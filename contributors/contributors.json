@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "repo": "storytold/gridcraft",
+  "branch": "main",
+  "head": "a60bd2f40edae13197965ded9433dcf276caca45",
+  "head_date": "2026-10-07T18:45:37Z",
+  "commits": 16,
+  "unattributed_commits": 0,
+  "contributors": [
+    {
+      "login": "echelon",
+      "display_name": "Brandon Thomas",
+      "real_name": "Brandon Thomas",
+      "prs": 1,
+      "commits": 16,
+      "lines_added": 78054,
+      "lines_deleted": 3954,
+      "binary_added": 35,
+      "binary_deleted": 12,
+      "first_commit": "2026-10-06T02:09:42Z",
+      "last_commit": "2026-10-07T18:45:37Z"
+    }
+  ],
+  "models": [
+    {
+      "id": "anthropic/claude-opus/5.5",
+      "company": "Anthropic",
+      "model": "Claude Opus",
+      "version": "5.5",
+      "commits": 15,
+      "lines_added": 78047,
+      "lines_deleted": 3954
+    }
+  ]
+}

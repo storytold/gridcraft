@@ -101,14 +101,35 @@ fn renders_every_ribbon_tab_without_panicking() {
 #[test]
 fn dialogs_open_and_close() {
     let mut h = harness(blank());
-    for name in
-        ["formatCells", "insertFunction", "find", "sort", "nameManager", "dataValidation", "pasteSpecial", "commandSearch", "spelling", "goTo"]
-    {
+    for name in [
+        "formatCells",
+        "insertFunction",
+        "find",
+        "sort",
+        "nameManager",
+        "dataValidation",
+        "pasteSpecial",
+        "commandSearch",
+        "spelling",
+        "goTo",
+        "about",
+    ] {
         h.state_mut().open_dialog(name, json!({}));
         h.run_steps(2);
         key(&mut h, Key::Escape, Modifiers::NONE);
         h.state_mut().dialog = None;
         h.state_mut().message = None;
+    }
+}
+
+#[test]
+fn about_renders_every_tab() {
+    let mut h = harness(blank());
+    for tab in ["About", "Contributors", "Models"] {
+        h.state_mut().open_dialog("about", json!({"tab": tab}));
+        h.run_steps(2);
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.tab.clone()).as_deref(), Some(tab));
+        h.state_mut().dialog = None;
     }
 }
 

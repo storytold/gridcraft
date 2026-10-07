@@ -8,6 +8,7 @@
 
 pub mod chartview;
 pub mod control;
+pub mod credits;
 pub mod dialogs;
 pub mod editor;
 pub mod formula_bar;

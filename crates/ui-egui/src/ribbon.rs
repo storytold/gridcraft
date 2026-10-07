@@ -1583,6 +1583,9 @@ fn automate(app: &mut SheetApp, ui: &mut Ui) {
     if big_button(ui, Icon::Script, "Action\nJournal", "Every command run in this session (replayable)", false).clicked() {
         app.open_dialog("journal", json!({}));
     }
+    if big_button(ui, Icon::Script, "About\nGridCraft", "Version, contributors and the AI models that helped", false).clicked() {
+        app.open_dialog("about", json!({}));
+    }
 }
 
 fn table_design(app: &mut SheetApp, ui: &mut Ui) {

@@ -1,7 +1,8 @@
 //! Renders the whole GridCraft window offscreen (wgpu, no window) to a PNG.
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
-//!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] out.png`
+//!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark]
+//!  [--dialog 'name={json}'] out.png`
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -18,6 +19,7 @@ fn main() {
     let mut dark = false;
     let mut pane: Option<String> = None;
     let mut chart: Option<u32> = None;
+    let mut dialog: Option<String> = None;
     let mut out = "snapshot.png".to_string();
     let mut i = 0;
     while i < args.len() {
@@ -59,6 +61,10 @@ fn main() {
                 i += 1;
                 chart = args.get(i).and_then(|s| s.parse().ok());
             }
+            "--dialog" => {
+                i += 1;
+                dialog = args.get(i).cloned();
+            }
             other => out = other.to_string(),
         }
         i += 1;
@@ -92,6 +98,11 @@ fn main() {
                 }
                 app.grid.pane = pane;
                 app.selected_chart = chart;
+                if let Some(d) = &dialog {
+                    let (name, p) =
+                        d.split_once('=').map(|(a, b)| (a, serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((d.as_str(), json!({})));
+                    app.open_dialog(name, p);
+                }
                 app
             },
         );

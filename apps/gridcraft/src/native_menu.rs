@@ -170,6 +170,7 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
             "Help",
             vec![
                 ("Agent Control (MCP)…", "dialog:agents", None),
+                ("Contributors…", "dialog:about:Contributors", None),
                 ("GridCraft on getartcraft.com", "url:https://getartcraft.com/apps/gridcraft", None),
                 ("Join the ArtCraft Discord…", "url:https://discord.gg/artcraft", None),
             ],
@@ -186,7 +187,7 @@ impl NativeMenu {
     pub fn install(ctx: &egui::Context) -> NativeMenu {
         let menu = Menu::new();
         let app_menu = Submenu::new("GridCraft", true);
-        let about = MenuItem::with_id("url:https://getartcraft.com/apps/gridcraft", "About GridCraft", true, None);
+        let about = MenuItem::with_id("dialog:about", "About GridCraft", true, None);
         let _ = app_menu.append_items(&[
             &about,
             &PredefinedMenuItem::separator(),
@@ -236,6 +237,7 @@ impl NativeMenu {
                     ("find", "replace") => json!({"replace": true}),
                     ("note", _) => json!({"threaded": false}),
                     ("comment", _) => json!({"threaded": true}),
+                    ("about", tab) => json!({"tab": tab}),
                     _ => json!({}),
                 };
                 let name = if name == "note" { "comment" } else { name };
