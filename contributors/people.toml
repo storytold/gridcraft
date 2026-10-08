@@ -113,3 +113,8 @@ sync_github_name = true
 
 [people.RockerHX]
 sync_github_name = true
+
+[people.switch87]
+real_name = "Gert Pellin"
+display_name = "Gert Pellin"
+sync_github_name = false
