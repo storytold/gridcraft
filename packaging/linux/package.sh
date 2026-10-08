@@ -95,7 +95,10 @@ if has appimage; then
   APPDIR="$WORK/GridCraft.AppDir"
   cp -R "$STAGE" "$APPDIR"
   mv "$APPDIR/usr/share/doc" "$WORK/doc-unused"
-  ln -s usr/bin/gridcraft "$APPDIR/AppRun"
+  # AppRun is a script (not a bare symlink to the binary): under Wayland the dock/taskbar icon
+  # comes from an installed desktop entry matched by app id, and a directly-run AppImage ships
+  # none, so AppRun installs the entry + icons under the user's XDG data dirs on first launch.
+  install -Dm755 "$HERE/apprun.sh" "$APPDIR/AppRun"
   cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
   cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
   ln -s "$APP_ID.png" "$APPDIR/.DirIcon"

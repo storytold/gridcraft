@@ -137,6 +137,18 @@ Locally on Windows: `dotnet tool install -g wix --version 5.0.2`, then
 binaries need glibc ≥ 2.35. X11/Wayland/xkbcommon/Vulkan/EGL are loaded at runtime; the
 packages declare them (see `nfpm.yaml`).
 
+The AppImage's entry point is a script, not a bare symlink: `packaging/linux/apprun.sh`. Under
+Wayland the compositor ignores the window icon a client sets and instead matches the window's
+app id (`ai.storyteller.gridcraft`) against an *installed* desktop entry to choose the dock
+icon. A directly-run AppImage exposes its `.desktop` and icons only inside the mounted image, so
+that lookup would fail and the dock would show the generic placeholder (issue #3). On launch
+AppRun installs the entry and hicolor icon under the user's `$XDG_DATA_HOME` (idempotently,
+rewriting `Exec`/`TryExec` to the AppImage's absolute path and refreshing the desktop/icon
+caches), then execs the binary. It is best effort and can be turned off with
+`GRIDCRAFT_SKIP_DESKTOP_INTEGRATION=1`; system packages (deb/rpm) install under `/usr/share` and
+don't need it. `packaging/linux/apprun-selftest.sh` exercises this against a throwaway AppDir and
+HOME, and runs in CI (`.github/workflows/packaging-lint.yml`).
+
 Flatpak: `packaging/linux/flatpak/ai.storyteller.gridcraft.yml` builds from source and is ready
 for a Flathub submission (freedesktop 25.08; Wayland + X11 fallback, `dri`, IPC; Documents and
 Downloads; everything else through portals). CI validates it but doesn't build it; build by hand
@@ -243,8 +255,9 @@ row in `ATTRIBUTION.md` (`cargo xtask assets`).
 ## Checks
 
 - `.github/workflows/packaging-lint.yml` (seconds, on changes to `packaging/`, the workflows or
-  the icons): actionlint, shellcheck, a PowerShell parse, xmllint, a WiX icon-id check,
-  `desktop-file-validate`, `appstreamcli validate`, and a Flatpak manifest check.
+  the icons): actionlint, shellcheck, the AppRun desktop-integration self-test, a PowerShell
+  parse, xmllint, a WiX icon-id check, `desktop-file-validate`, `appstreamcli validate`, and a
+  Flatpak manifest check.
 - `.github/workflows/windows-arm64.yml` (on `release` pushes): packages ARM64 on x64, then
   installs, runs and uninstalls the MSI on a Windows 11 ARM64 runner.
 - `.github/workflows/freebsd.yml`: FreeBSD build + tests (manual run from `release`).

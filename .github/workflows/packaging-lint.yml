@@ -35,6 +35,11 @@ jobs:
           "$RUNNER_TEMP/actionlint" -color
       - name: shellcheck
         run: shellcheck packaging/*.sh packaging/*/*.sh
+      - name: AppRun desktop-integration self-test
+        # The AppImage's AppRun installs the launcher entry + icons into the user's XDG data dirs
+        # (so Wayland shows the real icon, not the generic placeholder). Exercised against a
+        # throwaway AppDir/HOME; no Rust build needed.
+        run: packaging/linux/apprun-selftest.sh
       - name: PowerShell
         shell: pwsh
         run: |
