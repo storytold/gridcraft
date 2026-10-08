@@ -1528,6 +1528,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]
