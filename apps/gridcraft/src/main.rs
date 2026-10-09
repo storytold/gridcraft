@@ -18,6 +18,13 @@ use serde_json::json;
 
 struct App(SheetApp, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
 
+/// Files macOS delivered through `application:openURLs:` (Finder "Open With", `open -a`).
+#[cfg(target_os = "macos")]
+static PENDING_OPENS: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+/// Wakes the UI when files arrive while the app is running.
+#[cfg(target_os = "macos")]
+static OPEN_CTX: std::sync::OnceLock<egui::Context> = std::sync::OnceLock::new();
+
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
@@ -33,6 +40,13 @@ impl eframe::App for App {
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.0.raw_input_hook(raw);
+        // Files opened from Finder open the same way as files dropped on the window.
+        #[cfg(target_os = "macos")]
+        for p in PENDING_OPENS.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default() {
+            if let Some(p) = p.to_str().filter(|p| !p.is_empty()) {
+                self.0.open_path(p);
+            }
+        }
         // Files dropped on the window open as workbooks.
         for f in std::mem::take(&mut raw.dropped_files) {
             if let Some(p) = f.path().to_str().map(str::to_string).filter(|p| !p.is_empty()) {
@@ -187,11 +201,23 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(i);
     }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
+    // Before the event loop runs, so the files that launch the app are not missed.
+    #[cfg(target_os = "macos")]
+    gridcraft_macos_open::install(|paths| {
+        if let Ok(mut pending) = PENDING_OPENS.lock() {
+            pending.extend(paths);
+        }
+        if let Some(ctx) = OPEN_CTX.get() {
+            ctx.request_repaint();
+        }
+    });
     eframe::run_native(
         "GridCraft",
         options,
         Box::new(move |cc| {
             SheetApp::setup_context(&cc.egui_ctx, app.ui.dark);
+            #[cfg(target_os = "macos")]
+            let _ = OPEN_CTX.set(cc.egui_ctx.clone());
             if let Some(port) = control_port {
                 match control_server::start(port, cc.egui_ctx.clone()) {
                     Ok(rx) => app.control_rx = Some(rx),

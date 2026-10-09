@@ -1397,6 +1397,7 @@ dependencies = [
  "eframe",
  "egui",
  "gridcraft-engine",
+ "gridcraft-macos-open",
  "gridcraft-ui-egui",
  "image",
  "log",
@@ -1483,6 +1484,16 @@ version = "0.3.0"
 dependencies = [
  "gridcraft-core",
  "regex",
+]
+
+[[package]]
+name = "gridcraft-macos-open"
+version = "0.3.0"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
