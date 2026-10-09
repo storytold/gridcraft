@@ -3,8 +3,9 @@
 use egui::{Event, Key, Modifiers, PointerButton};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
-use gridcraft_ui_egui::{SheetApp, grid::Geo};
+use gridcraft_ui_egui::{{Services, SheetApp, grid::Geo}};
 use serde_json::json;
+use std::sync::{Arc, Mutex};
 
 fn harness(session: Session) -> egui_kittest::Harness<'static, SheetApp> {
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
@@ -322,4 +323,114 @@ fn rotated_wrapped_text_is_drawn_rotated_inside_its_cell() {
         // Upright text never spills into the neighbouring columns: the clip is the cell itself.
         assert!(clip.width() < 70.0, "clip spans one 6-character column, got {clip:?}");
     }
+}
+
+#[test]
+fn native_open_service_uses_a_new_window_for_an_existing_workbook() {
+    let mut session = blank();
+    session.execute("cell.set", json!({"cell": "A1", "input": "existing"})).unwrap();
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let opened_by_service = Arc::clone(&opened);
+    let services = Services {
+        open_in_new_window: Some(Box::new(move |path| {
+            opened_by_service.lock().map_err(|_| "lock poisoned".to_string())?.push(path.to_string());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = SheetApp::new(session, services);
+
+    app.open_path("/tmp/second.xlsx");
+
+    let opened = opened.lock().ok().map(|paths| paths.clone()).unwrap_or_default();
+    assert_eq!(opened, vec!["/tmp/second.xlsx"]);
+    assert_eq!(app.session.documents().len(), 1);
+}
+
+#[test]
+fn equivalent_open_path_activates_existing_workbook_without_new_window() {
+    let mut session = blank();
+    let relative = "Cargo.toml";
+    let absolute = std::env::current_dir().unwrap_or_default().join(relative);
+    session.active_mut().unwrap().path = Some(relative.into());
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let opened_by_service = Arc::clone(&opened);
+    let services = Services {
+        open_in_new_window: Some(Box::new(move |path| {
+            opened_by_service.lock().map_err(|_| "lock poisoned".to_string())?.push(path.to_string());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = SheetApp::new(session, services);
+
+    app.open_path(absolute.to_str().unwrap_or_default());
+
+    assert!(opened.lock().map(|paths| paths.is_empty()).unwrap_or(false));
+    assert_eq!(app.session.documents().len(), 1);
+}
+
+#[test]
+fn blank_workbook_is_replaced_by_first_opened_file() {
+    let path = std::env::temp_dir().join(format!("gridcraft-open-{}.csv", std::process::id()));
+    std::fs::write(&path, b"Name,Value\nNorth,1\n").unwrap();
+    let mut app = SheetApp::new(blank(), Default::default());
+
+    app.open_path(path.to_str().unwrap_or_default());
+
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.session.active().and_then(|d| d.path.as_deref()), path.to_str());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn already_open_path_activates_existing_document_without_delegating() {
+    let path = std::env::current_dir().unwrap_or_default().join("Cargo.toml");
+    let mut session = blank();
+    session.active_mut().unwrap().path = Some(path.to_string_lossy().into_owned());
+    session.new_workbook();
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let opened_by_service = Arc::clone(&opened);
+    let services = Services {
+        open_in_new_window: Some(Box::new(move |path| {
+            opened_by_service.lock().map_err(|_| "lock poisoned".to_string())?.push(path.to_string());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = SheetApp::new(session, services);
+
+    app.open_path("Cargo.toml");
+
+    assert_eq!(app.session.active_index(), 0);
+    assert!(opened.lock().map(|paths| paths.is_empty()).unwrap_or(false));
+    assert_eq!(app.session.documents().len(), 2);
+}
+
+#[test]
+fn new_window_callback_failure_is_shown_without_opening_file() {
+    let mut session = blank();
+    session.execute("cell.set", json!({"cell": "A1", "input": "existing"})).unwrap();
+    let services = Services { open_in_new_window: Some(Box::new(|_| Err("launch failed".into()))), ..Default::default() };
+    let mut app = SheetApp::new(session, services);
+
+    app.open_path("/tmp/second.xlsx");
+
+    assert_eq!(app.message.as_ref().map(|(_, message)| message.as_str()), Some("launch failed"));
+    assert_eq!(app.session.documents().len(), 1);
+}
+
+#[test]
+fn existing_workbook_falls_back_to_in_process_open_without_new_window_service() {
+    let path = std::env::temp_dir().join(format!("gridcraft-fallback-{}.csv", std::process::id()));
+    std::fs::write(&path, b"Name,Value\nNorth,1\n").unwrap();
+    let mut session = blank();
+    session.execute("cell.set", json!({"cell": "A1", "input": "existing"})).unwrap();
+    let mut app = SheetApp::new(session, Default::default());
+
+    app.open_path(path.to_str().unwrap_or_default());
+
+    assert_eq!(app.session.documents().len(), 2);
+    assert_eq!(app.session.active().and_then(|d| d.path.as_deref()), path.to_str());
+    let _ = std::fs::remove_file(path);
 }
