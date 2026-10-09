@@ -199,7 +199,9 @@ impl SheetApp {
                         self.ui.language = l;
                         Ok(json!({"language": l}))
                     }
-                    None => Err(format!("unknown language {:?} (use \"en\" or \"ja\")", p.get("language").and_then(Json::as_str).unwrap_or(""))),
+                    None => {
+                        Err(format!("unknown language {:?} (use \"en\", \"ja\" or \"pt\")", p.get("language").and_then(Json::as_str).unwrap_or("")))
+                    }
                 }
             }
             "app.language.english" => {
@@ -209,6 +211,10 @@ impl SheetApp {
             "app.language.japanese" => {
                 self.ui.language = i18n::Language::Ja;
                 Ok(json!({"language": i18n::Language::Ja}))
+            }
+            "app.language.portuguese" => {
+                self.ui.language = i18n::Language::PtBr;
+                Ok(json!({"language": i18n::Language::PtBr}))
             }
             "ui.dialog" => {
                 let name = p.get("name").and_then(Json::as_str).unwrap_or("");

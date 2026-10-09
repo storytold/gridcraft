@@ -1588,7 +1588,11 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
             |ui| {
                 for l in crate::i18n::Language::ALL {
                     if ui.selectable_label(l == lang, l.name()).clicked() {
-                        let code = if l == crate::i18n::Language::Ja { "app.language.japanese" } else { "app.language.english" };
+                        let code = match l {
+                            crate::i18n::Language::En => "app.language.english",
+                            crate::i18n::Language::Ja => "app.language.japanese",
+                            crate::i18n::Language::PtBr => "app.language.portuguese",
+                        };
                         act(app, code, json!({}));
                     }
                 }

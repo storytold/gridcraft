@@ -15,16 +15,19 @@ pub enum Language {
     #[default]
     En,
     Ja,
+    #[serde(rename = "pt")]
+    PtBr,
 }
 
 impl Language {
-    pub const ALL: [Self; 2] = [Self::En, Self::Ja];
+    pub const ALL: [Self; 3] = [Self::En, Self::Ja, Self::PtBr];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
             Self::Ja => "日本語",
+            Self::PtBr => "Português (Brasil)",
         }
     }
 
@@ -32,6 +35,7 @@ impl Language {
         match code {
             "en" => Some(Self::En),
             "ja" => Some(Self::Ja),
+            "pt" | "pt-br" => Some(Self::PtBr),
             _ => None,
         }
     }
@@ -57,12 +61,12 @@ impl Language {
     }
 
     pub fn tr(self, text: &str) -> &str {
-        if self == Self::Ja
-            && let Some((_, japanese)) = JAPANESE.iter().find(|(english, _)| *english == text)
-        {
-            return japanese;
-        }
-        text
+        let table: &[(&str, &str)] = match self {
+            Self::En => &[],
+            Self::Ja => JAPANESE,
+            Self::PtBr => PORTUGUESE,
+        };
+        table.iter().find(|(english, _)| *english == text).map_or(text, |(_, translated)| translated)
     }
 }
 
@@ -346,6 +350,271 @@ const JAPANESE: &[(&str, &str)] = &[
     ("More\nFunctions", "その他の関数"),
 ];
 
+/// English label → Brazilian Portuguese, keyed like [`JAPANESE`] so the tables stay in step (a test
+/// enforces it) and the diff reads against the Japanese column. Labels follow Excel's pt-BR wording;
+/// anything absent falls back to English.
+const PORTUGUESE: &[(&str, &str)] = &[
+    ("Paste", "Colar"),
+    ("Paste Values", "Colar Valores"),
+    ("Paste Formulas", "Colar Fórmulas"),
+    ("Paste Formatting", "Colar Formatação"),
+    ("Transpose", "Transpor"),
+    ("Paste Link", "Colar Vínculo"),
+    ("Paste Special…", "Colar Especial…"),
+    ("Cut (⌘X)", "Recortar (⌘X)"),
+    ("Copy (⌘C)", "Copiar (⌘C)"),
+    ("Format Painter (double-click to keep it on)", "Pincel de Formatação (clique duas vezes para mantê-lo ativo)"),
+    ("Bold (⌘B)", "Negrito (⌘B)"),
+    ("Italic (⌘I)", "Itálico (⌘I)"),
+    ("Underline (⌘U)", "Sublinhado (⌘U)"),
+    ("Double Underline", "Sublinhado Duplo"),
+    ("Strikethrough", "Riscado"),
+    ("Underline", "Sublinhado"),
+    ("Increase Font Size", "Aumentar Tamanho da Fonte"),
+    ("Decrease Font Size", "Diminuir Tamanho da Fonte"),
+    ("Wrap Text", "Quebrar Texto Automaticamente"),
+    ("Merge & Center", "Mesclar e Centralizar"),
+    ("Merge Cells", "Mesclar Células"),
+    ("Merge Across", "Mesclar Através"),
+    ("Unmerge Cells", "Desmesclar Células"),
+    ("Fill Color", "Cor de Preenchimento"),
+    ("Font Color", "Cor da Fonte"),
+    ("Borders", "Bordas"),
+    ("Top\nAlign", "Alinhar\nno Topo"),
+    ("Middle\nAlign", "Alinhar\nno Meio"),
+    ("Bottom\nAlign", "Alinhar\nem Baixo"),
+    ("Left", "Esquerda"),
+    ("Right", "Direita"),
+    ("Center", "Centro"),
+    ("Horizontal", "Horizontal"),
+    ("Vertical Text", "Texto Vertical"),
+    ("Decrease Indent", "Diminuir Recuo"),
+    ("Increase Indent", "Aumentar Recuo"),
+    ("Orientation", "Orientação"),
+    ("Angle Counterclockwise", "Ângulo Anti-Horário"),
+    ("Angle Clockwise", "Ângulo Horário"),
+    ("Rotate Text Up", "Girar Texto para Cima"),
+    ("Rotate Text Down", "Girar Texto para Baixo"),
+    ("Accounting Number Format", "Formato de Número Contábil"),
+    ("Percent Style", "Estilo de Porcentagem"),
+    ("Comma Style", "Estilo de Vírgula"),
+    ("Increase Decimal", "Aumentar Casas Decimais"),
+    ("Decrease Decimal", "Diminuir Casas Decimais"),
+    ("More Accounting Formats…", "Mais Formatos Contábeis…"),
+    ("Conditional\nFormatting", "Formatação\nCondicional"),
+    ("Conditional Formatting", "Formatação Condicional"),
+    ("Format\nas Table", "Formatar\ncomo Tabela"),
+    ("Cell\nStyles", "Estilos\nde Célula"),
+    ("Format Cells…", "Formatar Células…"),
+    ("Format Cell Alignment…", "Formatar Alinhamento de Células…"),
+    ("Format\nPane", "Painel de\nFormatação"),
+    ("Format", "Formatar"),
+    ("Insert", "Inserir"),
+    ("Insert Cells…", "Inserir Células…"),
+    ("Delete", "Excluir"),
+    ("Delete Cells…", "Excluir Células…"),
+    ("Insert Sheet Rows", "Inserir Linhas de Planilha"),
+    ("Insert Sheet Columns", "Inserir Colunas de Planilha"),
+    ("Delete Sheet Rows", "Excluir Linhas de Planilha"),
+    ("Delete Sheet Columns", "Excluir Colunas de Planilha"),
+    ("Row Height…", "Altura da Linha…"),
+    ("AutoFit Row Height", "Ajustar Altura da Linha"),
+    ("Column Width…", "Largura da Coluna…"),
+    ("AutoFit Column Width", "Ajustar Largura da Coluna"),
+    ("Default Width…", "Largura Padrão…"),
+    ("Hide Rows", "Ocultar Linhas"),
+    ("Unhide Rows", "Reexibir Linhas"),
+    ("Hide Columns", "Ocultar Colunas"),
+    ("Unhide Columns", "Reexibir Colunas"),
+    ("Lock Cell", "Bloquear Célula"),
+    ("Clear", "Limpar"),
+    ("Clear All", "Limpar Tudo"),
+    ("Clear Formats", "Limpar Formatos"),
+    ("Clear Contents", "Limpar Conteúdo"),
+    ("Clear Comments and Notes", "Limpar Comentários e Notas"),
+    ("Clear Hyperlinks", "Limpar Hiperlinks"),
+    ("AutoSum", "Soma Automática"),
+    ("AutoSum (⌘⇧T)", "Soma Automática (⌘⇧T)"),
+    ("Flash\nFill", "Preenchimento\nRelâmpago"),
+    ("Flash Fill", "Preenchimento Relâmpago"),
+    ("Fill", "Preencher"),
+    ("Clear Print Area", "Limpar Área de Impressão"),
+    ("Find &\nSelect", "Localizar e\nSelecionar"),
+    ("Find…", "Localizar…"),
+    ("Replace…", "Substituir…"),
+    ("Go To…", "Ir Para…"),
+    ("Go To Special…", "Ir Para Especial…"),
+    ("PivotTable", "Tabela Dinâmica"),
+    ("Recommended\nCharts", "Gráficos\nRecomendados"),
+    ("Table", "Tabela"),
+    ("Pictures", "Imagens"),
+    ("Shapes", "Formas"),
+    ("Icons", "Ícones"),
+    ("Text\nBox", "Caixa\nde Texto"),
+    ("Comment", "Comentário"),
+    ("New\nComment", "Novo\nComentário"),
+    ("New Note", "Nova Nota"),
+    ("Show/Hide Note", "Mostrar/Ocultar Nota"),
+    ("Header &\nFooter", "Cabeçalho e\nRodapé"),
+    ("Text to\nColumns", "Texto para\nColunas"),
+    ("Link", "Vínculo"),
+    ("Symbol", "Símbolo"),
+    ("Sparklines", "Minigráficos"),
+    ("Header & Footer", "Cabeçalho e Rodapé"),
+    ("Draw with ink", "Desenhar com Tinta"),
+    ("Eraser", "Borracha"),
+    ("Ink to\nShape", "Tinta para\nForma"),
+    ("Select\nObjects", "Selecionar\nObjetos"),
+    ("Themes", "Temas"),
+    ("Margins", "Margens"),
+    ("Size", "Tamanho"),
+    ("Print\nArea", "Área de\nImpressão"),
+    ("Set Print Area", "Definir Área de Impressão"),
+    ("Breaks", "Quebras"),
+    ("Insert Page Break", "Inserir Quebra de Página"),
+    ("Remove Page Break", "Remover Quebra de Página"),
+    ("Reset All Page Breaks", "Redefinir Todas as Quebras de Página"),
+    ("Print\nTitles", "Imprimir\nTítulos"),
+    ("Narrow", "Estreita"),
+    ("Wide", "Ampla"),
+    ("Normal", "Normal"),
+    ("Portrait", "Retrato"),
+    ("Landscape", "Paisagem"),
+    ("Custom Margins…", "Margens Personalizadas…"),
+    ("Insert\nFunction", "Inserir\nFunção"),
+    ("Name\nManager", "Gerenciador\nde Nomes"),
+    ("Define Name", "Definir Nome"),
+    ("Use in Formula", "Usar na Fórmula"),
+    ("Create from Selection", "Criar a Partir da Seleção"),
+    ("Trace Precedents", "Rastrear Precedentes"),
+    ("Trace Dependents", "Rastrear Dependentes"),
+    ("Remove Arrows", "Remover Setas"),
+    ("Show Formulas", "Exibir Fórmulas"),
+    ("Error Checking", "Verificação de Erros"),
+    ("Evaluate Formula", "Avaliar Fórmula"),
+    ("Watch Window", "Janela de Inspeção"),
+    ("Calculation\nOptions", "Opções de\nCálculo"),
+    ("Calculate Now", "Calcular Agora"),
+    ("Calculate Sheet", "Calcular Planilha"),
+    ("Automatic", "Automático"),
+    ("Automatic Except for Data Tables", "Automático Exceto Tabelas de Dados"),
+    ("Manual", "Manual"),
+    ("Sort &\nFilter", "Classificar e\nFiltrar"),
+    ("Sort", "Classificar"),
+    ("Sort A to Z", "Classificar de A a Z"),
+    ("Sort Z to A", "Classificar de Z a A"),
+    ("Custom Sort…", "Classificação Personalizada…"),
+    ("Filter", "Filtrar"),
+    ("Reapply", "Aplicar Novamente"),
+    ("Get Data\n(Text/CSV)", "Obter Dados\n(Texto/CSV)"),
+    ("Remove\nDuplicates", "Remover\nDuplicatas"),
+    ("Data\nValidation", "Validação\nde Dados"),
+    ("Data Validation", "Validação de Dados"),
+    ("Data Validation…", "Validação de Dados…"),
+    ("Circle Invalid Data", "Circundar Dados Inválidos"),
+    ("Clear Validation", "Limpar Validação"),
+    ("Group", "Agrupar"),
+    ("Ungroup", "Desagrupar"),
+    ("Subtotal", "Subtotal"),
+    ("What-If\nAnalysis", "Análise de\nHipóteses"),
+    ("Data Table…", "Tabela de Dados…"),
+    ("Scenario Manager…", "Gerenciador de Cenários…"),
+    ("Goal Seek…", "Buscar Objetivo…"),
+    ("Spelling", "Ortografia"),
+    ("Check\nAccessibility", "Verificar\nAcessibilidade"),
+    ("Threaded Comments", "Comentários Encadeados"),
+    ("Show\nComments", "Mostrar\nComentários"),
+    ("Protect\nWorkbook", "Proteger\nPasta de Trabalho"),
+    ("Unprotect\nSheet", "Desproteger\nPlanilha"),
+    ("Protect Sheet…", "Proteger Planilha…"),
+    ("Comments", "Comentários"),
+    ("Notes", "Notas"),
+    ("Page Break\nPreview", "Visualização\nde Quebras de Página"),
+    ("Page\nLayout", "Layout\nde Página"),
+    ("Formula Bar", "Barra de Fórmulas"),
+    ("Gridlines", "Linhas de Grade"),
+    ("Headings", "Títulos"),
+    ("Zoom", "Zoom"),
+    ("100%", "100%"),
+    ("Zoom to\nSelection", "Zoom na\nSeleção"),
+    ("Freeze\nPanes", "Congelar\nPainéis"),
+    ("Freeze Panes", "Congelar Painéis"),
+    ("Freeze Top Row", "Congelar Linha Superior"),
+    ("Freeze First Column", "Congelar Primeira Coluna"),
+    ("Unfreeze Panes", "Descongelar Painéis"),
+    ("Dark Mode", "Modo Escuro"),
+    ("Interface language", "Idioma da interface"),
+    ("Command\nPalette", "Paleta de\nComandos"),
+    ("Agent\nControl", "Controle\ndo Agente"),
+    ("Action\nJournal", "Registro\nde Ações"),
+    ("About\nGridCraft", "Sobre o\nGridCraft"),
+    ("Share", "Compartilhar"),
+    ("Add Chart\nElement", "Adicionar\nElemento de Gráfico"),
+    ("Change\nChart Type", "Alterar\nTipo de Gráfico"),
+    ("Switch\nRow/Column", "Alternar\nLinha/Coluna"),
+    ("Data Labels: None", "Rótulos de Dados: Nenhum"),
+    ("Data Labels: Show", "Rótulos de Dados: Exibir"),
+    ("Legend: None", "Legenda: Nenhuma"),
+    ("Legend: Bottom", "Legenda: Abaixo"),
+    ("Legend: Top", "Legenda: Acima"),
+    ("Legend: Right", "Legenda: À Direita"),
+    ("Gridlines: None", "Linhas de Grade: Nenhuma"),
+    ("Gridlines: Show", "Linhas de Grade: Exibir"),
+    ("Chart\nTitle", "Título\ndo Gráfico"),
+    ("Delete\nChart", "Excluir\nGráfico"),
+    ("Convert\nto Range", "Converter\nem Intervalo"),
+    ("Table\nStyles", "Estilos\nde Tabela"),
+    ("Top 10 Items", "10 Primeiros Itens"),
+    ("Top 10%", "10% Primeiros"),
+    ("Bottom 10 Items", "10 Últimos Itens"),
+    ("Bottom 10%", "10% Últimos"),
+    ("Above Average", "Acima da Média"),
+    ("Below Average", "Abaixo da Média"),
+    ("Clear Rules from Entire Sheet", "Limpar Regras de Toda a Planilha"),
+    ("Clear Rules from Selected Cells", "Limpar Regras das Células Selecionadas"),
+    ("Constants", "Constantes"),
+    ("Data Bars", "Barras de Dados"),
+    ("Color Scales", "Escalas de Cores"),
+    ("Icon Sets", "Conjuntos de Ícones"),
+    ("Home", "Página Inicial"),
+    ("Draw", "Desenhar"),
+    ("Page Layout", "Layout da Página"),
+    ("Formulas", "Fórmulas"),
+    ("Data", "Dados"),
+    ("Review", "Revisão"),
+    ("View", "Exibir"),
+    ("Automate", "Automatizar"),
+    ("Table Design", "Design de Tabela"),
+    ("Chart Design", "Design de Gráfico"),
+    ("Ready", "Pronto"),
+    ("Enter", "Inserir"),
+    ("Edit", "Editar"),
+    ("Point", "Apontar"),
+    ("Calculate", "Calcular"),
+    ("Select destination and press Enter or choose Paste", "Selecione o destino e pressione Enter ou escolha Colar"),
+    ("General", "Geral"),
+    ("Number", "Número"),
+    ("Currency", "Moeda"),
+    ("Accounting", "Contábil"),
+    ("Date", "Data"),
+    ("Time", "Hora"),
+    ("Percentage", "Porcentagem"),
+    ("Fraction", "Fração"),
+    ("Scientific", "Científico"),
+    ("Text", "Texto"),
+    ("Special", "Especial"),
+    ("Custom", "Personalizado"),
+    ("Short Date", "Data Abreviada"),
+    ("Long Date", "Data Por Extenso"),
+    ("More Number Formats…", "Mais Formatos de Número…"),
+    ("Financial", "Financeira"),
+    ("Logical", "Lógica"),
+    ("Date &\nTime", "Data e\nHora"),
+    ("Lookup &\nReference", "Pesquisa e\nReferência"),
+    ("Math &\nTrig", "Matemática e\nTrigonometria"),
+    ("More\nFunctions", "Mais\nFunções"),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,8 +626,21 @@ mod tests {
             assert!(JAPANESE.iter().take(i).all(|(other, _)| en != other));
             assert_eq!(Language::En.tr(en), *en);
         }
+        for (i, (en, pt)) in PORTUGUESE.iter().enumerate() {
+            assert!(!pt.is_empty());
+            assert!(PORTUGUESE.iter().take(i).all(|(other, _)| en != other));
+            assert_eq!(Language::En.tr(en), *en);
+        }
+        // The tables cover the same interface strings, so per-language coverage stays even.
+        for (en, _) in PORTUGUESE {
+            assert!(JAPANESE.iter().any(|(other, _)| en == other), "{en:?} missing from JAPANESE");
+        }
+        assert_eq!(JAPANESE.len(), PORTUGUESE.len());
         assert_eq!(Language::Ja.tr("Data"), "データ");
+        assert_eq!(Language::PtBr.tr("Data"), "Dados");
+        assert_eq!(Language::PtBr.tr("Date"), "Data");
         assert_eq!(Language::Ja.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(Language::PtBr.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::parse("xx"), None);
     }
 
@@ -367,6 +649,9 @@ mod tests {
         assert_eq!(Language::from_tag("ja-JP"), Some(Language::Ja));
         assert_eq!(Language::from_tag("en_US"), Some(Language::En));
         assert_eq!(Language::from_tag("de-DE"), None);
+        assert_eq!(Language::from_tag("pt-BR"), Some(Language::PtBr));
+        assert_eq!(Language::parse("pt"), Some(Language::PtBr));
+        assert_eq!(Language::parse("pt-br"), Some(Language::PtBr));
     }
 
     #[test]
@@ -374,8 +659,10 @@ mod tests {
         let mut app = crate::SheetApp::new(gridcraft_engine::Session::default(), Default::default());
         app.run("app.language.japanese", serde_json::json!({})).unwrap();
         assert_eq!(app.ui.language, Language::Ja);
+        app.run("app.language.portuguese", serde_json::json!({})).unwrap();
+        assert_eq!(app.ui.language, Language::PtBr);
         let restored: crate::UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
-        assert_eq!(restored.language, Language::Ja);
+        assert_eq!(restored.language, Language::PtBr);
         app.run("app.language.english", serde_json::json!({})).unwrap();
         assert_eq!(app.ui.language, Language::En);
     }
