@@ -403,6 +403,115 @@ fn dollar(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     text_val(if r < 0.0 { format!("(${body})") } else { format!("${body}") })
 }
 
+fn convert_int_to_thai(num: u64, is_overall_gt_1: bool) -> String {
+    if num == 0 {
+        return String::new();
+    }
+    const THAI_DIGITS: &[&str] = &["", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
+    const THAI_POSITIONS: &[&str] = &["", "สิบ", "ร้อย", "พัน", "หมื่น", "แสน"];
+
+    let mut groups = Vec::new();
+    let mut temp = num;
+    while temp > 0 {
+        groups.push(temp % 1_000_000);
+        temp /= 1_000_000;
+    }
+
+    let mut out = String::new();
+    for g_idx in (0..groups.len()).rev() {
+        let g = groups.get(g_idx).copied().unwrap_or(0);
+        if g == 0 {
+            continue;
+        }
+        let s = g.to_string();
+        let bytes = s.as_bytes();
+        let g_len = bytes.len();
+        let mut group_text = String::new();
+
+        for (pos_idx, &b) in bytes.iter().enumerate() {
+            let d = (b.saturating_sub(b'0')) as usize;
+            if d == 0 {
+                continue;
+            }
+            let unit_pos = g_len.saturating_sub(pos_idx).saturating_sub(1);
+            if unit_pos == 0 {
+                if d == 1 {
+                    if g_len > 1 {
+                        group_text.push_str("เอ็ด");
+                    } else if is_overall_gt_1 && g_idx == 0 {
+                        group_text.push_str("เอ็ด");
+                    } else {
+                        group_text.push_str("หนึ่ง");
+                    }
+                } else if let Some(dig) = THAI_DIGITS.get(d) {
+                    group_text.push_str(dig);
+                }
+            } else if unit_pos == 1 {
+                if d == 1 {
+                    group_text.push_str("สิบ");
+                } else if d == 2 {
+                    group_text.push_str("ยี่สิบ");
+                } else if let Some(dig) = THAI_DIGITS.get(d) {
+                    group_text.push_str(dig);
+                    group_text.push_str("สิบ");
+                }
+            } else if let Some(dig) = THAI_DIGITS.get(d) {
+                group_text.push_str(dig);
+                if let Some(pos) = THAI_POSITIONS.get(unit_pos) {
+                    group_text.push_str(pos);
+                }
+            }
+        }
+
+        out.push_str(&group_text);
+        if g_idx > 0 {
+            for _ in 0..g_idx {
+                out.push_str("ล้าน");
+            }
+        }
+    }
+    out
+}
+
+fn bahttext_core(val: f64) -> R<String> {
+    if !val.is_finite() || val.abs() > 1e15 {
+        return Err(CellError::Num);
+    }
+    let is_neg = val < 0.0;
+    let abs_val = val.abs();
+    let cents = (abs_val * 100.0).round() as u64;
+    let baht = cents / 100;
+    let satang = cents % 100;
+
+    if baht == 0 && satang == 0 {
+        return Ok("ศูนย์บาทถ้วน".to_string());
+    }
+
+    let mut res = String::new();
+    if is_neg {
+        res.push_str("ลบ");
+    }
+
+    if baht > 0 {
+        res.push_str(&convert_int_to_thai(baht, baht > 1));
+        res.push_str("บาท");
+    }
+
+    if satang > 0 {
+        res.push_str(&convert_int_to_thai(satang, satang > 1));
+        res.push_str("สตางค์");
+    } else {
+        res.push_str("ถ้วน");
+    }
+
+    Ok(res)
+}
+
+fn bahttext(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+    let n = num(a, 0)?;
+    text_val(bahttext_core(n)?)
+}
+
 fn t_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     match scalar(arg(a, 0)?) {
         Value::Text(t) => Ok(Value::Text(t)),
@@ -762,6 +871,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             fixed
         ),
         f!("DOLLAR", 1, 2, Text, S, "DOLLAR(number, [decimals])", "Formats a number as currency text.", dollar),
+        f!("BAHTTEXT", 1, 1, Text, S, "BAHTTEXT(number)", "Converts a number to Thai currency text.", bahttext),
         f!("T", 1, 1, Text, S, "T(value)", "Returns the value if it is text, otherwise empty text.", t_fn),
         f!(
             "TEXTBEFORE",
@@ -1040,4 +1150,22 @@ mod tests {
         is_text(ev("REGEXREPLACE", vec![t("John Smith"), t("(\\w+) (\\w+)"), t("$2, $1")]), "Smith, John");
         is_text(ev("REGEXREPLACE", vec![t("ab"), t("(a)"), t("$1x")]), "axb");
     }
+
+    #[test]
+    fn bahttext() {
+        is_text(ev("BAHTTEXT", vec![n(0.0)]), "ศูนย์บาทถ้วน");
+        is_text(ev("BAHTTEXT", vec![n(1.0)]), "หนึ่งบาทถ้วน");
+        is_text(ev("BAHTTEXT", vec![n(11.0)]), "สิบเอ็ดบาทถ้วน");
+        is_text(ev("BAHTTEXT", vec![n(21.0)]), "ยี่สิบเอ็ดบาทถ้วน");
+        is_text(ev("BAHTTEXT", vec![n(101.0)]), "หนึ่งร้อยเอ็ดบาทถ้วน");
+        is_text(ev("BAHTTEXT", vec![n(1001.0)]), "หนึ่งพันเอ็ดบาทถ้วน");
+        is_text(ev("BAHTTEXT", vec![n(1500.50)]), "หนึ่งพันห้าร้อยบาทห้าสิบสตางค์");
+        is_text(ev("BAHTTEXT", vec![n(1234.50)]), "หนึ่งพันสองร้อยสามสิบสี่บาทห้าสิบสตางค์");
+        is_text(ev("BAHTTEXT", vec![n(0.50)]), "ห้าสิบสตางค์");
+        is_text(ev("BAHTTEXT", vec![n(-1500.50)]), "ลบหนึ่งพันห้าร้อยบาทห้าสิบสตางค์");
+        is_text(ev("BAHTTEXT", vec![n(1_000_000.0)]), "หนึ่งล้านบาทถ้วน");
+        is_text(ev("BAHTTEXT", vec![n(1_000_001.0)]), "หนึ่งล้านเอ็ดบาทถ้วน");
+        is_err(ev("BAHTTEXT", vec![t("invalid")]), CellError::Value);
+    }
 }
+
