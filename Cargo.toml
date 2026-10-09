@@ -43,6 +43,10 @@ eframe = { version = "0.36", default-features = false }
 egui_kittest = "0.36"
 rfd = "0.17"
 arboard = { version = "3.6", default-features = false }
+# Font name-table reading. The same version epaint already depends on, so it adds no new build.
+skrifa = "0.44"
+# Real font bytes for tests (Ubuntu Light, compiled into epaint).
+epaint_default_fonts = "0.36"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

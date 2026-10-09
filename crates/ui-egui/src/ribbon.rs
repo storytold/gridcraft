@@ -688,9 +688,9 @@ fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let mut name = st.font.name.clone();
     let before = name.clone();
     egui::ComboBox::from_id_salt("font_name").width(150.0).selected_text(egui::RichText::new(&name).font(theme::ui_font(12.5))).show_ui(ui, |ui| {
-        for f in FONTS {
-            let fam = theme::cell_family(f, false, false);
-            ui.selectable_value(&mut name, f.to_string(), egui::RichText::new(*f).font(egui::FontId::new(14.0, fam)));
+        for f in crate::fonts::families() {
+            let fam = theme::cell_family(&f, false, false);
+            ui.selectable_value(&mut name, f.clone(), egui::RichText::new(&f).font(egui::FontId::new(14.0, fam)));
         }
     });
     if name != before {

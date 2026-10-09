@@ -16,9 +16,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 image = { workspace = true }
+skrifa = { workspace = true }
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
+epaint_default_fonts = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }

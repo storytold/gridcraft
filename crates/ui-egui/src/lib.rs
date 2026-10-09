@@ -11,6 +11,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod editor;
+pub mod fonts;
 pub mod formula_bar;
 pub mod grid;
 pub mod icons;
@@ -104,6 +105,14 @@ pub struct SheetApp {
     pub perf: Perf,
     pub fonts_ready: bool,
     fonts_set: bool,
+    /// Workbook fonts bound into the current font set; a change rebinds (installed fonts only).
+    fonts_bound: Vec<String>,
+    /// The (doc uid, revision) `fonts_bound` was computed for, so the style table is walked only
+    /// when the workbook changes.
+    fonts_seen: (u64, u64),
+    /// Set while a font-set change is pending activation: skip this frame's paint, like the
+    /// startup `fonts_ready` gate (egui applies new definitions at the next pass).
+    fonts_rebind: bool,
     pub name_box: Option<String>,
     pub(crate) shots: control::Shots,
     /// Chart selected on the sheet (id).
@@ -133,6 +142,9 @@ impl SheetApp {
             perf: Perf::default(),
             fonts_ready: false,
             fonts_set: false,
+            fonts_bound: Vec::new(),
+            fonts_seen: (0, 0),
+            fonts_rebind: false,
             name_box: None,
             shots: control::Shots::default(),
             selected_chart: None,
@@ -140,10 +152,26 @@ impl SheetApp {
         }
     }
 
-    /// One-time context setup: fonts and visuals.
+    /// One-time context setup: start cataloging the machine's fonts, then install the fonts and
+    /// visuals. Workbook-specific fonts are bound later, once the scan is done (see [`logic`]).
+    ///
+    /// [`logic`]: SheetApp::logic
     pub fn setup_context(ctx: &egui::Context, dark: bool) {
-        ctx.set_fonts(theme::font_definitions());
+        fonts::start_scan();
+        ctx.set_fonts(theme::font_definitions(&[]));
         theme::apply(ctx, dark);
+    }
+
+    /// The font names the active workbook uses: every style's font plus the theme's heading/body
+    /// fonts. These are the families [`fonts`] binds an installed file for.
+    pub fn used_fonts(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        if let Some(d) = self.session.active() {
+            names.extend(d.wb.styles.iter().map(|(_, s)| s.font.name.clone()));
+            names.push(d.wb.theme.major_font.clone());
+            names.push(d.wb.theme.minor_font.clone());
+        }
+        names
     }
 
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
@@ -361,6 +389,24 @@ impl SheetApp {
                 self.fonts_set = true;
                 ctx.request_repaint();
             }
+        } else if self.fonts_rebind {
+            // A font-set change made last frame is active now.
+            self.fonts_rebind = false;
+        } else if fonts::scan_done() {
+            // Bind the workbook's installed fonts once the background scan has finished. Adding
+            // fonts re-applies the font set, which egui activates at the next pass, so skip this
+            // frame's paint (same one-frame cost as startup). Only when the workbook changed.
+            let seen = self.session.active().map(|d| (d.uid, d.revision)).unwrap_or((0, 0));
+            if seen != self.fonts_seen {
+                let used = self.used_fonts();
+                self.fonts_seen = seen;
+                if used != self.fonts_bound {
+                    ctx.set_fonts(theme::font_definitions(&used));
+                    self.fonts_bound = used;
+                    self.fonts_rebind = true;
+                    ctx.request_repaint();
+                }
+            }
         }
         if ctx.global_style().visuals.dark_mode != self.ui.dark {
             theme::apply(ctx, self.ui.dark);
@@ -394,7 +440,7 @@ impl SheetApp {
     /// Lays out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        if !self.fonts_ready {
+        if !self.fonts_ready || self.fonts_rebind {
             ctx.request_repaint();
             return;
         }

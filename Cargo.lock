@@ -1522,12 +1522,14 @@ version = "0.3.0"
 dependencies = [
  "egui",
  "egui_kittest",
+ "epaint_default_fonts",
  "gridcraft-chart",
  "gridcraft-engine",
  "image",
  "log",
  "serde",
  "serde_json",
+ "skrifa",
  "toml",
 ]
 

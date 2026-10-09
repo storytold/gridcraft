@@ -21,17 +21,23 @@ pub fn specs() -> Vec<CommandSpec> {
 fn dictionary() -> &'static HashSet<String> {
     static DICT: OnceLock<HashSet<String>> = OnceLock::new();
     DICT.get_or_init(|| {
-        let mut set = HashSet::new();
-        #[cfg(not(target_arch = "wasm32"))]
-        for path in ["/usr/share/dict/words", "/usr/share/dict/american-english", "/usr/share/dict/british-english"] {
-            if let Ok(text) = std::fs::read_to_string(path) {
-                for w in text.lines().take(2_000_000) {
-                    set.insert(w.trim().to_lowercase());
-                }
-                break;
-            }
+        #[cfg(target_arch = "wasm32")]
+        {
+            HashSet::new()
         }
-        set
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut set = HashSet::new();
+            for path in ["/usr/share/dict/words", "/usr/share/dict/american-english", "/usr/share/dict/british-english"] {
+                if let Ok(text) = std::fs::read_to_string(path) {
+                    for w in text.lines().take(2_000_000) {
+                        set.insert(w.trim().to_lowercase());
+                    }
+                    break;
+                }
+            }
+            set
+        }
     })
 }
 

@@ -166,7 +166,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             ed.caret_to_end = false;
             ed.sync_caret = true;
         }
-        if !ed.autocomplete.is_empty() && (tab || (enter && false)) {
+        if !ed.autocomplete.is_empty() && tab {
             ed.accept_autocomplete();
         } else if enter {
             action = Some((if shift { -1 } else { 1 }, 0, false, false));
