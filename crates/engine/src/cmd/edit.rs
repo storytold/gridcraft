@@ -1034,6 +1034,16 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
 fn fill_dir(s: &mut Session, p: &Json, dr: i64, dc: i64) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let mut r = target_range(s, p)?;
+    // Whole rows or columns fill only where the sheet has content (nothing on an empty sheet).
+    if r.is_full_cols() || r.is_full_rows() {
+        match s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()).and_then(|u| r.intersection(&u)) {
+            Some(u) => r = u,
+            None => return Ok(Json::Null),
+        }
+    }
+    if r.count() > 5_000_000 {
+        return Err(bad("edit.fill", "range too large"));
+    }
     // With one row selected, Fill Down copies from the row above (Excel behaviour).
     if dr == 1 && r.height() == 1 {
         r.start.row = r.start.row.saturating_sub(1);
@@ -1050,8 +1060,6 @@ fn fill_dir(s: &mut Session, p: &Json, dr: i64, dc: i64) -> Result<Json> {
     } else {
         RangeRef::new(CellRef::new(r.start.row, r.end.col), r.end)
     };
-    let used = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range());
-    let r = if r.is_full_cols() || r.is_full_rows() { used.and_then(|u| r.intersection(&u)).unwrap_or(r) } else { r };
     edit(s, |cx| {
         crate::fill::fill(cx, sheet, src, r, crate::fill::FillMode::Copy)?;
         Ok(Json::Null)

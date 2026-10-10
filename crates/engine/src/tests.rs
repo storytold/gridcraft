@@ -168,6 +168,22 @@ fn every_command_survives_empty_params() {
 }
 
 #[test]
+fn whole_sheet_selection_stays_within_the_data() {
+    // On an empty sheet with everything selected these filled or scanned every cell of the
+    // sheet, running out of memory or time.
+    let mut s = s();
+    s.execute("edit.selectAll", json!({})).unwrap();
+    for cmd in ["edit.fillDown", "edit.fillRight", "edit.fillUp", "edit.fillLeft", "data.removeDuplicates"] {
+        s.execute(cmd, json!({})).unwrap();
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [3, 4], [5, 6]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:XFD1048576"})).unwrap();
+    s.execute("edit.fillUp", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(5.0));
+    assert!(s.execute("edit.fillDown", json!({"range": "A1:Z1000000"})).is_err(), "too large to fill");
+}
+
+#[test]
 fn parity_counts() {
     let (done, total) = crate::catalog::parity();
     assert!(total > 250);

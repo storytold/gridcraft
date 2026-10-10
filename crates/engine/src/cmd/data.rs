@@ -112,7 +112,8 @@ fn data_range(s: &Session, p: &Json) -> Result<RangeRef> {
     }
     let sel = d.selection.current();
     if !sel.is_single() {
-        let used = sh.used_range().unwrap_or(sel);
+        // An empty sheet has no data to work on: just the active cell.
+        let Some(used) = sh.used_range() else { return Ok(RangeRef::cell(d.selection.active)) };
         return Ok(sel.intersection(&used).unwrap_or(sel));
     }
     Ok(current_region(sh, d.selection.active))
