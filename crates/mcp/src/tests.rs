@@ -340,6 +340,18 @@ fn serve_loop_over_buffers() {
 }
 
 #[test]
+fn cell_set_without_input_is_error() {
+    let mut s = server();
+    ok(&mut s, "set_cell", json!({"cell": "B2", "input": "keep"}));
+    fails(&mut s, "execute_command", json!({"command": "cell.set", "params": {"cell": "B2"}}));
+    fails(&mut s, "execute_command", json!({"command": "cell.set", "params": {}}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "B2"}))["text"], "keep");
+    // An explicit empty string still clears.
+    ok(&mut s, "execute_command", json!({"command": "cell.set", "params": {"cell": "B2", "input": ""}}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "B2"}))["text"], "");
+}
+
+#[test]
 fn remote_backend_over_tcp() {
     // A fake app: answers engine.execute by running a headless session; closes after the first
     // request to exercise the reconnect path.
