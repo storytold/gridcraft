@@ -62,6 +62,8 @@ pub enum Edit {
     /// Delete Cells shifting up (`Rows`) or left (`Cols`): `range` goes and the cells below
     /// (right of) it move back by its height (width), within its columns (rows) only.
     DeleteCells { axis: Axis, range: RangeRef },
+    /// Cut-paste to another sheet; fully contained references follow the destination sheet too.
+    MoveToSheet { from: RangeRef, to_sheet: String, to_row: u32, to_col: u32 },
 }
 
 /// Adjusts a formula living on sheet `host` after `edit` on sheet `target`.
@@ -196,6 +198,26 @@ fn adjust_ref(r: &Reference, edit: &Edit) -> Option<Reference> {
                 k => k.clone(),
             };
             Some(Reference { sheet: r.sheet.clone(), kind })
+        }
+        Edit::MoveToSheet { from, to_sheet, to_row, to_col } => {
+            if !from.contains_range(&r.range()) {
+                return Some(r.clone());
+            }
+            let mut moved = adjust_ref(r, &Edit::Move { from: *from, to_row: *to_row, to_col: *to_col })?;
+            // Whole-row/column references have no anchors, but their indices must move too.
+            moved.kind = match &r.kind {
+                RefKind::Rows(a, aa, b, ba) => {
+                    let dr = *to_row as i64 - from.start.row as i64;
+                    RefKind::Rows(shift_line(*a, false, dr, MAX_ROWS)?, *aa, shift_line(*b, false, dr, MAX_ROWS)?, *ba)
+                }
+                RefKind::Cols(a, aa, b, ba) => {
+                    let dc = *to_col as i64 - from.start.col as i64;
+                    RefKind::Cols(shift_line(*a, false, dc, MAX_COLS)?, *aa, shift_line(*b, false, dc, MAX_COLS)?, *ba)
+                }
+                _ => moved.kind,
+            };
+            moved.sheet = SheetSel::Named(to_sheet.clone());
+            Some(moved)
         }
     }
 }
