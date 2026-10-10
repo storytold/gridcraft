@@ -288,18 +288,35 @@ impl Value {
 pub fn compare(a: &Value, b: &Value) -> Ordering {
     match (a, b) {
         (Value::Empty, Value::Empty) => Ordering::Equal,
-        (Value::Empty, Value::Number(n)) => 0.0f64.partial_cmp(n).unwrap_or(Ordering::Equal),
-        (Value::Number(n), Value::Empty) => n.partial_cmp(&0.0).unwrap_or(Ordering::Equal),
+        (Value::Empty, Value::Number(n)) => compare_numbers(0.0, *n),
+        (Value::Number(n), Value::Empty) => compare_numbers(*n, 0.0),
         (Value::Empty, Value::Text(t)) => "".cmp(&t.to_lowercase() as &str),
         (Value::Text(t), Value::Empty) => (t.to_lowercase() as String).as_str().cmp(""),
         (Value::Empty, Value::Bool(b)) => false.cmp(b),
         (Value::Bool(b), Value::Empty) => b.cmp(&false),
-        (Value::Number(x), Value::Number(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
+        (Value::Number(x), Value::Number(y)) => compare_numbers(*x, *y),
         (Value::Text(x), Value::Text(y)) => compare_text(x, y),
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         (Value::Error(x), Value::Error(y)) => x.code().cmp(&y.code()),
         _ => a.rank().cmp(&b.rank()),
     }
+}
+
+/// Compares numbers the way Excel does: both are rounded to 15 significant digits first, so binary
+/// noise such as `0.1+0.2` versus `0.3` counts as equal.
+pub fn compare_numbers(a: f64, b: f64) -> Ordering {
+    fn round15(x: f64) -> f64 {
+        if !x.is_finite() || x == 0.0 { x } else { format!("{x:.14e}").parse().unwrap_or(x) }
+    }
+    if a == b {
+        return Ordering::Equal;
+    }
+    // Numbers further apart than the 15th digit can't round together, and rounding keeps their
+    // order: skip the text round trip (this is on the sort and lookup hot path).
+    if (a - b).abs() > a.abs().max(b.abs()) * 1e-13 {
+        return a.partial_cmp(&b).unwrap_or(Ordering::Equal);
+    }
+    round15(a).partial_cmp(&round15(b)).unwrap_or(Ordering::Equal)
 }
 
 /// Case-insensitive text order (Unicode lowercase).
@@ -408,6 +425,17 @@ mod tests {
             assert_eq!(CellError::parse(e.as_str()), Some(e));
         }
         assert_eq!(CellError::parse("#div/0!"), Some(CellError::Div0));
+    }
+
+    #[test]
+    fn numbers_compare_at_15_significant_digits() {
+        let num = Value::Number;
+        assert_eq!(compare(&num(0.1 + 0.2), &num(0.3)), Ordering::Equal);
+        assert_eq!(compare(&num(1.1 * 3.0), &num(3.3)), Ordering::Equal);
+        assert_eq!(compare(&num(1.0), &num(1.0 + 1e-16)), Ordering::Equal);
+        assert_ne!(compare(&num(0.1 + 0.2), &num(0.3)), Ordering::Greater);
+        assert_eq!(compare(&num(1.0), &num(1.00000000000001)), Ordering::Less);
+        assert_eq!(compare(&num(1.0), &num(2.0)), Ordering::Less);
     }
 
     #[test]
