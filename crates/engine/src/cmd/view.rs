@@ -113,7 +113,7 @@ fn freeze_panes(s: &mut Session, p: &Json) -> Result<Json> {
     if sh.freeze.is_some() && p.get("cell").is_none() {
         return set_freeze(s, None);
     }
-    let at = cell_param(p, "cell").unwrap_or(d.selection.active);
+    let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
     let top = sh.view_top_left;
     let rows = at.row.saturating_sub(top.row);
     let cols = at.col.saturating_sub(top.col);
@@ -254,7 +254,7 @@ fn scale_fit(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn breaks(s: &mut Session, p: &Json) -> Result<Json> {
-    let at = cell_param(p, "cell").unwrap_or(s.doc()?.selection.active);
+    let at = cell_param(s, p, "cell")?.unwrap_or(s.doc()?.selection.active);
     let insert = bool_param(p, "insert").unwrap_or(false);
     let remove = bool_param(p, "remove").unwrap_or(false);
     let reset = bool_param(p, "reset").unwrap_or(false);

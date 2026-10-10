@@ -376,7 +376,7 @@ fn move_chart(s: &mut Session, p: &Json) -> Result<Json> {
         Some(n) => Some(s.doc()?.wb.sheet_index(n).ok_or_else(|| bad("chart.move", "no such sheet"))?),
         None => None,
     };
-    let at = cell_param(p, "at");
+    let at = cell_param_on(s, p, "at", target.unwrap_or(si))?;
     edit(s, |cx| {
         let mut chart = cx.sheet_mut(si)?.charts.remove(ci);
         if let Some(a) = at {
@@ -856,7 +856,7 @@ fn checkbox(s: &mut Session, p: &Json) -> Result<Json> {
 fn toggle_checkbox(s: &mut Session, p: &Json) -> Result<Json> {
     let si = target_sheet(s, p)?;
     let d = s.doc()?;
-    let cells: Vec<CellRef> = match cell_param(p, "cell") {
+    let cells: Vec<CellRef> = match cell_param_on(s, p, "cell", si)? {
         Some(c) => vec![c],
         None => d.selection.ranges.iter().flat_map(|r| r.iter().take(100_000).collect::<Vec<_>>()).collect(),
     };
@@ -922,7 +922,7 @@ fn new_cell_style(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").ok_or_else(|| bad("home.newCellStyle", "missing `name`"))?.to_string();
     let d = s.doc()?;
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
-    let c = cell_param(p, "fromCell").unwrap_or(d.selection.active);
+    let c = cell_param(s, p, "fromCell")?.unwrap_or(d.selection.active);
     let style = d.wb.styles.get(sh.style_id(c)).clone();
     edit(s, |cx| {
         cx.wb.cell_styles.retain(|(n, _)| !n.eq_ignore_ascii_case(&name));

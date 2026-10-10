@@ -192,7 +192,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
 
 fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
-    let at = match cell_param(p, "cell") {
+    let at = match cell_param_on(s, p, "cell", sheet)? {
         Some(c) => c,
         None => s.doc()?.selection.active,
     };
@@ -340,8 +340,9 @@ fn selection_set(s: &mut Session, p: &Json) -> Result<Json> {
         s.doc_mut()?.wb_switch_sheet(i);
     }
     let ranges = target_ranges(s, p)?;
+    let active = cell_param(s, p, "active")?;
     let d = s.doc_mut()?;
-    let active = cell_param(p, "active").or_else(|| ranges.last().map(|r| r.start)).unwrap_or_default();
+    let active = active.or_else(|| ranges.last().map(|r| r.start)).unwrap_or_default();
     let mut sel = crate::Selection { active, anchor: ranges.last().map(|r| r.start).unwrap_or(active), ranges };
     if let Some(sh) = d.wb.active() {
         sel.expand_merges(sh);
@@ -672,7 +673,7 @@ fn paste(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
-    let at = cell_param(p, "at").unwrap_or(s.doc()?.selection.current().start);
+    let at = cell_param_on(s, p, "at", sheet)?.unwrap_or(s.doc()?.selection.current().start);
     let rows: Vec<Vec<String>> = parse_tsv(text);
     let h = rows.len();
     let w = rows.iter().map(Vec::len).max().unwrap_or(0);
@@ -771,14 +772,14 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let link = bool_param(p, "link").unwrap_or(false);
     let dest_sheet = target_sheet(s, p)?;
     let sel = s.doc()?.selection.current();
-    let at = cell_param(p, "at").unwrap_or(sel.start);
+    let at = cell_param_on(s, p, "at", dest_sheet)?.unwrap_or(sel.start);
     let src = clip.range;
     let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
     // Tile the copy over a larger destination that is a multiple of its size.
     let tile = sel.height() % h == 0
         && sel.width() % w == 0
         && !sel.is_single()
-        && cell_param(p, "at").is_none()
+        && cell_param_on(s, p, "at", dest_sheet)?.is_none()
         && !sel.is_full_cols()
         && !sel.is_full_rows()
         && sel.count() <= 4_000_000;
