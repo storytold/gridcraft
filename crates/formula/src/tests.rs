@@ -65,7 +65,19 @@ fn spill_operator() {
     assert!(parse("A1:B2#").is_err());
     assert!(parse("Name#").is_err());
     // Deleting the anchor's sheet leaves #REF!.
-    assert_eq!(print(&crate::adjust::delete_sheet(parse("SUM(Data!A1#)").unwrap(), "Data")), "SUM(#REF!)");
+    assert_eq!(print(&crate::adjust::delete_sheet(parse("SUM(Data!A1#)").unwrap(), "Data", &[])), "SUM(#REF!)");
+}
+
+#[test]
+fn delete_sheet_shrinks_3d_span() {
+    let order: Vec<String> = ["Sheet1", "Sheet2", "Sheet3", "Results"].iter().map(|s| s.to_string()).collect();
+    let del = |f: &str, n: &str| print(&crate::adjust::delete_sheet(parse(f).unwrap(), n, &order));
+    assert_eq!(del("SUM(Sheet1:Sheet3!A1)", "Sheet1"), "SUM(Sheet2:Sheet3!A1)");
+    assert_eq!(del("SUM(Sheet1:Sheet3!A1)", "Sheet3"), "SUM(Sheet1:Sheet2!A1)");
+    assert_eq!(del("SUM(Sheet3:Sheet1!A1)", "Sheet1"), "SUM(Sheet3:Sheet2!A1)");
+    assert_eq!(del("SUM(Sheet1:Sheet3!A1)", "Sheet2"), "SUM(Sheet1:Sheet3!A1)");
+    assert_eq!(del("SUM(Sheet1:Sheet2!A1)", "Sheet1"), "SUM(Sheet2!A1)");
+    assert_eq!(del("Sheet1!A1+Sheet3!A1", "Sheet1"), "#REF!+Sheet3!A1");
 }
 
 #[test]
