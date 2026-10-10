@@ -175,38 +175,34 @@ pub fn jump(sheet: &Sheet, from: CellRef, dr: i64, dc: i64) -> CellRef {
 
 /// The contiguous data region around `c` (Ctrl+A / Ctrl+Shift+8, AutoSum, sort, tables).
 pub fn current_region(sheet: &Sheet, c: CellRef) -> RangeRef {
-    let filled = |c: CellRef| sheet.value_ref(c).is_some_and(|v| !v.is_empty());
-    let mut r = RangeRef::cell(c);
-    for _ in 0..10_000 {
-        let mut grown = r;
-        let r0 = r.start.row.saturating_sub(1);
-        let r1 = (r.end.row + 1).min(MAX_ROWS - 1);
-        let c0 = r.start.col.saturating_sub(1);
-        let c1 = (r.end.col + 1).min(MAX_COLS - 1);
-        // Check the ring around r.
-        let ring = RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1));
-        let mut any = false;
-        for (cc, cell) in sheet.cells.iter_range(ring) {
-            if !r.contains(cc) && (!cell.value.is_empty() || cell.formula.is_some()) {
-                grown = grown.union(&RangeRef::cell(cc));
-                any = true;
-            }
+    let filled = |c: CellRef| sheet.cell(c).is_some_and(|x| !x.value.is_empty() || x.formula.is_some()) || sheet.spill.contains_key(&c);
+    // Whether a row (or column) has a filled cell between two columns (rows), inclusive.
+    let row_has = |row: u32, a: u32, b: u32| (a..=b).any(|col| filled(CellRef::new(row, col)));
+    let col_has = |col: u32, a: u32, b: u32| (a..=b).any(|row| filled(CellRef::new(row, col)));
+    let (mut r0, mut r1, mut c0, mut c1) = (c.row, c.row, c.col, c.col);
+    // Grow one side at a time while the line next to it (diagonals included) has data. Each
+    // pass scans only the lines next to the region, so tall regions take linear time.
+    loop {
+        let before = (r0, r1, c0, c1);
+        let (lo_c, hi_c) = (c0.saturating_sub(1), (c1 + 1).min(MAX_COLS - 1));
+        while r0 > 0 && row_has(r0 - 1, lo_c, hi_c) {
+            r0 -= 1;
         }
-        for (cc, _) in sheet.spill.range(CellRef::new(r0, 0)..=CellRef::new(r1, MAX_COLS - 1)) {
-            if ring.contains(*cc) && !r.contains(*cc) {
-                grown = grown.union(&RangeRef::cell(*cc));
-                any = true;
-            }
+        while r1 + 1 < MAX_ROWS && row_has(r1 + 1, lo_c, hi_c) {
+            r1 += 1;
         }
-        if !any || grown == r {
+        let (lo_r, hi_r) = (r0.saturating_sub(1), (r1 + 1).min(MAX_ROWS - 1));
+        while c0 > 0 && col_has(c0 - 1, lo_r, hi_r) {
+            c0 -= 1;
+        }
+        while c1 + 1 < MAX_COLS && col_has(c1 + 1, lo_r, hi_r) {
+            c1 += 1;
+        }
+        if (r0, r1, c0, c1) == before {
             break;
         }
-        r = grown;
     }
-    if r.is_single() && !filled(c) {
-        return RangeRef::cell(c);
-    }
-    r
+    RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1))
 }
 
 #[cfg(test)]
@@ -239,6 +235,13 @@ mod tests {
         assert_eq!(current_region(&s, CellRef::new(3, 2)).a1(), "B3:D5");
         assert_eq!(current_region(&s, CellRef::new(5, 4)).a1(), "B3:E6");
         assert_eq!(current_region(&s, CellRef::new(20, 20)).a1(), "U21");
+        // Taller than 10,000 rows: it used to stop growing after 10,000 steps.
+        let mut s = Sheet::new("S");
+        for r in 0..20_000 {
+            s.set_value(CellRef::new(r, 0), Value::Number(r as f64));
+            s.set_value(CellRef::new(r, 1), Value::Number(1.0));
+        }
+        assert_eq!(current_region(&s, CellRef::new(5, 0)).a1(), "A1:B20000");
     }
 
     #[test]
