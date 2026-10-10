@@ -44,7 +44,10 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             if icon_button(ui, Icon::Home, t.text_dim, "Home", vec2(26.0, 26.0)).clicked() {
                 app.open_dialog("start", json!({}));
             }
-            if icon_button(ui, Icon::Save, t.text_dim, "Save (⌘S)", vec2(26.0, 26.0)).clicked() {
+            if icon_button(ui, Icon::Save, t.text_dim, "Save (⌘S)", vec2(26.0, 26.0)).clicked()
+                // File operations must include the cell the user is still editing (as the File > Save menu item already does).
+                && app.commit_edit(0, 0, false, false)
+            {
                 app.run_or_alert("file.save", json!({}));
             }
             let can_undo = app.session.active().is_some_and(|d| !d.undo.is_empty());

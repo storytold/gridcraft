@@ -810,7 +810,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         if ui.button("Cancel").clicked() {
                             open = false;
                         }
-                        if ui.button("Save").clicked() {
+                        // File operations must include the cell the user is still editing (as the File > Save menu item already does).
+                        if ui.button("Save").clicked() && app.commit_edit(0, 0, false, false) {
                             app.run_or_alert("file.save", json!({}));
                             if app.session.active().is_some_and(|x| !x.is_dirty()) {
                                 app.run_or_alert("file.close", json!({"force": true}));
