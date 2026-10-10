@@ -1444,12 +1444,14 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         && let Some(p) = pos
         && handle.contains(p)
     {
-        // Fill down as far as the neighbouring column goes.
+        // Fill down as far as the neighbouring column goes. Capped well under Excel's own
+        // million-plus rows: a stray value far below the data (not unusual in a real sheet)
+        // would otherwise make this probe a cell at a time for however far down it sits, long
+        // enough to feel like a hang before the cap was reached at all.
         let src = sel.current();
         let neighbour = if src.start.col > 0 { src.start.col - 1 } else { src.end.col + 1 };
         let mut last = src.end.row;
-        while last + 1 < MAX_ROWS && sh.value_ref(CellRef::new(last + 1, neighbour)).is_some_and(|v| !v.is_empty()) && last - src.end.row < 1_000_000
-        {
+        while last + 1 < MAX_ROWS && sh.value_ref(CellRef::new(last + 1, neighbour)).is_some_and(|v| !v.is_empty()) && last - src.end.row < 10_000 {
             last += 1;
         }
         if last > src.end.row {
