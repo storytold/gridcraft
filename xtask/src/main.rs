@@ -21,12 +21,12 @@ usage: cargo xtask <command>
 
 commands:
   ci              fmt --check, clippy -D warnings, test, assets, layers, wasm, parity --check
-                  (stops at the first failure; the parity check runs only if docs/parity.md exists)
+                  (stops at the first failure; the parity check runs only if docs/parity-checklist.md exists)
   assets          check that every icon/image/font/sample file is attributed in ATTRIBUTION.md
   layers          enforce the crate dependency layering (AGENTS.md \"Layering\")
   wasm            cargo check --target wasm32-unknown-unknown for the L0-L5 crates (+ gridcraft-web)
   parity [--check] [--out PATH]
-                  write docs/parity.md from gridcraft_engine::catalog (implemented vs missing ids)
+                  write docs/parity-checklist.md from gridcraft_engine::catalog (implemented vs missing ids)
   version [set X.Y.Z[-pre]]
                   print or set the workspace version ([workspace.package] in Cargo.toml)
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -186,10 +186,10 @@ fn cmd_ci() -> Result<(), String> {
         (
             "parity",
             Box::new(|| {
-                if root().join("docs/parity.md").exists() {
+                if root().join("docs/parity-checklist.md").exists() {
                     parity::run(&root(), &["--check"])
                 } else {
-                    println!("parity: docs/parity.md not generated yet; skipped (run `cargo xtask parity`)");
+                    println!("parity: docs/parity-checklist.md not generated yet; skipped (run `cargo xtask parity`)");
                     Ok(())
                 }
             }),
