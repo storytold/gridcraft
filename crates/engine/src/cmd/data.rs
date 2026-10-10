@@ -580,6 +580,9 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
     let r = data_range(s, p)?;
     let d = s.doc()?;
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    // Rows and columns past the data are blank: only the part with data is compared (whole
+    // columns compared a million blank rows and reported them as removed duplicates).
+    let r = sh.used_range().and_then(|u| r.intersection(&u)).unwrap_or(RangeRef::cell(r.start));
     let header = bool_param(p, "header").unwrap_or_else(|| guess_header(&d.wb, sh, r));
     let cols: Vec<u32> = p
         .get("columns")
