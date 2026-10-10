@@ -6,6 +6,7 @@
 
 mod b64;
 pub mod cell;
+mod cellmap;
 pub mod features;
 pub mod sheet;
 pub mod store;
