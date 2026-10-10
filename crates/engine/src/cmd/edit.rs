@@ -868,8 +868,10 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             {
                                 let a = old.value.clone();
                                 let b = new.value.clone();
+                                // Numbers stored as text take part (multiplying by 1 turns them into
+                                // numbers); other text and errors stay as they are.
                                 if let (Ok(x), Ok(y)) = (a.to_number(), b.to_number())
-                                    && (a.is_number() || a.is_empty())
+                                    && (a.is_number() || a.is_empty() || a.is_text())
                                     && (b.is_number() || b.is_empty())
                                 {
                                     new.value = match op.as_str() {
@@ -883,8 +885,26 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                                 Value::number(x / y)
                                             }
                                         }
-                                        _ => b,
+                                        _ => b.clone(),
                                     };
+                                } else if (a.is_text() || a.is_error()) && (b.is_number() || b.is_empty()) {
+                                    new.value = a;
+                                }
+                                // A formula already there is kept and combined with the pasted number.
+                                if let Some(f) = &old.formula
+                                    && let Ok(y) = b.to_number()
+                                    && (b.is_number() || b.is_empty())
+                                    && let Some(sym) = match op.as_str() {
+                                        "add" => Some('+'),
+                                        "subtract" => Some('-'),
+                                        "multiply" => Some('*'),
+                                        "divide" => Some('/'),
+                                        _ => None,
+                                    }
+                                {
+                                    let text = format!("=({}){sym}{}", f.text, gridcraft_core::number_to_text(y));
+                                    new.formula = Some(std::sync::Arc::new(Formula::new(&text)));
+                                    new.value = Value::Empty;
                                 }
                             }
                         }
@@ -1325,6 +1345,28 @@ mod tests {
         assert_eq!(parse_tsv("a\tb\n1\t2\n"), vec![vec!["a", "b"], vec!["1", "2"]]);
         assert_eq!(parse_tsv("\"x\ty\"\tz"), vec![vec!["x\ty", "z"]]);
         assert_eq!(parse_tsv("\"he said \"\"hi\"\"\""), vec![vec!["he said \"hi\""]]);
+    }
+
+    #[test]
+    fn paste_special_operations_keep_text_errors_and_formulas() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute(
+            "range.setValues",
+            json!({"range": "A1", "values": [["'123", "Total", "=NA()", "=B3*2", 5], [1, null, null, null, null], [null, 4, null, null, null]]}),
+        )
+        .unwrap();
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+        assert_eq!(get(&mut s, "A1")["value"], "123");
+        s.execute("edit.copy", json!({"range": "A2"})).unwrap();
+        s.execute("selection.set", json!({"range": "A1:E1"})).unwrap();
+        s.execute("edit.pasteSpecial", json!({"what": "values", "operation": "multiply"})).unwrap();
+        assert_eq!(get(&mut s, "A1")["value"], json!(123.0));
+        assert_eq!(get(&mut s, "B1")["value"], "Total");
+        assert_eq!(get(&mut s, "C1")["value"]["error"], "#N/A");
+        assert_eq!(get(&mut s, "D1")["formula"], "=(B3*2)*1");
+        assert_eq!(get(&mut s, "D1")["value"], json!(8.0));
+        assert_eq!(get(&mut s, "E1")["value"], json!(5.0));
     }
 
     #[test]
