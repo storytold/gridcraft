@@ -223,7 +223,14 @@ impl Parser {
             Tok::LBrace => self.array(),
             Tok::Func(name) => {
                 let name = normalize_function_name(&name);
-                let args = self.args()?;
+                let mut args = self.args()?;
+                // Files write `A1#` as `_xlfn.ANCHORARRAY(A1)`.
+                if name == "ANCHORARRAY"
+                    && let [Expr::Ref(Reference { kind: RefKind::Cell(_), .. })] = args.as_slice()
+                    && let Some(r) = args.pop()
+                {
+                    return Ok(Expr::Unary(UnOp::Spill, Box::new(r)));
+                }
                 Ok(Expr::Call(name, args))
             }
             Tok::Sheet(a, b) => {
@@ -263,7 +270,12 @@ impl Parser {
                 self.next();
                 return Ok(Expr::Ref(Reference { sheet, kind: RefKind::Range(a, b) }));
             }
-            return Ok(Expr::Ref(Reference { sheet, kind: RefKind::Cell(a) }));
+            let cell = Expr::Ref(Reference { sheet, kind: RefKind::Cell(a) });
+            if *self.peek() == Tok::Op("#") {
+                self.next();
+                return Ok(Expr::Unary(UnOp::Spill, Box::new(cell)));
+            }
+            return Ok(cell);
         }
         let second = match self.peek_at(1) {
             Tok::Word(w2) => Some(w2.clone()),

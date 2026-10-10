@@ -225,6 +225,26 @@ impl Host for PassHost<'_> {
     fn workbook(&self) -> &Workbook {
         self.wb
     }
+    fn spill_range(&mut self, sheet: usize, anchor: CellRef) -> Option<RangeRef> {
+        let k = (sheet, anchor);
+        if !(self.pending.contains(&k) || self.results.contains_key(&k)) {
+            return self.wb.sheet(sheet)?.spill_ranges.get(&anchor).copied();
+        }
+        // Recalculated in this pass: its new array, unless something blocks it (#SPILL!).
+        self.compute(k);
+        let arr = self.spills.get(&k)?;
+        let end = CellRef::new(
+            anchor.row.saturating_add((arr.rows as u32).saturating_sub(1)),
+            anchor.col.saturating_add((arr.cols as u32).saturating_sub(1)),
+        );
+        let range = RangeRef::new(anchor, end);
+        let sh = self.wb.sheet(sheet)?;
+        let blocked = end.row >= gridcraft_core::MAX_ROWS
+            || end.col >= gridcraft_core::MAX_COLS
+            || sh.cells.iter_range(range).any(|(c, cell)| c != anchor && (cell.formula.is_some() || !cell.value.is_empty()))
+            || sh.merges.iter().any(|m| m.intersects(&range));
+        (!blocked).then_some(range)
+    }
     fn cell_value(&mut self, sheet: usize, c: CellRef) -> Value {
         let k = (sheet, c);
         if self.pending.contains(&k) || self.results.contains_key(&k) {

@@ -317,25 +317,31 @@ pub fn font_definitions() -> FontDefinitions {
 }
 
 pub fn apply(ctx: &egui::Context, dark: bool) {
-    let t = if dark { Tokens::dark() } else { Tokens::light() };
-    let mut v = if dark { Visuals::dark() } else { Visuals::light() };
-    v.panel_fill = t.window;
-    v.window_fill = t.menu_bg;
-    v.extreme_bg_color = t.input_bg;
-    v.selection.bg_fill = t.accent_soft;
-    v.selection.stroke = Stroke::new(1.0, t.accent);
-    v.hyperlink_color = t.accent;
-    v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, t.text);
-    v.widgets.inactive.fg_stroke = Stroke::new(1.0, t.text);
-    v.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-    v.widgets.hovered.weak_bg_fill = t.hover;
-    v.widgets.active.weak_bg_fill = t.pressed;
-    v.widgets.inactive.bg_stroke = Stroke::new(1.0, t.input_border);
-    v.window_corner_radius = egui::CornerRadius::same(10);
-    v.menu_corner_radius = egui::CornerRadius::same(8);
-    v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: t.shadow };
-    ctx.set_visuals(v);
-    ctx.global_style_mut(|s| {
+    // Install both palettes before System can switch between the style slots.
+    for theme in [egui::Theme::Light, egui::Theme::Dark] {
+        let dark = theme == egui::Theme::Dark;
+        let t = if dark { Tokens::dark() } else { Tokens::light() };
+        let mut v = if dark { Visuals::dark() } else { Visuals::light() };
+        v.panel_fill = t.window;
+        v.window_fill = t.menu_bg;
+        v.extreme_bg_color = t.input_bg;
+        v.selection.bg_fill = t.accent_soft;
+        v.selection.stroke = Stroke::new(1.0, t.accent);
+        v.hyperlink_color = t.accent;
+        v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, t.text);
+        v.widgets.inactive.fg_stroke = Stroke::new(1.0, t.text);
+        v.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+        v.widgets.hovered.weak_bg_fill = t.hover;
+        v.widgets.active.weak_bg_fill = t.pressed;
+        v.widgets.inactive.bg_stroke = Stroke::new(1.0, t.input_border);
+        v.window_corner_radius = egui::CornerRadius::same(10);
+        v.menu_corner_radius = egui::CornerRadius::same(8);
+        v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: t.shadow };
+        ctx.set_visuals_of(theme, v);
+    }
+    ctx.options_mut(|o| o.fallback_theme = egui::Theme::Light);
+    ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+    ctx.all_styles_mut(|s| {
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.button_padding = egui::vec2(6.0, 3.0);
         s.spacing.interact_size.y = 22.0;

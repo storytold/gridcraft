@@ -563,3 +563,27 @@ fn writing_repairs_invalid_models() {
     assert_eq!(s.tables[0].name, "Table1");
     assert_eq!(s.cell(at("B2")).unwrap().style, StyleId::DEFAULT);
 }
+
+fn sheet1_xml(bytes: &[u8]) -> (String, bool) {
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut s = String::new();
+    z.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut s).unwrap();
+    let metadata = z.by_name("xl/metadata.xml").is_ok();
+    (s, metadata)
+}
+
+/// Excel refuses to open a file whose cached values include `#SPILL!` or `#CALC!`.
+#[test]
+fn spill_and_calc_errors_are_cached_as_value_errors() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.set_value(at("A1"), Value::Number(1.0));
+    s.cells.set(at("C1"), Cell { value: Value::Error(CellError::Spill), ..Cell::formula(Formula::new("A1:A3*2")) });
+    s.cells.set(at("C2"), Cell { value: Value::Error(CellError::Calc), ..Cell::formula(Formula::new("FILTER(A1:A3,A1:A3>5)")) });
+    s.cells.set(at("C3"), Cell { value: Value::Error(CellError::NA), ..Cell::formula(Formula::new("NA()")) });
+    let (xml, _) = sheet1_xml(&write_xlsx(&wb).unwrap());
+    assert!(!xml.contains("#SPILL!") && !xml.contains("#CALC!"), "{xml}");
+    assert!(xml.contains(r#"<f>A1:A3*2</f><v>#VALUE!</v></c>"#), "{xml}");
+    assert!(xml.contains(r#"<f>_xlfn._xlws.FILTER(A1:A3,A1:A3&gt;5)</f><v>#VALUE!</v></c>"#), "{xml}");
+    assert!(xml.contains(r#"<c r="C3" t="e"><f>NA()</f><v>#N/A</v></c>"#), "{xml}");
+}

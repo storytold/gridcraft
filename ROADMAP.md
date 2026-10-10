@@ -81,11 +81,13 @@ by open equivalents or left out, not cloned.
   autocomplete and argument hints, copy/cut/paste and Paste Special (values, formats, transpose,
   operations, link, skip blanks), AutoFill series (numbers, dates, months, weekdays, custom lists,
   text+number), Fill Series, Flash Fill, find/replace with wildcards, Go To / Go To Special,
-  undo/redo with history, format painter.
+  undo/redo with history, format painter. Quick selection drags retain their final endpoint;
+  the fill handle explains how to fill versus select cells.
 - Formatting: fonts, fills, all border styles, alignment (wrap, indent, rotation, merge), number
   formats, 47 cell styles, 60 table styles, conditional formatting (cell rules, text, dates,
   duplicates, top/bottom, averages, data bars, colour scales, icon sets, formulas), automatic
   row heights, autofit, hide/unhide, freeze panes.
+  Border presets include visual diagrams; Format Cells previews draft borders before applying.
 - Data: sort (multi-level, by colour, custom lists), AutoFilter (values, custom, top 10,
   average, colour), tables with totals rows, remove duplicates, text to columns, data validation
   with error alerts, grouping/outline, subtotals.

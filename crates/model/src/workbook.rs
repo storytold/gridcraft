@@ -3,8 +3,10 @@
 use std::sync::Arc;
 
 use gridcraft_core::DateSystem;
+use gridcraft_formula::Expr;
 use serde::{Deserialize, Serialize};
 
+use crate::cell::Formula;
 use crate::sheet::Sheet;
 use crate::style::{StyleTable, Theme};
 
@@ -143,6 +145,53 @@ impl Workbook {
             .find(|n| n.scope == Some(sheet) && n.name.eq_ignore_ascii_case(name))
             .or_else(|| self.names.iter().find(|n| n.scope.is_none() && n.name.eq_ignore_ascii_case(name)))
     }
+    /// Spells calls of LAMBDA names the way the names are defined (`Double(4)`, where the
+    /// parser gives `DOUBLE(4)`: it upper-cases function names, as built-in ones are shown).
+    pub fn name_call_case(&self, e: Expr) -> Expr {
+        spell_calls(e, &self.lambda_names())
+    }
+    /// [`Workbook::name_call_case`] for every cell formula and defined name (after reading a
+    /// file).
+    pub fn apply_name_call_case(&mut self) {
+        let lambdas = self.lambda_names();
+        if lambdas.is_empty() {
+            return;
+        }
+        for sheet in self.sheets.iter_mut() {
+            let fixed: Vec<_> = sheet
+                .cells
+                .iter()
+                .filter_map(|(c, cell)| {
+                    let f = cell.formula.as_ref()?;
+                    let e = f.expr()?;
+                    let ne = spell_calls(e.clone(), &lambdas);
+                    (ne != e).then(|| (c, Formula { array: f.array, ..Formula::from_expr(ne) }))
+                })
+                .collect();
+            if fixed.is_empty() {
+                continue;
+            }
+            let sheet = Arc::make_mut(sheet);
+            for (c, f) in fixed {
+                if let Some(cell) = sheet.cells.get_mut(c) {
+                    cell.formula = Some(Arc::new(f));
+                }
+            }
+        }
+        for n in self.names.iter_mut() {
+            if let Ok(e) = gridcraft_formula::parse(&n.formula) {
+                let ne = spell_calls(e.clone(), &lambdas);
+                if ne != e {
+                    n.formula = gridcraft_formula::print(&ne);
+                }
+            }
+        }
+    }
+    /// Names of the defined names holding a LAMBDA (callable like functions).
+    fn lambda_names(&self) -> Vec<String> {
+        let is_lambda = |f: &str| f.trim_start_matches('=').trim_start().get(..7).is_some_and(|p| p.eq_ignore_ascii_case("LAMBDA("));
+        self.names.iter().filter(|n| is_lambda(&n.formula)).map(|n| n.name.clone()).collect()
+    }
     /// Table by name across sheets: (sheet index, table index).
     pub fn table(&self, name: &str) -> Option<(usize, usize)> {
         for (si, s) in self.sheets.iter().enumerate() {
@@ -170,6 +219,20 @@ impl Workbook {
         }
         m + 1
     }
+}
+
+/// Calls of the names in `lambdas` spelled as the names are.
+fn spell_calls(e: Expr, lambdas: &[String]) -> Expr {
+    if lambdas.is_empty() {
+        return e;
+    }
+    e.map(&mut |x| match x {
+        Expr::Call(n, args) => match lambdas.iter().find(|l| l.eq_ignore_ascii_case(&n)) {
+            Some(l) => Expr::Call(l.clone(), args),
+            None => Expr::Call(n, args),
+        },
+        other => other,
+    })
 }
 
 #[cfg(test)]

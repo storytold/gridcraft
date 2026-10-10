@@ -74,20 +74,8 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
             None
         }
     };
-    let map_range = |r: RangeRef| -> Option<RangeRef> {
-        let e = if insert { Edit::Insert { axis, at, count } } else { Edit::Delete { axis, at, count } };
-        let expr = gridcraft_formula::Expr::Ref(gridcraft_formula::Reference {
-            sheet: gridcraft_formula::SheetSel::Current,
-            kind: gridcraft_formula::RefKind::Range(
-                gridcraft_formula::Anchor { row: r.start.row, col: r.start.col, row_abs: false, col_abs: false },
-                gridcraft_formula::Anchor { row: r.end.row, col: r.end.col, row_abs: false, col_abs: false },
-            ),
-        });
-        match gridcraft_formula::adjust::adjust(expr, "S", "S", &e) {
-            gridcraft_formula::Expr::Ref(r) => Some(r.range()),
-            _ => None,
-        }
-    };
+    let e = if insert { Edit::Insert { axis, at, count } } else { Edit::Delete { axis, at, count } };
+    let map_range = |r: RangeRef| map_range(r, &e);
     let map_cell = |c: CellRef| -> Option<CellRef> {
         match axis {
             Axis::Rows => map_line(c.row).map(|r| CellRef::new(r, c.col)),
@@ -196,8 +184,18 @@ fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit) {
     }
 }
 
+/// Inserting or deleting cells moves the copied block away from the stored source range, so, like
+/// Excel, it cancels copy/cut mode for this workbook (a later paste would take the wrong cells).
+fn cancel_copy_mode(s: &mut Session) {
+    let uid = s.doc().map(|d| d.uid).ok();
+    if s.clipboard.as_ref().is_some_and(|c| Some(c.doc_uid) == uid) {
+        s.clipboard = None;
+    }
+}
+
 fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let (at, count) = lines(s, p, axis)?;
+    check_lines_protection(s, p, axis, at, count, true)?;
     let sheet = target_sheet(s, p)?;
     // Refuse to push data off the sheet.
     let limit = if axis == Axis::Rows { MAX_ROWS } else { MAX_COLS };
@@ -207,8 +205,9 @@ fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
             return Err(EngineError::Other("To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet.".into()));
         }
     }
-    edit(s, |cx| {
+    let out = edit(s, |cx| {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
+        cx.protection_checked = true;
         {
             let sh = cx.sheet_mut(sheet)?;
             match axis {
@@ -230,14 +229,18 @@ fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
         rewrite(&mut cx.wb, &name, &Edit::Insert { axis, at, count });
         cx.structural = true;
         Ok(Json::Null)
-    })
+    })?;
+    cancel_copy_mode(s);
+    Ok(out)
 }
 
 fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let (at, count) = lines(s, p, axis)?;
+    check_lines_protection(s, p, axis, at, count, false)?;
     let sheet = target_sheet(s, p)?;
-    edit(s, |cx| {
+    let out = edit(s, |cx| {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
+        cx.protection_checked = true;
         {
             let sh = cx.sheet_mut(sheet)?;
             let block = match axis {
@@ -254,7 +257,9 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
         rewrite(&mut cx.wb, &name, &Edit::Delete { axis, at, count });
         cx.structural = true;
         Ok(Json::Null)
-    })
+    })?;
+    cancel_copy_mode(s);
+    Ok(out)
 }
 
 fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
@@ -265,27 +270,24 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
         "column" | "entireColumn" => return insert_lines(s, &json!({"cols": RangeRef::cols(r.start.col, r.end.col).a1()}), Axis::Cols),
         _ => {}
     }
+    let e = Edit::InsertCells { axis: if shift == "right" { Axis::Cols } else { Axis::Rows }, range: r };
     let sheet = target_sheet(s, p)?;
     let right = shift == "right";
-    edit(s, |cx| {
+    let out = edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         if right {
             sh.cells.shift_cols_in_rows(r.start.row, r.end.row, r.start.col, r.width() as i64);
         } else {
             sh.cells.shift_rows_in_cols(r.start.col, r.end.col, r.start.row, r.height() as i64);
         }
-        // Formulas referring to cells that moved: approximate with a whole-sheet move edit.
-        let moved = if right {
-            RangeRef::new(r.start, CellRef::new(r.end.row, MAX_COLS - 1 - r.width()))
-        } else {
-            RangeRef::new(r.start, CellRef::new(MAX_ROWS - 1 - r.height(), r.end.col))
-        };
+        shift_cell_features(sh, &e);
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
-        let to = if right { (r.start.row, r.start.col + r.width()) } else { (r.start.row + r.height(), r.start.col) };
-        super::edit::rewrite_all_formulas(&mut cx.wb, &name, &Edit::Move { from: moved, to_row: to.0, to_col: to.1 });
+        rewrite(&mut cx.wb, &name, &e);
         cx.structural = true;
         Ok(Json::Null)
-    })
+    })?;
+    cancel_copy_mode(s);
+    Ok(out)
 }
 
 fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
@@ -296,9 +298,10 @@ fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
         "column" | "entireColumn" => return delete_lines(s, &json!({"cols": RangeRef::cols(r.start.col, r.end.col).a1()}), Axis::Cols),
         _ => {}
     }
+    let e = Edit::DeleteCells { axis: if shift == "left" { Axis::Cols } else { Axis::Rows }, range: r };
     let sheet = target_sheet(s, p)?;
     let left = shift == "left";
-    edit(s, |cx| {
+    let out = edit(s, |cx| {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
         {
             let sh = cx.sheet_mut(sheet)?;
@@ -308,19 +311,15 @@ fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
             } else {
                 sh.cells.shift_rows_in_cols(r.start.col, r.end.col, r.end.row + 1, -(r.height() as i64));
             }
+            shift_cell_features(sh, &e);
         }
-        // References into the deleted block become #REF!; the rest move.
-        let deleted = Edit::Move { from: r, to_row: r.start.row, to_col: r.start.col };
-        let _ = deleted;
-        let moved_from = if left {
-            RangeRef::new(CellRef::new(r.start.row, r.end.col + 1), CellRef::new(r.end.row, MAX_COLS - 1))
-        } else {
-            RangeRef::new(CellRef::new(r.end.row + 1, r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col))
-        };
-        super::edit::rewrite_all_formulas(&mut cx.wb, &name, &Edit::Move { from: moved_from, to_row: r.start.row, to_col: r.start.col });
+        // References into the deleted cells become #REF!; the rest move.
+        rewrite(&mut cx.wb, &name, &e);
         cx.structural = true;
         Ok(Json::Null)
-    })
+    })?;
+    cancel_copy_mode(s);
+    Ok(out)
 }
 
 fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
@@ -359,6 +358,39 @@ fn edit_doc<R>(d: &mut crate::DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -
     super::commit(d, f)
 }
 
+/// Sheet protection for inserting or deleting rows/columns: the protection must allow it, and
+/// deleted lines must not hold locked cells.
+fn check_lines_protection(s: &Session, p: &Json, axis: Axis, at: u32, count: u32, insert: bool) -> Result<()> {
+    let sheet = target_sheet(s, p)?;
+    let wb = &s.doc()?.wb;
+    let Some(sh) = wb.sheet(sheet) else { return Ok(()) };
+    let Some(pr) = &sh.protection else { return Ok(()) };
+    let allowed = match (axis, insert) {
+        (Axis::Rows, true) => pr.insert_rows,
+        (Axis::Rows, false) => pr.delete_rows,
+        (Axis::Cols, true) => pr.insert_columns,
+        (Axis::Cols, false) => pr.delete_columns,
+    };
+    let locked = |st: gridcraft_model::StyleId| wb.styles.get(st).protection.locked;
+    let refuse = || EngineError::Other(PROTECTED.into());
+    if !allowed {
+        return Err(refuse());
+    }
+    if insert {
+        return Ok(());
+    }
+    let end = at.saturating_add(count - 1).min(if axis == Axis::Rows { MAX_ROWS - 1 } else { MAX_COLS - 1 });
+    let infos = if axis == Axis::Rows { &sh.rows } else { &sh.cols };
+    if (at..=end).any(|i| locked(infos.get(&i).and_then(|x| x.style).unwrap_or_default())) {
+        return Err(refuse());
+    }
+    let block = if axis == Axis::Rows { RangeRef::rows(at, end) } else { RangeRef::cols(at, end) };
+    if sh.cells.iter_range(block).any(|(_, cell)| locked(cell.style)) {
+        return Err(refuse());
+    }
+    Ok(())
+}
+
 fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let i = target_sheet(s, p)?;
     let d = s.doc()?;
@@ -391,6 +423,13 @@ fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 && *sc > i
             {
                 *sc -= 1;
+            }
+            // Names referring to the sheet become #REF!.
+            if let Ok(e) = gridcraft_formula::parse(&n.formula) {
+                let ne = gridcraft_formula::adjust::delete_sheet(e.clone(), &name);
+                if ne != e {
+                    n.formula = gridcraft_formula::print(&ne);
+                }
             }
         }
         if cx.wb.active_sheet >= cx.wb.sheets.len() || cx.wb.active_sheet > i {
@@ -461,10 +500,31 @@ fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         if copy {
             let mut sh = (*src).clone();
             let base = sh.name.clone();
-            let name = (2..).map(|k| format!("{base} ({k})")).find(|nm| cx.wb.sheet_index(nm).is_none()).unwrap_or(base);
+            let name = (2..).map(|k| format!("{base} ({k})")).find(|nm| cx.wb.sheet_index(nm).is_none()).unwrap_or(base.clone());
             sh.name = name.chars().take(31).collect();
             sh.tables.clear(); // table names must be unique
             let at = to.min(n);
+            // The copy gets its own copies of the sheet's names, referring to the copy.
+            let copies: Vec<gridcraft_model::DefinedName> = cx
+                .wb
+                .names
+                .iter()
+                .filter(|nm| nm.scope == Some(i))
+                .map(|nm| {
+                    let formula = gridcraft_formula::parse(&nm.formula)
+                        .map(|e| gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet(e, &base, &sh.name)))
+                        .unwrap_or_else(|_| nm.formula.clone());
+                    gridcraft_model::DefinedName { scope: Some(at), formula, ..nm.clone() }
+                })
+                .collect();
+            for nm in cx.wb.names.iter_mut() {
+                if let Some(sc) = nm.scope.as_mut()
+                    && *sc >= at
+                {
+                    *sc += 1;
+                }
+            }
+            cx.wb.names.extend(copies);
             cx.wb.sheets.insert(at, Arc::new(sh));
             cx.wb.active_sheet = at;
         } else {
@@ -472,6 +532,17 @@ fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             let at = to.min(n - 1);
             cx.wb.sheets.insert(at, sh);
             cx.wb.active_sheet = at;
+            // Sheet-level names follow their sheet.
+            for nm in cx.wb.names.iter_mut() {
+                if let Some(sc) = nm.scope.as_mut() {
+                    *sc = match *sc {
+                        x if x == i => at,
+                        x if i < x && x <= at => x - 1,
+                        x if at <= x && x < i => x + 1,
+                        x => x,
+                    };
+                }
+            }
         }
         cx.structural = true;
         Ok(Json::Null)
@@ -537,4 +608,54 @@ fn step_sheet(s: &mut Session, dir: i64) -> Result<Json> {
     }
     s.doc_mut()?.wb_switch_sheet(i as usize);
     ok()
+}
+
+/// Where a range of the edited sheet goes after a structural edit (`None` = deleted).
+fn map_range(r: RangeRef, e: &Edit) -> Option<RangeRef> {
+    let expr = gridcraft_formula::Expr::Ref(gridcraft_formula::Reference {
+        sheet: gridcraft_formula::SheetSel::Current,
+        kind: gridcraft_formula::RefKind::Range(
+            gridcraft_formula::Anchor { row: r.start.row, col: r.start.col, row_abs: false, col_abs: false },
+            gridcraft_formula::Anchor { row: r.end.row, col: r.end.col, row_abs: false, col_abs: false },
+        ),
+    });
+    match gridcraft_formula::adjust::adjust(expr, "S", "S", e) {
+        gridcraft_formula::Expr::Ref(r) => Some(r.range()),
+        _ => None,
+    }
+}
+
+/// Shifts what Insert/Delete Cells moves along with the cells: merged areas, conditional
+/// format, validation, table, filter and print-area ranges, notes, links and sparklines.
+fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
+    let map_cell = |c: CellRef| map_range(RangeRef::cell(c), e).map(|r| r.start);
+    sh.merges = sh.merges.iter().filter_map(|m| map_range(*m, e)).filter(|m| !m.is_single()).collect();
+    for cf in sh.cond_formats.iter_mut() {
+        cf.ranges = cf.ranges.iter().filter_map(|r| map_range(*r, e)).collect();
+    }
+    sh.cond_formats.retain(|cf| !cf.ranges.is_empty());
+    for dv in sh.validations.iter_mut() {
+        dv.ranges = dv.ranges.iter().filter_map(|r| map_range(*r, e)).collect();
+    }
+    sh.validations.retain(|dv| !dv.ranges.is_empty());
+    for t in sh.tables.iter_mut() {
+        t.range = map_range(t.range, e).unwrap_or_default();
+    }
+    sh.tables.retain(|t| t.range != RangeRef::default());
+    if let Some(af) = sh.autofilter.as_mut() {
+        match map_range(af.range, e) {
+            Some(r) => af.range = r,
+            None => sh.autofilter = None,
+        }
+    }
+    sh.comments = std::mem::take(&mut sh.comments).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
+    sh.hyperlinks = std::mem::take(&mut sh.hyperlinks).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
+    for sp in sh.sparklines.iter_mut() {
+        if let Some(c) = map_cell(sp.cell) {
+            sp.cell = c;
+        }
+    }
+    if let Some(pa) = sh.print.print_area {
+        sh.print.print_area = map_range(pa, e);
+    }
 }

@@ -119,9 +119,10 @@ pub fn specs() -> Vec<CommandSpec> {
 // ---------------------------------------------------------------- entry
 
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
-/// format). Errors when the formula can't be parsed.
-pub(crate) fn input_to_cell(input: &str, old: Option<&Cell>, wb: &mut gridcraft_model::Workbook) -> Result<Option<Cell>> {
-    let style = old.map(|c| c.style).unwrap_or_default();
+/// format). Inherits the destination's cell, row or column style, including its number
+/// format, before parsing. Errors when the formula can't be parsed.
+pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gridcraft_model::Workbook) -> Result<Option<Cell>> {
+    let style = wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
     if input.is_empty() {
         let c = Cell { value: Value::Empty, formula: None, style };
         return Ok(if c.is_blank() { None } else { Some(c) });
@@ -148,6 +149,7 @@ pub(crate) fn input_to_cell(input: &str, old: Option<&Cell>, wb: &mut gridcraft_
             parsed = gridcraft_formula::parse(&text);
         }
         let expr = parsed.map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))?;
+        let expr = wb.name_call_case(expr);
         let mut cell = Cell::formula(Formula::from_expr(expr));
         cell.style = style;
         // Formulas whose result is a date/time get a format from functions like TODAY().
@@ -206,8 +208,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         if array {
             // Legacy Ctrl+Shift+Enter array formula over the selection.
             let range = cx.sel.current();
-            let old = cx.wb.sheet(sheet).and_then(|sh| sh.cell(range.start)).cloned();
-            let mut cell = input_to_cell(&input, old.as_ref(), &mut cx.wb)?.unwrap_or_default();
+            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
             if let Some(f) = cell.formula.as_mut() {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
@@ -216,8 +217,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             cx.touch(sheet, range.start);
             return Ok(Json::Null);
         }
-        let old = cx.wb.sheet(sheet).and_then(|sh| sh.cell(at)).cloned();
-        let cell = input_to_cell(&input, old.as_ref(), &mut cx.wb)?;
+        let cell = input_to_cell(&input, sheet, at, &mut cx.wb)?;
         let sh = cx.sheet_mut(sheet)?;
         match cell {
             Some(c) => sh.cells.set(at, c),
@@ -265,15 +265,16 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
             for (ci, v) in cols.iter().enumerate() {
                 let Some(at) = start.offset(ri as i64, ci as i64) else { continue };
                 let input = json_to_input(v);
-                let old = cx.wb.sheet(sheet).and_then(|sh| sh.cell(at)).cloned();
                 let cell = match v {
                     Json::Number(n) => Some(Cell {
                         value: Value::number(n.as_f64().unwrap_or(0.0)),
                         formula: None,
-                        style: old.as_ref().map(|c| c.style).unwrap_or_default(),
+                        style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default(),
                     }),
-                    Json::Bool(b) => Some(Cell { value: Value::Bool(*b), formula: None, style: old.as_ref().map(|c| c.style).unwrap_or_default() }),
-                    _ => input_to_cell(&input, old.as_ref(), &mut cx.wb)?,
+                    Json::Bool(b) => {
+                        Some(Cell { value: Value::Bool(*b), formula: None, style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default() })
+                    }
+                    _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,
                 };
                 let sh = cx.sheet_mut(sheet)?;
                 match cell {
@@ -297,8 +298,7 @@ fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let input = str_param(p, "input").unwrap_or("").to_string();
     let origin = s.doc()?.selection.active;
     edit(s, |cx| {
-        let old = cx.wb.sheet(sheet).and_then(|sh| sh.cell(origin)).cloned();
-        let base = input_to_cell(&input, old.as_ref(), &mut cx.wb)?;
+        let base = input_to_cell(&input, sheet, origin, &mut cx.wb)?;
         for r in &ranges {
             if r.count() > 2_000_000 {
                 return Err(bad("range.fill", "range too large"));
@@ -665,8 +665,7 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
         for (ri, row) in rows.iter().enumerate() {
             for (ci, v) in row.iter().enumerate() {
                 let Some(c) = at.offset(ri as i64, ci as i64) else { continue };
-                let old = cx.wb.sheet(sheet).and_then(|sh| sh.cell(c)).cloned();
-                let cell = input_to_cell(v, old.as_ref(), &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
+                let cell = input_to_cell(v, sheet, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
                 let sh = cx.sheet_mut(sheet)?;
                 match cell {
                     Some(cell) => sh.cells.set(c, cell),
@@ -1175,7 +1174,11 @@ fn find(s: &mut Session, p: &Json) -> Result<Json> {
             .cells
             .iter()
             .filter_map(|(c, cell)| {
-                let text = if values || cell.formula.is_none() { crate::display::cell_text(&d.wb, sh, c) } else { cell.input_text() };
+                let text = if values || cell.formula.is_none() || crate::display::formula_hidden(&d.wb, sh, c) {
+                    crate::display::cell_text(&d.wb, sh, c)
+                } else {
+                    cell.input_text()
+                };
                 matches(&text, &what, case, whole).then_some((c, text))
             })
             .collect();
@@ -1234,8 +1237,7 @@ fn replace(s: &mut Session, p: &Json) -> Result<Json> {
                 } else {
                     replace_ci(&text, &what, &with)
                 };
-                let old = cx.wb.sheet(si).and_then(|sh| sh.cell(c)).cloned();
-                let cell = input_to_cell(&new, old.as_ref(), &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(new.as_str()))));
+                let cell = input_to_cell(&new, si, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(new.as_str()))));
                 let sh = cx.sheet_mut(si)?;
                 match cell {
                     Some(cell) => sh.cells.set(c, cell),

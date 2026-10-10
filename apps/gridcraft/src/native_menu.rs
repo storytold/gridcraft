@@ -6,7 +6,7 @@ use std::sync::mpsc::{Receiver, channel};
 
 use gridcraft_ui_egui::SheetApp;
 use muda::accelerator::Accelerator;
-use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use serde_json::{Value, json};
 
 type Entry = (&'static str, &'static str, Option<&'static str>);
@@ -78,7 +78,7 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 ("Freeze Top Row", "view.freezeTopRow", None),
                 ("Unfreeze Panes", "view.unfreezePanes", None),
                 ("-", "", None),
-                ("Dark Mode", "view.darkMode", None),
+                ("Display Theme", "view.theme", None),
                 ("Collapse Ribbon", "view.collapseRibbon", Some("CMD+ALT+R")),
             ],
         ),
@@ -181,6 +181,18 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
 pub struct NativeMenu {
     _menu: Menu,
     events: Receiver<MenuEvent>,
+    theme_items: Vec<(&'static str, CheckMenuItem)>,
+}
+
+fn select_theme(app: &mut SheetApp, id: &str) -> bool {
+    let mode = match id {
+        "theme:system" => "system",
+        "theme:light" => "light",
+        "theme:dark" => "dark",
+        _ => return false,
+    };
+    app.run_or_alert("view.theme", json!({"mode": mode}));
+    true
 }
 
 impl NativeMenu {
@@ -200,11 +212,22 @@ impl NativeMenu {
             &PredefinedMenuItem::quit(None),
         ]);
         let _ = menu.append(&app_menu);
+        let mut theme_items = Vec::new();
         for (title, entries) in tree() {
             let sub = Submenu::new(title, true);
             for (label, id, acc) in entries {
                 if label == "-" {
                     let _ = sub.append(&PredefinedMenuItem::separator());
+                    continue;
+                }
+                if id == "view.theme" {
+                    let themes = Submenu::new(label, true);
+                    for (mode, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
+                        let item = CheckMenuItem::with_id(format!("theme:{mode}"), label, true, false, None);
+                        let _ = themes.append(&item);
+                        theme_items.push((mode, item));
+                    }
+                    let _ = sub.append(&themes);
                     continue;
                 }
                 let accel = acc.and_then(|a| Accelerator::from_str(a).ok());
@@ -220,12 +243,15 @@ impl NativeMenu {
             let _ = tx.send(e);
             ctx.request_repaint();
         }));
-        NativeMenu { _menu: menu, events: rx }
+        NativeMenu { _menu: menu, events: rx, theme_items }
     }
 
     pub fn poll(&self, app: &mut SheetApp, ctx: &egui::Context) {
         while let Ok(ev) = self.events.try_recv() {
             let id = ev.id.as_ref().to_string();
+            if select_theme(app, &id) {
+                continue;
+            }
             if let Some(url) = id.strip_prefix("url:") {
                 if let Some(open) = &app.services.open_url {
                     open(url);
@@ -252,5 +278,28 @@ impl NativeMenu {
                 app.run_or_alert(&id, json!({}));
             }
         }
+        for (mode, item) in &self.theme_items {
+            let checked = app.ui.theme_mode() == *mode;
+            if item.is_checked() != checked {
+                item.set_checked(checked);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn theme_choices_use_the_shared_preference_command() {
+        let mut app = SheetApp::new(gridcraft_engine::Session::new(), Default::default());
+        for mode in ["dark", "system", "light"] {
+            assert!(select_theme(&mut app, &format!("theme:{mode}")));
+            assert_eq!(app.ui.theme_mode(), mode);
+            assert!(app.message.is_none());
+        }
+        assert!(!select_theme(&mut app, "view.formulaBar"));
+        assert_eq!(app.ui.theme_mode(), "light");
     }
 }

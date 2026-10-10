@@ -555,7 +555,13 @@ fn write_cell(
     };
     let value = match value {
         Value::Array(a) => a.get(0, 0).cloned().unwrap_or(Value::Empty),
+        v => v,
+    };
+    let value = match value {
         Value::Error(CellError::Circ) => Value::Number(0.0),
+        // #SPILL! and #CALC! are not error codes of the file format (Excel refuses a file that
+        // caches them); Excel itself caches them as #VALUE!.
+        Value::Error(CellError::Spill | CellError::Calc) => Value::Error(CellError::Value),
         v => v,
     };
     if formula.is_some() && dynamic.is_some() {

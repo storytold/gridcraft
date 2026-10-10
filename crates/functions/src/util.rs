@@ -235,7 +235,9 @@ pub(crate) fn round_half_away(x: f64, digits: i32) -> f64 {
     // value = 0.d1d2…d15 × 10^(e+1); keep the first `keep` digits.
     let keep = e + 1 + digits;
     if keep >= d.len() as i64 {
-        return x;
+        // Nothing to round off, but Excel still keeps only 15 significant digits, which drops binary noise
+        // such as 0.1 + 0.2 = 0.30000000000000004.
+        return to_sig_digits(x, d.len());
     }
     if keep < 0 {
         return 0.0;
@@ -416,6 +418,8 @@ mod tests {
         assert_eq!(round_half_away(1234.5678, -2), 1200.0);
         assert_eq!(round_half_away(0.285, 2), 0.29);
         assert_eq!(round_half_away(1.005, 2), 1.01);
+        assert_eq!(round_half_away(0.1 + 0.2, 15), 0.3);
+        assert_eq!(round_half_away(0.1 + 0.2, 20), 0.3);
     }
 
     #[test]

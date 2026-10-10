@@ -39,5 +39,11 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 
 Any other method name that is a command id (e.g. `home.bold`) runs that command.
 
+Use `engine.execute` with `{command: "view.theme", params: {mode: "system"}}`
+to choose the display theme; `mode` accepts `"system"`, `"light"`, or `"dark"`.
+System follows live OS appearance changes and falls back to Light when the platform supplies no preference.
+The saved choice remains System; new users still start in Light. The legacy
+`view.darkMode` command and `ui.set {dark}` select a fixed Light or Dark theme.
+
 For a headless equivalent (no window), use `gridcraft-cli mcp` or `gridcraft-cli run`;
 see [`mcp.md`](mcp.md) and [`cli.md`](cli.md).

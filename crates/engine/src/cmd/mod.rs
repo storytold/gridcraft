@@ -209,6 +209,9 @@ pub struct Ctx<'a> {
     pub sel: &'a mut Selection,
     /// Rows whose automatic height should be recomputed (sheet, row).
     pub fit_rows: Vec<(usize, u32)>,
+    /// The command applied sheet protection itself (row/column inserts and deletes the
+    /// protection allows), so cells it shifts aren't refused as edits of locked cells.
+    pub protection_checked: bool,
 }
 
 pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
@@ -220,9 +223,12 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     let prof = std::env::var_os("GRIDCRAFT_PROFILE").is_some();
     let t0 = std::time::Instant::now();
     let mut sel = d.selection.clone();
-    let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new() };
+    let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new(), protection_checked: false };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, changed, structural, mut fit_rows, .. } = ctx;
+    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, .. } = ctx;
+    if !protection_checked {
+        check_protection(&d.wb, &wb)?;
+    }
     if changed.len() <= 200_000 {
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
     }
@@ -248,6 +254,43 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;
     Ok(r)
+}
+
+/// Excel's message for an edit of a locked cell on a protected sheet.
+pub(crate) const PROTECTED: &str = "The cell or chart you're trying to change is on a protected sheet.";
+
+/// Refuses an edit that changed what a locked cell on a protected sheet holds (its value or
+/// formula), whichever command made it. Sheets are matched by name, so moving, renaming or
+/// deleting a sheet isn't an edit of its cells.
+fn check_protection(old: &Workbook, new: &Workbook) -> Result<()> {
+    for sh in &old.sheets {
+        if !sh.is_protected() {
+            continue;
+        }
+        let Some(after) = new.sheet_index(&sh.name).and_then(|i| new.sheets.get(i)) else { continue };
+        if std::sync::Arc::ptr_eq(sh, after) || !after.is_protected() {
+            continue;
+        }
+        for c in sh.cells.diff(&after.cells) {
+            if !same_content(sh.cell(c), after.cell(c)) && old.styles.get(sh.style_id(c)).protection.locked {
+                return Err(EngineError::Other(PROTECTED.into()));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Two cells hold the same value or formula (formats aside).
+fn same_content(a: Option<&gridcraft_model::Cell>, b: Option<&gridcraft_model::Cell>) -> bool {
+    let empty = |c: Option<&gridcraft_model::Cell>| c.is_none_or(|c| c.formula.is_none() && c.value.is_empty());
+    match (a, b) {
+        (Some(a), Some(b)) => match (&a.formula, &b.formula) {
+            (Some(x), Some(y)) => x.text == y.text && x.array == y.array,
+            (None, None) => a.value == b.value,
+            _ => false,
+        },
+        _ => empty(a) && empty(b),
+    }
 }
 
 /// Recomputes an automatic row height from its content: the largest font, and wrapped or
