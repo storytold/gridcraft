@@ -37,7 +37,13 @@ including tests, 2026-10-10.
 2. **Edits** change the model through copy-on-write bands (64 rows behind an `Arc`; each row a
    vector of cells sorted by column); undo keeps the previous snapshot, and undo/redo bring the
    dependency graph along by looking only at the cells that differ (`Calc::sync`; a change of
-   most of the workbook or of its sheets rebuilds it).
+   most of the workbook or of its sheets rebuilds it). Formulas copied or filled from one formula
+   share its parsed expression (Excel's shared formulas): a `Formula` keeps its own text and the
+   shared expression with its (row, column) offset from where that was parsed; the evaluator and
+   the precedents walk move the relative parts of the formula's own references by the offset as
+   they resolve them (names, INDIRECT text and LAMBDAs from names don't move). Loading a file
+   shares formulas that are the same relative to their cells (`FormulaSharer`, keyed by R1C1
+   text), as does the rewrite after a structural edit.
 3. **Recalc** marks dependents of changed cells dirty through the dependency graph (with range
    nodes for range dependents), evaluates in topological order (Kahn's algorithm over the dirty
    set; a formula that reads a cell not yet done, through a name, table or INDIRECT, waits on a
@@ -89,6 +95,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Shared formulas |
 | 2026-10-11 | minor | Cell rows as sorted vectors, compact dependents, spill-anchor index, incremental graph sync on undo/redo, parallel bulk helpers |
 | 2026-10-11 | minor | Background recalculation in the desktop app |
 | 2026-10-11 | minor | Recalc: multi-threaded levels |

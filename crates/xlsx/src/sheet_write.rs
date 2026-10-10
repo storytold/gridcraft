@@ -604,7 +604,7 @@ fn write_cell(
         };
         s.push_str(t);
         s.push('>');
-        let text = esc(&crate::fmla::to_file(f));
+        let text = esc(&crate::fmla::to_file_shared(f, &mut out.file_exprs));
         match (f.array, dynamic) {
             (Some(r), _) => {
                 let _ = write!(s, "<f t=\"array\" ref=\"{}\">{text}</f>", r.a1());

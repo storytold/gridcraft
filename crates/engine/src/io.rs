@@ -38,6 +38,36 @@ impl FileKind {
 /// Parses a file's bytes into a workbook. `name` picks the format by extension when the bytes
 /// don't say.
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
+    let (mut wb, warnings) = read_bytes(name, bytes)?;
+    share_formulas(&mut wb);
+    Ok((wb, warnings))
+}
+
+/// Shares the formulas of a loaded workbook that are the same relative to their cells (filled
+/// blocks): many files don't mark them, and a filled block then parses once and is held once.
+/// The keys are worked out on every processor.
+fn share_formulas(wb: &mut Workbook) {
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheets.get(si) else { continue };
+        let formulas: Vec<(gridcraft_core::CellRef, std::sync::Arc<gridcraft_model::Formula>)> =
+            sh.cells.iter().filter_map(|(c, cell)| cell.formula.clone().map(|f| (c, f))).collect();
+        if formulas.len() < 2 {
+            continue;
+        }
+        let keys = gridcraft_calc::par::filter_map(&formulas, |(c, f)| Some(gridcraft_model::FormulaSharer::key(*c, f)));
+        let mut sharer = gridcraft_model::FormulaSharer::default();
+        let Some(sheet) = wb.sheet_mut(si) else { continue };
+        for ((c, f), key) in formulas.into_iter().zip(keys) {
+            if let Some(shared) = sharer.share_existing(si, c, &f, key)
+                && let Some(cell) = sheet.cells.get_mut(c)
+            {
+                cell.formula = Some(shared);
+            }
+        }
+    }
+}
+
+fn read_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
     if sniffed == gridcraft_xlsx::Format::Encrypted {

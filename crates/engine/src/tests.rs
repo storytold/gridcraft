@@ -1721,3 +1721,113 @@ fn undo_and_redo_keep_the_dependency_graph_in_step() {
     set(&mut s, "A1", "9");
     assert_eq!(v(&s, "B1"), Value::Number(18.0));
 }
+
+#[test]
+fn shared_formula_copies_calculate_like_typed_formulas() {
+    // Each formula is entered in rows 1-20 of its column from row 2 (Ctrl+Enter: copies that
+    // share one parsed expression, the row-1 copy moved up so some of its references fall off
+    // the sheet). A second sheet holds the same data with every copy's text typed at the same
+    // address (formulas of their own). Every value must match, before and after edits, an
+    // undo and a row insert.
+    let mut s = s();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    let names: Vec<String> = s.doc().unwrap().wb.sheets.iter().map(|sh| sh.name.clone()).collect();
+    let data: Vec<_> = (1..=20).map(|i| json!([i, if i == 1 { json!(7) } else { json!(null) }])).collect();
+    for n in &names {
+        s.execute("range.setValues", json!({"sheet": n, "range": "A1", "values": data})).unwrap();
+    }
+    let (shared_sheet, typed_sheet) = (names[0].clone(), names[1].clone());
+    s.execute("sheet.activate", json!({"sheet": shared_sheet})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Base", "refersTo": format!("={shared_sheet}!$B$1")})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Rel", "refersTo": format!("={shared_sheet}!A1")})).unwrap();
+    let formulas = [
+        "=A2*2+$B$1",
+        "=SUM(A1:A3)+SUM($A:$A)/100",
+        "=IF(A2>5,\"big\",A2&\"!\")",
+        "=INDEX($A$1:$A$20,ROW())+COLUMN()",
+        "=INDIRECT(\"A\"&ROW())+Base+Rel",
+        "=LET(x,A2,LAMBDA(y,y+x+A1)(1))",
+        "=SUMIF(A1:A5,\">3\")+SUMIF(A1:A3,\">0\",A2:A4)",
+        "=OFFSET(A2,1,0)+A1",
+        "=XLOOKUP(A2,$A$1:$A$20,$A$1:$A$20)*2",
+        "=MAX(A1:A2)",
+    ];
+    let col = |i: usize| gridcraft_core::col_to_letters(i as u32);
+    for (i, f) in formulas.iter().enumerate() {
+        s.execute("selection.set", json!({"range": format!("{}2", col(3 + i))})).unwrap();
+        s.execute("range.fill", json!({"range": format!("{0}1:{0}20", col(3 + i)), "input": f})).unwrap();
+    }
+    let cell = |s: &Session, sheet: usize, a1: &str| s.doc().unwrap().wb.sheet(sheet).unwrap().cell(CellRef::parse(a1).unwrap()).cloned();
+    let text = |s: &Session, a1: &str| cell(s, 0, a1).and_then(|c| c.formula).map(|f| f.text.clone());
+    for (i, f) in formulas.iter().enumerate() {
+        // The copies share one parsed expression.
+        let parsed = |a1: &str| cell(&s, 0, a1).and_then(|c| c.formula).and_then(|f| f.parsed()).map(|p| p.0);
+        let (a, b) = (parsed(&format!("{}3", col(3 + i))).unwrap(), parsed(&format!("{}17", col(3 + i))).unwrap());
+        assert!(std::sync::Arc::ptr_eq(&a, &b), "{f}: copies don't share");
+        for r in 1..=20 {
+            let at = format!("{}{r}", col(3 + i));
+            let t = text(&s, &at).unwrap();
+            s.execute("cell.set", json!({"sheet": typed_sheet, "cell": at, "input": format!("={t}")})).unwrap();
+        }
+    }
+    let check = |s: &Session, when: &str| {
+        for (i, f) in formulas.iter().enumerate() {
+            for r in 1..=20 {
+                let at = format!("{}{r}", col(3 + i));
+                let value = |sheet| cell(s, sheet, &at).map(|c| c.value).unwrap_or_default();
+                assert_eq!(value(0), value(1), "{when}: {f} copied to {at} ({:?})", text(s, &at));
+            }
+        }
+    };
+    check(&s, "entered");
+    // The row-1 copies whose references fell off the sheet are #REF!, as typed ones are.
+    assert_eq!(text(&s, "D1").as_deref(), Some("A1*2+$B$1"));
+    assert_eq!(text(&s, "M1").as_deref(), Some("MAX(#REF!)"));
+    assert_eq!(cell(&s, 0, "M1").map(|c| c.value), Some(Value::Error(gridcraft_core::CellError::Ref)));
+    for n in [&shared_sheet, &typed_sheet] {
+        s.execute("cell.set", json!({"sheet": n, "cell": "A5", "input": "100"})).unwrap();
+        s.execute("cell.set", json!({"sheet": n, "cell": "B1", "input": "-3"})).unwrap();
+    }
+    check(&s, "after edits");
+    s.execute("edit.undo", json!({"steps": 4})).unwrap();
+    check(&s, "after undo");
+    for n in [&shared_sheet, &typed_sheet] {
+        s.execute("home.insertRows", json!({"sheet": n, "rows": "3:3"})).unwrap();
+    }
+    check(&s, "after inserting a row");
+}
+
+#[test]
+fn opening_a_file_shares_its_filled_formulas() {
+    // Typed one by one, the formulas each have their own parse; written to a file and opened
+    // again, those that are the same relative to their cells share one, and still calculate
+    // the same.
+    for format in ["xlsx", "json"] {
+        let mut s = s();
+        for r in 1..=50 {
+            s.execute("cell.set", json!({"cell": format!("A{r}"), "input": format!("{r}")})).unwrap();
+            s.execute("cell.set", json!({"cell": format!("B{r}"), "input": format!("=A{r}*2+$A$1")})).unwrap();
+        }
+        s.execute("cell.set", json!({"cell": "C1", "input": "=SUM(B1:B50)"})).unwrap();
+        let before: Vec<Value> = (1..=50).map(|r| v(&s, &format!("B{r}"))).collect();
+        let saved = s.execute("file.saveBytes", json!({"format": format})).unwrap();
+        let b64 = saved["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": format!("book.{format}"), "base64": b64})).unwrap();
+        let parsed = |s: &Session, a1: &str| {
+            s.doc()
+                .unwrap()
+                .wb
+                .active()
+                .unwrap()
+                .cell(CellRef::parse(a1).unwrap())
+                .and_then(|c| c.formula.as_ref())
+                .and_then(|f| f.parsed())
+                .map(|p| p.0)
+        };
+        assert!(std::sync::Arc::ptr_eq(&parsed(&s, "B2").unwrap(), &parsed(&s, "B49").unwrap()), "{format}: not shared");
+        assert_eq!((1..=50).map(|r| v(&s, &format!("B{r}"))).collect::<Vec<_>>(), before, "{format}");
+        s.execute("cell.set", json!({"cell": "A1", "input": "100"})).unwrap();
+        assert_eq!(v(&s, "B10"), Value::Number(120.0), "{format}");
+        assert_eq!(v(&s, "C1"), Value::Number((1..=50).map(|r| if r == 1 { 300.0 } else { f64::from(r) * 2.0 + 100.0 }).sum()), "{format}");
+    }
+}

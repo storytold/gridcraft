@@ -43,9 +43,17 @@ use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{CalcMode, Workbook};
 
-use crate::eval::{Area, Evaluator, Host, precedents};
+use crate::eval::{Area, Evaluator, Host, precedents_shifted};
 
 pub type Key = (usize, CellRef);
+
+/// A formula to evaluate: its (possibly shared) expression and its offset from where that was
+/// parsed (see `Formula::parsed`).
+type Parsed = (Arc<Expr>, (i64, i64));
+
+fn parsed(f: &gridcraft_model::Formula) -> Option<Parsed> {
+    f.parsed().map(|(e, (r, c))| (e, (i64::from(r), i64::from(c))))
+}
 
 #[derive(Clone, Debug, Default)]
 struct Node {
@@ -592,7 +600,7 @@ struct Layer {
 
 struct PassHost<'a> {
     wb: &'a Workbook,
-    exprs: &'a HashMap<Key, Arc<Expr>>,
+    exprs: &'a HashMap<Key, Parsed>,
     /// The main thread's layer, when this host is a worker thread on a multi-threaded level.
     base: Option<&'a Layer>,
     own: Layer,
@@ -670,7 +678,7 @@ fn uses_random(e: &Expr) -> bool {
 /// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
 /// overlaps merged cells, holds other cells, or another formula's spill (unless that formula is
 /// recalculated in this pass, and so may spill elsewhere now).
-fn spill_blocked(wb: &Workbook, exprs: &HashMap<Key, Arc<Expr>>, (sheet, anchor): Key, a: &Array) -> bool {
+fn spill_blocked(wb: &Workbook, exprs: &HashMap<Key, Parsed>, (sheet, anchor): Key, a: &Array) -> bool {
     let Some(sh) = wb.sheet(sheet) else { return false };
     let end =
         CellRef::new(anchor.row.saturating_add((a.rows as u32).saturating_sub(1)), anchor.col.saturating_add((a.cols as u32).saturating_sub(1)));
@@ -688,7 +696,7 @@ fn spill_blocked(wb: &Workbook, exprs: &HashMap<Key, Arc<Expr>>, (sheet, anchor)
 }
 
 impl<'a> PassHost<'a> {
-    fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, Arc<Expr>>, now: f64, rng: u64, base: Option<&'a Layer>) -> Self {
+    fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, Parsed>, now: f64, rng: u64, base: Option<&'a Layer>) -> Self {
         PassHost {
             wb,
             exprs,
@@ -765,7 +773,10 @@ impl<'a> PassHost<'a> {
     /// nothing) when it read pending cells, listed in `blocked`.
     fn attempt(&mut self, k: Key) -> bool {
         self.blocked.clear();
-        let Some(expr) = self.exprs.get(&k).map(Arc::clone) else {
+        // Borrowed, not cloned: the formulas of a filled block share one expression, and cloning
+        // it from every thread would contend on its reference count.
+        let exprs = self.exprs;
+        let Some((expr, shift)) = exprs.get(&k).map(|(e, s)| (&**e, *s)) else {
             self.own.pending.remove(&k);
             let v = self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
             self.own.results.insert(k, v);
@@ -773,7 +784,8 @@ impl<'a> PassHost<'a> {
         };
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
-            ev.value(&expr)
+            ev.shift = shift;
+            ev.value(expr)
         };
         if !self.blocked.is_empty() {
             return false;
@@ -788,7 +800,7 @@ impl<'a> PassHost<'a> {
         // A blank cell shows as 0 in a formula's result, inside an array as well (`=A1:A3`,
         // FILTER or SORT of a range with blanks). GROUPBY and PIVOTBY lay out blank cells
         // of their own, which stay blank.
-        let keep_blanks = matches!(&*expr, Expr::Call(n, _) if matches!(n.as_str(), "GROUPBY" | "PIVOTBY"));
+        let keep_blanks = matches!(expr, Expr::Call(n, _) if matches!(n.as_str(), "GROUPBY" | "PIVOTBY"));
         let v = match v {
             Value::Array(a) => {
                 let a = if keep_blanks || !a.data.iter().any(|x| matches!(x, Value::Empty)) {
@@ -863,7 +875,7 @@ impl<'a> PassHost<'a> {
             return;
         }
         let exprs = self.exprs;
-        let (random, mut parallel): (Vec<Key>, Vec<Key>) = level.iter().partition(|k| exprs.get(k).is_some_and(|e| uses_random(e)));
+        let (random, mut parallel): (Vec<Key>, Vec<Key>) = level.iter().partition(|k| exprs.get(k).is_some_and(|(e, _)| uses_random(e)));
         let warm = WARM_UP.min(parallel.len());
         for k in parallel.drain(..warm) {
             self.settle(k);
@@ -1179,9 +1191,9 @@ impl Calc {
             if let Some(b) = new.sheets.get(si) {
                 let k = (si, c);
                 let cell = b.cell(c);
-                match cell.and_then(|x| x.formula.as_ref()).and_then(|f| f.expr_arc()) {
-                    Some(e) => {
-                        let (areas, dynamic) = precedents(new, si, &e);
+                match cell.and_then(|x| x.formula.as_deref()).and_then(parsed) {
+                    Some((e, shift)) => {
+                        let (areas, dynamic) = precedents_shifted(new, si, &e, shift);
                         self.graph.insert(k, Node::new(areas, dynamic));
                         if cell.is_some_and(|x| x.value == Value::Error(CellError::Spill)) {
                             self.spill_blocked.insert(k);
@@ -1216,8 +1228,14 @@ impl Calc {
         // Working out precedents is independent per formula (spread over threads); the indexes
         // are filled on this thread.
         let nodes = crate::par::filter_map(&formulas, |&(k, cell)| {
-            let e = cell.formula.as_ref()?.expr_arc()?;
-            let (areas, dynamic) = precedents(wb, k.0, &e);
+            let f = cell.formula.as_deref()?;
+            let (areas, dynamic) = match f.parsed_ref() {
+                Some((e, (r, c))) => precedents_shifted(wb, k.0, e, (r.into(), c.into())),
+                None => {
+                    let (e, shift) = parsed(f)?;
+                    precedents_shifted(wb, k.0, &e, shift)
+                }
+            };
             Some((k, Node::new(areas, dynamic), cell.value == Value::Error(CellError::Spill)))
         });
         for (k, node, blocked) in nodes {
@@ -1277,10 +1295,10 @@ impl Calc {
     pub fn prepare(&mut self, wb: &mut Workbook, changed: &[Key]) -> Vec<Key> {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
-            let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
-            match formula.and_then(|f| f.expr()) {
-                Some(e) => {
-                    let (areas, dynamic) = precedents(wb, k.0, &e);
+            let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_deref()).and_then(parsed);
+            match formula {
+                Some((e, shift)) => {
+                    let (areas, dynamic) = precedents_shifted(wb, k.0, &e, shift);
                     self.graph.insert(k, Node::new(areas, dynamic));
                 }
                 None => {
@@ -1416,9 +1434,9 @@ impl Calc {
             // Row-major order is a good topological guess; on-demand evaluation fixes the rest.
             dirty.sort_by_key(|(s, c)| (*s, c.row, c.col));
             dirty.dedup();
-            let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
+            let mut exprs: HashMap<Key, Parsed> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
             for k in &dirty {
-                if let Some(e) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc()) {
+                if let Some(e) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_deref()).and_then(parsed) {
                     exprs.insert(*k, e);
                 }
             }

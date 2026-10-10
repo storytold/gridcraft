@@ -124,21 +124,38 @@ fn number(n: f64) -> String {
     number_to_text(n)
 }
 
+/// How to print: A1, or R1C1 relative to a cell; with the relative parts of references moved
+/// by a shift (a formula copied that far, see [`print_shifted`]).
+#[derive(Clone, Copy)]
+struct Print {
+    r1c1: Option<CellRef>,
+    shift: (i64, i64),
+}
+
 /// Prints an expression in A1 notation.
 pub fn print(e: &Expr) -> String {
     let mut s = String::new();
-    write_expr(&mut s, e, None);
+    write_expr(&mut s, e, Print { r1c1: None, shift: (0, 0) });
     s
 }
 
 /// Prints an expression in R1C1 notation relative to `at`.
 pub fn print_r1c1(e: &Expr, at: CellRef) -> String {
     let mut s = String::new();
-    write_expr(&mut s, e, Some(at));
+    write_expr(&mut s, e, Print { r1c1: Some(at), shift: (0, 0) });
     s
 }
 
-fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
+/// Prints `e` copied `dr` rows and `dc` columns away, in A1 notation: the same text as
+/// `print(&shift_relative(e, dr, dc))` (references pushed off the sheet print `#REF!`), without
+/// building the moved expression.
+pub fn print_shifted(e: &Expr, dr: i64, dc: i64) -> String {
+    let mut s = String::new();
+    write_expr(&mut s, e, Print { r1c1: None, shift: (dr, dc) });
+    s
+}
+
+fn write_expr(s: &mut String, e: &Expr, p: Print) {
     match e {
         Expr::Number(n) => s.push_str(&number(*n)),
         Expr::Text(t) => {
@@ -158,46 +175,65 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
                     if ci > 0 {
                         s.push(',');
                     }
-                    write_expr(s, el, r1c1);
+                    write_expr(s, el, p);
                 }
             }
             s.push('}');
         }
-        Expr::Ref(r) => match r1c1 {
-            Some(at) => s.push_str(&reference_r1c1(r, at)),
-            None => s.push_str(&reference_a1(r)),
-        },
+        Expr::Ref(r) => {
+            let moved;
+            let r = if p.shift == (0, 0) {
+                r
+            } else {
+                match crate::adjust::shift_ref(r, p.shift.0, p.shift.1) {
+                    Some(x) => {
+                        moved = x;
+                        &moved
+                    }
+                    None => {
+                        s.push_str(gridcraft_core::CellError::Ref.as_str());
+                        return;
+                    }
+                }
+            };
+            match p.r1c1 {
+                Some(at) => s.push_str(&reference_r1c1(r, at)),
+                None => s.push_str(&reference_a1(r)),
+            }
+        }
         Expr::Name(n) => s.push_str(n),
         Expr::Struct(st) => s.push_str(&struct_ref(st)),
         Expr::Unary(op, x) => match op {
             UnOp::Neg => {
                 s.push('-');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, p);
             }
             UnOp::Plus => {
                 s.push('+');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, p);
             }
             UnOp::At => {
                 s.push('@');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, p);
             }
             UnOp::Percent => {
-                write_expr(s, x, r1c1);
+                write_expr(s, x, p);
                 s.push('%');
             }
             UnOp::Spill => {
-                write_expr(s, x, r1c1);
-                // A reference that became #REF! (its sheet or cell was deleted) stays `#REF!`.
-                if !matches!(**x, Expr::Error(_)) {
+                write_expr(s, x, p);
+                // A reference that became #REF! (its sheet or cell was deleted, or a copy moved it
+                // off the sheet) stays `#REF!`.
+                let off_sheet = p.shift != (0, 0) && matches!(&**x, Expr::Ref(r) if crate::adjust::shift_ref(r, p.shift.0, p.shift.1).is_none());
+                if !matches!(**x, Expr::Error(_)) && !off_sheet {
                     s.push('#');
                 }
             }
         },
         Expr::Binary(op, a, b) => {
-            write_expr(s, a, r1c1);
+            write_expr(s, a, p);
             s.push_str(op.symbol());
-            write_expr(s, b, r1c1);
+            write_expr(s, b, p);
         }
         Expr::Call(name, args) => {
             s.push_str(name);
@@ -206,25 +242,25 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
                 if i > 0 {
                     s.push(',');
                 }
-                write_expr(s, a, r1c1);
+                write_expr(s, a, p);
             }
             s.push(')');
         }
         Expr::Invoke(c, args) => {
-            write_expr(s, c, r1c1);
+            write_expr(s, c, p);
             s.push('(');
             for (i, a) in args.iter().enumerate() {
                 if i > 0 {
                     s.push(',');
                 }
-                write_expr(s, a, r1c1);
+                write_expr(s, a, p);
             }
             s.push(')');
         }
         Expr::Missing => {}
         Expr::Paren(x) => {
             s.push('(');
-            write_expr(s, x, r1c1);
+            write_expr(s, x, p);
             s.push(')');
         }
     }

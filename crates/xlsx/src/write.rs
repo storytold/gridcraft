@@ -106,6 +106,8 @@ pub struct Out {
     pub dynamic_arrays: bool,
     pub needs_calc: bool,
     pub cell_pictures: crate::richdata::PicturesOut,
+    /// Shared formulas converted to file form once (see `fmla::to_file_shared`).
+    pub file_exprs: crate::fmla::FileExprs,
 }
 
 impl Out {
@@ -158,6 +160,7 @@ pub fn write_xlsx(wb: &Workbook) -> Result<Vec<u8>, IoError> {
         dynamic_arrays: false,
         needs_calc: false,
         cell_pictures: Default::default(),
+        file_exprs: Default::default(),
     };
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
     out.default_type("xml", "application/xml");

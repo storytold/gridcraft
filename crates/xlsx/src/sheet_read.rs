@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use gridcraft_core::date::{serial_from_ymd, time_fraction};
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
-use gridcraft_formula::Expr;
 use gridcraft_model::{
     AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo, Orientation,
     Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation, ValidationKind,
@@ -19,10 +18,10 @@ use crate::styles::read_color;
 use crate::tables::{col_width_to_px, paper_name, pt_to_px};
 use crate::xml::{self, El};
 
+/// The master of a shared formula: the cells sharing it are copies of it.
 struct Shared {
     anchor: CellRef,
-    expr: Option<Expr>,
-    text: String,
+    formula: Formula,
 }
 
 #[derive(Default)]
@@ -392,22 +391,15 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
         "shared" => {
             let si = f.attr_u32("si")?;
             if !text.is_empty() {
-                let expr = gridcraft_formula::parse(text).ok();
-                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string() });
-                Some(Formula::new(text))
+                let formula = Formula::new(text);
+                st.shared.insert(si, Shared { anchor: pos, formula: formula.clone() });
+                Some(formula)
             } else {
                 let Some(sh) = st.shared.get(&si) else {
                     cx.warn("a shared formula refers to a missing master cell; kept the cached value");
                     return None;
                 };
-                Some(match &sh.expr {
-                    Some(e) => {
-                        let dr = pos.row as i64 - sh.anchor.row as i64;
-                        let dc = pos.col as i64 - sh.anchor.col as i64;
-                        Formula::from_expr(gridcraft_formula::adjust::shift_relative(e.clone(), dr, dc))
-                    }
-                    None => Formula::new(&sh.text),
-                })
+                Some(sh.formula.moved(pos.row as i64 - sh.anchor.row as i64, pos.col as i64 - sh.anchor.col as i64))
             }
         }
         "array" => {
