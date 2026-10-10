@@ -285,7 +285,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     Ok((wb, cx.report))
 }
 
-fn unique_name(wb: &Workbook, name: &str, i: usize) -> String {
+pub(crate) fn unique_name(wb: &Workbook, name: &str, i: usize) -> String {
     let mut base: String = name.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).take(31).collect();
     if base.trim().is_empty() {
         base = format!("Sheet{}", i + 1);

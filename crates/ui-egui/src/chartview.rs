@@ -180,7 +180,7 @@ fn area_mesh(v: &[Pos2], col: Color32) -> egui::Mesh {
     mesh
 }
 
-fn anchor_rect(geo: &Geo, sh: &Sheet, a: &Anchor) -> Rect {
+pub(crate) fn anchor_rect(geo: &Geo, sh: &Sheet, a: &Anchor) -> Rect {
     let x = geo.x(sh, a.cell.col) + a.dx * geo.z;
     let y = geo.y(sh, a.cell.row) + a.dy * geo.z;
     Rect::from_min_size(pos2(x, y), vec2(a.width * geo.z, a.height.max(1.0) * geo.z))
@@ -243,7 +243,7 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
                 }
             }
         }
-        if !sp.text.is_empty() {
+        if !sp.text.is_empty() && !app.editing_text_box(sp.id) {
             let job = egui::text::LayoutJob::simple(
                 sp.text.clone(),
                 FontId::new(14.0 * geo.z, egui::FontFamily::Name(theme::CELL.into())),
@@ -253,6 +253,9 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
             let g = p.layout_job(job);
             let pos = if sp.kind == ShapeKind::TextBox { r.min + vec2(4.0, 4.0) } else { r.center() - g.size() / 2.0 };
             p.galley(pos, g, Color32::BLACK);
+        }
+        if sp.kind == ShapeKind::TextBox && app.selected_chart == Some(sp.id) {
+            selection_frame(p, r);
         }
     }
     for im in &sh.images {

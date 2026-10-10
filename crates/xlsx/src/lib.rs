@@ -1,4 +1,4 @@
-//! GridCraft file formats: XLSX (Office Open XML SpreadsheetML, transitional and strict) and CSV.
+//! GridCraft file formats: XLSX (transitional and strict) and CSV import/export, plus XLSB and ODS data import.
 //!
 //! Clean-room implementation from ECMA-376 / ISO/IEC 29500 and observed behaviour. All entry
 //! points work on byte slices (no file system access), so the crate builds for WebAssembly.
@@ -14,6 +14,7 @@ mod chart;
 mod csv;
 mod drawing;
 mod fmla;
+mod ods;
 mod package;
 mod pivot;
 mod read;
@@ -23,6 +24,7 @@ mod styles;
 mod tables;
 mod theme;
 mod write;
+mod xlsb;
 mod xml;
 
 #[cfg(test)]
@@ -32,6 +34,8 @@ use gridcraft_core::DateSystem;
 use gridcraft_model::Workbook;
 
 pub use csv::{read_csv, write_csv};
+pub use ods::read_ods;
+pub use xlsb::read_xlsb;
 
 /// Errors from reading or writing files.
 #[derive(Debug, thiserror::Error)]
@@ -92,14 +96,22 @@ impl Default for CsvOptions {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Xlsx,
+    Xlsb,
+    Ods,
     Csv,
     Unknown,
 }
 
-/// Guesses the format from the first bytes: a zip package is XLSX, text is CSV.
+/// Guesses the format from content: ODS mimetype, XLSB package content types, other ZIP packages as XLSX, text as CSV.
 pub fn sniff(bytes: &[u8]) -> Format {
     if bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06") || bytes.starts_with(b"PK\x07\x08") {
-        return Format::Xlsx;
+        return if ods::has_mimetype(bytes) {
+            Format::Ods
+        } else if xlsb::is_xlsb(bytes) {
+            Format::Xlsb
+        } else {
+            Format::Xlsx
+        };
     }
     if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) || bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         return Format::Csv;

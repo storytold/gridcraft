@@ -111,6 +111,110 @@ fn undo_redo() {
 }
 
 #[test]
+fn shape_text_edit_undo_redo_and_noop() {
+    let mut s = s();
+    let id = s.execute("insert.textBox", json!({"at": "C4", "width": 210, "height": 90, "text": "Original"})).unwrap()["shape"].clone();
+    let original = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    let mut changed = original.clone();
+    changed.text = "First line\n\nSecond line & <text>".into();
+    let undo_len = s.doc().unwrap().undo.len();
+    s.execute("shape.setText", json!({"id": id, "text": changed.text})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0], changed);
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0], original);
+
+    let before_noop = s.doc().unwrap().wb.clone();
+    let revision = s.doc().unwrap().revision;
+    s.execute("shape.setText", json!({"id": id, "text": "Original"})).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before_noop));
+    assert_eq!(s.doc().unwrap().revision, revision);
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+    assert_eq!(s.doc().unwrap().redo.len(), 1);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0], changed);
+
+    s.execute("shape.setText", json!({"id": id, "text": ""})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].text, "");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0], changed);
+}
+
+#[test]
+fn shape_text_rejects_invalid_targets_and_params() {
+    let mut s = s();
+    let id = s.execute("insert.textBox", json!({"text": "Original"})).unwrap()["shape"].clone();
+    let rectangle = s.execute("insert.shape", json!({"kind": "rectangle", "text": "Rectangle"})).unwrap()["shape"].clone();
+    let before = s.doc().unwrap().wb.clone();
+    let undo_len = s.doc().unwrap().undo.len();
+    for params in [
+        json!({}),
+        json!({"id": id}),
+        json!({"id": id, "text": 12}),
+        json!({"id": "1", "text": "bad id"}),
+        json!({"id": -1, "text": "bad id"}),
+        json!({"id": 1.5, "text": "bad id"}),
+        json!({"id": u64::from(u32::MAX) + 1, "text": "bad id"}),
+        json!({"id": 999, "text": "unknown"}),
+        json!({"id": rectangle, "text": "not a text box"}),
+    ] {
+        assert!(matches!(s.execute("shape.setText", params), Err(crate::EngineError::BadParams { .. })));
+        assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+        assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+    }
+    s.execute("home.insertSheet", json!({})).unwrap();
+    assert!(matches!(s.execute("shape.setText", json!({"id": id, "text": "wrong sheet"})), Err(crate::EngineError::BadParams { .. })));
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().shapes[0].text, "Original");
+    assert!(s.doc().unwrap().wb.active().unwrap().shapes.is_empty());
+}
+
+#[test]
+fn shape_text_respects_sheet_protection() {
+    let mut s = s();
+    let id = s.execute("insert.textBox", json!({"text": "Original"})).unwrap()["shape"].clone();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let undo_len = s.doc().unwrap().undo.len();
+    assert!(s.execute("shape.setText", json!({"id": id, "text": "Changed"})).is_err());
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("shape.setText", json!({"id": id, "text": "Changed"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].text, "Changed");
+}
+
+#[test]
+fn shape_text_is_capped_like_a_cell() {
+    let mut s = s();
+    let id = s.execute("insert.textBox", json!({"text": "Original"})).unwrap()["shape"].clone();
+    // The cap counts characters, not bytes.
+    let longest = "é".repeat(32_767);
+    s.execute("shape.setText", json!({"id": id, "text": longest})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].text.chars().count(), 32_767);
+    let undo_len = s.doc().unwrap().undo.len();
+    let too_long = "x".repeat(32_768);
+    assert!(matches!(s.execute("shape.setText", json!({"id": id, "text": too_long})), Err(crate::EngineError::BadParams { .. })));
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].text.chars().count(), 32_767);
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+}
+
+#[test]
+fn shape_text_edit_survives_xlsx_roundtrip() {
+    let mut s = s();
+    s.execute("insert.textBox", json!({"text": "Imported"})).unwrap();
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "text-box.xlsx", "base64": saved["base64"]})).unwrap();
+    let id = s.doc().unwrap().wb.active().unwrap().shapes[0].id;
+    let text = "Edited & <escaped>\n\nLast line\n";
+    s.execute("shape.setText", json!({"id": id, "text": text})).unwrap();
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "edited.xlsx", "base64": saved["base64"]})).unwrap();
+    let shape = &s.doc().unwrap().wb.active().unwrap().shapes[0];
+    assert_eq!(shape.kind, gridcraft_model::ShapeKind::TextBox);
+    assert_eq!(shape.text, text);
+}
+
+#[test]
 fn no_border_clears_only_shared_edges_and_undo_restores_them() {
     use gridcraft_core::RangeRef;
     use gridcraft_model::{BorderLine, Borders};
@@ -200,6 +304,103 @@ fn copy_paste_shifts_formulas() {
     assert_eq!(v(&s, "E5"), Value::Number(1.0));
     let f = s.execute("cell.get", json!({"cell": "C1"})).unwrap();
     assert_eq!(f["formula"], "=E5+B1");
+}
+
+#[test]
+fn rich_clipboard_copies_selected_displayed_cells_and_styles() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "outside selection"})).unwrap();
+    s.execute("range.setValues", json!({"range": "B2", "values": [[0.125, "<tag>&\"\nnext"], [0.25, "last"]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "B2:B3", "code": "0.0%"})).unwrap();
+    s.execute("home.bold", json!({"range": "B2", "on": true})).unwrap();
+    s.execute("home.italic", json!({"range": "B2", "on": true})).unwrap();
+    s.execute("home.fontColor", json!({"range": "B2", "color": "#123456"})).unwrap();
+    s.execute("home.fillColor", json!({"range": "B2", "color": "#FEDCBA"})).unwrap();
+    let copied = s.execute("edit.copy", json!({"range": "B2:C3", "html": true})).unwrap();
+    let html = copied["html"].as_str().expect("copy publishes HTML as well as plain text");
+    assert_eq!(copied["text"], "12.5%\t\"<tag>&\"\"\nnext\"\n25.0%\tlast\n");
+    assert!(html.starts_with("<table "));
+    assert!(html.ends_with("</table>"));
+    assert_eq!(html.matches("<tr>").count(), 2);
+    assert_eq!(html.matches("<td ").count(), 4);
+    assert!(html.contains("&lt;tag&gt;&amp;&quot;<br>next"));
+    for content in ["12.5%", "25.0%", "font-weight:bold;", "font-style:italic;", "color:#123456;", "background:#FEDCBA;", "text-align:right;"] {
+        assert!(html.contains(content), "missing {content}");
+    }
+    assert!(!html.contains("outside selection"));
+    assert!(!html.contains("<html"));
+
+    let cut = s.execute("edit.cut", json!({"range": "B2:C3", "html": true})).unwrap();
+    assert_eq!(cut["html"], copied["html"]);
+    assert_eq!(cut["text"], copied["text"]);
+    s.execute("edit.paste", json!({"at": "E5", "text": cut["text"]})).unwrap();
+    assert_eq!(v(&s, "E5"), Value::Number(0.125));
+    assert_eq!(v(&s, "B2"), Value::Empty);
+}
+
+#[test]
+fn copy_and_cut_return_html_only_when_requested() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    for cmd in ["edit.copy", "edit.cut"] {
+        for params in [json!({"range": "A1"}), json!({"range": "A1", "html": false})] {
+            let r = s.execute(cmd, params).unwrap();
+            assert_eq!(r["text"], "x\n");
+            assert!(r.get("html").is_none(), "{cmd} must not bloat programmatic responses with HTML");
+        }
+        let r = s.execute(cmd, json!({"range": "A1", "html": true})).unwrap();
+        assert!(r["html"].as_str().is_some_and(|h| h.contains(">x</td>")));
+    }
+}
+
+#[test]
+fn rich_clipboard_clips_merges_and_skips_hidden_rows() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B2", "input": "merged"})).unwrap();
+    s.execute("home.mergeCenter", json!({"range": "B2:D5"})).unwrap();
+    s.execute("home.hideRows", json!({"rows": "3:3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E4", "input": "side"})).unwrap();
+    let copied = s.execute("edit.copy", json!({"range": "B2:C4", "html": true})).unwrap();
+    let html = copied["html"].as_str().expect("merged copy publishes HTML");
+    assert_eq!(copied["text"], "merged\t\n\t\n");
+    assert_eq!(html.matches("<tr>").count(), 2);
+    assert_eq!(html.matches("<td ").count(), 1);
+    assert!(html.contains("rowspan=\"2\" colspan=\"2\""));
+    assert!(html.contains(">merged</td>"));
+
+    // A selection beginning inside a merge must keep its shape without copying
+    // the original anchor's value from outside the selected rectangle.
+    let copied = s.execute("edit.copy", json!({"range": "C3:E5", "html": true})).unwrap();
+    let html = copied["html"].as_str().expect("partially selected merge publishes HTML");
+    assert_eq!(html.matches("<tr>").count(), 2);
+    assert_eq!(html.matches("<td ").count(), 3);
+    assert!(html.contains("rowspan=\"2\" colspan=\"2\""));
+    assert!(!html.contains("merged"));
+    assert!(html.contains(">side</td>"));
+}
+
+#[test]
+fn rich_clipboard_omits_html_for_large_ranges_without_truncating_text() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A10001", "input": "last cell"})).unwrap();
+    let copied = s.execute("edit.copy", json!({"range": "A1:A10001", "html": true})).unwrap();
+    assert!(copied.get("html").is_none(), "oversized HTML must be omitted, not partially copied");
+    let text = copied["text"].as_str().unwrap();
+    assert_eq!(text.lines().count(), 10_001);
+    assert!(text.ends_with("last cell\n"));
+    let copied = s.execute("edit.copy", json!({"range": "A10001", "html": true})).unwrap();
+    assert!(copied["html"].as_str().is_some_and(|html| html.contains("last cell")));
+}
+
+#[test]
+fn rich_clipboard_omits_html_when_escaping_exceeds_byte_budget() {
+    let mut s = s();
+    let text = "&".repeat(1_000_000);
+    s.execute("range.setValues", json!({"range": "A1", "values": [[text]]})).unwrap();
+    let copied = s.execute("edit.copy", json!({"range": "A1", "html": true})).unwrap();
+    assert!(copied.get("html").is_none(), "an oversized escaped value must not produce partial HTML");
+    assert_eq!(copied["text"].as_str().unwrap().len(), 1_000_001);
+    assert!(copied["text"].as_str().unwrap().ends_with("&\n"));
 }
 
 #[test]
@@ -574,12 +775,148 @@ fn xlsx_roundtrip_through_engine() {
     assert_eq!(v(&s, "B3"), Value::Number(3.0));
 }
 
+fn ods_fixture() -> Vec<u8> {
+    use std::io::{Cursor, Write};
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [
+        ("mimetype", "application/vnd.oasis.opendocument.spreadsheet"),
+        (
+            "META-INF/manifest.xml",
+            r#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.3"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/></manifest:manifest>"#,
+        ),
+        (
+            "content.xml",
+            r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:of="urn:oasis:names:tc:opendocument:xmlns:of:1.2" office:version="1.3"><office:body><office:spreadsheet><table:table table:name="Data"><table:table-row><table:table-cell office:value-type="float" office:value="42" table:formula="of:=SUM([.B1:.B2])"/><table:table-cell office:value-type="string"><text:p>Original data</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#,
+        ),
+    ] {
+        zip.start_file(name, options).unwrap();
+        zip.write_all(data.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+fn ods_import_keeps_cached_values_and_reports_limits() {
+    let bytes = ods_fixture();
+    assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Ods);
+    for name in ["source.ods", "source.xlsx"] {
+        let mut s = s();
+        let r = s.execute("file.open", json!({"name": name, "base64": crate::io::base64_encode(&bytes)})).unwrap();
+        assert!(!r["warnings"].as_array().unwrap().is_empty());
+        assert!(s.take_ui_requests().iter().any(|r| matches!(r, crate::UiRequest::Message(_))));
+        assert!(s.doc().unwrap().path.is_none());
+        assert!(s.doc().unwrap().display_title().ends_with(".xlsx"));
+        assert_eq!(v(&s, "A1"), Value::Number(42.0));
+        assert_eq!(v(&s, "B1"), Value::from("Original data"));
+        assert!(s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.is_none());
+        let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+        s.execute("file.open", json!({"name": "imported.xlsx", "base64": saved["base64"]})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(42.0));
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn ods_import_never_reuses_source_as_save_target() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-ods-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let bytes = ods_fixture();
+    for name in ["source.ods", "disguised.xlsx"] {
+        let path = dir.join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        let mut s = s();
+        s.execute("file.open", json!({"path": path})).unwrap();
+        s.take_ui_requests();
+        s.execute("cell.set", json!({"cell": "A1", "input": "43"})).unwrap();
+        s.execute("file.save", json!({})).unwrap();
+        assert!(s.take_ui_requests().iter().any(|r| matches!(r, crate::UiRequest::Dialog(name, _) if name == "saveAs")));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(s.execute("file.saveAs", json!({"path": dir.join("source.ods")})).is_err());
+        assert!(s.execute("file.saveBytes", json!({"format": "ods"})).is_err());
+        let output = dir.join("converted.xlsx");
+        s.execute("file.saveAs", json!({"path": output})).unwrap();
+        assert!(!s.doc().unwrap().is_dirty());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        s.execute("file.open", json!({"name": "converted.xlsx", "base64": crate::io::base64_encode(&std::fs::read(output).unwrap())})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(43.0));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn samples_build() {
     for (name, _) in crate::sample::SAMPLES {
         let wb = crate::sample::build(name).unwrap_or_else(|| panic!("sample {name}"));
         assert!(!wb.sheets[0].cells.is_empty());
     }
+}
+
+/// Original minimal BIFF12 records, built in source rather than a vendor workbook fixture.
+fn xlsb_fixture() -> Vec<u8> {
+    use std::io::{Cursor, Write};
+    fn wide(s: &str) -> Vec<u8> {
+        let units: Vec<_> = s.encode_utf16().collect();
+        (units.len() as u32).to_le_bytes().into_iter().chain(units.into_iter().flat_map(u16::to_le_bytes)).collect()
+    }
+    fn record(out: &mut Vec<u8>, id: u16, payload: &[u8]) {
+        if id < 128 {
+            out.push(id as u8);
+        } else {
+            out.extend([(id as u8 & 127) | 128, (id >> 7) as u8]);
+        }
+        let mut size = payload.len();
+        while size >= 128 {
+            out.push((size as u8 & 127) | 128);
+            size >>= 7;
+        }
+        out.push(size as u8);
+        out.extend(payload);
+    }
+    let mut book = vec![];
+    record(&mut book, 131, &[]); // BeginBook
+    record(&mut book, 143, &[]); // BeginBundleShs
+    let mut bundle = vec![0; 4]; // Visible
+    bundle.extend(1u32.to_le_bytes());
+    bundle.extend(wide("rId1"));
+    bundle.extend(wide("Imported"));
+    record(&mut book, 156, &bundle);
+    record(&mut book, 144, &[]);
+    record(&mut book, 132, &[]);
+    let mut sheet = vec![];
+    record(&mut sheet, 129, &[]); // BeginSheet
+    record(&mut sheet, 145, &[]); // BeginSheetData
+    record(&mut sheet, 0, &[0; 17]); // Row 0, no spans
+    let mut numeric = vec![0; 8]; // A1, default style
+    numeric.extend(42.0f64.to_le_bytes());
+    numeric.extend([0; 2]); // Formula flags
+    numeric.extend(3u32.to_le_bytes());
+    numeric.extend([0x1e, 42, 0]); // PtgInt(42)
+    numeric.extend(0u32.to_le_bytes());
+    record(&mut sheet, 9, &numeric); // FmlaNum
+    let mut text = 1u32.to_le_bytes().to_vec(); // B1
+    text.extend(0u32.to_le_bytes());
+    text.extend(wide("Original data"));
+    record(&mut sheet, 6, &text);
+    record(&mut sheet, 146, &[]);
+    record(&mut sheet, 130, &[]);
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let types = br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/><Override PartName="/xl/worksheets/sheet1.bin" ContentType="application/vnd.ms-excel.worksheet"/></Types>"#;
+    let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.bin"/></Relationships>"#;
+    let book_rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.bin"/></Relationships>"#;
+    for (name, data) in [
+        ("[Content_Types].xml", types.as_slice()),
+        ("_rels/.rels", rels.as_slice()),
+        ("xl/_rels/workbook.bin.rels", book_rels.as_slice()),
+        ("xl/workbook.bin", book.as_slice()),
+        ("xl/worksheets/sheet1.bin", sheet.as_slice()),
+    ] {
+        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
 }
 
 #[test]
@@ -618,4 +955,66 @@ fn ink_strokes_and_ink_to_shape() {
     s.execute("draw.stroke", json!({"points": [[0.0, 0.0], [50.0, 10.0], [120.0, 30.0]]})).unwrap();
     assert_eq!(s.execute("draw.inkToShape", json!({})).unwrap()["kind"], "Line");
     assert!(s.execute("draw.stroke", json!({"points": [[1.0, 1.0]]})).is_err());
+}
+
+#[test]
+fn xlsb_import_keeps_cached_values_and_reports_limits() {
+    let bytes = xlsb_fixture();
+    assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Xlsb);
+    for name in ["source.xlsb", "source.xlsx"] {
+        let mut s = s();
+        let r = s.execute("file.open", json!({"name": name, "base64": crate::io::base64_encode(&bytes)})).unwrap();
+        assert!(!r["warnings"].as_array().unwrap().is_empty());
+        assert!(s.take_ui_requests().iter().any(|r| matches!(r, crate::UiRequest::Message(_))));
+        assert!(s.doc().unwrap().path.is_none());
+        assert!(s.doc().unwrap().display_title().ends_with(".xlsx"));
+        assert_eq!(v(&s, "A1"), Value::Number(42.0));
+        assert_eq!(v(&s, "B1"), Value::from("Original data"));
+        assert!(s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.is_none());
+        s.execute("cell.set", json!({"cell": "B1", "input": "Changed"})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(42.0)); // Imported formula caches are constants.
+        let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+        s.execute("file.open", json!({"name": "imported.xlsx", "base64": saved["base64"]})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(42.0));
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn xlsb_import_never_reuses_source_as_save_target() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-xlsb-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let bytes = xlsb_fixture();
+    for name in ["source.xlsb", "disguised.xlsx"] {
+        let path = dir.join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        let mut s = s();
+        s.execute("file.open", json!({"path": path})).unwrap();
+        s.take_ui_requests();
+        s.execute("cell.set", json!({"cell": "A1", "input": "43"})).unwrap();
+        s.execute("file.save", json!({})).unwrap();
+        assert!(s.take_ui_requests().iter().any(|r| matches!(r, crate::UiRequest::Dialog(name, _) if name == "saveAs")));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(s.execute("file.saveAs", json!({"path": dir.join("source.xlsb")})).is_err());
+        assert!(s.execute("file.saveBytes", json!({"format": "xlsb"})).is_err());
+        let output = dir.join("converted.xlsx");
+        s.execute("file.saveAs", json!({"path": output})).unwrap();
+        assert!(!s.doc().unwrap().is_dirty());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        s.execute("file.open", json!({"name": "converted.xlsx", "base64": crate::io::base64_encode(&std::fs::read(output).unwrap())})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(43.0));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn malformed_xlsb_keeps_the_current_workbook() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Keep me"})).unwrap();
+    assert!(s.execute("file.open", json!({"name": "bad.xlsb", "base64": crate::io::base64_encode(b"not a workbook")})).is_err());
+    assert_eq!(s.documents().len(), 1);
+    assert_eq!(v(&s, "A1"), Value::from("Keep me"));
+    assert!(s.doc().unwrap().is_dirty());
 }

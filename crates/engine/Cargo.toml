@@ -23,3 +23,6 @@ gridcraft-xlsx = { workspace = true }
 gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
 image = { workspace = true }
+
+[dev-dependencies]
+zip = { workspace = true }

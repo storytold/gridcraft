@@ -249,6 +249,31 @@ impl NativeMenu {
     pub fn poll(&self, app: &mut SheetApp, ctx: &egui::Context) {
         while let Ok(ev) = self.events.try_recv() {
             let id = ev.id.as_ref().to_string();
+            // Text selection belongs to the inline editor, not the worksheet clipboard/undo.
+            if app.text_box_editor.is_some() {
+                let clipboard = match id.as_str() {
+                    "edit.copy" => Some(egui::ViewportCommand::RequestCopy),
+                    "edit.cut" => Some(egui::ViewportCommand::RequestCut),
+                    "edit.paste" => Some(egui::ViewportCommand::RequestPaste),
+                    _ => None,
+                };
+                if let Some(command) = clipboard {
+                    ctx.send_viewport_cmd(command);
+                    continue;
+                }
+                if id == "edit.undo" || id == "edit.redo" {
+                    ctx.input_mut(|i| {
+                        i.events.push(egui::Event::Key {
+                            key: egui::Key::Z,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers { command: true, mac_cmd: true, shift: id == "edit.redo", ..Default::default() },
+                        });
+                    });
+                    continue;
+                }
+            }
             if select_theme(app, &id) {
                 continue;
             }
@@ -269,11 +294,7 @@ impl NativeMenu {
                 let name = if name == "note" { "comment" } else { name };
                 app.open_dialog(name, params);
             } else if id == "edit.copy" || id == "edit.cut" {
-                if let Ok(r) = app.run(&id, json!({}))
-                    && let Some(t) = r.get("text").and_then(Value::as_str)
-                {
-                    ctx.copy_text(t.to_string());
-                }
+                app.copy_to_clipboard(ctx, &id);
             } else {
                 app.run_or_alert(&id, json!({}));
             }

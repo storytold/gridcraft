@@ -188,10 +188,10 @@ impl Dialog {
                         label: "Paste",
                         options: vec![
                             ("all", "All"),
-                            ("formulas", "Formulas"),
-                            ("values", "Values"),
-                            ("formats", "Formats"),
-                            ("comments", "Comments and notes"),
+                            ("formulas", "Formulas (F)"),
+                            ("values", "Values (V)"),
+                            ("formats", "Formats (T)"),
+                            ("comments", "Comments and notes (C)"),
                             ("validation", "Validation"),
                             ("allExceptBorders", "All except borders"),
                             ("columnWidths", "Column widths"),
@@ -205,7 +205,7 @@ impl Dialog {
                         options: vec![("none", "None"), ("add", "Add"), ("subtract", "Subtract"), ("multiply", "Multiply"), ("divide", "Divide")],
                     },
                     Check { key: "skipBlanks", label: "Skip blanks" },
-                    Check { key: "transpose", label: "Transpose" },
+                    Check { key: "transpose", label: "Transpose (E)" },
                     Check { key: "link", label: "Paste Link" },
                 ],
                 json!({"what": "all", "operation": "none"}),
@@ -632,6 +632,9 @@ fn build_params(d: &Dialog) -> Json {
 
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
+    if d.name == "pasteSpecial" {
+        paste_special_shortcuts(&mut d, ctx);
+    }
     let mut open = true;
     let mut win_open = true;
     let mut confirm = false;
@@ -826,6 +829,71 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     if open {
         app.dialog = Some(d);
     }
+}
+
+/// Paste Special's legacy mnemonics select options; Enter still performs the paste.
+fn paste_special_shortcuts(d: &mut Dialog, ctx: &egui::Context) {
+    if ctx.text_edit_focused() {
+        return;
+    }
+    let right_alt = ctx.input(|i| {
+        i.key_down(Key::AltRight)
+            || i.events.iter().any(|event| {
+                matches!(event, egui::Event::Key { key: Key::AltRight, .. })
+                    || matches!(event, egui::Event::Key { physical_key: Some(Key::AltRight), .. })
+            })
+    });
+    let mac = ctx.os() == egui::os::OperatingSystem::Mac;
+    let allowed = |m: egui::Modifiers| !m.ctrl && !m.command && !m.mac_cmd && !(m.alt && (mac || right_alt));
+    let mnemonic = |key| match key {
+        Key::T => Some('t'),
+        Key::V => Some('v'),
+        Key::F => Some('f'),
+        Key::C => Some('c'),
+        Key::E => Some('e'),
+        _ => None,
+    };
+    let mut text_to_consume = Vec::new();
+    for event in ctx.input(|i| i.events.clone()) {
+        let egui::Event::Key { key, pressed: true, repeat, modifiers, .. } = event else { continue };
+        if !allowed(modifiers) {
+            continue;
+        }
+        let Some(letter) = mnemonic(key) else { continue };
+        text_to_consume.push(letter);
+        if repeat {
+            continue;
+        }
+        if key == Key::E {
+            let transpose = d.values.get("transpose").and_then(Json::as_bool).unwrap_or(false);
+            d.values.insert("transpose".into(), json!(!transpose));
+        } else {
+            let what = match key {
+                Key::T => "formats",
+                Key::V => "values",
+                Key::F => "formulas",
+                _ => "comments",
+            };
+            d.values.insert("what".into(), json!(what));
+        }
+    }
+    // Browsers can deliver Text before or after Key. Act only on Key, then remove
+    // its matching text so one physical press cannot toggle Transpose twice.
+    ctx.input_mut(|i| {
+        i.events.retain(|event| match event {
+            egui::Event::Key { key, modifiers, .. } => !(allowed(*modifiers) && mnemonic(*key).is_some()),
+            egui::Event::Text(text) if text.len() == 1 => {
+                let letter = text.chars().next().unwrap_or_default().to_ascii_lowercase();
+                if let Some(index) = text_to_consume.iter().position(|&c| c == letter) {
+                    text_to_consume.remove(index);
+                    false
+                } else {
+                    true
+                }
+            }
+            _ => true,
+        });
+    });
 }
 
 fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {

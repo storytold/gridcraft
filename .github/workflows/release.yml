@@ -316,6 +316,75 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
 
+  linux-riscv64:
+    name: Linux riscv64
+    needs: version
+    # Cross-compiled on x86_64 (no hosted RISC-V runners) against the runner's own Ubuntu release
+    # from ports.ubuntu.com, so the binaries need that release's glibc (24.04: 2.39). 22.04's
+    # riscv64 ports lag its amd64 updates, which breaks the multiarch install. tar.gz only; the
+    # CLI is smoke-tested under QEMU.
+    runs-on: ubuntu-24.04
+    # No `environment: release`: this job signs nothing, so it gets no release secrets.
+    env:
+      GRIDCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      GRIDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out craft-fonts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          path: craft-fonts
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: riscv64gc-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-linux-riscv64
+      - name: Apply version override
+        if: inputs.version != ''
+        run: cargo run -q -p xtask --no-default-features -- version set "$GRIDCRAFT_VERSION"
+      - name: Install cross-compilation dependencies
+        run: |
+          . /etc/os-release
+          sudo dpkg --add-architecture riscv64
+          # Pin the existing (archive.ubuntu.com) sources to amd64; riscv64 comes from ports.
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i '/^Types: deb/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          if [ -f /etc/apt/sources.list ]; then
+            sudo sed -i 's/^deb /deb [arch=amd64] /g' /etc/apt/sources.list
+            sudo sed -i 's/^deb-src /deb-src [arch=amd64] /g' /etc/apt/sources.list
+          fi
+          for suite in "$VERSION_CODENAME" "$VERSION_CODENAME-updates" "$VERSION_CODENAME-security"; do
+            echo "deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports $suite main universe restricted multiverse"
+          done | sudo tee /etc/apt/sources.list.d/riscv64.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross libc6-dev:riscv64 qemu-user \
+            libxkbcommon-dev:riscv64 libwayland-dev:riscv64 libx11-dev:riscv64 libxrandr-dev:riscv64 \
+            libxi-dev:riscv64 libgl1-mesa-dev:riscv64
+      - name: Build and package (tar.gz)
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+          PKG_CONFIG_SYSROOT_DIR: /
+          PKG_CONFIG_PATH: /usr/lib/riscv64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          CROSS_ARCH: riscv64
+          CROSS_TARGET: riscv64gc-unknown-linux-gnu
+          CROSS_COMPILE: riscv64-linux-gnu-
+          EMULATOR: qemu-riscv64
+          QEMU_LD_PREFIX: /usr/riscv64-linux-gnu
+        run: packaging/linux/package.sh --formats tar
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-linux-riscv64
+          path: dist/release/*.tar.gz
+          if-no-files-found: error
+
   # FreeBSD has no hosted runners: freebsd.yml builds in a FreeBSD VM and, with package: true,
   # uploads the release-freebsd artifact (gridcraft-<v>-freebsd-x86_64.tar.gz). It needs no
   # secrets, so the called workflow runs without the release environment (and in dry runs).
@@ -330,7 +399,7 @@ jobs:
 
   release:
     name: Draft GitHub Release
-    needs: [version, macos, windows, linux, flatpak, web, freebsd]
+    needs: [version, macos, windows, linux, linux-riscv64, flatpak, web, freebsd]
     # Belt and braces for branch dry runs: only the release branch drafts a release (the
     # environment's branch rule refuses this job and the signing jobs anywhere else, too).
     if: github.ref == 'refs/heads/release'

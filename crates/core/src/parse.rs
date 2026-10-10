@@ -275,6 +275,7 @@ fn valid_ymd(sys: DateSystem, y: i64, m: i64, d: i64) -> Option<f64> {
 
 /// The year used for dates typed without one. Fixed per process from the system clock when
 /// available (wasm without clock falls back to 2026).
+#[allow(clippy::disallowed_methods)] // the clock is read only off wasm
 pub fn current_year() -> i64 {
     #[cfg(not(target_arch = "wasm32"))]
     {

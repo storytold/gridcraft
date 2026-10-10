@@ -220,8 +220,10 @@ pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) ->
 }
 
 pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
-    let prof = std::env::var_os("GRIDCRAFT_PROFILE").is_some();
-    let t0 = std::time::Instant::now();
+    // `GRIDCRAFT_PROFILE` timing. Read the clock only when profiling, and never on wasm: there
+    // `Instant::now` traps (`RuntimeError: unreachable`), which broke every edit in the web app.
+    #[allow(clippy::disallowed_methods)]
+    let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| std::time::Instant::now()) };
     let mut sel = d.selection.clone();
     let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new(), protection_checked: false };
     let r = f(&mut ctx)?;
@@ -232,7 +234,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     if changed.len() <= 200_000 {
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
     }
-    if prof {
+    if let Some(t0) = t0 {
         eprintln!("commit: edit {:?}, {} changed", t0.elapsed(), changed.len());
     }
     if structural {
@@ -240,7 +242,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }
-    if prof {
+    if let Some(t0) = t0 {
         eprintln!("commit: + recalc {:?}", t0.elapsed());
     }
     fit_rows.sort_unstable();
@@ -248,7 +250,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     for (si, row) in fit_rows {
         auto_row_height(&mut wb, si, row);
     }
-    if prof {
+    if let Some(t0) = t0 {
         eprintln!("commit: + rows {:?}", t0.elapsed());
     }
     d.wb = std::sync::Arc::new(wb);

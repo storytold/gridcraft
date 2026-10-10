@@ -3,8 +3,10 @@
 mod csv_tests;
 mod fixtures;
 mod malformed;
+mod ods_tests;
 mod pivot_tests;
 mod roundtrip;
+mod xlsb_tests;
 
 use std::io::Write;
 
