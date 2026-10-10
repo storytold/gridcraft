@@ -266,7 +266,7 @@ fn valid_ymd(sys: DateSystem, y: i64, m: i64, d: i64) -> Option<f64> {
     if !(1..=12).contains(&m) || d < 1 {
         return None;
     }
-    let max = if y == 1900 && m == 2 { 29 } else { crate::date::days_in_month(y as i32, m as u32) as i64 };
+    let max = crate::date::days_in_month_in(sys, y as i32, m as u32) as i64;
     if d > max {
         return None;
     }
@@ -356,5 +356,20 @@ mod tests {
         assert_eq!(p("12:00 AM").value, Value::Number(0.0));
         assert_eq!(p("10/7/2026 18:00").value, Value::Number(46302.75));
         assert_eq!(p("25:00").value, Value::Number(25.0 / 24.0));
+    }
+
+    #[test]
+    fn fictitious_1900_02_29() {
+        // Excel accepts 29 February 1900 (serial 60) and keeps 1 March 1900 at 61.
+        assert_eq!(p("2/29/1900").value, Value::Number(60.0));
+        assert_eq!(p("1900-02-29").value, Value::Number(60.0));
+        assert_eq!(p("29-Feb-1900").value, Value::Number(60.0));
+        assert_eq!(p("2/28/1900").value, Value::Number(59.0));
+        assert_eq!(p("3/1/1900").value, Value::Number(61.0));
+        assert_eq!(p("2/29/1901").value, Value::text("2/29/1901"));
+        assert_eq!(p("2/30/1900").value, Value::text("2/30/1900"));
+        // The 1904 system starts after it.
+        assert_eq!(parse_input("2/29/1900", DateSystem::D1904).value, Value::text("2/29/1900"));
+        assert_eq!(parse_input("2/29/1904", DateSystem::D1904).value, Value::Number(59.0));
     }
 }

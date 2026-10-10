@@ -155,15 +155,19 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         }
         "engine.commands" => {
             let mut v: Vec<Json> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
-            for (id, label) in [
-                ("ui.ribbonTab", "Ribbon Tab"),
-                ("view.formulaBar", "Formula Bar"),
-                ("view.collapseRibbon", "Collapse Ribbon"),
-                ("view.darkMode", "Dark Mode"),
-                ("view.zoom100", "100%"),
-                ("ui.dialog", "Open Dialog"),
+            for (id, label, params) in [
+                ("ui.ribbonTab", "Ribbon Tab", ""),
+                ("view.formulaBar", "Formula Bar", ""),
+                ("view.collapseRibbon", "Collapse Ribbon", ""),
+                ("view.darkMode", "Dark Mode", ""),
+                ("view.theme", "Display Theme", ""),
+                ("view.zoom100", "100%", ""),
+                ("ui.dialog", "Open Dialog", ""),
+                ("app.language.set", "Interface Language", "{language: \"en\"|\"zh\"|\"ja\"|\"ko\"|\"ru\"} (alias: code)"),
+                ("app.language.english", "Interface Language: English", ""),
+                ("app.language.japanese", "Interface Language: Japanese", ""),
             ] {
-                v.push(json!({"id": id, "label": label, "enabled": true, "ui": true}));
+                v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
             }
             ok(Json::Array(v))
         }
@@ -178,6 +182,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         "ui.set" => {
             if let Some(v) = p.get("dark").and_then(Json::as_bool) {
                 app.ui.dark = v;
+                app.ui.system_theme = false;
             }
             if let Some(v) = p.get("formulaBar").and_then(Json::as_bool) {
                 app.ui.formula_bar = v;
@@ -403,7 +408,7 @@ pub fn collect_screenshots(app: &mut SheetApp, ctx: &egui::Context) {
         if now < *deadline {
             return true;
         }
-        let _ = reply.send(json!({"ok": false, "error": "no frame was presented (screen locked or window hidden); use `gridcraft-cli snapshot`"}));
+        let _ = reply.send(json!({"ok": false, "error": "no frame was presented before the screenshot timeout; make the window visible, use `ui.focus`, then retry `ui.screenshot`"}));
         false
     });
 }

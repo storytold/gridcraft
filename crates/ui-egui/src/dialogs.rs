@@ -1087,12 +1087,17 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
                         (BorderStyle::Dotted, "dotted"),
                         (BorderStyle::Double, "double"),
                     ] {
-                        if ui.selectable_label(slot.style == s, label).clicked() {
+                        let response = ui.selectable_label(slot.style == s, label);
+                        response
+                            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, ui.is_enabled(), format!("{n} {label}")));
+                        if response.clicked() {
                             slot.style = s;
                         }
                     }
                 });
             }
+            let theme = app.session.active().map(|doc| &doc.wb.theme).cloned().unwrap_or_default();
+            crate::border_preview::sample(ui, &st.borders, &theme);
         }
         "Fill" => {
             let colors = app.session.active().map(|doc| doc.wb.theme.colors).unwrap_or_default();
@@ -1368,7 +1373,7 @@ fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.label(n["scope"].as_str().unwrap_or(""));
                 if ui.small_button("Delete").clicked() {
-                    app.run_or_alert("formulas.deleteName", json!({"name": n["name"]}));
+                    app.run_or_alert("formulas.deleteName", json!({"name": n["name"], "scope": n["scope"]}));
                 }
             });
             ui.end_row();

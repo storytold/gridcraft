@@ -124,6 +124,11 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                 push(&mut out, Tok::Sheet(a, b), j + 1);
                 i = j + 1;
             }
+            '#' if out.last().is_some_and(|t: &Token| t.end == start && matches!(t.tok, Tok::Word(_))) => {
+                // Spill range operator right after a reference: `A1#`.
+                push(&mut out, Tok::Op("#"), i + 1);
+                i += 1;
+            }
             '#' => {
                 // Error literal, or #-prefixed struct specifier (only inside [] which we lex as Struct).
                 let rest = src.get(start..).unwrap_or("");

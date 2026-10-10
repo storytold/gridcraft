@@ -261,7 +261,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Lookup &\nReference" => "Поиск и\nссылки",
         "Math &\nTrig" => "Математические и\nтригонометрические",
         "More\nFunctions" => "Другие\nфункции",
-        "Screen" => "На экране",
+        "Page Layout|Orientation" => "Ориентация",
+        "Display theme" => "Тема оформления",
+        "System" => "Системная",
+        "Light" => "Светлая",
+        "Dark" => "Тёмная",
+        "Sheet Options|View" => "На экране",
         "Print" => "Печать",
         _ => return None,
     })

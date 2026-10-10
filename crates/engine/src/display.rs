@@ -31,11 +31,28 @@ pub fn format(v: &Value, code: &str, wb: &Workbook) -> Formatted {
     format_value(v, &parsed(code), wb.date_system)
 }
 
+/// Whether `c` has a formula that must not be shown: its cell is formatted Hidden on a
+/// protected sheet. A spilled cell follows its anchor.
+pub fn formula_hidden(wb: &Workbook, sheet: &Sheet, c: CellRef) -> bool {
+    if !sheet.is_protected() {
+        return false;
+    }
+    let at = match sheet.cell(c) {
+        Some(x) if x.formula.is_some() => c,
+        _ => match sheet.spill_ranges.iter().find(|(_, r)| r.contains(c)) {
+            Some((anchor, _)) => *anchor,
+            None => return false,
+        },
+    };
+    wb.styles.get(sheet.style_id(at)).protection.hidden
+}
+
 /// The text a cell shows (full precision General; the grid narrows General to fit the column).
 pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let v = sheet.value(c);
     if sheet.show_formulas
         && let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref())
+        && !formula_hidden(wb, sheet, c)
     {
         return format!("={}", f.text);
     }

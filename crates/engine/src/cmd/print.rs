@@ -923,7 +923,15 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         HAlign::Justify | HAlign::Fill => HAlign::Left,
         other => other,
     };
-    let lines: Vec<String> = if wrap { wrap_lines(&text, font, size, avail.max(size)) } else { vec![text] };
+    let rot = st.align.rotation;
+    let rotated = rot != 0 && rot != 255;
+    // Rotated text wraps along its own direction: upright (±90°) text to the row height.
+    let lines: Vec<String> = match (wrap, rotated) {
+        (true, false) => wrap_lines(&text, font, size, avail.max(size)),
+        (true, true) if rot.abs() == 90 => wrap_lines(&text, font, size, (h - 2.0 * pad).max(size)),
+        (true, true) => vec![text.lines().next().unwrap_or_default().to_string()],
+        (false, _) => vec![text],
+    };
     let line_h = size * 1.2;
     let n = lines.len().max(1) as f32;
     let first_baseline = match st.align.v {
@@ -933,7 +941,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     };
     // Overflow into empty neighbours (single-line text, not merged).
     let (mut clip_l, mut clip_r) = (x, x + w);
-    if !wrap && !merged && !is_num && tw + 2.0 * pad + indent > w {
+    if !wrap && !merged && !is_num && rot.abs() != 90 && tw + 2.0 * pad + indent > w {
         let need = tw + 2.0 * pad + indent - w;
         let grow = |dir: i64, mut need: f32| -> f32 {
             let mut ext = 0.0;
@@ -966,13 +974,20 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     let clip_r = clip_r.min(limits.1);
     pg.save();
     pg.clip_rect(clip_l, y, (clip_r - clip_l).max(0.0), h);
-    let rot = st.align.rotation;
-    if rot != 0 && rot != 255 && !wrap {
+    if rotated {
         // Rotated text: anchored at the bottom-left (upward) or top-left (downward) of the cell.
+        // Wrapped lines stack rightward for upward text and leftward for downward text, so
+        // downward text starts its first line far enough in for the last to end at the left pad.
         let deg = (rot as f32).clamp(-90.0, 90.0);
         let angle = -deg.to_radians();
-        let (ox, oy) = if deg > 0.0 { (x + pad + size * 0.8 * deg.to_radians().sin(), y + h - pad) } else { (x + pad, y + pad + size * 0.8) };
-        if let Some(t) = lines.first() {
+        let last = lines.len().saturating_sub(1) as f32;
+        for (i, t) in lines.iter().enumerate() {
+            let i = i as f32;
+            let (ox, oy) = if deg > 0.0 {
+                (x + pad + size * 0.8 * deg.to_radians().sin() + i * line_h, y + h - pad)
+            } else {
+                (x + pad + (last - i) * line_h, y + pad + size * 0.8)
+            };
             pg.text_rotated(ox, oy, size, font, color, t, angle);
         }
         pg.restore();
@@ -1761,5 +1776,27 @@ mod tests {
         assert!(w.iter().all(|l| gridcraft_pdf::text_width(Font::Helvetica, 10.0, l) <= 50.0 || !l.contains(' ')));
         let w = wrap_lines("Supercalifragilistic", Font::Helvetica, 10.0, 20.0);
         assert!(w.len() > 2);
+    }
+
+    #[test]
+    fn rotated_wrapped_text_prints_rotated() {
+        // Upright headers over narrow columns (mark sheets) combine rotation with Wrap Text.
+        let mut s = s();
+        let header = "Term 1 : Drama : Continuous Assessment";
+        s.execute("range.setValues", json!({"range": "A1", "values": [[header, header]]})).unwrap();
+        s.execute("home.wrapText", json!({"range": "A1:B1", "on": true})).unwrap();
+        s.execute("home.orientation", json!({"range": "A1", "angle": "up"})).unwrap();
+        s.execute("home.orientation", json!({"range": "B1", "angle": "down"})).unwrap();
+        s.execute("home.columnWidth", json!({"cols": "A:B", "chars": 6})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "1:1", "height": 267})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        let pdf = String::from_utf8_lossy(&pdf);
+        // The page holds only these two cells, so every text block on it is a piece of a header.
+        let blocks: Vec<&str> = pdf.split("BT\n").skip(1).filter(|b| b.contains(" Tj")).collect();
+        let up = blocks.iter().filter(|b| b.contains("\n0 1 -1 0 ")).count();
+        let down = blocks.iter().filter(|b| b.contains("\n0 -1 1 0 ")).count();
+        // Every piece of both headers is rotated, each wrapped along the row height into a few long lines.
+        assert_eq!(up + down, blocks.len(), "a header line printed flat: {blocks:?}");
+        assert!((1..=3).contains(&up) && (1..=3).contains(&down), "up {up}, down {down}: {blocks:?}");
     }
 }

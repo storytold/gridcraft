@@ -261,7 +261,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Lookup &\nReference" => "조회 및\n참조",
         "Math &\nTrig" => "수학 및\n삼각",
         "More\nFunctions" => "기타\n함수",
-        "Screen" => "화면",
+        "Page Layout|Orientation" => "용지 방향",
+        "Display theme" => "표시 테마",
+        "System" => "시스템",
+        "Light" => "밝게",
+        "Dark" => "어둡게",
+        "Sheet Options|View" => "화면",
         "Print" => "인쇄",
         _ => return None,
     })

@@ -69,26 +69,34 @@ pub fn days_in_month(y: i32, m: u32) -> u32 {
     }
 }
 
+/// Days in a month of a date system's calendar: like [`days_in_month`], except that February
+/// 1900 has 29 days in the 1900 system (serial 60 is the fictitious 1900-02-29).
+pub fn days_in_month_in(sys: DateSystem, y: i32, m: u32) -> u32 {
+    if sys == DateSystem::D1900 && y == 1900 && m == 2 { 29 } else { days_in_month(y, m) }
+}
+
 /// Serial for a date. Month and day overflow roll over like `DATE()` (month 13 = January next
-/// year, day 0 = last day of the previous month). `None` before the epoch or after 9999-12-31.
+/// year, day 0 = last day of the previous month), in the date system's own calendar: in the 1900
+/// system February 1900 has 29 days, so `(1900, 2, 29)` and `(1900, 3, 0)` are serial 60.
+/// `None` before the epoch or after 9999-12-31.
 pub fn serial_from_ymd(sys: DateSystem, year: i64, month: i64, day: i64) -> Option<f64> {
     // DATE(): years 0–1899 are added to 1900.
-    let mut y = if (0..1900).contains(&year) { year + 1900 } else { year };
-    let m0 = month - 1;
-    y += m0.div_euclid(12);
+    let y = if (0..1900).contains(&year) { year + 1900 } else { year };
+    let m0 = month.checked_sub(1)?;
+    let y = y.checked_add(m0.div_euclid(12))?;
     let m = m0.rem_euclid(12) + 1;
     if !(1900..=9999).contains(&y) && sys == DateSystem::D1900 || !(1904..=9999).contains(&y) && sys == DateSystem::D1904 {
         return None;
     }
-    let base = days_from_civil(y as i32, m as u32, 1) + day - 1;
-    let serial = match sys {
-        DateSystem::D1900 => {
-            let s = base - UNIX_1899_12_30;
-            // Before the fictitious 1900-02-29 serials are one lower than the day count from 1899-12-30.
-            if s <= 60 { s - 1 } else { s }
-        }
-        DateSystem::D1904 => base - UNIX_1904_01_01,
+    let first = days_from_civil(y as i32, m as u32, 1);
+    // Serial of the first of the month; the day (and any overflow) counts on from there.
+    let first = match sys {
+        // Up to February 1900 the serial is one lower than the day count from 1899-12-30: the
+        // fictitious 1900-02-29 (serial 60) comes before 1 March.
+        DateSystem::D1900 => first - UNIX_1899_12_30 - i64::from(y == 1900 && m <= 2),
+        DateSystem::D1904 => first - UNIX_1904_01_01,
     };
+    let serial = first.checked_add(day)?.checked_sub(1)?;
     if !(0..=2_958_465).contains(&serial) {
         return None;
     }
@@ -169,9 +177,57 @@ mod tests {
     }
 
     #[test]
+    fn fictitious_1900_02_29() {
+        // Excel's 1900 calendar has a 29 February 1900 (serial 60); day and month overflow count
+        // through it.
+        let s = DateSystem::D1900;
+        assert_eq!(serial_from_ymd(s, 1900, 2, 29), Some(60.0));
+        assert_eq!(serial_from_ymd(s, 1900, 3, 0), Some(60.0));
+        assert_eq!(serial_from_ymd(s, 1900, 2, 30), Some(61.0));
+        assert_eq!(serial_from_ymd(s, 1900, 1, 60), Some(60.0));
+        assert_eq!(serial_from_ymd(s, 1900, 1, 61), Some(61.0));
+        assert_eq!(serial_from_ymd(s, 1900, 1, 400), Some(400.0));
+        assert_eq!(serial_from_ymd(s, 1900, 4, -30), Some(61.0));
+        assert_eq!(serial_from_ymd(s, 1900, 4, -31), Some(60.0));
+        assert_eq!(serial_from_ymd(s, 1900, 3, -1), Some(59.0));
+        assert_eq!(serial_from_ymd(s, 1901, -10, 29), Some(60.0));
+        assert_eq!(serial_from_ymd(s, 1900, 1, 0), Some(0.0));
+        assert_eq!(serial_from_ymd(s, 1900, 1, -1), None);
+        assert_eq!(serial_from_ymd(s, 1900, 0, 1), None);
+        // Later years keep the real calendar.
+        assert_eq!(serial_from_ymd(s, 1901, 2, 29), serial_from_ymd(s, 1901, 3, 1));
+        assert_eq!(serial_from_ymd(s, 1904, 2, 29), Some(1521.0));
+        // Every serial up to 1900-12-31 comes back from its own year, month and day.
+        for serial in 0..=366 {
+            let d = datetime_from_serial(s, serial as f64).unwrap();
+            assert_eq!(serial_from_ymd(s, d.year as i64, d.month as i64, d.day as i64), Some(serial as f64), "{d:?}");
+        }
+        assert_eq!(days_in_month_in(s, 1900, 2), 29);
+        assert_eq!(days_in_month_in(s, 1901, 2), 28);
+        assert_eq!(days_in_month_in(DateSystem::D1904, 1900, 2), 28);
+        // The 1904 system has no fictitious day: 1904 is a real leap year.
+        let s = DateSystem::D1904;
+        assert_eq!(serial_from_ymd(s, 1904, 2, 29), Some(59.0));
+        assert_eq!(serial_from_ymd(s, 1904, 3, 0), Some(59.0));
+        assert_eq!(serial_from_ymd(s, 1904, 3, 1), Some(60.0));
+        assert_eq!(serial_from_ymd(s, 1904, 1, 0), None);
+        assert_eq!(serial_from_ymd(s, 1900, 2, 29), None);
+    }
+
+    #[test]
+    fn hostile_month_and_day() {
+        let s = DateSystem::D1900;
+        assert_eq!(serial_from_ymd(s, 2000, i64::MIN, 1), None);
+        assert_eq!(serial_from_ymd(s, 2000, i64::MAX, 1), None);
+        assert_eq!(serial_from_ymd(s, 2000, 1, i64::MAX), None);
+        assert_eq!(serial_from_ymd(s, 2000, 1, i64::MIN), None);
+        assert_eq!(serial_from_ymd(s, i64::MAX, 1, 1), None);
+    }
+
+    #[test]
     fn roundtrip() {
         let s = DateSystem::D1900;
-        for serial in [1.0, 59.0, 61.0, 36526.0, 46302.0, 2958465.0] {
+        for serial in [1.0, 59.0, 60.0, 61.0, 36526.0, 46302.0, 2958465.0] {
             let d = datetime_from_serial(s, serial).unwrap();
             assert_eq!(serial_from_ymd(s, d.year as i64, d.month as i64, d.day as i64), Some(serial));
         }

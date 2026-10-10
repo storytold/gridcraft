@@ -38,6 +38,7 @@ impl Language {
         }
     }
 
+    /// The language's code, as saved in `ui.json` and taken by `app.language.set`.
     pub const fn code(self) -> &'static str {
         match self {
             Self::En => "en",
@@ -76,18 +77,43 @@ impl Language {
         }
     }
 
+    /// Translates an interface label; untranslated labels fall back to English.
+    ///
+    /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
+    /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
-        if self == Self::En {
-            return text;
-        }
-        match self {
-            Self::En => text,
-            Self::Ja => JAPANESE.iter().find(|(english, _)| *english == text).map(|(_, translated)| *translated).unwrap_or(text),
-            Self::Zh => zh::translate(text).unwrap_or(text),
-            Self::Ko => ko::translate(text).unwrap_or(text),
-            Self::Ru => ru::translate(text).unwrap_or(text),
-        }
+        let translated = match self {
+            Self::En => None,
+            Self::Ja => JAPANESE.iter().find(|(english, _)| *english == text).map(|(_, translated)| *translated),
+            Self::Zh => zh::translate(text),
+            Self::Ko => ko::translate(text),
+            Self::Ru => ru::translate(text),
+        };
+        translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
+}
+
+/// Deserializes a saved language leniently: an unknown or malformed value (a language removed in a
+/// later version, a hand-edited `ui.json`) reads as English instead of failing the whole `UiState`,
+/// which would reset every other preference with it.
+pub fn lenient<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Language, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Code(String),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Raw::deserialize(d)? {
+        Raw::Code(code) => Language::parse(&code).unwrap_or_default(),
+        Raw::Other(_) => Language::default(),
+    })
+}
+
+/// The language a saved `ui.json` asks for, if it names a supported one. The desktop app uses it
+/// to tell "saved English" from "nothing usable saved" (first run, an older file, an unknown
+/// value), which starts from [`Language::system`] instead.
+pub fn saved_language(ui_json: &serde_json::Value) -> Option<Language> {
+    ui_json.get("language").and_then(serde_json::Value::as_str).and_then(Language::parse)
 }
 
 /// egui context-data key holding the language of the frame being drawn. Widgets that only get a
@@ -145,7 +171,8 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Vertical Text", "縦書き"),
     ("Decrease Indent", "インデントを減らす"),
     ("Increase Indent", "インデントを増やす"),
-    ("Orientation", "印刷の向き"),
+    ("Orientation", "方向"),
+    ("Page Layout|Orientation", "印刷の向き"),
     ("Angle Counterclockwise", "左回りに回転"),
     ("Angle Clockwise", "右回りに回転"),
     ("Rotate Text Up", "文字列を上に回転"),
@@ -177,7 +204,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Column Width…", "列の幅…"),
     ("AutoFit Column Width", "列の幅を自動調整"),
     ("Default Width…", "標準の幅…"),
-    ("Hide Rows", "行の表示/非表示"),
+    ("Hide Rows", "行を表示しない"),
     ("Unhide Rows", "再表示"),
     ("Hide Columns", "列の表示/非表示"),
     ("Unhide Columns", "再表示"),
@@ -242,7 +269,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Use in Formula", "数式で使用"),
     ("Create from Selection", "選択範囲から作成"),
     ("Trace Precedents", "参照元のトレース"),
-    ("Trace Dependents", "依存元のトレース"),
+    ("Trace Dependents", "参照先のトレース"),
     ("Remove Arrows", "矢印の解除"),
     ("Show Formulas", "数式の表示"),
     ("Error Checking", "エラーチェック"),
@@ -298,6 +325,10 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Freeze First Column", "最左列の固定"),
     ("Unfreeze Panes", "ウィンドウ枠固定の解除"),
     ("Dark Mode", "ダーク モード"),
+    ("Display theme", "表示テーマ"),
+    ("System", "システム"),
+    ("Light", "ライト"),
+    ("Dark", "ダーク"),
     ("Interface language", "表示言語"),
     ("Command\nPalette", "コマンド パレット"),
     ("Agent\nControl", "エージェント制御"),
@@ -368,7 +399,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Lookup &\nReference", "検索/行列"),
     ("Math &\nTrig", "数学/三角"),
     ("More\nFunctions", "その他の関数"),
-    ("Screen", "画面"),
+    ("Sheet Options|View", "画面"),
     ("Print", "印刷"),
 ];
 
@@ -381,7 +412,7 @@ mod tests {
         for (i, (en, ja)) in JAPANESE.iter().enumerate() {
             assert!(!ja.is_empty());
             assert!(JAPANESE.iter().take(i).all(|(other, _)| en != other));
-            assert_eq!(Language::En.tr(en), *en);
+            assert_eq!(Language::En.tr(en), en.rsplit_once('|').map_or(*en, |(_, label)| label));
         }
         for (english, _) in JAPANESE {
             assert!(zh::translate(english).is_some_and(|text| !text.is_empty()), "missing Simplified Chinese: {english}");
@@ -396,7 +427,26 @@ mod tests {
         assert_eq!(Language::Zh.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::Ko.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::Ru.tr("Sheet1!A1"), "Sheet1!A1");
+        // A `context|label` key shows only its label in English and splits the translation.
+        assert_eq!(Language::En.tr("Page Layout|Orientation"), "Orientation");
+        assert_eq!(Language::Ja.tr("Page Layout|Orientation"), "印刷の向き");
+        assert_eq!(Language::Ja.tr("Orientation"), "方向");
         assert_eq!(Language::parse("xx"), None);
+    }
+
+    #[test]
+    fn unknown_saved_language_keeps_the_other_preferences() {
+        let ui: crate::UiState = serde_json::from_str(r#"{"dark": true, "language": "xx"}"#).unwrap();
+        assert!(ui.dark);
+        assert_eq!(ui.language, Language::En);
+        let ui: crate::UiState = serde_json::from_str(r#"{"dark": true, "language": 7}"#).unwrap();
+        assert!(ui.dark);
+        let ui: crate::UiState = serde_json::from_str(r#"{"language": "ja"}"#).unwrap();
+        assert_eq!(ui.language, Language::Ja);
+        assert_eq!(crate::UiState::default().language, Language::En, "the default never reads the host locale");
+        assert_eq!(saved_language(&serde_json::json!({"language": "ja"})), Some(Language::Ja));
+        assert_eq!(saved_language(&serde_json::json!({"language": "xx"})), None);
+        assert_eq!(saved_language(&serde_json::json!({})), None);
     }
 
     #[test]
@@ -410,9 +460,12 @@ mod tests {
     }
 
     #[test]
-    fn an_unset_language_preference_uses_the_system_default() {
+    fn an_unset_language_preference_is_english_until_the_app_applies_the_system_one() {
+        // Deserializing never reads the host locale (tests stay deterministic); the desktop app
+        // applies `Language::system()` itself when `ui.json` names no usable language.
         let restored: crate::UiState = serde_json::from_str("{}").unwrap();
-        assert_eq!(restored.language, Language::system());
+        assert_eq!(restored.language, Language::En);
+        assert_eq!(saved_language(&serde_json::json!({"language": "zh"})), Some(Language::Zh));
     }
 
     #[test]
@@ -423,6 +476,14 @@ mod tests {
             assert_eq!(app.ui.language, language);
             let restored: crate::UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
             assert_eq!(restored.language, language);
+        }
+        app.run("app.language.set", serde_json::json!({"code": "ja"})).unwrap();
+        assert_eq!(app.ui.language, Language::Ja, "`code` is an alias for `language`");
+        assert!(app.run("app.language.set", serde_json::json!({})).is_err(), "no language is an error, not a dialog");
+        app.run("app.language.english", serde_json::json!({})).unwrap();
+        assert_eq!(app.ui.language, Language::En);
+        for l in Language::ALL {
+            assert_eq!(Language::parse(l.code()), Some(l));
         }
     }
 }

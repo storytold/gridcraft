@@ -2,23 +2,49 @@
   "schema": 1,
   "repo": "storytold/gridcraft",
   "branch": "main",
-  "head": "a60bd2f40edae13197965ded9433dcf276caca45",
-  "head_date": "2026-10-07T18:45:37Z",
-  "commits": 16,
+  "head": "51b531be3e8b3f5a19d2b7714a4780a79569ca92",
+  "head_date": "2026-10-08T13:12:32Z",
+  "commits": 24,
   "unattributed_commits": 0,
   "contributors": [
     {
       "login": "echelon",
       "people_entry": true,
       "github_name": null,
-      "prs": 1,
-      "commits": 16,
-      "lines_added": 78054,
-      "lines_deleted": 3954,
+      "prs": 4,
+      "commits": 21,
+      "lines_added": 79088,
+      "lines_deleted": 3997,
       "binary_added": 35,
       "binary_deleted": 12,
       "first_commit": "2026-10-06T02:09:42Z",
-      "last_commit": "2026-10-07T18:45:37Z"
+      "last_commit": "2026-10-08T13:50:17Z"
+    },
+    {
+      "login": "h-a-n-a-s-h-i",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 0,
+      "commits": 2,
+      "lines_added": 34,
+      "lines_deleted": 34,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-08T12:13:30Z",
+      "last_commit": "2026-10-08T14:02:29Z"
+    },
+    {
+      "login": "XusBadia",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 1,
+      "commits": 1,
+      "lines_added": 244,
+      "lines_deleted": 1,
+      "binary_added": 2,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-08T13:12:32Z",
+      "last_commit": "2026-10-08T13:12:32Z"
     }
   ],
   "models": [
@@ -27,9 +53,9 @@
       "company": "Anthropic",
       "model": "Claude Opus",
       "version": "5.5",
-      "commits": 15,
-      "lines_added": 78047,
-      "lines_deleted": 3954
+      "commits": 23,
+      "lines_added": 79359,
+      "lines_deleted": 4032
     }
   ]
 }

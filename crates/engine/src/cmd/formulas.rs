@@ -36,14 +36,14 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             define_name
         ),
-        cmd!("formulas.deleteName", "Delete Name", [], None, "{name, scope?}", has_doc, delete_name),
+        cmd!("formulas.deleteName", "Delete Name", [], None, "{name, scope?: \"Workbook\"|sheet name (default: every scope)}", has_doc, delete_name),
         cmd!(query "formulas.nameManager", "Name Manager", ["Formulas", "Defined Names"], Some("Cmd+F3"), "{} → names with values", has_doc, name_manager),
         cmd!(
             "formulas.createFromSelection",
             "Create from Selection",
             ["Formulas", "Defined Names"],
             Some("Cmd+Shift+F3"),
-            "{range?, top?: true, left?: false, bottom?, right?}",
+            "{range?, top?: true, left?: false, bottom?: false, right?: false, replace?: false (existing names are kept and listed in `skipped`)}",
             has_doc,
             create_from_selection
         ),
@@ -218,13 +218,24 @@ fn valid_name(n: &str) -> bool {
     if !(first.is_alphabetic() || first == '_' || first == '\\') {
         return false;
     }
-    if n.len() > 255 || n.eq_ignore_ascii_case("R") || n.eq_ignore_ascii_case("C") {
-        return false;
-    }
-    if CellRef::parse(n).is_some() {
+    if n.len() > 255 || CellRef::parse(n).is_some() || is_r1c1(n) {
         return false;
     }
     n.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '\\' | '?'))
+}
+
+/// Looks like an R1C1 reference (`R`, `C`, `RC`, `R2`, `C3`, `R1C1`), which Excel doesn't
+/// accept as a name.
+fn is_r1c1(n: &str) -> bool {
+    let digits = |s: &str| s.bytes().take_while(u8::is_ascii_digit).count();
+    let mut rest = n;
+    if let Some(r) = rest.strip_prefix(['R', 'r']) {
+        rest = r.get(digits(r)..).unwrap_or("");
+    }
+    if let Some(c) = rest.strip_prefix(['C', 'c']) {
+        rest = c.get(digits(c)..).unwrap_or("");
+    }
+    rest.is_empty() && !n.is_empty()
 }
 
 fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
@@ -264,9 +275,14 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn delete_name(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").ok_or_else(|| bad("formulas.deleteName", "missing `name`"))?.to_string();
+    let scope = match str_param(p, "scope") {
+        None => None,
+        Some("Workbook") => Some(None),
+        Some(sh) => Some(Some(s.doc()?.wb.sheet_index(sh).ok_or_else(|| bad("formulas.deleteName", "no such sheet"))?)),
+    };
     edit(s, |cx| {
         let before = cx.wb.names.len();
-        cx.wb.names.retain(|n| !n.name.eq_ignore_ascii_case(&name));
+        cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && scope.is_none_or(|sc| n.scope == sc)));
         if cx.wb.names.len() == before {
             return Err(bad("formulas.deleteName", "no such name"));
         }
@@ -295,6 +311,9 @@ fn create_from_selection(s: &mut Session, p: &Json) -> Result<Json> {
     let r = target_range(s, p)?;
     let top = bool_param(p, "top").unwrap_or(true);
     let left = bool_param(p, "left").unwrap_or(false);
+    let bottom = bool_param(p, "bottom").unwrap_or(false);
+    let right = bool_param(p, "right").unwrap_or(false);
+    let replace = bool_param(p, "replace").unwrap_or(false);
     let d = s.doc()?;
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let q = gridcraft_formula::quote_sheet(&sh.name);
@@ -309,28 +328,38 @@ fn create_from_selection(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let clean = |t: String| -> String {
         let mut n: String = t.trim().chars().map(|c| if c.is_alphanumeric() || c == '.' { c } else { '_' }).collect();
-        if n.chars().next().is_some_and(|c| c.is_ascii_digit()) || CellRef::parse(&n).is_some() {
+        if !n.is_empty() && !valid_name(&n) {
             n.insert(0, '_');
         }
-        n
+        if valid_name(&n) { n } else { String::new() }
     };
+    // The labels in the chosen edge rows/columns name the cells between them.
+    let (r0, r1) = (r.start.row + top as u32, r.end.row.saturating_sub(bottom as u32));
+    let (c0, c1) = (r.start.col + left as u32, r.end.col.saturating_sub(right as u32));
     let mut made = Vec::new();
-    if top && r.height() > 1 {
-        for c in r.start.col..=r.end.col {
-            let name = clean(sh.value(CellRef::new(r.start.row, c)).display());
-            if !name.is_empty() {
-                made.push((name, abs(RangeRef::new(CellRef::new(r.start.row + 1, c), CellRef::new(r.end.row, c)))));
+    if r0 <= r1 && c0 <= c1 {
+        for (on, row) in [(top, r.start.row), (bottom, r.end.row)] {
+            for c in (c0..=c1).filter(|_| on) {
+                let name = clean(sh.value(CellRef::new(row, c)).display());
+                if !name.is_empty() {
+                    made.push((name, abs(RangeRef::new(CellRef::new(r0, c), CellRef::new(r1, c)))));
+                }
+            }
+        }
+        for (on, col) in [(left, r.start.col), (right, r.end.col)] {
+            for row in (r0..=r1).filter(|_| on) {
+                let name = clean(sh.value(CellRef::new(row, col)).display());
+                if !name.is_empty() {
+                    made.push((name, abs(RangeRef::new(CellRef::new(row, c0), CellRef::new(row, c1)))));
+                }
             }
         }
     }
-    if left && r.width() > 1 {
-        for row in r.start.row + top as u32..=r.end.row {
-            let name = clean(sh.value(CellRef::new(row, r.start.col)).display());
-            if !name.is_empty() {
-                made.push((name, abs(RangeRef::new(CellRef::new(row, r.start.col + 1), CellRef::new(row, r.end.col)))));
-            }
-        }
-    }
+    // Excel asks before replacing an existing name; here it's kept unless `replace` is set, and
+    // reported.
+    let exists = |n: &str| d.wb.names.iter().any(|x| x.name.eq_ignore_ascii_case(n) && x.scope.is_none());
+    let (made, skipped): (Vec<_>, Vec<_>) = made.into_iter().partition(|(n, _)| replace || !exists(n));
+    let skipped: Vec<String> = skipped.into_iter().map(|(n, _)| n).collect();
     let n = made.len();
     edit(s, |cx| {
         for (name, f) in made {
@@ -338,7 +367,7 @@ fn create_from_selection(s: &mut Session, p: &Json) -> Result<Json> {
             cx.wb.names.push(DefinedName { name, scope: None, formula: f, comment: String::new(), hidden: false });
         }
         cx.structural = true;
-        Ok(json!({"created": n}))
+        Ok(json!({"created": n, "skipped": skipped}))
     })
 }
 

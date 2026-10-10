@@ -1,6 +1,6 @@
 //! Date and time functions.
 
-use gridcraft_core::date::{DateTime, datetime_from_serial, days_in_month, is_leap, serial_from_ymd};
+use gridcraft_core::date::{DateTime, datetime_from_serial, days_in_month, days_in_month_in, is_leap, serial_from_ymd};
 use gridcraft_core::parse::parse_input;
 use gridcraft_core::{CellError, DateSystem, Value};
 
@@ -164,7 +164,7 @@ fn edate(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     if !(1900..=9999).contains(&y) {
         return Err(CellError::Num);
     }
-    let dd = (d.day.max(1) as i64).min(days_in_month(y as i32, mo as u32) as i64);
+    let dd = (d.day.max(1) as i64).min(days_in_month_in(sys, y as i32, mo as u32) as i64);
     num_val(ymd_serial(sys, y, mo, dd)? as f64)
 }
 
@@ -177,7 +177,7 @@ fn eomonth(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     if !(1900..=9999).contains(&y) {
         return Err(CellError::Num);
     }
-    num_val(ymd_serial(sys, y, mo, days_in_month(y as i32, mo as u32) as i64)? as f64)
+    num_val(ymd_serial(sys, y, mo, days_in_month_in(sys, y as i32, mo as u32) as i64)? as f64)
 }
 
 fn datedif(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
@@ -653,6 +653,36 @@ mod tests {
     }
 
     #[test]
+    fn fictitious_1900_02_29() {
+        // Excel's 1900 calendar has 29 February 1900 = serial 60, and DATE counts day and month
+        // overflow through it.
+        assert_eq!(d(1900.0, 2.0, 29.0), 60.0);
+        assert_eq!(d(1900.0, 3.0, 0.0), 60.0);
+        assert_eq!(d(1900.0, 2.0, 28.0), 59.0);
+        assert_eq!(d(1900.0, 3.0, 1.0), 61.0);
+        assert_eq!(d(1900.0, 2.0, 30.0), 61.0);
+        assert_eq!(d(1900.0, 1.0, 60.0), 60.0);
+        assert_eq!(d(1900.0, 4.0, -31.0), 60.0);
+        assert_eq!(d(1901.0, -10.0, 29.0), 60.0);
+        assert_eq!(d(0.0, 2.0, 29.0), 60.0);
+        assert_eq!(d(1900.0, 1.0, 0.0), 0.0);
+        close(ev("DAY", vec![n(d(1900.0, 3.0, 0.0))]), 29.0);
+        close(ev("DATEVALUE", vec![t("1900-02-29")]), 60.0);
+        close(ev("DATEVALUE", vec![t("2/29/1900")]), 60.0);
+        close(ev("DATEVALUE", vec![t("3/1/1900")]), 61.0);
+        is_err(ev("DATEVALUE", vec![t("2/29/1901")]), CellError::Value);
+        // EDATE and EOMONTH land on it as the end of February 1900.
+        close(ev("EOMONTH", vec![n(d(1900.0, 1.0, 15.0)), n(1.0)]), 60.0);
+        close(ev("EOMONTH", vec![n(60.0), n(0.0)]), 60.0);
+        close(ev("EOMONTH", vec![n(d(1900.0, 3.0, 15.0)), n(-1.0)]), 60.0);
+        close(ev("EOMONTH", vec![n(60.0), n(12.0)]), d(1901.0, 2.0, 28.0));
+        close(ev("EDATE", vec![n(d(1900.0, 1.0, 31.0)), n(1.0)]), 60.0);
+        close(ev("EDATE", vec![n(d(1900.0, 3.0, 31.0)), n(-1.0)]), 60.0);
+        close(ev("EDATE", vec![n(60.0), n(1.0)]), d(1900.0, 3.0, 29.0));
+        close(ev("EDATE", vec![n(60.0), n(12.0)]), d(1901.0, 2.0, 28.0));
+    }
+
+    #[test]
     fn datedif_units() {
         let s = n(d(2001.0, 6.0, 1.0));
         let e = n(d(2002.0, 8.0, 15.0));
@@ -755,5 +785,16 @@ mod tests {
         close(crate::call(spec, &[n(0.0)], &mut ctx), 6.0);
         let spec = crate::lookup("YEAR").unwrap();
         close(crate::call(spec, &[n(0.0)], &mut ctx), 1904.0);
+        // No fictitious day here: 1904 is a real leap year and 1900 is before the epoch.
+        let spec = crate::lookup("DATE").unwrap();
+        close(crate::call(spec, &[n(1904.0), n(2.0), n(29.0)], &mut ctx), 59.0);
+        close(crate::call(spec, &[n(1904.0), n(3.0), n(0.0)], &mut ctx), 59.0);
+        close(crate::call(spec, &[n(1904.0), n(3.0), n(1.0)], &mut ctx), 60.0);
+        is_err(crate::call(spec, &[n(1900.0), n(2.0), n(29.0)], &mut ctx), CellError::Num);
+        let spec = crate::lookup("EOMONTH").unwrap();
+        close(crate::call(spec, &[n(31.0), n(0.0)], &mut ctx), 59.0);
+        let spec = crate::lookup("DATEVALUE").unwrap();
+        close(crate::call(spec, &[t("2/29/1904")], &mut ctx), 59.0);
+        is_err(crate::call(spec, &[t("2/29/1900")], &mut ctx), CellError::Value);
     }
 }
