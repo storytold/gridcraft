@@ -1530,6 +1530,7 @@ dependencies = [
  "serde_json",
  "sys-locale",
  "toml",
+ "web-sys",
 ]
 
 [[package]]

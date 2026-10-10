@@ -4,43 +4,63 @@
 //! The interface language is a preference ([`crate::UiState::language`]): on first run it defaults
 //! to the system's language ([`Language::system`]), and the View tab switches it by hand.
 //!
-//! No Japanese font is bundled and none is installed here: the CJK faces [`crate::theme`] appends
-//! to every family already cover kana and kanji, so Japanese interface text renders without help.
+//! CJK fonts stay system-provided: [`crate::theme`] appends available CJK faces to every family so
+//! Japanese, Chinese and Korean labels and workbook text can render without bundling font files.
 
 use serde::{Deserialize, Serialize};
+
+mod ko;
+mod ru;
+mod zh;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
     #[default]
     En,
+    Zh,
     Ja,
+    Ko,
+    Ru,
 }
 
 impl Language {
-    pub const ALL: [Self; 2] = [Self::En, Self::Ja];
+    pub const ALL: [Self; 5] = [Self::En, Self::Zh, Self::Ja, Self::Ko, Self::Ru];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
+            Self::Zh => "简体中文",
             Self::Ja => "日本語",
+            Self::Ko => "한국어",
+            Self::Ru => "Русский",
+        }
+    }
+
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::En => "en",
+            Self::Zh => "zh",
+            Self::Ja => "ja",
+            Self::Ko => "ko",
+            Self::Ru => "ru",
         }
     }
 
     pub fn parse(code: &str) -> Option<Self> {
-        match code {
-            "en" => Some(Self::En),
-            "ja" => Some(Self::Ja),
-            _ => None,
-        }
+        Self::from_tag(code)
     }
 
-    /// A language tag (`ja`, `ja-JP`, `en_US`) reduced to a supported language. Native only: the web
-    /// build has no system locale to read and tests exercise it on the host.
-    #[cfg(not(target_arch = "wasm32"))]
     fn from_tag(tag: &str) -> Option<Self> {
-        Self::parse(&tag.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase())
+        match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
+            "en" => Some(Self::En),
+            "zh" => Some(Self::Zh),
+            "ja" => Some(Self::Ja),
+            "ko" => Some(Self::Ko),
+            "ru" => Some(Self::Ru),
+            _ => None,
+        }
     }
 
     /// The system's preferred interface language, best effort; English when it is unknown or
@@ -52,17 +72,21 @@ impl Language {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            Self::En
+            web_sys::window().and_then(|window| window.navigator().language()).and_then(|tag| Self::from_tag(&tag)).unwrap_or(Self::En)
         }
     }
 
     pub fn tr(self, text: &str) -> &str {
-        if self == Self::Ja
-            && let Some((_, japanese)) = JAPANESE.iter().find(|(english, _)| *english == text)
-        {
-            return japanese;
+        if self == Self::En {
+            return text;
         }
-        text
+        match self {
+            Self::En => text,
+            Self::Ja => JAPANESE.iter().find(|(english, _)| *english == text).map(|(_, translated)| *translated).unwrap_or(text),
+            Self::Zh => zh::translate(text).unwrap_or(text),
+            Self::Ko => ko::translate(text).unwrap_or(text),
+            Self::Ru => ru::translate(text).unwrap_or(text),
+        }
     }
 }
 
@@ -344,6 +368,8 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Lookup &\nReference", "検索/行列"),
     ("Math &\nTrig", "数学/三角"),
     ("More\nFunctions", "その他の関数"),
+    ("Screen", "画面"),
+    ("Print", "印刷"),
 ];
 
 #[cfg(test)]
@@ -357,8 +383,19 @@ mod tests {
             assert!(JAPANESE.iter().take(i).all(|(other, _)| en != other));
             assert_eq!(Language::En.tr(en), *en);
         }
+        for (english, _) in JAPANESE {
+            assert!(zh::translate(english).is_some_and(|text| !text.is_empty()), "missing Simplified Chinese: {english}");
+            assert!(ko::translate(english).is_some_and(|text| !text.is_empty()), "missing Korean: {english}");
+            assert!(ru::translate(english).is_some_and(|text| !text.is_empty()), "missing Russian: {english}");
+        }
         assert_eq!(Language::Ja.tr("Data"), "データ");
+        assert_eq!(Language::Zh.tr("Data"), "数据");
+        assert_eq!(Language::Ko.tr("Data"), "데이터");
+        assert_eq!(Language::Ru.tr("Data"), "Данные");
         assert_eq!(Language::Ja.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(Language::Zh.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(Language::Ko.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(Language::Ru.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::parse("xx"), None);
     }
 
@@ -366,17 +403,26 @@ mod tests {
     fn tags_reduce_to_a_supported_language() {
         assert_eq!(Language::from_tag("ja-JP"), Some(Language::Ja));
         assert_eq!(Language::from_tag("en_US"), Some(Language::En));
+        assert_eq!(Language::from_tag("zh-Hans-CN"), Some(Language::Zh));
+        assert_eq!(Language::from_tag("ko-KR"), Some(Language::Ko));
+        assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
         assert_eq!(Language::from_tag("de-DE"), None);
+    }
+
+    #[test]
+    fn an_unset_language_preference_uses_the_system_default() {
+        let restored: crate::UiState = serde_json::from_str("{}").unwrap();
+        assert_eq!(restored.language, Language::system());
     }
 
     #[test]
     fn language_commands_switch_and_persist() {
         let mut app = crate::SheetApp::new(gridcraft_engine::Session::default(), Default::default());
-        app.run("app.language.japanese", serde_json::json!({})).unwrap();
-        assert_eq!(app.ui.language, Language::Ja);
-        let restored: crate::UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
-        assert_eq!(restored.language, Language::Ja);
-        app.run("app.language.english", serde_json::json!({})).unwrap();
-        assert_eq!(app.ui.language, Language::En);
+        for language in Language::ALL {
+            app.run("app.language.set", serde_json::json!({"language": language.code()})).unwrap();
+            assert_eq!(app.ui.language, language);
+            let restored: crate::UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
+            assert_eq!(restored.language, language);
+        }
     }
 }

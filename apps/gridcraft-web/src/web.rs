@@ -38,7 +38,7 @@ pub fn start() {
                         let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
                     }
                     let app = SheetApp::new(session, services(inbox.clone(), cc.egui_ctx.clone()));
-                    SheetApp::setup_context(&cc.egui_ctx, false);
+                    SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
                     Ok(Box::new(WebShell { app, inbox }))
                 }),
             )

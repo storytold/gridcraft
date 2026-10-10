@@ -289,12 +289,18 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
 
 /// Builds the font set from system fonts (with egui's defaults as fallback).
 pub fn font_definitions() -> FontDefinitions {
+    font_definitions_for_language(crate::i18n::Language::system())
+}
+
+/// Builds the font set with CJK glyph shapes ordered for the selected interface language.
+pub fn font_definitions_for_language(language: crate::i18n::Language) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let base_prop: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let base_mono: Vec<String> = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
     // CJK has to sit at the end of each chain: a Latin font owns Latin, and epaint picks the first
-    // face that has the glyph, so the CJK faces only ever catch Han/Kana/Hangul.
-    let cjk = load_cjk(&mut fonts);
+    // face that has the glyph, so the CJK faces only ever catch Han/Kana/Hangul. Keep both
+    // simplified-Chinese and Japanese Han faces: either font may lack a less common glyph.
+    let cjk = load_cjk(&mut fonts, language);
     for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
         let paths = candidates(role);
         let refs: Vec<(&str, u32)> = paths.iter().map(|(p, i)| (p.as_str(), *i)).collect();
@@ -324,40 +330,64 @@ pub fn font_definitions() -> FontDefinitions {
 /// family can carry them as fallback. egui's bundled fonts have no CJK coverage, so without this a
 /// Japanese or Chinese workbook renders as tofu boxes even though the text was read correctly.
 #[cfg(not(target_arch = "wasm32"))]
-fn load_cjk(fonts: &mut FontDefinitions) -> Vec<String> {
-    let mut keys = Vec::new();
-    for (key, cands) in [("sys-cjk-han", cjk_han()), ("sys-cjk-hangul", cjk_hangul())] {
-        let refs: Vec<(&str, u32)> = cands.iter().map(|(p, i)| (p.as_str(), *i)).collect();
-        if let Some(fd) = try_load(&refs) {
-            fonts.font_data.insert(key.to_string(), Arc::new(fd));
-            keys.push(key.to_string());
-        }
-    }
-    keys
+fn load_cjk(fonts: &mut FontDefinitions, language: crate::i18n::Language) -> Vec<String> {
+    let han_ja = load_cjk_face(fonts, "sys-cjk-han-ja", cjk_han_japanese());
+    let han_zh = load_cjk_face(fonts, "sys-cjk-han-zh", cjk_han_simplified());
+    let hangul = load_cjk_face(fonts, "sys-cjk-hangul", cjk_hangul());
+    let order = match language {
+        crate::i18n::Language::Ja => [han_ja, han_zh, hangul],
+        crate::i18n::Language::Ko => [hangul, han_zh, han_ja],
+        _ => [han_zh, han_ja, hangul],
+    };
+    order.into_iter().flatten().collect()
 }
 
 #[cfg(target_arch = "wasm32")]
-fn load_cjk(_fonts: &mut FontDefinitions) -> Vec<String> {
+fn load_cjk(_fonts: &mut FontDefinitions, _language: crate::i18n::Language) -> Vec<String> {
     Vec::new()
 }
 
-/// Han + Kana faces, in fallback order. A Japanese face comes first (kana and JIS kanji render
-/// with Japanese glyph shapes); a Chinese face follows to widen coverage. Every CJK face carries
-/// kana, so any of them renders Japanese; the order only decides kanji glyph style.
 #[cfg(not(target_arch = "wasm32"))]
-fn cjk_han() -> Vec<(String, u32)> {
-    let mac = "/System/Library/Fonts";
+fn load_cjk_face(fonts: &mut FontDefinitions, key: &str, candidates: Vec<(String, u32)>) -> Option<String> {
+    let refs: Vec<(&str, u32)> = candidates.iter().map(|(path, index)| (path.as_str(), *index)).collect();
+    let fd = try_load(&refs)?;
+    fonts.font_data.insert(key.to_string(), Arc::new(fd));
+    Some(key.to_string())
+}
+
+/// Japanese Han/Kana faces. A Japanese face goes first when the interface is Japanese so kanji
+/// use Japanese glyph shapes; Chinese remains later in the chain for glyphs it does not contain.
+#[cfg(not(target_arch = "wasm32"))]
+fn cjk_han_japanese() -> Vec<(String, u32)> {
     let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
-    let lin = ["/usr/share/fonts/opentype/noto", "/usr/share/fonts/truetype/noto", "/usr/share/fonts/truetype", "/usr/share/fonts"];
     let mut v: Vec<(String, u32)> = Vec::new();
     v.push((format!("{win}\\YuGothR.ttc"), 0)); // Yu Gothic (Japanese)
     v.push((format!("{win}\\msgothic.ttc"), 0)); // MS Gothic (Japanese)
-    v.push((format!("{win}\\msyh.ttc"), 0)); // Microsoft YaHei (Chinese)
-    v.push((format!("{mac}/Hiragino Sans GB.ttc"), 0));
-    v.push((format!("{mac}/PingFang.ttc"), 0));
+    v.push(("/System/Library/Fonts/Hiragino Sans W3.ttc".into(), 0));
+    v.push(("/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc".into(), 0));
+    let lin = ["/usr/share/fonts/opentype/noto", "/usr/share/fonts/truetype/noto", "/usr/share/fonts/truetype", "/usr/share/fonts"];
     for d in lin {
-        v.push((format!("{d}/NotoSansCJK-Regular.ttc"), 0));
         v.push((format!("{d}/NotoSansCJKjp-Regular.otf"), 0));
+        v.push((format!("{d}/NotoSansCJK-Regular.ttc"), 0));
+    }
+    v
+}
+
+/// Simplified Chinese Han faces. These are loaded separately from Japanese fonts so a missing
+/// glyph in the first face can continue through the family chain instead of becoming tofu.
+#[cfg(not(target_arch = "wasm32"))]
+fn cjk_han_simplified() -> Vec<(String, u32)> {
+    let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
+    let mut v: Vec<(String, u32)> = Vec::new();
+    v.push((format!("{win}\\msyh.ttc"), 0)); // Microsoft YaHei
+    v.push((format!("{win}\\simsun.ttc"), 0)); // SimSun
+    v.push((format!("{win}\\simhei.ttf"), 0)); // SimHei
+    v.push(("/System/Library/Fonts/PingFang.ttc".into(), 0));
+    v.push(("/System/Library/Fonts/Hiragino Sans GB.ttc".into(), 0));
+    let lin = ["/usr/share/fonts/opentype/noto", "/usr/share/fonts/truetype/noto", "/usr/share/fonts/truetype", "/usr/share/fonts"];
+    for d in lin {
+        v.push((format!("{d}/NotoSansCJKsc-Regular.otf"), 0));
+        v.push((format!("{d}/NotoSansCJK-Regular.ttc"), 2)); // Simplified Chinese face in the Noto collection
         v.push((format!("{d}/wqy-microhei.ttc"), 0));
     }
     v
@@ -374,7 +404,7 @@ fn cjk_hangul() -> Vec<(String, u32)> {
     v.push((format!("{mac}/AppleSDGothicNeo.ttc"), 0));
     for d in lin {
         v.push((format!("{d}/NotoSansCJKkr-Regular.otf"), 0));
-        v.push((format!("{d}/NotoSansCJK-Regular.ttc"), 0));
+        v.push((format!("{d}/NotoSansCJK-Regular.ttc"), 1)); // Korean face in the Noto collection
     }
     v
 }
@@ -423,32 +453,55 @@ mod tests {
     fn cjk_fallback_is_appended_to_every_family() {
         // Structural: whatever loaded, the CJK keys must sit at the end of each chain (after the
         // Latin/default fonts) so Latin still wins for Latin text.
-        let fonts = font_definitions();
-        let cjk_keys: Vec<String> =
-            ["sys-cjk-han", "sys-cjk-hangul"].into_iter().filter(|k| fonts.font_data.contains_key(*k)).map(str::to_string).collect();
+        let language = crate::i18n::Language::Zh;
+        let fonts = font_definitions_for_language(language);
+        let cjk_keys: Vec<String> = ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul"]
+            .into_iter()
+            .filter(|key| fonts.font_data.contains_key(*key))
+            .map(str::to_string)
+            .collect();
         if cjk_keys.is_empty() {
             return; // no CJK face on this machine (minimal Linux)
         }
         for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
             let chain = fonts.families.get(&FontFamily::Name(role.into())).map(Vec::as_slice).unwrap_or_default();
             assert!(chain.len() >= cjk_keys.len(), "{role} chain too short for its CJK fallback");
-            let tail = &chain[chain.len() - cjk_keys.len()..];
-            assert_eq!(tail, cjk_keys.as_slice(), "{role} must end its chain with the CJK faces");
+            let first_cjk = chain.iter().position(|key| key.starts_with("sys-cjk-")).unwrap_or(chain.len());
+            let tail = &chain[first_cjk..];
+            assert_eq!(tail, cjk_keys.as_slice(), "{role} must end its chain with CJK faces in the language order");
         }
     }
 
     #[test]
-    fn cjk_fallback_covers_japanese() {
-        // Real render check: the proportional family (what cells and the UI use) must resolve
-        // Japanese kana/kanji to a glyph, not the tofu replacement char.
-        if cjk_han().iter().all(|(p, _)| std::fs::read(p).is_err()) {
-            return; // no CJK face on this machine (minimal Linux); nothing to assert
+    fn system_fallback_covers_supported_scripts() {
+        let cases = [
+            (crate::i18n::Language::Zh, cjk_han_simplified(), &["页面布局", "自动化", "粘贴格式"][..]),
+            (crate::i18n::Language::Ja, cjk_han_japanese(), &["カテゴリ", "貼り付け"][..]),
+            (crate::i18n::Language::Ko, cjk_hangul(), &["한국어"][..]),
+        ];
+        for (language, paths, samples) in cases {
+            if paths.iter().all(|(path, _)| std::fs::read(path).is_err()) {
+                continue; // this machine has no system face for this script
+            }
+            let ctx = egui::Context::default();
+            ctx.set_fonts(font_definitions_for_language(language));
+            let mut out = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+            out.textures_delta.clear(); // nothing consumes the atlas in a headless test
+            for sample in samples {
+                let covered = ctx.fonts_mut(|f| f.has_glyphs(&FontId::proportional(14.0), sample));
+                assert!(covered, "{sample:?} must render with a real glyph, not tofu");
+            }
+            if language == crate::i18n::Language::Zh {
+                let cell_font = FontId::new(14.0, FontFamily::Name(CELL.into()));
+                let covered = ctx.fonts_mut(|f| f.has_glyphs(&cell_font, "客户端配置 中文字体测试"));
+                assert!(covered, "Chinese workbook text must render with a real glyph, not tofu");
+            }
         }
         let ctx = egui::Context::default();
-        ctx.set_fonts(font_definitions());
+        ctx.set_fonts(font_definitions_for_language(crate::i18n::Language::Ru));
         let mut out = ctx.run_ui(egui::RawInput::default(), |_ui| {});
-        out.textures_delta.clear(); // nothing consumes the atlas in a headless test
-        let covered = ctx.fonts_mut(|f| f.has_glyphs(&FontId::proportional(14.0), "カテゴリ"));
-        assert!(covered, "Japanese text must render with a real glyph, not tofu");
+        out.textures_delta.clear();
+        let cyrillic = ctx.fonts_mut(|f| f.has_glyphs(&ui_font(14.0), "Русский"));
+        assert!(cyrillic, "Russian interface text must render with a real glyph, not tofu");
     }
 }

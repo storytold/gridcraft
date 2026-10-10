@@ -191,7 +191,7 @@ fn main() -> eframe::Result<()> {
         "GridCraft",
         options,
         Box::new(move |cc| {
-            SheetApp::setup_context(&cc.egui_ctx, app.ui.dark);
+            SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
             if let Some(port) = control_port {
                 match control_server::start(port, cc.egui_ctx.clone()) {
                     Ok(rx) => app.control_rx = Some(rx),

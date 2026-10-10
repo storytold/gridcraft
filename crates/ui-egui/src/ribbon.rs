@@ -1268,7 +1268,8 @@ fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
         .unwrap_or((true, true, false, false));
     // These two checkboxes mean the screen view vs. the printed page, so they do not share the
     // "View" tab label; pick per language rather than through the shared table.
-    let (screen, print) = if app.ui.language == crate::i18n::Language::Ja { ("画面", "印刷") } else { ("View", "Print") };
+    let screen = app.ui.language.tr("Screen");
+    let print = app.ui.language.tr("Print");
     ui.vertical(|ui| {
         ui.label(egui::RichText::new(app.ui.language.tr("Gridlines")).strong().small());
         let mut v = sh.0;
@@ -1588,8 +1589,7 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
             |ui| {
                 for l in crate::i18n::Language::ALL {
                     if ui.selectable_label(l == lang, l.name()).clicked() {
-                        let code = if l == crate::i18n::Language::Ja { "app.language.japanese" } else { "app.language.english" };
-                        act(app, code, json!({}));
+                        act(app, "app.language.set", json!({"language": l.code()}));
                     }
                 }
             },
