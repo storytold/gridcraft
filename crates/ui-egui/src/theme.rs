@@ -287,11 +287,51 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
     v
 }
 
+/// Candidate CJK font files per weight, in preference order. Every font in [`candidates`] is a
+/// Latin face, so without one of these CJK text falls through to the glyphs egui has and renders
+/// as tofu boxes.
+fn cjk_candidates(bold: bool) -> Vec<(String, u32)> {
+    let mac_sys = "/System/Library/Fonts";
+    let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
+    let lin = ["/usr/share/fonts", "/usr/share/fonts/truetype", "/usr/local/share/fonts", "/usr/share/fonts/TTF"];
+    let weight = if bold { "Bold" } else { "Regular" };
+    let mut v: Vec<(String, u32)> = Vec::new();
+    let mut add = |s: String, i: u32| v.push((s, i));
+    // macOS: PingFang SC. Windows: Microsoft YaHei, then SimSun. Linux: Noto Sans CJK SC — the
+    // region-merged .ttc holds every locale (JP 0, KR 1, SC 2, TC 3, HK 4), the older
+    // per-language builds are a single face — then WenQuanYi Micro Hei.
+    add(format!("{mac_sys}/PingFang.ttc"), 0);
+    add(format!("{win}\\{}.ttc", if bold { "msyhbd" } else { "msyh" }), 0);
+    add(format!("{win}\\simsun.ttc"), 0);
+    for d in lin {
+        add(format!("{d}/noto-cjk/NotoSansCJK-{weight}.ttc"), 2);
+        add(format!("{d}/opentype/noto/NotoSansCJK-{weight}.ttc"), 2);
+        add(format!("{d}/google-noto-cjk/NotoSansCJK-{weight}.ttc"), 2);
+        add(format!("{d}/noto-cjk/NotoSansCJKsc-{weight}.otf"), 0);
+        add(format!("{d}/opentype/noto/NotoSansCJKsc-{weight}.otf"), 0);
+        add(format!("{d}/wqy/wqy-microhei.ttc"), 0);
+        add(format!("{d}/truetype/wqy/wqy-microhei.ttc"), 0);
+    }
+    v
+}
+
+/// Loads the first available CJK face for `bold`, registers it and returns its key.
+fn add_cjk(fonts: &mut FontDefinitions, bold: bool) -> Option<&'static str> {
+    let paths = cjk_candidates(bold);
+    let refs: Vec<(&str, u32)> = paths.iter().map(|(p, i)| (p.as_str(), *i)).collect();
+    let fd = try_load(&refs)?;
+    let key = if bold { "sys-cjk-bold" } else { "sys-cjk" };
+    fonts.font_data.insert(key.to_string(), Arc::new(fd));
+    Some(key)
+}
+
 /// Builds the font set from system fonts (with egui's defaults as fallback).
 pub fn font_definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let base_prop: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let base_mono: Vec<String> = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
+    let cjk = add_cjk(&mut fonts, false);
+    let cjk_bold = add_cjk(&mut fonts, true).or(cjk);
     for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
         let paths = candidates(role);
         let refs: Vec<(&str, u32)> = paths.iter().map(|(p, i)| (p.as_str(), *i)).collect();
@@ -307,6 +347,11 @@ pub fn font_definitions() -> FontDefinitions {
         }
         chain.extend(if role == MONO { base_mono.clone() } else { base_prop.clone() });
         chain.retain(|k| fonts.font_data.contains_key(k));
+        // CJK last: the Latin faces above carry no Han glyphs, but every other glyph stays theirs.
+        let cjk_key = if role == UI_BOLD || role == CELL_BOLD || role == CELL_BOLD_ITALIC { cjk_bold } else { cjk };
+        if let Some(key) = cjk_key {
+            chain.push(key.to_string());
+        }
         fonts.families.insert(FontFamily::Name(role.into()), chain);
     }
     // Default proportional text in widgets uses the UI font.
@@ -350,4 +395,37 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
 /// Model colour → egui colour.
 pub fn color32(rgb: [u8; 3]) -> Color32 {
     Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chain(fonts: &FontDefinitions, role: &str) -> Vec<String> {
+        fonts.families[&FontFamily::Name(role.into())].clone()
+    }
+
+    #[test]
+    fn every_role_ends_with_a_cjk_fallback_when_one_is_installed() {
+        let fonts = font_definitions();
+        if !fonts.font_data.contains_key("sys-cjk") {
+            return; // No CJK font on this machine: nothing to assert.
+        }
+        for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
+            let chain = chain(&fonts, role);
+            let last = chain.last().map(String::as_str);
+            assert!(matches!(last, Some("sys-cjk" | "sys-cjk-bold")), "{role} chain: {chain:?}");
+        }
+    }
+
+    #[test]
+    fn bold_roles_use_the_bold_cjk_face() {
+        let fonts = font_definitions();
+        if !fonts.font_data.contains_key("sys-cjk-bold") {
+            return;
+        }
+        for role in [UI_BOLD, CELL_BOLD, CELL_BOLD_ITALIC] {
+            assert_eq!(chain(&fonts, role).last().map(String::as_str), Some("sys-cjk-bold"), "{role}");
+        }
+    }
 }
