@@ -1,0 +1,113 @@
+# Container check: one image, built from packaging/docker/Dockerfile, serves the web build with
+# nginx and carries gridcraft-cli (including MCP over stdio). The web build is made first, since
+# the image copies dist/web. Nothing is pushed to a registry here; the release workflow owns the
+# published artifacts.
+name: Docker
+
+on:
+  push:
+    branches: [main, release]
+    paths:
+      - ".dockerignore"
+      - ".github/workflows/docker.yml"
+      - "apps/**"
+      - "crates/**"
+      - "xtask/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "packaging/docker/**"
+      - "packaging/web/**"
+  pull_request:
+    paths:
+      - ".dockerignore"
+      - ".github/workflows/docker.yml"
+      - "apps/**"
+      - "crates/**"
+      - "xtask/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "packaging/docker/**"
+      - "packaging/web/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  TRUNK_VERSION: 0.21.14
+
+jobs:
+  image:
+    name: GridCraft image (web + CLI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: docker-image
+      - name: Install trunk
+        run: |
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C "$HOME/.cargo/bin" trunk
+          trunk --version
+      # The optional font input (storytold/craft-fonts docs/integration.md), pinned like the
+      # release: with it the web build bakes in the Simplified-Chinese face, so the site renders
+      # CJK text instead of boxes.
+      - name: Check out craft-fonts
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
+          path: craft-fonts
+      - name: Install fontTools
+        run: pip install fonttools
+      # The image copies dist/web, so the same build the release makes comes first.
+      - name: Build the web app
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+        run: packaging/web/package.sh
+      - name: Check the wasm carries the CJK face
+        run: |
+          wasm=$(ls dist/web/*.wasm)
+          ls -l "$wasm"
+          grep -aq "Noto Sans CJK SC" "$wasm" || { echo "::error::the web build has no CJK face"; exit 1; }
+          echo "the CJK face is in the wasm"
+      - name: Build the image
+        run: docker build -f packaging/docker/Dockerfile -t gridcraft .
+      - name: Run the CLI from the image
+        run: |
+          docker run --rm gridcraft version
+          sum="$(docker run --rm gridcraft eval '=SUM(1,2,3)')"
+          echo "eval =SUM(1,2,3) -> $sum"
+          case "$sum" in *6*) ;; *) echo "::error::eval returned '$sum'"; exit 1 ;; esac
+      # Writes through a bind mount, the way the examples in packaging/docker/README.md do.
+      - name: Build a workbook and convert it, through a mounted directory
+        run: |
+          mkdir -p work
+          docker run --rm -v "$PWD/work:/data" gridcraft run --sample budget --out /data/budget.xlsx
+          test -s work/budget.xlsx || { echo "::error::run wrote no workbook"; exit 1; }
+          docker run --rm -v "$PWD/work:/data" gridcraft convert /data/budget.xlsx /data/budget.csv
+          test -s work/budget.csv || { echo "::error::convert wrote nothing"; exit 1; }
+          head -3 work/budget.csv
+      # The same image serves the site (compose reuses the image built above).
+      - name: Serve the site with Docker
+        working-directory: packaging/docker
+        run: docker compose up --detach --wait
+      - name: Check the served site
+        working-directory: packaging/docker
+        run: ./smoke-test.sh
+      - name: Container logs and cleanup
+        if: always()
+        working-directory: packaging/docker
+        run: |
+          docker compose logs --no-color || true
+          docker compose down --volumes || true

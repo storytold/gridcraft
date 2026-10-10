@@ -203,6 +203,21 @@ Installers and executables are code-signed.
 |---|---|---|
 | Static site | `gridcraft-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
 
+### Docker
+
+| Image | Tags | Notes |
+|---|---|---|
+| `ghcr.io/storytold/gridcraft` | `<ver>`, `<major>.<minor>`, `latest` | nginx serving the web build plus the `gridcraft-cli`; `linux/amd64` + `linux/arm64` |
+
+```sh
+docker run --rm -p 8771:80 ghcr.io/storytold/gridcraft          # web app → http://localhost:8771/
+docker run --rm ghcr.io/storytold/gridcraft eval '=SUM(1,2,3)'  # CLI
+```
+
+Pre-releases (e.g. `<ver>` = `0.4.0-rc.1`) get their own tag only, so `latest` is always a stable
+release. Building it yourself and the full command set are in
+[`packaging/docker/README.md`](packaging/docker/README.md).
+
 ## The Crafting Apps
 
 GridCraft is one of the **Crafting Apps**: free, open-source creative tools from the

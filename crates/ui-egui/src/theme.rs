@@ -1,9 +1,10 @@
 //! Design tokens and fonts.
 //!
 //! Colours are our own, tuned to read like a modern desktop spreadsheet. Fonts come from the
-//! operating system at runtime (nothing bundled): the UI uses the platform UI font, cells use the
-//! best available match for the workbook font (Calibri/Carlito/Aptos/Arial…) with egui's built-in
-//! fonts as the last resort.
+//! operating system at runtime: the UI uses the platform UI font, cells use the best available
+//! match for the workbook font (Calibri/Carlito/Aptos/Arial…) with egui's built-in fonts as the
+//! last resort. A web build has no system fonts to fall back on, so it also bakes in the CJK face
+//! of the optional craft-fonts build input (`CRAFT_FONTS_DIR`; see `CraftFont` below).
 
 use std::sync::Arc;
 
@@ -287,9 +288,36 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
     v
 }
 
-/// Builds the font set from system fonts (with egui's defaults as fallback).
+/// A font baked in from the optional craft-fonts build input (`CRAFT_FONTS_DIR`; see
+/// storytold/craft-fonts `docs/integration.md`). The table is empty unless the build had it.
+pub struct CraftFont {
+    pub family: &'static str,
+    pub style: &'static str,
+    /// ISO 15924 scripts the font covers, e.g. `"Hans"` for Simplified Chinese.
+    pub scripts: &'static [&'static str],
+    pub bytes: &'static [u8],
+}
+
+include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
+
+/// Registers the baked faces and returns their keys, in manifest order. They sit after the
+/// machine's own fonts and before egui's defaults: Latin keeps the system face, and the scripts
+/// egui's defaults have no glyphs for get a real one.
+fn register_craft_fonts(fonts: &mut FontDefinitions) -> Vec<String> {
+    let mut keys = Vec::new();
+    for (i, f) in CRAFT_FONTS.iter().enumerate() {
+        let key = format!("craft-fonts-{i}");
+        fonts.font_data.insert(key.clone(), Arc::new(FontData::from_static(f.bytes)));
+        keys.push(key);
+    }
+    keys
+}
+
+/// Builds the font set from the baked craft-fonts faces plus the system's fonts (with egui's
+/// defaults as fallback).
 pub fn font_definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
+    let craft = register_craft_fonts(&mut fonts);
     let base_prop: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let base_mono: Vec<String> = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
     for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
@@ -305,6 +333,7 @@ pub fn font_definitions() -> FontDefinitions {
         } else if role.starts_with("cell-") {
             chain.push(format!("sys-{CELL}"));
         }
+        chain.extend(craft.iter().cloned());
         chain.extend(if role == MONO { base_mono.clone() } else { base_prop.clone() });
         chain.retain(|k| fonts.font_data.contains_key(k));
         fonts.families.insert(FontFamily::Name(role.into()), chain);

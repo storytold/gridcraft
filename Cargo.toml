@@ -7,7 +7,7 @@ default-members = ["crates/*", "apps/gridcraft", "apps/gridcraft-cli", "xtask"]
 version = "0.4.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-rust-version = "1.90"
+rust-version = "1.95"
 repository = "https://github.com/storytold/gridcraft"
 
 [workspace.dependencies]

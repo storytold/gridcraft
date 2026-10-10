@@ -1,0 +1,44 @@
+# GridCraft in one image: nginx serves the built web app and the same image carries the headless
+# gridcraft-cli (inspect, convert, evaluate, script, and MCP over stdio). The Dockerfile builds it;
+# nothing comes from a registry and there is no server-side code.
+#
+#   packaging/web/package.sh                                       # writes dist/web/ first
+#   docker compose -f packaging/docker/compose.yaml up --build     # then open http://localhost:8771/
+#   docker compose -f packaging/docker/compose.yaml down
+#
+# GRIDCRAFT_WEB_PORT  host port to publish (default 8771, the port `trunk serve` uses)
+#
+# nginx/default.conf is the nginx form of the requirements in packaging/web/README.md and is baked
+# into the image. Note the HTTPS one: WebGPU and the clipboard need a secure context, so
+# http://localhost is fine while a plain-HTTP LAN address serves the app with the WebGL2 fallback.
+#
+# The CLI (and the stdio MCP server) is a command on the same image rather than a second service.
+# Reach it through this one: `docker compose run --rm web eval '=SUM(1,2,3)'` runs the entrypoint's
+# CLI branch. See README.md in this directory.
+name: gridcraft
+
+services:
+  web:
+    build:
+      # The repository root: cargo build -p gridcraft-cli needs the workspace manifests and crates,
+      # and the image copies dist/web (see .dockerignore).
+      context: ../..
+      dockerfile: packaging/docker/Dockerfile
+    image: gridcraft
+    restart: unless-stopped
+    ports:
+      - "${GRIDCRAFT_WEB_PORT:-8771}:80"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+      start_period: 2s
+    # nginx only reads files here: keep the container filesystem read-only and give it just the
+    # two writable directories it needs (its pid file and its cache).
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    security_opt:
+      - "no-new-privileges:true"

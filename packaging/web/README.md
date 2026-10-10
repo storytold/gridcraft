@@ -36,19 +36,38 @@ hash, so they can be cached forever. Only `index.html` needs revalidation.
   COEP `require-corp`, also send `Cross-Origin-Resource-Policy: same-origin` (or `cross-origin`
   when the files live on a CDN) on the app's files.
 
+## Fonts
+
+The web build bakes its fonts into the wasm: a browser has no system fonts to fall back on, and
+egui's own defaults carry no CJK glyphs, so Chinese, Japanese and Korean text would show as empty
+boxes. A build made with the optional `CRAFT_FONTS_DIR` input (see
+[`storytold/craft-fonts`](https://github.com/storytold/craft-fonts) `docs/integration.md`) embeds
+the Simplified-Chinese face — `packaging/web/subset-fonts.py` cuts it down to the characters a UI
+needs first (15.7 MiB → 3.4 MiB), since hosts cap a single file. Widen `WEB_FONTS` in
+`crates/ui-egui/build.rs` (and the script) to embed more faces if the size budget allows. The
+licence of each embedded font ships beside the site as `OFL-<family>.txt`.
+
 nginx example:
 
 ```nginx
 location /gridcraft/ {
     types { application/wasm wasm; text/javascript js; text/html html; }
     gzip on;
-    gzip_types application/wasm text/javascript text/html;
+    # text/html is always compressed; naming it here logs "duplicate MIME type" at startup.
+    gzip_types application/wasm text/javascript;
     location ~* \.(wasm|js)$ { add_header Cache-Control "public, max-age=31536000, immutable"; }
     location ~* index\.html$ { add_header Cache-Control "no-cache"; }
 }
 ```
 
 Local test: `python3 -m http.server 8765` inside the folder, then open http://localhost:8765/.
+(WebGPU needs a secure context, so use `localhost` and not your machine's IP — see
+[Renderer selection](#renderer-selection).)
+
+Self-hosting with Docker: `packaging/docker/Dockerfile` builds one image — nginx serving this build
+(with `nginx/default.conf`, the settings above written out for nginx) plus the `gridcraft-cli` — and
+`packaging/docker/compose.yaml` runs it. `smoke-test.sh` checks the result. See
+[`packaging/docker/README.md`](../docker/README.md).
 
 ## Embedding in a page (iframe)
 

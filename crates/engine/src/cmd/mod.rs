@@ -217,7 +217,12 @@ pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) ->
 }
 
 pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
+    // The profiler needs a clock, and wasm32-unknown-unknown has none: std's `Instant::now()`
+    // panics there ("time not implemented on this platform"), which would take the whole wasm
+    // instance down on the first command. Guarded like `ui-egui::now_ms` and `calc::now_serial`.
+    #[cfg(not(target_arch = "wasm32"))]
     let prof = std::env::var_os("GRIDCRAFT_PROFILE").is_some();
+    #[cfg(not(target_arch = "wasm32"))]
     let t0 = std::time::Instant::now();
     let mut sel = d.selection.clone();
     let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new() };
@@ -226,6 +231,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     if changed.len() <= 200_000 {
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
     }
+    #[cfg(not(target_arch = "wasm32"))]
     if prof {
         eprintln!("commit: edit {:?}, {} changed", t0.elapsed(), changed.len());
     }
@@ -234,6 +240,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }
+    #[cfg(not(target_arch = "wasm32"))]
     if prof {
         eprintln!("commit: + recalc {:?}", t0.elapsed());
     }
@@ -242,6 +249,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     for (si, row) in fit_rows {
         auto_row_height(&mut wb, si, row);
     }
+    #[cfg(not(target_arch = "wasm32"))]
     if prof {
         eprintln!("commit: + rows {:?}", t0.elapsed());
     }
