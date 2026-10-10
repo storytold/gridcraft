@@ -10,9 +10,9 @@ list is [`gaps.md`](gaps.md); numbers and method are in
 
 1. **Review and land the open PR queue** (50 PRs on 2026-10-10): recalc and spill fixes (#148,
    #155, #156, #157), whole-sheet and large-range fixes (#151, #152, #153, #154), chart kinds
-   (#116, #158, #161), macOS document open (#164, #167), CJK fonts (#103, #147), German and
-   Chinese/Korean/Russian UI (#163, #104). 8–15 h. Language PRs should land on top of the catalog
-   infrastructure, not as scattered literals.
+   (#158, #161), macOS document open (#164, #167), German UI, numbers and formulas (#163),
+   15-digit comparison (#187). 8–15 h. Language work should extend the new `i18n` catalog past the
+   ribbon rather than add scattered literals.
 2. **XLSX on real files** (gaps #1, #3): corpus run plus Excel opening our output.
 3. **Large workbooks and multi-threaded recalc** (gap #2).
 
@@ -77,14 +77,14 @@ to check our files, and Windows machines with the reported GPU drivers.
 | M12 | Performance, accessibility, i18n | partial; i18n not started |
 | M13 | Release & polish | releases shipping (v0.2.0–v0.4.0, signed) |
 | M14 | **Beta gates** (table above) | not started as a milestone; parts in open PRs |
-| M15 | Localization infrastructure and the twelve languages | not started (PRs #104, #163 open) |
+| M15 | Localization infrastructure and the twelve languages | started: ribbon catalog in ja, zh, ko, pt-BR, ru (#31, #104, #82); German in PR #163 |
 | M16 | Get & Transform, data model | not started |
 
 ## After beta (ranked)
 
 | Work | Gap | Hours |
 |---|---|---|
-| Localization: infrastructure, then twelve languages | #11 | 110–175 |
+| Localization: catalog past the ribbon, then twelve languages | #11 | 100–165 |
 | Get & Transform and the data model | #12 | 60–100 |
 | Solver, Analysis ToolPak, Forecast Sheet | #13 | 22–35 |
 | Remaining functions, oracle suite | #15 | 18–30 |
@@ -112,5 +112,6 @@ to check our files, and Windows machines with the reported GPU drivers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Current focus and M15 updated for the 10-10 merges |
 | 2026-10-10 | minor | Added the alpha gate table (six core workflows; passes, stays alpha) |
 | 2026-10-10 | major | Created: current focus, beta gates (~160–240 h), milestones moved from ROADMAP.md, post-beta ranking |

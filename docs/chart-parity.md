@@ -6,8 +6,8 @@ Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
 
 Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crates/chart/src`
-(layout and rendering), `crates/xlsx/src/chart.rs` (DrawingML chart parts), open PRs #116, #158,
-#161 and issue #52.
+(layout and rendering), `crates/xlsx/src/chart.rs` (DrawingML chart parts), merged PRs #62 and #116,
+open PRs #158, #161, and issue #190.
 
 ## Chart types
 
@@ -15,7 +15,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 |---|---|---|---|
 | Column | clustered, stacked, 100% stacked, 3-D clustered/stacked/100%, 3-D column | 3 of 7 | no 3-D |
 | Bar | clustered, stacked, 100%, 3-D ×3 | 3 of 6 | no 3-D |
-| Line | line, stacked, 100% stacked, with markers ×3, 3-D line | 3 of 7 (line, with markers, stacked) | no 100% stacked, no smoothing (#52) |
+| Line | line, stacked, 100% stacked, with markers ×3, 3-D line | 3 of 7 (line, with markers, stacked) | no 100% stacked; smoothed lines landed (#62) |
 | Pie | pie, 3-D pie, pie of pie, bar of pie, doughnut | 2 of 5 (pie, doughnut) | no exploded, pie of pie, bar of pie |
 | Area | area, stacked, 100%, 3-D ×3 | 2 of 6 | no 100%, no 3-D |
 | X Y (scatter) | markers, smooth lines (±markers), straight lines (±markers) | 2 of 5 | no smooth lines |
@@ -35,6 +35,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 
 | Element | Excel | GridCraft |
 |---|---|---|
+| Move and resize the chart object | yes | move yes; **resize broken** (#190) |
 | Chart title, axis titles | text, linked to cells, full formatting | text only |
 | Legend | position, overlay, formatting, per-entry delete | position only |
 | Data labels | value, category, series, percentage, from cells, callouts, position | one on/off flag |
@@ -50,7 +51,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Chart sheets | yes | **missing** (skipped with a warning on open) |
 | Chart templates (`.crtx`) | yes | **missing** |
 | Recommended Charts | yes | partial (Insert ▸ Recommended) |
-| Switch Row/Column, Select Data | yes | yes (Switch on charts read from files: PR #116) |
+| Switch Row/Column, Select Data | yes | yes (Switch on charts read from files landed in #116) |
 | Sparklines (line, column, win/loss, markers, axis) | yes | line, column, win/loss |
 | PivotCharts | yes | **missing** |
 | Animation on data change | yes (Windows) | no |
@@ -65,7 +66,7 @@ back.
 
 ## Work (40–60 h)
 
-1. Kinds survive XLSX round-trip (merge PRs #158, #161, #116): 2–4 h.
+1. Kinds survive XLSX round-trip (merge PRs #158, #161): 2–4 h. Chart resizing (#190): 1–2 h.
 2. Preserve unmodelled chart XML on round-trip (keep the original part, patch only edited fields): 6–10 h.
 3. Axis options, label options, gridlines per axis, legend formatting: 10–15 h.
 4. Trendlines and error bars (maths shared with LINEST/LOGEST/GROWTH): 6–10 h.
@@ -77,4 +78,5 @@ back.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Smooth lines (#62) and Switch Row/Column on file charts (#116) landed; chart resize bug (#190) |
 | 2026-10-10 | major | Created from a source audit: 25 kinds (25 of ~60 subtypes), element gaps, round-trip loss |

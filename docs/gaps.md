@@ -44,14 +44,15 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Missing:** kinds that survive XLSX (stock, combo, histogram, box, waterfall, funnel, treemap,
   sunburst), axis scaling, label options, trendlines, error bars, per-point formatting.
 - **Evidence:** `Chart` holds only title, legend position, two flags and axis titles
-  (`crates/model/src/features.rs`); PRs #158, #161, #116; #52.
+  (`crates/model/src/features.rs`); PRs #158, #161 open; charts can't be resized (#190). Smooth lines (#62) and Switch Row/Column (#116) landed.
 - **Impact:** charts are in most business workbooks.
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
 ### 5. Text in non-Latin scripts doesn't render or export (L)
 - **Missing:** CJK font fallback, complex shaping (Arabic, Devanagari, Thai), bidi, non-Latin PDF.
-- **Evidence:** #142 (Chinese text), #32 (Thai), #54 (symbols as boxes on Fedora), PDF writer
-  uses 14 standard fonts only; PRs #103, #147 open.
+- **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32); #142
+  (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora); no shaping for Arabic or
+  Devanagari; PDF writer uses 14 standard fonts only.
 - **Impact:** blocks most of the world's users even with an English UI.
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
 
@@ -64,7 +65,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 10–15 h. [function-parity.md](function-parity.md#formula-language)
 
 ### 7. No legacy `.xls`; no password-protected workbooks (FF)
-- **Evidence:** #121, #11. `FileKind` has no XLS; no CFB/encryption code.
+- **Evidence:** #121. Since #17 (closed #11) both are recognised through a CFB sniff and refused with a clear message, but neither opens.
 - **Impact:** common in finance, government and anything older than 2007; encrypted files are
   routine in business.
 - **Estimate:** 28–42 h (`.xls` read 20–30, encryption 8–12). [file-format-parity.md](file-format-parity.md)
@@ -88,8 +89,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ## After beta
 
 ### 11. No localization at all (L)
-- English-only literals, no catalog, en-US function names and separators (#20, #45, #79; PRs #104,
-  #163). **Estimate:** 110–175 h including #5. [localization-parity.md](localization-parity.md)
+- Ribbon-only catalog in five languages (#31, #104, #82; ~12% of strings each); dialogs, menus and
+  messages English; en-US function names and separators (#45); German in PR #163. **Estimate:**
+  100–165 h including #5. [localization-parity.md](localization-parity.md)
 
 ### 12. Get & Transform, external data, data model (F)
 - No Power Query editor, connections, refresh, From Web/database/folder sources, relationships or
@@ -147,5 +149,6 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Updated for the 10-10 merges (#17, #31, #38, #62, #82, #104, #116) and the new chart resize bug (#190) |
 | 2026-10-10 | minor | Noted that no gap blocks the alpha gate |
 | 2026-10-10 | major | Created: 24 ranked gaps with evidence, from the full re-measure and the 60 open issues |
