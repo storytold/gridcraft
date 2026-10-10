@@ -193,6 +193,40 @@ fn spills() {
 }
 
 #[test]
+fn references_keep_their_size_past_the_used_range() {
+    let mut t = T::new();
+    t.set("A1", "5");
+    t.set("A2", "6");
+    t.set("C1", "=ROWS(A1:A10*1)");
+    t.set("C2", "=SUMPRODUCT(--(A1:A10=\"\"))");
+    t.set("C3", "=COUNTBLANK(A1:A10)");
+    t.set("C4", "=COUNTIF(A1:A10,\"\")");
+    t.set("C5", "=COLUMNS(TRANSPOSE(A1:A10))");
+    for (at, want) in [("C1", 10.0), ("C2", 8.0), ("C3", 8.0), ("C4", 8.0), ("C5", 10.0)] {
+        assert_eq!(t.num(at), want, "{at}");
+    }
+    // Whole columns are still read up to the used range.
+    t.set("D1", "=ROWS(FILTER(A:A,A:A<>\"\"))");
+    assert_eq!(t.num("D1"), 2.0);
+}
+
+#[test]
+fn spilled_blank_cells_show_zero() {
+    let mut t = T::new();
+    t.set("A1", "5");
+    t.set("A3", "7");
+    t.set("C1", "=A1:A4");
+    assert_eq!(t.get("C2"), Value::Number(0.0));
+    assert_eq!(t.get("C4"), Value::Number(0.0));
+    t.set("D1", "=COUNT(C1:C4)");
+    assert_eq!(t.num("D1"), 4.0);
+    t.set("E1", "=A2:A3");
+    assert_eq!(t.get("E1"), Value::Number(0.0));
+    t.set("F1", "=SORT(A1:A3)");
+    assert_eq!(t.get("F3"), Value::Number(0.0));
+}
+
+#[test]
 fn let_lambda() {
     let mut t = T::new();
     t.set("A1", "=LET(x,2,y,3,x*y)");
