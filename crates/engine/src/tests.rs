@@ -175,6 +175,32 @@ fn parity_counts() {
 }
 
 #[test]
+fn switch_row_column_on_a_chart_read_from_a_file() {
+    let mut s = s();
+    s.execute(
+        "range.setValues",
+        json!({"range": "A1", "values": [["", "North", "South", "East", "West"], ["Mon", 10, 14, 9, 12], ["Tue", 12, 15, 11, 14], ["Wed", 14, 16, 10, 11], ["Thu", 11, 13, 8, 9], ["Fri", 9, 12, 7, 11], ["Sat", 11, 15, 10, 14]]}),
+    )
+    .unwrap();
+    s.execute("insert.chart", json!({"type": "column", "range": "A1:E7"})).unwrap();
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let b64 = r["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "x.xlsx", "base64": b64})).unwrap();
+    let chart = |s: &Session| s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    assert_eq!((chart(&s).source, chart(&s).series.len()), (None, 4));
+    s.execute("chart.switchRowColumn", json!({})).unwrap();
+    let c = chart(&s);
+    assert!(c.by_rows);
+    assert_eq!(c.source.as_deref(), Some("Sheet1!A1:E7"));
+    assert_eq!(c.series.len(), 6);
+    assert_eq!(c.series[0].name.as_deref(), Some("Sheet1!$A$2"));
+    assert_eq!(c.series[0].categories.as_deref(), Some("Sheet1!$B$1:$E$1"));
+    assert_eq!(c.series[0].values, "Sheet1!$B$2:$E$2");
+    s.execute("chart.switchRowColumn", json!({})).unwrap();
+    assert_eq!(chart(&s).series.len(), 4);
+}
+
+#[test]
 fn ink_strokes_and_ink_to_shape() {
     let mut s = s();
     // A rough closed box.
