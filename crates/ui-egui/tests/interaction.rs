@@ -184,6 +184,32 @@ fn renders_every_ribbon_tab_without_panicking() {
 }
 
 #[test]
+fn language_switch_translates_the_ribbon_and_persists() {
+    use gridcraft_ui_egui::i18n::Language;
+    let mut h = harness(blank());
+    // English by default whatever the host's locale: only the desktop app reads the system language.
+    assert_eq!(h.state().ui.language, Language::En);
+    // The language commands are listed with the other UI commands.
+    let ctx = h.ctx.clone();
+    let gridcraft_ui_egui::control::Outcome::Done(listed) = gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "engine.commands", &json!({}))
+    else {
+        panic!("engine.commands returns a response");
+    };
+    let ids: Vec<&str> = listed["result"].as_array().into_iter().flatten().filter_map(|c| c["id"].as_str()).collect();
+    for id in ["app.language.set", "app.language.english", "app.language.japanese"] {
+        assert!(ids.contains(&id), "engine.commands lists {id}");
+    }
+    h.state_mut().run("app.language.japanese", json!({})).unwrap();
+    h.run_steps(2); // the ribbon renders the Japanese tabs without panicking
+    assert_eq!(h.state().ui.language, Language::Ja);
+    // The preference round-trips through the saved UiState.
+    let restored: gridcraft_ui_egui::UiState = serde_json::from_str(&serde_json::to_string(&h.state().ui).unwrap()).unwrap();
+    assert_eq!(restored.language, Language::Ja);
+    h.state_mut().run("app.language.english", json!({})).unwrap();
+    assert_eq!(h.state().ui.language, Language::En);
+}
+
+#[test]
 fn dialogs_open_and_close() {
     let mut h = harness(blank());
     for name in [

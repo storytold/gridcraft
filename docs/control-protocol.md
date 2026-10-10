@@ -45,5 +45,11 @@ System follows live OS appearance changes and falls back to Light when the platf
 The saved choice remains System; new users still start in Light. The legacy
 `view.darkMode` command and `ui.set {dark}` select a fixed Light or Dark theme.
 
+`{command: "app.language.set", params: {language: "ja"}}` switches the interface language
+(`code` is accepted as an alias for `language`); `app.language.english` and
+`app.language.japanese` are shortcuts. Only interface chrome is translated, never command ids or
+document text. The choice is saved in `ui.json`; with nothing saved the desktop app follows the
+system language.
+
 For a headless equivalent (no window), use `gridcraft-cli mcp` or `gridcraft-cli run`;
 see [`mcp.md`](mcp.md) and [`cli.md`](cli.md).

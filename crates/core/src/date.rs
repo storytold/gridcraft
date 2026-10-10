@@ -105,7 +105,7 @@ pub fn serial_from_ymd(sys: DateSystem, year: i64, month: i64, day: i64) -> Opti
 
 /// Date/time from a serial. `None` for negative or too-large serials.
 pub fn datetime_from_serial(sys: DateSystem, serial: f64) -> Option<DateTime> {
-    if !serial.is_finite() || serial < 0.0 || serial >= 2_958_466.0 {
+    if !serial.is_finite() || !(0.0..2_958_466.0).contains(&serial) {
         return None;
     }
     let mut day = serial.floor() as i64;

@@ -20,6 +20,11 @@ image = { workspace = true }
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The desktop's preferred language, for the first-run interface language. The web build has no
+# system locale, so the crate is native-only (see i18n::Language::system).
+sys-locale = { workspace = true }
+
 [build-dependencies]
 serde_json = { workspace = true }
 toml = "1"

@@ -1185,7 +1185,7 @@ fn binom_dist_range(a: &[Arg], _: C) -> R<Value> {
     let p = num(a, 1)?;
     let s1 = num(a, 2)?.trunc();
     let s2 = if has(a, 3) { num(a, 3)?.trunc() } else { s1 };
-    if n < 0.0 || n > 1e15 || !(0.0..=1.0).contains(&p) || s1 < 0.0 || s1 > n || s2 < s1 || s2 > n {
+    if !(0.0..=1e15).contains(&n) || !(0.0..=1.0).contains(&p) || s1 < 0.0 || s1 > n || s2 < s1 || s2 > n {
         return Err(CellError::Num);
     }
     if s2 - s1 > 10_000.0 {

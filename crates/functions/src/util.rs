@@ -51,7 +51,7 @@ pub(crate) fn arg(args: &[Arg], i: usize) -> R<&Arg> {
 
 /// Whether argument `i` was supplied (present and not an empty literal like `F(1,)`).
 pub(crate) fn has(args: &[Arg], i: usize) -> bool {
-    matches!(args.get(i), Some(a) if !(matches!(a.value, Value::Empty) && !a.from_ref))
+    matches!(args.get(i), Some(a) if !matches!(a.value, Value::Empty) || a.from_ref)
 }
 
 /// Number coercion for a scalar parameter: empty = 0, TRUE = 1, numeric text parses.

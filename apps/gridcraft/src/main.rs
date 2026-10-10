@@ -79,11 +79,16 @@ fn load_prefs(app: &mut SheetApp) {
     if !prefs_enabled() {
         return;
     }
+    // First run (or a ui.json without a usable language): follow the desktop's language.
+    app.ui.language = gridcraft_ui_egui::i18n::Language::system();
     let Some(dir) = config_dir() else { return };
     if let Ok(b) = std::fs::read(dir.join("ui.json"))
-        && let Ok(ui) = serde_json::from_slice(&b)
+        && let Ok(ui) = serde_json::from_slice::<gridcraft_ui_egui::UiState>(&b)
     {
+        let saved = serde_json::from_slice(&b).ok().and_then(|v| gridcraft_ui_egui::i18n::saved_language(&v));
+        let language = saved.unwrap_or(app.ui.language);
         app.ui = ui;
+        app.ui.language = language;
     }
     if let Ok(b) = std::fs::read(dir.join("prefs.json"))
         && let Ok(p) = serde_json::from_slice(&b)

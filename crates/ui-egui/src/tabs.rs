@@ -190,11 +190,11 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     gridcraft_engine::Mode::Edit => "Edit",
                     gridcraft_engine::Mode::Point => "Point",
                 };
-                ui.label(egui::RichText::new(mode).font(theme::ui_font(12.5)).color(t.text_dim));
+                ui.label(egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
                 if let Some(d) = app.session.active() {
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);
-                        ui.label(egui::RichText::new("Calculate").font(theme::ui_font(12.5)).color(t.text_dim));
+                        ui.label(egui::RichText::new(app.ui.language.tr("Calculate")).font(theme::ui_font(12.5)).color(t.text_dim));
                     }
                     if !d.calc.circular.is_empty() {
                         ui.add_space(12.0);
@@ -205,7 +205,9 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     if app.session.clipboard.is_some() && app.editor.is_none() {
                         ui.add_space(12.0);
                         ui.label(
-                            egui::RichText::new("Select destination and press Enter or choose Paste").font(theme::ui_font(12.5)).color(t.text_dim),
+                            egui::RichText::new(app.ui.language.tr("Select destination and press Enter or choose Paste"))
+                                .font(theme::ui_font(12.5))
+                                .color(t.text_dim),
                         );
                     }
                 }

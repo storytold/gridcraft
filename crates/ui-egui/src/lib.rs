@@ -14,6 +14,7 @@ pub mod dialogs;
 pub mod editor;
 pub mod formula_bar;
 pub mod grid;
+pub mod i18n;
 pub mod icons;
 pub mod keytips;
 pub mod panes;
@@ -46,6 +47,12 @@ pub struct UiState {
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
     pub recent: Vec<String>,
+    /// Interface language. English by default (so tests and headless renders never depend on the
+    /// host's locale); the desktop app starts from [`i18n::Language::system`] when `ui.json` has
+    /// no usable language (see [`i18n::saved_language`]). An unknown saved value reads as English
+    /// rather than failing the whole `UiState`.
+    #[serde(deserialize_with = "i18n::lenient")]
+    pub language: i18n::Language,
 }
 
 impl Default for UiState {
@@ -59,6 +66,7 @@ impl Default for UiState {
             formula_bar_expanded: false,
             status_bar: true,
             recent: vec![],
+            language: i18n::Language::En,
         }
     }
 }
@@ -278,6 +286,25 @@ impl SheetApp {
                 Ok(json!({"mode": self.ui.theme_mode()}))
             }
             "view.zoom100" => return Some(self.session.run("view.zoom", json!({"percent": 100})).inspect(|_| self.after_engine())),
+            "app.language.set" => {
+                // `{"language": "ja"}`; `code` is accepted as an alias.
+                let code = p.get("language").or_else(|| p.get("code")).and_then(Json::as_str).unwrap_or("");
+                match i18n::Language::parse(code) {
+                    Some(l) => {
+                        self.ui.language = l;
+                        Ok(json!({"language": l}))
+                    }
+                    None => Err(format!("unknown language {code:?} (use \"en\" or \"ja\")")),
+                }
+            }
+            "app.language.english" => {
+                self.ui.language = i18n::Language::En;
+                Ok(json!({"language": i18n::Language::En}))
+            }
+            "app.language.japanese" => {
+                self.ui.language = i18n::Language::Ja;
+                Ok(json!({"language": i18n::Language::Ja}))
+            }
             "ui.dialog" => {
                 let name = p.get("name").and_then(Json::as_str).unwrap_or("");
                 self.open_dialog(name, p.clone());
@@ -502,6 +529,8 @@ impl SheetApp {
         }
         let t0 = now_ms();
         text_box::before_ui(self, &ctx);
+        // The language the widgets translate with this frame (see `i18n::current`).
+        i18n::set_current(&ctx, self.ui.language);
         let t = theme::Tokens::get(&ctx);
         self.ribbon_keys(&ctx);
         ribbon::title_bar(self, ui);
