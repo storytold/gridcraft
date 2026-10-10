@@ -9,6 +9,7 @@ use crate::theme::{self, Tokens};
 
 /// A flat square icon button with hover highlight and tooltip.
 pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egui::Vec2) -> Response {
+    let tip = crate::tl!(tip);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let t = Tokens::get(ui.ctx());
     if resp.is_pointer_button_down_on() {
@@ -22,6 +23,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egu
 
 /// A toggle-able small button (e.g. Bold) showing a checked state.
 pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
+    let tip = crate::tl!(tip);
     let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
     let t = Tokens::get(ui.ctx());
     if on {
@@ -36,6 +38,8 @@ pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
 
 /// Large ribbon button: 32px icon over a one- or two-line label.
 pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
+    let label = crate::tl!(label);
+    let tip = crate::tl!(tip);
     let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(11.5);
     let lines: Vec<&str> = label.split('\n').collect();
@@ -60,6 +64,8 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
 
 /// Small ribbon button: 16px icon with optional label to the right.
 pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
+    let label = crate::tl!(label);
+    let tip = crate::tl!(tip);
     let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(12.5);
     let tw = if label.is_empty() { 0.0 } else { ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0 };
@@ -103,14 +109,14 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
         ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 4.0, main.bottom() - 5.0), vec2(17.0, 3.0)), 0.0, c);
     }
     icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
-    (m.on_hover_text(tip).clicked(), a)
+    (m.on_hover_text(crate::tl!(tip)).clicked(), a)
 }
 
 /// Our colour palette (theme row + tints + standard colours), returns a picked hex colour,
 /// `Some("none")` for No Fill/Automatic.
 pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {
     let mut picked = None;
-    if ui.button(none_label).clicked() {
+    if ui.button(crate::tl!(none_label)).clicked() {
         picked = Some("none".to_string());
     }
     ui.label(egui::RichText::new("Theme Colors").small());
@@ -170,7 +176,9 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
         });
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("  OK  ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            if ui.button(format!("  {}  ", crate::tl!("OK"))).clicked()
+                || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape))
+            {
                 close = true;
             }
         });

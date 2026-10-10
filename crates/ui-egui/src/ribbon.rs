@@ -30,47 +30,63 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
         ui.horizontal_centered(|ui| {
             ui.add_space(TITLE_LEFT_PAD);
             // AutoSave toggle (saves after each change when the workbook has a file).
-            ui.label(egui::RichText::new("AutoSave").font(theme::ui_font(12.5)).color(t.text_dim));
+            ui.label(egui::RichText::new(crate::tl!("AutoSave")).font(theme::ui_font(12.5)).color(t.text_dim));
             let on = app.grid.autosave();
             let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
             ui.painter().rect_filled(r, 8.0, if on { t.accent } else { Color32::TRANSPARENT });
             ui.painter().rect_stroke(r, 8.0, Stroke::new(1.0, if on { t.accent } else { t.text_dim }), StrokeKind::Inside);
             let knob = if on { pos2(r.right() - 8.0, r.center().y) } else { pos2(r.left() + 8.0, r.center().y) };
             ui.painter().circle_filled(knob, 5.0, if on { Color32::WHITE } else { t.text_dim });
-            if resp.on_hover_text("AutoSave: save after every change (workbooks saved to a file)").clicked() {
+            if resp.on_hover_text(crate::tl!("AutoSave: save after every change (workbooks saved to a file)")).clicked() {
                 app.grid.toggle_autosave();
             }
             ui.add_space(6.0);
-            if icon_button(ui, Icon::Home, t.text_dim, "Home", vec2(26.0, 26.0)).clicked() {
+            if icon_button(ui, Icon::Home, t.text_dim, crate::tl!("Home"), vec2(26.0, 26.0)).clicked() {
                 app.open_dialog("start", json!({}));
             }
-            if icon_button(ui, Icon::Save, t.text_dim, "Save (⌘S)", vec2(26.0, 26.0)).clicked() {
+            if icon_button(ui, Icon::Save, t.text_dim, &format!("{} (⌘S)", crate::tl!("Save")), vec2(26.0, 26.0)).clicked() {
                 app.run_or_alert("file.save", json!({}));
             }
             let can_undo = app.session.active().is_some_and(|d| !d.undo.is_empty());
             let can_redo = app.session.active().is_some_and(|d| !d.redo.is_empty());
-            if icon_button(ui, Icon::Undo, if can_undo { t.text_dim } else { t.text_disabled }, "Undo (⌘Z)", vec2(26.0, 26.0)).clicked() && can_undo
+            if icon_button(
+                ui,
+                Icon::Undo,
+                if can_undo { t.text_dim } else { t.text_disabled },
+                &format!("{} (⌘Z)", crate::tl!("Undo")),
+                vec2(26.0, 26.0),
+            )
+            .clicked()
+                && can_undo
             {
                 app.run_or_alert("edit.undo", json!({}));
             }
-            let undo_list = icon_button(ui, Icon::Chevron, t.text_dim, "Undo list", vec2(14.0, 26.0));
+            let undo_list = icon_button(ui, Icon::Chevron, t.text_dim, crate::tl!("Undo list"), vec2(14.0, 26.0));
             egui::Popup::menu(&undo_list).show(|ui| {
                 let labels: Vec<String> =
                     app.session.active().map(|d| d.undo.iter().rev().take(20).map(|e| e.label.clone()).collect()).unwrap_or_default();
                 if labels.is_empty() {
-                    ui.label("Can't Undo");
+                    ui.label(crate::tl!("Can't Undo"));
                 }
                 for (i, l) in labels.iter().enumerate() {
-                    if ui.button(format!("Undo {l}")).clicked() {
+                    if ui.button(crate::i18n::fmt(crate::tl!("Undo {action}"), &[("action", l)])).clicked() {
                         app.run_or_alert("edit.undo", json!({"steps": i + 1}));
                     }
                 }
             });
-            if icon_button(ui, Icon::Redo, if can_redo { t.text_dim } else { t.text_disabled }, "Redo (⌘Y)", vec2(26.0, 26.0)).clicked() && can_redo
+            if icon_button(
+                ui,
+                Icon::Redo,
+                if can_redo { t.text_dim } else { t.text_disabled },
+                &format!("{} (⌘Y)", crate::tl!("Redo")),
+                vec2(26.0, 26.0),
+            )
+            .clicked()
+                && can_redo
             {
                 app.run_or_alert("edit.redo", json!({}));
             }
-            let more = icon_button(ui, Icon::More, t.text_dim, "More commands", vec2(26.0, 26.0));
+            let more = icon_button(ui, Icon::More, t.text_dim, crate::tl!("More commands"), vec2(26.0, 26.0));
             egui::Popup::menu(&more).show(|ui| {
                 for (label, id) in [
                     ("New Workbook", "file.new"),
@@ -79,11 +95,11 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     ("Sort A to Z", "data.sortAscending"),
                     ("Calculate Now", "formulas.calculateNow"),
                 ] {
-                    if ui.button(label).clicked() {
+                    if ui.button(crate::tl!(label)).clicked() {
                         app.run_or_alert(id, json!({}));
                     }
                 }
-                if ui.button("Print…").clicked() {
+                if ui.button(crate::tl!("Print…")).clicked() {
                     app.print_now();
                 }
             });
@@ -99,20 +115,21 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
-                if icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, 26.0)).clicked() {
+                if icon_button(ui, Icon::Search, t.text_dim, &format!("{} (⌘⇧Space)", crate::tl!("Search commands")), vec2(28.0, 26.0)).clicked()
+                {
                     app.open_dialog("commandSearch", json!({}));
                 }
-                let share = small_button(ui, Icon::Share, "Share", "Share: export or save a copy", true);
+                let share = small_button(ui, Icon::Share, crate::tl!("Share"), crate::tl!("Share: export or save a copy"), true);
                 egui::Popup::menu(&share).show(|ui| {
                     for (label, fmt) in
                         [("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"), ("Export as CSV…", "csv"), ("Export as Web Page (.html)…", "html")]
                     {
-                        if ui.button(label).clicked() {
+                        if ui.button(crate::tl!(label)).clicked() {
                             app.open_dialog("saveCopy", json!({"format": fmt}));
                         }
                     }
                 });
-                if icon_button(ui, Icon::Comment, t.text_dim, "Comments", vec2(28.0, 26.0)).clicked() {
+                if icon_button(ui, Icon::Comment, t.text_dim, crate::tl!("Comments"), vec2(28.0, 26.0)).clicked() {
                     app.open_dialog("comments", json!({}));
                 }
             });
@@ -140,8 +157,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     for tab in tabs {
                         let active = tab != "File" && app.ui.ribbon_tab == tab;
                         let contextual = ctx_tabs.contains(&tab);
+                        let label = crate::tl!(tab);
                         let font = theme::ui_font(13.5);
-                        let tw = ui.painter().layout_no_wrap(tab.to_string(), font.clone(), t.text).size().x;
+                        let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
                         let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
                         if resp.hovered() && !active {
                             ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
@@ -153,7 +171,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         } else {
                             t.text_dim
                         };
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, tab, if active { theme::ui_bold(13.5) } else { font }, color);
+                        ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
                         if active {
                             let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
                             ui.painter().rect_filled(ul, 1.5, t.accent);
@@ -252,7 +270,7 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, serde_json:
             ui.separator();
             continue;
         }
-        if ui.add(egui::Button::new(*label).frame(false).min_size(vec2(220.0, 22.0))).clicked() {
+        if ui.add(egui::Button::new(crate::tl!(label)).frame(false).min_size(vec2(220.0, 22.0))).clicked() {
             if let Some(d) = id.strip_prefix("dialog:") {
                 app.open_dialog(d, p.clone());
             } else {

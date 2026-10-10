@@ -10,8 +10,8 @@ use crate::theme::{self, Tokens};
 /// in WordCraft.
 pub const APP_COLOR: egui::Color32 = egui::Color32::from_rgb(0x10, 0x7C, 0x41);
 
-const PAGES: [(&str, &str); 6] =
-    [("new", "New"), ("open", "Open"), ("save", "Save"), ("saveAs", "Save As"), ("print", "Print"), ("export", "Export")];
+const PAGES: [(&str, &str); 7] =
+    [("new", "New"), ("open", "Open"), ("save", "Save"), ("saveAs", "Save As"), ("print", "Print"), ("export", "Export"), ("options", "Options")];
 
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -36,7 +36,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 ui.painter().text(
                     pos2(r.min.x + 22.0, r.center().y),
                     Align2::LEFT_CENTER,
-                    label,
+                    crate::tl!(label),
                     if active { theme::ui_bold(14.0) } else { theme::ui_font(14.0) },
                     egui::Color32::WHITE,
                 );
@@ -53,7 +53,13 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 if resp.hovered() {
                     ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
                 }
-                ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, "About", theme::ui_font(13.0), egui::Color32::WHITE);
+                ui.painter().text(
+                    pos2(r.min.x + 22.0, r.center().y),
+                    Align2::LEFT_CENTER,
+                    crate::tl!("About"),
+                    theme::ui_font(13.0),
+                    egui::Color32::WHITE,
+                );
                 if resp.clicked() {
                     app.open_dialog("about", json!({}));
                 }
@@ -63,22 +69,23 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         egui::ScrollArea::vertical().show(ui, |ui| match app.ui.backstage_page.as_str() {
             "open" => open_page(app, ui),
             "print" | "export" => export_page(app, ui),
+            "options" => options_page(app, ui),
             _ => new_page(app, ui),
         });
     });
 }
 
 fn heading(ui: &mut Ui, s: &str) {
-    ui.label(egui::RichText::new(s).font(theme::ui_bold(26.0)));
+    ui.label(egui::RichText::new(crate::tl!(s)).font(theme::ui_bold(26.0)));
     ui.add_space(16.0);
 }
 
 fn recent_list(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new("Recent").font(theme::ui_bold(16.0)));
+    ui.label(egui::RichText::new(crate::tl!("Recent")).font(theme::ui_bold(16.0)));
     ui.add_space(6.0);
     if app.ui.recent.is_empty() {
-        ui.label(egui::RichText::new("Workbooks you open will show up here.").color(t.text_dim));
+        ui.label(egui::RichText::new(crate::tl!("Workbooks you open will show up here.")).color(t.text_dim));
     }
     for p in app.ui.recent.clone() {
         let name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.clone());
@@ -97,7 +104,7 @@ fn recent_list(app: &mut SheetApp, ui: &mut Ui) {
 
 fn new_page(app: &mut SheetApp, ui: &mut Ui) {
     heading(ui, "New");
-    if ui.add(egui::Button::new(egui::RichText::new("Blank workbook").font(theme::ui_font(14.0))).min_size(vec2(220.0, 34.0))).clicked() {
+    if ui.add(egui::Button::new(egui::RichText::new(crate::tl!("Blank workbook")).font(theme::ui_font(14.0))).min_size(vec2(220.0, 34.0))).clicked() {
         app.run_or_alert("file.new", json!({}));
         app.ui.backstage = false;
     }
@@ -107,28 +114,56 @@ fn new_page(app: &mut SheetApp, ui: &mut Ui) {
 
 fn open_page(app: &mut SheetApp, ui: &mut Ui) {
     heading(ui, "Open");
-    if ui.add(egui::Button::new(egui::RichText::new("Browse…").font(theme::ui_font(14.0))).min_size(vec2(220.0, 34.0))).clicked() {
+    if ui.add(egui::Button::new(egui::RichText::new(crate::tl!("Browse…")).font(theme::ui_font(14.0))).min_size(vec2(220.0, 34.0))).clicked() {
         app.open_dialog("open", json!({}));
     }
     ui.add_space(18.0);
     recent_list(app, ui);
 }
 
+fn options_page(app: &mut SheetApp, ui: &mut Ui) {
+    heading(ui, "Options");
+    ui.label(crate::tl!("Interface language:"));
+    let current = crate::i18n::Lang::from_pref(&app.ui.language);
+    egui::ComboBox::from_id_salt("language")
+        .selected_text(if app.ui.language == crate::i18n::AUTO {
+            format!("{} ({})", crate::tl!("Automatic"), current.name())
+        } else {
+            current.name().to_string()
+        })
+        .show_ui(ui, |ui| {
+            if ui.selectable_label(app.ui.language == crate::i18n::AUTO, format!("{} ({})", crate::tl!("Automatic"), current.name())).clicked() {
+                app.ui.language = crate::i18n::AUTO.into();
+            }
+            for lang in crate::i18n::Lang::all() {
+                if lang == crate::i18n::Lang::EN {
+                    continue;
+                }
+                if ui.selectable_label(app.ui.language == lang.code(), lang.name()).clicked() {
+                    app.ui.language = lang.code().into();
+                }
+            }
+            if ui.selectable_label(app.ui.language == "en", "English").clicked() {
+                app.ui.language = "en".into();
+            }
+        });
+}
+
 fn export_page(app: &mut SheetApp, ui: &mut Ui) {
     let printing = app.ui.backstage_page == "print";
     heading(ui, if printing { "Print" } else { "Export" });
     if printing {
-        ui.label("Send the active workbook straight to a printer.");
+        ui.label(crate::tl!("Send the active workbook straight to a printer."));
         ui.add_space(12.0);
-        if ui.add(egui::Button::new(egui::RichText::new("Print").font(theme::ui_font(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
+        if ui.add(egui::Button::new(egui::RichText::new(crate::tl!("Print")).font(theme::ui_font(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
             app.print_now();
         }
         return;
     }
-    ui.label("Save a copy of this workbook in another format.");
+    ui.label(crate::tl!("Save a copy of this workbook in another format."));
     ui.add_space(12.0);
     for (label, fmt) in [("Excel Workbook (*.xlsx)", "xlsx"), ("CSV (*.csv)", "csv"), ("Web Page (*.html)", "html")] {
-        if ui.add(egui::Button::new(egui::RichText::new(label).font(theme::ui_font(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
+        if ui.add(egui::Button::new(egui::RichText::new(crate::tl!(label)).font(theme::ui_font(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
             app.open_dialog("saveCopy", json!({"format": fmt}));
         }
         ui.add_space(4.0);

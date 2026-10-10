@@ -1,0 +1,518 @@
+# Serbian, Latin script (sr-latn) interface catalog. Columns, separated by a TAB:
+#   context <TAB> English source <TAB> translation
+#   context    empty (GridCraft uses no contexts yet)
+#   source     the English text exactly as in the code (tl!(...), ribbon labels, command labels)
+#   escapes    \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns, and a
+#              trailing "…" in one needs one in the other.
+#   Lines starting with # and blank lines are ignored. A missing entry shows in English.
+#
+# Clean room: every entry was written from the plain meaning of the English label in ordinary
+# computing vocabulary. No Microsoft Excel (or other product) localisation, string table or
+# translated UI was consulted or copied; add entries the same way.
+# Product, format and technology names (GridCraft, PDF, CSV, MCP …) stay in Latin letters.
+
+	100%	100%
+	A	A
+	About	O programu
+	About GridCraft	O GridCraft-u
+	About\nGridCraft	O\nGridCraft-u
+	Above Average	Iznad proseka
+	Accessibility	Pristupačnost
+	Accounting Number Format	Računovodstveni format
+	Action Journal	Dnevnik radnji
+	Action\nJournal	Dnevnik\nradnji
+	Add	Dodaj
+	Add Chart Element	Dodaj element grafikona
+	Add Chart\nElement	Dodaj element\ngrafikona
+	Add subtotal to (columns, e.g. C,D):	Dodaj međuzbir u (kolone, npr. C,D):
+	Agent Control	Kontrola agenata
+	Agent\nControl	Kontrola\nagenata
+	All	Sve
+	All except borders	Sve osim ivica
+	Allow	Dozvoli
+	Angle Clockwise	Nagni u smeru kazaljke
+	Angle Counterclockwise	Nagni suprotno od kazaljke
+	Any value	Bilo koja vrednost
+	At each change in (column letter):	Pri svakoj promeni u (slovo kolone):
+	AutoFit Column Width	Automatski uklopi širinu kolone
+	AutoFit Row Height	Automatski uklopi visinu reda
+	Automate	Automatizuj
+	Automatic	Automatski
+	Automatic Except for Data Tables	Automatski osim tabela podataka
+	AutoSave	Automatsko čuvanje
+	AutoSave: save after every change (workbooks saved to a file)	Automatsko čuvanje: sačuvaj posle svake izmene (za sveske sačuvane u fajl)
+	AutoSum	Automatski zbir
+	AutoSum (⌘⇧T)	Automatski zbir (⌘⇧T)
+	Average	Prosek
+	Before sheet (position, 0 = first):	Pre lista (pozicija, 0 = prvi):
+	Below Average	Ispod proseka
+	Blanks	Prazne
+	Blank workbook	Prazna sveska
+	Bold (⌘B)	Podebljano (⌘B)
+	Borders	Ivice
+	Bottom 10%	Donjih 10%
+	Bottom 10 Items	Donjih 10 stavki
+	Bottom margin (in):	Donja margina (in):
+	Breaks	Prelomi
+	Browse…	Potraži…
+	Calculate Now	Izračunaj odmah
+	Calculate Now (F9)	Izračunaj odmah (F9)
+	Calculate Sheet	Izračunaj list
+	Calculate Sheet (⇧F9)	Izračunaj list (⇧F9)
+	Calculation\nOptions	Opcije\nizračunavanja
+	Calculation Options	Opcije izračunavanja
+	Cancel	Otkaži
+	Can't Undo	Nema šta da se opozove
+	Cell\nStyles	Stilovi\nćelija
+	Cell Styles	Stilovi ćelija
+	Change Chart Type	Promeni tip grafikona
+	Change\nChart Type	Promeni\ntip grafikona
+	Chart Design	Dizajn grafikona
+	Chart\nTitle	Naslov\ngrafikona
+	Check Accessibility	Provera pristupačnosti
+	Check\nAccessibility	Provera\npristupačnosti
+	Circle Invalid Data	Zaokruži neispravne podatke
+	Clear	Obriši
+	Clear All	Obriši sve
+	Clear Comments and Notes	Obriši komentare i napomene
+	Clear Contents	Obriši sadržaj
+	Clear Filter	Obriši filter
+	Clear Formats	Obriši formate
+	Clear Hyperlinks	Obriši hiperveze
+	Clear Print Area	Obriši oblast štampe
+	Clear Rules from Entire Sheet	Obriši pravila sa celog lista
+	Clear Rules from Selected Cells	Obriši pravila sa izabranih ćelija
+	Clear Validation	Obriši proveru valjanosti
+	Collapse Ribbon	Skupi traku
+	Columns	Kolone
+	Columns (blank = all, e.g. A,C):	Kolone (prazno = sve, npr. A,C):
+	Column Width…	Širina kolone…
+	Column width (characters):	Širina kolone (znakova):
+	Column widths	Širine kolona
+	Comma	Zapeta
+	Command\nPalette	Paleta\nnaredbi
+	Comma Style	Stil sa zapetom
+	Comment	Komentar
+	Comment:	Komentar:
+	Comments	Komentari
+	Comments and notes	Komentari i napomene
+	Comments pane	Okno komentara
+	Commits	Komiti
+	Conditional formats	Uslovni formati
+	Conditional Formatting	Uslovno formatiranje
+	Conditional Formatting Rules Manager	Upravljač pravilima uslovnog formatiranja
+	Conditional\nFormatting	Uslovno\nformatiranje
+	Constants	Konstante
+	Convert\nto Range	Pretvori\nu opseg
+	Convert the last ink stroke to a shape	Pretvori poslednji rukopisni potez u oblik
+	Convert to Range	Pretvori u opseg
+	Copy (⌘C)	Kopiraj (⌘C)
+	Count	Broj
+	Create a copy	Napravi kopiju
+	Create from Selection	Napravi iz izbora
+	Current region	Trenutni region
+	Custom	Prilagođeno
+	Custom (%):	Prilagođeno (%):
+	Custom Margins…	Prilagođene margine…
+	Custom Sort	Prilagođeno sortiranje
+	Custom Sort…	Prilagođeno sortiranje…
+	Cut (⌘X)	Iseci (⌘X)
+	Dark Mode	Tamni režim
+	Data	Podaci
+	Data Labels: None	Oznake podataka: nema
+	Data Labels: Show	Oznake podataka: prikaži
+	Data\nValidation	Provera\nvaljanosti
+	Data Range:	Opseg podataka:
+	Data Table…	Tabela podataka…
+	Data validation	Provera valjanosti podataka
+	Data Validation	Provera valjanosti podataka
+	Data Validation…	Provera valjanosti podataka…
+	Date	Datum
+	DateTime	Datum i vreme
+	Date unit	Jedinica datuma
+	Day	Dan
+	Decimal	Decimalno
+	Decrease Decimal	Smanji decimale
+	Decrease Font Size	Smanji veličinu fonta
+	Decrease Indent	Smanji uvlačenje
+	Default Width…	Podrazumevana širina…
+	Define Name	Definiši naziv
+	Delete	Obriši
+	Delete Cells…	Obriši ćelije…
+	Delete chart	Obriši grafikon
+	Delete Comment	Obriši komentar
+	Delete\nChart	Obriši\ngrafikon
+	Delete rows	Obriši redove
+	Delete Sheet	Obriši list
+	Delete Sheet Columns	Obriši kolone lista
+	Delete Sheet Rows	Obriši redove lista
+	Destination:	Odredište:
+	Display:	Prikaz:
+	Divide	Podeli
+	Double Underline	Duplo podvučeno
+	Down	Dole
+	Edit chart title	Uredi naslov grafikona
+	Enter	Enter
+	Entire column	Cela kolona
+	Entire row	Ceo red
+	Erase ink strokes	Obriši rukopisne poteze
+	Eraser	Gumica
+	Error Checking	Provera grešaka
+	Error message:	Poruka o grešci:
+	Errors	Greške
+	Error style	Stil greške
+	Evaluate Formula	Izračunaj formulu
+	Every command run in this session (replayable)	Svaka pokrenuta naredba u ovoj sesiji (može se ponoviti)
+	Export	Izvoz
+	Export as CSV…	Izvezi kao CSV…
+	Export as Web Page (.html)…	Izvezi kao veb stranu (.html)…
+	File	Fajl
+	Fill	Popuna
+	Fill Color	Boja popune
+	Filter	Filter
+	Filter (⌘⇧F)	Filter (⌘⇧F)
+	Filters	Filteri
+	Financial	Finansijsko
+	Find…	Pronađi…
+	Find and Replace	Pronađi i zameni
+	Find &\nSelect	Pronađi i\nizaberi
+	Find & Select	Pronađi i izaberi
+	First	Prvi
+	Flash Fill	Trenutna popuna
+	Flash Fill (⌘E)	Trenutna popuna (⌘E)
+	Flash\nFill	Trenutna\npopuna
+	Font Color	Boja fonta
+	Footer:	Podnožje:
+	Footer (in):	Podnožje (in):
+	Format	Format
+	Format as Table	Formatiraj kao tabelu
+	Format Cell Alignment…	Format poravnanja ćelije…
+	Format cells	Formatiraj ćelije
+	Format Cells	Formatiraj ćelije
+	Format Cells…	Formatiraj ćelije…
+	Format cells that are (value):	Formatiraj ćelije koje su (vrednost):
+	Format cells that contain a date occurring:	Formatiraj ćelije koje sadrže datum koji pada:
+	Format cells that contain the text:	Formatiraj ćelije koje sadrže tekst:
+	Format Chart pane	Okno formatiranja grafikona
+	Format columns	Formatiraj kolone
+	Format\nas Table	Formatiraj\nkao tabelu
+	Format\nPane	Okno\nformata
+	Format Painter (double-click to keep it on)	Kopiranje formata (duplim klikom ostaje uključeno)
+	Format rows	Formatiraj redove
+	Formats	Formati
+	Format values where this formula is true:	Formatiraj vrednosti gde je ova formula tačna:
+	Formula Bar	Traka formule
+	Formula Builder	Graditelj formula
+	Formulas	Formule
+	Formulas and number formats	Formule i formati brojeva
+	Freeze First Column	Zamrzni prvu kolonu
+	Freeze\nPanes	Zamrzni\nokna
+	Freeze Panes	Zamrzni okna
+	Freeze Top Row	Zamrzni gornji red
+	Get Data\n(Text/CSV)	Preuzmi podatke\n(Tekst/CSV)
+	Goal Seek	Traženje cilja
+	Goal Seek…	Traženje cilja…
+	Go To	Idi na
+	Go To…	Idi na…
+	Go To Special…	Idi na posebno…
+	Green Fill with Dark Green Text	Zelena popuna sa tamnozelenim tekstom
+	GridCraft	GridCraft
+	Gridlines: None	Linije mreže: nema
+	Gridlines: Show	Linije mreže: prikaži
+	Group	Grupiši
+	Group by Months	Grupiši po mesecima
+	Group by Quarters	Grupiši po kvartalima
+	Group by Years	Grupiši po godinama
+	Growth	Rast
+	Header & Footer	Zaglavlje i podnožje
+	Header (in):	Zaglavlje (in):
+	Header (&L left, &C center, &R right; &P page, &N pages, &D date, &A sheet):	Zaglavlje (&L levo, &C centar, &R desno; &P strana, &N strana ukupno, &D datum, &A list):
+	Header &\nFooter	Zaglavlje i\npodnožje
+	Hide Columns	Sakrij kolone
+	Hide Rows	Sakrij redove
+	Hide Sheet	Sakrij list
+	Home	Početak
+	Horizontal	Horizontalno
+	Horizontal axis title:	Naslov horizontalne ose:
+	How agents drive GridCraft (MCP / control channel)	Kako agenti upravljaju GridCraft-om (MCP / kontrolni kanal)
+	Icons	Ikonice
+	Ignore blank	Zanemari prazno
+	Import a text or CSV file	Uvezi tekstualni ili CSV fajl
+	In-cell dropdown	Padajuća lista u ćeliji
+	Increase Decimal	Povećaj decimale
+	Increase Font Size	Povećaj veličinu fonta
+	Increase Indent	Povećaj uvlačenje
+	Information	Informacije
+	Ink to\nShape	Rukopis u\noblik
+	Input message:	Poruka za unos:
+	Insert	Umetanje
+	Insert an icon	Umetni ikonicu
+	Insert a picture	Umetni sliku
+	Insert Cells…	Umetni ćelije…
+	Insert Function	Umetni funkciju
+	Insert Function (⇧F3)	Umetni funkciju (⇧F3)
+	Insert Link (⌘K)	Umetni vezu (⌘K)
+	Insert\nFunction	Umetni\nfunkciju
+	Insert Page Break	Umetni prelom strane
+	Insert Picture	Umetni sliku
+	Insert rows	Umetni redove
+	Insert Sheet	Umetni list
+	Insert Sheet Columns	Umetni kolone lista
+	Insert Sheet Rows	Umetni redove lista
+	In the last 7 days	U poslednjih 7 dana
+	Italic (⌘I)	Kurziv (⌘I)
+	Landscape	Položeno
+	Last	Poslednji
+	Last cell	Poslednja ćelija
+	Last month	Prošli mesec
+	Last week	Prošle nedelje
+	Left	Levo
+	Left margin (in):	Leva margina (in):
+	Legend: Bottom	Legenda: dole
+	Legend: None	Legenda: nema
+	Legend: Right	Legenda: desno
+	Legend: Top	Legenda: gore
+	Light Red Fill	Svetlocrvena popuna
+	Light Red Fill with Dark Red Text	Svetlocrvena popuna sa tamnocrvenim tekstom
+	Linear	Linearno
+	Link	Veza
+	Link to (web address, e-mail or Sheet!A1):	Veza do (veb adresa, e-mail ili List!A1):
+	List	Lista
+	Location Range:	Opseg lokacije:
+	Lock Cell	Zaključaj ćeliju
+	Logical	Logičko
+	Lookup	Pretraga
+	Macros	Makroi
+	Magnification	Uvećanje
+	Manual	Ručno
+	Margins	Margine
+	Markers	Oznake
+	MathTrig	Matematika i trigonometrija
+	Max	Maks
+	Maximum:	Maksimum:
+	Merge Across	Spoji preko
+	Merge Cells	Spoji ćelije
+	Merge & Center	Spoji i centriraj
+	Min	Min
+	Minimum / Source / Formula:	Minimum / izvor / formula:
+	Month	Mesec
+	More Accounting Formats…	Više računovodstvenih formata…
+	More commands	Više naredbi
+	Move or Copy Sheet…	Premesti ili kopiraj list…
+	Move to Column Labels	Premesti u oznake kolona
+	Move to Report Filter	Premesti u filter izveštaja
+	Move to Row Labels	Premesti u oznake redova
+	Move to Values	Premesti u vrednosti
+	Multiply	Pomnoži
+	My data has headers	Moji podaci imaju zaglavlja
+	Name	Naziv
+	Name:	Naziv:
+	Name Manager	Upravljač nazivima
+	Name\nManager	Upravljač\nnazivima
+	Narrow	Usko
+	New	Novo
+	New Comment	Novi komentar
+	New\nComment	Novi\nkomentar
+	New Note	Nova napomena
+	New sheet (⇧F11)	Novi list (⇧F11)
+	New Workbook	Nova sveska
+	Next month	Sledeći mesec
+	Next sheet	Sledeći list
+	Next week	Sledeće nedelje
+	No Calculation	Bez izračunavanja
+	No Color	Bez boje
+	No Fill	Bez popune
+	None	Nijedno
+	Normal	Normalno
+	Notes	Napomene
+	Numbers	Brojevi
+	OK	U redu
+	Open	Otvori
+	Open Dialog	Otvori dijalog
+	Operation	Operacija
+	Options	Opcije
+	Interface language:	Jezik interfejsa:
+	Orientation	Orijentacija
+	Other:	Drugo:
+	Page Breaks	Prelomi strana
+	Page Layout	Izgled strane
+	Paper Size	Veličina papira
+	Password:	Lozinka:
+	Password (optional):	Lozinka (opciono):
+	Paste	Nalepi
+	Paste Formatting	Nalepi formatiranje
+	Paste Formulas	Nalepi formule
+	Paste Link	Nalepi vezu
+	Paste Special…	Specijalno lepljenje…
+	Paste (⌘V)	Nalepi (⌘V)
+	Paste Values	Nalepi vrednosti
+	Percent Style	Procentualni stil
+	Pick From List	Izaberi sa liste
+	Pictures	Slike
+	PivotTable	Izvedena tabela
+	Portrait	Uspravno
+	Previous sheet	Prethodni list
+	Print	Štampaj
+	Print…	Štampaj…
+	Print Area	Oblast štampe
+	Print\nArea	Oblast\nštampe
+	Print\nTitles	Naslovi za\nštampu
+	Print Titles	Naslovi za štampu
+	Product	Proizvod
+	Protect\nWorkbook	Zaštiti\nsvesku
+	Protect Sheet…	Zaštiti list…
+	Protect Workbook structure	Zaštiti strukturu sveske
+	PRs	PR-ovi
+	Rank	Rang
+	Reapply	Ponovo primeni
+	Recent	Nedavno
+	Recommended Charts	Preporučeni grafikoni
+	Recommended\nCharts	Preporučeni\ngrafikoni
+	Red Border	Crvena ivica
+	Redo	Ponovi
+	Red Text	Crven tekst
+	Refers to:	Odnosi se na:
+	Remove Arrows	Ukloni strelice
+	Remove Duplicates	Ukloni duplikate
+	Remove\nDuplicates	Ukloni\nduplikate
+	Remove Page Break	Ukloni prelom strane
+	Rename Sheet	Preimenuj list
+	Replace…	Zameni…
+	Reset All Page Breaks	Resetuj sve prelome strana
+	Ribbon Tab	Kartica trake
+	Right	Desno
+	Right margin (in):	Desna margina (in):
+	Rotate Text Down	Rotiraj tekst nadole
+	Rotate Text Up	Rotiraj tekst nagore
+	Row Height…	Visina reda…
+	Row height (pixels):	Visina reda (piksela):
+	Rows	Redovi
+	Run a basic subset of VBA macros found in this workbook	Pokreni osnovni podskup VBA makroa pronađenih u ovoj svesci
+	Running Total	Tekući zbir
+	Save	Sačuvaj
+	Save a Copy	Sačuvaj kopiju
+	Save a Copy as Excel Workbook (.xlsx)…	Sačuvaj kopiju kao Excel svesku (.xlsx)…
+	Save a copy of this workbook in another format.	Sačuvaj kopiju ove sveske u drugom formatu.
+	Save As	Sačuvaj kao
+	Save As…	Sačuvaj kao…
+	Save Changes?	Sačuvati izmene?
+	Scenario Manager…	Upravljač scenarijima…
+	Scope (Workbook or sheet name):	Opseg (sveska ili naziv lista):
+	ScreenTip:	Opis pri zadržavanju:
+	Search and run any command	Pretraži i pokreni bilo koju naredbu
+	Search commands	Pretraga naredbi
+	Search Commands	Pretraga naredbi
+	Select	Izaberi
+	Select and move ink and shapes	Izaberi i pomeri rukopis i oblike
+	Select\nObjects	Izaberi\nobjekte
+	Semicolon	Tačka-zapeta
+	Send the active workbook straight to a printer.	Šalje aktivnu svesku direktno na štampač.
+	Series…	Nizovi…
+	Series in	Niz po
+	Set Print Area	Postavi oblast štampe
+	Shapes	Oblici
+	Share	Deli
+	Share: export or save a copy	Deljenje: izvezi ili sačuvaj kopiju
+	Shift cells down	Pomeri ćelije nadole
+	Shift cells left	Pomeri ćelije levo
+	Shift cells right	Pomeri ćelije desno
+	Shift cells up	Pomeri ćelije nagore
+	Show Formulas	Prikaži formule
+	Show Formulas (⌃`)	Prikaži formule (⌃`)
+	Show/Hide Note	Prikaži/sakrij napomenu
+	Show\nComments	Prikaži\nkomentare
+	Size	Veličina
+	Skip blanks	Preskoči prazne
+	Sort	Sortiraj
+	Sort A to Z	Sortiraj A do Š
+	Sort & Filter	Sortiraj i filtriraj
+	Sort &\nFilter	Sortiraj i\nfiltriraj
+	Sort Z to A	Sortiraj Š do A
+	Space	Razmak
+	Sparklines	Mini grafikoni
+	Spelling	Pravopis
+	Spelling (F7)	Pravopis (F7)
+	Standard column width (pixels):	Standardna širina kolone (piksela):
+	Statistical	Statističko
+	Step value:	Korak:
+	Stop	Zaustavi
+	Stop value:	Krajnja vrednost:
+	Strikethrough	Precrtano
+	Subtotal	Međuzbir
+	Subtract	Oduzmi
+	Sum	Zbir
+	Switch\nRow/Column	Zameni\nred/kolonu
+	Switch Row/Column	Zameni red/kolonu
+	Symbol	Simbol
+	Tab	Tab
+	Table	Tabela
+	Table Design	Dizajn tabele
+	Table\nStyles	Stilovi\ntabele
+	Table Styles	Stilovi tabele
+	Table (⌘T)	Tabela (⌘T)
+	Text	Tekst
+	Text Box	Okvir za tekst
+	Text length	Dužina teksta
+	Text\nBox	Okvir za\ntekst
+	Text to Columns	Tekst u kolone
+	Text to\nColumns	Tekst u\nkolone
+	Themes	Teme
+	This month	Ovaj mesec
+	This week	Ove nedelje
+	Time	Vreme
+	Title:	Naslov:
+	Today	Danas
+	Tomorrow	Sutra
+	Top 10%	Gornjih 10%
+	Top 10 Items	Gornjih 10 stavki
+	Top margin (in):	Gornja margina (in):
+	Trace Dependents	Prati zavisne ćelije
+	Trace Precedents	Prati izvorne ćelije
+	Transpose	Transponuj
+	Treat consecutive delimiters as one	Tretiraj uzastopne razdvajače kao jedan
+	Type	Tip
+	Underline	Podvučeno
+	Underline (⌘U)	Podvučeno (⌘U)
+	Undo	Opozovi
+	Undo {action}	Opozovi {action}
+	Undo list	Lista opoziva
+	Unfreeze Panes	Odmrzni okna
+	Ungroup	Razgrupiši
+	Unhide Columns	Otkrij kolone
+	Unhide Rows	Otkrij redove
+	Unhide sheet:	Otkrij list:
+	Unhide Sheet…	Otkrij list…
+	Unmerge Cells	Razdvoji ćelije
+	Up	Gore
+	Use AutoFilter	Koristi automatski filter
+	Use function	Koristi funkciju
+	Use in Formula	Koristi u formuli
+	Validation	Provera valjanosti
+	Values	Vrednosti
+	Values and number formats	Vrednosti i formati brojeva
+	Version, contributors and the AI models that helped	Verzija, saradnici i AI modeli koji su pomogli
+	Vertical axis title:	Naslov vertikalne ose:
+	Vertical Text	Uspravan tekst
+	Visible cells only	Samo vidljive ćelije
+	Warning	Upozorenje
+	Watch Window	Prozor za praćenje
+	Weekday	Radni dan
+	What-If Analysis	Analiza "šta ako"
+	What-If\nAnalysis	Analiza\n"šta ako"
+	Whole number	Ceo broj
+	Wide	Široko
+	Workbook\nStatistics	Statistika\nsveske
+	Workbook Statistics	Statistika sveske
+	Workbooks you open will show up here.	Sveske koje otvorite pojaviće se ovde.
+	Wrap Text	Prelomi tekst
+	Year	Godina
+	Yellow Fill with Dark Yellow Text	Žuta popuna sa tamnožutim tekstom
+	Yesterday	Juče
+	Z	Z
+	Zoom	Zumiranje
+	Zoom…	Zumiranje…
+	Zoom In	Uvećaj
+	Zoom Out	Umanji
+	Zoom to 100%	Zumiraj na 100%
+	Zoom to\nSelection	Zumiraj na\nizbor
+	Zoom to Selection	Zumiraj na izbor

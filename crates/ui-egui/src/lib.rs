@@ -6,6 +6,14 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+/// An English UI string in the current interface language ([`i18n::t`]).
+#[macro_export]
+macro_rules! tl {
+    ($s:expr) => {
+        $crate::i18n::t($s)
+    };
+}
+
 pub mod backstage;
 pub mod chartview;
 pub mod control;
@@ -14,6 +22,7 @@ pub mod dialogs;
 pub mod editor;
 pub mod formula_bar;
 pub mod grid;
+pub mod i18n;
 pub mod icons;
 pub mod panes;
 pub mod pivot_pane;
@@ -42,6 +51,7 @@ pub struct UiState {
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
     pub recent: Vec<String>,
+    pub language: String,
     #[serde(skip)]
     pub backstage: bool,
     #[serde(skip)]
@@ -58,6 +68,7 @@ impl Default for UiState {
             formula_bar_expanded: false,
             status_bar: true,
             recent: vec![],
+            language: i18n::AUTO.into(),
             backstage: false,
             backstage_page: "new".into(),
         }
@@ -434,6 +445,7 @@ impl SheetApp {
             ctx.request_repaint();
             return;
         }
+        i18n::set_current(i18n::Lang::from_pref(&self.ui.language));
         let t0 = now_ms();
         let t = theme::Tokens::get(&ctx);
         if self.ui.backstage {

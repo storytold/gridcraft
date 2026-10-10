@@ -41,7 +41,7 @@ impl Dialog {
     fn form(name: &str, title: &str, command: &'static str, fields: Vec<Field>, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
-            title: title.into(),
+            title: crate::tl!(title).into(),
             fields,
             values: defaults.as_object().cloned().unwrap_or_default(),
             command: Some(command),
@@ -55,7 +55,7 @@ impl Dialog {
     fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
-            title: title.into(),
+            title: crate::tl!(title).into(),
             fields: vec![],
             values: defaults.as_object().cloned().unwrap_or_default(),
             command: None,
@@ -866,11 +866,14 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
 fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let ok = ui.add(egui::Button::new(egui::RichText::new("   OK   ").color(Color32::WHITE)).fill(crate::theme::Tokens::get(ui.ctx()).accent));
+        let ok = ui.add(
+            egui::Button::new(egui::RichText::new(format!("   {}   ", crate::tl!("OK"))).color(Color32::WHITE))
+                .fill(crate::theme::Tokens::get(ui.ctx()).accent),
+        );
         if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
             *confirm = true;
         }
-        if ui.button(" Cancel ").clicked() {
+        if ui.button(format!(" {} ", crate::tl!("Cancel"))).clicked() {
             *open = false;
         }
     });
@@ -882,7 +885,7 @@ fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) 
             match f {
                 Field::Text { key, label } => {
                     ui.vertical(|ui| {
-                        ui.label(label);
+                        ui.label(crate::tl!(label));
                         let mut s = d
                             .values
                             .get(key)
@@ -901,7 +904,7 @@ fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) 
                 }
                 Field::Number { key, label } => {
                     ui.horizontal(|ui| {
-                        ui.label(label);
+                        ui.label(crate::tl!(label));
                         let mut n = d.values.get(key).and_then(Json::as_f64).unwrap_or(0.0);
                         if ui.add(egui::DragValue::new(&mut n).speed(0.5)).changed() {
                             d.values.insert(key.into(), json!(n));
@@ -910,10 +913,10 @@ fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) 
                 }
                 Field::Choice { key, label, options } => {
                     ui.vertical(|ui| {
-                        ui.label(egui::RichText::new(label).strong());
+                        ui.label(egui::RichText::new(crate::tl!(label)).strong());
                         let cur = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
                         for (val, text) in options {
-                            if ui.radio(cur == val, text).clicked() {
+                            if ui.radio(cur == val, crate::tl!(text)).clicked() {
                                 d.values.insert(key.into(), json!(val));
                             }
                         }
@@ -921,12 +924,12 @@ fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) 
                 }
                 Field::Check { key, label } => {
                     let mut b = d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
-                    if ui.checkbox(&mut b, label).changed() {
+                    if ui.checkbox(&mut b, crate::tl!(label)).changed() {
                         d.values.insert(key.into(), json!(b));
                     }
                 }
                 Field::Note(t) => {
-                    ui.label(egui::RichText::new(t).small());
+                    ui.label(egui::RichText::new(crate::tl!(&t)).small());
                 }
             }
             ui.end_row();

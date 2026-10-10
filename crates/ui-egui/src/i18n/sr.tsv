@@ -1,0 +1,522 @@
+# Serbian, Cyrillic script (sr) interface catalog. Mechanically transliterated from sr-latn.tsv
+# (see that file for the clean-room translation itself); edit sr-latn.tsv and re-run the
+# transliteration, don't hand-edit this file, or the two will drift apart.
+#
+# Columns, separated by a TAB:
+#   context <TAB> English source <TAB> translation
+#   context    empty (GridCraft uses no contexts yet)
+#   source     the English text exactly as in the code (tl!(...), ribbon labels, command labels)
+#   escapes    \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns, and a
+#              trailing "…" in one needs one in the other.
+#   Lines starting with # and blank lines are ignored. A missing entry shows in English.
+#
+# Clean room: every entry was written from the plain meaning of the English label in ordinary
+# computing vocabulary. No Microsoft Excel (or other product) localisation, string table or
+# translated UI was consulted or copied; add entries the same way.
+# Product, format and technology names (GridCraft, PDF, CSV, MCP …) stay in Latin letters.
+
+	100%	100%
+	A	А
+	About	О програму
+	About GridCraft	О GridCraft-у
+	About\nGridCraft	О\nGridCraft-у
+	Above Average	Изнад просека
+	Accessibility	Приступачност
+	Accounting Number Format	Рачуноводствени формат
+	Action Journal	Дневник радњи
+	Action\nJournal	Дневник\nрадњи
+	Add	Додај
+	Add Chart Element	Додај елемент графикона
+	Add Chart\nElement	Додај елемент\nграфикона
+	Add subtotal to (columns, e.g. C,D):	Додај међузбир у (колоне, нпр. Ц,Д):
+	Agent Control	Контрола агената
+	Agent\nControl	Контрола\nагената
+	All	Све
+	All except borders	Све осим ивица
+	Allow	Дозволи
+	Angle Clockwise	Нагни у смеру казаљке
+	Angle Counterclockwise	Нагни супротно од казаљке
+	Any value	Било која вредност
+	At each change in (column letter):	При свакој промени у (слово колоне):
+	AutoFit Column Width	Аутоматски уклопи ширину колоне
+	AutoFit Row Height	Аутоматски уклопи висину реда
+	Automate	Аутоматизуј
+	Automatic	Аутоматски
+	Automatic Except for Data Tables	Аутоматски осим табела података
+	AutoSave	Аутоматско чување
+	AutoSave: save after every change (workbooks saved to a file)	Аутоматско чување: сачувај после сваке измене (за свеске сачуване у фајл)
+	AutoSum	Аутоматски збир
+	AutoSum (⌘⇧T)	Аутоматски збир (⌘⇧Т)
+	Average	Просек
+	Before sheet (position, 0 = first):	Пре листа (позиција, 0 = први):
+	Below Average	Испод просека
+	Blanks	Празне
+	Blank workbook	Празна свеска
+	Bold (⌘B)	Подебљано (⌘Б)
+	Borders	Ивице
+	Bottom 10%	Доњих 10%
+	Bottom 10 Items	Доњих 10 ставки
+	Bottom margin (in):	Доња маргина (ин):
+	Breaks	Преломи
+	Browse…	Потражи…
+	Calculate Now	Израчунај одмах
+	Calculate Now (F9)	Израчунај одмах (Ф9)
+	Calculate Sheet	Израчунај лист
+	Calculate Sheet (⇧F9)	Израчунај лист (⇧Ф9)
+	Calculation\nOptions	Опције\nизрачунавања
+	Calculation Options	Опције израчунавања
+	Cancel	Откажи
+	Can't Undo	Нема шта да се опозове
+	Cell\nStyles	Стилови\nћелија
+	Cell Styles	Стилови ћелија
+	Change Chart Type	Промени тип графикона
+	Change\nChart Type	Промени\nтип графикона
+	Chart Design	Дизајн графикона
+	Chart\nTitle	Наслов\nграфикона
+	Check Accessibility	Провера приступачности
+	Check\nAccessibility	Провера\nприступачности
+	Circle Invalid Data	Заокружи неисправне податке
+	Clear	Обриши
+	Clear All	Обриши све
+	Clear Comments and Notes	Обриши коментаре и напомене
+	Clear Contents	Обриши садржај
+	Clear Filter	Обриши филтер
+	Clear Formats	Обриши формате
+	Clear Hyperlinks	Обриши хипервезе
+	Clear Print Area	Обриши област штампе
+	Clear Rules from Entire Sheet	Обриши правила са целог листа
+	Clear Rules from Selected Cells	Обриши правила са изабраних ћелија
+	Clear Validation	Обриши проверу ваљаности
+	Collapse Ribbon	Скупи траку
+	Columns	Колоне
+	Columns (blank = all, e.g. A,C):	Колоне (празно = све, нпр. А,Ц):
+	Column Width…	Ширина колоне…
+	Column width (characters):	Ширина колоне (знакова):
+	Column widths	Ширине колона
+	Comma	Запета
+	Command\nPalette	Палета\nнаредби
+	Comma Style	Стил са запетом
+	Comment	Коментар
+	Comment:	Коментар:
+	Comments	Коментари
+	Comments and notes	Коментари и напомене
+	Comments pane	Окно коментара
+	Commits	Комити
+	Conditional formats	Условни формати
+	Conditional Formatting	Условно форматирање
+	Conditional Formatting Rules Manager	Управљач правилима условног форматирања
+	Conditional\nFormatting	Условно\nформатирање
+	Constants	Константе
+	Convert\nto Range	Претвори\nу опсег
+	Convert the last ink stroke to a shape	Претвори последњи рукописни потез у облик
+	Convert to Range	Претвори у опсег
+	Copy (⌘C)	Копирај (⌘Ц)
+	Count	Број
+	Create a copy	Направи копију
+	Create from Selection	Направи из избора
+	Current region	Тренутни регион
+	Custom	Прилагођено
+	Custom (%):	Прилагођено (%):
+	Custom Margins…	Прилагођене маргине…
+	Custom Sort	Прилагођено сортирање
+	Custom Sort…	Прилагођено сортирање…
+	Cut (⌘X)	Исеци (⌘X)
+	Dark Mode	Тамни режим
+	Data	Подаци
+	Data Labels: None	Ознаке података: нема
+	Data Labels: Show	Ознаке података: прикажи
+	Data\nValidation	Провера\nваљаности
+	Data Range:	Опсег података:
+	Data Table…	Табела података…
+	Data validation	Провера ваљаности података
+	Data Validation	Провера ваљаности података
+	Data Validation…	Провера ваљаности података…
+	Date	Датум
+	DateTime	Датум и време
+	Date unit	Јединица датума
+	Day	Дан
+	Decimal	Децимално
+	Decrease Decimal	Смањи децимале
+	Decrease Font Size	Смањи величину фонта
+	Decrease Indent	Смањи увлачење
+	Default Width…	Подразумевана ширина…
+	Define Name	Дефиниши назив
+	Delete	Обриши
+	Delete Cells…	Обриши ћелије…
+	Delete chart	Обриши графикон
+	Delete Comment	Обриши коментар
+	Delete\nChart	Обриши\nграфикон
+	Delete rows	Обриши редове
+	Delete Sheet	Обриши лист
+	Delete Sheet Columns	Обриши колоне листа
+	Delete Sheet Rows	Обриши редове листа
+	Destination:	Одредиште:
+	Display:	Приказ:
+	Divide	Подели
+	Double Underline	Дупло подвучено
+	Down	Доле
+	Edit chart title	Уреди наслов графикона
+	Enter	Ентер
+	Entire column	Цела колона
+	Entire row	Цео ред
+	Erase ink strokes	Обриши рукописне потезе
+	Eraser	Гумица
+	Error Checking	Провера грешака
+	Error message:	Порука о грешци:
+	Errors	Грешке
+	Error style	Стил грешке
+	Evaluate Formula	Израчунај формулу
+	Every command run in this session (replayable)	Свака покренута наредба у овој сесији (може се поновити)
+	Export	Извоз
+	Export as CSV…	Извези као CSV…
+	Export as Web Page (.html)…	Извези као веб страну (.хтмл)…
+	File	Фајл
+	Fill	Попуна
+	Fill Color	Боја попуне
+	Filter	Филтер
+	Filter (⌘⇧F)	Филтер (⌘⇧Ф)
+	Filters	Филтери
+	Financial	Финансијско
+	Find…	Пронађи…
+	Find and Replace	Пронађи и замени
+	Find &\nSelect	Пронађи и\nизабери
+	Find & Select	Пронађи и изабери
+	First	Први
+	Flash Fill	Тренутна попуна
+	Flash Fill (⌘E)	Тренутна попуна (⌘Е)
+	Flash\nFill	Тренутна\nпопуна
+	Font Color	Боја фонта
+	Footer:	Подножје:
+	Footer (in):	Подножје (ин):
+	Format	Формат
+	Format as Table	Форматирај као табелу
+	Format Cell Alignment…	Формат поравнања ћелије…
+	Format cells	Форматирај ћелије
+	Format Cells	Форматирај ћелије
+	Format Cells…	Форматирај ћелије…
+	Format cells that are (value):	Форматирај ћелије које су (вредност):
+	Format cells that contain a date occurring:	Форматирај ћелије које садрже датум који пада:
+	Format cells that contain the text:	Форматирај ћелије које садрже текст:
+	Format Chart pane	Окно форматирања графикона
+	Format columns	Форматирај колоне
+	Format\nas Table	Форматирај\nкао табелу
+	Format\nPane	Окно\nформата
+	Format Painter (double-click to keep it on)	Копирање формата (дуплим кликом остаје укључено)
+	Format rows	Форматирај редове
+	Formats	Формати
+	Format values where this formula is true:	Форматирај вредности где је ова формула тачна:
+	Formula Bar	Трака формуле
+	Formula Builder	Градитељ формула
+	Formulas	Формуле
+	Formulas and number formats	Формуле и формати бројева
+	Freeze First Column	Замрзни прву колону
+	Freeze\nPanes	Замрзни\nокна
+	Freeze Panes	Замрзни окна
+	Freeze Top Row	Замрзни горњи ред
+	Get Data\n(Text/CSV)	Преузми податке\n(Текст/CSV)
+	Goal Seek	Тражење циља
+	Goal Seek…	Тражење циља…
+	Go To	Иди на
+	Go To…	Иди на…
+	Go To Special…	Иди на посебно…
+	Green Fill with Dark Green Text	Зелена попуна са тамнозеленим текстом
+	GridCraft	GridCraft
+	Gridlines: None	Линије мреже: нема
+	Gridlines: Show	Линије мреже: прикажи
+	Group	Групиши
+	Group by Months	Групиши по месецима
+	Group by Quarters	Групиши по кварталима
+	Group by Years	Групиши по годинама
+	Growth	Раст
+	Header & Footer	Заглавље и подножје
+	Header (in):	Заглавље (ин):
+	Header (&L left, &C center, &R right; &P page, &N pages, &D date, &A sheet):	Заглавље (&Л лево, &Ц центар, &Р десно; &П страна, &Н страна укупно, &Д датум, &А лист):
+	Header &\nFooter	Заглавље и\nподножје
+	Hide Columns	Сакриј колоне
+	Hide Rows	Сакриј редове
+	Hide Sheet	Сакриј лист
+	Home	Почетак
+	Horizontal	Хоризонтално
+	Horizontal axis title:	Наслов хоризонталне осе:
+	How agents drive GridCraft (MCP / control channel)	Како агенти управљају GridCraft-ом (MCP / контролни канал)
+	Icons	Иконице
+	Ignore blank	Занемари празно
+	Import a text or CSV file	Увези текстуални или CSV фајл
+	In-cell dropdown	Падајућа листа у ћелији
+	Increase Decimal	Повећај децимале
+	Increase Font Size	Повећај величину фонта
+	Increase Indent	Повећај увлачење
+	Information	Информације
+	Ink to\nShape	Рукопис у\nоблик
+	Input message:	Порука за унос:
+	Insert	Уметање
+	Insert an icon	Уметни иконицу
+	Insert a picture	Уметни слику
+	Insert Cells…	Уметни ћелије…
+	Insert Function	Уметни функцију
+	Insert Function (⇧F3)	Уметни функцију (⇧Ф3)
+	Insert Link (⌘K)	Уметни везу (⌘К)
+	Insert\nFunction	Уметни\nфункцију
+	Insert Page Break	Уметни прелом стране
+	Insert Picture	Уметни слику
+	Insert rows	Уметни редове
+	Insert Sheet	Уметни лист
+	Insert Sheet Columns	Уметни колоне листа
+	Insert Sheet Rows	Уметни редове листа
+	In the last 7 days	У последњих 7 дана
+	Italic (⌘I)	Курзив (⌘И)
+	Landscape	Положено
+	Last	Последњи
+	Last cell	Последња ћелија
+	Last month	Прошли месец
+	Last week	Прошле недеље
+	Left	Лево
+	Left margin (in):	Лева маргина (ин):
+	Legend: Bottom	Легенда: доле
+	Legend: None	Легенда: нема
+	Legend: Right	Легенда: десно
+	Legend: Top	Легенда: горе
+	Light Red Fill	Светлоцрвена попуна
+	Light Red Fill with Dark Red Text	Светлоцрвена попуна са тамноцрвеним текстом
+	Linear	Линеарно
+	Link	Веза
+	Link to (web address, e-mail or Sheet!A1):	Веза до (веб адреса, е-маил или Лист!А1):
+	List	Листа
+	Location Range:	Опсег локације:
+	Lock Cell	Закључај ћелију
+	Logical	Логичко
+	Lookup	Претрага
+	Macros	Макрои
+	Magnification	Увећање
+	Manual	Ручно
+	Margins	Маргине
+	Markers	Ознаке
+	MathTrig	Математика и тригонометрија
+	Max	Макс
+	Maximum:	Максимум:
+	Merge Across	Споји преко
+	Merge Cells	Споји ћелије
+	Merge & Center	Споји и центрирај
+	Min	Мин
+	Minimum / Source / Formula:	Минимум / извор / формула:
+	Month	Месец
+	More Accounting Formats…	Више рачуноводствених формата…
+	More commands	Више наредби
+	Move or Copy Sheet…	Премести или копирај лист…
+	Move to Column Labels	Премести у ознаке колона
+	Move to Report Filter	Премести у филтер извештаја
+	Move to Row Labels	Премести у ознаке редова
+	Move to Values	Премести у вредности
+	Multiply	Помножи
+	My data has headers	Моји подаци имају заглавља
+	Name	Назив
+	Name:	Назив:
+	Name Manager	Управљач називима
+	Name\nManager	Управљач\nназивима
+	Narrow	Уско
+	New	Ново
+	New Comment	Нови коментар
+	New\nComment	Нови\nкоментар
+	New Note	Нова напомена
+	New sheet (⇧F11)	Нови лист (⇧Ф11)
+	New Workbook	Нова свеска
+	Next month	Следећи месец
+	Next sheet	Следећи лист
+	Next week	Следеће недеље
+	No Calculation	Без израчунавања
+	No Color	Без боје
+	No Fill	Без попуне
+	None	Ниједно
+	Normal	Нормално
+	Notes	Напомене
+	Numbers	Бројеви
+	OK	У реду
+	Open	Отвори
+	Open Dialog	Отвори дијалог
+	Operation	Операција
+	Options	Опције
+	Interface language:	Језик интерфејса:
+	Orientation	Оријентација
+	Other:	Друго:
+	Page Breaks	Преломи страна
+	Page Layout	Изглед стране
+	Paper Size	Величина папира
+	Password:	Лозинка:
+	Password (optional):	Лозинка (опционо):
+	Paste	Налепи
+	Paste Formatting	Налепи форматирање
+	Paste Formulas	Налепи формуле
+	Paste Link	Налепи везу
+	Paste Special…	Специјално лепљење…
+	Paste (⌘V)	Налепи (⌘В)
+	Paste Values	Налепи вредности
+	Percent Style	Процентуални стил
+	Pick From List	Изабери са листе
+	Pictures	Слике
+	PivotTable	Изведена табела
+	Portrait	Усправно
+	Previous sheet	Претходни лист
+	Print	Штампај
+	Print…	Штампај…
+	Print Area	Област штампе
+	Print\nArea	Област\nштампе
+	Print\nTitles	Наслови за\nштампу
+	Print Titles	Наслови за штампу
+	Product	Производ
+	Protect\nWorkbook	Заштити\nсвеску
+	Protect Sheet…	Заштити лист…
+	Protect Workbook structure	Заштити структуру свеске
+	PRs	PR-ovi
+	Rank	Ранг
+	Reapply	Поново примени
+	Recent	Недавно
+	Recommended Charts	Препоручени графикони
+	Recommended\nCharts	Препоручени\nграфикони
+	Red Border	Црвена ивица
+	Redo	Понови
+	Red Text	Црвен текст
+	Refers to:	Односи се на:
+	Remove Arrows	Уклони стрелице
+	Remove Duplicates	Уклони дупликате
+	Remove\nDuplicates	Уклони\nдупликате
+	Remove Page Break	Уклони прелом стране
+	Rename Sheet	Преименуј лист
+	Replace…	Замени…
+	Reset All Page Breaks	Ресетуј све преломе страна
+	Ribbon Tab	Картица траке
+	Right	Десно
+	Right margin (in):	Десна маргина (ин):
+	Rotate Text Down	Ротирај текст надоле
+	Rotate Text Up	Ротирај текст нагоре
+	Row Height…	Висина реда…
+	Row height (pixels):	Висина реда (пиксела):
+	Rows	Редови
+	Run a basic subset of VBA macros found in this workbook	Покрени основни подскуп ВБА макроа пронађених у овој свесци
+	Running Total	Текући збир
+	Save	Сачувај
+	Save a Copy	Сачувај копију
+	Save a Copy as Excel Workbook (.xlsx)…	Сачувај копију као Excel свеску (.xлсx)…
+	Save a copy of this workbook in another format.	Сачувај копију ове свеске у другом формату.
+	Save As	Сачувај као
+	Save As…	Сачувај као…
+	Save Changes?	Сачувати измене?
+	Scenario Manager…	Управљач сценаријима…
+	Scope (Workbook or sheet name):	Опсег (свеска или назив листа):
+	ScreenTip:	Опис при задржавању:
+	Search and run any command	Претражи и покрени било коју наредбу
+	Search commands	Претрага наредби
+	Search Commands	Претрага наредби
+	Select	Изабери
+	Select and move ink and shapes	Изабери и помери рукопис и облике
+	Select\nObjects	Изабери\nобјекте
+	Semicolon	Тачка-запета
+	Send the active workbook straight to a printer.	Шаље активну свеску директно на штампач.
+	Series…	Низови…
+	Series in	Низ по
+	Set Print Area	Постави област штампе
+	Shapes	Облици
+	Share	Дели
+	Share: export or save a copy	Дељење: извези или сачувај копију
+	Shift cells down	Помери ћелије надоле
+	Shift cells left	Помери ћелије лево
+	Shift cells right	Помери ћелије десно
+	Shift cells up	Помери ћелије нагоре
+	Show Formulas	Прикажи формуле
+	Show Formulas (⌃`)	Прикажи формуле (⌃`)
+	Show/Hide Note	Прикажи/сакриј напомену
+	Show\nComments	Прикажи\nкоментаре
+	Size	Величина
+	Skip blanks	Прескочи празне
+	Sort	Сортирај
+	Sort A to Z	Сортирај А до Ш
+	Sort & Filter	Сортирај и филтрирај
+	Sort &\nFilter	Сортирај и\nфилтрирај
+	Sort Z to A	Сортирај Ш до А
+	Space	Размак
+	Sparklines	Мини графикони
+	Spelling	Правопис
+	Spelling (F7)	Правопис (Ф7)
+	Standard column width (pixels):	Стандардна ширина колоне (пиксела):
+	Statistical	Статистичко
+	Step value:	Корак:
+	Stop	Заустави
+	Stop value:	Крајња вредност:
+	Strikethrough	Прецртано
+	Subtotal	Међузбир
+	Subtract	Одузми
+	Sum	Збир
+	Switch\nRow/Column	Замени\nред/колону
+	Switch Row/Column	Замени ред/колону
+	Symbol	Симбол
+	Tab	Таб
+	Table	Табела
+	Table Design	Дизајн табеле
+	Table\nStyles	Стилови\nтабеле
+	Table Styles	Стилови табеле
+	Table (⌘T)	Табела (⌘Т)
+	Text	Текст
+	Text Box	Оквир за текст
+	Text length	Дужина текста
+	Text\nBox	Оквир за\nтекст
+	Text to Columns	Текст у колоне
+	Text to\nColumns	Текст у\nколоне
+	Themes	Теме
+	This month	Овај месец
+	This week	Ове недеље
+	Time	Време
+	Title:	Наслов:
+	Today	Данас
+	Tomorrow	Сутра
+	Top 10%	Горњих 10%
+	Top 10 Items	Горњих 10 ставки
+	Top margin (in):	Горња маргина (ин):
+	Trace Dependents	Прати зависне ћелије
+	Trace Precedents	Прати изворне ћелије
+	Transpose	Транспонуј
+	Treat consecutive delimiters as one	Третирај узастопне раздвајаче као један
+	Type	Тип
+	Underline	Подвучено
+	Underline (⌘U)	Подвучено (⌘У)
+	Undo	Опозови
+	Undo {action}	Опозови {action}
+	Undo list	Листа опозива
+	Unfreeze Panes	Одмрзни окна
+	Ungroup	Разгрупиши
+	Unhide Columns	Откриј колоне
+	Unhide Rows	Откриј редове
+	Unhide sheet:	Откриј лист:
+	Unhide Sheet…	Откриј лист…
+	Unmerge Cells	Раздвоји ћелије
+	Up	Горе
+	Use AutoFilter	Користи аутоматски филтер
+	Use function	Користи функцију
+	Use in Formula	Користи у формули
+	Validation	Провера ваљаности
+	Values	Вредности
+	Values and number formats	Вредности и формати бројева
+	Version, contributors and the AI models that helped	Верзија, сарадници и AI модели који су помогли
+	Vertical axis title:	Наслов вертикалне осе:
+	Vertical Text	Усправан текст
+	Visible cells only	Само видљиве ћелије
+	Warning	Упозорење
+	Watch Window	Прозор за праћење
+	Weekday	Радни дан
+	What-If Analysis	Анализа "шта ако"
+	What-If\nAnalysis	Анализа\n"шта ако"
+	Whole number	Цео број
+	Wide	Широко
+	Workbook\nStatistics	Статистика\nсвеске
+	Workbook Statistics	Статистика свеске
+	Workbooks you open will show up here.	Свеске које отворите појавиће се овде.
+	Wrap Text	Преломи текст
+	Year	Година
+	Yellow Fill with Dark Yellow Text	Жута попуна са тамножутим текстом
+	Yesterday	Јуче
+	Z	З
+	Zoom	Зумирање
+	Zoom…	Зумирање…
+	Zoom In	Увећај
+	Zoom Out	Умањи
+	Zoom to 100%	Зумирај на 100%
+	Zoom to\nSelection	Зумирај на\nизбор
+	Zoom to Selection	Зумирај на избор
