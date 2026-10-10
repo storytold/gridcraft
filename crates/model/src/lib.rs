@@ -12,7 +12,7 @@ pub mod store;
 pub mod style;
 pub mod workbook;
 
-pub use cell::{Cell, Formula};
+pub use cell::{Cell, CellPicture, Formula};
 pub use features::*;
 pub use sheet::{DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, LineIndex, Sheet, Visibility};
 pub use store::CellStore;

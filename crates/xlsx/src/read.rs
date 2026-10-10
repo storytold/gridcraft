@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
-use gridcraft_model::{CalcMode, DefinedName, Sheet, Style, StyleId, StyleTable, Visibility, Workbook};
+use gridcraft_model::{CalcMode, CellPicture, DefinedName, Sheet, Style, StyleId, StyleTable, Visibility, Workbook};
 
 use crate::package::{Package, Rel};
 use crate::styles::{StylesIn, read_styles};
@@ -26,6 +26,8 @@ pub struct Ctx<'a> {
     pub next_id: u32,
     /// Custom number formats from the styles part, by id.
     pub num_fmts: std::collections::HashMap<u32, String>,
+    /// Value metadata blocks, indexed by the worksheet's one-based `vm` attribute.
+    pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
 }
 
 impl Ctx<'_> {
@@ -76,6 +78,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         persons: Default::default(),
         next_id: 1,
         num_fmts: Default::default(),
+        cell_pictures: vec![],
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -95,6 +98,13 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         return Err(IoError::Format(format!("unexpected root element <{}> in workbook part", wb_xml.name)));
     }
     let wb_rels = cx.pkg.rels(&wb_part)?;
+    cx.cell_pictures = match crate::richdata::read(&mut cx, &wb_rels) {
+        Ok(pictures) => pictures,
+        Err(error) => {
+            cx.warn(format!("cell-picture data could not be read ({error}); scalar fallbacks were retained"));
+            vec![]
+        }
+    };
     let mut wb = Workbook::new();
     wb.sheets.clear();
 

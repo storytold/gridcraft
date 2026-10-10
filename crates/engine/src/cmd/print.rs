@@ -847,9 +847,39 @@ fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::
         if w <= 0.0 || h <= 0.0 {
             continue;
         }
-        draw_text(pg, b, *c, l, (x, y, w, h), merged, &merges, (bx, bx + bw));
+        if let Some(picture) = sh.cell_pictures.get(c) {
+            draw_cell_picture(pg, &picture.data, (x, y, w, h), b.k);
+        } else {
+            draw_text(pg, b, *c, l, (x, y, w, h), merged, &merges, (bx, bx + bw));
+        }
     }
     pg.restore();
+}
+
+/// Cell pictures fit the current cell (or merged-cell) rectangle without changing aspect ratio.
+fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
+    let (x, y, w, h) = rect;
+    let pad = 2.0 * k;
+    let (w, h) = ((w - 2.0 * pad).max(0.0), (h - 2.0 * pad).max(0.0));
+    if w <= 0.0 || h <= 0.0 || data.len() > 16 * 1024 * 1024 {
+        return;
+    }
+    let Some((iw, ih)) = crate::io::image_size(data) else { return };
+    if iw == 0 || ih == 0 || iw > 8192 || ih > 8192 || u64::from(iw) * u64::from(ih) > 16_000_000 {
+        return;
+    }
+    let Ok(mut reader) = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format() else { return };
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    let Ok(image) = reader.decode() else { return };
+    let image =
+        image.thumbnail(((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32).to_rgba8();
+    let fit = (w / iw as f32).min(h / ih as f32);
+    let (pw, ph) = (iw as f32 * fit, ih as f32 * fit);
+    pg.image_rgba(x + pad + (w - pw) / 2.0, y + pad + (h - ph) / 2.0, pw, ph, image.as_raw(), image.width(), image.height());
 }
 
 /// Is a cell free for text to overflow into?

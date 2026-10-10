@@ -131,6 +131,12 @@ fn services() -> Services {
                 .pick_file()
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
+        pick_picture: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])
+                .pick_file()
+                .and_then(|p| p.to_str().map(str::to_string))
+        })),
         pick_save: Some(Box::new(|suggested: &str| {
             let stem = std::path::Path::new(suggested).file_stem().and_then(|s| s.to_str()).unwrap_or("Book1").to_string();
             rfd::FileDialog::new()

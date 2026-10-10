@@ -187,6 +187,8 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
             None => sh.autofilter = None,
         }
     }
+    sh.cell_pictures =
+        std::mem::take(&mut sh.cell_pictures).into_iter().filter_map(|(c, v)| map_cell(c).filter(CellRef::is_valid).map(|c| (c, v))).collect();
     sh.comments = std::mem::take(&mut sh.comments).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     sh.hyperlinks = std::mem::take(&mut sh.hyperlinks).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     // Floating objects follow their anchor lines per their [`AnchorMode`]. Corners were snapshotted
@@ -304,7 +306,7 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
                 Axis::Rows => RangeRef::rows(at, (at + count - 1).min(MAX_ROWS - 1)),
                 Axis::Cols => RangeRef::cols(at, (at + count - 1).min(MAX_COLS - 1)),
             };
-            sh.cells.take_range(block);
+            sh.take_cells(block);
             match axis {
                 Axis::Rows => sh.cells.shift_rows(at + count, -(count as i64)),
                 Axis::Cols => sh.cells.shift_cols(at + count, -(count as i64)),
@@ -362,7 +364,7 @@ fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
         {
             let sh = cx.sheet_mut(sheet)?;
-            sh.cells.take_range(r);
+            sh.take_cells(r);
             if left {
                 sh.cells.shift_cols_in_rows(r.start.row, r.end.row, r.end.col + 1, -(r.width() as i64));
             } else {
@@ -705,6 +707,8 @@ fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
             None => sh.autofilter = None,
         }
     }
+    sh.cell_pictures =
+        std::mem::take(&mut sh.cell_pictures).into_iter().filter_map(|(c, v)| map_cell(c).filter(CellRef::is_valid).map(|c| (c, v))).collect();
     sh.comments = std::mem::take(&mut sh.comments).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     sh.hyperlinks = std::mem::take(&mut sh.hyperlinks).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     for sp in sh.sparklines.iter_mut() {

@@ -1184,11 +1184,11 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     }
     let shm = wb.sheet_mut(sheet).ok_or("There's no such sheet.")?;
     if let Some(old) = pt.last_range {
-        shm.cells.take_range(old);
+        shm.take_cells(old);
     }
-    shm.cells.take_range(area);
+    shm.take_cells(area);
     for (c, cell) in cells {
-        shm.cells.set(c, cell);
+        shm.set_cell(c, cell);
     }
     for (col, wpt) in widths {
         if wpt > shm.col_width(col) && !shm.is_col_hidden(col) {
@@ -1205,7 +1205,7 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
 pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
     let Some(shm) = wb.sheet_mut(sheet) else { return };
     let Some(r) = shm.pivots.get(idx).and_then(|p| p.last_range) else { return };
-    shm.cells.take_range(r);
+    shm.take_cells(r);
     if let Some(p) = shm.pivots.get_mut(idx) {
         p.last_range = None;
     }
