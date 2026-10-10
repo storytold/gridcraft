@@ -1,0 +1,13 @@
+[package]
+name = "gridcraft-vba"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A basic VBA macro interpreter: extracts modules from a vbaProject.bin (via `ovba`) and runs a common subset of the language (Sub/If/For/assignment/Range/Cells/MsgBox) against a host's cells."
+
+[lints]
+workspace = true
+
+[dependencies]
+ovba = "0.7"
+thiserror = { workspace = true }

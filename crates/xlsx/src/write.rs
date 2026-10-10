@@ -273,7 +273,19 @@ pub fn write_xlsx(wb: &Workbook) -> Result<Vec<u8>, IoError> {
         );
         wb_rels.add("sheetMetadata", "metadata.xml");
     }
-    out.part("xl/workbook.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"), w.into_bytes());
+    if let Some(vba) = &wb.vba {
+        // `vbaProject.bin` is never modified — GridCraft doesn't write VBA code, only runs a
+        // basic subset of what's already there — so round-trip it byte-for-byte.
+        wb_rels.add("vbaProject", "vbaProject.bin");
+        out.default_type("bin", "application/vnd.ms-office.vbaProject");
+        out.part("xl/vbaProject.bin", None, (**vba).clone());
+    }
+    let main_ct = if wb.vba.is_some() {
+        "application/vnd.ms-excel.sheet.macroEnabled.main+xml"
+    } else {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+    };
+    out.part("xl/workbook.xml", Some(main_ct), w.into_bytes());
     out.part("xl/_rels/workbook.xml.rels", None, wb_rels.xml().into_bytes());
 
     // Document properties.

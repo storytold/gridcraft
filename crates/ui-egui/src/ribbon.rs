@@ -1578,6 +1578,9 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 fn automate(app: &mut SheetApp, ui: &mut Ui) {
+    if big_button(ui, Icon::Script, "Macros", "Run a basic subset of VBA macros found in this workbook", false).clicked() {
+        app.open_dialog("macros", json!({}));
+    }
     if big_button(ui, Icon::Script, "Command\nPalette", "Search and run any command", false).clicked() {
         app.open_dialog("commandSearch", json!({}));
     }

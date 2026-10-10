@@ -22,4 +22,5 @@ log = { workspace = true }
 gridcraft-xlsx = { workspace = true }
 gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
+gridcraft-vba = { workspace = true }
 image = { workspace = true }

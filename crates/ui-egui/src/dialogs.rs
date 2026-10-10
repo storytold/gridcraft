@@ -512,6 +512,11 @@ impl Dialog {
                 d
             }
             "journal" => Dialog::custom("journal", "Action Journal", json!({})),
+            "macros" => {
+                let mut d = Dialog::custom("macros", "Macros", json!({}));
+                d.result = app.session.run("macro.list", json!({})).ok();
+                d
+            }
             "statistics" => {
                 let mut d = Dialog::custom("statistics", "Workbook Statistics", json!({}));
                 d.result = app.session.run("review.workbookStatistics", json!({})).ok();
@@ -638,7 +643,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
         _ => 380.0,
     };
     egui::Window::new(d.title.clone())
@@ -675,6 +680,36 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             ui.monospace(format!("{id} {p}"));
                         }
                     });
+                }
+                "macros" => {
+                    let names: Vec<String> =
+                        d.result.as_ref().and_then(|r| r.get("macros")).and_then(Json::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                    if names.is_empty() {
+                        ui.label("No macros found. Open a macro-enabled workbook (.xlsm) with a zero-argument Sub to see it here.");
+                    } else {
+                        ui.label("Runs a basic subset of VBA — loops, If, simple Range/Cells reads and writes, MsgBox. Not every macro will work.");
+                        ui.add_space(6.0);
+                        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                            for name in &names {
+                                ui.horizontal(|ui| {
+                                    ui.label(name);
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui.button("Run").clicked() {
+                                            match app.session.run("macro.run", json!({"name": name})) {
+                                                Ok(r) => {
+                                                    let msgs: Vec<String> = r.get("messages").and_then(Json::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                                                    if !msgs.is_empty() {
+                                                        app.message = Some(("Macro".into(), msgs.join("\n")));
+                                                    }
+                                                }
+                                                Err(e) => app.message = Some(("Macro failed".into(), e)),
+                                            }
+                                        }
+                                    });
+                                });
+                            }
+                        });
+                    }
                 }
                 "statistics" | "accessibility" | "errorChecking" | "evaluateFormula" | "comments" => {
                     let r = if d.name == "comments" {
