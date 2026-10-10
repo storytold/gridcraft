@@ -196,10 +196,14 @@ struct Look {
 }
 
 fn col32(c: Color, wb: &Workbook, default: Color32) -> Color32 {
-    c.resolve(&wb.theme).map(theme::color32).unwrap_or(default)
+    theme::adapt(c.resolve(&wb.theme).map(theme::color32).unwrap_or(default))
 }
 
 fn numfmt_color(c: gridcraft_engine::numfmt::FormatColor) -> Color32 {
+    theme::adapt(numfmt_color_raw(c))
+}
+
+fn numfmt_color_raw(c: gridcraft_engine::numfmt::FormatColor) -> Color32 {
     use gridcraft_engine::numfmt::FormatColor as F;
     match c {
         F::Black => Color32::BLACK,
@@ -271,6 +275,7 @@ fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (
     {
         fill = Some(theme::color32(rgb));
     }
+    let fill = fill.map(theme::adapt);
     let text_color = col32(style.font.color, wb, Color32::BLACK);
     (Look { style, fill, text_color }, cfl)
 }
@@ -400,10 +405,10 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
     // Freeze lines.
     if geo.fr > 0 {
-        painter.line_segment([pos2(geo.cells.left(), split.y), pos2(geo.cells.right(), split.y)], Stroke::new(1.0, Color32::from_gray(150)));
+        painter.line_segment([pos2(geo.cells.left(), split.y), pos2(geo.cells.right(), split.y)], Stroke::new(1.0, t.header_line));
     }
     if geo.fc > 0 {
-        painter.line_segment([pos2(split.x, geo.cells.top()), pos2(split.x, geo.cells.bottom())], Stroke::new(1.0, Color32::from_gray(150)));
+        painter.line_segment([pos2(split.x, geo.cells.top()), pos2(split.x, geo.cells.bottom())], Stroke::new(1.0, t.header_line));
     }
     // Objects above cells.
     crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
@@ -549,14 +554,14 @@ fn paint_quadrant(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet, 
             && let Some((frac, rgb, gradient)) = l.bar
         {
             let bar = Rect::from_min_size(pos2(rect.left() + 2.0, rect.top() + 2.0), vec2((rect.width() - 4.0) * frac, rect.height() - 4.0));
-            let col = theme::color32(rgb);
+            let col = theme::adapt(theme::color32(rgb));
             if gradient {
                 let mut mesh = egui::Mesh::default();
-                let light = Color32::from_rgb(
+                let light = theme::adapt(Color32::from_rgb(
                     ((rgb[0] as u16 + 255 * 3) / 4) as u8,
                     ((rgb[1] as u16 + 255 * 3) / 4) as u8,
                     ((rgb[2] as u16 + 255 * 3) / 4) as u8,
-                );
+                ));
                 let i = mesh.vertices.len() as u32;
                 for (pt, cc) in [(bar.left_top(), col), (bar.right_top(), light), (bar.right_bottom(), light), (bar.left_bottom(), col)] {
                     mesh.colored_vertex(pt, cc);
@@ -815,9 +820,14 @@ fn paint_quadrant(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet, 
             continue;
         }
         let r = filter_button_rect(geo, sh, c);
-        p.rect_filled(r, 2.0, Color32::from_gray(250));
-        p.rect_stroke(r, 2.0, Stroke::new(1.0, Color32::from_gray(170)), StrokeKind::Inside);
-        crate::icons::paint(p, r.shrink(1.5), if active { crate::icons::Icon::Filter } else { crate::icons::Icon::Chevron }, Color32::from_gray(70));
+        p.rect_filled(r, 2.0, theme::adapt(Color32::from_gray(250)));
+        p.rect_stroke(r, 2.0, Stroke::new(1.0, theme::adapt(Color32::from_gray(170))), StrokeKind::Inside);
+        crate::icons::paint(
+            p,
+            r.shrink(1.5),
+            if active { crate::icons::Icon::Filter } else { crate::icons::Icon::Chevron },
+            theme::adapt(Color32::from_gray(70)),
+        );
     }
 }
 
@@ -928,22 +938,29 @@ fn paint_selection(p: &Painter, geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::S
             }
         }
     }
-    p.rect_stroke(cur.expand(0.5), 0.0, Stroke::new(2.0, t.sel_border), StrokeKind::Middle);
+    // The selection frame glides to its new place (anchored to the sheet so scrolling never lags).
+    // ponytail: frozen panes don't scroll, so a frame crossing the freeze line glides once.
+    let to_sheet = geo.scroll * geo.z;
+    let cur = theme::glide_rect(p.ctx(), egui::Id::new("sel_frame"), cur.translate(to_sheet), 0.045).translate(-to_sheet);
+    if t.dark {
+        p.rect_stroke(cur.expand(2.0), 2.0, Stroke::new(4.0, t.sel_border.gamma_multiply(0.12)), StrokeKind::Middle);
+    }
+    p.rect_stroke(cur.expand(0.5), 1.0, Stroke::new(2.0, t.sel_border), StrokeKind::Middle);
     if sel.ranges.len() > 1 {
         p.rect_stroke(active, 0.0, Stroke::new(1.0, t.sel_border), StrokeKind::Inside);
     }
     // Fill handle (bottom-right of the current area).
     if app.editor.is_none() {
         let h = Rect::from_center_size(cur.right_bottom(), vec2(6.0, 6.0));
-        p.rect_filled(h.expand(1.0), 0.0, Color32::WHITE);
-        p.rect_filled(h, 0.0, t.sel_border);
+        p.rect_filled(h.expand(1.0), 1.0, t.grid_bg);
+        p.rect_filled(h, 1.0, t.sel_border);
     }
     // Fill-handle drag preview.
     if let crate::grid::Drag::Fill { target: Some(tr) } = &app.grid.drag {
         let rr = geo.range_rect(sh, *tr);
         p.extend(egui::Shape::dashed_line(
             &[rr.left_top(), rr.right_top(), rr.right_bottom(), rr.left_bottom(), rr.left_top()],
-            Stroke::new(1.5, Color32::from_gray(90)),
+            Stroke::new(1.5, t.text_dim),
             4.0,
             3.0,
         ));
@@ -952,7 +969,7 @@ fn paint_selection(p: &Painter, geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::S
         let r = sel.current();
         let moved = RangeRef::new(*to, to.offset_clamped(r.height() as i64 - 1, r.width() as i64 - 1));
         let rr = geo.range_rect(sh, moved);
-        p.rect_stroke(rr, 0.0, Stroke::new(2.0, Color32::from_gray(110)), StrokeKind::Middle);
+        p.rect_stroke(rr, 0.0, Stroke::new(2.0, t.text_dim), StrokeKind::Middle);
     }
     // Marching ants around the copied range.
     if let Some(clip) = &app.session.clipboard
@@ -1741,8 +1758,8 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let h = (size * 1.3 * lines + 4.0).max(rect.height());
     let erect = Rect::from_min_size(rect.min, vec2(w, h));
     let fill = match st.fill.pattern {
-        PatternType::Solid => st.fill.fg.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::WHITE),
-        _ => Color32::WHITE,
+        PatternType::Solid => theme::adapt(st.fill.fg.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::WHITE)),
+        _ => theme::adapt(Color32::WHITE),
     };
     ui.painter().rect_filled(erect, 0.0, fill);
     ui.painter().rect_stroke(erect.expand(1.0), 0.0, Stroke::new(2.0, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
@@ -1969,9 +1986,9 @@ fn paint_overlays(
     if app.editor.is_none()
         && let Some(r) = validation_arrow(sh, geo, sel.active)
     {
-        p.rect_filled(r, 2.0, Color32::from_gray(245));
-        p.rect_stroke(r, 2.0, Stroke::new(1.0, Color32::from_gray(160)), StrokeKind::Inside);
-        crate::icons::paint(p, r.shrink(3.0), crate::icons::Icon::Chevron, Color32::from_gray(60));
+        p.rect_filled(r, 2.0, theme::adapt(Color32::from_gray(245)));
+        p.rect_stroke(r, 2.0, Stroke::new(1.0, theme::adapt(Color32::from_gray(160))), StrokeKind::Inside);
+        crate::icons::paint(p, r.shrink(3.0), crate::icons::Icon::Chevron, theme::adapt(Color32::from_gray(60)));
     }
     // Input message of the active cell's validation.
     if app.editor.is_none()
@@ -1982,12 +1999,12 @@ fn paint_overlays(
         let r = geo.cell_rect(sh, sel.active);
         let at = pos2(r.left() + 8.0, r.bottom() + 6.0);
         egui::Area::new(egui::Id::new("dv_input")).fixed_pos(at).order(egui::Order::Tooltip).interactable(false).show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).fill(Color32::from_rgb(0xFF, 0xFF, 0xE1)).show(ui, |ui| {
+            egui::Frame::popup(ui.style()).fill(theme::adapt(Color32::from_rgb(0xFF, 0xFF, 0xE1))).show(ui, |ui| {
                 ui.set_max_width(220.0);
                 if !dv.input_title.is_empty() {
-                    ui.label(egui::RichText::new(&dv.input_title).strong().color(Color32::BLACK));
+                    ui.label(egui::RichText::new(&dv.input_title).strong().color(theme::adapt(Color32::BLACK)));
                 }
-                ui.label(egui::RichText::new(&dv.input_message).color(Color32::BLACK));
+                ui.label(egui::RichText::new(&dv.input_message).color(theme::adapt(Color32::BLACK)));
             });
         });
     }
@@ -2005,15 +2022,17 @@ fn paint_overlays(
         let at = pos2(r.right() + 10.0, r.top());
         p.line_segment([r.right_top(), at + vec2(0.0, 6.0)], Stroke::new(1.0, Color32::from_gray(90)));
         egui::Area::new(egui::Id::new(("note", c.row, c.col))).fixed_pos(at).order(egui::Order::Tooltip).interactable(false).show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).fill(if cm.threaded { Color32::WHITE } else { Color32::from_rgb(0xFF, 0xFF, 0xE1) }).show(ui, |ui| {
-                ui.set_max_width(240.0);
-                ui.label(egui::RichText::new(format!("{}:", cm.author)).strong().color(Color32::BLACK));
-                ui.label(egui::RichText::new(&cm.text).color(Color32::BLACK));
-                for (a, t) in &cm.replies {
-                    ui.separator();
-                    ui.label(egui::RichText::new(format!("{a}: {t}")).color(Color32::BLACK));
-                }
-            });
+            egui::Frame::popup(ui.style())
+                .fill(if cm.threaded { theme::adapt(Color32::WHITE) } else { theme::adapt(Color32::from_rgb(0xFF, 0xFF, 0xE1)) })
+                .show(ui, |ui| {
+                    ui.set_max_width(240.0);
+                    ui.label(egui::RichText::new(format!("{}:", cm.author)).strong().color(theme::adapt(Color32::BLACK)));
+                    ui.label(egui::RichText::new(&cm.text).color(theme::adapt(Color32::BLACK)));
+                    for (a, t) in &cm.replies {
+                        ui.separator();
+                        ui.label(egui::RichText::new(format!("{a}: {t}")).color(theme::adapt(Color32::BLACK)));
+                    }
+                });
         });
     }
     // Hyperlink tooltip.

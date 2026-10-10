@@ -14,9 +14,14 @@ pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas",
 /// Leave room for the macOS traffic lights when the content extends into the title bar.
 pub const TITLE_LEFT_PAD: f32 = if cfg!(target_os = "macos") { 76.0 } else { 8.0 };
 
+/// Draw our own window controls (Linux runs undecorated; macOS keeps its traffic lights).
+const OWN_WINDOW_CONTROLS: bool = cfg!(target_os = "linux");
+
 pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    egui::Panel::top("title_bar").exact_size(38.0).frame(egui::Frame::NONE.fill(t.window)).show(ui, |ui| {
+    let rad = theme::window_radius(ui.ctx());
+    let frame = egui::Frame::NONE.fill(t.window).corner_radius(egui::CornerRadius { nw: rad, ne: rad, sw: 0, se: 0 });
+    egui::Panel::top("title_bar").exact_size(40.0).frame(frame).show(ui, |ui| {
         let rect = ui.max_rect();
         // Dragging the empty title area moves the window.
         let bg = ui.interact(rect, ui.id().with("drag_title"), Sense::click_and_drag());
@@ -28,33 +33,44 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
         }
         ui.horizontal_centered(|ui| {
-            ui.add_space(TITLE_LEFT_PAD);
-            // AutoSave toggle (saves after each change when the workbook has a file).
-            ui.label(egui::RichText::new("AutoSave").font(theme::ui_font(12.5)).color(t.text_dim));
-            let on = app.grid.autosave();
-            let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
-            ui.painter().rect_filled(r, 8.0, if on { t.accent } else { Color32::TRANSPARENT });
-            ui.painter().rect_stroke(r, 8.0, Stroke::new(1.0, if on { t.accent } else { t.text_dim }), StrokeKind::Inside);
-            let knob = if on { pos2(r.right() - 8.0, r.center().y) } else { pos2(r.left() + 8.0, r.center().y) };
-            ui.painter().circle_filled(knob, 5.0, if on { Color32::WHITE } else { t.text_dim });
-            if resp.on_hover_text("AutoSave: save after every change (workbooks saved to a file)").clicked() {
-                app.grid.toggle_autosave();
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.add_space(TITLE_LEFT_PAD + 6.0);
+            // App mark: a 3×3 phosphor grid.
+            let (m, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+            for i in 0..9 {
+                let c = pos2(m.left() + 3.0 + (i % 3) as f32 * 5.0, m.top() + 3.0 + (i / 3) as f32 * 5.0);
+                let a = if i == 4 { 1.0 } else { 0.45 };
+                ui.painter().rect_filled(Rect::from_center_size(c, vec2(3.0, 3.0)), 0.8, t.accent.gamma_multiply(a));
             }
-            ui.add_space(6.0);
-            if icon_button(ui, Icon::Home, t.text_dim, "Home", vec2(26.0, 26.0)).clicked() {
-                app.open_dialog("start", json!({}));
-            }
-            if icon_button(ui, Icon::Save, t.text_dim, "Save (⌘S)", vec2(26.0, 26.0)).clicked() {
+            ui.add_space(10.0);
+            let recent = icon_button(ui, Icon::Folder, t.text_dim, "Recent workbooks", vec2(28.0, 26.0));
+            egui::Popup::menu(&recent).show(|ui| {
+                ui.set_min_width(320.0);
+                recent_list(app, ui);
+                ui.separator();
+                if ui.button("Open…").clicked() {
+                    app.open_dialog("open", json!({}));
+                }
+                if !app.ui.recent.is_empty() && ui.button("Clear Recent").clicked() {
+                    app.ui.recent.clear();
+                }
+            });
+            if icon_button(ui, Icon::Save, t.text_dim, "Save (⌘S)", vec2(28.0, 26.0)).clicked() {
                 app.run_or_alert("file.save", json!({}));
             }
             let can_undo = app.session.active().is_some_and(|d| !d.undo.is_empty());
             let can_redo = app.session.active().is_some_and(|d| !d.redo.is_empty());
-            if icon_button(ui, Icon::Undo, if can_undo { t.text_dim } else { t.text_disabled }, "Undo (⌘Z)", vec2(26.0, 26.0)).clicked() && can_undo
-            {
+            let undo = icon_button(
+                ui,
+                Icon::Undo,
+                if can_undo { t.text_dim } else { t.text_disabled },
+                "Undo (⌘Z) · right-click for history",
+                vec2(28.0, 26.0),
+            );
+            if undo.clicked() && can_undo {
                 app.run_or_alert("edit.undo", json!({}));
             }
-            let undo_list = icon_button(ui, Icon::Chevron, t.text_dim, "Undo list", vec2(14.0, 26.0));
-            egui::Popup::menu(&undo_list).show(|ui| {
+            egui::Popup::context_menu(&undo).show(|ui| {
                 let labels: Vec<String> =
                     app.session.active().map(|d| d.undo.iter().rev().take(20).map(|e| e.label.clone()).collect()).unwrap_or_default();
                 if labels.is_empty() {
@@ -66,42 +82,28 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 }
             });
-            if icon_button(ui, Icon::Redo, if can_redo { t.text_dim } else { t.text_disabled }, "Redo (⌘Y)", vec2(26.0, 26.0)).clicked() && can_redo
+            if icon_button(ui, Icon::Redo, if can_redo { t.text_dim } else { t.text_disabled }, "Redo (⌘Y)", vec2(28.0, 26.0)).clicked() && can_redo
             {
                 app.run_or_alert("edit.redo", json!({}));
             }
-            let more = icon_button(ui, Icon::More, t.text_dim, "More commands", vec2(26.0, 26.0));
+            let more = icon_button(ui, Icon::More, t.text_dim, "More", vec2(28.0, 26.0));
             egui::Popup::menu(&more).show(|ui| {
-                for (label, id) in [
-                    ("New Workbook", "file.new"),
-                    ("Open…", "file.open"),
-                    ("Save As…", "file.saveAs"),
-                    ("Print…", "file.print"),
-                    ("Sort A to Z", "data.sortAscending"),
-                    ("Calculate Now", "formulas.calculateNow"),
-                ] {
+                ui.set_min_width(220.0);
+                if ui.button("Start…").clicked() {
+                    app.open_dialog("start", json!({}));
+                }
+                let mut autosave = app.grid.autosave();
+                if ui.checkbox(&mut autosave, "AutoSave").on_hover_text("Save after every change (workbooks saved to a file)").changed() {
+                    app.grid.toggle_autosave();
+                }
+                ui.separator();
+                for (label, id) in [("New Workbook", "file.new"), ("Open…", "file.open"), ("Save As…", "file.saveAs"), ("Print…", "file.print")]
+                {
                     if ui.button(label).clicked() {
                         app.run_or_alert(id, json!({}));
                     }
                 }
-            });
-            // Centered title.
-            let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
-            let dirty = app.session.active().is_some_and(|d| d.is_dirty());
-            ui.painter().text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                format!("{title}{}", if dirty { " •" } else { "" }),
-                theme::ui_bold(13.0),
-                t.text,
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(8.0);
-                if icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, 26.0)).clicked() {
-                    app.open_dialog("commandSearch", json!({}));
-                }
-                let share = small_button(ui, Icon::Share, "Share", "Share: export or save a copy", true);
-                egui::Popup::menu(&share).show(|ui| {
+                ui.menu_button("Share", |ui| {
                     for (label, fmt) in
                         [("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"), ("Export as CSV…", "csv"), ("Export as Web Page (.html)…", "html")]
                     {
@@ -110,12 +112,125 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                         }
                     }
                 });
+                ui.separator();
+                for (label, id) in [("Sort A to Z", "data.sortAscending"), ("Calculate Now", "formulas.calculateNow")] {
+                    if ui.button(label).clicked() {
+                        app.run_or_alert(id, json!({}));
+                    }
+                }
+            });
+            // Centered title: quiet, technical, with a phosphor dot while unsaved.
+            let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
+            let dirty = app.session.active().is_some_and(|d| d.is_dirty());
+            let tr = ui.painter().text(rect.center(), Align2::CENTER_CENTER, &title, theme::ui_bold(13.0), t.text_dim);
+            let k = theme::fade(ui.ctx(), ui.id().with("dirty"), dirty);
+            if k > 0.0 {
+                ui.painter().circle_filled(pos2(tr.right() + 9.0, tr.center().y), 2.5 * k, t.accent);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if OWN_WINDOW_CONTROLS {
+                    ui.add_space(6.0);
+                    window_controls(ui, &t);
+                    ui.add_space(10.0);
+                } else {
+                    ui.add_space(8.0);
+                }
+                if icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, 26.0)).clicked() {
+                    app.open_dialog("commandSearch", json!({}));
+                }
                 if icon_button(ui, Icon::Comment, t.text_dim, "Comments", vec2(28.0, 26.0)).clicked() {
                     app.open_dialog("comments", json!({}));
                 }
             });
         });
     });
+}
+
+/// Recently opened workbooks: name over a quiet folder path. Returns true when one was opened.
+pub fn recent_list(app: &mut SheetApp, ui: &mut Ui) -> bool {
+    let t = Tokens::get(ui.ctx());
+    if app.ui.recent.is_empty() {
+        ui.label(egui::RichText::new("No recent workbooks").color(t.text_dim));
+        return false;
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    for path in app.ui.recent.clone().iter().take(12) {
+        let p = std::path::Path::new(path);
+        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.clone());
+        let dir = p.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+        let dir = match dir.strip_prefix(&home) {
+            Some(rest) if !home.is_empty() => format!("~{rest}"),
+            _ => dir,
+        };
+        let exists = p.exists();
+        let w = ui.available_width().max(300.0);
+        let (r, resp) = ui.allocate_exact_size(vec2(w, 38.0), if exists { Sense::click() } else { Sense::hover() });
+        theme::hover_fill(ui, &resp, r, 6.0);
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), vec2(16.0, 16.0)),
+            Icon::Book,
+            if exists { t.accent } else { t.text_disabled },
+        );
+        ui.painter().text(
+            pos2(r.left() + 34.0, r.top() + 12.0),
+            Align2::LEFT_CENTER,
+            &name,
+            theme::ui_font(13.0),
+            if exists { t.text } else { t.text_disabled },
+        );
+        let sub = if exists { dir } else { format!("{dir} · missing") };
+        ui.painter().text(pos2(r.left() + 34.0, r.top() + 27.0), Align2::LEFT_CENTER, sub, theme::ui_font(11.0), t.text_dim);
+        if resp.on_hover_text(path).clicked() {
+            app.open_path(path);
+            ui.close();
+            return true;
+        }
+    }
+    false
+}
+
+/// Minimize / maximize / close, drawn as hairline glyphs (laid out right to left).
+fn window_controls(ui: &mut Ui, t: &Tokens) {
+    let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+    for kind in 0..3 {
+        // 0 close, 1 maximize/restore, 2 minimize (right-to-left order).
+        let (r, resp) = ui.allocate_exact_size(vec2(30.0, 26.0), Sense::click());
+        let h = theme::fade(ui.ctx(), resp.id.with("wc"), resp.hovered());
+        let fill = if kind == 0 { t.danger } else { t.hover };
+        if h > 0.0 {
+            ui.painter().rect_filled(r.shrink(1.0), 6.0, fill.gamma_multiply(if kind == 0 { 0.85 * h } else { h }));
+        }
+        let col = if kind == 0 && h > 0.5 { Color32::WHITE } else { t.text_dim.lerp_to_gamma(t.text, h) };
+        let st = Stroke::new(1.2, col);
+        let c = r.center();
+        let p = ui.painter();
+        match kind {
+            0 => {
+                p.line_segment([c + vec2(-4.5, -4.5), c + vec2(4.5, 4.5)], st);
+                p.line_segment([c + vec2(-4.5, 4.5), c + vec2(4.5, -4.5)], st);
+            }
+            1 if maximized => {
+                p.rect_stroke(Rect::from_center_size(c + vec2(-1.5, 1.5), vec2(7.5, 7.5)), 1.5, st, StrokeKind::Middle);
+                p.line_segment([c + vec2(-1.5, -4.5), c + vec2(4.5, -4.5)], st);
+                p.line_segment([c + vec2(4.5, -4.5), c + vec2(4.5, 1.5)], st);
+            }
+            1 => {
+                p.rect_stroke(Rect::from_center_size(c, vec2(9.0, 9.0)), 1.5, st, StrokeKind::Middle);
+            }
+            _ => {
+                p.line_segment([c + vec2(-4.5, 0.5), c + vec2(4.5, 0.5)], st);
+            }
+        }
+        if resp.clicked() {
+            ui.ctx().send_viewport_cmd(match kind {
+                0 => egui::ViewportCommand::Close,
+                1 => egui::ViewportCommand::Maximized(!maximized),
+                _ => egui::ViewportCommand::Minimized(true),
+            });
+        }
+    }
 }
 
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
@@ -136,26 +251,21 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     let mut tabs: Vec<&str> = TABS.to_vec();
                     let ctx_tabs = contextual_tabs(app);
                     tabs.extend(ctx_tabs.iter());
+                    let mut active_ul: Option<Rect> = None;
                     for tab in tabs {
                         let active = app.ui.ribbon_tab == tab;
                         let contextual = ctx_tabs.contains(&tab);
                         let font = theme::ui_font(13.5);
                         let tw = ui.painter().layout_no_wrap(tab.to_string(), font.clone(), t.text).size().x;
                         let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
-                        if resp.hovered() && !active {
-                            ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
+                        if !active {
+                            theme::hover_fill(ui, &resp, r.shrink2(vec2(2.0, 4.0)), 6.0);
                         }
-                        let color = if contextual {
-                            t.accent
-                        } else if active {
-                            t.text
-                        } else {
-                            t.text_dim
-                        };
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, tab, if active { theme::ui_bold(13.5) } else { font }, color);
+                        let k = theme::fade(ui.ctx(), resp.id.with("on"), active);
+                        let color = if contextual { t.accent } else { t.text_dim.lerp_to_gamma(t.text, k) };
+                        ui.painter().text(r.center(), Align2::CENTER_CENTER, tab, font, color);
                         if active {
-                            let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
-                            ui.painter().rect_filled(ul, 1.5, t.accent);
+                            active_ul = Some(Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(18.0, 44.0), 2.0)));
                         }
                         if resp.clicked() {
                             if active && !collapsed {
@@ -169,6 +279,14 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             app.ui.ribbon_collapsed = !collapsed;
                         }
                     }
+                    // The underline glides between tabs.
+                    if let Some(ul) = active_ul {
+                        let ul = theme::glide_rect(ui.ctx(), ui.id().with("tab_ul"), ul, 0.055);
+                        if t.dark {
+                            ui.painter().rect_filled(ul.expand2(vec2(2.0, 2.0)), 3.0, t.accent.gamma_multiply(0.18));
+                        }
+                        ui.painter().rect_filled(ul, 1.0, t.accent);
+                    }
                 });
             });
             if collapsed {
@@ -178,8 +296,22 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 88.0));
             ui.painter().rect_filled(card, 10.0, t.ribbon);
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
-            let inner = card.shrink2(vec2(10.0, 6.0));
+            ui.painter().add(crate::glass::rim(card, t.dark));
+            // New tab content eases in: fade plus a short rise.
+            let tab_id = ui.id().with(("ribbon_content", app.ui.ribbon_tab.as_str()));
+            let shown = ui.ctx().data_mut(|d| {
+                let last = d.get_temp_mut_or(ui.id().with("ribbon_last"), String::new());
+                let changed = *last != app.ui.ribbon_tab;
+                *last = app.ui.ribbon_tab.clone();
+                changed
+            });
+            if shown {
+                ui.ctx().data_mut(|d| d.insert_temp(tab_id.with("fade"), 0.0_f32));
+            }
+            let k = theme::fade(ui.ctx(), tab_id.with("fade"), true);
+            let inner = card.shrink2(vec2(10.0, 6.0)).translate(vec2(0.0, (1.0 - k) * 6.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+                ui.set_opacity(k);
                 egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);

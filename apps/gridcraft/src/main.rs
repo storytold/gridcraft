@@ -45,6 +45,17 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.0.ui(ui);
+        // Keep the Recent list on disk as it changes, not only on a clean exit.
+        static SAVED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        let mut saved = SAVED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *saved != self.0.ui.recent {
+            saved.clone_from(&self.0.ui.recent);
+            save_prefs(&self.0);
+        }
+    }
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // Transparent outside the rounded window corners (Linux draws its own window shape).
+        [0.0; 4]
     }
     fn on_exit(&mut self) {
         save_prefs(&self.0);
@@ -228,13 +239,18 @@ fn main() -> eframe::Result<()> {
         .with_min_inner_size([640.0, 420.0])
         .with_app_id("ai.storyteller.gridcraft")
         .with_drag_and_drop(true);
+    if cfg!(target_os = "linux") {
+        // Our own minimal title bar replaces the toolkit's client-side decorations; the window is
+        // transparent only outside its rounded corners.
+        viewport = viewport.with_decorations(false).with_transparent(true);
+    }
     if cfg!(target_os = "macos") {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
     }
     if let Some(i) = icon() {
         viewport = viewport.with_icon(i);
     }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let options = eframe::NativeOptions { viewport, multisampling: 4, ..Default::default() };
     // Before eframe creates the wgpu instance: default Windows to DirectX 12 only (see graphics.rs).
     #[cfg(target_os = "windows")]
     let options = {

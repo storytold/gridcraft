@@ -13,6 +13,7 @@ pub mod credits;
 pub mod dialogs;
 pub mod editor;
 pub mod formula_bar;
+pub mod glass;
 pub mod grid;
 pub mod icons;
 pub mod panes;
@@ -444,6 +445,10 @@ impl SheetApp {
         }
         let t0 = now_ms();
         let t = theme::Tokens::get(&ctx);
+        theme::set_canvas_dark(t.dark);
+        // One solid, rounded backdrop under every panel: the window is transparent outside its
+        // rounded corners, and seams between panels must never show the desktop through.
+        ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.content_rect(), theme::window_radius(&ctx), t.window);
         ribbon::title_bar(self, ui);
         ribbon::show(self, ui);
         if self.ui.formula_bar {
@@ -465,6 +470,20 @@ impl SheetApp {
         widgets::toast(self, &ctx);
         control::issue_screenshots(self, &ctx);
         control::collect_screenshots(self, &ctx);
+        #[cfg(target_os = "linux")]
+        window_edges(&ctx);
+        glass::pass(&ctx);
+        // Hairline rim around the rounded window.
+        let rad = theme::window_radius(&ctx);
+        if rad > 0 {
+            let rim = if t.dark { egui::Color32::from_rgba_unmultiplied(0x96, 0xFF, 0xC8, 0x1E) } else { egui::Color32::from_black_alpha(40) };
+            ctx.layer_painter(egui::LayerId::new(egui::Order::Debug, egui::Id::new("window_rim"))).rect_stroke(
+                ctx.content_rect().shrink(0.5),
+                rad,
+                egui::Stroke::new(1.0, rim),
+                egui::StrokeKind::Middle,
+            );
+        }
         if !ctx.input(|i| i.focused) {
             // Nothing else to do.
         }
@@ -485,6 +504,14 @@ impl SheetApp {
         {
             self.grid.last_autosave = now;
             let _ = self.session.run("file.save", json!({}));
+        }
+        // Recent: every workbook with a file, however it was opened or saved.
+        if let Some(path) = self.session.active().and_then(|d| d.path.clone())
+            && self.ui.recent.first() != Some(&path)
+        {
+            self.ui.recent.retain(|p| *p != path);
+            self.ui.recent.insert(0, path);
+            self.ui.recent.truncate(20);
         }
         // Window title.
         if let Some(d) = self.session.active() {
@@ -519,6 +546,39 @@ impl SheetApp {
             return format!("{}R x {}C", cur.height(), cur.width());
         }
         sel.active.a1()
+    }
+}
+
+/// Resize handles for the undecorated window: cursor feedback and compositor-driven resize.
+#[cfg(target_os = "linux")]
+fn window_edges(ctx: &egui::Context) {
+    use egui::viewport::ResizeDirection as D;
+    use egui::{CursorIcon as C, ViewportCommand};
+    if ctx.input(|i| i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false)) {
+        return;
+    }
+    let Some(p) = ctx.input(|i| i.pointer.hover_pos()) else { return };
+    let r = ctx.content_rect();
+    const M: f32 = 6.0;
+    const CORNER: f32 = 14.0;
+    let (l, rt, t, b) = (p.x < r.left() + M, p.x > r.right() - M, p.y < r.top() + M, p.y > r.bottom() - M);
+    let (lc, rc, tc, bc) = (p.x < r.left() + CORNER, p.x > r.right() - CORNER, p.y < r.top() + CORNER, p.y > r.bottom() - CORNER);
+    let hit = match () {
+        _ if (t && lc) || (l && tc) => Some((D::NorthWest, C::ResizeNorthWest)),
+        _ if (t && rc) || (rt && tc) => Some((D::NorthEast, C::ResizeNorthEast)),
+        _ if (b && lc) || (l && bc) => Some((D::SouthWest, C::ResizeSouthWest)),
+        _ if (b && rc) || (rt && bc) => Some((D::SouthEast, C::ResizeSouthEast)),
+        _ if t => Some((D::North, C::ResizeNorth)),
+        _ if b => Some((D::South, C::ResizeSouth)),
+        _ if l => Some((D::West, C::ResizeWest)),
+        _ if rt => Some((D::East, C::ResizeEast)),
+        _ => None,
+    };
+    if let Some((dir, icon)) = hit {
+        ctx.set_cursor_icon(icon);
+        if ctx.input(|i| i.pointer.primary_pressed()) {
+            ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
+        }
     }
 }
 

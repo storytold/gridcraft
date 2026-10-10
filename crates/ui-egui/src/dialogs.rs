@@ -779,11 +779,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     });
                     ui.separator();
                     ui.label(egui::RichText::new("Recent").strong());
-                    for path in app.ui.recent.clone() {
-                        if ui.link(&path).clicked() {
-                            app.open_path(&path);
-                            open = false;
-                        }
+                    if crate::ribbon::recent_list(app, ui) {
+                        open = false;
                     }
                     if ui.button("Open…").clicked() {
                         app.open_dialog("open", json!({}));

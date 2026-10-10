@@ -10,12 +10,7 @@ use crate::theme::{self, Tokens};
 /// A flat square icon button with hover highlight and tooltip.
 pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egui::Vec2) -> Response {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
-    let t = Tokens::get(ui.ctx());
-    if resp.is_pointer_button_down_on() {
-        ui.painter().rect_filled(rect, 4.0, t.pressed);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, 4.0, t.hover);
-    }
+    theme::hover_fill(ui, &resp, rect, 5.0);
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, color);
     resp.on_hover_text(tip)
 }
@@ -24,11 +19,13 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egu
 pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
     let t = Tokens::get(ui.ctx());
-    if on {
-        ui.painter().rect_filled(rect, 4.0, t.pressed);
-        ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, 4.0, t.hover);
+    let on_k = theme::fade(ui.ctx(), resp.id.with("on"), on);
+    if on_k > 0.0 {
+        ui.painter().rect_filled(rect, 5.0, t.accent_soft.gamma_multiply(on_k));
+        ui.painter().rect_stroke(rect, 5.0, Stroke::new(1.0, t.accent.gamma_multiply(0.45 * on_k)), StrokeKind::Inside);
+    }
+    if !on {
+        theme::hover_fill(ui, &resp, rect, 5.0);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, t.text);
     resp.on_hover_text(tip)
@@ -44,11 +41,7 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
     let text_w = lines.iter().enumerate().map(|(i, line)| line.size().x + if i + 1 == lines.len() { arrow_space } else { 0.0 }).fold(0.0, f32::max);
     let w = (text_w + 12.0).max(44.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 72.0), Sense::click());
-    if resp.is_pointer_button_down_on() {
-        ui.painter().rect_filled(rect, 5.0, t.pressed);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, 5.0, t.hover);
-    }
+    theme::hover_fill(ui, &resp, rect, 5.0);
     icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text);
     for (i, line) in lines.iter().enumerate() {
         let has_arrow = dropdown && i + 1 == lines.len();
@@ -75,11 +68,7 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
     let tw = if label.is_empty() { 0.0 } else { ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0 };
     let w = 24.0 + tw + if dropdown { 12.0 } else { 0.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 23.0), Sense::click());
-    if resp.is_pointer_button_down_on() {
-        ui.painter().rect_filled(rect, 4.0, t.pressed);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, 4.0, t.hover);
-    }
+    theme::hover_fill(ui, &resp, rect, 5.0);
     icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
     if !label.is_empty() {
         ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, t.text);
@@ -104,9 +93,13 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
     let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
     let m = ui.interact(main, ui.id().with((tip, "main")), Sense::click());
     let a = ui.interact(arrow, ui.id().with((tip, "arrow")), Sense::click());
-    if m.hovered() || a.hovered() {
-        ui.painter().rect_filled(rect, 4.0, t.hover);
-        ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
+    let h = theme::fade(ui.ctx(), m.id.with("split"), m.hovered() || a.hovered());
+    if h > 0.0 {
+        ui.painter().rect_filled(rect, 5.0, t.hover.gamma_multiply(h));
+        ui.painter().line_segment(
+            [pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)],
+            Stroke::new(1.0, t.separator.gamma_multiply(h)),
+        );
     }
     icons::paint(ui.painter(), Rect::from_center_size(main.center() - vec2(0.0, 2.0), vec2(16.0, 16.0)), icon, t.text);
     if let Some(c) = accent {
