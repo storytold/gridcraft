@@ -74,3 +74,18 @@ fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(123.0));
 }
+
+#[test]
+fn export_as_pdf_is_delivered_as_a_download() {
+    let files = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+    let capture = files.clone();
+    let mut h = harness(Services {
+        download: Some(Box::new(move |name, bytes| capture.lock().unwrap().push((name.to_string(), bytes.to_vec())))),
+        ..Default::default()
+    });
+    h.state_mut().run("file.exportPdf", serde_json::json!({})).unwrap();
+    let got = files.lock().unwrap();
+    assert_eq!(got.len(), 1, "Export as PDF hands a file to the browser");
+    assert!(got[0].0.ends_with(".pdf"));
+    assert!(got[0].1.starts_with(b"%PDF-"));
+}
