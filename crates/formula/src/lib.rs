@@ -5,11 +5,13 @@
 
 pub mod adjust;
 pub mod ast;
+mod input;
 pub mod lexer;
 pub mod parser;
 pub mod printer;
 
 pub use ast::{Anchor, BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, UnOp};
+pub use input::{FormulaLocale, parse_input, print_input};
 pub use parser::{ParseError, normalize_function_name, parse};
 pub use printer::{print, print_r1c1, quote_sheet};
 

@@ -1411,9 +1411,12 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
                     if f["category"].as_str() == Some(cat)
                         && let Some(n) = f["name"].as_str()
                     {
-                        let desc = f["description"].as_str().unwrap_or("").to_string();
-                        if ui.button(n).on_hover_text(desc).clicked() {
-                            app.begin_edit(Some(format!("={n}(")), false);
+                        let locale = app.ui.language.formula_locale();
+                        let name =
+                            app.session.active().map(|d| crate::formula_locale::completion_name(n, locale, &d.wb, d.wb.active_sheet)).unwrap_or(n);
+                        let desc = crate::formula_locale::description(n, locale).unwrap_or_default();
+                        if ui.button(name).on_hover_text(desc).clicked() {
+                            app.run_or_alert("formulas.insertFunction", json!({"name": n}));
                             ui.close();
                         }
                     }

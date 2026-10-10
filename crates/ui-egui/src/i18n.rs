@@ -19,6 +19,7 @@ mod zh;
 pub enum Language {
     #[default]
     En,
+    Es,
     Zh,
     Ja,
     Ko,
@@ -28,12 +29,13 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Self; 6] = [Self::En, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr];
+    pub const ALL: [Self; 7] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
+            Self::Es => "Español",
             Self::Zh => "简体中文",
             Self::Ja => "日本語",
             Self::Ko => "한국어",
@@ -46,6 +48,7 @@ impl Language {
     pub const fn code(self) -> &'static str {
         match self {
             Self::En => "en",
+            Self::Es => "es",
             Self::Zh => "zh",
             Self::Ja => "ja",
             Self::Ko => "ko",
@@ -61,6 +64,7 @@ impl Language {
     fn from_tag(tag: &str) -> Option<Self> {
         match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
             "en" => Some(Self::En),
+            "es" => Some(Self::Es),
             "zh" => Some(Self::Zh),
             "ja" => Some(Self::Ja),
             "ko" => Some(Self::Ko),
@@ -83,13 +87,17 @@ impl Language {
         }
     }
 
+    pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
+        if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
+    }
+
     /// Translates an interface label; untranslated labels fall back to English.
     ///
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
     /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
         let translated = match self {
-            Self::En => None,
+            Self::En | Self::Es => None,
             Self::Ja => JAPANESE.iter().find(|(english, _)| *english == text).map(|(_, translated)| *translated),
             Self::Zh => zh::translate(text),
             Self::Ko => ko::translate(text),
@@ -464,6 +472,7 @@ mod tests {
     fn tags_reduce_to_a_supported_language() {
         assert_eq!(Language::from_tag("ja-JP"), Some(Language::Ja));
         assert_eq!(Language::from_tag("en_US"), Some(Language::En));
+        assert_eq!(Language::from_tag("es_MX"), Some(Language::Es));
         assert_eq!(Language::from_tag("zh-Hans-CN"), Some(Language::Zh));
         assert_eq!(Language::from_tag("ko-KR"), Some(Language::Ko));
         assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));

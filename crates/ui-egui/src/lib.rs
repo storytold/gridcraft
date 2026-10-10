@@ -13,6 +13,7 @@ pub mod credits;
 pub mod dialogs;
 pub mod editor;
 pub mod formula_bar;
+mod formula_locale;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
@@ -303,7 +304,7 @@ impl SheetApp {
                         self.ui.language = l;
                         Ok(json!({"language": l}))
                     }
-                    None => Err(format!("unknown language {code:?} (use \"en\", \"zh\", \"ja\", \"ko\", \"ru\" or \"pt\")")),
+                    None => Err(format!("unknown language {code:?} (use \"en\", \"es\", \"zh\", \"ja\", \"ko\", \"ru\" or \"pt\")")),
                 }
             }
             "app.language.english" => {
@@ -334,7 +335,15 @@ impl SheetApp {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),
                 UiRequest::Message(m) => self.message = Some(("GridCraft".into(), m)),
-                UiRequest::EditCell(text) => self.begin_edit(text, false),
+                UiRequest::EditCell(text) => {
+                    let text = text.map(|text| {
+                        self.session
+                            .active()
+                            .map(|d| formula_locale::display_template(&text, self.ui.language.formula_locale(), &d.wb, d.wb.active_sheet))
+                            .unwrap_or(text)
+                    });
+                    self.begin_edit(text, false);
+                }
                 UiRequest::OpenUrl(u) => {
                     if let Some(f) = &self.services.open_url {
                         f(&u);
@@ -412,12 +421,17 @@ impl SheetApp {
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
-        let current = sh.cell(at).map(|c| c.input_text()).unwrap_or_default();
+        let locale = self.ui.language.formula_locale();
+        let current = sh
+            .cell(at)
+            .map(|c| if c.formula.is_some() { formula_locale::display(&c.input_text(), locale, &d.wb, d.wb.active_sheet) } else { c.input_text() })
+            .unwrap_or_default();
         let (text, replace) = match text {
             Some(t) => (t, true),
             None => (current.clone(), false),
         };
         let mut ed = editor::EditState::new(d.wb.active_sheet, at, text, replace, from_formula_bar);
+        ed.locale = locale;
         if replace && !ed.is_formula() {
             ed.completion = editor::column_completion(sh, at, &ed.text);
         }
@@ -432,6 +446,16 @@ impl SheetApp {
         let text = match &ed.completion {
             Some(full) if full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
             _ => ed.text.clone(),
+        };
+        let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)) {
+            Some(Ok(text)) => text,
+            Some(Err(error)) => {
+                self.message = Some(("GridCraft".into(), error.to_string()));
+                self.editor = Some(ed);
+                self.session.mode = gridcraft_engine::Mode::Edit;
+                return false;
+            }
+            None => text,
         };
         // Data validation.
         if let Some(d) = self.session.active()
