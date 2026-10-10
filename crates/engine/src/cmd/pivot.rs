@@ -1622,6 +1622,29 @@ mod tests {
     }
 
     #[test]
+    fn repeated_headers_get_numbered_names() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let mut header = vec![json!("a"), json!("A"), json!("a"), json!("a2")];
+        // Thousands of equal headers (a row of check boxes, say) used to take cubic time; this would
+        // hang rather than fail a wall-clock check, which is flaky on a loaded machine.
+        header.extend((0..3000).map(|_| json!("x")));
+        let data: Vec<_> = (0..header.len()).map(|i| json!(i)).collect();
+        let end = CellRef::new(1, header.len() as u32 - 1).a1();
+        s.execute("range.setValues", json!({"range": "A1", "values": [header, data]})).unwrap();
+        let src = crate::pivot::read_source(&s.doc().unwrap().wb, &format!("Sheet1!A1:{end}"), 0).unwrap();
+        assert_eq!(&src.headers[..4], ["a", "A2", "a3", "a22"]);
+        assert_eq!(src.headers[4], "x");
+        assert_eq!(src.headers.last().map(String::as_str), Some("x3000"));
+        // Table column names follow the same rule.
+        s.execute("insert.table", json!({"range": format!("A1:{end}"), "header": true})).unwrap();
+        let text = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["text"].clone();
+        assert_eq!(text(&mut s, "B1"), "A2");
+        let last = CellRef::new(0, 3003).a1();
+        assert_eq!(text(&mut s, &last), "x3000");
+    }
+
+    #[test]
     fn hostile_params_never_panic() {
         let mut s = sales();
         let cmds = [
