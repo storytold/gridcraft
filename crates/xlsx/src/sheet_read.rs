@@ -142,26 +142,24 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
             }
             "rowBreaks" => sheet.print.row_breaks = e.kids("brk").filter_map(|b| b.attr_u32("id")).filter(|&r| r > 0 && r < MAX_ROWS).collect(),
             "colBreaks" => sheet.print.col_breaks = e.kids("brk").filter_map(|b| b.attr_u32("id")).filter(|&c| c > 0 && c < MAX_COLS).collect(),
-            "sheetProtection" => {
-                if e.flag("sheet", false) {
-                    if e.attr("password").is_some() || e.attr("hashValue").is_some() {
-                        cx.warn(format!("sheet \"{name}\": the protection password was not imported"));
-                    }
-                    sheet.protection = Some(SheetProtection {
-                        password_hash: None,
-                        select_locked: !e.flag("selectLockedCells", false),
-                        select_unlocked: !e.flag("selectUnlockedCells", false),
-                        format_cells: !e.flag("formatCells", true),
-                        format_columns: !e.flag("formatColumns", true),
-                        format_rows: !e.flag("formatRows", true),
-                        insert_columns: !e.flag("insertColumns", true),
-                        insert_rows: !e.flag("insertRows", true),
-                        delete_columns: !e.flag("deleteColumns", true),
-                        delete_rows: !e.flag("deleteRows", true),
-                        sort: !e.flag("sort", true),
-                        autofilter: !e.flag("autoFilter", true),
-                    });
+            "sheetProtection" if e.flag("sheet", false) => {
+                if e.attr("password").is_some() || e.attr("hashValue").is_some() {
+                    cx.warn(format!("sheet \"{name}\": the protection password was not imported"));
                 }
+                sheet.protection = Some(SheetProtection {
+                    password_hash: None,
+                    select_locked: !e.flag("selectLockedCells", false),
+                    select_unlocked: !e.flag("selectUnlockedCells", false),
+                    format_cells: !e.flag("formatCells", true),
+                    format_columns: !e.flag("formatColumns", true),
+                    format_rows: !e.flag("formatRows", true),
+                    insert_columns: !e.flag("insertColumns", true),
+                    insert_rows: !e.flag("insertRows", true),
+                    delete_columns: !e.flag("deleteColumns", true),
+                    delete_rows: !e.flag("deleteRows", true),
+                    sort: !e.flag("sort", true),
+                    autofilter: !e.flag("autoFilter", true),
+                });
             }
             "drawing" => {
                 if let Some(rel) = e.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)) {
