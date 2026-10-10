@@ -460,6 +460,7 @@ fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("A workbook must contain at least one visible worksheet.".into()));
     }
     let name = d.wb.sheet(i).map(|s| s.name.clone()).unwrap_or_default();
+    let order: Vec<String> = d.wb.sheets.iter().map(|s| s.name.clone()).collect();
     let d = s.doc_mut()?;
     edit_doc(d, |cx| {
         cx.wb.sheets.remove(i);
@@ -469,7 +470,7 @@ fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             let Some(sh) = cx.wb.sheet_mut(si) else { continue };
             for (c, f) in keys {
                 if let Some(e) = f.expr() {
-                    let ne = gridcraft_formula::adjust::delete_sheet(e, &name);
+                    let ne = gridcraft_formula::adjust::delete_sheet(e, &name, &order);
                     if let Some(cell) = sh.cells.get_mut(c) {
                         cell.formula = Some(Arc::new(gridcraft_model::Formula::from_expr(ne)));
                     }
@@ -485,7 +486,7 @@ fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             }
             // Names referring to the sheet become #REF!.
             if let Ok(e) = gridcraft_formula::parse(&n.formula) {
-                let ne = gridcraft_formula::adjust::delete_sheet(e.clone(), &name);
+                let ne = gridcraft_formula::adjust::delete_sheet(e.clone(), &name, &order);
                 if ne != e {
                     n.formula = gridcraft_formula::print(&ne);
                 }

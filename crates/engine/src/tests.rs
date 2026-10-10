@@ -765,6 +765,32 @@ fn sheet_operations_keep_names_on_their_sheets() {
 }
 
 #[test]
+fn deleting_a_3d_span_end_sheet_keeps_the_rest() {
+    let book = || {
+        let mut s = s();
+        for name in ["Sheet2", "Sheet3", "Results"] {
+            s.execute("home.insertSheet", json!({"name": name})).unwrap();
+        }
+        for (sheet, n) in [("Sheet1", 3), ("Sheet2", 5), ("Sheet3", 7)] {
+            s.execute("sheet.activate", json!({"sheet": sheet})).unwrap();
+            s.execute("cell.set", json!({"cell": "A1", "input": n.to_string()})).unwrap();
+        }
+        s.execute("sheet.activate", json!({"sheet": "Results"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": "=SUM(Sheet1:Sheet3!A1)"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": "=Sheet1!A1"})).unwrap();
+        s
+    };
+    let gone = Value::Error(gridcraft_core::CellError::Ref);
+    for (deleted, total, direct) in [("Sheet1", 12.0, gone), ("Sheet3", 8.0, Value::Number(3.0)), ("Sheet2", 10.0, Value::Number(3.0))] {
+        let mut s = book();
+        s.execute("home.deleteSheet", json!({"sheet": deleted})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "Results"})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(total), "deleting {deleted}");
+        assert_eq!(v(&s, "B1"), direct, "deleting {deleted}");
+    }
+}
+
+#[test]
 fn xlsx_roundtrip_through_engine() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["a", 1], ["b", 2]]})).unwrap();
