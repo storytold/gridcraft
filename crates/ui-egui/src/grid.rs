@@ -288,7 +288,7 @@ fn display_text(
     if sh.show_formulas
         && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref())
     {
-        return (format!("={}", f.text), None, false, None);
+        return (gridcraft_engine::formula::locale::to_local(&format!("={}", f.text), crate::i18n::number_locale()), None, false, None);
     }
     if !sh.show_zeros && v.as_f64() == Some(0.0) {
         return (String::new(), None, false, None);
@@ -302,11 +302,11 @@ fn display_text(
     {
         let max_chars = ((width_px - 4.0) / char_w).floor().max(1.0) as usize;
         return match gridcraft_engine::numfmt::format_general_fit(*n, max_chars.min(11)) {
-            Some(t) => (t, None, true, None),
+            Some(t) => (crate::i18n::number_locale().number_literal(&t), None, true, None),
             None => ("#".repeat(max_chars.max(1)), None, true, None),
         };
     }
-    let f = gridcraft_engine::display::format(v, code, wb);
+    let f = gridcraft_engine::display::format_in(v, code, wb, crate::i18n::number_locale());
     (f.text, f.color.map(numfmt_color), f.numeric, f.fill)
 }
 

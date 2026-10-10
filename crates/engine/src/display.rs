@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::{Sheet, Workbook};
-use gridcraft_numfmt::{Formatted, NumberFormat, format_value};
+use gridcraft_core::{CellRef, Locale, RangeRef, Value};
+use gridcraft_model::{Cell, Sheet, Workbook};
+use gridcraft_numfmt::{Formatted, NumberFormat, format_value_in};
 
 /// Parsed number formats are cached by code.
 fn parsed(code: &str) -> NumberFormat {
@@ -26,21 +26,31 @@ pub fn number_format(code: &str) -> NumberFormat {
     parsed(code)
 }
 
-/// Formats a value with a format code.
+/// Formats a value with a format code (en-US).
 pub fn format(v: &Value, code: &str, wb: &Workbook) -> Formatted {
-    format_value(v, &parsed(code), wb.date_system)
+    format_in(v, code, wb, Locale::EnUs)
+}
+
+/// Formats a value with a format code, as shown in `loc` (`1.234,56` in German).
+pub fn format_in(v: &Value, code: &str, wb: &Workbook, loc: Locale) -> Formatted {
+    format_value_in(v, &parsed(code), wb.date_system, loc)
 }
 
 /// The text a cell shows (full precision General; the grid narrows General to fit the column).
 pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
+    cell_text_in(wb, sheet, c, Locale::EnUs)
+}
+
+/// The text a cell shows in `loc`.
+pub fn cell_text_in(wb: &Workbook, sheet: &Sheet, c: CellRef, loc: Locale) -> String {
     let v = sheet.value(c);
     if sheet.show_formulas
         && let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref())
     {
-        return format!("={}", f.text);
+        return gridcraft_formula::locale::to_local(&format!("={}", f.text), loc);
     }
     let style = wb.styles.get(sheet.style_id(c));
-    let f = format(&v, style.num_fmt.as_str(), wb);
+    let f = format_in(&v, style.num_fmt.as_str(), wb, loc);
     match f.fill {
         Some((_, pos)) => {
             let mut t = f.text;
@@ -50,6 +60,40 @@ pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
             t
         }
         None => f.text,
+    }
+}
+
+/// What the formula bar shows for a cell in `loc`, ready to be typed back: the formula as
+/// written there, or the value (`1234,5`, `10.10.2026`, `12,5%`, `WAHR` in German). en-US shows
+/// [`Cell::input_text`].
+pub fn input_text_in(wb: &Workbook, cell: &Cell, loc: Locale) -> String {
+    if loc.is_en() {
+        return cell.input_text();
+    }
+    if let Some(f) = &cell.formula {
+        return gridcraft_formula::locale::to_local(&format!("={}", f.text), loc);
+    }
+    match &cell.value {
+        Value::Number(n) if n.is_finite() => {
+            let nf = parsed(wb.styles.get(cell.style).num_fmt.as_str());
+            if nf.is_date() && *n >= 0.0 {
+                let code = if n.fract() == 0.0 {
+                    "dd.mm.yyyy"
+                } else if *n < 1.0 {
+                    "hh:mm:ss"
+                } else {
+                    "dd.mm.yyyy hh:mm:ss"
+                };
+                return format_in(&cell.value, code, wb, loc).text;
+            }
+            if nf.is_percent() {
+                return format!("{}%", loc.number_literal(&gridcraft_core::number_to_text(n * 100.0)));
+            }
+            loc.number_literal(&gridcraft_core::number_to_text(*n))
+        }
+        Value::Bool(b) => loc.bool_name(*b).to_string(),
+        Value::Error(e) => loc.error_name(*e).to_string(),
+        _ => cell.input_text(),
     }
 }
 

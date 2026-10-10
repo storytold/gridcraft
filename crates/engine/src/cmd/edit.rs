@@ -1,6 +1,6 @@
 //! Cell entry, selection, undo/redo, clipboard, clear, fill, find & replace.
 
-use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
+use gridcraft_core::{CellRef, Locale, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{Cell, Formula, StyleId};
 use serde_json::{Value as Json, json};
 
@@ -10,7 +10,15 @@ use crate::{Clipboard, Session};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!("cell.set", "Enter Cell", [], None, "{cell?: \"B2\", input: \"text, number or =formula\", sheet?, array?: bool}", has_doc, cell_set),
+        cmd!(
+            "cell.set",
+            "Enter Cell",
+            [],
+            None,
+            "{cell?: \"B2\", input: \"text, number or =formula\", sheet?, array?: bool, locale?: \"de\" (input as typed in German Excel: =SUMME(A1;2,5), 1.234,5, 10.10.2026)}",
+            has_doc,
+            cell_set
+        ),
         cmd!(
             "range.setValues",
             "Set Values",
@@ -25,7 +33,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Fill Range With Input",
             [],
             Some("Ctrl+Enter"),
-            "{range?, input}: enters the same input in every selected cell (relative formulas adjust)",
+            "{range?, input, locale?: \"de\"}: enters the same input in every selected cell (relative formulas adjust)",
             has_doc,
             range_fill
         ),
@@ -121,6 +129,11 @@ pub fn specs() -> Vec<CommandSpec> {
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
 /// format). Errors when the formula can't be parsed.
 pub(crate) fn input_to_cell(input: &str, old: Option<&Cell>, wb: &mut gridcraft_model::Workbook) -> Result<Option<Cell>> {
+    input_to_cell_in(input, old, wb, Locale::EnUs)
+}
+
+/// [`input_to_cell`] for input typed in `loc`: German `=SUMME(A1;2,5)`, `1.234,5`, `10.10.2026`.
+pub(crate) fn input_to_cell_in(input: &str, old: Option<&Cell>, wb: &mut gridcraft_model::Workbook, loc: Locale) -> Result<Option<Cell>> {
     let style = old.map(|c| c.style).unwrap_or_default();
     if input.is_empty() {
         let c = Cell { value: Value::Empty, formula: None, style };
@@ -138,7 +151,7 @@ pub(crate) fn input_to_cell(input: &str, old: Option<&Cell>, wb: &mut gridcraft_
     if is_formula {
         let body = input.strip_prefix('=').unwrap_or(input);
         // Excel closes missing parentheses for you.
-        let mut text = body.to_string();
+        let mut text = gridcraft_formula::locale::from_local(body, loc);
         let mut parsed = gridcraft_formula::parse(&text);
         for _ in 0..8 {
             if parsed.is_ok() {
@@ -173,7 +186,7 @@ pub(crate) fn input_to_cell(input: &str, old: Option<&Cell>, wb: &mut gridcraft_
         }
         return Ok(Some(cell));
     }
-    let parsed = gridcraft_core::parse::parse_input(input, wb.date_system);
+    let parsed = loc.parse_input(input, wb.date_system);
     let mut style = style;
     if let Some(code) = parsed.format {
         let cur = wb.styles.get(style).num_fmt.as_str().to_string();
@@ -197,6 +210,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     let input =
         str_param(p, "input").or_else(|| str_param(p, "value")).map(str::to_string).or_else(|| p.get("value").map(json_to_input)).unwrap_or_default();
     let array = bool_param(p, "array").unwrap_or(false);
+    let loc = locale_param(p);
     let protected =
         s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.is_protected() && s.doc().is_ok_and(|d| d.wb.styles.get(sh.style_id(at)).protection.locked));
     if protected {
@@ -207,7 +221,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             // Legacy Ctrl+Shift+Enter array formula over the selection.
             let range = cx.sel.current();
             let old = cx.wb.sheet(sheet).and_then(|sh| sh.cell(range.start)).cloned();
-            let mut cell = input_to_cell(&input, old.as_ref(), &mut cx.wb)?.unwrap_or_default();
+            let mut cell = input_to_cell_in(&input, old.as_ref(), &mut cx.wb, loc)?.unwrap_or_default();
             if let Some(f) = cell.formula.as_mut() {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
@@ -217,7 +231,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             return Ok(Json::Null);
         }
         let old = cx.wb.sheet(sheet).and_then(|sh| sh.cell(at)).cloned();
-        let cell = input_to_cell(&input, old.as_ref(), &mut cx.wb)?;
+        let cell = input_to_cell_in(&input, old.as_ref(), &mut cx.wb, loc)?;
         let sh = cx.sheet_mut(sheet)?;
         match cell {
             Some(c) => sh.cells.set(at, c),
@@ -295,10 +309,11 @@ fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
     let input = str_param(p, "input").unwrap_or("").to_string();
+    let loc = locale_param(p);
     let origin = s.doc()?.selection.active;
     edit(s, |cx| {
         let old = cx.wb.sheet(sheet).and_then(|sh| sh.cell(origin)).cloned();
-        let base = input_to_cell(&input, old.as_ref(), &mut cx.wb)?;
+        let base = input_to_cell_in(&input, old.as_ref(), &mut cx.wb, loc)?;
         for r in &ranges {
             if r.count() > 2_000_000 {
                 return Err(bad("range.fill", "range too large"));

@@ -306,18 +306,23 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.poly(&[(3.0, 8.0), (5.5, 6.5), (5.5, 9.5)], BLUE);
             g.poly(&[(13.0, 8.0), (10.5, 6.5), (10.5, 9.5)], BLUE);
         }
-        Icon::Currency => g.text(8.0, 8.5, "$", 12.0, c, false, false),
+        // The currency and thousands buttons show the interface language's symbols, as in Excel
+        // (`€` and `000` in German).
+        Icon::Currency => g.text(8.0, 8.5, if crate::i18n::number_locale().is_en() { "$" } else { "€" }, 12.0, c, false, false),
         Icon::Percent => g.text(8.0, 8.5, "%", 11.0, c, false, false),
+        Icon::Comma if !crate::i18n::number_locale().is_en() => g.text(8.0, 8.5, "000", 7.5, c, true, false),
         Icon::Comma => g.text(8.0, 7.0, ",", 14.0, c, true, false),
         Icon::DecInc => {
-            g.text(5.0, 5.0, ".0", 6.5, c, false, false);
-            g.text(10.0, 11.0, ".00", 6.5, c, false, false);
+            let (one, two) = if crate::i18n::number_locale().is_en() { (".0", ".00") } else { (",0", ",00") };
+            g.text(5.0, 5.0, one, 6.5, c, false, false);
+            g.text(10.0, 11.0, two, 6.5, c, false, false);
             g.stroke(&[(2.0, 12.0), (5.0, 12.0)], BLUE);
             g.poly(&[(1.0, 12.0), (2.8, 10.6), (2.8, 13.4)], BLUE);
         }
         Icon::DecDec => {
-            g.text(6.0, 5.0, ".00", 6.5, c, false, false);
-            g.text(11.0, 11.0, ".0", 6.5, c, false, false);
+            let (one, two) = if crate::i18n::number_locale().is_en() { (".0", ".00") } else { (",0", ",00") };
+            g.text(6.0, 5.0, two, 6.5, c, false, false);
+            g.text(11.0, 11.0, one, 6.5, c, false, false);
             g.stroke(&[(2.0, 12.0), (5.5, 12.0)], BLUE);
             g.poly(&[(7.0, 12.0), (5.2, 10.6), (5.2, 13.4)], BLUE);
         }

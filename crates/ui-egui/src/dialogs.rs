@@ -633,6 +633,44 @@ fn build_params(d: &Dialog) -> Json {
     v
 }
 
+/// Formulas and values typed into dialogs in the interface language, as the commands take them
+/// (en-US): `=SUMME(A1;B1)` → `=SUM(A1,B1)`, `1,5` → `1.5`, `10.10.2026` → its date serial, a
+/// validation list `Ja;Nein` → `Ja,Nein`.
+fn delocalize_params(d: &Dialog, mut params: Json, sys: gridcraft_engine::core::DateSystem) -> Json {
+    let loc = crate::i18n::number_locale();
+    if loc.is_en() {
+        return params;
+    }
+    let formula = |s: &str| gridcraft_engine::formula::locale::from_local(s, loc);
+    let value = |s: &str| {
+        if s.starts_with('=') {
+            return formula(s);
+        }
+        match loc.parse_input(s, sys).value {
+            gridcraft_engine::core::Value::Number(n) => gridcraft_engine::core::number_to_text(n),
+            gridcraft_engine::core::Value::Bool(b) => gridcraft_engine::core::Locale::EnUs.bool_name(b).to_string(),
+            gridcraft_engine::core::Value::Error(e) => e.as_str().to_string(),
+            _ => s.to_string(),
+        }
+    };
+    let list = d.values.get("type").and_then(Json::as_str) == Some("list");
+    let (target, keys): (Option<&mut Json>, &[(&str, bool)]) = match d.name.as_str() {
+        "defineName" => (Some(&mut params), &[("refersTo", true)]),
+        "dataValidation" => (Some(&mut params), &[("formula1", list), ("formula2", false)]),
+        "cfQuick" => (params.get_mut("rule"), &[("formula", true), ("value", false), ("value2", false)]),
+        _ => (None, &[]),
+    };
+    if let Some(obj) = target.and_then(Json::as_object_mut) {
+        for (key, is_formula) in keys {
+            if let Some(s) = obj.get(*key).and_then(Json::as_str).map(str::to_string) {
+                let en = if *is_formula { formula(&s) } else { value(&s) };
+                obj.insert((*key).to_string(), json!(en));
+            }
+        }
+    }
+    params
+}
+
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
     let mut open = true;
@@ -821,7 +859,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         open = false;
     }
     if confirm && let Some(cmd) = d.command {
-        let params = build_params(&d);
+        let sys = app.session.active().map(|doc| doc.wb.date_system).unwrap_or_default();
+        let params = delocalize_params(&d, build_params(&d), sys);
         match app.run(cmd, params) {
             Ok(_) => open = false,
             Err(e) => app.message = Some((tl!(&d.title).to_string(), crate::clean_error(&e))),
@@ -948,45 +987,83 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
     match d.tab.as_str() {
         "Number" => {
             let mut code = st.num_fmt.as_str().to_string();
+            // Codes are shown and typed as the interface language writes them (`TT.MM.JJJJ`,
+            // `#.##0,00` in German); the workbook keeps the en-US code.
+            let loc = crate::i18n::number_locale();
+            let local_key = "numCodeLocal";
+            let typed = d.values.get(local_key).and_then(Json::as_str).map(str::to_string);
+            let mut local = typed
+                .filter(|t| gridcraft_engine::numfmt::code_from_local(t, loc) == code)
+                .unwrap_or_else(|| gridcraft_engine::numfmt::code_to_local(&code, loc));
             ui.columns(2, |cols| {
                 cols[0].label(egui::RichText::new(tl!("Category:")).strong());
                 for name in
                     ["General", "Number", "Currency", "Accounting", "Short Date", "Long Date", "Time", "Percentage", "Fraction", "Scientific", "Text"]
                 {
-                    let c = gridcraft_engine::cmd::format::format_code_for(name).to_string();
+                    let c = gridcraft_engine::cmd::format::format_code_for_in(name, loc).to_string();
                     if cols[0].selectable_label(code == c, crate::i18n::t_at(&["Format Cells"], name)).clicked() {
                         code = c;
+                        local = gridcraft_engine::numfmt::code_to_local(&code, loc);
                     }
                 }
                 cols[1].label(egui::RichText::new(tl!("Sample")).strong());
-                let preview = app.session.active().map(|doc| gridcraft_engine::display::format(&sample, &code, &doc.wb).text).unwrap_or_default();
+                let preview =
+                    app.session.active().map(|doc| gridcraft_engine::display::format_in(&sample, &code, &doc.wb, loc).text).unwrap_or_default();
                 cols[1].label(egui::RichText::new(preview).font(theme::ui_font(15.0)));
                 cols[1].add_space(8.0);
                 cols[1].label(tl!("Type (custom format code):"));
-                cols[1].text_edit_singleline(&mut code);
-                for c in [
-                    "0",
-                    "0.00",
-                    "#,##0",
-                    "#,##0.00",
-                    "#,##0;[Red]-#,##0",
-                    "0%",
-                    "0.00%",
-                    "0.00E+00",
-                    "# ?/?",
-                    "m/d/yyyy",
-                    "d-mmm-yy",
-                    "mmmm d, yyyy",
-                    "h:mm AM/PM",
-                    "h:mm:ss",
-                    "[h]:mm:ss",
-                    "@",
-                ] {
-                    if cols[1].small_button(c).clicked() {
+                if cols[1].text_edit_singleline(&mut local).changed() {
+                    code = gridcraft_engine::numfmt::code_from_local(&local, loc);
+                }
+                let presets: &[&str] = if loc.is_en() {
+                    &[
+                        "0",
+                        "0.00",
+                        "#,##0",
+                        "#,##0.00",
+                        "#,##0;[Red]-#,##0",
+                        "0%",
+                        "0.00%",
+                        "0.00E+00",
+                        "# ?/?",
+                        "m/d/yyyy",
+                        "d-mmm-yy",
+                        "mmmm d, yyyy",
+                        "h:mm AM/PM",
+                        "h:mm:ss",
+                        "[h]:mm:ss",
+                        "@",
+                    ]
+                } else {
+                    // German Excel's list: dates day first, 24-hour times, euro amounts.
+                    &[
+                        "0",
+                        "0.00",
+                        "#,##0",
+                        "#,##0.00",
+                        "#,##0;[Red]-#,##0",
+                        "#,##0.00 \"€\"",
+                        "0%",
+                        "0.00%",
+                        "0.00E+00",
+                        "# ?/?",
+                        "m/d/yyyy",
+                        "d-mmm-yy",
+                        "d. mmmm yyyy",
+                        "hh:mm",
+                        "hh:mm:ss",
+                        "[h]:mm:ss",
+                        "@",
+                    ]
+                };
+                for c in presets {
+                    if cols[1].small_button(gridcraft_engine::numfmt::code_to_local(c, loc)).clicked() {
                         code = c.to_string();
+                        local = gridcraft_engine::numfmt::code_to_local(&code, loc);
                     }
                 }
             });
+            d.values.insert(local_key.into(), json!(local));
             st.num_fmt = gridcraft_engine::model::NumFmt::new(&code);
         }
         "Alignment" => {
@@ -1144,20 +1221,28 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
         let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text(tl!("e.g. lookup, average, date")));
         r.request_focus();
     });
-    let list = gridcraft_engine::cmd::formulas::function_list();
-    let q = d.search.to_ascii_lowercase();
+    // Functions are listed under the interface language's names (`SUMME` in German), sorted as
+    // German Excel sorts them; searching finds English names too.
+    let loc = crate::i18n::number_locale();
+    let local_name = |f: &Json| gridcraft_engine::formula::locale::function_name(f["name"].as_str().unwrap_or(""), loc);
+    let mut list = gridcraft_engine::cmd::formulas::function_list();
+    if !loc.is_en() {
+        list.sort_by_cached_key(|f| local_name(f));
+    }
+    let q = d.search.to_lowercase();
     let hits: Vec<&Json> = list
         .iter()
         .filter(|f| {
             q.is_empty()
                 || f["name"].as_str().is_some_and(|n| n.to_ascii_lowercase().contains(&q))
+                || local_name(f).to_lowercase().contains(&q)
                 || f["description"].as_str().is_some_and(|n| n.to_ascii_lowercase().contains(&q))
         })
         .take(300)
         .collect();
     egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
         for (i, f) in hits.iter().enumerate() {
-            let name = f["name"].as_str().unwrap_or("");
+            let name = local_name(f);
             let r = ui.add(
                 egui::Button::selectable(i == d.list_index, format!("{name:<18} {}", f["category"].as_str().unwrap_or("")))
                     .min_size(vec2(480.0, 20.0)),
@@ -1173,12 +1258,13 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     });
     if let Some(f) = hits.get(d.list_index) {
         ui.separator();
-        ui.label(egui::RichText::new(f["signature"].as_str().unwrap_or("")).strong());
+        let sig = f["name"].as_str().and_then(crate::formula_bar::function_signature).unwrap_or_default();
+        ui.label(egui::RichText::new(sig).strong());
         ui.label(f["description"].as_str().unwrap_or(""));
     }
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
-    if *confirm && let Some(n) = hits.get(d.list_index).and_then(|f| f["name"].as_str()) {
+    if *confirm && let Some(n) = hits.get(d.list_index).map(|f| local_name(f)) {
         let cur = app.editor.as_ref().map(|e| e.text.clone());
         let text = match cur {
             Some(t) if t.starts_with('=') => format!("{t}{n}("),
@@ -1378,7 +1464,7 @@ fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui) {
         for n in list.as_array().cloned().unwrap_or_default() {
             ui.label(n["name"].as_str().unwrap_or(""));
             ui.label(n["value"].to_string().chars().take(30).collect::<String>());
-            ui.label(n["refersTo"].as_str().unwrap_or(""));
+            ui.label(gridcraft_engine::formula::locale::to_local(n["refersTo"].as_str().unwrap_or(""), crate::i18n::number_locale()));
             ui.horizontal(|ui| {
                 ui.label(n["scope"].as_str().unwrap_or(""));
                 if ui.small_button(tl!("Delete")).clicked() {

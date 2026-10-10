@@ -129,15 +129,19 @@ pub fn specs() -> Vec<CommandSpec> {
             "Number Format",
             ["Home", "Number"],
             None,
-            "{range?, format: \"General\"|\"Number\"|\"Currency\"|\"Accounting\"|\"Short Date\"|\"Long Date\"|\"Time\"|\"Percentage\"|\"Fraction\"|\"Scientific\"|\"Text\" | code: \"0.00\"}",
+            "{range?, format: \"General\"|\"Number\"|\"Currency\"|\"Accounting\"|\"Short Date\"|\"Long Date\"|\"Time\"|\"Percentage\"|\"Fraction\"|\"Scientific\"|\"Text\" | code: \"0.00\", locale?: \"de\" (euro currency and accounting)}",
             has_doc,
             number_format
         ),
-        cmd!("home.accounting", "Accounting Number Format", ["Home", "Number"], None, "{range?, symbol?: \"$\"}", has_doc, |s, p| set_fmt(
-            s, p, ACCOUNTING
-        )),
+        cmd!("home.accounting", "Accounting Number Format", ["Home", "Number"], None, "{range?, locale?: \"de\" (euro)}", has_doc, |s, p| {
+            let code = format_code_for_in("Accounting", locale_param(p));
+            set_fmt(s, p, code)
+        }),
         cmd!("home.percent", "Percent Style", ["Home", "Number"], Some("Ctrl+Shift+%"), "{range?}", has_doc, |s, p| set_fmt(s, p, "0%")),
-        cmd!("home.comma", "Comma Style", ["Home", "Number"], None, "{range?}", has_doc, |s, p| set_fmt(s, p, COMMA)),
+        cmd!("home.comma", "Comma Style", ["Home", "Number"], None, "{range?, locale?: \"de\"}", has_doc, |s, p| {
+            let code = format_code_for_in("Comma", locale_param(p));
+            set_fmt(s, p, code)
+        }),
         cmd!("home.increaseDecimal", "Increase Decimal", ["Home", "Number"], None, "{range?}", has_doc, |s, p| decimals(s, p, 1)),
         cmd!("home.decreaseDecimal", "Decrease Decimal", ["Home", "Number"], None, "{range?}", has_doc, |s, p| decimals(s, p, -1)),
         // Styles
@@ -201,6 +205,10 @@ pub fn specs() -> Vec<CommandSpec> {
 
 const ACCOUNTING: &str = "_(\"$\"* #,##0.00_);_(\"$\"* \\(#,##0.00\\);_(\"$\"* \"-\"??_);_(@_)";
 const COMMA: &str = "_(* #,##0.00_);_(* \\(#,##0.00\\);_(* \"-\"??_);_(@_)";
+/// German Excel's euro formats (Währung, Buchhaltung) and its thousands separator style.
+const DE_CURRENCY: &str = "#,##0.00 \"€\"";
+const DE_ACCOUNTING: &str = "_-* #,##0.00 \"€\"_-;-* #,##0.00 \"€\"_-;_-* \"-\"?? \"€\"_-;_-@_-";
+const DE_COMMA: &str = "_-* #,##0.00_-;-* #,##0.00_-;_-* \"-\"??_-;_-@_-";
 
 fn with(p: &Json, key: &str, v: Json) -> Json {
     let mut m = p.as_object().cloned().unwrap_or_default();
@@ -579,6 +587,18 @@ fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
 
 /// Ribbon format names → codes.
 pub fn format_code_for(name: &str) -> &str {
+    format_code_for_in(name, gridcraft_core::Locale::EnUs)
+}
+
+/// Ribbon format names → codes in `loc`. German Excel's currency and accounting formats are in
+/// euros; dates and times are the same built-in codes, which display in the locale's pattern.
+pub fn format_code_for_in(name: &str, loc: gridcraft_core::Locale) -> &str {
+    match (name, loc) {
+        ("Currency", gridcraft_core::Locale::De) => return DE_CURRENCY,
+        ("Accounting", gridcraft_core::Locale::De) => return DE_ACCOUNTING,
+        ("Comma", gridcraft_core::Locale::De) => return DE_COMMA,
+        _ => {}
+    }
     match name {
         "General" => "General",
         "Number" => "0.00",
@@ -599,7 +619,7 @@ pub fn format_code_for(name: &str) -> &str {
 fn number_format(s: &mut Session, p: &Json) -> Result<Json> {
     let code = str_param(p, "code")
         .map(str::to_string)
-        .or_else(|| str_param(p, "format").map(|f| format_code_for(f).to_string()))
+        .or_else(|| str_param(p, "format").map(|f| format_code_for_in(f, locale_param(p)).to_string()))
         .ok_or_else(|| bad("home.numberFormat", "missing `format` or `code`"))?;
     set_fmt(s, p, &code)
 }

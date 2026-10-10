@@ -165,7 +165,7 @@ fn month_from_name(s: &str) -> Option<u32> {
 }
 
 /// Time part: `h:mm`, `h:mm:ss`, `h:mm:ss.000`, `h AM`, with optional AM/PM.
-fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
+pub(crate) fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
     let t = t.trim();
     let lower = t.to_ascii_lowercase();
     let (body, ampm) = if let Some(b) = lower.strip_suffix("am").or_else(|| lower.strip_suffix('a')) {
@@ -262,7 +262,7 @@ fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
     None
 }
 
-fn valid_ymd(sys: DateSystem, y: i64, m: i64, d: i64) -> Option<f64> {
+pub(crate) fn valid_ymd(sys: DateSystem, y: i64, m: i64, d: i64) -> Option<f64> {
     if !(1..=12).contains(&m) || d < 1 {
         return None;
     }

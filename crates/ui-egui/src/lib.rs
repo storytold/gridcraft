@@ -303,7 +303,7 @@ impl SheetApp {
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = d.selection.active;
-        let current = sh.cell(at).map(|c| c.input_text()).unwrap_or_default();
+        let current = sh.cell(at).map(|c| gridcraft_engine::display::input_text_in(&d.wb, c, i18n::number_locale())).unwrap_or_default();
         let (text, replace) = match text {
             Some(t) => (t, true),
             None => (current.clone(), false),
@@ -324,9 +324,11 @@ impl SheetApp {
             Some(full) if full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
             _ => ed.text.clone(),
         };
+        // Typed in the interface language, as in Excel: `=SUMME(A1;2,5)`, `1.234,5` in German.
+        let loc = i18n::number_locale();
         // Data validation.
         if let Some(d) = self.session.active()
-            && let Some((dv, msg)) = gridcraft_engine::cmd::data::check_validation(&d.wb, ed.sheet, ed.cell, &text)
+            && let Some((dv, msg)) = gridcraft_engine::cmd::data::check_validation_in(&d.wb, ed.sheet, ed.cell, &text, loc)
         {
             if dv.error_style == gridcraft_engine::model::ErrorStyle::Stop {
                 let title = if dv.error_title.is_empty() { "GridCraft".to_string() } else { dv.error_title.clone() };
@@ -337,11 +339,13 @@ impl SheetApp {
             }
             self.toast = Some((msg, now_ms()));
         }
-        let r = if fill_selection {
-            self.session.run("range.fill", json!({"input": text}))
-        } else {
-            self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
-        };
+        let mut params = if fill_selection { json!({"input": text}) } else { json!({"cell": ed.cell.a1(), "input": text, "array": array}) };
+        if !loc.is_en()
+            && let Some(o) = params.as_object_mut()
+        {
+            o.insert("locale".into(), json!(i18n::current().code()));
+        }
+        let r = self.session.run(if fill_selection { "range.fill" } else { "cell.set" }, params);
         match r {
             Ok(_) => {
                 if dr != 0 || dc != 0 {

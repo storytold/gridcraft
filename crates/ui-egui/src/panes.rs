@@ -213,7 +213,8 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     ui.collapsing(crate::i18n::t_at(&["Chart"], "Series"), |ui| {
-        let data = app.session.active().map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet, &chart));
+        let loc = crate::i18n::number_locale();
+        let data = app.session.active().map(|d| gridcraft_chart::resolve_in(&d.wb, d.wb.active_sheet, &chart, loc));
         for (i, s) in chart.series.iter().enumerate() {
             let name = data
                 .as_ref()
@@ -226,7 +227,8 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
                 let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::hover());
                 ui.painter().rect_filled(r, 2.0, col);
                 ui.label(&name);
-                ui.label(egui::RichText::new(&s.values).small().color(Color32::from_gray(110)));
+                let values = gridcraft_engine::formula::locale::to_local(&s.values, loc);
+                ui.label(egui::RichText::new(values).small().color(Color32::from_gray(110)));
                 ui.menu_button(tl!("Fill…"), |ui| {
                     if let Some(c) = crate::widgets::color_palette(ui, &theme.colors, "Automatic") {
                         app.run_or_alert(

@@ -244,6 +244,17 @@ fn act(app: &mut SheetApp, id: &str, params: serde_json::Value) {
     app.run_or_alert(id, params);
 }
 
+/// Adds the interface language to a command whose result depends on it (German Excel's currency
+/// is the euro). English sends nothing, so the command behaves as for scripts.
+fn with_locale(mut params: serde_json::Value) -> serde_json::Value {
+    if !crate::i18n::number_locale().is_en()
+        && let Some(o) = params.as_object_mut()
+    {
+        o.insert("locale".into(), json!(crate::i18n::current().code()));
+    }
+    params
+}
+
 fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, serde_json::Value)]) {
     for (label, id, p) in items {
         if *label == "-" {
@@ -491,9 +502,21 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
         ui.horizontal(|ui| {
             let (c, ca) = split_button(ui, Icon::Currency, None, "Accounting Number Format");
             if c {
-                act(app, "home.accounting", json!({}));
+                act(app, "home.accounting", with_locale(json!({})));
             }
             egui::Popup::menu(&ca).show(|ui| {
+                if !crate::i18n::number_locale().is_en() {
+                    // German Excel lists its own euro format first.
+                    menu_items(
+                        app,
+                        ui,
+                        &[(
+                            "€ German (Germany)",
+                            "home.numberFormat",
+                            json!({"code": "_-* #,##0.00 [$€-407]_-;-* #,##0.00 [$€-407]_-;_-* \"-\"?? [$€-407]_-;_-@_-"}),
+                        )],
+                    );
+                }
                 menu_items(
                     app,
                     ui,
@@ -523,7 +546,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
                 act(app, "home.percent", json!({}));
             }
             if icon_button(ui, Icon::Comma, t.text, "Comma Style", vec2(24.0, 23.0)).clicked() {
-                act(app, "home.comma", json!({}));
+                act(app, "home.comma", with_locale(json!({})));
             }
             if icon_button(ui, Icon::DecInc, t.text, "Increase Decimal", vec2(26.0, 23.0)).clicked() {
                 act(app, "home.increaseDecimal", json!({}));
@@ -744,11 +767,12 @@ fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     egui::ComboBox::from_id_salt("number_format").width(150.0).selected_text(egui::RichText::new(current_shown).font(theme::ui_font(12.5))).show_ui(
         ui,
         |ui| {
+            let loc = crate::i18n::number_locale();
             for name in
                 ["General", "Number", "Currency", "Accounting", "Short Date", "Long Date", "Time", "Percentage", "Fraction", "Scientific", "Text"]
             {
-                let code = gridcraft_engine::cmd::format::format_code_for(name);
-                let preview = app.session.active().map(|d| gridcraft_engine::display::format(&sample, code, &d.wb).text).unwrap_or_default();
+                let code = gridcraft_engine::cmd::format::format_code_for_in(name, loc);
+                let preview = app.session.active().map(|d| gridcraft_engine::display::format_in(&sample, code, &d.wb, loc).text).unwrap_or_default();
                 let shown = crate::i18n::t_at(&["Format Cells"], name);
                 let r = ui.add(egui::Button::selectable(current == name, format!("{shown:<12}   {preview}")).min_size(vec2(240.0, 22.0)));
                 if r.clicked() {
@@ -763,7 +787,7 @@ fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     );
     match picked {
         Some("__more") => app.open_dialog("formatCells", json!({"tab": "Number"})),
-        Some(n) => act(app, "home.numberFormat", json!({"format": n})),
+        Some(n) => act(app, "home.numberFormat", with_locale(json!({"format": n}))),
         None => {}
     }
 }
@@ -1317,7 +1341,8 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
                         && let Some(n) = f["name"].as_str()
                     {
                         let desc = f["description"].as_str().unwrap_or("").to_string();
-                        if ui.button(n).on_hover_text(desc).clicked() {
+                        let n = gridcraft_engine::formula::locale::function_name(n, crate::i18n::number_locale());
+                        if ui.button(&n).on_hover_text(desc).clicked() {
                             app.begin_edit(Some(format!("={n}(")), false);
                             ui.close();
                         }
@@ -1792,7 +1817,10 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
             let text = app
                 .session
                 .active()
-                .map(|d| gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(today), "m/d/yyyy", &d.wb).text)
+                .map(|d| {
+                    let v = gridcraft_engine::core::Value::Number(today);
+                    gridcraft_engine::display::format_in(&v, "m/d/yyyy", &d.wb, crate::i18n::number_locale()).text
+                })
                 .unwrap_or_default();
             app.begin_edit(Some(text), false);
             None

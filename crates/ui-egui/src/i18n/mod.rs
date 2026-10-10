@@ -196,6 +196,12 @@ pub fn current() -> Lang {
     CURRENT.get()
 }
 
+/// How numbers, dates and formulas are shown and typed in the current language, as in Excel
+/// (German: `1.234,56`, `10.10.2026`, `=SUMME(A1;B1)`). Files, scripts and agents stay en-US.
+pub fn number_locale() -> gridcraft_engine::core::Locale {
+    gridcraft_engine::core::Locale::from_tag(current().code())
+}
+
 /// Does `lang` have a catalog entry for this string? (English never does: it is the source.)
 pub fn has(lang: Lang, s: &str) -> bool {
     lang.catalog().plain(s).is_some()

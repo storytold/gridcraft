@@ -795,6 +795,11 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
 
 /// Checks typed input against the validation of a cell. `Ok(None)` = valid.
 pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
+    check_validation_in(wb, sheet, at, input, gridcraft_core::Locale::EnUs)
+}
+
+/// [`check_validation`] for input typed in `loc` (`1,5` is one and a half in German).
+pub fn check_validation_in(wb: &Workbook, sheet: usize, at: CellRef, input: &str, loc: gridcraft_core::Locale) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at)))?;
     if dv.kind == ValidationKind::Any || !dv.show_error {
@@ -803,10 +808,14 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     if input.is_empty() && dv.allow_blank {
         return None;
     }
-    let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
+    let v = loc.parse_input(input, wb.date_system).value;
     let num = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, f).to_number().ok();
     let ok = match dv.kind {
-        ValidationKind::List => list_items(wb, sheet, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
+        ValidationKind::List => {
+            // List items are listed in en-US; German input matches by the value it stands for.
+            let typed = if loc.is_en() { None } else { Some(v.display()) };
+            list_items(wb, sheet, dv).iter().any(|x| x.eq_ignore_ascii_case(input) || typed.as_deref().is_some_and(|t| x.eq_ignore_ascii_case(t)))
+        }
         ValidationKind::Custom => gridcraft_calc::evaluate(wb, sheet, at, &dv.f1).to_bool().unwrap_or(false),
         ValidationKind::TextLength => {
             let n = input.chars().count() as f64;

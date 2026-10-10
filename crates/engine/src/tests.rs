@@ -232,3 +232,87 @@ fn new_workbooks_are_named_in_the_session_language() {
     assert_eq!(s.doc().unwrap().wb.sheets[0].name, "Sheet1");
     assert_eq!(s.lang, crate::lang::Lang::German, "the session keeps its language");
 }
+
+#[test]
+fn german_input_and_display() {
+    use gridcraft_core::Locale;
+    let mut s = s();
+    let de = |s: &mut Session, cell: &str, input: &str| s.execute("cell.set", json!({"cell": cell, "input": input, "locale": "de"})).unwrap();
+    de(&mut s, "A1", "1.234,5");
+    de(&mut s, "A2", "2,5");
+    de(&mut s, "A3", "=SUMME(A1;A2;0,5)");
+    de(&mut s, "A4", "10.10.2026");
+    de(&mut s, "A5", "12,5 %");
+    de(&mut s, "A6", "WAHR");
+    de(&mut s, "A7", "=WENN(A1>1000;\"groß\";\"klein\")");
+    de(&mut s, "A8", "=SVERWEIS(2,5;A2:A3;1;FALSCH)");
+    assert_eq!(v(&s, "A1"), Value::Number(1234.5));
+    assert_eq!(v(&s, "A3"), Value::Number(1237.5));
+    assert_eq!(v(&s, "A6"), Value::Bool(true));
+    assert_eq!(v(&s, "A7"), Value::text("groß"));
+    assert_eq!(v(&s, "A8"), Value::Number(2.5));
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let at = |a: &str| CellRef::parse(a).unwrap();
+    // Stored as en-US, shown in German.
+    assert_eq!(sh.cell(at("A3")).unwrap().input_text(), "=SUM(A1,A2,0.5)");
+    let text = |a: &str| crate::display::cell_text_in(&d.wb, sh, at(a), Locale::De);
+    let input = |a: &str| crate::display::input_text_in(&d.wb, sh.cell(at(a)).unwrap(), Locale::De);
+    assert_eq!(text("A1"), "1.234,50", "typing thousands separators applies #,##0.00, as in Excel");
+    assert_eq!(text("A3"), "1237,5");
+    assert_eq!(text("A4"), "10.10.2026");
+    assert_eq!(text("A5"), "12,50%");
+    assert_eq!(text("A6"), "WAHR");
+    assert_eq!(crate::display::cell_text(&d.wb, sh, at("A6")), "TRUE", "en-US callers are unchanged");
+    assert_eq!(input("A1"), "1234,5");
+    assert_eq!(input("A3"), "=SUMME(A1;A2;0,5)");
+    assert_eq!(input("A4"), "10.10.2026");
+    assert_eq!(input("A5"), "12,5%");
+    assert_eq!(input("A6"), "WAHR");
+    // Without a locale the same text is en-US input.
+    s.execute("cell.set", json!({"cell": "B1", "input": "2,5"})).unwrap();
+    assert_ne!(v(&s, "B1"), Value::Number(2.5));
+    s.execute("cell.set", json!({"cell": "B2", "input": "=SUM(1.5,1)"})).unwrap();
+    assert_eq!(v(&s, "B2"), Value::Number(2.5));
+    // range.fill takes the locale too; relative references still adjust.
+    s.execute("selection.set", json!({"range": "C1:C2"})).unwrap();
+    s.execute("range.fill", json!({"input": "=A1*0,5", "locale": "de"})).unwrap();
+    assert_eq!(v(&s, "C2"), Value::Number(1.25));
+}
+
+#[test]
+fn german_number_formats_are_in_euros() {
+    let mut s = s();
+    let code = |s: &Session| {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str().to_string()
+    };
+    s.execute("cell.set", json!({"cell": "A1", "input": "1234.5"})).unwrap();
+    s.execute("home.numberFormat", json!({"format": "Currency", "locale": "de"})).unwrap();
+    assert_eq!(code(&s), "#,##0.00 \"€\"");
+    let text = |s: &Session| {
+        let d = s.doc().unwrap();
+        crate::display::cell_text_in(&d.wb, d.wb.active().unwrap(), CellRef::new(0, 0), gridcraft_core::Locale::De)
+    };
+    assert_eq!(text(&s), "1.234,50 €");
+    s.execute("home.accounting", json!({"locale": "de"})).unwrap();
+    assert!(code(&s).contains('€'));
+    assert_eq!(text(&s).trim(), "1.234,50 €");
+    s.execute("home.numberFormat", json!({"format": "Currency"})).unwrap();
+    assert_eq!(code(&s), "\"$\"#,##0.00", "scripts keep the en-US formats");
+    s.execute("home.accounting", json!({})).unwrap();
+    assert!(code(&s).contains('$'));
+}
+
+#[test]
+fn german_validation_input() {
+    let mut s = s();
+    s.execute("data.validation", json!({"range": "A1", "type": "decimal", "operator": "between", "formula1": "1", "formula2": "2"})).unwrap();
+    let d = s.doc().unwrap();
+    let at = CellRef::new(0, 0);
+    let si = d.wb.active_sheet;
+    assert!(crate::cmd::data::check_validation_in(&d.wb, si, at, "1,5", gridcraft_core::Locale::De).is_none());
+    assert!(crate::cmd::data::check_validation_in(&d.wb, si, at, "2,5", gridcraft_core::Locale::De).is_some());
+    assert!(crate::cmd::data::check_validation(&d.wb, si, at, "1.5").is_none());
+}
