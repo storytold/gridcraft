@@ -1056,6 +1056,12 @@ fn every_chart_kind_survives_xlsx() {
     let kinds = [
         ("combo", ChartKind::Combo),
         ("stock", ChartKind::Stock),
+        ("histogram", ChartKind::Histogram),
+        ("boxWhisker", ChartKind::BoxWhisker),
+        ("waterfall", ChartKind::Waterfall),
+        ("funnel", ChartKind::Funnel),
+        ("treemap", ChartKind::Treemap),
+        ("sunburst", ChartKind::Sunburst),
         ("column", ChartKind::ColumnClustered),
         ("line", ChartKind::Line),
         ("scatter", ChartKind::Scatter),
@@ -1067,12 +1073,17 @@ fn every_chart_kind_survives_xlsx() {
         let before = s.doc().unwrap().wb.active().unwrap().charts[0].clone();
         assert_eq!(before.kind, kind);
         reopen(&mut s);
+        assert!(s.doc().unwrap().wb.names.is_empty(), "{t}");
         let after = &s.doc().unwrap().wb.active().unwrap().charts[0];
         assert_eq!(after.kind, kind, "{t}");
         assert_eq!(after.title.as_deref(), Some("Week"), "{t}");
         assert_eq!(after.series.len(), before.series.len(), "{t}");
         for (a, b) in after.series.iter().zip(&before.series) {
-            assert_eq!((&a.name, &a.categories, &a.values), (&b.name, &b.categories, &b.values), "{t}");
+            assert_eq!((&a.name, &a.values, &a.color), (&b.name, &b.values, &b.color), "{t}");
+            // A histogram bins its values; it has no categories in the file.
+            if kind != ChartKind::Histogram {
+                assert_eq!(a.categories, b.categories, "{t}");
+            }
         }
     }
 }

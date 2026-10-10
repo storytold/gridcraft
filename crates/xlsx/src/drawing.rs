@@ -124,7 +124,22 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
     let rels = cx.pkg.rels(part)?;
     for a in &x.children {
         let Some(anchor) = read_anchor(a, sheet) else { continue };
-        for obj in &a.children {
+        // Objects in markup-compatibility blocks: the first choice (chartex frames), else the
+        // fallback.
+        let objs: Vec<&El> = a
+            .children
+            .iter()
+            .flat_map(|o| match o.name.as_str() {
+                "AlternateContent" => o
+                    .child("Choice")
+                    .filter(|c| c.child("graphicFrame").is_some())
+                    .or_else(|| o.child("Fallback"))
+                    .map(|c| c.children.iter().collect())
+                    .unwrap_or_default(),
+                _ => vec![o],
+            })
+            .collect();
+        for obj in objs {
             match obj.name.as_str() {
                 "pic" => {
                     let Some(rid) = obj.path(&["blipFill", "blip"]).and_then(|b| b.attr("embed")) else { continue };
@@ -148,7 +163,8 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                         let Some(rel) = rels.iter().find(|r| r.id == rid) else { continue };
                         let target = rel.target.clone();
                         if let Some(cx_xml) = cx.optional_xml(&target)? {
-                            match crate::chart::read_chart(&cx_xml) {
+                            let chartex = uri.contains("chartex");
+                            match if chartex { crate::chartex::read_chartex(&cx_xml) } else { crate::chart::read_chart(&cx_xml) } {
                                 Some(mut ch) => {
                                     ch.id = cx.next_object_id();
                                     ch.anchor = anchor;
@@ -158,7 +174,7 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                             }
                         }
                     } else if uri.contains("chartex") || uri.contains("chartEx") {
-                        cx.warn("Excel 2016 chart types (histogram, waterfall, treemap…) are not supported yet and were skipped");
+                        cx.warn("a histogram, waterfall, treemap… chart without its chart part was skipped");
                     } else {
                         cx.warn("an embedded object (SmartArt, OLE…) was skipped");
                     }
@@ -274,6 +290,18 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     id - 1,
                     esc_attr(&img.alt),
                     xfrm(&img.anchor, "a:xfrm")
+                );
+            }
+            Obj::Chart(ch, rid) if crate::chartex::is_chartex(ch.kind) => {
+                // Chartex frames come with a fallback for readers that don't know them.
+                s.push_str(&anchor_open(sheet, &ch.anchor));
+                let (prefix, ns) = crate::chartex::requires(ch.kind);
+                let _ = write!(
+                    s,
+                    "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice xmlns:{prefix}=\"{ns}\" Requires=\"{prefix}\"><xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"{id}\" name=\"Chart {}\"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>{}<a:graphic><a:graphicData uri=\"http://schemas.microsoft.com/office/drawing/2014/chartex\"><cx:chart xmlns:cx=\"http://schemas.microsoft.com/office/drawing/2014/chartex\" r:id=\"{rid}\"/></a:graphicData></a:graphic></xdr:graphicFrame></mc:Choice><mc:Fallback><xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"0\" name=\"\"/><xdr:cNvSpPr><a:spLocks noTextEdit=\"1\"/></xdr:cNvSpPr></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>This chart type can't be shown by this application.</a:t></a:r></a:p></xdr:txBody></xdr:sp></mc:Fallback></mc:AlternateContent>",
+                    id - 1,
+                    xfrm(&ch.anchor, "xdr:xfrm"),
+                    xfrm(&ch.anchor, "a:xfrm")
                 );
             }
             Obj::Chart(ch, rid) => {
