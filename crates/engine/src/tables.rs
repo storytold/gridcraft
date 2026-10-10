@@ -148,20 +148,6 @@ pub fn gallery() -> Vec<String> {
     v
 }
 
-#[cfg(test)]
-mod style_tests {
-    use super::*;
-
-    #[test]
-    fn zero_numbered_styles_do_not_underflow() {
-        assert_eq!(parse_style_name("TableStyleLight0"), ("Light", 1));
-        assert_eq!(parse_style_name("TableStyleMedium0"), ("Medium", 1));
-        for name in ["TableStyleLight0", "TableStyleMedium0", "TableStyleDark0"] {
-            let _ = look(name);
-        }
-    }
-}
-
 /// Editing a table's header row renames the column, as in Excel: an empty or repeated header
 /// gets a unique name written back into the cell, and structured references follow the rename.
 pub(crate) fn sync_headers(cx: &mut crate::cmd::Ctx) {
@@ -298,5 +284,19 @@ mod tests {
         s.execute("range.setValues", json!({"range": "A1", "values": [["a", "b"], [1, 2], [3, 4]]})).unwrap();
         s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
         assert_eq!(s.execute("edit.goTo", json!({"reference": "Table1"})).unwrap()["selection"], "A2:B3");
+    }
+}
+
+#[cfg(test)]
+mod style_tests {
+    use super::*;
+
+    #[test]
+    fn zero_numbered_styles_do_not_underflow() {
+        assert_eq!(parse_style_name("TableStyleLight0"), ("Light", 1));
+        assert_eq!(parse_style_name("TableStyleMedium0"), ("Medium", 1));
+        for name in ["TableStyleLight0", "TableStyleMedium0", "TableStyleDark0"] {
+            let _ = look(name);
+        }
     }
 }
