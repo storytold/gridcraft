@@ -20,7 +20,7 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | Method | Params | What it does |
 |---|---|---|
 | `engine.execute` | `{command, params}` | Runs any engine command (see `engine.commands` or `gridcraft-cli commands`) |
-| `engine.commands` | | Every command: id, label, ribbon path, shortcut, params doc, enabled |
+| `engine.commands` | `{search?}` | Every command: id, label, ribbon path, shortcut, params doc, enabled; `search` keeps those whose id, label or ribbon path contains it (case-insensitive) |
 | `engine.journal` | | Commands run so far (replayable) |
 | `document.inspect` | | Workbook summary: sheets, used ranges, tables, charts, names, selection, undo labels |
 | `sheet.read` | `{range?, sheet?, formulas?, formatted?}` | Values (or formulas / displayed text) of a range |
