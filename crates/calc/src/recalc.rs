@@ -524,6 +524,7 @@ impl Calc {
             self.circular = cycles;
             // Write back.
             let mut spill_changes: Vec<Key> = Vec::new();
+            let mut freed: Vec<(usize, RangeRef)> = Vec::new();
             for (k, v) in results {
                 let Some(sheet) = wb.sheet_mut(k.0) else { continue };
                 if let Some(cell) = sheet.cells.get_mut(k.1)
@@ -571,6 +572,23 @@ impl Calc {
                     let mut deps = Vec::new();
                     self.graph.dependents_of_range(k.0, r, &mut deps);
                     spill_changes.extend(deps);
+                }
+                if let Some(o) = old
+                    && !sheet.spill_ranges.get(&k.1).is_some_and(|n| n.contains(o.start) && n.contains(o.end))
+                {
+                    freed.push((k.0, o));
+                }
+            }
+            // An area a formula no longer spills over may unblock another formula's array.
+            for (si, o) in freed {
+                for &(s, c) in self.graph.nodes.keys() {
+                    if s == si
+                        && c.row <= o.end.row
+                        && c.col <= o.end.col
+                        && wb.sheet(s).is_some_and(|sh| sh.value(c) == Value::Error(CellError::Spill))
+                    {
+                        spill_changes.push((s, c));
+                    }
                 }
             }
             if full {

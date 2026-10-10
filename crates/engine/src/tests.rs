@@ -195,6 +195,18 @@ fn clearing_a_distant_blocker_unblocks_the_spill() {
 }
 
 #[test]
+fn a_spill_that_goes_away_unblocks_another() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "F8", "input": "=SEQUENCE(5)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E10", "input": "=SEQUENCE(1,3)"})).unwrap();
+    assert_eq!(v(&s, "E10"), Value::Error(gridcraft_core::CellError::Spill));
+    // Blocking F8's array frees F10 for E10's.
+    s.execute("cell.set", json!({"cell": "F9", "input": "0"})).unwrap();
+    assert_eq!(v(&s, "F8"), Value::Error(gridcraft_core::CellError::Spill));
+    assert_eq!((v(&s, "E10"), v(&s, "G10")), (Value::Number(1.0), Value::Number(3.0)));
+}
+
+#[test]
 fn every_command_survives_empty_params() {
     let mut s = Session::new();
     s.execute("file.new", json!({"sample": "sales"})).unwrap();
