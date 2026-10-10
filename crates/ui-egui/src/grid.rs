@@ -84,6 +84,8 @@ pub struct GridState {
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
     pub pages: Option<((u64, u64, usize), Vec<(RangeRef, u32)>)>,
     pub header_menu: Option<(Pos2, bool)>,
+    /// Frame the open menu or picker was opened in, so the opening click does not dismiss it.
+    pub popup_frame: u64,
 }
 
 impl GridState {
@@ -1118,12 +1120,15 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         if let Some(r) = validation_arrow(sh, geo, sel.active)
             && r.contains(p)
         {
-            app.grid.list_picker = Some(sel.active);
+            // The arrow toggles the list (Excel behaviour: pressing it again closes it).
+            app.grid.list_picker = (app.grid.list_picker != Some(sel.active)).then_some(sel.active);
+            app.grid.popup_frame = ui.ctx().cumulative_frame_nr();
             return;
         }
         // Filter dropdown buttons.
         if is_filter_button(sh, geo, p) {
             app.grid.filter_menu = Some((c.col, p));
+            app.grid.popup_frame = ui.ctx().cumulative_frame_nr();
             return;
         }
         // Point mode while editing a formula: clicking inserts a reference.
@@ -1380,6 +1385,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 let range = if rows { RangeRef::rows(idx, idx) } else { RangeRef::cols(idx, idx) };
                 let _ = app.session.run("selection.set", json!({"range": range.a1()}));
             }
+            app.grid.popup_frame = ui.ctx().cumulative_frame_nr();
             app.grid.header_menu = Some((p, rows));
         } else {
             app.grid.context_menu = Some(p);
@@ -1643,6 +1649,12 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     crate::formula_bar::editor_widget(app, &mut child, id, font, false, erect.width() - 4.0);
 }
 
+/// True when a press landed outside `rect` on a later frame than `frame`: clicking anywhere else
+/// in the app dismisses a transient menu or picker, but the click that opened it does not.
+fn pressed_outside(ui: &egui::Ui, frame: u64, rect: Rect) -> bool {
+    ui.ctx().cumulative_frame_nr() != frame && ui.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !rect.contains(p)))
+}
+
 fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo) {
     let Some((col, at)) = app.grid.filter_menu else { return };
     let Some(d) = app.session.active() else { return };
@@ -1678,7 +1690,7 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo) {
     let values = gridcraft_engine::cmd::data::filter_values(&wb, si, col);
     let mut close = false;
     let area = egui::Area::new(egui::Id::new("filter_menu")).fixed_pos(at + vec2(-180.0, 10.0)).order(egui::Order::Foreground);
-    area.show(ui.ctx(), |ui| {
+    let resp = area.show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_width(230.0);
             if ui.button("↑  Sort Ascending").clicked() {
@@ -1728,7 +1740,7 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo) {
             });
         });
     });
-    if close || ui.input(|i| i.key_pressed(egui::Key::Escape)) || (ui.input(|i| i.pointer.any_pressed()) && !ui.ctx().is_pointer_over_egui()) {
+    if close || ui.input(|i| i.key_pressed(egui::Key::Escape)) || pressed_outside(ui, app.grid.popup_frame, resp.response.rect) {
         app.grid.filter_menu = None;
     }
 }
@@ -1952,7 +1964,7 @@ fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo) {
     let items = gridcraft_engine::cmd::data::list_items(&wb, si, &dv);
     let r = geo.cell_rect(sh, c);
     let mut close = false;
-    egui::Area::new(egui::Id::new("dv_list")).fixed_pos(r.left_bottom()).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+    let resp = egui::Area::new(egui::Id::new("dv_list")).fixed_pos(r.left_bottom()).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_width(r.width().max(100.0));
             egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
@@ -1965,7 +1977,7 @@ fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo) {
             });
         });
     });
-    if close || ui.input(|i| i.key_pressed(egui::Key::Escape)) || (ui.input(|i| i.pointer.any_pressed()) && !ui.ctx().is_pointer_over_egui()) {
+    if close || ui.input(|i| i.key_pressed(egui::Key::Escape)) || pressed_outside(ui, app.grid.popup_frame, resp.response.rect) {
         app.grid.list_picker = None;
     }
 }
@@ -1973,7 +1985,7 @@ fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo) {
 fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let Some((at, rows)) = app.grid.header_menu else { return };
     let mut close = false;
-    egui::Area::new(egui::Id::new("header_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+    let resp = egui::Area::new(egui::Id::new("header_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(190.0);
             let items: Vec<(&str, &str)> = if rows {
@@ -2033,7 +2045,7 @@ fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
             }
         });
     });
-    if close || ui.input(|i| i.key_pressed(egui::Key::Escape)) || (ui.input(|i| i.pointer.any_pressed()) && !ui.ctx().is_pointer_over_egui()) {
+    if close || ui.input(|i| i.key_pressed(egui::Key::Escape)) || pressed_outside(ui, app.grid.popup_frame, resp.response.rect) {
         app.grid.header_menu = None;
     }
 }

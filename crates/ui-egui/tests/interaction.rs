@@ -36,6 +36,13 @@ fn text(h: &mut egui_kittest::Harness<'static, SheetApp>, t: &str) {
     h.run_steps(2);
 }
 
+fn click(h: &mut egui_kittest::Harness<'static, SheetApp>, pos: egui::Pos2) {
+    h.input_mut().events.push(Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
 fn value(h: &egui_kittest::Harness<'static, SheetApp>, a: &str) -> Value {
     h.state().session.active().and_then(|d| d.wb.active().map(|s| s.value(CellRef::parse(a).unwrap_or_default()))).unwrap_or_default()
 }
@@ -145,4 +152,16 @@ fn column_autocomplete_completes_on_enter() {
     text(&mut h, "Ea"); // ambiguous: East / Eastern
     key(&mut h, Key::Enter, Modifiers::NONE);
     assert_eq!(value(&h, "A5"), Value::from("Ea"));
+}
+
+#[test]
+fn validation_picker_closes_on_an_outside_click() {
+    let mut s = blank();
+    s.execute("data.validation", json!({"range": "B2", "type": "list", "formula1": "\"R,W,RW\""})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().grid.list_picker = Some(CellRef::new(1, 1));
+    h.run_steps(2);
+    assert!(h.state().grid.list_picker.is_some(), "open picker stays open until a click or Escape");
+    click(&mut h, egui::pos2(400.0, 500.0));
+    assert!(h.state().grid.list_picker.is_none(), "clicking elsewhere in the window dismisses the picker");
 }
