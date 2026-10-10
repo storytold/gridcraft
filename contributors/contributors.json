@@ -2,23 +2,36 @@
   "schema": 1,
   "repo": "storytold/gridcraft",
   "branch": "main",
-  "head": "51b531be3e8b3f5a19d2b7714a4780a79569ca92",
-  "head_date": "2026-10-08T13:12:32Z",
-  "commits": 24,
+  "head": "90b3c41eec691797129303603d4073269aebab73",
+  "head_date": "2026-10-10T19:59:42Z",
+  "commits": 148,
   "unattributed_commits": 0,
   "contributors": [
     {
       "login": "echelon",
       "people_entry": true,
       "github_name": null,
-      "prs": 4,
-      "commits": 21,
-      "lines_added": 79088,
-      "lines_deleted": 3997,
+      "prs": 5,
+      "commits": 46,
+      "lines_added": 81717,
+      "lines_deleted": 4837,
       "binary_added": 35,
       "binary_deleted": 12,
       "first_commit": "2026-10-06T02:09:42Z",
-      "last_commit": "2026-10-08T13:50:17Z"
+      "last_commit": "2026-10-10T19:59:42Z"
+    },
+    {
+      "login": "switch87",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 1,
+      "commits": 2,
+      "lines_added": 646,
+      "lines_deleted": 8,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-08T10:06:39Z",
+      "last_commit": "2026-10-08T11:01:16Z"
     },
     {
       "login": "h-a-n-a-s-h-i",
@@ -34,6 +47,19 @@
       "last_commit": "2026-10-08T14:02:29Z"
     },
     {
+      "login": "justinjohn0306",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 6,
+      "commits": 7,
+      "lines_added": 1408,
+      "lines_deleted": 116,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-08T12:28:53Z",
+      "last_commit": "2026-10-09T18:39:12Z"
+    },
+    {
       "login": "XusBadia",
       "people_entry": false,
       "github_name": null,
@@ -45,6 +71,149 @@
       "binary_deleted": 0,
       "first_commit": "2026-10-08T13:12:32Z",
       "last_commit": "2026-10-08T13:12:32Z"
+    },
+    {
+      "login": "DWAA1660",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 4,
+      "commits": 4,
+      "lines_added": 244,
+      "lines_deleted": 24,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-09T01:40:12Z",
+      "last_commit": "2026-10-09T20:46:29Z"
+    },
+    {
+      "login": "MarekSpodBiedry",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 14,
+      "commits": 14,
+      "lines_added": 586,
+      "lines_deleted": 52,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-09T08:45:50Z",
+      "last_commit": "2026-10-10T17:06:52Z"
+    },
+    {
+      "login": "harrisonoconnorhover",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 20,
+      "commits": 22,
+      "lines_added": 9266,
+      "lines_deleted": 371,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-09T09:28:48Z",
+      "last_commit": "2026-10-10T17:48:20Z"
+    },
+    {
+      "login": "LloydNicholson",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 7,
+      "commits": 2,
+      "lines_added": 130,
+      "lines_deleted": 25,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-09T15:13:40Z",
+      "last_commit": "2026-10-09T15:23:15Z"
+    },
+    {
+      "login": "lloyd-nich",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 0,
+      "commits": 5,
+      "lines_added": 854,
+      "lines_deleted": 88,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-09T18:36:08Z",
+      "last_commit": "2026-10-10T12:17:14Z"
+    },
+    {
+      "login": "dylanmtaylor",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 3,
+      "commits": 3,
+      "lines_added": 281,
+      "lines_deleted": 45,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-09T21:14:43Z",
+      "last_commit": "2026-10-10T03:14:29Z"
+    },
+    {
+      "login": "edurbs",
+      "people_entry": true,
+      "github_name": "Eduardo Soares",
+      "prs": 1,
+      "commits": 1,
+      "lines_added": 311,
+      "lines_deleted": 11,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-09T21:18:57Z",
+      "last_commit": "2026-10-09T21:18:57Z"
+    },
+    {
+      "login": "nihilist-narwhal",
+      "people_entry": true,
+      "github_name": null,
+      "prs": 19,
+      "commits": 35,
+      "lines_added": 2261,
+      "lines_deleted": 145,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-09T22:14:59Z",
+      "last_commit": "2026-10-10T10:40:00Z"
+    },
+    {
+      "login": "neko233-com",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 1,
+      "commits": 1,
+      "lines_added": 1004,
+      "lines_deleted": 81,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-10T02:20:59Z",
+      "last_commit": "2026-10-10T02:20:59Z"
+    },
+    {
+      "login": "agammann",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 1,
+      "commits": 1,
+      "lines_added": 34,
+      "lines_deleted": 2,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-10T05:47:38Z",
+      "last_commit": "2026-10-10T05:47:38Z"
+    },
+    {
+      "login": "itrycodinganditsbad",
+      "people_entry": false,
+      "github_name": null,
+      "prs": 2,
+      "commits": 2,
+      "lines_added": 68,
+      "lines_deleted": 7,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-10T11:25:38Z",
+      "last_commit": "2026-10-10T11:28:07Z"
     }
   ],
   "models": [
@@ -53,9 +222,18 @@
       "company": "Anthropic",
       "model": "Claude Opus",
       "version": "5.5",
-      "commits": 23,
-      "lines_added": 79359,
-      "lines_deleted": 4032
+      "commits": 58,
+      "lines_added": 83111,
+      "lines_deleted": 4992
+    },
+    {
+      "id": "openai/codex",
+      "company": "OpenAI",
+      "model": "Codex",
+      "version": "",
+      "commits": 3,
+      "lines_added": 173,
+      "lines_deleted": 24
     }
   ]
 }
