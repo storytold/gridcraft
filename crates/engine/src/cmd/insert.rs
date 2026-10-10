@@ -527,9 +527,12 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
     out
 }
 
+/// Most cells a chart's source block may span (bounds the series it builds).
+const MAX_CHART_CELLS: u64 = 1_000_000;
+
 fn insert_chart(s: &mut Session, p: &Json) -> Result<Json> {
     let r = block(s, p)?;
-    if r.count() > 1_000_000 {
+    if r.count() > MAX_CHART_CELLS {
         return Err(bad("insert.chart", "range too large for a chart"));
     }
     let sheet = target_sheet(s, p)?;
@@ -658,8 +661,17 @@ fn chart_switch(s: &mut Session, p: &Json) -> Result<Json> {
         let Some((src, by_rows)) = c.source.clone().map(|s| (s, c.by_rows)).or_else(|| series_block(&c.series)) else { return Ok(Json::Null) };
         let (sheet_name, body) = split_sheet(&src);
         let src_sheet = sheet_name.and_then(|n| cx.wb.sheet_index(&n)).unwrap_or(si);
-        let Some(r) = RangeRef::parse(body) else { return Ok(Json::Null) };
+        let Some(mut r) = RangeRef::parse(body) else { return Ok(Json::Null) };
         let Some(ssh) = cx.wb.sheet(src_sheet) else { return Ok(Json::Null) };
+        // Whole-column/row references (common in files) span a million cells: clip the block's
+        // far edges to the cells in use, then refuse anything still too large to chart.
+        if let Some(used) = ssh.used_range() {
+            r.end.row = r.end.row.min(used.end.row).max(r.start.row);
+            r.end.col = r.end.col.min(used.end.col).max(r.start.col);
+        }
+        if r.count() > MAX_CHART_CELLS {
+            return Err(bad("chart.switchRowColumn", "range too large for a chart"));
+        }
         let by_rows = !by_rows;
         let series = series_from_range(ssh, r, by_rows);
         if let Some(c) = cx.sheet_mut(si)?.charts.get_mut(ci) {

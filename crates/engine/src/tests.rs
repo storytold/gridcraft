@@ -630,6 +630,37 @@ fn switch_row_column_on_a_chart_read_from_a_file() {
 }
 
 #[test]
+fn switch_row_column_with_whole_column_refs_is_bounded() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["", "North", "South"], ["Mon", 10, 14], ["Tue", 12, 15], ["Wed", 14, 16]]}))
+        .unwrap();
+    s.execute("insert.chart", json!({"type": "column", "range": "A1:C4"})).unwrap();
+    // As read from a file: no source block, series over whole columns.
+    let whole = |s: &mut Session| {
+        let c = &mut std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().charts[0];
+        c.source = None;
+        c.by_rows = false;
+        c.series.truncate(2);
+        for (i, col) in ["B", "C"].iter().enumerate() {
+            c.series[i].name = None;
+            c.series[i].categories = Some("Sheet1!$A:$A".into());
+            c.series[i].values = format!("Sheet1!${col}:${col}");
+        }
+    };
+    whole(&mut s);
+    s.execute("chart.switchRowColumn", json!({})).unwrap();
+    let c = s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    assert!(c.by_rows);
+    // Clipped to the used rows, not a million series.
+    assert_eq!(c.series.len(), 3);
+    // A used range that is itself enormous is refused rather than charted.
+    s.execute("cell.set", json!({"cell": "C1048576", "input": "1"})).unwrap();
+    whole(&mut s);
+    assert!(s.execute("chart.switchRowColumn", json!({})).is_err());
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().charts[0].series.len(), 2);
+}
+
+#[test]
 fn ink_strokes_and_ink_to_shape() {
     let mut s = s();
     // A rough closed box.
