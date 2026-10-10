@@ -983,6 +983,7 @@ fn paint_headers(p: &Painter, geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::Sel
 
 fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     let ctx = ui.ctx().clone();
+    let kb_handled = keyboard(app, &ctx, resp, geo, sh);
     let pointer = ctx.input(|i| i.pointer.clone());
     let mods = ctx.input(|i| i.modifiers);
     let pos = pointer.interact_pos().or(pointer.hover_pos());
@@ -1081,7 +1082,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     }
 
     // Press: decide the drag mode.
-    if resp.drag_started() || (resp.clicked() && app.grid.drag == Drag::None) {
+    if !kb_handled &&(resp.drag_started() || (resp.clicked() && app.grid.drag == Drag::None)) {
         // Where the press began (a drag is only recognised after the pointer has moved).
         let Some(p) = pointer.press_origin().or(pos) else { return };
         if in_corner {
@@ -1090,6 +1091,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         }
         if in_col_header {
             if let Some((c, x)) = col_edge(geo, sh, p.x) {
+                if resp.double_clicked() {
+                    let _ = app.run("home.autofitColumnWidth", json!({"cols":RangeRef::cols(c, c).a1()}));
+                    return;
+                }
                 app.grid.drag = Drag::ResizeCol { col: c, start: p.x, orig: sh.col_width(c).max(0.0) * 0.0 + (x - geo.x(sh, c)) / geo.z };
                 return;
             }
@@ -1334,7 +1339,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         app.grid.drag_select = false;
     }
 
-    // Double-click on header edges autofits.
+// Double-click on header edges autofits.
     if resp.double_clicked()
         && let Some(p) = pos
     {
@@ -1389,7 +1394,6 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     if resp.clicked() || resp.drag_started() {
         resp.request_focus();
     }
-    keyboard(app, &ctx, resp, geo, sh);
 }
 
 fn coalesce_last_undo(app: &mut SheetApp) {
@@ -1501,7 +1505,7 @@ fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
 }
 
 /// Grid keyboard handling when no text field has focus.
-fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
+fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) -> bool {
     // Focus left on an editor that no longer exists goes back to the grid.
     let stale = [egui::Id::new("gridcraft.cell_editor"), egui::Id::new("gridcraft.formula_bar")];
     if app.editor.is_none() && ctx.memory(|m| m.focused()).is_some_and(|f| stale.contains(&f)) {
@@ -1509,7 +1513,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     }
     let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && !(app.editor.is_none() && stale.contains(&f)));
     if app.editor.is_some() || app.dialog.is_some() || other_focus || app.message.is_some() {
-        return;
+        return false;
     }
     if ctx.memory(|m| m.focused()).is_none() {
         resp.request_focus();
@@ -1543,7 +1547,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                     if let Some(ed) = app.editor.as_mut() {
                         ed.caret = ed.text.chars().count();
                     }
-                    return;
+                    return true;
                 }
             }
             egui::Event::Key { key, pressed: true, modifiers: m, .. } => {
@@ -1583,9 +1587,23 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                         if m.alt || m.ctrl {
                             app.begin_edit(None, false);
                         } else {
-                            app.move_after_enter(if shift { -1 } else { 1 }, 0);
+                            let dr = if shift { -1 } else { 1 };
+                            app.move_after_enter(dr, 0);
+
+                            // If shift is not held, collapse anchor to active so selection bounds
+                            // don't snap back
+                            if !shift {
+                                app.grid.drag = Drag::None; // Reset stale mouse drag state
+                                app.grid.drag_select = false;
+
+                                if let Some(d) = app.session.active_mut() {
+                                    d.selection = gridcraft_engine::Selection::at(d.selection.active);
+                                }
+                            }
                         }
+                        return true;
                     }
+
                     Key::Tab => app.move_after_enter(0, if shift { -1 } else { 1 }),
                     Key::F2 => app.begin_edit(None, false),
                     Key::Delete => app.run_or_alert("edit.clearContents", json!({})),
@@ -1612,6 +1630,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
             _ => {}
         }
     }
+    false
 }
 
 fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook) {
