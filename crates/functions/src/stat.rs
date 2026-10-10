@@ -1632,7 +1632,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             "Population variance counting text as 0 and logicals as 1/0.",
             |a: &[Arg], _c: C| num_val(var_p(&numbers_a(a)?)?)
         ),
-        f!("MIN", 1, VAR, Statistical, A, "MIN(number1, [number2], ...)", "Smallest number (0 when there are none).", |a: &[Arg], _c: C| num_val(
+        f!("MIN", 0, VAR, Statistical, A, "MIN(number1, [number2], ...)", "Smallest number (0 when there are none).", |a: &[Arg], _c: C| num_val(
             min_of(&numbers(a)?)
         )),
         f!(
@@ -2290,6 +2290,7 @@ mod tests {
     fn min_max_order() {
         close(ev("MIN", vec![c(&[3.0, -1.0, 2.0]), n(0.0)]), -1.0);
         close(ev("MAX", vec![c(&[3.0, -1.0, 2.0]), n(10.0)]), 10.0);
+        close(ev("MIN", vec![]), 0.0);
         close(ev("MAX", vec![rf(arr(vec![vec![tv("a")]]))]), 0.0);
         close(ev("MAXA", vec![rf(arr(vec![vec![nv(-1.0), Value::Bool(true)]]))]), 1.0);
         close(ev("MINA", vec![rf(arr(vec![vec![nv(1.0), tv("x")]]))]), 0.0);
