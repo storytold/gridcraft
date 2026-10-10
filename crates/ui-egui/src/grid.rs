@@ -1708,7 +1708,11 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                     }
                     Key::Tab => app.move_after_enter(0, if shift { -1 } else { 1 }),
                     Key::F2 => app.begin_edit(None, false),
-                    Key::Delete => app.run_or_alert("edit.clearContents", json!({})),
+                    Key::Delete => {
+                        if !app.delete_selected_object() {
+                            app.run_or_alert("edit.clearContents", json!({}));
+                        }
+                    }
                     Key::Backspace => {
                         // Excel for Mac: Delete clears the cell and starts editing it.
                         app.run_or_alert("edit.clearContents", json!({}));

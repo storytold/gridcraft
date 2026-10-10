@@ -532,6 +532,30 @@ impl SheetApp {
         self.session.mode = gridcraft_engine::Mode::Ready;
     }
 
+    /// Deletes the selected chart/image/shape (Delete with an object selected, like Excel,
+    /// instead of clearing whatever cell range happens to still be selected underneath it).
+    /// `selected_chart` only tracks the id, so its kind is looked up from the selection pane.
+    /// Returns `false` (nothing deleted) when no object is selected, so the caller can fall
+    /// back to clearing cell contents.
+    pub fn delete_selected_object(&mut self) -> bool {
+        let Some(id) = self.selected_chart else { return false };
+        let Ok(list) = self.session.run("arrange.selectionPane", json!({})) else { return false };
+        let Some(kind) = list
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|it| it.get("id").and_then(Json::as_u64) == Some(id as u64))
+            .and_then(|it| it.get("kind"))
+            .and_then(Json::as_str)
+            .map(str::to_string)
+        else {
+            return false;
+        };
+        self.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
+        self.selected_chart = None;
+        true
+    }
+
     /// Enter/Tab move inside a multi-cell selection, otherwise to the next cell.
     pub fn move_after_enter(&mut self, dr: i64, dc: i64) {
         let multi = self.session.active().is_some_and(|d| !d.selection.is_single_cell());

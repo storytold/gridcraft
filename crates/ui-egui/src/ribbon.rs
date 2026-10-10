@@ -1143,7 +1143,12 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
     });
     sep(ui);
     if big_button(ui, Icon::Chart, "Recommended\nCharts", "Recommended Charts", false).clicked() {
-        act(app, "insert.recommendedCharts", json!({}));
+        // Select the new chart, like inserting any other object, so it can be moved or deleted
+        // right away instead of leaving the source data selected.
+        match app.run("insert.recommendedCharts", json!({})) {
+            Ok(r) => app.selected_chart = r.get("chart").and_then(serde_json::Value::as_u64).map(|id| id as u32),
+            Err(e) => app.message = Some(("GridCraft".into(), crate::clean_error(&e))),
+        }
     }
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
