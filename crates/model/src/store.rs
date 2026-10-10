@@ -120,6 +120,40 @@ impl CellStore {
     pub fn has(&self, c: CellRef) -> bool {
         self.get(c).is_some_and(|cell| !cell.value.is_empty() || cell.formula.is_some())
     }
+    /// Positions whose cells differ between `self` and `other` (stored on one side only, or not
+    /// equal). Bands both stores share are skipped, so comparing an edited copy with the store
+    /// it was cloned from only visits the bands the edit touched.
+    pub fn diff(&self, other: &CellStore) -> Vec<CellRef> {
+        let empty = Band::default();
+        let mut keys: Vec<u32> = self.bands.keys().chain(other.bands.keys()).copied().collect();
+        keys.sort_unstable();
+        keys.dedup();
+        let mut out = Vec::new();
+        for k in keys {
+            let (a, b) = (self.bands.get(&k), other.bands.get(&k));
+            if let (Some(a), Some(b)) = (a, b)
+                && Arc::ptr_eq(a, b)
+            {
+                continue;
+            }
+            let (a, b) = (a.map_or(&empty, |x| x), b.map_or(&empty, |x| x));
+            for (row, cols) in &a.rows {
+                for (col, cell) in cols {
+                    if b.rows.get(row).and_then(|r| r.get(col)) != Some(cell) {
+                        out.push(CellRef::new(*row, *col));
+                    }
+                }
+            }
+            for (row, cols) in &b.rows {
+                for col in cols.keys() {
+                    if !a.rows.get(row).is_some_and(|r| r.contains_key(col)) {
+                        out.push(CellRef::new(*row, *col));
+                    }
+                }
+            }
+        }
+        out
+    }
     /// Removes every cell in `r` and returns them.
     pub fn take_range(&mut self, r: RangeRef) -> Vec<(CellRef, Cell)> {
         let keys: Vec<CellRef> = self.iter_range(r).map(|(c, _)| c).collect();
@@ -208,6 +242,20 @@ mod tests {
         s.set(c(5, 0), Cell::value(99.0.into()));
         assert_eq!(snap.get(c(5, 0)).unwrap().value, Value::Number(5.0));
         assert_eq!(s.get(c(5, 0)).unwrap().value, Value::Number(99.0));
+    }
+
+    #[test]
+    fn diff_visits_changed_bands() {
+        let mut s = CellStore::new();
+        for r in 0..1000 {
+            s.set(c(r, 0), Cell::value((r as f64).into()));
+        }
+        let snap = s.clone();
+        assert!(s.diff(&snap).is_empty());
+        s.set(c(5, 0), Cell::value(99.0.into()));
+        s.set(c(700, 3), Cell::value("new".into()));
+        s.remove(c(900, 0));
+        assert_eq!(snap.diff(&s), [c(5, 0), c(700, 3), c(900, 0)]);
     }
 
     #[test]

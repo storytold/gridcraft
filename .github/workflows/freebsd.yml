@@ -51,16 +51,15 @@ jobs:
       GRIDCRAFT_PACKAGE: ${{ inputs.package && '1' || '' }}
       GRIDCRAFT_BUILD_SHA: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
-      # Optional font input (docs: storytold/craft-fonts docs/integration.md); releases embed it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check out craft-fonts
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: abb83316d96aa59c1cf64784289e378fe9fa5695
           path: craft-fonts
       - name: Build in a FreeBSD VM
-        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
         with:
           release: "14.3"
           usesh: true
@@ -88,7 +87,7 @@ jobs:
               cargo build --workspace --all-targets --locked
               CRAFT_FONTS_DIR="$PWD/craft-fonts" cargo test --workspace --locked
             fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: inputs.package
         with:
           name: release-freebsd

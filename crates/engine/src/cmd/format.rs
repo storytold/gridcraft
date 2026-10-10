@@ -365,6 +365,9 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
     let base = border_style(str_param(p, "style").unwrap_or("thin"));
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
+    if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.protection.as_ref().is_some_and(|pr| !pr.format_cells)) {
+        return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
+    }
     edit(s, |cx| {
         for r in &ranges {
             if r.count() > 2_000_000 {
@@ -453,7 +456,29 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
                     }
                 });
                 cx.sheet_mut(sheet)?.set_style(c, new);
-                // Clear the neighbour's facing edge when removing borders, so it really goes.
+                if preset == "none" {
+                    // A shared line can be stored on either cell. Selected cells are handled
+                    // by this loop; remove only facing edges outside this range.
+                    for (boundary, dr, dc) in [(top, -1, 0), (bottom, 1, 0), (left, 0, -1), (right, 0, 1)] {
+                        if !boundary {
+                            continue;
+                        }
+                        let Some(neighbor) = c.offset(dr, dc) else { continue };
+                        let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(neighbor)).unwrap_or_default();
+                        let new = cx.wb.styles.derive(st, |s| {
+                            let edge = match (dr, dc) {
+                                (-1, _) => &mut s.borders.bottom,
+                                (1, _) => &mut s.borders.top,
+                                (_, -1) => &mut s.borders.right,
+                                _ => &mut s.borders.left,
+                            };
+                            *edge = BorderLine::default();
+                        });
+                        if new != st {
+                            cx.sheet_mut(sheet)?.set_style(neighbor, new);
+                        }
+                    }
+                }
             }
         }
         Ok(Json::Null)

@@ -43,7 +43,7 @@ People trust GridCraft with their numbers; a crash loses their work. **This outr
 ## Running and looking at the app
 - `cargo run --release -p gridcraft -- --sample sales --control 7979` (sample workbook + control channel).
 - Drive it: JSON lines on `127.0.0.1:7979`, e.g. `{"id":1,"method":"engine.execute","params":{"command":"cell.set","params":{"cell":"B2","input":"=SUM(A1:A9)"}}}` then `{"id":2,"method":"ui.screenshot","params":{"path":"/tmp/shot.png"}}`. Methods: `crates/ui-egui/src/control.rs`, docs: `docs/control-protocol.md`.
-- **Offscreen UI render** (no window): `cargo run --release -p gridcraft-cli -- snapshot --sample sales out.png`.
+- **Offscreen UI render** (no window, from a source checkout): `cargo run -p gridcraft-ui-egui --example snapshot -- --sample sales out.png`.
 - Headless: `gridcraft-cli eval '=SUM(1,2,3)'`, `gridcraft-cli run --in book.xlsx --cmd 'home.bold={"range":"A1:C1"}' --out book.xlsx`, `gridcraft-cli mcp`.
 - **For UI work, look at the result** (snapshot PNG) and compare with `plan/excel/observed-ui.md`.
 - Shell gotcha: `mv`/`cp` are aliased interactive here — use `/bin/mv -f` / `/bin/cp -f`. macOS has no `timeout`; use `perl -e 'alarm 60; exec @ARGV' cmd`.

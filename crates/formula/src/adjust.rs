@@ -56,6 +56,12 @@ pub enum Edit {
     Delete { axis: Axis, at: u32, count: u32 },
     /// Cut-paste of a block: references into `from` now point into the block at `to` (top-left).
     Move { from: RangeRef, to_row: u32, to_col: u32 },
+    /// Insert Cells shifting down (`Rows`) or right (`Cols`): the cells of `range` and those
+    /// below (right of) it move by its height (width), within its columns (rows) only.
+    InsertCells { axis: Axis, range: RangeRef },
+    /// Delete Cells shifting up (`Rows`) or left (`Cols`): `range` goes and the cells below
+    /// (right of) it move back by its height (width), within its columns (rows) only.
+    DeleteCells { axis: Axis, range: RangeRef },
 }
 
 /// Adjusts a formula living on sheet `host` after `edit` on sheet `target`.
@@ -157,6 +163,21 @@ fn adjust_ref(r: &Reference, edit: &Edit) -> Option<Reference> {
                 (k, _) => k.clone(),
             };
             Some(Reference { sheet: r.sheet.clone(), kind })
+        }
+        Edit::InsertCells { axis, range } | Edit::DeleteCells { axis, range } => {
+            // Like inserting/deleting lines, for references that lie within the shifted
+            // columns (rows); Excel leaves references reaching outside them as they are.
+            let span = r.range();
+            let (inside, at, count) = match axis {
+                Axis::Rows => (range.start.col <= span.start.col && span.end.col <= range.end.col, range.start.row, range.height()),
+                Axis::Cols => (range.start.row <= span.start.row && span.end.row <= range.end.row, range.start.col, range.width()),
+            };
+            if !inside {
+                return Some(r.clone());
+            }
+            let axis = *axis;
+            let lines = if matches!(edit, Edit::InsertCells { .. }) { Edit::Insert { axis, at, count } } else { Edit::Delete { axis, at, count } };
+            adjust_ref(r, &lines)
         }
         Edit::Move { from, to_row, to_col } => {
             let dr = *to_row as i64 - from.start.row as i64;

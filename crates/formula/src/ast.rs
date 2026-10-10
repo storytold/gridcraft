@@ -88,6 +88,9 @@ pub enum UnOp {
     Percent,
     /// Implicit intersection `@`.
     At,
+    /// Spill range operator `A1#`: the whole spill range of the dynamic array anchored at the
+    /// cell (`ANCHORARRAY` in files).
+    Spill,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

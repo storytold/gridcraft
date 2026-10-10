@@ -101,6 +101,9 @@ and upload their artifacts, the environment refuses macOS and Windows, and no re
 - **Notarization:** the app is zipped and sent with `xcrun notarytool submit --wait`, then
   stapled. The DMG (with an `Applications` link) is signed, notarized and stapled too, and
   checked with `codesign --verify --strict`, `stapler validate` and `spctl -a -vvv`.
+  Its Finder window (background, icon size and positions) comes from
+  [`packaging/macos/dmg/`](../packaging/macos/dmg/README.md), and its volume is named `GridCraft`
+  without the version, which the window's background needs; the DMG file name keeps the version.
 - **CLI:** the universal `gridcraft-cli` is signed, zipped and notarized.
 
 Locally, without certificates, the script signs ad-hoc (`codesign -s -`) and skips notarization:

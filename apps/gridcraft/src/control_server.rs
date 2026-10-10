@@ -21,7 +21,7 @@ pub fn start(port: u16, ctx: egui::Context) -> std::io::Result<Receiver<ControlR
             let _ = std::thread::Builder::new().name("control-conn".into()).spawn(move || serve(stream, tx, ctx));
         }
     })?;
-    eprintln!("GridCraft control channel listening on 127.0.0.1:{port}");
+    log::info!("control channel listening on 127.0.0.1:{port}");
     Ok(rx)
 }
 

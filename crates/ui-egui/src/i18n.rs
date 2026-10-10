@@ -4,47 +4,70 @@
 //! The interface language is a preference ([`crate::UiState::language`]): on first run it defaults
 //! to the system's language ([`Language::system`]), and the View tab switches it by hand.
 //!
-//! No Japanese font is bundled and none is installed here: the CJK faces [`crate::theme`] appends
-//! to every family already cover kana and kanji, so Japanese interface text renders without help.
+//! CJK fonts stay system-provided: [`crate::theme`] appends available CJK faces to every family so
+//! Japanese, Chinese and Korean labels and workbook text can render without bundling font files.
 
 use serde::{Deserialize, Serialize};
+
+mod ko;
+mod pt;
+mod ru;
+mod zh;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
     #[default]
     En,
+    Zh,
     Ja,
+    Ko,
+    Ru,
     #[serde(rename = "pt")]
     PtBr,
 }
 
 impl Language {
-    pub const ALL: [Self; 3] = [Self::En, Self::Ja, Self::PtBr];
+    pub const ALL: [Self; 6] = [Self::En, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
+            Self::Zh => "简体中文",
             Self::Ja => "日本語",
+            Self::Ko => "한국어",
+            Self::Ru => "Русский",
             Self::PtBr => "Português (Brasil)",
         }
     }
 
-    pub fn parse(code: &str) -> Option<Self> {
-        match code {
-            "en" => Some(Self::En),
-            "ja" => Some(Self::Ja),
-            "pt" | "pt-br" => Some(Self::PtBr),
-            _ => None,
+    /// The language's code, as saved in `ui.json` and taken by `app.language.set`.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::En => "en",
+            Self::Zh => "zh",
+            Self::Ja => "ja",
+            Self::Ko => "ko",
+            Self::Ru => "ru",
+            Self::PtBr => "pt",
         }
     }
 
-    /// A language tag (`ja`, `ja-JP`, `en_US`) reduced to a supported language. Native only: the web
-    /// build has no system locale to read and tests exercise it on the host.
-    #[cfg(not(target_arch = "wasm32"))]
+    pub fn parse(code: &str) -> Option<Self> {
+        Self::from_tag(code)
+    }
+
     fn from_tag(tag: &str) -> Option<Self> {
-        Self::parse(&tag.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase())
+        match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
+            "en" => Some(Self::En),
+            "zh" => Some(Self::Zh),
+            "ja" => Some(Self::Ja),
+            "ko" => Some(Self::Ko),
+            "ru" => Some(Self::Ru),
+            "pt" => Some(Self::PtBr),
+            _ => None,
+        }
     }
 
     /// The system's preferred interface language, best effort; English when it is unknown or
@@ -56,18 +79,48 @@ impl Language {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            Self::En
+            web_sys::window().and_then(|window| window.navigator().language()).and_then(|tag| Self::from_tag(&tag)).unwrap_or(Self::En)
         }
     }
 
+    /// Translates an interface label; untranslated labels fall back to English.
+    ///
+    /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
+    /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
-        let table: &[(&str, &str)] = match self {
-            Self::En => &[],
-            Self::Ja => JAPANESE,
-            Self::PtBr => PORTUGUESE,
+        let translated = match self {
+            Self::En => None,
+            Self::Ja => JAPANESE.iter().find(|(english, _)| *english == text).map(|(_, translated)| *translated),
+            Self::Zh => zh::translate(text),
+            Self::Ko => ko::translate(text),
+            Self::Ru => ru::translate(text),
+            Self::PtBr => pt::translate(text),
         };
-        table.iter().find(|(english, _)| *english == text).map_or(text, |(_, translated)| translated)
+        translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
+}
+
+/// Deserializes a saved language leniently: an unknown or malformed value (a language removed in a
+/// later version, a hand-edited `ui.json`) reads as English instead of failing the whole `UiState`,
+/// which would reset every other preference with it.
+pub fn lenient<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Language, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Code(String),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Raw::deserialize(d)? {
+        Raw::Code(code) => Language::parse(&code).unwrap_or_default(),
+        Raw::Other(_) => Language::default(),
+    })
+}
+
+/// The language a saved `ui.json` asks for, if it names a supported one. The desktop app uses it
+/// to tell "saved English" from "nothing usable saved" (first run, an older file, an unknown
+/// value), which starts from [`Language::system`] instead.
+pub fn saved_language(ui_json: &serde_json::Value) -> Option<Language> {
+    ui_json.get("language").and_then(serde_json::Value::as_str).and_then(Language::parse)
 }
 
 /// egui context-data key holding the language of the frame being drawn. Widgets that only get a
@@ -125,7 +178,8 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Vertical Text", "縦書き"),
     ("Decrease Indent", "インデントを減らす"),
     ("Increase Indent", "インデントを増やす"),
-    ("Orientation", "印刷の向き"),
+    ("Orientation", "方向"),
+    ("Page Layout|Orientation", "印刷の向き"),
     ("Angle Counterclockwise", "左回りに回転"),
     ("Angle Clockwise", "右回りに回転"),
     ("Rotate Text Up", "文字列を上に回転"),
@@ -157,7 +211,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Column Width…", "列の幅…"),
     ("AutoFit Column Width", "列の幅を自動調整"),
     ("Default Width…", "標準の幅…"),
-    ("Hide Rows", "行の表示/非表示"),
+    ("Hide Rows", "行を表示しない"),
     ("Unhide Rows", "再表示"),
     ("Hide Columns", "列の表示/非表示"),
     ("Unhide Columns", "再表示"),
@@ -222,7 +276,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Use in Formula", "数式で使用"),
     ("Create from Selection", "選択範囲から作成"),
     ("Trace Precedents", "参照元のトレース"),
-    ("Trace Dependents", "依存元のトレース"),
+    ("Trace Dependents", "参照先のトレース"),
     ("Remove Arrows", "矢印の解除"),
     ("Show Formulas", "数式の表示"),
     ("Error Checking", "エラーチェック"),
@@ -278,6 +332,10 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Freeze First Column", "最左列の固定"),
     ("Unfreeze Panes", "ウィンドウ枠固定の解除"),
     ("Dark Mode", "ダーク モード"),
+    ("Display theme", "表示テーマ"),
+    ("System", "システム"),
+    ("Light", "ライト"),
+    ("Dark", "ダーク"),
     ("Interface language", "表示言語"),
     ("Command\nPalette", "コマンド パレット"),
     ("Agent\nControl", "エージェント制御"),
@@ -348,271 +406,8 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Lookup &\nReference", "検索/行列"),
     ("Math &\nTrig", "数学/三角"),
     ("More\nFunctions", "その他の関数"),
-];
-
-/// English label → Brazilian Portuguese, keyed like [`JAPANESE`] so the tables stay in step (a test
-/// enforces it) and the diff reads against the Japanese column. Labels follow Excel's pt-BR wording;
-/// anything absent falls back to English.
-const PORTUGUESE: &[(&str, &str)] = &[
-    ("Paste", "Colar"),
-    ("Paste Values", "Colar Valores"),
-    ("Paste Formulas", "Colar Fórmulas"),
-    ("Paste Formatting", "Colar Formatação"),
-    ("Transpose", "Transpor"),
-    ("Paste Link", "Colar Vínculo"),
-    ("Paste Special…", "Colar Especial…"),
-    ("Cut (⌘X)", "Recortar (⌘X)"),
-    ("Copy (⌘C)", "Copiar (⌘C)"),
-    ("Format Painter (double-click to keep it on)", "Pincel de Formatação (clique duas vezes para mantê-lo ativo)"),
-    ("Bold (⌘B)", "Negrito (⌘B)"),
-    ("Italic (⌘I)", "Itálico (⌘I)"),
-    ("Underline (⌘U)", "Sublinhado (⌘U)"),
-    ("Double Underline", "Sublinhado Duplo"),
-    ("Strikethrough", "Riscado"),
-    ("Underline", "Sublinhado"),
-    ("Increase Font Size", "Aumentar Tamanho da Fonte"),
-    ("Decrease Font Size", "Diminuir Tamanho da Fonte"),
-    ("Wrap Text", "Quebrar Texto Automaticamente"),
-    ("Merge & Center", "Mesclar e Centralizar"),
-    ("Merge Cells", "Mesclar Células"),
-    ("Merge Across", "Mesclar Através"),
-    ("Unmerge Cells", "Desmesclar Células"),
-    ("Fill Color", "Cor de Preenchimento"),
-    ("Font Color", "Cor da Fonte"),
-    ("Borders", "Bordas"),
-    ("Top\nAlign", "Alinhar\nno Topo"),
-    ("Middle\nAlign", "Alinhar\nno Meio"),
-    ("Bottom\nAlign", "Alinhar\nem Baixo"),
-    ("Left", "Esquerda"),
-    ("Right", "Direita"),
-    ("Center", "Centro"),
-    ("Horizontal", "Horizontal"),
-    ("Vertical Text", "Texto Vertical"),
-    ("Decrease Indent", "Diminuir Recuo"),
-    ("Increase Indent", "Aumentar Recuo"),
-    ("Orientation", "Orientação"),
-    ("Angle Counterclockwise", "Ângulo Anti-Horário"),
-    ("Angle Clockwise", "Ângulo Horário"),
-    ("Rotate Text Up", "Girar Texto para Cima"),
-    ("Rotate Text Down", "Girar Texto para Baixo"),
-    ("Accounting Number Format", "Formato de Número Contábil"),
-    ("Percent Style", "Estilo de Porcentagem"),
-    ("Comma Style", "Estilo de Vírgula"),
-    ("Increase Decimal", "Aumentar Casas Decimais"),
-    ("Decrease Decimal", "Diminuir Casas Decimais"),
-    ("More Accounting Formats…", "Mais Formatos Contábeis…"),
-    ("Conditional\nFormatting", "Formatação\nCondicional"),
-    ("Conditional Formatting", "Formatação Condicional"),
-    ("Format\nas Table", "Formatar\ncomo Tabela"),
-    ("Cell\nStyles", "Estilos\nde Célula"),
-    ("Format Cells…", "Formatar Células…"),
-    ("Format Cell Alignment…", "Formatar Alinhamento de Células…"),
-    ("Format\nPane", "Painel de\nFormatação"),
-    ("Format", "Formatar"),
-    ("Insert", "Inserir"),
-    ("Insert Cells…", "Inserir Células…"),
-    ("Delete", "Excluir"),
-    ("Delete Cells…", "Excluir Células…"),
-    ("Insert Sheet Rows", "Inserir Linhas de Planilha"),
-    ("Insert Sheet Columns", "Inserir Colunas de Planilha"),
-    ("Delete Sheet Rows", "Excluir Linhas de Planilha"),
-    ("Delete Sheet Columns", "Excluir Colunas de Planilha"),
-    ("Row Height…", "Altura da Linha…"),
-    ("AutoFit Row Height", "Ajustar Altura da Linha"),
-    ("Column Width…", "Largura da Coluna…"),
-    ("AutoFit Column Width", "Ajustar Largura da Coluna"),
-    ("Default Width…", "Largura Padrão…"),
-    ("Hide Rows", "Ocultar Linhas"),
-    ("Unhide Rows", "Reexibir Linhas"),
-    ("Hide Columns", "Ocultar Colunas"),
-    ("Unhide Columns", "Reexibir Colunas"),
-    ("Lock Cell", "Bloquear Célula"),
-    ("Clear", "Limpar"),
-    ("Clear All", "Limpar Tudo"),
-    ("Clear Formats", "Limpar Formatos"),
-    ("Clear Contents", "Limpar Conteúdo"),
-    ("Clear Comments and Notes", "Limpar Comentários e Notas"),
-    ("Clear Hyperlinks", "Limpar Hiperlinks"),
-    ("AutoSum", "Soma Automática"),
-    ("AutoSum (⌘⇧T)", "Soma Automática (⌘⇧T)"),
-    ("Flash\nFill", "Preenchimento\nRelâmpago"),
-    ("Flash Fill", "Preenchimento Relâmpago"),
-    ("Fill", "Preencher"),
-    ("Clear Print Area", "Limpar Área de Impressão"),
-    ("Find &\nSelect", "Localizar e\nSelecionar"),
-    ("Find…", "Localizar…"),
-    ("Replace…", "Substituir…"),
-    ("Go To…", "Ir Para…"),
-    ("Go To Special…", "Ir Para Especial…"),
-    ("PivotTable", "Tabela Dinâmica"),
-    ("Recommended\nCharts", "Gráficos\nRecomendados"),
-    ("Table", "Tabela"),
-    ("Pictures", "Imagens"),
-    ("Shapes", "Formas"),
-    ("Icons", "Ícones"),
-    ("Text\nBox", "Caixa\nde Texto"),
-    ("Comment", "Comentário"),
-    ("New\nComment", "Novo\nComentário"),
-    ("New Note", "Nova Nota"),
-    ("Show/Hide Note", "Mostrar/Ocultar Nota"),
-    ("Header &\nFooter", "Cabeçalho e\nRodapé"),
-    ("Text to\nColumns", "Texto para\nColunas"),
-    ("Link", "Vínculo"),
-    ("Symbol", "Símbolo"),
-    ("Sparklines", "Minigráficos"),
-    ("Header & Footer", "Cabeçalho e Rodapé"),
-    ("Draw with ink", "Desenhar com Tinta"),
-    ("Eraser", "Borracha"),
-    ("Ink to\nShape", "Tinta para\nForma"),
-    ("Select\nObjects", "Selecionar\nObjetos"),
-    ("Themes", "Temas"),
-    ("Margins", "Margens"),
-    ("Size", "Tamanho"),
-    ("Print\nArea", "Área de\nImpressão"),
-    ("Set Print Area", "Definir Área de Impressão"),
-    ("Breaks", "Quebras"),
-    ("Insert Page Break", "Inserir Quebra de Página"),
-    ("Remove Page Break", "Remover Quebra de Página"),
-    ("Reset All Page Breaks", "Redefinir Todas as Quebras de Página"),
-    ("Print\nTitles", "Imprimir\nTítulos"),
-    ("Narrow", "Estreita"),
-    ("Wide", "Ampla"),
-    ("Normal", "Normal"),
-    ("Portrait", "Retrato"),
-    ("Landscape", "Paisagem"),
-    ("Custom Margins…", "Margens Personalizadas…"),
-    ("Insert\nFunction", "Inserir\nFunção"),
-    ("Name\nManager", "Gerenciador\nde Nomes"),
-    ("Define Name", "Definir Nome"),
-    ("Use in Formula", "Usar na Fórmula"),
-    ("Create from Selection", "Criar a Partir da Seleção"),
-    ("Trace Precedents", "Rastrear Precedentes"),
-    ("Trace Dependents", "Rastrear Dependentes"),
-    ("Remove Arrows", "Remover Setas"),
-    ("Show Formulas", "Exibir Fórmulas"),
-    ("Error Checking", "Verificação de Erros"),
-    ("Evaluate Formula", "Avaliar Fórmula"),
-    ("Watch Window", "Janela de Inspeção"),
-    ("Calculation\nOptions", "Opções de\nCálculo"),
-    ("Calculate Now", "Calcular Agora"),
-    ("Calculate Sheet", "Calcular Planilha"),
-    ("Automatic", "Automático"),
-    ("Automatic Except for Data Tables", "Automático Exceto Tabelas de Dados"),
-    ("Manual", "Manual"),
-    ("Sort &\nFilter", "Classificar e\nFiltrar"),
-    ("Sort", "Classificar"),
-    ("Sort A to Z", "Classificar de A a Z"),
-    ("Sort Z to A", "Classificar de Z a A"),
-    ("Custom Sort…", "Classificação Personalizada…"),
-    ("Filter", "Filtrar"),
-    ("Reapply", "Aplicar Novamente"),
-    ("Get Data\n(Text/CSV)", "Obter Dados\n(Texto/CSV)"),
-    ("Remove\nDuplicates", "Remover\nDuplicatas"),
-    ("Data\nValidation", "Validação\nde Dados"),
-    ("Data Validation", "Validação de Dados"),
-    ("Data Validation…", "Validação de Dados…"),
-    ("Circle Invalid Data", "Circundar Dados Inválidos"),
-    ("Clear Validation", "Limpar Validação"),
-    ("Group", "Agrupar"),
-    ("Ungroup", "Desagrupar"),
-    ("Subtotal", "Subtotal"),
-    ("What-If\nAnalysis", "Análise de\nHipóteses"),
-    ("Data Table…", "Tabela de Dados…"),
-    ("Scenario Manager…", "Gerenciador de Cenários…"),
-    ("Goal Seek…", "Buscar Objetivo…"),
-    ("Spelling", "Ortografia"),
-    ("Check\nAccessibility", "Verificar\nAcessibilidade"),
-    ("Threaded Comments", "Comentários Encadeados"),
-    ("Show\nComments", "Mostrar\nComentários"),
-    ("Protect\nWorkbook", "Proteger\nPasta de Trabalho"),
-    ("Unprotect\nSheet", "Desproteger\nPlanilha"),
-    ("Protect Sheet…", "Proteger Planilha…"),
-    ("Comments", "Comentários"),
-    ("Notes", "Notas"),
-    ("Page Break\nPreview", "Visualização\nde Quebras de Página"),
-    ("Page\nLayout", "Layout\nde Página"),
-    ("Formula Bar", "Barra de Fórmulas"),
-    ("Gridlines", "Linhas de Grade"),
-    ("Headings", "Títulos"),
-    ("Zoom", "Zoom"),
-    ("100%", "100%"),
-    ("Zoom to\nSelection", "Zoom na\nSeleção"),
-    ("Freeze\nPanes", "Congelar\nPainéis"),
-    ("Freeze Panes", "Congelar Painéis"),
-    ("Freeze Top Row", "Congelar Linha Superior"),
-    ("Freeze First Column", "Congelar Primeira Coluna"),
-    ("Unfreeze Panes", "Descongelar Painéis"),
-    ("Dark Mode", "Modo Escuro"),
-    ("Interface language", "Idioma da interface"),
-    ("Command\nPalette", "Paleta de\nComandos"),
-    ("Agent\nControl", "Controle\ndo Agente"),
-    ("Action\nJournal", "Registro\nde Ações"),
-    ("About\nGridCraft", "Sobre o\nGridCraft"),
-    ("Share", "Compartilhar"),
-    ("Add Chart\nElement", "Adicionar\nElemento de Gráfico"),
-    ("Change\nChart Type", "Alterar\nTipo de Gráfico"),
-    ("Switch\nRow/Column", "Alternar\nLinha/Coluna"),
-    ("Data Labels: None", "Rótulos de Dados: Nenhum"),
-    ("Data Labels: Show", "Rótulos de Dados: Exibir"),
-    ("Legend: None", "Legenda: Nenhuma"),
-    ("Legend: Bottom", "Legenda: Abaixo"),
-    ("Legend: Top", "Legenda: Acima"),
-    ("Legend: Right", "Legenda: À Direita"),
-    ("Gridlines: None", "Linhas de Grade: Nenhuma"),
-    ("Gridlines: Show", "Linhas de Grade: Exibir"),
-    ("Chart\nTitle", "Título\ndo Gráfico"),
-    ("Delete\nChart", "Excluir\nGráfico"),
-    ("Convert\nto Range", "Converter\nem Intervalo"),
-    ("Table\nStyles", "Estilos\nde Tabela"),
-    ("Top 10 Items", "10 Primeiros Itens"),
-    ("Top 10%", "10% Primeiros"),
-    ("Bottom 10 Items", "10 Últimos Itens"),
-    ("Bottom 10%", "10% Últimos"),
-    ("Above Average", "Acima da Média"),
-    ("Below Average", "Abaixo da Média"),
-    ("Clear Rules from Entire Sheet", "Limpar Regras de Toda a Planilha"),
-    ("Clear Rules from Selected Cells", "Limpar Regras das Células Selecionadas"),
-    ("Constants", "Constantes"),
-    ("Data Bars", "Barras de Dados"),
-    ("Color Scales", "Escalas de Cores"),
-    ("Icon Sets", "Conjuntos de Ícones"),
-    ("Home", "Página Inicial"),
-    ("Draw", "Desenhar"),
-    ("Page Layout", "Layout da Página"),
-    ("Formulas", "Fórmulas"),
-    ("Data", "Dados"),
-    ("Review", "Revisão"),
-    ("View", "Exibir"),
-    ("Automate", "Automatizar"),
-    ("Table Design", "Design de Tabela"),
-    ("Chart Design", "Design de Gráfico"),
-    ("Ready", "Pronto"),
-    ("Enter", "Inserir"),
-    ("Edit", "Editar"),
-    ("Point", "Apontar"),
-    ("Calculate", "Calcular"),
-    ("Select destination and press Enter or choose Paste", "Selecione o destino e pressione Enter ou escolha Colar"),
-    ("General", "Geral"),
-    ("Number", "Número"),
-    ("Currency", "Moeda"),
-    ("Accounting", "Contábil"),
-    ("Date", "Data"),
-    ("Time", "Hora"),
-    ("Percentage", "Porcentagem"),
-    ("Fraction", "Fração"),
-    ("Scientific", "Científico"),
-    ("Text", "Texto"),
-    ("Special", "Especial"),
-    ("Custom", "Personalizado"),
-    ("Short Date", "Data Abreviada"),
-    ("Long Date", "Data Por Extenso"),
-    ("More Number Formats…", "Mais Formatos de Número…"),
-    ("Financial", "Financeira"),
-    ("Logical", "Lógica"),
-    ("Date &\nTime", "Data e\nHora"),
-    ("Lookup &\nReference", "Pesquisa e\nReferência"),
-    ("Math &\nTrig", "Matemática e\nTrigonometria"),
-    ("More\nFunctions", "Mais\nFunções"),
+    ("Sheet Options|View", "画面"),
+    ("Print", "印刷"),
 ];
 
 #[cfg(test)]
@@ -624,30 +419,54 @@ mod tests {
         for (i, (en, ja)) in JAPANESE.iter().enumerate() {
             assert!(!ja.is_empty());
             assert!(JAPANESE.iter().take(i).all(|(other, _)| en != other));
-            assert_eq!(Language::En.tr(en), *en);
+            assert_eq!(Language::En.tr(en), en.rsplit_once('|').map_or(*en, |(_, label)| label));
         }
-        for (i, (en, pt)) in PORTUGUESE.iter().enumerate() {
-            assert!(!pt.is_empty());
-            assert!(PORTUGUESE.iter().take(i).all(|(other, _)| en != other));
-            assert_eq!(Language::En.tr(en), *en);
+        for (english, _) in JAPANESE {
+            assert!(zh::translate(english).is_some_and(|text| !text.is_empty()), "missing Simplified Chinese: {english}");
+            assert!(ko::translate(english).is_some_and(|text| !text.is_empty()), "missing Korean: {english}");
+            assert!(ru::translate(english).is_some_and(|text| !text.is_empty()), "missing Russian: {english}");
+            assert!(pt::translate(english).is_some_and(|text| !text.is_empty()), "missing Portuguese: {english}");
         }
-        // The tables cover the same interface strings, so per-language coverage stays even.
-        for (en, _) in PORTUGUESE {
-            assert!(JAPANESE.iter().any(|(other, _)| en == other), "{en:?} missing from JAPANESE");
-        }
-        assert_eq!(JAPANESE.len(), PORTUGUESE.len());
         assert_eq!(Language::Ja.tr("Data"), "データ");
+        assert_eq!(Language::Zh.tr("Data"), "数据");
+        assert_eq!(Language::Ko.tr("Data"), "데이터");
+        assert_eq!(Language::Ru.tr("Data"), "Данные");
         assert_eq!(Language::PtBr.tr("Data"), "Dados");
         assert_eq!(Language::PtBr.tr("Date"), "Data");
-        assert_eq!(Language::Ja.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::PtBr.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(Language::Ja.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(Language::Zh.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(Language::Ko.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(Language::Ru.tr("Sheet1!A1"), "Sheet1!A1");
+        // A `context|label` key shows only its label in English and splits the translation.
+        assert_eq!(Language::En.tr("Page Layout|Orientation"), "Orientation");
+        assert_eq!(Language::Ja.tr("Page Layout|Orientation"), "印刷の向き");
+        assert_eq!(Language::Ja.tr("Orientation"), "方向");
         assert_eq!(Language::parse("xx"), None);
+    }
+
+    #[test]
+    fn unknown_saved_language_keeps_the_other_preferences() {
+        let ui: crate::UiState = serde_json::from_str(r#"{"dark": true, "language": "xx"}"#).unwrap();
+        assert!(ui.dark);
+        assert_eq!(ui.language, Language::En);
+        let ui: crate::UiState = serde_json::from_str(r#"{"dark": true, "language": 7}"#).unwrap();
+        assert!(ui.dark);
+        let ui: crate::UiState = serde_json::from_str(r#"{"language": "ja"}"#).unwrap();
+        assert_eq!(ui.language, Language::Ja);
+        assert_eq!(crate::UiState::default().language, Language::En, "the default never reads the host locale");
+        assert_eq!(saved_language(&serde_json::json!({"language": "ja"})), Some(Language::Ja));
+        assert_eq!(saved_language(&serde_json::json!({"language": "xx"})), None);
+        assert_eq!(saved_language(&serde_json::json!({})), None);
     }
 
     #[test]
     fn tags_reduce_to_a_supported_language() {
         assert_eq!(Language::from_tag("ja-JP"), Some(Language::Ja));
         assert_eq!(Language::from_tag("en_US"), Some(Language::En));
+        assert_eq!(Language::from_tag("zh-Hans-CN"), Some(Language::Zh));
+        assert_eq!(Language::from_tag("ko-KR"), Some(Language::Ko));
+        assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
         assert_eq!(Language::from_tag("de-DE"), None);
         assert_eq!(Language::from_tag("pt-BR"), Some(Language::PtBr));
         assert_eq!(Language::parse("pt"), Some(Language::PtBr));
@@ -655,15 +474,30 @@ mod tests {
     }
 
     #[test]
+    fn an_unset_language_preference_is_english_until_the_app_applies_the_system_one() {
+        // Deserializing never reads the host locale (tests stay deterministic); the desktop app
+        // applies `Language::system()` itself when `ui.json` names no usable language.
+        let restored: crate::UiState = serde_json::from_str("{}").unwrap();
+        assert_eq!(restored.language, Language::En);
+        assert_eq!(saved_language(&serde_json::json!({"language": "zh"})), Some(Language::Zh));
+    }
+
+    #[test]
     fn language_commands_switch_and_persist() {
         let mut app = crate::SheetApp::new(gridcraft_engine::Session::default(), Default::default());
-        app.run("app.language.japanese", serde_json::json!({})).unwrap();
-        assert_eq!(app.ui.language, Language::Ja);
-        app.run("app.language.portuguese", serde_json::json!({})).unwrap();
-        assert_eq!(app.ui.language, Language::PtBr);
-        let restored: crate::UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
-        assert_eq!(restored.language, Language::PtBr);
+        for language in Language::ALL {
+            app.run("app.language.set", serde_json::json!({"language": language.code()})).unwrap();
+            assert_eq!(app.ui.language, language);
+            let restored: crate::UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
+            assert_eq!(restored.language, language);
+        }
+        app.run("app.language.set", serde_json::json!({"code": "ja"})).unwrap();
+        assert_eq!(app.ui.language, Language::Ja, "`code` is an alias for `language`");
+        assert!(app.run("app.language.set", serde_json::json!({})).is_err(), "no language is an error, not a dialog");
         app.run("app.language.english", serde_json::json!({})).unwrap();
         assert_eq!(app.ui.language, Language::En);
+        for l in Language::ALL {
+            assert_eq!(Language::parse(l.code()), Some(l));
+        }
     }
 }

@@ -279,6 +279,8 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     if wb_rels.iter().any(|r| r.kind == "externalLink") {
         cx.warn("links to external workbooks are not supported");
     }
+    // Calls of LAMBDA names are spelled like the names (the parser upper-cases them).
+    wb.apply_name_call_case();
     wb.styles = cx.styles;
     Ok((wb, cx.report))
 }

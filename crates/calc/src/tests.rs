@@ -34,6 +34,40 @@ impl T {
 }
 
 #[test]
+fn spill_range_operator() {
+    let mut t = T::new();
+    t.set("A1", "3");
+    t.set("B1", "=SEQUENCE(A1)");
+    t.set("C1", "=SUM(B1#)");
+    t.set("C2", "=ROWS(B1#)");
+    assert_eq!((t.num("C1"), t.num("C2")), (6.0, 3.0));
+    // Growing and shrinking the spill recalculates its users.
+    t.set("A1", "5");
+    assert_eq!((t.num("C1"), t.num("C2")), (15.0, 5.0));
+    t.set("A1", "2");
+    assert_eq!((t.num("C1"), t.num("C2")), (3.0, 2.0));
+    // A blocked spill, or a cell that doesn't spill, gives #REF!.
+    t.set("B2", "x");
+    assert_eq!(t.get("C1"), Value::Error(CellError::Ref));
+    t.set("B2", "");
+    assert_eq!(t.num("C1"), 3.0);
+    t.set("D1", "=SUM(A1#)");
+    assert_eq!(t.get("D1"), Value::Error(CellError::Ref));
+    // Through a defined name.
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "Seq".into(),
+        scope: None,
+        formula: "Sheet1!$B$1#".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    t.set("E1", "=SUM(Seq)*10");
+    assert_eq!(t.num("E1"), 30.0);
+    t.set("A1", "4");
+    assert_eq!(t.num("E1"), 100.0);
+}
+
+#[test]
 fn arithmetic_and_dependencies() {
     let mut t = T::new();
     t.set("A1", "2");
@@ -214,4 +248,95 @@ fn recalc_all_after_load() {
     s.cells.set(c("A3"), Cell::formula(Formula::new("=A2+A1")));
     t.calc.recalc_all(&mut t.wb);
     assert_eq!(t.num("A3"), 12.0);
+}
+
+#[test]
+fn sumif_sum_range_takes_the_criteria_size() {
+    // Excel adds up the range that starts at sum_range's top-left cell with the criteria range's
+    // height and width, whatever size sum_range has.
+    let mut t = T::new();
+    for (r, (k, v)) in [("a", 1), ("b", 2), ("a", 3)].iter().enumerate() {
+        t.set(&format!("A{}", r + 1), k);
+        t.set(&format!("B{}", r + 1), &v.to_string());
+    }
+    t.set("D1", "=SUMIF(A1:A3,\"a\",B1)");
+    assert_eq!(t.num("D1"), 4.0);
+    t.set("D2", "=AVERAGEIF(A1:A3,\"a\",B1)");
+    assert_eq!(t.num("D2"), 2.0);
+    t.set("D3", "=SUMIF(A1:A3,\"a\",B1:B2)");
+    assert_eq!(t.num("D3"), 4.0);
+    t.set("D4", "=SUMIF(A1:A3,\"a\",B1:F1)");
+    assert_eq!(t.num("D4"), 4.0);
+    t.set("D5", "=SUMIF(A1:A3,\"a\",B1:B99)");
+    assert_eq!(t.num("D5"), 4.0);
+    t.set("D6", "=SUMIF(A:A,\"a\",B1)");
+    assert_eq!(t.num("D6"), 4.0);
+    t.set("D7", "=SUMIF(A1:A3,\"a\",$B$2)");
+    assert_eq!(t.num("D7"), 2.0); // B2:B4: rows 1 and 3 match → B2 + B4 (empty)
+    t.set("D8", "=SUMIF(A1:A3,\"a\")");
+    assert_eq!(t.num("D8"), 0.0);
+    // A horizontal criteria range resizes across.
+    t.set("H1", "1");
+    t.set("I1", "0");
+    t.set("J1", "1");
+    t.set("H2", "10");
+    t.set("I2", "20");
+    t.set("J2", "30");
+    t.set("D9", "=SUMIF(H1:J1,1,H2)");
+    assert_eq!(t.num("D9"), 40.0);
+    // The resized cells are precedents: editing one recalculates.
+    t.set("B3", "5");
+    assert_eq!(t.num("D1"), 6.0);
+    assert_eq!(t.num("D2"), 3.0);
+    assert_eq!(t.num("D3"), 6.0);
+    assert_eq!(t.num("D4"), 6.0);
+    assert_eq!(t.num("D6"), 6.0);
+    // SUMIFS and AVERAGEIFS don't resize: different sizes are #VALUE!.
+    t.set("D11", "=SUMIFS(B1,A1:A3,\"a\")");
+    assert_eq!(t.get("D11"), Value::Error(CellError::Value));
+    t.set("D12", "=AVERAGEIFS(B1:B2,A1:A3,\"a\")");
+    assert_eq!(t.get("D12"), Value::Error(CellError::Value));
+    t.set("D13", "=SUMIFS(B1:B3,A1:A3,\"a\")");
+    assert_eq!(t.num("D13"), 6.0);
+}
+
+#[test]
+fn sumif_resized_sum_range_stops_at_the_sheet_edge() {
+    let mut t = T::new();
+    t.set("A1", "a");
+    t.set("A2", "a");
+    t.set("B1048575", "5");
+    t.set("B1048576", "7");
+    t.set("C1", "=SUMIF(A1:A2,\"a\",B1048576)");
+    assert_eq!(t.num("C1"), 7.0);
+    t.set("C2", "=SUMIF(A1:A2,\"a\",B1048575)");
+    assert_eq!(t.num("C2"), 12.0);
+    t.set("C3", "=SUMIF(A1:B1,\"a\",XFD1)");
+    assert_eq!(t.num("C3"), 0.0);
+}
+
+#[test]
+fn sumif_resized_sum_range_on_another_sheet_and_through_a_name() {
+    let mut t = T::new();
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "Amounts".into(),
+        scope: None,
+        formula: "Data!$B$1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    for (r, k) in ["a", "b", "a"].iter().enumerate() {
+        t.set(&format!("A{}", r + 1), k);
+        t.wb.sheet_mut(1).unwrap().set_value(CellRef::new(r as u32, 1), Value::Number((r + 1) as f64));
+    }
+    t.calc.rebuild(&t.wb);
+    t.set("C1", "=SUMIF(A1:A3,\"a\",Data!B1)");
+    assert_eq!(t.num("C1"), 4.0);
+    t.set("C2", "=AVERAGEIF(A1:A3,\"a\",Amounts)");
+    assert_eq!(t.num("C2"), 2.0);
+    t.wb.sheet_mut(1).unwrap().set_value(c("B3"), Value::Number(9.0));
+    t.calc.cells_changed(&mut t.wb, &[(1, c("B3"))]);
+    assert_eq!(t.num("C1"), 10.0);
+    assert_eq!(t.num("C2"), 5.0);
 }

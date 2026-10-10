@@ -65,7 +65,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
 fn active_input(app: &SheetApp) -> String {
     let Some(d) = app.session.active() else { return String::new() };
     let Some(sh) = d.wb.active() else { return String::new() };
-    let a = d.selection.active;
+    let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
     if let Some(c) = sh.cell(a) {
         if c.formula.is_some() && d.wb.styles.get(c.style).protection.hidden && sh.is_protected() {
             return String::new();
@@ -77,6 +77,9 @@ fn active_input(app: &SheetApp) -> String {
         if r.contains(a)
             && let Some(f) = sh.cell(*anchor).and_then(|c| c.formula.as_ref())
         {
+            if gridcraft_engine::display::formula_hidden(&d.wb, sh, *anchor) {
+                return String::new();
+            }
             return format!("={}", f.text);
         }
     }

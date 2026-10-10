@@ -186,6 +186,13 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
                 write_expr(s, x, r1c1);
                 s.push('%');
             }
+            UnOp::Spill => {
+                write_expr(s, x, r1c1);
+                // A reference that became #REF! (its sheet or cell was deleted) stays `#REF!`.
+                if !matches!(**x, Expr::Error(_)) {
+                    s.push('#');
+                }
+            }
         },
         Expr::Binary(op, a, b) => {
             write_expr(s, a, r1c1);
