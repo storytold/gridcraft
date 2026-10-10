@@ -1633,3 +1633,56 @@ fn notes_comments_and_links_survive_a_json_save() {
     assert_eq!(after.hyperlinks, before.hyperlinks);
     assert_eq!(after.cells, before.cells);
 }
+
+/// A sheet with enough formulas that an edit to A1 leaves its recalculation for a background
+/// thread (when background calculation is on): 1,500 formulas over a 500-cell column.
+fn heavy_session(background: bool) -> Session {
+    let mut s = s();
+    s.set_background_calc(background);
+    let data: Vec<_> = (0..500).map(|i| json!([i])).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": data})).unwrap();
+    let formulas: Vec<_> = (0..1500).map(|_| json!(["=SUMPRODUCT(--(MOD($A$1:$A$500+ROW(),7)=0))+$A$1"])).collect();
+    s.execute("range.setValues", json!({"range": "C1", "values": formulas})).unwrap();
+    s
+}
+
+fn column_c(s: &Session) -> Vec<Value> {
+    (1..=1500).map(|r| v(s, &format!("C{r}"))).collect()
+}
+
+#[test]
+fn background_recalculation_gives_the_same_values() {
+    let mut fg = heavy_session(false);
+    let mut bg = heavy_session(true);
+    for input in ["7", "=A2*3", "-1"] {
+        fg.execute("cell.set", json!({"cell": "A1", "input": input})).unwrap();
+        bg.execute("cell.set", json!({"cell": "A1", "input": input})).unwrap();
+        bg.finish_calc();
+        assert!(!bg.calculating());
+        assert_eq!(column_c(&fg), column_c(&bg), "after A1 = {input}");
+    }
+    fg.execute("edit.undo", json!({})).unwrap();
+    bg.execute("edit.undo", json!({})).unwrap();
+    bg.finish_calc();
+    assert_eq!(column_c(&fg), column_c(&bg), "after undo");
+    // The calculation state came back from the thread: later edits still recalculate.
+    fg.execute("cell.set", json!({"cell": "A1", "input": "100"})).unwrap();
+    bg.execute("cell.set", json!({"cell": "A1", "input": "100"})).unwrap();
+    bg.finish_calc();
+    assert_eq!(column_c(&fg), column_c(&bg), "after a later edit");
+}
+
+#[test]
+fn commands_wait_for_a_background_recalculation() {
+    let mut s = heavy_session(true);
+    s.execute("cell.set", json!({"cell": "A1", "input": "1000"})).unwrap();
+    // Moving around doesn't wait; anything that reads or changes values does, so E1 reads C1's
+    // new value without anyone polling.
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E1", "input": "=C1+1"})).unwrap();
+    let c1 = v(&s, "C1").as_f64().unwrap();
+    assert!(c1 >= 1000.0, "C1 = {c1}");
+    assert_eq!(v(&s, "E1"), Value::Number(c1 + 1.0));
+    s.finish_calc();
+    assert_eq!(v(&s, "C1"), Value::Number(c1));
+}

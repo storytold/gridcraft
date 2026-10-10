@@ -462,9 +462,11 @@ fn evaluate(s: &mut Session, p: &Json) -> Result<Json> {
 fn calc_now(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     let mut wb = (*d.wb).clone();
-    d.calc.recalc_all(&mut wb);
+    let dirty = d.calc.prepare_all(&mut wb);
+    let n = dirty.len();
+    super::recalc(d, &mut wb, dirty, &mut Vec::new());
     d.wb = std::sync::Arc::new(wb);
-    Ok(json!({"cells": d.calc.last_recalc_cells}))
+    Ok(json!({"cells": n}))
 }
 
 fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {

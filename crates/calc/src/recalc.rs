@@ -479,11 +479,23 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// Where a recalculation reports how far it has got (for a status bar while it runs on
+    /// another thread).
+    pub progress: Option<Arc<CalcProgress>>,
+}
+
+/// How far a recalculation has got: formulas evaluated out of those to evaluate (which grows
+/// when spills make more formulas dirty), and the threads it uses.
+#[derive(Debug, Default)]
+pub struct CalcProgress {
+    pub done: std::sync::atomic::AtomicUsize,
+    pub total: std::sync::atomic::AtomicUsize,
+    pub threads: std::sync::atomic::AtomicUsize,
 }
 
 impl Default for Calc {
     fn default() -> Self {
-        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0 }
+        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0, progress: None }
     }
 }
 
@@ -762,18 +774,28 @@ impl<'a> PassHost<'a> {
     /// still pending in the level (through a name, a table, INDIRECT) is handed back and
     /// finished here, as are formulas that draw random numbers. The results are the same as on
     /// one thread. If a worker can't start or fails, the level is evaluated on this thread.
-    fn run_level(&mut self, level: &[Key], threads: usize) {
+    fn run_level(&mut self, level: &[Key], threads: usize, progress: Option<&CalcProgress>) {
+        let report = |n: usize| {
+            if let Some(p) = progress {
+                p.done.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+            }
+        };
         if threads <= 1 || level.len() < PARALLEL_MIN {
-            for &k in level {
-                self.settle(k);
+            for chunk in level.chunks(256) {
+                for &k in chunk {
+                    self.settle(k);
+                }
+                report(chunk.len());
             }
             return;
         }
         let exprs = self.exprs;
         let (random, mut parallel): (Vec<Key>, Vec<Key>) = level.iter().partition(|k| exprs.get(k).is_some_and(|e| uses_random(e)));
-        for k in parallel.drain(..WARM_UP.min(parallel.len())) {
+        let warm = WARM_UP.min(parallel.len());
+        for k in parallel.drain(..warm) {
             self.settle(k);
         }
+        report(warm + random.len());
         let base = std::mem::take(&mut self.own);
         let (wb, now, rng) = (self.wb, self.now, self.rng);
         let lookups = &self.lookups;
@@ -795,6 +817,7 @@ impl<'a> PassHost<'a> {
                     }
                     w.in_stack.remove(&k);
                 }
+                report(chunk.len());
             }
             WorkerOut { results: w.own.results, spills: w.own.spills, evict: w.evict, deferred, cycle: w.cycle, cycles: w.cycles }
         };
@@ -824,6 +847,7 @@ impl<'a> PassHost<'a> {
             }
             return;
         }
+        // (Formulas handed back were counted with their chunk.)
         let mut deferred = Vec::new();
         for out in outs {
             for (k, v) in out.results {
@@ -1069,8 +1093,9 @@ impl Calc {
         self.graph.settle();
     }
 
-    /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
-    pub fn recalc_all(&mut self, wb: &mut Workbook) {
+    /// Rebuilds the graph and lays spills out afresh, and returns every formula, to recalculate
+    /// with [`Calc::run_dirty`].
+    pub fn prepare_all(&mut self, wb: &mut Workbook) -> Vec<Key> {
         self.rebuild(wb);
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
@@ -1082,12 +1107,38 @@ impl Calc {
                 sh.spill_ranges.clear();
             }
         }
-        let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
+        self.graph.nodes.keys().copied().collect()
+    }
+
+    /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
+    pub fn recalc_all(&mut self, wb: &mut Workbook) {
+        let all = self.prepare_all(wb);
         self.run(wb, all, true);
+    }
+
+    /// Evaluates `dirty` (from [`Calc::prepare`] or [`Calc::prepare_all`]) and writes the results
+    /// back. The graph is only read, so this can run on a copy of the workbook on another thread.
+    pub fn run_dirty(&mut self, wb: &mut Workbook, dirty: Vec<Key>) {
+        self.run(wb, dirty, false);
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
+        let dirty = self.prepare(wb, changed);
+        if !dirty.is_empty() {
+            let t1 = prof_now();
+            let n = dirty.len();
+            self.run(wb, dirty, false);
+            if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
+                eprintln!("recalc: {n} cells, run {:.1} ms", prof_now() - t1);
+            }
+        }
+    }
+
+    /// Updates the graph for cells whose content changed and returns the formulas to
+    /// recalculate (for [`Calc::run_dirty`]). In manual calculation mode the edited formulas are
+    /// evaluated here and nothing is returned.
+    pub fn prepare(&mut self, wb: &mut Workbook, changed: &[Key]) -> Vec<Key> {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
             let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
@@ -1121,7 +1172,7 @@ impl Calc {
             // Only the edited formulas themselves are evaluated.
             let own: Vec<Key> = changed.iter().copied().filter(|k| self.graph.nodes.contains_key(k)).collect();
             self.run(wb, own, false);
-            return;
+            return Vec::new();
         }
         let mut seeds: Vec<Key> = changed.to_vec();
         let mut emptied: Vec<Key> = Vec::new();
@@ -1166,12 +1217,10 @@ impl Calc {
         }
         let t0 = prof_now();
         let dirty = self.dirty_closure(wb, &seeds);
-        let t1 = prof_now();
-        let n = dirty.len();
-        self.run(wb, dirty, false);
         if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
-            eprintln!("recalc: {} seeds, closure {} cells {:.1} ms, run {:.1} ms", seeds.len(), n, t1 - t0, prof_now() - t1);
+            eprintln!("recalc: {} seeds, closure {} cells {:.1} ms", seeds.len(), dirty.len(), prof_now() - t0);
         }
+        dirty
     }
 
     fn dirty_closure(&self, _wb: &Workbook, seeds: &[Key]) -> Vec<Key> {
@@ -1216,6 +1265,7 @@ impl Calc {
             }
             // Row-major order is a good topological guess; on-demand evaluation fixes the rest.
             dirty.sort_by_key(|(s, c)| (*s, c.row, c.col));
+            dirty.dedup();
             let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
             for k in &dirty {
                 if let Some(e) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc()) {
@@ -1230,11 +1280,19 @@ impl Calc {
                 host.own.pending = exprs.keys().copied().collect();
                 host.own.results.reserve(dirty.len());
                 let plan = self.graph.levels(&dirty);
+                let progress = self.progress.as_deref();
+                if let Some(p) = progress {
+                    p.total.fetch_add(dirty.len(), std::sync::atomic::Ordering::Relaxed);
+                    p.threads.store(threads, std::sync::atomic::Ordering::Relaxed);
+                }
                 for level in plan.levels() {
-                    host.run_level(level, threads);
+                    host.run_level(level, threads, progress);
                 }
                 for &k in plan.rest() {
                     host.settle(k);
+                }
+                if let Some(p) = progress {
+                    p.done.fetch_add(plan.rest().len(), std::sync::atomic::Ordering::Relaxed);
                 }
                 (host.own.results, host.own.spills, host.cycles, host.rng)
             };

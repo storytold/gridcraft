@@ -266,9 +266,11 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         eprintln!("commit: edit {:?}, {} changed", t0.elapsed(), changed.len());
     }
     if structural {
-        d.calc.recalc_all(&mut wb);
+        let dirty = d.calc.prepare_all(&mut wb);
+        recalc(d, &mut wb, dirty, &mut fit_rows);
     } else if !changed.is_empty() {
-        d.calc.cells_changed(&mut wb, &changed);
+        let dirty = d.calc.prepare(&mut wb, &changed);
+        recalc(d, &mut wb, dirty, &mut fit_rows);
     }
     if let Some(t0) = t0 {
         eprintln!("commit: + recalc {:?}", t0.elapsed());
@@ -284,6 +286,25 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;
     Ok(r)
+}
+
+/// Recalculations smaller than this always run at once: a thread wouldn't pay for itself.
+const DEFER_MIN: usize = 512;
+
+/// Recalculates `dirty` (with what an earlier commit of the same command left), or, when the
+/// document allows background calculation and the work is large, leaves it with the rows to
+/// fit afterwards for the session to run on another thread when the command is done.
+pub(crate) fn recalc(d: &mut DocState, wb: &mut Workbook, mut dirty: Vec<Key>, fit_rows: &mut Vec<(usize, u32)>) {
+    if d.background && dirty.len().saturating_add(d.deferred.len()) >= DEFER_MIN {
+        d.deferred.append(&mut dirty);
+        d.deferred_rows.append(fit_rows);
+        return;
+    }
+    dirty.append(&mut d.deferred);
+    fit_rows.append(&mut d.deferred_rows);
+    if !dirty.is_empty() {
+        d.calc.run_dirty(wb, dirty);
+    }
 }
 
 /// Excel's message for an edit of a locked cell on a protected sheet.

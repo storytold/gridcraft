@@ -19,7 +19,7 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 
 | Method | Params | What it does |
 |---|---|---|
-| `engine.execute` | `{command, params}` | Runs any engine command (see `engine.commands` or `gridcraft-cli commands`) |
+| `engine.execute` | `{command, params}` | Runs any engine command (see `engine.commands` or `gridcraft-cli commands`). In the desktop app a large recalculation can still be running when an edit returns (the status bar shows "Calculating"); any later command that reads or changes values waits for it, so `cell.get` after `cell.set` sees the final value. A screenshot taken in between shows the previous values |
 | `engine.commands` | `{search?}` | Every command: id, label, ribbon path, shortcut, params doc, enabled; `search` keeps those whose id, label or ribbon path contains it (case-insensitive) |
 | `engine.journal` | | Commands run so far (replayable) |
 | `document.inspect` | | Workbook summary: sheets, used ranges, tables, charts, names, selection, undo labels |

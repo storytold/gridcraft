@@ -601,6 +601,14 @@ impl SheetApp {
             return;
         }
         let t0 = now_ms();
+        // Bring in a recalculation that finished in the background; while one runs, repaint now
+        // and then for its progress in the status bar.
+        if self.session.poll_calc() {
+            ctx.request_repaint();
+        }
+        if self.session.calculating() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         text_box::before_ui(self, &ctx);
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
