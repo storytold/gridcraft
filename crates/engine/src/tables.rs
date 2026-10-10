@@ -9,7 +9,7 @@ pub fn parse_style_name(name: &str) -> (&'static str, u32) {
     let rest = name.strip_prefix("TableStyle").unwrap_or(name);
     for fam in ["Light", "Medium", "Dark"] {
         if let Some(n) = rest.strip_prefix(fam) {
-            let k = n.parse().unwrap_or(2);
+            let k = n.parse::<u32>().unwrap_or(2).max(1); // the gallery starts at 1; 0 would underflow `n - 1`
             return (fam, k);
         }
     }
@@ -146,4 +146,18 @@ pub fn gallery() -> Vec<String> {
         v.push(format!("TableStyleDark{n}"));
     }
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_numbered_styles_do_not_underflow() {
+        assert_eq!(parse_style_name("TableStyleLight0"), ("Light", 1));
+        assert_eq!(parse_style_name("TableStyleMedium0"), ("Medium", 1));
+        for name in ["TableStyleLight0", "TableStyleMedium0", "TableStyleDark0"] {
+            let _ = look(name);
+        }
+    }
 }
