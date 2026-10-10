@@ -119,6 +119,10 @@ impl Selection {
 
 /// Ctrl+arrow: jump to the edge of the current data region (Excel's End mode).
 pub fn jump(sheet: &Sheet, from: CellRef, dr: i64, dc: i64) -> CellRef {
+    if dr == 0 && dc == 0 {
+        // No direction: nowhere to go (the search below would never advance).
+        return from;
+    }
     let filled = |c: CellRef| sheet.value_ref(c).is_some_and(|v| !v.is_empty());
     let Some(mut cur) = from.offset(dr, dc) else { return from };
     let here = filled(from);
@@ -218,6 +222,8 @@ mod tests {
         }
         s.set_value(CellRef::new(10, 0), Value::Number(1.0));
         assert_eq!(jump(&s, CellRef::new(0, 0), 1, 0), CellRef::new(4, 0));
+        // Without a direction it stays put (it used to loop forever from a blank cell).
+        assert_eq!(jump(&s, CellRef::new(7, 0), 0, 0), CellRef::new(7, 0));
         assert_eq!(jump(&s, CellRef::new(4, 0), 1, 0), CellRef::new(10, 0));
         assert_eq!(jump(&s, CellRef::new(10, 0), 1, 0), CellRef::new(MAX_ROWS - 1, 0));
         assert_eq!(jump(&s, CellRef::new(0, 0), 0, 1), CellRef::new(0, MAX_COLS - 1));
