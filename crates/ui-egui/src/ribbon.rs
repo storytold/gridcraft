@@ -1733,9 +1733,10 @@ fn table_design(app: &mut SheetApp, ui: &mut Ui) {
     };
     ui.vertical(|ui| {
         ui.label(egui::RichText::new("Table Name:").small());
-        let mut name = tname.clone();
-        let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(120.0));
-        if r.lost_focus() && name != tname {
+        let field = egui::Id::new(("gridcraft.table_name", &tname));
+        if let Some(name) = crate::widgets::committed_text(ui, field, &tname, Some(120.0))
+            && name != tname
+        {
             act(app, "table.rename", json!({"table": tname, "name": name}));
         }
     });

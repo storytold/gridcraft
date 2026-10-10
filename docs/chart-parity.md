@@ -35,7 +35,7 @@ open PRs #158, #161, and issue #190.
 
 | Element | Excel | GridCraft |
 |---|---|---|
-| Move and resize the chart object | yes | move yes; **resize broken** (#190) |
+| Move and resize the chart object | yes | yes (corner handle, Format Chart Area Size fields) |
 | Chart title, axis titles | text, linked to cells, full formatting | text only |
 | Legend | position, overlay, formatting, per-entry delete | position only |
 | Data labels | value, category, series, percentage, from cells, callouts, position | one on/off flag |
