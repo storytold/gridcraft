@@ -228,17 +228,24 @@ fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
         };
         let sh = cx.sheet_mut(sheet)?;
         let mut names: Vec<String> = Vec::new();
+        // Lower-case names taken, and the next suffix for each header, so that thousands of equal
+        // headers don't take cubic time.
+        let mut taken = std::collections::HashSet::new();
+        let mut next_suffix = std::collections::HashMap::new();
         for c in r.start.col..=r.end.col {
             let mut n = sh.value(CellRef::new(r.start.row, c)).display();
             if n.is_empty() {
                 n = format!("Column{}", c - r.start.col + 1);
             }
             let base = n.clone();
-            let mut k = 2;
-            while names.iter().any(|x| x.eq_ignore_ascii_case(&n)) {
+            let key = base.to_ascii_lowercase();
+            let mut k = next_suffix.get(&key).copied().unwrap_or(2);
+            while taken.contains(&n.to_ascii_lowercase()) {
                 n = format!("{base}{k}");
                 k += 1;
             }
+            next_suffix.insert(key, k);
+            taken.insert(n.to_ascii_lowercase());
             // Headers are text.
             sh.set_value(CellRef::new(r.start.row, c), gridcraft_core::Value::text(n.as_str()));
             names.push(n);

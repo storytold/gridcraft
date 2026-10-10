@@ -415,17 +415,22 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
     }
     let sh = wb.sheet(si)?;
     let mut fields: Vec<CField> = Vec::new();
+    // Lower-case names taken, and the next suffix for each header (linear for repeated headers).
+    let mut taken = std::collections::HashSet::new();
+    let mut next_suffix: HashMap<String, usize> = HashMap::new();
     for (k, c) in (r.start.col..=r.end.col).enumerate() {
         let mut h = header_text(&sh.value(CellRef::new(r.start.row, c)).scalar());
         if h.is_empty() {
             h = format!("Column{}", k + 1);
         }
         let mut n = h.clone();
-        let mut i = 2;
-        while fields.iter().any(|f| same(&f.name, &n)) {
+        let mut i = next_suffix.get(&h.to_lowercase()).copied().unwrap_or(2);
+        while taken.contains(&n.to_lowercase()) {
             n = format!("{h}{i}");
             i += 1;
         }
+        next_suffix.insert(h.to_lowercase(), i);
+        taken.insert(n.to_lowercase());
         fields.push(CField {
             name: n,
             col: Some(k as u32),
