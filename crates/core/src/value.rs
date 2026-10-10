@@ -311,6 +311,11 @@ pub fn compare_numbers(a: f64, b: f64) -> Ordering {
     if a == b {
         return Ordering::Equal;
     }
+    // Numbers further apart than the 15th digit can't round together, and rounding keeps their
+    // order: skip the text round trip (this is on the sort and lookup hot path).
+    if (a - b).abs() > a.abs().max(b.abs()) * 1e-13 {
+        return a.partial_cmp(&b).unwrap_or(Ordering::Equal);
+    }
     round15(a).partial_cmp(&round15(b)).unwrap_or(Ordering::Equal)
 }
 
