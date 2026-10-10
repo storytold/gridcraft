@@ -1213,6 +1213,10 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     sep(ui);
+    if big_button(ui, Icon::Filter, "Slicer", "Insert a slicer to filter a table", false).clicked() {
+        act(app, "insert.slicer", json!({}));
+    }
+    sep(ui);
     let sp = big_button(ui, Icon::Sparkline, "Sparklines", "Sparklines", true);
     egui::Popup::menu(&sp).show(|ui| {
         for (label, kind) in [("Line", "line"), ("Column", "column"), ("Win/Loss", "winLoss")] {
@@ -1736,6 +1740,10 @@ fn table_design(app: &mut SheetApp, ui: &mut Ui) {
     }
     if big_button(ui, Icon::Table, "Convert\nto Range", "Convert to Range", false).clicked() {
         act(app, "table.convertToRange", json!({"table": tname}));
+    }
+    sep(ui);
+    if big_button(ui, Icon::Filter, "Insert\nSlicer", "Insert Slicer", false).clicked() {
+        act(app, "table.insertSlicer", json!({"table": tname}));
     }
     sep(ui);
     ui.vertical(|ui| {

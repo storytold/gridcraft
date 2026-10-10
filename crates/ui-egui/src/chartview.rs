@@ -308,6 +308,112 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
             }
         }
     }
+    paint_slicers(app, p, geo, wb, si, sh);
+}
+
+/// Geometry of a slicer's parts within its screen rect.
+pub struct SlicerLayout {
+    pub header: Rect,
+    /// Clear-filter button in the header.
+    pub clear: Rect,
+    /// One rect per value tile, in order.
+    pub tiles: Vec<Rect>,
+}
+
+pub fn slicer_layout(rect: Rect, z: f32, n: usize, columns: u32) -> SlicerLayout {
+    let header_h = 26.0 * z;
+    let pad = 6.0 * z;
+    let gap = 3.0 * z;
+    let tile_h = 22.0 * z;
+    let header = Rect::from_min_size(rect.min, vec2(rect.width(), header_h));
+    let cb = 16.0 * z;
+    let clear = Rect::from_min_size(pos2(header.right() - pad - cb, header.top() + (header_h - cb) / 2.0), vec2(cb, cb));
+    let cols = columns.max(1) as f32;
+    let inner_left = rect.left() + pad;
+    let inner_top = header.bottom() + pad;
+    let inner_w = (rect.width() - 2.0 * pad).max(1.0);
+    let tile_w = ((inner_w - (cols - 1.0) * gap) / cols).max(1.0);
+    let mut tiles = Vec::with_capacity(n);
+    for i in 0..n {
+        let col = (i as f32) % cols;
+        let row = (i as f32 / cols).floor();
+        let x = inner_left + col * (tile_w + gap);
+        let y = inner_top + row * (tile_h + gap);
+        tiles.push(Rect::from_min_size(pos2(x, y), vec2(tile_w, tile_h)));
+    }
+    SlicerLayout { header, clear, tiles }
+}
+
+fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) {
+    let tk = theme::Tokens::get(p.ctx());
+    for sl in &sh.slicers {
+        let r = anchor_rect(geo, sh, &sl.anchor);
+        if !r.intersects(p.clip_rect()) {
+            continue;
+        }
+        let items = gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl);
+        let lay = slicer_layout(r, geo.z, items.len(), sl.columns);
+        let radius = 4.0 * geo.z;
+        // Card + soft shadow.
+        p.rect_filled(r.translate(vec2(0.0, 1.5)), radius, Color32::from_black_alpha(18));
+        p.rect_filled(r, radius, tk.window);
+        p.rect_stroke(r, radius, Stroke::new(1.0, tk.separator), StrokeKind::Inside);
+        // Header.
+        p.rect_filled(lay.header, radius, tk.accent_soft);
+        p.rect_filled(Rect::from_min_max(pos2(lay.header.left(), lay.header.bottom() - radius), lay.header.max), 0.0, tk.accent_soft);
+        let cap = if sl.caption.is_empty() { sl.column.clone() } else { sl.caption.clone() };
+        p.text(lay.header.left_center() + vec2(8.0 * geo.z, 0.0), Align2::LEFT_CENTER, cap, theme::ui_bold(12.5 * geo.z), tk.accent_dark);
+        // Clear-filter button (tinted when a filter is active).
+        let filtered = sl.selected.is_some();
+        if let Some(icon) = crate::icons::from_name("filter") {
+            crate::icons::paint(p, lay.clear, icon, if filtered { tk.accent } else { tk.text_dim });
+        }
+        // Value tiles.
+        for ((val, on), tr) in items.iter().zip(&lay.tiles) {
+            if !r.contains(tr.left_top()) {
+                continue; // overflowed the card; skip (no scroll yet)
+            }
+            let (fill, fg) = if *on { (tk.accent, Color32::WHITE) } else { (tk.hover, tk.text_dim) };
+            p.rect_filled(*tr, 3.0 * geo.z, fill);
+            let cp = p.with_clip_rect(tr.intersect(p.clip_rect()));
+            cp.text(tr.left_center() + vec2(6.0 * geo.z, 0.0), Align2::LEFT_CENTER, val, theme::ui_font(12.0 * geo.z), fg);
+        }
+        if app.selected_chart == Some(sl.id) {
+            selection_frame(p, r);
+        }
+    }
+}
+
+/// What a click inside a slicer hit.
+pub enum SlicerAction {
+    Toggle(String),
+    Clear,
+}
+
+/// A click on a slicer's value tile or clear button, if any. A click elsewhere in a slicer returns
+/// `None` so the caller can treat it as a select/drag on the object.
+pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) -> Option<(u32, SlicerAction)> {
+    if !geo.cells.contains(p) {
+        return None;
+    }
+    for sl in sh.slicers.iter().rev() {
+        let r = anchor_rect(geo, sh, &sl.anchor);
+        if !r.contains(p) {
+            continue;
+        }
+        let items = gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl);
+        let lay = slicer_layout(r, geo.z, items.len(), sl.columns);
+        if lay.clear.contains(p) {
+            return Some((sl.id, SlicerAction::Clear));
+        }
+        for ((val, _on), tr) in items.iter().zip(&lay.tiles) {
+            if r.contains(tr.left_top()) && tr.contains(p) {
+                return Some((sl.id, SlicerAction::Toggle(val.clone())));
+            }
+        }
+        return None; // inside this (topmost) slicer, but on its header/background → select/drag
+    }
+    None
 }
 
 fn selection_frame(p: &Painter, r: Rect) {
@@ -322,6 +428,12 @@ fn selection_frame(p: &Painter, r: Rect) {
 /// The topmost object under `p`: (kind, id, rect).
 pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
     let _ = app;
+    for sl in sh.slicers.iter().rev() {
+        let r = anchor_rect(geo, sh, &sl.anchor);
+        if r.contains(p) && geo.cells.contains(p) {
+            return Some(("slicer", sl.id, r));
+        }
+    }
     for ch in sh.charts.iter().rev() {
         let r = anchor_rect(geo, sh, &ch.anchor);
         if r.expand(4.0).contains(p) && geo.cells.contains(p) {
