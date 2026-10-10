@@ -1,9 +1,9 @@
 //! Pulls chart data (names, categories, values, formats, colours) out of a workbook.
 
 use gridcraft_calc::evaluate;
-use gridcraft_core::{CellRef, RangeRef, Value, number_to_text};
+use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{Chart, ChartKind, Theme, Workbook, style::apply_tint};
-use gridcraft_numfmt::{NumberFormat, format_value};
+use gridcraft_numfmt::{NumberFormat, format_value_in};
 
 use crate::{ChartData, Rgba, SeriesData};
 
@@ -76,14 +76,10 @@ fn ref_format(wb: &Workbook, sheet: usize, formula: &str) -> String {
         .unwrap_or_else(|| "General".into())
 }
 
-fn value_text(v: &Value) -> String {
+fn value_text(wb: &Workbook, v: &Value) -> String {
     match v {
-        Value::Empty => String::new(),
-        Value::Number(n) => number_to_text(*n),
-        Value::Text(t) => t.to_string(),
-        Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.into(),
-        Value::Error(e) => e.as_str().into(),
-        Value::Array(a) => a.get(0, 0).map(value_text).unwrap_or_default(),
+        Value::Array(a) => a.get(0, 0).map(|v| value_text(wb, v)).unwrap_or_default(),
+        _ => v.to_text_in(&wb.locale).unwrap_or_else(|e| wb.locale.formula.local_error(e.as_str()).into()),
     }
 }
 
@@ -101,11 +97,11 @@ fn category_texts(wb: &Workbook, sheet: usize, formula: &str) -> Vec<String> {
                 if let Some(c) = at {
                     let code = &wb.styles.get(s.style_id(c)).num_fmt.0;
                     if !code.eq_ignore_ascii_case("general") {
-                        return format_value(v, &NumberFormat::parse(code), wb.date_system).text;
+                        return format_value_in(v, &NumberFormat::parse(code), wb.date_system, &wb.locale).text;
                     }
                 }
             }
-            value_text(v)
+            value_text(wb, v)
         })
         .collect()
 }
@@ -118,7 +114,7 @@ fn series_name(wb: &Workbook, sheet: usize, name: &str) -> String {
     }
     if t.starts_with('=') || parse_ref(wb, sheet, t).is_some() && t.contains('!') {
         let vals = eval_list(wb, sheet, t);
-        let parts: Vec<String> = vals.iter().map(value_text).filter(|s| !s.is_empty()).take(8).collect();
+        let parts: Vec<String> = vals.iter().map(|v| value_text(wb, v)).filter(|s| !s.is_empty()).take(8).collect();
         return parts.join(" ");
     }
     t.to_string()

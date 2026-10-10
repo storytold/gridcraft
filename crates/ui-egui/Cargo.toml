@@ -11,7 +11,10 @@ workspace = true
 [dependencies]
 gridcraft-engine = { workspace = true }
 gridcraft-chart = { workspace = true }
+gridcraft-l10n = { workspace = true }
+gridcraft-locale = { workspace = true }
 egui = { workspace = true }
+skrifa = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
@@ -20,13 +23,6 @@ image = { workspace = true }
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# The desktop's preferred language for the first-run interface language.
-sys-locale = { workspace = true }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# Read the browser's preferred language for the first-run web interface language.
-web-sys = { version = "0.3", features = ["Window", "Navigator"] }
 
 [build-dependencies]
 serde_json = { workspace = true }

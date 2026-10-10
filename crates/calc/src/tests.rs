@@ -68,6 +68,22 @@ fn spill_range_operator() {
 }
 
 #[test]
+fn spill_range_operator_in_a_local_workbook() {
+    // Storage is canonical; FORMULATEXT shows the local dialect, `A1#` included.
+    let mut t = pt_br();
+    t.set("A1", "3");
+    t.set("B1", "=SEQUENCE(A1)");
+    t.set("C1", "=SUM(B1#)");
+    t.set("C2", "=FORMULATEXT(C1)");
+    t.set("C3", "=SUM(B1#,A1#)");
+    assert_eq!(t.num("C1"), 6.0);
+    assert_eq!(t.get("C2"), Value::from("=SOMA(B1#)"));
+    assert_eq!(t.get("C3"), Value::Error(CellError::Ref));
+    t.set("A1", "4");
+    assert_eq!(t.num("C1"), 10.0);
+}
+
+#[test]
 fn arithmetic_and_dependencies() {
     let mut t = T::new();
     t.set("A1", "2");
@@ -375,6 +391,103 @@ fn recalc_all_after_load() {
     s.cells.set(c("A3"), Cell::formula(Formula::new("=A2+A1")));
     t.calc.recalc_all(&mut t.wb);
     assert_eq!(t.num("A3"), 12.0);
+}
+
+#[test]
+fn function_catalog_matches_registry_and_special_forms() {
+    use std::collections::BTreeSet;
+    let catalog: BTreeSet<&str> = gridcraft_formula::catalog::BUILTINS.iter().map(|(n, _)| *n).collect();
+    let mut implemented: BTreeSet<&str> = gridcraft_functions::all().iter().map(|f| f.name).collect();
+    implemented.extend(crate::eval::SPECIAL_FUNCTIONS.iter().copied());
+    let missing: Vec<_> = implemented.difference(&catalog).collect();
+    let stale: Vec<_> = catalog.difference(&implemented).collect();
+    assert!(missing.is_empty() && stale.is_empty(), "not in catalog: {missing:?}; not implemented: {stale:?}");
+}
+
+#[test]
+fn every_special_form_has_an_evaluator_branch() {
+    let wb = Workbook::new();
+    for name in crate::eval::SPECIAL_FUNCTIONS.iter() {
+        let e = gridcraft_formula::Expr::Call((*name).to_string(), Vec::new());
+        let v = crate::recalc::evaluate_expr(&wb, 0, c("A1"), &e);
+        assert_ne!(v, Value::Error(CellError::Name), "{name} is documented as special but not evaluated");
+        assert!(crate::is_known_function(name), "{name}");
+    }
+    assert!(!crate::is_known_function("NOSUCHFUNCTION"));
+}
+
+fn pt_br() -> T {
+    let mut t = T::new();
+    let lang = gridcraft_locale::language("pt-BR").unwrap();
+    let region = gridcraft_locale::region("pt-BR").unwrap();
+    t.wb.locale = std::sync::Arc::new(gridcraft_locale::Locale::new(lang, lang, *region));
+    t
+}
+
+#[test]
+fn local_text_coerces_with_the_region() {
+    let mut t = pt_br();
+    t.set("A1", "=\"1,5\"+1");
+    t.set("A2", "=-\"2,5\"");
+    t.set("A3", "=1.5&\"x\"");
+    t.set("A4", "=IF(\"VERDADEIRO\",1,2)");
+    t.set("A5", "=\"x1,5\"+1");
+    assert_eq!(t.num("A1"), 2.5);
+    assert_eq!(t.num("A2"), -2.5);
+    assert_eq!(t.get("A3"), Value::from("1,5x"));
+    assert_eq!(t.num("A4"), 1.0);
+    assert_eq!(t.get("A5"), Value::Error(CellError::Value));
+    // The invariant workbook is unchanged.
+    let mut en = T::new();
+    en.set("A1", "=\"1.5\"+1");
+    en.set("A2", "=\"1,5\"+1");
+    assert_eq!(en.num("A1"), 2.5);
+    assert_eq!(en.get("A2"), Value::Error(CellError::Value));
+}
+
+#[test]
+fn local_keywords_and_r1c1_letters() {
+    let mut t = pt_br();
+    t.set("B2", "7");
+    t.set("A1", "=CELL(\"endereço\",B2)");
+    t.set("A2", "=CELL(\"address\",B2)");
+    t.set("A3", "=ADDRESS(2,3,1,FALSE)");
+    t.set("A4", "=INDIRECT(\"L2C2\",FALSE)");
+    t.set("A5", "=INDIRECT(\"R2C2\",FALSE)");
+    t.set("A6", "=CELL(\"nosuchkeyword\",B2)");
+    assert_eq!(t.get("A1"), Value::from("$B$2"));
+    assert_eq!(t.get("A2"), Value::from("$B$2"));
+    assert_eq!(t.get("A3"), Value::from("L2C3"));
+    assert_eq!(t.num("A4"), 7.0);
+    assert_eq!(t.get("A5"), Value::Error(CellError::Ref));
+    assert_eq!(t.get("A6"), Value::Error(CellError::Value));
+}
+
+#[test]
+fn text_and_formulatext_use_the_local_dialect() {
+    let mut t = pt_br();
+    t.set("B1", "=IF(C1>1.5,SUM(C1:C3),0)");
+    t.set("A1", "=FORMULATEXT(B1)");
+    t.set("A2", "=TEXT(DATE(2026,10,10),\"dd/mm/aaaa\")");
+    t.set("A3", "=TEXT(1234.5,\"#.##0,00\")");
+    assert_eq!(t.get("A1"), Value::from("=SE(C1>1,5;SOMA(C1:C3);0)"));
+    assert_eq!(t.get("A2"), Value::from("10/10/2026"));
+    assert_eq!(t.get("A3"), Value::from("1.234,50"));
+}
+
+#[test]
+fn cell_keywords_beyond_the_language_table_work_in_every_locale() {
+    for mut t in [T::new(), pt_br()] {
+        t.set("B2", "7");
+        t.set("A1", "=CELL(\"sheetname\",B2)");
+        t.set("A2", "=CELL(\"SHEETNAME\",B2)");
+        t.set("A3", "=CELL(\"filename\",B2)");
+        t.set("A4", "=CELL(\"nosuchkeyword\",B2)");
+        assert_eq!(t.get("A1"), Value::from(t.wb.sheet(0).unwrap().name.as_str()));
+        assert_eq!(t.get("A2"), t.get("A1"));
+        assert_eq!(t.get("A3"), Value::from(""));
+        assert_eq!(t.get("A4"), Value::Error(CellError::Value));
+    }
 }
 
 #[test]

@@ -4,7 +4,10 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
+use gridcraft_locale::{INVARIANT, Language, Locale, Regional};
 use serde::{Deserialize, Serialize};
+
+use crate::date::DateSystem;
 
 /// Excel's error values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -222,45 +225,52 @@ impl Value {
     }
 
     /// Coercion to a number as arithmetic does it: empty = 0, TRUE = 1, numeric text parses
-    /// (including dates, times, percentages and currency), other text = `#VALUE!`.
+    /// (including dates, times, percentages and currency), other text = `#VALUE!`. Text is read
+    /// in the invariant en-US conventions.
     pub fn to_number(&self) -> Result<f64, CellError> {
+        self.to_number_in(&INVARIANT.regional, DateSystem::D1900)
+    }
+    /// [`Value::to_number`] reading numeric text the way `region` writes it, with dates counted
+    /// in the `sys` date system.
+    pub fn to_number_in(&self, region: &Regional, sys: DateSystem) -> Result<f64, CellError> {
         match self {
             Value::Empty => Ok(0.0),
             Value::Number(n) => Ok(*n),
             Value::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
-            Value::Text(t) => crate::parse::parse_number_text(t).ok_or(CellError::Value),
+            Value::Text(t) => crate::parse::parse_number_text_in(t, sys, region).ok_or(CellError::Value),
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_number()).unwrap_or(Ok(0.0)),
+            Value::Array(a) => a.data.first().map(|v| v.to_number_in(region, sys)).unwrap_or(Ok(0.0)),
         }
     }
-    /// Coercion to text as `&` does it.
+    /// Coercion to text as `&` does it (invariant en-US conventions).
     pub fn to_text(&self) -> Result<String, CellError> {
+        self.to_text_in(&INVARIANT)
+    }
+    /// [`Value::to_text`] with the region's decimal separator for numbers and the formula
+    /// language's `TRUE`/`FALSE`.
+    pub fn to_text_in(&self, locale: &Locale) -> Result<String, CellError> {
         match self {
             Value::Empty => Ok(String::new()),
-            Value::Number(n) => Ok(number_to_text(*n)),
-            Value::Bool(b) => Ok(if *b { "TRUE".into() } else { "FALSE".into() }),
+            Value::Number(n) => Ok(number_to_text_in(*n, &locale.regional)),
+            Value::Bool(b) => Ok(locale.formula.bool_text(*b).to_string()),
             Value::Text(t) => Ok(t.to_string()),
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_text()).unwrap_or(Ok(String::new())),
+            Value::Array(a) => a.data.first().map(|v| v.to_text_in(locale)).unwrap_or(Ok(String::new())),
         }
     }
-    /// Coercion to a boolean as `IF` does it.
+    /// Coercion to a boolean as `IF` does it (text `TRUE`/`FALSE` of the invariant language).
     pub fn to_bool(&self) -> Result<bool, CellError> {
+        self.to_bool_in(INVARIANT.formula)
+    }
+    /// [`Value::to_bool`] accepting the `TRUE`/`FALSE` spelling of `lang` as text.
+    pub fn to_bool_in(&self, lang: &Language) -> Result<bool, CellError> {
         match self {
             Value::Empty => Ok(false),
             Value::Number(n) => Ok(*n != 0.0),
             Value::Bool(b) => Ok(*b),
-            Value::Text(t) => {
-                if t.eq_ignore_ascii_case("TRUE") {
-                    Ok(true)
-                } else if t.eq_ignore_ascii_case("FALSE") {
-                    Ok(false)
-                } else {
-                    Err(CellError::Value)
-                }
-            }
+            Value::Text(t) => lang.parse_bool(t).ok_or(CellError::Value),
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_bool()).unwrap_or(Ok(false)),
+            Value::Array(a) => a.data.first().map(|v| v.to_bool_in(lang)).unwrap_or(Ok(false)),
         }
     }
     /// Display text with General formatting (for logs, CSV and tests).
@@ -362,6 +372,12 @@ pub fn number_to_text(n: f64) -> String {
     trim_decimal(&s)
 }
 
+/// [`number_to_text`] with the region's decimal separator.
+pub fn number_to_text_in(n: f64, region: &Regional) -> String {
+    let s = number_to_text(n);
+    if region.decimal == '.' { s } else { s.replace('.', region.decimal.encode_utf8(&mut [0u8; 4])) }
+}
+
 /// Removes trailing zeros (and a trailing point) from a decimal string.
 pub fn trim_decimal(s: &str) -> String {
     if s.contains('.') {
@@ -408,6 +424,26 @@ mod tests {
         assert_eq!(Value::Empty.to_text(), Ok(String::new()));
         assert_eq!(Value::from("true").to_bool(), Ok(true));
         assert!(Value::number(f64::NAN).is_error());
+    }
+
+    #[test]
+    fn localized_coercion() {
+        let pt = gridcraft_locale::Locale::new(
+            gridcraft_locale::language("pt-BR").expect("pt-BR language"),
+            gridcraft_locale::language("pt-BR").expect("pt-BR language"),
+            *gridcraft_locale::region("pt-BR").expect("pt-BR region"),
+        );
+        assert_eq!(Value::from("1,5").to_number_in(&pt.regional, DateSystem::D1900), Ok(1.5));
+        assert_eq!(Value::from("1,5").to_number(), Err(CellError::Value));
+        assert_eq!(Value::Number(1.5).to_text_in(&pt), Ok("1,5".to_string()));
+        assert_eq!(Value::Number(1.5).to_text(), Ok("1.5".to_string()));
+        assert_eq!(Value::Number(1e-10).to_text_in(&pt), Ok("1E-10".to_string()));
+        assert_eq!(Value::Number(1.5e20).to_text_in(&pt), Ok("1,5E+20".to_string()));
+        assert_eq!(Value::Bool(true).to_text_in(&pt), Ok("VERDADEIRO".to_string()));
+        assert_eq!(Value::Bool(false).to_text(), Ok("FALSE".to_string()));
+        assert_eq!(Value::from("falso").to_bool_in(pt.formula), Ok(false));
+        assert_eq!(Value::from("false").to_bool_in(pt.formula), Err(CellError::Value));
+        assert_eq!(number_to_text_in(-0.25, &pt.regional), "-0,25");
     }
 
     #[test]

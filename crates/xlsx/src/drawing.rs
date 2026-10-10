@@ -271,8 +271,9 @@ pub enum Obj<'a> {
     Shape(&'a Shape),
 }
 
-/// The drawing part for a sheet's objects (relationship ids already assigned).
-pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
+/// The drawing part for a sheet's objects (relationship ids already assigned). `lang` is the
+/// workbook's interface language tag, recorded on shape text runs.
+pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>], lang: &str) -> String {
     let mut s = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\">",
     );
@@ -359,9 +360,9 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     s.push_str("<xdr:txBody><a:bodyPr wrap=\"square\" rtlCol=\"0\" anchor=\"t\"/><a:lstStyle/>");
                     for line in sh.text.split('\n') {
                         if line.is_empty() {
-                            s.push_str("<a:p><a:endParaRPr lang=\"en-US\"/></a:p>");
+                            let _ = write!(s, "<a:p><a:endParaRPr lang=\"{}\"/></a:p>", esc(lang));
                         } else {
-                            let _ = write!(s, "<a:p><a:r><a:rPr lang=\"en-US\"/><a:t>{}</a:t></a:r></a:p>", esc(line));
+                            let _ = write!(s, "<a:p><a:r><a:rPr lang=\"{}\"/><a:t>{}</a:t></a:r></a:p>", esc(lang), esc(line));
                         }
                     }
                     s.push_str("</xdr:txBody>");

@@ -6,6 +6,7 @@ use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
 use gridcraft_engine::model::HAlign;
 use gridcraft_ui_egui::SheetApp;
+use gridcraft_ui_egui::l10n::Tr;
 use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
@@ -317,4 +318,44 @@ fn ordinary_typing_editor_shortcuts_and_altgr_remain_text_input() {
     events(&mut h, [Event::ModifiersChanged(Modifiers::NONE), key_event(Key::AltLeft, false, Modifiers::NONE), Event::Text("é".into())]);
     assert_eq!(h.state().keytips.prefix(), None, "macOS Option must remain available for text composition");
     assert_eq!(h.state().editor.as_ref().unwrap().text, "é");
+}
+
+#[test]
+fn english_keytip_letters_and_paste_mnemonics_work_in_every_interface_language() {
+    // Access keys intentionally remain English in every language; only their captions translate.
+    for language in gridcraft_locale::LANGUAGES {
+        let mut h = harness(copied_row());
+        h.state_mut().run("app.language.set", json!({"language": language.tag})).unwrap();
+        h.run_steps(2);
+        assert_eq!(h.state().session.locale().ui.tag, language.tag);
+
+        sequence(&mut h, &[Key::H, Key::A, Key::R], false);
+        let d = h.state().session.active().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert_eq!(d.wb.styles.get(sh.style_id(d.selection.active)).align.h, HAlign::Right);
+        assert!(h.state().editor.is_none());
+
+        sequence(&mut h, &[Key::H, Key::V], false);
+        let paste_special = h.state().l10n.tr("Paste Special…").into_owned();
+        h.get_by_label(&paste_special).click();
+        h.run_steps(3);
+        assert_eq!(h.state().dialog.as_ref().unwrap().name(), "pasteSpecial");
+        let values = format!("{} (V)", h.state().l10n.tr("Values"));
+        h.get_by_label(&values).click();
+        h.run_steps(2);
+        assert_eq!(h.state().dialog.as_ref().unwrap().values.get("what"), Some(&json!("values")));
+        let transpose = format!("{} (E)", h.state().l10n.tr("Transpose"));
+        h.get_by_label(&transpose).click();
+        h.run_steps(2);
+        assert_eq!(h.state().dialog.as_ref().unwrap().values.get("transpose"), Some(&json!(true)));
+        letter(&mut h, Key::F, false);
+        assert_eq!(h.state().dialog.as_ref().unwrap().values.get("what"), Some(&json!("formulas")));
+        letter(&mut h, Key::V, true);
+        key(&mut h, Key::Enter);
+        assert!(h.state().dialog.is_none());
+        assert!(h.state().editor.is_none());
+        assert_eq!(value(&h, "D4"), Value::Number(42.0));
+        assert_eq!(value(&h, "D5"), Value::Number(99.0));
+        assert_eq!(value(&h, "E4"), Value::Empty);
+    }
 }

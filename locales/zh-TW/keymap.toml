@@ -1,0 +1,13 @@
+# Keyboard shortcuts of zh-TW. Same format as en-US/keymap.toml.
+#
+# No override: every command inherits its en-US chord. Provenance: the Microsoft zh-TW Excel
+# keyboard-shortcuts page (https://support.microsoft.com/zh-tw/accessibility/excel/keyboard-shortcuts-in-excel,
+# cached and read 2026-10-10) lists the same Ctrl chords as the en-US reference for every command that
+# the page covers (Ctrl+O open, Ctrl+W close, Ctrl+S save, Ctrl+C/X/V copy/cut/paste, Ctrl+Z undo,
+# Ctrl+Y redo, Ctrl+B bold, Ctrl+I italic, Ctrl+U underline, Ctrl+D fill down, Ctrl+R fill right,
+# Ctrl+E Flash Fill, Ctrl+F find, Ctrl+H replace, Ctrl+G go to, Ctrl+A select all, Ctrl+1 format cells,
+# Ctrl+9 / Ctrl+0 hide rows / columns, Ctrl+T table, Ctrl+K link, Shift+F3 insert function, F9 / Shift+F9
+# calculate, F7 spelling, Ctrl+Space / Shift+Space select column / row, Ctrl+Page Up / Page Down sheets).
+# zh-TW Excel does not localize shortcut letters, so no entry needs to be overridden.
+
+[shortcuts]

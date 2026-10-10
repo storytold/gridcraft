@@ -59,8 +59,8 @@ mod tests {
     use crate::util::{R, num};
     use crate::{Arg, Ctx, FnSpec};
 
-    fn add(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-        Ok(Value::Number(num(a, 0)? + num(a, 1)?))
+    fn add(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+        Ok(Value::Number(num(c, a, 0)? + num(c, a, 1)?))
     }
 
     fn spec() -> FnSpec {

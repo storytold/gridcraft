@@ -12,6 +12,7 @@ pub mod cmd;
 pub mod display;
 pub mod fill;
 pub mod io;
+pub mod locale;
 pub mod pivot;
 pub mod sample;
 pub mod selection;
@@ -31,6 +32,7 @@ pub use gridcraft_core as core;
 pub use gridcraft_formula as formula;
 pub use gridcraft_model as model;
 pub use gridcraft_numfmt as numfmt;
+pub use locale::LocalePrefs;
 pub use selection::Selection;
 
 #[derive(Debug, thiserror::Error)]
@@ -47,6 +49,68 @@ pub enum EngineError {
     Other(String),
     #[error("internal error in `{0}` (the workbook was kept as it was): {1}")]
     Internal(String, String),
+    /// A formula that does not parse (the message names the problem).
+    #[error("There's a problem with this formula: {0}")]
+    InvalidFormula(String),
+    /// Language or regional settings that cannot be applied.
+    #[error("invalid language or regional settings: {0}")]
+    InvalidLocale(String),
+    /// An edit of a locked cell (or another change the sheet protection forbids) on a protected
+    /// sheet.
+    #[error("The cell or chart you're trying to change is on a protected sheet.")]
+    Protected,
+    #[error("'{0}' is password-protected. GridCraft can't open encrypted workbooks yet; remove the password in Excel and try again.")]
+    EncryptedWorkbook(String),
+    #[error("'{0}' is an Excel 97-2003 (.xls) workbook or another legacy binary file. Save it as .xlsx in Excel and try again.")]
+    LegacyWorkbook(String),
+    #[error("We can't import '{name}': {message}")]
+    ImportFailed { name: String, message: String },
+    #[error("{0} is supported for data import only. Save as .xlsx or another supported export format.")]
+    ImportOnlyFormat(&'static str),
+    #[error("Text boxes can hold at most {0} characters.")]
+    TextBoxTooLong(usize),
+    #[error("The source range is too large for a chart.")]
+    ChartRangeTooLarge,
+}
+
+impl EngineError {
+    /// Stable kebab-case code. The UI looks up `error-<code>` in `errors.ftl`; `Display` stays
+    /// English for MCP and the control channel.
+    pub fn code(&self) -> &'static str {
+        match self {
+            EngineError::UnknownCommand(_) => "unknown-command",
+            EngineError::Disabled(..) => "command-disabled",
+            EngineError::BadParams { .. } => "bad-params",
+            EngineError::NoDocument => "no-document",
+            EngineError::Other(_) => "other",
+            EngineError::Internal(..) => "internal",
+            EngineError::InvalidFormula(_) => "invalid-formula",
+            EngineError::InvalidLocale(_) => "invalid-locale",
+            EngineError::Protected => "protected-sheet",
+            EngineError::EncryptedWorkbook(_) => "encrypted-workbook",
+            EngineError::LegacyWorkbook(_) => "legacy-workbook",
+            EngineError::ImportFailed { .. } => "import-failed",
+            EngineError::ImportOnlyFormat(_) => "import-only-format",
+            EngineError::TextBoxTooLong(_) => "text-box-too-long",
+            EngineError::ChartRangeTooLarge => "chart-range-too-large",
+        }
+    }
+
+    /// The message arguments for [`EngineError::code`]'s Fluent message, as `(name, value)`.
+    pub fn args(&self) -> Vec<(&'static str, String)> {
+        match self {
+            EngineError::UnknownCommand(c) => vec![("command", c.clone())],
+            EngineError::Disabled(c, why) => vec![("command", c.clone()), ("reason", why.clone())],
+            EngineError::BadParams { cmd, msg } => vec![("command", cmd.clone()), ("message", msg.clone())],
+            EngineError::NoDocument | EngineError::Protected | EngineError::ChartRangeTooLarge => vec![],
+            EngineError::Other(m) | EngineError::InvalidFormula(m) | EngineError::InvalidLocale(m) => vec![("message", m.clone())],
+            EngineError::Internal(c, m) => vec![("command", c.clone()), ("message", m.clone())],
+            EngineError::EncryptedWorkbook(name) | EngineError::LegacyWorkbook(name) => vec![("name", name.clone())],
+            EngineError::ImportFailed { name, message } => vec![("name", name.clone()), ("message", message.clone())],
+            EngineError::ImportOnlyFormat(format) => vec![("format", (*format).into())],
+            EngineError::TextBoxTooLong(limit) => vec![("limit", limit.to_string())],
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
@@ -124,6 +188,23 @@ impl DocState {
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)
     }
+    /// Assigns `loc` to the workbook (`Workbook::locale` is not serialized, so every document
+    /// and every restored snapshot gets it from the session) and, when `recalc`, recalculates
+    /// everything so results that depend on the locale (`TEXT`, `VALUE`, …) follow it. A
+    /// locale change never makes a clean workbook dirty.
+    pub(crate) fn refresh_locale(&mut self, loc: &Arc<gridcraft_locale::Locale>, recalc: bool) {
+        let clean = !self.is_dirty();
+        let mut wb = (*self.wb).clone();
+        wb.locale = loc.clone();
+        if recalc {
+            self.calc.recalc_all(&mut wb);
+        }
+        self.wb = Arc::new(wb);
+        if clean {
+            self.saved = self.wb.clone();
+        }
+        self.revision += 1;
+    }
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet
     }
@@ -150,6 +231,16 @@ pub struct Prefs {
     pub r1c1: bool,
     /// Words added with Add to Dictionary.
     pub user_dictionary: Vec<String>,
+    /// Interface language: `"system"` (the OS or browser language) or a tag such as `pt-BR`.
+    pub ui_language: String,
+    /// Formula language: `"followUi"` or `"en-US"` (or any available tag).
+    pub formula_language: String,
+    /// Regional format: `"system"` or a tag such as `de-DE`.
+    pub regional_format: String,
+    /// When false, `decimal_separator` and `thousands_separator` override the region's.
+    pub use_system_separators: bool,
+    pub decimal_separator: String,
+    pub thousands_separator: String,
 }
 
 impl Default for Prefs {
@@ -163,6 +254,12 @@ impl Default for Prefs {
             sheets_in_new_workbook: 1,
             r1c1: false,
             user_dictionary: vec![],
+            ui_language: "system".into(),
+            formula_language: "followUi".into(),
+            regional_format: "system".into(),
+            use_system_separators: true,
+            decimal_separator: ".".into(),
+            thousands_separator: ",".into(),
         }
     }
 }
@@ -175,6 +272,8 @@ pub enum UiRequest {
     /// Start editing the active cell (F2) with optional initial text.
     EditCell(Option<String>),
     OpenUrl(String),
+    /// The language or regional format changed: rebuild translated UI, fonts and native menus.
+    LocaleChanged,
 }
 
 #[derive(Default)]
@@ -200,6 +299,10 @@ pub struct Session {
     pub draw_tool: String,
     pub draw_color: String,
     pub draw_width: f32,
+    /// The resolved locale (interface, formula language, region) every document uses.
+    locale: Arc<gridcraft_locale::Locale>,
+    /// The OS or browser locale tag the apps detect; the `"system"` preferences resolve to it.
+    system_locale: String,
 }
 
 impl Session {
@@ -229,7 +332,11 @@ impl Session {
     pub fn doc_mut(&mut self) -> Result<&mut DocState> {
         self.active_mut().ok_or(EngineError::NoDocument)
     }
-    pub fn add_document(&mut self, d: DocState) -> usize {
+    pub fn add_document(&mut self, mut d: DocState) -> usize {
+        if *d.wb.locale != *self.locale {
+            let recalc = d.wb.calc.mode != gridcraft_model::CalcMode::Manual;
+            d.refresh_locale(&self.locale, recalc);
+        }
         self.docs.push(d);
         self.active = self.docs.len() - 1;
         self.active
@@ -242,15 +349,16 @@ impl Session {
             }
         }
     }
-    /// A new blank workbook titled `BookN`.
+    /// A new blank workbook titled `BookN` (`Pasta1` in a Portuguese interface).
     pub fn new_workbook(&mut self) -> usize {
-        let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
-        let mut wb = Workbook::new();
+        let book = self.locale.ui.content("book");
+        let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("{book}{n}") && d.path.is_none())).unwrap_or(1);
+        let mut wb = Workbook::new_in(self.locale.clone());
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
             let name = wb.next_sheet_name();
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
         }
-        self.add_document(DocState::new(wb, None, format!("Book{n}")))
+        self.add_document(DocState::new(wb, None, format!("{book}{n}")))
     }
 
     pub fn commands(&self) -> Vec<CommandInfo> {
@@ -284,7 +392,8 @@ impl Session {
             }
         };
         if spec.journal && result.is_ok() {
-            self.journal.push((id.to_string(), params.clone()));
+            let recorded = crate::locale::canonical_journal(self, id, &params, before.as_ref().map(|(_, wb, _)| &**wb));
+            self.journal.extend(recorded);
             if self.journal.len() > 10_000 {
                 self.journal.drain(..5_000);
             }

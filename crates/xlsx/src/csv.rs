@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
-use gridcraft_core::parse::parse_input;
-use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, Value, number_to_text};
+use gridcraft_core::parse::parse_input_in;
+use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, Value};
+use gridcraft_locale::Locale;
 use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
 
 use crate::{CsvOptions, IoError};
@@ -42,10 +43,27 @@ pub fn decode_text(bytes: &[u8]) -> String {
 }
 
 /// Picks comma, semicolon or tab: the candidate with the most consistent count per line
-/// (outside quotes) over the first non-blank lines. A candidate must appear on every such line, otherwise comma wins.
+/// (outside quotes) over the first non-blank lines. A candidate must appear on every such line,
+/// otherwise comma wins. En-US conventions; see [`sniff_delimiter_in`].
+#[cfg(test)]
 pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
-    let mut best = (b',', 0usize, 0usize);
+    sniff_delimiter_in(text, quote, &gridcraft_locale::INVARIANT.regional)
+}
+
+/// [`sniff_delimiter`] for a region: the region's list separator is the first candidate and the
+/// default (it wins when no candidate appears on every line), and where the decimal separator is
+/// a comma a comma is never chosen (it belongs to the numbers, so Excel splits such files on the
+/// list separator).
+pub fn sniff_delimiter_in(text: &str, quote: char, reg: &gridcraft_locale::Regional) -> u8 {
+    let mut candidates: Vec<char> = vec![reg.list];
     for d in [',', ';', '\t'] {
+        if !candidates.contains(&d) && !(d == ',' && reg.decimal == ',') {
+            candidates.push(d);
+        }
+    }
+    let first = u8::try_from(reg.list).unwrap_or(b',');
+    let mut best = (first, 0usize, 0usize);
+    for d in candidates {
         let mut counts = vec![];
         let mut n = 0usize;
         let mut in_q = false;
@@ -133,13 +151,13 @@ fn parse_records(text: &str, delim: char, quote: char, mut on_record: impl FnMut
 pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
     let text = decode_text(bytes);
     let quote = if opts.quote == 0 { '"' } else { opts.quote as char };
-    let delim = if opts.delimiter == 0 { sniff_delimiter(&text, quote) } else { opts.delimiter } as char;
+    let delim = if opts.delimiter == 0 { sniff_delimiter_in(&text, quote, &opts.locale.regional) } else { opts.delimiter } as char;
     if delim == quote {
         return Err(IoError::Format("the delimiter and quote character must differ".into()));
     }
-    let mut wb = Workbook::new();
+    let mut wb = Workbook::new_in(Arc::new(opts.locale));
     wb.date_system = opts.date_system;
-    let mut sheet = Sheet::new("Sheet1");
+    let mut sheet = Sheet::new(format!("{}1", opts.locale.ui.content("sheet")));
     let mut styles = std::mem::take(&mut wb.styles);
     let mut fmt_cache: Vec<(&'static str, StyleId)> = vec![];
     let mut row: u32 = 0;
@@ -157,7 +175,7 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
             }
             let pos = CellRef::new(row, col as u32);
             let cell = if opts.parse_values {
-                let p = parse_input(&f, opts.date_system);
+                let p = parse_input_in(&f, opts.date_system, &opts.locale.regional, opts.locale.formula);
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
                         Some((_, id)) => *id,
@@ -183,21 +201,22 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
     Ok(wb)
 }
 
-fn field_text(v: &Value) -> String {
+/// A value as the file spells it in `loc`: the region's decimal separator, the formula
+/// language's booleans and error names.
+fn field_text(v: &Value, loc: &Locale) -> String {
     match v {
-        Value::Empty => String::new(),
-        Value::Number(n) => number_to_text(*n),
-        Value::Text(t) => t.to_string(),
-        Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.into(),
-        Value::Error(e) => e.as_str().into(),
-        Value::Array(a) => a.get(0, 0).map(field_text).unwrap_or_default(),
+        Value::Error(e) => loc.formula.local_error(e.as_str()).to_string(),
+        Value::Array(a) => a.get(0, 0).map(|x| field_text(x, loc)).unwrap_or_default(),
+        v => v.to_text_in(loc).unwrap_or_default(),
     }
 }
 
 /// Writes the sheet's used range as CSV (raw values, CRLF line ends, UTF-8 without BOM).
+/// Numbers, booleans and errors are spelled in the workbook's locale. A `delimiter` of `0`
+/// uses the region's list separator (`;` where the decimal separator is a comma).
 pub fn write_csv(sheet: &Sheet, wb: &Workbook, delimiter: u8) -> Vec<u8> {
-    let _ = wb;
-    let delim = if delimiter == 0 { ',' } else { delimiter as char };
+    let loc: &Locale = &wb.locale;
+    let delim = if delimiter == 0 { loc.regional.list } else { delimiter as char };
     let mut out = String::new();
     let Some(r) = sheet.used_range() else { return Vec::new() };
     for row in r.start.row..=r.end.row {
@@ -205,7 +224,7 @@ pub fn write_csv(sheet: &Sheet, wb: &Workbook, delimiter: u8) -> Vec<u8> {
             if col > r.start.col {
                 out.push(delim);
             }
-            let t = field_text(&sheet.value(CellRef::new(row, col)));
+            let t = field_text(&sheet.value(CellRef::new(row, col)), loc);
             if t.contains(delim) || t.contains('"') || t.contains('\n') || t.contains('\r') {
                 out.push('"');
                 out.push_str(&t.replace('"', "\"\""));
@@ -217,4 +236,49 @@ pub fn write_csv(sheet: &Sheet, wb: &Workbook, delimiter: u8) -> Vec<u8> {
         out.push_str("\r\n");
     }
     out.into_bytes()
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use gridcraft_core::DateSystem;
+
+    use super::*;
+
+    fn pt_region() -> Locale {
+        let region = gridcraft_locale::region("pt-BR").copied().unwrap_or(gridcraft_locale::INVARIANT.regional);
+        Locale::new(gridcraft_locale::INVARIANT.ui, gridcraft_locale::INVARIANT.formula, region)
+    }
+
+    #[test]
+    fn export_uses_the_region_list_separator_and_decimal() {
+        let loc = pt_region();
+        let mut wb = Workbook::new_in(Arc::new(loc));
+        let mut s = Sheet::new("S");
+        s.set_value(CellRef::new(0, 0), Value::Number(1.5));
+        s.set_value(CellRef::new(0, 1), Value::Number(2.0));
+        s.set_value(CellRef::new(0, 2), Value::text("a;b"));
+        wb.sheets = vec![Arc::new(s)];
+        let sheet = wb.sheet(0).cloned().unwrap_or_else(|| Sheet::new("S"));
+        let default = String::from_utf8(write_csv(&sheet, &wb, 0)).unwrap_or_default();
+        assert_eq!(default, "1,5;2;\"a;b\"\r\n");
+        let comma = String::from_utf8(write_csv(&sheet, &wb, b'\t')).unwrap_or_default();
+        assert_eq!(comma, "1,5\t2\ta;b\r\n");
+        // The canonical workbook keeps comma-separated invariant numbers.
+        let plain = Workbook::new();
+        let invariant = String::from_utf8(write_csv(&sheet, &plain, 0)).unwrap_or_default();
+        assert_eq!(invariant, "1.5,2,a;b\r\n");
+    }
+
+    #[test]
+    fn import_reads_numbers_by_region() {
+        let opts = CsvOptions { delimiter: 0, locale: pt_region(), ..Default::default() };
+        let wb = read_csv(b"x;y\n1,5;10/10/2026", &opts).unwrap_or_default();
+        let sh = wb.sheet(0);
+        assert_eq!(sh.map(|s| s.value(CellRef::new(1, 0))), Some(Value::Number(1.5)));
+        // Day/month/year: 10 October 2026.
+        let date = sh.map(|s| s.value(CellRef::new(1, 1))).and_then(|v| v.as_f64());
+        let expected = parse_input_in("2026-10-10", DateSystem::D1900, &opts.locale.regional, opts.locale.formula).value.as_f64();
+        assert!(date.is_some());
+        assert_eq!(date, expected);
+    }
 }

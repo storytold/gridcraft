@@ -6,7 +6,9 @@ use gridcraft_core::addr::{letters_to_col, parse_a1_prefix};
 use gridcraft_core::{CellError, MAX_ROWS};
 
 use crate::ast::*;
-use crate::lexer::{Tok, Token, tokenize_locale};
+use gridcraft_locale::{Dialect, TABLE_ITEM_ALL, TABLE_ITEM_DATA, TABLE_ITEM_HEADERS, TABLE_ITEM_THIS_ROW, TABLE_ITEM_TOTALS};
+
+use crate::lexer::{Tok, Token, tokenize_local};
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 #[error("{msg}")]
@@ -15,23 +17,81 @@ pub struct ParseError {
     pub pos: usize,
 }
 
-pub(crate) const MAX_DEPTH: usize = 256;
+const MAX_DEPTH: usize = 256;
 
-/// Parses formula text. A leading `=` (or `+`/`-` as Lotus users type) is accepted and skipped
-/// for `=`.
+/// Parses canonical (en-US) formula text. A leading `=` is accepted and skipped.
 pub fn parse(src: &str) -> Result<Expr, ParseError> {
-    parse_syntax(src, crate::FormulaLocale::En)
+    parse_local(src, &Dialect::INVARIANT)
 }
 
-pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale) -> Result<Expr, ParseError> {
+/// Parses formula text written in dialect `d` (localized function names, booleans, errors and
+/// separators) into the canonical syntax tree. A leading `=` is accepted and skipped.
+pub fn parse_local(src: &str, d: &Dialect) -> Result<Expr, ParseError> {
+    parse_local_with(src, d, &no_names)
+}
+
+/// Workbook names (defined names and tables) known when reading or writing a formula; see
+/// [`parse_local_with`].
+pub type KnownNames<'a> = &'a dyn Fn(&str) -> bool;
+
+/// No workbook names: only LET/LAMBDA bindings take precedence over localized names.
+pub fn no_names(_: &str) -> bool {
+    false
+}
+
+/// [`parse_local`] where the names `known` reports (and LET/LAMBDA bindings in scope) take
+/// precedence over the dialect's function names and booleans: with a name `SUMA` defined, Spanish
+/// `SUMA(2)` calls that name, not `SUM`, and `FALSO` reads a name `FALSO`, not `FALSE`.
+/// The canonical `TRUE` and `FALSE` are never names.
+pub fn parse_local_with(src: &str, d: &Dialect, known: KnownNames<'_>) -> Result<Expr, ParseError> {
     let body = src.strip_prefix('=').unwrap_or(src);
-    let toks = tokenize_locale(body, locale).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
+    let toks = tokenize_local(body, d).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
-    let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
+    let mut p = Parser { toks, i: 0, depth: 0, d, src: body, known, bindings: Vec::new() };
     let e = p.expr(0, false)?;
     match p.peek() {
         Tok::Eof => Ok(e),
         t => Err(p.err(format!("unexpected {}", describe(t)))),
+    }
+}
+
+/// Whether a local boolean spelling can also be a name: every one but the canonical `TRUE` and
+/// `FALSE`, which Excel reserves.
+pub(crate) fn bindable_bool(word: &str) -> bool {
+    !word.eq_ignore_ascii_case("TRUE") && !word.eq_ignore_ascii_case("FALSE")
+}
+
+/// Whether `name` is bound by a LET/LAMBDA in `bindings` or is a name `known` reports. Bindings
+/// compare in ASCII case, like the evaluator.
+pub(crate) fn is_bound(name: &str, bindings: &[String], known: KnownNames<'_>) -> bool {
+    bindings.iter().rev().any(|n| n.eq_ignore_ascii_case(name)) || known(name)
+}
+
+/// The name argument `i` of LET or LAMBDA binds for the arguments after it, when `more` follow
+/// (the parser and the printer must agree): a LAMBDA parameter binds from the next argument on;
+/// a LET name binds once its value has been read, so `LET(x, x, …)` reads the outer `x` in the
+/// value.
+pub(crate) fn binds_after<'e>(function: &str, args: &'e [Expr], i: usize, more: bool) -> Option<&'e str> {
+    if !more {
+        return None;
+    }
+    let decl = match function {
+        "LAMBDA" => args.get(i),
+        "LET" if i % 2 == 1 => args.get(i - 1),
+        _ => None,
+    };
+    match decl {
+        Some(Expr::Name(n)) => Some(n),
+        _ => None,
+    }
+}
+
+/// Whether argument `i` of LET or LAMBDA (with more arguments after it) declares a name.
+fn declares(function: &str, i: usize) -> bool {
+    match function {
+        "LAMBDA" => true,
+        "LET" => i.is_multiple_of(2),
+        _ => false,
     }
 }
 
@@ -62,11 +122,16 @@ fn significant_spaces(toks: Vec<Token>) -> Vec<Token> {
     out
 }
 
-struct Parser {
+struct Parser<'a> {
     toks: Vec<Token>,
     i: usize,
     depth: usize,
-    input: bool,
+    d: &'a Dialect<'a>,
+    /// The formula body the token spans point into.
+    src: &'a str,
+    known: KnownNames<'a>,
+    /// Names bound by the LET/LAMBDA calls being read, innermost last.
+    bindings: Vec<String>,
 }
 
 fn word_is_cols(w: &str) -> Option<(u32, bool)> {
@@ -88,18 +153,57 @@ fn word_is_cell(w: &str) -> Option<Anchor> {
     Some(Anchor { row, col, row_abs, col_abs })
 }
 
-/// `_xlfn.XLOOKUP` → `XLOOKUP`.
-pub fn normalize_function_name(name: &str) -> String {
-    let u = name.to_ascii_uppercase();
-    for p in ["_XLFN._XLWS.", "_XLFN.", "_XLWS.", "_XLUDF."] {
-        if let Some(r) = u.strip_prefix(p) {
-            return r.to_string();
-        }
+/// `_xlfn.` / `_xlfn._xlws.` / `_xlws.` prefixes of file function names (upper case).
+pub(crate) const FILE_PREFIXES: [&str; 3] = ["_XLFN._XLWS.", "_XLFN.", "_XLWS."];
+
+/// Prefix of a function name Excel does not define: user-defined or unresolved (upper case).
+pub(crate) const UDF_PREFIX: &str = "_XLUDF.";
+
+/// Marker Excel stores before LET/LAMBDA parameter names in files (`_xlpm.x`).
+const PARAM_PREFIX: &str = "_xlpm.";
+
+/// A name without the file-only LET/LAMBDA parameter marker.
+fn strip_param_prefix(name: &str) -> &str {
+    match name.get(..PARAM_PREFIX.len()) {
+        Some(p) if p.eq_ignore_ascii_case(PARAM_PREFIX) => name.get(PARAM_PREFIX.len()..).unwrap_or(name),
+        _ => name,
     }
-    u
 }
 
-impl Parser {
+/// The canonical function name for a name written in dialect `d`.
+///
+/// - A `_xlpm.` call target is a LET/LAMBDA parameter being called: the marker is dropped and the
+///   name is never resolved as a built-in.
+/// - File-style prefixes (`_xlfn.XLOOKUP`) are stripped when the rest is a built-in; other
+///   prefixed names keep their full upper-case spelling (`_XLFN.FORECAST.ETS`, `_XLUDF.MYFN`).
+/// - A local name resolves to its canonical function (`SOMA` → `SUM` in pt-BR).
+/// - A canonical built-in name that the dialect does not know (`SUM` in pt-BR) is an unresolved
+///   user-defined function, as in Excel: `_XLUDF.SUM`, which evaluates to `#NAME?`.
+/// - Any other name is upper-cased in ASCII only: the evaluator binds LET/LAMBDA names by ASCII
+///   case, so `ação(1)` must stay `AçãO`, not `AÇÃO`.
+fn resolve_function(raw: &str, d: &Dialect) -> String {
+    let upper = raw.to_ascii_uppercase();
+    let bare = strip_param_prefix(raw);
+    if bare.len() != raw.len() {
+        return bare.to_ascii_uppercase();
+    }
+    for p in FILE_PREFIXES {
+        if let Some(rest) = upper.strip_prefix(p)
+            && crate::catalog::is_builtin(rest)
+        {
+            return rest.to_string();
+        }
+    }
+    if upper.starts_with(UDF_PREFIX) || FILE_PREFIXES.iter().any(|p| upper.starts_with(p)) {
+        return upper;
+    }
+    if let Some(c) = d.names.canonical_function(raw) {
+        return c.to_string();
+    }
+    if crate::catalog::is_builtin(&upper) { format!("_XLUDF.{upper}") } else { upper }
+}
+
+impl Parser<'_> {
     fn peek(&self) -> &Tok {
         self.toks.get(self.i).map(|t| &t.tok).unwrap_or(&Tok::Eof)
     }
@@ -118,6 +222,13 @@ impl Parser {
     }
     fn err(&self, msg: impl Into<String>) -> ParseError {
         ParseError { msg: msg.into(), pos: self.pos() }
+    }
+    /// Source text of the token just consumed.
+    fn last_text(&self) -> &str {
+        self.i.checked_sub(1).and_then(|k| self.toks.get(k)).and_then(|t| self.src.get(t.start..t.end)).unwrap_or("")
+    }
+    fn bound(&self, name: &str) -> bool {
+        is_bound(name, &self.bindings, self.known)
     }
     fn expect(&mut self, t: Tok) -> Result<(), ParseError> {
         if *self.peek() == t {
@@ -170,7 +281,7 @@ impl Parser {
                     // A name followed by '(' was lexed as Func; this is `(name)(…)` only.
                 }
                 self.next();
-                let args = self.args()?;
+                let args = self.args("")?;
                 lhs = Expr::Invoke(Box::new(lhs), args);
                 continue;
             }
@@ -187,24 +298,41 @@ impl Parser {
         Ok(lhs)
     }
 
-    fn args(&mut self) -> Result<Vec<Expr>, ParseError> {
+    /// The arguments of a call to `function` (canonical name), after its `(`. LET and LAMBDA
+    /// bind their names for the arguments after them (see [`binds_after`]).
+    fn args(&mut self, function: &str) -> Result<Vec<Expr>, ParseError> {
         let mut args = Vec::new();
         if *self.peek() == Tok::RParen {
             self.next();
             return Ok(args);
         }
+        let saved = self.bindings.len();
         loop {
-            let a = match self.peek() {
+            let start = self.i;
+            let mut a = match self.peek() {
                 Tok::Comma | Tok::RParen => Expr::Missing,
                 _ => self.expr(0, false)?,
             };
+            let more = *self.peek() == Tok::Comma;
+            // A declared name spelled like a local boolean: `LET(FALSO; 7; FALSO)` in Spanish.
+            if more && declares(function, args.len()) && matches!(a, Expr::Bool(_)) && self.i == start + 1 {
+                let text = self.toks.get(start).and_then(|t| self.src.get(t.start..t.end)).unwrap_or("");
+                if bindable_bool(text) {
+                    a = Expr::Name(text.to_string());
+                }
+            }
             args.push(a);
+            if more && let Some(n) = binds_after(function, &args, args.len() - 1, true) {
+                let n = n.to_string();
+                self.bindings.push(n);
+            }
             match self.next() {
                 Tok::Comma => continue,
                 Tok::RParen => break,
                 t => return Err(self.err(format!("expected `,` or `)`, found {}", describe(&t)))),
             }
         }
+        self.bindings.truncate(saved);
         if args.len() > 255 {
             return Err(self.err("too many arguments"));
         }
@@ -215,7 +343,10 @@ impl Parser {
         match self.next() {
             Tok::Number(n) => Ok(Expr::Number(n)),
             Tok::Text(s) => Ok(Expr::Text(Arc::from(s))),
-            Tok::Bool(b) => Ok(Expr::Bool(b)),
+            Tok::Bool(b) => {
+                let text = self.last_text();
+                Ok(if bindable_bool(text) && self.bound(text) { Expr::Name(text.to_string()) } else { Expr::Bool(b) })
+            }
             Tok::Error(e) => Ok(Expr::Error(e)),
             Tok::Op("-") => Ok(Expr::Unary(UnOp::Neg, Box::new(self.expr(60, allow_union)?))),
             Tok::Op("+") => Ok(Expr::Unary(UnOp::Plus, Box::new(self.expr(60, allow_union)?))),
@@ -226,11 +357,12 @@ impl Parser {
                 Ok(Expr::Paren(Box::new(e)))
             }
             Tok::LBrace => self.array(),
-            Tok::Func(name) => {
-                let name = normalize_function_name(&name);
-                let mut args = self.args()?;
-                // Files write `A1#` as `_xlfn.ANCHORARRAY(A1)`.
-                if name == "ANCHORARRAY"
+            Tok::Func(raw) => {
+                // A bound name is called as written (ASCII upper case, like other user names).
+                let name = if self.bound(&raw) { raw.to_ascii_uppercase() } else { resolve_function(&raw, self.d) };
+                let mut args = self.args(&name)?;
+                // Files write `A1#` as `_xlfn.ANCHORARRAY(A1)`; the name is not localized.
+                if matches!(name.as_str(), "ANCHORARRAY" | "_XLFN.ANCHORARRAY")
                     && let [Expr::Ref(Reference { kind: RefKind::Cell(_), .. })] = args.as_slice()
                     && let Some(r) = args.pop()
                 {
@@ -254,11 +386,11 @@ impl Parser {
                     && word_is_cell(&w).is_none()
                 {
                     let Tok::Struct(body) = self.next() else { return Err(self.err("internal")) };
-                    return Ok(Expr::Struct(parse_struct(&w, &body)));
+                    return Ok(Expr::Struct(parse_struct(&w, &body, self.d)));
                 }
                 self.reference_from_word(SheetSel::Current, &w)
             }
-            Tok::Struct(body) => Ok(Expr::Struct(parse_struct("", &body))),
+            Tok::Struct(body) => Ok(Expr::Struct(parse_struct("", &body, self.d))),
             t => Err(self.err(format!("unexpected {}", describe(&t)))),
         }
     }
@@ -311,7 +443,15 @@ impl Parser {
         if w.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             return Err(self.err(format!("unexpected `{w}`")));
         }
-        Ok(Expr::Name(w.to_string()))
+        // A canonical boolean that is not a literal of this dialect would print and re-read as a
+        // boolean, changing meaning; reject it and name the dialect's literal.
+        for canonical in [true, false] {
+            if w.eq_ignore_ascii_case(if canonical { "TRUE" } else { "FALSE" }) && self.d.names.parse_bool(w).is_none() {
+                let local = self.d.names.bool_text(canonical);
+                return Err(self.err(format!("`{w}` is not a boolean in this language; write `{local}`")));
+            }
+        }
+        Ok(Expr::Name(strip_param_prefix(w).to_string()))
     }
 
     fn array(&mut self) -> Result<Expr, ParseError> {
@@ -329,9 +469,6 @@ impl Parser {
                 },
                 Tok::Text(s) => Expr::Text(Arc::from(s)),
                 Tok::Bool(b) => Expr::Bool(b),
-                Tok::Word(w) if self.input => crate::input::boolean_alias(&w)
-                    .map(Expr::Bool)
-                    .ok_or_else(|| self.err(format!("array constants may only contain constants, found {}", describe(&Tok::Word(w)))))?,
                 Tok::Error(e) => Expr::Error(e),
                 t => return Err(self.err(format!("array constants may only contain constants, found {}", describe(&t)))),
             };
@@ -365,8 +502,9 @@ fn combine(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
     Expr::Binary(op, Box::new(lhs), Box::new(rhs))
 }
 
-/// Parses the inside of `Table[...]`.
-pub fn parse_struct(table: &str, body: &str) -> StructRef {
+/// Parses the inside of `Table[...]` in dialect `d`: items are the language's (`#Tudo`), the parts
+/// of a multi-part specifier are separated by the region's list separator.
+pub fn parse_struct(table: &str, body: &str, d: &Dialect) -> StructRef {
     let mut specifiers = Vec::new();
     let mut cols: Vec<String> = Vec::new();
     let body = body.trim();
@@ -385,12 +523,12 @@ pub fn parse_struct(table: &str, body: &str) -> StructRef {
         out
     };
     let item = |s: &str| -> Option<StructItem> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "#all" => Some(StructItem::All),
-            "#data" => Some(StructItem::Data),
-            "#headers" => Some(StructItem::Headers),
-            "#totals" => Some(StructItem::Totals),
-            "#this row" => Some(StructItem::ThisRow),
+        match d.names.table_item(s)? {
+            TABLE_ITEM_ALL => Some(StructItem::All),
+            TABLE_ITEM_DATA => Some(StructItem::Data),
+            TABLE_ITEM_HEADERS => Some(StructItem::Headers),
+            TABLE_ITEM_TOTALS => Some(StructItem::Totals),
+            TABLE_ITEM_THIS_ROW => Some(StructItem::ThisRow),
             _ => None,
         }
     };
@@ -438,7 +576,7 @@ pub fn parse_struct(table: &str, body: &str) -> StructRef {
                         parts.push(std::mem::take(&mut cur));
                     }
                 }
-                ',' if depth == 0 => {}
+                c if c == d.regional.list && depth == 0 => {}
                 ':' if depth == 0 => parts.push(":".into()),
                 _ if depth > 0 => cur.push(c),
                 _ => {}

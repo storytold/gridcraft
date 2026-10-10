@@ -88,11 +88,14 @@ pub struct CsvOptions {
     pub date_system: DateSystem,
     /// Interpret fields like typed input (numbers, dates, booleans…); otherwise keep text.
     pub parse_values: bool,
+    /// How numbers, dates and booleans are spelled in the file: the region's decimal separator,
+    /// date order and month names, the formula language's `TRUE`/`FALSE` and error names.
+    pub locale: gridcraft_locale::Locale,
 }
 
 impl Default for CsvOptions {
     fn default() -> Self {
-        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true }
+        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true, locale: gridcraft_locale::Locale::default() }
     }
 }
 

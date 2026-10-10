@@ -4,12 +4,15 @@ use egui::{Color32, FontId, Key, Rect, Sense, Stroke, StrokeKind, TextEdit, pos2
 use serde_json::json;
 
 use crate::SheetApp;
-use crate::editor::{REF_COLORS, formula_refs};
+use crate::editor::REF_COLORS;
+use crate::fnlist;
 use crate::icons::{self, Icon};
+use crate::l10n::{Arg, Tr};
 use crate::theme::{self, Tokens};
 
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    let l = app.l10n;
     let expanded = app.ui.formula_bar_expanded;
     let h = if expanded { 72.0 } else { 30.0 };
     egui::Panel::top("formula_bar")
@@ -22,13 +25,13 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 ui.add_space(4.0);
                 let editing = app.editor.is_some();
                 let c = if editing { t.text } else { t.text_disabled };
-                if crate::widgets::icon_button(ui, Icon::Close, c, "Cancel", vec2(22.0, 22.0)).clicked() && editing {
+                if crate::widgets::icon_button(ui, Icon::Close, c, &l.tr("Cancel"), vec2(22.0, 22.0)).clicked() && editing {
                     app.cancel_edit();
                 }
-                if crate::widgets::icon_button(ui, Icon::Check, c, "Enter", vec2(22.0, 22.0)).clicked() && editing {
+                if crate::widgets::icon_button(ui, Icon::Check, c, &l.tr("Enter"), vec2(22.0, 22.0)).clicked() && editing {
                     app.commit_edit(0, 0, false, false);
                 }
-                if crate::widgets::icon_button(ui, Icon::Fx, t.text, "Insert Function", vec2(26.0, 22.0)).clicked() {
+                if crate::widgets::icon_button(ui, Icon::Fx, t.text, &l.tr("Insert Function"), vec2(26.0, 22.0)).clicked() {
                     app.open_dialog("insertFunction", json!({}));
                 }
                 ui.add_space(4.0);
@@ -55,31 +58,32 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 let _ = editing_here;
                 ui.allocate_space(vec2(avail, h - 6.0));
                 let chevron = if expanded { Icon::ChevronUp } else { Icon::Chevron };
-                if crate::widgets::icon_button(ui, chevron, t.text_dim, "Expand formula bar", vec2(20.0, 22.0)).clicked() {
+                if crate::widgets::icon_button(ui, chevron, t.text_dim, &l.tr("Expand formula bar"), vec2(20.0, 22.0)).clicked() {
                     app.ui.formula_bar_expanded = !app.ui.formula_bar_expanded;
                 }
             });
         });
 }
 
+/// What the formula bar shows for the active cell, in the formula language and region.
 fn active_input(app: &SheetApp) -> String {
     let Some(d) = app.session.active() else { return String::new() };
     let Some(sh) = d.wb.active() else { return String::new() };
     let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
     if let Some(picture) = sh.cell_pictures.get(&a) {
-        return if picture.alt.is_empty() { "Picture in cell".into() } else { format!("Picture: {}", picture.alt) };
+        return if picture.alt.is_empty() {
+            app.l10n.text("ui-formula-bar-picture-in-cell", &[]).into_owned()
+        } else {
+            app.l10n.text("ui-formula-bar-picture-alt", &[("alt", Arg::from(picture.alt.as_str()))]).into_owned()
+        };
     }
     if let Some(c) = sh.cell(a) {
         if c.formula.is_some() && d.wb.styles.get(c.style).protection.hidden && sh.is_protected() {
             return String::new();
         }
-        return if let Some(f) = &c.formula {
-            let shown = crate::formula_locale::display(&c.input_text(), app.ui.language.formula_locale(), &d.wb, d.wb.active_sheet);
-            // A legacy array formula shows in braces (`{=A1:A2*2}`), as `Cell::bar_text` does.
-            if f.array.is_some() { format!("{{{shown}}}") } else { shown }
-        } else {
-            c.input_text()
-        };
+        let shown = gridcraft_engine::locale::input_local(c, &app.session.locale(), &|n: &str| d.wb.knows_name(n, d.wb.active_sheet));
+        // A legacy array formula shows in braces (`{=A1:A2*2}`), as `Cell::bar_text` does.
+        return if c.formula.as_ref().is_some_and(|f| f.array.is_some()) { format!("{{{shown}}}") } else { shown };
     }
     // A spilled cell shows the anchor's formula greyed out in Excel; we show it plainly.
     for (anchor, r) in &sh.spill_ranges {
@@ -89,13 +93,14 @@ fn active_input(app: &SheetApp) -> String {
             if gridcraft_engine::display::formula_hidden(&d.wb, sh, *anchor) {
                 return String::new();
             }
-            return crate::formula_locale::display(&format!("={}", f.text), app.ui.language.formula_locale(), &d.wb, d.wb.active_sheet);
+            return app.local_formula(&format!("={}", f.text));
         }
     }
     String::new()
 }
 
 fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) {
+    let l = app.l10n;
     let id = egui::Id::new("gridcraft.name_box");
     let shown = app.name_box_text();
     let mut text = app.name_box.clone().unwrap_or(shown.clone());
@@ -118,12 +123,12 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) {
                 let is_ref = gridcraft_engine::core::RangeRef::parse(target.split('!').next_back().unwrap_or("")).is_some();
                 let known = app.session.active().is_some_and(|d| d.wb.name(&target, d.wb.active_sheet).is_some() || d.wb.table(&target).is_some());
                 let r = if is_ref || known {
-                    app.run("edit.goTo", json!({"reference": target}))
+                    app.run_typed("edit.goTo", json!({"reference": target}))
                 } else {
-                    app.run("formulas.defineName", json!({"name": target}))
+                    app.run_typed("formulas.defineName", json!({"name": target}))
                 };
                 if let Err(e) = r {
-                    app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+                    app.message = Some(("GridCraft".into(), app.error_text(&e)));
                 }
                 app.grid.ensure_visible = true;
             }
@@ -139,7 +144,7 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) {
     let r = ui.interact(mb, id.with("drop"), Sense::click());
     egui::Popup::menu(&r).show(|ui| {
         if names.is_empty() {
-            ui.label(egui::RichText::new("No names defined").italics());
+            ui.label(egui::RichText::new(&*l.tr("No names defined")).italics());
         }
         for n in names {
             if ui.button(&n).clicked() {
@@ -152,6 +157,7 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) {
 
 /// The text editor used in the cell and in the formula bar (they share `app.editor`).
 pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32) {
+    let l = app.l10n;
     let Some(mut ed) = app.editor.take() else { return };
     let mine = ed.from_formula_bar == (id == egui::Id::new("gridcraft.formula_bar"));
     // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
@@ -159,7 +165,22 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none()));
     let mut action: Option<(i64, i64, bool, bool)> = None;
     let mut cancel = false;
-    if has_focus && mine {
+    // Keys pressed while an input method composes text belong to the input method.
+    let ime_frame = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Ime(_))));
+    if mine && has_focus {
+        ui.input(|i| {
+            for e in &i.events {
+                if let egui::Event::Ime(ime) = e {
+                    match ime {
+                        egui::ImeEvent::Preedit { text, .. } => ed.preedit = (!text.is_empty()).then(|| text.clone()),
+                        _ => ed.preedit = None,
+                    }
+                }
+            }
+        });
+    }
+    let composing = ed.preedit.is_some() || ime_frame;
+    if has_focus && mine && !composing {
         let (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, shift) = ui.input_mut(|i| {
             let m = i.modifiers;
             let alt_enter =
@@ -244,7 +265,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         }
     }
     // The text widget.
-    let refs = formula_refs(&ed.text);
+    let refs = ed.refs();
     let text_color = Tokens::get(ui.ctx()).text;
     let cell_text_color = if id == egui::Id::new("gridcraft.cell_editor") { Color32::BLACK } else { text_color };
     let font2 = font.clone();
@@ -302,15 +323,10 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             && ed.caret == ed.text.chars().count()
             && let Some(sh) = app.session.active().and_then(|d| d.wb.sheet(ed.sheet))
         {
-            ed.completion = crate::editor::column_completion(sh, ed.cell, &ed.text);
+            ed.completion = crate::editor::column_completion(sh, ed.cell, &ed.text, &ed.locale);
         }
         ed.point = None;
-        let names: Vec<String> = function_names()
-            .iter()
-            .map(|name| {
-                app.session.active().map(|d| crate::formula_locale::completion_name(name, ed.locale, &d.wb, ed.sheet)).unwrap_or(name).to_string()
-            })
-            .collect();
+        let names = fnlist::local_names(&ed.locale);
         ed.update_autocomplete(&names);
         app.session.mode = if ed.can_point() {
             gridcraft_engine::Mode::Point
@@ -336,10 +352,13 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         ui.painter().galley(pos, g, Color32::WHITE);
     }
     // Autocomplete list and argument hint under the editor.
-    if mine && (!ed.autocomplete.is_empty() || ed.current_function().is_some()) {
+    let loc = ed.locale.clone();
+    let hint = ed.current_function().and_then(|(name, arg)| fnlist::resolve(&loc, &name).map(|f| (f, arg)));
+    if mine && (!ed.autocomplete.is_empty() || hint.is_some()) {
         let below = resp.rect.left_bottom() + vec2(0.0, 4.0);
         egui::Area::new(id.with("ac")).fixed_pos(below).order(egui::Order::Tooltip).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).inner_margin(4.0).show(ui, |ui| {
+                let describe = |name: &str| fnlist::resolve(&loc, name).map(|f| fnlist::description(&l, f));
                 if !ed.autocomplete.is_empty() {
                     let mut pick = None;
                     for (i, n) in ed.autocomplete.iter().enumerate() {
@@ -351,11 +370,11 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
                         if r.clicked() {
                             pick = Some(i);
                         }
-                        if sel && let Some(desc) = crate::formula_locale::description(n, ed.locale) {
+                        if sel && let Some(desc) = describe(n) {
                             r.on_hover_text(desc);
                         }
                     }
-                    if let Some(desc) = ed.autocomplete.get(ed.ac_index).and_then(|n| crate::formula_locale::description(n, ed.locale)) {
+                    if let Some(desc) = ed.autocomplete.get(ed.ac_index).and_then(|n| describe(n)) {
                         ui.separator();
                         ui.add(egui::Label::new(egui::RichText::new(desc).small()).wrap());
                     }
@@ -364,21 +383,18 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
                         ed.accept_autocomplete();
                         ed.request_focus = true;
                     }
-                } else if let Some((name, arg)) = ed.current_function()
-                    && let Some(sig) = crate::formula_locale::signature(&name, ed.locale)
-                {
+                } else if let Some((f, arg)) = hint {
+                    let parts = fnlist::params(&l, f);
+                    let sep = format!("{} ", loc.regional.list);
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
-                        let (head, rest) = sig.split_once('(').unwrap_or((&sig, ""));
-                        ui.label(egui::RichText::new(format!("{}(", ed.locale.function_name(head))).font(theme::ui_font(12.0)));
-                        let inner = rest.trim_end_matches(')');
-                        let parts: Vec<&str> = inner.split(&format!("{} ", ed.locale.list_separator())).collect();
+                        ui.label(egui::RichText::new(format!("{}(", fnlist::local_name(&loc, f))).font(theme::ui_font(12.0)));
                         for (i, part) in parts.iter().enumerate() {
                             let is_cur = i == arg.min(parts.len().saturating_sub(1)) || (part.contains("...") && arg >= i);
-                            let txt = egui::RichText::new(*part).font(if is_cur { theme::ui_bold(12.0) } else { theme::ui_font(12.0) });
+                            let txt = egui::RichText::new(part.as_str()).font(if is_cur { theme::ui_bold(12.0) } else { theme::ui_font(12.0) });
                             ui.label(txt);
                             if i + 1 < parts.len() {
-                                ui.label(egui::RichText::new(format!("{} ", ed.locale.list_separator())).font(theme::ui_font(12.0)));
+                                ui.label(egui::RichText::new(sep.as_str()).font(theme::ui_font(12.0)));
                             }
                         }
                         ui.label(egui::RichText::new(")").font(theme::ui_font(12.0)));
@@ -397,7 +413,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
 
 fn cycle_anchor(ed: &mut crate::editor::EditState) {
     let caret_b = ed.text.char_indices().nth(ed.caret).map(|(i, _)| i).unwrap_or(ed.text.len());
-    for (a, b, ..) in formula_refs(&ed.text) {
+    for (a, b, ..) in ed.refs() {
         if a <= caret_b && caret_b <= b {
             let Some(r) = ed.text.get(a..b) else { return };
             let cycled: String = r
@@ -428,27 +444,4 @@ fn cycle_anchor(ed: &mut crate::editor::EditState) {
             return;
         }
     }
-}
-
-fn function_names() -> Vec<String> {
-    static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    NAMES
-        .get_or_init(|| gridcraft_engine::cmd::formulas::function_list().iter().filter_map(|f| f["name"].as_str().map(str::to_string)).collect())
-        .clone()
-}
-
-fn function_info(name: &str) -> Option<serde_json::Value> {
-    static LIST: std::sync::OnceLock<Vec<serde_json::Value>> = std::sync::OnceLock::new();
-    LIST.get_or_init(gridcraft_engine::cmd::formulas::function_list)
-        .iter()
-        .find(|f| f["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(name)))
-        .cloned()
-}
-
-pub fn function_signature(name: &str) -> Option<String> {
-    function_info(name).and_then(|f| f["signature"].as_str().map(str::to_string))
-}
-
-pub fn function_description(name: &str) -> Option<String> {
-    function_info(name).and_then(|f| f["description"].as_str().map(str::to_string))
 }

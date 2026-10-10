@@ -35,8 +35,8 @@ const IF2: &[bool] = &[false, true, false];
 
 const TRIG_LIMIT: f64 = 134_217_728.0; // 2^27: Excel's argument limit for trig functions
 
-fn unary(a: &[Arg], f: impl Fn(f64) -> R<f64>) -> R<Value> {
-    num_val(f(num(a, 0)?)?)
+fn unary(c: &dyn Ctx, a: &[Arg], f: impl Fn(f64) -> R<f64>) -> R<Value> {
+    num_val(f(num(c, a, 0)?)?)
 }
 
 fn trig_arg(x: f64) -> R<f64> {
@@ -52,8 +52,8 @@ fn clean(x: f64) -> f64 {
     to_sig_digits(x, 15)
 }
 
-fn digits_arg(a: &[Arg], i: usize) -> R<i32> {
-    let d = opt_num(a, i, 0.0)?.trunc();
+fn digits_arg(c: &dyn Ctx, a: &[Arg], i: usize) -> R<i32> {
+    let d = opt_num(c, a, i, 0.0)?.trunc();
     Ok(d.clamp(-400.0, 400.0) as i32)
 }
 
@@ -82,16 +82,16 @@ fn round_dir(x: f64, digits: i32, up: bool) -> f64 {
 // ---------------------------------------------------------------------------------------------
 // Sums and products
 
-fn sum(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(numbers(a)?.iter().sum())
+fn sum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(numbers(c, a)?.iter().sum())
 }
 
-fn sumsq(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(numbers(a)?.iter().map(|x| x * x).sum())
+fn sumsq(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(numbers(c, a)?.iter().map(|x| x * x).sum())
 }
 
-fn product(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = numbers(a)?;
+fn product(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = numbers(c, a)?;
     if v.is_empty() {
         return Ok(Value::Number(0.0));
     }
@@ -159,24 +159,24 @@ fn sumxmy2(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 // ---------------------------------------------------------------------------------------------
 // Rounding
 
-fn round(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(round_half_away(num(a, 0)?, digits_arg(a, 1)?))
+fn round(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(round_half_away(num(c, a, 0)?, digits_arg(c, a, 1)?))
 }
-fn roundup(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(round_dir(num(a, 0)?, digits_arg(a, 1)?, true))
+fn roundup(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(round_dir(num(c, a, 0)?, digits_arg(c, a, 1)?, true))
 }
-fn rounddown(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(round_dir(num(a, 0)?, digits_arg(a, 1)?, false))
+fn rounddown(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(round_dir(num(c, a, 0)?, digits_arg(c, a, 1)?, false))
 }
-fn trunc(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(round_dir(num(a, 0)?, digits_arg(a, 1)?, false))
+fn trunc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(round_dir(num(c, a, 0)?, digits_arg(c, a, 1)?, false))
 }
-fn int_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.floor()))
+fn int_fn(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(x.floor()))
 }
 
-fn mround(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, m) = (num(a, 0)?, num(a, 1)?);
+fn mround(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, m) = (num(c, a, 0)?, num(c, a, 1)?);
     if m == 0.0 || x == 0.0 {
         return Ok(Value::Number(0.0));
     }
@@ -187,9 +187,9 @@ fn mround(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(clean(q * m))
 }
 
-fn ceiling(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let s = num(a, 1)?;
+fn ceiling(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let s = num(c, a, 1)?;
     if x == 0.0 || s == 0.0 {
         return Ok(Value::Number(0.0));
     }
@@ -199,9 +199,9 @@ fn ceiling(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(clean(clean(x / s).ceil() * s))
 }
 
-fn floor(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let s = num(a, 1)?;
+fn floor(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let s = num(c, a, 1)?;
     if s == 0.0 {
         return if x == 0.0 { Ok(Value::Number(0.0)) } else { Err(CellError::Div0) };
     }
@@ -232,27 +232,27 @@ fn ceil_floor_math(x: f64, s: f64, up: bool, away: bool) -> R<Value> {
     num_val(clean(r * s))
 }
 
-fn ceiling_math(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let s = if has(a, 1) { num(a, 1)? } else { 1.0 };
-    let mode = opt_num(a, 2, 0.0)?;
+fn ceiling_math(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let s = if has(a, 1) { num(c, a, 1)? } else { 1.0 };
+    let mode = opt_num(c, a, 2, 0.0)?;
     ceil_floor_math(x, s, true, mode != 0.0)
 }
-fn floor_math(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let s = if has(a, 1) { num(a, 1)? } else { 1.0 };
-    let mode = opt_num(a, 2, 0.0)?;
+fn floor_math(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let s = if has(a, 1) { num(c, a, 1)? } else { 1.0 };
+    let mode = opt_num(c, a, 2, 0.0)?;
     // Negative numbers: mode 0 rounds away from zero (down), non-zero rounds toward zero.
     ceil_floor_math(x, s, false, mode == 0.0)
 }
-fn ceiling_precise(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let s = if has(a, 1) { num(a, 1)? } else { 1.0 };
+fn ceiling_precise(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let s = if has(a, 1) { num(c, a, 1)? } else { 1.0 };
     ceil_floor_math(x, s, true, false)
 }
-fn floor_precise(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let s = if has(a, 1) { num(a, 1)? } else { 1.0 };
+fn floor_precise(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let s = if has(a, 1) { num(c, a, 1)? } else { 1.0 };
     ceil_floor_math(x, s, false, true)
 }
 
@@ -269,11 +269,11 @@ fn even_odd(x: f64, odd: bool) -> f64 {
     }
     sign * v
 }
-fn even(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(even_odd(x, false)))
+fn even(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(even_odd(x, false)))
 }
-fn odd(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(even_odd(x, true)))
+fn odd(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(even_odd(x, true)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -294,18 +294,18 @@ fn modulo(x: f64, d: f64) -> R<f64> {
     }
     Ok(clean(r))
 }
-fn mod_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(modulo(num(a, 0)?, num(a, 1)?)?)
+fn mod_fn(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(modulo(num(c, a, 0)?, num(c, a, 1)?)?)
 }
-fn quotient(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, d) = (num(a, 0)?, num(a, 1)?);
+fn quotient(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, d) = (num(c, a, 0)?, num(c, a, 1)?);
     num_val(clean(x / nonzero(d)?).trunc())
 }
-fn abs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.abs()))
+fn abs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(x.abs()))
 }
-fn sign(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| {
+fn sign(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| {
         Ok(if x > 0.0 {
             1.0
         } else if x < 0.0 {
@@ -315,11 +315,11 @@ fn sign(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         })
     })
 }
-fn sqrt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x < 0.0 { Err(CellError::Num) } else { Ok(x.sqrt()) })
+fn sqrt(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| if x < 0.0 { Err(CellError::Num) } else { Ok(x.sqrt()) })
 }
-fn sqrtpi(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x < 0.0 { Err(CellError::Num) } else { Ok((x * PI).sqrt()) })
+fn sqrtpi(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| if x < 0.0 { Err(CellError::Num) } else { Ok((x * PI).sqrt()) })
 }
 
 fn power_of(x: f64, y: f64) -> R<f64> {
@@ -338,21 +338,21 @@ fn power_of(x: f64, y: f64) -> R<f64> {
     let r = x.powf(y);
     if r.is_finite() { Ok(r) } else { Err(CellError::Num) }
 }
-fn power(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(power_of(num(a, 0)?, num(a, 1)?)?)
+fn power(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(power_of(num(c, a, 0)?, num(c, a, 1)?)?)
 }
-fn exp(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.exp()))
+fn exp(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(x.exp()))
 }
-fn ln(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x <= 0.0 { Err(CellError::Num) } else { Ok(x.ln()) })
+fn ln(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| if x <= 0.0 { Err(CellError::Num) } else { Ok(x.ln()) })
 }
-fn log10(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x <= 0.0 { Err(CellError::Num) } else { Ok(x.log10()) })
+fn log10(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| if x <= 0.0 { Err(CellError::Num) } else { Ok(x.log10()) })
 }
-fn log(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let base = opt_num(a, 1, 10.0)?;
+fn log(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let base = opt_num(c, a, 1, 10.0)?;
     if x <= 0.0 || base <= 0.0 {
         return Err(CellError::Num);
     }
@@ -375,8 +375,8 @@ fn rand(_a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     num_val(c.random())
 }
 fn randbetween(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let lo = num(a, 0)?.ceil();
-    let hi = num(a, 1)?.floor();
+    let lo = num(c, a, 0)?.ceil();
+    let hi = num(c, a, 1)?.floor();
     if lo > hi {
         return Err(CellError::Num);
     }
@@ -404,11 +404,11 @@ fn fact_of(n: f64) -> R<f64> {
     }
     Ok(f)
 }
-fn fact(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(fact_of(num(a, 0)?)?)
+fn fact(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(fact_of(num(c, a, 0)?)?)
 }
-fn factdouble(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let n = num(a, 0)?.trunc();
+fn factdouble(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let n = num(c, a, 0)?.trunc();
     if n < -1.0 {
         return Err(CellError::Num);
     }
@@ -445,11 +445,11 @@ fn combin_of(n: f64, k: f64) -> R<f64> {
     }
     Ok(if r < 9e15 { r.round() } else { r })
 }
-fn combin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(combin_of(num(a, 0)?, num(a, 1)?)?)
+fn combin(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(combin_of(num(c, a, 0)?, num(c, a, 1)?)?)
 }
-fn combina(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (n, k) = (num(a, 0)?.trunc(), num(a, 1)?.trunc());
+fn combina(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (n, k) = (num(c, a, 0)?.trunc(), num(c, a, 1)?.trunc());
     if n < 0.0 || k < 0.0 || n < k && n == 0.0 && k > 0.0 {
         return Err(CellError::Num);
     }
@@ -458,8 +458,8 @@ fn combina(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     num_val(combin_of(n + k - 1.0, k)?)
 }
-fn permut(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (n, k) = (num(a, 0)?.trunc(), num(a, 1)?.trunc());
+fn permut(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (n, k) = (num(c, a, 0)?.trunc(), num(c, a, 1)?.trunc());
     if n < 0.0 || k < 0.0 || k > n {
         return Err(CellError::Num);
     }
@@ -474,16 +474,16 @@ fn permut(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     num_val(r)
 }
-fn permutationa(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (n, k) = (num(a, 0)?.trunc(), num(a, 1)?.trunc());
+fn permutationa(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (n, k) = (num(c, a, 0)?.trunc(), num(c, a, 1)?.trunc());
     if n < 0.0 || k < 0.0 {
         return Err(CellError::Num);
     }
     num_val(n.powf(k))
 }
 
-fn integer_args(a: &[Arg]) -> R<Vec<u64>> {
-    let v = numbers(a)?;
+fn integer_args(c: &dyn Ctx, a: &[Arg]) -> R<Vec<u64>> {
+    let v = numbers(c, a)?;
     v.iter()
         .map(|x| {
             let t = x.trunc();
@@ -499,12 +499,12 @@ fn gcd2(mut a: u64, mut b: u64) -> u64 {
     }
     a
 }
-fn gcd(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = integer_args(a)?;
+fn gcd(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = integer_args(c, a)?;
     num_val(v.iter().fold(0u64, |acc, &x| gcd2(acc, x)) as f64)
 }
-fn lcm(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = integer_args(a)?;
+fn lcm(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = integer_args(c, a)?;
     let mut acc = 1f64;
     for &x in &v {
         if x == 0 {
@@ -519,8 +519,8 @@ fn lcm(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     num_val(acc)
 }
-fn multinomial(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = numbers(a)?;
+fn multinomial(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = numbers(c, a)?;
     let mut total = 0.0;
     let mut r = 1.0f64;
     for x in v {
@@ -540,78 +540,78 @@ fn multinomial(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 // ---------------------------------------------------------------------------------------------
 // Trigonometry
 
-fn sin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(trig_arg(x)?.sin()))
+fn sin(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(trig_arg(x)?.sin()))
 }
-fn cos(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(trig_arg(x)?.cos()))
+fn cos(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(trig_arg(x)?.cos()))
 }
-fn tan(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(trig_arg(x)?.tan()))
+fn tan(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(trig_arg(x)?.tan()))
 }
-fn asin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x.abs() > 1.0 { Err(CellError::Num) } else { Ok(x.asin()) })
+fn asin(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| if x.abs() > 1.0 { Err(CellError::Num) } else { Ok(x.asin()) })
 }
-fn acos(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x.abs() > 1.0 { Err(CellError::Num) } else { Ok(x.acos()) })
+fn acos(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| if x.abs() > 1.0 { Err(CellError::Num) } else { Ok(x.acos()) })
 }
-fn atan(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.atan()))
+fn atan(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(x.atan()))
 }
-fn atan2(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, y) = (num(a, 0)?, num(a, 1)?);
+fn atan2(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, y) = (num(c, a, 0)?, num(c, a, 1)?);
     if x == 0.0 && y == 0.0 {
         return Err(CellError::Div0);
     }
     num_val(y.atan2(x))
 }
-fn sinh(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.sinh()))
+fn sinh(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(x.sinh()))
 }
-fn cosh(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.cosh()))
+fn cosh(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(x.cosh()))
 }
-fn tanh(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.tanh()))
+fn tanh(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(x.tanh()))
 }
-fn asinh(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.asinh()))
+fn asinh(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(x.asinh()))
 }
-fn acosh(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x < 1.0 { Err(CellError::Num) } else { Ok(x.acosh()) })
+fn acosh(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| if x < 1.0 { Err(CellError::Num) } else { Ok(x.acosh()) })
 }
-fn atanh(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x.abs() >= 1.0 { Err(CellError::Num) } else { Ok(x.atanh()) })
+fn atanh(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| if x.abs() >= 1.0 { Err(CellError::Num) } else { Ok(x.atanh()) })
 }
-fn cot(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.tan()))
+fn cot(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.tan()))
 }
-fn coth(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.tanh()))
+fn coth(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.tanh()))
 }
-fn csc(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.sin()))
+fn csc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.sin()))
 }
-fn csch(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.sinh()))
+fn csch(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.sinh()))
 }
-fn sec(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(1.0 / trig_arg(x)?.cos()))
+fn sec(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(1.0 / trig_arg(x)?.cos()))
 }
-fn sech(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(1.0 / trig_arg(x)?.cosh()))
+fn sech(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(1.0 / trig_arg(x)?.cosh()))
 }
-fn acot(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(PI / 2.0 - x.atan()))
+fn acot(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(PI / 2.0 - x.atan()))
 }
-fn acoth(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x.abs() <= 1.0 { Err(CellError::Num) } else { Ok(0.5 * ((x + 1.0) / (x - 1.0)).ln()) })
+fn acoth(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| if x.abs() <= 1.0 { Err(CellError::Num) } else { Ok(0.5 * ((x + 1.0) / (x - 1.0)).ln()) })
 }
-fn degrees(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x * 180.0 / PI))
+fn degrees(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(x * 180.0 / PI))
 }
-fn radians(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x * PI / 180.0))
+fn radians(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(c, a, |x| Ok(x * PI / 180.0))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -641,13 +641,13 @@ fn roman_tokens(form: u32) -> Vec<(String, u32)> {
     toks
 }
 
-fn roman(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let n = num(a, 0)?.trunc();
+fn roman(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let n = num(c, a, 0)?.trunc();
     let form = match a.get(1).map(|x| x.value.scalar()) {
         None => 0.0,
         Some(Value::Bool(true)) => 0.0,
         Some(Value::Bool(false)) => 4.0,
-        Some(_) => num(a, 1)?.trunc(),
+        Some(_) => num(c, a, 1)?.trunc(),
     };
     if !(0.0..=3999.0).contains(&n) || !(0.0..=4.0).contains(&form) {
         return Err(CellError::Value);
@@ -663,8 +663,8 @@ fn roman(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     text_val(out)
 }
 
-fn arabic(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let s = text(a, 0)?;
+fn arabic(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let s = text(c, a, 0)?;
     let s = s.trim();
     if s.chars().count() > 255 {
         return Err(CellError::Value);
@@ -690,10 +690,10 @@ fn arabic(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(if neg { -total as f64 } else { total as f64 })
 }
 
-fn base(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let n = num(a, 0)?.trunc();
-    let radix = num(a, 1)?.trunc();
-    let min_len = opt_num(a, 2, 0.0)?.trunc();
+fn base(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let n = num(c, a, 0)?.trunc();
+    let radix = num(c, a, 1)?.trunc();
+    let min_len = opt_num(c, a, 2, 0.0)?.trunc();
     if !(0.0..9.007_199_254_740_992e15).contains(&n) || !(2.0..=36.0).contains(&radix) || !(0.0..=255.0).contains(&min_len) {
         return Err(CellError::Num);
     }
@@ -714,9 +714,9 @@ fn base(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     text_val(digits.iter().rev().collect::<String>())
 }
 
-fn decimal(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let s = text(a, 0)?;
-    let radix = num(a, 1)?.trunc();
+fn decimal(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let s = text(c, a, 0)?;
+    let radix = num(c, a, 1)?.trunc();
     if !(2.0..=36.0).contains(&radix) || s.chars().count() > 255 {
         return Err(CellError::Num);
     }
@@ -899,8 +899,8 @@ fn minverse(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     to_value_array(n, n, inv)
 }
 
-fn munit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let n = num(a, 0)?.trunc();
+fn munit(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let n = num(c, a, 0)?.trunc();
     let (r, _) = check_size(n, n)?;
     let mut data = vec![Value::Number(0.0); r * r];
     for i in 0..r {
@@ -911,8 +911,8 @@ fn munit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     array_val(r, r, data)
 }
 
-fn seriessum(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, n, m) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+fn seriessum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, n, m) = (num(c, a, 0)?, num(c, a, 1)?, num(c, a, 2)?);
     let coeffs = as_array(&crate::util::arg(a, 3)?.value);
     let mut total = 0.0;
     for (i, c) in coeffs.iter().enumerate() {
@@ -930,7 +930,7 @@ fn seriessum(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 // Criteria aggregates
 
 /// Values at the matched positions of `target` for every (range, criteria) pair.
-fn criteria_mask(a: &[Arg], first_pair: usize, rows: usize, cols: usize) -> R<Vec<bool>> {
+fn criteria_mask(ctx: &dyn Ctx, a: &[Arg], first_pair: usize, rows: usize, cols: usize) -> R<Vec<bool>> {
     let rest = a.get(first_pair..).unwrap_or(&[]);
     if rest.is_empty() || rest.len() % 2 != 0 {
         return Err(CellError::Value);
@@ -942,9 +942,9 @@ fn criteria_mask(a: &[Arg], first_pair: usize, rows: usize, cols: usize) -> R<Ve
         if r.rows != rows || r.cols != cols {
             return Err(CellError::Value);
         }
-        let c = Criterion::parse(&crit.value.scalar());
+        let crit = Criterion::parse(ctx, &crit.value.scalar());
         for (m, v) in mask.iter_mut().zip(r.iter()) {
-            if *m && !c.matches(v) {
+            if *m && !crit.matches(v) {
                 *m = false;
             }
         }
@@ -968,56 +968,56 @@ fn masked_numbers(target: &Array, mask: &[bool]) -> R<Vec<f64>> {
     Ok(out)
 }
 
-fn countifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn countifs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let first = as_array(&crate::util::arg(a, 0)?.value);
-    let mask = criteria_mask(a, 0, first.rows, first.cols)?;
+    let mask = criteria_mask(c, a, 0, first.rows, first.cols)?;
     num_val(mask.iter().filter(|m| **m).count() as f64)
 }
 
 /// The values of the `*IFS` target range with the mask from its pairs.
-fn ifs_numbers(a: &[Arg]) -> R<Vec<f64>> {
+fn ifs_numbers(c: &dyn Ctx, a: &[Arg]) -> R<Vec<f64>> {
     let target = as_array(&crate::util::arg(a, 0)?.value);
-    let mask = criteria_mask(a, 1, target.rows, target.cols)?;
+    let mask = criteria_mask(c, a, 1, target.rows, target.cols)?;
     masked_numbers(&target, &mask)
 }
 
-fn sumifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(ifs_numbers(a)?.iter().sum())
+fn sumifs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(ifs_numbers(c, a)?.iter().sum())
 }
-fn averageifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = ifs_numbers(a)?;
+fn averageifs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = ifs_numbers(c, a)?;
     if v.is_empty() {
         return Err(CellError::Div0);
     }
     num_val(v.iter().sum::<f64>() / v.len() as f64)
 }
-fn maxifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = ifs_numbers(a)?;
+fn maxifs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = ifs_numbers(c, a)?;
     num_val(v.iter().copied().reduce(f64::max).unwrap_or(0.0))
 }
-fn minifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = ifs_numbers(a)?;
+fn minifs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = ifs_numbers(c, a)?;
     num_val(v.iter().copied().reduce(f64::min).unwrap_or(0.0))
 }
 
-fn countif(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn countif(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let range = as_array(&crate::util::arg(a, 0)?.value);
-    let c = Criterion::parse(&crate::util::arg(a, 1)?.value.scalar());
-    num_val(range.iter().filter(|v| c.matches(v)).count() as f64)
+    let crit = Criterion::parse(c, &crate::util::arg(a, 1)?.value.scalar());
+    num_val(range.iter().filter(|v| crit.matches(v)).count() as f64)
 }
 
 /// SUMIF / AVERAGEIF: matched numbers from the sum range, read at the criteria range's positions.
 /// Excel sizes a sum range reference like the criteria range, anchored at its own top-left cell;
 /// the evaluator does that resizing (it has the references), so cells line up one to one here.
-fn if_numbers(a: &[Arg]) -> R<Vec<f64>> {
+fn if_numbers(ctx: &dyn Ctx, a: &[Arg]) -> R<Vec<f64>> {
     let range = as_array(&crate::util::arg(a, 0)?.value);
-    let c = Criterion::parse(&crate::util::arg(a, 1)?.value.scalar());
+    let crit = Criterion::parse(ctx, &crate::util::arg(a, 1)?.value.scalar());
     let sum_range = if has(a, 2) { Some(as_array(&crate::util::arg(a, 2)?.value)) } else { None };
     let mut out = Vec::new();
     for r in 0..range.rows {
         for col in 0..range.cols {
             let Some(v) = range.get(r, col) else { continue };
-            if !c.matches(v) {
+            if !crit.matches(v) {
                 continue;
             }
             let target = match &sum_range {
@@ -1033,11 +1033,11 @@ fn if_numbers(a: &[Arg]) -> R<Vec<f64>> {
     }
     Ok(out)
 }
-fn sumif(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(if_numbers(a)?.iter().sum())
+fn sumif(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(if_numbers(c, a)?.iter().sum())
 }
-fn averageif(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = if_numbers(a)?;
+fn averageif(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = if_numbers(c, a)?;
     if v.is_empty() {
         return Err(CellError::Div0);
     }

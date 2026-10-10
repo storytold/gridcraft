@@ -166,20 +166,33 @@ pub fn cell_family(name: &str, bold: bool, italic: bool) -> FontFamily {
     )
 }
 
+/// Font file bytes as egui font data, or `None` when they are not a TrueType/OpenType font (or a
+/// collection with face `index`). epaint panics on font data it cannot parse, and font files are
+/// untrusted: system files, and on the web whatever the server answered.
+pub fn font_data(bytes: Vec<u8>, index: u32) -> Option<FontData> {
+    skrifa::FontRef::from_index(&bytes, index).ok()?;
+    let mut fd = FontData::from_owned(bytes);
+    fd.index = index;
+    Some(fd)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-fn try_load(paths: &[(&str, u32)]) -> Option<FontData> {
+fn try_load(paths: &[(&str, u32)], loaded: &mut Vec<(String, u32, Arc<FontData>)>) -> Option<Arc<FontData>> {
     for (p, index) in paths {
-        if let Ok(bytes) = std::fs::read(p) {
-            let mut fd = FontData::from_owned(bytes);
-            fd.index = *index;
-            return Some(fd);
+        if let Some((_, _, data)) = loaded.iter().find(|(path, face, _)| path.as_str() == *p && face == index) {
+            return Some(Arc::clone(data));
+        }
+        if let Some(fd) = std::fs::read(p).ok().and_then(|bytes| font_data(bytes, *index)) {
+            let data = Arc::new(fd);
+            loaded.push(((*p).to_owned(), *index, Arc::clone(&data)));
+            return Some(data);
         }
     }
     None
 }
 
 #[cfg(target_arch = "wasm32")]
-fn try_load(_paths: &[(&str, u32)]) -> Option<FontData> {
+fn try_load(_paths: &[(&str, u32)], _loaded: &mut Vec<(String, u32, Arc<FontData>)>) -> Option<Arc<FontData>> {
     None
 }
 
@@ -287,44 +300,178 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
     v
 }
 
-/// Builds the font set from system fonts (with egui's defaults as fallback), with the default
-/// (non-Japanese) Han order. Never reads the host locale, so tests and snapshots are stable.
-pub fn font_definitions() -> FontDefinitions {
-    font_definitions_for_language(crate::i18n::Language::En)
+/// A font from the optional craft-fonts build input (empty unless built with `CRAFT_FONTS_DIR`).
+pub struct CraftFont {
+    pub family: &'static str,
+    pub style: &'static str,
+    /// ISO 15924 scripts the font is for, e.g. `"Jpan"`.
+    pub scripts: &'static [&'static str],
+    pub bytes: &'static [u8],
 }
 
-/// Which Han face leads the fallback chain. Both Han faces cover kana and most kanji, so this only
-/// decides glyph shapes (and which face catches a glyph the other lacks); switching between two
-/// languages with the same order needs no font rebuild.
+include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
+
+/// Whether `c` belongs to a script that needs a CJK font (Han, kana, Hangul, full-width forms).
+pub fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x11FF | 0x2E80..=0x303F | 0x3040..=0x30FF | 0x3100..=0x318F | 0x31A0..=0x31FF
+        | 0x3200..=0x4DBF | 0x4E00..=0x9FFF | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE4F | 0xFF00..=0xFFEF | 0x20000..=0x3FFFF)
+}
+
+/// Whether `s` contains a character that needs a CJK font.
+pub fn has_cjk(s: &str) -> bool {
+    s.chars().any(is_cjk)
+}
+
+/// Whether the interface language itself is written with CJK characters.
+pub fn is_cjk_language(tag: &str) -> bool {
+    tag.split('-').next().is_some_and(|language| ["ja", "ko", "zh"].contains(&language))
+}
+
+/// Han glyph shapes used by the interface. Non-CJK languages share the widest Chinese coverage;
+/// switching between them does not rebuild the font atlas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HanOrder {
-    /// Japanese glyph shapes first (the interface is Japanese).
     Japanese,
-    /// Simplified Chinese first: the widest Han coverage, for every other interface language.
     Chinese,
+    TraditionalChinese,
+    Korean,
 }
 
 impl HanOrder {
-    pub fn of(language: crate::i18n::Language) -> Self {
-        if language == crate::i18n::Language::Ja { Self::Japanese } else { Self::Chinese }
+    pub fn of(tag: &str) -> Self {
+        match tag.split('-').next() {
+            Some("ja") => Self::Japanese,
+            Some("ko") => Self::Korean,
+            Some("zh") => {
+                // An explicit script wins over the region, just as locale negotiation does.
+                if tag.split('-').any(|part| part == "Hant") {
+                    Self::TraditionalChinese
+                } else if tag.split('-').any(|part| part == "Hans") {
+                    Self::Chinese
+                } else if tag.split('-').any(|part| ["TW", "HK", "MO"].contains(&part)) {
+                    Self::TraditionalChinese
+                } else {
+                    Self::Chinese
+                }
+            }
+            _ => Self::Chinese,
+        }
+    }
+
+    fn script(self) -> &'static str {
+        match self {
+            Self::Japanese => "Jpan",
+            Self::Chinese => "Hans",
+            Self::TraditionalChinese => "Hant",
+            Self::Korean => "Kore",
+        }
     }
 }
 
-/// Builds the font set with the Han fallback faces ordered for the interface language.
-pub fn font_definitions_for_language(language: crate::i18n::Language) -> FontDefinitions {
+/// File below the deployment's `fonts/` directory, downloaded on demand. Fonts are never part
+/// of this repository; the host reports a failed download if the deployment does not ship it.
+pub fn web_cjk_font(tag: &str) -> &'static str {
+    match HanOrder::of(tag) {
+        HanOrder::Japanese => "cjk-ja.ttf",
+        HanOrder::Chinese => "cjk-zh-CN.ttf",
+        HanOrder::TraditionalChinese => "cjk-zh-TW.ttf",
+        HanOrder::Korean => "cjk-ko.ttf",
+    }
+}
+
+/// Split Noto Sans CJK files, in the same order as the collection's regional glyph shapes.
+#[cfg(not(target_arch = "wasm32"))]
+fn noto_otf_order(han: HanOrder) -> [&'static str; 4] {
+    let (jp, sc, kr, tc) = ("NotoSansCJKjp-Regular.otf", "NotoSansCJKsc-Regular.otf", "NotoSansCJKkr-Regular.otf", "NotoSansCJKtc-Regular.otf");
+    match han {
+        HanOrder::Japanese => [jp, sc, kr, tc],
+        HanOrder::Chinese => [sc, tc, jp, kr],
+        HanOrder::TraditionalChinese => [tc, sc, jp, kr],
+        HanOrder::Korean => [kr, jp, sc, tc],
+    }
+}
+
+/// What the font set has to cover beyond Latin text.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FontNeeds<'a> {
+    /// Interface language tag (`ja-JP`); picks the CJK face whose Han glyph shapes match.
+    pub language: &'a str,
+    /// The interface or a workbook uses CJK characters: add the CJK fallback chain.
+    pub cjk: bool,
+    /// Font files the host delivered (web build: `fonts/<name>` downloaded on demand), each once.
+    pub downloaded: &'a [(String, Arc<FontData>)],
+}
+
+/// Only CJK coverage with its Han glyph order, and the delivered font count, change the installed
+/// font set: equivalent tags (`zh-HK`, `zh-TW`) never rebuild it.
+pub type FontKey = (Option<HanOrder>, usize);
+
+impl FontNeeds<'_> {
+    pub fn key(&self) -> FontKey {
+        (self.cjk.then(|| HanOrder::of(self.language)), self.downloaded.len())
+    }
+}
+
+/// Builds every family with egui's defaults and non-Latin fallback faces after its own fonts.
+/// Cyrillic, Thai and Hebrew system/craft faces are always available. With `needs.cjk`, regional
+/// craft-fonts (`CRAFT_FONTS_DIR`), web downloads and system CJK faces extend the chain as well.
+pub fn font_definitions(needs: &FontNeeds) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let base_prop: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let base_mono: Vec<String> = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
-    // The non-Latin fallback faces have to sit at the end of each chain: a Latin font owns Latin,
-    // and epaint picks the first face that has the glyph, so they only catch their own scripts.
-    let fallback = load_fallback(&mut fonts, HanOrder::of(language));
+    let mut fallback: Vec<String> = Vec::new();
+    // Share a system file used by a role and a script fallback instead of reading/copying it twice.
+    let mut system_files = Vec::new();
+    let han = HanOrder::of(needs.language);
+    let system_fallback = load_fallback(&mut fonts, han, needs.cjk, &mut system_files);
+    let add_craft = |fonts: &mut FontDefinitions, chain: &mut Vec<String>, f: &CraftFont| {
+        let key = format!("craft-{}-{}", f.family, f.style);
+        if !fonts.font_data.contains_key(&key) {
+            fonts.font_data.insert(key.clone(), Arc::new(FontData::from_static(f.bytes)));
+            chain.push(key);
+        }
+    };
+    if needs.cjk {
+        let script = han.script();
+        // Preferred craft fonts and downloads precede system faces. Japanese craft fonts back up
+        // the regional system chain, never override the interface's Chinese or Korean glyph shapes.
+        for f in CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&script)) {
+            add_craft(&mut fonts, &mut fallback, f);
+        }
+        let preferred = web_cjk_font(needs.language);
+        let mut downloaded: Vec<&(String, Arc<FontData>)> = needs.downloaded.iter().collect();
+        downloaded.sort_by_key(|(name, _)| name != preferred);
+        for (name, data) in downloaded {
+            let key = format!("downloaded-{name}");
+            if !fonts.font_data.contains_key(&key) {
+                fonts.font_data.insert(key.clone(), data.clone());
+                fallback.push(key);
+            }
+        }
+        fallback.extend(system_fallback.iter().filter(|key| key.starts_with("sys-cjk-")).cloned());
+        if script != "Jpan" {
+            for f in CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Jpan") && !f.scripts.contains(&script)) {
+                add_craft(&mut fonts, &mut fallback, f);
+            }
+        }
+        // Last resort, other regional faces: Hangul in a workbook under a Japanese interface.
+        for f in CRAFT_FONTS.iter().filter(|f| f.scripts.iter().any(|s| ["Hans", "Hant", "Kore"].contains(s))) {
+            add_craft(&mut fonts, &mut fallback, f);
+        }
+    }
+    for f in CRAFT_FONTS.iter().filter(|f| f.scripts.iter().any(|script| ["Cyrl", "Thai", "Hebr"].contains(script))) {
+        add_craft(&mut fonts, &mut fallback, f);
+    }
+    fallback.extend(system_fallback.into_iter().filter(|key| !key.starts_with("sys-cjk-")));
     for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
         let paths = candidates(role);
         let refs: Vec<(&str, u32)> = paths.iter().map(|(p, i)| (p.as_str(), *i)).collect();
         let mut chain: Vec<String> = Vec::new();
-        if let Some(fd) = try_load(&refs) {
+        if let Some(fd) = try_load(&refs, &mut system_files) {
             let key = format!("sys-{role}");
-            fonts.font_data.insert(key.clone(), Arc::new(fd));
+            fonts.font_data.insert(key.clone(), fd);
             chain.push(key);
         } else if role == UI_BOLD {
             chain.push(format!("sys-{UI}"));
@@ -340,28 +487,32 @@ pub fn font_definitions_for_language(language: crate::i18n::Language) -> FontDef
     if let Some(ui) = fonts.families.get(&FontFamily::Name(UI.into())).cloned() {
         fonts.families.insert(FontFamily::Proportional, ui);
     }
+    if let Some(mono) = fonts.families.get(&FontFamily::Name(MONO.into())).cloned() {
+        fonts.families.insert(FontFamily::Monospace, mono);
+    }
     fonts
 }
 
-/// Loads the system non-Latin fallback faces (one file per script family) and returns their keys so
-/// every family can carry them as fallback. egui's bundled fonts have no coverage beyond Latin, so
-/// without this a Thai, Hebrew, Japanese or Chinese workbook shows tofu boxes even though the text
-/// was read correctly. With a face installed those scripts get real glyphs instead of tofu; nothing
-/// is bundled, and a machine without the face keeps the old behaviour.
+/// Loads system script fallback faces. A regional CJK collection or a multi-script face such as
+/// Tahoma serves several scripts without duplicating its bytes. Without a system or craft face,
+/// glyph coverage is limited to egui's bundled fonts; no font assets are bundled by this module.
 #[cfg(not(target_arch = "wasm32"))]
-fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder) -> Vec<String> {
+fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder, cjk: bool, system_files: &mut Vec<(String, u32, Arc<FontData>)>) -> Vec<String> {
     let mut keys = Vec::new();
     // Files already loaded as a fallback face. A file serves at most one key: the region-merged
     // Noto Sans CJK .ttc found for Han also carries Hangul (and Tahoma carries both Thai and
     // Hebrew), so loading it again for a later script would only duplicate tens of MB in memory.
     let mut loaded: Vec<String> = Vec::new();
     for (key, cands) in fallback_faces(han) {
+        if key.starts_with("sys-cjk-") && !cjk {
+            continue;
+        }
         for (path, index) in &cands {
             if loaded.contains(path) {
                 break; // a face loaded for an earlier script already covers this one
             }
-            if let Some(fd) = try_load(&[(path.as_str(), *index)]) {
-                fonts.font_data.insert(key.to_string(), Arc::new(fd));
+            if let Some(fd) = try_load(&[(path.as_str(), *index)], system_files) {
+                fonts.font_data.insert(key.to_string(), fd);
                 keys.push(key.to_string());
                 loaded.push(path.clone());
                 break;
@@ -372,41 +523,64 @@ fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder) -> Vec<String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn load_fallback(_fonts: &mut FontDefinitions, _han: HanOrder) -> Vec<String> {
+fn load_fallback(_fonts: &mut FontDefinitions, _han: HanOrder, _cjk: bool, _system_files: &mut Vec<(String, u32, Arc<FontData>)>) -> Vec<String> {
     Vec::new()
 }
 
-/// Every fallback face we look for, in chain order: `(key, candidate files)`. One file per script
-/// family is enough — epaint picks the first face with the glyph, and a script's glyphs live in one
-/// file. Order only matters between faces that both cover a glyph (Japanese vs Chinese kanji), so
-/// the interface language reorders the two Han entries and nothing else.
+/// One face per script family, with the preferred regional Han face first. A region-merged
+/// collection covers all CJK scripts and is loaded only once by `load_fallback`.
 #[cfg(not(target_arch = "wasm32"))]
 fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u32)>)> {
     let ja = ("sys-cjk-han-ja", cjk_han_japanese());
     let zh = ("sys-cjk-han-zh", cjk_han_simplified());
-    let (first, second) = match han {
-        HanOrder::Japanese => (ja, zh),
-        HanOrder::Chinese => (zh, ja),
+    let tc = ("sys-cjk-han-tc", cjk_han_traditional());
+    let ko = ("sys-cjk-hangul", cjk_hangul());
+    let mut faces = match han {
+        HanOrder::Japanese => vec![ja, zh, tc, ko],
+        HanOrder::Chinese => vec![zh, tc, ja, ko],
+        HanOrder::TraditionalChinese => vec![tc, zh, ja, ko],
+        HanOrder::Korean => vec![ko, ja, zh, tc],
     };
-    vec![first, second, ("sys-cjk-hangul", cjk_hangul()), ("sys-thai", thai()), ("sys-hebrew", hebrew())]
+    faces.extend([("sys-cyrillic", cyrillic()), ("sys-thai", thai()), ("sys-hebrew", hebrew())]);
+    faces
 }
 
 /// Linux directories that hold CJK fonts across distributions: Debian/Ubuntu (`opentype/noto`,
 /// `truetype/wqy`), Fedora (`google-noto-cjk`), Arch (`noto-cjk`, `wenquanyi`), plus local and
 /// flat layouts.
 #[cfg(not(target_arch = "wasm32"))]
-const LINUX_CJK_DIRS: [&str; 10] = [
+const LINUX_CJK_DIRS: [&str; 13] = [
     "/usr/share/fonts/opentype/noto",
     "/usr/share/fonts/google-noto-cjk",
     "/usr/share/fonts/noto-cjk",
+    "/usr/share/fonts/google-noto-sans-cjk-fonts",
     "/usr/share/fonts/truetype/noto",
     "/usr/share/fonts/noto",
     "/usr/share/fonts/truetype",
     "/usr/share/fonts/TTF",
+    "/usr/share/fonts/OTF",
     "/usr/share/fonts",
     "/usr/local/share/fonts",
     "/usr/local/share/fonts/noto-cjk",
+    "/usr/local/share/fonts/noto",
 ];
+
+#[cfg(not(target_arch = "wasm32"))]
+fn noto_candidates(han: HanOrder) -> Vec<(String, u32)> {
+    let index = match han {
+        HanOrder::Japanese => 0,
+        HanOrder::Chinese => 2,
+        HanOrder::TraditionalChinese => 3,
+        HanOrder::Korean => 1,
+    };
+    let mut paths = Vec::new();
+    for dir in LINUX_CJK_DIRS {
+        paths.push((format!("{dir}/{}", noto_otf_order(han)[0]), 0));
+        paths.push((format!("{dir}/NotoSansCJK-Regular.ttc"), index));
+        paths.push((format!("{dir}/NotoSansCJK-VF.otf.ttc"), index));
+    }
+    paths
+}
 
 /// Japanese Han + Kana faces (Japanese kanji glyph shapes).
 ///
@@ -420,11 +594,9 @@ fn cjk_han_japanese() -> Vec<(String, u32)> {
     let mut v: Vec<(String, u32)> = Vec::new();
     v.push((format!("{win}\\YuGothR.ttc"), 0)); // Yu Gothic
     v.push((format!("{win}\\msgothic.ttc"), 0)); // MS Gothic
+    v.push((format!("{win}\\meiryo.ttc"), 0));
     v.push((format!("{mac}/ヒラギノ角ゴシック W3.ttc"), 0)); // Hiragino Sans
-    for d in LINUX_CJK_DIRS {
-        v.push((format!("{d}/NotoSansCJKjp-Regular.otf"), 0));
-        v.push((format!("{d}/NotoSansCJK-Regular.ttc"), 0)); // JP face
-    }
+    v.extend(noto_candidates(HanOrder::Japanese));
     v
 }
 
@@ -440,16 +612,24 @@ fn cjk_han_simplified() -> Vec<(String, u32)> {
     v.push((format!("{win}\\simhei.ttf"), 0)); // SimHei
     v.push((format!("{mac}/Hiragino Sans GB.ttc"), 0)); // ships on every recent macOS
     v.push((format!("{mac}/PingFang.ttc"), 0)); // older macOS only; now a downloadable asset
-    for d in LINUX_CJK_DIRS {
-        v.push((format!("{d}/NotoSansCJKsc-Regular.otf"), 0));
-        v.push((format!("{d}/NotoSansCJK-Regular.ttc"), 2)); // SC face
-    }
+    v.extend(noto_candidates(HanOrder::Chinese));
     for d in LINUX_CJK_DIRS {
         v.push((format!("{d}/wqy/wqy-microhei.ttc"), 0));
         v.push((format!("{d}/wenquanyi/wqy-microhei.ttc"), 0));
         v.push((format!("{d}/wqy-microhei.ttc"), 0));
+        v.push((format!("{d}/wenquanyi/wqy-microhei/wqy-microhei.ttc"), 0));
+        v.push((format!("{d}/droid/DroidSansFallbackFull.ttf"), 0));
     }
     v
+}
+
+/// Traditional Chinese glyph shapes precede simplified Chinese for Hant interfaces.
+#[cfg(not(target_arch = "wasm32"))]
+fn cjk_han_traditional() -> Vec<(String, u32)> {
+    let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
+    let mut paths = vec![(format!("{win}\\msjh.ttc"), 0), ("/System/Library/Fonts/PingFang.ttc".into(), 1)];
+    paths.extend(noto_candidates(HanOrder::TraditionalChinese));
+    paths
 }
 
 /// Hangul faces (Korean). The Han faces above that come from the region-merged Noto Sans CJK file
@@ -461,11 +641,36 @@ fn cjk_hangul() -> Vec<(String, u32)> {
     let mut v: Vec<(String, u32)> = Vec::new();
     v.push((format!("{win}\\malgun.ttf"), 0)); // Malgun Gothic
     v.push((format!("{mac}/AppleSDGothicNeo.ttc"), 0));
-    for d in LINUX_CJK_DIRS {
-        v.push((format!("{d}/NotoSansCJKkr-Regular.otf"), 0));
-        v.push((format!("{d}/NotoSansCJK-Regular.ttc"), 1)); // KR face
-    }
+    v.extend(noto_candidates(HanOrder::Korean));
     v
+}
+
+/// Broad Cyrillic coverage even when the chosen UI/cell face contains only Latin glyphs.
+#[cfg(not(target_arch = "wasm32"))]
+fn cyrillic() -> Vec<(String, u32)> {
+    let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
+    let mut paths = vec![
+        (format!("{win}\\segoeui.ttf"), 0),
+        (format!("{win}\\arial.ttf"), 0),
+        ("/System/Library/Fonts/Supplemental/Arial.ttf".into(), 0),
+        ("/System/Library/Fonts/HelveticaNeue.ttc".into(), 0),
+    ];
+    for dir in LINUX_CJK_DIRS {
+        for file in [
+            "NotoSans-Regular.ttf",
+            "DejaVuSans.ttf",
+            "LiberationSans-Regular.ttf",
+            "FreeSans.ttf",
+            "noto/NotoSans-Regular.ttf",
+            "dejavu/DejaVuSans.ttf",
+            "liberation/LiberationSans-Regular.ttf",
+            "liberation2/LiberationSans-Regular.ttf",
+            "freefont/FreeSans.ttf",
+        ] {
+            paths.push((format!("{dir}/{file}"), 0));
+        }
+    }
+    paths
 }
 
 /// Thai faces. Windows ships Leelawadee UI and Tahoma/Microsoft Sans Serif (both carry Thai);
@@ -475,14 +680,13 @@ fn thai() -> Vec<(String, u32)> {
     let mac_sys = "/System/Library/Fonts";
     let mac_sup = "/System/Library/Fonts/Supplemental";
     let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
-    let lin = ["/usr/share/fonts/truetype/noto", "/usr/share/fonts/opentype/noto", "/usr/share/fonts/truetype", "/usr/share/fonts"];
     let mut v: Vec<(String, u32)> = Vec::new();
     v.push((format!("{win}\\LeelawUI.ttf"), 0)); // Leelawadee UI
     v.push((format!("{win}\\tahoma.ttf"), 0)); // Tahoma
     v.push((format!("{win}\\micross.ttf"), 0)); // Microsoft Sans Serif
     v.push((format!("{mac_sup}/Thonburi.ttc"), 0));
     v.push((format!("{mac_sys}/SukhumvitSet.ttc"), 0));
-    for d in lin {
+    for d in LINUX_CJK_DIRS {
         v.push((format!("{d}/NotoSansThai-Regular.ttf"), 0));
         v.push((format!("{d}/tlwg/Garuda.ttf"), 0));
         v.push((format!("{d}/garuda/Garuda.ttf"), 0));
@@ -497,7 +701,6 @@ fn hebrew() -> Vec<(String, u32)> {
     let mac_sys = "/System/Library/Fonts";
     let mac_sup = "/System/Library/Fonts/Supplemental";
     let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
-    let lin = ["/usr/share/fonts/truetype/noto", "/usr/share/fonts/opentype/noto", "/usr/share/fonts/truetype", "/usr/share/fonts"];
     let mut v: Vec<(String, u32)> = Vec::new();
     v.push((format!("{win}\\david.ttf"), 0)); // David
     v.push((format!("{win}\\frank.ttf"), 0)); // FrankRuehl
@@ -505,8 +708,10 @@ fn hebrew() -> Vec<(String, u32)> {
     v.push((format!("{mac_sup}/Arial Hebrew.ttf"), 0));
     v.push((format!("{mac_sup}/David.ttf"), 0));
     v.push((format!("{mac_sys}/Lucida Grande.ttc"), 0));
-    for d in lin {
+    for d in LINUX_CJK_DIRS {
         v.push((format!("{d}/NotoSansHebrew-Regular.ttf"), 0));
+        v.push((format!("{d}/DejaVuSans.ttf"), 0));
+        v.push((format!("{d}/FreeSans.ttf"), 0));
         v.push((format!("{d}/dejavu/DejaVuSans.ttf"), 0));
         v.push((format!("{d}/freefont/FreeSans.ttf"), 0));
     }
@@ -558,25 +763,103 @@ pub fn color32(rgb: [u8; 3]) -> Color32 {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
-    use crate::i18n::Language;
+
+    #[test]
+    fn cjk_detection() {
+        assert!(has_cjk("売上 2026"));
+        assert!(has_cjk("한글"));
+        assert!(!has_cjk("Planilha1 ação Русский"));
+        assert!(is_cjk_language("ja-JP"));
+        assert!(is_cjk_language("zh-TW"));
+        assert!(!is_cjk_language("pt-BR"));
+    }
+
+    #[test]
+    fn web_fonts_follow_the_language() {
+        assert_eq!(web_cjk_font("ko-KR"), "cjk-ko.ttf");
+        assert_eq!(web_cjk_font("zh-TW"), "cjk-zh-TW.ttf");
+        assert_eq!(web_cjk_font("zh-HK"), "cjk-zh-TW.ttf");
+        assert_eq!(web_cjk_font("zh-Hant"), "cjk-zh-TW.ttf");
+        assert_eq!(web_cjk_font("zh-CN"), "cjk-zh-CN.ttf");
+        assert_eq!(web_cjk_font("ja-JP"), "cjk-ja.ttf");
+        assert_eq!(web_cjk_font("ru-RU"), "cjk-zh-CN.ttf");
+    }
+
+    #[test]
+    fn downloaded_fonts_extend_every_family_without_duplicate_keys() {
+        let data = Arc::new(FontData::from_static(&[0u8; 4]));
+        let downloaded = vec![("cjk-ja.ttf".into(), data.clone()), ("cjk-ja.ttf".into(), data)];
+        let fonts = font_definitions(&FontNeeds { language: "ja-JP", cjk: true, downloaded: &downloaded });
+        for family in [FontFamily::Proportional, FontFamily::Name(MONO.into()), FontFamily::Name(UI.into())] {
+            let chain = fonts.families.get(&family).cloned().unwrap_or_default();
+            assert_eq!(chain.iter().filter(|name| *name == "downloaded-cjk-ja.ttf").count(), 1, "{family:?}");
+        }
+        let plain = font_definitions(&FontNeeds::default());
+        assert!(!plain.font_data.contains_key("downloaded-cjk-ja.ttf"));
+    }
+
+    #[test]
+    fn the_font_of_the_interface_language_comes_first() {
+        let data = Arc::new(FontData::from_static(&[0u8; 4]));
+        let downloaded = vec![("cjk-ja.ttf".to_string(), data.clone()), ("cjk-ko.ttf".to_string(), data)];
+        let position = |language: &str, font: &str| {
+            let fonts = font_definitions(&FontNeeds { language, cjk: true, downloaded: &downloaded });
+            let chain = fonts.families.get(&FontFamily::Name(UI.into())).cloned().unwrap_or_default();
+            chain.iter().position(|n| n == font)
+        };
+        let (ko_in_ko, ja_in_ko) = (position("ko-KR", "downloaded-cjk-ko.ttf"), position("ko-KR", "downloaded-cjk-ja.ttf"));
+        assert!(ko_in_ko.is_some() && ko_in_ko < ja_in_ko);
+        let (ko_in_ja, ja_in_ja) = (position("ja-JP", "downloaded-cjk-ko.ttf"), position("ja-JP", "downloaded-cjk-ja.ttf"));
+        assert!(ja_in_ja.is_some() && ja_in_ja < ko_in_ja);
+    }
+
+    #[test]
+    fn the_font_key_tracks_coverage_and_shapes_not_language_names() {
+        let needs = |language: &'static str, cjk: bool| FontNeeds { language, cjk, downloaded: &[] };
+        assert_eq!(needs("pt-BR", false).key(), needs("ru-RU", false).key());
+        assert_eq!(needs("pt-BR", true).key(), needs("ru-RU", true).key());
+        assert_eq!(needs("zh-HK", true).key(), needs("zh-TW", true).key());
+        assert_ne!(needs("ja-JP", true).key(), needs("ko-KR", true).key());
+        assert_ne!(needs("pt-BR", false).key(), needs("pt-BR", true).key());
+        let fonts = [("cjk-ja.ttf".to_string(), Arc::new(FontData::from_static(&[0u8; 4])))];
+        assert_ne!(needs("ja-JP", true).key(), FontNeeds { downloaded: &fonts, ..needs("ja-JP", true) }.key());
+    }
+
+    #[test]
+    fn split_noto_files_are_ordered_by_language() {
+        let first = |tag: &str| noto_otf_order(HanOrder::of(tag))[0];
+        assert!(first("ko-KR").contains("kr"));
+        assert!(first("zh-TW").contains("tc") && first("zh-HK").contains("tc"));
+        assert!(first("zh-CN").contains("sc") && first("pt-BR").contains("sc"));
+        assert!(first("ja-JP").contains("jp"));
+        for tag in ["ko-KR", "zh-TW", "zh-CN", "ja-JP"] {
+            let mut all = noto_otf_order(HanOrder::of(tag)).to_vec();
+            all.sort_unstable();
+            all.dedup();
+            assert_eq!(all.len(), 4, "{tag}");
+        }
+    }
 
     #[test]
     fn fallback_faces_are_appended_to_every_family() {
         // Structural: whatever loaded, the non-Latin fallback keys must sit at the end of each chain
         // (after the Latin/default fonts) so Latin still wins for Latin text, in the language's order.
-        for han in [HanOrder::Chinese, HanOrder::Japanese] {
-            let language = if han == HanOrder::Japanese { Language::Ja } else { Language::Zh };
-            let fonts = font_definitions_for_language(language);
+        for language in ["en-US", "ja-JP", "zh-TW", "ko-KR"] {
+            let han = HanOrder::of(language);
+            let fonts = font_definitions(&FontNeeds { language, cjk: true, downloaded: &[] });
             let fb_keys: Vec<String> =
                 fallback_faces(han).into_iter().map(|(k, _)| k.to_string()).filter(|k| fonts.font_data.contains_key(k)).collect();
             if fb_keys.is_empty() {
-                return; // no fallback face on this machine (minimal Linux)
+                continue; // no fallback face on this machine (minimal Linux)
             }
             for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
                 let chain = fonts.families.get(&FontFamily::Name(role.into())).map(Vec::as_slice).unwrap_or_default();
-                assert!(chain.len() >= fb_keys.len(), "{role} chain too short for its fallback");
-                let tail = &chain[chain.len() - fb_keys.len()..];
-                assert_eq!(tail, fb_keys.as_slice(), "{role} must end its chain with the fallback faces");
+                let actual: Vec<&String> = chain.iter().filter(|key| fb_keys.contains(key)).collect();
+                assert_eq!(actual, fb_keys.iter().collect::<Vec<_>>(), "{role} must keep the system fallback order");
+                let first_fallback = chain.iter().position(|key| fb_keys.contains(key));
+                let last_default =
+                    chain.iter().rposition(|key| !key.starts_with("sys-") && !key.starts_with("craft-") && !key.starts_with("downloaded-"));
+                assert!(last_default.is_none() || first_fallback > last_default, "{role} must put defaults before fallbacks");
             }
         }
     }
@@ -584,10 +867,19 @@ mod tests {
     #[test]
     fn language_reorders_only_the_han_faces() {
         let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
-        assert_eq!(keys(HanOrder::Japanese), ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-hebrew"]);
-        assert_eq!(keys(HanOrder::Chinese), ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-hebrew"]);
-        assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
-        for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr] {
+        assert_eq!(
+            keys(HanOrder::Japanese),
+            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-han-tc", "sys-cjk-hangul", "sys-cyrillic", "sys-thai", "sys-hebrew"]
+        );
+        assert_eq!(
+            keys(HanOrder::Chinese),
+            ["sys-cjk-han-zh", "sys-cjk-han-tc", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-cyrillic", "sys-thai", "sys-hebrew"]
+        );
+        assert_eq!(HanOrder::of("ja-JP"), HanOrder::Japanese);
+        assert_eq!(HanOrder::of("ko-KR"), HanOrder::Korean);
+        assert_eq!(HanOrder::of("zh-Hant-CN"), HanOrder::TraditionalChinese);
+        assert_eq!(HanOrder::of("zh-Hans-HK"), HanOrder::Chinese);
+        for l in ["en-US", "zh-CN", "ru-RU", "pt-BR"] {
             assert_eq!(HanOrder::of(l), HanOrder::Chinese, "{l:?} shares the default order (no font rebuild)");
         }
     }
@@ -596,8 +888,8 @@ mod tests {
     fn fallback_faces_load_each_file_once() {
         // The region-merged Noto Sans CJK .ttc serves Japanese, Chinese and Hangul; it must be loaded
         // once, not once per script (tens of MB each).
-        for language in [Language::En, Language::Ja] {
-            let fonts = font_definitions_for_language(language);
+        for language in ["en-US", "ja-JP", "zh-TW", "ko-KR"] {
+            let fonts = font_definitions(&FontNeeds { language, cjk: true, downloaded: &[] });
             let present: Vec<&Arc<FontData>> =
                 fallback_faces(HanOrder::of(language)).into_iter().filter_map(|(k, _)| fonts.font_data.get(k)).collect();
             for (i, a) in present.iter().enumerate() {
@@ -609,21 +901,54 @@ mod tests {
     }
 
     #[test]
+    fn cyrillic_fallback_is_available_without_cjk_and_reuses_system_bytes() {
+        let fonts = font_definitions(&FontNeeds { language: "ru-RU", cjk: false, downloaded: &[] });
+        assert!(!fonts.font_data.keys().any(|key| key.starts_with("sys-cjk-")));
+        if !fonts.font_data.contains_key("sys-cyrillic") {
+            return; // no system Cyrillic face on this machine
+        }
+        for family in [FontFamily::Proportional, FontFamily::Monospace, FontFamily::Name(CELL.into())] {
+            assert!(fonts.families.get(&family).is_some_and(|chain| chain.iter().any(|key| key == "sys-cyrillic")));
+        }
+        let paths = cyrillic();
+        let refs: Vec<(&str, u32)> = paths.iter().map(|(path, index)| (path.as_str(), *index)).collect();
+        let mut loaded = Vec::new();
+        let first = try_load(&refs, &mut loaded);
+        let second = try_load(&refs, &mut loaded);
+        assert!(first.zip(second).is_some_and(|(a, b)| Arc::ptr_eq(&a, &b)));
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        out.textures_delta.clear(); // no renderer consumes the atlas in this headless test
+        for family in [FontFamily::Proportional, FontFamily::Monospace, FontFamily::Name(CELL.into())] {
+            let font = FontId::new(14.0, family);
+            let glyphs = |text: &str| {
+                let galley = ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font.clone(), Color32::BLACK));
+                galley.rows.iter().flat_map(|row| row.glyphs.iter().filter(|glyph| glyph.chr != ' ').map(|glyph| glyph.uv_rect)).collect::<Vec<_>>()
+            };
+            let tofu = glyphs("\u{25FB}");
+            let drawn = glyphs("Русский Ёжик");
+            assert!(!drawn.is_empty() && drawn.iter().all(|glyph| !tofu.contains(glyph)), "{:?}", font.family);
+        }
+    }
+
+    #[test]
     fn fallback_covers_its_script() {
         // Real render check, per script: the proportional family (what cells and the UI use) must
         // resolve a sample string to a real glyph, not the tofu replacement char. Skips a script
         // whose face is absent (a minimal machine) and fails if a face is present but not wired in.
-        let cases: [(&str, Vec<(String, u32)>, &str); 6] = [
+        let cases: [(&str, Vec<(String, u32)>, &str); 7] = [
             ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
             ("sys-cjk-han-zh", cjk_han_simplified(), "页面布局 客户端配置"),
+            ("sys-cjk-han-tc", cjk_han_traditional(), "頁面配置"),
             ("sys-cjk-hangul", cjk_hangul(), "한글"),
             ("sys-thai", thai(), "ทดสอบ"),
             ("sys-hebrew", hebrew(), "עברית"),
-            ("ui", candidates(UI), "Русский"),
+            ("sys-cyrillic", cyrillic(), "Русский Ёжик"),
         ];
-        for language in [Language::En, Language::Ja] {
+        for language in ["en-US", "ja-JP", "zh-TW", "ko-KR", "ru-RU"] {
             let ctx = egui::Context::default();
-            ctx.set_fonts(font_definitions_for_language(language));
+            ctx.set_fonts(font_definitions(&FontNeeds { language, cjk: true, downloaded: &[] }));
             let mut out = ctx.run_ui(egui::RawInput::default(), |_ui| {});
             out.textures_delta.clear(); // nothing consumes the atlas in a headless test
             // `has_glyphs` is a false negative when the face that owns the script is also the face

@@ -78,7 +78,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Value Field Settings",
             ["PivotTable Analyze", "Active Field"],
             None,
-            "{pivot?, field: caption or source field | index: n, func?, name?, showAs?: normal|percentOfGrandTotal|percentOfColumnTotal|percentOfRowTotal|runningTotal|rank, numberFormat?: \"#,##0\" | null, replace?}",
+            "{pivot?, field: caption or source field | index: n, func?, name?, showAs?: normal|percentOfGrandTotal|percentOfColumnTotal|percentOfRowTotal|runningTotal|rank, numberFormat?: \"#,##0\" | null, numberFormatLocal?: \"#.##0\" (as typed in the session's language and region, or the `locale` tag), replace?}",
             has_doc,
             value_settings
         ),
@@ -328,13 +328,25 @@ fn unique_value_name(pt: &PivotTable, base: &str, except: Option<usize>) -> Stri
     (2..10_000).map(|k| format!("{base}{k}")).find(|n| !taken(n)).unwrap_or_else(|| base.to_string())
 }
 
-fn auto_name(f: PivotFunc, field: &str) -> String {
-    format!("{} of {field}", pv::func_caption(f))
+fn auto_name(f: PivotFunc, field: &str, loc: &gridcraft_locale::Locale) -> String {
+    crate::locale::content_fmt(loc, "value_caption", &[("func", pv::func_caption(f, loc)), ("field", field)])
+}
+
+/// Whether `name` is the automatic caption of a value field (`Sum of Sales`, optionally with a
+/// uniqueness number), generated in any language: a caption made before a language switch still
+/// counts as automatic.
+fn is_auto_name(name: &str, f: PivotFunc, field: &str, cur: &gridcraft_locale::Locale) -> bool {
+    gridcraft_locale::LANGUAGES.iter().any(|lang| {
+        let loc = gridcraft_locale::Locale::new(lang, lang, cur.regional);
+        let auto = auto_name(f, field, &loc);
+        name.eq_ignore_ascii_case(&auto) || name.strip_prefix(auto.as_str()).is_some_and(|r| !r.is_empty() && r.chars().all(|c| c.is_ascii_digit()))
+    })
 }
 
 /// Adds `field` to an area (moving it out of the other axis areas).
 fn add_to_area(
     cmd: &str,
+    loc: &gridcraft_locale::Locale,
     pt: &mut PivotTable,
     src: &pv::Source,
     field: &str,
@@ -378,7 +390,7 @@ fn add_to_area(
                     }
                     n.to_string()
                 }
-                _ => auto_name(f, &field),
+                _ => auto_name(f, &field, loc),
             };
             let nm = unique_value_name(pt, &base, None);
             let v = PivotValue { source_col: field, func: f, name: nm, show_as: PivotShowAs::Normal, number_format: None };
@@ -501,8 +513,9 @@ fn source_param(s: &Session, p: &Json) -> Result<String> {
 }
 
 fn next_pivot_name(wb: &Workbook) -> String {
+    let base = wb.locale.ui.content("pivot_table");
     (1..)
-        .map(|n| format!("PivotTable{n}"))
+        .map(|n| format!("{base}{n}"))
         .find(|n| !wb.sheets.iter().any(|s| s.pivots.iter().any(|p| p.name.eq_ignore_ascii_case(n))))
         .unwrap_or_default()
 }
@@ -577,14 +590,15 @@ fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
                 (at, CellRef::new(2, 0))
             }
         };
+        let loc = *cx.wb.locale;
         let mut pt = PivotTable { id, name: name.clone(), source: source.clone(), anchor, ..Default::default() };
         let add = |pt: &mut PivotTable, list: &[Json], area: &str| -> Result<()> {
             for f in list {
                 match f {
-                    Json::String(n) => add_to_area("insert.pivotTable", pt, &src, n, area, None, None, None)?,
+                    Json::String(n) => add_to_area("insert.pivotTable", &loc, pt, &src, n, area, None, None, None)?,
                     Json::Object(_) => {
                         let n = str_param(f, "field").ok_or_else(|| bad("insert.pivotTable", "a field object needs `field`"))?;
-                        add_to_area("insert.pivotTable", pt, &src, n, area, func_param(str_param(f, "func")), str_param(f, "name"), None)?;
+                        add_to_area("insert.pivotTable", &loc, pt, &src, n, area, func_param(str_param(f, "func")), str_param(f, "name"), None)?;
                         let by = group_param(str_param(f, "group"));
                         if let Some(by) = by.filter(|b| *b != PivotDateGroup::None)
                             && matches!(area, "rows" | "columns")
@@ -741,8 +755,8 @@ fn add_field(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let name = str_param(p, "name").map(str::to_string);
     let pos = position_param(p);
-    update(s, p, |pt, src, _| {
-        add_to_area(C, pt, src, &field, area, func, name.as_deref(), pos)?;
+    update(s, p, |pt, src, wb| {
+        add_to_area(C, &wb.locale, pt, src, &field, area, func, name.as_deref(), pos)?;
         Ok(json!({"field": canonical(C, src, &field)?, "area": area}))
     })
 }
@@ -779,7 +793,7 @@ fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
     let from = area_param(C, str_param(p, "from"))?;
     let to = area_param(C, str_param(p, "to"))?;
     let pos = position_param(p);
-    update(s, p, |pt, src, _| {
+    update(s, p, |pt, src, wb| {
         if from == to {
             // Reorder within the area.
             match from {
@@ -821,7 +835,7 @@ fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
         let kept = pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(&field)).cloned();
         let hidden = pt.filters.iter().find(|f| f.source_col.eq_ignore_ascii_case(&field)).cloned();
         let src_field = remove_from_area(C, pt, &field, from)?;
-        add_to_area(C, pt, src, &src_field, to, None, None, pos)?;
+        add_to_area(C, &wb.locale, pt, src, &src_field, to, None, None, pos)?;
         if matches!(to, "rows" | "columns") {
             let list = if to == "rows" { &mut pt.rows } else { &mut pt.columns };
             if let (Some(k), Some(slot)) = (kept, list.iter_mut().find(|f| f.source_col.eq_ignore_ascii_case(&src_field))) {
@@ -850,8 +864,11 @@ fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
         None => None,
     };
     let name = str_param(p, "name").map(str::to_string);
-    let fmt = p.get("numberFormat").cloned();
-    update(s, p, |pt, src, _| {
+    let fmt = match str_param(p, "numberFormatLocal") {
+        Some(t) => Some(json!(crate::locale::from_local_format(t, &crate::locale::call_locale(s, p)?.dialect()))),
+        None => p.get("numberFormat").cloned(),
+    };
+    update(s, p, |pt, src, wb| {
         let i = match (index, &field) {
             (Some(i), _) => i,
             (None, Some(f)) => pt
@@ -873,9 +890,8 @@ fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(f) = func {
             v.func = f;
             // An automatic caption follows the function.
-            let auto = auto_name(cur.func, &cur.source_col);
-            if cur.name.eq_ignore_ascii_case(&auto) || cur.name.strip_prefix(auto.as_str()).is_some_and(|r| r.chars().all(|c| c.is_ascii_digit())) {
-                v.name = unique_value_name(pt, &auto_name(f, &cur.source_col), Some(i));
+            if is_auto_name(&cur.name, cur.func, &cur.source_col, &wb.locale) {
+                v.name = unique_value_name(pt, &auto_name(f, &cur.source_col, &wb.locale), Some(i));
             }
         }
         if let Some(n) = &name {
@@ -918,11 +934,12 @@ fn filter(s: &mut Session, p: &Json) -> Result<Json> {
             if a.len() > 100_000 {
                 return Err(bad(C, "too many items"));
             }
+            let loc = *s.locale();
             let v: Vec<String> = a
                 .iter()
                 .map(|x| match x {
-                    Json::String(s) => s.clone(),
-                    Json::Null => "(blank)".into(),
+                    Json::String(s) => pv::canonical_label(&loc, s),
+                    Json::Null => pv::BLANK_IDENT.into(),
                     other => other.to_string(),
                 })
                 .collect();
@@ -931,7 +948,7 @@ fn filter(s: &mut Session, p: &Json) -> Result<Json> {
             }
             Some(v)
         }
-        Some(Json::String(s)) => Some(vec![s.clone()]),
+        Some(Json::String(t)) => Some(vec![pv::canonical_label(&s.locale(), t)]),
         Some(_) => return Err(bad(C, "`selected` is a list of item labels or null")),
     };
     update(s, p, |pt, src, _| {
@@ -1014,8 +1031,11 @@ fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.collapse";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
     let on = bool_param(p, "collapse").unwrap_or(true);
-    let items: Option<Vec<String>> =
-        p.get("items").and_then(Json::as_array).map(|a| a.iter().take(100_000).filter_map(|x| x.as_str().map(str::to_string)).collect());
+    let loc = *s.locale();
+    let items: Option<Vec<String>> = p
+        .get("items")
+        .and_then(Json::as_array)
+        .map(|a| a.iter().take(100_000).filter_map(|x| x.as_str().map(|t| pv::canonical_label(&loc, t))).collect());
     update(s, p, |pt, src, wb| {
         let all = match &items {
             Some(v) => v.clone(),
@@ -1023,7 +1043,7 @@ fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
                 let f = pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(&field));
                 let g = f.map(|f| f.date_group).unwrap_or_default();
                 match src.col(&field) {
-                    Some(c) => pv::distinct_labels(wb, src, c, g, 100_000),
+                    Some(c) => pv::distinct_labels(wb, src, c, g, 100_000).iter().map(|l| pv::canonical_label(&loc, l)).collect(),
                     None => vec![],
                 }
             }

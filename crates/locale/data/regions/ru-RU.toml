@@ -1,0 +1,38 @@
+# Regional conventions supplied to Excel by the operating system.
+# Format codes use canonical (en-US) letters; grouping is U+00A0 NO-BREAK SPACE.
+tag = "ru-RU"
+native_name = "Русский (Россия)"
+lcid = 0x0419
+decimal = ","
+group = "\u00a0"
+list = ";"
+array_col = ";"
+array_row = ":"
+date_order = "DMY"
+date_sep = "."
+time_sep = ":"
+short_date = "dd.mm.yyyy"
+long_date = "d mmmm yyyy\" г.\""
+short_time = "hh:mm"
+long_time = "hh:mm:ss"
+months = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"]
+months_abbr = ["янв.", "февр.", "март", "апр.", "май", "июнь", "июль", "авг.", "сент.", "окт.", "нояб.", "дек."]
+weekdays = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"]
+weekdays_abbr = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"]
+am_pm = ["AM", "PM"]
+currency = "₽"
+currency_format = "#,##0.00\u00a0\"₽\""
+
+[provenance]
+method = "CLDR Russian regional conventions, expressed with canonical Excel format letters; LCID 0x0419 is Windows Russian (Russia)."
+retrieved = "2026-10-10"
+written = "2026-10-10"
+month_forms = "Stored CLDR stand-alone nominative full names and abbreviations: Excel MMMM alone and month-name autofill name the month (январь). Dates containing a day normally need genitive (1 января); the current Regional schema has only one month-name array, so genitive date rendering cannot be represented here. No invented hybrid forms are stored."
+array_separators = "Columns use semicolon, rows colon. The use-array-constants page mixes untranslated comma/semicolon prose with the localized two-dimensional example {1;2;3;4:5;6;7;8:9;10;11;12}. The guidelines page explicitly says semicolons create a horizontal array and colons a vertical array; Excel2 independently confirms both."
+
+[provenance.sources]
+dates = "https://raw.githubusercontent.com/unicode-org/cldr-json/main/cldr-json/cldr-dates-full/main/ru/ca-gregorian.json (stand-alone months; Sunday-first weekdays; dd.MM.y; d MMMM y 'г'.; HH:mm and HH:mm:ss; AM/PM)"
+numbers = "https://raw.githubusercontent.com/unicode-org/cldr-json/main/cldr-json/cldr-numbers-full/main/ru/numbers.json (decimal comma, U+00A0 grouping, semicolon list, currency pattern #,##0.00 NBSP currency)"
+currency = "https://raw.githubusercontent.com/unicode-org/cldr-json/main/cldr-json/cldr-numbers-full/main/ru/currencies.json (RUB symbol ₽)"
+array_constants = "https://support.microsoft.com/ru-ru/excel/use-array-constants-in-array-formulas (localized two-dimensional example) | https://support.microsoft.com/ru-ru/excel/guidelines-and-examples-of-array-formulas (explicit horizontal/vertical separator paragraph) | https://excel2.ru/articles/massivy-konstant-v-ms-excel (F9 observations and two-dimensional examples)"
+lcid = "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/ (Russian Russia 0x0419)"

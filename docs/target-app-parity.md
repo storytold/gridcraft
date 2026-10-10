@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first full assessment; re-measure against Excel for Mac 16.113.4, replacing the estimates that lived in ROADMAP.md) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (localization re-measured for M12, #191: 10% → 50%; full number 53.2 computed, still ~50%) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -13,21 +13,21 @@ generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 | Number | Value | Kind |
 |---|---|---|
 | Feature breadth (weighted by use) | **~75%** | estimated from the area table below; anchored on two measurements |
-| Ribbon and menu catalog | **258 / 290 (89.0%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
+| Ribbon and menu catalog | **259 / 290 (89.3%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
 | Worksheet functions, by name | **501 / 523 (95.8%)** | measured: registered functions vs Microsoft's published function list (method below) |
 | Worksheet functions that do real work | **492 / 523 (94.1%)** | measured: excludes 9 stubs (7 CUBE functions, WEBSERVICE, FILTERXML) |
-| **Ready for real work** | **~50%** | estimated; written weights below (51.6 computed) |
+| **Ready for real work** | **~50%** | estimated; written weights below (53.2 computed) |
 | **Mainstream practitioner** | **~50%** | estimated; [method](#mainstream-practitioner) (69.5 depth × 0.90 × 0.92 × 0.88 = 50.6) |
 | **Essentials user** | **~63%** | estimated; [method](#essentials-user) (80.2 depth × 0.92 × 0.95 × 0.90 = 63.1) |
 | Stage | **alpha** | see [Stage](#stage) |
 | Remaining to beta | **~160–240 Opus 5.5 agent-hours** | estimated; [roadmap.md](roadmap.md#beta-gates) |
-| Remaining to full parity | **~700–1,100 Opus 5.5 agent-hours** | estimated; sum of the rows below |
+| Remaining to full parity | **~650–1,000 Opus 5.5 agent-hours** | estimated; sum of the rows below |
 
 ### Readiness by audience
 
 | Audience | Ready % | Opus 5.5 agent wall-clock hours to ~95% | Work that dominates |
 |---|---|---|---|
-| Full target (ready for real work) | ~50% | ~650–1,050 | Get & Transform and the data model, localization (twelve languages), charts depth, file fidelity (`.xls`, corpus, pass-through), PivotTables, collaboration, mobile |
+| Full target (ready for real work) | ~50% | ~600–950 | Get & Transform and the data model, charts depth, file fidelity (`.xls`, corpus, pass-through), PivotTables, collaboration, mobile, localization (Hindi, Arabic, right-to-left, non-Latin PDF) |
 | Mainstream practitioner | ~50% | ~200–310 | File exchange with Excel users (corpus and Excel verification, pass-through, large files, `.xls`, encryption: 63–97 h), common-chart depth (30–45 h), PivotTables (20–30 h), keyboard and interaction (18–28 h), calc correctness and functions (20–33 h) |
 | Essentials user | ~63% | ~60–100 | Opening files people send (`.xls` and encrypted import 28–42 h; macOS Finder open 2–4 h), launch stability (6–10 h), basic chart resize and polish (6–10 h), print and Page Layout (8–12 h), small editing and UI fixes (10–16 h) |
 
@@ -55,8 +55,8 @@ long `.xls` track, so about half parallelizes (≈30–50 wall-clock hours with 
   `SPECIAL_FUNCTIONS` in `crates/calc/src/eval.rs` (evaluator special forms), minus the test-only
   `ADD2`: **501**, all of them Excel names.
 - **Ribbon catalog:** `crates/engine/src/catalog.rs` (290 unique ids across 15 tabs) against the
-  313 command ids registered in `crates/engine/src/cmd/*.rs`, recomputed from source by script and
-  identical to the committed `parity-checklist.md`. The catalog is our own transcription of
+  command ids registered in `crates/engine/src/cmd/*.rs` (313 when measured; 319 after M12, #191,
+  among them `file.options`), identical to the committed `parity-checklist.md`. The catalog is our own transcription of
   Excel's main ribbon tabs; it leaves out most contextual tabs (Picture Format, Shape Format,
   Header & Footer, Sparkline, Slicer, Timeline), the Developer and Help tabs and sub-menu items, so
   89% of it is roughly **60–65% of Excel's full command surface** (estimated).
@@ -103,18 +103,19 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 | UI/UX fidelity | 12 | ~55% | 50–80 | Excel-style ribbon, galleries, dialogs, formula bar, status bar; 59 commands with shortcuts vs Excel's 200+; key tips on part of the Home tab only; short context menu; single window. [ui-parity.md](ui-parity.md) |
 | Performance | 8 | ~35% | 35–55 | [Performance](#performance) |
 | Stability | 8 | ~60% | 15–25 | Never-crash rules enforced by lint, every command fuzzed with hostile params, last-resort guard in `Session::execute`. Field reports: Windows Intel GPU crash (#120), error on close (#117), freeze opening from Finder (#166), screen flashing (#76) |
-| Localization | 4 | ~10% | 100–165 | Ribbon-only catalog in five languages (ja, zh, ko, pt-BR, ru; ~12% of strings each), CJK/Thai/Hebrew font fallback, no shaping or RTL. [localization-parity.md](localization-parity.md) |
+| Localization | 4 | ~50% | 45–65 | Interface (1,955-key Fluent catalog), function names, separators, regional formats and shortcuts in 12 languages, 8 of the 12 target languages end to end (M12, #191); CJK/Thai/Hebrew font fallback; no Hindi, Arabic, Indonesian or Vietnamese; no shaping or RTL; no native review. [localization-parity.md](localization-parity.md) |
 | Hardware | 2 | ~40% | 25–40 | GPU UI via wgpu; single-threaded calc; no pen pressure; one window. [hardware-parity.md](hardware-parity.md) |
 | Platforms | 2 | ~80% | 30–60 | [Platforms](#platforms) |
 | Ecosystem / add-ins | 2 | ~10% | 25–40 | [Ecosystem and AI](#ecosystem-and-ai) |
 | AI features | 2 | ~15% | 30–50 | [Ecosystem and AI](#ecosystem-and-ai) |
-| **Ready for real work** | 100 | **~50%** (51.6 computed: 0.45 × 59.0 features + the other rows × their weights) | **~700–1,100** | |
+| **Ready for real work** | 100 | **~50%** (53.2 computed: 0.45 × 59.0 features + the other rows × their weights) | **~650–1,000** | |
 
 How the full number is built: features ready is the weighted mean of the area table (59.0 with
 charts at 30%); ready for real work is the weighted mean of this table with the weights written
 under [Weights](#weights). Re-checked after the 10-10 merges: charts were corrected from 38% to
 30% (round-trip loss, #190 chart resize) and localization rose from 5% to 10% (#31, #104, #82,
-#38). The two moves cancel: 51.6 before and after, so **~50%** stands.
+#38). The two moves cancel: 51.6 before and after, so **~50%** stood. M12 (#191) then took
+localization from 10% to 50% (+1.6 points): 53.2 computed, still **~50%** at this precision.
 
 ## Mainstream practitioner
 
@@ -332,6 +333,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Localization re-measured for M12 (#191): 10% → 50%, 100–165 h → 45–65 h; full number 51.6 → 53.2 (still ~50%), full parity ~700–1,100 → ~650–1,000 h, full-target hours to ~95% ~650–1,050 → ~600–950; catalog 258 → 259 / 290 (`file.options`) |
 | 2026-10-10 | minor | Readiness-by-audience table: hours to ~95% for each of the three numbers (full 650–1,050, mainstream 200–310, essentials 60–100). Full number confirmed as the additive weighted sum over the written dimension weights (no change) |
 | 2026-10-10 | minor | Added Mainstream practitioner (~50%) and Essentials user (~63%) with written weights and discounts, and user-evidence counts; re-checked the full number after the 10-10 merges (charts 38→30, localization 5→10; still 51.6, ~50%) |
 | 2026-10-10 | minor | Stage checked against the new alpha gate (six core workflows, all pass): stays alpha |

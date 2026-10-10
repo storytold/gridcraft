@@ -1,0 +1,13 @@
+# Keyboard shortcuts of es-ES. Same format as en-US/keymap.toml.
+#
+# Only chords that the Microsoft es-ES page (machine-translated, partly inconsistent) confirms in at
+# least two rows, or that are forced by those chords, are overridden; every other command inherits
+# its en-US chord. `mac` keeps the macOS chord, because the page shows Command-key chords unchanged.
+# The page was not used for bold, italic, underline, save, new workbook, go to, find or replace: its rows
+# contradict each other there (Ctrl+S is listed both for saving and for underlining, Ctrl+K and Ctrl+I
+# are both listed for italic), and moving bold to Ctrl+N would force new-workbook onto Ctrl+U, the chord
+# of underline, which could only move to Ctrl+S, the chord of save.
+
+[shortcuts]
+"file.open" = { keys = "Cmd+A", mac = "Cmd+O", source = 'Microsoft Excel keyboard-shortcuts page, es-ES, retrieved 2026-10-10 (https://support.microsoft.com/es-es/accessibility/excel/keyboard-shortcuts-in-excel): three rows (open a workbook "Ctrl+A", the dialog row "Cmd+O o bien Ctrl+A" and "Abrir libro Ctrl+A") give Ctrl+A (en-US Ctrl+O)' }
+"edit.selectAll" = { keys = "Cmd+Shift+Space", mac = "Cmd+A", source = 'Microsoft Excel keyboard-shortcuts page, es-ES, retrieved 2026-10-10 (https://support.microsoft.com/es-es/accessibility/excel/keyboard-shortcuts-in-excel): the select-the-whole-sheet rows list "Ctrl+E o Ctrl+Mayús+barra espaciadora" twice; Ctrl+A is taken by Open in this language and Ctrl+E is already used by Flash Fill and Center, so the second chord is used' }

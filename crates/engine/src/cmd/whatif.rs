@@ -489,7 +489,7 @@ fn scenario_show(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         for (c, v) in cells.iter().zip(sc.values.iter()) {
             let input = super::edit::json_to_input(v);
-            let cell = super::edit::input_to_cell(&input, si, *c, &mut cx.wb)?;
+            let cell = super::edit::input_to_cell(&input, si, *c, &mut cx.wb, &gridcraft_locale::INVARIANT)?;
             let sh = cx.sheet_mut(si)?;
             match cell {
                 Some(cell) => sh.set_cell(*c, cell),

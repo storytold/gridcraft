@@ -1,19 +1,24 @@
 //! GridCraft number formats: Excel format codes (`#,##0.00;[Red](#,##0.00)`, dates, fractions,
-//! scientific…), the General display format and the `TEXT()` worksheet function. en-US only.
+//! scientific…), the General display format and the `TEXT()` worksheet function. Codes are stored
+//! in the invariant (en-US) spelling; rendering and the local spelling of codes follow a
+//! [`Locale`] (separators, month and day names, AM/PM, booleans and errors).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 mod builtin;
 mod decimal;
+mod local;
 mod parse;
 mod render;
 
 use std::sync::Arc;
 
 use gridcraft_core::{CellError, DateSystem, Value};
+use gridcraft_locale::{INVARIANT, Locale, Regional};
 
 pub use builtin::{builtin_format, builtin_id};
-pub use decimal::format_general_fit;
+pub use decimal::{format_general_fit, format_general_fit_in};
+pub use local::{from_local_code, to_local_code};
 
 use parse::{SecKind, Section, Tok};
 use render::Out;
@@ -229,32 +234,30 @@ impl NumberFormat {
     }
 
     /// Formats a number. The flag is true when the value cannot be shown (date out of range).
-    fn format_number(&self, n: f64, sys: DateSystem) -> (Formatted, bool) {
-        let general = |n: f64| Formatted {
-            text: format_general_fit(n, GENERAL_WIDTH).unwrap_or_else(|| OVERFLOW.into()),
-            color: None,
-            fill: None,
-            numeric: true,
-        };
+    fn format_number(&self, n: f64, sys: DateSystem, reg: &Regional) -> (Formatted, bool) {
+        let general_text = |n: f64| format_general_fit_in(n, GENERAL_WIDTH, reg).unwrap_or_else(|| OVERFLOW.into());
+        let general = |n: f64| Formatted { text: general_text(n), color: None, fill: None, numeric: true };
         if self.is_general() {
             return (general(n), false);
         }
         let Some((sec, drop_sign)) = self.select(n) else { return (general(n), false) };
+        let system = system_section(sec, reg);
+        let sec = system.as_ref().unwrap_or(sec);
         let minus = n < 0.0 && !drop_sign;
         let out: Option<Out> = match sec.kind {
-            SecKind::Text => Some(render::render_text(sec, &format_general_fit(n, GENERAL_WIDTH).unwrap_or_default())),
+            SecKind::Text => Some(render::render_text(sec, &format_general_fit_in(n, GENERAL_WIDTH, reg).unwrap_or_default())),
             SecKind::General => {
                 let width = if minus { GENERAL_WIDTH - 1 } else { GENERAL_WIDTH };
-                Some(render::render_general(sec, n.abs(), width))
+                Some(render::render_general(sec, n.abs(), width, reg.decimal))
             }
             SecKind::Date => {
                 if minus {
                     None
                 } else {
-                    render::render_date(sec, n.abs(), sys)
+                    render::render_date(sec, n.abs(), sys, reg)
                 }
             }
-            SecKind::Number => Some(render::render_number(sec, n.abs())),
+            SecKind::Number => Some(render::render_number(sec, n.abs(), reg)),
         };
         let Some(mut out) = out else {
             return (Formatted { text: OVERFLOW.into(), color: sec.color, fill: None, numeric: true }, true);
@@ -276,35 +279,130 @@ impl NumberFormat {
     }
 }
 
-/// Formats a cell value for display.
+/// A format Excel takes from the system settings instead of from the code itself.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum SystemFormat {
+    ShortDate,
+    ShortDateTime,
+    LongDate,
+    LongTime,
+}
+
+impl SystemFormat {
+    /// The built-ins Excel stores as ids 14 and 22 are displayed with the region's short date
+    /// and short date and time.
+    fn of_code(code: &str) -> Option<SystemFormat> {
+        let code = code.trim();
+        if code.eq_ignore_ascii_case("m/d/yyyy") {
+            Some(SystemFormat::ShortDate)
+        } else if code.eq_ignore_ascii_case("m/d/yyyy h:mm") {
+            Some(SystemFormat::ShortDateTime)
+        } else {
+            None
+        }
+    }
+
+    /// The `[$-F800]` and `[$-F400]` tags Excel writes for the system long date and long time.
+    fn of_lcid(lcid: u16) -> Option<SystemFormat> {
+        match lcid {
+            0xF800 => Some(SystemFormat::LongDate),
+            0xF400 => Some(SystemFormat::LongTime),
+            _ => None,
+        }
+    }
+
+    fn code(self, reg: &Regional) -> String {
+        match self {
+            SystemFormat::ShortDate => reg.short_date.to_string(),
+            SystemFormat::ShortDateTime => format!("{} {}", reg.short_date, reg.short_time),
+            SystemFormat::LongDate => reg.long_date.to_string(),
+            SystemFormat::LongTime => reg.long_time.to_string(),
+        }
+    }
+
+    /// The region's own format for this system format (parsed once per region).
+    fn format(self, reg: &Regional) -> NumberFormat {
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+        thread_local! {
+            static CACHE: RefCell<HashMap<(&'static str, SystemFormat), NumberFormat>> = RefCell::new(HashMap::new());
+        }
+        CACHE.with(|cache| cache.borrow_mut().entry((reg.tag, self)).or_insert_with(|| NumberFormat::parse(&self.code(reg))).clone())
+    }
+}
+
+/// The region's replacement for a built-in system date/time code; `None` when the code is not
+/// one of them or the region is en-US (whose formats are the codes themselves).
+fn system_alias(fmt: &NumberFormat, reg: &Regional) -> Option<NumberFormat> {
+    if reg.tag == INVARIANT.regional.tag {
+        return None;
+    }
+    SystemFormat::of_code(fmt.code()).map(|which| which.format(reg))
+}
+
+/// A section tagged `[$-F800]` or `[$-F400]` with the region's long date or long time pattern in
+/// place of its own; colour and condition stay with the section. `None` for other sections and
+/// for en-US.
+fn system_section(sec: &Section, reg: &Regional) -> Option<Section> {
+    if reg.tag == INVARIANT.regional.tag {
+        return None;
+    }
+    let which = SystemFormat::of_lcid(sec.lcid?)?;
+    let replacement = which.format(reg).inner.sections.first().cloned()?;
+    Some(Section { color: sec.color, cond: sec.cond, ..replacement })
+}
+
+/// Formats a cell value for display in the invariant (en-US) locale.
 pub fn format_value(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted {
+    format_value_in(v, fmt, sys, &INVARIANT)
+}
+
+/// Formats a cell value for display in a locale: the region's separators, month and day names and
+/// AM/PM designators, and the formula language's boolean and error literals. The built-in short
+/// date and time codes (`m/d/yyyy`, `m/d/yyyy h:mm`) and the system long date and time follow
+/// the region's own formats, as in Excel.
+pub fn format_value_in(v: &Value, fmt: &NumberFormat, sys: DateSystem, loc: &Locale) -> Formatted {
     match v {
         Value::Empty => Formatted::default(),
-        Value::Number(n) if !n.is_finite() => Formatted { text: CellError::Num.as_str().into(), ..Formatted::default() },
-        Value::Number(n) => fmt.format_number(*n, sys).0,
+        Value::Number(n) if !n.is_finite() => Formatted { text: loc.formula.local_error(CellError::Num.as_str()).into(), ..Formatted::default() },
+        Value::Number(n) => {
+            let alias = system_alias(fmt, &loc.regional);
+            alias.as_ref().unwrap_or(fmt).format_number(*n, sys, &loc.regional).0
+        }
         Value::Text(t) => fmt.format_text(t),
-        Value::Bool(b) => Formatted { text: if *b { "TRUE" } else { "FALSE" }.into(), ..Formatted::default() },
-        Value::Error(e) => Formatted { text: e.as_str().into(), ..Formatted::default() },
+        Value::Bool(b) => Formatted { text: loc.formula.bool_text(*b).into(), ..Formatted::default() },
+        Value::Error(e) => Formatted { text: loc.formula.local_error(e.as_str()).into(), ..Formatted::default() },
         Value::Array(a) => match a.data.first() {
             Some(Value::Array(_)) | None => Formatted::default(),
-            Some(first) => format_value(first, fmt, sys),
+            Some(first) => format_value_in(first, fmt, sys, loc),
         },
     }
 }
 
-/// The `TEXT()` worksheet function: formats a value with a format code. Numeric text is
-/// converted to a number first; other text goes through the text section (or is returned as is).
+/// The `TEXT()` worksheet function in the invariant locale: formats a value with a canonical
+/// format code. Numeric text is converted to a number first; other text goes through the text
+/// section (or is returned as is).
 pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellError> {
-    if code.is_empty() {
+    text_function_in(v, code, sys, &INVARIANT)
+}
+
+/// The `TEXT()` worksheet function in a locale. The code is spelled as a user of that locale
+/// types it: the formula language's format letters (`dd/mm/aaaa`, `TT.MM.JJJJ`, `Geral`) and the
+/// region's separators (`#.##0,00`). Numeric text is read with the region's separators.
+pub fn text_function_in(v: &Value, local_code: &str, sys: DateSystem, loc: &Locale) -> Result<String, CellError> {
+    if local_code.is_empty() {
         return Ok(String::new());
     }
-    let fmt = NumberFormat::parse(code);
+    if local::too_long(local_code) {
+        return Err(CellError::Value);
+    }
+    let fmt = NumberFormat::parse(&from_local_code(local_code, &loc.dialect()));
     let n = match v.scalar() {
         Value::Error(e) => return Err(e),
         Value::Empty => 0.0,
         Value::Number(n) => n,
-        Value::Bool(b) => return Ok(if b { "TRUE" } else { "FALSE" }.into()),
-        Value::Text(t) => match gridcraft_core::parse::parse_number_text(&t) {
+        Value::Bool(b) => return Ok(loc.formula.bool_text(b).into()),
+        Value::Text(t) => match gridcraft_core::parse::parse_number_text_in(&t, sys, &loc.regional) {
             Some(n) => n,
             None => return Ok(fmt.format_text(&t).text),
         },
@@ -313,9 +411,12 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    let alias = system_alias(&fmt, &loc.regional);
+    let (f, overflow) = alias.as_ref().unwrap_or(&fmt).format_number(n, sys, &loc.regional);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_locale;

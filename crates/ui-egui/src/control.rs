@@ -174,10 +174,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.theme", "Display Theme", ""),
                 ("view.zoom100", "100%", ""),
                 ("ui.dialog", "Open Dialog", ""),
-                ("app.language.set", "Interface Language", "{language: \"en\"|\"zh\"|\"ja\"|\"ko\"|\"ru\"|\"pt\"} (alias: code)"),
+                ("app.language.set", "Interface Language", "{language: <tag or upstream code>} (alias: code)"),
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),
             ] {
+                // English, like the engine labels: the control channel is a machine-readable surface.
                 v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
             }
             ok(Json::Array(filter_commands(v, s("search"))))

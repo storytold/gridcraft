@@ -1,0 +1,10 @@
+# Keyboard shortcuts of ja-JP. Same format as en-US/keymap.toml.
+#
+# No override: Japanese Excel keeps the en-US chords. The Microsoft ja-JP keyboard-shortcuts page
+# (https://support.microsoft.com/ja-jp/accessibility/excel/keyboard-shortcuts-in-excel, retrieved 2026-10-10)
+# lists the same chords as the en-US reference for every command that has one here: Ctrl+N/O/S/W
+# (new, open, save, close), Ctrl+B/I/U, Ctrl+C/X/V/Z/Y, Ctrl+A, Ctrl+D/R/E, Ctrl+1, Ctrl+K, Ctrl+T,
+# Ctrl+9/0, Ctrl+Space, Shift+Space, Ctrl+Shift+F, Ctrl+G, Ctrl+Alt+V, Ctrl+Enter, F2, F7, F9,
+# Shift+F9, Ctrl+Alt+F5 and Ctrl+PageUp/PageDown. Every command therefore inherits its en-US chord.
+
+[shortcuts]

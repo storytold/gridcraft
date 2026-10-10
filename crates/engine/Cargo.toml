@@ -12,6 +12,7 @@ workspace = true
 gridcraft-core = { workspace = true }
 gridcraft-numfmt = { workspace = true }
 gridcraft-formula = { workspace = true }
+gridcraft-locale = { workspace = true }
 gridcraft-functions = { workspace = true }
 gridcraft-model = { workspace = true }
 gridcraft-calc = { workspace = true }

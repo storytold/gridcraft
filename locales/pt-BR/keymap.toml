@@ -1,0 +1,15 @@
+# Keyboard shortcuts of pt-BR. Same format as en-US/keymap.toml.
+#
+# Only chords that the Microsoft pt-BR page (machine-translated, partly inconsistent) confirms in at
+# least two rows, or that are forced by those chords, are overridden; every other command inherits
+# its en-US chord. `mac` keeps the macOS chord, because the page shows Command-key chords unchanged.
+# The page was not used for find/replace, alignment, Flash Fill or tables: its rows contradict each
+# other there.
+
+[shortcuts]
+"file.new" = { keys = "Cmd+O", mac = "Cmd+N", source = 'Microsoft Excel keyboard-shortcuts page, pt-BR, retrieved 2026-10-10 (https://support.microsoft.com/pt-br/accessibility/excel/keyboard-shortcuts-in-excel): the row for opening a new blank workbook reads "Cmd+N ou Ctrl+O"; no row keeps Ctrl+N for it' }
+"file.open" = { keys = "Cmd+A", mac = "Cmd+O", source = 'Microsoft Excel keyboard-shortcuts page, pt-BR, retrieved 2026-10-10 (https://support.microsoft.com/pt-br/accessibility/excel/keyboard-shortcuts-in-excel): three rows (open a workbook, open workbook, "Cmd+O ou Ctrl+A") give Ctrl+A (en-US Ctrl+O)' }
+"file.save" = { keys = "Cmd+B", mac = "Cmd+S", source = 'Microsoft Excel keyboard-shortcuts page, pt-BR, retrieved 2026-10-10 (https://support.microsoft.com/pt-br/accessibility/excel/keyboard-shortcuts-in-excel): four rows (save a workbook, save the file, save a worksheet, "Cmd+S ou Ctrl+B") give Ctrl+B (en-US Ctrl+S)' }
+"home.bold" = { keys = "Cmd+N", mac = "Cmd+B", source = 'Microsoft Excel keyboard-shortcuts page, pt-BR, retrieved 2026-10-10 (https://support.microsoft.com/pt-br/accessibility/excel/keyboard-shortcuts-in-excel): four rows ("Ctrl+B ou Ctrl+2", "Cmd+B ou Ctrl+N" and two plain rows) give Ctrl+N (en-US Ctrl+B); two further rows print Ctrl+Alt+N, which contradicts them and is treated as a page error' }
+"home.underline" = { keys = "Cmd+S", mac = "Cmd+U", source = 'Microsoft Excel keyboard-shortcuts page, pt-BR, retrieved 2026-10-10 (https://support.microsoft.com/pt-br/accessibility/excel/keyboard-shortcuts-in-excel): three rows (two plain "apply underline" rows and "Ctrl+U ou Ctrl+4") give Ctrl+S (en-US Ctrl+U)' }
+"edit.selectAll" = { keys = "Cmd+Shift+Space", mac = "Cmd+A", source = 'Microsoft Excel keyboard-shortcuts page, pt-BR, retrieved 2026-10-10 (https://support.microsoft.com/pt-br/accessibility/excel/keyboard-shortcuts-in-excel): the select-the-whole-sheet rows list "Ctrl+A ou Ctrl+Shift+Barra de espaços"; Ctrl+A is taken by Open in this language, so the second chord is used' }

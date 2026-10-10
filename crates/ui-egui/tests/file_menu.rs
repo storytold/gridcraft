@@ -64,7 +64,7 @@ fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
     let saved = downloads.lock().unwrap();
     assert_eq!(saved.len(), 2);
     for bytes in saved.iter() {
-        let (wb, _) = gridcraft_engine::io::open_bytes("saved.xlsx", bytes).unwrap();
+        let (wb, _) = gridcraft_engine::io::open_bytes("saved.xlsx", bytes, &gridcraft_locale::INVARIANT).unwrap();
         assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(123.0));
     }
     drop(saved);

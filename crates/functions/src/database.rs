@@ -8,24 +8,25 @@
 
 use std::borrow::Cow;
 
-use gridcraft_core::{Array, CellError, Value, compare_text};
+use gridcraft_core::parse::{parse_error_in, parse_number_text_in};
+use gridcraft_core::{Array, CellError, Value, compare_text, number_to_text_in};
 
 use crate::criteria::Criterion;
 use crate::util::{A, R, as_array, has, num_val};
 use crate::{Arg, Ctx, FnSpec};
 
 /// Column index of a label in the header row.
-fn find_column(db: &Array, label: &str) -> Option<usize> {
+fn find_column(ctx: &dyn Ctx, db: &Array, label: &str) -> Option<usize> {
     let label = label.trim();
     (0..db.cols).find(|&c| match db.get(0, c) {
         Some(Value::Text(t)) => compare_text(t.trim(), label).is_eq(),
-        Some(Value::Number(n)) => gridcraft_core::number_to_text(*n) == label,
+        Some(Value::Number(n)) => number_to_text_in(*n, &ctx.locale().regional) == label,
         _ => false,
     })
 }
 
 /// Resolves the field argument: a label or a 1-based column number. `None` when omitted.
-fn field_index(db: &Array, a: &[Arg]) -> R<Option<usize>> {
+fn field_index(ctx: &dyn Ctx, db: &Array, a: &[Arg]) -> R<Option<usize>> {
     if !has(a, 1) {
         return Ok(None);
     }
@@ -38,7 +39,7 @@ fn field_index(db: &Array, a: &[Arg]) -> R<Option<usize>> {
             }
             Ok(Some(i as usize - 1))
         }
-        Value::Text(t) => find_column(db, &t).map(Some).ok_or(CellError::Value),
+        Value::Text(t) => find_column(ctx, db, &t).map(Some).ok_or(CellError::Value),
         Value::Bool(_) => Err(CellError::Value),
         Value::Error(e) => Err(e),
         _ => Ok(None),
@@ -46,36 +47,36 @@ fn field_index(db: &Array, a: &[Arg]) -> R<Option<usize>> {
 }
 
 /// One criteria cell as a matcher. Plain text becomes a "begins with" pattern.
-fn cell_criterion(v: &Value) -> Option<Criterion> {
+fn cell_criterion(ctx: &dyn Ctx, v: &Value) -> Option<Criterion> {
     match v {
         Value::Empty => None,
         Value::Text(t) if t.is_empty() => None,
         Value::Text(t) => {
             let s: &str = t;
+            let locale = ctx.locale();
             let has_op = s.starts_with(['=', '<', '>']);
             let plain_text = !has_op
-                && gridcraft_core::parse::parse_number_text(s).is_none()
-                && !s.eq_ignore_ascii_case("TRUE")
-                && !s.eq_ignore_ascii_case("FALSE")
-                && CellError::parse(s).is_none();
-            if plain_text && !s.ends_with('*') { Some(Criterion::parse(&Value::from(format!("{s}*")))) } else { Some(Criterion::parse(v)) }
+                && parse_number_text_in(s, ctx.date_system(), &locale.regional).is_none()
+                && locale.formula.parse_bool(s).is_none()
+                && parse_error_in(s, locale.formula).is_none();
+            if plain_text && !s.ends_with('*') { Some(Criterion::parse(ctx, &Value::from(format!("{s}*")))) } else { Some(Criterion::parse(ctx, v)) }
         }
-        other => Some(Criterion::parse(other)),
+        other => Some(Criterion::parse(ctx, other)),
     }
 }
 
 /// Rows (1-based within the database, excluding the header) of matching records.
-fn matching_records(db: &Array, crit: &Array) -> Vec<usize> {
+fn matching_records(ctx: &dyn Ctx, db: &Array, crit: &Array) -> Vec<usize> {
     // Per criteria row: list of (database column or None when the label is unknown, criterion).
     let mut rows: Vec<Vec<(Option<usize>, Criterion)>> = Vec::new();
     for r in 1..crit.rows {
         let mut conds = Vec::new();
         for c in 0..crit.cols {
             let Some(cell) = crit.get(r, c) else { continue };
-            let Some(cr) = cell_criterion(cell) else { continue };
+            let Some(cr) = cell_criterion(ctx, cell) else { continue };
             let col = match crit.get(0, c) {
-                Some(Value::Text(t)) => find_column(db, t),
-                Some(Value::Number(n)) => find_column(db, &gridcraft_core::number_to_text(*n)),
+                Some(Value::Text(t)) => find_column(ctx, db, t),
+                Some(Value::Number(n)) => find_column(ctx, db, &number_to_text_in(*n, &ctx.locale().regional)),
                 _ => None,
             };
             conds.push((col, cr));
@@ -102,7 +103,7 @@ struct Selection<'a> {
     records: Vec<usize>,
 }
 
-fn select(a: &[Arg]) -> R<Selection<'_>> {
+fn select<'a>(ctx: &dyn Ctx, a: &'a [Arg]) -> R<Selection<'a>> {
     let dbv = &a.first().ok_or(CellError::Value)?.value;
     let critv = &a.get(2).ok_or(CellError::Value)?.value;
     if let Value::Error(e) = dbv {
@@ -113,32 +114,32 @@ fn select(a: &[Arg]) -> R<Selection<'_>> {
     }
     let db = as_array(dbv);
     let crit = as_array(critv);
-    let field = field_index(&db, a)?;
-    let records = matching_records(&db, &crit);
+    let field = field_index(ctx, &db, a)?;
+    let records = matching_records(ctx, &db, &crit);
     Ok(Selection { db, field, records })
 }
 
 /// Numbers of the field among matching records (field required).
-fn field_numbers(a: &[Arg]) -> R<Vec<f64>> {
-    let s = select(a)?;
+fn field_numbers(c: &dyn Ctx, a: &[Arg]) -> R<Vec<f64>> {
+    let s = select(c, a)?;
     let f = s.field.ok_or(CellError::Value)?;
     Ok(s.records.iter().filter_map(|&r| s.db.get(r, f).and_then(Value::as_f64)).collect())
 }
 
-fn dsum(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(field_numbers(a)?.iter().sum())
+fn dsum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(field_numbers(c, a)?.iter().sum())
 }
 
-fn daverage(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = field_numbers(a)?;
+fn daverage(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = field_numbers(c, a)?;
     if v.is_empty() {
         return Err(CellError::Div0);
     }
     num_val(v.iter().sum::<f64>() / v.len() as f64)
 }
 
-fn dcount(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let s = select(a)?;
+fn dcount(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let s = select(c, a)?;
     let n = match s.field {
         Some(f) => s.records.iter().filter(|&&r| matches!(s.db.get(r, f), Some(Value::Number(_)))).count(),
         None => s.records.len(),
@@ -146,8 +147,8 @@ fn dcount(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(n as f64)
 }
 
-fn dcounta(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let s = select(a)?;
+fn dcounta(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let s = select(c, a)?;
     let n = match s.field {
         Some(f) => s.records.iter().filter(|&&r| !matches!(s.db.get(r, f), None | Some(Value::Empty))).count(),
         None => s.records.len(),
@@ -155,8 +156,8 @@ fn dcounta(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(n as f64)
 }
 
-fn dget(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let s = select(a)?;
+fn dget(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let s = select(c, a)?;
     let f = s.field.ok_or(CellError::Value)?;
     match s.records.as_slice() {
         [] => Err(CellError::Value),
@@ -165,18 +166,18 @@ fn dget(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
 }
 
-fn dmax(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = field_numbers(a)?;
+fn dmax(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = field_numbers(c, a)?;
     num_val(v.iter().copied().reduce(f64::max).unwrap_or(0.0))
 }
 
-fn dmin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = field_numbers(a)?;
+fn dmin(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = field_numbers(c, a)?;
     num_val(v.iter().copied().reduce(f64::min).unwrap_or(0.0))
 }
 
-fn dproduct(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = field_numbers(a)?;
+fn dproduct(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = field_numbers(c, a)?;
     if v.is_empty() {
         return num_val(0.0);
     }
@@ -194,20 +195,20 @@ fn variance(v: &[f64], sample: bool) -> R<f64> {
     Ok(ss / if sample { n - 1.0 } else { n })
 }
 
-fn dvar(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(variance(&field_numbers(a)?, true)?)
+fn dvar(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(variance(&field_numbers(c, a)?, true)?)
 }
 
-fn dvarp(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(variance(&field_numbers(a)?, false)?)
+fn dvarp(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(variance(&field_numbers(c, a)?, false)?)
 }
 
-fn dstdev(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(variance(&field_numbers(a)?, true)?.sqrt())
+fn dstdev(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(variance(&field_numbers(c, a)?, true)?.sqrt())
 }
 
-fn dstdevp(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(variance(&field_numbers(a)?, false)?.sqrt())
+fn dstdevp(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(variance(&field_numbers(c, a)?, false)?.sqrt())
 }
 
 pub(crate) fn specs() -> Vec<FnSpec> {

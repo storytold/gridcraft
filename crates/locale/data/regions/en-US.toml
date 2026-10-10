@@ -1,0 +1,28 @@
+# Regional conventions (separators, dates, names, currency) equivalent to what the operating
+# system supplies to Excel for this region. Codes use canonical (en-US) format letters.
+tag = "en-US"
+native_name = "English (United States)"
+lcid = 0x0409
+decimal = "."
+group = ","
+list = ","
+array_col = ","
+array_row = ";"
+date_order = "MDY"
+date_sep = "/"
+time_sep = ":"
+short_date = "m/d/yyyy"
+long_date = "dddd, mmmm d, yyyy"
+short_time = "h:mm AM/PM"
+long_time = "h:mm:ss AM/PM"
+months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+months_abbr = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+weekdays_abbr = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+am_pm = ["AM", "PM"]
+currency = "$"
+currency_format = "\"$\"#,##0.00"
+
+[provenance]
+method = "Hand-written from the published regional conventions of the operating systems (CLDR / Windows NLS); plan §3 step 5."
+written = "2026-10-10"

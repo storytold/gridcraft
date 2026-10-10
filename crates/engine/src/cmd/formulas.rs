@@ -26,18 +26,18 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             insert_function
         ),
-        cmd!(query "formulas.functions", "List Functions", [], None, "{category?, search?} → [{name, category, signature, description}]", always, list_functions),
+        cmd!(query "formulas.functions", "List Functions", [], None, "{category?: Financial|Logical|Text|\"Date & Time\"|\"Lookup & Reference\"|\"Math & Trig\"|Statistical|Engineering|Information|Database|Compatibility|Web|Cube (Excel labels and engine names both work), search?} → [{name (canonical), localName (session formula language), category, signature, description}]", always, list_functions),
         cmd!(
             "formulas.defineName",
             "Define Name…",
             ["Formulas", "Defined Names"],
             None,
-            "{name, refersTo?: \"=Sheet1!$A$1:$A$10\" (default: the selection), scope?: \"Workbook\"|sheet name, comment?}",
+            "{name, refersTo?: \"=Sheet1!$A$1:$A$10\" (canonical) | refersToLocal?: (session language and separators), locale?, scope?: \"Workbook\"|sheet name, comment?}",
             has_doc,
             define_name
         ),
         cmd!("formulas.deleteName", "Delete Name", [], None, "{name, scope?: \"Workbook\"|sheet name (default: every scope)}", has_doc, delete_name),
-        cmd!(query "formulas.nameManager", "Name Manager", ["Formulas", "Defined Names"], Some("Cmd+F3"), "{} → names with values", has_doc, name_manager),
+        cmd!(query "formulas.nameManager", "Name Manager", ["Formulas", "Defined Names"], Some("Cmd+F3"), "{} → [{name, refersTo (canonical), refersToLocal, scope (`Workbook` or the sheet name), value, valueLocal (spelled in the session's language and region), comment}]", has_doc, name_manager),
         cmd!(
             "formulas.createFromSelection",
             "Create from Selection",
@@ -51,9 +51,9 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "formulas.traceDependents", "Trace Dependents", ["Formulas", "Formula Auditing"], None, "{cell?} → cells", has_doc, trace_dependents),
         cmd!(noundo "formulas.removeArrows", "Remove Arrows", ["Formulas", "Formula Auditing"], None, "{}", has_doc, |_, _| ok()),
         cmd!("formulas.showFormulas", "Show Formulas", ["Formulas", "Formula Auditing"], Some("Ctrl+`"), "{on?}", has_doc, show_formulas),
-        cmd!(query "formulas.errorChecking", "Error Checking", ["Formulas", "Formula Auditing"], None, "{} → cells with errors", has_doc, error_checking),
-        cmd!(query "formulas.evaluateFormula", "Evaluate Formula", ["Formulas", "Formula Auditing"], None, "{cell?, formula?} → steps", has_doc, evaluate_formula),
-        cmd!(query "formulas.evaluate", "Evaluate", [], None, "{formula: \"=SUM(A1:A3)\", cell?} → value without changing the sheet", has_doc, evaluate),
+        cmd!(query "formulas.errorChecking", "Error Checking", ["Formulas", "Formula Auditing"], None, "{} → {errors: [{sheet, cell, error, errorLocal, formula (canonical), formulaLocal}], circular}; the Local fields are spelled in the session's language and region", has_doc, error_checking),
+        cmd!(query "formulas.evaluateFormula", "Evaluate Formula", ["Formulas", "Formula Auditing"], None, "{cell?, formula?|formulaLocal? (as typed in the session's language and region, or the `locale` tag)} → {formula, formulaLocal, steps: [{expression, expressionLocal, value, valueLocal}], result, resultLocal}", has_doc, evaluate_formula),
+        cmd!(query "formulas.evaluate", "Evaluate", [], None, "{formula: \"=SUM(A1:A3)\" | formulaLocal: \"=SOMA(A1:A3)\" (as typed in the session's language and region, or the `locale` tag), cell?} → value without changing the sheet", has_doc, evaluate),
         cmd!(noundo "formulas.calculateNow", "Calculate Now", ["Formulas", "Calculation"], Some("F9"), "{}", has_doc, calc_now),
         cmd!(noundo "formulas.calculateSheet", "Calculate Sheet", ["Formulas", "Calculation"], Some("Shift+F9"), "{}", has_doc, calc_now),
         cmd!(
@@ -118,12 +118,15 @@ fn auto_sum(s: &mut Session, p: &Json) -> Result<Json> {
     let text = match range {
         Some(r) => format!("={func}({})", r.a1()),
         None => {
-            s.ui_requests.push(crate::UiRequest::EditCell(Some(format!("={func}()"))));
+            let local =
+                crate::locale::to_local_formula(&format!("={func}()"), &s.locale().dialect(), &|n: &str| d.wb.knows_name(n, d.wb.active_sheet));
+            s.ui_requests.push(crate::UiRequest::EditCell(Some(local)));
             return ok();
         }
     };
     if p.get("enter").and_then(Json::as_bool) == Some(false) {
-        s.ui_requests.push(crate::UiRequest::EditCell(Some(text.clone())));
+        let local = crate::locale::to_local_formula(&text, &s.locale().dialect(), &|n: &str| d.wb.knows_name(n, d.wb.active_sheet));
+        s.ui_requests.push(crate::UiRequest::EditCell(Some(local)));
         return Ok(json!({"formula": text}));
     }
     s.execute("cell.set", json!({"cell": at.a1(), "input": text}))?;
@@ -133,7 +136,15 @@ fn auto_sum(s: &mut Session, p: &Json) -> Result<Json> {
 fn insert_function(s: &mut Session, p: &Json) -> Result<Json> {
     match str_param(p, "name") {
         Some(n) => {
-            s.ui_requests.push(crate::UiRequest::EditCell(Some(format!("={}(", n.to_ascii_uppercase()))));
+            // Spelled through an empty call so a workbook name with the function's local
+            // spelling keeps it reading as the function (`=_xlfn.SUM(`).
+            let call = format!("={}()", n.to_ascii_uppercase());
+            let local = match s.doc() {
+                Ok(d) => crate::locale::to_local_formula(&call, &s.locale().dialect(), &|n: &str| d.wb.knows_name(n, d.wb.active_sheet)),
+                Err(_) => crate::locale::to_local_formula(&call, &s.locale().dialect(), &gridcraft_formula::no_names),
+            };
+            let text = local.strip_suffix(')').unwrap_or(&local).to_string();
+            s.ui_requests.push(crate::UiRequest::EditCell(Some(text)));
             ok()
         }
         None => {
@@ -143,69 +154,49 @@ fn insert_function(s: &mut Session, p: &Json) -> Result<Json> {
     }
 }
 
+/// Every function: canonical `name`, `localName` (as typed in the invariant language), category,
+/// signature and description.
 pub fn function_list() -> Vec<Json> {
-    let mut v: Vec<Json> = gridcraft_functions::all()
-        .iter()
-        .map(|f| json!({"name": f.name, "category": format!("{:?}", f.category), "signature": f.signature, "description": f.description}))
-        .collect();
-    let specials: &[(&str, &str, &str, &str)] = &[
-        (
-            "IF",
-            "Logical",
-            "IF(logical_test, [value_if_true], [value_if_false])",
-            "Returns one value if a condition is true and another if it's false.",
-        ),
-        ("IFS", "Logical", "IFS(test1, value1, ...)", "Returns the value of the first true condition."),
-        ("IFERROR", "Logical", "IFERROR(value, value_if_error)", "Returns a fallback when a value is an error."),
-        ("IFNA", "Logical", "IFNA(value, value_if_na)", "Returns a fallback when a value is #N/A."),
-        ("CHOOSE", "Lookup", "CHOOSE(index_num, value1, [value2], ...)", "Picks a value from a list by position."),
-        ("SWITCH", "Logical", "SWITCH(expression, value1, result1, ..., [default])", "Matches a value against a list of cases."),
-        ("ROW", "Lookup", "ROW([reference])", "Row number of a reference."),
-        ("COLUMN", "Lookup", "COLUMN([reference])", "Column number of a reference."),
-        ("ROWS", "Lookup", "ROWS(array)", "Number of rows in a reference or array."),
-        ("COLUMNS", "Lookup", "COLUMNS(array)", "Number of columns in a reference or array."),
-        ("OFFSET", "Lookup", "OFFSET(reference, rows, cols, [height], [width])", "A reference shifted from a starting point."),
-        ("INDIRECT", "Lookup", "INDIRECT(ref_text, [a1])", "The reference named by a text string."),
-        ("INDEX", "Lookup", "INDEX(array, row_num, [column_num], [area_num])", "The value or reference at a position."),
-        ("SUBTOTAL", "MathTrig", "SUBTOTAL(function_num, ref1, ...)", "A subtotal that can skip hidden rows."),
-        ("AGGREGATE", "MathTrig", "AGGREGATE(function_num, options, ref1, ...)", "An aggregate that can skip hidden rows and errors."),
-        ("TEXT", "Text", "TEXT(value, format_text)", "Formats a number as text."),
-        ("LET", "Logical", "LET(name1, value1, ..., calculation)", "Names intermediate results."),
-        ("LAMBDA", "Logical", "LAMBDA([parameter1, ...], calculation)", "Creates a reusable custom function."),
-        ("MAP", "Logical", "MAP(array1, ..., lambda)", "Applies a LAMBDA to each value."),
-        ("REDUCE", "Logical", "REDUCE(initial_value, array, lambda)", "Accumulates an array into one value."),
-        ("SCAN", "Logical", "SCAN(initial_value, array, lambda)", "Running accumulation of an array."),
-        ("BYROW", "Logical", "BYROW(array, lambda)", "Applies a LAMBDA to each row."),
-        ("BYCOL", "Logical", "BYCOL(array, lambda)", "Applies a LAMBDA to each column."),
-        ("MAKEARRAY", "Logical", "MAKEARRAY(rows, cols, lambda)", "Builds an array from a LAMBDA."),
-        ("CELL", "Information", "CELL(info_type, [reference])", "Information about a cell."),
-        ("ISREF", "Information", "ISREF(value)", "TRUE for references."),
-        ("ISFORMULA", "Information", "ISFORMULA(reference)", "TRUE when the cell has a formula."),
-        ("FORMULATEXT", "Lookup", "FORMULATEXT(reference)", "The formula of a cell as text."),
-        ("SHEET", "Information", "SHEET([value])", "Sheet number."),
-        ("SHEETS", "Information", "SHEETS([reference])", "Number of sheets."),
-        ("AREAS", "Lookup", "AREAS(reference)", "Number of areas in a reference."),
-        ("ISOMITTED", "Information", "ISOMITTED(argument)", "TRUE when a LAMBDA argument was left out."),
-    ];
-    for (n, c, sig, d) in specials {
-        if !v.iter().any(|x| x["name"] == *n) {
-            v.push(json!({"name": n, "category": c, "signature": sig, "description": d}));
-        }
-    }
-    v.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
-    v
+    function_list_in(gridcraft_locale::INVARIANT.formula)
 }
 
-fn list_functions(_: &mut Session, p: &Json) -> Result<Json> {
-    let cat = str_param(p, "category").map(str::to_ascii_lowercase);
-    let q = str_param(p, "search").map(str::to_ascii_lowercase);
-    let v: Vec<Json> = function_list()
+/// [`function_list`] with `localName` as `lang` spells it (the session's formula language).
+pub fn function_list_in(lang: &gridcraft_locale::Language) -> Vec<Json> {
+    gridcraft_functions::docs()
+        .iter()
+        .map(|f| {
+            json!({
+                "name": f.name,
+                "localName": lang.local_function(f.name).unwrap_or(f.name),
+                "category": format!("{:?}", f.category),
+                "signature": f.signature,
+                "description": f.description,
+            })
+        })
+        .collect()
+}
+
+/// A category as a comparison key: Excel's labels (`Math & Trig`, `Lookup & Reference`,
+/// `Date & Time`) and the engine's names (`MathTrig`, `Lookup`, `DateTime`) agree.
+fn category_key(name: &str) -> String {
+    let key: String = name.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect();
+    match key.as_str() {
+        "lookupreference" | "lookupandreference" => "lookup".into(),
+        "dateandtime" => "datetime".into(),
+        "mathandtrig" | "mathtrigonometry" => "mathtrig".into(),
+        _ => key,
+    }
+}
+
+fn list_functions(s: &mut Session, p: &Json) -> Result<Json> {
+    let cat = str_param(p, "category").map(category_key);
+    let q = str_param(p, "search").map(str::to_lowercase);
+    let v: Vec<Json> = function_list_in(s.locale().formula)
         .into_iter()
-        .filter(|f| cat.as_ref().is_none_or(|c| f["category"].as_str().is_some_and(|x| x.to_ascii_lowercase() == *c)))
+        .filter(|f| cat.as_ref().is_none_or(|c| f["category"].as_str().is_some_and(|x| category_key(x) == *c)))
         .filter(|f| {
             q.as_ref().is_none_or(|q| {
-                f["name"].as_str().is_some_and(|x| x.to_ascii_lowercase().contains(q.as_str()))
-                    || f["description"].as_str().is_some_and(|x| x.to_ascii_lowercase().contains(q.as_str()))
+                ["name", "localName", "description"].iter().any(|k| f[*k].as_str().is_some_and(|x| x.to_lowercase().contains(q.as_str())))
             })
         })
         .collect();
@@ -251,7 +242,10 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
         None | Some("Workbook") => None,
         Some(sh) => Some(d.wb.sheet_index(sh).ok_or_else(|| bad("formulas.defineName", "no such sheet"))?),
     };
-    let refers = match str_param(p, "refersTo") {
+    let call_loc = crate::locale::call_locale(s, p)?;
+    // The name being defined is not known yet: `SUMA` refers to SUM until it exists.
+    let known = |n: &str| d.wb.knows_name(n, scope.unwrap_or(d.wb.active_sheet));
+    let refers = match crate::locale::canonical_formula_param(p, "refersTo", &call_loc, &known)? {
         Some(r) => r.trim_start_matches('=').to_string(),
         None => {
             let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
@@ -265,11 +259,13 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("There's a problem with this formula.".into()));
     }
     let comment = str_param(p, "comment").unwrap_or("").to_string();
+    let sheet = scope.unwrap_or(d.wb.active_sheet);
     edit(s, |cx| {
         cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && n.scope == scope));
         cx.wb.names.push(DefinedName { name: name.clone(), scope, formula: refers.clone(), comment: comment.clone(), hidden: false });
         cx.structural = true;
-        Ok(json!({"name": name, "refersTo": format!("={refers}")}))
+        let local = crate::locale::to_local_body(&refers, &call_loc.dialect(), &|n: &str| cx.wb.knows_name(n, sheet));
+        Ok(json!({"name": name, "refersTo": format!("={refers}"), "refersToLocal": format!("={local}")}))
     })
 }
 
@@ -301,7 +297,8 @@ fn name_manager(s: &mut Session, _: &Json) -> Result<Json> {
         .map(|n| {
             let sheet = n.scope.unwrap_or(d.wb.active_sheet);
             let v = gridcraft_calc::evaluate(&d.wb, sheet, CellRef::default(), &n.formula);
-            json!({"name": n.name, "refersTo": format!("={}", n.formula), "scope": n.scope.and_then(|i| d.wb.sheet(i)).map(|s| s.name.clone()).unwrap_or_else(|| "Workbook".into()), "value": crate::cmd::inspect::value_json(&v), "comment": n.comment})
+            let local = crate::locale::to_local_body(&n.formula, &d.wb.locale.dialect(), &|x: &str| d.wb.knows_name(x, sheet));
+            json!({"name": n.name, "refersTo": format!("={}", n.formula), "refersToLocal": format!("={local}"), "scope": n.scope.and_then(|i| d.wb.sheet(i)).map(|s| s.name.clone()).unwrap_or_else(|| "Workbook".into()), "value": crate::cmd::inspect::value_json(&v), "valueLocal": crate::locale::value_local(&v, &d.wb.locale), "comment": n.comment})
         })
         .collect();
     Ok(Json::Array(list))
@@ -402,13 +399,23 @@ fn show_formulas(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn error_checking(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?;
+    let loc = &d.wb.locale;
+    let dialect = loc.dialect();
     let mut out = Vec::new();
-    for sh in &d.wb.sheets {
+    for (si, sh) in d.wb.sheets.iter().enumerate() {
+        let known = |n: &str| d.wb.knows_name(n, si);
         for (c, cell) in sh.cells.iter() {
             if let Some(e) = cell.value.as_error() {
-                out.push(
-                    json!({"sheet": sh.name, "cell": c.a1(), "error": e.as_str(), "formula": cell.formula.as_ref().map(|f| format!("={}", f.text))}),
-                );
+                let formula = cell.formula.as_ref().filter(|_| !crate::display::formula_hidden(&d.wb, sh, c)).map(|f| format!("={}", f.text));
+                let formula_local = formula.as_deref().map(|f| crate::locale::to_local_formula(f, &dialect, &known));
+                out.push(json!({
+                    "sheet": sh.name,
+                    "cell": c.a1(),
+                    "error": e.as_str(),
+                    "errorLocal": loc.formula.local_error(e.as_str()),
+                    "formula": formula,
+                    "formulaLocal": formula_local,
+                }));
             }
             if out.len() >= 10_000 {
                 break;
@@ -421,20 +428,26 @@ fn error_checking(s: &mut Session, _: &Json) -> Result<Json> {
 }
 
 fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
+    let loc = crate::locale::call_locale(s, p)?;
     let d = s.doc()?;
     let at = cell_param(p, "cell").unwrap_or(d.selection.active);
     let sheet = d.wb.active_sheet;
-    let text = match str_param(p, "formula") {
+    let known = |n: &str| d.wb.knows_name(n, sheet);
+    let text = match crate::locale::canonical_formula_param(p, "formula", &loc, &known)? {
         Some(f) => f.trim_start_matches('=').to_string(),
         None => {
-            d.wb.sheet(sheet)
-                .and_then(|sh| sh.cell(at))
+            let sh = d.wb.sheet(sheet);
+            if sh.is_some_and(|sh| crate::display::formula_hidden(&d.wb, sh, at)) {
+                return Err(EngineError::Protected);
+            }
+            sh.and_then(|sh| sh.cell(at))
                 .and_then(|c| c.formula.as_ref())
                 .map(|f| f.text.clone())
                 .ok_or_else(|| EngineError::Other("The cell has no formula.".into()))?
         }
     };
     let expr = gridcraft_formula::parse(&text).map_err(|e| EngineError::Other(e.to_string()))?;
+    let dialect = loc.dialect();
     // Steps: each sub-expression (innermost first) with its value.
     let mut steps = Vec::new();
     let mut nodes = Vec::new();
@@ -445,17 +458,30 @@ fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
     });
     for e in nodes.into_iter().rev().take(200) {
         let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, at, &e);
-        steps.push(json!({"expression": gridcraft_formula::print(&e), "value": crate::cmd::inspect::value_json(&v)}));
+        steps.push(json!({
+            "expression": gridcraft_formula::print(&e),
+            "expressionLocal": gridcraft_formula::print_local_with(&e, &dialect, &known),
+            "value": crate::cmd::inspect::value_json(&v),
+            "valueLocal": crate::locale::value_local(&v, &loc),
+        }));
     }
     let result = gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, at, &expr);
-    Ok(json!({"formula": format!("={text}"), "steps": steps, "result": crate::cmd::inspect::value_json(&result)}))
+    Ok(json!({
+        "formula": format!("={text}"),
+        "formulaLocal": format!("={}", gridcraft_formula::print_local_with(&expr, &dialect, &known)),
+        "steps": steps,
+        "result": crate::cmd::inspect::value_json(&result),
+        "resultLocal": crate::locale::value_local(&result, &loc),
+    }))
 }
 
 fn evaluate(s: &mut Session, p: &Json) -> Result<Json> {
+    let loc = crate::locale::call_locale(s, p)?;
     let d = s.doc()?;
-    let f = str_param(p, "formula").ok_or_else(|| bad("formulas.evaluate", "missing `formula`"))?;
+    let f = crate::locale::canonical_formula_param(p, "formula", &loc, &|n: &str| d.wb.knows_name(n, d.wb.active_sheet))?
+        .ok_or_else(|| bad("formulas.evaluate", "missing `formula` or `formulaLocal`"))?;
     let at = cell_param(p, "cell").unwrap_or(d.selection.active);
-    let v = gridcraft_calc::evaluate(&d.wb, d.wb.active_sheet, at, f);
+    let v = gridcraft_calc::evaluate(&d.wb, d.wb.active_sheet, at, &f);
     Ok(crate::cmd::inspect::value_json(&v))
 }
 

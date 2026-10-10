@@ -3,7 +3,7 @@
 
 use std::f64::consts::PI;
 
-use gridcraft_core::{CellError, Value, number_to_text};
+use gridcraft_core::{CellError, Value, number_to_text_in};
 
 use crate::special::{erf, erfc};
 use crate::util::{A, R, S, flatten, has, num, num_val, opt_num, scalar, text, text_val};
@@ -13,7 +13,7 @@ use crate::{Arg, Ctx, FnSpec, VAR};
 // Base conversion
 
 /// Source text of a base-conversion argument (numbers are written out as integers).
-fn base_source(a: &[Arg]) -> R<String> {
+fn base_source(c: &dyn Ctx, a: &[Arg]) -> R<String> {
     let v = a.first().map(scalar).unwrap_or(Value::Empty);
     match v {
         Value::Error(e) => Err(e),
@@ -22,10 +22,10 @@ fn base_source(a: &[Arg]) -> R<String> {
             if n < 0.0 || n != n.trunc() {
                 return Err(CellError::Num);
             }
-            Ok(number_to_text(n))
+            Ok(number_to_text_in(n, &c.locale().regional))
         }
         Value::Empty => Ok(String::new()),
-        v => Ok(v.to_text()?.trim().to_string()),
+        v => Ok(crate::util::to_str(c, &v)?.trim().to_string()),
     }
 }
 
@@ -96,36 +96,36 @@ fn to_radix(mut v: i64, radix: u32) -> String {
     out.iter().rev().collect()
 }
 
-fn places_arg(a: &[Arg]) -> R<Option<f64>> {
-    if has(a, 1) { Ok(Some(num(a, 1)?)) } else { Ok(None) }
+fn places_arg(c: &dyn Ctx, a: &[Arg]) -> R<Option<f64>> {
+    if has(a, 1) { Ok(Some(num(c, a, 1)?)) } else { Ok(None) }
 }
 
-fn convert_base(a: &[Arg], from: u32, to: u32) -> R<Value> {
-    let s = base_source(a)?;
+fn convert_base(c: &dyn Ctx, a: &[Arg], from: u32, to: u32) -> R<Value> {
+    let s = base_source(c, a)?;
     let v = parse_base(&s, from)?;
-    let places = places_arg(a)?;
+    let places = places_arg(c, a)?;
     if to == 10 {
         return Ok(Value::Number(v as f64));
     }
     format_base(v, to, places)
 }
 
-fn dec_to(a: &[Arg], to: u32) -> R<Value> {
+fn dec_to(c: &dyn Ctx, a: &[Arg], to: u32) -> R<Value> {
     let v = a.first().map(scalar).unwrap_or(Value::Empty);
     if matches!(v, Value::Bool(_)) {
         return Err(CellError::Value);
     }
-    let n = v.to_number()?.trunc();
+    let n = crate::util::to_num(c, &v)?.trunc();
     if n.abs() > 1e15 {
         return Err(CellError::Num);
     }
-    format_base(n as i64, to, places_arg(a)?)
+    format_base(n as i64, to, places_arg(c, a)?)
 }
 
 macro_rules! base_fn {
     ($name:ident, $from:expr, $to:expr) => {
-        fn $name(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-            convert_base(a, $from, $to)
+        fn $name(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+            convert_base(c, a, $from, $to)
         }
     };
 }
@@ -139,14 +139,14 @@ base_fn!(oct2bin, 8, 2);
 base_fn!(oct2dec, 8, 10);
 base_fn!(oct2hex, 8, 16);
 
-fn dec2bin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    dec_to(a, 2)
+fn dec2bin(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    dec_to(c, a, 2)
 }
-fn dec2oct(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    dec_to(a, 8)
+fn dec2oct(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    dec_to(c, a, 8)
 }
-fn dec2hex(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    dec_to(a, 16)
+fn dec2hex(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    dec_to(c, a, 16)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -154,27 +154,27 @@ fn dec2hex(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 const BIT_LIMIT: f64 = 281_474_976_710_656.0; // 2^48
 
-fn bit_operand(a: &[Arg], i: usize) -> R<u64> {
-    let n = num(a, i)?;
+fn bit_operand(c: &dyn Ctx, a: &[Arg], i: usize) -> R<u64> {
+    let n = num(c, a, i)?;
     if !(0.0..BIT_LIMIT).contains(&n) || n != n.trunc() {
         return Err(CellError::Num);
     }
     Ok(n as u64)
 }
 
-fn bitand(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Number((bit_operand(a, 0)? & bit_operand(a, 1)?) as f64))
+fn bitand(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    Ok(Value::Number((bit_operand(c, a, 0)? & bit_operand(c, a, 1)?) as f64))
 }
-fn bitor(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Number((bit_operand(a, 0)? | bit_operand(a, 1)?) as f64))
+fn bitor(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    Ok(Value::Number((bit_operand(c, a, 0)? | bit_operand(c, a, 1)?) as f64))
 }
-fn bitxor(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Number((bit_operand(a, 0)? ^ bit_operand(a, 1)?) as f64))
+fn bitxor(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    Ok(Value::Number((bit_operand(c, a, 0)? ^ bit_operand(c, a, 1)?) as f64))
 }
 
-fn shift(a: &[Arg], left: bool) -> R<Value> {
-    let n = bit_operand(a, 0)?;
-    let s = num(a, 1)?.trunc();
+fn shift(c: &dyn Ctx, a: &[Arg], left: bool) -> R<Value> {
+    let n = bit_operand(c, a, 0)?;
+    let s = num(c, a, 1)?.trunc();
     if s.abs() > 53.0 {
         return Err(CellError::Num);
     }
@@ -190,11 +190,11 @@ fn shift(a: &[Arg], left: bool) -> R<Value> {
     };
     Ok(Value::Number(r as f64))
 }
-fn bitlshift(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    shift(a, true)
+fn bitlshift(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    shift(c, a, true)
 }
-fn bitrshift(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    shift(a, false)
+fn bitrshift(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    shift(c, a, false)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -452,10 +452,10 @@ fn from_kelvin(name: &str, k: f64) -> f64 {
     }
 }
 
-fn convert(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let from = text(a, 1)?;
-    let to = text(a, 2)?;
+fn convert(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let from = text(c, a, 1)?;
+    let to = text(c, a, 2)?;
     let (fu, fp) = resolve(&from).ok_or(CellError::NA)?;
     let (tu, tp) = resolve(&to).ok_or(CellError::NA)?;
     if fu.dim != tu.dim {
@@ -477,29 +477,29 @@ fn convert(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 // ---------------------------------------------------------------------------------------------
 // DELTA, GESTEP, ERF
 
-fn delta(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let y = opt_num(a, 1, 0.0)?;
+fn delta(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let y = opt_num(c, a, 1, 0.0)?;
     Ok(Value::Number(if x == y { 1.0 } else { 0.0 }))
 }
-fn gestep(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let y = opt_num(a, 1, 0.0)?;
+fn gestep(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let y = opt_num(c, a, 1, 0.0)?;
     Ok(Value::Number(if x >= y { 1.0 } else { 0.0 }))
 }
-fn erf_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let lo = num(a, 0)?;
+fn erf_fn(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let lo = num(c, a, 0)?;
     if has(a, 1) {
-        let hi = num(a, 1)?;
+        let hi = num(c, a, 1)?;
         return num_val(erf(hi) - erf(lo));
     }
     num_val(erf(lo))
 }
-fn erf_precise(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(erf(num(a, 0)?))
+fn erf_precise(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(erf(num(c, a, 0)?))
 }
-fn erfc_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(erfc(num(a, 0)?))
+fn erfc_fn(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(erfc(num(c, a, 0)?))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -571,29 +571,49 @@ impl Cx {
 
 const ONE: Cx = Cx { re: 1.0, im: 0.0 };
 
+/// Longest text read as a complex number.
+const MAX_COMPLEX_TEXT: usize = 255;
+
 /// Parses a real number written in a complex string (no spaces, optional exponent).
-fn parse_real(s: &str) -> Option<f64> {
+fn parse_real(s: &str, decimal: char) -> Option<f64> {
     if s.is_empty() || s.contains(char::is_whitespace) {
         return None;
     }
-    let ok = s.chars().all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'));
-    if !ok {
+    let plain = |c: char| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-');
+    if decimal == '.' {
+        return if s.chars().all(plain) { s.parse::<f64>().ok().filter(|v| v.is_finite()) } else { None };
+    }
+    let mut canonical = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if ch == decimal {
+            canonical.push('.');
+        } else if ch == '.' {
+            return None;
+        } else {
+            canonical.push(ch);
+        }
+    }
+    if !canonical.chars().all(plain) {
         return None;
     }
-    s.parse::<f64>().ok().filter(|v| v.is_finite())
+    canonical.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
 /// Parses "a+bi" forms. Returns the number and its suffix ('i', 'j' or none).
-fn parse_complex(s: &str) -> R<(Cx, Option<char>)> {
+fn parse_complex(c: &dyn Ctx, s: &str) -> R<(Cx, Option<char>)> {
+    let decimal = c.locale().regional.decimal;
     if s.is_empty() {
         return Ok((Cx::new(0.0, 0.0), None));
+    }
+    if s.len() > MAX_COMPLEX_TEXT {
+        return Err(CellError::Num);
     }
     let suffix = match s.chars().last() {
         Some(c @ ('i' | 'j')) => Some(c),
         _ => None,
     };
     let Some(sfx) = suffix else {
-        return parse_real(s).map(|r| (Cx::new(r, 0.0), None)).ok_or(CellError::Num);
+        return parse_real(s, decimal).map(|r| (Cx::new(r, 0.0), None)).ok_or(CellError::Num);
     };
     let body = &s[..s.len() - 1];
     // Split at the last sign that is not at the start and not part of an exponent.
@@ -611,28 +631,28 @@ fn parse_complex(s: &str) -> R<(Cx, Option<char>)> {
         Some(i) => (&body[..i], &body[i..]),
         None => ("", body),
     };
-    let re = if re_s.is_empty() { 0.0 } else { parse_real(re_s).ok_or(CellError::Num)? };
+    let re = if re_s.is_empty() { 0.0 } else { parse_real(re_s, decimal).ok_or(CellError::Num)? };
     let im = match im_s {
         "" | "+" => 1.0,
         "-" => -1.0,
-        t => parse_real(t).ok_or(CellError::Num)?,
+        t => parse_real(t, decimal).ok_or(CellError::Num)?,
     };
     Ok((Cx::new(re, im), Some(sfx)))
 }
 
-fn cx_of(v: &Value) -> R<(Cx, Option<char>)> {
+fn cx_of(c: &dyn Ctx, v: &Value) -> R<(Cx, Option<char>)> {
     match v {
         Value::Number(n) => Ok((Cx::new(*n, 0.0), None)),
         Value::Empty => Ok((Cx::new(0.0, 0.0), None)),
         Value::Bool(_) => Err(CellError::Value),
         Value::Error(e) => Err(*e),
-        Value::Text(t) => parse_complex(t),
-        Value::Array(a) => cx_of(a.data.first().unwrap_or(&Value::Empty)),
+        Value::Text(t) => parse_complex(c, t),
+        Value::Array(a) => cx_of(c, a.data.first().unwrap_or(&Value::Empty)),
     }
 }
 
-fn cx_arg(a: &[Arg], i: usize) -> R<(Cx, Option<char>)> {
-    cx_of(&a.get(i).map(scalar).unwrap_or(Value::Empty))
+fn cx_arg(c: &dyn Ctx, a: &[Arg], i: usize) -> R<(Cx, Option<char>)> {
+    cx_of(c, &a.get(i).map(scalar).unwrap_or(Value::Empty))
 }
 
 fn merge_suffix(acc: Option<char>, s: Option<char>) -> R<Option<char>> {
@@ -643,7 +663,7 @@ fn merge_suffix(acc: Option<char>, s: Option<char>) -> R<Option<char>> {
     }
 }
 
-fn fmt_complex(z: Cx, suffix: char) -> R<Value> {
+fn fmt_complex(c: &dyn Ctx, z: Cx, suffix: char) -> R<Value> {
     if !z.re.is_finite() || !z.im.is_finite() {
         return Err(CellError::Num);
     }
@@ -651,11 +671,11 @@ fn fmt_complex(z: Cx, suffix: char) -> R<Value> {
     let im = clean(z.im);
     let mut s = String::new();
     if im == 0.0 {
-        s.push_str(&number_to_text(re));
+        s.push_str(&number_to_text_in(re, &c.locale().regional));
         return text_val(s);
     }
     if re != 0.0 {
-        s.push_str(&number_to_text(re));
+        s.push_str(&number_to_text_in(re, &c.locale().regional));
         if im > 0.0 {
             s.push('+');
         }
@@ -663,7 +683,7 @@ fn fmt_complex(z: Cx, suffix: char) -> R<Value> {
     if im == -1.0 {
         s.push('-');
     } else if im != 1.0 {
-        s.push_str(&number_to_text(im));
+        s.push_str(&number_to_text_in(im, &c.locale().regional));
     }
     s.push(suffix);
     text_val(s)
@@ -675,32 +695,32 @@ fn clean(x: f64) -> f64 {
     s.parse().unwrap_or(x)
 }
 
-fn complex(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let re = num(a, 0)?;
-    let im = num(a, 1)?;
-    let sfx = if has(a, 2) { text(a, 2)? } else { "i".into() };
+fn complex(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let re = num(c, a, 0)?;
+    let im = num(c, a, 1)?;
+    let sfx = if has(a, 2) { text(c, a, 2)? } else { "i".into() };
     let sfx = match sfx.as_str() {
         "i" | "" => 'i',
         "j" => 'j',
         _ => return Err(CellError::Value),
     };
-    fmt_complex(Cx::new(re, im), sfx)
+    fmt_complex(c, Cx::new(re, im), sfx)
 }
 
-fn im_unary(a: &[Arg], f: fn(Cx) -> R<Cx>) -> R<Value> {
-    let (z, s) = cx_arg(a, 0)?;
-    fmt_complex(f(z)?, s.unwrap_or('i'))
+fn im_unary(c: &dyn Ctx, a: &[Arg], f: fn(Cx) -> R<Cx>) -> R<Value> {
+    let (z, s) = cx_arg(c, a, 0)?;
+    fmt_complex(c, f(z)?, s.unwrap_or('i'))
 }
 
-fn im_real_fn(a: &[Arg], f: fn(Cx) -> R<f64>) -> R<Value> {
-    let (z, _) = cx_arg(a, 0)?;
+fn im_real_fn(c: &dyn Ctx, a: &[Arg], f: fn(Cx) -> R<f64>) -> R<Value> {
+    let (z, _) = cx_arg(c, a, 0)?;
     num_val(f(z)?)
 }
 
 macro_rules! im1 {
     ($name:ident, $f:expr) => {
-        fn $name(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-            im_unary(a, $f)
+        fn $name(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+            im_unary(c, a, $f)
         }
     };
 }
@@ -722,34 +742,34 @@ im1!(imcosh, |z: Cx| Ok(z.cosh()));
 im1!(imsech, |z: Cx| ONE.div(z.cosh()));
 im1!(imcsch, |z: Cx| ONE.div(z.sinh()));
 
-fn imabs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_real_fn(a, |z| Ok(z.abs()))
+fn imabs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_real_fn(c, a, |z| Ok(z.abs()))
 }
-fn imreal(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_real_fn(a, |z| Ok(z.re))
+fn imreal(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_real_fn(c, a, |z| Ok(z.re))
 }
-fn imaginary(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_real_fn(a, |z| Ok(z.im))
+fn imaginary(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_real_fn(c, a, |z| Ok(z.im))
 }
-fn imargument(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_real_fn(a, |z| if z.re == 0.0 && z.im == 0.0 { Err(CellError::Div0) } else { Ok(z.arg()) })
+fn imargument(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_real_fn(c, a, |z| if z.re == 0.0 && z.im == 0.0 { Err(CellError::Div0) } else { Ok(z.arg()) })
 }
 
-fn im_binary(a: &[Arg], f: fn(Cx, Cx) -> R<Cx>) -> R<Value> {
-    let (x, s1) = cx_arg(a, 0)?;
-    let (y, s2) = cx_arg(a, 1)?;
+fn im_binary(c: &dyn Ctx, a: &[Arg], f: fn(Cx, Cx) -> R<Cx>) -> R<Value> {
+    let (x, s1) = cx_arg(c, a, 0)?;
+    let (y, s2) = cx_arg(c, a, 1)?;
     let s = merge_suffix(s1, s2)?;
-    fmt_complex(f(x, y)?, s.unwrap_or('i'))
+    fmt_complex(c, f(x, y)?, s.unwrap_or('i'))
 }
-fn imdiv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_binary(a, |x, y| x.div(y))
+fn imdiv(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_binary(c, a, |x, y| x.div(y))
 }
-fn imsub(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_binary(a, |x, y| Ok(x.sub(y)))
+fn imsub(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_binary(c, a, |x, y| Ok(x.sub(y)))
 }
-fn impower(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (z, s) = cx_arg(a, 0)?;
-    let n = num(a, 1)?;
+fn impower(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (z, s) = cx_arg(c, a, 0)?;
+    let n = num(c, a, 1)?;
     // Integer powers by repeated multiplication are exact for small Gaussian integers.
     let r = if n == n.trunc() && n.abs() <= 64.0 && !(z.re == 0.0 && z.im == 0.0) {
         let mut acc = ONE;
@@ -760,10 +780,10 @@ fn impower(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     } else {
         z.powf(n)?
     };
-    fmt_complex(r, s.unwrap_or('i'))
+    fmt_complex(c, r, s.unwrap_or('i'))
 }
 
-fn im_fold(a: &[Arg], init: Cx, f: fn(Cx, Cx) -> Cx) -> R<Value> {
+fn im_fold(c: &dyn Ctx, a: &[Arg], init: Cx, f: fn(Cx, Cx) -> Cx) -> R<Value> {
     let mut acc = init;
     let mut sfx = None;
     for arg in a {
@@ -772,18 +792,18 @@ fn im_fold(a: &[Arg], init: Cx, f: fn(Cx, Cx) -> Cx) -> R<Value> {
             if matches!(v, Value::Empty) && !direct {
                 continue;
             }
-            let (z, s) = cx_of(&v)?;
+            let (z, s) = cx_of(c, &v)?;
             sfx = merge_suffix(sfx, s)?;
             acc = f(acc, z);
         }
     }
-    fmt_complex(acc, sfx.unwrap_or('i'))
+    fmt_complex(c, acc, sfx.unwrap_or('i'))
 }
-fn imsum(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_fold(a, Cx::new(0.0, 0.0), Cx::add)
+fn imsum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_fold(c, a, Cx::new(0.0, 0.0), Cx::add)
 }
-fn improduct(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_fold(a, ONE, Cx::mul)
+fn improduct(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_fold(c, a, ONE, Cx::mul)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -991,9 +1011,9 @@ impl LnCosh for f64 {
     }
 }
 
-fn bessel_args(a: &[Arg]) -> R<(f64, u32)> {
-    let x = num(a, 0)?;
-    let n = num(a, 1)?.trunc();
+fn bessel_args(c: &dyn Ctx, a: &[Arg]) -> R<(f64, u32)> {
+    let x = num(c, a, 0)?;
+    let n = num(c, a, 1)?.trunc();
     if n < 0.0 {
         return Err(CellError::Num);
     }
@@ -1003,23 +1023,23 @@ fn bessel_args(a: &[Arg]) -> R<(f64, u32)> {
     Ok((x, n as u32))
 }
 
-fn besselj(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, n) = bessel_args(a)?;
+fn besselj(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, n) = bessel_args(c, a)?;
     num_val(bessel_j(n, x).ok_or(CellError::Num)?)
 }
-fn bessely(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, n) = bessel_args(a)?;
+fn bessely(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, n) = bessel_args(c, a)?;
     if x <= 0.0 {
         return Err(CellError::Num);
     }
     num_val(bessel_y(n, x).ok_or(CellError::Num)?)
 }
-fn besseli(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, n) = bessel_args(a)?;
+fn besseli(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, n) = bessel_args(c, a)?;
     num_val(bessel_i(n, x).ok_or(CellError::Num)?)
 }
-fn besselk(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, n) = bessel_args(a)?;
+fn besselk(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, n) = bessel_args(c, a)?;
     if x <= 0.0 {
         return Err(CellError::Num);
     }
@@ -1131,7 +1151,7 @@ mod tests {
     #[track_caller]
     fn cx(v: Value, re: f64, im: f64) {
         let Value::Text(s) = &v else { panic!("expected complex text, got {v:?}") };
-        let (z, _) = parse_complex(s).unwrap();
+        let (z, _) = parse_complex(&TestCtx::default(), s).unwrap();
         let tol = 1e-12;
         assert!((z.re - re).abs() <= tol * re.abs().max(1.0), "{s}: re {} vs {re}", z.re);
         assert!((z.im - im).abs() <= tol * im.abs().max(1.0), "{s}: im {} vs {im}", z.im);

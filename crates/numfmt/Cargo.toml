@@ -10,3 +10,4 @@ workspace = true
 
 [dependencies]
 gridcraft-core = { workspace = true }
+gridcraft-locale = { workspace = true }

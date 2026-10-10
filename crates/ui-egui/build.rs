@@ -13,6 +13,7 @@ use std::fmt::Write as _;
 use serde_json::Value;
 
 fn main() {
+    craft_fonts_table();
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contributors");
     let json = read(&dir.join("contributors.json"), "the About window shows no contributors", |t| {
         serde_json::from_str::<Value>(t).map_err(|e| e.to_string())
@@ -102,4 +103,64 @@ fn generate(json: &Value, people: &toml::Table) -> String {
     }
     let _ = writeln!(o, "];");
     o
+}
+
+/// Writes `craft_fonts.rs`: the fonts of the craft-fonts build input (`CRAFT_FONTS_DIR`),
+/// following the recipe of storytold/craft-fonts `docs/integration.md`. The input is optional:
+/// without it, or when it cannot be used, the table is empty and the build warns. The release
+/// workflows and packaging scripts set `CRAFT_FONTS_REQUIRED`; then an unset `CRAFT_FONTS_DIR`, a
+/// missing, empty or unparsable manifest, or no font eligible for the target fails the build.
+fn craft_fonts_table() {
+    println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
+    println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
+    let required = std::env::var_os("CRAFT_FONTS_REQUIRED").is_some();
+    let mut src = String::from("pub static CRAFT_FONTS: &[CraftFont] = &[\n");
+    let result = match std::env::var_os("CRAFT_FONTS_DIR").map(std::path::PathBuf::from) {
+        Some(dir) => craft_fonts(&dir).map_err(|e| format!("CRAFT_FONTS_DIR={}: {e}", dir.display())),
+        None if required => Err("CRAFT_FONTS_REQUIRED is set but CRAFT_FONTS_DIR is not".to_string()),
+        None => Ok(String::new()),
+    };
+    match result {
+        Ok(entries) => src.push_str(&entries),
+        Err(e) if required => println!("cargo::error={e}"),
+        Err(e) => println!("cargo::warning=building without craft-fonts: {e}"),
+    }
+    src.push_str("];\n");
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("craft_fonts.rs");
+    if let Err(e) = std::fs::write(&out, src) {
+        println!("cargo::error=writing {}: {e}", out.display());
+    }
+}
+
+/// One `CraftFont { .. }` initialiser per manifest line.
+fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
+    let manifest = dir.join("fonts/manifest.txt");
+    println!("cargo::rerun-if-changed={}", manifest.display());
+    let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    // Web builds have a size budget: embed only the UI font there.
+    const WEB_FONTS: &[(&str, &str)] = &[("BIZ UDPGothic", "Regular")];
+    let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
+    let mut out = String::new();
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        let f: Vec<&str> = line.split(" | ").map(str::trim).collect();
+        let [family, style, file, scripts, ..] = f.as_slice() else {
+            return Err(format!("malformed manifest line: {line}"));
+        };
+        if wasm && !WEB_FONTS.contains(&(*family, *style)) {
+            continue;
+        }
+        let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
+        println!("cargo::rerun-if-changed={}", path.display());
+        let scripts: Vec<String> = scripts.split(',').map(|s| format!("{:?}", s.trim())).collect();
+        let _ = writeln!(
+            out,
+            "    CraftFont {{ family: {family:?}, style: {style:?}, scripts: &[{}], bytes: include_bytes!({:?}) }},",
+            scripts.join(", "),
+            path.display().to_string(),
+        );
+    }
+    if out.is_empty() {
+        return Err(format!("{} lists no font eligible for this target", manifest.display()));
+    }
+    Ok(out)
 }

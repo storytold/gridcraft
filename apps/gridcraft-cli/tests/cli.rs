@@ -130,6 +130,90 @@ fn commands_and_functions() {
 }
 
 #[test]
+fn eval_in_a_locale() {
+    // The formula is typed in the locale's language and the result is shown in its regional format.
+    assert_eq!(ok(&["eval", "--locale", "pt-BR", "=SOMA(1,5;2)"]).trim(), "3,5");
+    assert_eq!(ok(&["eval", "--locale", "pt-BR", "=1,5+1"]).trim(), "2,5");
+    assert_eq!(ok(&["eval", "--locale", "pt_BR.UTF-8", "=SE(1>2;\"a\";\"b\")"]).trim(), "b");
+    assert_eq!(ok(&["eval", "--locale", "de-DE", "=SUMME(1,5;2)"]).trim(), "3,5");
+    // The default stays en-US, and `--json` stays canonical.
+    assert_eq!(ok(&["eval", "=SUM(1.5,2)"]).trim(), "3.5");
+    assert_eq!(ok(&["eval", "--locale", "pt-BR", "=SOMA(1,5;2)", "--json"]).trim(), "3.5");
+    // English names are rejected like Excel does.
+    assert_eq!(ok(&["eval", "--locale", "pt-BR", "=SUM(1;2)"]).trim(), "#NOME?");
+    let o = run(&["eval", "--locale", "xx", "=1"]);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("unknown locale"));
+}
+
+#[test]
+fn run_in_a_locale() {
+    let out = ok(&[
+        "run",
+        "--locale",
+        "pt-BR",
+        "--cmd",
+        r#"cell.set={"cell":"A1","inputLocal":"1,5"}"#,
+        "--cmd",
+        r#"cell.set={"cell":"A2","inputLocal":"=A1*2"}"#,
+        "--print",
+        "A1:A2",
+        "--quiet",
+    ]);
+    assert_eq!(out.split_whitespace().collect::<Vec<_>>(), ["1,5", "3"], "{out}");
+    let o = run(&["run", "--locale", "xx", "--cmd", "app.languages"]);
+    assert!(!o.status.success());
+}
+
+#[test]
+fn functions_in_a_locale_list_the_local_name() {
+    let out = ok(&["functions", "--locale", "pt-BR", "--search", "soma"]);
+    assert!(out.contains("SOMA"), "{out}");
+}
+
+#[test]
+fn locale_is_applied_before_the_workbook_is_created_or_read() {
+    // A new book gets the language's sheet name.
+    let out = ok(&["run", "--locale", "de-DE", "--cmd", "document.inspect"]);
+    assert!(out.contains("Tabelle1"), "{out}");
+    assert!(ok(&["run", "--cmd", "document.inspect"]).contains("Sheet1"));
+
+    // A CSV is read in the region's format: `;` separates fields and `,` is the decimal.
+    let dir = tmpdir("locale-csv");
+    let csv = dir.join("data.csv");
+    std::fs::write(&csv, "x;y\n1,5;2\n").unwrap();
+    let csv_s = csv.to_str().unwrap();
+    assert_eq!(ok(&["eval", "--in", csv_s, "--locale", "de-DE", "=A2+B2"]).trim(), "3,5");
+    assert_eq!(ok(&["eval", "--in", csv_s, "--locale", "de-DE", "=A2+B2", "--json"]).trim(), "3.5");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn print_csv_uses_the_region_list_separator() {
+    let cmds = [
+        "run",
+        "--locale",
+        "de-DE",
+        "--cmd",
+        r#"cell.set={"cell":"A1","inputLocal":"1,5"}"#,
+        "--cmd",
+        r#"cell.set={"cell":"B1","inputLocal":"2"}"#,
+        "--print",
+        "A1:B1",
+        "--csv",
+        "--quiet",
+    ];
+    assert_eq!(ok(&cmds).trim(), "1,5;2");
+}
+
+#[test]
+fn mcp_connect_rejects_locale() {
+    let o = run(&["mcp", "--connect", "1", "--locale", "pt-BR"]);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("--locale"));
+}
+
+#[test]
 fn mcp_over_stdio() {
     let mut child = bin().arg("mcp").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
     {

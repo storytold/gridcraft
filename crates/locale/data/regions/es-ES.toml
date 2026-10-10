@@ -1,0 +1,28 @@
+# Regional conventions (separators, dates, names, currency) equivalent to what the operating
+# system supplies to Excel for this region. Codes use canonical (en-US) format letters.
+tag = "es-ES"
+native_name = "Español (España)"
+lcid = 0x0C0A
+decimal = ","
+group = "."
+list = ";"
+array_col = "\\"
+array_row = ";"
+date_order = "DMY"
+date_sep = "/"
+time_sep = ":"
+short_date = "dd/mm/yyyy"
+long_date = "dddd, d \"de\" mmmm \"de\" yyyy"
+short_time = "h:mm"
+long_time = "h:mm:ss"
+months = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+months_abbr = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+weekdays = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"]
+weekdays_abbr = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"]
+am_pm = ["a. m.", "p. m."]
+currency = "€"
+currency_format = "#,##0.00 \"€\""
+
+[provenance]
+method = "Hand-written from the published regional conventions of the operating systems (CLDR / Windows NLS); plan §3 step 5."
+written = "2026-10-10"

@@ -10,6 +10,7 @@ pub mod format;
 pub mod formulas;
 pub mod insert;
 pub mod inspect;
+pub mod intl;
 pub mod pivot;
 pub mod print;
 pub mod review;
@@ -98,6 +99,15 @@ macro_rules! cmd {
     (noundo $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
         $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: true, undoable: false }
     };
+    // Undoable, but not journaled itself: it runs other commands, which are journaled with
+    // canonical params (replaying the call as well would repeat its effect).
+    (nested $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: false, undoable: true }
+    };
+    // A UI preference: neither undoable nor journaled (it is not a document edit).
+    (pref $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: false, undoable: false }
+    };
 }
 pub(crate) use cmd;
 
@@ -116,6 +126,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(view::specs());
         v.extend(inspect::specs());
         v.extend(extra::specs());
+        v.extend(intl::specs());
         v.extend(draw::specs());
         v.extend(spelling::specs());
         v.extend(pivot::specs());
@@ -286,9 +297,6 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     Ok(r)
 }
 
-/// Excel's message for an edit of a locked cell on a protected sheet.
-pub(crate) const PROTECTED: &str = "The cell or chart you're trying to change is on a protected sheet.";
-
 /// Refuses an edit that changed what a locked cell on a protected sheet holds (its value or
 /// formula), whichever command made it. Sheets are matched by name, so moving, renaming or
 /// deleting a sheet isn't an edit of its cells.
@@ -303,7 +311,7 @@ fn check_protection(old: &Workbook, new: &Workbook) -> Result<()> {
         }
         for c in sh.cells.diff(&after.cells) {
             if !same_content(sh.cell(c), after.cell(c)) && old.styles.get(sh.style_id(c)).protection.locked {
-                return Err(EngineError::Other(PROTECTED.into()));
+                return Err(EngineError::Protected);
             }
         }
     }

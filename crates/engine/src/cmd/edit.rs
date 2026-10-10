@@ -10,13 +10,21 @@ use crate::{Clipboard, Session};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!("cell.set", "Enter Cell", [], None, "{cell?: \"B2\", input: \"text, number or =formula\", sheet?, array?: bool}", has_doc, cell_set),
+        cmd!(
+            "cell.set",
+            "Enter Cell",
+            [],
+            None,
+            "{cell?: \"B2\", input: \"text, number or =formula\" (canonical en-US) | inputLocal: \"as typed in the session's language and region, e.g. =SOMA(1,5;2)\", locale?: \"pt-BR\" (reads inputLocal in that language and region instead), sheet?, array?: bool}",
+            has_doc,
+            cell_set
+        ),
         cmd!(
             "range.setValues",
             "Set Values",
             [],
             None,
-            "{range?: \"A1\", values: [[...]] (rows of numbers/strings/bools/null; strings starting with = are formulas)}",
+            "{range?: \"A1\", values: [[...]] (rows of numbers/strings/bools/null; strings starting with = are formulas), local?: bool (read strings as typed in the session's language and region, or the `locale` tag, instead of canonical en-US), locale?}",
             has_doc,
             range_set_values
         ),
@@ -25,7 +33,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Fill Range With Input",
             [],
             Some("Ctrl+Enter"),
-            "{range?, input}: enters the same input in every selected cell (relative formulas adjust)",
+            "{range?, input | inputLocal (+ locale?)}: enters the same input in every selected cell (relative formulas adjust)",
             has_doc,
             range_fill
         ),
@@ -119,9 +127,17 @@ pub fn specs() -> Vec<CommandSpec> {
 // ---------------------------------------------------------------- entry
 
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
-/// format). Inherits the destination's cell, row or column style, including its number
-/// format, before parsing. Errors when the formula can't be parsed.
-pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gridcraft_model::Workbook) -> Result<Option<Cell>> {
+/// format). `loc` is how the text is spelled: `INVARIANT` for canonical input, the session's
+/// locale for what a person typed. Inherits the destination's cell, row or column style,
+/// including its number format, before parsing. Errors when the formula can't be parsed. The
+/// stored formula is always canonical.
+pub(crate) fn input_to_cell(
+    input: &str,
+    sheet: usize,
+    at: CellRef,
+    wb: &mut gridcraft_model::Workbook,
+    loc: &gridcraft_locale::Locale,
+) -> Result<Option<Cell>> {
     let style = wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
     if input.is_empty() {
         let c = Cell { value: Value::Empty, formula: None, style };
@@ -134,21 +150,14 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     let is_formula = input.starts_with('=')
         || (input.len() > 1
             && (input.starts_with('+') || input.starts_with('-'))
-            && gridcraft_core::parse::parse_number_text(input).is_none()
+            && gridcraft_core::parse::parse_number_text_in(input, wb.date_system, &loc.regional).is_none()
             && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('));
     if is_formula {
+        crate::locale::check_formula_len(input)?;
         let body = input.strip_prefix('=').unwrap_or(input);
         // Excel closes missing parentheses for you.
-        let mut text = body.to_string();
-        let mut parsed = gridcraft_formula::parse(&text);
-        for _ in 0..8 {
-            if parsed.is_ok() {
-                break;
-            }
-            text.push(')');
-            parsed = gridcraft_formula::parse(&text);
-        }
-        let expr = parsed.map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))?;
+        let expr = crate::locale::parse_closing(body, &loc.dialect(), &|n: &str| wb.knows_name(n, sheet))
+            .map_err(|e| EngineError::InvalidFormula(e.to_string()))?;
         let expr = wb.name_call_case(expr);
         let mut cell = Cell::formula(Formula::from_expr(expr));
         cell.style = style;
@@ -175,7 +184,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         }
         return Ok(Some(cell));
     }
-    let parsed = gridcraft_core::parse::parse_input(input, wb.date_system);
+    let parsed = gridcraft_core::parse::parse_input_in(input, wb.date_system, &loc.regional, loc.formula);
     let mut style = style;
     if let Some(code) = parsed.format {
         let cur = wb.styles.get(style).num_fmt.as_str().to_string();
@@ -196,19 +205,28 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         Some(c) => c,
         None => s.doc()?.selection.active,
     };
-    let input =
-        str_param(p, "input").or_else(|| str_param(p, "value")).map(str::to_string).or_else(|| p.get("value").map(json_to_input)).unwrap_or_default();
+    let (input, loc) = match str_param(p, "inputLocal") {
+        Some(t) => (t.to_string(), crate::locale::call_locale(s, p)?),
+        None => (
+            str_param(p, "input")
+                .or_else(|| str_param(p, "value"))
+                .map(str::to_string)
+                .or_else(|| p.get("value").map(json_to_input))
+                .unwrap_or_default(),
+            gridcraft_locale::INVARIANT,
+        ),
+    };
     let array = bool_param(p, "array").unwrap_or(false);
     let protected =
         s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.is_protected() && s.doc().is_ok_and(|d| d.wb.styles.get(sh.style_id(at)).protection.locked));
     if protected {
-        return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
+        return Err(EngineError::Protected);
     }
     edit(s, |cx| {
         if array {
             // Legacy Ctrl+Shift+Enter array formula over the selection.
             let range = cx.sel.current();
-            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
+            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb, &loc)?.unwrap_or_default();
             if let Some(f) = cell.formula.as_mut() {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
@@ -224,7 +242,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             cx.touch(sheet, range.start);
             return Ok(Json::Null);
         }
-        let cell = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+        let cell = input_to_cell(&input, sheet, at, &mut cx.wb, &loc)?;
         let sh = cx.sheet_mut(sheet)?;
         match cell {
             Some(c) => sh.set_cell(at, c),
@@ -235,8 +253,10 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         cx.touch(sheet, at);
         Ok(Json::Null)
     })?;
-    let v = s.doc()?.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
-    Ok(json!({"cell": at.a1(), "value": v.display()}))
+    let d = s.doc()?;
+    let v = d.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
+    let text = d.wb.sheet(sheet).map(|sh| crate::display::cell_text(&d.wb, sh, at)).unwrap_or_default();
+    Ok(json!({"cell": at.a1(), "value": v.display(), "text": text}))
 }
 
 pub(crate) fn json_to_input(v: &Json) -> String {
@@ -258,6 +278,7 @@ pub(crate) fn json_to_input(v: &Json) -> String {
 fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let start = target_range(s, p)?.start;
+    let loc = if bool_param(p, "local").unwrap_or(false) { crate::locale::call_locale(s, p)? } else { gridcraft_locale::INVARIANT };
     let Some(rows) = p.get("values").and_then(Json::as_array) else { return Err(bad("range.setValues", "missing `values` (array of rows)")) };
     if rows.len() > MAX_ROWS as usize {
         return Err(bad("range.setValues", "too many rows"));
@@ -281,7 +302,7 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                     Json::Bool(b) => {
                         Some(Cell { value: Value::Bool(*b), formula: None, style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default() })
                     }
-                    _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,
+                    _ => input_to_cell(&input, sheet, at, &mut cx.wb, &loc)?,
                 };
                 let sh = cx.sheet_mut(sheet)?;
                 match cell {
@@ -302,10 +323,13 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
 fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
-    let input = str_param(p, "input").unwrap_or("").to_string();
+    let (input, loc) = match str_param(p, "inputLocal") {
+        Some(t) => (t.to_string(), crate::locale::call_locale(s, p)?),
+        None => (str_param(p, "input").unwrap_or("").to_string(), gridcraft_locale::INVARIANT),
+    };
     let origin = s.doc()?.selection.active;
     edit(s, |cx| {
-        let base = input_to_cell(&input, sheet, origin, &mut cx.wb)?;
+        let base = input_to_cell(&input, sheet, origin, &mut cx.wb, &loc)?;
         for r in &ranges {
             if r.count() > 2_000_000 {
                 return Err(bad("range.fill", "range too large"));
@@ -569,6 +593,7 @@ fn coalesce(cells: &[CellRef]) -> Vec<RangeRef> {
 
 fn undo(s: &mut Session, p: &Json) -> Result<Json> {
     let steps = u32_param(p, "steps").unwrap_or(1).max(1);
+    let loc = s.locale();
     let d = s.doc_mut()?;
     let mut label = String::new();
     for _ in 0..steps {
@@ -581,11 +606,17 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
     }
     d.calc.rebuild(&d.wb);
     d.revision += 1;
+    // Snapshots taken before a language change carry the old locale.
+    if *d.wb.locale != *loc {
+        let recalc = d.wb.calc.mode != gridcraft_model::CalcMode::Manual;
+        d.refresh_locale(&loc, recalc);
+    }
     Ok(json!({"undone": label}))
 }
 
 fn redo(s: &mut Session, p: &Json) -> Result<Json> {
     let steps = u32_param(p, "steps").unwrap_or(1).max(1);
+    let loc = s.locale();
     let d = s.doc_mut()?;
     let mut label = String::new();
     for _ in 0..steps {
@@ -598,6 +629,10 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
     }
     d.calc.rebuild(&d.wb);
     d.revision += 1;
+    if *d.wb.locale != *loc {
+        let recalc = d.wb.calc.mode != gridcraft_model::CalcMode::Manual;
+        d.refresh_locale(&loc, recalc);
+    }
     Ok(json!({"redone": label}))
 }
 
@@ -680,7 +715,8 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
         for (ri, row) in rows.iter().enumerate() {
             for (ci, v) in row.iter().enumerate() {
                 let Some(c) = at.offset(ri as i64, ci as i64) else { continue };
-                let cell = input_to_cell(v, sheet, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
+                let loc = *cx.wb.locale;
+                let cell = input_to_cell(v, sheet, c, &mut cx.wb, &loc).unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
                 let sh = cx.sheet_mut(sheet)?;
                 match cell {
                     Some(cell) => sh.set_cell(c, cell),
@@ -1253,7 +1289,7 @@ fn find(s: &mut Session, p: &Json) -> Result<Json> {
                 let text = if values || cell.formula.is_none() || crate::display::formula_hidden(&d.wb, sh, c) {
                     crate::display::cell_text(&d.wb, sh, c)
                 } else {
-                    cell.input_text()
+                    crate::locale::input_local(cell, &d.wb.locale, &|n: &str| d.wb.knows_name(n, si))
                 };
                 matches(&text, &what, case, whole).then_some((c, text))
             })
@@ -1293,12 +1329,22 @@ fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     let all = bool_param(p, "all").unwrap_or(true);
     let workbook = str_param(p, "within") == Some("workbook");
     let active = s.doc()?.selection.active;
+    let loc = *s.doc()?.wb.locale;
     let n = edit(s, |cx| {
         let sheets: Vec<usize> = if workbook { (0..cx.wb.sheets.len()).collect() } else { vec![cx.wb.active_sheet] };
         let mut n = 0;
         for si in sheets {
-            let cells: Vec<(CellRef, String)> =
-                cx.wb.sheet(si).map(|sh| sh.cells.iter().map(|(c, _)| (c, sh.input_text(c))).collect()).unwrap_or_default();
+            let cells: Vec<(CellRef, String)> = cx
+                .wb
+                .sheet(si)
+                .map(|sh| {
+                    sh.cells
+                        .iter()
+                        .filter(|(c, cell)| cell.formula.is_none() || !crate::display::formula_hidden(&cx.wb, sh, *c))
+                        .map(|(c, _)| (c, crate::locale::sheet_input_local(sh, c, &loc, &|n: &str| cx.wb.knows_name(n, si))))
+                        .collect()
+                })
+                .unwrap_or_default();
             for (c, text) in cells {
                 if !all && c != active {
                     continue;
@@ -1313,7 +1359,7 @@ fn replace(s: &mut Session, p: &Json) -> Result<Json> {
                 } else {
                     replace_ci(&text, &what, &with)
                 };
-                let cell = input_to_cell(&new, si, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(new.as_str()))));
+                let cell = input_to_cell(&new, si, c, &mut cx.wb, &loc).unwrap_or_else(|_| Some(Cell::value(Value::text(new.as_str()))));
                 let sh = cx.sheet_mut(si)?;
                 match cell {
                     Some(cell) => sh.set_cell(c, cell),

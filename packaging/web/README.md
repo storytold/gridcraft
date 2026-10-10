@@ -82,3 +82,20 @@ sibling Craft apps do with `?webgl` / `?cpu`), document them here; they also wor
 iframe `src`.
 
 A browser with neither WebGPU nor WebGL2 gets a message in place of the app.
+
+## Language and fonts
+
+The interface language, the formula language and the regional format follow the browser
+(`navigator.language`) until the user changes them in File › Options › Language; the choice is
+kept in `localStorage` with the other preferences.
+
+No CJK font is part of the bundle. When the interface language is Japanese, Korean or Chinese,
+a cell holds CJK text, or a language list is open (it names 日本語, 中文, 한국어), the app fetches
+one font file from `./fonts/` next to `index.html`:
+`cjk-ja.ttf`, `cjk-ko.ttf`, `cjk-zh-CN.ttf` or `cjk-zh-TW.ttf`, matching the interface language;
+in any other interface language, CJK text in cells uses `cjk-zh-CN.ttf`. Add the files you want
+to support (any font with the matching glyph shapes, for example a subset of an open-licensed Noto
+Sans CJK build) to the site and serve them with the same cache rules as the other assets. When a
+file is missing, or the response is not a TrueType/OpenType font (some hosts answer a missing
+file with their HTML page), the app logs a warning in the browser console and shows CJK characters
+as boxes; every other language works without extra files.

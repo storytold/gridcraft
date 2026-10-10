@@ -9,7 +9,7 @@ use gridcraft_model::{
     Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, Style, Underline, VAlign, VertAlign, Workbook,
 };
 
-use crate::tables::{INDEXED, builtin_format, builtin_id};
+use crate::tables::{INDEXED, builtin_id};
 use crate::xml::{El, esc_attr, num};
 
 // ---------------------------------------------------------------- reading
@@ -271,7 +271,7 @@ fn num_fmt_code(id: u32, custom: &HashMap<u32, String>) -> NumFmt {
     if let Some(c) = custom.get(&id) {
         return NumFmt::new(c);
     }
-    NumFmt::new(builtin_format(id).unwrap_or("General"))
+    NumFmt::new(gridcraft_numfmt::builtin_format(id).unwrap_or("General"))
 }
 
 fn read_xf(xf: &El, fonts: &[Font], fills: &[Fill], borders: &[Borders], fmts: &HashMap<u32, String>) -> Style {

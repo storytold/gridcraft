@@ -36,19 +36,21 @@ impl FileKind {
 }
 
 /// Parses a file's bytes into a workbook. `name` picks the format by extension when the bytes
-/// don't say.
-pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
+/// don't say. Text formats read numbers, dates and booleans the way `loc` spells them.
+pub fn open_bytes(name: &str, bytes: &[u8], loc: &gridcraft_locale::Locale) -> Result<(Workbook, Vec<String>)> {
+    open_bytes_with(name, bytes, loc, None)
+}
+
+/// [`open_bytes`] with an explicit CSV field `delimiter` (automation); without one the delimiter is
+/// detected, preferring the region's list separator. TSV is always tab-separated.
+pub fn open_bytes_with(name: &str, bytes: &[u8], loc: &gridcraft_locale::Locale, delimiter: Option<u8>) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
     if sniffed == gridcraft_xlsx::Format::Encrypted {
-        return Err(EngineError::Other(format!(
-            "'{name}' is password-protected. GridCraft can't open encrypted workbooks yet; remove the password in Excel and try again."
-        )));
+        return Err(EngineError::EncryptedWorkbook(name.into()));
     }
     if sniffed == gridcraft_xlsx::Format::LegacyBinary {
-        return Err(EngineError::Other(format!(
-            "'{name}' is an Excel 97-2003 (.xls) workbook or another legacy binary file. GridCraft doesn't open these yet; save it as .xlsx in Excel and try again."
-        )));
+        return Err(EngineError::LegacyWorkbook(name.into()));
     }
     // Content wins over the extension: an ODS or XLSB package is imported as what it is,
     // whatever it is called; the extension only decides when the bytes don't say.
@@ -59,7 +61,7 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     };
     if let Some(import) = import {
         let read = if import == FileKind::Ods { gridcraft_xlsx::read_ods } else { gridcraft_xlsx::read_xlsb };
-        let (wb, report) = read(bytes).map_err(|e| EngineError::Other(format!("We can't import '{name}': {e}")))?;
+        let (wb, report) = read(bytes).map_err(|e| EngineError::ImportFailed { name: name.into(), message: e.to_string() })?;
         return Ok((wb, report.warnings));
     }
     if sniffed == gridcraft_xlsx::Format::Xlsx || kind == Some(FileKind::Xlsx) {
@@ -76,13 +78,13 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
             Ok((wb, vec![]))
         }
         Some(FileKind::Tsv) => {
-            let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', ..Default::default() };
+            let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', locale: *loc, ..Default::default() };
             let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             rename_first_sheet(&mut wb, name);
             Ok((wb, vec![]))
         }
         _ => {
-            let opts = gridcraft_xlsx::CsvOptions { delimiter: 0, ..Default::default() };
+            let opts = gridcraft_xlsx::CsvOptions { delimiter: delimiter.unwrap_or(0), locale: *loc, ..Default::default() };
             let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             rename_first_sheet(&mut wb, name);
             Ok((wb, vec![]))
@@ -102,14 +104,20 @@ fn rename_first_sheet(wb: &mut Workbook, path: &str) {
     }
 }
 
-/// Encodes a workbook in the format chosen by `path`'s extension.
+/// Encodes a workbook in the format chosen by `path`'s extension (CSV uses the workbook region's
+/// list separator).
 pub fn save_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
+    save_bytes_with(wb, path, None)
+}
+
+/// [`save_bytes`] with an explicit CSV field `delimiter` (automation); TSV is always tab-separated.
+pub fn save_bytes_with(wb: &Workbook, path: &str, delimiter: Option<u8>) -> Result<Vec<u8>> {
     let sheet = wb.active_sheet;
     match FileKind::from_path(path).unwrap_or(FileKind::Xlsx) {
         FileKind::Xlsx => gridcraft_xlsx::write_xlsx(wb).map_err(|e| EngineError::Other(e.to_string())),
-        FileKind::Xlsb => Err(EngineError::Other("XLSB is supported for data import only. Save as .xlsx or another supported export format.".into())),
-        FileKind::Ods => Err(EngineError::Other("ODS is supported for data import only. Save as .xlsx or another supported export format.".into())),
-        FileKind::Csv => Ok(wb.sheet(sheet).map(|sh| gridcraft_xlsx::write_csv(sh, wb, b',')).unwrap_or_default()),
+        FileKind::Xlsb => Err(EngineError::ImportOnlyFormat("XLSB")),
+        FileKind::Ods => Err(EngineError::ImportOnlyFormat("ODS")),
+        FileKind::Csv => Ok(wb.sheet(sheet).map(|sh| gridcraft_xlsx::write_csv(sh, wb, delimiter.unwrap_or(0))).unwrap_or_default()),
         FileKind::Tsv => Ok(wb.sheet(sheet).map(|sh| gridcraft_xlsx::write_csv(sh, wb, b'\t')).unwrap_or_default()),
         FileKind::Json => serde_json::to_vec_pretty(wb).map_err(|e| EngineError::Other(e.to_string())),
         FileKind::Html => Ok(to_html(wb, sheet).into_bytes()),
@@ -381,7 +389,7 @@ mod tests {
 
     #[test]
     fn encrypted_workbook_is_reported_not_misread() {
-        let err = open_bytes("secret.xlsx", &cfb(&["EncryptionInfo", "EncryptedPackage"])).unwrap_err();
+        let err = open_bytes("secret.xlsx", &cfb(&["EncryptionInfo", "EncryptedPackage"]), &gridcraft_locale::INVARIANT).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("password-protected"), "got: {msg}");
         assert!(!msg.contains("zip"), "must not surface the zip error: {msg}");
@@ -389,7 +397,7 @@ mod tests {
 
     #[test]
     fn legacy_xls_is_not_called_encrypted() {
-        let err = open_bytes("old.xls", &cfb(&["Workbook", "\u{5}SummaryInformation"])).unwrap_err();
+        let err = open_bytes("old.xls", &cfb(&["Workbook", "\u{5}SummaryInformation"]), &gridcraft_locale::INVARIANT).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("97-2003") && msg.contains(".xlsx"), "got: {msg}");
         assert!(!msg.contains("password"), "got: {msg}");

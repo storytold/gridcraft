@@ -8,6 +8,10 @@
 //! (bytes arrive asynchronously through `Services::inbox`); Save downloads the file; dropped
 //! files are read asynchronously.
 //!
+//! Preferences (engine preferences and interface state) are kept in the browser's `localStorage`
+//! (`gridcraft.prefs`, `gridcraft.ui`). The interface language, formula language and regional
+//! format follow `navigator.language` until changed in Options › Language.
+//!
 //! URL query flags: `?webgl` forces WebGL2; `?sample=sales|budget|grades` opens a sample.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

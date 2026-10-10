@@ -4,6 +4,8 @@
 //! digits and then rounded half away from zero on that decimal string. That makes 2.675 with
 //! "0.00" show 2.68 and 1.005 show 1.01, as in Excel, even though neither is exact in binary.
 
+use gridcraft_locale::{INVARIANT, Regional};
+
 /// Most decimals we ever compute; placeholders beyond this are padded with zeros.
 pub(crate) const MAX_DECIMALS: usize = 400;
 
@@ -80,9 +82,21 @@ pub(crate) fn fixed(a: f64, decimals: usize) -> (String, String) {
     fixed_from_digits(&d, e, decimals)
 }
 
-/// General format squeezed into `max_chars` characters. Excel shows fewer decimals, then
-/// scientific notation, then "####" when a column is narrow; `None` means the caller paints "####".
+/// General format squeezed into `max_chars` characters, with the decimal point of the invariant
+/// (en-US) locale; see [`format_general_fit_in`].
 pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
+    format_general_fit_in(n, max_chars, &INVARIANT.regional)
+}
+
+/// General format squeezed into `max_chars` characters with the region's decimal separator.
+/// Excel shows fewer decimals, then scientific notation, then "####" when a column is narrow;
+/// `None` means the caller paints "####". The text never gets longer than `max_chars`
+/// characters, whatever the separator.
+pub fn format_general_fit_in(n: f64, max_chars: usize, reg: &Regional) -> Option<String> {
+    general_fit(n, max_chars).map(|s| crate::render::localize_decimal(s, reg.decimal))
+}
+
+fn general_fit(n: f64, max_chars: usize) -> Option<String> {
     if !n.is_finite() {
         return None;
     }

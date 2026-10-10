@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created; measured against Microsoft's published Excel function list) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (localized function names and separators, M12, #191) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -77,7 +77,7 @@ PIVOTBY, REGEXTEST…) are all present.
 | Iterative calculation for circular references | cycle detection done; the Enable Iterative Calculation setting is stored and saved to XLSX, but the calc engine does not iterate (circular references stay unresolved) |
 | 15-significant-digit comparison semantics | **missing** (#57: `=0.1+0.2=0.3` is FALSE) |
 | External workbook references (`[Book.xlsx]Sheet1!A1`) | parsed; links dropped on open, no update |
-| Localized function names and `;` separators | **missing** (#45); en-US only |
+| Localized function names and `;` separators | done (M12, #191; #45): names follow the formula language in 12 languages (CJK keep English, as Excel), separators and array-constant separators follow the region; files stay canonical. Coverage per language: [localization-parity.md](localization-parity.md) |
 | Error values | the seven classic errors plus `#SPILL!`, `#CALC!`, `#GETTING_DATA` done; `#FIELD!`, `#BLOCKED!`, `#CONNECT!`, `#BUSY!`, `#UNKNOWN!`, `#PYTHON!` missing (minor: they come from data types, cloud and Python features) |
 
 ## Depth (estimated)
@@ -97,4 +97,5 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Localized function names and separators done (M12, #191) |
 | 2026-10-10 | major | Created: 501 / 523 by name, 492 working, per category, against Microsoft's published list |

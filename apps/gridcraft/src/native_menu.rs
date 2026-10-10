@@ -1,185 +1,26 @@
 //! macOS: the native menu bar (File, Edit, View, Insert, Format, Tools, Data, Window, Help), as
 //! a desktop spreadsheet has on the Mac. Items run the same commands as the ribbon.
+//!
+//! The menus and their labels are described in `menu_model` and rendered in the interface language
+//! of the session; they are rebuilt whenever that language changes (`app.setLocale`, Options ›
+//! Language, a changed system language at start).
 
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, channel};
 
+use gridcraft_l10n::Localizer;
 use gridcraft_ui_egui::SheetApp;
 use muda::accelerator::Accelerator;
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use serde_json::{Value, json};
 
-type Entry = (&'static str, &'static str, Option<&'static str>);
-
-/// (label, command or `dialog:name`, accelerator). `-` is a separator.
-fn tree() -> Vec<(&'static str, Vec<Entry>)> {
-    vec![
-        (
-            "File",
-            vec![
-                ("New Workbook", "file.new", Some("CMD+N")),
-                ("New from Sample…", "dialog:start", None),
-                ("Open…", "file.open", Some("CMD+O")),
-                ("-", "", None),
-                ("Close", "file.close", Some("CMD+W")),
-                ("Save", "file.save", Some("CMD+S")),
-                ("Save As…", "file.saveAs", Some("CMD+SHIFT+S")),
-                ("Export as CSV…", "dialog:saveCopy:csv", None),
-                ("Save as Web Page…", "dialog:saveCopy:html", None),
-                ("-", "", None),
-                ("Page Setup…", "dialog:pageSetup", None),
-                ("Print…", "file.print", Some("CMD+P")),
-                ("-", "", None),
-                ("Properties…", "file.properties", None),
-            ],
-        ),
-        (
-            "Edit",
-            vec![
-                ("Undo", "edit.undo", None),
-                ("Redo", "edit.redo", None),
-                ("-", "", None),
-                ("Cut", "edit.cut", None),
-                ("Copy", "edit.copy", None),
-                ("Paste", "edit.paste", None),
-                ("Paste Special…", "dialog:pasteSpecial", Some("CTRL+CMD+V")),
-                ("-", "", None),
-                ("Fill Down", "edit.fillDown", None),
-                ("Fill Right", "edit.fillRight", None),
-                ("Series…", "dialog:series", None),
-                ("Flash Fill", "edit.flashFill", None),
-                ("-", "", None),
-                ("Clear All", "edit.clearAll", None),
-                ("Clear Formats", "edit.clearFormats", None),
-                ("Clear Contents", "edit.clearContents", None),
-                ("-", "", None),
-                ("Delete…", "dialog:deleteCells", None),
-                ("Delete Sheet", "home.deleteSheet", None),
-                ("-", "", None),
-                ("Find…", "dialog:find", None),
-                ("Replace…", "dialog:find:replace", Some("CTRL+H")),
-                ("Go To…", "dialog:goTo", Some("CTRL+G")),
-            ],
-        ),
-        (
-            "View",
-            vec![
-                ("Normal", "view.normal", None),
-                ("Page Layout", "view.pageLayout", None),
-                ("Page Break Preview", "view.pageBreakPreview", None),
-                ("-", "", None),
-                ("Formula Bar", "view.formulaBar", None),
-                ("Gridlines", "view.gridlines", None),
-                ("Headings", "view.headings", None),
-                ("-", "", None),
-                ("Zoom…", "dialog:zoom", None),
-                ("Zoom to Selection", "view.zoomToSelection", None),
-                ("Freeze Panes", "view.freezePanes", None),
-                ("Freeze Top Row", "view.freezeTopRow", None),
-                ("Unfreeze Panes", "view.unfreezePanes", None),
-                ("-", "", None),
-                ("Display Theme", "view.theme", None),
-                ("Collapse Ribbon", "view.collapseRibbon", Some("CMD+ALT+R")),
-            ],
-        ),
-        (
-            "Insert",
-            vec![
-                ("Cells…", "dialog:insertCells", None),
-                ("Rows", "home.insertRows", None),
-                ("Columns", "home.insertColumns", None),
-                ("Sheet", "home.insertSheet", Some("SHIFT+F11")),
-                ("-", "", None),
-                ("Chart", "insert.recommendedCharts", None),
-                ("Sparklines…", "dialog:sparkline", None),
-                ("PivotTable", "insert.pivotTable", None),
-                ("Table", "insert.table", None),
-                ("-", "", None),
-                ("Function…", "dialog:insertFunction", Some("SHIFT+F3")),
-                ("Name…", "dialog:defineName", None),
-                ("New Comment", "dialog:comment", None),
-                ("New Note", "dialog:note", None),
-                ("Picture…", "dialog:insertPicture", None),
-                ("Text Box", "insert.textBox", None),
-                ("Link…", "dialog:insertLink", None),
-                ("Checkbox", "insert.checkbox", None),
-            ],
-        ),
-        (
-            "Format",
-            vec![
-                ("Cells…", "dialog:formatCells", None),
-                ("Row Height…", "dialog:rowHeight", None),
-                ("AutoFit Row Height", "home.autofitRowHeight", None),
-                ("Column Width…", "dialog:columnWidth", None),
-                ("AutoFit Column Width", "home.autofitColumnWidth", None),
-                ("-", "", None),
-                ("Hide Rows", "home.hideRows", None),
-                ("Unhide Rows", "home.unhideRows", None),
-                ("Hide Columns", "home.hideColumns", None),
-                ("Unhide Columns", "home.unhideColumns", None),
-                ("-", "", None),
-                ("Rename Sheet…", "dialog:renameSheet", None),
-                ("Hide Sheet", "sheet.hide", None),
-                ("Unhide Sheet…", "sheet.unhide", None),
-                ("-", "", None),
-                ("Conditional Formatting…", "dialog:manageRules", None),
-                ("Format as Table", "insert.table", None),
-            ],
-        ),
-        (
-            "Tools",
-            vec![
-                ("Spelling…", "dialog:spelling", None),
-                ("Workbook Statistics", "dialog:statistics", None),
-                ("Check Accessibility", "dialog:accessibility", None),
-                ("-", "", None),
-                ("Protect Sheet…", "dialog:protectSheet", None),
-                ("Protect Workbook", "review.protectWorkbook", None),
-                ("-", "", None),
-                ("Goal Seek…", "dialog:goalSeek", None),
-                ("Error Checking…", "dialog:errorChecking", None),
-                ("Evaluate Formula…", "dialog:evaluateFormula", None),
-                ("-", "", None),
-                ("Record Actions", "automate.recordActions", None),
-                ("Command Palette…", "dialog:commandSearch", Some("CMD+SHIFT+P")),
-            ],
-        ),
-        (
-            "Data",
-            vec![
-                ("Sort…", "dialog:sort", None),
-                ("Sort A to Z", "data.sortAscending", None),
-                ("Sort Z to A", "data.sortDescending", None),
-                ("Filter", "data.filter", None),
-                ("Clear Filter", "data.clearFilter", None),
-                ("-", "", None),
-                ("Text to Columns…", "dialog:textToColumns", None),
-                ("Remove Duplicates…", "dialog:removeDuplicates", None),
-                ("Data Validation…", "dialog:dataValidation", None),
-                ("-", "", None),
-                ("Group", "data.group", None),
-                ("Ungroup", "data.ungroup", None),
-                ("Subtotal…", "dialog:subtotal", None),
-                ("-", "", None),
-                ("Calculate Now", "formulas.calculateNow", None),
-            ],
-        ),
-        ("Window", vec![("New Window", "view.newWindow", None), ("Next Sheet", "sheet.next", None), ("Previous Sheet", "sheet.previous", None)]),
-        (
-            "Help",
-            vec![
-                ("Agent Control (MCP)…", "dialog:agents", None),
-                ("Contributors…", "dialog:about:Contributors", None),
-                ("GridCraft on getartcraft.com", "url:https://getartcraft.com/apps/gridcraft", None),
-                ("Join the ArtCraft Discord…", "url:https://discord.gg/artcraft", None),
-            ],
-        ),
-    ]
-}
+use crate::menu_model::{self, ResolvedEntry};
 
 pub struct NativeMenu {
+    /// The installed menu bar; replaced as a whole when the language changes.
     _menu: Menu,
+    /// Interface language the menu bar was built for.
+    tag: &'static str,
     events: Receiver<MenuEvent>,
     theme_items: Vec<(&'static str, CheckMenuItem)>,
 }
@@ -195,58 +36,74 @@ fn select_theme(app: &mut SheetApp, id: &str) -> bool {
     true
 }
 
-impl NativeMenu {
-    pub fn install(ctx: &egui::Context) -> NativeMenu {
-        let menu = Menu::new();
-        let app_menu = Submenu::new("GridCraft", true);
-        let about = MenuItem::with_id("dialog:about", "About GridCraft", true, None);
-        let _ = app_menu.append_items(&[
-            &about,
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::services(None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::hide(None),
-            &PredefinedMenuItem::hide_others(None),
-            &PredefinedMenuItem::show_all(None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::quit(None),
-        ]);
-        let _ = menu.append(&app_menu);
-        let mut theme_items = Vec::new();
-        for (title, entries) in tree() {
-            let sub = Submenu::new(title, true);
-            for (label, id, acc) in entries {
-                if label == "-" {
+/// Builds the menu bar for `loc` and makes it the application's main menu. Also returns the check
+/// items of the Display Theme submenu, which `NativeMenu::poll` keeps in step with the preference.
+fn build(loc: &Localizer) -> (Menu, Vec<(&'static str, CheckMenuItem)>) {
+    let menu = Menu::new();
+    let app_menu = Submenu::new("GridCraft", true);
+    let about = MenuItem::with_id(menu_model::ABOUT_ACTION, loc.plain(menu_model::ABOUT_KEY), true, None);
+    let _ = app_menu.append_items(&[
+        &about,
+        &PredefinedMenuItem::separator(),
+        &PredefinedMenuItem::services(None),
+        &PredefinedMenuItem::separator(),
+        &PredefinedMenuItem::hide(None),
+        &PredefinedMenuItem::hide_others(None),
+        &PredefinedMenuItem::show_all(None),
+        &PredefinedMenuItem::separator(),
+        &PredefinedMenuItem::quit(None),
+    ]);
+    let _ = menu.append(&app_menu);
+    let mut theme_items = Vec::new();
+    for m in menu_model::resolve(loc) {
+        let sub = Submenu::new(m.title, true);
+        for entry in m.entries {
+            match entry {
+                ResolvedEntry::Separator => {
                     let _ = sub.append(&PredefinedMenuItem::separator());
-                    continue;
                 }
-                if id == "view.theme" {
-                    let themes = Submenu::new(label, true);
-                    for (mode, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
-                        let item = CheckMenuItem::with_id(format!("theme:{mode}"), label, true, false, None);
-                        let _ = themes.append(&item);
-                        theme_items.push((mode, item));
+                ResolvedEntry::Item(item) if item.action == menu_model::THEME_ACTION => {
+                    let themes = Submenu::new(item.label, true);
+                    for (mode, key) in menu_model::THEME_CHOICES {
+                        let choice = CheckMenuItem::with_id(format!("theme:{mode}"), loc.plain(key), true, false, None);
+                        let _ = themes.append(&choice);
+                        theme_items.push((mode, choice));
                     }
                     let _ = sub.append(&themes);
-                    continue;
                 }
-                let accel = acc.and_then(|a| Accelerator::from_str(a).ok());
-                let item = MenuItem::with_id(id, label, true, accel);
-                let _ = sub.append(&item);
+                ResolvedEntry::Item(item) => {
+                    let accel = item.accel.and_then(|a| Accelerator::from_str(a).ok());
+                    let _ = sub.append(&MenuItem::with_id(item.action, item.label, true, accel));
+                }
             }
-            let _ = menu.append(&sub);
         }
-        menu.init_for_nsapp();
+        let _ = menu.append(&sub);
+    }
+    menu.init_for_nsapp();
+    (menu, theme_items)
+}
+
+impl NativeMenu {
+    /// Installs the menu bar for the interface language of `app`'s session.
+    pub fn install(ctx: &egui::Context, app: &SheetApp) -> NativeMenu {
+        let loc = Localizer::new(app.session.locale().ui.tag);
+        let (menu, theme_items) = build(&loc);
         let (tx, rx) = channel();
         let ctx = ctx.clone();
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
             let _ = tx.send(e);
             ctx.request_repaint();
         }));
-        NativeMenu { _menu: menu, events: rx, theme_items }
+        NativeMenu { _menu: menu, tag: loc.tag(), events: rx, theme_items }
     }
 
-    pub fn poll(&self, app: &mut SheetApp, ctx: &egui::Context) {
+    /// Rebuilds the menu bar when the interface language changed, then runs the chosen items.
+    pub fn poll(&mut self, app: &mut SheetApp, ctx: &egui::Context) {
+        let loc = Localizer::new(app.session.locale().ui.tag);
+        if loc.tag() != self.tag {
+            (self._menu, self.theme_items) = build(&loc);
+            self.tag = loc.tag();
+        }
         while let Ok(ev) = self.events.try_recv() {
             let id = ev.id.as_ref().to_string();
             // Text selection belongs to the inline editor, not the worksheet clipboard/undo.

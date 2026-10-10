@@ -1,0 +1,21 @@
+[package]
+name = "gridcraft-l10n"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft interface localization: Fluent messages, command labels, ribbon names, function documentation and keyboard shortcuts per language"
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+fluent-bundle = { workspace = true }
+gridcraft-locale = { workspace = true }
+unic-langid = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+fluent-syntax = "0.12"
+gridcraft-formula = { workspace = true }

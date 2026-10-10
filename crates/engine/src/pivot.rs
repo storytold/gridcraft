@@ -8,6 +8,7 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
+use crate::locale::content_fmt;
 use gridcraft_core::date::datetime_from_serial;
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::*;
@@ -187,10 +188,22 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
 
 // ---------------------------------------------------------------- items
 
+/// The stored, language-independent identity of the blank item in filters and collapsed lists.
+/// Only the displayed caption is translated.
+pub const BLANK_IDENT: &str = "(blank)";
+
+/// A label as stored in a filter or collapsed list: the blank caption in the UI language maps to
+/// [`BLANK_IDENT`]; anything else is unchanged.
+pub fn canonical_label(loc: &gridcraft_locale::Locale, label: &str) -> String {
+    if label.eq_ignore_ascii_case(loc.ui.content("blank")) { BLANK_IDENT.to_string() } else { label.to_string() }
+}
+
 #[derive(Clone, Debug)]
 struct Item {
     value: Value,
     label: String,
+    /// What filters and collapsed lists store for this item (the label, except for blanks).
+    ident: String,
     class: u8,
     num: f64,
     text: String,
@@ -214,6 +227,7 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
     let it = |value: Value, label: String, class: u8, num: f64, formatted: bool| Item {
         text: label.to_lowercase(),
         value,
+        ident: label.clone(),
         label,
         class,
         num,
@@ -221,7 +235,12 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
         formatted,
     };
     match v {
-        Value::Empty => ("b".into(), it(Value::text("(blank)"), "(blank)".into(), 4, 0.0, false)),
+        Value::Empty => {
+            let blank = wb.locale.ui.content("blank");
+            let mut item = it(Value::text(blank), blank.into(), 4, 0.0, false);
+            item.ident = BLANK_IDENT.into();
+            ("b".into(), item)
+        }
         Value::Number(n) => {
             if group != PivotDateGroup::None
                 && let Some(dt) = datetime_from_serial(wb.date_system, *n)
@@ -268,11 +287,19 @@ impl FieldItems {
     fn label(&self, i: u32) -> String {
         self.get(i).map(|x| x.label.clone()).unwrap_or_default()
     }
+    fn ident(&self, i: u32) -> String {
+        self.get(i).map(|x| x.ident.clone()).unwrap_or_default()
+    }
 }
 
-/// The label of a source value under a date grouping (for filters and field lists).
+/// The label of a source value under a date grouping (for field lists).
 pub fn item_label(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str) -> String {
     make_item(wb, v, group, fmt, 0).1.label
+}
+
+/// What a filter stores for a source value: its label, or [`BLANK_IDENT`] for an empty cell.
+pub fn item_ident(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str) -> String {
+    make_item(wb, v, group, fmt, 0).1.ident
 }
 
 /// Distinct item labels of a source column, sorted like the field list shows them.
@@ -382,21 +409,21 @@ impl Acc {
     }
 }
 
-/// Excel's caption verb for a function ("Sum of Sales").
-pub fn func_caption(f: PivotFunc) -> &'static str {
-    match f {
-        PivotFunc::Sum => "Sum",
-        PivotFunc::Count => "Count",
-        PivotFunc::Average => "Average",
-        PivotFunc::Max => "Max",
-        PivotFunc::Min => "Min",
-        PivotFunc::Product => "Product",
-        PivotFunc::CountNumbers => "Count Numbers",
-        PivotFunc::StdDev => "StdDev",
-        PivotFunc::StdDevP => "StdDevp",
-        PivotFunc::Var => "Var",
-        PivotFunc::VarP => "Varp",
-    }
+/// Excel's caption verb for a function ("Sum of Sales"), in the UI language.
+pub fn func_caption(f: PivotFunc, loc: &gridcraft_locale::Locale) -> &'static str {
+    loc.ui.content(match f {
+        PivotFunc::Sum => "func_sum",
+        PivotFunc::Count => "func_count",
+        PivotFunc::Average => "func_average",
+        PivotFunc::Max => "func_max",
+        PivotFunc::Min => "func_min",
+        PivotFunc::Product => "func_product",
+        PivotFunc::CountNumbers => "func_count_numbers",
+        PivotFunc::StdDev => "func_stddev",
+        PivotFunc::StdDevP => "func_stddevp",
+        PivotFunc::Var => "func_var",
+        PivotFunc::VarP => "func_varp",
+    })
 }
 
 // ---------------------------------------------------------------- trees
@@ -439,8 +466,8 @@ fn build_tree(paths: &[&[u32]], depth: usize, fields: &[&PivotField], items: &[F
     nodes
 }
 
-fn is_collapsed(field: &PivotField, label: &str) -> bool {
-    field.collapsed_items.iter().any(|c| c.eq_ignore_ascii_case(label))
+fn is_collapsed(field: &PivotField, ident: &str) -> bool {
+    field.collapsed_items.iter().any(|c| c.eq_ignore_ascii_case(ident))
 }
 
 fn collect_siblings(nodes: &[Node], prefix: &mut Vec<u32>, out: &mut HashMap<Vec<u32>, Vec<u32>>) {
@@ -569,13 +596,23 @@ struct Ctx<'a> {
     rows: Vec<&'a PivotField>,
     row_items: Vec<FieldItems>,
     row_fmts: Vec<String>,
+    locale: gridcraft_locale::Locale,
 }
 
 impl Ctx<'_> {
+    /// "Apple Total": the subtotal caption for an item label.
+    fn subtotal_label(&self, label: &str) -> String {
+        content_fmt(&self.locale, "subtotal_group", &[("name", label), ("label", self.locale.ui.content("total"))])
+    }
+
     fn label_cell(&self, depth: usize, item: u32) -> (Value, Option<String>, String) {
         let Some(it) = self.row_items.get(depth).and_then(|fi| fi.get(item)) else { return (Value::Empty, None, String::new()) };
         let fmt = if it.formatted { self.row_fmts.get(depth).cloned() } else { None };
         (it.value.clone(), fmt, it.label.clone())
+    }
+
+    fn ident_of(&self, depth: usize, item: u32) -> String {
+        self.row_items.get(depth).map(|fi| fi.ident(item)).unwrap_or_default()
     }
 
     fn flatten(&self, nodes: &[Node], depth: usize, prefix: &mut Vec<u32>, out: &mut Vec<Line>) {
@@ -585,7 +622,7 @@ impl Ctx<'_> {
             prefix.push(node.item);
             let (v, fmt, label) = self.label_cell(depth, node.item);
             let (col, indent) = if outline { (depth, 0) } else { (0, depth.min(250) as u8) };
-            let collapsed = depth + 1 < n && self.rows.get(depth).is_some_and(|f| is_collapsed(f, &label));
+            let collapsed = depth + 1 < n && self.rows.get(depth).is_some_and(|f| is_collapsed(f, &self.ident_of(depth, node.item)));
             if depth + 1 >= n || collapsed || node.children.is_empty() {
                 out.push(Line { kind: LineKind::Item(depth + 1 < n), path: prefix.clone(), values: true, labels: vec![(col, v, indent, fmt)] });
             } else {
@@ -597,7 +634,7 @@ impl Ctx<'_> {
                         kind: LineKind::Subtotal,
                         path: prefix.clone(),
                         values: true,
-                        labels: vec![(col, Value::text(format!("{label} Total")), indent, None)],
+                        labels: vec![(col, Value::text(self.subtotal_label(&label)), indent, None)],
                     });
                 }
             }
@@ -619,7 +656,7 @@ impl Ctx<'_> {
             let (v, fmt, label) = self.label_cell(depth, node.item);
             let mut labels: Vec<(usize, Value, u8, Option<String>)> = if i == 0 { pending.to_vec() } else { vec![] };
             labels.push((depth, v, 0, fmt));
-            let collapsed = depth + 1 < n && self.rows.get(depth).is_some_and(|f| is_collapsed(f, &label));
+            let collapsed = depth + 1 < n && self.rows.get(depth).is_some_and(|f| is_collapsed(f, &self.ident_of(depth, node.item)));
             if depth + 1 >= n || collapsed || node.children.is_empty() {
                 out.push(Line { kind: LineKind::Item(false), path: prefix.clone(), values: true, labels });
             } else {
@@ -629,7 +666,7 @@ impl Ctx<'_> {
                         kind: LineKind::Subtotal,
                         path: prefix.clone(),
                         values: true,
-                        labels: vec![(depth, Value::text(format!("{label} Total")), 0, None)],
+                        labels: vec![(depth, Value::text(self.subtotal_label(&label)), 0, None)],
                     });
                 }
             }
@@ -650,8 +687,8 @@ fn flatten_cols(
     let n = fields.len();
     for node in nodes {
         prefix.push(node.item);
-        let label = items.get(depth).map(|fi| fi.label(node.item)).unwrap_or_default();
-        let collapsed = depth + 1 < n && fields.get(depth).is_some_and(|f| is_collapsed(f, &label));
+        let ident = items.get(depth).map(|fi| fi.ident(node.item)).unwrap_or_default();
+        let collapsed = depth + 1 < n && fields.get(depth).is_some_and(|f| is_collapsed(f, &ident));
         if depth + 1 >= n || collapsed || node.children.is_empty() {
             out.push(ColSpec { kind: ColKind::Leaf, path: prefix.clone() });
         } else {
@@ -709,8 +746,8 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     'rec: for (ri, rec) in src.rows.iter().enumerate() {
         for ((c, f, g, _), fmt) in filters.iter().zip(filter_fmts.iter()) {
             if let Some(sel) = &f.selected {
-                let label = item_label(wb, rec.get(*c).unwrap_or(&Value::Empty), *g, fmt);
-                if !sel.iter().any(|s| s.eq_ignore_ascii_case(&label)) {
+                let ident = item_ident(wb, rec.get(*c).unwrap_or(&Value::Empty), *g, fmt);
+                if !sel.iter().any(|s| s.eq_ignore_ascii_case(&ident)) {
                     continue 'rec;
                 }
             }
@@ -752,7 +789,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     collect_siblings(&row_tree, &mut Vec::new(), &mut siblings);
     let level0: Vec<u32> = row_tree.iter().map(|n| n.item).collect();
 
-    let ctx = Ctx { pt, rows: row_fields.clone(), row_items, row_fmts: row_fmts.clone() };
+    let ctx = Ctx { pt, rows: row_fields.clone(), row_items, row_fmts: row_fmts.clone(), locale: *wb.locale };
     let mut lines: Vec<Line> = Vec::new();
     if rows.is_empty() {
         lines.push(Line { kind: LineKind::Item(false), path: vec![], values: true, labels: vec![] });
@@ -763,7 +800,12 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             ctx.flatten(&row_tree, 0, &mut Vec::new(), &mut lines);
         }
         if pt.grand_totals_cols {
-            lines.push(Line { kind: LineKind::Grand, path: vec![], values: true, labels: vec![(0, Value::text("Grand Total"), 0, None)] });
+            lines.push(Line {
+                kind: LineKind::Grand,
+                path: vec![],
+                values: true,
+                labels: vec![(0, Value::text(wb.locale.ui.content("grand_total")), 0, None)],
+            });
         }
     }
     let mut specs: Vec<ColSpec> = Vec::new();
@@ -815,7 +857,10 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         let name = src.headers.get(*c).cloned().unwrap_or_default();
         let shown = match &f.selected {
             None => "(All)".to_string(),
-            Some(v) if v.len() == 1 => v.first().cloned().unwrap_or_default(),
+            Some(v) if v.len() == 1 => {
+                let one = v.first().cloned().unwrap_or_default();
+                if one.eq_ignore_ascii_case(BLANK_IDENT) { wb.locale.ui.content("blank").to_string() } else { one }
+            }
             Some(_) => "(Multiple Items)".to_string(),
         };
         g.set(r, 0, Value::text(name), CellKind::Filter, 0, None);
@@ -839,7 +884,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             return;
         }
         if compact {
-            g.set(r, 0, Value::text("Row Labels"), CellKind::Header, 0, None);
+            g.set(r, 0, Value::text(wb.locale.ui.content("row_labels")), CellKind::Header, 0, None);
         } else {
             for (i, f) in row_fields.iter().enumerate() {
                 g.set(r, i, Value::text(f.source_col.as_str()), CellKind::Header, 0, None);
@@ -862,7 +907,11 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             g.set(cap, 0, Value::text(val_name(0)), CellKind::Header, 0, None);
         }
         if headers_on {
-            let caption = if compact { "Column Labels".to_string() } else { col_fields.first().map(|f| f.source_col.clone()).unwrap_or_default() };
+            let caption = if compact {
+                wb.locale.ui.content("column_labels").to_string()
+            } else {
+                col_fields.first().map(|f| f.source_col.clone()).unwrap_or_default()
+            };
             g.set(cap, l, Value::text(caption), CellKind::Header, 0, None);
         }
         let levels = cols.len() + usize::from(k > 1);
@@ -895,14 +944,14 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
                     let label = spec.path.last().and_then(|it| col_items.get(lv).map(|fi| fi.label(*it))).unwrap_or_default();
                     let text = match vi {
                         Some(vi) if k > 1 => format!("{label} {}", val_name(*vi)),
-                        _ => format!("{label} Total"),
+                        _ => ctx.subtotal_label(&label),
                     };
                     g.set(first_level + lv, c, Value::text(text), CellKind::ColLabel, 0, None);
                 }
                 ColKind::Grand => {
                     let text = match vi {
-                        Some(vi) if k > 1 => format!("Total {}", val_name(*vi)),
-                        _ => "Grand Total".to_string(),
+                        Some(vi) if k > 1 => content_fmt(&wb.locale, "total_of", &[("value", &val_name(*vi))]),
+                        _ => wb.locale.ui.content("grand_total").to_string(),
                     };
                     g.set(first_level, c, Value::text(text), CellKind::ColLabel, 0, None);
                 }

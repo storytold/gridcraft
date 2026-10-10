@@ -1,0 +1,11 @@
+# Keyboard shortcuts of fr-FR. Same format as en-US/keymap.toml.
+#
+# Only chords that the Microsoft fr-FR page (machine-translated, partly inconsistent) confirms in at
+# least two rows, or that are forced by those chords, are overridden; every other command inherits
+# its en-US chord. `mac` keeps the macOS chord, because the page shows the Command-key chord for bold
+# unchanged ("Cmd+B ou Ctrl+G"). Other rows (save, open, new, italic, underline, find, replace, select
+# all, fill) list the same chord as en-US and need no entry.
+
+[shortcuts]
+"home.bold" = { keys = "Cmd+G", mac = "Cmd+B", source = 'Microsoft Excel keyboard-shortcuts page, fr-FR, retrieved 2026-10-10 (https://support.microsoft.com/fr-fr/accessibility/excel/keyboard-shortcuts-in-excel): five rows ("Appliquer la mise en forme Gras | Ctrl+G", "Ctrl+G ou Ctrl+Maj+2", two plain bold rows and "Cmd+B ou Ctrl+G") give Ctrl+G (en-US Ctrl+B)' }
+"edit.goTo" = { keys = "F5", mac = "Ctrl+G", source = 'Microsoft Excel keyboard-shortcuts page, fr-FR, retrieved 2026-10-10 (https://support.microsoft.com/fr-fr/accessibility/excel/keyboard-shortcuts-in-excel): three rows ("Ouvrez la boîte de dialogue Atteindre | F5", the F5 function-key row and "Ctrl+G ou F5") give F5; Ctrl+G is taken by bold in this language on Windows and Linux, and the macOS section still lists Ctrl+G for Go To' }

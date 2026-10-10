@@ -1,10 +1,11 @@
 //! Statistical functions: aggregates, order statistics, regression and probability
 //! distributions (with their inverses).
 
+use gridcraft_core::parse::parse_number_text_in;
 use gridcraft_core::{CellError, Value};
 
 use crate::special::{erf, gamma, invert, ln_beta, ln_gamma, norm_cdf, norm_inv, norm_pdf, reg_gamma_p, reg_gamma_q, reg_inc_beta};
-use crate::util::{A, R, S, arg, array_numbers, array_val, as_array, boolean, has, num, num_val, numbers, numbers_a, opt_num};
+use crate::util::{A, R, S, arg, array_numbers, array_val, as_array, boolean, has, num, num_val, numbers, numbers_a, opt_num, to_num};
 use crate::{Arg, Ctx, FnSpec, VAR};
 
 type C<'a> = &'a mut dyn Ctx;
@@ -150,8 +151,8 @@ fn quartile_exc(v: Vec<f64>, q: f64) -> R<f64> {
     percentile_exc(v, q / 4.0)
 }
 
-fn arg_nums(a: &[Arg], i: usize) -> R<Vec<f64>> {
-    array_numbers(&arg(a, i)?.value)
+fn arg_nums(c: &dyn Ctx, a: &[Arg], i: usize) -> R<Vec<f64>> {
+    array_numbers(c, &arg(a, i)?.value)
 }
 
 /// Pairs of numbers at matching positions of two arrays (pairs with a non-number skipped).
@@ -239,19 +240,19 @@ fn col_value(v: Vec<f64>) -> R<Value> {
 // Aggregates
 // ---------------------------------------------------------------------------------------------
 
-fn count_impl(a: &[Arg]) -> f64 {
-    let mut c = 0usize;
+fn count_impl(ctx: &dyn Ctx, a: &[Arg]) -> f64 {
+    let mut n = 0usize;
     for x in a {
         match &x.value {
-            Value::Array(arr) => c += arr.iter().filter(|v| v.is_number()).count(),
-            Value::Number(_) => c += 1,
+            Value::Array(arr) => n += arr.iter().filter(|v| v.is_number()).count(),
+            Value::Number(_) => n += 1,
             _ if x.from_ref => {}
-            Value::Bool(_) => c += 1,
-            Value::Text(t) if gridcraft_core::parse::parse_number_text(t).is_some() => c += 1,
+            Value::Bool(_) => n += 1,
+            Value::Text(t) if parse_number_text_in(t, ctx.date_system(), &ctx.locale().regional).is_some() => n += 1,
             _ => {}
         }
     }
-    c as f64
+    n as f64
 }
 
 fn counta_impl(a: &[Arg]) -> f64 {
@@ -276,8 +277,8 @@ fn countblank(a: &[Arg], _: C) -> R<Value> {
     num_val(c as f64)
 }
 
-fn mode_mult(a: &[Arg], _: C) -> R<Value> {
-    let v = numbers(a)?;
+fn mode_mult(a: &[Arg], c: C) -> R<Value> {
+    let v = numbers(c, a)?;
     let m = modes(&v);
     if m.is_empty() {
         return Err(CellError::NA);
@@ -285,18 +286,18 @@ fn mode_mult(a: &[Arg], _: C) -> R<Value> {
     col_value(m)
 }
 
-fn large(a: &[Arg], _: C) -> R<Value> {
-    num_val(kth(arg_nums(a, 0)?, num(a, 1)?, true)?)
+fn large(a: &[Arg], c: C) -> R<Value> {
+    num_val(kth(arg_nums(c, a, 0)?, num(c, a, 1)?, true)?)
 }
 
-fn small(a: &[Arg], _: C) -> R<Value> {
-    num_val(kth(arg_nums(a, 0)?, num(a, 1)?, false)?)
+fn small(a: &[Arg], c: C) -> R<Value> {
+    num_val(kth(arg_nums(c, a, 0)?, num(c, a, 1)?, false)?)
 }
 
-fn rank_impl(a: &[Arg], avg: bool) -> R<Value> {
-    let x = num(a, 0)?;
-    let v = arg_nums(a, 1)?;
-    let asc = opt_num(a, 2, 0.0)? != 0.0;
+fn rank_impl(c: &dyn Ctx, a: &[Arg], avg: bool) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let v = arg_nums(c, a, 1)?;
+    let asc = opt_num(c, a, 2, 0.0)? != 0.0;
     let eq = v.iter().filter(|&&y| y == x).count();
     if eq == 0 {
         return Err(CellError::NA);
@@ -306,10 +307,10 @@ fn rank_impl(a: &[Arg], avg: bool) -> R<Value> {
     num_val(if avg { r + (eq as f64 - 1.0) / 2.0 } else { r })
 }
 
-fn percentrank_impl(a: &[Arg], exc: bool) -> R<Value> {
-    let s = sorted(arg_nums(a, 0)?);
-    let x = num(a, 1)?;
-    let sig = opt_num(a, 2, 3.0)?.trunc();
+fn percentrank_impl(c: &dyn Ctx, a: &[Arg], exc: bool) -> R<Value> {
+    let s = sorted(arg_nums(c, a, 0)?);
+    let x = num(c, a, 1)?;
+    let sig = opt_num(c, a, 2, 3.0)?.trunc();
     if sig < 1.0 || s.is_empty() {
         return Err(CellError::Num);
     }
@@ -339,9 +340,9 @@ fn percentrank_impl(a: &[Arg], exc: bool) -> R<Value> {
     num_val(trunc_digits(r, sig))
 }
 
-fn trimmean(a: &[Arg], _: C) -> R<Value> {
-    let v = arg_nums(a, 0)?;
-    let p = num(a, 1)?;
+fn trimmean(a: &[Arg], c: C) -> R<Value> {
+    let v = arg_nums(c, a, 0)?;
+    let p = num(c, a, 1)?;
     if !(0.0..1.0).contains(&p) || v.is_empty() {
         return Err(CellError::Num);
     }
@@ -411,9 +412,9 @@ fn avedev(v: &[f64]) -> R<f64> {
     Ok(v.iter().map(|x| (x - m).abs()).sum::<f64>() / v.len() as f64)
 }
 
-fn frequency(a: &[Arg], _: C) -> R<Value> {
-    let data = arg_nums(a, 0)?;
-    let bins = arg_nums(a, 1)?;
+fn frequency(a: &[Arg], c: C) -> R<Value> {
+    let data = arg_nums(c, a, 0)?;
+    let bins = arg_nums(c, a, 1)?;
     if bins.is_empty() {
         return col_value(vec![data.len() as f64]);
     }
@@ -429,10 +430,10 @@ fn frequency(a: &[Arg], _: C) -> R<Value> {
     col_value(counts)
 }
 
-fn prob(a: &[Arg], _: C) -> R<Value> {
+fn prob(a: &[Arg], c: C) -> R<Value> {
     let (xs, ps) = arg_pairs(a, 0, 1)?;
-    let lo = num(a, 2)?;
-    let hi = if has(a, 3) { num(a, 3)? } else { lo };
+    let lo = num(c, a, 2)?;
+    let hi = if has(a, 3) { num(c, a, 3)? } else { lo };
     if ps.iter().any(|&p| !(0.0..=1.0).contains(&p)) {
         return Err(CellError::Num);
     }
@@ -443,16 +444,16 @@ fn prob(a: &[Arg], _: C) -> R<Value> {
     num_val(xs.iter().zip(&ps).filter(|(x, _)| **x >= lo && **x <= hi).map(|(_, p)| p).sum())
 }
 
-fn standardize(a: &[Arg], _: C) -> R<Value> {
-    let (x, m, sd) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+fn standardize(a: &[Arg], c: C) -> R<Value> {
+    let (x, m, sd) = (num(c, a, 0)?, num(c, a, 1)?, num(c, a, 2)?);
     if sd <= 0.0 {
         return Err(CellError::Num);
     }
     num_val((x - m) / sd)
 }
 
-fn forecast(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
+fn forecast(a: &[Arg], c: C) -> R<Value> {
+    let x = num(c, a, 0)?;
     let (ys, xs) = arg_pairs(a, 1, 2)?;
     if ys.is_empty() {
         return Err(CellError::Div0);
@@ -674,15 +675,15 @@ fn regress(y: &[f64], x: &[Vec<f64>], k: usize, constant: bool) -> R<Fit> {
     Ok(Fit { coef, b, se, se_b, r2, sey, f, df, ssreg, ssresid })
 }
 
-fn const_arg(a: &[Arg], i: usize) -> R<bool> {
-    if has(a, i) { boolean(a, i) } else { Ok(true) }
+fn const_arg(c: &dyn Ctx, a: &[Arg], i: usize) -> R<bool> {
+    if has(a, i) { boolean(c, a, i) } else { Ok(true) }
 }
 
 fn opt_value(a: &[Arg], i: usize) -> Option<&Value> {
     if has(a, i) { a.get(i).map(|x| &x.value) } else { None }
 }
 
-fn linest_impl(a: &[Arg], log: bool) -> R<Value> {
+fn linest_impl(c: &dyn Ctx, a: &[Arg], log: bool) -> R<Value> {
     let mut xy = parse_xy(&arg(a, 0)?.value, opt_value(a, 1))?;
     if log {
         if xy.y.iter().any(|&v| v <= 0.0) {
@@ -690,8 +691,8 @@ fn linest_impl(a: &[Arg], log: bool) -> R<Value> {
         }
         xy.y.iter_mut().for_each(|v| *v = v.ln());
     }
-    let constant = const_arg(a, 2)?;
-    let stats = if has(a, 3) { boolean(a, 3)? } else { false };
+    let constant = const_arg(c, a, 2)?;
+    let stats = if has(a, 3) { boolean(c, a, 3)? } else { false };
     let fit = regress(&xy.y, &xy.x, xy.k, constant)?;
     let tr = |v: f64| if log { v.exp() } else { v };
     let cols = xy.k + 1;
@@ -723,7 +724,7 @@ fn linest_impl(a: &[Arg], log: bool) -> R<Value> {
     array_val(1, cols, data)
 }
 
-fn trend_impl(a: &[Arg], log: bool) -> R<Value> {
+fn trend_impl(c: &dyn Ctx, a: &[Arg], log: bool) -> R<Value> {
     let mut xy = parse_xy(&arg(a, 0)?.value, opt_value(a, 1))?;
     if log {
         if xy.y.iter().any(|&v| v <= 0.0) {
@@ -731,10 +732,10 @@ fn trend_impl(a: &[Arg], log: bool) -> R<Value> {
         }
         xy.y.iter_mut().for_each(|v| *v = v.ln());
     }
-    let constant = const_arg(a, 3)?;
+    let constant = const_arg(c, a, 3)?;
     let fit = regress(&xy.y, &xy.x, xy.k, constant)?;
     let predict = |row: &[f64]| -> Value {
-        let v = fit.b + fit.coef.iter().zip(row).map(|(c, x)| c * x).sum::<f64>();
+        let v = fit.b + fit.coef.iter().zip(row).map(|(k, x)| k * x).sum::<f64>();
         Value::number(if log { v.exp() } else { v })
     };
     match opt_value(a, 2) {
@@ -899,8 +900,8 @@ fn poisson_cdf(x: f64, m: f64) -> f64 {
     reg_gamma_q(x + 1.0, m)
 }
 
-fn norm_dist(a: &[Arg], _: C) -> R<Value> {
-    let (x, m, sd, cum) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, boolean(a, 3)?);
+fn norm_dist(a: &[Arg], c: C) -> R<Value> {
+    let (x, m, sd, cum) = (num(c, a, 0)?, num(c, a, 1)?, num(c, a, 2)?, boolean(c, a, 3)?);
     if sd <= 0.0 {
         return Err(CellError::Num);
     }
@@ -908,89 +909,89 @@ fn norm_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(if cum { norm_cdf(z) } else { norm_pdf(z) / sd })
 }
 
-fn norm_inv_fn(a: &[Arg], _: C) -> R<Value> {
-    let (p, m, sd) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+fn norm_inv_fn(a: &[Arg], c: C) -> R<Value> {
+    let (p, m, sd) = (num(c, a, 0)?, num(c, a, 1)?, num(c, a, 2)?);
     if !(p > 0.0 && p < 1.0) || sd <= 0.0 {
         return Err(CellError::Num);
     }
     num_val(m + sd * norm_inv(p))
 }
 
-fn norm_s_dist(a: &[Arg], _: C) -> R<Value> {
-    let z = num(a, 0)?;
-    let cum = if a.len() > 1 { boolean(a, 1)? } else { true };
+fn norm_s_dist(a: &[Arg], c: C) -> R<Value> {
+    let z = num(c, a, 0)?;
+    let cum = if a.len() > 1 { boolean(c, a, 1)? } else { true };
     num_val(if cum { norm_cdf(z) } else { norm_pdf(z) })
 }
 
-fn norm_s_inv(a: &[Arg], _: C) -> R<Value> {
-    let p = num(a, 0)?;
+fn norm_s_inv(a: &[Arg], c: C) -> R<Value> {
+    let p = num(c, a, 0)?;
     if !(p > 0.0 && p < 1.0) {
         return Err(CellError::Num);
     }
     num_val(norm_inv(p))
 }
 
-fn df_arg(a: &[Arg], i: usize) -> R<f64> {
-    let v = num(a, i)?.trunc();
+fn df_arg(c: &dyn Ctx, a: &[Arg], i: usize) -> R<f64> {
+    let v = num(c, a, i)?.trunc();
     if v < 1.0 {
         return Err(CellError::Num);
     }
     Ok(v)
 }
 
-fn t_dist(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
-    let v = df_arg(a, 1)?;
-    let cum = boolean(a, 2)?;
+fn t_dist(a: &[Arg], c: C) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let v = df_arg(c, a, 1)?;
+    let cum = boolean(c, a, 2)?;
     num_val(if cum { t_cdf(x, v) } else { t_pdf(x, v) })
 }
 
-fn t_dist_2t(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+fn t_dist_2t(a: &[Arg], c: C) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let v = df_arg(c, a, 1)?;
     if x < 0.0 {
         return Err(CellError::Num);
     }
     num_val(2.0 * t_upper(x, v))
 }
 
-fn t_dist_rt(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+fn t_dist_rt(a: &[Arg], c: C) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let v = df_arg(c, a, 1)?;
     num_val(1.0 - t_cdf(x, v))
 }
 
-fn tdist_legacy(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
-    let v = df_arg(a, 1)?;
-    let tails = num(a, 2)?.trunc();
+fn tdist_legacy(a: &[Arg], c: C) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let v = df_arg(c, a, 1)?;
+    let tails = num(c, a, 2)?.trunc();
     if x < 0.0 || !(tails == 1.0 || tails == 2.0) {
         return Err(CellError::Num);
     }
     num_val(tails * t_upper(x, v))
 }
 
-fn t_inv(a: &[Arg], _: C) -> R<Value> {
-    let p = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+fn t_inv(a: &[Arg], c: C) -> R<Value> {
+    let p = num(c, a, 0)?;
+    let v = df_arg(c, a, 1)?;
     if !(p > 0.0 && p < 1.0) {
         return Err(CellError::Num);
     }
     num_val(if p < 0.5 { -t_inv_upper(p, v) } else { t_inv_upper(1.0 - p, v) })
 }
 
-fn t_inv_2t(a: &[Arg], _: C) -> R<Value> {
-    let p = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+fn t_inv_2t(a: &[Arg], c: C) -> R<Value> {
+    let p = num(c, a, 0)?;
+    let v = df_arg(c, a, 1)?;
     if !(p > 0.0 && p <= 1.0) {
         return Err(CellError::Num);
     }
     num_val(t_inv_upper(p / 2.0, v))
 }
 
-fn t_test(a: &[Arg], _: C) -> R<Value> {
-    let tails = num(a, 2)?.trunc();
-    let ty = num(a, 3)?.trunc();
+fn t_test(a: &[Arg], c: C) -> R<Value> {
+    let tails = num(c, a, 2)?.trunc();
+    let ty = num(c, a, 3)?.trunc();
     if !(tails == 1.0 || tails == 2.0) || !(1.0..=3.0).contains(&ty) {
         return Err(CellError::Num);
     }
@@ -1004,8 +1005,8 @@ fn t_test(a: &[Arg], _: C) -> R<Value> {
         }
         (mean(&d)? / (sd / n.sqrt()), n - 1.0)
     } else {
-        let x = arg_nums(a, 0)?;
-        let y = arg_nums(a, 1)?;
+        let x = arg_nums(c, a, 0)?;
+        let y = arg_nums(c, a, 1)?;
         let (n1, n2) = (x.len() as f64, y.len() as f64);
         let (v1, v2) = (var_s(&x)?, var_s(&y)?);
         let diff = mean(&x)? - mean(&y)?;
@@ -1030,10 +1031,10 @@ fn t_test(a: &[Arg], _: C) -> R<Value> {
     num_val(tails * t_upper(t.abs(), v))
 }
 
-fn chisq_dist(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
-    let v = df_arg(a, 1)?;
-    let cum = boolean(a, 2)?;
+fn chisq_dist(a: &[Arg], c: C) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let v = df_arg(c, a, 1)?;
+    let cum = boolean(c, a, 2)?;
     if x < 0.0 || v > 1e10 {
         return Err(CellError::Num);
     }
@@ -1052,27 +1053,27 @@ fn chisq_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(((v / 2.0 - 1.0) * x.ln() - x / 2.0 - (v / 2.0) * 2f64.ln() - ln_gamma(v / 2.0)).exp())
 }
 
-fn chisq_dist_rt(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+fn chisq_dist_rt(a: &[Arg], c: C) -> R<Value> {
+    let x = num(c, a, 0)?;
+    let v = df_arg(c, a, 1)?;
     if x < 0.0 || v > 1e10 {
         return Err(CellError::Num);
     }
     num_val(reg_gamma_q(v / 2.0, x / 2.0))
 }
 
-fn chisq_inv(a: &[Arg], _: C) -> R<Value> {
-    let p = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+fn chisq_inv(a: &[Arg], c: C) -> R<Value> {
+    let p = num(c, a, 0)?;
+    let v = df_arg(c, a, 1)?;
     if !(0.0..1.0).contains(&p) || v > 1e10 {
         return Err(CellError::Num);
     }
     num_val(chi_inv(p, v))
 }
 
-fn chisq_inv_rt(a: &[Arg], _: C) -> R<Value> {
-    let p = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+fn chisq_inv_rt(a: &[Arg], c: C) -> R<Value> {
+    let p = num(c, a, 0)?;
+    let v = df_arg(c, a, 1)?;
     if !(p > 0.0 && p <= 1.0) || v > 1e10 {
         return Err(CellError::Num);
     }
@@ -1107,35 +1108,35 @@ fn chisq_test(a: &[Arg], _: C) -> R<Value> {
     num_val(reg_gamma_q(df / 2.0, x2 / 2.0))
 }
 
-fn f_args(a: &[Arg]) -> R<(f64, f64, f64)> {
-    let x = num(a, 0)?;
-    let d1 = num(a, 1)?.trunc();
-    let d2 = num(a, 2)?.trunc();
+fn f_args(c: &dyn Ctx, a: &[Arg]) -> R<(f64, f64, f64)> {
+    let x = num(c, a, 0)?;
+    let d1 = num(c, a, 1)?.trunc();
+    let d2 = num(c, a, 2)?.trunc();
     if d1 < 1.0 || d2 < 1.0 || d1 >= 1e10 || d2 >= 1e10 {
         return Err(CellError::Num);
     }
     Ok((x, d1, d2))
 }
 
-fn f_dist(a: &[Arg], _: C) -> R<Value> {
-    let (x, d1, d2) = f_args(a)?;
-    let cum = boolean(a, 3)?;
+fn f_dist(a: &[Arg], c: C) -> R<Value> {
+    let (x, d1, d2) = f_args(c, a)?;
+    let cum = boolean(c, a, 3)?;
     if x < 0.0 {
         return Err(CellError::Num);
     }
     num_val(if cum { f_cdf(x, d1, d2) } else { f_pdf(x, d1, d2) })
 }
 
-fn f_dist_rt(a: &[Arg], _: C) -> R<Value> {
-    let (x, d1, d2) = f_args(a)?;
+fn f_dist_rt(a: &[Arg], c: C) -> R<Value> {
+    let (x, d1, d2) = f_args(c, a)?;
     if x < 0.0 {
         return Err(CellError::Num);
     }
     num_val(f_upper(x, d1, d2))
 }
 
-fn f_inv(a: &[Arg], _: C) -> R<Value> {
-    let (p, d1, d2) = f_args(a)?;
+fn f_inv(a: &[Arg], c: C) -> R<Value> {
+    let (p, d1, d2) = f_args(c, a)?;
     if !(0.0..1.0).contains(&p) {
         return Err(CellError::Num);
     }
@@ -1145,8 +1146,8 @@ fn f_inv(a: &[Arg], _: C) -> R<Value> {
     num_val(invert(|x| f_cdf(x, d1, d2), p, 0.0, 1.0, 1e60))
 }
 
-fn f_inv_rt(a: &[Arg], _: C) -> R<Value> {
-    let (p, d1, d2) = f_args(a)?;
+fn f_inv_rt(a: &[Arg], c: C) -> R<Value> {
+    let (p, d1, d2) = f_args(c, a)?;
     if !(p > 0.0 && p <= 1.0) {
         return Err(CellError::Num);
     }
@@ -1156,36 +1157,36 @@ fn f_inv_rt(a: &[Arg], _: C) -> R<Value> {
     num_val(invert(|x| f_upper(x, d1, d2), p, 0.0, 1.0, 1e60))
 }
 
-fn f_test(a: &[Arg], _: C) -> R<Value> {
-    let x = arg_nums(a, 0)?;
-    let y = arg_nums(a, 1)?;
+fn f_test(a: &[Arg], c: C) -> R<Value> {
+    let x = arg_nums(c, a, 0)?;
+    let y = arg_nums(c, a, 1)?;
     let (v1, v2) = (var_s(&x)?, var_s(&y)?);
     if v1 == 0.0 || v2 == 0.0 {
         return Err(CellError::Div0);
     }
     let f = v1 / v2;
     let (d1, d2) = ((x.len() - 1) as f64, (y.len() - 1) as f64);
-    let c = f_cdf(f, d1, d2);
-    num_val((2.0 * c.min(1.0 - c)).min(1.0))
+    let p = f_cdf(f, d1, d2);
+    num_val((2.0 * p.min(1.0 - p)).min(1.0))
 }
 
-fn binom_dist(a: &[Arg], _: C) -> R<Value> {
-    let k = num(a, 0)?.trunc();
-    let n = num(a, 1)?.trunc();
-    let p = num(a, 2)?;
-    let cum = boolean(a, 3)?;
+fn binom_dist(a: &[Arg], c: C) -> R<Value> {
+    let k = num(c, a, 0)?.trunc();
+    let n = num(c, a, 1)?.trunc();
+    let p = num(c, a, 2)?;
+    let cum = boolean(c, a, 3)?;
     if k < 0.0 || k > n || !(0.0..=1.0).contains(&p) {
         return Err(CellError::Num);
     }
     num_val(if cum { binom_cdf(k, n, p) } else { binom_pmf(k, n, p) })
 }
 
-fn binom_dist_range(a: &[Arg], _: C) -> R<Value> {
-    let n = num(a, 0)?.trunc();
-    let p = num(a, 1)?;
-    let s1 = num(a, 2)?.trunc();
-    let s2 = if has(a, 3) { num(a, 3)?.trunc() } else { s1 };
-    if !(0.0..=1e15).contains(&n) || !(0.0..=1.0).contains(&p) || s1 < 0.0 || s1 > n || s2 < s1 || s2 > n {
+fn binom_dist_range(a: &[Arg], c: C) -> R<Value> {
+    let n = num(c, a, 0)?.trunc();
+    let p = num(c, a, 1)?;
+    let s1 = num(c, a, 2)?.trunc();
+    let s2 = if has(a, 3) { num(c, a, 3)?.trunc() } else { s1 };
+    if !(0.0..=1e15).contains(&n) || !(0.0..=1.0).contains(&p) || !(0.0..=n).contains(&s1) || s2 < s1 || s2 > n {
         return Err(CellError::Num);
     }
     if s2 - s1 > 10_000.0 {
@@ -1200,10 +1201,10 @@ fn binom_dist_range(a: &[Arg], _: C) -> R<Value> {
     num_val(s)
 }
 
-fn binom_inv(a: &[Arg], _: C) -> R<Value> {
-    let n = num(a, 0)?.trunc();
-    let p = num(a, 1)?;
-    let alpha = num(a, 2)?;
+fn binom_inv(a: &[Arg], c: C) -> R<Value> {
+    let n = num(c, a, 0)?.trunc();
+    let p = num(c, a, 1)?;
+    let alpha = num(c, a, 2)?;
     if n < 0.0 || !(0.0..=1.0).contains(&p) || !(0.0..=1.0).contains(&alpha) {
         return Err(CellError::Num);
     }
@@ -1223,26 +1224,26 @@ fn binom_inv(a: &[Arg], _: C) -> R<Value> {
     num_val(hi)
 }
 
-fn poisson_dist(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?.trunc();
-    let m = num(a, 1)?;
-    let cum = boolean(a, 2)?;
+fn poisson_dist(a: &[Arg], c: C) -> R<Value> {
+    let x = num(c, a, 0)?.trunc();
+    let m = num(c, a, 1)?;
+    let cum = boolean(c, a, 2)?;
     if x < 0.0 || m < 0.0 {
         return Err(CellError::Num);
     }
     num_val(if cum { poisson_cdf(x, m) } else { poisson_pmf(x, m) })
 }
 
-fn expon_dist(a: &[Arg], _: C) -> R<Value> {
-    let (x, l, cum) = (num(a, 0)?, num(a, 1)?, boolean(a, 2)?);
+fn expon_dist(a: &[Arg], c: C) -> R<Value> {
+    let (x, l, cum) = (num(c, a, 0)?, num(c, a, 1)?, boolean(c, a, 2)?);
     if x < 0.0 || l <= 0.0 {
         return Err(CellError::Num);
     }
     num_val(if cum { -(-l * x).exp_m1() } else { l * (-l * x).exp() })
 }
 
-fn gamma_fn(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
+fn gamma_fn(a: &[Arg], c: C) -> R<Value> {
+    let x = num(c, a, 0)?;
     let g = gamma(x);
     if !g.is_finite() {
         return Err(CellError::Num);
@@ -1250,8 +1251,8 @@ fn gamma_fn(a: &[Arg], _: C) -> R<Value> {
     num_val(g)
 }
 
-fn gamma_dist(a: &[Arg], _: C) -> R<Value> {
-    let (x, al, be, cum) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, boolean(a, 3)?);
+fn gamma_dist(a: &[Arg], c: C) -> R<Value> {
+    let (x, al, be, cum) = (num(c, a, 0)?, num(c, a, 1)?, num(c, a, 2)?, boolean(c, a, 3)?);
     if x < 0.0 || al <= 0.0 || be <= 0.0 {
         return Err(CellError::Num);
     }
@@ -1270,8 +1271,8 @@ fn gamma_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(((al - 1.0) * x.ln() - x / be - al * be.ln() - ln_gamma(al)).exp())
 }
 
-fn gamma_inv(a: &[Arg], _: C) -> R<Value> {
-    let (p, al, be) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+fn gamma_inv(a: &[Arg], c: C) -> R<Value> {
+    let (p, al, be) = (num(c, a, 0)?, num(c, a, 1)?, num(c, a, 2)?);
     if !(0.0..1.0).contains(&p) || al <= 0.0 || be <= 0.0 {
         return Err(CellError::Num);
     }
@@ -1281,26 +1282,26 @@ fn gamma_inv(a: &[Arg], _: C) -> R<Value> {
     num_val(invert(|x| reg_gamma_p(al, x / be), p, 0.0, (al * be).max(1e-3), 1e60))
 }
 
-fn gammaln(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
+fn gammaln(a: &[Arg], c: C) -> R<Value> {
+    let x = num(c, a, 0)?;
     if x <= 0.0 {
         return Err(CellError::Num);
     }
     num_val(ln_gamma(x))
 }
 
-fn beta_bounds(a: &[Arg], i: usize) -> R<(f64, f64)> {
-    let lo = if has(a, i) { num(a, i)? } else { 0.0 };
-    let hi = if has(a, i + 1) { num(a, i + 1)? } else { 1.0 };
+fn beta_bounds(c: &dyn Ctx, a: &[Arg], i: usize) -> R<(f64, f64)> {
+    let lo = if has(a, i) { num(c, a, i)? } else { 0.0 };
+    let hi = if has(a, i + 1) { num(c, a, i + 1)? } else { 1.0 };
     if lo >= hi {
         return Err(CellError::Num);
     }
     Ok((lo, hi))
 }
 
-fn beta_dist(a: &[Arg], _: C) -> R<Value> {
-    let (x, al, be, cum) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, boolean(a, 3)?);
-    let (lo, hi) = beta_bounds(a, 4)?;
+fn beta_dist(a: &[Arg], c: C) -> R<Value> {
+    let (x, al, be, cum) = (num(c, a, 0)?, num(c, a, 1)?, num(c, a, 2)?, boolean(c, a, 3)?);
+    let (lo, hi) = beta_bounds(c, a, 4)?;
     if al <= 0.0 || be <= 0.0 || x < lo || x > hi {
         return Err(CellError::Num);
     }
@@ -1320,18 +1321,18 @@ fn beta_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(lp.exp() / (hi - lo))
 }
 
-fn betadist_legacy(a: &[Arg], _: C) -> R<Value> {
-    let (x, al, be) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
-    let (lo, hi) = beta_bounds(a, 3)?;
+fn betadist_legacy(a: &[Arg], c: C) -> R<Value> {
+    let (x, al, be) = (num(c, a, 0)?, num(c, a, 1)?, num(c, a, 2)?);
+    let (lo, hi) = beta_bounds(c, a, 3)?;
     if al <= 0.0 || be <= 0.0 || x < lo || x > hi {
         return Err(CellError::Num);
     }
     num_val(reg_inc_beta((x - lo) / (hi - lo), al, be))
 }
 
-fn beta_inv(a: &[Arg], _: C) -> R<Value> {
-    let (p, al, be) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
-    let (lo, hi) = beta_bounds(a, 3)?;
+fn beta_inv(a: &[Arg], c: C) -> R<Value> {
+    let (p, al, be) = (num(c, a, 0)?, num(c, a, 1)?, num(c, a, 2)?);
+    let (lo, hi) = beta_bounds(c, a, 3)?;
     if al <= 0.0 || be <= 0.0 || !(0.0..=1.0).contains(&p) {
         return Err(CellError::Num);
     }
@@ -1345,9 +1346,9 @@ fn beta_inv(a: &[Arg], _: C) -> R<Value> {
     num_val(lo + z * (hi - lo))
 }
 
-fn lognorm_dist(a: &[Arg], _: C) -> R<Value> {
-    let (x, m, sd) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
-    let cum = if a.len() > 3 { boolean(a, 3)? } else { true };
+fn lognorm_dist(a: &[Arg], c: C) -> R<Value> {
+    let (x, m, sd) = (num(c, a, 0)?, num(c, a, 1)?, num(c, a, 2)?);
+    let cum = if a.len() > 3 { boolean(c, a, 3)? } else { true };
     if x <= 0.0 || sd <= 0.0 {
         return Err(CellError::Num);
     }
@@ -1355,16 +1356,16 @@ fn lognorm_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(if cum { norm_cdf(z) } else { norm_pdf(z) / (x * sd) })
 }
 
-fn lognorm_inv(a: &[Arg], _: C) -> R<Value> {
-    let (p, m, sd) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+fn lognorm_inv(a: &[Arg], c: C) -> R<Value> {
+    let (p, m, sd) = (num(c, a, 0)?, num(c, a, 1)?, num(c, a, 2)?);
     if !(p > 0.0 && p < 1.0) || sd <= 0.0 {
         return Err(CellError::Num);
     }
     num_val((m + sd * norm_inv(p)).exp())
 }
 
-fn weibull_dist(a: &[Arg], _: C) -> R<Value> {
-    let (x, al, be, cum) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, boolean(a, 3)?);
+fn weibull_dist(a: &[Arg], c: C) -> R<Value> {
+    let (x, al, be, cum) = (num(c, a, 0)?, num(c, a, 1)?, num(c, a, 2)?, boolean(c, a, 3)?);
     if x < 0.0 || al <= 0.0 || be <= 0.0 {
         return Err(CellError::Num);
     }
@@ -1372,12 +1373,12 @@ fn weibull_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(if cum { -(-t).exp_m1() } else { al / be.powf(al) * x.powf(al - 1.0) * (-t).exp() })
 }
 
-fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
-    let k = num(a, 0)?.trunc();
-    let n = num(a, 1)?.trunc();
-    let kk = num(a, 2)?.trunc();
-    let nn = num(a, 3)?.trunc();
-    let cum = if a.len() > 4 { boolean(a, 4)? } else { false };
+fn hypgeom_dist(a: &[Arg], c: C) -> R<Value> {
+    let k = num(c, a, 0)?.trunc();
+    let n = num(c, a, 1)?.trunc();
+    let kk = num(c, a, 2)?.trunc();
+    let nn = num(c, a, 3)?.trunc();
+    let cum = if a.len() > 4 { boolean(c, a, 4)? } else { false };
     if k < 0.0 || n <= 0.0 || kk <= 0.0 || nn <= 0.0 || n > nn || kk > nn || k > n.min(kk) || k < (n - nn + kk).max(0.0) {
         return Err(CellError::Num);
     }
@@ -1397,11 +1398,11 @@ fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(s.min(1.0))
 }
 
-fn negbinom_dist(a: &[Arg], _: C) -> R<Value> {
-    let f = num(a, 0)?.trunc();
-    let s = num(a, 1)?.trunc();
-    let p = num(a, 2)?;
-    let cum = if a.len() > 3 { boolean(a, 3)? } else { false };
+fn negbinom_dist(a: &[Arg], c: C) -> R<Value> {
+    let f = num(c, a, 0)?.trunc();
+    let s = num(c, a, 1)?.trunc();
+    let p = num(c, a, 2)?;
+    let cum = if a.len() > 3 { boolean(c, a, 3)? } else { false };
     if f < 0.0 || s < 1.0 || !(0.0..=1.0).contains(&p) {
         return Err(CellError::Num);
     }
@@ -1417,16 +1418,16 @@ fn negbinom_dist(a: &[Arg], _: C) -> R<Value> {
     num_val((ln_comb(f + s - 1.0, s - 1.0) + s * p.ln() + f * (1.0 - p).ln()).exp())
 }
 
-fn confidence_norm(a: &[Arg], _: C) -> R<Value> {
-    let (al, sd, n) = (num(a, 0)?, num(a, 1)?, num(a, 2)?.trunc());
+fn confidence_norm(a: &[Arg], c: C) -> R<Value> {
+    let (al, sd, n) = (num(c, a, 0)?, num(c, a, 1)?, num(c, a, 2)?.trunc());
     if !(al > 0.0 && al < 1.0) || sd <= 0.0 || n < 1.0 {
         return Err(CellError::Num);
     }
     num_val(norm_inv(1.0 - al / 2.0) * sd / n.sqrt())
 }
 
-fn confidence_t(a: &[Arg], _: C) -> R<Value> {
-    let (al, sd, n) = (num(a, 0)?, num(a, 1)?, num(a, 2)?.trunc());
+fn confidence_t(a: &[Arg], c: C) -> R<Value> {
+    let (al, sd, n) = (num(c, a, 0)?, num(c, a, 1)?, num(c, a, 2)?.trunc());
     if !(al > 0.0 && al < 1.0) || sd <= 0.0 || n < 1.0 {
         return Err(CellError::Num);
     }
@@ -1436,13 +1437,13 @@ fn confidence_t(a: &[Arg], _: C) -> R<Value> {
     num_val(t_inv_upper(al / 2.0, n - 1.0) * sd / n.sqrt())
 }
 
-fn z_test(a: &[Arg], _: C) -> R<Value> {
-    let v = arg_nums(a, 0)?;
-    let x = num(a, 1)?;
+fn z_test(a: &[Arg], c: C) -> R<Value> {
+    let v = arg_nums(c, a, 0)?;
+    let x = num(c, a, 1)?;
     if v.is_empty() {
         return Err(CellError::NA);
     }
-    let sd = if has(a, 2) { num(a, 2)? } else { var_s(&v)?.sqrt() };
+    let sd = if has(a, 2) { num(c, a, 2)? } else { var_s(&v)?.sqrt() };
     if sd <= 0.0 {
         return Err(if has(a, 2) { CellError::Num } else { CellError::Div0 });
     }
@@ -1450,16 +1451,16 @@ fn z_test(a: &[Arg], _: C) -> R<Value> {
     num_val(1.0 - norm_cdf(z))
 }
 
-fn fisher(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
+fn fisher(a: &[Arg], c: C) -> R<Value> {
+    let x = num(c, a, 0)?;
     if x <= -1.0 || x >= 1.0 {
         return Err(CellError::Num);
     }
     num_val(0.5 * ((1.0 + x) / (1.0 - x)).ln())
 }
 
-fn gauss(a: &[Arg], _: C) -> R<Value> {
-    let z = num(a, 0)?;
+fn gauss(a: &[Arg], c: C) -> R<Value> {
+    let z = num(c, a, 0)?;
     // Φ(z) − 0.5 = erf(z/√2)/2, accurate near zero.
     num_val(0.5 * erf(z / std::f64::consts::SQRT_2))
 }
@@ -1474,18 +1475,18 @@ fn gauss(a: &[Arg], _: C) -> R<Value> {
 /// SUM, VAR.S, VAR.P; 12 = MEDIAN, 13 = MODE.SNGL. Codes 14–19 need `k`: use
 /// [`aggregate_values_k`] (they give `#VALUE!` here). Values that are not numbers are ignored
 /// (COUNTA counts non-empty values); the first error value present is returned.
-pub fn aggregate_values(function_num: u32, values: &[Value]) -> Value {
-    crate::util::finish(aggregate_impl(function_num, values, None))
+pub fn aggregate_values(c: &dyn Ctx, function_num: u32, values: &[Value]) -> Value {
+    crate::util::finish(aggregate_impl(c, function_num, values, None))
 }
 
 /// AGGREGATE codes 14 = LARGE, 15 = SMALL, 16 = PERCENTILE.INC, 17 = QUARTILE.INC,
 /// 18 = PERCENTILE.EXC, 19 = QUARTILE.EXC with their `k` argument; codes 1–13 delegate to
 /// [`aggregate_values`].
-pub fn aggregate_values_k(function_num: u32, values: &[Value], k: &Value) -> Value {
-    crate::util::finish(aggregate_impl(function_num, values, Some(k)))
+pub fn aggregate_values_k(c: &dyn Ctx, function_num: u32, values: &[Value], k: &Value) -> Value {
+    crate::util::finish(aggregate_impl(c, function_num, values, Some(k)))
 }
 
-fn aggregate_impl(function_num: u32, values: &[Value], k: Option<&Value>) -> R<Value> {
+fn aggregate_impl(c: &dyn Ctx, function_num: u32, values: &[Value], k: Option<&Value>) -> R<Value> {
     let code = if (101..=111).contains(&function_num) { function_num - 100 } else { function_num };
     let mut xs = Vec::new();
     let mut nonempty = 0usize;
@@ -1507,7 +1508,7 @@ fn aggregate_impl(function_num: u32, values: &[Value], k: Option<&Value>) -> R<V
         }
     }
     let k = match (code, k) {
-        (14..=19, Some(k)) => k.scalar().to_number()?,
+        (14..=19, Some(k)) => to_num(c, &k.scalar())?,
         (14..=19, None) => return Err(CellError::Value),
         _ => 0.0,
     };
@@ -1549,8 +1550,8 @@ const S_TTEST: &[bool] = &[false, false, true, true];
 
 pub(crate) fn specs() -> Vec<FnSpec> {
     vec![
-        f!("AVERAGE", 1, VAR, Statistical, A, "AVERAGE(number1, [number2], ...)", "Arithmetic mean of the numbers.", |a: &[Arg], _c: C| num_val(
-            mean(&numbers(a)?)?
+        f!("AVERAGE", 1, VAR, Statistical, A, "AVERAGE(number1, [number2], ...)", "Arithmetic mean of the numbers.", |a: &[Arg], c: C| num_val(
+            mean(&numbers(c, a)?)?
         )),
         f!(
             "AVERAGEA",
@@ -1560,29 +1561,29 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "AVERAGEA(value1, [value2], ...)",
             "Mean counting text as 0 and logical values as 1 or 0.",
-            |a: &[Arg], _c: C| num_val(mean(&numbers_a(a)?)?)
+            |a: &[Arg], c: C| num_val(mean(&numbers_a(c, a)?)?)
         ),
-        f!("MEDIAN", 1, VAR, Statistical, A, "MEDIAN(number1, [number2], ...)", "Middle value of the numbers.", |a: &[Arg], _c: C| num_val(median(
-            numbers(a)?
+        f!("MEDIAN", 1, VAR, Statistical, A, "MEDIAN(number1, [number2], ...)", "Middle value of the numbers.", |a: &[Arg], c: C| num_val(median(
+            numbers(c, a)?
         )?)),
-        f!("MODE", 1, VAR, Compatibility, A, "MODE(number1, [number2], ...)", "Most frequently occurring number.", |a: &[Arg], _c: C| num_val(
-            mode_sngl(&numbers(a)?)?
+        f!("MODE", 1, VAR, Compatibility, A, "MODE(number1, [number2], ...)", "Most frequently occurring number.", |a: &[Arg], c: C| num_val(
+            mode_sngl(&numbers(c, a)?)?
         )),
-        f!("MODE.SNGL", 1, VAR, Statistical, A, "MODE.SNGL(number1, [number2], ...)", "Most frequently occurring number.", |a: &[Arg], _c: C| {
-            num_val(mode_sngl(&numbers(a)?)?)
+        f!("MODE.SNGL", 1, VAR, Statistical, A, "MODE.SNGL(number1, [number2], ...)", "Most frequently occurring number.", |a: &[Arg], c: C| {
+            num_val(mode_sngl(&numbers(c, a)?)?)
         }),
         f!("MODE.MULT", 1, VAR, Statistical, A, "MODE.MULT(number1, [number2], ...)", "Vertical array of all the most frequent numbers.", mode_mult),
-        f!("STDEV", 1, VAR, Compatibility, A, "STDEV(number1, [number2], ...)", "Sample standard deviation.", |a: &[Arg], _c: C| num_val(
-            var_s(&numbers(a)?)?.sqrt()
+        f!("STDEV", 1, VAR, Compatibility, A, "STDEV(number1, [number2], ...)", "Sample standard deviation.", |a: &[Arg], c: C| num_val(
+            var_s(&numbers(c, a)?)?.sqrt()
         )),
-        f!("STDEV.S", 1, VAR, Statistical, A, "STDEV.S(number1, [number2], ...)", "Sample standard deviation.", |a: &[Arg], _c: C| num_val(
-            var_s(&numbers(a)?)?.sqrt()
+        f!("STDEV.S", 1, VAR, Statistical, A, "STDEV.S(number1, [number2], ...)", "Sample standard deviation.", |a: &[Arg], c: C| num_val(
+            var_s(&numbers(c, a)?)?.sqrt()
         )),
-        f!("STDEV.P", 1, VAR, Statistical, A, "STDEV.P(number1, [number2], ...)", "Population standard deviation.", |a: &[Arg], _c: C| num_val(
-            var_p(&numbers(a)?)?.sqrt()
+        f!("STDEV.P", 1, VAR, Statistical, A, "STDEV.P(number1, [number2], ...)", "Population standard deviation.", |a: &[Arg], c: C| num_val(
+            var_p(&numbers(c, a)?)?.sqrt()
         )),
-        f!("STDEVP", 1, VAR, Compatibility, A, "STDEVP(number1, [number2], ...)", "Population standard deviation.", |a: &[Arg], _c: C| num_val(
-            var_p(&numbers(a)?)?.sqrt()
+        f!("STDEVP", 1, VAR, Compatibility, A, "STDEVP(number1, [number2], ...)", "Population standard deviation.", |a: &[Arg], c: C| num_val(
+            var_p(&numbers(c, a)?)?.sqrt()
         )),
         f!(
             "STDEVA",
@@ -1592,7 +1593,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "STDEVA(value1, [value2], ...)",
             "Sample standard deviation counting text as 0 and logicals as 1/0.",
-            |a: &[Arg], _c: C| { num_val(var_s(&numbers_a(a)?)?.sqrt()) }
+            |a: &[Arg], c: C| { num_val(var_s(&numbers_a(c, a)?)?.sqrt()) }
         ),
         f!(
             "STDEVPA",
@@ -1602,15 +1603,15 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "STDEVPA(value1, [value2], ...)",
             "Population standard deviation counting text as 0 and logicals as 1/0.",
-            |a: &[Arg], _c: C| { num_val(var_p(&numbers_a(a)?)?.sqrt()) }
+            |a: &[Arg], c: C| { num_val(var_p(&numbers_a(c, a)?)?.sqrt()) }
         ),
-        f!("VAR", 1, VAR, Compatibility, A, "VAR(number1, [number2], ...)", "Sample variance.", |a: &[Arg], _c: C| num_val(var_s(&numbers(a)?)?)),
-        f!("VAR.S", 1, VAR, Statistical, A, "VAR.S(number1, [number2], ...)", "Sample variance.", |a: &[Arg], _c: C| num_val(var_s(&numbers(a)?)?)),
-        f!("VAR.P", 1, VAR, Statistical, A, "VAR.P(number1, [number2], ...)", "Population variance.", |a: &[Arg], _c: C| num_val(var_p(&numbers(
-            a
+        f!("VAR", 1, VAR, Compatibility, A, "VAR(number1, [number2], ...)", "Sample variance.", |a: &[Arg], c: C| num_val(var_s(&numbers(c, a)?)?)),
+        f!("VAR.S", 1, VAR, Statistical, A, "VAR.S(number1, [number2], ...)", "Sample variance.", |a: &[Arg], c: C| num_val(var_s(&numbers(c, a)?)?)),
+        f!("VAR.P", 1, VAR, Statistical, A, "VAR.P(number1, [number2], ...)", "Population variance.", |a: &[Arg], c: C| num_val(var_p(&numbers(
+            c, a
         )?)?)),
-        f!("VARP", 1, VAR, Compatibility, A, "VARP(number1, [number2], ...)", "Population variance.", |a: &[Arg], _c: C| num_val(var_p(&numbers(
-            a
+        f!("VARP", 1, VAR, Compatibility, A, "VARP(number1, [number2], ...)", "Population variance.", |a: &[Arg], c: C| num_val(var_p(&numbers(
+            c, a
         )?)?)),
         f!(
             "VARA",
@@ -1620,7 +1621,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "VARA(value1, [value2], ...)",
             "Sample variance counting text as 0 and logicals as 1/0.",
-            |a: &[Arg], _c: C| num_val(var_s(&numbers_a(a)?)?)
+            |a: &[Arg], c: C| num_val(var_s(&numbers_a(c, a)?)?)
         ),
         f!(
             "VARPA",
@@ -1630,10 +1631,10 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "VARPA(value1, [value2], ...)",
             "Population variance counting text as 0 and logicals as 1/0.",
-            |a: &[Arg], _c: C| num_val(var_p(&numbers_a(a)?)?)
+            |a: &[Arg], c: C| num_val(var_p(&numbers_a(c, a)?)?)
         ),
-        f!("MIN", 0, VAR, Statistical, A, "MIN(number1, [number2], ...)", "Smallest number (0 when there are none).", |a: &[Arg], _c: C| num_val(
-            min_of(&numbers(a)?)
+        f!("MIN", 0, VAR, Statistical, A, "MIN(number1, [number2], ...)", "Smallest number (0 when there are none).", |a: &[Arg], c: C| num_val(
+            min_of(&numbers(c, a)?)
         )),
         f!(
             "MINA",
@@ -1643,10 +1644,10 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "MINA(value1, [value2], ...)",
             "Smallest value counting text as 0 and logicals as 1/0.",
-            |a: &[Arg], _c: C| num_val(min_of(&numbers_a(a)?))
+            |a: &[Arg], c: C| num_val(min_of(&numbers_a(c, a)?))
         ),
-        f!("MAX", 1, VAR, Statistical, A, "MAX(number1, [number2], ...)", "Largest number (0 when there are none).", |a: &[Arg], _c: C| num_val(
-            max_of(&numbers(a)?)
+        f!("MAX", 1, VAR, Statistical, A, "MAX(number1, [number2], ...)", "Largest number (0 when there are none).", |a: &[Arg], c: C| num_val(
+            max_of(&numbers(c, a)?)
         )),
         f!(
             "MAXA",
@@ -1656,12 +1657,12 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "MAXA(value1, [value2], ...)",
             "Largest value counting text as 0 and logicals as 1/0.",
-            |a: &[Arg], _c: C| num_val(max_of(&numbers_a(a)?))
+            |a: &[Arg], c: C| num_val(max_of(&numbers_a(c, a)?))
         ),
         f!("LARGE", 2, 2, Statistical, S_ARR_K, "LARGE(array, k)", "The k-th largest number in a data set.", large),
         f!("SMALL", 2, 2, Statistical, S_ARR_K, "SMALL(array, k)", "The k-th smallest number in a data set.", small),
-        f!("RANK", 2, 3, Compatibility, S_RANK, "RANK(number, ref, [order])", "Rank of a number within a list.", |a: &[Arg], _c: C| rank_impl(
-            a, false
+        f!("RANK", 2, 3, Compatibility, S_RANK, "RANK(number, ref, [order])", "Rank of a number within a list.", |a: &[Arg], c: C| rank_impl(
+            c, a, false
         )),
         f!(
             "RANK.EQ",
@@ -1671,7 +1672,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_RANK,
             "RANK.EQ(number, ref, [order])",
             "Rank of a number within a list; ties share the top rank.",
-            |a: &[Arg], _c: C| rank_impl(a, false)
+            |a: &[Arg], c: C| rank_impl(c, a, false)
         ),
         f!(
             "RANK.AVG",
@@ -1681,10 +1682,10 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_RANK,
             "RANK.AVG(number, ref, [order])",
             "Rank of a number within a list; ties get the average rank.",
-            |a: &[Arg], _c: C| { rank_impl(a, true) }
+            |a: &[Arg], c: C| { rank_impl(c, a, true) }
         ),
-        f!("PERCENTILE", 2, 2, Compatibility, S_ARR_K, "PERCENTILE(array, k)", "k-th percentile, k from 0 to 1 inclusive.", |a: &[Arg], _c: C| {
-            num_val(percentile_inc(arg_nums(a, 0)?, num(a, 1)?)?)
+        f!("PERCENTILE", 2, 2, Compatibility, S_ARR_K, "PERCENTILE(array, k)", "k-th percentile, k from 0 to 1 inclusive.", |a: &[Arg], c: C| {
+            num_val(percentile_inc(arg_nums(c, a, 0)?, num(c, a, 1)?)?)
         }),
         f!(
             "PERCENTILE.INC",
@@ -1694,7 +1695,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_ARR_K,
             "PERCENTILE.INC(array, k)",
             "k-th percentile, k from 0 to 1 inclusive.",
-            |a: &[Arg], _c: C| num_val(percentile_inc(arg_nums(a, 0)?, num(a, 1)?)?)
+            |a: &[Arg], c: C| num_val(percentile_inc(arg_nums(c, a, 0)?, num(c, a, 1)?)?)
         ),
         f!(
             "PERCENTILE.EXC",
@@ -1704,10 +1705,10 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_ARR_K,
             "PERCENTILE.EXC(array, k)",
             "k-th percentile, k strictly between 0 and 1.",
-            |a: &[Arg], _c: C| num_val(percentile_exc(arg_nums(a, 0)?, num(a, 1)?)?)
+            |a: &[Arg], c: C| num_val(percentile_exc(arg_nums(c, a, 0)?, num(c, a, 1)?)?)
         ),
-        f!("QUARTILE", 2, 2, Compatibility, S_ARR_K, "QUARTILE(array, quart)", "Quartile (0–4) of a data set.", |a: &[Arg], _c: C| num_val(
-            quartile_inc(arg_nums(a, 0)?, num(a, 1)?)?
+        f!("QUARTILE", 2, 2, Compatibility, S_ARR_K, "QUARTILE(array, quart)", "Quartile (0–4) of a data set.", |a: &[Arg], c: C| num_val(
+            quartile_inc(arg_nums(c, a, 0)?, num(c, a, 1)?)?
         )),
         f!(
             "QUARTILE.INC",
@@ -1717,7 +1718,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_ARR_K,
             "QUARTILE.INC(array, quart)",
             "Quartile (0–4) of a data set, inclusive method.",
-            |a: &[Arg], _c: C| num_val(quartile_inc(arg_nums(a, 0)?, num(a, 1)?)?)
+            |a: &[Arg], c: C| num_val(quartile_inc(arg_nums(c, a, 0)?, num(c, a, 1)?)?)
         ),
         f!(
             "QUARTILE.EXC",
@@ -1727,7 +1728,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_ARR_K,
             "QUARTILE.EXC(array, quart)",
             "Quartile (1–3) of a data set, exclusive method.",
-            |a: &[Arg], _c: C| num_val(quartile_exc(arg_nums(a, 0)?, num(a, 1)?)?)
+            |a: &[Arg], c: C| num_val(quartile_exc(arg_nums(c, a, 0)?, num(c, a, 1)?)?)
         ),
         f!(
             "PERCENTRANK",
@@ -1737,7 +1738,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_PRANK,
             "PERCENTRANK(array, x, [significance])",
             "Relative standing of a value as a fraction of the data set.",
-            |a: &[Arg], _c: C| { percentrank_impl(a, false) }
+            |a: &[Arg], c: C| { percentrank_impl(c, a, false) }
         ),
         f!(
             "PERCENTRANK.INC",
@@ -1747,7 +1748,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_PRANK,
             "PERCENTRANK.INC(array, x, [significance])",
             "Relative standing of a value from 0 to 1 inclusive.",
-            |a: &[Arg], _c: C| percentrank_impl(a, false)
+            |a: &[Arg], c: C| percentrank_impl(c, a, false)
         ),
         f!(
             "PERCENTRANK.EXC",
@@ -1757,9 +1758,9 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S_PRANK,
             "PERCENTRANK.EXC(array, x, [significance])",
             "Relative standing of a value strictly between 0 and 1.",
-            |a: &[Arg], _c: C| percentrank_impl(a, true)
+            |a: &[Arg], c: C| percentrank_impl(c, a, true)
         ),
-        f!("COUNT", 1, VAR, Statistical, A, "COUNT(value1, [value2], ...)", "Counts the numbers.", |a: &[Arg], _c: C| num_val(count_impl(a))),
+        f!("COUNT", 1, VAR, Statistical, A, "COUNT(value1, [value2], ...)", "Counts the numbers.", |a: &[Arg], c: C| num_val(count_impl(c, a))),
         f!("COUNTA", 1, VAR, Statistical, A, "COUNTA(value1, [value2], ...)", "Counts the non-empty values.", |a: &[Arg], _c: C| num_val(
             counta_impl(a)
         )),
@@ -1819,7 +1820,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "TREND(known_ys, [known_xs], [new_xs], [const])",
             "Values along a least-squares linear fit.",
-            |a: &[Arg], _c: C| trend_impl(a, false)
+            |a: &[Arg], c: C| trend_impl(c, a, false)
         ),
         f!(
             "GROWTH",
@@ -1829,7 +1830,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "GROWTH(known_ys, [known_xs], [new_xs], [const])",
             "Values along a fitted exponential growth curve.",
-            |a: &[Arg], _c: C| { trend_impl(a, true) }
+            |a: &[Arg], c: C| { trend_impl(c, a, true) }
         ),
         f!(
             "LINEST",
@@ -1839,7 +1840,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "LINEST(known_ys, [known_xs], [const], [stats])",
             "Least-squares line coefficients and optional regression statistics.",
-            |a: &[Arg], _c: C| { linest_impl(a, false) }
+            |a: &[Arg], c: C| { linest_impl(c, a, false) }
         ),
         f!(
             "LOGEST",
@@ -1849,7 +1850,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             A,
             "LOGEST(known_ys, [known_xs], [const], [stats])",
             "Exponential curve coefficients and optional regression statistics.",
-            |a: &[Arg], _c: C| { linest_impl(a, true) }
+            |a: &[Arg], c: C| { linest_impl(c, a, true) }
         ),
         f!("COVARIANCE.P", 2, 2, Statistical, A, "COVARIANCE.P(array1, array2)", "Population covariance of paired values.", |a: &[Arg], _c: C| {
             covariance(a, false)
@@ -1860,29 +1861,29 @@ pub(crate) fn specs() -> Vec<FnSpec> {
         f!("COVAR", 2, 2, Compatibility, A, "COVAR(array1, array2)", "Population covariance of paired values.", |a: &[Arg], _c: C| covariance(
             a, false
         )),
-        f!("DEVSQ", 1, VAR, Statistical, A, "DEVSQ(number1, [number2], ...)", "Sum of squared deviations from the mean.", |a: &[Arg], _c: C| {
-            let v = numbers(a)?;
+        f!("DEVSQ", 1, VAR, Statistical, A, "DEVSQ(number1, [number2], ...)", "Sum of squared deviations from the mean.", |a: &[Arg], c: C| {
+            let v = numbers(c, a)?;
             if v.is_empty() {
                 return Err(CellError::Num);
             }
             num_val(devsq(&v))
         }),
-        f!("AVEDEV", 1, VAR, Statistical, A, "AVEDEV(number1, [number2], ...)", "Average absolute deviation from the mean.", |a: &[Arg], _c: C| {
-            num_val(avedev(&numbers(a)?)?)
+        f!("AVEDEV", 1, VAR, Statistical, A, "AVEDEV(number1, [number2], ...)", "Average absolute deviation from the mean.", |a: &[Arg], c: C| {
+            num_val(avedev(&numbers(c, a)?)?)
         }),
-        f!("GEOMEAN", 1, VAR, Statistical, A, "GEOMEAN(number1, [number2], ...)", "Geometric mean of positive numbers.", |a: &[Arg], _c: C| num_val(
-            geomean(&numbers(a)?)?
+        f!("GEOMEAN", 1, VAR, Statistical, A, "GEOMEAN(number1, [number2], ...)", "Geometric mean of positive numbers.", |a: &[Arg], c: C| num_val(
+            geomean(&numbers(c, a)?)?
         )),
-        f!("HARMEAN", 1, VAR, Statistical, A, "HARMEAN(number1, [number2], ...)", "Harmonic mean of positive numbers.", |a: &[Arg], _c: C| num_val(
-            harmean(&numbers(a)?)?
+        f!("HARMEAN", 1, VAR, Statistical, A, "HARMEAN(number1, [number2], ...)", "Harmonic mean of positive numbers.", |a: &[Arg], c: C| num_val(
+            harmean(&numbers(c, a)?)?
         )),
         f!("TRIMMEAN", 2, 2, Statistical, S_ARR_K, "TRIMMEAN(array, percent)", "Mean after trimming a fraction of points from both ends.", trimmean),
-        f!("KURT", 1, VAR, Statistical, A, "KURT(number1, [number2], ...)", "Excess kurtosis of a sample.", |a: &[Arg], _c: C| num_val(kurt(
-            &numbers(a)?
+        f!("KURT", 1, VAR, Statistical, A, "KURT(number1, [number2], ...)", "Excess kurtosis of a sample.", |a: &[Arg], c: C| num_val(kurt(
+            &numbers(c, a)?
         )?)),
-        f!("SKEW", 1, VAR, Statistical, A, "SKEW(number1, [number2], ...)", "Sample skewness.", |a: &[Arg], _c: C| num_val(skew(&numbers(a)?)?)),
-        f!("SKEW.P", 1, VAR, Statistical, A, "SKEW.P(number1, [number2], ...)", "Population skewness.", |a: &[Arg], _c: C| num_val(skew_p(
-            &numbers(a)?
+        f!("SKEW", 1, VAR, Statistical, A, "SKEW(number1, [number2], ...)", "Sample skewness.", |a: &[Arg], c: C| num_val(skew(&numbers(c, a)?)?)),
+        f!("SKEW.P", 1, VAR, Statistical, A, "SKEW.P(number1, [number2], ...)", "Population skewness.", |a: &[Arg], c: C| num_val(skew_p(
+            &numbers(c, a)?
         )?)),
         f!("STANDARDIZE", 3, 3, Statistical, S, "STANDARDIZE(x, mean, standard_dev)", "Z-score of a value.", standardize),
         f!(
@@ -2208,8 +2209,10 @@ pub(crate) fn specs() -> Vec<FnSpec> {
         f!("Z.TEST", 2, 3, Statistical, S_PRANK, "Z.TEST(array, x, [sigma])", "One-tailed probability of a z-test.", z_test),
         f!("ZTEST", 2, 3, Compatibility, S_PRANK, "ZTEST(array, x, [sigma])", "One-tailed probability of a z-test.", z_test),
         f!("FISHER", 1, 1, Statistical, S, "FISHER(x)", "Fisher transformation.", fisher),
-        f!("FISHERINV", 1, 1, Statistical, S, "FISHERINV(y)", "Inverse of the Fisher transformation.", |a: &[Arg], _c: C| num_val(num(a, 0)?.tanh())),
-        f!("PHI", 1, 1, Statistical, S, "PHI(x)", "Standard normal density.", |a: &[Arg], _c: C| num_val(norm_pdf(num(a, 0)?))),
+        f!("FISHERINV", 1, 1, Statistical, S, "FISHERINV(y)", "Inverse of the Fisher transformation.", |a: &[Arg], c: C| num_val(
+            num(c, a, 0)?.tanh()
+        )),
+        f!("PHI", 1, 1, Statistical, S, "PHI(x)", "Standard normal density.", |a: &[Arg], c: C| num_val(norm_pdf(num(c, a, 0)?))),
         f!("GAUSS", 1, 1, Statistical, S, "GAUSS(z)", "Probability that a standard normal value falls between the mean and z.", gauss),
     ]
 }
@@ -2557,28 +2560,28 @@ mod tests {
     #[test]
     fn aggregate_helper() {
         let vals = vec![nv(1.0), nv(2.0), tv("x"), Value::Empty, Value::Bool(true), nv(6.0)];
-        close(aggregate_values(1, &vals), 3.0);
-        close(aggregate_values(2, &vals), 3.0);
-        close(aggregate_values(3, &vals), 5.0);
-        close(aggregate_values(4, &vals), 6.0);
-        close(aggregate_values(105, &vals), 1.0);
-        close(aggregate_values(6, &vals), 12.0);
-        close(aggregate_values(9, &vals), 9.0);
-        close(aggregate_values(109, &vals), 9.0);
-        close(aggregate_values(11, &vals), 14.0 / 3.0);
-        close(aggregate_values(10, &vals), 7.0);
-        close(aggregate_values(12, &vals), 2.0);
-        is_err(aggregate_values(13, &vals), CellError::NA);
-        is_err(aggregate_values(14, &vals), CellError::Value);
-        is_err(aggregate_values(99, &vals), CellError::Value);
-        is_err(aggregate_values(9, &[nv(1.0), Value::Error(CellError::Div0)]), CellError::Div0);
-        close(aggregate_values_k(14, &vals, &nv(1.0)), 6.0);
-        close(aggregate_values_k(15, &vals, &nv(2.0)), 2.0);
-        close(aggregate_values_k(16, &vals, &nv(0.5)), 2.0);
-        close(aggregate_values_k(17, &vals, &nv(4.0)), 6.0);
-        close(aggregate_values_k(18, &vals, &nv(0.5)), 2.0);
-        close(aggregate_values_k(19, &vals, &nv(2.0)), 2.0);
-        close(aggregate_values_k(9, &vals, &nv(2.0)), 9.0);
-        is_err(aggregate_values_k(14, &vals, &nv(10.0)), CellError::Num);
+        close(aggregate_values(&TestCtx::default(), 1, &vals), 3.0);
+        close(aggregate_values(&TestCtx::default(), 2, &vals), 3.0);
+        close(aggregate_values(&TestCtx::default(), 3, &vals), 5.0);
+        close(aggregate_values(&TestCtx::default(), 4, &vals), 6.0);
+        close(aggregate_values(&TestCtx::default(), 105, &vals), 1.0);
+        close(aggregate_values(&TestCtx::default(), 6, &vals), 12.0);
+        close(aggregate_values(&TestCtx::default(), 9, &vals), 9.0);
+        close(aggregate_values(&TestCtx::default(), 109, &vals), 9.0);
+        close(aggregate_values(&TestCtx::default(), 11, &vals), 14.0 / 3.0);
+        close(aggregate_values(&TestCtx::default(), 10, &vals), 7.0);
+        close(aggregate_values(&TestCtx::default(), 12, &vals), 2.0);
+        is_err(aggregate_values(&TestCtx::default(), 13, &vals), CellError::NA);
+        is_err(aggregate_values(&TestCtx::default(), 14, &vals), CellError::Value);
+        is_err(aggregate_values(&TestCtx::default(), 99, &vals), CellError::Value);
+        is_err(aggregate_values(&TestCtx::default(), 9, &[nv(1.0), Value::Error(CellError::Div0)]), CellError::Div0);
+        close(aggregate_values_k(&TestCtx::default(), 14, &vals, &nv(1.0)), 6.0);
+        close(aggregate_values_k(&TestCtx::default(), 15, &vals, &nv(2.0)), 2.0);
+        close(aggregate_values_k(&TestCtx::default(), 16, &vals, &nv(0.5)), 2.0);
+        close(aggregate_values_k(&TestCtx::default(), 17, &vals, &nv(4.0)), 6.0);
+        close(aggregate_values_k(&TestCtx::default(), 18, &vals, &nv(0.5)), 2.0);
+        close(aggregate_values_k(&TestCtx::default(), 19, &vals, &nv(2.0)), 2.0);
+        close(aggregate_values_k(&TestCtx::default(), 9, &vals, &nv(2.0)), 9.0);
+        is_err(aggregate_values_k(&TestCtx::default(), 14, &vals, &nv(10.0)), CellError::Num);
     }
 }

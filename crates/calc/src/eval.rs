@@ -4,11 +4,12 @@
 //! `ROW`, `OFFSET`, `INDEX`, `:` and friends can work on references) or a lambda. Cell reads go
 //! through [`Host`], which lets the recalculation engine evaluate dirty precedents on demand.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use gridcraft_core::{Array, CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, compare};
 use gridcraft_formula::{BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, UnOp};
 use gridcraft_functions::{Arg, Ctx};
+use gridcraft_locale::Locale;
 use gridcraft_model::Workbook;
 
 /// Largest array a reference may expand to.
@@ -94,6 +95,9 @@ impl Ctx for FnCtx<'_, '_> {
     }
     fn random(&mut self) -> f64 {
         self.ev.host.random()
+    }
+    fn locale(&self) -> &Locale {
+        &self.ev.host.workbook().locale
     }
 }
 
@@ -339,6 +343,15 @@ impl<'h> Evaluator<'h> {
         Ev::R(vec![Area { sheet: si, range: RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1)) }])
     }
 
+    /// The workbook's locale, copied so it can be held across evaluation calls.
+    fn locale(&self) -> Locale {
+        *self.host.workbook().locale
+    }
+
+    fn conv(&self) -> Conv {
+        Conv { locale: self.locale(), sys: self.host.workbook().date_system }
+    }
+
     fn unary(&mut self, op: UnOp, x: &Expr) -> Ev {
         if op == UnOp::Spill {
             return match self.eval(x) {
@@ -369,6 +382,7 @@ impl<'h> Evaluator<'h> {
         }
         let v = self.value(x);
         Ev::V(map_unary(
+            self.conv(),
             &v,
             &|n| match op {
                 UnOp::Neg => Value::number(-n),
@@ -452,7 +466,7 @@ impl<'h> Evaluator<'h> {
             _ => {
                 let x = self.value(a);
                 let y = self.value(b);
-                Ev::V(binary_values(op, &x, &y))
+                Ev::V(binary_values(self.conv(), op, &x, &y))
             }
         }
     }
@@ -470,7 +484,8 @@ impl<'h> Evaluator<'h> {
             None | Some(Expr::Missing) => Ok(default),
             Some(e) => {
                 let v = self.value(e);
-                v.scalar().to_number()
+                let (l, sys) = (self.locale(), self.host.workbook().date_system);
+                v.scalar().to_number_in(&l.regional, sys)
             }
         }
     }
@@ -482,17 +497,18 @@ impl<'h> Evaluator<'h> {
                     return err(CellError::Value);
                 }
                 let c = self.arg_val(args, 0).unwrap_or_default();
+                let lang = self.locale().formula;
                 if let Value::Array(arr) = &c {
                     // Array condition: element-wise.
                     let t = self.arg_val(args, 1).unwrap_or(Value::Bool(true));
                     let f = if args.len() > 2 { self.arg_val(args, 2).unwrap_or(Value::Bool(false)) } else { Value::Bool(false) };
-                    return Ev::V(zip3(arr, &t, &f, |c, t, f| match c.to_bool() {
+                    return Ev::V(zip3(arr, &t, &f, |c, t, f| match c.to_bool_in(lang) {
                         Ok(true) => t.clone(),
                         Ok(false) => f.clone(),
                         Err(e) => Value::Error(e),
                     }));
                 }
-                match c.to_bool() {
+                match c.to_bool_in(lang) {
                     Ok(true) => match args.get(1) {
                         Some(Expr::Missing) => Ev::V(Value::Number(0.0)),
                         Some(e) => self.eval(e),
@@ -510,10 +526,11 @@ impl<'h> Evaluator<'h> {
                 if args.len() < 2 || !args.len().is_multiple_of(2) {
                     return err(CellError::Value);
                 }
+                let lang = self.locale().formula;
                 for pair in args.chunks(2) {
                     let [c, v] = pair else { break };
                     let cv = self.value(c);
-                    match cv.scalar().to_bool() {
+                    match cv.scalar().to_bool_in(lang) {
                         Ok(true) => return self.eval(v),
                         Ok(false) => {}
                         Err(e) => return err(e),
@@ -628,12 +645,18 @@ impl<'h> Evaluator<'h> {
             "ISFORMULA" | "FORMULATEXT" => {
                 let Some(Ev::R(a)) = args.first().map(|a| self.eval(a)) else { return err(CellError::NA) };
                 let Some(a) = a.first() else { return err(CellError::NA) };
+                let loc = self.locale();
                 let f = self.host.workbook().sheet(a.sheet).and_then(|s| s.cell(a.range.start)).and_then(|c| c.formula.clone());
                 if name == "ISFORMULA" {
                     Ev::V(Value::Bool(f.is_some()))
                 } else {
                     match f {
-                        Some(f) => Ev::V(Value::text(format!("={}", f.text))),
+                        Some(f) => {
+                            let wb = self.host.workbook();
+                            let known = |n: &str| wb.knows_name(n, a.sheet);
+                            let text = f.expr().map_or_else(|| f.text.clone(), |e| gridcraft_formula::print_local_with(&e, &loc.dialect(), &known));
+                            Ev::V(Value::text(format!("={text}")))
+                        }
                         None => err(CellError::NA),
                     }
                 }
@@ -672,15 +695,16 @@ impl<'h> Evaluator<'h> {
                 let v = self.arg_val(args, 0).unwrap_or_default();
                 let f = self.arg_val(args, 1).unwrap_or_default();
                 let sys = self.host.workbook().date_system;
+                let loc = self.locale();
                 let one = |v: &Value, f: &Value| -> Value {
                     if let Value::Error(e) = v {
                         return Value::Error(*e);
                     }
-                    let code = match f.to_text() {
+                    let code = match f.to_text_in(&loc) {
                         Ok(c) => c,
                         Err(e) => return Value::Error(e),
                     };
-                    match gridcraft_numfmt::text_function(v, &code, sys) {
+                    match gridcraft_numfmt::text_function_in(v, &code, sys, &loc) {
                         Ok(s) => Value::text(s),
                         Err(e) => Value::Error(e),
                     }
@@ -972,7 +996,8 @@ impl<'h> Evaluator<'h> {
         if args.is_empty() || args.len() > 2 {
             return err(CellError::Value);
         }
-        let text = match self.arg_val(args, 0).map(|v| v.scalar().to_text()) {
+        let loc = self.locale();
+        let text = match self.arg_val(args, 0).map(|v| v.scalar().to_text_in(&loc)) {
             Some(Ok(t)) => t,
             Some(Err(e)) => return err(e),
             None => return err(CellError::Value),
@@ -981,11 +1006,14 @@ impl<'h> Evaluator<'h> {
             None | Some(Expr::Missing) => true,
             Some(e) => {
                 let v = self.value(e);
-                v.scalar().to_bool().unwrap_or(true)
+                v.scalar().to_bool_in(loc.formula).unwrap_or(true)
             }
         };
-        let text = if a1 { text } else { r1c1_to_a1(&text, self.at).unwrap_or(text) };
-        match gridcraft_formula::parse(&text) {
+        let text = if a1 { text } else { r1c1_to_a1(&text, self.at, loc.formula.r1c1).unwrap_or(text) };
+        let wb = self.host.workbook();
+        let sheet = self.sheet;
+        let parsed = gridcraft_formula::parse_local_with(&text, &loc.dialect(), &|n: &str| wb.knows_name(n, sheet));
+        match parsed {
             Ok(e @ (Expr::Ref(_) | Expr::Name(_) | Expr::Struct(_))) => match self.eval(&e) {
                 r @ Ev::R(_) => r,
                 _ => err(CellError::Ref),
@@ -1052,8 +1080,11 @@ impl<'h> Evaluator<'h> {
     }
 
     fn cell_info(&mut self, args: &[Expr]) -> Ev {
-        let kind = match self.arg_val(args, 0).map(|v| v.scalar().to_text()) {
-            Some(Ok(t)) => t.to_ascii_lowercase(),
+        let loc = self.locale();
+        // A local spelling maps to its canonical keyword; canonical keywords the evaluator
+        // supports beyond the language table (`sheetname`) keep working in every locale.
+        let kind = match self.arg_val(args, 0).map(|v| v.scalar().to_text_in(&loc)) {
+            Some(Ok(t)) => loc.formula.canonical_cell_type(&t).map_or_else(|| t.to_ascii_lowercase(), str::to_string),
             Some(Err(e)) => return err(e),
             None => return err(CellError::Value),
         };
@@ -1156,11 +1187,12 @@ impl<'h> Evaluator<'h> {
                 Ev::L(_) => return err(CellError::Value),
             }
         }
+        let ctx = FnCtx { ev: self };
         if let Some(k) = k {
             values.push(Value::Empty);
-            return Ev::V(gridcraft_functions::aggregate_values_k(func, &values[..values.len() - 1], &k));
+            return Ev::V(gridcraft_functions::aggregate_values_k(&ctx, func, &values[..values.len() - 1], &k));
         }
-        Ev::V(gridcraft_functions::aggregate_values(func, &values))
+        Ev::V(gridcraft_functions::aggregate_values(&ctx, func, &values))
     }
 }
 
@@ -1206,16 +1238,19 @@ fn same_kind(a: &Value, b: &Value) -> bool {
     std::mem::discriminant(a) == std::mem::discriminant(b) || (a.is_empty() || b.is_empty())
 }
 
-/// Converts an R1C1 reference text to A1 (for INDIRECT(…, FALSE)).
-pub fn r1c1_to_a1(s: &str, at: CellRef) -> Option<String> {
+/// Converts an R1C1 reference text written with the language's row and column letters to A1
+/// (for INDIRECT(…, FALSE)).
+pub fn r1c1_to_a1(s: &str, at: CellRef, letters: [char; 2]) -> Option<String> {
     let (sheet, body) = match s.rsplit_once('!') {
         Some((sh, b)) => (format!("{sh}!"), b),
         None => (String::new(), s),
     };
     let conv = |part: &str| -> Option<String> {
-        let u = part.to_ascii_uppercase();
-        let rest = u.strip_prefix('R')?;
-        let (rpart, cpart) = rest.split_once('C')?;
+        let upper = |c: char| c.to_uppercase().next().unwrap_or(c);
+        let [row_letter, col_letter] = letters.map(upper);
+        let u = part.to_uppercase();
+        let rest = u.strip_prefix(row_letter)?;
+        let (rpart, cpart) = rest.split_once(col_letter)?;
         let num = |p: &str, base: u32| -> Option<(u32, bool)> {
             if p.is_empty() {
                 return Some((base, false));
@@ -1241,12 +1276,25 @@ pub fn r1c1_to_a1(s: &str, at: CellRef) -> Option<String> {
 
 // ---------------------------------------------------------------- operators
 
-fn map_unary(v: &Value, f: &dyn Fn(f64) -> Value, plus: bool) -> Value {
+/// What implicit conversions in operators need: the locale and the date system.
+#[derive(Clone, Copy)]
+struct Conv {
+    locale: Locale,
+    sys: gridcraft_core::DateSystem,
+}
+
+impl Conv {
+    fn number(self, v: &Value) -> Result<f64, CellError> {
+        v.to_number_in(&self.locale.regional, self.sys)
+    }
+}
+
+fn map_unary(cv: Conv, v: &Value, f: &dyn Fn(f64) -> Value, plus: bool) -> Value {
     match v {
-        Value::Array(a) => Value::from(Array { rows: a.rows, cols: a.cols, data: a.data.iter().map(|x| map_unary(x, f, plus)).collect() }),
+        Value::Array(a) => Value::from(Array { rows: a.rows, cols: a.cols, data: a.data.iter().map(|x| map_unary(cv, x, f, plus)).collect() }),
         Value::Error(e) => Value::Error(*e),
         Value::Text(_) if plus => v.clone(),
-        other => match other.to_number() {
+        other => match cv.number(other) {
             Ok(n) => f(n),
             Err(e) => Value::Error(e),
         },
@@ -1299,18 +1347,18 @@ fn zip3(c: &Array, t: &Value, f: &Value, g: impl Fn(&Value, &Value, &Value) -> V
     Value::from(Array { rows, cols, data })
 }
 
-pub fn binary_values(op: BinOp, x: &Value, y: &Value) -> Value {
-    zip2(x, y, |a, b| binary_scalar(op, a, b))
+fn binary_values(cv: Conv, op: BinOp, x: &Value, y: &Value) -> Value {
+    zip2(x, y, |a, b| binary_scalar(cv, op, a, b))
 }
 
-fn binary_scalar(op: BinOp, a: &Value, b: &Value) -> Value {
+fn binary_scalar(cv: Conv, op: BinOp, a: &Value, b: &Value) -> Value {
     if let Value::Error(e) = a {
         return Value::Error(*e);
     }
     if let Value::Error(e) = b {
         return Value::Error(*e);
     }
-    let num = |f: fn(f64, f64) -> Value| match (a.to_number(), b.to_number()) {
+    let num = |f: fn(f64, f64) -> Value| match (cv.number(a), cv.number(b)) {
         (Ok(x), Ok(y)) => f(x, y),
         (Err(e), _) | (_, Err(e)) => Value::Error(e),
     };
@@ -1329,7 +1377,7 @@ fn binary_scalar(op: BinOp, a: &Value, b: &Value) -> Value {
                 Value::number(x.powf(y))
             }
         }),
-        BinOp::Concat => match (a.to_text(), b.to_text()) {
+        BinOp::Concat => match (a.to_text_in(&cv.locale), b.to_text_in(&cv.locale)) {
             (Ok(x), Ok(y)) => {
                 if x.len() + y.len() > 32767 * 4 {
                     Value::Error(CellError::Value)
@@ -1413,7 +1461,7 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
             dynamic = true
         }
         Expr::Name(_) | Expr::Struct(_) => dynamic = true,
-        Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !is_special(n) => dynamic = true,
+        Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !gridcraft_functions::is_special(n) => dynamic = true,
         // A range ending in a function's result (`A1:INDEX(B1:B9,n)`) covers the cells between
         // the references inside it, not only those references.
         Expr::Binary(BinOp::Range, a, b) if !matches!((&**a, &**b), (Expr::Ref(_), Expr::Ref(_))) => {
@@ -1433,81 +1481,13 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
     (out, dynamic)
 }
 
-fn is_special(n: &str) -> bool {
-    matches!(
-        n,
-        "IF" | "IFS"
-            | "IFERROR"
-            | "IFNA"
-            | "CHOOSE"
-            | "SWITCH"
-            | "ROW"
-            | "COLUMN"
-            | "ROWS"
-            | "COLUMNS"
-            | "AREAS"
-            | "ISREF"
-            | "ISFORMULA"
-            | "FORMULATEXT"
-            | "SHEET"
-            | "SHEETS"
-            | "OFFSET"
-            | "INDIRECT"
-            | "INDEX"
-            | "CELL"
-            | "SUBTOTAL"
-            | "AGGREGATE"
-            | "TEXT"
-            | "LET"
-            | "LAMBDA"
-            | "ISOMITTED"
-            | "MAP"
-            | "REDUCE"
-            | "SCAN"
-            | "BYROW"
-            | "BYCOL"
-            | "MAKEARRAY"
-    )
-}
-
 /// Names of functions the evaluator implements itself (merged into the function list for UI).
-pub const SPECIAL_FUNCTIONS: &[&str] = &[
-    "IF",
-    "IFS",
-    "IFERROR",
-    "IFNA",
-    "CHOOSE",
-    "SWITCH",
-    "ROW",
-    "COLUMN",
-    "ROWS",
-    "COLUMNS",
-    "AREAS",
-    "ISREF",
-    "ISFORMULA",
-    "FORMULATEXT",
-    "SHEET",
-    "SHEETS",
-    "OFFSET",
-    "INDIRECT",
-    "INDEX",
-    "CELL",
-    "SUBTOTAL",
-    "AGGREGATE",
-    "TEXT",
-    "LET",
-    "LAMBDA",
-    "ISOMITTED",
-    "MAP",
-    "REDUCE",
-    "SCAN",
-    "BYROW",
-    "BYCOL",
-    "MAKEARRAY",
-];
+/// Derived from [`gridcraft_functions::docs`], the single source of function documentation.
+pub static SPECIAL_FUNCTIONS: LazyLock<Vec<&'static str>> =
+    LazyLock::new(|| gridcraft_functions::docs().iter().filter(|d| d.special).map(|d| d.name).collect());
 
 pub fn is_known_function(n: &str) -> bool {
-    is_special(&n.to_ascii_uppercase()) || gridcraft_functions::lookup(n).is_some()
+    gridcraft_functions::is_special(&n.to_ascii_uppercase()) || gridcraft_functions::lookup(n).is_some()
 }
 
 #[allow(dead_code)]

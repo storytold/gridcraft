@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use gridcraft_core::{Array, CellError, Value, compare_text};
 
-use crate::util::{A, MAX_CELLS, R, S, has, scalar, text};
+use crate::util::{A, MAX_CELLS, R, S, has, scalar, text, to_flag, to_num};
 use crate::{Arg, Ctx, FnSpec, VAR};
 
 // ---------------------------------------------------------------------------------------------
@@ -39,11 +39,11 @@ fn is_logical(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     Ok(Value::Bool(matches!(first(a), Value::Bool(_))))
 }
 
-fn parity(a: &[Arg]) -> R<f64> {
+fn parity(c: &dyn Ctx, a: &[Arg]) -> R<f64> {
     match first(a) {
         Value::Bool(_) => Err(CellError::Value),
         v => {
-            let n = v.to_number()?;
+            let n = to_num(c, &v)?;
             if n.abs() > 9.007_199_254_740_992e15 {
                 return Err(CellError::Num);
             }
@@ -51,11 +51,11 @@ fn parity(a: &[Arg]) -> R<f64> {
         }
     }
 }
-fn is_even(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Bool(parity(a)? == 0.0))
+fn is_even(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    Ok(Value::Bool(parity(c, a)? == 0.0))
 }
-fn is_odd(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Bool(parity(a)? == 1.0))
+fn is_odd(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    Ok(Value::Bool(parity(c, a)? == 1.0))
 }
 
 fn type_of(v: &Value) -> f64 {
@@ -97,9 +97,10 @@ fn n_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
 }
 
-fn info(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let t = text(a, 0)?.to_ascii_lowercase();
-    let v: Value = match t.as_str() {
+fn info(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let word = text(c, a, 0)?;
+    let t = c.locale().formula.canonical_info_type(&word).ok_or(CellError::Value)?;
+    let v: Value = match t {
         "directory" => "/".into(),
         "numfile" => Value::Number(1.0),
         "origin" => "$A:$A$1".into(),
@@ -117,7 +118,7 @@ fn info(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 /// Collects booleans for AND/OR/XOR: references and arrays contribute numbers and booleans
 /// (text and blanks skipped); direct scalars coerce (empty literal = FALSE).
-fn logicals(a: &[Arg]) -> R<Vec<bool>> {
+fn logicals(c: &dyn Ctx, a: &[Arg]) -> R<Vec<bool>> {
     let mut out = Vec::new();
     for arg in a {
         match &arg.value {
@@ -135,7 +136,7 @@ fn logicals(a: &[Arg]) -> R<Vec<bool>> {
             Value::Number(n) => out.push(*n != 0.0),
             Value::Bool(b) => out.push(*b),
             _ if arg.from_ref => {}
-            v => out.push(v.to_bool()?),
+            v => out.push(to_flag(c, v)?),
         }
     }
     if out.is_empty() {
@@ -144,17 +145,17 @@ fn logicals(a: &[Arg]) -> R<Vec<bool>> {
     Ok(out)
 }
 
-fn and(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Bool(logicals(a)?.iter().all(|b| *b)))
+fn and(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    Ok(Value::Bool(logicals(c, a)?.iter().all(|b| *b)))
 }
-fn or(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Bool(logicals(a)?.iter().any(|b| *b)))
+fn or(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    Ok(Value::Bool(logicals(c, a)?.iter().any(|b| *b)))
 }
-fn xor(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Bool(logicals(a)?.iter().filter(|b| **b).count() % 2 == 1))
+fn xor(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    Ok(Value::Bool(logicals(c, a)?.iter().filter(|b| **b).count() % 2 == 1))
 }
-fn not(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Bool(!first(a).to_bool()?))
+fn not(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    Ok(Value::Bool(!to_flag(c, &first(a))?))
 }
 
 /// Applies `f` to scalar argument values. When any argument at a `drivers` position is an
@@ -200,21 +201,21 @@ fn empty_to_zero(v: Value) -> Value {
     if matches!(v, Value::Empty) { Value::Number(0.0) } else { v }
 }
 
-fn if_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn if_fn(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     drive(a, &|i| i == 0, &|v| {
-        let cond = v.first().cloned().unwrap_or(Value::Empty).to_bool()?;
+        let cond = to_flag(c, &v.first().cloned().unwrap_or(Value::Empty))?;
         if cond { Ok(v.get(1).cloned().unwrap_or(Value::Bool(true))) } else { Ok(v.get(2).cloned().unwrap_or(Value::Bool(false))) }
     })
 }
 
-fn ifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn ifs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     if !a.len().is_multiple_of(2) {
         return Err(CellError::NA);
     }
     drive(a, &|i| i % 2 == 0, &|v| {
         for pair in v.chunks(2) {
-            if let [c, r] = pair
-                && c.to_bool()?
+            if let [cond, r] = pair
+                && to_flag(c, cond)?
             {
                 return Ok(r.clone());
             }
@@ -276,9 +277,9 @@ fn switch(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     })
 }
 
-fn choose(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn choose(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     drive(a, &|i| i == 0, &|v| {
-        let idx = v.first().cloned().unwrap_or(Value::Empty).to_number()?.trunc();
+        let idx = to_num(c, &v.first().cloned().unwrap_or(Value::Empty))?.trunc();
         if idx < 1.0 || idx >= v.len() as f64 {
             return Err(CellError::Value);
         }
@@ -308,8 +309,8 @@ fn hyperlink(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     Ok(link)
 }
 
-fn encodeurl(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let s = text(a, 0)?;
+fn encodeurl(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let s = text(c, a, 0)?;
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {

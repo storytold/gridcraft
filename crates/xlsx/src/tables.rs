@@ -1,55 +1,11 @@
-//! Fixed lookup tables: built-in number formats, the legacy indexed colour palette, paper sizes,
-//! functions that need the `_xlfn.` prefix in files, and unit conversions.
+//! Fixed lookup tables: the legacy indexed colour palette, paper sizes, functions that need the
+//! `_xlfn.` prefix in files, and unit conversions.
 
-/// Built-in number format codes (en-US) by id. Ids not listed (23–36 are East Asian
-/// locale formats) read as General.
-const BUILTIN_FORMATS: [(u32, &str); 36] = [
-    (0, "General"),
-    (1, "0"),
-    (2, "0.00"),
-    (3, "#,##0"),
-    (4, "#,##0.00"),
-    (5, "\"$\"#,##0_);\\(\"$\"#,##0\\)"),
-    (6, "\"$\"#,##0_);[Red]\\(\"$\"#,##0\\)"),
-    (7, "\"$\"#,##0.00_);\\(\"$\"#,##0.00\\)"),
-    (8, "\"$\"#,##0.00_);[Red]\\(\"$\"#,##0.00\\)"),
-    (9, "0%"),
-    (10, "0.00%"),
-    (11, "0.00E+00"),
-    (12, "# ?/?"),
-    (13, "# ??/??"),
-    (14, "m/d/yyyy"),
-    (15, "d-mmm-yy"),
-    (16, "d-mmm"),
-    (17, "mmm-yy"),
-    (18, "h:mm AM/PM"),
-    (19, "h:mm:ss AM/PM"),
-    (20, "h:mm"),
-    (21, "h:mm:ss"),
-    (22, "m/d/yyyy h:mm"),
-    (37, "#,##0 ;(#,##0)"),
-    (38, "#,##0 ;[Red](#,##0)"),
-    (39, "#,##0.00;(#,##0.00)"),
-    (40, "#,##0.00;[Red](#,##0.00)"),
-    (41, "_(* #,##0_);_(* \\(#,##0\\);_(* \"-\"_);_(@_)"),
-    (42, "_(\"$\"* #,##0_);_(\"$\"* \\(#,##0\\);_(\"$\"* \"-\"_);_(@_)"),
-    (43, "_(* #,##0.00_);_(* \\(#,##0.00\\);_(* \"-\"??_);_(@_)"),
-    (44, "_(\"$\"* #,##0.00_);_(\"$\"* \\(#,##0.00\\);_(\"$\"* \"-\"??_);_(@_)"),
-    (45, "mm:ss"),
-    (46, "[h]:mm:ss"),
-    (47, "mmss.0"),
-    (48, "##0.0E+0"),
-    (49, "@"),
-];
-
-pub fn builtin_format(id: u32) -> Option<&'static str> {
-    BUILTIN_FORMATS.iter().find(|(i, _)| *i == id).map(|(_, c)| *c)
-}
-
-/// Id to write for a format code when it is a locale-independent built-in (currency formats 5–8
-/// are written as custom formats because their meaning depends on the reader's locale).
+/// Id to write for a format code when it is a locale-independent built-in of
+/// [`gridcraft_numfmt::builtin_format`] (currency formats 5–8 are written as custom formats
+/// because their meaning depends on the reader's locale). The code must match exactly.
 pub fn builtin_id(code: &str) -> Option<u32> {
-    BUILTIN_FORMATS.iter().find(|(i, c)| *c == code && !(5..=8).contains(i)).map(|(i, _)| *i)
+    gridcraft_numfmt::builtin_id(code).filter(|id| !(5..=8).contains(id) && gridcraft_numfmt::builtin_format(*id) == Some(code))
 }
 
 /// The 64-entry legacy palette (`indexed` colours), RRGGBB.
@@ -88,182 +44,6 @@ pub fn paper_name(id: u32) -> Option<&'static str> {
 
 pub fn paper_id(name: &str) -> Option<u32> {
     PAPERS.iter().find(|(_, n)| n.eq_ignore_ascii_case(name.trim())).map(|(i, _)| *i)
-}
-
-/// Functions introduced after Excel 2007 that files store with the `_xlfn.` prefix. Entries with
-/// `_xlws.` get `_xlfn._xlws.`.
-const FUTURE_FUNCTIONS: &[&str] = &[
-    "ACOT",
-    "ACOTH",
-    "AGGREGATE",
-    "ARABIC",
-    "ARRAYTOTEXT",
-    "BASE",
-    "BETA.DIST",
-    "BETA.INV",
-    "BINOM.DIST",
-    "BINOM.DIST.RANGE",
-    "BINOM.INV",
-    "BITAND",
-    "BITLSHIFT",
-    "BITOR",
-    "BITRSHIFT",
-    "BITXOR",
-    "BYCOL",
-    "BYROW",
-    "CEILING.MATH",
-    "CEILING.PRECISE",
-    "CHISQ.DIST",
-    "CHISQ.DIST.RT",
-    "CHISQ.INV",
-    "CHISQ.INV.RT",
-    "CHISQ.TEST",
-    "CHOOSECOLS",
-    "CHOOSEROWS",
-    "COMBINA",
-    "CONCAT",
-    "CONFIDENCE.NORM",
-    "CONFIDENCE.T",
-    "COT",
-    "COTH",
-    "COVARIANCE.P",
-    "COVARIANCE.S",
-    "CSC",
-    "CSCH",
-    "DAYS",
-    "DECIMAL",
-    "DROP",
-    "ERF.PRECISE",
-    "ERFC.PRECISE",
-    "EXPAND",
-    "EXPON.DIST",
-    "F.DIST",
-    "F.DIST.RT",
-    "F.INV",
-    "F.INV.RT",
-    "F.TEST",
-    "FIELDVALUE",
-    "FILTERXML",
-    "FLOOR.MATH",
-    "FLOOR.PRECISE",
-    "FORECAST.ETS",
-    "FORECAST.ETS.CONFINT",
-    "FORECAST.ETS.SEASONALITY",
-    "FORECAST.ETS.STAT",
-    "FORECAST.LINEAR",
-    "FORMULATEXT",
-    "GAMMA",
-    "GAMMA.DIST",
-    "GAMMA.INV",
-    "GAMMALN.PRECISE",
-    "GAUSS",
-    "HSTACK",
-    "HYPGEOM.DIST",
-    "IFNA",
-    "IFS",
-    "IMAGE",
-    "IMCOSH",
-    "IMCOT",
-    "IMCSC",
-    "IMCSCH",
-    "IMSEC",
-    "IMSECH",
-    "IMSINH",
-    "IMTAN",
-    "ISFORMULA",
-    "ISOMITTED",
-    "ISOWEEKNUM",
-    "LAMBDA",
-    "LET",
-    "LOGNORM.DIST",
-    "LOGNORM.INV",
-    "MAKEARRAY",
-    "MAP",
-    "MAXIFS",
-    "MINIFS",
-    "MODE.MULT",
-    "MODE.SNGL",
-    "MUNIT",
-    "NEGBINOM.DIST",
-    "NETWORKDAYS.INTL",
-    "NORM.DIST",
-    "NORM.INV",
-    "NORM.S.DIST",
-    "NORM.S.INV",
-    "NUMBERVALUE",
-    "PDURATION",
-    "PERCENTILE.EXC",
-    "PERCENTILE.INC",
-    "PERCENTRANK.EXC",
-    "PERCENTRANK.INC",
-    "PERMUTATIONA",
-    "PHI",
-    "POISSON.DIST",
-    "QUARTILE.EXC",
-    "QUARTILE.INC",
-    "RANDARRAY",
-    "RANK.AVG",
-    "RANK.EQ",
-    "REDUCE",
-    "RRI",
-    "SCAN",
-    "SEC",
-    "SECH",
-    "SEQUENCE",
-    "SHEET",
-    "SHEETS",
-    "SINGLE",
-    "SKEW.P",
-    "SORTBY",
-    "STDEV.P",
-    "STDEV.S",
-    "SWITCH",
-    "T.DIST",
-    "T.DIST.2T",
-    "T.DIST.RT",
-    "T.INV",
-    "T.INV.2T",
-    "T.TEST",
-    "TAKE",
-    "TEXTAFTER",
-    "TEXTBEFORE",
-    "TEXTJOIN",
-    "TEXTSPLIT",
-    "TOCOL",
-    "TOROW",
-    "UNICHAR",
-    "UNICODE",
-    "UNIQUE",
-    "VALUETOTEXT",
-    "VAR.P",
-    "VAR.S",
-    "VSTACK",
-    "WEBSERVICE",
-    "WEIBULL.DIST",
-    "WORKDAY.INTL",
-    "WRAPCOLS",
-    "WRAPROWS",
-    "XLOOKUP",
-    "XMATCH",
-    "XOR",
-    "Z.TEST",
-    "_xlws.FILTER",
-    "_xlws.SORT",
-];
-
-/// The name to write for a function (`XLOOKUP` → `_xlfn.XLOOKUP`, `FILTER` → `_xlfn._xlws.FILTER`).
-pub fn file_function_name(name: &str) -> Option<String> {
-    let u = name.to_ascii_uppercase();
-    for f in FUTURE_FUNCTIONS {
-        if let Some(ws) = f.strip_prefix("_xlws.") {
-            if ws == u {
-                return Some(format!("_xlfn._xlws.{u}"));
-            }
-        } else if *f == u {
-            return Some(format!("_xlfn.{u}"));
-        }
-    }
-    None
 }
 
 // ---------------------------------------------------------------- units
@@ -320,12 +100,10 @@ mod tests {
 
     #[test]
     fn functions() {
-        assert_eq!(file_function_name("xlookup").as_deref(), Some("_xlfn.XLOOKUP"));
-        assert_eq!(file_function_name("FILTER").as_deref(), Some("_xlfn._xlws.FILTER"));
-        assert_eq!(file_function_name("SUM"), None);
-        assert_eq!(builtin_format(14), Some("m/d/yyyy"));
+        assert_eq!(gridcraft_numfmt::builtin_format(14), Some("m/d/yyyy"));
         assert_eq!(builtin_id("0.00%"), Some(10));
-        assert_eq!(builtin_id(builtin_format(5).unwrap()), None);
+        assert_eq!(builtin_id("M/D/YYYY"), None, "only exact codes get a built-in id");
+        assert_eq!(builtin_id(gridcraft_numfmt::builtin_format(5).unwrap()), None);
         assert_eq!(paper_name(9), Some("A4"));
         assert_eq!(paper_id("a4"), Some(9));
     }

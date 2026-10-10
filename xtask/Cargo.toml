@@ -4,17 +4,23 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-description = "GridCraft workspace tooling: cargo xtask ci | layers | assets | wasm | parity | version | stats | ico"
+description = "GridCraft workspace tooling: cargo xtask ci | layers | assets | wasm | parity | locales | version | stats | ico"
 
 [lints]
 workspace = true
 
 [features]
-# `cargo xtask parity` reads the command catalog from the engine. CI steps that only need the
-# version or the layer/asset checks run with --no-default-features and skip compiling it.
+# `cargo xtask parity` and `cargo xtask locales` read the command catalog, the locale data and the
+# message files through the engine, formula, locale and l10n crates. CI steps that only need the
+# version or the layer/asset checks run with --no-default-features and skip compiling them.
 default = ["engine"]
-engine = ["dep:gridcraft-engine"]
+engine = ["dep:gridcraft-engine", "dep:gridcraft-locale", "dep:gridcraft-l10n", "dep:gridcraft-formula", "dep:fluent-syntax", "dep:toml"]
 
 [dependencies]
 serde_json = { workspace = true }
 gridcraft-engine = { workspace = true, optional = true }
+gridcraft-locale = { workspace = true, optional = true }
+gridcraft-l10n = { workspace = true, optional = true }
+gridcraft-formula = { workspace = true, optional = true }
+fluent-syntax = { version = "0.12", optional = true }
+toml = { workspace = true, optional = true }

@@ -1,0 +1,9 @@
+# Keyboard shortcuts of ru-RU. Same format as en-US/keymap.toml.
+#
+# No overrides: Russian Excel uses Latin-letter shortcut chords (assignment requirement,
+# 2026-10-10). All commands inherit the en-US keymap, including platform-specific chords.
+# No unverified localized shortcut is introduced. The Russian public reference is:
+# https://support.microsoft.com/ru-ru/accessibility/excel/keyboard-shortcuts-in-excel
+# This URL is provided as reference only; no claim of retrieval is made.
+
+[shortcuts]
