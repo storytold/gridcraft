@@ -105,6 +105,18 @@ cargo run --release -p gridcraft -- --sample sales --control 7979   # + JSON con
 cargo xtask ci                                                 # fmt, clippy, tests, assets, layering, wasm
 ```
 
+Each [GitHub release](https://github.com/storytold/gridcraft/releases) has ready-made builds, on Linux as
+an AppImage, a `.deb`, an `.rpm` and a tarball. On Gentoo, the community [::snakebyte
+overlay](https://github.com/switch87/snakebyte-overlay) packages the Linux release as
+`app-office/gridcraft-bin` (not maintained by the GridCraft team):
+
+```sh
+eselect repository add snakebyte git https://github.com/switch87/snakebyte-overlay.git
+emaint sync -r snakebyte
+echo 'app-office/gridcraft-bin ~amd64' >> /etc/portage/package.accept_keywords/gridcraft
+emerge --ask app-office/gridcraft-bin
+```
+
 ### Web
 
 ```sh
