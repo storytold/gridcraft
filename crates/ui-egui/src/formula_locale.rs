@@ -12,7 +12,8 @@ pub(crate) fn canonical(
     if locale == FormulaLocale::En || wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@") {
         return Ok(text.to_string());
     }
-    let body = text.trim();
+    // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text).
+    let body = text;
     if body.starts_with('=')
         || ((body.starts_with('+') || body.starts_with('-')) && body.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
     {
@@ -30,7 +31,7 @@ pub(crate) fn canonical(
         return Ok(format!("={}", formula::print(&expr?)));
     }
     // Decimal-comma number entry follows the same preference, without rewriting text or dates.
-    let normalized = body.replace(locale.decimal_separator(), ".");
+    let normalized = body.trim().replace(locale.decimal_separator(), ".");
     let number = normalized.strip_suffix('%').unwrap_or(&normalized);
     if number.parse::<f64>().is_ok_and(f64::is_finite) {
         return Ok(normalized);
@@ -39,6 +40,11 @@ pub(crate) fn canonical(
 }
 
 pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> String {
+    // English (and every language without a formula table) shows the stored text untouched,
+    // and skips a parse per frame.
+    if locale == FormulaLocale::En {
+        return text.to_string();
+    }
     let Some(body) = text.strip_prefix('=') else { return text.to_string() };
     formula::parse(body)
         .and_then(|expr| formula::print_input(&expr, locale, |name| wb.name(name, sheet).is_some() || wb.table(name).is_some()))

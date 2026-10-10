@@ -89,3 +89,12 @@ fn locale_controls_decimal_list_array_separators_and_display() {
     assert_eq!(shown, "LET(SUMA;LAMBDA(x;x+1);SUM(SUMA(2);FALSE))");
     assert_eq!(print(&parse_input(&shown, es, |n| n == "FALSO").unwrap()), print(&expr));
 }
+
+#[test]
+fn spanish_display_round_trips_text_containing_separators() {
+    let es = FormulaLocale::Es;
+    let expr = parse(r#"IF(A1="a,b;c",CONCAT("1.5",",",";"),SUM(0.25,A1:A3 B2))"#).unwrap();
+    let shown = print_input(&expr, es, |_| false).unwrap();
+    assert_eq!(shown, r#"SI(A1="a,b;c";CONCAT("1.5";",";";");SUMA(0,25;A1:A3 B2))"#);
+    assert_eq!(print(&parse_input(&shown, es, |_| false).unwrap()), print(&expr));
+}
