@@ -70,14 +70,14 @@ fn active_input(app: &SheetApp) -> String {
         if c.formula.is_some() && d.wb.styles.get(c.style).protection.hidden && sh.is_protected() {
             return String::new();
         }
-        return c.input_text();
+        return gridcraft_engine::display::input_text_in(&d.wb, c, crate::i18n::number_locale());
     }
     // A spilled cell shows the anchor's formula greyed out in Excel; we show it plainly.
     for (anchor, r) in &sh.spill_ranges {
         if r.contains(a)
             && let Some(f) = sh.cell(*anchor).and_then(|c| c.formula.as_ref())
         {
-            return format!("={}", f.text);
+            return gridcraft_engine::formula::locale::to_local(&format!("={}", f.text), crate::i18n::number_locale());
         }
     }
     String::new()
@@ -127,7 +127,7 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) {
     let r = ui.interact(mb, id.with("drop"), Sense::click());
     egui::Popup::menu(&r).show(|ui| {
         if names.is_empty() {
-            ui.label(egui::RichText::new("No names defined").italics());
+            ui.label(egui::RichText::new(tl!("No names defined")).italics());
         }
         for n in names {
             if ui.button(&n).clicked() {
@@ -355,13 +355,14 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
                         let (head, rest) = sig.split_once('(').unwrap_or((&sig, ""));
                         ui.label(egui::RichText::new(format!("{head}(")).font(theme::ui_font(12.0)));
                         let inner = rest.trim_end_matches(')');
-                        let parts: Vec<&str> = inner.split(", ").collect();
+                        let sep = format!("{} ", crate::i18n::number_locale().list_separator());
+                        let parts: Vec<&str> = inner.split(sep.as_str()).collect();
                         for (i, part) in parts.iter().enumerate() {
                             let is_cur = i == arg.min(parts.len().saturating_sub(1)) || (part.contains("...") && arg >= i);
                             let txt = egui::RichText::new(*part).font(if is_cur { theme::ui_bold(12.0) } else { theme::ui_font(12.0) });
                             ui.label(txt);
                             if i + 1 < parts.len() {
-                                ui.label(egui::RichText::new(", ").font(theme::ui_font(12.0)));
+                                ui.label(egui::RichText::new(sep.as_str()).font(theme::ui_font(12.0)));
                             }
                         }
                         ui.label(egui::RichText::new(")").font(theme::ui_font(12.0)));
@@ -413,23 +414,50 @@ fn cycle_anchor(ed: &mut crate::editor::EditState) {
     }
 }
 
+/// Function names for AutoComplete, as the interface language writes them (`SUMME` in German).
 fn function_names() -> Vec<String> {
-    static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    NAMES
-        .get_or_init(|| gridcraft_engine::cmd::formulas::function_list().iter().filter_map(|f| f["name"].as_str().map(str::to_string)).collect())
-        .clone()
+    static EN: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    static DE: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let loc = crate::i18n::number_locale();
+    let names = || -> Vec<String> {
+        let mut v: Vec<String> = gridcraft_engine::cmd::formulas::function_list()
+            .iter()
+            .filter_map(|f| f["name"].as_str().map(|n| gridcraft_engine::formula::locale::function_name(n, loc)))
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    match loc {
+        gridcraft_engine::core::Locale::De => DE.get_or_init(names).clone(),
+        _ => EN.get_or_init(names).clone(),
+    }
 }
 
+/// A function's entry by its English or interface-language name.
 fn function_info(name: &str) -> Option<serde_json::Value> {
     static LIST: std::sync::OnceLock<Vec<serde_json::Value>> = std::sync::OnceLock::new();
+    let name = gridcraft_engine::formula::locale::function_from_local(name, crate::i18n::number_locale()).unwrap_or(name);
     LIST.get_or_init(gridcraft_engine::cmd::formulas::function_list)
         .iter()
         .find(|f| f["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(name)))
         .cloned()
 }
 
+/// A signature (`SUM(number1, [number2], ...)`) with the function name and argument separator
+/// of the interface language (`SUMME(number1; [number2]; ...)`).
+fn local_signature(sig: &str) -> String {
+    let loc = crate::i18n::number_locale();
+    if loc.is_en() {
+        return sig.to_string();
+    }
+    let (head, rest) = sig.split_once('(').unwrap_or((sig, ""));
+    let sep = format!("{} ", loc.list_separator());
+    format!("{}({}", gridcraft_engine::formula::locale::function_name(head, loc), rest.replace(", ", &sep))
+}
+
 pub fn function_signature(name: &str) -> Option<String> {
-    function_info(name).and_then(|f| f["signature"].as_str().map(str::to_string))
+    function_info(name).and_then(|f| f["signature"].as_str().map(local_signature))
 }
 
 pub fn function_description(name: &str) -> Option<String> {

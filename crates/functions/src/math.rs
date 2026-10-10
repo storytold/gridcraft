@@ -487,7 +487,7 @@ fn integer_args(a: &[Arg]) -> R<Vec<u64>> {
     v.iter()
         .map(|x| {
             let t = x.trunc();
-            if t < 0.0 || t >= 9.007_199_254_740_992e15 { Err(CellError::Num) } else { Ok(t as u64) }
+            if !t.is_nan() && !(0.0..9.007_199_254_740_992e15).contains(&t) { Err(CellError::Num) } else { Ok(t as u64) }
         })
         .collect()
 }

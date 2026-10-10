@@ -6,6 +6,7 @@
 pub mod adjust;
 pub mod ast;
 pub mod lexer;
+pub mod locale;
 pub mod parser;
 pub mod printer;
 

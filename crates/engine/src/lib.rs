@@ -12,6 +12,7 @@ pub mod cmd;
 pub mod display;
 pub mod fill;
 pub mod io;
+pub mod lang;
 pub mod pivot;
 pub mod sample;
 pub mod selection;
@@ -200,6 +201,9 @@ pub struct Session {
     pub draw_tool: String,
     pub draw_color: String,
     pub draw_width: f32,
+    /// Language of new workbooks: their names (`Mappe1`, `Tabelle1`) and samples. The app sets
+    /// it from its interface language; headless sessions keep English.
+    pub lang: lang::Lang,
 }
 
 impl Session {
@@ -244,13 +248,18 @@ impl Session {
     }
     /// A new blank workbook titled `BookN`.
     pub fn new_workbook(&mut self) -> usize {
-        let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
+        let book = self.lang.book_base();
+        let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("{book}{n}") && d.path.is_none())).unwrap_or(1);
+        let sheet = self.lang.sheet_base();
         let mut wb = Workbook::new();
+        if let Some(first) = wb.sheet_mut(0) {
+            first.name = format!("{sheet}1");
+        }
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
-            let name = wb.next_sheet_name();
+            let name = wb.next_sheet_name_from(sheet);
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
         }
-        self.add_document(DocState::new(wb, None, format!("Book{n}")))
+        self.add_document(DocState::new(wb, None, format!("{book}{n}")))
     }
 
     pub fn commands(&self) -> Vec<CommandInfo> {

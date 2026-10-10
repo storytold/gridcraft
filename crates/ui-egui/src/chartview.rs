@@ -288,9 +288,10 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
         // Soft shadow + white card.
         p.rect_filled(r.translate(vec2(0.0, 1.5)), 2.0, Color32::from_black_alpha(18));
         p.rect_filled(r, 0.0, Color32::WHITE);
-        let data = gridcraft_chart::resolve(wb, si, ch);
+        let loc = crate::i18n::number_locale();
+        let data = gridcraft_chart::resolve_in(wb, si, ch, loc);
         let m = EguiMeasure { painter: p, z: geo.z };
-        let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
+        let prims = gridcraft_chart::render_in(ch, &data, ch.anchor.width, ch.anchor.height, &m, loc);
         paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
         if app.selected_chart == Some(ch.id) {
             selection_frame(p, r);

@@ -143,6 +143,11 @@ pub(crate) fn f64_param(p: &Json, key: &str) -> Option<f64> {
 pub(crate) fn bool_param(p: &Json, key: &str) -> Option<bool> {
     p.get(key).and_then(Json::as_bool)
 }
+/// The `locale` a command's input is written in (`"de"`); en-US when absent, so scripts and
+/// agents get the same results everywhere.
+pub(crate) fn locale_param(p: &Json) -> gridcraft_core::Locale {
+    str_param(p, "locale").map(gridcraft_core::Locale::from_tag).unwrap_or_default()
+}
 pub(crate) fn u32_param(p: &Json, key: &str) -> Option<u32> {
     p.get(key).and_then(Json::as_u64).map(|v| v.min(u32::MAX as u64) as u32)
 }

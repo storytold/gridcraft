@@ -111,12 +111,11 @@ impl EditState {
             return;
         }
         let before = self.text.get(..self.byte_caret()).unwrap_or("");
-        let word: String =
-            before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+        let word: String = before.chars().rev().take_while(|c| is_name_char(*c)).collect::<String>().chars().rev().collect();
         if word.is_empty() || word.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             return;
         }
-        let u = word.to_ascii_uppercase();
+        let u = word.to_uppercase();
         // Not after a column letter of a reference like A1 (digits follow) – fine either way.
         self.autocomplete = names.iter().filter(|n| n.starts_with(&u)).take(12).cloned().collect();
         if self.autocomplete.len() == 1 && self.autocomplete[0] == u {
@@ -130,7 +129,7 @@ impl EditState {
         let Some(name) = self.autocomplete.get(self.ac_index).cloned() else { return false };
         let caret_b = self.byte_caret();
         let before = self.text.get(..caret_b).unwrap_or("");
-        let wlen: usize = before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').map(char::len_utf8).sum();
+        let wlen: usize = before.chars().rev().take_while(|c| is_name_char(*c)).map(char::len_utf8).sum();
         let start = caret_b - wlen;
         let (Some(a), Some(b)) = (self.text.get(..start), self.text.get(caret_b..)) else { return false };
         self.text = format!("{a}{name}({b}");
@@ -147,6 +146,8 @@ impl EditState {
             return None;
         }
         let before = self.text.get(..self.byte_caret())?;
+        // Arguments are separated by `;` in German, as in German Excel.
+        let sep = crate::i18n::number_locale().list_separator();
         let mut depth = 0i32;
         let mut arg = 0usize;
         let chars: Vec<char> = before.chars().collect();
@@ -166,27 +167,25 @@ impl EditState {
                 ')' => depth += 1,
                 '(' => {
                     if depth == 0 {
-                        let name: String = chars[..i]
-                            .iter()
-                            .rev()
-                            .take_while(|c| c.is_ascii_alphanumeric() || **c == '.' || **c == '_')
-                            .collect::<String>()
-                            .chars()
-                            .rev()
-                            .collect();
+                        let name: String = chars[..i].iter().rev().take_while(|c| is_name_char(**c)).collect::<String>().chars().rev().collect();
                         if name.is_empty() {
                             return None;
                         }
-                        return Some((name.to_ascii_uppercase(), arg));
+                        return Some((name.to_uppercase(), arg));
                     }
                     depth -= 1;
                 }
-                ',' if depth == 0 => arg += 1,
+                c if c == sep && depth == 0 => arg += 1,
                 _ => {}
             }
         }
         None
     }
+}
+
+/// A character of a function name (`ZÄHLENWENN`, `NORM.S.DIST`, `_xlfn.X`).
+fn is_name_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '.' || c == '_'
 }
 
 /// References in formula text with their byte spans and colour index (same reference text ⇒
@@ -307,6 +306,23 @@ mod tests {
         assert_eq!(e.text, "=SUM(");
         let e = EditState::new(0, CellRef::new(0, 0), "=IF(A1>0,SUM(B1,".into(), true, false);
         assert_eq!(e.current_function(), Some(("SUM".into(), 1)));
+    }
+
+    #[test]
+    fn german_autocomplete_and_hints() {
+        crate::i18n::set_current(crate::i18n::lang_from_tag("de").unwrap_or(crate::i18n::Lang::EN));
+        let names: Vec<String> = ["ZÄHLENWENN", "ZÄHLENWENNS", "SUMME"].iter().map(|s| s.to_string()).collect();
+        let mut e = EditState::new(0, CellRef::new(0, 0), "=zäh".into(), true, false);
+        e.update_autocomplete(&names);
+        assert_eq!(e.autocomplete.len(), 2);
+        assert!(e.accept_autocomplete());
+        assert_eq!(e.text, "=ZÄHLENWENN(");
+        // `;` separates arguments; a decimal comma doesn't.
+        let e = EditState::new(0, CellRef::new(0, 0), "=WENN(A1>0,5;SUMME(B1;".into(), true, false);
+        assert_eq!(e.current_function(), Some(("SUMME".into(), 1)));
+        assert_eq!(crate::formula_bar::function_signature("summe").as_deref().map(|s| s.starts_with("SUMME(") && s.contains("; ")), Some(true));
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        assert_eq!(crate::formula_bar::function_signature("SUM").as_deref().map(|s| s.starts_with("SUM(") && !s.contains(';')), Some(true));
     }
 
     #[test]

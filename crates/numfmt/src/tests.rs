@@ -421,3 +421,56 @@ fn fuzz_no_panic() {
         }
     }
 }
+
+mod german {
+    use gridcraft_core::{CellError, DateSystem, Locale, Value};
+
+    use crate::{NumberFormat, format_value, format_value_in, text_function};
+
+    fn de(v: Value, code: &str) -> String {
+        format_value_in(&v, &NumberFormat::parse(code), DateSystem::D1900, Locale::De).text
+    }
+
+    fn day() -> Value {
+        Value::Number(gridcraft_core::date::serial_from_ymd(DateSystem::D1900, 2026, 10, 10).unwrap_or_default())
+    }
+
+    #[test]
+    fn numbers_use_german_separators() {
+        assert_eq!(de(Value::Number(1234.56), "#,##0.00"), "1.234,56");
+        assert_eq!(de(Value::Number(-1234567.0), "#,##0"), "-1.234.567");
+        assert_eq!(de(Value::Number(48200.0), "#,##0 \"€\""), "48.200 €");
+        assert_eq!(de(Value::Number(0.284), "0.0%"), "28,4%");
+        assert_eq!(de(Value::Number(1234.5), "General"), "1234,5");
+        assert_eq!(de(Value::Number(0.5), "0.00E+00"), "5,00E-01");
+        assert_eq!(de(Value::Number(1.5), "# ?/?"), "1 1/2");
+        // A literal dot in a code stays a dot.
+        assert_eq!(de(Value::Number(5.0), "0\".\""), "5.");
+    }
+
+    #[test]
+    fn dates_take_the_german_patterns() {
+        assert_eq!(de(day(), "m/d/yyyy"), "10.10.2026");
+        assert_eq!(de(day(), "d-mmm"), "10. Okt");
+        assert_eq!(de(day(), "d-mmm-yy"), "10. Okt 26");
+        assert_eq!(de(day(), "[$-F800]dddd, mmmm dd, yyyy"), "Samstag, 10. Oktober 2026");
+        assert_eq!(de(day(), "mmmm yyyy"), "Oktober 2026", "custom codes keep their pattern, in German");
+        assert_eq!(de(day(), "ddd"), "Sa");
+        let t = Value::Number(10.5 / 24.0 + 15.0 / 86400.0);
+        assert_eq!(de(t, "[$-F400]h:mm:ss AM/PM"), "10:30:15");
+    }
+
+    #[test]
+    fn words_and_errors() {
+        assert_eq!(de(Value::Bool(true), "General"), "WAHR");
+        assert_eq!(de(Value::Error(CellError::NA), "General"), "#NV");
+        assert_eq!(de(Value::text("Text"), "General"), "Text");
+    }
+
+    #[test]
+    fn stored_results_stay_en_us() {
+        assert_eq!(format_value(&Value::Number(1234.56), &NumberFormat::parse("#,##0.00"), DateSystem::D1900).text, "1,234.56");
+        assert_eq!(text_function(&Value::Number(1234.5), "#,##0.00", DateSystem::D1900), Ok("1,234.50".into()));
+        assert_eq!(format_value(&day(), &NumberFormat::parse("m/d/yyyy"), DateSystem::D1900).text, "10/10/2026");
+    }
+}

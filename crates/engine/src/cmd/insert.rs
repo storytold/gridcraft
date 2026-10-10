@@ -280,6 +280,8 @@ fn find_table(s: &Session, p: &Json) -> Result<(usize, usize)> {
 fn table_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
     let (si, ti) = find_table(s, p)?;
     let on = bool_param(p, "on");
+    // The totals row's label is cell text, in the session's language (`Ergebnis` in German).
+    let total_label = s.lang.pick("Total", "Ergebnis");
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let Some(t) = sh.tables.get_mut(ti) else { return Ok(Json::Null) };
@@ -291,7 +293,7 @@ fn table_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
                     if v {
                         t.range.end.row += 1;
                         if let Some(first) = t.columns.first_mut() {
-                            first.totals_label = Some("Total".into());
+                            first.totals_label = Some(total_label.into());
                         }
                         if t.columns.len() > 1
                             && let Some(last) = t.columns.last_mut()

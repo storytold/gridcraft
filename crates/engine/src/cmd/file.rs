@@ -7,7 +7,15 @@ use crate::DocState;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
+        cmd!(
+            noundo "file.new",
+            "New Workbook",
+            ["File"],
+            Some("Cmd+N"),
+            "{sample?: \"budget\"|\"sales\"|\"grades\", language?: \"en\"|\"de\" (default: the session's language)}",
+            always,
+            new_workbook
+        ),
         cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64} (xlsx, xlsm, csv, tsv, txt, json)", always, open),
         cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html by extension)", has_doc, save),
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path}", has_doc, save_as),
@@ -21,13 +29,20 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
+    let lang = str_param(p, "language").map(crate::lang::Lang::from_tag).unwrap_or(s.lang);
     let i = match str_param(p, "sample") {
         Some(name) => {
-            let wb = crate::sample::build(name).ok_or_else(|| bad("file.new", format!("unknown sample `{name}`")))?;
-            let title = crate::sample::title(name);
+            let wb = crate::sample::build_in(name, lang).ok_or_else(|| bad("file.new", format!("unknown sample `{name}`")))?;
+            let title = crate::sample::title_in(name, lang);
             s.add_document(DocState::new(wb, None, title))
         }
-        None => s.new_workbook(),
+        None => {
+            let session = s.lang;
+            s.lang = lang;
+            let i = s.new_workbook();
+            s.lang = session;
+            i
+        }
     };
     Ok(json!({"index": i, "title": s.doc()?.display_title()}))
 }
