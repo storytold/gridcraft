@@ -57,6 +57,7 @@ pub enum Icon {
     ChevronUp,
     Close,
     Check,
+    Eye,
     Fx,
     Plus,
     Left,
@@ -415,6 +416,21 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.line(&[(12.0, 4.0), (4.0, 12.0)], c, 1.3);
         }
         Icon::Check => g.line(&[(3.0, 8.5), (6.5, 12.0), (13.0, 4.5)], c, 1.3),
+        Icon::Eye => {
+            g.p.add(CubicBezierShape::from_points_stroke(
+                [g.pt(2.0, 8.0), g.pt(5.0, 3.5), g.pt(11.0, 3.5), g.pt(14.0, 8.0)],
+                false,
+                Color32::TRANSPARENT,
+                Stroke::new(1.2, c),
+            ));
+            g.p.add(CubicBezierShape::from_points_stroke(
+                [g.pt(14.0, 8.0), g.pt(11.0, 12.5), g.pt(5.0, 12.5), g.pt(2.0, 8.0)],
+                false,
+                Color32::TRANSPARENT,
+                Stroke::new(1.2, c),
+            ));
+            g.circle(8.0, 8.0, 2.0, Some(c), None);
+        }
         Icon::Fx => g.text(8.0, 8.0, "fx", 10.5, c, false, true),
         Icon::Plus => {
             g.line(&[(8.0, 3.0), (8.0, 13.0)], c, 1.3);
@@ -611,6 +627,7 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
 /// Icons offered by Insert › Icons, by name.
 pub const LIBRARY: &[(&str, Icon)] = &[
     ("check", Icon::Check),
+    ("eye", Icon::Eye),
     ("close", Icon::Close),
     ("plus", Icon::Plus),
     ("minus", Icon::Minus),

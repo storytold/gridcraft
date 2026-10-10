@@ -1,21 +1,22 @@
 //! Title bar (Quick Access Toolbar), ribbon tabs and ribbon groups, and keyboard shortcuts.
 
-use egui::{Align2, Color32, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align2, Color32, CursorIcon, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use gridcraft_engine::model::{HAlign, Style, VAlign};
 use serde_json::json;
 
-use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
 use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::{SheetApp, WorkbookWindowAction, WorkbookWindowInfo};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
 /// Leave room for the macOS traffic lights when the content extends into the title bar.
 pub const TITLE_LEFT_PAD: f32 = if cfg!(target_os = "macos") { 76.0 } else { 8.0 };
 
-pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
+pub fn title_bar(app: &mut SheetApp, ui: &mut Ui, workbooks: Option<&[WorkbookWindowInfo]>) -> Option<WorkbookWindowAction> {
     let t = Tokens::get(ui.ctx());
+    let mut window_action = None;
     egui::Panel::top("title_bar").exact_size(38.0).frame(egui::Frame::NONE.fill(t.window)).show(ui, |ui| {
         let rect = ui.max_rect();
         // Dragging the empty title area moves the window.
@@ -85,16 +86,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 }
             });
-            // Centered title.
-            let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
-            let dirty = app.session.active().is_some_and(|d| d.is_dirty());
-            ui.painter().text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                format!("{title}{}", if dirty { " •" } else { "" }),
-                theme::ui_bold(13.0),
-                t.text,
-            );
+            window_action = workbook_switcher(app, ui, rect, &t, workbooks);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
                 if icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, 26.0)).clicked() {
@@ -116,6 +108,96 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             });
         });
     });
+    window_action
+}
+
+fn workbook_switcher(
+    app: &mut SheetApp,
+    ui: &mut Ui,
+    title_bar: Rect,
+    t: &Tokens,
+    workbooks: Option<&[WorkbookWindowInfo]>,
+) -> Option<WorkbookWindowAction> {
+    let documents: Vec<(u64, usize, String, bool, bool)> = match workbooks {
+        Some(workbooks) => workbooks.iter().map(|w| (w.id, 0, w.title.clone(), w.active, w.dirty)).collect(),
+        None => app
+            .session
+            .documents()
+            .iter()
+            .enumerate()
+            .map(|(i, d)| (d.uid, i, d.display_title(), i == app.session.active_index(), d.is_dirty()))
+            .collect(),
+    };
+    let Some((_, _, title, _, dirty)) = documents.iter().find(|(_, _, _, active, _)| *active) else { return None };
+    let multiple = documents.len() > 1;
+    let open_count = if multiple { format!("  ({} open)", documents.len()) } else { String::new() };
+    let text = format!("{title}{}{}", if *dirty { " — Unsaved" } else { "" }, open_count);
+    let title_color = if *dirty { t.warning } else { t.text };
+    let width = (documents
+        .iter()
+        .map(|(_, _, title, _, dirty)| {
+            let candidate = format!("{title}{}{}", if *dirty { " — Unsaved" } else { "" }, open_count);
+            ui.painter().layout_no_wrap(candidate, theme::ui_bold(13.0), title_color).size().x
+        })
+        .fold(0.0_f32, f32::max)
+        + 20.0)
+        .clamp(100.0, (title_bar.width() * 0.42).max(100.0));
+    let title_rect = Rect::from_center_size(title_bar.center(), vec2(width, 28.0));
+    let response =
+        ui.put(title_rect, egui::Button::new(egui::RichText::new(text).font(theme::ui_bold(13.0)).color(title_color)).frame(false).truncate());
+    if !multiple {
+        return None;
+    }
+    let mut action = None;
+    let response = response.on_hover_text(format!("Switch workbook ({} open)", documents.len()));
+    egui::Popup::menu(&response).show(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 2.0);
+        let title_width = documents
+            .iter()
+            .map(|(_, _, title, _, _)| ui.painter().layout_no_wrap(title.clone(), theme::ui_font(13.0), t.text).size().x)
+            .fold(0.0_f32, f32::max)
+            .clamp(120.0, 190.0);
+        let row_width = 14.0 + title_width + 56.0 + 22.0 + 12.0;
+        for (id, index, title, active, dirty) in &documents {
+            let (row_rect, row) = ui.allocate_exact_size(vec2(row_width, 24.0), Sense::click());
+            if ui.rect_contains_pointer(row_rect) {
+                ui.painter().rect_filled(row_rect, 4.0, t.hover);
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            let close_clicked = ui
+                .scope_builder(egui::UiBuilder::new().max_rect(row_rect).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let (mark_rect, _) = ui.allocate_exact_size(vec2(14.0, 22.0), Sense::hover());
+                    if *active {
+                        icons::paint(ui.painter(), Rect::from_center_size(mark_rect.center(), vec2(14.0, 14.0)), Icon::Eye, t.text);
+                    }
+                    ui.add_sized(
+                        [title_width, 22.0],
+                        egui::Label::new(egui::RichText::new(title).color(t.text)).halign(egui::Align::LEFT).truncate(),
+                    );
+                    ui.add_sized(
+                        [56.0, 20.0],
+                        egui::Label::new(if *dirty { egui::RichText::new("Unsaved").color(t.warning) } else { egui::RichText::new("") }),
+                    );
+                    icon_button(ui, Icon::Close, t.text_dim, &format!("Close {title}"), vec2(22.0, 22.0)).clicked()
+                })
+                .inner;
+            if close_clicked {
+                if workbooks.is_some() {
+                    action = Some(WorkbookWindowAction::Close(*id));
+                } else {
+                    app.close_document(*index, false);
+                }
+            } else if row.clicked() {
+                if workbooks.is_some() {
+                    action = Some(WorkbookWindowAction::Focus(*id));
+                } else {
+                    app.activate_document(*index);
+                }
+            }
+        }
+    });
+    action
 }
 
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
@@ -1849,7 +1931,10 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         Key::S => Some(("file.save", json!({}))),
         Key::O => Some(("file.open", json!({}))),
         Key::N => Some(("file.new", json!({}))),
-        Key::W => Some(("file.close", json!({}))),
+        Key::W => {
+            app.close_document(app.session.active_index(), false);
+            None
+        }
         Key::K => {
             app.open_dialog("insertLink", json!({}));
             None

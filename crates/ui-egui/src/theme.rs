@@ -43,6 +43,7 @@ pub struct Tokens {
     pub menu_bg: Color32,
     pub shadow: Color32,
     pub danger: Color32,
+    pub warning: Color32,
 }
 
 impl Tokens {
@@ -80,6 +81,7 @@ impl Tokens {
             menu_bg: Color32::WHITE,
             shadow: Color32::from_black_alpha(40),
             danger: Color32::from_rgb(0xC4, 0x2B, 0x1C),
+            warning: Color32::from_rgb(0x8A, 0x68, 0x00),
         }
     }
 
@@ -117,6 +119,7 @@ impl Tokens {
             menu_bg: Color32::from_rgb(0x30, 0x30, 0x30),
             shadow: Color32::from_black_alpha(90),
             danger: Color32::from_rgb(0xF1, 0x70, 0x5F),
+            warning: Color32::from_rgb(0xE0, 0xB8, 0x42),
         }
     }
 

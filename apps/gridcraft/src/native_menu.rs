@@ -295,6 +295,8 @@ impl NativeMenu {
                 app.open_dialog(name, params);
             } else if id == "edit.copy" || id == "edit.cut" {
                 app.copy_to_clipboard(ctx, &id);
+            } else if id == "file.close" {
+                app.close_document(app.session.active_index(), false);
             } else {
                 app.run_or_alert(&id, json!({}));
             }

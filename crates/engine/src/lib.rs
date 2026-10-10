@@ -242,6 +242,22 @@ impl Session {
             }
         }
     }
+    /// Removes a document from this session and returns its complete state.
+    ///
+    /// Desktop shells use this to move a newly opened workbook into its own native window
+    /// without reloading it or losing undo history.
+    pub fn take_document(&mut self, i: usize) -> Option<DocState> {
+        if i >= self.docs.len() {
+            return None;
+        }
+        let document = self.docs.remove(i);
+        if self.active > i {
+            self.active -= 1;
+        } else if self.active >= self.docs.len() {
+            self.active = self.docs.len().saturating_sub(1);
+        }
+        Some(document)
+    }
     /// A new blank workbook titled `BookN`.
     pub fn new_workbook(&mut self) -> usize {
         let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
