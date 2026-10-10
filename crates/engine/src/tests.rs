@@ -167,6 +167,47 @@ fn every_command_survives_empty_params() {
     }
 }
 
+fn reopen(s: &mut Session) {
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let b64 = r["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "x.xlsx", "base64": b64})).unwrap();
+}
+
+fn chart_data(s: &mut Session) {
+    s.execute(
+        "range.setValues",
+        json!({"range": "A1", "values": [["", "Open", "High", "Low", "Close"], ["Mon", 10, 14, 9, 12], ["Tue", 12, 15, 11, 14], ["Wed", 14, 16, 10, 11], ["Thu", 11, 13, 8, 9], ["Fri", 9, 12, 7, 11], ["Sat", 11, 15, 10, 14]]}),
+    )
+    .unwrap();
+}
+
+#[test]
+fn every_chart_kind_survives_xlsx() {
+    use gridcraft_model::ChartKind;
+    let kinds = [
+        ("combo", ChartKind::Combo),
+        ("stock", ChartKind::Stock),
+        ("column", ChartKind::ColumnClustered),
+        ("line", ChartKind::Line),
+        ("scatter", ChartKind::Scatter),
+    ];
+    for (t, kind) in kinds {
+        let mut s = s();
+        chart_data(&mut s);
+        s.execute("insert.chart", json!({"type": t, "range": "A1:E7", "title": "Week"})).unwrap();
+        let before = s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+        assert_eq!(before.kind, kind);
+        reopen(&mut s);
+        let after = &s.doc().unwrap().wb.active().unwrap().charts[0];
+        assert_eq!(after.kind, kind, "{t}");
+        assert_eq!(after.title.as_deref(), Some("Week"), "{t}");
+        assert_eq!(after.series.len(), before.series.len(), "{t}");
+        for (a, b) in after.series.iter().zip(&before.series) {
+            assert_eq!((&a.name, &a.categories, &a.values), (&b.name, &b.categories, &b.values), "{t}");
+        }
+    }
+}
+
 #[test]
 fn parity_counts() {
     let (done, total) = crate::catalog::parity();
