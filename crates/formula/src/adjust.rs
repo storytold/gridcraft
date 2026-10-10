@@ -218,6 +218,13 @@ pub fn rename_sheet(e: Expr, old: &str, new: &str) -> Expr {
             }
             Expr::Ref(r)
         }
+        // Sheet-qualified defined name `Old!MyName` is stored as one string.
+        Expr::Name(n) => match n.split_at_checked(old.len()) {
+            Some((head, rest)) if head.eq_ignore_ascii_case(old) && rest.starts_with('!') => {
+                Expr::Name(format!("{}{rest}", crate::printer::quote_sheet(new)))
+            }
+            _ => Expr::Name(n),
+        },
         other => other,
     })
 }
