@@ -1,0 +1,36 @@
+# Builds the macOS universal DMG (Apple silicon + Intel) on a GitHub-hosted Mac runner.
+#
+# Added for the table-slicers branch so a macOS build can be produced without a Mac: a .dmg
+# can't be built on Windows/Linux (it needs Apple-only tools: lipo, codesign, hdiutil, iconutil).
+#
+# No signing secrets are used, so packaging/macos/package.sh signs the app AD-HOC and skips
+# notarization. Gatekeeper will warn on first open; right-click the app > Open, or run
+# `xattr -dr com.apple.quarantine /Applications/GridCraft.app` after installing.
+#
+# Run it: Actions tab > "macOS build" > Run workflow. The DMG is uploaded as a build artifact.
+name: macOS build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/table-slicers]
+
+jobs:
+  macos:
+    name: macOS universal (ad-hoc)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: macos-slicers-universal
+      - name: Build and package (ad-hoc signed, not notarized)
+        run: packaging/macos/package.sh --arch universal
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gridcraft-macos-universal-dmg
+          path: dist/release/*.dmg
+          if-no-files-found: error
