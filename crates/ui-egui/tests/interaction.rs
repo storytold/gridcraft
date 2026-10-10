@@ -249,6 +249,37 @@ fn about_renders_every_tab() {
 }
 
 #[test]
+fn switching_workbooks_clears_transient_editor_state() {
+    let mut s = blank();
+    s.execute("file.new", json!({})).unwrap();
+    let mut h = harness(s);
+    assert_eq!(h.state().session.documents().len(), 2);
+    h.state_mut().begin_edit(Some("belongs to Book2".into()), false);
+    assert!(h.state().editor.is_some());
+
+    h.state_mut().activate_document(0);
+
+    assert_eq!(h.state().session.active_index(), 0);
+    assert!(h.state().editor.is_none());
+}
+
+#[test]
+fn closing_workbooks_preserves_dirty_documents_until_confirmed() {
+    let mut s = blank();
+    s.execute("cell.set", json!({"cell": "A1", "input": "unsaved"})).unwrap();
+    s.execute("file.new", json!({})).unwrap();
+    let mut h = harness(s);
+
+    h.state_mut().close_document(0, false);
+    assert_eq!(h.state().session.documents().len(), 2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("saveChanges"));
+
+    h.state_mut().close_document(0, true);
+    assert_eq!(h.state().session.documents().len(), 1);
+    assert_eq!(h.state().session.active().map(|d| d.display_title()).as_deref(), Some("Book2"));
+}
+
+#[test]
 fn column_autocomplete_completes_on_enter() {
     let mut s = blank();
     s.execute("range.setValues", json!({"range": "A1", "values": [["North"], ["East"], ["Eastern"]]})).unwrap();

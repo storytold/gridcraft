@@ -804,7 +804,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     ui.label(format!("Do you want to save the changes you made to {}?", d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook")));
                     ui.horizontal(|ui| {
                         if ui.button("Don't Save").clicked() {
-                            app.run_or_alert("file.close", json!({"force": true}));
+                            app.close_document(app.session.active_index(), true);
                             open = false;
                         }
                         if ui.button("Cancel").clicked() {
@@ -813,7 +813,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         if ui.button("Save").clicked() {
                             app.run_or_alert("file.save", json!({}));
                             if app.session.active().is_some_and(|x| !x.is_dirty()) {
-                                app.run_or_alert("file.close", json!({"force": true}));
+                                app.close_document(app.session.active_index(), true);
                             }
                             open = false;
                         }
