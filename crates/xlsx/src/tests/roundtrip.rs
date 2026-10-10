@@ -7,6 +7,7 @@ use std::sync::Arc;
 use gridcraft_core::{CellError, CellRef, DateSystem, RangeRef, Value};
 use gridcraft_model::*;
 
+use crate::package::Package;
 use crate::{read_xlsx, write_xlsx};
 
 fn at(a: &str) -> CellRef {
@@ -581,9 +582,15 @@ fn spill_and_calc_errors_are_cached_as_value_errors() {
     s.cells.set(at("C1"), Cell { value: Value::Error(CellError::Spill), ..Cell::formula(Formula::new("A1:A3*2")) });
     s.cells.set(at("C2"), Cell { value: Value::Error(CellError::Calc), ..Cell::formula(Formula::new("FILTER(A1:A3,A1:A3>5)")) });
     s.cells.set(at("C3"), Cell { value: Value::Error(CellError::NA), ..Cell::formula(Formula::new("NA()")) });
-    let (xml, _) = sheet1_xml(&write_xlsx(&wb).unwrap());
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
     assert!(!xml.contains("#SPILL!") && !xml.contains("#CALC!"), "{xml}");
-    assert!(xml.contains(r#"<f>A1:A3*2</f><v>#VALUE!</v></c>"#), "{xml}");
-    assert!(xml.contains(r#"<f>_xlfn._xlws.FILTER(A1:A3,A1:A3&gt;5)</f><v>#VALUE!</v></c>"#), "{xml}");
-    assert!(xml.contains(r#"<c r="C3" t="e"><f>NA()</f><v>#N/A</v></c>"#), "{xml}");
+    let mut pkg = Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    for (address, text, value) in [("C1", "A1:A3*2", "#VALUE!"), ("C2", "_xlfn._xlws.FILTER(A1:A3,A1:A3>5)", "#VALUE!"), ("C3", "NA()", "#N/A")] {
+        let cell = sheet.child("sheetData").unwrap().kids("row").flat_map(|row| row.kids("c")).find(|cell| cell.attr("r") == Some(address)).unwrap();
+        assert_eq!(cell.attr("t"), Some("e"));
+        assert_eq!(cell.child("f").unwrap().text, text);
+        assert_eq!(cell.child("v").unwrap().text, value);
+    }
 }
