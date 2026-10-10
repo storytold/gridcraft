@@ -1756,10 +1756,18 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
         PatternType::Solid => st.fill.fg.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::WHITE),
         _ => Color32::WHITE,
     };
-    ui.painter().rect_filled(erect, 0.0, fill);
-    ui.painter().rect_stroke(erect.expand(1.0), 0.0, Stroke::new(2.0, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
+    let split = pos2(geo.cells.left() + geo.frozen_w, geo.cells.top() + geo.frozen_h);
+    let quadrant = Rect::from_min_max(
+        pos2(if cell.col >= geo.fc { split.x } else { geo.cells.left() }, if cell.row >= geo.fr { split.y } else { geo.cells.top() }),
+        pos2(if cell.col >= geo.fc { geo.cells.right() } else { split.x }, if cell.row >= geo.fr { geo.cells.bottom() } else { split.y }),
+    );
+    let clip = ui.clip_rect().intersect(quadrant);
+    let painter = ui.painter().with_clip_rect(clip);
+    painter.rect_filled(erect, 0.0, fill);
+    painter.rect_stroke(erect.expand(1.0), 0.0, Stroke::new(2.0, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
     let id = egui::Id::new("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
+    child.set_clip_rect(clip);
     crate::formula_bar::editor_widget(app, &mut child, id, font, false, erect.width() - 4.0);
 }
 

@@ -28,3 +28,7 @@ sync_github_name = false
 
 [people.edurbs]
 sync_github_name = true
+
+[people.webdevtodayjason]
+display_name = "Jason Brashear"
+sync_github_name = false
