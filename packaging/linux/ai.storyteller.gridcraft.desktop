@@ -3,7 +3,9 @@ Type=Application
 Name=GridCraft
 GenericName=Spreadsheet
 Comment=Calculate, analyse and chart data in workbooks
-Exec=gridcraft %F
+# XRandR reports the panel's physical DPI while XFCE renders at 96, so winit scales
+# every window up and the app looks zoomed. Pin the X11 scale to 1 to match the desktop.
+Exec=env WINIT_X11_SCALE_FACTOR=1 gridcraft %F
 TryExec=gridcraft
 Icon=ai.storyteller.gridcraft
 Terminal=false
