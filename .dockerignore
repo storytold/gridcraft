@@ -1,0 +1,11 @@
+# Build context for packaging/docker/cli.Dockerfile. `cargo build -p gridcraft-cli` needs the
+# workspace manifests and the source of the crates it links, and nothing else.
+.git
+.github
+target
+dist
+docs
+contributors
+packaging
+plan
+ROADMAP.md

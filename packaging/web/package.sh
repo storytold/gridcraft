@@ -15,6 +15,18 @@ SITE="$ROOT/dist/web"
 if [ "${1:-}" != "--skip-build" ]; then
   command -v trunk >/dev/null || { echo "error: trunk not found (cargo install trunk --locked)" >&2; exit 1; }
   [ -f "$ROOT/apps/gridcraft-web/index.html" ] || { echo "error: apps/gridcraft-web/index.html missing (the web app isn't set up yet)" >&2; exit 1; }
+  # With CRAFT_FONTS_DIR set the web build bakes fonts into the wasm (crates/ui-egui/build.rs), so
+  # the CJK face is subset first: the full Noto Sans CJK SC is 15.7 MiB, over what hosts allow in
+  # one file. Absolute path: build.rs resolves a relative one from the crate directory.
+  if [ -n "${CRAFT_FONTS_DIR:-}" ]; then
+    WEB_FONTS_DIR="$CARGO_TARGET_DIR/web-fonts"
+    case "$WEB_FONTS_DIR" in /*) ;; *) WEB_FONTS_DIR="$ROOT/$WEB_FONTS_DIR" ;; esac
+    command -v python3 >/dev/null || { echo "error: python3 not found; CRAFT_FONTS_DIR needs packaging/web/subset-fonts.py" >&2; exit 1; }
+    rm -rf "$WEB_FONTS_DIR"
+    python3 "$HERE/subset-fonts.py" "$CRAFT_FONTS_DIR" "$WEB_FONTS_DIR"
+    CRAFT_FONTS_DIR="$WEB_FONTS_DIR"
+    export CRAFT_FONTS_DIR
+  fi
   # --dist/--public-url here, so the output doesn't depend on Trunk.toml (which should agree:
   # public_url = "./").
   (cd "$ROOT/apps/gridcraft-web" && trunk build --release --dist "$SITE" --public-url ./)
