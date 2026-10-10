@@ -303,7 +303,7 @@ impl SheetApp {
                         self.ui.language = l;
                         Ok(json!({"language": l}))
                     }
-                    None => Err(format!("unknown language {code:?} (use \"en\", \"zh\", \"ja\", \"ko\" or \"ru\")")),
+                    None => Err(format!("unknown language {code:?} (use \"en\", \"zh\", \"ja\", \"ko\", \"ru\" or \"pt\")")),
                 }
             }
             "app.language.english" => {
