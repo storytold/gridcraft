@@ -130,6 +130,29 @@ fn moves_and_renames() {
 }
 
 #[test]
+fn moves_between_sheets() {
+    let mv = Edit::MoveToSheet { from: gridcraft_core::RangeRef::parse("A1:B2").unwrap(), to_sheet: "New Name".into(), to_row: 9, to_col: 3 };
+    for (host, input, expected) in [
+        ("Source", "A1+$B$2+C3+SUM(A1:B2)", "'New Name'!D10+'New Name'!$E$11+C3+SUM('New Name'!D10:E11)"),
+        ("Other", "A1+sOuRcE!$B2+Other!B2", "A1+'New Name'!$E11+Other!B2"),
+        ("Source", "SUM(A1:C3)+SUM(Source:Other!A1)", "SUM(A1:C3)+SUM(Source:Other!A1)"),
+    ] {
+        assert_eq!(print(&adjust(parse(input).unwrap(), host, "Source", &mv)), expected);
+    }
+    let edge = Edit::MoveToSheet {
+        from: gridcraft_core::RangeRef::parse("A1:B2").unwrap(),
+        to_sheet: "New Name".into(),
+        to_row: gridcraft_core::MAX_ROWS - 1,
+        to_col: 3,
+    };
+    assert_eq!(print(&adjust(parse("B2").unwrap(), "Source", "Source", &edge)), "#REF!");
+    for (from, input, row, col, expected) in [("A:A", "$A:$A", 0, 2, "Dest!$C:$C"), ("1:1", "$1:$1", 2, 0, "Dest!$3:$3")] {
+        let mv = Edit::MoveToSheet { from: gridcraft_core::RangeRef::parse(from).unwrap(), to_sheet: "Dest".into(), to_row: row, to_col: col };
+        assert_eq!(print(&adjust(parse(input).unwrap(), "Source", "Source", &mv)), expected);
+    }
+}
+
+#[test]
 fn r1c1() {
     let e = parse("A1+$B$2+SUM(C:C)").unwrap();
     assert_eq!(print_r1c1(&e, gridcraft_core::CellRef::new(1, 1)), "R[-1]C[-1]+R2C2+SUM(C[1])");

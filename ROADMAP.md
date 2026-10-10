@@ -81,7 +81,8 @@ by open equivalents or left out, not cloned.
   autocomplete and argument hints, copy/cut/paste and Paste Special (values, formats, transpose,
   operations, link, skip blanks), AutoFill series (numbers, dates, months, weekdays, custom lists,
   text+number), Fill Series, Flash Fill, find/replace with wildcards, Go To / Go To Special,
-  undo/redo with history, format painter.
+  undo/redo with history, format painter. Cross-sheet cuts retarget dependent cell formulas
+  and qualified defined names while preserving references inside the moved formulas.
 - Formatting: fonts, fills, all border styles, alignment (wrap, indent, rotation, merge), number
   formats, 47 cell styles, 60 table styles, conditional formatting (cell rules, text, dates,
   duplicates, top/bottom, averages, data bars, colour scales, icon sets, formulas), automatic

@@ -814,7 +814,22 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             let f = cell.formula.as_ref()?;
                             let e = f.expr()?;
                             if cut_move {
-                                return Some(std::sync::Arc::new(Formula::from_expr(e)));
+                                // A moved formula still reads cells on its original sheet. Qualify
+                                // those references before the workbook-wide move adjustment below.
+                                let e = if dest_sheet != clip.sheet {
+                                    e.map(&mut |x| match x {
+                                        gridcraft_formula::Expr::Ref(mut r) if r.sheet == gridcraft_formula::SheetSel::Current => {
+                                            r.sheet = gridcraft_formula::SheetSel::Named(src_sheet_name.clone());
+                                            gridcraft_formula::Expr::Ref(r)
+                                        }
+                                        other => other,
+                                    })
+                                } else {
+                                    e
+                                };
+                                let mut moved = Formula::from_expr(e);
+                                moved.array = f.array;
+                                return Some(std::sync::Arc::new(moved));
                             }
                             let moved =
                                 gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
@@ -929,11 +944,12 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         if cut_move {
             // References elsewhere to the moved block now point to its new place.
             let dest_name = cx.wb.sheet(dest_sheet).map(|s| s.name.clone()).unwrap_or_default();
-            if dest_sheet == clip.sheet {
-                let e = gridcraft_formula::adjust::Edit::Move { from: src, to_row: at.row, to_col: at.col };
-                rewrite_all_formulas(&mut cx.wb, &src_sheet_name, &e);
-            }
-            let _ = dest_name;
+            let e = if dest_sheet == clip.sheet {
+                gridcraft_formula::adjust::Edit::Move { from: src, to_row: at.row, to_col: at.col }
+            } else {
+                gridcraft_formula::adjust::Edit::MoveToSheet { from: src, to_sheet: dest_name, to_row: at.row, to_col: at.col }
+            };
+            rewrite_all_formulas(&mut cx.wb, &src_sheet_name, &e);
             cx.structural = true;
         }
         let end = at.offset_clamped((tiles_r * h) as i64 - 1, (tiles_c * w) as i64 - 1);
@@ -946,7 +962,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"pasted": s.doc()?.selection.a1()}))
 }
 
-/// Applies a reference adjustment to every formula in the workbook (and names, CF, DV).
+/// Applies a reference adjustment to every cell formula and defined name in the workbook.
 pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &str, e: &gridcraft_formula::adjust::Edit) {
     for si in 0..wb.sheets.len() {
         let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
