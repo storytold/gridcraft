@@ -35,6 +35,13 @@ function Assert-That([bool] $Condition, [string] $Message) {
   if (-not $Condition) { throw $Message }
 }
 
+function Get-OptionalRegistryValue([string] $Path, [string] $Name) {
+  if (-not (Test-Path -LiteralPath $Path)) { return $null }
+  $key = Get-Item -LiteralPath $Path
+  try { return $key.GetValue($Name, $null) }
+  finally { $key.Close() }
+}
+
 function Get-ProductCode([string] $Msi) {
   $installer = New-Object -ComObject WindowsInstaller.Installer
   $database = $null
@@ -86,9 +93,9 @@ function Assert-Package($Package) {
 
 function Assert-Desktop([bool] $Enabled) {
   Assert-That ((Test-Path $DesktopLink) -eq $Enabled) "Desktop shortcut presence should be $Enabled"
-  $marker = Get-ItemPropertyValue $ComponentKey -Name DesktopShortcutComponent -ErrorAction SilentlyContinue
+  $marker = Get-OptionalRegistryValue $ComponentKey 'DesktopShortcutComponent'
   Assert-That (($null -ne $marker) -eq $Enabled) 'Shortcut component marker must match the machine-wide shortcut'
-  Assert-That ($null -eq (Get-ItemPropertyValue 'HKCU:\Software\GridCraft\Installer' -Name DesktopShortcutComponent -ErrorAction SilentlyContinue)) 'Shortcut component must not leave a per-user marker'
+  Assert-That ($null -eq (Get-OptionalRegistryValue 'HKCU:\Software\GridCraft\Installer' 'DesktopShortcutComponent')) 'Shortcut component must not leave a per-user marker'
   $choice = Get-ItemPropertyValue -Path $ChoiceKey -Name DesktopShortcut
   Assert-That ($choice -eq $(if ($Enabled) { '1' } else { '0' })) 'Installer did not persist the selected desktop choice'
   if (-not $Enabled) { return }
@@ -115,8 +122,8 @@ function Assert-Removed($Package) {
   Assert-That (-not (Test-Path (Join-Path $InstallDir 'gridcraft-cli.exe'))) 'CLI executable remains after uninstall'
   Assert-That (-not (Test-Path $DesktopLink)) 'Desktop shortcut remains after uninstall'
   Assert-That (-not (Test-Path $StartLink)) 'Start Menu shortcut remains after uninstall'
-  Assert-That ($null -eq (Get-ItemPropertyValue $ChoiceKey -Name DesktopShortcut -ErrorAction SilentlyContinue)) 'Saved choice remains after uninstall'
-  Assert-That ($null -eq (Get-ItemPropertyValue $ComponentKey -Name DesktopShortcutComponent -ErrorAction SilentlyContinue)) 'Shortcut component registration remains after uninstall'
+  Assert-That ($null -eq (Get-OptionalRegistryValue $ChoiceKey 'DesktopShortcut')) 'Saved choice remains after uninstall'
+  Assert-That ($null -eq (Get-OptionalRegistryValue $ComponentKey 'DesktopShortcutComponent')) 'Shortcut component registration remains after uninstall'
 }
 
 function Uninstall-AsSystem($Package) {
