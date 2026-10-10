@@ -220,6 +220,17 @@ fn an_array_reading_another_arrays_spill_is_updated() {
 }
 
 #[test]
+fn indirect_reads_a_spill_laid_out_in_the_same_pass() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "F5", "input": "=SEQUENCE(2,2,7)"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "3:3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E5", "input": "=INDIRECT(\"F7\")"})).unwrap();
+    assert_eq!(v(&s, "E5"), Value::Number(9.0));
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(v(&s, "E5"), Value::Number(9.0));
+}
+
+#[test]
 fn every_command_survives_empty_params() {
     let mut s = Session::new();
     s.execute("file.new", json!({"sample": "sales"})).unwrap();

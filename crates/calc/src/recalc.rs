@@ -481,6 +481,7 @@ impl Calc {
 
     /// Evaluates the dirty set and writes results (and spills) back.
     fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
+        let mut dynamic_again = !self.graph.dynamic.is_empty();
         for _round in 0..8 {
             if dirty.is_empty() {
                 break;
@@ -578,6 +579,12 @@ impl Calc {
                 {
                     freed.push((k.0, o));
                 }
+            }
+            // Formulas with references only known while evaluating (INDIRECT, OFFSET) may have read
+            // a spill area before it was laid out: they are evaluated once more.
+            if dynamic_again && !spills.is_empty() {
+                dynamic_again = false;
+                spill_changes.extend(self.graph.dynamic.iter().copied());
             }
             // An area a formula no longer spills over may unblock another formula's array.
             for (si, o) in freed {
