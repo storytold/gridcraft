@@ -1,0 +1,11 @@
+kind = "app"
+categories = ["Office"]
+icon = "assets/app-icon/hicolor/256x256/apps/ai.storyteller.gridcraft.png"
+
+[linux.x86_64]
+asset = "gridcraft-{version}-linux-x86_64.tar.gz"
+exec = "gridcraft-{version}-linux-x86_64/usr/bin/gridcraft"
+
+[linux.aarch64]
+asset = "gridcraft-{version}-linux-aarch64.tar.gz"
+exec = "gridcraft-{version}-linux-aarch64/usr/bin/gridcraft"
