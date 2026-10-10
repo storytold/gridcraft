@@ -1,4 +1,4 @@
-//! Tokenizer for Excel formulas (A1 style, en-US separators).
+//! Tokenizer for Excel formulas (A1 style, canonical or selected UI separators).
 //!
 //! Token spans are byte offsets into the source, which the editor uses to colour references.
 
@@ -51,12 +51,18 @@ fn is_word_char(c: char) -> bool {
 
 /// Tokenizes formula text (without the leading `=`).
 pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
+    tokenize_locale(src, crate::FormulaLocale::En)
+}
+
+/// Tokenizes UI syntax while retaining byte spans in the original text.
+pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<Token>, LexError> {
     let chars: Vec<(usize, char)> = src.char_indices().collect();
     let n = chars.len();
     let pos_of = |i: usize| chars.get(i).map(|c| c.0).unwrap_or(src.len());
     let ch = |i: usize| chars.get(i).map(|c| c.1);
     let mut out = Vec::new();
     let mut i = 0;
+    let mut array_depth = 0usize;
     while i < n {
         let start = pos_of(i);
         let Some(c) = ch(i) else { break };
@@ -172,7 +178,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                 push(&mut out, Tok::Struct(inner), j);
                 i = j;
             }
-            '0'..='9' | '.' if c != '.' || ch(i + 1).is_some_and(|d| d.is_ascii_digit()) => {
+            c if c.is_ascii_digit() || (c == locale.decimal_separator() && ch(i + 1).is_some_and(|d| d.is_ascii_digit())) => {
                 // Number, unless it is a row range like 1:3 (handled by parser via Word) — numbers
                 // followed by ':' and digits are row refs: lex as Word.
                 let mut j = i;
@@ -193,7 +199,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                     i = j;
                     continue;
                 }
-                if ch(j) == Some('.') {
+                if ch(j) == Some(locale.decimal_separator()) {
                     j += 1;
                     while ch(j).is_some_and(|d| d.is_ascii_digit()) {
                         j += 1;
@@ -212,7 +218,10 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                     }
                 }
                 let text = src.get(start..pos_of(j)).unwrap_or("");
-                let v: f64 = text.parse().map_err(|_| LexError { msg: format!("bad number `{text}`"), pos: start })?;
+                let v: f64 = text
+                    .replace(locale.decimal_separator(), ".")
+                    .parse()
+                    .map_err(|_| LexError { msg: format!("bad number `{text}`"), pos: start })?;
                 push(&mut out, Tok::Number(v), j);
                 i = j;
             }
@@ -225,14 +234,16 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                 i += 1;
             }
             '{' => {
+                array_depth += 1;
                 push(&mut out, Tok::LBrace, i + 1);
                 i += 1;
             }
             '}' => {
+                array_depth = array_depth.saturating_sub(1);
                 push(&mut out, Tok::RBrace, i + 1);
                 i += 1;
             }
-            ',' => {
+            c if (array_depth == 0 && c == locale.list_separator()) || (array_depth > 0 && c == locale.array_column_separator()) => {
                 push(&mut out, Tok::Comma, i + 1);
                 i += 1;
             }
@@ -273,7 +284,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
             }
             c if is_word_char(c) => {
                 let mut j = i;
-                while ch(j).is_some_and(is_word_char) {
+                while ch(j).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
                     j += 1;
                 }
                 let w: String = chars.get(i..j).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();
@@ -283,13 +294,13 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                 } else if ch(j) == Some(':') && {
                     // Sheet1:Sheet3!A1 — look ahead for word then '!'
                     let mut k = j + 1;
-                    while ch(k).is_some_and(is_word_char) {
+                    while ch(k).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
                         k += 1;
                     }
                     k > j + 1 && ch(k) == Some('!')
                 } {
                     let mut k = j + 1;
-                    while ch(k).is_some_and(is_word_char) {
+                    while ch(k).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
                         k += 1;
                     }
                     let w2: String = chars.get(j + 1..k).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default();

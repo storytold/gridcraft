@@ -6,7 +6,7 @@ use gridcraft_core::addr::{letters_to_col, parse_a1_prefix};
 use gridcraft_core::{CellError, MAX_ROWS};
 
 use crate::ast::*;
-use crate::lexer::{Tok, Token, tokenize};
+use crate::lexer::{Tok, Token, tokenize_locale};
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 #[error("{msg}")]
@@ -15,15 +15,19 @@ pub struct ParseError {
     pub pos: usize,
 }
 
-const MAX_DEPTH: usize = 256;
+pub(crate) const MAX_DEPTH: usize = 256;
 
 /// Parses formula text. A leading `=` (or `+`/`-` as Lotus users type) is accepted and skipped
 /// for `=`.
 pub fn parse(src: &str) -> Result<Expr, ParseError> {
+    parse_syntax(src, crate::FormulaLocale::En)
+}
+
+pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale) -> Result<Expr, ParseError> {
     let body = src.strip_prefix('=').unwrap_or(src);
-    let toks = tokenize(body).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
+    let toks = tokenize_locale(body, locale).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
-    let mut p = Parser { toks, i: 0, depth: 0 };
+    let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
     let e = p.expr(0, false)?;
     match p.peek() {
         Tok::Eof => Ok(e),
@@ -62,6 +66,7 @@ struct Parser {
     toks: Vec<Token>,
     i: usize,
     depth: usize,
+    input: bool,
 }
 
 fn word_is_cols(w: &str) -> Option<(u32, bool)> {
@@ -324,6 +329,9 @@ impl Parser {
                 },
                 Tok::Text(s) => Expr::Text(Arc::from(s)),
                 Tok::Bool(b) => Expr::Bool(b),
+                Tok::Word(w) if self.input => crate::input::boolean_alias(&w)
+                    .map(Expr::Bool)
+                    .ok_or_else(|| self.err(format!("array constants may only contain constants, found {}", describe(&Tok::Word(w)))))?,
                 Tok::Error(e) => Expr::Error(e),
                 t => return Err(self.err(format!("array constants may only contain constants, found {}", describe(&t)))),
             };

@@ -19,6 +19,8 @@ pub const REF_COLORS: [Color32; 8] = [
 #[derive(Clone, Debug)]
 pub struct EditState {
     pub sheet: usize,
+    /// Syntax of this edit, captured when it starts (prevents a language switch reinterpreting it).
+    pub locale: gridcraft_engine::formula::FormulaLocale,
     pub cell: CellRef,
     pub text: String,
     /// Started by typing (Enter mode: arrows commit) rather than F2 (Edit mode: arrows move the caret).
@@ -46,6 +48,7 @@ impl EditState {
         let caret = text.chars().count();
         EditState {
             sheet,
+            locale: Default::default(),
             cell,
             text,
             enter_mode,
@@ -163,7 +166,8 @@ impl EditState {
                 continue;
             }
             match c {
-                ')' => depth += 1,
+                ')' | '}' | ']' => depth += 1,
+                '{' | '[' => depth -= 1,
                 '(' => {
                     if depth == 0 {
                         let name: String = chars[..i]
@@ -181,7 +185,7 @@ impl EditState {
                     }
                     depth -= 1;
                 }
-                ',' if depth == 0 => arg += 1,
+                c if c == self.locale.list_separator() && depth == 0 => arg += 1,
                 _ => {}
             }
         }
