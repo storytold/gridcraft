@@ -166,6 +166,14 @@ fn replacing_a_spilling_formula_clears_its_spill() {
 }
 
 #[test]
+fn range_ending_in_index_recalculates() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B6", "input": "=SUM(C3:INDEX(B9:C11,2,2))"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C5", "input": "2"})).unwrap();
+    assert_eq!(v(&s, "B6"), Value::Number(2.0));
+}
+
+#[test]
 fn every_command_survives_empty_params() {
     let mut s = Session::new();
     s.execute("file.new", json!({"sample": "sales"})).unwrap();

@@ -1337,6 +1337,20 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
         }
         Expr::Name(_) | Expr::Struct(_) => dynamic = true,
         Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !is_special(n) => dynamic = true,
+        // A range ending in a function's result (`A1:INDEX(B1:B9,n)`) covers the cells between
+        // the references inside it, not only those references.
+        Expr::Binary(BinOp::Range, a, b) if !matches!((&**a, &**b), (Expr::Ref(_), Expr::Ref(_))) => {
+            let mut inner = precedents(wb, sheet, a).0;
+            inner.extend(precedents(wb, sheet, b).0);
+            let mut boxes: Vec<Area> = Vec::new();
+            for area in inner {
+                match boxes.iter_mut().find(|x| x.sheet == area.sheet) {
+                    Some(x) => x.range = x.range.union(&area.range),
+                    None => boxes.push(area),
+                }
+            }
+            out.extend(boxes);
+        }
         _ => {}
     });
     (out, dynamic)
