@@ -115,7 +115,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
-| 2026-10-10 | Progress docs restructured to the craftrules standard; full re-measure (this page). ODS and XLSB data import (#100, #101); recalc linear in the number of range formulas (#66); RISC-V Linux build; Flatpak repository on Pages; web cell-commit trap fixed |
+| 2026-10-10 | Progress docs restructured to the craftrules standard; full re-measure (this page). Initial ribbon key tips (#43), in-place text box editing (#84), copy as HTML table (#36). ODS and XLSB data import (#100, #101); recalc linear in the number of range formulas (#66); RISC-V Linux build; Flatpak repository on Pages; web cell-commit trap fixed |
 | 2026-10-09 | Community fixes: spill range operator `A1#`, sheet-scoped names, protection refuses locked-cell edits, Insert/Delete Cells adjust references, `DATE(1900,2,29)`, SUMIF sizing, `ROUND` at 15 digits, `_xlpm.` LAMBDA parameters in XLSX, vertical scrollbar, system appearance, border previews; v0.4.0 |
 | 2026-10-08 | v0.2.0 and v0.3.0 releases; Flatpak, AppImage zsync, branded DMG; desktop log file; DirectX 12 default on Windows |
 | 2026-10-07 | About window with contributor and model credits; macOS release runner |

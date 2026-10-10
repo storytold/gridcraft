@@ -73,7 +73,7 @@ Kinds: **F** feature · **U** UI/UX · **FF** file format · **H** hardware · *
 - **Estimate:** 20–30 h for beta (25–40 h full).
 
 ### 9. Keyboard-first users: key tips, shortcuts, context menus (U)
-- **Evidence:** #33, #49 (no Alt key tips), #110, #21 (Insert Copied Cells), #28 (selection),
+- **Evidence:** #33, #49 (key tips: initial Home-tab support landed in #43 on 10-10, the rest of the ribbon not yet), #110, #21 (Insert Copied Cells), #28 (selection),
   59 command shortcuts vs Excel's 200+.
 - **Estimate:** 12–20 h. [ui-parity.md](ui-parity.md)
 

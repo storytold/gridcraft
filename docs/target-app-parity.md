@@ -45,7 +45,7 @@ generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
   Header & Footer, Sparkline, Slicer, Timeline), the Developer and Help tabs and sub-menu items, so
   89% of it is roughly **60–65% of Excel's full command surface** (estimated).
 - **Depth and readiness:** source reading (the model types in `crates/model/src/features.rs`,
-  readers and writers in `crates/xlsx/src`, the evaluator), 449 `#[test]` functions, and the
+  readers and writers in `crates/xlsx/src`, the evaluator), 478 `#[test]` functions, and the
   issue tracker: 60 open issues and 50 open PRs on 2026-10-10, 82 issues filed in total.
 - No cargo build or test ran for this pass (disk constraints); numbers come from source.
 
@@ -65,7 +65,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 |---|---|---|---|---|---|
 | Formula language and calculation | 18 | ~92% | ~72% | 20–30 | A1/R1C1 parser, reference adjustment, dependency-graph recalc, dynamic arrays and `#SPILL!`, `A1#`, LET/LAMBDA and helpers, structured references, names, 3-D references. Open correctness bugs: 15-digit equality (#57), stale spills after structural edits and cleared blockers (#133, #139), 3-D span endpoint deletion (#140), sheet rename and qualified names (#134). Single-threaded |
 | Worksheet functions | 12 | 95.8% (measured) | ~82% | 18–30 | 501 / 523 names, 492 working. Missing: FORECAST.ETS family, ODDF*/ODDL*, GETPIVOTDATA, TRIMRANGE, PERCENTOF, BAHTTEXT, IMAGE plus cloud functions. No conformance suite against Excel-computed oracles; edge-case bugs keep surfacing (#137, #138). [function-parity.md](function-parity.md) |
-| Editing, navigation, clipboard, fill | 12 | ~90% | ~70% | 15–25 | Point mode, F4, AutoComplete, Paste Special, AutoFill, Flash Fill, Find/Replace, Go To Special. Bugs: rectangular drag-select (#28), monthly fill (#132), cut across sheets (#128), Insert Copied Cells missing (#21), no Alt key tips (#33, #49). [ui-parity.md](ui-parity.md) |
+| Editing, navigation, clipboard, fill | 12 | ~90% | ~70% | 15–25 | Point mode, F4, AutoComplete, Paste Special, AutoFill, Flash Fill, Find/Replace, Go To Special. Bugs: rectangular drag-select (#28), monthly fill (#132), cut across sheets (#128), Insert Copied Cells missing (#21), key tips only on part of the Home tab (#43; #33, #49). [ui-parity.md](ui-parity.md) |
 | Cell formatting, styles, conditional formatting | 10 | ~95% | ~80% | 8–14 | Full number-format language, borders, 47 cell styles, 60 table styles, all CF rule kinds including data bars, colour scales and icon sets. Gaps: font weights beyond regular/bold (#168), system fonts list (#4), themes |
 | Sort, filter, tables, validation, outline | 8 | ~82% | ~70% | 10–16 | Multi-level sort, AutoFilter, Advanced Filter, tables with totals, validation, outline, subtotals, consolidate. Bugs: subtotal header (#131), validation edits (#129), table style panic caught (#130); no slicers on tables |
 | PivotTables | 7 | ~65% | ~45% | 25–40 | Insert/Recommended, field list, three layouts, date grouping, show-values-as, refresh, XLSX round-trip. Missing: slicers, timelines, calculated fields/items, PivotCharts, value/label filters, number grouping, GETPIVOTDATA, data-model pivots. Round-trip never checked in Excel |
@@ -84,7 +84,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 |---|---|---|---|---|
 | Features | 45 | ~59% | 300–485 | Table above |
 | File formats | 15 | ~50% | 80–120 | XLSX read/write is broad but unproven on a real corpus and in Excel; XLSB and ODS are values-only import; no XLS, XML Spreadsheet 2003, SYLK, DIF, PRN; VBA dropped; 100 MB XLSX fails (#175). [file-format-parity.md](file-format-parity.md) |
-| UI/UX fidelity | 12 | ~55% | 50–80 | Excel-style ribbon, galleries, dialogs, formula bar, status bar; 59 commands with shortcuts vs Excel's 200+; no key tips; short context menu; single window. [ui-parity.md](ui-parity.md) |
+| UI/UX fidelity | 12 | ~55% | 50–80 | Excel-style ribbon, galleries, dialogs, formula bar, status bar; 59 commands with shortcuts vs Excel's 200+; key tips on part of the Home tab only; short context menu; single window. [ui-parity.md](ui-parity.md) |
 | Performance | 8 | ~35% | 35–55 | [Performance](#performance) |
 | Stability | 8 | ~60% | 15–25 | Never-crash rules enforced by lint, every command fuzzed with hostile params, last-resort guard in `Session::execute`. Field reports: Windows Intel GPU crash (#120), error on close (#117), freeze opening from Finder (#166), screen flashing (#76) |
 | Localization | 4 | ~5% | 110–175 | English only; no catalog. [localization-parity.md](localization-parity.md) |

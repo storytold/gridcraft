@@ -17,7 +17,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Title bar, Quick Access Toolbar, AutoSave toggle | yes | yes | done; macOS window controls misaligned (#170), Dock icon size (#169) |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable tabs) | done; missing contextual tabs for pictures, shapes, sparklines, header/footer, slicers |
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing (File ▸ Options is the one missing File command) |
-| Key tips (Alt / Ctrl+F6 then letters) | yes | **no** (#33, #49) | 4–6 h |
+| Key tips (Alt / F10 then letters) | yes, every ribbon control | **initial** (#43, 10-10): Alt or F10 shows key tips on Home for alignment, Paste Special and AutoFit plus legacy Alt sequences; other tabs and controls not yet (#33, #49) | 3–5 h |
 | Formula bar with Name Box, expand, function hints | yes | yes | done |
 | Sheet tabs: rename, reorder, colour, hide, scroll | yes | yes | rename focus bug on macOS (#145) |
 | Status bar: Sum/Count/Average and more, view buttons, zoom | yes | yes | customizable statistics partial |
@@ -39,6 +39,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | AutoComplete in columns, function autocomplete and argument tips | done |
 | Header resize and double-click AutoFit | done (#42, #88 for header dividers) |
 | Freeze panes, split panes | freeze done; split to verify |
+| Copy as HTML table for other apps | done (#36, 10-10) |
 | Context menu on cells | 16 items (Cut, Copy, Paste, Paste Special, Insert, Delete, Clear Contents, Filter by value, Sort, New Comment, New Note, Format Cells, Pick From Drop-down List, Define Name, Link). Missing: Insert Copied/Cut Cells (#21), paste-option icons, Quick Analysis, Get Data from Table, Show Changes, Smart Lookup |
 | Context menus on row/column headers, sheet tabs, charts, shapes | headers and tabs done; objects partial |
 | Quick Analysis (Ctrl+Q) | missing |
@@ -54,7 +55,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Ctrl+1, Ctrl+; and Ctrl+Shift+; , Ctrl+D/R, Ctrl+E, Ctrl+T, Ctrl+K, Ctrl+Shift+L | yes | most done; audit pending |
 | F2, F4, F5, F9 family, Shift+F3, F11 | yes | most; F11 chart sheet missing (no chart sheets) |
 | Mac-specific (Cmd variants, Fn keys) | yes | Cmd mapping done |
-| Requests | — | #110 (more shortcuts and hot keys), #33 (sequential Alt) |
+| Requests | — | #110 (more shortcuts and hot keys), #33 (sequential Alt; initial support landed in #43) |
 
 Work: a shortcut table generated from the command catalog checked against Microsoft's published
 shortcut lists for Windows and Mac, then fill the gaps: 6–10 h.
@@ -81,7 +82,7 @@ by rule and will never match Office's, by design.
 
 ## Work (50–80 h)
 
-Key tips 4–6 · shortcut audit 6–10 · context menus and Quick Analysis 5–8 · Page Layout view
+Key tips 3–5 · shortcut audit 6–10 · context menus and Quick Analysis 5–8 · Page Layout view
 8–12 · Options dialog and ribbon/QAT customization 6–10 · accessibility 12–18 · selection and
 scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
