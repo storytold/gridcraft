@@ -124,7 +124,8 @@ fn dynamic_spills_and_legacy_cse_keep_distinct_ranges() {
     let (back, _) = read_xlsx(&bytes).unwrap();
     let sh = back.sheet(0).unwrap();
     assert_eq!(sh.cell(at("A1")).unwrap().formula.as_ref().unwrap().array, Some(range("A1:A2")));
-    assert_eq!(sh.value(at("A2")), Value::Number(2.0));
+    // A legacy array's cached values are dropped on read: the formula fills its range on recalc (#156).
+    assert!(sh.cell(at("A2")).is_none());
     assert_eq!(sh.cell(at("B1")).unwrap().formula.as_ref().unwrap().array, None);
     assert!(sh.cell(at("B2")).is_none());
     assert!(sh.cell(at("B3")).is_none());
