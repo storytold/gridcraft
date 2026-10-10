@@ -396,6 +396,7 @@ impl Calc {
             return;
         }
         let mut seeds: Vec<Key> = changed.to_vec();
+        let mut emptied: Vec<Key> = Vec::new();
         // Typing into (or clearing) a cell a dynamic array spills over (or would spill over)
         // re-evaluates the anchor, which may now be blocked or unblocked.
         for &k in changed {
@@ -409,6 +410,20 @@ impl Calc {
                     if c != k.1 && cell.value == Value::Error(CellError::Spill) {
                         seeds.push((k.0, c));
                     }
+                }
+                if !sh.cells.has(k.1) {
+                    match emptied.iter_mut().find(|x| x.0 == k.0) {
+                        Some(x) => x.1 = CellRef::new(x.1.row.max(k.1.row), x.1.col.max(k.1.col)),
+                        None => emptied.push(k),
+                    }
+                }
+            }
+        }
+        // An emptied cell can unblock an anchor any distance above or to the left of it.
+        for (si, end) in emptied {
+            for &(s, c) in self.graph.nodes.keys() {
+                if s == si && c.row <= end.row && c.col <= end.col && wb.sheet(s).is_some_and(|sh| sh.value(c) == Value::Error(CellError::Spill)) {
+                    seeds.push((s, c));
                 }
             }
         }

@@ -185,6 +185,16 @@ fn structural_edits_move_spills_with_their_formula() {
 }
 
 #[test]
+fn clearing_a_distant_blocker_unblocks_the_spill() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(100)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A90", "input": "x"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Error(gridcraft_core::CellError::Spill));
+    s.execute("edit.clearContents", json!({"range": "A90"})).unwrap();
+    assert_eq!((v(&s, "A1"), v(&s, "A100")), (Value::Number(1.0), Value::Number(100.0)));
+}
+
+#[test]
 fn every_command_survives_empty_params() {
     let mut s = Session::new();
     s.execute("file.new", json!({"sample": "sales"})).unwrap();
