@@ -684,48 +684,36 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
-fn font_group_name(name: &str) -> String {
-    // Explicit aliases for families with different naming patterns.
-    if name == "MingLiU" || name == "PMingLiU" {
-        return "MingLiU".to_owned();
-    }
+fn favorite_font_row(
+    ui: &mut egui::Ui,
+    font: &str,
+    selected: &mut String,
+    favorites: &mut Vec<String>,
+) {
+    ui.horizontal(|ui| {
+        let starred = favorites.iter().any(|f| f == font);
 
-    // Remove known regional, language and style suffixes.
-    let mut base = name;
+        let star = if starred { "★" } else { "☆" };
 
-    for suffix in [
-        " TC", " SC", " HK", " MO",
-        "-簡", "-繁", "－簡", "－繁",
-        "-简", "－简",
-        " 簡", " 繁", " 简",
-        "-Regular", "-Bold", "-Light",
-        " Regular", " Bold", " Light",
-    ] {
-        if let Some(prefix) = base.strip_suffix(suffix) {
-            if !prefix.is_empty() {
-                base = prefix;
-                break;
+        if ui.small_button(star).clicked() {
+            if starred {
+                favorites.retain(|f| f != font);
+            } else {
+                favorites.push(font.to_owned());
             }
         }
-    }
 
-    base.to_owned()
+        if ui.selectable_label(selected == font, font).clicked() {
+            *selected = font.to_owned();
+            ui.close();
+        }
+    });
 }
 
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
-    use std::collections::BTreeMap;
-
     let mut name = st.font.name.clone();
     let before = name.clone();
-
-    let mut groups: BTreeMap<String, Vec<&str>> = BTreeMap::new();
-
-    for font in crate::system_fonts::families() {
-        groups
-            .entry(font_group_name(font))
-            .or_default()
-            .push(font.as_str());
-    }
+    let mut favorites = app.ui.favorite_fonts.clone();
 
     egui::ComboBox::from_id_salt("font_name")
         .width(170.0)
@@ -736,33 +724,41 @@ fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
         .show_ui(ui, |ui| {
             ui.set_min_width(250.0);
 
-            for (family, members) in &groups {
+            if !favorites.is_empty() {
+                ui.label("Favorites");
+
+                // Snapshot the list so stars can be toggled safely.
+                let pinned = favorites.clone();
+
+                for font in &pinned {
+                    favorite_font_row(
+                        ui, font, &mut name, &mut favorites
+                    );
+                }
+
+                ui.separator();
+            }
+
+            for (family, members) in
+                crate::system_fonts::grouped_families()
+            {
                 if members.len() == 1 {
-                    // Single font: select directly, no submenu.
-                    let font = members[0];
-                    if ui.selectable_label(
-                        name == font,
-                        font,
-                    ).clicked() {
-                        name = font.to_owned();
-                        ui.close();
-                    }
+                    favorite_font_row(
+                        ui, &members[0], &mut name, &mut favorites
+                    );
                 } else {
-                    // Multiple fonts: use one expandable family.
                     ui.collapsing(family, |ui| {
                         for font in members {
-                            if ui.selectable_label(
-                                name == *font,
-                                *font,
-                            ).clicked() {
-                                name = (*font).to_owned();
-                                ui.close();
-                            }
+                            favorite_font_row(
+                                ui, font, &mut name, &mut favorites
+                            );
                         }
                     });
                 }
             }
         });
+
+    app.ui.favorite_fonts = favorites;
 
     if name != before {
         if crate::system_fonts::register(ui.ctx(), &name) {

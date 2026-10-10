@@ -42,6 +42,7 @@ pub struct UiState {
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
     pub recent: Vec<String>,
+    pub favorite_fonts: Vec<String>,
 }
 
 impl Default for UiState {
@@ -54,6 +55,7 @@ impl Default for UiState {
             formula_bar_expanded: false,
             status_bar: true,
             recent: vec![],
+            favorite_fonts: vec![],
         }
     }
 }
