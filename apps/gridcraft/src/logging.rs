@@ -262,6 +262,7 @@ impl log::Log for AppLogger {
         }
         // Formatted before the sink is locked, so a message that logs while it is formatted can't deadlock.
         let thread = std::thread::current();
+        #[allow(clippy::disallowed_methods)] // the desktop app (native only): wasm never runs it
         let line =
             format_line(&timestamp(SystemTime::now()), record.level(), thread.name().unwrap_or("?"), record.target(), &record.args().to_string());
         if self.stderr {

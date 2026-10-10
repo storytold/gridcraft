@@ -1,9 +1,9 @@
-//! Opening and saving files: XLSX (the native format), CSV/TSV, JSON (debug), HTML export.
+//! Opening and saving files: XLSX, XLSB and ODS data import, CSV/TSV, JSON (debug), HTML export.
 
 use std::fmt::Write as _;
 
-use gridcraft_core::CellRef;
-use gridcraft_model::Workbook;
+use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_model::{Sheet, Workbook};
 
 use crate::{EngineError, Result};
 
@@ -11,6 +11,8 @@ use crate::{EngineError, Result};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileKind {
     Xlsx,
+    Xlsb,
+    Ods,
     Csv,
     Tsv,
     Json,
@@ -22,6 +24,8 @@ impl FileKind {
         let ext = std::path::Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
         Some(match ext.as_str() {
             "xlsx" | "xlsm" | "xltx" | "xltm" => FileKind::Xlsx,
+            "xlsb" => FileKind::Xlsb,
+            "ods" => FileKind::Ods,
             "csv" => FileKind::Csv,
             "tsv" | "tab" | "txt" => FileKind::Tsv,
             "json" | "scjson" => FileKind::Json,
@@ -36,6 +40,18 @@ impl FileKind {
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
+    // Content wins over the extension: an ODS or XLSB package is imported as what it is,
+    // whatever it is called; the extension only decides when the bytes don't say.
+    let import = match sniffed {
+        gridcraft_xlsx::Format::Ods => Some(FileKind::Ods),
+        gridcraft_xlsx::Format::Xlsb => Some(FileKind::Xlsb),
+        _ => kind.filter(|k| matches!(k, FileKind::Ods | FileKind::Xlsb)),
+    };
+    if let Some(import) = import {
+        let read = if import == FileKind::Ods { gridcraft_xlsx::read_ods } else { gridcraft_xlsx::read_xlsb };
+        let (wb, report) = read(bytes).map_err(|e| EngineError::Other(format!("We can't import '{name}': {e}")))?;
+        return Ok((wb, report.warnings));
+    }
     if sniffed == gridcraft_xlsx::Format::Xlsx || kind == Some(FileKind::Xlsx) {
         let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
         return Ok((wb, report.warnings));
@@ -81,6 +97,8 @@ pub fn save_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
     let sheet = wb.active_sheet;
     match FileKind::from_path(path).unwrap_or(FileKind::Xlsx) {
         FileKind::Xlsx => gridcraft_xlsx::write_xlsx(wb).map_err(|e| EngineError::Other(e.to_string())),
+        FileKind::Xlsb => Err(EngineError::Other("XLSB is supported for data import only. Save as .xlsx or another supported export format.".into())),
+        FileKind::Ods => Err(EngineError::Other("ODS is supported for data import only. Save as .xlsx or another supported export format.".into())),
         FileKind::Csv => Ok(wb.sheet(sheet).map(|sh| gridcraft_xlsx::write_csv(sh, wb, b',')).unwrap_or_default()),
         FileKind::Tsv => Ok(wb.sheet(sheet).map(|sh| gridcraft_xlsx::write_csv(sh, wb, b'\t')).unwrap_or_default()),
         FileKind::Json => serde_json::to_vec_pretty(wb).map_err(|e| EngineError::Other(e.to_string())),
@@ -90,6 +108,109 @@ pub fn save_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef) -> String {
+    let st = wb.styles.get(sh.style_id(c));
+    let mut css = String::new();
+    if st.font.bold {
+        css.push_str("font-weight:bold;");
+    }
+    if st.font.italic {
+        css.push_str("font-style:italic;");
+    }
+    if let Some(h) = st.font.color.hex(&wb.theme) {
+        let _ = write!(css, "color:{h};");
+    }
+    if st.fill.pattern != gridcraft_model::PatternType::None
+        && let Some(h) = st.fill.fg.hex(&wb.theme)
+    {
+        let _ = write!(css, "background:{h};");
+    }
+    let v = sh.value(c);
+    let align = match st.align.h {
+        gridcraft_model::HAlign::Center => "center",
+        gridcraft_model::HAlign::Right => "right",
+        gridcraft_model::HAlign::Left => "left",
+        _ if v.is_number() => "right",
+        _ => "left",
+    };
+    let _ = write!(css, "text-align:{align};");
+    css
+}
+
+const CLIPBOARD_HTML_MAX_BYTES: usize = 4 * 1024 * 1024;
+const CLIPBOARD_HTML_MAX_CELLS: u64 = 10_000;
+
+/// An HTML fragment for the same range as `plain_text`, previously produced by
+/// `display::range_text`. Large copies keep plain text only; never return a partial table.
+pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &str) -> Option<String> {
+    let r = crate::display::clipboard_range(r);
+    if r.count() > CLIPBOARD_HTML_MAX_CELLS || plain_text.len() > CLIPBOARD_HTML_MAX_BYTES {
+        return None;
+    }
+    let sh = wb.sheet(sheet)?;
+    let mut out = ClipboardHtml(String::new());
+    out.write_str("<table style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\">").ok()?;
+    for row in r.start.row..=r.end.row {
+        if sh.is_row_hidden(row) {
+            continue;
+        }
+        out.write_str("<tr>").ok()?;
+        for col in r.start.col..=r.end.col {
+            let c = CellRef::new(row, col);
+            let span = if let Some(merged) = sh.merges.iter().find(|m| m.contains(c)).and_then(|m| m.intersection(&r)) {
+                let first_row = (merged.start.row..=merged.end.row).find(|&row| !sh.is_row_hidden(row))?;
+                if c != CellRef::new(first_row, merged.start.col) {
+                    continue;
+                }
+                let rows = (first_row..=merged.end.row).filter(|&row| !sh.is_row_hidden(row)).count();
+                format!(" rowspan=\"{rows}\" colspan=\"{}\"", merged.width())
+            } else {
+                String::new()
+            };
+            let css = html_cell_css(wb, sh, c);
+            write!(out, "<td style=\"border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;{css}\"{span}>").ok()?;
+            // Use the visible selected cell, even when the merge's original anchor
+            // is outside the range or hidden. This matches the plain-text copy.
+            let text = crate::display::cell_text(wb, sh, c);
+            let mut chars = text.chars().peekable();
+            while let Some(ch) = chars.next() {
+                match ch {
+                    '&' => out.write_str("&amp;"),
+                    '<' => out.write_str("&lt;"),
+                    '>' => out.write_str("&gt;"),
+                    '"' => out.write_str("&quot;"),
+                    '\r' => {
+                        if chars.peek() == Some(&'\n') {
+                            chars.next();
+                        }
+                        out.write_str("<br>")
+                    }
+                    '\n' => out.write_str("<br>"),
+                    _ => out.write_char(ch),
+                }
+                .ok()?;
+            }
+            out.write_str("</td>").ok()?;
+        }
+        out.write_str("</tr>").ok()?;
+    }
+    out.write_str("</table>").ok()?;
+    Some(out.0)
+}
+
+/// Enforce the budget while escaping, before HTML expansion can allocate a large string.
+struct ClipboardHtml(String);
+
+impl std::fmt::Write for ClipboardHtml {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        if s.len() > CLIPBOARD_HTML_MAX_BYTES.saturating_sub(self.0.len()) {
+            return Err(std::fmt::Error);
+        }
+        self.0.push_str(s);
+        Ok(())
+    }
 }
 
 /// A sheet as a standalone HTML table (Save as Web Page).
@@ -112,31 +233,7 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> String {
                 if sh.merges.iter().any(|m| m.contains(c) && m.start != c) {
                     continue;
                 }
-                let st = wb.styles.get(sh.style_id(c));
-                let mut css = String::new();
-                if st.font.bold {
-                    css.push_str("font-weight:bold;");
-                }
-                if st.font.italic {
-                    css.push_str("font-style:italic;");
-                }
-                if let Some(h) = st.font.color.hex(&wb.theme) {
-                    let _ = write!(css, "color:{h};");
-                }
-                if st.fill.pattern != gridcraft_model::PatternType::None
-                    && let Some(h) = st.fill.fg.hex(&wb.theme)
-                {
-                    let _ = write!(css, "background:{h};");
-                }
-                let v = sh.value(c);
-                let align = match st.align.h {
-                    gridcraft_model::HAlign::Center => "center",
-                    gridcraft_model::HAlign::Right => "right",
-                    gridcraft_model::HAlign::Left => "left",
-                    _ if v.is_number() => "right",
-                    _ => "left",
-                };
-                let _ = write!(css, "text-align:{align};");
+                let css = html_cell_css(wb, sh, c);
                 let span = sh
                     .merges
                     .iter()

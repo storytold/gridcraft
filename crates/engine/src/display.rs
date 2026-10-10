@@ -74,7 +74,7 @@ pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
 pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
     let Some(sh) = wb.sheet(sheet) else { return String::new() };
     let mut out = String::new();
-    let r = if r.count() > 2_000_000 { RangeRef::new(r.start, r.start.offset_clamped(1999, 999)) } else { r };
+    let r = clipboard_range(r);
     for row in r.start.row..=r.end.row {
         if sh.is_row_hidden(row) {
             continue;
@@ -97,6 +97,11 @@ pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
         out.push('\n');
     }
     out
+}
+
+/// The existing plain-text clipboard limit, shared with its HTML representation.
+pub(crate) fn clipboard_range(r: RangeRef) -> RangeRef {
+    if r.count() > 2_000_000 { RangeRef::new(r.start, r.start.offset_clamped(1999, 999)) } else { r }
 }
 
 /// Status-bar statistics for a selection: average, count (non-empty), numerical count, min,

@@ -1,13 +1,14 @@
 //! Dependency graph and recalculation.
 //!
 //! The graph maps every formula cell to its static precedents (resolved areas). A reverse index
-//! answers "which formulas read this cell?": single-cell precedents in a hash map, ranges in
-//! per-column buckets (wide ranges in a separate list). After an edit, the dirty set is the
+//! answers "which formulas read this cell?": single-cell precedents in a hash map, ranges as row
+//! intervals per column (wide ranges per sheet), each an interval index so a lookup costs
+//! O(log n + matches) however many ranges share the column. After an edit, the dirty set is the
 //! transitive closure of dependents; it is evaluated in topological order, with on-demand
 //! evaluation as a safety net for dynamic references. Cycles produce `#CIRC!` unless iterative
 //! calculation is on.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::hash::{BuildHasherDefault, Hasher};
 
 /// A fast, non-cryptographic hasher for cell keys (FxHash-style multiply-rotate).
@@ -51,19 +52,147 @@ struct Node {
     dynamic: bool,
 }
 
-/// Ranges wider than this many columns go to the wide list instead of per-column buckets.
+/// Ranges wider than this many columns go to the per-sheet wide index instead of per-column ones.
 const WIDE: u32 = 64;
+
+/// Insertions an [`Intervals`] keeps aside (scanned by every query) before merging them in.
+const PENDING: usize = 32;
+
+/// Row intervals `[r0, r1]`, each with a payload, answering "which intervals overlap rows
+/// `a..=b`?" in O(log n + k).
+///
+/// The intervals are sorted by start with an implicit segment tree of their largest end, so a query
+/// only descends into subtrees that hold a match. Removals mark entries dead (re-inserting one
+/// revives it); insertions wait in a small sorted set. [`Intervals::settle`] merges them and drops
+/// dead entries once either grows, so mutations cost O(log n) amortised.
+#[derive(Clone, Debug)]
+struct Intervals<T> {
+    /// Sorted, without duplicates.
+    items: Vec<(u32, u32, T)>,
+    dead: Vec<bool>,
+    dead_count: usize,
+    /// Segment tree over `items`: node `i` has children `2i` and `2i + 1`, leaves start at
+    /// `max_end.len() / 2`. Each node holds the largest end below it (dead entries included).
+    max_end: Vec<u32>,
+    /// Inserted since the last merge.
+    pending: BTreeSet<(u32, u32, T)>,
+}
+
+impl<T> Default for Intervals<T> {
+    fn default() -> Self {
+        Intervals { items: Vec::new(), dead: Vec::new(), dead_count: 0, max_end: Vec::new(), pending: BTreeSet::new() }
+    }
+}
+
+impl<T: Copy + Ord> Intervals<T> {
+    fn is_empty(&self) -> bool {
+        self.items.len() == self.dead_count && self.pending.is_empty()
+    }
+
+    fn insert(&mut self, r0: u32, r1: u32, t: T) {
+        let it = (r0, r1, t);
+        if let Ok(i) = self.items.binary_search(&it) {
+            if let Some(d) = self.dead.get_mut(i)
+                && *d
+            {
+                *d = false;
+                self.dead_count -= 1;
+            }
+            return;
+        }
+        self.pending.insert(it);
+    }
+
+    fn remove(&mut self, r0: u32, r1: u32, t: T) {
+        let it = (r0, r1, t);
+        if let Ok(i) = self.items.binary_search(&it) {
+            if let Some(d) = self.dead.get_mut(i)
+                && !*d
+            {
+                *d = true;
+                self.dead_count += 1;
+            }
+            return;
+        }
+        self.pending.remove(&it);
+    }
+
+    /// Merges pending insertions and drops dead entries when there are enough of them.
+    fn settle(&mut self) {
+        if self.pending.len() <= PENDING && self.dead_count <= (self.items.len() / 2).max(PENDING) {
+            return;
+        }
+        let mut all: Vec<(u32, u32, T)> = Vec::with_capacity(self.items.len() - self.dead_count + self.pending.len());
+        all.extend(self.items.iter().zip(&self.dead).filter(|(_, d)| !**d).map(|(it, _)| *it));
+        all.extend(std::mem::take(&mut self.pending));
+        // Two sorted runs: the stable sort merges them in linear time.
+        all.sort();
+        all.dedup();
+        let size = all.len().next_power_of_two();
+        let mut max_end = vec![0; 2 * size];
+        if let Some(leaves) = max_end.get_mut(size..) {
+            for (slot, it) in leaves.iter_mut().zip(&all) {
+                *slot = it.1;
+            }
+        }
+        for i in (1..size).rev() {
+            let m = max_end.get(2 * i).copied().unwrap_or(0).max(max_end.get(2 * i + 1).copied().unwrap_or(0));
+            if let Some(slot) = max_end.get_mut(i) {
+                *slot = m;
+            }
+        }
+        self.dead = vec![false; all.len()];
+        self.dead_count = 0;
+        self.items = all;
+        self.max_end = max_end;
+    }
+
+    /// Calls `f` for every interval overlapping rows `a..=b` (`r0 <= b && r1 >= a`). Returns the
+    /// number of tree nodes visited.
+    fn query(&self, a: u32, b: u32, f: &mut dyn FnMut(&T)) -> usize {
+        for it in &self.pending {
+            if it.0 <= b && it.1 >= a {
+                f(&it.2);
+            }
+        }
+        // Entries before `p` start at or before row `b`.
+        let p = self.items.partition_point(|it| it.0 <= b);
+        if p == 0 {
+            return 0;
+        }
+        self.walk(1, 0, self.max_end.len() / 2, p, a, f)
+    }
+
+    fn walk(&self, node: usize, lo: usize, hi: usize, p: usize, a: u32, f: &mut dyn FnMut(&T)) -> usize {
+        if lo >= p || self.max_end.get(node).is_none_or(|m| *m < a) {
+            return 1;
+        }
+        if hi - lo <= 1 {
+            if let (Some(it), Some(false)) = (self.items.get(lo), self.dead.get(lo))
+                && it.1 >= a
+            {
+                f(&it.2);
+            }
+            return 1;
+        }
+        let mid = lo + (hi - lo) / 2;
+        1 + self.walk(2 * node, lo, mid, p, a, f) + self.walk(2 * node + 1, mid, hi, p, a, f)
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct Graph {
     nodes: HashMap<Key, Node>,
     /// single cell → dependents
-    cell_deps: HashMap<Key, Vec<Key>>,
-    /// (sheet, col) → [(r0, r1, dependent)]
-    col_deps: HashMap<(usize, u32), Vec<(u32, u32, Key)>>,
-    /// (sheet, range, dependent)
-    wide_deps: Vec<(usize, RangeRef, Key)>,
+    cell_deps: HashMap<Key, HashSet<Key>>,
+    /// (sheet, col) → row intervals of the ranges (up to `WIDE` columns) that cover the column
+    col_deps: HashMap<(usize, u32), Intervals<Key>>,
+    /// sheet → row intervals of wider ranges, with their columns: (first, last, dependent)
+    wide_deps: HashMap<usize, Intervals<(u32, u32, Key)>>,
     dynamic: HashSet<Key>,
+    /// Range indexes changed since the last [`Graph::settle`].
+    unsettled_cols: HashSet<(usize, u32)>,
+    unsettled_wide: HashSet<usize>,
 }
 
 impl Graph {
@@ -74,18 +203,43 @@ impl Graph {
         self.nodes.is_empty()
     }
 
-    fn insert(&mut self, k: Key, node: Node) {
-        self.remove(k);
-        for a in &node.areas {
+    /// Index entries of a formula's precedents, without duplicates: single cells, column
+    /// intervals and wide ranges.
+    fn entries(areas: &[Area]) -> (Vec<Key>, Vec<(usize, u32, u32, u32)>, Vec<(usize, RangeRef)>) {
+        let (mut cells, mut cols, mut wide) = (Vec::new(), Vec::new(), Vec::new());
+        for a in areas {
             if a.range.is_single() {
-                self.cell_deps.entry((a.sheet, a.range.start)).or_default().push(k);
+                cells.push((a.sheet, a.range.start));
             } else if a.range.width() > WIDE {
-                self.wide_deps.push((a.sheet, a.range, k));
+                wide.push((a.sheet, a.range));
             } else {
                 for c in a.range.start.col..=a.range.end.col {
-                    self.col_deps.entry((a.sheet, c)).or_default().push((a.range.start.row, a.range.end.row, k));
+                    cols.push((a.sheet, c, a.range.start.row, a.range.end.row));
                 }
             }
+        }
+        cells.sort_unstable();
+        cells.dedup();
+        cols.sort_unstable();
+        cols.dedup();
+        wide.sort_unstable_by_key(|(s, r)| (*s, r.start, r.end));
+        wide.dedup();
+        (cells, cols, wide)
+    }
+
+    fn insert(&mut self, k: Key, node: Node) {
+        self.remove(k);
+        let (cells, cols, wide) = Self::entries(&node.areas);
+        for c in cells {
+            self.cell_deps.entry(c).or_default().insert(k);
+        }
+        for (s, c, r0, r1) in cols {
+            self.col_deps.entry((s, c)).or_default().insert(r0, r1, k);
+            self.unsettled_cols.insert((s, c));
+        }
+        for (s, r) in wide {
+            self.wide_deps.entry(s).or_default().insert(r.start.row, r.end.row, (r.start.col, r.end.col, k));
+            self.unsettled_wide.insert(s);
         }
         if node.dynamic {
             self.dynamic.insert(k);
@@ -95,54 +249,104 @@ impl Graph {
 
     fn remove(&mut self, k: Key) {
         let Some(old) = self.nodes.remove(&k) else { return };
-        for a in &old.areas {
-            if a.range.is_single() {
-                if let Some(v) = self.cell_deps.get_mut(&(a.sheet, a.range.start)) {
-                    v.retain(|x| *x != k);
+        let (cells, cols, wide) = Self::entries(&old.areas);
+        for c in cells {
+            if let Some(v) = self.cell_deps.get_mut(&c) {
+                v.remove(&k);
+                if v.is_empty() {
+                    self.cell_deps.remove(&c);
                 }
-            } else if a.range.width() > WIDE {
-                self.wide_deps.retain(|(_, _, d)| *d != k);
-            } else {
-                for c in a.range.start.col..=a.range.end.col {
-                    if let Some(v) = self.col_deps.get_mut(&(a.sheet, c)) {
-                        v.retain(|(_, _, d)| *d != k);
-                    }
-                }
+            }
+        }
+        for (s, c, r0, r1) in cols {
+            if let Some(v) = self.col_deps.get_mut(&(s, c)) {
+                v.remove(r0, r1, k);
+                self.unsettled_cols.insert((s, c));
+            }
+        }
+        for (s, r) in wide {
+            if let Some(v) = self.wide_deps.get_mut(&s) {
+                v.remove(r.start.row, r.end.row, (r.start.col, r.end.col, k));
+                self.unsettled_wide.insert(s);
             }
         }
         self.dynamic.remove(&k);
     }
 
+    /// Tidies the range indexes changed by `insert`/`remove` (queries stay correct without it,
+    /// just slower).
+    fn settle(&mut self) {
+        for key in std::mem::take(&mut self.unsettled_cols) {
+            if let Some(v) = self.col_deps.get_mut(&key) {
+                v.settle();
+                if v.is_empty() {
+                    self.col_deps.remove(&key);
+                }
+            }
+        }
+        for key in std::mem::take(&mut self.unsettled_wide) {
+            if let Some(v) = self.wide_deps.get_mut(&key) {
+                v.settle();
+                if v.is_empty() {
+                    self.wide_deps.remove(&key);
+                }
+            }
+        }
+    }
+
     /// Formulas that read cell `c` of `sheet`.
     pub fn dependents(&self, sheet: usize, c: CellRef, out: &mut Vec<Key>) {
         if let Some(v) = self.cell_deps.get(&(sheet, c)) {
-            out.extend_from_slice(v);
+            out.extend(v.iter().copied());
         }
         if let Some(v) = self.col_deps.get(&(sheet, c.col)) {
-            out.extend(v.iter().filter(|(r0, r1, _)| *r0 <= c.row && c.row <= *r1).map(|(_, _, k)| *k));
+            v.query(c.row, c.row, &mut |k| out.push(*k));
         }
-        out.extend(self.wide_deps.iter().filter(|(s, r, _)| *s == sheet && r.contains(c)).map(|(_, _, k)| *k));
+        if let Some(v) = self.wide_deps.get(&sheet) {
+            v.query(c.row, c.row, &mut |(c0, c1, k)| {
+                if *c0 <= c.col && c.col <= *c1 {
+                    out.push(*k);
+                }
+            });
+        }
     }
 
-    /// Formulas that read any cell of `range`.
+    /// Formulas that read any cell of `range` (a formula can be listed more than once).
     pub fn dependents_of_range(&self, sheet: usize, range: RangeRef, out: &mut Vec<Key>) {
         if range.count() <= 4096 {
             for c in range.iter() {
-                self.dependents(sheet, c, out);
+                if let Some(v) = self.cell_deps.get(&(sheet, c)) {
+                    out.extend(v.iter().copied());
+                }
             }
-            return;
-        }
-        for ((s, c), v) in &self.cell_deps {
-            if *s == sheet && range.contains(*c) {
-                out.extend_from_slice(v);
-            }
-        }
-        for ((s, col), v) in &self.col_deps {
-            if *s == sheet && range.start.col <= *col && *col <= range.end.col {
-                out.extend(v.iter().filter(|(r0, r1, _)| *r0 <= range.end.row && range.start.row <= *r1).map(|(_, _, k)| *k));
+        } else {
+            for ((s, c), v) in &self.cell_deps {
+                if *s == sheet && range.contains(*c) {
+                    out.extend(v.iter().copied());
+                }
             }
         }
-        out.extend(self.wide_deps.iter().filter(|(s, r, _)| *s == sheet && r.intersects(&range)).map(|(_, _, k)| *k));
+        let (r0, r1) = (range.start.row, range.end.row);
+        if (range.width() as usize) <= self.col_deps.len() {
+            for col in range.start.col..=range.end.col {
+                if let Some(v) = self.col_deps.get(&(sheet, col)) {
+                    v.query(r0, r1, &mut |k| out.push(*k));
+                }
+            }
+        } else {
+            for ((s, col), v) in &self.col_deps {
+                if *s == sheet && range.start.col <= *col && *col <= range.end.col {
+                    v.query(r0, r1, &mut |k| out.push(*k));
+                }
+            }
+        }
+        if let Some(v) = self.wide_deps.get(&sheet) {
+            v.query(r0, r1, &mut |(c0, c1, k)| {
+                if *c0 <= range.end.col && range.start.col <= *c1 {
+                    out.push(*k);
+                }
+            });
+        }
     }
 
     /// Precedent areas of a formula cell (for Trace Precedents).
@@ -177,6 +381,9 @@ struct PassHost<'a> {
     in_progress: HashSet<Key>,
     /// New spills found during the pass: anchor → array.
     spills: HashMap<Key, std::sync::Arc<Array>>,
+    /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
+    /// every row, so once per sheet rather than once per range read.
+    used: HashMap<usize, Option<RangeRef>>,
     rng: &'a mut u64,
     now: f64,
     cycle: bool,
@@ -321,6 +528,10 @@ impl Host for PassHost<'_> {
         }
         out
     }
+    fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
+        let wb = self.wb;
+        *self.used.entry(sheet).or_insert_with(|| wb.sheet(sheet).and_then(|s| s.used_range()))
+    }
     fn now_serial(&self) -> f64 {
         self.now
     }
@@ -360,6 +571,7 @@ impl Calc {
                 }
             }
         }
+        self.graph.settle();
     }
 
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
@@ -389,6 +601,7 @@ impl Calc {
                 }
             }
         }
+        self.graph.settle();
         if wb.calc.mode == CalcMode::Manual {
             // Only the edited formulas themselves are evaluated.
             let own: Vec<Key> = changed.iter().copied().filter(|k| self.graph.nodes.contains_key(k)).collect();
@@ -486,6 +699,7 @@ impl Calc {
                     pending: exprs.keys().copied().collect(),
                     in_progress: HashSet::default(),
                     spills: HashMap::default(),
+                    used: HashMap::default(),
                     rng: &mut rng,
                     now,
                     cycle: false,
@@ -573,6 +787,7 @@ impl Calc {
 }
 
 /// Local date-time as a serial (1900 system). Wasm without a clock returns a fixed date.
+#[allow(clippy::disallowed_methods)] // the clock is read only off wasm
 pub fn now_serial() -> f64 {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -602,6 +817,7 @@ pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> V
         pending: HashSet::default(),
         in_progress: HashSet::default(),
         spills: HashMap::default(),
+        used: HashMap::default(),
         rng: &mut rng,
         now: now_serial(),
         cycle: false,
@@ -612,6 +828,7 @@ pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> V
     ev.value(expr)
 }
 
+#[allow(clippy::disallowed_methods)] // the clock is read only off wasm
 fn prof_now() -> f64 {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -620,5 +837,215 @@ fn prof_now() -> f64 {
     #[cfg(target_arch = "wasm32")]
     {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use gridcraft_core::{CellRef, RangeRef, Value};
+    use gridcraft_model::{Cell, Formula, Workbook};
+
+    use super::{Calc, Intervals, Key};
+
+    /// xorshift64 for repeatable pseudo-random cases.
+    fn rng(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    fn found(iv: &Intervals<u32>, a: u32, b: u32) -> Vec<u32> {
+        let mut v = Vec::new();
+        iv.query(a, b, &mut |t| v.push(*t));
+        v.sort_unstable();
+        v
+    }
+
+    #[test]
+    fn intervals_match_a_linear_scan() {
+        let mut iv: Intervals<u32> = Intervals::default();
+        let mut model: Vec<(u32, u32, u32)> = Vec::new();
+        let mut s = 0x9E37_79B9_7F4A_7C15;
+        for step in 0..20_000u32 {
+            let roll = rng(&mut s) % 10;
+            if roll < 6 || model.is_empty() {
+                let r0 = (rng(&mut s) % 500) as u32;
+                let r1 = r0 + (rng(&mut s) % 40) as u32;
+                if !model.contains(&(r0, r1, step)) {
+                    iv.insert(r0, r1, step);
+                    model.push((r0, r1, step));
+                }
+            } else {
+                let i = (rng(&mut s) % model.len() as u64) as usize;
+                let (r0, r1, t) = model.swap_remove(i);
+                iv.remove(r0, r1, t);
+                if roll == 9 {
+                    // Removed and put back before the next merge.
+                    iv.insert(r0, r1, t);
+                    model.push((r0, r1, t));
+                }
+            }
+            if rng(&mut s).is_multiple_of(50) {
+                iv.settle();
+            }
+            if step.is_multiple_of(97) {
+                let a = (rng(&mut s) % 560) as u32;
+                let b = a + (rng(&mut s) % 30) as u32;
+                let mut want: Vec<u32> = model.iter().filter(|(r0, r1, _)| *r0 <= b && *r1 >= a).map(|(_, _, t)| *t).collect();
+                want.sort_unstable();
+                assert_eq!(found(&iv, a, b), want, "rows {a}..={b} at step {step}");
+            }
+        }
+        iv.settle();
+        for row in 0..560 {
+            let mut want: Vec<u32> = model.iter().filter(|(r0, r1, _)| *r0 <= row && row <= *r1).map(|(_, _, t)| *t).collect();
+            want.sort_unstable();
+            assert_eq!(found(&iv, row, row), want, "row {row}");
+        }
+        for (r0, r1, t) in std::mem::take(&mut model) {
+            iv.remove(r0, r1, t);
+        }
+        iv.settle();
+        assert!(iv.is_empty());
+    }
+
+    #[test]
+    fn interval_queries_cost_log_n_plus_matches() {
+        // 40k one-row ranges (like =SUM(E1:J1) down a column) and 1k ranges over everything:
+        // a point query visits O(log n) tree nodes per match, not every range in the column.
+        let n = 40_000u32;
+        let mut iv: Intervals<u32> = Intervals::default();
+        for r in 0..n {
+            iv.insert(r, r, r);
+        }
+        for t in 0..1_000 {
+            iv.insert(0, n, n + t);
+        }
+        iv.settle();
+        let mut worst = 0;
+        for row in (0..n).step_by(7) {
+            let mut k = 0;
+            let visited = iv.query(row, row, &mut |_| k += 1);
+            assert_eq!(k, 1_001);
+            worst = worst.max(visited);
+        }
+        // 1,001 matches in a tree of depth 16: well under 4 nodes per match plus the path.
+        assert!(worst < 4 * 1_001 + 64, "visited {worst} nodes");
+        let mut k = 0;
+        let visited = iv.query(n + 1, n + 5, &mut |_| k += 1);
+        assert_eq!(k, 0);
+        assert!(visited < 64, "visited {visited} nodes for no match");
+    }
+
+    /// `rows` rows of six numbers (E:J) and `=SUM(E{r}:J{r})` in K.
+    fn sum_rows(rows: u32) -> Workbook {
+        let mut wb = Workbook::new();
+        if let Some(sh) = wb.sheet_mut(0) {
+            for r in 0..rows {
+                for c in 4..10 {
+                    sh.cells.set(CellRef::new(r, c), Cell::value(Value::Number(f64::from(r % 97 + c))));
+                }
+                sh.cells.set(CellRef::new(r, 10), Cell::formula(Formula::new(&format!("=SUM(E{0}:J{0})", r + 1))));
+            }
+        }
+        wb
+    }
+
+    /// Opening (full recalc), changing every value of a column, and re-entering every formula.
+    #[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
+    fn open_and_bulk_edit(rows: u32) -> Duration {
+        let mut wb = sum_rows(rows);
+        let mut calc = Calc::new();
+        let t = Instant::now();
+        calc.recalc_all(&mut wb);
+        let values: Vec<Key> = (0..rows).map(|r| (0, CellRef::new(r, 4))).collect();
+        if let Some(sh) = wb.sheet_mut(0) {
+            for (_, c) in &values {
+                sh.cells.set(*c, Cell::value(Value::Number(1.0)));
+            }
+        }
+        calc.cells_changed(&mut wb, &values);
+        let formulas: Vec<Key> = (0..rows).map(|r| (0, CellRef::new(r, 10))).collect();
+        calc.cells_changed(&mut wb, &formulas);
+        let elapsed = t.elapsed();
+        let last = wb.sheet(0).map(|s| s.value(CellRef::new(rows - 1, 10)));
+        let r = rows - 1;
+        assert_eq!(last, Some(Value::Number(f64::from(1 + (5..10).map(|c| r % 97 + c).sum::<u32>()))));
+        elapsed
+    }
+
+    #[test]
+    fn range_formulas_recalc_and_bulk_edit_correctly() {
+        // The values behind the timing test below, checked on every run.
+        open_and_bulk_edit(500);
+    }
+
+    #[test]
+    #[ignore = "timing-sensitive; run with --ignored in release"]
+    #[allow(clippy::disallowed_methods)]
+    fn recalc_with_range_formulas_scales_linearly() {
+        // Each row's SUM reads a range in the same columns. Recalculating on open used to walk
+        // every row per range read (the used range), and finding a cell's dependents scanned
+        // every range in its column: 4x the rows took 16x the time. Linear is 4x; allow 8x.
+        let best = |rows| (0..3).map(|_| open_and_bulk_edit(rows)).min().unwrap_or_default();
+        let small = best(5_000);
+        let large = best(20_000);
+        assert!(large < small * 8 + Duration::from_millis(100), "5k rows {small:?}, 20k rows {large:?}");
+    }
+
+    #[test]
+    fn range_dependents_after_edits() {
+        // Formulas that read ranges, wide ranges and whole columns, found again after edits.
+        let mut wb = Workbook::new();
+        let mut calc = Calc::new();
+        let set = |wb: &mut Workbook, calc: &mut Calc, at: &str, input: &str| {
+            let c = CellRef::parse(at).unwrap();
+            let cell = if input.starts_with('=') { Cell::formula(Formula::new(input)) } else { Cell::value(Value::Number(input.parse().unwrap())) };
+            wb.sheet_mut(0).unwrap().cells.set(c, cell);
+            calc.cells_changed(wb, &[(0, c)]);
+        };
+        let num = |wb: &Workbook, at: &str| {
+            let v = wb.sheet(0).unwrap().value(CellRef::parse(at).unwrap());
+            v.as_f64().unwrap_or_else(|| panic!("{at} = {v:?}"))
+        };
+        set(&mut wb, &mut calc, "A1", "1");
+        set(&mut wb, &mut calc, "B2", "2");
+        set(&mut wb, &mut calc, "CZ3", "3");
+        set(&mut wb, &mut calc, "DA5", "=SUM(A1:B2)");
+        set(&mut wb, &mut calc, "DA6", "=SUM(A1:CZ3)");
+        set(&mut wb, &mut calc, "DA7", "=SUM(B:B)");
+        set(&mut wb, &mut calc, "DA8", "=SUM(2:2)");
+        assert_eq!((num(&wb, "DA5"), num(&wb, "DA6"), num(&wb, "DA7"), num(&wb, "DA8")), (3.0, 6.0, 2.0, 2.0));
+        set(&mut wb, &mut calc, "B2", "20");
+        assert_eq!((num(&wb, "DA5"), num(&wb, "DA6"), num(&wb, "DA7"), num(&wb, "DA8")), (21.0, 24.0, 20.0, 20.0));
+        // Re-entering a formula with another range drops the old one.
+        set(&mut wb, &mut calc, "DA5", "=SUM(A1:A2)");
+        set(&mut wb, &mut calc, "B2", "5");
+        assert_eq!(num(&wb, "DA5"), 1.0);
+        let mut deps = Vec::new();
+        calc.graph.dependents(0, CellRef::parse("B2").unwrap(), &mut deps);
+        deps.sort_unstable();
+        let at = |s: &str| (0, CellRef::parse(s).unwrap());
+        assert_eq!(deps, vec![at("DA6"), at("DA7"), at("DA8")]);
+        deps.clear();
+        calc.graph.dependents_of_range(0, RangeRef::new(CellRef::parse("A1").unwrap(), CellRef::parse("A9").unwrap()), &mut deps);
+        deps.sort_unstable();
+        deps.dedup();
+        assert_eq!(deps, vec![at("DA5"), at("DA6"), at("DA8")]);
+        set(&mut wb, &mut calc, "CZ3", "30");
+        assert_eq!(num(&wb, "DA6"), 36.0);
+        // Ranges on another sheet.
+        wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
+        set(&mut wb, &mut calc, "DA9", "=SUM(Data!A1:A3)+SUM(Data!A:CZ)");
+        assert_eq!(num(&wb, "DA9"), 0.0);
+        wb.sheet_mut(1).unwrap().cells.set(CellRef::parse("A2").unwrap(), Cell::value(Value::Number(4.0)));
+        calc.cells_changed(&mut wb, &[(1, CellRef::parse("A2").unwrap())]);
+        assert_eq!(num(&wb, "DA9"), 8.0);
+        deps.clear();
+        calc.graph.dependents(1, CellRef::parse("A2").unwrap(), &mut deps);
+        assert_eq!(deps, vec![at("DA9"), at("DA9")]);
     }
 }

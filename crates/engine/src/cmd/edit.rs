@@ -40,8 +40,8 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "edit.goToSpecial", "Go To Special…", ["Home", "Editing", "Find & Select"], None, "{kind: blanks|constants|formulas|comments|lastCell|currentRegion|visible|conditionalFormats|dataValidation|errors|numbers|text}", has_doc, go_to_special),
         cmd!(noundo "edit.undo", "Undo", ["Edit"], Some("Cmd+Z"), "{steps?: 1}", can_undo, undo),
         cmd!(noundo "edit.redo", "Redo", ["Edit"], Some("Cmd+Y"), "{steps?: 1}", can_redo, redo),
-        cmd!(noundo "edit.copy", "Copy", ["Home", "Clipboard"], Some("Cmd+C"), "{range?}", has_doc, copy),
-        cmd!(noundo "edit.cut", "Cut", ["Home", "Clipboard"], Some("Cmd+X"), "{range?}", has_doc, cut),
+        cmd!(noundo "edit.copy", "Copy", ["Home", "Clipboard"], Some("Cmd+C"), "{range?, html?: bool} → {range, text, html?} (html: a styled HTML table, only when requested and small enough)", has_doc, copy),
+        cmd!(noundo "edit.cut", "Cut", ["Home", "Clipboard"], Some("Cmd+X"), "{range?, html?: bool} → {range, text, html?} (html: a styled HTML table, only when requested and small enough)", has_doc, cut),
         cmd!(
             "edit.paste",
             "Paste",
@@ -611,9 +611,16 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
         range
     };
     let text = crate::display::range_text(&d.wb, sheet, range);
+    // The HTML rendering is for the host clipboard (UI); it can reach 4 MB, so agents and
+    // scripts get it only when they ask for it.
+    let html = if p.get("html").and_then(Json::as_bool) == Some(true) { crate::io::range_html(&d.wb, sheet, range, &text) } else { None };
     let clip = Clipboard { wb: d.wb.clone(), sheet, range, cut, doc_uid: d.uid, text: text.clone() };
     s.clipboard = Some(clip);
-    Ok(json!({"range": range.a1(), "text": text}))
+    let mut result = json!({"range": range.a1(), "text": text});
+    if let Some(html) = html {
+        result["html"] = Json::String(html);
+    }
+    Ok(result)
 }
 
 fn copy(s: &mut Session, p: &Json) -> Result<Json> {

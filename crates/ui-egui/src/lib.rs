@@ -16,10 +16,12 @@ pub mod formula_bar;
 pub mod grid;
 pub mod i18n;
 pub mod icons;
+pub mod keytips;
 pub mod panes;
 pub mod pivot_pane;
 pub mod ribbon;
 pub mod tabs;
+pub mod text_box;
 pub mod theme;
 pub mod widgets;
 
@@ -103,6 +105,9 @@ pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
     pub open_url: Option<Box<dyn Fn(&str)>>,
+    /// Publish HTML and its plain-text alternative together. `Ok` means the host owns the
+    /// write (including any asynchronous fallback); an immediate error uses egui's text path.
+    pub copy_html: Option<Box<dyn FnMut(&str, &str) -> Result<(), String>>>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Box<dyn Fn(&str, &[u8])>>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
@@ -127,6 +132,7 @@ pub struct SheetApp {
     pub ui: UiState,
     pub views: HashMap<(u64, usize), SheetView>,
     pub editor: Option<editor::EditState>,
+    pub text_box_editor: Option<text_box::EditState>,
     pub dialog: Option<dialogs::Dialog>,
     pub message: Option<(String, String)>,
     pub toast: Option<(String, f64)>,
@@ -143,6 +149,8 @@ pub struct SheetApp {
     fonts_han: Option<theme::HanOrder>,
     effective_dark: bool,
     pub name_box: Option<String>,
+    /// Transient ribbon keyboard navigation; never saved with UI preferences.
+    pub keytips: keytips::KeyTips,
     pub(crate) shots: control::Shots,
     /// Chart selected on the sheet (id).
     pub selected_chart: Option<u32>,
@@ -156,6 +164,7 @@ impl SheetApp {
             ui: UiState::default(),
             views: HashMap::new(),
             editor: None,
+            text_box_editor: None,
             dialog: None,
             message: None,
             toast: None,
@@ -174,6 +183,7 @@ impl SheetApp {
             fonts_han: None,
             effective_dark: false,
             name_box: None,
+            keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
             selected_chart: None,
             started: now_ms(),
@@ -193,12 +203,52 @@ impl SheetApp {
 
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        if id.starts_with("file.")
+            || matches!(
+                id,
+                "window.activate"
+                    | "sheet.activate"
+                    | "sheet.next"
+                    | "sheet.previous"
+                    | "sheet.move"
+                    | "sheet.hide"
+                    | "sheet.unhide"
+                    | "view.newWindow"
+                    | "view.hideWindow"
+                    | "view.unhideWindow"
+                    | "home.insertSheet"
+                    | "home.deleteSheet"
+                    | "edit.undo"
+                    | "edit.redo"
+                    | "object.delete"
+                    | "object.move"
+            )
+        {
+            self.commit_text_box_edit()?;
+        }
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
         let r = self.session.run(id, params);
         self.after_engine();
         r
+    }
+
+    /// Copy or cut the selected cells to the system clipboard. Engine-only commands keep
+    /// their existing internal clipboard behavior and do not write to the host clipboard.
+    pub fn copy_to_clipboard(&mut self, ctx: &egui::Context, command: &str) {
+        // Only ask the engine for HTML when the host can publish it.
+        let Ok(result) = self.run(command, json!({"html": self.services.copy_html.is_some()})) else { return };
+        let Some(text) = result.get("text").and_then(Json::as_str) else { return };
+        if let Some(html) = result.get("html").and_then(Json::as_str)
+            && let Some(copy_html) = &mut self.services.copy_html
+        {
+            match copy_html(html, text) {
+                Ok(()) => return,
+                Err(error) => log::warn!("HTML clipboard unavailable; copying plain text: {error}"),
+            }
+        }
+        ctx.copy_text(text.to_string());
     }
 
     /// Runs a command and shows its error in a message box (for menu/ribbon clicks).
@@ -295,6 +345,10 @@ impl SheetApp {
     }
 
     pub fn open_dialog(&mut self, name: &str, params: Json) {
+        if let Err(e) = self.commit_text_box_edit() {
+            self.message = Some(("Text Box".into(), clean_error(&e)));
+            return;
+        }
         match name {
             "open" => {
                 if let Some(start) = &self.services.open_async {
@@ -325,7 +379,7 @@ impl SheetApp {
     }
 
     pub fn open_path(&mut self, path: &str) {
-        match self.session.run("file.open", json!({"path": path})) {
+        match self.run("file.open", json!({"path": path})) {
             Ok(_) => {
                 self.ui.recent.retain(|p| p != path);
                 self.ui.recent.insert(0, path.to_string());
@@ -351,6 +405,10 @@ impl SheetApp {
 
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
+        if let Err(e) = self.commit_text_box_edit() {
+            self.message = Some(("Text Box".into(), clean_error(&e)));
+            return;
+        }
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
@@ -460,7 +518,7 @@ impl SheetApp {
             .unwrap_or_default();
         for (name, bytes) in arrived {
             let b64 = gridcraft_engine::io::base64_encode(&bytes);
-            if let Err(e) = self.session.run("file.open", json!({"name": name, "base64": b64})) {
+            if let Err(e) = self.run("file.open", json!({"name": name, "base64": b64})) {
                 self.message = Some(("GridCraft".into(), clean_error(&e)));
             }
             self.after_engine();
@@ -484,9 +542,11 @@ impl SheetApp {
             return;
         }
         let t0 = now_ms();
+        text_box::before_ui(self, &ctx);
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
         let t = theme::Tokens::get(&ctx);
+        self.ribbon_keys(&ctx);
         ribbon::title_bar(self, ui);
         ribbon::show(self, ui);
         if self.ui.formula_bar {
@@ -523,6 +583,7 @@ impl SheetApp {
         // AutoSave: save workbooks that have a file shortly after they change.
         if self.grid.autosave
             && self.editor.is_none()
+            && self.text_box_editor.is_none()
             && now - self.grid.last_autosave > 2000.0
             && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")))
         {
@@ -535,6 +596,43 @@ impl SheetApp {
             if self.grid.last_title.as_deref() != Some(title.as_str()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
                 self.grid.last_title = Some(title);
+            }
+        }
+    }
+
+    fn ribbon_keys(&mut self, ctx: &egui::Context) {
+        let before = self.keytips.prefix().map(str::to_string);
+        let enabled = self.editor.is_none()
+            && self.dialog.is_none()
+            && self.message.is_none()
+            && self.name_box.is_none()
+            && !ctx.text_edit_focused()
+            && self.grid.context_menu.is_none()
+            && self.grid.header_menu.is_none()
+            && self.grid.filter_menu.is_none()
+            && self.grid.list_picker.is_none()
+            && self.grid.renaming_tab.is_none()
+            && (before.is_some() || !egui::Popup::is_any_open(ctx));
+        let actions = self.keytips.process(ctx, enabled);
+        if before.is_some() && before.as_deref() != self.keytips.prefix() && !ctx.input(|i| i.pointer.any_pressed()) {
+            // Leave pointer cancellation to the popup so clicking a menu item still works.
+            egui::Popup::close_all(ctx);
+        }
+        // The legacy Edit/Format paths lead to the same existing Home menus. Switch once, when
+        // the prefix changes, not every frame (that would reset a tab the user picked meanwhile).
+        let after = self.keytips.prefix();
+        if after != before.as_deref() && matches!(after, Some("E" | "O" | "OC")) {
+            self.run_or_alert("ui.ribbonTab", json!({"tab": "Home"}));
+            self.ui.ribbon_collapsed = false;
+        }
+        for action in actions {
+            match action {
+                keytips::Action::Home => {
+                    self.run_or_alert("ui.ribbonTab", json!({"tab": "Home"}));
+                    self.ui.ribbon_collapsed = false;
+                }
+                keytips::Action::Command(id) => self.run_or_alert(id, json!({})),
+                keytips::Action::Dialog(name) => self.open_dialog(name, json!({})),
             }
         }
     }
@@ -573,6 +671,7 @@ pub fn clean_error(e: &str) -> String {
     e.to_string()
 }
 
+#[allow(clippy::disallowed_methods)] // the clock is read only off wasm
 pub fn now_ms() -> f64 {
     #[cfg(not(target_arch = "wasm32"))]
     {

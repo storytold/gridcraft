@@ -1,6 +1,8 @@
 //! Performance scenarios on large workbooks (release build):
 //! `cargo run --release -p gridcraft-engine --example perf -- [rows]`
 
+#![allow(clippy::disallowed_methods)] // a native-only benchmark: wasm never runs it
+
 use std::time::Instant;
 
 use gridcraft_engine::Session;

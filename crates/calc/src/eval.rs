@@ -62,6 +62,11 @@ pub trait Host {
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
         range.iter().map(|c| self.cell_value(sheet, c)).collect()
     }
+    /// The sheet's used range (`Sheet::used_range`, which walks every stored row). Hosts that
+    /// keep the workbook unchanged while evaluating can remember it.
+    fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
+        self.workbook().sheet(sheet).and_then(|s| s.used_range())
+    }
 }
 
 pub struct Evaluator<'h> {
@@ -144,9 +149,11 @@ impl<'h> Evaluator<'h> {
 
     /// Trims the bottom/right of an area to the sheet's used range (keeps the top-left so
     /// positions stay right).
-    pub fn trim(&self, a: &Area) -> RangeRef {
-        let Some(sheet) = self.host.workbook().sheet(a.sheet) else { return a.range };
-        let used = sheet.used_range();
+    pub fn trim(&mut self, a: &Area) -> RangeRef {
+        if self.host.workbook().sheet(a.sheet).is_none() {
+            return a.range;
+        }
+        let used = self.host.used_range(a.sheet);
         let (mut r1, mut c1) = (a.range.end.row, a.range.end.col);
         match used {
             Some(u) => {
@@ -910,7 +917,7 @@ impl<'h> Evaluator<'h> {
     }
 
     /// Whole rows/columns trimmed for ROW()/COLUMN() arrays.
-    fn trim_lines(&self, a: &Area) -> RangeRef {
+    fn trim_lines(&mut self, a: &Area) -> RangeRef {
         if a.range.is_full_cols() || a.range.is_full_rows() { self.trim(a) } else { a.range }
     }
 

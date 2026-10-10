@@ -324,7 +324,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let mut view = app.view();
     // Scrolling.
     let (scroll_delta, zoom_delta, modifiers) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers));
-    if resp.hovered() || resp.contains_pointer() {
+    if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
         if zoom_delta != 1.0 {
             let z = (sh.zoom as f32 * zoom_delta).clamp(10.0, 400.0).round();
             let _ = app.session.run("view.zoom", json!({"percent": z}));
@@ -418,6 +418,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // Interaction.
     let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu);
     interact(app, ui, &resp, &geo, sh, &wb);
+    crate::text_box::show(app, ui, &geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
         in_cell_editor(app, ui, &geo, sh, &wb);
     }
@@ -1040,6 +1041,10 @@ fn paint_headers(p: &Painter, geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::Sel
 // ------------------------------------------------------------------ interaction
 
 fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
+    // Text selection and editing must not also move the object or edit worksheet cells.
+    if app.text_box_editor.is_some() {
+        return;
+    }
     let ctx = ui.ctx().clone();
     // Enter/Space synthesize egui clicks; only real pointer clicks use sheet coordinates.
     let primary_clicked = resp.clicked_by(egui::PointerButton::Primary);
@@ -1127,6 +1132,13 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             && let Some((kind, id, rect)) = crate::chartview::hit(app, geo, sh, p)
         {
             app.selected_chart = Some(id);
+            if kind == "shape"
+                && resp.double_clicked()
+                && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::TextBox)
+            {
+                app.begin_text_box_edit(id);
+                return;
+            }
             if kind == "chart" && resp.double_clicked() {
                 app.grid.pane = Some("formatChart".into());
             }
@@ -1611,12 +1623,13 @@ fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
 /// Grid keyboard handling when no text field has focus.
 fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
     // Focus left on an editor that no longer exists goes back to the grid.
-    let stale = [egui::Id::new("gridcraft.cell_editor"), egui::Id::new("gridcraft.formula_bar")];
-    if app.editor.is_none() && ctx.memory(|m| m.focused()).is_some_and(|f| stale.contains(&f)) {
+    let stale = [egui::Id::new("gridcraft.cell_editor"), egui::Id::new("gridcraft.formula_bar"), crate::text_box::editor_id()];
+    let editing = app.editor.is_some() || app.text_box_editor.is_some();
+    if !editing && ctx.memory(|m| m.focused()).is_some_and(|f| stale.contains(&f)) {
         resp.request_focus();
     }
-    let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && !(app.editor.is_none() && stale.contains(&f)));
-    if app.editor.is_some() || app.dialog.is_some() || other_focus || app.message.is_some() {
+    let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
+    if editing || app.dialog.is_some() || other_focus || app.message.is_some() {
         return;
     }
     if ctx.memory(|m| m.focused()).is_none() {
@@ -1631,18 +1644,10 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     for ev in events {
         match ev {
             egui::Event::Copy => {
-                if let Ok(r) = app.run("edit.copy", json!({}))
-                    && let Some(t) = r.get("text").and_then(|t| t.as_str())
-                {
-                    ctx.copy_text(t.to_string());
-                }
+                app.copy_to_clipboard(ctx, "edit.copy");
             }
             egui::Event::Cut => {
-                if let Ok(r) = app.run("edit.cut", json!({}))
-                    && let Some(t) = r.get("text").and_then(|t| t.as_str())
-                {
-                    ctx.copy_text(t.to_string());
-                }
+                app.copy_to_clipboard(ctx, "edit.cut");
             }
             egui::Event::Paste(text) => app.run_or_alert("edit.paste", json!({"text": text})),
             egui::Event::Text(text) => {
@@ -1903,11 +1908,7 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                             }
                         }
                         "edit.copy" | "edit.cut" => {
-                            if let Ok(r) = app.run(id, json!({}))
-                                && let Some(t) = r.get("text").and_then(|t| t.as_str())
-                            {
-                                ui.ctx().copy_text(t.to_string());
-                            }
+                            app.copy_to_clipboard(ui.ctx(), id);
                         }
                         other => app.run_or_alert(other, json!({})),
                     }
@@ -2134,11 +2135,7 @@ fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
                         "ui:rowHeight" => app.open_dialog("rowHeight", json!({})),
                         "ui:columnWidth" => app.open_dialog("columnWidth", json!({})),
                         "edit.copy" | "edit.cut" => {
-                            if let Ok(r) = app.run(id, json!({}))
-                                && let Some(t) = r.get("text").and_then(|t| t.as_str())
-                            {
-                                ui.ctx().copy_text(t.to_string());
-                            }
+                            app.copy_to_clipboard(ui.ctx(), id);
                         }
                         other => app.run_or_alert(other, json!({})),
                     }

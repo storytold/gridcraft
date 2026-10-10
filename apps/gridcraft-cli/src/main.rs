@@ -147,6 +147,14 @@ impl Args {
 fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
     let r = s.execute(id, params).map_err(|e| e.to_string());
     s.take_ui_requests();
+    if id == "file.open"
+        && let Ok(value) = &r
+        && let Some(warnings) = value.get("warnings").and_then(Value::as_array)
+    {
+        for warning in warnings.iter().filter_map(Value::as_str) {
+            eprintln!("Warning: {warning}");
+        }
+    }
     r
 }
 

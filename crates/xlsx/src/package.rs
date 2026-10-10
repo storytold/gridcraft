@@ -58,22 +58,28 @@ impl<'a> Package<'a> {
 
     /// Reads a part's bytes; `Ok(None)` when it doesn't exist.
     pub fn read(&mut self, part: &str) -> Result<Option<Vec<u8>>, IoError> {
+        self.read_limited(part, MAX_PART)
+    }
+
+    /// Reads a small metadata part without allowing it to expand to the general part limit.
+    pub fn read_limited(&mut self, part: &str, maximum: u64) -> Result<Option<Vec<u8>>, IoError> {
+        let maximum = maximum.min(MAX_PART);
         let Some(&idx) = self.names.get(&normalize(part)) else {
             return Ok(None);
         };
         let mut f = self.zip.by_index(idx).map_err(|e| IoError::Zip(format!("{part}: {e}")))?;
-        if f.size() > MAX_PART {
+        if f.size() > maximum {
             return Err(IoError::TooLarge(format!("{part} expands to {} bytes", f.size())));
         }
         let remaining = MAX_TOTAL.saturating_sub(self.total);
-        let limit = MAX_PART.min(remaining);
+        let limit = maximum.min(remaining);
         let mut out = Vec::with_capacity(f.size().min(16 * 1024 * 1024) as usize);
         (&mut f).take(limit + 1).read_to_end(&mut out).map_err(|e| IoError::Zip(format!("{part}: {e}")))?;
         if out.len() as u64 > limit {
-            return Err(IoError::TooLarge(if limit < MAX_PART {
+            return Err(IoError::TooLarge(if remaining < maximum {
                 "package expands to more than 1 GB".into()
             } else {
-                format!("{part} expands to more than 512 MB")
+                format!("{part} expands to more than {maximum} bytes")
             }));
         }
         self.total += out.len() as u64;
