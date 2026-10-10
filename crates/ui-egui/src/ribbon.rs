@@ -1029,9 +1029,15 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
     }
     sep(ui);
     let pic = big_button(ui, Icon::Picture, "Pictures", "Insert a picture", true);
-    if pic.clicked() {
-        app.open_dialog("insertPicture", json!({}));
-    }
+    pic.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Pictures"));
+    egui::Popup::menu(&pic).show(|ui| {
+        for (label, placement) in [("Place in Cell", "cell"), ("Place over Cells", "overCells")] {
+            if ui.button(label).clicked() {
+                app.open_dialog("insertPicture", json!({"placement": placement}));
+                ui.close();
+            }
+        }
+    });
     let shapes = big_button(ui, Icon::Shapes, "Shapes", "Shapes", true);
     egui::Popup::menu(&shapes).show(|ui| {
         for (label, kind) in [

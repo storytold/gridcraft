@@ -94,6 +94,8 @@ by open equivalents or left out, not cloned.
 - PivotTables: Insert/Recommended PivotTables, field list pane, compact/outline/tabular layouts,
   date grouping, sort, filters, show-values-as, refresh, and XLSX round-trip.
 - Page layout & print: Page Break Preview, print settings, PDF export and printing.
+- Static in-cell PNG/JPEG pictures: file insertion, aspect-preserving fit, cell operations and
+  XLSX rich-value read/write. Clipboard images, floating/cell conversion and `IMAGE()` remain open.
 - What-if: Goal Seek, scenarios, data tables. Spelling (system word list) and thesaurus.
 - Draw: pen, highlighter, eraser, ink strokes and Ink to Shape. Task panes: Comments (threaded
   replies, resolve), Watch Window, Selection, Format Chart.

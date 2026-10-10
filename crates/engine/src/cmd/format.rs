@@ -585,7 +585,7 @@ fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
                             if let Some(mut cell) = sh.cells.get(c).cloned() {
                                 cell.value = gridcraft_core::Value::Empty;
                                 cell.formula = None;
-                                sh.cells.set(c, cell);
+                                sh.set_cell(c, cell);
                             }
                             touched.push((sheet, c));
                         }

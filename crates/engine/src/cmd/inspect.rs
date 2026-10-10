@@ -125,10 +125,11 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({
         "cell": c.a1(),
         "value": value_json(&sh.value(c)),
-        "type": match sh.value(c) { Value::Empty => "empty", Value::Number(_) => "number", Value::Text(_) => "text", Value::Bool(_) => "boolean", Value::Error(_) => "error", Value::Array(_) => "array" },
+        "type": if sh.cell_pictures.contains_key(&c) { "picture" } else { match sh.value(c) { Value::Empty => "empty", Value::Number(_) => "number", Value::Text(_) => "text", Value::Bool(_) => "boolean", Value::Error(_) => "error", Value::Array(_) => "array" } },
         "formula": cell.and_then(|x| x.formula.as_ref()).map(|f| format!("={}", f.text)),
         "text": crate::display::cell_text(&d.wb, sh, c),
-        "input": cell.map(|x| x.input_text()).unwrap_or_default(),
+        "input": sh.input_text(c),
+        "picture": sh.cell_pictures.get(&c).map(|picture| json!({"mime": picture.mime, "alt": picture.alt, "bytes": picture.data.len()})),
         "spilledFrom": sh.spill_ranges.iter().find(|(a, r)| **a != c && r.contains(c)).map(|(a, _)| a.a1()),
         "spill": sh.spill_ranges.get(&c).map(|r| r.a1()),
         "style": style,

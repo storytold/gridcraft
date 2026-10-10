@@ -251,6 +251,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
 
     // sheetData
     let mut keys: BTreeSet<CellRef> = sheet.cells.iter().map(|(c, _)| c).collect();
+    keys.extend(sheet.cell_pictures.keys().copied());
     keys.extend(extra.keys().copied());
     keys.extend(overrides.keys().copied());
     let mut rows: BTreeMap<u32, Vec<CellRef>> = BTreeMap::new();
@@ -291,7 +292,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             let cell = sheet.cells.get(*c);
             let ov = overrides.get(c);
             let ex = extra.get(c);
-            write_cell(&mut s, *c, cell, ov, ex, dynamic.get(c), &sid, out);
+            write_cell(&mut s, *c, cell, sheet.cell_pictures.get(c), ov, ex, dynamic.get(c), &sid, out);
         }
         s.push_str("</row>");
     }
@@ -536,6 +537,7 @@ fn write_cell(
     s: &mut String,
     c: CellRef,
     cell: Option<&Cell>,
+    picture: Option<&std::sync::Arc<gridcraft_model::CellPicture>>,
     ov: Option<&String>,
     extra: Option<&Value>,
     dynamic: Option<&RangeRef>,
@@ -546,6 +548,11 @@ fn write_cell(
     let _ = write!(s, "<c r=\"{}\"", c.a1());
     if style != 0 {
         let _ = write!(s, " s=\"{style}\"");
+    }
+    if let Some(picture) = picture {
+        let vm = out.cell_pictures.index(picture);
+        let _ = write!(s, " t=\"e\" vm=\"{vm}\"><v>#VALUE!</v></c>");
+        return;
     }
     let formula = if ov.is_some() { None } else { cell.and_then(|x| x.formula.as_ref()) };
     let value: Value = match (ov, extra) {

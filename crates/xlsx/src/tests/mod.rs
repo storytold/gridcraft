@@ -4,6 +4,7 @@ mod csv_tests;
 mod fixtures;
 mod malformed;
 mod pivot_tests;
+mod richdata_tests;
 mod roundtrip;
 
 use std::io::Write;

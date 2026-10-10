@@ -42,6 +42,16 @@ impl Formula {
     }
 }
 
+/// A static picture stored as cell content, independent of floating drawing anchors.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CellPicture {
+    /// Encoded PNG/JPEG bytes, base64 in JSON. Sheet entries share the payload through Arc.
+    #[serde(with = "crate::b64")]
+    pub data: Vec<u8>,
+    pub mime: String,
+    pub alt: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
     /// Constant value, or the cached result of the formula.

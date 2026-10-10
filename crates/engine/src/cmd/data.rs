@@ -265,6 +265,7 @@ fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_co
         // Move whole lines (cells with formulas adjusted for relative references).
         let lanes: Vec<u32> = if by_cols { (body.start.row..=body.end.row).collect() } else { (body.start.col..=body.end.col).collect() };
         let mut moved: Vec<(CellRef, Option<Cell>)> = Vec::with_capacity(body.count() as usize);
+        let mut pictures = Vec::new();
         for (dst_i, &src_i) in order.iter().enumerate() {
             for &k in &lanes {
                 let src = line(src_i, k);
@@ -277,6 +278,9 @@ fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_co
                     let shifted = gridcraft_formula::adjust::shift_relative(e, dst.row as i64 - src.row as i64, dst.col as i64 - src.col as i64);
                     c.formula = Some(Arc::new(Formula::from_expr(shifted)));
                 }
+                if let Some(picture) = sh.cell_pictures.get(&src) {
+                    pictures.push((dst, picture.clone()));
+                }
                 moved.push((dst, cell));
             }
         }
@@ -286,12 +290,13 @@ fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_co
         let shm = cx.sheet_mut(sheet)?;
         for (c, cell) in &moved {
             match cell {
-                Some(x) => shm.cells.set(*c, x.clone()),
+                Some(x) => shm.set_cell(*c, x.clone()),
                 None => {
-                    shm.cells.remove(*c);
+                    shm.remove_cell(*c);
                 }
             }
         }
+        shm.cell_pictures.extend(pictures);
         for (i, h) in heights.into_iter().enumerate() {
             let row = body.start.row + i as u32;
             match h {
@@ -600,21 +605,30 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
                 removed += 1;
             }
         }
+        let pictures: Vec<_> = keep
+            .iter()
+            .enumerate()
+            .flat_map(|(i, row)| {
+                (r.start.col..=r.end.col)
+                    .filter_map(move |col| sh.cell_pictures.get(&CellRef::new(*row, col)).map(|p| (CellRef::new(start + i as u32, col), p.clone())))
+            })
+            .collect();
         let rows: Vec<Vec<Option<Cell>>> =
             keep.iter().map(|row| (r.start.col..=r.end.col).map(|c| sh.cell(CellRef::new(*row, c)).cloned()).collect()).collect();
         let shm = cx.sheet_mut(sheet)?;
         for row in start..=r.end.row {
             for c in r.start.col..=r.end.col {
-                shm.cells.remove(CellRef::new(row, c));
+                shm.remove_cell(CellRef::new(row, c));
             }
         }
         for (i, cells) in rows.into_iter().enumerate() {
             for (j, cell) in cells.into_iter().enumerate() {
                 if let Some(cell) = cell {
-                    shm.cells.set(CellRef::new(start + i as u32, r.start.col + j as u32), cell);
+                    shm.set_cell(CellRef::new(start + i as u32, r.start.col + j as u32), cell);
                 }
             }
         }
+        shm.cell_pictures.extend(pictures);
         for c in RangeRef::new(CellRef::new(start, r.start.col), r.end).iter() {
             cx.changed.push((sheet, c));
         }
@@ -665,9 +679,9 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
             let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb).unwrap_or(None);
             let shm = cx.sheet_mut(sheet)?;
             match cell {
-                Some(x) => shm.cells.set(c, x),
+                Some(x) => shm.set_cell(c, x),
                 None => {
-                    shm.cells.remove(c);
+                    shm.remove_cell(c);
                 }
             }
             cx.changed.push((sheet, c));
@@ -873,7 +887,7 @@ fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
             let r = sh.used_range().and_then(|u| r.intersection(&u));
             let Some(r) = r else { continue };
             for c in r.iter().take(100_000) {
-                let text = sh.cell(c).map(|x| x.input_text()).unwrap_or_default();
+                let text = sh.input_text(c);
                 if !text.is_empty() && check_validation(&d.wb, sheet, c, &text).is_some() {
                     bad_cells.push(c.a1());
                 }

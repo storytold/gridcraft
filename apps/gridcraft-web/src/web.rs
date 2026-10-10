@@ -92,6 +92,7 @@ impl eframe::App for WebShell {
 
 fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     let open_inbox = inbox.clone();
+    let picture_ctx = ctx.clone();
     Services {
         open_async: Some(Box::new(move || {
             let inbox = open_inbox.clone();
@@ -104,6 +105,17 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
                 };
                 let bytes = file.read().await;
                 inbox.lock().unwrap_or_else(|e| e.into_inner()).push((file.file_name(), bytes));
+                ctx.request_repaint();
+            });
+        })),
+        pick_picture_async: Some(Box::new(move |inbox| {
+            let ctx = picture_ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let Some(file) = rfd::AsyncFileDialog::new().add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"]).pick_file().await else {
+                    return;
+                };
+                let bytes = file.read().await;
+                inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((file.file_name(), bytes));
                 ctx.request_repaint();
             });
         })),

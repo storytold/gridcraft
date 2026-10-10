@@ -544,6 +544,10 @@ fn paint_quadrant(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet, 
     // Text and per-cell decorations.
     for (c, rect, lk, cfl) in &looks {
         let c = *c;
+        if let Some(picture) = sh.cell_pictures.get(&c) {
+            crate::cell_pictures::paint(p, *rect, picture);
+            continue;
+        }
         let v = sh.value(c);
         if let Some(l) = cfl
             && let Some((frac, rgb, gradient)) = l.bar

@@ -1,11 +1,12 @@
 //! Worksheets.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use serde::{Deserialize, Serialize};
 
-use crate::cell::Cell;
+use crate::cell::{Cell, CellPicture};
 use crate::features::*;
 use crate::store::CellStore;
 use crate::style::{Color, StyleId};
@@ -22,6 +23,9 @@ pub enum Visibility {
 pub struct Sheet {
     pub name: String,
     pub cells: CellStore,
+    /// Static pictures are sparse rich content. Ordinary cells carry no picture pointer.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "picture_map")]
+    pub cell_pictures: BTreeMap<CellRef, Arc<CellPicture>>,
     /// Values spilled by dynamic-array formulas (maintained by calc), keyed by cell.
     #[serde(skip)]
     pub spill: BTreeMap<CellRef, Value>,
@@ -73,6 +77,7 @@ impl Sheet {
         Sheet {
             name: name.into(),
             cells: CellStore::new(),
+            cell_pictures: BTreeMap::new(),
             spill: BTreeMap::new(),
             spill_ranges: BTreeMap::new(),
             cols: BTreeMap::new(),
@@ -134,7 +139,30 @@ impl Sheet {
     }
     pub fn set_value(&mut self, c: CellRef, v: Value) {
         let style = self.style_id(c);
-        self.cells.set(c, Cell { value: v, formula: None, style });
+        self.set_cell(c, Cell { value: v, formula: None, style });
+    }
+    /// Replaces content, removing any picture at this address. Style-only edits use set_style.
+    pub fn set_cell(&mut self, c: CellRef, cell: Cell) {
+        self.cell_pictures.remove(&c);
+        self.cells.set(c, cell);
+    }
+    pub fn remove_cell(&mut self, c: CellRef) -> Option<Cell> {
+        self.cell_pictures.remove(&c);
+        self.cells.remove(c)
+    }
+    /// Removes content in a range; returns scalar cells, with pictures removed from the side map.
+    pub fn take_cells(&mut self, range: RangeRef) -> Vec<(CellRef, Cell)> {
+        self.cell_pictures.retain(|c, _| !range.contains(*c));
+        self.cells.take_range(range)
+    }
+    /// Pictures retain a scalar fallback for calculation and unsupported consumers.
+    pub fn set_picture(&mut self, c: CellRef, picture: Arc<CellPicture>) {
+        let style = self.style_id(c);
+        self.cells.set(c, Cell { value: Value::Error(gridcraft_core::CellError::Value), formula: None, style });
+        self.cell_pictures.insert(c, picture);
+    }
+    pub fn input_text(&self, c: CellRef) -> String {
+        if self.cell_pictures.contains_key(&c) { String::new() } else { self.cell(c).map(Cell::input_text).unwrap_or_default() }
     }
     pub fn set_style(&mut self, c: CellRef, style: StyleId) {
         let mut cell = self.cells.get(c).cloned().unwrap_or_default();
@@ -337,5 +365,17 @@ mod tests {
         assert_eq!(s.col_at(1e12), gridcraft_core::MAX_COLS - 1);
         assert_eq!(s.col_at(-5.0), 0);
         assert_eq!(s.col_left(2), 128.0);
+    }
+}
+
+// CellRef is a struct, so encode the sparse map as entries for JSON as well as other formats.
+mod picture_map {
+    use super::*;
+    use serde::{Deserializer, Serializer};
+    pub fn serialize<S: Serializer>(map: &BTreeMap<CellRef, Arc<CellPicture>>, serializer: S) -> Result<S::Ok, S::Error> {
+        map.iter().collect::<Vec<_>>().serialize(serializer)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<CellRef, Arc<CellPicture>>, D::Error> {
+        Ok(Vec::<(CellRef, Arc<CellPicture>)>::deserialize(deserializer)?.into_iter().collect())
     }
 }

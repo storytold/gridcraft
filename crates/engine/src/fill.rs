@@ -45,6 +45,7 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
     let lanes: Vec<u32> = if vertical { (src.start.col..=src.end.col).collect() } else { (src.start.row..=src.end.row).collect() };
     let src_len = if vertical { src.height() } else { src.width() };
     let mut writes: Vec<(CellRef, Option<Cell>)> = Vec::new();
+    let mut pictures = Vec::new();
     for lane in lanes {
         let src_cells: Vec<(CellRef, Option<Cell>)> = (0..src_len)
             .map(|i| {
@@ -97,18 +98,23 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                     cell.style = style;
                 }
             }
+            if let Some(picture) = sh.cell_pictures.get(&sc) {
+                pictures.push((*t, picture.clone()));
+            }
             writes.push((*t, if cell.is_blank() { None } else { Some(cell) }));
         }
     }
     let sh = cx.sheet_mut(sheet)?;
     for (c, cell) in &writes {
         match cell {
-            Some(x) => sh.cells.set(*c, x.clone()),
+            Some(x) if mode == FillMode::Formats => sh.cells.set(*c, x.clone()),
+            Some(x) => sh.set_cell(*c, x.clone()),
             None => {
-                sh.cells.remove(*c);
+                sh.remove_cell(*c);
             }
         }
     }
+    sh.cell_pictures.extend(pictures);
     for (c, _) in writes {
         cx.touch(sheet, c);
     }
@@ -339,7 +345,7 @@ pub fn series(cx: &mut Ctx, sheet: usize, r: RangeRef, rows: bool, kind: &str, s
     }
     let sh = cx.sheet_mut(sheet)?;
     for (c, cell) in &writes {
-        sh.cells.set(*c, cell.clone());
+        sh.set_cell(*c, cell.clone());
     }
     for (c, _) in writes {
         cx.touch(sheet, c);
@@ -393,7 +399,7 @@ pub fn flash_fill(cx: &mut Ctx, sheet: usize, at: CellRef) -> Result<usize> {
     }
     let sh = cx.sheet_mut(sheet)?;
     for (c, out) in &writes {
-        sh.cells.set(*c, Cell { value: Value::text(out.as_str()), formula: None, style });
+        sh.set_cell(*c, Cell { value: Value::text(out.as_str()), formula: None, style });
     }
     for (c, _) in writes {
         cx.touch(sheet, c);

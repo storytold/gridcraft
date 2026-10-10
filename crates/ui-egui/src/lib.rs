@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod border_preview;
+mod cell_pictures;
 pub mod chartview;
 pub mod control;
 pub mod credits;
@@ -94,6 +95,11 @@ pub struct SheetView {
 pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// Native picture picker (PNG/JPEG), separate from workbook opening.
+    pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot
+    /// insert into a subsequent dialog or open the image as a workbook.
+    pub pick_picture_async: Option<Box<dyn Fn(Inbox)>>,
     pub open_url: Option<Box<dyn Fn(&str)>>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Box<dyn Fn(&str, &[u8])>>,
@@ -318,7 +324,13 @@ impl SheetApp {
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
-        let current = sh.cell(at).map(|c| c.input_text()).unwrap_or_default();
+        // A picture has no editable scalar text. Selecting it, F2, or clicking
+        // the formula bar must not turn its fallback value into a text edit.
+        // Typing still starts an intentional replacement.
+        if text.is_none() && sh.cell_pictures.contains_key(&at) {
+            return;
+        }
+        let current = sh.input_text(at);
         let (text, replace) = match text {
             Some(t) => (t, true),
             None => (current.clone(), false),

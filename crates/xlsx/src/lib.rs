@@ -17,6 +17,7 @@ mod fmla;
 mod package;
 mod pivot;
 mod read;
+mod richdata;
 mod sheet_read;
 mod sheet_write;
 mod styles;

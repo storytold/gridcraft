@@ -213,16 +213,16 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
             let sh = cx.sheet_mut(sheet)?;
-            sh.cells.set(range.start, cell);
+            sh.set_cell(range.start, cell);
             cx.touch(sheet, range.start);
             return Ok(Json::Null);
         }
         let cell = input_to_cell(&input, sheet, at, &mut cx.wb)?;
         let sh = cx.sheet_mut(sheet)?;
         match cell {
-            Some(c) => sh.cells.set(at, c),
+            Some(c) => sh.set_cell(at, c),
             None => {
-                sh.cells.remove(at);
+                sh.remove_cell(at);
             }
         }
         cx.touch(sheet, at);
@@ -278,9 +278,9 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                 };
                 let sh = cx.sheet_mut(sheet)?;
                 match cell {
-                    Some(c) => sh.cells.set(at, c),
+                    Some(c) => sh.set_cell(at, c),
                     None => {
-                        sh.cells.remove(at);
+                        sh.remove_cell(at);
                     }
                 }
                 cx.touch(sheet, at);
@@ -312,7 +312,7 @@ fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
                     cell.formula = Some(std::sync::Arc::new(Formula::from_expr(shifted)));
                 }
                 cell.style = cx.wb.sheet(sheet).and_then(|sh| sh.cell(at)).map(|c| c.style).unwrap_or(cell.style);
-                cx.sheet_mut(sheet)?.cells.set(at, cell);
+                cx.sheet_mut(sheet)?.set_cell(at, cell);
                 cx.touch(sheet, at);
             }
         }
@@ -668,9 +668,9 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
                 let cell = input_to_cell(v, sheet, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
                 let sh = cx.sheet_mut(sheet)?;
                 match cell {
-                    Some(cell) => sh.cells.set(c, cell),
+                    Some(cell) => sh.set_cell(c, cell),
                     None => {
-                        sh.cells.remove(c);
+                        sh.remove_cell(c);
                     }
                 }
                 cx.touch(sheet, c);
@@ -783,9 +783,12 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             *style_map.entry(id).or_insert_with(|| wb.styles.intern(src_wb.styles.get(id).clone()))
         };
         let mut moved_formulas = Vec::new();
+        let mut moved_pictures = std::collections::BTreeMap::new();
         if cut_move {
             // Remove the source first (contents and formats), and fix references to it.
-            let taken = cx.sheet_mut(clip.sheet)?.cells.take_range(src);
+            let source = cx.sheet_mut(clip.sheet)?;
+            moved_pictures = source.cell_pictures.iter().filter(|(c, _)| src.contains(**c)).map(|(c, p)| (*c, p.clone())).collect();
+            let taken = source.take_cells(src);
             for (c, _) in &taken {
                 cx.touch(clip.sheet, *c);
             }
@@ -804,10 +807,13 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             src_sheet.cell(sc).cloned()
                         };
                         let src_val = src_sheet.value(sc);
-                        if skip_blanks && src_val.is_empty() && src_cell.as_ref().is_none_or(|x| x.formula.is_none()) {
+                        let src_picture = if cut_move { moved_pictures.get(&sc) } else { src_sheet.cell_pictures.get(&sc) }.cloned();
+                        if skip_blanks && src_picture.is_none() && src_val.is_empty() && src_cell.as_ref().is_none_or(|x| x.formula.is_none()) {
                             continue;
                         }
                         let old = cx.wb.sheet(dest_sheet).and_then(|sh| sh.cell(dest)).cloned().unwrap_or_default();
+                        let old_picture = cx.wb.sheet(dest_sheet).and_then(|sh| sh.cell_pictures.get(&dest)).cloned();
+                        let mut new_picture = old_picture.clone();
                         let mut new = old.clone();
                         let shift = |cell: &Cell| -> Option<std::sync::Arc<Formula>> {
                             let f = cell.formula.as_ref()?;
@@ -827,10 +833,12 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             };
                             new.formula = Some(std::sync::Arc::new(Formula::new(&format!("={sheet_prefix}{}", sc.a1()))));
                             new.value = Value::Empty;
+                            new_picture = None;
                         } else {
                             let sc_cell = src_cell.clone().unwrap_or_default();
                             match what {
                                 What::All | What::AllExceptBorders => {
+                                    new_picture = src_picture.clone();
                                     new.formula = shift(&sc_cell);
                                     new.value = if new.formula.is_some() { Value::Empty } else { sc_cell.value.clone() };
                                     let st = map_style(sc_cell.style, &mut cx.wb);
@@ -842,6 +850,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                     };
                                 }
                                 What::Formulas | What::FormulasAndNumberFormats => {
+                                    new_picture = src_picture.clone();
                                     new.formula = shift(&sc_cell);
                                     new.value = if new.formula.is_some() { Value::Empty } else { sc_cell.value.clone() };
                                     if what == What::FormulasAndNumberFormats {
@@ -850,6 +859,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                     }
                                 }
                                 What::Values | What::ValuesAndNumberFormats => {
+                                    new_picture = src_picture.clone();
                                     new.formula = None;
                                     new.value = src_val.clone();
                                     if what == What::ValuesAndNumberFormats {
@@ -865,6 +875,10 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                 && matches!(what, What::All | What::Values | What::ValuesAndNumberFormats | What::Formulas)
                                 && new.formula.is_none()
                             {
+                                if old_picture.is_some() || new_picture.is_some() {
+                                    new_picture = None;
+                                    new.value = Value::Error(gridcraft_core::CellError::Value);
+                                }
                                 let a = old.value.clone();
                                 let b = new.value.clone();
                                 if let (Ok(x), Ok(y)) = (a.to_number(), b.to_number())
@@ -902,9 +916,12 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                 if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
                                     cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
                                 }
-                                cx.sheet_mut(dest_sheet)?.cells.set(dest, new);
+                                cx.sheet_mut(dest_sheet)?.set_cell(dest, new);
                             }
-                            _ => cx.sheet_mut(dest_sheet)?.cells.set(dest, new),
+                            _ => cx.sheet_mut(dest_sheet)?.set_cell(dest, new),
+                        }
+                        if let Some(picture) = new_picture {
+                            cx.sheet_mut(dest_sheet)?.cell_pictures.insert(dest, picture);
                         }
                         cx.touch(dest_sheet, dest);
                     }
@@ -997,12 +1014,12 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
             for (c, mut cell) in cells {
                 match what {
                     "all" => {
-                        sh.cells.remove(c);
+                        sh.remove_cell(c);
                     }
                     "contents" => {
                         cell.value = Value::Empty;
                         cell.formula = None;
-                        sh.cells.set(c, cell);
+                        sh.set_cell(c, cell);
                     }
                     "formats" => {
                         cell.style = StyleId::DEFAULT;
@@ -1222,7 +1239,7 @@ fn replace(s: &mut Session, p: &Json) -> Result<Json> {
         let mut n = 0;
         for si in sheets {
             let cells: Vec<(CellRef, String)> =
-                cx.wb.sheet(si).map(|sh| sh.cells.iter().map(|(c, cell)| (c, cell.input_text())).collect()).unwrap_or_default();
+                cx.wb.sheet(si).map(|sh| sh.cells.iter().map(|(c, _)| (c, sh.input_text(c))).collect()).unwrap_or_default();
             for (c, text) in cells {
                 if !all && c != active {
                     continue;
@@ -1240,9 +1257,9 @@ fn replace(s: &mut Session, p: &Json) -> Result<Json> {
                 let cell = input_to_cell(&new, si, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(new.as_str()))));
                 let sh = cx.sheet_mut(si)?;
                 match cell {
-                    Some(cell) => sh.cells.set(c, cell),
+                    Some(cell) => sh.set_cell(c, cell),
                     None => {
-                        sh.cells.remove(c);
+                        sh.remove_cell(c);
                     }
                 }
                 cx.touch(si, c);

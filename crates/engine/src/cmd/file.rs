@@ -56,6 +56,13 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         s.close_document(0);
     }
     let i = s.add_document(DocState::new(wb, path, title));
+    if !warnings.is_empty() {
+        let mut message = warnings.iter().take(5).cloned().collect::<Vec<_>>().join("\n\n");
+        if warnings.len() > 5 {
+            message.push_str(&format!("\n\n{} additional import warnings.", warnings.len() - 5));
+        }
+        s.ui_requests.push(crate::UiRequest::Message(message));
+    }
     let d = s.doc()?;
     Ok(
         json!({"index": i, "title": d.display_title(), "sheets": d.wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(), "warnings": warnings}),
