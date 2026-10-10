@@ -190,3 +190,53 @@ fn ink_strokes_and_ink_to_shape() {
     assert_eq!(s.execute("draw.inkToShape", json!({})).unwrap()["kind"], "Line");
     assert!(s.execute("draw.stroke", json!({"points": [[1.0, 1.0]]})).is_err());
 }
+
+fn ymd(y: i64, m: i64, d: i64) -> Value {
+    Value::Number(gridcraft_core::date::serial_from_ymd(gridcraft_core::DateSystem::D1900, y, m, d).unwrap())
+}
+
+fn series_date(seed: &str, range: &str, unit: &str) -> Session {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": seed})).unwrap();
+    s.execute("edit.fillSeries", json!({"range": range, "direction": "columns", "type": "date", "dateUnit": unit})).unwrap();
+    s
+}
+
+#[test]
+fn fill_series_month_clamps_to_month_end() {
+    let s = series_date("2026-01-31", "A1:A4", "month");
+    assert_eq!(v(&s, "A1"), ymd(2026, 1, 31));
+    assert_eq!(v(&s, "A2"), ymd(2026, 2, 28));
+    assert_eq!(v(&s, "A3"), ymd(2026, 3, 31));
+    assert_eq!(v(&s, "A4"), ymd(2026, 4, 30));
+    // Mid-month seeds are untouched.
+    let s = series_date("2026-01-15", "A1:A4", "month");
+    assert_eq!(v(&s, "A4"), ymd(2026, 4, 15));
+}
+
+#[test]
+fn fill_series_month_leap_year() {
+    let s = series_date("2028-01-31", "A1:A3", "month");
+    assert_eq!(v(&s, "A2"), ymd(2028, 2, 29));
+    assert_eq!(v(&s, "A3"), ymd(2028, 3, 31));
+    let s = series_date("1996-01-31", "A1:A3", "month");
+    assert_eq!(v(&s, "A2"), ymd(1996, 2, 29));
+}
+
+#[test]
+fn fill_series_year_clamps_leap_day() {
+    let s = series_date("2028-02-29", "A1:A5", "year");
+    assert_eq!(v(&s, "A2"), ymd(2029, 2, 28));
+    assert_eq!(v(&s, "A5"), ymd(2032, 2, 29));
+}
+
+#[test]
+fn autofill_month_pattern_clamps_to_month_end() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["2026-01-31"], ["2026-03-31"]]})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "A1:A2", "target": "A1:A6"})).unwrap();
+    assert_eq!(v(&s, "A3"), ymd(2026, 5, 31));
+    assert_eq!(v(&s, "A4"), ymd(2026, 7, 31));
+    assert_eq!(v(&s, "A5"), ymd(2026, 9, 30));
+    assert_eq!(v(&s, "A6"), ymd(2026, 11, 30));
+}
