@@ -195,17 +195,6 @@ fn adjust_ref(r: &Reference, edit: &Edit) -> Option<Reference> {
             let kind = match &r.kind {
                 RefKind::Cell(a) => RefKind::Cell(mv(a)?),
                 RefKind::Range(a, b) => RefKind::Range(mv(a)?, mv(b)?),
-                k => k.clone(),
-            };
-            Some(Reference { sheet: r.sheet.clone(), kind })
-        }
-        Edit::MoveToSheet { from, to_sheet, to_row, to_col } => {
-            if !from.contains_range(&r.range()) {
-                return Some(r.clone());
-            }
-            let mut moved = adjust_ref(r, &Edit::Move { from: *from, to_row: *to_row, to_col: *to_col })?;
-            // Whole-row/column references have no anchors, but their indices must move too.
-            moved.kind = match &r.kind {
                 RefKind::Rows(a, aa, b, ba) => {
                     let dr = *to_row as i64 - from.start.row as i64;
                     RefKind::Rows(shift_line(*a, false, dr, MAX_ROWS)?, *aa, shift_line(*b, false, dr, MAX_ROWS)?, *ba)
@@ -214,8 +203,14 @@ fn adjust_ref(r: &Reference, edit: &Edit) -> Option<Reference> {
                     let dc = *to_col as i64 - from.start.col as i64;
                     RefKind::Cols(shift_line(*a, false, dc, MAX_COLS)?, *aa, shift_line(*b, false, dc, MAX_COLS)?, *ba)
                 }
-                _ => moved.kind,
             };
+            Some(Reference { sheet: r.sheet.clone(), kind })
+        }
+        Edit::MoveToSheet { from, to_sheet, to_row, to_col } => {
+            if !from.contains_range(&r.range()) {
+                return Some(r.clone());
+            }
+            let mut moved = adjust_ref(r, &Edit::Move { from: *from, to_row: *to_row, to_col: *to_col })?;
             moved.sheet = SheetSel::Named(to_sheet.clone());
             Some(moved)
         }
