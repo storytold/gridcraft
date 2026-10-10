@@ -16,12 +16,38 @@ use gridcraft_engine::Session;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
-struct App(SheetApp, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+struct App(
+    SheetApp,
+    #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")] Option<gridcraft_macos_events::OpenEvents>,
+);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         {
+            // Files opened from Finder and Dock-icon reopen arrive as Apple events.
+            if let Some(events) = &self.2 {
+                for ev in events.poll() {
+                    match ev {
+                        gridcraft_macos_events::OpenEvent::Files(paths) => {
+                            for p in paths {
+                                if !p.is_empty() {
+                                    self.0.open_path(&p);
+                                }
+                            }
+                        }
+                        gridcraft_macos_events::OpenEvent::Reopen => {
+                            // Dock click with everything closed: reopen the last workbook.
+                            if self.0.session.documents().is_empty()
+                                && let Some(p) = self.0.ui.recent.first().cloned()
+                            {
+                                self.0.open_path(&p);
+                            }
+                        }
+                    }
+                }
+            }
             if self.1.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
                 self.1 = Some(native_menu::NativeMenu::install(ctx));
             }
@@ -138,6 +164,11 @@ fn main() -> eframe::Result<()> {
         println!("GridCraft {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    // macOS: files opened from Finder and Dock-icon reopen arrive as Apple events right
+    // after launch; the handlers must exist before the application runs, so install them
+    // here rather than inside the eframe creator (which runs after didFinishLaunching).
+    #[cfg(target_os = "macos")]
+    let open_events = gridcraft_macos_events::OpenEvents::install(|| {});
     let mut control_port: Option<u16> = std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut sample: Option<String> = None;
     let mut files: Vec<String> = Vec::new();
@@ -168,7 +199,7 @@ fn main() -> eframe::Result<()> {
             eprintln!("{f}: {e}");
         }
     }
-    if session.documents().is_empty() {
+    if session.documents().is_empty() && !(cfg!(target_os = "macos") && files.is_empty()) {
         session.new_workbook();
     }
     let mut app = SheetApp::new(session, services());
@@ -202,6 +233,14 @@ fn main() -> eframe::Result<()> {
                 app,
                 #[cfg(target_os = "macos")]
                 None,
+                #[cfg(target_os = "macos")]
+                {
+                    open_events.set_notify({
+                        let ctx = cc.egui_ctx.clone();
+                        move || ctx.request_repaint()
+                    });
+                    Some(open_events)
+                },
             )))
         }),
     )

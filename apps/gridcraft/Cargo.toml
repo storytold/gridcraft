@@ -27,4 +27,5 @@ winresource = "0.1"
 rfd = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+gridcraft-macos-events = { workspace = true }
 muda = { version = "0.21", default-features = false }
