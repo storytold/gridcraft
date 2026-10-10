@@ -64,9 +64,10 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
 (WebGPU needs a secure context, so use `localhost` and not your machine's IP — see
 [Renderer selection](#renderer-selection).)
 
-Self-hosting with Docker: `packaging/docker/compose.yaml` serves this build from the official nginx
-image with `nginx/default.conf` (the settings above, written out for nginx), and `smoke-test.sh`
-checks the result. See [`packaging/docker/README.md`](../docker/README.md).
+Self-hosting with Docker: `packaging/docker/Dockerfile` builds one image — nginx serving this build
+(with `nginx/default.conf`, the settings above written out for nginx) plus the `gridcraft-cli` — and
+`packaging/docker/compose.yaml` runs it. `smoke-test.sh` checks the result. See
+[`packaging/docker/README.md`](../docker/README.md).
 
 ## Embedding in a page (iframe)
 

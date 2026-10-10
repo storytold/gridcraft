@@ -1,11 +1,22 @@
-# Build context for packaging/docker/cli.Dockerfile. `cargo build -p gridcraft-cli` needs the
-# workspace manifests and the source of the crates it links, and nothing else.
+# Build context for packaging/docker/Dockerfile: the workspace manifests and the source of the
+# crates `cargo build -p gridcraft-cli` links, the built web site the image serves (dist/web), and
+# the nginx config it copies in. Everything else is left out to keep the upload small.
 .git
 .github
 target
-dist
+target-*
 docs
 contributors
-packaging
 plan
 ROADMAP.md
+craft-fonts
+corpus
+log
+# Keep dist/web — the site the image serves — and drop the release artifacts.
+dist/release
+# Keep packaging/docker — the Dockerfile and the nginx config — and drop the installer trees.
+packaging/freebsd
+packaging/linux
+packaging/macos
+packaging/web
+packaging/windows

@@ -1,36 +1,35 @@
-# Serve the built GridCraft web app from the official nginx image: no image to build, no
-# server-side code, nothing to publish to a registry.
+# GridCraft in one image: nginx serves the built web app and the same image carries the headless
+# gridcraft-cli (inspect, convert, evaluate, script, and MCP over stdio). The Dockerfile builds it;
+# nothing comes from a registry and there is no server-side code.
 #
-#   packaging/web/package.sh                            # writes dist/web/ (index.html, hashed .js/.wasm)
-#   docker compose -f packaging/docker/compose.yaml up  # then open http://localhost:8771/
+#   packaging/web/package.sh                                       # writes dist/web/ first
+#   docker compose -f packaging/docker/compose.yaml up --build     # then open http://localhost:8771/
 #   docker compose -f packaging/docker/compose.yaml down
 #
-# GRIDCRAFT_WEB_DIR   folder holding index.html (default ../../dist/web, relative to this file);
-#                     an unpacked gridcraft-web-<version>.zip works just as well
 # GRIDCRAFT_WEB_PORT  host port to publish (default 8771, the port `trunk serve` uses)
 #
-# nginx/default.conf is the nginx form of the requirements in packaging/web/README.md. Note the
-# HTTPS one: WebGPU and the clipboard need a secure context, so http://localhost is fine while a
-# plain-HTTP LAN address serves the app with the WebGL2 fallback.
+# nginx/default.conf is the nginx form of the requirements in packaging/web/README.md and is baked
+# into the image. Note the HTTPS one: WebGPU and the clipboard need a secure context, so
+# http://localhost is fine while a plain-HTTP LAN address serves the app with the WebGL2 fallback.
 #
-# The gridcraft-cli image (CLI + stdio MCP server) is a command rather than a service, so it is
-# built and run on demand: see README.md in this directory.
-name: gridcraft-web
+# The CLI (and the stdio MCP server) is a command on the same image rather than a second service.
+# Reach it through this one: `docker compose run --rm web eval '=SUM(1,2,3)'` runs the entrypoint's
+# CLI branch. See README.md in this directory.
+name: gridcraft
 
 services:
   web:
-    image: nginx:stable-alpine
+    build:
+      # The repository root: cargo build -p gridcraft-cli needs the workspace manifests and crates,
+      # and the image copies dist/web (see .dockerignore).
+      context: ../..
+      dockerfile: packaging/docker/Dockerfile
+    image: gridcraft
     restart: unless-stopped
     ports:
       - "${GRIDCRAFT_WEB_PORT:-8771}:80"
-    volumes:
-      # Read-only: the server only reads the site, and the container keeps no state.
-      - "${GRIDCRAFT_WEB_DIR:-../../dist/web}:/usr/share/nginx/html:ro"
-      # The whole directory, not the single file: a bind-mounted file follows the inode, so
-      # editing default.conf in place would leave the container serving (or missing) the old one.
-      - "./nginx:/etc/nginx/conf.d:ro"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/"]
       interval: 2s
       timeout: 3s
       retries: 10

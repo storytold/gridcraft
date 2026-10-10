@@ -1,6 +1,7 @@
-# Container checks: the gridcraft-cli image built from packaging/docker/cli.Dockerfile, and the web
-# build served by nginx through packaging/docker/compose.yaml. Nothing is pushed to a registry here;
-# the release workflow owns the published artifacts.
+# Container check: one image, built from packaging/docker/Dockerfile, serves the web build with
+# nginx and carries gridcraft-cli (including MCP over stdio). The web build is made first, since
+# the image copies dist/web. Nothing is pushed to a registry here; the release workflow owns the
+# published artifacts.
 name: Docker
 
 on:
@@ -41,31 +42,8 @@ env:
   TRUNK_VERSION: 0.21.14
 
 jobs:
-  cli:
-    name: gridcraft-cli image
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build the image
-        run: docker build -f packaging/docker/cli.Dockerfile -t gridcraft-cli .
-      - name: Run the CLI from the image
-        run: |
-          docker run --rm gridcraft-cli version
-          sum="$(docker run --rm gridcraft-cli eval '=SUM(1,2,3)')"
-          echo "eval =SUM(1,2,3) -> $sum"
-          case "$sum" in *6*) ;; *) echo "::error::eval returned '$sum'"; exit 1 ;; esac
-      # Writes through a bind mount, the way the examples in packaging/docker/README.md do.
-      - name: Build a workbook and convert it, through a mounted directory
-        run: |
-          mkdir -p work
-          docker run --rm -v "$PWD/work:/data" gridcraft-cli run --sample budget --out /data/budget.xlsx
-          test -s work/budget.xlsx || { echo "::error::run wrote no workbook"; exit 1; }
-          docker run --rm -v "$PWD/work:/data" gridcraft-cli convert /data/budget.xlsx /data/budget.csv
-          test -s work/budget.csv || { echo "::error::convert wrote nothing"; exit 1; }
-          head -3 work/budget.csv
-
-  web:
-    name: Web served by nginx
+  image:
+    name: GridCraft image (web + CLI)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +52,7 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
-          key: docker-web
+          key: docker-image
       - name: Install trunk
         run: |
           curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
@@ -91,7 +69,7 @@ jobs:
           path: craft-fonts
       - name: Install fontTools
         run: pip install fonttools
-      # The same build the release makes, so the container serves the real artifact.
+      # The image copies dist/web, so the same build the release makes comes first.
       - name: Build the web app
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
@@ -103,11 +81,26 @@ jobs:
           ls -l "$wasm"
           grep -aq "Noto Sans CJK SC" "$wasm" || { echo "::error::the web build has no CJK face"; exit 1; }
           echo "the CJK face is in the wasm"
-      - name: Serve it with Docker
+      - name: Build the image
+        run: docker build -f packaging/docker/Dockerfile -t gridcraft .
+      - name: Run the CLI from the image
+        run: |
+          docker run --rm gridcraft version
+          sum="$(docker run --rm gridcraft eval '=SUM(1,2,3)')"
+          echo "eval =SUM(1,2,3) -> $sum"
+          case "$sum" in *6*) ;; *) echo "::error::eval returned '$sum'"; exit 1 ;; esac
+      # Writes through a bind mount, the way the examples in packaging/docker/README.md do.
+      - name: Build a workbook and convert it, through a mounted directory
+        run: |
+          mkdir -p work
+          docker run --rm -v "$PWD/work:/data" gridcraft run --sample budget --out /data/budget.xlsx
+          test -s work/budget.xlsx || { echo "::error::run wrote no workbook"; exit 1; }
+          docker run --rm -v "$PWD/work:/data" gridcraft convert /data/budget.xlsx /data/budget.csv
+          test -s work/budget.csv || { echo "::error::convert wrote nothing"; exit 1; }
+          head -3 work/budget.csv
+      # The same image serves the site (compose reuses the image built above).
+      - name: Serve the site with Docker
         working-directory: packaging/docker
-        env:
-          # Absolute: a relative path would resolve against packaging/docker.
-          GRIDCRAFT_WEB_DIR: ${{ github.workspace }}/dist/web
         run: docker compose up --detach --wait
       - name: Check the served site
         working-directory: packaging/docker
