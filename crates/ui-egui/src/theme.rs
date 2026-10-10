@@ -6,6 +6,7 @@
 //! fonts as the last resort.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId, Stroke, Visuals};
 
@@ -77,46 +78,49 @@ impl Tokens {
             tab_active: Color32::WHITE,
             status_bar: Color32::from_rgb(0xF3, 0xF3, 0xF3),
             cell_text: Color32::BLACK,
-            menu_bg: Color32::WHITE,
+            // Translucent: menus and dialogs are glass over the frost `glass::pass` draws.
+            menu_bg: Color32::from_rgba_unmultiplied(0xFF, 0xFF, 0xFF, 0xB8),
             shadow: Color32::from_black_alpha(40),
             danger: Color32::from_rgb(0xC4, 0x2B, 0x1C),
         }
     }
 
+    /// "Construct" dark: near-black teal surfaces, hairline chrome, phosphor-green accent.
     pub fn dark() -> Tokens {
+        let accent = Color32::from_rgb(0x3D, 0xF5, 0x8C);
         Tokens {
             dark: true,
-            window: Color32::from_rgb(0x29, 0x29, 0x29),
-            ribbon: Color32::from_rgb(0x33, 0x33, 0x33),
-            ribbon_border: Color32::from_rgb(0x40, 0x40, 0x40),
-            text: Color32::from_rgb(0xEE, 0xEE, 0xEE),
-            text_dim: Color32::from_rgb(0xB0, 0xB0, 0xB0),
-            text_disabled: Color32::from_rgb(0x70, 0x70, 0x70),
-            accent: Color32::from_rgb(0x5C, 0xC5, 0x87),
-            accent_dark: Color32::from_rgb(0x3F, 0xA8, 0x6C),
-            accent_soft: Color32::from_rgb(0x23, 0x45, 0x31),
-            hover: Color32::from_rgb(0x42, 0x42, 0x42),
-            pressed: Color32::from_rgb(0x4D, 0x4D, 0x4D),
-            separator: Color32::from_rgb(0x48, 0x48, 0x48),
-            grid_bg: Color32::WHITE,
-            gridline: Color32::from_rgb(0xE1, 0xE1, 0xE1),
-            header_bg: Color32::from_rgb(0x30, 0x30, 0x30),
-            header_text: Color32::from_rgb(0xCC, 0xCC, 0xCC),
-            header_line: Color32::from_rgb(0x45, 0x45, 0x45),
-            header_sel_bg: Color32::from_rgb(0x45, 0x45, 0x45),
-            header_sel_text: Color32::from_rgb(0x5C, 0xC5, 0x87),
-            header_all_bg: Color32::from_rgb(0x2E, 0x55, 0x3E),
-            sel_fill: Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x24),
-            sel_border: Color32::from_rgb(0x10, 0x7C, 0x41),
-            input_bg: Color32::from_rgb(0x1F, 0x1F, 0x1F),
-            input_border: Color32::from_rgb(0x50, 0x50, 0x50),
-            tab_bar: Color32::from_rgb(0x29, 0x29, 0x29),
-            tab_active: Color32::from_rgb(0x3A, 0x3A, 0x3A),
-            status_bar: Color32::from_rgb(0x29, 0x29, 0x29),
-            cell_text: Color32::BLACK,
-            menu_bg: Color32::from_rgb(0x30, 0x30, 0x30),
-            shadow: Color32::from_black_alpha(90),
-            danger: Color32::from_rgb(0xF1, 0x70, 0x5F),
+            window: Color32::from_rgb(0x07, 0x0D, 0x0D),
+            ribbon: Color32::from_rgb(0x0A, 0x13, 0x13),
+            ribbon_border: Color32::from_rgb(0x16, 0x26, 0x25),
+            text: Color32::from_rgb(0xCD, 0xE2, 0xDC),
+            text_dim: Color32::from_rgb(0x6B, 0x8A, 0x84),
+            text_disabled: Color32::from_rgb(0x34, 0x4D, 0x49),
+            accent,
+            accent_dark: Color32::from_rgb(0x22, 0xC4, 0x6A),
+            accent_soft: Color32::from_rgb(0x0E, 0x2A, 0x1D),
+            hover: Color32::from_rgb(0x10, 0x1E, 0x1D),
+            pressed: Color32::from_rgb(0x15, 0x2A, 0x27),
+            separator: Color32::from_rgb(0x14, 0x23, 0x22),
+            grid_bg: Color32::from_rgb(0x05, 0x0A, 0x0A),
+            gridline: Color32::from_rgb(0x10, 0x1B, 0x1A),
+            header_bg: Color32::from_rgb(0x08, 0x10, 0x10),
+            header_text: Color32::from_rgb(0x4F, 0x6D, 0x67),
+            header_line: Color32::from_rgb(0x14, 0x22, 0x21),
+            header_sel_bg: Color32::from_rgb(0x0C, 0x22, 0x1A),
+            header_sel_text: accent,
+            header_all_bg: Color32::from_rgb(0x10, 0x34, 0x24),
+            sel_fill: Color32::from_rgba_unmultiplied(0x3D, 0xF5, 0x8C, 0x1A),
+            sel_border: accent,
+            input_bg: Color32::from_rgb(0x05, 0x0B, 0x0B),
+            input_border: Color32::from_rgb(0x1A, 0x2D, 0x2B),
+            tab_bar: Color32::from_rgb(0x07, 0x0D, 0x0D),
+            tab_active: Color32::from_rgb(0x0E, 0x1A, 0x19),
+            status_bar: Color32::from_rgb(0x07, 0x0D, 0x0D),
+            cell_text: Color32::from_rgb(0xCD, 0xE2, 0xDC),
+            menu_bg: Color32::from_rgba_unmultiplied(0x0A, 0x16, 0x15, 0xA0),
+            shadow: Color32::from_black_alpha(170),
+            danger: Color32::from_rgb(0xFF, 0x6B, 0x5E),
         }
     }
 
@@ -325,26 +329,54 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
         v.panel_fill = t.window;
         v.window_fill = t.menu_bg;
         v.extreme_bg_color = t.input_bg;
+        v.faint_bg_color = t.ribbon;
+        v.code_bg_color = t.input_bg;
         v.selection.bg_fill = t.accent_soft;
         v.selection.stroke = Stroke::new(1.0, t.accent);
+        v.text_cursor.stroke = Stroke::new(1.5, t.accent);
         v.hyperlink_color = t.accent;
+        v.window_stroke =
+            Stroke::new(1.0, if dark { Color32::from_rgba_unmultiplied(0x96, 0xFF, 0xC8, 0x22) } else { Color32::from_black_alpha(26) });
+        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, t.separator);
         v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, t.text);
         v.widgets.inactive.fg_stroke = Stroke::new(1.0, t.text);
+        v.widgets.hovered.fg_stroke = Stroke::new(1.0, t.text);
+        v.widgets.active.fg_stroke = Stroke::new(1.0, t.text);
         v.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+        v.widgets.inactive.bg_fill = t.input_bg;
         v.widgets.hovered.weak_bg_fill = t.hover;
+        v.widgets.hovered.bg_fill = t.hover;
         v.widgets.active.weak_bg_fill = t.pressed;
+        v.widgets.active.bg_fill = t.pressed;
+        v.widgets.open.weak_bg_fill = t.hover;
         v.widgets.inactive.bg_stroke = Stroke::new(1.0, t.input_border);
-        v.window_corner_radius = egui::CornerRadius::same(10);
-        v.menu_corner_radius = egui::CornerRadius::same(8);
-        v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: t.shadow };
+        v.widgets.hovered.bg_stroke = Stroke::new(1.0, if dark { t.accent_dark.gamma_multiply(0.6) } else { t.input_border });
+        v.widgets.active.bg_stroke = Stroke::new(1.0, t.accent);
+        for w in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
+            w.corner_radius = egui::CornerRadius::same(6);
+            w.expansion = 0.0;
+        }
+        v.window_corner_radius = egui::CornerRadius::same(12);
+        v.menu_corner_radius = egui::CornerRadius::same(10);
+        // Soft, low shadows: a heavy one would show through the glass and muddy it.
+        let shadow = Color32::from_black_alpha(if dark { 90 } else { 28 });
+        v.window_shadow = egui::epaint::Shadow { offset: [0, 14], blur: 40, spread: 0, color: shadow };
+        v.popup_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 26, spread: 0, color: shadow };
+        v.slider_trailing_fill = true;
+        v.handle_shape = egui::style::HandleShape::Rect { aspect_ratio: 0.42 };
         ctx.set_visuals_of(theme, v);
     }
     ctx.options_mut(|o| o.fallback_theme = egui::Theme::Light);
     ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
     ctx.all_styles_mut(|s| {
+        s.animation_time = 0.18;
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
-        s.spacing.button_padding = egui::vec2(6.0, 3.0);
+        s.spacing.button_padding = egui::vec2(8.0, 4.0);
+        s.spacing.menu_margin = egui::Margin::same(6);
         s.spacing.interact_size.y = 22.0;
+        s.spacing.scroll = egui::style::ScrollStyle::floating();
+        s.spacing.scroll.bar_width = 8.0;
+        s.spacing.slider_rail_height = 4.0;
         s.text_styles.insert(egui::TextStyle::Body, ui_font(13.0));
         s.text_styles.insert(egui::TextStyle::Button, ui_font(13.0));
         s.text_styles.insert(egui::TextStyle::Small, ui_font(11.0));
@@ -353,7 +385,143 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     });
 }
 
+/// Draws the sheet for a dark canvas from now on (call each frame with the effective theme, so
+/// System appearance switches are followed).
+pub fn set_canvas_dark(dark: bool) {
+    DARK.store(dark, Ordering::Relaxed);
+}
+
+/// Corner radius of the (undecorated) window; square when maximized or fullscreen.
+pub fn window_radius(ctx: &egui::Context) -> u8 {
+    let square = ctx.input(|i| i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false));
+    if cfg!(target_os = "linux") && !square { 12 } else { 0 }
+}
+
+static DARK: AtomicBool = AtomicBool::new(false);
+
+/// Workbook colour as drawn on the canvas. In dark mode lightness is mirrored (hue and
+/// saturation kept), so black text reads light, white fills go near-black, and contrast between
+/// a cell's text and its fill survives.
+pub fn adapt(c: Color32) -> Color32 {
+    if !DARK.load(Ordering::Relaxed) {
+        return c;
+    }
+    let [r, g, b, a] = c.to_array();
+    let (r, g, b) = (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    let d = max - min;
+    let (h, s) = if d < 1e-5 {
+        (0.0, 0.0)
+    } else {
+        let s = d / (1.0 - (2.0 * l - 1.0).abs());
+        let h = if max == r {
+            ((g - b) / d).rem_euclid(6.0)
+        } else if max == g {
+            (b - r) / d + 2.0
+        } else {
+            (r - g) / d + 4.0
+        };
+        (h * 60.0, s)
+    };
+    // Mirror into [0.04, 0.86]: pure white lands on the canvas, pure black on soft white.
+    let l2 = 0.04 + (1.0 - l) * 0.82;
+    let c2 = (1.0 - (2.0 * l2 - 1.0).abs()) * s;
+    let x = c2 * (1.0 - ((h / 60.0).rem_euclid(2.0) - 1.0).abs());
+    let (r1, g1, b1) = match (h / 60.0) as u32 {
+        0 => (c2, x, 0.0),
+        1 => (x, c2, 0.0),
+        2 => (0.0, c2, x),
+        3 => (0.0, x, c2),
+        4 => (x, 0.0, c2),
+        _ => (c2, 0.0, x),
+    };
+    let m = l2 - c2 / 2.0;
+    let u = |v: f32| ((v + m).clamp(0.0, 1.0) * 255.0).round() as u8;
+    Color32::from_rgba_unmultiplied(u(r1), u(g1), u(b1), a)
+}
+
+// --- Motion -------------------------------------------------------------------------------
+// Zero-bounce, decelerating moves; entrances ~160 ms, exits ~25% quicker.
+
+fn frame_dt(ctx: &egui::Context) -> f32 {
+    ctx.input(|i| i.stable_dt).clamp(0.0, 1.0 / 30.0)
+}
+
+/// Critically damped glide of a value toward `target` (no overshoot). `tau` is the time constant:
+/// ~95% of the way after 3·tau.
+pub fn glide(ctx: &egui::Context, id: egui::Id, target: f32, tau: f32) -> f32 {
+    let k = 1.0 - (-frame_dt(ctx) / tau).exp();
+    let pass = ctx.cumulative_pass_nr();
+    let v = ctx.data_mut(|d| {
+        // (value, pass it last advanced): repeated calls within a pass don't speed it up.
+        let (v, at) = d.get_temp_mut_or(id, (target, pass));
+        if *at != pass {
+            *at = pass;
+            *v += (target - *v) * k;
+            if (target - *v).abs() < 0.2 {
+                *v = target;
+            }
+        }
+        *v
+    });
+    if v != target {
+        ctx.request_repaint();
+    }
+    v
+}
+
+pub fn glide_rect(ctx: &egui::Context, id: egui::Id, target: egui::Rect, tau: f32) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(glide(ctx, id.with(0), target.min.x, tau), glide(ctx, id.with(1), target.min.y, tau)),
+        egui::pos2(glide(ctx, id.with(2), target.max.x, tau), glide(ctx, id.with(3), target.max.y, tau)),
+    )
+}
+
+/// 0→1 presence for hover/press/appear states: decelerates in, accelerates out (faster).
+pub fn fade(ctx: &egui::Context, id: egui::Id, on: bool) -> f32 {
+    let dt = frame_dt(ctx);
+    let v = ctx.data_mut(|d| {
+        let v = d.get_temp_mut_or(id, 0.0_f32);
+        *v = if on { (*v + dt / 0.16).min(1.0) } else { (*v - dt / 0.12).max(0.0) };
+        *v
+    });
+    if (on && v < 1.0) || (!on && v > 0.0) {
+        ctx.request_repaint();
+    }
+    // One curve serves both: ease-out while rising, ease-in while falling.
+    1.0 - (1.0 - v).powi(3)
+}
+
+/// Animated hover/press background for a custom-drawn control.
+pub fn hover_fill(ui: &egui::Ui, resp: &egui::Response, rect: egui::Rect, radius: f32) {
+    let t = Tokens::get(ui.ctx());
+    let down = resp.is_pointer_button_down_on();
+    let h = fade(ui.ctx(), resp.id.with("hover"), resp.hovered() || down);
+    if h > 0.0 {
+        ui.painter().rect_filled(rect, radius, if down { t.pressed } else { t.hover }.gamma_multiply(h));
+    }
+}
+
 /// Model colour → egui colour.
 pub fn color32(rgb: [u8; 3]) -> Color32 {
     Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+}
+
+#[cfg(test)]
+mod canvas_tests {
+    use super::*;
+
+    #[test]
+    fn dark_canvas_mirrors_lightness_and_keeps_hue() {
+        set_canvas_dark(true);
+        let near = |a: Color32, b: Color32| a.to_array().iter().zip(b.to_array()).all(|(x, y)| (*x as i16 - y as i16).abs() <= 2);
+        assert!(near(adapt(Color32::BLACK), Color32::from_gray(219)));
+        assert!(near(adapt(Color32::WHITE), Color32::from_gray(10)));
+        let red = adapt(Color32::from_rgb(255, 0, 0));
+        assert!(red.r() > 200 && red.g() < 40 && red.b() < 40);
+        set_canvas_dark(false);
+        assert_eq!(adapt(Color32::BLACK), Color32::BLACK);
+    }
 }

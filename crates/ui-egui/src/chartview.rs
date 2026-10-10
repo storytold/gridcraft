@@ -14,7 +14,7 @@ use crate::grid::Geo;
 use crate::theme;
 
 fn rgba(c: [u8; 4]) -> Color32 {
-    Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
+    theme::adapt(Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]))
 }
 
 struct EguiMeasure<'a> {
@@ -287,7 +287,7 @@ pub fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: 
         }
         // Soft shadow + white card.
         p.rect_filled(r.translate(vec2(0.0, 1.5)), 2.0, Color32::from_black_alpha(18));
-        p.rect_filled(r, 0.0, Color32::WHITE);
+        p.rect_filled(r, 0.0, theme::adapt(Color32::WHITE));
         let data = gridcraft_chart::resolve(wb, si, ch);
         let m = EguiMeasure { painter: p, z: geo.z };
         let prims = gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m);
