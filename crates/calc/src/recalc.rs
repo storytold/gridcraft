@@ -207,10 +207,21 @@ impl PassHost<'_> {
         self.depth -= 1;
         self.in_progress.remove(&k);
         self.pending.remove(&k);
+        // A blank cell shows as 0 in a formula's result, inside an array as well (`=A1:A3`,
+        // FILTER or SORT of a range with blanks). GROUPBY and PIVOTBY lay out blank cells
+        // of their own, which stay blank.
+        let keep_blanks = matches!(&*expr, Expr::Call(n, _) if matches!(n.as_str(), "GROUPBY" | "PIVOTBY"));
         let v = match v {
-            Value::Array(a) if a.rows == 1 && a.cols == 1 => a.data.first().cloned().unwrap_or_default(),
             Value::Array(a) => {
-                self.spills.insert(k, a.clone());
+                let a = if keep_blanks || !a.data.iter().any(|x| matches!(x, Value::Empty)) {
+                    a
+                } else {
+                    let data = a.data.iter().map(|x| if matches!(x, Value::Empty) { Value::Number(0.0) } else { x.clone() }).collect();
+                    Array::new(a.rows, a.cols, data).map(std::sync::Arc::new).unwrap_or(a)
+                };
+                if a.rows > 1 || a.cols > 1 {
+                    self.spills.insert(k, a.clone());
+                }
                 a.data.first().cloned().unwrap_or_default()
             }
             Value::Empty => Value::Number(0.0),

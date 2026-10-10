@@ -177,6 +177,22 @@ fn references_keep_their_size_past_the_used_range() {
 }
 
 #[test]
+fn spilled_blank_cells_show_zero() {
+    let mut t = T::new();
+    t.set("A1", "5");
+    t.set("A3", "7");
+    t.set("C1", "=A1:A4");
+    assert_eq!(t.get("C2"), Value::Number(0.0));
+    assert_eq!(t.get("C4"), Value::Number(0.0));
+    t.set("D1", "=COUNT(C1:C4)");
+    assert_eq!(t.num("D1"), 4.0);
+    t.set("E1", "=A2:A3");
+    assert_eq!(t.get("E1"), Value::Number(0.0));
+    t.set("F1", "=SORT(A1:A3)");
+    assert_eq!(t.get("F3"), Value::Number(0.0));
+}
+
+#[test]
 fn let_lambda() {
     let mut t = T::new();
     t.set("A1", "=LET(x,2,y,3,x*y)");
