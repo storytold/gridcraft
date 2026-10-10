@@ -82,7 +82,15 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     let shape = Shape {
         id,
         kind: ShapeKind::Ink,
-        anchor: Anchor { cell, dx, dy, width: (maxx - minx).max(1.0) as f32, height: (maxy - miny).max(1.0) as f32 },
+        anchor: Anchor {
+            cell,
+            dx,
+            dy,
+            width: (maxx - minx).max(1.0) as f32,
+            height: (maxy - miny).max(1.0) as f32,
+            // Ink is a freehand mark: pinned where it was drawn, it does not follow cells.
+            mode: gridcraft_model::AnchorMode::Absolute,
+        },
         fill: Color::from_hex(&format!("#{:02X}0000", width.round().clamp(0.0, 255.0) as u8)).unwrap_or_default(),
         line: Color::from_hex(&color).unwrap_or(Color::rgb(0x1F, 0x5F, 0xC9)),
         text,

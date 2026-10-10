@@ -138,6 +138,8 @@ pub struct SeriesData {
     pub kind: ChartKind,
     /// Plotted against the secondary (right) value axis.
     pub secondary: bool,
+    /// Draw line segments as a smoothed (spline) curve.
+    pub smooth: bool,
     /// Number format code of the source values ("General" by default).
     pub number_format: String,
 }
@@ -152,6 +154,7 @@ impl Default for SeriesData {
             color: [0x15, 0x60, 0x82, 0xFF],
             kind: ChartKind::ColumnClustered,
             secondary: false,
+            smooth: false,
             number_format: "General".into(),
         }
     }

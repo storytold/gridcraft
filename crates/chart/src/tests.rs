@@ -60,6 +60,7 @@ fn series(name: &str, values: &[f64], color: Rgba, kind: ChartKind) -> SeriesDat
         color,
         kind,
         secondary: false,
+        smooth: false,
         number_format: "$#,##0".into(),
     }
 }
@@ -223,6 +224,7 @@ fn resolve_from_workbook() {
             color: None,
             secondary: false,
             kind: None,
+            smooth: false,
         },
         Series {
             name: None,
@@ -232,6 +234,7 @@ fn resolve_from_workbook() {
             color: Some(Color::rgb(1, 2, 3)),
             secondary: true,
             kind: None,
+            smooth: false,
         },
         Series {
             name: Some("Literal".into()),
@@ -241,6 +244,7 @@ fn resolve_from_workbook() {
             color: None,
             secondary: false,
             kind: None,
+            smooth: false,
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -269,8 +273,26 @@ fn resolve_from_workbook() {
     // Combo kinds and scatter X values.
     let mut c = chart(ChartKind::Combo);
     c.series = vec![
-        Series { name: None, categories: None, values: "Sales!B2:B4".into(), bubble_sizes: None, color: None, secondary: false, kind: None },
-        Series { name: None, categories: None, values: "Sales!B2:B4".into(), bubble_sizes: None, color: None, secondary: true, kind: None },
+        Series {
+            name: None,
+            categories: None,
+            values: "Sales!B2:B4".into(),
+            bubble_sizes: None,
+            color: None,
+            secondary: false,
+            kind: None,
+            smooth: false,
+        },
+        Series {
+            name: None,
+            categories: None,
+            values: "Sales!B2:B4".into(),
+            bubble_sizes: None,
+            color: None,
+            secondary: true,
+            kind: None,
+            smooth: false,
+        },
     ];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series[0].kind, ChartKind::ColumnClustered);
@@ -284,6 +306,7 @@ fn resolve_from_workbook() {
         color: None,
         secondary: false,
         kind: None,
+        smooth: false,
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series[0].x.as_ref().map(|x| x.len()), Some(3));
@@ -299,6 +322,7 @@ fn resolve_from_workbook() {
         color: None,
         secondary: false,
         kind: None,
+        smooth: false,
     }];
     let d = resolve(&wb, 7, &c);
     assert_eq!(d.series.len(), 1);
@@ -312,6 +336,29 @@ fn palette_beyond_six_series() {
     assert_eq!(p.len(), 14);
     assert_ne!(p[0], p[6]);
     assert_ne!(p[6], p[12]);
+}
+
+#[test]
+fn scatter_with_text_x_values_numbers_the_points() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    for (i, (label, v)) in [("North", 3.0), ("South", 5.0), ("East", 4.0)].iter().enumerate() {
+        s.set_value(CellRef::new(i as u32, 0), Value::from(*label));
+        s.set_value(CellRef::new(i as u32, 1), Value::Number(*v));
+        s.set_value(CellRef::new(i as u32, 2), Value::Number(i as f64 * 10.0));
+    }
+    for kind in [ChartKind::Scatter, ChartKind::ScatterLines, ChartKind::Bubble] {
+        let mut c = chart(kind);
+        c.series = vec![Series { categories: Some("Sheet1!$A$1:$A$3".into()), values: "Sheet1!$B$1:$B$3".into(), ..Default::default() }];
+        let d = resolve(&wb, 0, &c);
+        assert_eq!(d.series[0].x, None, "{kind:?}");
+        let prims = render(&c, &d, 400.0, 300.0, &ApproxMeasure);
+        let empty = render(&c, &ChartData { categories: vec![], series: vec![] }, 400.0, 300.0, &ApproxMeasure);
+        assert!(prims.len() > empty.len() + 2, "{kind:?} draws its points");
+        // Numeric X values are kept.
+        c.series[0].categories = Some("Sheet1!$C$1:$C$3".into());
+        assert_eq!(resolve(&wb, 0, &c).series[0].x, Some(vec![Some(0.0), Some(10.0), Some(20.0)]));
+    }
 }
 
 fn pixel(img: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
@@ -450,8 +497,51 @@ fn thousands_of_points_are_decimated() {
     }
 }
 
+#[test]
+fn smooth_line_adds_interpolated_points_and_keeps_endpoints() {
+    let m = ApproxMeasure;
+    let cats = ["a", "b", "c", "d"].map(String::from).to_vec();
+    let line_pts = |smooth: bool, m: &ApproxMeasure| -> usize {
+        let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
+        s.smooth = smooth;
+        let d = ChartData { categories: cats.clone(), series: vec![s] };
+        render(&chart(ChartKind::Line), &d, 600.0, 400.0, m)
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Line { pts, .. } => Some(pts.len()),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0)
+    };
+    let straight = line_pts(false, &m);
+    let curved = line_pts(true, &m);
+    assert_eq!(straight, 4, "straight polyline keeps one point per datum");
+    assert!(curved > straight, "smooth line interpolates extra points: {curved} vs {straight}");
+    // Rendering either way must stay finite and inside the canvas.
+    let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
+    s.smooth = true;
+    let d = ChartData { categories: cats, series: vec![s] };
+    assert_sane(&render(&chart(ChartKind::Line), &d, 600.0, 400.0, &m), 600.0, 400.0);
+}
+
+#[test]
+fn smooth_line_splits_at_gaps() {
+    let m = ApproxMeasure;
+    let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
+    s.smooth = true;
+    s.values[1] = None; // gap between two data points
+    let d = ChartData { categories: vec!["a".into(), "b".into(), "c".into(), "d".into()], series: vec![s] };
+    let prims = render(&chart(ChartKind::Line), &d, 600.0, 400.0, &m);
+    // Two separate runs (before/after the gap) → at least two line primitives.
+    let lines = prims.iter().filter(|p| matches!(p, Prim::Line { .. })).count();
+    assert!(lines >= 2, "a gap must split the smoothed line into runs, got {lines}");
+    assert_sane(&prims, 600.0, 400.0);
+}
+
 /// Small deterministic PRNG (xorshift) for the fuzz test.
 struct Rng(u64);
+
 impl Rng {
     fn next(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
@@ -491,6 +581,7 @@ fn fuzz_random_data_and_sizes() {
                 color: [(r.next() % 256) as u8, 100, 50, 255],
                 kind: ALL_KINDS[(r.next() % ALL_KINDS.len() as u64) as usize],
                 secondary: r.next().is_multiple_of(3),
+                smooth: r.next().is_multiple_of(4),
                 number_format: ["General", "$#,##0", "0.00%", "yyyy-mm-dd", "#,##0.0;[Red]-#,##0.0", "@"][(r.next() % 6) as usize].into(),
             })
             .collect();

@@ -155,16 +155,19 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         }
         "engine.commands" => {
             let mut v: Vec<Json> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
-            for (id, label) in [
-                ("ui.ribbonTab", "Ribbon Tab"),
-                ("view.formulaBar", "Formula Bar"),
-                ("view.collapseRibbon", "Collapse Ribbon"),
-                ("view.darkMode", "Dark Mode"),
-                ("view.theme", "Display Theme"),
-                ("view.zoom100", "100%"),
-                ("ui.dialog", "Open Dialog"),
+            for (id, label, params) in [
+                ("ui.ribbonTab", "Ribbon Tab", ""),
+                ("view.formulaBar", "Formula Bar", ""),
+                ("view.collapseRibbon", "Collapse Ribbon", ""),
+                ("view.darkMode", "Dark Mode", ""),
+                ("view.theme", "Display Theme", ""),
+                ("view.zoom100", "100%", ""),
+                ("ui.dialog", "Open Dialog", ""),
+                ("app.language.set", "Interface Language", "{language: \"en\"|\"zh\"|\"ja\"|\"ko\"|\"ru\"|\"pt\"} (alias: code)"),
+                ("app.language.english", "Interface Language: English", ""),
+                ("app.language.japanese", "Interface Language: Japanese", ""),
             ] {
-                v.push(json!({"id": id, "label": label, "enabled": true, "ui": true}));
+                v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
             }
             ok(Json::Array(v))
         }

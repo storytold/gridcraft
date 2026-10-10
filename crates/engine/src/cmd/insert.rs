@@ -96,7 +96,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Picture",
             ["Insert", "Illustrations"],
             None,
-            "{path? | base64?: \"...\", mime?, at?: \"B2\", width?, height?, alt?}",
+            "{path? | base64?: \"...\", mime?, at?: \"B2\", width?, height?, alt?, mode?: moveOnly|moveAndSize|absolute}",
             has_doc,
             insert_picture
         ),
@@ -125,6 +125,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("shape.setText", "Edit Text Box", [], None, "{id: textBox id, text: string}", has_doc, shape_set_text),
         cmd!("object.delete", "Delete Object", [], None, "{kind: chart|image|shape, id}", has_doc, delete_object),
         cmd!("object.move", "Move Object", [], None, "{kind: chart|image|shape, id, at?: \"C3\", dx?, dy?, width?, height?}", has_doc, move_object),
+        cmd!(
+            "object.setAnchorMode",
+            "Object Properties",
+            [],
+            None,
+            "{kind: chart|image|shape, id, mode: moveAndSize|moveOnly|absolute}",
+            has_doc,
+            set_anchor_mode
+        ),
         cmd!(
             "insert.link",
             "Link",
@@ -509,6 +518,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 color: None,
                 secondary: false,
                 kind: None,
+                smooth: false,
             });
         }
     } else {
@@ -522,15 +532,19 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 color: None,
                 secondary: false,
                 kind: None,
+                smooth: false,
             });
         }
     }
     out
 }
 
+/// Most cells a chart's source block may span (bounds the series it builds).
+const MAX_CHART_CELLS: u64 = 1_000_000;
+
 fn insert_chart(s: &mut Session, p: &Json) -> Result<Json> {
     let r = block(s, p)?;
-    if r.count() > 1_000_000 {
+    if r.count() > MAX_CHART_CELLS {
         return Err(bad("insert.chart", "range too large for a chart"));
     }
     let sheet = target_sheet(s, p)?;
@@ -567,6 +581,7 @@ fn insert_chart(s: &mut Session, p: &Json) -> Result<Json> {
             dy: 0.0,
             width: f64_param(p, "width").unwrap_or(480.0) as f32,
             height: f64_param(p, "height").unwrap_or(288.0) as f32,
+            mode: anchor_mode_param(p).unwrap_or_default(),
         },
         title,
         series,
@@ -655,19 +670,53 @@ fn chart_switch(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(si) else { return Ok(Json::Null) };
         let Some(c) = sh.charts.get(ci) else { return Ok(Json::Null) };
-        let Some(src) = c.source.clone() else { return Ok(Json::Null) };
+        // Charts read from a file have no source range: take the block their series span.
+        let Some((src, by_rows)) = c.source.clone().map(|s| (s, c.by_rows)).or_else(|| series_block(&c.series)) else { return Ok(Json::Null) };
         let (sheet_name, body) = split_sheet(&src);
         let src_sheet = sheet_name.and_then(|n| cx.wb.sheet_index(&n)).unwrap_or(si);
-        let Some(r) = RangeRef::parse(body) else { return Ok(Json::Null) };
+        let Some(mut r) = RangeRef::parse(body) else { return Ok(Json::Null) };
         let Some(ssh) = cx.wb.sheet(src_sheet) else { return Ok(Json::Null) };
-        let by_rows = !c.by_rows;
+        // Whole-column/row references (common in files) span a million cells: clip the block's
+        // far edges to the cells in use, then refuse anything still too large to chart.
+        if let Some(used) = ssh.used_range() {
+            r.end.row = r.end.row.min(used.end.row).max(r.start.row);
+            r.end.col = r.end.col.min(used.end.col).max(r.start.col);
+        }
+        if r.count() > MAX_CHART_CELLS {
+            return Err(bad("chart.switchRowColumn", "range too large for a chart"));
+        }
+        let by_rows = !by_rows;
         let series = series_from_range(ssh, r, by_rows);
         if let Some(c) = cx.sheet_mut(si)?.charts.get_mut(ci) {
+            c.source.get_or_insert(src);
             c.by_rows = by_rows;
             c.series = series;
         }
         Ok(Json::Null)
     })
+}
+
+/// The block a chart's series come from, and whether each series is a row of it: the bounding
+/// range of the series names, categories and values, when they're all references to one sheet.
+fn series_block(series: &[Series]) -> Option<(String, bool)> {
+    let mut sheet: Option<String> = None;
+    let mut bounds: Option<RangeRef> = None;
+    let mut rows = 0;
+    for s in series {
+        for (i, f) in [Some(&s.values), s.categories.as_ref(), s.name.as_ref()].into_iter().flatten().enumerate() {
+            let Ok(gridcraft_formula::Expr::Ref(r)) = gridcraft_formula::parse(f) else { return None };
+            let gridcraft_formula::SheetSel::Named(n) = &r.sheet else { return None };
+            if !sheet.get_or_insert_with(|| n.clone()).eq_ignore_ascii_case(n) {
+                return None;
+            }
+            let range = r.range();
+            if i == 0 && range.height() == 1 && range.width() > 1 {
+                rows += 1;
+            }
+            bounds = Some(bounds.map_or(range, |b| b.union(&range)));
+        }
+    }
+    Some((format!("{}!{}", gridcraft_formula::quote_sheet(&sheet?), bounds?.a1()), rows > 0 && rows == series.len()))
 }
 
 fn chart_delete(s: &mut Session, p: &Json) -> Result<Json> {
@@ -724,6 +773,8 @@ fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
             dy: 0.0,
             width: f64_param(p, "width").map(|v| v as f32).unwrap_or(w as f32 * scale),
             height: f64_param(p, "height").map(|v| v as f32).unwrap_or(h as f32 * scale),
+            // Excel inserts pictures as "Move but don't size with cells" (`editAs="oneCell"`).
+            mode: anchor_mode_param(p).unwrap_or(gridcraft_model::AnchorMode::MoveOnly),
         },
         data,
         mime,
@@ -765,6 +816,7 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
             dy: 0.0,
             width: f64_param(p, "width").unwrap_or(144.0) as f32,
             height: f64_param(p, "height").unwrap_or(if kind == ShapeKind::Line { 0.0 } else { 96.0 }) as f32,
+            mode: anchor_mode_param(p).unwrap_or_default(),
         },
         fill,
         line,
@@ -832,7 +884,8 @@ fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
         let anchor = match kind.as_str() {
             "chart" => sh.charts.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
             "image" => sh.images.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-            _ => sh.shapes.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+            "shape" => sh.shapes.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+            _ => None,
         };
         let Some(a) = anchor else { return Err(bad("object.move", "no such object")) };
         if let Some(at) = cell_param(p, "at") {
@@ -851,6 +904,30 @@ fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
             a.height = v.clamp(0.0, 10000.0) as f32;
         }
         Ok(Json::Null)
+    })
+}
+
+/// Sets an object's anchor mode (Excel's "Move and size with cells" / "Move but don't size with
+/// cells" / "Don't move or size with cells"), so it follows — or ignores — its rows and columns
+/// when the sheet is sorted or edited structurally.
+fn set_anchor_mode(s: &mut Session, p: &Json) -> Result<Json> {
+    let id = u32_param(p, "id").ok_or_else(|| bad("object.setAnchorMode", "missing `id`"))?;
+    let kind = str_param(p, "kind").unwrap_or("").to_string();
+    if !matches!(kind.as_str(), "chart" | "image" | "shape") {
+        return Err(bad("object.setAnchorMode", "kind must be chart, image or shape"));
+    }
+    let mode = anchor_mode_param(p).ok_or_else(|| bad("object.setAnchorMode", "mode must be moveAndSize, moveOnly or absolute"))?;
+    let sheet = s.doc()?.wb.active_sheet;
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(sheet)?;
+        let anchor = match kind.as_str() {
+            "chart" => sh.charts.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+            "image" => sh.images.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+            _ => sh.shapes.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
+        };
+        let Some(a) = anchor else { return Err(bad("object.setAnchorMode", "no such object")) };
+        a.mode = mode;
+        Ok(json!({"mode": anchor_mode_name(mode)}))
     })
 }
 
@@ -1166,7 +1243,7 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
     let shape = Shape {
         id,
         kind: ShapeKind::Icon,
-        anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width: size, height: size },
+        anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width: size, height: size, mode: anchor_mode_param(p).unwrap_or_default() },
         fill: color,
         line: Color::Auto,
         text: name,

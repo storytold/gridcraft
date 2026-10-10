@@ -44,7 +44,8 @@ fn set_mode(h: &mut egui_kittest::Harness<'static, SheetApp>, mode: &str) {
 }
 
 fn select_ribbon_theme(h: &mut egui_kittest::Harness<'static, SheetApp>, label: &str) {
-    h.get_by_role(egui::accesskit::Role::ComboBox).click();
+    // The View tab's first combo box is the display theme (the interface language follows it).
+    h.get_all_by_role(egui::accesskit::Role::ComboBox).next().expect("display theme combo").click();
     h.run_steps(2);
     h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
     h.run_steps(2);

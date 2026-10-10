@@ -14,6 +14,7 @@ pub mod dialogs;
 pub mod editor;
 pub mod formula_bar;
 pub mod grid;
+pub mod i18n;
 pub mod icons;
 pub mod keytips;
 pub mod panes;
@@ -46,6 +47,12 @@ pub struct UiState {
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
     pub recent: Vec<String>,
+    /// Interface language. English by default (so tests and headless renders never depend on the
+    /// host's locale); the desktop app starts from [`i18n::Language::system`] when `ui.json` has
+    /// no usable language (see [`i18n::saved_language`]). An unknown saved value reads as English
+    /// rather than failing the whole `UiState`.
+    #[serde(deserialize_with = "i18n::lenient")]
+    pub language: i18n::Language,
 }
 
 impl Default for UiState {
@@ -59,6 +66,7 @@ impl Default for UiState {
             formula_bar_expanded: false,
             status_bar: true,
             recent: vec![],
+            language: i18n::Language::En,
         }
     }
 }
@@ -136,6 +144,9 @@ pub struct SheetApp {
     pub perf: Perf,
     pub fonts_ready: bool,
     fonts_set: bool,
+    /// Han face order the installed fonts were built with; a language switch rebuilds the fonts
+    /// only when it changes this (see `theme::HanOrder`).
+    fonts_han: Option<theme::HanOrder>,
     effective_dark: bool,
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
@@ -169,6 +180,7 @@ impl SheetApp {
             perf: Perf::default(),
             fonts_ready: false,
             fonts_set: false,
+            fonts_han: None,
             effective_dark: false,
             name_box: None,
             keytips: keytips::KeyTips::default(),
@@ -178,9 +190,14 @@ impl SheetApp {
         }
     }
 
-    /// One-time context setup: fonts and visuals.
+    /// One-time context setup: fonts and visuals (default Han order; never reads the host locale).
     pub fn setup_context(ctx: &egui::Context, dark: bool) {
-        ctx.set_fonts(theme::font_definitions());
+        Self::setup_context_for_language(ctx, dark, i18n::Language::En);
+    }
+
+    /// Sets up fonts and visuals for a specific persisted interface language.
+    pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
+        ctx.set_fonts(theme::font_definitions_for_language(language));
         theme::apply(ctx, dark);
     }
 
@@ -278,6 +295,25 @@ impl SheetApp {
                 Ok(json!({"mode": self.ui.theme_mode()}))
             }
             "view.zoom100" => return Some(self.session.run("view.zoom", json!({"percent": 100})).inspect(|_| self.after_engine())),
+            "app.language.set" => {
+                // `{"language": "ja"}`; `code` is accepted as an alias.
+                let code = p.get("language").or_else(|| p.get("code")).and_then(Json::as_str).unwrap_or("");
+                match i18n::Language::parse(code) {
+                    Some(l) => {
+                        self.ui.language = l;
+                        Ok(json!({"language": l}))
+                    }
+                    None => Err(format!("unknown language {code:?} (use \"en\", \"zh\", \"ja\", \"ko\", \"ru\" or \"pt\")")),
+                }
+            }
+            "app.language.english" => {
+                self.ui.language = i18n::Language::En;
+                Ok(json!({"language": i18n::Language::En}))
+            }
+            "app.language.japanese" => {
+                self.ui.language = i18n::Language::Ja;
+                Ok(json!({"language": i18n::Language::Ja}))
+            }
             "ui.dialog" => {
                 let name = p.get("name").and_then(Json::as_str).unwrap_or("");
                 self.open_dialog(name, p.clone());
@@ -451,13 +487,18 @@ impl SheetApp {
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        if self.fonts_han.is_some_and(|han| han != theme::HanOrder::of(self.ui.language)) {
+            self.fonts_ready = false;
+            self.fonts_set = false;
+        }
         if !self.fonts_ready {
             // New fonts apply from the next frame on: paint nothing until then.
             if self.fonts_set {
                 self.fonts_ready = true;
             } else {
-                SheetApp::setup_context(ctx, self.ui.dark);
+                SheetApp::setup_context_for_language(ctx, self.ui.dark, self.ui.language);
                 self.fonts_set = true;
+                self.fonts_han = Some(theme::HanOrder::of(self.ui.language));
                 ctx.request_repaint();
             }
         }
@@ -502,6 +543,8 @@ impl SheetApp {
         }
         let t0 = now_ms();
         text_box::before_ui(self, &ctx);
+        // The language the widgets translate with this frame (see `i18n::current`).
+        i18n::set_current(&ctx, self.ui.language);
         let t = theme::Tokens::get(&ctx);
         self.ribbon_keys(&ctx);
         ribbon::title_bar(self, ui);

@@ -941,6 +941,63 @@ fn parity_counts() {
 }
 
 #[test]
+fn switch_row_column_on_a_chart_read_from_a_file() {
+    let mut s = s();
+    s.execute(
+        "range.setValues",
+        json!({"range": "A1", "values": [["", "North", "South", "East", "West"], ["Mon", 10, 14, 9, 12], ["Tue", 12, 15, 11, 14], ["Wed", 14, 16, 10, 11], ["Thu", 11, 13, 8, 9], ["Fri", 9, 12, 7, 11], ["Sat", 11, 15, 10, 14]]}),
+    )
+    .unwrap();
+    s.execute("insert.chart", json!({"type": "column", "range": "A1:E7"})).unwrap();
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let b64 = r["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "x.xlsx", "base64": b64})).unwrap();
+    let chart = |s: &Session| s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    assert_eq!((chart(&s).source, chart(&s).series.len()), (None, 4));
+    s.execute("chart.switchRowColumn", json!({})).unwrap();
+    let c = chart(&s);
+    assert!(c.by_rows);
+    assert_eq!(c.source.as_deref(), Some("Sheet1!A1:E7"));
+    assert_eq!(c.series.len(), 6);
+    assert_eq!(c.series[0].name.as_deref(), Some("Sheet1!$A$2"));
+    assert_eq!(c.series[0].categories.as_deref(), Some("Sheet1!$B$1:$E$1"));
+    assert_eq!(c.series[0].values, "Sheet1!$B$2:$E$2");
+    s.execute("chart.switchRowColumn", json!({})).unwrap();
+    assert_eq!(chart(&s).series.len(), 4);
+}
+
+#[test]
+fn switch_row_column_with_whole_column_refs_is_bounded() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["", "North", "South"], ["Mon", 10, 14], ["Tue", 12, 15], ["Wed", 14, 16]]}))
+        .unwrap();
+    s.execute("insert.chart", json!({"type": "column", "range": "A1:C4"})).unwrap();
+    // As read from a file: no source block, series over whole columns.
+    let whole = |s: &mut Session| {
+        let c = &mut std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().charts[0];
+        c.source = None;
+        c.by_rows = false;
+        c.series.truncate(2);
+        for (i, col) in ["B", "C"].iter().enumerate() {
+            c.series[i].name = None;
+            c.series[i].categories = Some("Sheet1!$A:$A".into());
+            c.series[i].values = format!("Sheet1!${col}:${col}");
+        }
+    };
+    whole(&mut s);
+    s.execute("chart.switchRowColumn", json!({})).unwrap();
+    let c = s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    assert!(c.by_rows);
+    // Clipped to the used rows, not a million series.
+    assert_eq!(c.series.len(), 3);
+    // A used range that is itself enormous is refused rather than charted.
+    s.execute("cell.set", json!({"cell": "C1048576", "input": "1"})).unwrap();
+    whole(&mut s);
+    assert!(s.execute("chart.switchRowColumn", json!({})).is_err());
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().charts[0].series.len(), 2);
+}
+
+#[test]
 fn ink_strokes_and_ink_to_shape() {
     let mut s = s();
     // A rough closed box.
@@ -1017,4 +1074,139 @@ fn malformed_xlsb_keeps_the_current_workbook() {
     assert_eq!(s.documents().len(), 1);
     assert_eq!(v(&s, "A1"), Value::from("Keep me"));
     assert!(s.doc().unwrap().is_dirty());
+}
+
+/// A 2×2 PNG, so objects can be injected into a workbook in tests.
+fn tiny_png() -> Vec<u8> {
+    let img = image::RgbaImage::from_raw(2, 2, vec![255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 0, 0, 0, 0]).unwrap();
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    png
+}
+
+fn add_image(s: &mut Session, cell: &str, mode: gridcraft_model::AnchorMode) -> u32 {
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let id = wb.next_object_id();
+    wb.sheet_mut(0).unwrap().images.push(gridcraft_model::Image {
+        id,
+        anchor: gridcraft_model::Anchor { cell: CellRef::parse(cell).unwrap(), dx: 0.0, dy: 0.0, width: 40.0, height: 40.0, mode },
+        data: tiny_png(),
+        mime: "image/png".into(),
+        alt: String::new(),
+    });
+    id
+}
+
+fn image_cell(s: &Session, id: u32) -> Option<CellRef> {
+    s.doc().unwrap().wb.active().unwrap().images.iter().find(|i| i.id == id).map(|i| i.anchor.cell)
+}
+
+/// Issue #5: images anchored in cells follow their row when the sheet is sorted.
+#[test]
+fn sort_moves_anchored_images_with_their_rows() {
+    use gridcraft_model::AnchorMode;
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["b", 2], ["c", 3], ["a", 1]]})).unwrap();
+    // One picture per data row, in its own row.
+    let ib = add_image(&mut s, "A2", AnchorMode::MoveAndSize);
+    let ic = add_image(&mut s, "A3", AnchorMode::MoveAndSize);
+    let ia = add_image(&mut s, "A4", AnchorMode::MoveAndSize);
+    s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.sortAscending", json!({"header": true, "column": "A"})).unwrap();
+    // Ascending by name: b, c, a → a, b, c. Each picture lands in its row's new home.
+    assert_eq!(image_cell(&s, ib), Some(CellRef::parse("A3").unwrap()));
+    assert_eq!(image_cell(&s, ic), Some(CellRef::parse("A4").unwrap()));
+    assert_eq!(image_cell(&s, ia), Some(CellRef::parse("A2").unwrap()));
+}
+
+/// An `absolute`-pinned object stays exactly where it was drawn across a sort and a row delete.
+#[test]
+fn absolute_objects_ignore_sort_and_structural_edits() {
+    use gridcraft_model::AnchorMode;
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["b", 2], ["c", 3], ["a", 1]]})).unwrap();
+    let pinned = add_image(&mut s, "A3", AnchorMode::Absolute);
+    s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.sortAscending", json!({"header": true, "column": "A"})).unwrap();
+    assert_eq!(image_cell(&s, pinned), Some(CellRef::parse("A3").unwrap()));
+    s.execute("home.deleteRows", json!({"rows": "2:2"})).unwrap();
+    assert_eq!(image_cell(&s, pinned), Some(CellRef::parse("A3").unwrap()));
+}
+
+/// A "move but don't size" object follows its row across a sort but keeps its size.
+#[test]
+fn move_only_objects_follow_but_do_not_resize() {
+    use gridcraft_model::AnchorMode;
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "N"], ["b", 2], ["a", 1]]})).unwrap();
+    let id = add_image(&mut s, "A2", AnchorMode::MoveOnly);
+    s.execute("selection.set", json!({"range": "A1:B3"})).unwrap();
+    s.execute("data.sortAscending", json!({"column": "A"})).unwrap();
+    // "a" moved to row 2 and "b" to row 3, so the image follows from A2 to A3.
+    assert_eq!(image_cell(&s, id), Some(CellRef::parse("A3").unwrap()));
+    let a = s.doc().unwrap().wb.active().unwrap().images.iter().find(|i| i.id == id).unwrap().anchor;
+    assert_eq!((a.width, a.height), (40.0, 40.0));
+}
+
+/// `object.setAnchorMode` changes how an object follows its cells.
+#[test]
+fn set_anchor_mode_changes_following() {
+    use gridcraft_model::AnchorMode;
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "N"], ["b", 2], ["a", 1]]})).unwrap();
+    let id = add_image(&mut s, "A2", AnchorMode::MoveAndSize);
+    let r = s.execute("object.setAnchorMode", json!({"kind": "image", "id": id, "mode": "dontMoveOrSizeWithCells"})).unwrap();
+    assert_eq!(r["mode"], "absolute");
+    s.execute("selection.set", json!({"range": "A1:B3"})).unwrap();
+    s.execute("data.sortAscending", json!({"column": "A"})).unwrap();
+    // Pinned absolute: it stays put even though its row moved.
+    assert_eq!(image_cell(&s, id), Some(CellRef::parse("A2").unwrap()));
+    // A bad mode is rejected, not silently ignored.
+    assert!(s.execute("object.setAnchorMode", json!({"kind": "image", "id": id, "mode": "sideways"})).is_err());
+}
+
+/// A sort moves only objects anchored inside the sorted block on both axes: a picture beside
+/// the block (same rows, other columns) stays where it is.
+#[test]
+fn sort_leaves_objects_outside_the_block_alone() {
+    use gridcraft_model::AnchorMode;
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["b", 2], ["c", 3], ["a", 1]]})).unwrap();
+    let beside = add_image(&mut s, "Z3", AnchorMode::MoveAndSize);
+    let inside = add_image(&mut s, "B3", AnchorMode::MoveAndSize);
+    s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.sortAscending", json!({"header": true, "column": "A"})).unwrap();
+    assert_eq!(image_cell(&s, beside), Some(CellRef::parse("Z3").unwrap()));
+    // "c" moved from row 3 to row 4, taking the picture in B3 with it.
+    assert_eq!(image_cell(&s, inside), Some(CellRef::parse("B4").unwrap()));
+}
+
+/// Inserted pictures default to Excel's "Move but don't size with cells".
+#[test]
+fn inserted_pictures_move_but_do_not_size() {
+    let mut s = s();
+    let b64 = crate::io::base64_encode(&tiny_png());
+    let id = s.execute("insert.picture", json!({"base64": b64, "at": "C3"})).unwrap()["image"].as_u64().unwrap() as u32;
+    let mode = |s: &Session| s.doc().unwrap().wb.active().unwrap().images.iter().find(|i| i.id == id).unwrap().anchor.mode;
+    assert_eq!(mode(&s), gridcraft_model::AnchorMode::MoveOnly);
+    let b64 = crate::io::base64_encode(&tiny_png());
+    let id2 = s.execute("insert.picture", json!({"base64": b64, "mode": "absolute"})).unwrap()["image"].as_u64().unwrap() as u32;
+    let m2 = s.doc().unwrap().wb.active().unwrap().images.iter().find(|i| i.id == id2).unwrap().anchor.mode;
+    assert_eq!(m2, gridcraft_model::AnchorMode::Absolute);
+}
+
+/// `object.setAnchorMode` needs a real object kind.
+#[test]
+fn set_anchor_mode_rejects_unknown_kind() {
+    use gridcraft_model::AnchorMode;
+    let mut s = s();
+    let id = add_image(&mut s, "A2", AnchorMode::MoveAndSize);
+    for kind in [json!(""), json!("widget"), serde_json::Value::Null] {
+        assert!(s.execute("object.setAnchorMode", json!({"kind": kind, "id": id, "mode": "absolute"})).is_err());
+    }
+    let mode = |s: &Session| s.doc().unwrap().wb.active().unwrap().images[0].anchor.mode;
+    assert_eq!(mode(&s), AnchorMode::MoveAndSize);
+    s.execute("object.setAnchorMode", json!({"kind": "image", "id": id, "mode": "moveOnly"})).unwrap();
+    assert_eq!(mode(&s), AnchorMode::MoveOnly);
 }

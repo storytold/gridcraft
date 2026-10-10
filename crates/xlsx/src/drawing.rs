@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS};
-use gridcraft_model::{Anchor, Color, Image, Shape, ShapeKind, Sheet, Theme};
+use gridcraft_model::{Anchor, AnchorMode, Color, Image, Shape, ShapeKind, Sheet, Theme};
 
 use crate::IoError;
 use crate::read::Ctx;
@@ -40,12 +40,19 @@ fn read_anchor(a: &El, sheet: &Sheet) -> Option<Anchor> {
             let y1 = sheet.row_top(cell.row) + dy as f64;
             let x2 = sheet.col_left(to.col) + tdx as f64;
             let y2 = sheet.row_top(to.row) + tdy as f64;
-            Some(Anchor { cell, dx, dy, width: (x2 - x1).max(0.0) as f32, height: (y2 - y1).max(0.0) as f32 })
+            // Excel stores "Move and size with cells" as a plain twoCellAnchor, "Move but don't
+            // size" as editAs="oneCell", and "Don't move or size" as editAs="absolute".
+            let mode = match a.attr("editAs") {
+                Some("absolute") => AnchorMode::Absolute,
+                Some("oneCell") => AnchorMode::MoveOnly,
+                _ => AnchorMode::MoveAndSize,
+            };
+            Some(Anchor { cell, dx, dy, width: (x2 - x1).max(0.0) as f32, height: (y2 - y1).max(0.0) as f32, mode })
         }
         "oneCellAnchor" => {
             let (cell, dx, dy) = marker(a.child("from")?);
             let (width, height) = ext_px(a.child("ext"));
-            Some(Anchor { cell, dx, dy, width, height })
+            Some(Anchor { cell, dx, dy, width, height, mode: AnchorMode::MoveOnly })
         }
         "absoluteAnchor" => {
             let pos = a.child("pos");
@@ -60,6 +67,7 @@ fn read_anchor(a: &El, sheet: &Sheet) -> Option<Anchor> {
                 dy: (y - sheet.row_top(row)).max(0.0) as f32,
                 width,
                 height,
+                mode: AnchorMode::Absolute,
             })
         }
         _ => None,
@@ -198,8 +206,12 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
 
 // ---------------------------------------------------------------- writing
 
-/// `<xdr:from>`/`<xdr:to>` markers for a model anchor.
-fn anchor_open(sheet: &Sheet, a: &Anchor) -> String {
+/// The opening `<xdr:twoCellAnchor>` for a model anchor, carrying Excel's `editAs` when the mode
+/// is not the default: omitted for "Move and size with cells", `editAs="oneCell"` for "Move but
+/// don't size", `editAs="absolute"` for "Don't move or size". (Excel writes pictures this way;
+/// the standalone `oneCellAnchor`/`absoluteAnchor` elements are read on import but not written.)
+/// Returns the opening tag and the matching closing tag.
+fn anchor_open(sheet: &Sheet, a: &Anchor) -> (String, &'static str) {
     let px = |v: f64| ((v.max(0.0)) * EMU_PER_PX).round() as i64;
     let x1 = sheet.col_left(a.cell.col) + a.dx as f64;
     let y1 = sheet.row_top(a.cell.row) + a.dy as f64;
@@ -209,15 +221,21 @@ fn anchor_open(sheet: &Sheet, a: &Anchor) -> String {
     let tr = sheet.row_at(y2);
     let tdx = x2 - sheet.col_left(tc);
     let tdy = y2 - sheet.row_top(tr);
-    format!(
-        "<xdr:twoCellAnchor editAs=\"oneCell\"><xdr:from><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></xdr:from><xdr:to><xdr:col>{tc}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{tr}</xdr:row><xdr:rowOff>{}</xdr:rowOff></xdr:to>",
+    let edit = match a.mode {
+        AnchorMode::MoveAndSize => "",
+        AnchorMode::MoveOnly => " editAs=\"oneCell\"",
+        AnchorMode::Absolute => " editAs=\"absolute\"",
+    };
+    let open = format!(
+        "<xdr:twoCellAnchor{edit}><xdr:from><xdr:col>{}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{}</xdr:row><xdr:rowOff>{}</xdr:rowOff></xdr:from><xdr:to><xdr:col>{tc}</xdr:col><xdr:colOff>{}</xdr:colOff><xdr:row>{tr}</xdr:row><xdr:rowOff>{}</xdr:rowOff></xdr:to>",
         a.cell.col,
         px(a.dx as f64),
         a.cell.row,
         px(a.dy as f64),
         px(tdx),
         px(tdy)
-    )
+    );
+    (open, "</xdr:twoCellAnchor>")
 }
 
 fn xfrm(a: &Anchor, tag: &str) -> String {
@@ -244,9 +262,12 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
     );
     for (i, o) in objs.iter().enumerate() {
         let id = i + 2;
+        let close_tag;
         match o {
             Obj::Image(img, rid) => {
-                s.push_str(&anchor_open(sheet, &img.anchor));
+                let (open, close) = anchor_open(sheet, &img.anchor);
+                close_tag = close;
+                s.push_str(&open);
                 let _ = write!(
                     s,
                     "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"Picture {}\" descr=\"{}\"/><xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"{rid}\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>",
@@ -256,7 +277,9 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                 );
             }
             Obj::Chart(ch, rid) => {
-                s.push_str(&anchor_open(sheet, &ch.anchor));
+                let (open, close) = anchor_open(sheet, &ch.anchor);
+                close_tag = close;
+                s.push_str(&open);
                 let _ = write!(
                     s,
                     "<xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"{id}\" name=\"Chart {}\"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>{}<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart r:id=\"{rid}\"/></a:graphicData></a:graphic></xdr:graphicFrame>",
@@ -265,7 +288,9 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                 );
             }
             Obj::Shape(sh) => {
-                s.push_str(&anchor_open(sheet, &sh.anchor));
+                let (open, close) = anchor_open(sheet, &sh.anchor);
+                close_tag = close;
+                s.push_str(&open);
                 let (prst, tx) = match sh.kind {
                     ShapeKind::Rectangle => ("rect", false),
                     ShapeKind::RoundedRectangle => ("roundRect", false),
@@ -314,7 +339,8 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                 s.push_str("</xdr:sp>");
             }
         }
-        s.push_str("<xdr:clientData/></xdr:twoCellAnchor>");
+        s.push_str("<xdr:clientData/>");
+        s.push_str(close_tag);
     }
     s.push_str("</xdr:wsDr>");
     s

@@ -15,7 +15,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Chart Element",
             ["Chart Design", "Chart Layouts"],
             None,
-            "{chart?, element: title|legend|dataLabels|gridlines|axisTitles, on?: bool, position?: bottom|top|left|right}",
+            "{chart?, element: title|legend|dataLabels|gridlines|axisTitles|smooth, on?: bool, position?: bottom|top|left|right}",
             has_doc,
             add_element
         ),
@@ -291,6 +291,11 @@ fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
                 c.x_title = on.then(|| c.x_title.clone().unwrap_or_else(|| "Axis Title".into()));
                 c.y_title = on.then(|| c.y_title.clone().unwrap_or_else(|| "Axis Title".into()));
             }
+            "smooth" => {
+                for s in &mut c.series {
+                    s.smooth = on;
+                }
+            }
             other => return Err(bad("chart.addElement", format!("unknown element `{other}`"))),
         }
         Ok(())
@@ -468,13 +473,13 @@ fn selection_pane(s: &mut Session, _: &Json) -> Result<Json> {
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let mut v = Vec::new();
     for c in &sh.shapes {
-        v.push(json!({"kind": "shape", "id": c.id, "name": format!("{:?} {}", c.kind, c.id), "at": c.anchor.cell.a1()}));
+        v.push(json!({"kind": "shape", "id": c.id, "name": format!("{:?} {}", c.kind, c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
     }
     for c in &sh.images {
-        v.push(json!({"kind": "image", "id": c.id, "name": format!("Picture {}", c.id), "at": c.anchor.cell.a1()}));
+        v.push(json!({"kind": "image", "id": c.id, "name": format!("Picture {}", c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
     }
     for c in &sh.charts {
-        v.push(json!({"kind": "chart", "id": c.id, "name": format!("Chart {}", c.id), "title": c.title, "at": c.anchor.cell.a1()}));
+        v.push(json!({"kind": "chart", "id": c.id, "name": format!("Chart {}", c.id), "title": c.title, "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
     }
     Ok(Json::Array(v))
 }

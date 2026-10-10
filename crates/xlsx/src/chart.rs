@@ -106,6 +106,7 @@ fn read_series(s: &El) -> Series {
         color,
         secondary: false,
         kind: None,
+        smooth: s.child("smooth").and_then(|e| e.attr("val")).and_then(|v| v.parse::<u8>().ok()).is_some_and(|v| v != 0),
     }
 }
 
@@ -349,7 +350,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
                 x.push_str(&num_data("bubbleSize", s.bubble_sizes.as_deref().or(Some(&s.values)), wb, si));
                 x.push_str("<c:bubble3D val=\"0\"/>");
             } else {
-                x.push_str("<c:smooth val=\"0\"/>");
+                let _ = write!(x, "<c:smooth val=\"{}\"/>", s.smooth as u8);
             }
         }
         _ => {
@@ -358,7 +359,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
             }
             x.push_str(&num_data("val", Some(&s.values), wb, si));
             if matches!(g, G::Line { .. }) {
-                x.push_str("<c:smooth val=\"0\"/>");
+                let _ = write!(x, "<c:smooth val=\"{}\"/>", s.smooth as u8);
             }
         }
     }

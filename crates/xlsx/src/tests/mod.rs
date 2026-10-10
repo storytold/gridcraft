@@ -6,6 +6,7 @@ mod malformed;
 mod ods_tests;
 mod pivot_tests;
 mod roundtrip;
+mod smooth_roundtrip;
 mod xlsb_tests;
 
 use std::io::Write;

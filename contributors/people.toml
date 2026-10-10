@@ -25,3 +25,6 @@ sync_github_name = false
 [people.nihilist-narwhal]
 display_name = "nihilist-narwhal"
 sync_github_name = false
+
+[people.edurbs]
+sync_github_name = true

@@ -146,6 +146,30 @@ pub(crate) fn bool_param(p: &Json, key: &str) -> Option<bool> {
 pub(crate) fn u32_param(p: &Json, key: &str) -> Option<u32> {
     p.get(key).and_then(Json::as_u64).map(|v| v.min(u32::MAX as u64) as u32)
 }
+
+/// An object anchor mode from Excel's wording or the model's: `"moveAndSize"`/`"twoCell"`,
+/// `"moveOnly"`/`"oneCell"`, `"absolute"`/`"don't move or size"` (case-insensitive).
+pub(crate) fn anchor_mode_param(p: &Json) -> Option<gridcraft_model::AnchorMode> {
+    parse_anchor_mode(str_param(p, "mode").or_else(|| str_param(p, "anchorMode"))?)
+}
+
+pub(crate) fn parse_anchor_mode(s: &str) -> Option<gridcraft_model::AnchorMode> {
+    match s.to_ascii_lowercase().replace([' ', '-', '_', '\''], "").as_str() {
+        "moveandsize" | "moveandsizeandcells" | "twocell" => Some(gridcraft_model::AnchorMode::MoveAndSize),
+        "moveonly" | "movebutdontsize" | "movebutdontsizewithcells" | "onecell" => Some(gridcraft_model::AnchorMode::MoveOnly),
+        "absolute" | "dontmoveorsize" | "dontmoveorsizewithcells" | "none" => Some(gridcraft_model::AnchorMode::Absolute),
+        _ => None,
+    }
+}
+
+/// The wire name of an anchor mode (matches the `mode` param of [`anchor_mode_param`]).
+pub(crate) fn anchor_mode_name(m: gridcraft_model::AnchorMode) -> &'static str {
+    match m {
+        gridcraft_model::AnchorMode::MoveAndSize => "moveAndSize",
+        gridcraft_model::AnchorMode::MoveOnly => "moveOnly",
+        gridcraft_model::AnchorMode::Absolute => "absolute",
+    }
+}
 pub(crate) fn ok() -> Result<Json> {
     Ok(Json::Null)
 }

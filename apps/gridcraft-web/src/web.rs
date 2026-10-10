@@ -37,8 +37,17 @@ pub fn start() {
                     } else if q.contains("sample") {
                         let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
                     }
-                    let app = SheetApp::new(session, services(inbox.clone(), cc.egui_ctx.clone()));
-                    SheetApp::setup_context(&cc.egui_ctx, false);
+                    let mut app = SheetApp::new(session, services(inbox.clone(), cc.egui_ctx.clone()));
+                    // Follow the browser's language, except a CJK one: the web build has no system
+                    // CJK fonts (none are bundled), so that interface would render as tofu.
+                    let browser = gridcraft_ui_egui::i18n::Language::system();
+                    if !matches!(
+                        browser,
+                        gridcraft_ui_egui::i18n::Language::Zh | gridcraft_ui_egui::i18n::Language::Ja | gridcraft_ui_egui::i18n::Language::Ko
+                    ) {
+                        app.ui.language = browser;
+                    }
+                    SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
                     Ok(Box::new(WebShell { app, inbox }))
                 }),
             )
