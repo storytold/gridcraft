@@ -9,7 +9,7 @@ use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
 use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
 
-pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
+pub const TABS: &[&str] = &["File", "Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
 /// Leave room for the macOS traffic lights when the content extends into the title bar.
 pub const TITLE_LEFT_PAD: f32 = if cfg!(target_os = "macos") { 76.0 } else { 8.0 };
@@ -138,7 +138,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     let ctx_tabs = contextual_tabs(app);
                     tabs.extend(ctx_tabs.iter());
                     for tab in tabs {
-                        let active = app.ui.ribbon_tab == tab;
+                        let active = tab != "File" && app.ui.ribbon_tab == tab;
                         let contextual = ctx_tabs.contains(&tab);
                         let font = theme::ui_font(13.5);
                         let tw = ui.painter().layout_no_wrap(tab.to_string(), font.clone(), t.text).size().x;
@@ -159,7 +159,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             ui.painter().rect_filled(ul, 1.5, t.accent);
                         }
                         if resp.clicked() {
-                            if active && !collapsed {
+                            if tab == "File" {
+                                app.ui.backstage = true;
+                            } else if active && !collapsed {
                                 app.ui.ribbon_collapsed = true;
                             } else {
                                 app.ui.ribbon_tab = tab.to_string();

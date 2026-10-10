@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod backstage;
 pub mod chartview;
 pub mod control;
 pub mod credits;
@@ -41,6 +42,10 @@ pub struct UiState {
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
     pub recent: Vec<String>,
+    #[serde(skip)]
+    pub backstage: bool,
+    #[serde(skip)]
+    pub backstage_page: String,
 }
 
 impl Default for UiState {
@@ -53,6 +58,8 @@ impl Default for UiState {
             formula_bar_expanded: false,
             status_bar: true,
             recent: vec![],
+            backstage: false,
+            backstage_page: "new".into(),
         }
     }
 }
@@ -429,22 +436,26 @@ impl SheetApp {
         }
         let t0 = now_ms();
         let t = theme::Tokens::get(&ctx);
-        ribbon::title_bar(self, ui);
-        ribbon::show(self, ui);
-        if self.ui.formula_bar {
-            formula_bar::show(self, ui);
+        if self.ui.backstage {
+            backstage::show(self, ui);
+        } else {
+            ribbon::title_bar(self, ui);
+            ribbon::show(self, ui);
+            if self.ui.formula_bar {
+                formula_bar::show(self, ui);
+            }
+            if self.ui.status_bar {
+                tabs::status_bar(self, ui);
+            }
+            tabs::sheet_tabs(self, ui);
+            pivot_pane::show(self, ui);
+            panes::show(self, ui);
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
+                let g0 = now_ms();
+                grid::show(self, ui);
+                self.perf.grid_ms = now_ms() - g0;
+            });
         }
-        if self.ui.status_bar {
-            tabs::status_bar(self, ui);
-        }
-        tabs::sheet_tabs(self, ui);
-        pivot_pane::show(self, ui);
-        panes::show(self, ui);
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
-            let g0 = now_ms();
-            grid::show(self, ui);
-            self.perf.grid_ms = now_ms() - g0;
-        });
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
