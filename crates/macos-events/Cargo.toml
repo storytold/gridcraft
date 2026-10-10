@@ -1,0 +1,33 @@
+[package]
+name = "gridcraft-macos-events"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "macOS Apple Event shim: workbooks opened from Finder and Dock-icon reopen"
+
+[lints]
+# Deliberately does not inherit the workspace lints: this is the repository's single
+# `unsafe` module (the Apple Event API has no safe binding). Everything else matches
+# the workspace rules; see lib.rs for the policy notes.
+clippy.unwrap_used = "deny"
+clippy.expect_used = "deny"
+clippy.panic = "deny"
+clippy.unimplemented = "deny"
+clippy.todo = "deny"
+clippy.unreachable = "deny"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = [
+    "NSAppleEventDescriptor",
+    "NSAppleEventManager",
+    "NSArray",
+    "NSNotification",
+    "NSOperation",
+    "NSString",
+    "NSURL",
+    "objc2-core-services",
+] }
+objc2-core-services = "0.3"

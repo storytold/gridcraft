@@ -24,6 +24,7 @@ gridcraft-engine = { path = "crates/engine" }
 gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
+gridcraft-macos-events = { path = "crates/macos-events" }
 
 # foundation
 thiserror = "2"
