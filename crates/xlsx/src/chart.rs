@@ -199,6 +199,7 @@ enum G {
     Scatter { lines: bool },
     Bubble,
     Radar,
+    Stock,
 }
 
 fn group_for(k: ChartKind) -> G {
@@ -219,7 +220,8 @@ fn group_for(k: ChartKind) -> G {
         ChartKind::ScatterLines => G::Scatter { lines: true },
         ChartKind::Bubble => G::Bubble,
         ChartKind::Radar => G::Radar,
-        // Kinds without a classic chart element are written as clustered columns.
+        ChartKind::Stock => G::Stock,
+        // Combo charts start from clustered columns; chartex kinds have their own part.
         _ => G::Bar { bar: false, grouping: "clustered" },
     }
 }
@@ -227,7 +229,7 @@ fn group_for(k: ChartKind) -> G {
 const MAX_CACHE: u64 = 100_000;
 
 /// Values of a same-workbook reference (`Sheet1!$B$2:$B$9`), row-major.
-fn ref_values(wb: &Workbook, sheet_idx: usize, f: &str) -> Option<Vec<Value>> {
+pub(crate) fn ref_values(wb: &Workbook, sheet_idx: usize, f: &str) -> Option<Vec<Value>> {
     let e = gridcraft_formula::parse(f).ok()?;
     let Expr::Ref(r) = e else { return None };
     let si = match &r.sheet {
@@ -331,12 +333,12 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
         (Some(c), false) => {
             let _ = write!(x, "<c:spPr><a:solidFill>{c}</a:solidFill></c:spPr>");
         }
-        (None, _) if g == (G::Scatter { lines: false }) => x.push_str("<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr>"),
+        (None, _) if g == (G::Scatter { lines: false }) || g == G::Stock => x.push_str("<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr>"),
         _ => {}
     }
     match g {
         G::Bar { .. } => x.push_str("<c:invertIfNegative val=\"0\"/>"),
-        G::Line { markers: false, .. } | G::Scatter { lines: true } => x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>"),
+        G::Line { markers: false, .. } | G::Scatter { lines: true } | G::Stock => x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>"),
         G::Bubble => x.push_str("<c:invertIfNegative val=\"0\"/>"),
         _ => {}
     }
@@ -403,6 +405,7 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb
             format!("<c:bubbleChart><c:varyColors val=\"0\"/>{sers}{dl}<c:bubbleScale val=\"100\"/><c:showNegBubbles val=\"0\"/>{ax}</c:bubbleChart>")
         }
         G::Radar => format!("<c:radarChart><c:radarStyle val=\"marker\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:radarChart>"),
+        G::Stock => format!("<c:stockChart>{sers}{dl}<c:hiLowLines/>{ax}</c:stockChart>"),
     }
 }
 
@@ -475,9 +478,11 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart) -> String {
     let primary_g;
     let mut secondary: Option<G> = None;
     if ch.kind == ChartKind::Combo {
+        // Series without a kind of their own: the first is a column, the others lines (as drawn).
+        let kind = |i: usize, x: &Series| x.kind.filter(|k| *k != ChartKind::Combo).or((i > 0).then_some(ChartKind::Line));
         let is_line = |k: Option<ChartKind>| matches!(k.map(group_for), Some(G::Line { .. } | G::Area { .. } | G::Radar | G::Scatter { .. }));
-        let bars: Vec<(usize, &Series)> = all.iter().filter(|(_, x)| !x.secondary && !is_line(x.kind)).copied().collect();
-        let lines: Vec<(usize, &Series)> = all.iter().filter(|(_, x)| !x.secondary && is_line(x.kind)).copied().collect();
+        let bars: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && !is_line(kind(*i, x))).copied().collect();
+        let lines: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && is_line(kind(*i, x))).copied().collect();
         let sec: Vec<(usize, &Series)> = all.iter().filter(|(_, x)| x.secondary).copied().collect();
         primary_g = G::Bar { bar: false, grouping: "clustered" };
         if !bars.is_empty() || (lines.is_empty() && sec.is_empty()) {
@@ -495,7 +500,11 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart) -> String {
             secondary = Some(g);
         }
     } else {
-        primary_g = group_for(ch.kind);
+        primary_g = match group_for(ch.kind) {
+            // A stock chart has 3 or 4 series (high-low-close, open-high-low-close).
+            G::Stock if !(3..=4).contains(&ch.series.len()) => G::Line { stacked: false, markers: false },
+            g => g,
+        };
         s.push_str(&group_xml(primary_g, &all, ch, (1, 2), wb, si));
     }
     match primary_g {
