@@ -216,6 +216,9 @@ impl Workbook {
             for c in &s.tables {
                 m = m.max(c.id);
             }
+            for c in &s.slicers {
+                m = m.max(c.id);
+            }
         }
         m + 1
     }

@@ -479,6 +479,26 @@ pub struct AutoFilter {
     pub criteria: Vec<(u32, FilterCriterion)>,
 }
 
+/// A slicer: an on-sheet filter widget bound to one column of a table. Clicking its value tiles
+/// sets that column's `FilterCriterion::Values` in the sheet's [`AutoFilter`] and re-applies it,
+/// so a slicer is just a visual front-end over the existing filter machinery.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Slicer {
+    pub id: u32,
+    /// Name of the table this slicer filters.
+    pub table: String,
+    /// Header name of the filtered column within the table.
+    pub column: String,
+    /// Caption shown in the slicer header (defaults to the column name).
+    pub caption: String,
+    pub anchor: Anchor,
+    /// Selected display values. `None` means every value (no filter from this slicer); an empty
+    /// list means nothing is selected (all rows hidden), matching Excel's "clear all buttons".
+    pub selected: Option<Vec<String>>,
+    /// Number of button columns in the layout (Excel default 1).
+    pub columns: u32,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Orientation {
     #[default]

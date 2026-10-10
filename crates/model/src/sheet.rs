@@ -54,6 +54,9 @@ pub struct Sheet {
     pub images: Vec<Image>,
     pub shapes: Vec<Shape>,
     pub sparklines: Vec<Sparkline>,
+    /// On-sheet slicer widgets (filter a table column by clicking value tiles).
+    #[serde(default)]
+    pub slicers: Vec<Slicer>,
     /// PivotTables whose output lives on this sheet.
     #[serde(default)]
     pub pivots: Vec<PivotTable>,
@@ -99,6 +102,7 @@ impl Sheet {
             images: vec![],
             shapes: vec![],
             sparklines: vec![],
+            slicers: vec![],
             pivots: vec![],
             protection: None,
             print: PrintSettings::default(),

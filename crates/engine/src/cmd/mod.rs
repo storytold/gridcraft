@@ -14,6 +14,7 @@ pub mod pivot;
 pub mod print;
 pub mod review;
 pub mod sheet;
+pub mod slicer;
 pub mod spelling;
 pub mod view;
 pub mod whatif;
@@ -119,6 +120,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(draw::specs());
         v.extend(spelling::specs());
         v.extend(pivot::specs());
+        v.extend(slicer::specs());
         v.extend(whatif::specs());
         v.extend(print::specs());
         v

@@ -648,6 +648,59 @@ fn tables_and_structured_refs() {
 }
 
 #[test]
+fn slicer_filters_table() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Qty"], ["East", 2], ["West", 5], ["East", 3], ["North", 1]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B5", "name": "Sales"})).unwrap();
+    s.execute("selection.set", json!({"cell": "A2"})).unwrap();
+
+    // A new slicer on the Region column filters nothing (all values selected).
+    let r = s.execute("insert.slicer", json!({})).unwrap();
+    let id = r["slicer"].as_u64().unwrap() as u32;
+    let hidden = |s: &Session| {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        (1..=4).filter(|row| sh.is_row_hidden(*row)).count() // data rows are sheet rows 1..=4 (0-based header at 0)
+    };
+    assert_eq!(hidden(&s), 0);
+    {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert_eq!(sh.slicers.len(), 1);
+        assert_eq!(sh.slicers[0].column, "Region");
+    }
+
+    // Single-click "East": only the two East rows remain (West row 2 and North row 4 hidden).
+    s.execute("slicer.toggle", json!({"slicer": id, "value": "East"})).unwrap();
+    assert_eq!(hidden(&s), 2);
+    {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert!(sh.is_row_hidden(2) && sh.is_row_hidden(4));
+        assert!(!sh.is_row_hidden(1) && !sh.is_row_hidden(3));
+    }
+
+    // Ctrl-click "West" adds it: East + West visible, only North hidden.
+    s.execute("slicer.toggle", json!({"slicer": id, "value": "West", "multi": true})).unwrap();
+    assert_eq!(hidden(&s), 1);
+
+    // Clear restores everything.
+    s.execute("slicer.clear", json!({"slicer": id})).unwrap();
+    assert_eq!(hidden(&s), 0);
+    assert!(s.doc().unwrap().wb.active().unwrap().slicers[0].selected.is_none());
+
+    // Deleting the slicer drops it and clears its filter.
+    s.execute("slicer.toggle", json!({"slicer": id, "value": "East"})).unwrap();
+    assert_eq!(hidden(&s), 2);
+    s.execute("slicer.delete", json!({"slicer": id})).unwrap();
+    assert_eq!(hidden(&s), 0);
+    assert!(s.doc().unwrap().wb.active().unwrap().slicers.is_empty());
+
+    // A bad value is rejected, not panicked.
+    assert!(s.execute("slicer.toggle", json!({"value": "Nowhere"})).is_err());
+}
+
+#[test]
 fn create_names_from_selection() {
     let names = |s: &Session| -> Vec<(String, String)> {
         let mut v: Vec<_> = s.doc().unwrap().wb.names.iter().map(|n| (n.name.clone(), n.formula.clone())).collect();

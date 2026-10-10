@@ -1126,7 +1126,25 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             return;
         }
     }
-    // Objects (charts, pictures, shapes) take clicks first.
+    // A plain click on a slicer value tile toggles it (Ctrl/Cmd for multi-select); the clear
+    // button resets it. Runs before the generic object select/drag so tiles stay clickable.
+    if primary_clicked
+        && !resp.drag_started()
+        && let Some(p) = pos
+        && let Some((id, act)) = crate::chartview::slicer_click(geo, sh, wb, wb.active_sheet, p)
+    {
+        app.selected_chart = Some(id);
+        match act {
+            crate::chartview::SlicerAction::Toggle(value) => {
+                let _ = app.run("slicer.toggle", json!({"slicer": id, "value": value, "multi": mods.command || mods.ctrl}));
+            }
+            crate::chartview::SlicerAction::Clear => {
+                let _ = app.run("slicer.clear", json!({"slicer": id}));
+            }
+        }
+        return;
+    }
+    // Objects (charts, pictures, shapes, slicers) take clicks first.
     if resp.drag_started() || primary_clicked {
         if let Some(p) = pos
             && let Some((kind, id, rect)) = crate::chartview::hit(app, geo, sh, p)
@@ -1597,6 +1615,7 @@ fn object_anchor(sh: &Sheet, kind: &str, id: u32) -> Option<gridcraft_engine::mo
     match kind {
         "chart" => sh.charts.iter().find(|c| c.id == id).map(|c| c.anchor),
         "image" => sh.images.iter().find(|c| c.id == id).map(|c| c.anchor),
+        "slicer" => sh.slicers.iter().find(|c| c.id == id).map(|c| c.anchor),
         _ => sh.shapes.iter().find(|c| c.id == id).map(|c| c.anchor),
     }
 }
