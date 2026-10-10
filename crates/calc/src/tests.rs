@@ -159,6 +159,24 @@ fn spills() {
 }
 
 #[test]
+fn references_keep_their_size_past_the_used_range() {
+    let mut t = T::new();
+    t.set("A1", "5");
+    t.set("A2", "6");
+    t.set("C1", "=ROWS(A1:A10*1)");
+    t.set("C2", "=SUMPRODUCT(--(A1:A10=\"\"))");
+    t.set("C3", "=COUNTBLANK(A1:A10)");
+    t.set("C4", "=COUNTIF(A1:A10,\"\")");
+    t.set("C5", "=COLUMNS(TRANSPOSE(A1:A10))");
+    for (at, want) in [("C1", 10.0), ("C2", 8.0), ("C3", 8.0), ("C4", 8.0), ("C5", 10.0)] {
+        assert_eq!(t.num(at), want, "{at}");
+    }
+    // Whole columns are still read up to the used range.
+    t.set("D1", "=ROWS(FILTER(A:A,A:A<>\"\"))");
+    assert_eq!(t.num("D1"), 2.0);
+}
+
+#[test]
 fn let_lambda() {
     let mut t = T::new();
     t.set("A1", "=LET(x,2,y,3,x*y)");

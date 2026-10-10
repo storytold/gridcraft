@@ -13,6 +13,10 @@ use gridcraft_model::Workbook;
 
 /// Largest array a reference may expand to.
 pub const MAX_CELLS: u64 = 16_000_000;
+/// References up to this many cells are read at their full size; larger ones (`A:A`, ranges
+/// reserved for data to come such as `$A$2:$A$50000`) stop at the sheet's used range, so that
+/// formulas over them stay fast.
+const FULL_SIZE_CELLS: u64 = 16_384;
 const MAX_DEPTH: usize = 400;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -129,7 +133,10 @@ impl<'h> Evaluator<'h> {
         if a.range.is_single() {
             return self.host.cell_value(a.sheet, a.range.start);
         }
-        let range = self.trim(a);
+        // A reference keeps its size, so the array has its shape and its blanks count
+        // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`).
+        let cells = u64::from(a.range.height()) * u64::from(a.range.width());
+        let range = if cells > FULL_SIZE_CELLS { self.trim(a) } else { a.range };
         let (h, w) = (range.height() as usize, range.width() as usize);
         if (h as u64) * (w as u64) > MAX_CELLS {
             return Value::Error(CellError::Num);
