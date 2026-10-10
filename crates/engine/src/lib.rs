@@ -311,6 +311,25 @@ impl Session {
     pub fn take_ui_requests(&mut self) -> Vec<UiRequest> {
         std::mem::take(&mut self.ui_requests)
     }
+
+    /// Runs a command for a caller with no UI (MCP, CLI): queued UI requests are dropped, and a command that only
+    /// queued a file dialog because it got no file (`file.open`, `file.saveAs`, `file.save` on a workbook with no
+    /// file yet, `data.getData`) is an error instead of a silent success.
+    pub fn execute_headless(&mut self, id: &str, params: Json) -> Result<Json> {
+        let r = self.execute(id, params);
+        let requests = self.take_ui_requests();
+        let asked_for_file = requests.iter().any(|q| matches!(q, UiRequest::Dialog(name, _) if name == "open" || name == "saveAs"));
+        if r.is_ok() && asked_for_file {
+            let what = match id {
+                "file.open" => "`path` or `base64`",
+                "data.getData" | "data.fromTextCsv" => "`path` or `text`",
+                _ => "`path`",
+            };
+            let msg = format!("missing {what}: programmatic calls never open dialogs");
+            return Err(EngineError::BadParams { cmd: id.to_string(), msg });
+        }
+        r
+    }
 }
 
 /// Convenience: the active workbook's active sheet.

@@ -381,3 +381,14 @@ fn remote_backend_over_tcp() {
     handle.join().unwrap();
     assert!(Remote::connect("127.0.0.1:1").is_err());
 }
+
+#[test]
+fn file_commands_without_a_file_fail() {
+    let mut s = server();
+    // `file.save` on Book1, which has no file yet, would ask for one too.
+    for command in ["file.open", "file.saveAs", "file.save", "data.getData", "data.fromTextCsv"] {
+        let msg = fails(&mut s, "execute_command", json!({"command": command}));
+        assert!(msg.contains("missing") && msg.contains("never open dialogs"), "{command}: {msg}");
+        fails(&mut s, "execute_command", json!({"command": command, "params": {}}));
+    }
+}
