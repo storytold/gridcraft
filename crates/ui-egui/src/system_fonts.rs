@@ -25,7 +25,12 @@ pub fn families() -> &'static [String] {
 
         for face in database().faces() {
             for (name, _) in &face.families {
-                names.insert(name.clone());
+                // Hide internal dot-prefixed font family names.
+                if !name.trim_start().starts_with('.')
+                    && !name.trim().is_empty()
+                {
+                    names.insert(name.clone());
+                }
             }
         }
 

@@ -331,6 +331,26 @@ pub fn font_definitions() -> FontDefinitions {
             fonts.families.insert(FontFamily::Name(name.into()), chain);
         }
     }
+
+    // Use the installed Traditional Chinese font as a glyph fallback.
+    // Keep each family's primary font unchanged.
+    if let Some(data) = crate::system_fonts::load("PingFang TC") {
+        let key = "system-cjk-fallback".to_string();
+        fonts.font_data.insert(key.clone(), Arc::new(data));
+
+        for role in [
+            UI, UI_BOLD, CELL, CELL_BOLD,
+            CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO,
+        ] {
+            if let Some(chain) =
+                fonts.families.get_mut(&FontFamily::Name(role.into()))
+            {
+                let pos = chain.len().min(1);
+                chain.insert(pos, key.clone());
+            }
+        }
+    }
+
     // Default proportional text in widgets uses the UI font.
     if let Some(ui) = fonts.families.get(&FontFamily::Name(UI.into())).cloned() {
         fonts.families.insert(FontFamily::Proportional, ui);
