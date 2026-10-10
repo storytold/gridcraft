@@ -100,7 +100,8 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         .map(|(a, r)| (*a, *r))
         .collect();
     let mut extra: BTreeMap<CellRef, Value> = BTreeMap::new();
-    for (a, r) in &dynamic {
+    // Values inside spills and legacy array ranges.
+    for (a, r) in sheet.spill_ranges.iter().filter(|(_, r)| !r.is_single()) {
         for c in r.iter().take(1_000_000) {
             if c != *a
                 && let Some(v) = sheet.spill.get(&c)

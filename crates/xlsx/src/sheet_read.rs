@@ -29,8 +29,8 @@ struct Shared {
 struct RowState {
     next_row: u32,
     shared: HashMap<u32, Shared>,
-    /// Dynamic-array spill ranges: cached values inside them (other than the anchor) are not
-    /// stored, so the formula can spill again.
+    /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
+    /// the anchor) are not stored, so the formula can fill them again.
     dynamic: Vec<RangeRef>,
     dropped: u64,
     rows: u64,
@@ -416,11 +416,10 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
             }
             let mut fm = Formula::new(text);
             let range = f.attr("ref").and_then(RangeRef::parse).unwrap_or(RangeRef::cell(pos));
-            if dynamic {
-                if !range.is_single() {
-                    st.dynamic.push(range);
-                }
-            } else {
+            if !range.is_single() {
+                st.dynamic.push(range);
+            }
+            if !dynamic {
                 fm.array = Some(range);
             }
             Some(fm)

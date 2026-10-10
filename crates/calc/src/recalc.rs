@@ -432,6 +432,12 @@ impl PassHost<'_> {
             let mut ev = Evaluator::new(self, k.0, k.1);
             ev.value(&expr)
         };
+        // A legacy array formula fills the range it was entered in.
+        let legacy = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
+        let v = match legacy {
+            Some(range) => fit_to_range(v, range),
+            None => v,
+        };
         self.depth -= 1;
         self.in_progress.remove(&k);
         self.pending.remove(&k);
@@ -466,6 +472,30 @@ impl PassHost<'_> {
         self.results.insert(k, v.clone());
         v
     }
+}
+
+/// A legacy (Ctrl+Shift+Enter) array formula's result fitted to the range it was entered in, as
+/// Excel does: a single row or column repeats across the range, a single value fills it, cells
+/// past the result show `#N/A`, and a result larger than the range is cut off.
+fn fit_to_range(v: Value, range: RangeRef) -> Value {
+    if range.count() > crate::eval::MAX_CELLS {
+        return Value::Error(CellError::Num);
+    }
+    let (h, w) = (range.height() as usize, range.width() as usize);
+    let Value::Array(a) = v else {
+        return if h * w == 1 { v } else { Array::new(h, w, vec![v; h * w]).map(Value::from).unwrap_or(Value::Error(CellError::Value)) };
+    };
+    if h * w == 1 {
+        return a.data.first().cloned().unwrap_or_default();
+    }
+    let mut data = Vec::with_capacity(h * w);
+    for r in 0..h {
+        for c in 0..w {
+            let (r, c) = (if a.rows == 1 { 0 } else { r }, if a.cols == 1 { 0 } else { c });
+            data.push(a.get(r, c).cloned().unwrap_or(Value::Error(CellError::NA)));
+        }
+    }
+    Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
 }
 
 impl Host for PassHost<'_> {

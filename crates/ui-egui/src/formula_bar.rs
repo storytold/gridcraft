@@ -73,8 +73,10 @@ fn active_input(app: &SheetApp) -> String {
         if c.formula.is_some() && d.wb.styles.get(c.style).protection.hidden && sh.is_protected() {
             return String::new();
         }
-        return if c.formula.is_some() {
-            crate::formula_locale::display(&c.input_text(), app.ui.language.formula_locale(), &d.wb, d.wb.active_sheet)
+        return if let Some(f) = &c.formula {
+            let shown = crate::formula_locale::display(&c.input_text(), app.ui.language.formula_locale(), &d.wb, d.wb.active_sheet);
+            // A legacy array formula shows in braces (`{=A1:A2*2}`), as `Cell::bar_text` does.
+            if f.array.is_some() { format!("{{{shown}}}") } else { shown }
         } else {
             c.input_text()
         };

@@ -17,8 +17,8 @@ fn shared_formulas_and_value_types() {
         <row r="2"><c r="A2"><v>2</v></c><c r="B2"><f t="shared" si="0"/><v>5</v></c></row>
         <row r="3"><c r="A3" t="inlineStr"><is><r><t>rich </t></r><r><rPr><b/></rPr><t>text</t></r><rPh><t>ignored</t></rPh></is></c><c r="B3"><f t="shared" si="0"/></c></row>
         <row r="4"><c r="A4" t="b"><v>1</v></c><c r="B4" t="e"><v>#DIV/0!</v></c><c r="C4" t="str"><f>_xlfn.CONCAT("a","b")</f><v>ab</v></c><c r="D4" t="d"><v>2024-01-01T12:00:00</v></c></row>
-        <row r="5"><c r="A5"><f t="array" ref="A5:B6">A1:B2*2</f><v>2</v></c><c r="C5" cm="1"><f t="array" ref="C5:C7">_xlfn.SEQUENCE(3)</f><v>1</v></c></row>
-        <row r="6"><c r="C6"><v>2</v></c></row>
+        <row r="5"><c r="A5"><f t="array" ref="A5:B6">A1:B2*2</f><v>2</v></c><c r="B5"><v>6</v></c><c r="C5" cm="1"><f t="array" ref="C5:C7">_xlfn.SEQUENCE(3)</f><v>1</v></c></row>
+        <row r="6"><c r="A6"><v>4</v></c><c r="C6"><v>2</v></c></row>
         <row><c><v>9</v></c><c><v>10</v></c></row>
     </sheetData>"#;
     let (wb, rep) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
@@ -35,6 +35,7 @@ fn shared_formulas_and_value_types() {
     assert_eq!(s.value(at("D4")), Value::Number(45292.5));
     let a5 = s.cell(at("A5")).unwrap().formula.clone().unwrap();
     assert_eq!(a5.array, Some(RangeRef::parse("A5:B6").unwrap()));
+    assert!(s.cell(at("B5")).is_none() && s.cell(at("A6")).is_none(), "a legacy array's cached values are dropped too");
     let c5 = s.cell(at("C5")).unwrap().formula.clone().unwrap();
     assert_eq!(c5.array, None, "dynamic arrays are not legacy CSE arrays");
     assert_eq!(c5.text, "SEQUENCE(3)");

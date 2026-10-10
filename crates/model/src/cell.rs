@@ -85,4 +85,12 @@ impl Cell {
             v => v.display(),
         }
     }
+    /// What the formula bar shows when not editing: [`input_text`](Self::input_text), with a
+    /// legacy array formula in braces (`{=A1:A2*2}`).
+    pub fn bar_text(&self) -> String {
+        match &self.formula {
+            Some(f) if f.array.is_some() => format!("{{={}}}", f.text),
+            _ => self.input_text(),
+        }
+    }
 }

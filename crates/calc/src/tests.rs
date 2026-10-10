@@ -320,6 +320,33 @@ fn names_and_sheets() {
 }
 
 #[test]
+fn legacy_array_formulas_fill_their_range() {
+    let mut t = T::new();
+    t.set("A1", "1");
+    t.set("A2", "2");
+    let cse = |t: &mut T, at: &str, formula: &str, range: &str| {
+        let mut f = Formula::new(formula);
+        f.array = gridcraft_core::RangeRef::parse(range);
+        t.wb.sheet_mut(0).unwrap().cells.set(c(at), Cell::formula(f));
+        t.calc.cells_changed(&mut t.wb, &[(0, c(at))]);
+    };
+    // Past the result: #N/A. A single column repeats across the range.
+    cse(&mut t, "C1", "=A1:A2*2", "C1:D3");
+    cse(&mut t, "F1", "=A1:A2*2", "F1");
+    cse(&mut t, "G1", "=5", "G1:G2");
+    assert_eq!(t.num("C2"), 4.0);
+    assert_eq!(t.num("D2"), 4.0);
+    assert_eq!(t.get("C3"), Value::Error(CellError::NA));
+    // A smaller range shows only part of the result and never spills.
+    assert_eq!(t.num("F1"), 2.0);
+    assert_eq!(t.get("F2"), Value::Empty);
+    assert_eq!(t.num("G2"), 5.0);
+    // A range too large to fill is an error, not an allocation of every cell.
+    cse(&mut t, "H1", "=1", "H1:XFD1048576");
+    assert_eq!(t.get("H1"), Value::Error(CellError::Num));
+}
+
+#[test]
 fn text_function() {
     let mut t = T::new();
     t.set("A1", "=TEXT(1234.5,\"#,##0.00\")");

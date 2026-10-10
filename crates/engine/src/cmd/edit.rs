@@ -213,6 +213,13 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
             let sh = cx.sheet_mut(sheet)?;
+            // The array takes the whole range: other cells in it lose their contents.
+            for c in range.iter().skip(1).take(1_000_000) {
+                if let Some(old) = sh.cells.get(c).filter(|x| !x.value.is_empty() || x.formula.is_some()) {
+                    let style = old.style;
+                    sh.set_cell(c, Cell { style, ..Cell::default() });
+                }
+            }
             sh.set_cell(range.start, cell);
             cx.touch(sheet, range.start);
             return Ok(Json::Null);
@@ -1364,6 +1371,22 @@ fn begin_edit(s: &mut Session, _: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_array_entry() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "B2", "values": [[1], [2]]})).unwrap();
+        s.execute("cell.set", json!({"cell": "C4", "input": "old"})).unwrap();
+        s.execute("selection.set", json!({"range": "C2:C4"})).unwrap();
+        s.execute("cell.set", json!({"cell": "C2", "input": "=B2:B3*2", "array": true})).unwrap();
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+        assert_eq!(get(&mut s, "C3")["value"], json!(4.0));
+        // Past the result Excel shows #N/A; the old content of the range is replaced.
+        assert_eq!(get(&mut s, "C4")["text"], "#N/A");
+        let bar = s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("C2").unwrap()).map(|c| c.bar_text());
+        assert_eq!(bar.as_deref(), Some("{=B2:B3*2}"));
+    }
 
     #[test]
     fn wildcards() {
