@@ -3,7 +3,7 @@ Type=Application
 Name=GridCraft
 GenericName=Spreadsheet
 Comment=Calculate, analyse and chart data in workbooks
-Exec=gridcraft %F
+Exec=env WINIT_X11_SCALE_FACTOR=1 gridcraft %F
 TryExec=gridcraft
 Icon=ai.storyteller.gridcraft
 Terminal=false
