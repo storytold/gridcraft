@@ -1358,9 +1358,10 @@ fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
         .active()
         .and_then(|d| d.wb.active().map(|s| (s.show_gridlines, s.show_headings, s.print.gridlines, s.print.headings)))
         .unwrap_or((true, true, false, false));
-    // These two checkboxes mean the screen view vs. the printed page, so they do not share the
-    // "View" tab label; pick per language rather than through the shared table.
-    let (screen, print) = if app.ui.language == crate::i18n::Language::Ja { ("画面", "印刷") } else { ("View", "Print") };
+    // These two checkboxes mean the screen view vs. the printed page. English shows "View" (as in
+    // Excel), but the key is distinct from the "View" tab so languages can word them apart.
+    let screen = app.ui.language.tr("Sheet Options|View");
+    let print = app.ui.language.tr("Print");
     ui.vertical(|ui| {
         ui.label(egui::RichText::new(app.ui.language.tr("Gridlines")).strong().small());
         let mut v = sh.0;

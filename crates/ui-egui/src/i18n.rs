@@ -4,51 +4,64 @@
 //! The interface language is a preference ([`crate::UiState::language`]): on first run it defaults
 //! to the system's language ([`Language::system`]), and the View tab switches it by hand.
 //!
-//! No Japanese font is bundled and none is installed here: the CJK faces [`crate::theme`] appends
-//! to every family already cover kana and kanji, so Japanese interface text renders without help.
+//! CJK fonts stay system-provided: [`crate::theme`] appends available CJK faces to every family so
+//! Japanese, Chinese and Korean labels and workbook text can render without bundling font files.
 
 use serde::{Deserialize, Serialize};
+
+mod ko;
+mod ru;
+mod zh;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
     #[default]
     En,
+    Zh,
     Ja,
+    Ko,
+    Ru,
 }
 
 impl Language {
-    pub const ALL: [Self; 2] = [Self::En, Self::Ja];
+    pub const ALL: [Self; 5] = [Self::En, Self::Zh, Self::Ja, Self::Ko, Self::Ru];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
+            Self::Zh => "简体中文",
             Self::Ja => "日本語",
+            Self::Ko => "한국어",
+            Self::Ru => "Русский",
         }
     }
 
     /// The language's code, as saved in `ui.json` and taken by `app.language.set`.
-    pub fn code(self) -> &'static str {
+    pub const fn code(self) -> &'static str {
         match self {
             Self::En => "en",
+            Self::Zh => "zh",
             Self::Ja => "ja",
+            Self::Ko => "ko",
+            Self::Ru => "ru",
         }
     }
 
     pub fn parse(code: &str) -> Option<Self> {
-        match code {
-            "en" => Some(Self::En),
-            "ja" => Some(Self::Ja),
-            _ => None,
-        }
+        Self::from_tag(code)
     }
 
-    /// A language tag (`ja`, `ja-JP`, `en_US`) reduced to a supported language. Native only: the web
-    /// build has no system locale to read and tests exercise it on the host.
-    #[cfg(not(target_arch = "wasm32"))]
     fn from_tag(tag: &str) -> Option<Self> {
-        Self::parse(&tag.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase())
+        match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
+            "en" => Some(Self::En),
+            "zh" => Some(Self::Zh),
+            "ja" => Some(Self::Ja),
+            "ko" => Some(Self::Ko),
+            "ru" => Some(Self::Ru),
+            _ => None,
+        }
     }
 
     /// The system's preferred interface language, best effort; English when it is unknown or
@@ -60,7 +73,7 @@ impl Language {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            Self::En
+            web_sys::window().and_then(|window| window.navigator().language()).and_then(|tag| Self::from_tag(&tag)).unwrap_or(Self::En)
         }
     }
 
@@ -69,12 +82,14 @@ impl Language {
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
     /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
-        if self == Self::Ja
-            && let Some((_, japanese)) = JAPANESE.iter().find(|(english, _)| *english == text)
-        {
-            return japanese;
-        }
-        text.rsplit_once('|').map_or(text, |(_, label)| label)
+        let translated = match self {
+            Self::En => None,
+            Self::Ja => JAPANESE.iter().find(|(english, _)| *english == text).map(|(_, translated)| *translated),
+            Self::Zh => zh::translate(text),
+            Self::Ko => ko::translate(text),
+            Self::Ru => ru::translate(text),
+        };
+        translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
 }
 
@@ -384,6 +399,8 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Lookup &\nReference", "検索/行列"),
     ("Math &\nTrig", "数学/三角"),
     ("More\nFunctions", "その他の関数"),
+    ("Sheet Options|View", "画面"),
+    ("Print", "印刷"),
 ];
 
 #[cfg(test)]
@@ -397,8 +414,19 @@ mod tests {
             assert!(JAPANESE.iter().take(i).all(|(other, _)| en != other));
             assert_eq!(Language::En.tr(en), en.rsplit_once('|').map_or(*en, |(_, label)| label));
         }
+        for (english, _) in JAPANESE {
+            assert!(zh::translate(english).is_some_and(|text| !text.is_empty()), "missing Simplified Chinese: {english}");
+            assert!(ko::translate(english).is_some_and(|text| !text.is_empty()), "missing Korean: {english}");
+            assert!(ru::translate(english).is_some_and(|text| !text.is_empty()), "missing Russian: {english}");
+        }
         assert_eq!(Language::Ja.tr("Data"), "データ");
+        assert_eq!(Language::Zh.tr("Data"), "数据");
+        assert_eq!(Language::Ko.tr("Data"), "데이터");
+        assert_eq!(Language::Ru.tr("Data"), "Данные");
         assert_eq!(Language::Ja.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(Language::Zh.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(Language::Ko.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(Language::Ru.tr("Sheet1!A1"), "Sheet1!A1");
         // A `context|label` key shows only its label in English and splits the translation.
         assert_eq!(Language::En.tr("Page Layout|Orientation"), "Orientation");
         assert_eq!(Language::Ja.tr("Page Layout|Orientation"), "印刷の向き");
@@ -425,23 +453,35 @@ mod tests {
     fn tags_reduce_to_a_supported_language() {
         assert_eq!(Language::from_tag("ja-JP"), Some(Language::Ja));
         assert_eq!(Language::from_tag("en_US"), Some(Language::En));
+        assert_eq!(Language::from_tag("zh-Hans-CN"), Some(Language::Zh));
+        assert_eq!(Language::from_tag("ko-KR"), Some(Language::Ko));
+        assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
         assert_eq!(Language::from_tag("de-DE"), None);
+    }
+
+    #[test]
+    fn an_unset_language_preference_is_english_until_the_app_applies_the_system_one() {
+        // Deserializing never reads the host locale (tests stay deterministic); the desktop app
+        // applies `Language::system()` itself when `ui.json` names no usable language.
+        let restored: crate::UiState = serde_json::from_str("{}").unwrap();
+        assert_eq!(restored.language, Language::En);
+        assert_eq!(saved_language(&serde_json::json!({"language": "zh"})), Some(Language::Zh));
     }
 
     #[test]
     fn language_commands_switch_and_persist() {
         let mut app = crate::SheetApp::new(gridcraft_engine::Session::default(), Default::default());
-        app.run("app.language.japanese", serde_json::json!({})).unwrap();
-        assert_eq!(app.ui.language, Language::Ja);
-        let restored: crate::UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
-        assert_eq!(restored.language, Language::Ja);
+        for language in Language::ALL {
+            app.run("app.language.set", serde_json::json!({"language": language.code()})).unwrap();
+            assert_eq!(app.ui.language, language);
+            let restored: crate::UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
+            assert_eq!(restored.language, language);
+        }
+        app.run("app.language.set", serde_json::json!({"code": "ja"})).unwrap();
+        assert_eq!(app.ui.language, Language::Ja, "`code` is an alias for `language`");
+        assert!(app.run("app.language.set", serde_json::json!({})).is_err(), "no language is an error, not a dialog");
         app.run("app.language.english", serde_json::json!({})).unwrap();
         assert_eq!(app.ui.language, Language::En);
-        app.run("app.language.set", serde_json::json!({"language": "ja"})).unwrap();
-        assert_eq!(app.ui.language, Language::Ja);
-        app.run("app.language.set", serde_json::json!({"code": "en"})).unwrap();
-        assert_eq!(app.ui.language, Language::En);
-        assert!(app.run("app.language.set", serde_json::json!({})).is_err(), "no language is an error, not a dialog");
         for l in Language::ALL {
             assert_eq!(Language::parse(l.code()), Some(l));
         }

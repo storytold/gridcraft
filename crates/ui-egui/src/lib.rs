@@ -144,6 +144,9 @@ pub struct SheetApp {
     pub perf: Perf,
     pub fonts_ready: bool,
     fonts_set: bool,
+    /// Han face order the installed fonts were built with; a language switch rebuilds the fonts
+    /// only when it changes this (see `theme::HanOrder`).
+    fonts_han: Option<theme::HanOrder>,
     effective_dark: bool,
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
@@ -177,6 +180,7 @@ impl SheetApp {
             perf: Perf::default(),
             fonts_ready: false,
             fonts_set: false,
+            fonts_han: None,
             effective_dark: false,
             name_box: None,
             keytips: keytips::KeyTips::default(),
@@ -186,9 +190,14 @@ impl SheetApp {
         }
     }
 
-    /// One-time context setup: fonts and visuals.
+    /// One-time context setup: fonts and visuals (default Han order; never reads the host locale).
     pub fn setup_context(ctx: &egui::Context, dark: bool) {
-        ctx.set_fonts(theme::font_definitions());
+        Self::setup_context_for_language(ctx, dark, i18n::Language::En);
+    }
+
+    /// Sets up fonts and visuals for a specific persisted interface language.
+    pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
+        ctx.set_fonts(theme::font_definitions_for_language(language));
         theme::apply(ctx, dark);
     }
 
@@ -294,7 +303,7 @@ impl SheetApp {
                         self.ui.language = l;
                         Ok(json!({"language": l}))
                     }
-                    None => Err(format!("unknown language {code:?} (use \"en\" or \"ja\")")),
+                    None => Err(format!("unknown language {code:?} (use \"en\", \"zh\", \"ja\", \"ko\" or \"ru\")")),
                 }
             }
             "app.language.english" => {
@@ -478,13 +487,18 @@ impl SheetApp {
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        if self.fonts_han.is_some_and(|han| han != theme::HanOrder::of(self.ui.language)) {
+            self.fonts_ready = false;
+            self.fonts_set = false;
+        }
         if !self.fonts_ready {
             // New fonts apply from the next frame on: paint nothing until then.
             if self.fonts_set {
                 self.fonts_ready = true;
             } else {
-                SheetApp::setup_context(ctx, self.ui.dark);
+                SheetApp::setup_context_for_language(ctx, self.ui.dark, self.ui.language);
                 self.fonts_set = true;
+                self.fonts_han = Some(theme::HanOrder::of(self.ui.language));
                 ctx.request_repaint();
             }
         }
