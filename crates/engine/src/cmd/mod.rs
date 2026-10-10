@@ -240,7 +240,11 @@ pub struct Ctx<'a> {
 
 pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
     let d = s.doc_mut()?;
-    commit(d, f)
+    commit(d, |cx| {
+        let r = f(cx)?;
+        crate::tables::sync_headers(cx);
+        Ok(r)
+    })
 }
 
 pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
