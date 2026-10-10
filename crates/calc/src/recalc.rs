@@ -919,17 +919,11 @@ impl Calc {
     }
 }
 
-/// Local date-time as a serial (1900 system). Wasm without a clock returns a fixed date.
-#[allow(clippy::disallowed_methods)] // the clock is read only off wasm
+/// Current date-time as a serial (1900 system), from the system clock (browser clock on wasm).
+/// UTC; the local offset isn't available without platform calls. Falls back to a fixed date only
+/// when no clock is available.
 pub fn now_serial() -> f64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        if let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-            // UTC; local offset isn't available without platform calls.
-            return 25569.0 + d.as_secs_f64() / 86400.0;
-        }
-    }
-    46302.5
+    gridcraft_core::date::unix_now_ms().map_or(46302.5, gridcraft_core::date::serial_from_unix_ms)
 }
 
 /// Evaluates a formula in the context of a cell without storing it (conditional formats, data

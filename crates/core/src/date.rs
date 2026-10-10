@@ -39,6 +39,26 @@ pub fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
     era * 146097 + doe - 719468
 }
 
+/// Milliseconds since the Unix epoch (UTC) from the system clock; `None` when the clock is unavailable.
+/// On wasm32 `std::time::SystemTime::now` traps, so the browser clock is read through `Date.now()`.
+#[allow(clippy::disallowed_methods)] // the std clock is read only off wasm
+pub fn unix_now_ms() -> Option<f64> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?;
+        Some(d.as_secs_f64() * 1000.0)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Some(js_sys::Date::now())
+    }
+}
+
+/// Date serial (1900 system, with fraction) for a Unix time in milliseconds.
+pub fn serial_from_unix_ms(ms: f64) -> f64 {
+    25569.0 + ms / 86_400_000.0
+}
+
 pub fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let z = z + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
@@ -159,6 +179,14 @@ pub const WEEKDAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Th
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serial_from_unix_time() {
+        assert_eq!(serial_from_unix_ms(0.0), 25569.0);
+        // 2026-10-10T12:00:00Z
+        assert_eq!(serial_from_unix_ms(1_791_633_600_000.0), 46305.5);
+        assert!(unix_now_ms().is_some_and(|ms| serial_from_unix_ms(ms) > 46305.0));
+    }
 
     #[test]
     fn known_serials() {

@@ -273,16 +273,12 @@ fn valid_ymd(sys: DateSystem, y: i64, m: i64, d: i64) -> Option<f64> {
     serial_from_ymd(sys, y, m, d)
 }
 
-/// The year used for dates typed without one. Fixed per process from the system clock when
-/// available (wasm without clock falls back to 2026).
-#[allow(clippy::disallowed_methods)] // the clock is read only off wasm
+/// The year used for dates typed without one, from the system clock (browser clock on wasm).
+/// Falls back to 2026 only when no clock is available.
 pub fn current_year() -> i64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        if let Ok(d) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-            let days = (d.as_secs() / 86400) as i64;
-            return crate::date::civil_from_days(days).0 as i64;
-        }
+    if let Some(ms) = crate::date::unix_now_ms() {
+        let days = (ms / 86_400_000.0).floor() as i64;
+        return crate::date::civil_from_days(days).0 as i64;
     }
     2026
 }
