@@ -184,6 +184,26 @@ struct PassHost<'a> {
     depth: usize,
 }
 
+/// Whether an array result at `k` can't spill: its area runs off the sheet, overlaps merged cells,
+/// holds other cells, or another formula's spill (unless that formula is recalculated in this
+/// pass, and so may spill elsewhere now).
+fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
+    let Some(sh) = host.wb.sheet(sheet) else { return false };
+    let end =
+        CellRef::new(anchor.row.saturating_add((a.rows as u32).saturating_sub(1)), anchor.col.saturating_add((a.cols as u32).saturating_sub(1)));
+    let range = RangeRef::new(anchor, end);
+    let own = sh.spill_ranges.get(&anchor);
+    let spilled_over = |c: CellRef| {
+        !own.is_some_and(|o| o.contains(c))
+            && sh.spill_ranges.iter().any(|(o, r)| *o != anchor && r.contains(c) && !host.exprs.contains_key(&(sheet, *o)))
+    };
+    end.row >= gridcraft_core::MAX_ROWS
+        || end.col >= gridcraft_core::MAX_COLS
+        || sh.merges.iter().any(|m| m.intersects(&range))
+        || sh.cells.iter_range(range).any(|(c, cell)| c != anchor && (!cell.value.is_empty() || cell.formula.is_some()))
+        || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c) && spilled_over(*c))
+}
+
 impl PassHost<'_> {
     fn compute(&mut self, k: Key) -> Value {
         if let Some(v) = self.results.get(&k) {
@@ -215,6 +235,14 @@ impl PassHost<'_> {
             }
             Value::Empty => Value::Number(0.0),
             v => v,
+        };
+        // An array that can't spill is #SPILL! for the formulas evaluated after it in this pass too.
+        let v = match self.spills.get(&k) {
+            Some(a) if spill_blocked(self, k, a) => {
+                self.spills.remove(&k);
+                Value::Error(CellError::Spill)
+            }
+            _ => v,
         };
         self.results.insert(k, v.clone());
         v

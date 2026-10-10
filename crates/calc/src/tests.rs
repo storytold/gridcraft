@@ -106,6 +106,45 @@ fn operators() {
 }
 
 #[test]
+fn blocked_spill_reads_as_spill_error() {
+    // Calculated in the same pass, a formula over a blocked spill read the array that couldn't
+    // spill.
+    let mut t = T::new();
+    let s = t.wb.sheet_mut(0).unwrap();
+    for a in ["A1", "B1", "C1", "A2", "C2", "A3", "B3", "C3"] {
+        s.cells.set(c(a), Cell::value(Value::Number(1.0)));
+    }
+    s.cells.set(c("B2"), Cell::formula(Formula::new("=SEQUENCE(2,2,9)")));
+    s.cells.set(c("E1"), Cell::formula(Formula::new("=SUM(A1:C3)")));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("B2"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("E1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("C3"), 1.0);
+}
+
+#[test]
+fn blocked_spill_read_through_offset() {
+    // The reader's reference is only known while evaluating, so it isn't in the dependency graph.
+    let mut t = T::new();
+    t.set("E4", "5");
+    t.set("E8", "=SUM(OFFSET(E2,0,0,2,2))");
+    t.set("E3", "=SEQUENCE(2,2,3)");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("E3"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("E8"), Value::Error(CellError::Spill));
+}
+
+#[test]
+fn spill_into_the_old_area_of_a_blocked_neighbour() {
+    // C7's array becomes blocked by C8, whose array then takes over C7's old area.
+    let mut t = T::new();
+    t.set("C7", "=SEQUENCE(2,2)");
+    t.set("C8", "=SEQUENCE(2,2)");
+    assert_eq!(t.get("C7"), Value::Error(CellError::Spill));
+    assert_eq!([t.num("C8"), t.num("D8"), t.num("C9"), t.num("D9")], [1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
 fn ifs_and_lazy() {
     let mut t = T::new();
     t.set("A1", "5");
