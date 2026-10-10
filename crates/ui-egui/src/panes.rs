@@ -152,8 +152,8 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
     };
     let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
     ui.collapsing("Chart Title", |ui| {
-        let mut title = chart.title.clone().unwrap_or_default();
-        if ui.text_edit_singleline(&mut title).lost_focus() {
+        let field = egui::Id::new(("gridcraft.chart_title", id));
+        if let Some(title) = crate::widgets::committed_text(ui, field, chart.title.as_deref().unwrap_or(""), None) {
             app.run_or_alert("chart.set", json!({"chart": id, "title": title}));
         }
     });
@@ -195,17 +195,17 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
         if ui.checkbox(&mut gl, "Gridlines").changed() {
             app.run_or_alert("chart.set", json!({"chart": id, "gridlines": gl}));
         }
-        let mut xt = chart.x_title.clone().unwrap_or_default();
         ui.horizontal(|ui| {
             ui.label("Horizontal axis title:");
-            if ui.text_edit_singleline(&mut xt).lost_focus() {
+            let field = egui::Id::new(("gridcraft.chart_x_title", id));
+            if let Some(xt) = crate::widgets::committed_text(ui, field, chart.x_title.as_deref().unwrap_or(""), None) {
                 app.run_or_alert("chart.set", json!({"chart": id, "xTitle": if xt.is_empty() { Json::Null } else { json!(xt) }}));
             }
         });
-        let mut yt = chart.y_title.clone().unwrap_or_default();
         ui.horizontal(|ui| {
             ui.label("Vertical axis title:");
-            if ui.text_edit_singleline(&mut yt).lost_focus() {
+            let field = egui::Id::new(("gridcraft.chart_y_title", id));
+            if let Some(yt) = crate::widgets::committed_text(ui, field, chart.y_title.as_deref().unwrap_or(""), None) {
                 app.run_or_alert("chart.set", json!({"chart": id, "yTitle": if yt.is_empty() { Json::Null } else { json!(yt) }}));
             }
         });
@@ -250,12 +250,20 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     ui.collapsing("Size", |ui| {
-        let mut w = chart.anchor.width;
-        let mut h = chart.anchor.height;
+        // Keep the value being typed or dragged between frames; reloading it from the chart every frame threw the edit away.
+        let draft = egui::Id::new(("gridcraft.chart_size_draft", id));
+        let (mut w, mut h) = ui.data_mut(|d| d.get_temp::<(f32, f32)>(draft)).unwrap_or((chart.anchor.width, chart.anchor.height));
         let a = ui.add(egui::DragValue::new(&mut w).prefix("Width ").range(40.0..=4000.0));
         let b = ui.add(egui::DragValue::new(&mut h).prefix("Height ").range(40.0..=4000.0));
         if a.drag_stopped() || a.lost_focus() || b.drag_stopped() || b.lost_focus() {
-            app.run_or_alert("chart.set", json!({"chart": id, "width": w, "height": h}));
+            ui.data_mut(|d| d.remove::<(f32, f32)>(draft));
+            if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                app.run_or_alert("chart.set", json!({"chart": id, "width": w, "height": h}));
+            }
+        } else if a.dragged() || a.has_focus() || b.dragged() || b.has_focus() {
+            ui.data_mut(|d| d.insert_temp(draft, (w, h)));
+        } else {
+            ui.data_mut(|d| d.remove::<(f32, f32)>(draft));
         }
     });
 }

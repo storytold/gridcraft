@@ -125,6 +125,25 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
     (m.on_hover_text(tr(ui, tip)).clicked(), a)
 }
 
+/// A one-line text field for a value stored in the workbook, which callers reload every frame. The text being typed is
+/// kept in egui memory until the field loses focus, then returned to commit (`None` when Escape cancels the edit).
+pub fn committed_text(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f32>) -> Option<String> {
+    let width = width.unwrap_or(ui.spacing().text_edit_width);
+    let draft = id.with("draft");
+    let mut text = ui.data_mut(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| current.to_string());
+    let r = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(width));
+    if r.lost_focus() {
+        ui.data_mut(|d| d.remove::<String>(draft));
+        return (!ui.input(|i| i.key_pressed(egui::Key::Escape))).then_some(text);
+    }
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(draft, text));
+    } else {
+        ui.data_mut(|d| d.remove::<String>(draft));
+    }
+    None
+}
+
 /// Our colour palette (theme row + tints + standard colours), returns a picked hex colour,
 /// `Some("none")` for No Fill/Automatic.
 pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {

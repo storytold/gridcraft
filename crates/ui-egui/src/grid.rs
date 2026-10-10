@@ -1047,6 +1047,9 @@ fn paint_headers(p: &Painter, geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::Sel
 
 // ------------------------------------------------------------------ interaction
 
+/// How close (in points) a press must be to an object's bottom-right corner to resize it instead of moving it.
+const OBJECT_RESIZE_RADIUS: f32 = 10.0;
+
 fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     // Text selection and editing must not also move the object or edit worksheet cells.
     if app.text_box_editor.is_some() {
@@ -1072,7 +1075,12 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     {
         let near_col_edge = in_col_header && col_edge(geo, sh, p.x).is_some();
         let near_row_edge = in_row_header && row_edge(geo, sh, p.y).is_some();
-        if near_col_edge {
+        let selected_object = crate::chartview::hit(app, geo, sh, p).filter(|&(_, id, _)| app.selected_chart == Some(id));
+        let near_corner = selected_object.is_some_and(|(_, _, rect)| (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS);
+        let near_object_corner = app.grid.drag == Drag::None && near_corner;
+        if near_object_corner || matches!(app.grid.drag, Drag::Object { resize: true, .. }) {
+            ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
+        } else if near_col_edge {
             ctx.set_cursor_icon(CursorIcon::ResizeColumn);
         } else if near_row_edge {
             ctx.set_cursor_icon(CursorIcon::ResizeRow);
@@ -1135,7 +1143,9 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     }
     // Objects (charts, pictures, shapes) take clicks first.
     if resp.drag_started() || primary_clicked {
-        if let Some(p) = pos
+        // A drag is recognised only after the pointer has moved, so grab the object where the press began.
+        let at = if resp.drag_started() { pointer.press_origin().or(pos) } else { pos };
+        if let Some(p) = at
             && let Some((kind, id, rect)) = crate::chartview::hit(app, geo, sh, p)
         {
             app.selected_chart = Some(id);
@@ -1151,7 +1161,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             if resp.drag_started() {
                 let a = object_anchor(sh, kind, id);
-                let resize = (p - rect.right_bottom()).length() < 10.0;
+                let resize = (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS;
                 if let Some(a) = a {
                     app.grid.drag = Drag::Object { kind, id, start: p, orig: (a.cell, a.dx, a.dy, a.width, a.height), resize };
                 }
