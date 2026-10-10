@@ -13,6 +13,9 @@ Kinds: **F** feature · **U** UI/UX · **FF** file format · **H** hardware · *
 
 ## Beta blockers
 
+No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-gate).
+
+
 ### 1. XLSX output not proven in Excel or on real files (FF)
 - **Missing:** a run over a real-world XLSX corpus, and confirmation that Excel opens what we save
   with no repair prompt (PivotTables, charts, CF, validation, dynamic arrays, tables).
@@ -144,4 +147,5 @@ Kinds: **F** feature · **U** UI/UX · **FF** file format · **H** hardware · *
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Noted that no gap blocks the alpha gate |
 | 2026-10-10 | major | Created: 24 ranked gaps with evidence, from the full re-measure and the 60 open issues |

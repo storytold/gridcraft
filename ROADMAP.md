@@ -26,7 +26,7 @@ This page is the summary. The detail is in:
 | Remaining to **beta** | **~160–240 Opus 5.5 agent-hours** | estimated; itemized in [roadmap.md](docs/roadmap.md#beta-gates) |
 | Remaining to **full parity** | **~700–1,100 Opus 5.5 agent-hours** | estimated; sum of the dimension rows below |
 
-Why alpha: the core workflow works end to end (open an XLSX, enter formulas and data, format, sort
+Why alpha: all six core workflows in the [alpha gate](docs/roadmap.md#alpha-gate) pass end to end on macOS with save and reopen, and the core workflow works end to end (open an XLSX, enter formulas and data, format, sort
 and filter, chart, pivot, print to PDF, save XLSX), but users still hit blocking gaps on real
 files: 100 MB workbooks don't open (#175), there's no `.xls` (#121), Chinese text in cells
 doesn't render on some systems (#142), charts lose their type and options on round trip, and
@@ -126,5 +126,6 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Checked against the alpha gate (six core workflows pass): stays alpha |
 | 2026-10-10 | major | Re-measured against Excel for Mac 16.113.4: stage alpha, breadth ~75%, ready ~50%, ~160–240 h to beta, ~700–1,100 h to full parity; restructured to the progress-docs standard; detail moved to `docs/` |
 | 2026-10-07 | major | First estimates: catalog 89%, functions ~93%, depth ~65%, ~35 h to alpha, ~215 h to full parity |

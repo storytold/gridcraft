@@ -139,8 +139,8 @@ Linux, BSD and RISC-V, where Excel doesn't run.
 
 ## Stage
 
-**Alpha.** Core workflows exist end to end, but depth, fidelity and file compatibility are rough
-(ready ~50%, inside the 35–75% alpha band). Not beta: the main format, XLSX, has not been proven
+**Alpha.** All six core workflows in the [alpha gate](roadmap.md#alpha-gate) pass end to end on macOS with save and reopen (two pass with non-blocking fidelity loss). Core workflows exist end to end, but depth, fidelity and file compatibility are rough
+(ready ~50%, inside the 40–75% alpha band). Not beta: the main format, XLSX, has not been proven
 on real-world files or confirmed to open in Excel without repair, large files fail, `.xls` is
 missing and text in several scripts doesn't render. Distance to beta: ~25 points of readiness and
 ~160–240 h, itemized in [roadmap.md](roadmap.md#beta-gates).
@@ -233,4 +233,5 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Stage checked against the new alpha gate (six core workflows, all pass): stays alpha |
 | 2026-10-10 | major | Created. Full re-measure against Excel for Mac 16.113.4: functions 501 / 523 measured against Microsoft's list, catalog 258 / 290, breadth ~75%, ready ~50%, alpha; replaces the estimate tables previously in ROADMAP.md and keeps its "Working today" inventory |
