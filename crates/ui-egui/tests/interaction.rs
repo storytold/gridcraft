@@ -85,6 +85,21 @@ fn click_cell(h: &mut egui_kittest::Harness<'static, SheetApp>, cell: &str) {
     h.run_steps(2);
 }
 
+fn click_chart(h: &mut egui_kittest::Harness<'static, SheetApp>, id: u32) {
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+    let anchor = sheet.charts.iter().find(|chart| chart.id == id).unwrap().anchor;
+    let pos = egui::pos2(geo.x(sheet, anchor.cell.col) + anchor.dx * geo.z, geo.y(sheet, anchor.cell.row) + anchor.dy * geo.z)
+        + egui::vec2(anchor.width, anchor.height) * geo.z / 2.0;
+    h.input_mut().events.extend([
+        Event::PointerMoved(pos),
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+    ]);
+    h.run_steps(2);
+}
+
 #[test]
 fn keyboard_navigation_does_not_replay_the_last_pointer_click() {
     let mut h = harness(blank());
@@ -168,6 +183,24 @@ fn shortcuts_format_and_extend() {
     assert_eq!(bold, json!(true));
     key(&mut h, Key::Delete, Modifiers::NONE);
     assert_eq!(value(&h, "A1"), Value::Empty);
+}
+
+#[test]
+fn delete_key_removes_the_selected_chart() {
+    let mut session = blank();
+    session.execute("range.setValues", json!({"range": "A1:B2", "values": [[1, 2], [3, 4]]})).unwrap();
+    let id = session.execute("insert.chart", json!({"range": "A1:B2", "at": "D2"})).unwrap()["chart"].as_u64().unwrap() as u32;
+    let mut h = harness(session);
+
+    click_cell(&mut h, "C10");
+    click_chart(&mut h, id);
+    assert_eq!(h.state().selected_chart, Some(id));
+
+    key(&mut h, Key::Delete, Modifiers::NONE);
+
+    assert!(h.state().session.active().unwrap().wb.active().unwrap().charts.is_empty());
+    assert_eq!(h.state().selected_chart, None);
+    assert_eq!(value(&h, "A1"), Value::Number(1.0));
 }
 
 #[test]

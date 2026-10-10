@@ -1608,6 +1608,22 @@ fn object_anchor(sh: &Sheet, kind: &str, id: u32) -> Option<gridcraft_engine::mo
     }
 }
 
+fn delete_selected_object(app: &mut SheetApp, sh: &Sheet) -> bool {
+    let Some(id) = app.selected_chart else { return false };
+    let kind = if sh.charts.iter().any(|object| object.id == id) {
+        "chart"
+    } else if sh.images.iter().any(|object| object.id == id) {
+        "image"
+    } else if sh.shapes.iter().any(|object| object.id == id) {
+        "shape"
+    } else {
+        return false;
+    };
+    app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
+    app.selected_chart = None;
+    true
+}
+
 pub fn follow_link(app: &mut SheetApp, target: &str) {
     if target.contains("://") || target.starts_with("mailto:") {
         if let Some(f) = &app.services.open_url {
@@ -1708,7 +1724,9 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                     }
                     Key::Tab => app.move_after_enter(0, if shift { -1 } else { 1 }),
                     Key::F2 => app.begin_edit(None, false),
+                    Key::Delete if delete_selected_object(app, sh) => {}
                     Key::Delete => app.run_or_alert("edit.clearContents", json!({})),
+                    Key::Backspace if delete_selected_object(app, sh) => {}
                     Key::Backspace => {
                         // Excel for Mac: Delete clears the cell and starts editing it.
                         app.run_or_alert("edit.clearContents", json!({}));
