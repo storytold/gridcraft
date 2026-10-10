@@ -128,6 +128,28 @@ the MSI, and zips a portable build.
   in `Capabilities` + `RegisteredApplications`, so GridCraft appears in *Open with* and
   *Settings › Default apps* but never silently becomes the default. The MSI version is the
   numeric `X.Y.Z`; same-version upgrades let release candidates replace each other.
+- **Desktop shortcut:** full installer UI offers an unchecked checkbox on a new installation.
+  Unattended installs can use `msiexec /i gridcraft.msi /qn DESKTOPSHORTCUT=1` to opt in
+  (or `DESKTOPSHORTCUT=0` to opt out). The choice is stored per machine and reused on upgrades;
+  repair retains the installed component choice, and uninstall removes the managed shortcut.
+  The Start Menu shortcut is always installed. Run
+  the Packaging lint workflow’s Windows job to build small fixture installers and check
+  installation, repair, upgrade, opt-out and cleanup, including removal by SYSTEM after
+  installation by the runner account. The shortcut marker uses `HKMU`, which resolves to
+  `HKLM` for this per-machine package; it leaves no installing-user registry marker. Unlike
+  a literal `HKLM` key path, MSI registry root -1 also meets ICE43's shortcut rule without
+  suppressing validation ([WiX registry roots](https://docs.firegiant.com/wix/schema/wxs/registryvalue/),
+  [ICE43](https://learn.microsoft.com/windows/win32/msi/ice43)). Its
+  `packaging/windows/test-desktop-shortcut.ps1` script requires a GitHub-hosted Windows runner.
+- **Installer review images:** the same Windows job renders the compiled MSI's dialogs through
+  Windows Installer's native preview API and uploads PNGs plus install logs in
+  `desktop-shortcut-msi-evidence`, on success or failure. These are native dialog previews;
+  the separate silent lifecycle test verifies installation behavior. Normal full UI presents
+  the shortcut choice and then completion; cancel/failure and files-in-use dialogs are support
+  paths. To review on a maintainer branch, run **Packaging lint** with that branch selected
+  (or `gh workflow run packaging-lint.yml --repo storytold/gridcraft --ref BRANCH`). No release
+  environment, signing credentials or Rust build is required. Interactive checkbox behavior
+  still needs a Windows desktop check; previews alone do not establish that behavior.
 - **Signing:** `packaging/windows/sign.ps1` uses `signtool` with SHA-256 and an RFC 3161
   timestamp, from a `.pfx` (`WINDOWS_CERTIFICATE*`) if present, otherwise **Azure Trusted
   Signing** (`AZURE_*`, the storytold setup). With neither it warns and leaves files unsigned.

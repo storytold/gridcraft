@@ -4,7 +4,8 @@
 
     wix build gridcraft.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
 
-  Per-machine install into Program Files, a Start Menu shortcut, App Paths (Win+R `gridcraft`),
+  Per-machine install into Program Files, a Start Menu shortcut, an optional desktop shortcut,
+  App Paths (Win+R `gridcraft`),
   and GridCraft offered under "Open with" (and in Settings > Default apps) for .xlsx, .xlsm,
   .csv and .tsv, without taking over the user's default app for them.
 
@@ -33,10 +34,124 @@
     <Property Id="ARPURLUPDATEINFO" Value="https://getartcraft.com/apps/gridcraft" />
     <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
 
+    <!-- An explicit command-line value wins. Otherwise retain the previous installation's
+         choice, defaulting to off for a fresh install. Run only in the first sequence so the
+         execute sequence cannot reload the old choice after the user unchecks the box. -->
+    <Property Id="DESKTOPSHORTCUT" Secure="yes" />
+    <Property Id="SAVEDDESKTOPSHORTCUT" Secure="yes">
+      <RegistrySearch Id="FindDesktopShortcutPreference" Root="HKLM"
+          Key="Software\GridCraft\Installer" Name="DesktopShortcut" Type="raw" />
+    </Property>
+    <SetProperty Id="DESKTOPSHORTCUT" Action="LoadDesktopShortcutPreference" Value="1"
+        After="AppSearch" Sequence="first"
+        Condition="NOT DESKTOPSHORTCUT AND SAVEDDESKTOPSHORTCUT = &quot;1&quot;" />
+    <SetProperty Id="DESKTOPSHORTCUT" Action="DefaultDesktopShortcut" Value="0"
+        After="LoadDesktopShortcutPreference" Sequence="first" Condition="NOT DESKTOPSHORTCUT" />
+    <SetProperty Id="DesktopShortcutChoice" Value="1" After="DefaultDesktopShortcut"
+        Sequence="ui" Condition="DESKTOPSHORTCUT = &quot;1&quot;" />
+
+    <Property Id="DefaultUIFont" Value="GridcraftUIFont" />
+    <Property Id="ErrorDialog" Value="GridcraftErrorDlg" />
+    <EnsureTable Id="ListBox" />
+    <UI>
+      <TextStyle Id="GridcraftUIFont" FaceName="Segoe UI" Size="9" />
+      <Dialog Id="DesktopShortcutDlg" Width="320" Height="150" Title="GridCraft Setup" NoMinimize="yes">
+        <Control Id="Heading" Type="Text" X="15" Y="15" Width="290" Height="20" Text="Install GridCraft" />
+        <Control Id="Description" Type="Text" X="15" Y="40" Width="290" Height="28"
+            Text="Install GridCraft for everyone who uses this computer." />
+        <Control Id="DesktopShortcutCheckbox" Type="CheckBox" X="15" Y="76" Width="290" Height="18"
+            Property="DesktopShortcutChoice" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
+        <Control Id="Install" Type="PushButton" X="165" Y="118" Width="65" Height="20"
+            Default="yes" ElevationShield="yes" Text="&amp;Install">
+          <!-- An unchecked checkbox clears its property. Publish an explicit zero so the
+               elevated execute sequence receives an unambiguous opt-out. -->
+          <Publish Property="DESKTOPSHORTCUT" Value="1" Condition="DesktopShortcutChoice" />
+          <Publish Property="DESKTOPSHORTCUT" Value="0" Condition="NOT DesktopShortcutChoice" />
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="240" Y="118" Width="65" Height="20" Cancel="yes" Text="Cancel">
+          <Publish Event="EndDialog" Value="Exit" />
+        </Control>
+      </Dialog>
+
+      <!-- Windows Installer requires these support dialogs for authored full UI (ICE20).
+           They contain only installer messages and standard response controls. -->
+      <Dialog Id="GridcraftErrorDlg" Width="320" Height="120" Title="GridCraft Setup" ErrorDialog="yes" NoMinimize="yes">
+        <Control Id="ErrorText" Type="Text" X="15" Y="15" Width="290" Height="65" TabSkip="no" />
+        <Control Id="A" Type="PushButton" X="15" Y="90" Width="65" Height="20" Text="Abort" TabSkip="yes">
+          <Publish Event="EndDialog" Value="ErrorAbort" />
+        </Control>
+        <Control Id="C" Type="PushButton" X="15" Y="90" Width="65" Height="20" Text="Cancel" TabSkip="yes">
+          <Publish Event="EndDialog" Value="ErrorCancel" />
+        </Control>
+        <Control Id="I" Type="PushButton" X="15" Y="90" Width="65" Height="20" Text="Ignore" TabSkip="yes">
+          <Publish Event="EndDialog" Value="ErrorIgnore" />
+        </Control>
+        <Control Id="N" Type="PushButton" X="15" Y="90" Width="65" Height="20" Text="No" TabSkip="yes">
+          <Publish Event="EndDialog" Value="ErrorNo" />
+        </Control>
+        <Control Id="O" Type="PushButton" X="15" Y="90" Width="65" Height="20" Text="OK" TabSkip="yes">
+          <Publish Event="EndDialog" Value="ErrorOk" />
+        </Control>
+        <Control Id="R" Type="PushButton" X="15" Y="90" Width="65" Height="20" Text="Retry" TabSkip="yes">
+          <Publish Event="EndDialog" Value="ErrorRetry" />
+        </Control>
+        <Control Id="Y" Type="PushButton" X="15" Y="90" Width="65" Height="20" Text="Yes" TabSkip="yes">
+          <Publish Event="EndDialog" Value="ErrorYes" />
+        </Control>
+      </Dialog>
+      <Dialog Id="FilesInUse" Width="320" Height="190" Title="GridCraft Setup" NoMinimize="yes">
+        <Control Id="Description" Type="Text" X="15" Y="15" Width="290" Height="35"
+            Text="Close the applications listed below, then choose Retry. Ignore may require a restart." />
+        <Control Id="Files" Type="ListBox" X="15" Y="55" Width="290" Height="85" Property="FileInUseProcess" />
+        <Control Id="Retry" Type="PushButton" X="95" Y="155" Width="65" Height="20" Default="yes" Text="Retry">
+          <Publish Event="EndDialog" Value="Retry" />
+        </Control>
+        <Control Id="Ignore" Type="PushButton" X="167" Y="155" Width="65" Height="20" Text="Ignore">
+          <Publish Event="EndDialog" Value="Ignore" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="240" Y="155" Width="65" Height="20" Cancel="yes" Text="Cancel">
+          <Publish Event="EndDialog" Value="Exit" />
+        </Control>
+      </Dialog>
+      <Dialog Id="SetupCompleteDlg" Width="320" Height="110" Title="GridCraft Setup" NoMinimize="yes">
+        <Control Id="Message" Type="Text" X="15" Y="20" Width="290" Height="35" Text="GridCraft setup completed." />
+        <Control Id="Close" Type="PushButton" X="240" Y="75" Width="65" Height="20" Default="yes" Cancel="yes" Text="Close">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+      </Dialog>
+      <Dialog Id="SetupCanceledDlg" Width="320" Height="110" Title="GridCraft Setup" NoMinimize="yes">
+        <Control Id="Message" Type="Text" X="15" Y="20" Width="290" Height="35" Text="GridCraft setup was canceled." />
+        <Control Id="Close" Type="PushButton" X="240" Y="75" Width="65" Height="20" Default="yes" Cancel="yes" Text="Close">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+      </Dialog>
+      <Dialog Id="SetupFailedDlg" Width="320" Height="110" Title="GridCraft Setup" NoMinimize="yes">
+        <Control Id="Message" Type="Text" X="15" Y="20" Width="290" Height="35" Text="GridCraft setup could not finish. See the installer message or log for details." />
+        <Control Id="Close" Type="PushButton" X="240" Y="75" Width="65" Height="20" Default="yes" Cancel="yes" Text="Close">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+      </Dialog>
+    </UI>
+    <InstallUISequence>
+      <!-- Component conditions must see the choice before costing. Do not show the choice
+           during basic/silent installs, repair or uninstall. -->
+      <Show Dialog="DesktopShortcutDlg" Before="CostInitialize" Condition="NOT Installed AND NOT REMOVE AND UILevel = 5" />
+      <Show Dialog="SetupCompleteDlg" OnExit="success" Condition="UILevel = 5" />
+      <Show Dialog="SetupCanceledDlg" OnExit="cancel" Condition="UILevel = 5" />
+      <Show Dialog="SetupFailedDlg" OnExit="error" Condition="UILevel = 5" />
+    </InstallUISequence>
+    <AdminUISequence>
+      <Show Dialog="SetupCompleteDlg" OnExit="success" Condition="UILevel = 5" />
+      <Show Dialog="SetupCanceledDlg" OnExit="cancel" Condition="UILevel = 5" />
+      <Show Dialog="SetupFailedDlg" OnExit="error" Condition="UILevel = 5" />
+    </AdminUISequence>
+
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="GridCraft" />
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
 
     <Feature Id="Main" Title="GridCraft" Level="1">
       <ComponentGroupRef Id="GridcraftFiles" />
@@ -82,6 +197,21 @@
 
       <Component Id="GridcraftCli">
         <File Id="GridcraftCliExe" Source="$(var.BinDir)\gridcraft-cli.exe" KeyPath="yes" />
+      </Component>
+
+      <!-- Persist both on and off, independently of the optional shortcut. AppSearch reads
+           this before MajorUpgrade removes the previous product. -->
+      <Component Id="DesktopShortcutPreference">
+        <RegistryValue Root="HKLM" Key="Software\GridCraft\Installer" Name="DesktopShortcut"
+            Value="[DESKTOPSHORTCUT]" Type="string" KeyPath="yes" />
+      </Component>
+      <Component Id="DesktopShortcutComponent" Directory="DesktopFolder" Condition="DESKTOPSHORTCUT = &quot;1&quot;">
+        <Shortcut Id="DesktopShortcut" Name="GridCraft" Description="GridCraft spreadsheet"
+            Target="[#GridcraftExe]" WorkingDirectory="INSTALLFOLDER" Icon="GridcraftIcon.ico" IconIndex="0" />
+        <!-- HKMU resolves to HKLM for this per-machine package, so another account can
+             uninstall the marker too. MSI root -1 also satisfies ICE43 for this shortcut. -->
+        <RegistryValue Root="HKMU" Key="Software\GridCraft\Installer" Name="DesktopShortcutComponent"
+            Value="1" Type="integer" KeyPath="yes" />
       </Component>
     </ComponentGroup>
   </Fragment>
