@@ -7,9 +7,27 @@ use std::sync::mpsc::{Receiver, channel};
 use gridcraft_ui_egui::SheetApp;
 use muda::accelerator::Accelerator;
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use objc2::MainThreadMarker;
+use objc2_app_kit::NSApplication;
 use serde_json::{Value, json};
 
 type Entry = (&'static str, &'static str, Option<&'static str>);
+
+fn wakes_hidden_root(id: &str) -> bool {
+    matches!(id, "file.new" | "file.open" | "dialog:start")
+}
+
+fn show_hidden_root() {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let app = NSApplication::sharedApplication(mtm);
+    let windows = app.windows();
+    if windows.iter().any(|window| window.isVisible()) {
+        return;
+    }
+    if let Some(window) = windows.firstObject() {
+        window.makeKeyAndOrderFront(None);
+    }
+}
 
 /// (label, command or `dialog:name`, accelerator). `-` is a separator.
 fn tree() -> Vec<(&'static str, Vec<Entry>)> {
@@ -240,6 +258,9 @@ impl NativeMenu {
         let (tx, rx) = channel();
         let ctx = ctx.clone();
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
+            if wakes_hidden_root(e.id.as_ref()) {
+                show_hidden_root();
+            }
             let _ = tx.send(e);
             ctx.request_repaint();
         }));
@@ -324,5 +345,13 @@ mod tests {
         }
         assert!(!select_theme(&mut app, "view.formulaBar"));
         assert_eq!(app.ui.theme_mode(), "light");
+    }
+
+    #[test]
+    fn workbook_creation_commands_wake_the_hidden_root() {
+        assert!(wakes_hidden_root("file.new"));
+        assert!(wakes_hidden_root("file.open"));
+        assert!(wakes_hidden_root("dialog:start"));
+        assert!(!wakes_hidden_root("file.save"));
     }
 }
