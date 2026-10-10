@@ -1,9 +1,9 @@
 # Releasing GridCraft
 
 Every push to the `release` branch runs `.github/workflows/release.yml`. The workflow builds
-signed installers for macOS, Windows, Linux, FreeBSD and the web, then creates or updates a
-**draft** GitHub Release named `GridCraft v<version>`. Nobody sees a draft until a maintainer
-publishes it.
+signed installers for macOS, Windows, Linux, FreeBSD and the web, publishes the container image
+to GHCR, then creates or updates a **draft** GitHub Release named `GridCraft v<version>`. Nobody
+sees a draft until a maintainer publishes it.
 
 This is GridCraft's implementation of the shared [release playbook](release-playbook.md)
 (craftrules `release/playbook.md`), copied from DesignCraft and renamed. User-facing names say
@@ -85,6 +85,7 @@ and upload their artifacts, the environment refuses macOS and Windows, and no re
 | Flatpak x86_64, aarch64 | `gridcraft-<v>-linux-<arch>.flatpak` (repackages the Linux tarball) | `ubuntu-24.04`, `ubuntu-24.04-arm` |
 | FreeBSD 14 x86_64 | `gridcraft-<v>-freebsd-x86_64.tar.gz` | FreeBSD 14.3 VM (`freebsd.yml`, called by `release.yml`) |
 | Web | `gridcraft-web-<v>.zip` (static site; see [`packaging/web/README.md`](../packaging/web/README.md)) | `ubuntu-latest` |
+| Container image (linux/amd64, linux/arm64) | `ghcr.io/storytold/gridcraft:<v>` (nginx + the web build + `gridcraft-cli`; see [`packaging/docker/README.md`](../packaging/docker/README.md)) | `ubuntu-24.04`, `ubuntu-24.04-arm` |
 
 ### macOS
 
@@ -176,13 +177,39 @@ comes back from the VM. No signing (checksums are in `SHA256SUMS.txt`).
 ([`packaging/web/README.md`](../packaging/web/README.md)). Relative URLs only, so it works under
 any path and in an iframe; the script fails on root-absolute URLs.
 
+### Container image
+
+The `docker` job builds `packaging/docker/Dockerfile` — nginx serving the web build plus the
+`gridcraft-cli` — on two native runners (`ubuntu-24.04`, `ubuntu-24.04-arm`), one per architecture,
+and pushes each by digest; the `docker-manifest` job joins the digests into one
+`ghcr.io/storytold/gridcraft` image with `linux/amd64` and `linux/arm64`. A stable release tags it
+`<v>`, `<major>.<minor>` (e.g. `0.4`) and `latest`; a pre-release such as `0.4.0-rc.1` is tagged
+`0.4.0-rc.1` only, so `latest` never points at an unfinished build. Both jobs need no secret,
+only the run's own `GITHUB_TOKEN` with `packages: write` — so, unlike every other job, they run
+**only on the release branch** and a dry run from another branch publishes nothing.
+
+The image is built after the web job (it copies `dist/web`), and `release` waits on
+`docker-manifest`, so a failed image push blocks the draft. Build and run it by hand with the
+commands in [`packaging/docker/README.md`](../packaging/docker/README.md).
+
 ## Secrets and GitHub setup (org admin, once)
 
 All signing secrets live in the repository's **`release` environment**, deployable only from the
-`release` branch; a ruleset restricts who can push that branch. Every job in `release.yml`
-declares `environment: release`; the FreeBSD job is a called workflow and needs no secrets.
-Each secret is optional: if one is missing that platform's artifacts are unsigned and the run
-shows a `::warning::`. Never store these as org- or repo-level Actions secrets (playbook §3).
+`release` branch; a ruleset restricts who can push that branch. The signing jobs (macOS, Windows)
+and the draft-release job in `release.yml` declare `environment: release`; the rest (version,
+Linux, Flatpak, web, Docker, FreeBSD) sign nothing and need no secrets. Each secret is optional:
+if one is missing that platform's artifacts are unsigned and the run shows a `::warning::`. Never
+store these as org- or repo-level Actions secrets (playbook §3).
+
+Publishing to GHCR needs no secret: the workflow's own `GITHUB_TOKEN` carries `packages: write`
+for the `docker` jobs. The first release push creates the `storytold/gridcraft` package. GHCR
+does **not** inherit a repository's visibility, so it starts **private** and has to be made public
+once (a ran-once step, not part of the workflow) — package page → *Package settings* → *Change
+visibility*, or:
+
+```sh
+gh api --method PATCH /orgs/storytold/packages/container/gridcraft -f visibility=public
+```
 
 | Secret | Used for |
 |---|---|

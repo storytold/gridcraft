@@ -1,5 +1,6 @@
-# Release pipeline: every push to `release` builds signed installers for every platform and
-# creates or updates the draft GitHub Release "GridCraft v<version>". See docs/releasing.md.
+# Release pipeline: every push to `release` builds signed installers for every platform, publishes
+# the container image to GHCR, and creates or updates the draft GitHub Release "GridCraft v<version>".
+# See docs/releasing.md.
 # Copied from DesignCraft (craftrules release/playbook.md); keep the two in step.
 #
 # The signing jobs (macOS, Windows) and the draft-release job run in the `release` environment
@@ -7,7 +8,8 @@
 # optional: missing ones produce unsigned artifacts and a warning, never a failed build. The
 # other jobs sign nothing and get no secrets, so a manual run from another branch is a dry run:
 # they build and upload their artifacts, the environment refuses the signing jobs, and the
-# draft-release job (which needs them) is skipped.
+# draft-release job (which needs them) is skipped. The `docker`/`docker-manifest` jobs are the
+# exception: they push to the registry, so they run only on the release branch, never on a dry run.
 name: Release
 
 on:
@@ -319,6 +321,125 @@ jobs:
           name: release-web
           path: dist/release/*
           if-no-files-found: error
+      # The unpacked site as well: the Docker image (the `docker` job below) serves dist/web, so it
+      # need not unzip this. Only the site itself — not the hosting notes the zip carries.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: dist/web/*
+          if-no-files-found: error
+
+  # The container image (packaging/docker/Dockerfile): nginx serving the web build plus the
+  # gridcraft-cli, published to GHCR. One runner per architecture builds natively (no QEMU under
+  # Rust), each pushing an untagged, digest-pinned image; `docker-manifest` then joins the digests
+  # into one multi-architecture tag set. Published only from the release branch — a dry run
+  # elsewhere stops here, and docker.yml builds the same image (without pushing) on every change.
+  docker:
+    name: Docker ${{ matrix.arch }}
+    needs: [version, web]
+    if: github.ref == 'refs/heads/release'
+    runs-on: ${{ matrix.runner }}
+    # packages: write is this job's addition to the workflow's read-only default. No secret is
+    # needed: GHCR accepts the run's own GITHUB_TOKEN.
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, platform: linux/amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, platform: linux/arm64, runner: ubuntu-24.04-arm }
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      # The image copies dist/web; the web job just built it.
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: dist/web
+      - name: Check the site is there
+        run: |
+          ls -l dist/web
+          test -f dist/web/index.html || { echo "::error::dist/web/index.html is missing"; exit 1; }
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packaging/docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          # No tag: the manifest job below assembles the tagged list from these digests.
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: Export the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+
+  docker-manifest:
+    name: Docker manifest
+    needs: [version, docker]
+    if: github.ref == 'refs/heads/release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: docker-digest-*
+          path: /tmp/digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag the multi-architecture image
+        working-directory: /tmp/digests
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          names=("$VERSION")
+          # A stable release also moves the major.minor line and latest; a pre-release (-rc.1)
+          # keeps only its own tag, so `latest` never points at an unfinished build.
+          if [ "$PRERELEASE" = false ]; then
+            names+=("${VERSION%.*}" latest)
+          fi
+          tags=()
+          for name in "${names[@]}"; do tags+=(-t "$IMAGE:$name"); done
+          sources=()
+          for digest in *; do sources+=("$IMAGE@sha256:$digest"); done
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+          docker buildx imagetools inspect "$IMAGE:$VERSION"
+          {
+            echo "### Container image"
+            echo
+            echo "Published \`$IMAGE\` as a multi-architecture image (linux/amd64, linux/arm64):"
+            echo
+            for name in "${names[@]}"; do echo "- \`$IMAGE:$name\`"; done
+          } >>"$GITHUB_STEP_SUMMARY"
 
   # FreeBSD has no hosted runners: freebsd.yml builds in a FreeBSD VM and, with package: true,
   # uploads the release-freebsd artifact (gridcraft-<v>-freebsd-x86_64.tar.gz). It needs no
@@ -334,7 +455,7 @@ jobs:
 
   release:
     name: Draft GitHub Release
-    needs: [version, macos, windows, linux, flatpak, web, freebsd]
+    needs: [version, macos, windows, linux, flatpak, web, docker-manifest, freebsd]
     # Belt and braces for branch dry runs: only the release branch drafts a release (the
     # environment's branch rule refuses this job and the signing jobs anywhere else, too).
     if: github.ref == 'refs/heads/release'

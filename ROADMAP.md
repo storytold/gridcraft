@@ -108,7 +108,8 @@ by open equivalents or left out, not cloned.
   `eval`, `cat`, `run`, `commands`, `functions`, `mcp`, `send`).
 - Platforms: macOS, Windows, Linux, FreeBSD; web (WASM via trunk). Release workflows for
   signed/notarized macOS universal DMG, signed Windows x64/x86 MSI + zip, Linux AppImage/deb/rpm/
-  tar.gz + Flatpak manifest, FreeBSD tarball and a web zip.
+  tar.gz + Flatpak manifest, FreeBSD tarball, a web zip and a multi-architecture container image
+  (`ghcr.io/storytold/gridcraft`).
 
 ## Milestones
 

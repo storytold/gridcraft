@@ -32,6 +32,22 @@ docker run --rm -p 8771:80 gridcraft            # the web app at http://localhos
 docker run --rm gridcraft eval '=SUM(1,2,3)'    # the CLI
 ```
 
+### Published images
+
+Every release publishes this image to GitHub Container Registry
+(`release.yml`'s `docker` jobs), as a multi-architecture `linux/amd64` + `linux/arm64` manifest.
+Pull it instead of building:
+
+```sh
+docker run --rm -p 8771:80 ghcr.io/storytold/gridcraft:latest
+docker run --rm ghcr.io/storytold/gridcraft:0.4 eval '=SUM(1,2,3)'
+```
+
+Tags: `<version>` (e.g. `0.4.0`) always, plus `0.4` and `latest` for a stable release — a
+pre-release like `0.4.0-rc.1` gets its own tag only, so `latest` is never an unfinished build.
+`packaging/docker/compose.yaml` still builds locally; point its `image:` at
+`ghcr.io/storytold/gridcraft:<version>` and drop the `build:` block to run the published one.
+
 ## The web app
 
 With compose, which builds and runs the same image:
