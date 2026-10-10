@@ -351,6 +351,7 @@ impl Calc {
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
+        let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
             let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
             match formula.and_then(|f| f.expr()) {
@@ -360,6 +361,15 @@ impl Calc {
                 }
                 None => {
                     self.graph.remove(k);
+                    // A formula replaced by a constant (or cleared) takes its spilled values with it.
+                    if let Some(sh) = wb.sheet_mut(k.0)
+                        && let Some(r) = sh.spill_ranges.remove(&k.1)
+                    {
+                        for c in r.iter() {
+                            sh.spill.remove(&c);
+                        }
+                        cleared.push((k.0, r));
+                    }
                     // A formula that doesn't parse evaluates to #NAME?.
                     if let Some(cell) = wb.sheet_mut(k.0).and_then(|s| s.cells.get_mut(k.1))
                         && cell.formula.is_some()
@@ -397,6 +407,9 @@ impl Calc {
             if let Some(r) = wb.sheet(k.0).and_then(|s| s.spill_ranges.get(&k.1)) {
                 seeds.extend(r.iter().take(65536).map(|c| (k.0, c)));
             }
+        }
+        for (si, r) in &cleared {
+            seeds.extend(r.iter().take(65536).map(|c| (*si, c)));
         }
         let t0 = prof_now();
         let dirty = self.dirty_closure(wb, &seeds);
