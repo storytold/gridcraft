@@ -108,6 +108,7 @@ by open equivalents or left out, not cloned.
 - Agents: every action is an engine command; JSON control channel in the desktop app (pointer,
   keyboard, dialogs, screenshots); MCP server (headless or bridged); CLI (`info`, `convert`,
   `eval`, `cat`, `run`, `commands`, `functions`, `mcp`, `send`).
+- Windows MSI offers an optional desktop shortcut and remembers the choice across upgrades.
 - Platforms: macOS, Windows, Linux, FreeBSD; web (WASM via trunk). Release workflows for
   signed/notarized macOS universal DMG, signed Windows x64/x86 MSI + zip, Linux AppImage/deb/rpm/
   tar.gz + Flatpak manifest, FreeBSD tarball and a web zip.

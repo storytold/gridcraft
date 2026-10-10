@@ -1,5 +1,5 @@
-# Quick static checks for the release pipeline (seconds, no Rust build): workflow syntax,
-# packaging shell/PowerShell scripts, and the Linux desktop/AppStream/Flatpak metadata.
+# Quick release-pipeline checks without a Rust build: workflow and packaging-script syntax,
+# Linux desktop metadata, and the Windows desktop-shortcut installer lifecycle.
 name: Packaging lint
 
 on:
@@ -64,3 +64,33 @@ jobs:
               assert src[key] == bundle[key], f"Flatpak manifests disagree on {key}: {src[key]} vs {bundle[key]}"
           print("Flatpak manifests ok")
           EOF
+
+  desktop-shortcut:
+    name: Windows desktop shortcut smoke
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build fixture MSIs and test shortcut lifecycle
+        shell: pwsh
+        run: |
+          dotnet tool install --tool-path "$env:RUNNER_TEMP\wix" wix --version 5.0.2
+          if ($LASTEXITCODE -ne 0) { throw 'Could not install WiX' }
+          $env:PATH = "$env:RUNNER_TEMP\wix;$env:PATH"
+          ./packaging/windows/test-desktop-shortcut.ps1
+      - name: Capture native MSI dialog previews
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -STA -File ./packaging/windows/preview-installer-dialogs.ps1 `
+            -Msi "$env:RUNNER_TEMP\gridcraft-shortcut-smoke\gridcraft-90.0.0.msi" `
+            -OutputDir "$env:RUNNER_TEMP\gridcraft-shortcut-smoke\dialogs"
+          if ($LASTEXITCODE -ne 0) { throw 'Native MSI dialog preview failed' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: desktop-shortcut-msi-evidence
+          path: |
+            ${{ runner.temp }}/gridcraft-shortcut-smoke/*.log
+            ${{ runner.temp }}/gridcraft-shortcut-smoke/dialogs/*
+          if-no-files-found: ignore
+          retention-days: 7
