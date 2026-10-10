@@ -15,7 +15,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Chart Element",
             ["Chart Design", "Chart Layouts"],
             None,
-            "{chart?, element: title|legend|dataLabels|gridlines|axisTitles, on?: bool, position?: bottom|top|left|right}",
+            "{chart?, element: title|legend|dataLabels|gridlines|axisTitles|smooth, on?: bool, position?: bottom|top|left|right}",
             has_doc,
             add_element
         ),
@@ -290,6 +290,11 @@ fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
             "axisTitles" => {
                 c.x_title = on.then(|| c.x_title.clone().unwrap_or_else(|| "Axis Title".into()));
                 c.y_title = on.then(|| c.y_title.clone().unwrap_or_else(|| "Axis Title".into()));
+            }
+            "smooth" => {
+                for s in &mut c.series {
+                    s.smooth = on;
+                }
             }
             other => return Err(bad("chart.addElement", format!("unknown element `{other}`"))),
         }

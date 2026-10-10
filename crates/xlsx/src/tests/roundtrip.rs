@@ -287,6 +287,7 @@ fn sample() -> Workbook {
             color: Some(Color::Rgb(0xFF0000)),
             secondary: false,
             kind: None,
+            smooth: false,
         }],
         legend: LegendPos::Bottom,
         data_labels: true,
@@ -324,6 +325,7 @@ fn sample() -> Workbook {
         kind: Some(ChartKind::Line),
         secondary: true,
         color: None,
+        smooth: false,
         ..base_chart.series[0].clone()
     });
     s.charts.push(combo);

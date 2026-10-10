@@ -108,6 +108,7 @@ fn sales(s: &mut Session) -> bool {
                 color: None,
                 secondary: false,
                 kind: None,
+                smooth: false,
             }];
         }
     }

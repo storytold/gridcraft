@@ -166,7 +166,17 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             }
         }
         let sizes = s.bubble_sizes.as_deref().map(|f| nums(wb, sheet, f));
-        series.push(SeriesData { name, values, x, sizes, color, kind, secondary: s.secondary, number_format: ref_format(wb, sheet, &s.values) });
+        series.push(SeriesData {
+            name,
+            values,
+            x,
+            sizes,
+            color,
+            kind,
+            secondary: s.secondary,
+            smooth: s.smooth,
+            number_format: ref_format(wb, sheet, &s.values),
+        });
     }
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());

@@ -352,6 +352,9 @@ pub struct Series {
     /// Combo charts: this series drawn as a line on the secondary axis.
     pub secondary: bool,
     pub kind: Option<ChartKind>,
+    /// Draw line segments as a smoothed (spline) curve.
+    #[serde(default)]
+    pub smooth: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
