@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 
 use gridcraft_core::parse::parse_number_text;
-use gridcraft_core::{CellError, Value, compare_text};
+use gridcraft_core::{CellError, Value, compare_numbers, compare_text};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Op {
@@ -113,7 +113,7 @@ impl Criterion {
                     _ => None,
                 };
                 match cell {
-                    Some(x) => cmp_op(self.op, x.partial_cmp(n).unwrap_or(Ordering::Equal)),
+                    Some(x) => cmp_op(self.op, compare_numbers(x, *n)),
                     None => self.op == Op::Ne,
                 }
             }
@@ -252,7 +252,7 @@ pub(crate) fn lookup_equal(needle: &Value, hay: &Value, wild: bool) -> bool {
                 compare_text(p, t) == Ordering::Equal
             }
         }
-        (Value::Number(a), Value::Number(b)) => a == b,
+        (Value::Number(a), Value::Number(b)) => compare_numbers(*a, *b) == Ordering::Equal,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Error(a), Value::Error(b)) => a == b,
         (Value::Empty, Value::Empty) => true,
@@ -294,6 +294,8 @@ mod tests {
         assert!(!m("<b", Value::Number(1.0)));
         assert!(m("#N/A", Value::Error(CellError::NA)));
         assert!(Criterion::parse(&Value::Number(3.0)).matches(&Value::Number(3.0)));
+        assert!(Criterion::parse(&Value::Number(0.3)).matches(&Value::Number(0.1 + 0.2)));
+        assert!(lookup_equal(&Value::Number(0.3), &Value::Number(0.1 + 0.2), false));
         assert!(m("<>a*", Value::from("bcd")));
         assert!(m(">1/1/2020", Value::Number(44000.0)));
     }
