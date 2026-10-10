@@ -175,6 +175,8 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             wb.calc.max_change = d.abs();
         }
         wb.calc.precision_as_displayed = !c.flag("fullPrecision", true);
+        wb.calc.multi_threaded = c.flag("concurrentCalc", true);
+        wb.calc.threads = c.attr_u32("concurrentManualCount").unwrap_or(0).min(1024);
     }
     if let Some(p) = wb_xml.child("workbookProtection") {
         wb.protected_structure = p.flag("lockStructure", false);

@@ -61,7 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Calculation Options",
             ["Formulas", "Calculation"],
             None,
-            "{mode: automatic|automaticExceptTables|manual, iterative?, maxIterations?, maxChange?}",
+            "{mode: automatic|automaticExceptTables|manual, iterative?, maxIterations?, maxChange?, multiThreaded?, threads? (0 = every processor)}",
             has_doc,
             calc_options
         ),
@@ -487,9 +487,15 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(v) = f64_param(p, "maxChange") {
             cx.wb.calc.max_change = v.abs();
         }
+        if let Some(v) = bool_param(p, "multiThreaded") {
+            cx.wb.calc.multi_threaded = v;
+        }
+        if let Some(v) = u32_param(p, "threads") {
+            cx.wb.calc.threads = v.min(1024);
+        }
         if mode == Some(CalcMode::Automatic) {
             cx.structural = true;
         }
-        Ok(json!({"mode": format!("{:?}", cx.wb.calc.mode)}))
+        Ok(json!({"mode": format!("{:?}", cx.wb.calc.mode), "multiThreaded": cx.wb.calc.multi_threaded, "threads": cx.wb.calc.threads}))
     })
 }

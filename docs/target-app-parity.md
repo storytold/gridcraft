@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (Performance: recalc order and chain length; shared ranges and lookup indexes; measured with the `perf` example) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (Performance: recalc order and chain length; shared ranges and lookup indexes; multi-threaded recalc; measured with the `perf` example) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -201,18 +201,18 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 | Measure | GridCraft | Excel | Kind |
 |---|---|---|---|
 | Sheet size limits | 1,048,576 × 16,384 | same | measured (`crates/core/src/addr.rs`) |
-| Recalc threads | 1 | all cores | measured (no threading in `crates/calc`) |
+| Recalc threads | all cores (or a manual count, or off: Excel's Calculation Options, saved as XLSX `concurrentCalc` / `concurrentManualCount`); 1 on the web | all cores | measured: each independent level of the dependency graph with 512+ formulas is split across threads; results match one thread exactly (test `multi_threaded_recalc_matches_one_thread`) |
+| 10,000 independent formulas over a 1,000-cell array each, recalc after an edit | 1.89 s on 1 thread, 0.99 s on 2, 0.57 s on 4, 0.35 s on all 10 cores | scales with cores | GridCraft measured: `perf` example, `heavy`, Apple M2 Pro (6 performance + 4 efficiency cores) |
 | Edit → recalc, 100k dependents | ~50 ms (2026-10-11; was ~0.4 s on 2026-10-07) | tens of ms | measured: `perf` example, `basic`, 50,000 rows (a formula column and a running sum), Apple M2 Pro |
 | Long dependency chains | correct in any direction and at any length (topological order; formulas wait on a heap stack, not the call stack) | correct | measured: `perf` example, `chain`; tests `long_chains_*`. Before 2026-10-11 a chain read against row order past 2,000 cells gave `#CIRC!` |
 | Exact lookups, 100,000 VLOOKUPs over a 100,000-row table | 0.72 s (XLOOKUP 0.76 s, MATCH 0.63 s); an edit to the table with 300,000 dependent lookups 0.25 s. Before 2026-10-11: 2.6 s for 10,000, growing as n² | well under 1 s | GridCraft measured: `perf` example, `lookup`, 500,000 rows, Apple M2 Pro; Excel not measured. A range read by many formulas is built once per recalculation and lookups index it |
-| 1,000 × `SUM(A:A)` over 500,000 rows | 1.06 s (one thread) | well under 1 s (all cores) | GridCraft measured: `perf` example, `colsum` |
+| 1,000 × `SUM(A:A)` over 50,000 rows, recalc after an edit | 20 ms on all cores (86 ms on one) | fast | GridCraft measured: `perf` example, `colsum` |
 | Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
 | Open a ~100 MB XLSX | fails (#175) | opens | user report |
 | Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
 
-Work: streaming XLSX reader with shared-string and style dedup, multi-threaded recalc of
-independent chains (native only; WASM stays single-threaded), whole-column reference
-clamping (#205). The numbers above come from
+Work: streaming XLSX reader with shared-string and style dedup, recalculation off the UI thread
+with interruption and progress, whole-column reference clamping (#205). The numbers above come from
 `cargo run --release -p gridcraft-engine --example perf -- [rows]`, which checks every answer.
 
 ## Platforms
@@ -336,6 +336,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Performance: multi-threaded recalculation (every core by default; Calculation Options and XLSX `concurrentCalc`/`concurrentManualCount` like Excel; one thread on the web); 10,000 heavy formulas 5.4× faster on 10 cores |
 | 2026-10-11 | minor | Performance: ranges read by many formulas are shared per recalculation and lookups (VLOOKUP, HLOOKUP, LOOKUP, MATCH, XLOOKUP, XMATCH) index them: 100,000 VLOOKUPs over 100,000 rows in 0.72 s, was O(n²) |
 | 2026-10-11 | minor | Performance: recalc evaluates in topological order without recursion, so long chains are correct in either direction; edit-recalc re-timed at ~50 ms for 100k formulas; lookup scaling measured (O(n²)). Numbers from the extended `perf` example |
 | 2026-10-10 | minor | Readiness-by-audience table: hours to ~95% for each of the three numbers (full 650–1,050, mainstream 200–310, essentials 60–100). Full number confirmed as the additive weighted sum over the written dimension weights (no change) |

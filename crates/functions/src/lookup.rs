@@ -209,6 +209,17 @@ const MIN_INDEXED: usize = 32;
 const INDEX_BUDGET: usize = 1 << 25;
 
 impl LookupCache {
+    /// A cache starting with this one's indexes (shared, not copied): for a calculation thread
+    /// that searches the same arrays.
+    pub fn fork(&self) -> LookupCache {
+        let slots = self
+            .slots
+            .iter()
+            .filter_map(|(k, slot)| slot.index.as_ref().map(|ix| (*k, Slot { searches: slot.searches, index: Some(Arc::clone(ix)) })))
+            .collect();
+        LookupCache { slots, indexed: self.indexed }
+    }
+
     fn index(&mut self, source: &Arc<Array>, line: Line) -> Option<Arc<LookupIndex>> {
         let len = match line {
             Line::All => source.data.len(),

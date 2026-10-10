@@ -1,11 +1,13 @@
 //! Performance scenarios on large workbooks (release build):
-//! `cargo run --release -p gridcraft-engine --example perf -- [rows] [--only NAME[,NAME…]]`
+//! `cargo run --release -p gridcraft-engine --example perf -- [rows] [--only NAME[,NAME…]] [--threads N]`
 //!
 //! Every scenario goes through `Session::execute`, the path the UI, CLI and MCP use, and checks
 //! its answer: a fast wrong result is not a result. Scenarios: `basic` (fill, formulas, running
 //! sum, aggregates, edit, sort, save, open, undo), `lookup` (exact VLOOKUP / XLOOKUP / MATCH over a
 //! table, then an edit to the table), `colsum` (many `SUM(A:A)` over one column, then an edit),
-//! `chain` (a long dependency chain in both directions).
+//! `chain` (a long dependency chain in both directions), `heavy` (many independent formulas that
+//! each do real work: where calculation threads pay off). `--threads N` sets the calculation threads
+//! (`formulas.calculationOptions`; 0, the default, uses every processor).
 
 #![allow(clippy::disallowed_methods)] // a native-only benchmark: wasm never runs it
 
@@ -17,6 +19,7 @@ use serde_json::json;
 
 struct Bench {
     rows: usize,
+    threads: u32,
     failures: Vec<String>,
 }
 
@@ -52,10 +55,13 @@ fn run(s: &mut Session, id: &str, p: serde_json::Value) {
     }
 }
 
-fn session() -> Session {
-    let mut s = Session::new();
-    s.new_workbook();
-    s
+impl Bench {
+    fn session(&self) -> Session {
+        let mut s = Session::new();
+        s.new_workbook();
+        run(&mut s, "formulas.calculationOptions", json!({"threads": self.threads}));
+        s
+    }
 }
 
 /// Writes `rows` rows starting at `top` (1-based) in column `col`, in chunks.
@@ -72,7 +78,7 @@ fn fill(s: &mut Session, col: &str, top: usize, rows: usize, mut row: impl FnMut
 
 fn basic(b: &mut Bench) {
     let rows = b.rows;
-    let mut s = session();
+    let mut s = b.session();
     b.time(&format!("fill {rows}x6 values"), || {
         fill(&mut s, "A", 1, rows, |i| json!([format!("Item {i}"), i as f64, (i % 97) as f64, (i % 13) as f64 * 1.5, 1.0, 2.0]))
     });
@@ -107,7 +113,7 @@ fn basic(b: &mut Bench) {
 /// lookup copies and scans the table.
 fn lookup(b: &mut Bench) {
     let n = (b.rows / 5).max(1);
-    let mut s = session();
+    let mut s = b.session();
     fill(&mut s, "A", 1, n, |i| json!([format!("K{i}"), (i * 2) as f64]));
     b.time(&format!("{n} exact VLOOKUPs over a {n}-row table"), || {
         fill(&mut s, "D", 1, n, |i| json!([format!("=VLOOKUP(\"K{}\",$A$1:$B${n},2,FALSE)", n - 1 - i)]))
@@ -125,7 +131,7 @@ fn lookup(b: &mut Bench) {
 fn colsum(b: &mut Bench) {
     let rows = b.rows;
     let formulas = 1000;
-    let mut s = session();
+    let mut s = b.session();
     fill(&mut s, "A", 1, rows, |i| json!([(i % 10) as f64]));
     b.time(&format!("{formulas} x =SUM(A:A) over {rows} rows"), || fill(&mut s, "C", 1, formulas, |_| json!(["=SUM(A:A)"])));
     let sum: f64 = (0..rows).map(|i| (i % 10) as f64).sum();
@@ -138,7 +144,7 @@ fn colsum(b: &mut Bench) {
 /// are valid, neither is circular.
 fn chain(b: &mut Bench) {
     let n = b.rows.clamp(1, 20_000);
-    let mut s = session();
+    let mut s = b.session();
     b.time(&format!("{n}-cell chain, top to bottom"), || {
         run(&mut s, "cell.set", json!({"cell": "A1", "input": "1"}));
         fill(&mut s, "A", 2, n - 1, |i| json!([format!("=A{}+1", i + 1)]));
@@ -152,13 +158,36 @@ fn chain(b: &mut Bench) {
     b.check("chain after edit", &s, &format!("A{n}"), (n + 4) as f64);
 }
 
+/// Independent formulas that each evaluate a 1,000-element array expression.
+fn heavy(b: &mut Bench) {
+    let n = (b.rows / 5).max(1);
+    let mut s = b.session();
+    fill(&mut s, "A", 1, 1000, |i| json!([i as f64]));
+    b.time(&format!("{n} formulas over a 1,000-cell array each"), || {
+        fill(&mut s, "C", 1, n, |_| json!(["=SUMPRODUCT(--(MOD($A$1:$A$1000+ROW(),7)=0))"]))
+    });
+    // How many of A + ROW(), for A = 0…999, are multiples of 7.
+    let want = |row: usize| (0..1000usize).filter(|a| (a + row).is_multiple_of(7)).count() as f64;
+    b.check("heavy formula", &s, &format!("C{n}"), want(n));
+    b.time(&format!("edit A1: {n} heavy formulas recalc"), || run(&mut s, "cell.set", json!({"cell": "A1", "input": "1"})));
+    b.check("heavy formula after edit", &s, "C1", (1..1000usize).chain([1]).filter(|a| (a + 1).is_multiple_of(7)).count() as f64);
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let rows = args.iter().find_map(|a| a.parse().ok()).unwrap_or(100_000usize).max(10);
+    // The first number that isn't the value of an option.
+    let rows = args
+        .iter()
+        .enumerate()
+        .find(|(i, a)| a.parse::<usize>().is_ok() && !(*i > 0 && args.get(i - 1).is_some_and(|p| p.starts_with("--"))))
+        .and_then(|(_, a)| a.parse().ok())
+        .unwrap_or(100_000usize)
+        .max(10);
     let only: Option<Vec<String>> =
         args.iter().position(|a| a == "--only").and_then(|i| args.get(i + 1)).map(|v| v.split(',').map(str::to_string).collect());
-    let scenarios: [(&str, fn(&mut Bench)); 4] = [("basic", basic), ("lookup", lookup), ("colsum", colsum), ("chain", chain)];
-    let mut b = Bench { rows, failures: Vec::new() };
+    let scenarios: [(&str, fn(&mut Bench)); 5] = [("basic", basic), ("lookup", lookup), ("colsum", colsum), ("chain", chain), ("heavy", heavy)];
+    let threads = args.iter().position(|a| a == "--threads").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let mut b = Bench { rows, threads, failures: Vec::new() };
     let t = Instant::now();
     for (name, f) in scenarios {
         if only.as_ref().is_some_and(|o| !o.iter().any(|x| x == name)) {

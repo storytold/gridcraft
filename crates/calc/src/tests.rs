@@ -601,3 +601,73 @@ fn a_spill_landing_in_a_shared_range_replaces_it() {
         assert_eq!(t.num(&format!("F{r}")), 5049.0);
     }
 }
+
+/// A workbook of ~3,000 rows mixing what multi-threaded levels must get right: lookups over a
+/// shared table, INDIRECT and a defined name reading cells of the same level (so workers hand
+/// formulas back), spills and their readers, running sums, text, a cycle.
+fn mixed_workbook(threads: u32) -> T {
+    let n = 3_000;
+    let mut t = T::new();
+    t.wb.calc.threads = threads;
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "Base".into(),
+        scope: None,
+        formula: "Sheet1!$B$7".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    let mut cells: Vec<(String, String)> = Vec::new();
+    for r in 1..=n {
+        cells.push((format!("A{r}"), format!("={}", (r * 37) % 1000)));
+        cells.push((format!("B{r}"), format!("=A{r}*2+ROW()")));
+        cells.push((format!("C{r}"), format!("=VLOOKUP({},$A$1:$B${n},2,FALSE)", (r * 37) % 1000)));
+        cells.push((format!("D{r}"), "=INDIRECT(\"B\"&ROW())+Base".to_string()));
+        cells.push((format!("E{r}"), format!("=IF(MOD(A{r},2)=0,\"even\"&A{r},LEN(\"odd\"&B{r}))")));
+        cells.push((format!("F{r}"), if r == 1 { "=B1".to_string() } else { format!("=F{}+B{r}", r - 1) }));
+        cells.push((format!("G{r}"), format!("=SUM($B$1:$B${n})/ROW()")));
+    }
+    cells.push(("J1".to_string(), "=SEQUENCE(50,1,A3)".to_string()));
+    cells.push(("K1".to_string(), "=SUM(J1#)+COUNT(J2:J50)".to_string()));
+    cells.push(("L1".to_string(), "=L2+1".to_string()));
+    cells.push(("L2".to_string(), "=L1+1".to_string()));
+    t.load(cells);
+    t
+}
+
+#[test]
+fn multi_threaded_recalc_matches_one_thread() {
+    let one = mixed_workbook(1);
+    let many = mixed_workbook(8);
+    let (a, b) = (one.wb.sheet(0).unwrap(), many.wb.sheet(0).unwrap());
+    let mut cells = 0;
+    for (c, cell) in a.cells.iter() {
+        assert_eq!(cell.value, b.value(c), "{}", c.a1());
+        cells += 1;
+    }
+    assert_eq!(cells, b.cells.iter().count());
+    assert_eq!(a.spill, b.spill);
+    // Spot checks against values worked out by hand.
+    assert_eq!(one.num("D10"), one.num("B10") + one.num("B7"));
+    assert_eq!(one.num("C5"), one.num("B5"));
+    assert_eq!(one.num("K1"), (0..50).map(|i| f64::from(i) + one.num("A3")).sum::<f64>() + 49.0);
+    assert_eq!(many.get("L1"), Value::Error(CellError::Circ));
+    // An edit recalculates thousands of formulas in large levels again.
+    let mut many = many;
+    let mut one = one;
+    many.set("A1", "=999");
+    one.set("A1", "=999");
+    for (c, cell) in one.wb.sheet(0).unwrap().cells.iter() {
+        assert_eq!(cell.value, many.wb.sheet(0).unwrap().value(c), "after edit {}", c.a1());
+    }
+}
+
+#[test]
+fn thread_count_follows_the_settings() {
+    let mut s = gridcraft_model::CalcSettings { threads: 3, ..Default::default() };
+    assert_eq!(crate::recalc::thread_count(&s), if cfg!(target_arch = "wasm32") { 1 } else { 3 });
+    s.multi_threaded = false;
+    assert_eq!(crate::recalc::thread_count(&s), 1);
+    s.multi_threaded = true;
+    s.threads = 0;
+    assert!(crate::recalc::thread_count(&s) >= 1);
+}

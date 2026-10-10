@@ -262,6 +262,12 @@ pub fn write_xlsx(wb: &Workbook) -> Result<Vec<u8>, IoError> {
     if wb.calc.precision_as_displayed {
         w.push_str(" fullPrecision=\"0\"");
     }
+    if !wb.calc.multi_threaded {
+        w.push_str(" concurrentCalc=\"0\"");
+    }
+    if wb.calc.threads > 0 {
+        let _ = write!(w, " concurrentManualCount=\"{}\"", wb.calc.threads);
+    }
     if out.needs_calc {
         w.push_str(" fullCalcOnLoad=\"1\"");
     }

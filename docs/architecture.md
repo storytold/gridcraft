@@ -41,7 +41,12 @@ including tests, 2026-10-10.
    heap stack, so chains have no length limit), spills dynamic arrays and reports `#SPILL!`/cycles.
    Volatile functions are always dirty. Within a pass, a range read more than once is built once
    and shared, and lookup functions index a shared range (`LookupCache`, reached through
-   `Ctx::lookup_cache`) so repeated searches are O(1) or O(log n).
+   `Ctx::lookup_cache`) so repeated searches are O(1) or O(log n). The plan is split into levels
+   of formulas that don't read each other; a level of 512+ formulas runs on worker threads
+   (`std::thread::scope`, count from `CalcSettings::multi_threaded`/`threads`, one on wasm) that
+   read the main thread's results and write their own, merged after the level. A formula that
+   turns out to read a cell still pending in its level, or that draws random numbers, is
+   finished on the main thread, so results don't depend on the thread count.
 4. **Rendering**: the egui grid reads display values (number formats applied in `engine/display.rs`)
    for the visible window only; charts render through `crates/chart` primitives.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
@@ -72,6 +77,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Recalc: multi-threaded levels |
 | 2026-10-11 | minor | Recalc: shared ranges per pass and lookup indexes |
 | 2026-10-11 | minor | Recalc: topological order by Kahn's algorithm; formulas that wait for a cell read through a name, table or INDIRECT go on a heap stack, so chain length is unbounded |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |
