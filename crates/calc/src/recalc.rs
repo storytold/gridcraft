@@ -353,6 +353,83 @@ impl Graph {
     pub fn precedents_of(&self, k: Key) -> Vec<Area> {
         self.nodes.get(&k).map(|n| n.areas.clone()).unwrap_or_default()
     }
+
+    /// The order to evaluate `dirty` in: each formula after the dirty formulas its static
+    /// precedents cover (Kahn's algorithm), so evaluating it rarely has to wait for another.
+    /// Formulas that are ready at the same time keep the order of `dirty`. Formulas on or behind
+    /// a cycle come last, in the order of `dirty`; evaluating them finds the cycle.
+    ///
+    /// The edges come from [`Graph::dependents`], which reports a formula once per index entry of
+    /// its precedents that covers a cell, so a formula waits once for each such report and each
+    /// is released once. Edges between dirty formulas are kept in one flat list while they stay
+    /// within a budget of a few per formula; past it (many formulas over the same large range of
+    /// formulas) they are looked up again instead of stored.
+    pub fn order(&self, dirty: &[Key]) -> Vec<Key> {
+        let mut index: HashMap<Key, usize> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
+        let mut keys: Vec<Key> = Vec::with_capacity(dirty.len());
+        for &k in dirty {
+            if let std::collections::hash_map::Entry::Vacant(e) = index.entry(k) {
+                e.insert(keys.len());
+                keys.push(k);
+            }
+        }
+        let budget = keys.len().saturating_mul(8).saturating_add(1 << 20);
+        let mut waiting = vec![0usize; keys.len()];
+        let mut edges: Vec<usize> = Vec::new();
+        let mut starts: Vec<usize> = Vec::with_capacity(keys.len() + 1);
+        let mut stored = true;
+        let mut deps = Vec::new();
+        for &k in &keys {
+            starts.push(edges.len());
+            deps.clear();
+            self.dependents(k.0, k.1, &mut deps);
+            for d in &deps {
+                if let Some(&j) = index.get(d)
+                    && let Some(w) = waiting.get_mut(j)
+                {
+                    *w += 1;
+                    if stored {
+                        edges.push(j);
+                    }
+                }
+            }
+            if stored && edges.len() > budget {
+                stored = false;
+                edges = Vec::new();
+            }
+        }
+        starts.push(edges.len());
+        let mut ready: VecDeque<usize> = (0..keys.len()).filter(|&i| waiting.get(i) == Some(&0)).collect();
+        let mut out = Vec::with_capacity(keys.len());
+        let mut released: Vec<usize> = Vec::new();
+        while let Some(i) = ready.pop_front() {
+            let Some(&k) = keys.get(i) else { continue };
+            out.push(k);
+            released.clear();
+            if stored {
+                let (a, b) = (starts.get(i).copied().unwrap_or(0), starts.get(i + 1).copied().unwrap_or(0));
+                released.extend(edges.get(a..b).unwrap_or(&[]));
+            } else {
+                deps.clear();
+                self.dependents(k.0, k.1, &mut deps);
+                released.extend(deps.iter().filter_map(|d| index.get(d).copied()));
+            }
+            for &j in &released {
+                if let Some(w) = waiting.get_mut(j)
+                    && *w > 0
+                {
+                    *w -= 1;
+                    if *w == 0 {
+                        ready.push_back(j);
+                    }
+                }
+            }
+        }
+        if out.len() < keys.len() {
+            out.extend(keys.iter().zip(&waiting).filter(|(_, w)| **w > 0).map(|(k, _)| *k));
+        }
+        out
+    }
 }
 
 /// Calculation state kept beside a workbook.
@@ -378,7 +455,12 @@ struct PassHost<'a> {
     exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
     results: HashMap<Key, Value>,
     pending: HashSet<Key>,
-    in_progress: HashSet<Key>,
+    /// Formulas set aside until the pending cells they read are done (see [`PassHost::settle`]).
+    in_stack: HashSet<Key>,
+    /// Pending cells the formula being evaluated read before they were done.
+    blocked: Vec<Key>,
+    /// The formulas set aside by [`PassHost::settle`] (kept to reuse its allocation).
+    stack: Vec<Key>,
     /// New spills found during the pass: anchor → array.
     spills: HashMap<Key, std::sync::Arc<Array>>,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
@@ -388,7 +470,6 @@ struct PassHost<'a> {
     now: f64,
     cycle: bool,
     cycles: Vec<Key>,
-    depth: usize,
 }
 
 /// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
@@ -413,33 +494,68 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
 }
 
 impl PassHost<'_> {
-    fn compute(&mut self, k: Key) -> Value {
-        if let Some(v) = self.results.get(&k) {
+    /// The value of `root`, evaluating it first if it is pending, together with every pending
+    /// formula it turns out to read, without recursing: a formula that reads a pending cell is
+    /// set aside on a stack, the cells it read go on top, and it is evaluated again once they are
+    /// done. A cell read while it is set aside is part of a cycle (`#CIRC!`). Chains of any length
+    /// cost heap, not call stack.
+    fn settle(&mut self, root: Key) -> Value {
+        if let Some(v) = self.results.get(&root) {
             return v.clone();
         }
-        let Some(expr) = self.exprs.get(&k) else {
-            return self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
-        };
-        if self.in_progress.contains(&k) || self.depth > 2000 {
-            self.cycle = true;
-            self.cycles.push(k);
-            return Value::Error(CellError::Circ);
+        if !self.pending.contains(&root) {
+            return self.wb.sheet(root.0).map(|s| s.value(root.1)).unwrap_or_default();
         }
-        self.in_progress.insert(k);
-        self.depth += 1;
-        let expr = std::sync::Arc::clone(expr);
+        // Fast path: a formula whose precedents are done (nearly all of them, in `order`).
+        self.in_stack.insert(root);
+        if self.attempt(root) {
+            self.in_stack.remove(&root);
+            return self.results.get(&root).cloned().unwrap_or_default();
+        }
+        let mut stack = std::mem::take(&mut self.stack);
+        stack.clear();
+        stack.push(root);
+        let mut retry = false;
+        while let Some(&k) = stack.last() {
+            if retry && self.attempt(k) {
+                stack.pop();
+                self.in_stack.remove(&k);
+            } else {
+                for p in std::mem::take(&mut self.blocked) {
+                    if self.in_stack.insert(p) {
+                        stack.push(p);
+                    }
+                }
+            }
+            retry = true;
+        }
+        self.stack = stack;
+        self.results.get(&root).cloned().unwrap_or_default()
+    }
+
+    /// Evaluates pending formula `k` and records its result, or returns `false` (recording
+    /// nothing) when it read pending cells, listed in `blocked`.
+    fn attempt(&mut self, k: Key) -> bool {
+        self.blocked.clear();
+        let Some(expr) = self.exprs.get(&k).map(std::sync::Arc::clone) else {
+            self.pending.remove(&k);
+            let v = self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
+            self.results.insert(k, v);
+            return true;
+        };
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
             ev.value(&expr)
         };
+        if !self.blocked.is_empty() {
+            return false;
+        }
         // A legacy array formula fills the range it was entered in.
         let legacy = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
         let v = match legacy {
             Some(range) => fit_to_range(v, range),
             None => v,
         };
-        self.depth -= 1;
-        self.in_progress.remove(&k);
         self.pending.remove(&k);
         // A blank cell shows as 0 in a formula's result, inside an array as well (`=A1:A3`,
         // FILTER or SORT of a range with blanks). GROUPBY and PIVOTBY lay out blank cells
@@ -469,8 +585,22 @@ impl PassHost<'_> {
             }
             _ => v,
         };
-        self.results.insert(k, v.clone());
-        v
+        self.results.insert(k, v);
+        true
+    }
+
+    /// Reading pending cell `k` from the formula being evaluated: a cycle if `k` is set aside
+    /// (it waits for this formula), otherwise `k` is noted as blocking and the formula will be
+    /// evaluated again. Returns whether it is a cycle.
+    fn wait_for(&mut self, k: Key) -> bool {
+        if self.in_stack.contains(&k) {
+            self.cycle = true;
+            self.cycles.push(k);
+            true
+        } else {
+            self.blocked.push(k);
+            false
+        }
     }
 }
 
@@ -508,7 +638,10 @@ impl Host for PassHost<'_> {
             return self.wb.sheet(sheet)?.spill_ranges.get(&anchor).copied();
         }
         // Recalculated in this pass: its new array, unless something blocks it (#SPILL!).
-        self.compute(k);
+        if !self.results.contains_key(&k) {
+            self.wait_for(k);
+            return None;
+        }
         let arr = self.spills.get(&k)?;
         let end = CellRef::new(
             anchor.row.saturating_add((arr.rows as u32).saturating_sub(1)),
@@ -524,8 +657,12 @@ impl Host for PassHost<'_> {
     }
     fn cell_value(&mut self, sheet: usize, c: CellRef) -> Value {
         let k = (sheet, c);
-        if self.pending.contains(&k) || self.results.contains_key(&k) {
-            return self.compute(k);
+        if let Some(v) = self.results.get(&k) {
+            return v.clone();
+        }
+        if self.pending.contains(&k) {
+            // Not done yet: the value is a placeholder, the reading formula is evaluated again.
+            return if self.wait_for(k) { Value::Error(CellError::Circ) } else { Value::Empty };
         }
         // A cell covered by a spill computed in this pass.
         for (anchor, arr) in &self.spills {
@@ -806,17 +943,18 @@ impl Calc {
                     exprs: &exprs,
                     results: HashMap::with_capacity_and_hasher(dirty.len(), Default::default()),
                     pending: exprs.keys().copied().collect(),
-                    in_progress: HashSet::default(),
+                    in_stack: HashSet::default(),
+                    blocked: Vec::new(),
+                    stack: Vec::new(),
                     spills: HashMap::default(),
                     used: HashMap::default(),
                     rng: &mut rng,
                     now,
                     cycle: false,
                     cycles: vec![],
-                    depth: 0,
                 };
-                for k in &dirty {
-                    host.compute(*k);
+                for k in self.graph.order(&dirty) {
+                    host.settle(k);
                 }
                 (host.results, host.spills, host.cycles)
             };
@@ -948,14 +1086,15 @@ pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> V
         exprs: &exprs,
         results: HashMap::default(),
         pending: HashSet::default(),
-        in_progress: HashSet::default(),
+        in_stack: HashSet::default(),
+        blocked: Vec::new(),
+        stack: Vec::new(),
         spills: HashMap::default(),
         used: HashMap::default(),
         rng: &mut rng,
         now: now_serial(),
         cycle: false,
         cycles: vec![],
-        depth: 0,
     };
     let mut ev = Evaluator::new(&mut host, sheet, at);
     ev.value(expr)

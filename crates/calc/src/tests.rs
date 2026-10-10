@@ -467,3 +467,80 @@ fn sumif_resized_sum_range_on_another_sheet_and_through_a_name() {
     assert_eq!(t.num("C1"), 10.0);
     assert_eq!(t.num("C2"), 5.0);
 }
+
+impl T {
+    /// Stores formulas without recalculating, then recalculates everything at once (as loading
+    /// a file does).
+    fn load(&mut self, cells: impl IntoIterator<Item = (String, String)>) {
+        for (at, f) in cells {
+            self.wb.sheet_mut(0).unwrap().cells.set(c(&at), Cell::formula(Formula::new(&f)));
+        }
+        self.calc.recalc_all(&mut self.wb);
+    }
+}
+
+#[test]
+fn long_chains_compute_in_either_direction() {
+    let n = 20_000;
+    let mut t = T::new();
+    // C1 = C2+1, C2 = C3+1, …: every formula reads the row below, the reverse of row order.
+    t.load((1..n).map(|r| (format!("C{r}"), format!("=C{}+1", r + 1))).chain([(format!("C{n}"), "=1".to_string())]));
+    assert_eq!(t.num("C1"), n as f64);
+    assert!(t.calc.circular.is_empty());
+    // An edit at the far end recalculates the whole chain.
+    t.set(&format!("C{n}"), "=10");
+    assert_eq!(t.num("C1"), (n + 9) as f64);
+}
+
+#[test]
+fn long_chains_need_no_call_stack() {
+    // Evaluation sets formulas aside on a heap stack instead of recursing, so a long reverse
+    // chain through a defined name (no static precedents to order by) fits a tiny thread stack.
+    let run = || {
+        let n = 5_000;
+        let mut t = T::new();
+        t.wb.names.push(gridcraft_model::DefinedName {
+            name: "Step".into(),
+            scope: None,
+            formula: "1".into(),
+            comment: String::new(),
+            hidden: false,
+        });
+        t.load((1..n).map(|r| (format!("A{r}"), format!("=A{}+Step", r + 1))).chain([(format!("A{n}"), "=Step".to_string())]));
+        t.num("A1")
+    };
+    let a1 = std::thread::Builder::new().stack_size(512 * 1024).spawn(run).unwrap().join().unwrap();
+    assert_eq!(a1, 5_000.0);
+}
+
+#[test]
+fn cycles_are_circular_and_so_is_what_reads_them() {
+    let mut t = T::new();
+    t.set("A1", "=B1+1");
+    t.set("B1", "=A1+1");
+    assert!(!t.calc.circular.is_empty());
+    t.set("C1", "=A1*2");
+    t.set("D1", "=5");
+    for at in ["A1", "B1", "C1"] {
+        assert_eq!(t.get(at), Value::Error(CellError::Circ), "{at}");
+    }
+    assert_eq!(t.num("D1"), 5.0);
+    // Breaking the cycle recalculates everything that was stuck behind it.
+    t.set("B1", "=D1");
+    assert_eq!((t.num("A1"), t.num("B1"), t.num("C1")), (6.0, 5.0, 12.0));
+    assert!(t.calc.circular.is_empty());
+    // A formula that reads itself.
+    t.set("E1", "=E1+1");
+    assert_eq!(t.get("E1"), Value::Error(CellError::Circ));
+}
+
+#[test]
+fn ranges_over_formulas_wait_for_all_of_them() {
+    // SUM reads a range of formulas below it that are dirty in the same pass.
+    let mut t = T::new();
+    t.load((2..=1001).map(|r| (format!("A{r}"), format!("=ROW()+B{r}"))).chain([("A1".to_string(), "=SUM(A2:A1001)".to_string())]));
+    let want: f64 = (2..=1001).map(f64::from).sum();
+    assert_eq!(t.num("A1"), want);
+    t.set("B5", "100");
+    assert_eq!(t.num("A1"), want + 100.0);
+}

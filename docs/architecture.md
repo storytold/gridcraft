@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (recalc order: Kahn's algorithm, no recursion) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -36,8 +36,10 @@ including tests, 2026-10-10.
    `Session::execute` catches escaped panics and restores the workbook (never-crash guard).
 2. **Edits** change the model through copy-on-write bands; undo keeps the previous snapshot.
 3. **Recalc** marks dependents of changed cells dirty through the dependency graph (with range
-   nodes for range dependents), evaluates in topological order, spills dynamic arrays and reports
-   `#SPILL!`/cycles. Volatile functions are always dirty.
+   nodes for range dependents), evaluates in topological order (Kahn's algorithm over the dirty
+   set; a formula that reads a cell not yet done, through a name, table or INDIRECT, waits on a
+   heap stack, so chains have no length limit), spills dynamic arrays and reports `#SPILL!`/cycles.
+   Volatile functions are always dirty.
 4. **Rendering**: the egui grid reads display values (number formats applied in `engine/display.rs`)
    for the visible window only; charts render through `crates/chart` primitives.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
@@ -68,4 +70,5 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Recalc: topological order by Kahn's algorithm; formulas that wait for a cell read through a name, table or INDIRECT go on a heap stack, so chain length is unbounded |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |
