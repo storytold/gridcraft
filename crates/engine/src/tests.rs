@@ -181,6 +181,7 @@ fn whole_sheet_selection_stays_within_the_data() {
     s.execute("edit.fillUp", json!({})).unwrap();
     assert_eq!(v(&s, "A1"), Value::Number(5.0));
     assert!(s.execute("edit.fillDown", json!({"range": "A1:Z1000000"})).is_err(), "too large to fill");
+    assert!(s.execute("edit.autoFill", json!({"source": "A1:XFD1048576", "target": "A1"})).is_err(), "too large to fill");
     s.execute("range.setValues", json!({"range": "D1", "values": [[1], [1], [2]]})).unwrap();
     let r = s.execute("data.removeDuplicates", json!({"range": "D:D", "header": false})).unwrap();
     assert_eq!((r["removed"].clone(), r["remaining"].clone()), (json!(1), json!(2)));

@@ -1076,8 +1076,8 @@ fn auto_fill(s: &mut Session, p: &Json) -> Result<Json> {
         "values" => crate::fill::FillMode::ValuesOnly,
         _ => crate::fill::FillMode::Series,
     };
-    if target.count() > 5_000_000 {
-        return Err(bad("edit.autoFill", "target too large"));
+    if target.count() > 5_000_000 || src.count() > 5_000_000 {
+        return Err(bad("edit.autoFill", "range too large"));
     }
     edit(s, |cx| {
         crate::fill::fill(cx, sheet, src, target, mode)?;
