@@ -1,0 +1,1082 @@
+# German (de) interface catalog. Columns, separated by a TAB:
+#   context <TAB> English source <TAB> translation
+#   context    empty (GridCraft uses no contexts)
+#   source     the English text exactly as in the code (tl!(...), ribbon labels, command labels)
+#   escapes    \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns, and a
+#              trailing "…" in one needs one in the other.
+#   Lines starting with # and blank lines are ignored. A missing entry shows in English.
+#
+# Feature names (tabs, groups, buttons, menu items, dialog fields, cell style names) use the
+# established terms German Excel users know: Start, Einfügen, Seitenlayout, Formeln, Daten,
+# Überprüfen, Ansicht, Bedingte Formatierung, Als Tabelle formatieren, Fenster fixieren …
+# CLAUDE.md allows Excel feature names. No string table, resource file or other localisation file
+# of any product was read or copied, and longer texts (tooltips, explanations, messages) were
+# written from the meaning of the English source.
+# Conventions: address the user as "Sie"; "z. B."; a space before % ("10 %").
+# `Group › Label` keys are scoped entries (`i18n::t_at`) for English words German Excel names two
+# ways, e.g. Font = Schriftart (Home) and Schrift (Format Cells tab).
+# Product, format and technology names (GridCraft, CSV, PDF, MCP, PivotTable …) stay as they are.
+
+	File	Datei
+	Home	Start
+	Insert	Einfügen
+	Draw	Zeichnen
+	Page Layout	Seitenlayout
+	Formulas	Formeln
+	Data	Daten
+	Review	Überprüfen
+	View	Ansicht
+	Automate	Automatisieren
+	Table Design	Tabellenentwurf
+	Chart Design	Diagrammentwurf
+	PivotTable Analyze	PivotTable-Analyse
+	PivotTable Design	Entwurf
+	Table	Tabelle
+	Edit	Bearbeiten
+	Window	Fenster
+	Format	Format
+	Accessibility	Barrierefreiheit
+	Actions	Aktionen
+	Active Field	Aktives Feld
+	Add-ins	Add-Ins
+	Alignment	Ausrichtung
+	Arrange	Anordnen
+	Calculation	Berechnung
+	Cell Controls	Zellsteuerelemente
+	Cells	Zellen
+	Chart Layouts	Diagrammlayouts
+	Chart Styles	Diagrammformatvorlagen
+	Charts	Diagramme
+	Clear	Löschen
+	Clipboard	Zwischenablage
+	Comments	Kommentare
+	Conditional Formatting	Bedingte Formatierung
+	Convert	Konvertieren
+	Current Selection	Aktuelle Auswahl
+	Data Tools	Datentools
+	Data Validation	Datenüberprüfung
+	Defined Names	Definierte Namen
+	Delete	Löschen
+	Editing	Bearbeiten
+	Export	Exportieren
+	Fill	Füllbereich
+	Find & Select	Suchen und Auswählen
+	Font	Schriftart
+	Forecast	Prognose
+	Formula Auditing	Formelüberwachung
+	Freeze Panes	Fenster fixieren
+	Function Library	Funktionsbibliothek
+	Get & Transform Data	Daten abrufen und transformieren
+	Group	Gruppieren
+	Hide & Unhide	Ein-/Ausblenden
+	Illustrations	Illustrationen
+	Layout	Layout
+	Links	Links
+	Location	Ort
+	Macros	Makros
+	Notes	Notizen
+	Number	Zahl
+	Outline	Gliederung
+	Page Setup	Seite einrichten
+	Print Area	Druckbereich
+	Proofing	Dokumentprüfung
+	Properties	Eigenschaften
+	Protect	Schützen
+	Queries & Connections	Abfragen und Verbindungen
+	Scale to Fit	An Format anpassen
+	Scripting Tools	Skripttools
+	Shape Styles	Formenarten
+	Sheet Options	Blattoptionen
+	Show	Anzeigen
+	Sort & Filter	Sortieren und Filtern
+	Sparklines	Sparklines
+	Styles	Formatvorlagen
+	Symbols	Symbole
+	Table Style Options	Optionen für Tabellenformat
+	Table Styles	Tabellenformatvorlagen
+	Tables	Tabellen
+	Text	Text
+	Themes	Designs
+	Tools	Tools
+	Type	Typ
+	What-If Analysis	Was-wäre-wenn-Analyse
+	Workbook Views	Arbeitsmappenansichten
+	Zoom	Zoom
+	PivotTable Styles	PivotTable-Formate
+	Activate Sheet	Blatt aktivieren
+	Add Field	Feld hinzufügen
+	Add Scenario	Szenario hinzufügen
+	Add to Dictionary	Zum Wörterbuch hinzufügen
+	AutoFill	AutoAusfüllen
+	Cancel Copy	Kopieren abbrechen
+	Change	Ändern
+	Check Value Against Validation	Wert gegen Datenüberprüfung prüfen
+	Delete Chart	Diagramm löschen
+	Delete Name	Namen löschen
+	Delete Object	Objekt löschen
+	Delete Scenario	Szenario löschen
+	Delete Script	Skript löschen
+	Edit Cell	Zelle bearbeiten
+	Encode Workbook	Arbeitsmappe codieren
+	Enter Cell	Zelle eingeben
+	Evaluate	Auswerten
+	Fill Range With Input	Bereich mit Eingabe füllen
+	Filter Column	Spalte filtern
+	Filter Items	Elemente filtern
+	Get Cell	Zelle lesen
+	Ink Stroke	Freihandstrich
+	Inspect Workbook	Arbeitsmappe prüfen
+	List Commands	Befehle auflisten
+	List Functions	Funktionen auflisten
+	Move Field	Feld verschieben
+	Move Object	Objekt verschieben
+	Move Selection	Auswahl verschieben
+	Next Cell in Selection	Nächste Zelle in der Auswahl
+	Next Sheet	Nächstes Blatt
+	PivotTable Fields	PivotTable-Felder
+	PivotTables	PivotTables
+	Previous Sheet	Vorheriges Blatt
+	Read Range	Bereich lesen
+	Remove Field	Feld entfernen
+	Reply	Antworten
+	Resolve Thread	Thread auflösen
+	Run Script	Skript ausführen
+	Scenario Summary	Szenariobericht
+	Select	Auswählen
+	Select Current Region	Aktuellen Bereich markieren
+	Select Entire Column	Ganze Spalte markieren
+	Select Entire Row	Ganze Zeile markieren
+	Selection Statistics	Auswahlstatistik
+	Set Values	Werte festlegen
+	Show Scenario	Szenario anzeigen
+	Show Zeros	Nullwerte anzeigen
+	Shrink to Fit	An Zellgröße anpassen
+	Sort Field	Feld sortieren
+	Toggle Checkbox	Kontrollkästchen umschalten
+	Totals Function	Ergebnisfunktion
+	Undo History	Rückgängig-Verlauf
+	All Scripts	Alle Skripts
+	New Script	Neues Skript
+	Record Actions	Aktionen aufzeichnen
+	Chart Properties	Diagrammeigenschaften
+	Add Chart Element	Diagrammelement hinzufügen
+	Add Chart\nElement	Diagramm-\nelement hinzufügen
+	Quick Layout	Schnelllayout
+	Change Colors	Farben ändern
+	Select Data…	Daten auswählen…
+	Switch Row/Column	Zeile/Spalte wechseln
+	Switch\nRow/Column	Zeile/Spalte\nwechseln
+	Move Chart…	Diagramm verschieben…
+	Change Chart Type…	Diagrammtyp ändern…
+	Change Chart Type	Diagrammtyp ändern
+	Change\nChart Type	Diagrammtyp\nändern
+	Consolidate…	Konsolidieren…
+	Data Validation…	Datenüberprüfung…
+	Flash Fill	Blitzvorschau
+	Flash\nFill	Blitz-\nvorschau
+	Remove Duplicates	Duplikate entfernen
+	Remove\nDuplicates	Duplikate\nentfernen
+	Text to Columns	Text in Spalten
+	Text to\nColumns	Text in\nSpalten
+	Circle Invalid Data	Ungültige Daten einkreisen
+	Data Table…	Datentabelle…
+	Goal Seek…	Zielwertsuche…
+	Goal Seek	Zielwertsuche
+	Scenario Manager…	Szenario-Manager…
+	From Table/Range	Aus Tabelle/Bereich
+	From Text/CSV	Aus Text/CSV
+	Get Data	Daten abrufen
+	Get Data\n(Text/CSV)	Daten abrufen\n(Text/CSV)
+	Hide Detail	Detail ausblenden
+	Show Detail	Detail anzeigen
+	Subtotal	Teilergebnis
+	Ungroup	Gruppierung aufheben
+	Refresh All	Alle aktualisieren
+	Advanced…	Erweitert…
+	Filter	Filtern
+	Reapply	Erneut anwenden
+	Sort A to Z	Von A bis Z sortieren
+	Sort Z to A	Von Z bis A sortieren
+	Sort…	Sortieren…
+	Sort	Sortieren
+	Ink to Shape	Freihand in Form
+	Ink to\nShape	Freihand\nin Form
+	Eraser	Radierer
+	Lasso Select	Lassoauswahl
+	Pen	Stift
+	Redo	Wiederholen
+	Select All	Alles markieren
+	Undo	Rückgängig
+	Close	Schließen
+	New Workbook	Neue Arbeitsmappe
+	Open…	Öffnen…
+	Print Preview	Seitenansicht
+	Print…	Drucken…
+	Print	Drucken
+	Save	Speichern
+	Save As…	Speichern unter…
+	Export as CSV	Als CSV exportieren
+	Export as PDF	Als PDF exportieren
+	Save as Web Page	Als Webseite speichern
+	Format Selection	Auswahl formatieren
+	Shape Fill	Fülleffekt
+	Shape Outline	Formkontur
+	Calculate Now	Neu berechnen
+	Calculate Sheet	Blatt berechnen
+	Calculation Options	Berechnungsoptionen
+	Calculation\nOptions	Berechnungs-\noptionen
+	Create from Selection	Aus Auswahl erstellen
+	Define Name…	Namen definieren…
+	Define Name	Namen definieren
+	Name Manager	Namens-Manager
+	Name\nManager	Namens-\nManager
+	Use in Formula	In Formel verwenden
+	Error Checking	Fehlerüberprüfung
+	Evaluate Formula	Formelauswertung
+	Remove Arrows	Pfeile entfernen
+	Show Formulas	Formeln anzeigen
+	Trace Dependents	Spur zum Nachfolger
+	Trace Precedents	Spur zum Vorgänger
+	Watch Window	Überwachungsfenster
+	AutoSum	AutoSumme
+	Date & Time	Datum und Uhrzeit
+	Date &\nTime	Datum und\nUhrzeit
+	Financial	Finanzmathematik
+	Insert Function…	Funktion einfügen…
+	Insert Function	Funktion einfügen
+	Insert\nFunction	Funktion\neinfügen
+	Logical	Logisch
+	Lookup & Reference	Nachschlagen und Verweisen
+	Lookup &\nReference	Nachschlagen\nund Verweisen
+	Math & Trig	Mathematik und Trigonometrie
+	Math &\nTrig	Mathematik und\nTrigonometrie
+	More Functions	Mehr Funktionen
+	More\nFunctions	Mehr\nFunktionen
+	More Functions…	Mehr Funktionen…
+	Recently Used	Zuletzt verwendet
+	Align Left	Linksbündig
+	Align Right	Rechtsbündig
+	Bottom Align	Unten ausrichten
+	Center	Zentriert
+	Decrease Indent	Einzug verkleinern
+	Increase Indent	Einzug vergrößern
+	Justify	Blocksatz
+	Merge & Center	Verbinden und zentrieren
+	Merge Across	Verbinden über
+	Merge Cells	Zellen verbinden
+	Middle Align	Zentriert ausrichten
+	Orientation	Ausrichtung
+	Top Align	Oben ausrichten
+	Unmerge Cells	Zellverbund aufheben
+	Wrap Text	Textumbruch
+	Delete Cells…	Zellen löschen…
+	Delete Sheet	Blatt löschen
+	Delete Sheet Columns	Blattspalten löschen
+	Delete Sheet Rows	Blattzeilen löschen
+	AutoFit Column Width	Spaltenbreite automatisch anpassen
+	AutoFit Row Height	Zeilenhöhe automatisch anpassen
+	Column Width…	Spaltenbreite…
+	Column Width	Spaltenbreite
+	Default Width…	Standardbreite…
+	Format Cells…	Zellen formatieren…
+	Format Cells	Zellen formatieren
+	Lock Cell	Zelle sperren
+	Move or Copy Sheet…	Blatt verschieben/kopieren…
+	Rename Sheet	Blatt umbenennen
+	Row Height…	Zeilenhöhe…
+	Row Height	Zeilenhöhe
+	Tab Color	Registerfarbe
+	Hide Columns	Spalten ausblenden
+	Hide Rows	Zeilen ausblenden
+	Hide Sheet	Blatt ausblenden
+	Unhide Columns	Spalten einblenden
+	Unhide Rows	Zeilen einblenden
+	Unhide Sheet…	Blatt einblenden…
+	Insert Cells…	Zellen einfügen…
+	Insert Sheet	Blatt einfügen
+	Insert Sheet Columns	Blattspalten einfügen
+	Insert Sheet Rows	Blattzeilen einfügen
+	Copy	Kopieren
+	Cut	Ausschneiden
+	Format Painter	Format übertragen
+	Format Painter (double-click to keep it on)	Format übertragen (Doppelklick, um es eingeschaltet zu lassen)
+	Paste	Einfügen
+	Paste Special…	Inhalte einfügen…
+	Paste Special	Inhalte einfügen
+	Clear All	Alle löschen
+	Clear Comments and Notes	Kommentare und Notizen löschen
+	Clear Contents	Inhalte löschen
+	Clear Formats	Formate löschen
+	Clear Hyperlinks	Hyperlinks löschen
+	Fill Down	Unten
+	Fill Left	Links
+	Fill Right	Rechts
+	Fill Up	Oben
+	Series…	Reihe…
+	Find…	Suchen…
+	Go To Special…	Inhalte auswählen…
+	Go To Special	Inhalte auswählen
+	Go To…	Gehe zu…
+	Go To	Gehe zu
+	Replace…	Ersetzen…
+	Bold	Fett
+	Borders	Rahmenlinien
+	Decrease Font Size	Schriftgrad verkleinern
+	Double Underline	Doppelt unterstreichen
+	Draw Border	Rahmenlinien zeichnen
+	Fill Color	Füllfarbe
+	Font Color	Schriftfarbe
+	Font Size	Schriftgrad
+	Increase Font Size	Schriftgrad vergrößern
+	Italic	Kursiv
+	Strikethrough	Durchgestrichen
+	Subscript	Tiefgestellt
+	Superscript	Hochgestellt
+	Underline	Unterstreichen
+	Accounting Number Format	Buchhaltungszahlenformat
+	Comma Style	1.000er-Trennzeichen
+	Decrease Decimal	Dezimalstelle löschen
+	Increase Decimal	Dezimalstelle hinzufügen
+	Number Format	Zahlenformat
+	Percent Style	Prozentformat
+	Cell Styles	Zellenformatvorlagen
+	Cell\nStyles	Zellenformat-\nvorlagen
+	Format as Table	Als Tabelle formatieren
+	Format\nas Table	Als Tabelle\nformatieren
+	New Cell Style…	Neue Zellenformatvorlage…
+	Clear Rules	Regeln löschen
+	Manage Rules…	Regeln verwalten…
+	Checkbox	Kontrollkästchen
+	Insert Chart	Diagramm einfügen
+	Recommended Charts	Empfohlene Diagramme
+	Recommended\nCharts	Empfohlene\nDiagramme
+	Icons	Piktogramme
+	Picture	Bild
+	Pictures	Bilder
+	Shapes	Formen
+	Link	Link
+	Symbol	Symbol
+	PivotTable	PivotTable
+	Recommended PivotTables	Empfohlene PivotTables
+	Header & Footer	Kopf- und Fußzeile
+	Header &\nFooter	Kopf- und\nFußzeile
+	Text Box	Textfeld
+	Text\nBox	Text-\nfeld
+	Align	Ausrichten
+	Bring Forward	Ebene nach vorne
+	Rotate	Drehen
+	Selection Pane	Auswahlbereich
+	Send Backward	Ebene nach hinten
+	Background	Hintergrund
+	Breaks	Umbrüche
+	Margins	Seitenränder
+	Page Setup…	Seite einrichten…
+	Print Titles	Drucktitel
+	Print\nTitles	Druck-\ntitel
+	Size	Größe
+	Page Setup › Size	Format
+	Set Print Area	Druckbereich festlegen
+	Print Gridlines	Gitternetzlinien drucken
+	Print Headings	Überschriften drucken
+	Sheet Right-to-Left	Blatt von rechts nach links
+	Colors	Farben
+	Effects	Effekte
+	Fonts	Schriftarten
+	Delete PivotTable	PivotTable löschen
+	Expand/Collapse Field	Feld erweitern/reduzieren
+	Value Field Settings	Wertfeldeinstellungen
+	Change Data Source	Datenquelle ändern
+	Refresh	Aktualisieren
+	Group Field	Feld gruppieren
+	Field List	Feldliste
+	Grand Totals	Gesamtergebnisse
+	PivotTable Layout	PivotTable-Layout
+	Report Layout	Berichtslayout
+	Subtotals	Teilergebnisse
+	Check Accessibility	Barrierefreiheit überprüfen
+	Check\nAccessibility	Barrierefreiheit\nüberprüfen
+	Delete Comment	Kommentar löschen
+	New Comment	Neuer Kommentar
+	New\nComment	Neuer\nKommentar
+	New Note	Neue Notiz
+	Show/Hide Note	Notiz ein-/ausblenden
+	Spelling	Rechtschreibung
+	Thesaurus	Thesaurus
+	Workbook Statistics	Arbeitsmappenstatistik
+	Workbook\nStatistics	Arbeitsmappen-\nstatistik
+	Protect Sheet…	Blatt schützen…
+	Protect Sheet	Blatt schützen
+	Protect Workbook	Arbeitsmappe schützen
+	Protect\nWorkbook	Arbeitsmappe\nschützen
+	Unprotect Sheet	Blattschutz aufheben
+	Table Name	Tabellenname
+	Banded Columns	Gebänderte Spalten
+	Banded Rows	Gebänderte Zeilen
+	First Column	Erste Spalte
+	Header Row	Kopfzeile
+	Last Column	Letzte Spalte
+	Total Row	Ergebniszeile
+	Convert to Range	In Bereich konvertieren
+	Convert\nto Range	In Bereich\nkonvertieren
+	Resize Table	Tabellengröße ändern
+	Summarize with PivotTable	Mit PivotTable zusammenfassen
+	Gridlines	Gitternetzlinien
+	Headings	Überschriften
+	Ruler	Lineal
+	Arrange All	Alle anordnen
+	Hide	Ausblenden
+	New Window	Neues Fenster
+	Split	Teilen
+	Switch Windows	Fenster wechseln
+	Switch Window	Fenster wechseln
+	Unhide…	Einblenden…
+	Unhide	Einblenden
+	Freeze First Column	Erste Spalte fixieren
+	Freeze Top Row	Oberste Zeile fixieren
+	Freeze\nPanes	Fenster\nfixieren
+	Unfreeze Panes	Fixierung aufheben
+	Custom Views…	Benutzerdefinierte Ansichten…
+	Normal	Normal
+	Page Break Preview	Umbruchvorschau
+	Page Break\nPreview	Umbruch-\nvorschau
+	Page\nLayout	Seiten-\nlayout
+	Zoom to Selection	Zoom auf Auswahl
+	Zoom to\nSelection	Zoom auf\nAuswahl
+	$ English (United States)	$ Englisch (USA)
+	£ English (United Kingdom)	£ Englisch (Vereinigtes Königreich)
+	¥ Japanese	¥ Japanisch
+	€ Euro	€ Euro
+	€ German (Germany)	€ Deutsch (Deutschland)
+	% of Grand Total	% des Gesamtergebnisses
+	(No suggestions)	(Keine Vorschläge)
+	(Select All)	(Alles auswählen)
+	+ Add Level	+ Ebene hinzufügen
+	100% Stacked Column	100 % gestapelte Säulen
+	3 Arrows	3 Pfeile
+	3 Symbols	3 Symbole
+	3 Traffic Lights	3 Ampeln
+	4 Ratings	4 Bewertungen
+	5 Arrows	5 Pfeile
+	5 Quarters	5 Viertel
+	A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft.	Eine Open-Source-Tabellenkalkulation, im Clean-Room-Verfahren nativ in Rust geschrieben. Teil von ArtCraft.
+	A Date Occurring…	Datum…
+	A to Z	A bis Z
+	About	Info
+	About GridCraft	Über GridCraft
+	About\nGridCraft	Über\nGridCraft
+	Above Average	Über dem Durchschnitt
+	Action Journal	Aktionsprotokoll
+	Action\nJournal	Aktions-\nprotokoll
+	Add	Addieren
+	Add subtotal to (columns, e.g. C,D):	Teilergebnis addieren zu (Spalten, z. B. C,D):
+	Add Watch (active cell)	Überwachung hinzufügen (aktive Zelle)
+	Agent Control	Agentensteuerung
+	Agent\nControl	Agenten-\nsteuerung
+	All	Alles
+	All Borders	Alle Rahmenlinien
+	All done. We made {count} replacements.	Fertig: {count} Ersetzungen vorgenommen.
+	All except borders	Alles außer Rahmen
+	Allow	Zulassen
+	Allow all users of this sheet to:	Alle Benutzer dieses Arbeitsblatts dürfen:
+	and:	und:
+	Angle Clockwise	Im Uhrzeigersinn drehen
+	Angle Counterclockwise	Gegen den Uhrzeigersinn drehen
+	Any value	Jeder Wert
+	Apply	Übernehmen
+	Area	Fläche
+	At each change in (column letter):	Bei jeder Änderung in (Spaltenbuchstabe):
+	Automatic	Automatisch
+	Automatic ({language})	Automatisch ({language})
+	Automatic Except for Data Tables	Automatisch außer bei Datentabellen
+	AutoSave	Automatisches Speichern
+	AutoSave: save after every change (workbooks saved to a file)	Automatisches Speichern: nach jeder Änderung speichern (für Arbeitsmappen, die in einer Datei gespeichert sind)
+	Average	Mittelwert
+	Average: {value}	Mittelwert: {value}
+	Background Color:	Hintergrundfarbe:
+	Bar	Balken
+	Before sheet (position, 0 = first):	Einfügen vor Blatt (Position, 0 = erstes):
+	Below Average	Unter dem Durchschnitt
+	Between…	Zwischen…
+	Binary assets added	Hinzugefügte Binärdateien
+	Binary assets removed	Entfernte Binärdateien
+	Blank workbook	Leere Arbeitsmappe
+	Blanks	Leerzellen
+	Blue	Blau
+	Bottom	Unten
+	Bottom 10 Items	Untere 10 Elemente
+	Bottom 10%	Untere 10 %
+	Bottom Border	Rahmenlinie unten
+	Bottom Double Border	Doppelte Rahmenlinie unten
+	Bottom margin (in):	Unterer Rand (Zoll):
+	Box & Whisker	Kastengrafik
+	Browse…	Durchsuchen…
+	Bubble	Blase
+	By changing cell:	Veränderbare Zelle:
+	Calculate	Berechnen
+	Can't Undo	Rückgängig nicht möglich
+	Cancel	Abbrechen
+	Category:	Kategorie:
+	Cell	Zelle
+	Cell Color	Zellenfarbe
+	Cell Values	Zellwerte
+	Change All	Alle ändern
+	Chart Title	Diagrammtitel
+	Chart\nTitle	Diagramm-\ntitel
+	Chart Type	Diagrammtyp
+	Choose fields to add to report:	Felder auswählen, die dem Bericht hinzugefügt werden sollen:
+	Circular References: {cell}	Zirkelbezüge: {cell}
+	Clear Filter	Filter löschen
+	Clear Print Area	Druckbereich aufheben
+	Clear Rules from Entire Sheet	Regeln im gesamten Blatt löschen
+	Clear Rules from Selected Cells	Regeln in ausgewählten Zellen löschen
+	Clear Validation	Gültigkeitskreise löschen
+	Click once to follow. Click and hold to select this cell.	Einmal klicken, um dem Link zu folgen. Klicken und halten, um diese Zelle zu markieren.
+	Clustered Bar	Gruppierte Balken
+	Clustered Column	Gruppierte Säulen
+	Color Scales	Farbskalen
+	Color:	Farbe:
+	Colors & Layout	Farben und Layout
+	Column	Säule
+	Column width (characters):	Spaltenbreite (Zeichen):
+	Column widths	Spaltenbreiten
+	Columns	Spalten
+	Columns (blank = all, e.g. A,C):	Spalten (leer = alle, z. B. A,C):
+	Combo	Kombi
+	Comma	Komma
+	Command\nPalette	Befehls-\npalette
+	Comment	Kommentar
+	Comment:	Kommentar:
+	Comments and notes	Kommentare und Notizen
+	Comments pane	Kommentarbereich
+	Commits	Commits
+	Compact	Kurzformat
+	Conditional formats	Bedingte Formate
+	Conditional Formatting Rules Manager	Manager für Regeln zur bedingten Formatierung
+	Conditional\nFormatting	Bedingte\nFormatierung
+	Constants	Konstanten
+	Contributors	Mitwirkende
+	Convert Text to Columns	Text in Spalten
+	Convert the last ink stroke to a shape	Den letzten Freihandstrich in eine Form umwandeln
+	Count	Anzahl
+	Count: {value}	Anzahl: {value}
+	Create a copy	Kopie erstellen
+	Create Sparklines	Sparklines erstellen
+	Current region	Aktueller Bereich
+	Custom	Benutzerdefiniert
+	Custom (%):	Benutzerdefiniert (%):
+	Custom Margins…	Benutzerdefinierte Seitenränder…
+	Custom Sort	Benutzerdefiniertes Sortieren
+	Custom Sort…	Benutzerdefiniertes Sortieren…
+	Dark Mode	Dunkelmodus
+	Data Bars	Datenbalken
+	Data Labels	Datenbeschriftungen
+	Data Labels: None	Datenbeschriftungen: Keine
+	Data Labels: Show	Datenbeschriftungen: Anzeigen
+	Data Range:	Datenbereich:
+	Data validation	Gültigkeit
+	Data\nValidation	Daten-\nüberprüfung
+	Date	Datum
+	Date unit	Zeiteinheit
+	Day	Tag
+	Decimal	Dezimal
+	Delete chart	Diagramm löschen
+	Delete rows	Zeilen löschen
+	Delete\nChart	Diagramm\nlöschen
+	Delete…	Löschen…
+	Destination:	Ziel:
+	Display:	Anzeigen:
+	Display name	Anzeigename
+	Divide	Dividieren
+	Do you want to save the changes you made to this workbook?	Möchten Sie die Änderungen an dieser Arbeitsmappe speichern?
+	Do you want to save the changes you made to {title}?	Möchten Sie die Änderungen an „{title}“ speichern?
+	Don't Save	Nicht speichern
+	Doughnut	Ring
+	Down	Unten
+	Duplicate	Doppelte
+	Duplicate Values…	Doppelte Werte…
+	e.g. lookup, average, date	z. B. lookup, average, date
+	Edit chart title	Diagrammtitel bearbeiten
+	Edited	Bearbeitet
+	Elements	Elemente
+	Enter	Eingeben
+	Entire column	Ganze Spalte
+	Entire row	Ganze Zeile
+	equal to	gleich
+	Equal To…	Gleich…
+	Erase ink strokes	Freihandstriche löschen
+	Error message:	Fehlermeldung:
+	Error style	Typ
+	Errors	Fehler
+	Every command run in this session (replayable)	Jeder in dieser Sitzung ausgeführte Befehl (wiederholbar)
+	Expand formula bar	Bearbeitungsleiste erweitern
+	Export as CSV…	Als CSV exportieren…
+	Export as Web Page (.html)…	Als Webseite (.html) exportieren…
+	Fill…	Füllung…
+	Filter by Selected Cell's Value	Nach dem Wert der ausgewählten Zelle filtern
+	Filters	Filter
+	Find All	Alle suchen
+	Find and Replace	Suchen und Ersetzen
+	Find Next	Weitersuchen
+	Find what:	Suchen nach:
+	Find &\nSelect	Suchen und\nAuswählen
+	First	Erster
+	First commit	Erster Commit
+	Font…	Schriftart…
+	Footer (in):	Fußzeile (Zoll):
+	Footer:	Fußzeile:
+	Format Cell Alignment…	Zellausrichtung formatieren…
+	Format cells	Zellen formatieren
+	Format cells that are (value):	Zellen formatieren, die (Wert):
+	Format cells that contain a date occurring:	Zellen formatieren, die ein Datum enthalten:
+	Format cells that contain the text:	Zellen formatieren, die diesen Text enthalten:
+	Format Chart Area	Diagrammbereich formatieren
+	Format Chart pane	Bereich „Diagramm formatieren“
+	Format columns	Spalten formatieren
+	Format rows	Zeilen formatieren
+	Format values where this formula is true:	Werte formatieren, für die diese Formel wahr ist:
+	Format\nPane	Format-\nbereich
+	Formats	Formate
+	Formula	Formel
+	Formula Bar	Bearbeitungsleiste
+	Formula Builder	Funktionsargumente
+	Formulas and number formats	Formeln und Zahlenformate
+	Funnel	Trichter
+	Goal Seeking found a solution: {value}	Die Zielwertsuche hat eine Lösung gefunden: {value}
+	Grab bag	Bunt gemischt
+	greater than	größer als
+	greater than or equal to	größer oder gleich
+	Greater Than…	Größer als…
+	Green	Grün
+	Green Fill with Dark Green Text	Grüne Füllung mit dunkelgrünem Text
+	GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:	GridCraft lässt sich vollständig von Agents steuern. Jeder Menüeintrag, jede Schaltfläche und jede Geste ist ein Befehl:
+	Gridlines: None	Gitternetzlinien: Keine
+	Gridlines: Show	Gitternetzlinien: Anzeigen
+	Group by Months	Nach Monaten gruppieren
+	Group by Quarters	Nach Quartalen gruppieren
+	Group by Years	Nach Jahren gruppieren
+	Growth	Geometrisch
+	Header (&L left, &C center, &R right; &P page, &N pages, &D date, &A sheet):	Kopfzeile (&L links, &C Mitte, &R rechts; &P Seite, &N Seiten, &D Datum, &A Blatt):
+	Header (in):	Kopfzeile (Zoll):
+	Height: {height} ({pixels} pixels)	Höhe: {height} ({pixels} Pixel)
+	Hidden	Ausgeblendet
+	Hidden: {sheets}	Ausgeblendet: {sheets}
+	Highlight Cells Rules	Regeln zum Hervorheben von Zellen
+	Highlighter	Textmarker
+	Histogram	Histogramm
+	Horizontal	Horizontal
+	Horizontal axis title:	Titel der horizontalen Achse:
+	How agents drive GridCraft (MCP / control channel)	Wie Agents GridCraft steuern (MCP / Steuerkanal)
+	Icon Sets	Symbolsätze
+	Ignore blank	Leere Zellen ignorieren
+	Ignore Once	Einmal ignorieren
+	Import a text or CSV file	Eine Text- oder CSV-Datei importieren
+	In the last 7 days	In den letzten 7 Tagen
+	In-cell dropdown	Zellendropdown
+	Information	Information
+	Input message:	Eingabemeldung:
+	Insert a picture	Ein Bild einfügen
+	Insert an icon	Ein Piktogramm einfügen
+	Insert Hyperlink	Link einfügen
+	Insert Link	Link einfügen
+	Insert Page Break	Seitenumbruch einfügen
+	Insert Picture	Bild einfügen
+	Insert rows	Zeilen einfügen
+	Insert…	Einfügen…
+	Inside Borders	Rahmenlinien innen
+	Join the ArtCraft Discord	Dem ArtCraft-Discord beitreten
+	Landscape	Querformat
+	Language	Sprache
+	Last	Letzter
+	Last cell	Letzte Zelle
+	Last commit	Letzter Commit
+	Last month	Letzter Monat
+	Last week	Letzte Woche
+	Layout {n}	Layout {n}
+	Left	Links
+	Left Border	Rahmenlinie links
+	Left margin (in):	Linker Rand (Zoll):
+	Legend	Legende
+	Legend: Bottom	Legende: Unten
+	Legend: None	Legende: Keine
+	Legend: Right	Legende: Rechts
+	Legend: Top	Legende: Oben
+	less than	kleiner als
+	less than or equal to	kleiner oder gleich
+	Less Than…	Kleiner als…
+	Light Blue	Hellblau
+	Light Red Fill	Hellrote Füllung
+	Light Red Fill with Dark Red Text	Hellrote Füllung mit dunkelrotem Text
+	Line	Linie
+	Line delta	Zeilen netto
+	Line with Markers	Linie mit Datenpunkten
+	Linear	Linear
+	Lines added	Hinzugefügte Zeilen
+	Lines deleted	Gelöschte Zeilen
+	Link to (web address, e-mail or Sheet!A1):	Link zu (Webadresse, E-Mail oder Blatt!A1):
+	Link…	Link…
+	List	Liste
+	Location Range:	Positionsbereich:
+	Locked	Gesperrt
+	Locking cells or hiding formulas has no effect until you protect the worksheet (Review › Protect Sheet).	Das Sperren von Zellen und das Ausblenden von Formeln wirken erst, wenn Sie das Blatt schützen (Überprüfen › Blatt schützen).
+	Lookup	Nachschlagen
+	Magnification	Vergrößerung
+	Manual	Manuell
+	Markers	Datenpunkte
+	Match case	Groß-/Kleinschreibung beachten
+	Match entire cell contents	Gesamten Zellinhalt vergleichen
+	Max	Max
+	Maximum:	Maximum:
+	Menus and commands change; your workbooks and formulas don't.	Menüs und Befehle ändern sich, Ihre Arbeitsmappen und Formeln nicht.
+	Merged PRs	Zusammengeführte PRs
+	Min	Min
+	Minimum / Source / Formula:	Minimum / Quelle / Formel:
+	Models	Modelle
+	Month	Monat
+	More Accounting Formats…	Weitere Buchhaltungszahlenformate…
+	More Borders…	Weitere Rahmenlinien…
+	More commands	Weitere Befehle
+	More Number Formats…	Weitere Zahlenformate…
+	Move or Copy	Verschieben oder kopieren
+	Move or Copy…	Verschieben oder kopieren…
+	Move to Column Labels	In Spaltenbeschriftungen verschieben
+	Move to Report Filter	In Berichtsfilter verschieben
+	Move to Row Labels	In Zeilenbeschriftungen verschieben
+	Move to Values	In Werte verschieben
+	Multiply	Multiplizieren
+	My data has headers	Daten haben Überschriften
+	My list has headers	Liste hat Überschriften
+	Name	Name
+	Name (A–Z)	Name (A–Z)
+	Name:	Name:
+	Narrow	Schmal
+	New Name	Neuer Name
+	New Rule…	Neue Regel…
+	New sheet	Neues Blatt
+	New…	Neu…
+	Next month	Nächster Monat
+	Next sheet	Nächstes Blatt
+	Next week	Nächste Woche
+	No Border	Kein Rahmen
+	No Calculation	Keine Berechnung
+	No comments on this sheet yet. Select a cell and choose New Comment.	Auf diesem Blatt gibt es noch keine Kommentare. Markieren Sie eine Zelle, und wählen Sie „Neuer Kommentar“.
+	No contributor data was built into this copy.	In diese Version wurden keine Daten zu Mitwirkenden eingebaut.
+	No model credits were built into this copy.	In diese Version wurden keine Angaben zu Modellen eingebaut.
+	No names defined	Keine Namen definiert
+	None	Keine
+	not between	nicht zwischen
+	not equal to	ungleich
+	Not in Dictionary ({cell}):	Nicht im Wörterbuch ({cell}):
+	Numbers	Zahlen
+	OK	OK
+	Operation	Vorgang
+	Orange	Orange
+	Other:	Andere:
+	Outside Borders	Rahmenlinien außen
+	Oval	Ellipse
+	Page Breaks	Seitenumbrüche
+	Page {n}	Seite {n}
+	Paper Size	Papierformat
+	Password (optional):	Kennwort (optional):
+	Password:	Kennwort:
+	Paste Formatting	Formatierung einfügen
+	Paste Formulas	Formeln einfügen
+	Paste Link	Verknüpfung einfügen
+	Paste Values	Werte einfügen
+	Pen\nBlack	Stift\nSchwarz
+	Pen\nBlue	Stift\nBlau
+	Pen\nRed	Stift\nRot
+	Pick From Drop-down List…	Dropdownliste auswählen…
+	Pick From List	Aus Liste auswählen
+	Picture file path (PNG or JPEG):	Pfad der Bilddatei (PNG oder JPEG):
+	Pie	Kreis
+	Portrait	Hochformat
+	Previous sheet	Vorheriges Blatt
+	Print\nArea	Druck-\nbereich
+	Product	Produkt
+	Purple	Lila
+	Radar	Netz
+	Rank	Rangfolge
+	Real name	Echter Name
+	Recent	Zuletzt verwendet
+	Rectangle	Rechteck
+	Red	Rot
+	Red Border	Roter Rahmen
+	Red Text	Roter Text
+	Reference:	Verweis:
+	Refers To	Bezieht sich auf
+	Refers to:	Bezieht sich auf:
+	Remove Page Break	Seitenumbruch entfernen
+	Rename	Umbenennen
+	Replace	Ersetzen
+	Replace All	Alle ersetzen
+	Replace with:	Ersetzen durch:
+	Reply…	Antworten…
+	Reset All Page Breaks	Alle Seitenumbrüche zurücksetzen
+	Resolved	Aufgelöst
+	Reverse the order	Reihenfolge umkehren
+	Right	Rechts
+	Right Border	Rahmenlinie rechts
+	Right margin (in):	Rechter Rand (Zoll):
+	Rotate Text Down	Text nach unten drehen
+	Rotate Text Up	Text nach oben drehen
+	Rounded Rectangle	Abgerundetes Rechteck
+	Row height (pixels):	Zeilenhöhe (Pixel):
+	Rows	Zeilen
+	Running Total	Ergebnis in
+	Sample	Beispiel
+	Save a Copy	Kopie speichern
+	Save a copy as .{format}	Kopie als .{format} speichern
+	Save a Copy as Excel Workbook (.xlsx)…	Kopie als Excel-Arbeitsmappe (.xlsx) speichern…
+	Save Changes?	Änderungen speichern?
+	Scatter	Punkt (XY)
+	Scatter with Lines	Punkte mit Linien
+	Scope	Bereich
+	Scope (Workbook or sheet name):	Bereich (Arbeitsmappe oder Blattname):
+	ScreenTip:	QuickInfo:
+	Search and run any command	Beliebigen Befehl suchen und ausführen
+	Search Commands	Befehle durchsuchen
+	Search commands	Befehle durchsuchen
+	Search:	Suchen:
+	Select a chart to format it.	Markieren Sie ein Diagramm, um es zu formatieren.
+	Select All Sheets	Alle Blätter auswählen
+	Select and move ink and shapes	Freihand und Formen auswählen und verschieben
+	Select destination and press Enter or choose Paste	Ziel markieren und die Eingabetaste drücken oder „Einfügen“ wählen
+	Select\nObjects	Objekte\nauswählen
+	Selection	Auswahl
+	Semicolon	Semikolon
+	Series	Reihe
+	Chart › Series	Datenreihen
+	Series in	Reihe in
+	Series {n}	Datenreihe {n}
+	Set cell:	Zielzelle:
+	Share	Teilen
+	Share: export or save a copy	Teilen: exportieren oder eine Kopie speichern
+	Sheets: {sheets}	Blätter: {sheets}
+	Shift cells down	Zellen nach unten verschieben
+	Shift cells left	Zellen nach links verschieben
+	Shift cells right	Zellen nach rechts verschieben
+	Shift cells up	Zellen nach oben verschieben
+	Show as {calculation}	Werte anzeigen als: {calculation}
+	Show\nComments	Kommentare\nanzeigen
+	Shrink to fit	An Zellgröße anpassen
+	Skip blanks	Leerzellen überspringen
+	Sort &\nFilter	Sortieren und\nFiltern
+	Space	Leerzeichen
+	Special…	Inhalte…
+	Stacked	Gestapelt
+	Stacked Area	Gestapelte Fläche
+	Stacked Bar	Gestapelte Balken
+	Stacked Column	Gestapelte Säulen
+	Stacked Line	Gestapelte Linie
+	Standard Colors	Standardfarben
+	Standard column width (pixels):	Standardspaltenbreite (Pixel):
+	Standard Width	Standardbreite
+	Start a new workbook	Neue Arbeitsmappe erstellen
+	Statistical	Statistik
+	Step value:	Inkrement:
+	Stock	Kurs
+	Stop	Stopp
+	Stop value:	Endwert:
+	Subtract	Subtrahieren
+	Suggestions:	Vorschläge:
+	Sum	Summe
+	Sum: {value}	Summe: {value}
+	Summarize by {function}	Werte zusammenfassen nach: {function}
+	Sunburst	Sunburst
+	Tab	Tabstopp
+	Table Name:	Tabellenname:
+	Table\nStyles	Tabellenformat-\nvorlagen
+	Tabular	Tabellenformat
+	Text length	Textlänge
+	Text that Contains…	Textinhalt…
+	The chart no longer exists.	Das Diagramm ist nicht mehr vorhanden.
+	The spelling check is complete for the entire sheet.	Die Rechtschreibprüfung für das gesamte Blatt ist abgeschlossen.
+	Theme Colors	Designfarben
+	There are no conditional formatting rules on this sheet.	Auf diesem Blatt gibt es keine Regeln zur bedingten Formatierung.
+	There are no shapes, pictures or charts on this sheet.	Auf diesem Blatt gibt es keine Formen, Bilder oder Diagramme.
+	Thick Bottom Border	Dicke Rahmenlinie unten
+	Thick Outside Borders	Dicke Rahmenlinien außen
+	This month	Dieser Monat
+	This week	Diese Woche
+	Time	Zeit
+	Title:	Titel:
+	To value:	Zielwert:
+	Today	Heute
+	Tomorrow	Morgen
+	Top	Oben
+	Top 10 Items	Obere 10 Elemente
+	Top 10%	Obere 10 %
+	Top and Bottom Border	Rahmenlinie oben und unten
+	Top and Double Bottom Border	Rahmenlinie oben und doppelte Rahmenlinie unten
+	Top and Thick Bottom Border	Rahmenlinie oben und dicke Rahmenlinie unten
+	Top Border	Rahmenlinie oben
+	Top margin (in):	Oberer Rand (Zoll):
+	Top/Bottom Rules	Obere/untere Regeln
+	Transpose	Transponieren
+	Treat consecutive delimiters as one	Aufeinanderfolgende Trennzeichen als ein Zeichen behandeln
+	Treemap	Treemap
+	Triangle	Dreieck
+	Type (custom format code):	Typ (benutzerdefinierter Formatcode):
+	Type a command, e.g. freeze, chart, bold…	Befehl eingeben, z. B. fixieren, Diagramm, fett…
+	Undo list	Rückgängig-Liste
+	Undo {action}	Rückgängig: {action}
+	Unhide sheet:	Blatt einblenden:
+	Up	Oben
+	Use a field's menu to move it between areas:	Felder über ihr Menü zwischen den Bereichen verschieben:
+	Use AutoFilter	AutoFilter verwenden
+	Use function	Unter Verwendung von
+	Username	Benutzername
+	Validation	Gültigkeit
+	Value	Wert
+	Values	Werte
+	Values and number formats	Werte und Zahlenformate
+	Version	Version
+	Version {version}	Version {version}
+	Version, contributors and the AI models that helped	Version, Mitwirkende und die KI-Modelle, die geholfen haben
+	Vertical	Vertikal
+	Vertical axis title:	Titel der vertikalen Achse:
+	Vertical Text	Vertikaler Text
+	Visible cells only	Nur sichtbare Zellen
+	Warning	Warnung
+	Waterfall	Wasserfall
+	Weekday	Wochentag
+	What-If\nAnalysis	Was-wäre-wenn-\nAnalyse
+	Whole number	Ganze Zahl
+	Wide	Breit
+	Width: {width} ({pixels} pixels)	Breite: {width} ({pixels} Pixel)
+	Win/Loss	Gewinn/Verlust
+	with	mit
+	Within workbook	In der gesamten Arbeitsmappe
+	Wrap text	Zeilenumbruch
+	Year	Jahr
+	Yellow Fill with Dark Yellow Text	Gelbe Füllung mit dunkelgelbem Text
+	Yesterday	Gestern
+	Z to A	Z bis A
+	Zoom In	Vergrößern
+	Zoom Out	Verkleinern
+	Zoom to 100%	Zoom auf 100 %
+	Zoom…	Zoom…
+	{count} cell(s) found	{count} Zelle(n) gefunden
+	{count} contributors · {commits} commits	{count} Mitwirkende · {commits} Commits
+	{count} engine commands are available. See docs/mcp.md and docs/control-protocol.md.	{count} Engine-Befehle sind verfügbar. Siehe docs/mcp.md und docs/control-protocol.md.
+	↑  Sort Ascending	↑  Aufsteigend sortieren
+	↓  Sort Descending	↓  Absteigend sortieren
+	Company	Unternehmen
+	Model	Modell
+	% of all commits	% aller Commits
+	Lines +/−	Zeilen +/−
+	Ready	Bereit
+	Point	Zeigen
+	Sort by	Sortieren nach
+	Then by	Dann nach
+	General	Standard
+	Currency	Währung
+	Accounting	Buchhaltung
+	Short Date	Datum, kurz
+	Long Date	Datum, lang
+	Percentage	Prozent
+	Fraction	Bruch
+	Scientific	Wissenschaftlich
+	Border	Rahmen
+	Protection	Schutz
+	Format Cells › Font	Schrift
+	Format Cells › Fill	Ausfüllen
+	Format Cells › Size	Schriftgrad
+	Find	Suchen
+	Diagonal ↘	Diagonal ↘
+	Diagonal ↗	Diagonal ↗
+	none	keine
+	thin	dünn
+	medium	mittel
+	thick	dick
+	dashed	gestrichelt
+	dotted	gepunktet
+	double	doppelt
+	SUM	Summe
+	AVERAGE	Mittelwert
+	COUNT	Anzahl
+	MAX	Max
+	MIN	Min
+	Light	Hell
+	Medium	Mittel
+	Dark	Dunkel
+	Good, Bad and Neutral	Gut, Schlecht und Neutral
+	Data and Model	Daten und Modell
+	Titles and Headings	Titel und Überschriften
+	Themed Cell Styles	Zellenformatvorlagen mit Design
+	Cell Styles › Normal	Standard
+	Bad	Schlecht
+	Good	Gut
+	Neutral	Neutral
+	Check Cell	Zelle überprüfen
+	Explanatory Text	Erklärender Text
+	Input	Eingabe
+	Linked Cell	Verknüpfte Zelle
+	Cell Styles › Note	Notiz
+	Output	Ausgabe
+	Warning Text	Warnender Text
+	Heading 1	Überschrift 1
+	Heading 2	Überschrift 2
+	Heading 3	Überschrift 3
+	Heading 4	Überschrift 4
+	Cell Styles › Title	Überschrift
+	Cell Styles › Total	Ergebnis
+	Comma [0]	Komma [0]
+	Currency [0]	Währung [0]
+	Percent	Prozent
+	Accent1	Akzent1
+	Accent2	Akzent2
+	Accent3	Akzent3
+	Accent4	Akzent4
+	Accent5	Akzent5
+	Accent6	Akzent6
+	20% - Accent1	20 % - Akzent1
+	20% - Accent2	20 % - Akzent2
+	20% - Accent3	20 % - Akzent3
+	20% - Accent4	20 % - Akzent4
+	20% - Accent5	20 % - Akzent5
+	20% - Accent6	20 % - Akzent6
+	40% - Accent1	40 % - Akzent1
+	40% - Accent2	40 % - Akzent2
+	40% - Accent3	40 % - Akzent3
+	40% - Accent4	40 % - Akzent4
+	40% - Accent5	40 % - Akzent5
+	40% - Accent6	40 % - Akzent6
+	60% - Accent1	60 % - Akzent1
+	60% - Accent2	60 % - Akzent2
+	60% - Accent3	60 % - Akzent3
+	60% - Accent4	60 % - Akzent4
+	60% - Accent5	60 % - Akzent5
+	60% - Accent6	60 % - Akzent6
+	colorful	Farbig
+	monochrome	Monochrom
+	accent1	Akzent 1
+	accent2	Akzent 2
+	accent3	Akzent 3
+	accent4	Akzent 4
+	accent5	Akzent 5
+	accent6	Akzent 6
+	Household Budget	Haushaltsbudget
+	Quarterly Sales Dashboard	Quartalsumsätze
+	Gradebook	Notenliste
+	Format Cells › Time	Uhrzeit
+	Arrow	Pfeil
+	Protect Workbook structure	Arbeitsmappenstruktur schützen
+	Special	Sonderformat
+	Watch\nWindow	Überwachungs-\nfenster
+	Protect\nSheet	Blatt\nschützen
+	Unprotect\nSheet	Blattschutz\naufheben
+	Sheet Options › View	Anzeigen
+	Start a conversation:	Unterhaltung beginnen:
+	Note:	Notiz:
+	Column or Bar	Säule oder Balken
+	Line or Area	Linie oder Fläche
+	Pie or Doughnut	Kreis oder Ring
+	Scatter or Bubble	Punkt oder Blase
+	Statistic	Statistik
+	Hierarchy & more	Hierarchie und mehr
+	Draw with ink	Mit Freihand zeichnen
+	Reopen	Erneut öffnen
+	Resolve	Auflösen
+	Send	Senden
+	between	zwischen

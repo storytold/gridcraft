@@ -795,6 +795,11 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
 
 /// Checks typed input against the validation of a cell. `Ok(None)` = valid.
 pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
+    check_validation_in(wb, sheet, at, input, gridcraft_core::Locale::EnUs)
+}
+
+/// [`check_validation`] for input typed in `loc` (`1,5` is one and a half in German).
+pub fn check_validation_in(wb: &Workbook, sheet: usize, at: CellRef, input: &str, loc: gridcraft_core::Locale) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at)))?;
     if dv.kind == ValidationKind::Any || !dv.show_error {
@@ -803,10 +808,14 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     if input.is_empty() && dv.allow_blank {
         return None;
     }
-    let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
+    let v = loc.parse_input(input, wb.date_system).value;
     let num = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, f).to_number().ok();
     let ok = match dv.kind {
-        ValidationKind::List => list_items(wb, sheet, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
+        ValidationKind::List => {
+            // List items are listed in en-US; German input matches by the value it stands for.
+            let typed = if loc.is_en() { None } else { Some(v.display()) };
+            list_items(wb, sheet, dv).iter().any(|x| x.eq_ignore_ascii_case(input) || typed.as_deref().is_some_and(|t| x.eq_ignore_ascii_case(t)))
+        }
         ValidationKind::Custom => gridcraft_calc::evaluate(wb, sheet, at, &dv.f1).to_bool().unwrap_or(false),
         ValidationKind::TextLength => {
             let n = input.chars().count() as f64;
@@ -954,13 +963,15 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
         .and_then(Json::as_array)
         .map(|a| a.iter().filter_map(|c| col_param(Some(c), r.start.col)).collect())
         .unwrap_or_else(|| vec![r.end.col]);
+    // Labels are cell text, written in the session's language as Excel does (`Nord Ergebnis`).
+    let lang = s.lang;
     let label = match func {
-        "count" => "Count",
-        "average" => "Average",
-        "max" => "Max",
-        "min" => "Min",
-        "product" => "Product",
-        _ => "Total",
+        "count" => lang.pick("Count", "Anzahl"),
+        "average" => lang.pick("Average", "Mittelwert"),
+        "max" => lang.pick("Max", "Maximum"),
+        "min" => lang.pick("Min", "Minimum"),
+        "product" => lang.pick("Product", "Produkt"),
+        _ => lang.pick("Total", "Ergebnis"),
     };
     let sheet = s.doc()?.wb.active_sheet;
     // Group boundaries (header in the first row).
@@ -994,7 +1005,11 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
     let last = r.end.row + inserted + 1;
     let lbl = CellRef::new(last, group_col).a1();
     s.execute("home.insertRows", json!({"rows": format!("{}:{}", last + 1, last + 1)}))?;
-    s.execute("cell.set", json!({"cell": lbl, "input": format!("Grand {label}")}))?;
+    let grand = match lang {
+        crate::lang::Lang::English => format!("Grand {label}"),
+        crate::lang::Lang::German => format!("Gesamt{}", label.to_lowercase()),
+    };
+    s.execute("cell.set", json!({"cell": lbl, "input": grand}))?;
     for c in &cols {
         let range = RangeRef::new(CellRef::new(r.start.row + 1, *c), CellRef::new(last - 1, *c)).a1();
         s.execute("cell.set", json!({"cell": CellRef::new(last, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;

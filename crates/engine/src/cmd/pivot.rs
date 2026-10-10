@@ -558,13 +558,14 @@ fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
     let values = field_list(p.get("values"));
     let filters = field_list(p.get("filters"));
     let mut new_sheet_at: Option<usize> = None;
+    let sheet_base = s.lang.sheet_base();
     let res = edit(s, |cx| {
         let id = next_pivot_id(&cx.wb);
         let (si, anchor) = match target {
             Some(t) => t,
             None => {
                 let at = cx.wb.active_sheet.min(cx.wb.sheets.len());
-                let nm = cx.wb.next_sheet_name();
+                let nm = cx.wb.next_sheet_name_from(sheet_base);
                 cx.wb.sheets.insert(at, Arc::new(Sheet::new(nm)));
                 for n in cx.wb.names.iter_mut() {
                     if let Some(sc) = n.scope.as_mut()

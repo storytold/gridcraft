@@ -24,8 +24,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         Err(_) => return,
     };
     egui::Panel::right("pivot_pane").default_size(280.0).resizable(true).frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(10)).show(ui, |ui| {
-        ui.label(egui::RichText::new("PivotTable Fields").font(theme::ui_bold(15.0)));
-        ui.label(egui::RichText::new("Choose fields to add to report:").small().color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("PivotTable Fields")).font(theme::ui_bold(15.0)));
+        ui.label(egui::RichText::new(tl!("Choose fields to add to report:")).small().color(t.text_dim));
         ui.add_space(4.0);
         let fields = info["fields"].as_array().cloned().unwrap_or_default();
         egui::ScrollArea::vertical().max_height(220.0).id_salt("pv_fields").show(ui, |ui| {
@@ -52,7 +52,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
         ui.separator();
-        ui.label(egui::RichText::new("Use a field's menu to move it between areas:").small().color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Use a field's menu to move it between areas:")).small().color(t.text_dim));
         let area = |key: &str| -> Vec<String> {
             info["pivot"][key]
                 .as_array()
@@ -67,7 +67,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         ui.columns(2, |cols| {
             for (i, (key, label)) in [("filters", "Filters"), ("columns", "Columns"), ("rows", "Rows"), ("values", "Values")].iter().enumerate() {
                 let ui = &mut cols[i % 2];
-                ui.label(egui::RichText::new(*label).strong());
+                ui.label(egui::RichText::new(tl!(label)).strong());
                 egui::Frame::NONE.fill(t.window).corner_radius(4.0).inner_margin(4.0).show(ui, |ui| {
                     ui.set_min_size(vec2(ui.available_width(), 60.0));
                     for f in area(key) {
@@ -83,14 +83,14 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                                 ("filters", "Move to Report Filter"),
                                 ("values", "Move to Values"),
                             ] {
-                                if to != *key && ui.button(l).clicked() {
+                                if to != *key && ui.button(tl!(l)).clicked() {
                                     app.run_or_alert("pivot.moveField", json!({"pivot": name, "field": f, "from": key, "to": to}));
                                 }
                             }
                             if *key == "values" {
                                 ui.separator();
                                 for (func, l) in [("sum", "Sum"), ("count", "Count"), ("average", "Average"), ("max", "Max"), ("min", "Min")] {
-                                    if ui.button(format!("Summarize by {l}")).clicked() {
+                                    if ui.button(crate::i18n::fmt(tl!("Summarize by {function}"), &[("function", tl!(l))])).clicked() {
                                         app.run_or_alert("pivot.valueSettings", json!({"pivot": name, "field": f, "func": func}));
                                     }
                                 }
@@ -100,14 +100,14 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                                     ("runningTotal", "Running Total"),
                                     ("rank", "Rank"),
                                 ] {
-                                    if ui.button(format!("Show as {l}")).clicked() {
+                                    if ui.button(crate::i18n::fmt(tl!("Show as {calculation}"), &[("calculation", tl!(l))])).clicked() {
                                         app.run_or_alert("pivot.valueSettings", json!({"pivot": name, "field": f, "showAs": sa}));
                                     }
                                 }
                             } else {
                                 ui.separator();
                                 for (o, l) in [("asc", "Sort A to Z"), ("desc", "Sort Z to A")] {
-                                    if ui.button(l).clicked() {
+                                    if ui.button(tl!(l)).clicked() {
                                         app.run_or_alert("pivot.sort", json!({"pivot": name, "field": f, "order": o}));
                                     }
                                 }
@@ -117,13 +117,13 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                                     ("months", "Group by Months"),
                                     ("none", "Ungroup"),
                                 ] {
-                                    if ui.button(l).clicked() {
+                                    if ui.button(tl!(l)).clicked() {
                                         app.run_or_alert("pivot.group", json!({"pivot": name, "field": f, "by": g}));
                                     }
                                 }
                             }
                             ui.separator();
-                            if ui.button("Remove Field").clicked() {
+                            if ui.button(tl!("Remove Field")).clicked() {
                                 app.run_or_alert("pivot.removeField", json!({"pivot": name, "field": f, "area": key}));
                             }
                         });
@@ -133,12 +133,12 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         });
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.button("Refresh").clicked() {
+            if ui.button(tl!("Refresh")).clicked() {
                 app.run_or_alert("pivot.refresh", json!({"pivot": name}));
             }
-            egui::ComboBox::from_id_salt("pv_layout").selected_text("Report Layout").show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("pv_layout").selected_text(tl!("Report Layout")).show_ui(ui, |ui| {
                 for (l, v) in [("Compact", "compact"), ("Outline", "outline"), ("Tabular", "tabular")] {
-                    if ui.button(l).clicked() {
+                    if ui.button(tl!(l)).clicked() {
                         app.run_or_alert("pivot.layout", json!({"pivot": name, "layout": v}));
                     }
                 }

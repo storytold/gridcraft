@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::f32::consts::{PI, TAU};
 
+use gridcraft_core::Locale;
 use gridcraft_model::{Chart, ChartKind, LegendPos, Theme};
 
 use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
@@ -59,9 +60,14 @@ impl Bx {
 struct Ctx<'a> {
     out: Vec<Prim>,
     m: &'a dyn Measure,
+    loc: Locale,
 }
 
 impl Ctx<'_> {
+    /// A number format for labels, in the chart's locale.
+    fn fmt(&self, code: &str) -> Fmt {
+        Fmt::new_in(code, self.loc)
+    }
     fn tw(&self, s: &str, size: f32) -> f32 {
         let w = self.m.text_width(s, size, false);
         if w.is_finite() { w.max(0.0) } else { 0.0 }
@@ -210,11 +216,16 @@ fn chart_title(chart: &Chart, data: &ChartData) -> Option<String> {
 
 /// Lays out and draws a chart into a `w`×`h` box at the origin. Empty for a degenerate box.
 pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) -> Vec<Prim> {
+    render_in(chart, data, w, h, m, Locale::EnUs)
+}
+
+/// [`render`] with number labels written as `loc` writes them (`1.000,00 €` in German).
+pub fn render_in(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure, loc: Locale) -> Vec<Prim> {
     if !(w.is_finite() && h.is_finite()) || w < 1.0 || h < 1.0 || w > 1e7 || h > 1e7 {
         return vec![];
     }
     let data = sanitize(data);
-    let mut ctx = Ctx { out: Vec::new(), m };
+    let mut ctx = Ctx { out: Vec::new(), m, loc };
     ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
     let mut area = Bx { x: pad, y: pad, w: w - 2.0 * pad, h: h - 2.0 * pad };
@@ -702,10 +713,10 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         }));
         let (lo, hi) = range.unwrap_or((0.0, 0.0));
         let (scale, fmt) = if all100 {
-            (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new("0%"))
+            (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), ctx.fmt("0%"))
         } else {
             let code = members.first().and_then(|i| data.series.get(*i)).map(|s| s.number_format.as_str()).unwrap_or("General");
-            (nice_scale(lo, hi, force_zero), Fmt::new(code))
+            (nice_scale(lo, hi, force_zero), ctx.fmt(code))
         };
         axes.push((scale, fmt));
         if !axis && sec.iter().all(|s| !s) {
@@ -763,7 +774,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                 continue;
             }
             let sc = scale_of(i);
-            let fmt = Fmt::new(&s.number_format);
+            let fmt = ctx.fmt(&s.number_format);
             let row = match spans.get(i) {
                 Some(r) => r,
                 None => continue,
@@ -878,8 +889,8 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let Some((ylo, yhi)) = value_range(all.iter().flatten().flatten().map(|p| p.1)) else { return };
     let xs = nice_scale(xlo, xhi, false);
     let ys = nice_scale(ylo, yhi, false);
-    let fx = Fmt::new("General");
-    let fy = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
+    let fx = ctx.fmt("General");
+    let fy = ctx.fmt(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
     let plot = frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
@@ -951,18 +962,19 @@ fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             *c += 1;
         }
     }
-    let f = Fmt::new(&s.number_format);
+    let f = ctx.fmt(&s.number_format);
     let labels: Vec<String> = (0..bins)
         .map(|b| {
             let a = lo + b as f64 * width;
             let e = if b + 1 == bins { hi.max(a) } else { a + width };
             let open = if b == 0 { '[' } else { '(' };
-            format!("{open}{}, {}]", f.format(a, Some(width / 10.0)), f.format(e, Some(width / 10.0)))
+            let sep = ctx.loc.list_separator();
+            format!("{open}{}{sep} {}]", f.format(a, Some(width / 10.0)), f.format(e, Some(width / 10.0)))
         })
         .collect();
     let maxc = counts.iter().copied().max().unwrap_or(0) as f64;
     let ys = nice_scale(0.0, maxc, true);
-    let fc = Fmt::new("General");
+    let fc = ctx.fmt("General");
     let plot = frame(ctx, area, CatAxis::Labels(&labels), &ValAxis { scale: ys, fmt: &fc }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
@@ -1014,7 +1026,7 @@ fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     }
     let (lo, hi) = value_range(bars.iter().flat_map(|(b, t, _)| [*b, *t])).unwrap_or((0.0, 0.0));
     let ys = nice_scale(lo, hi, true);
-    let f = Fmt::new(&s.number_format);
+    let f = ctx.fmt(&s.number_format);
     let plot = frame(ctx, area, CatAxis::Labels(&labels), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
@@ -1062,7 +1074,7 @@ fn funnel(ctx: &mut Ctx, data: &ChartData, area: Bx) {
     }
     let slot = plot.h / n as f32;
     let bh = slot * 0.85;
-    let f = Fmt::new(&s.number_format);
+    let f = ctx.fmt(&s.number_format);
     let show = slot >= LABEL_SIZE * 0.9;
     for (j, v) in vals.iter().enumerate() {
         let bw = (*v / max) as f32 * plot.w;
@@ -1097,7 +1109,7 @@ fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inner: f32, nam
         return;
     }
     let ri = r * inner;
-    let f = Fmt::new(&s.number_format);
+    let f = ctx.fmt(&s.number_format);
     let mut a = 0.0f32;
     let mut labels = Vec::new();
     for (j, v) in vals.iter().enumerate() {
@@ -1199,7 +1211,7 @@ fn treemap(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let mut items: Vec<(usize, f64)> =
         s.values.iter().take(MAX_MARKERS).enumerate().filter_map(|(j, v)| v.filter(|v| *v > 0.0).map(|v| (j, v))).collect();
     items.sort_by(|a, b| b.1.total_cmp(&a.1));
-    let f = Fmt::new(&s.number_format);
+    let f = ctx.fmt(&s.number_format);
     for (j, b) in squarify(&items, area) {
         let fill = point_color(data, j);
         ctx.rect(b.x, b.y, b.w, b.h, fill, Some((WHITE, 1.5)));
@@ -1231,7 +1243,7 @@ fn radar(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let (cx, cy) = (area.cx(), area.cy());
     let (lo, hi) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())).unwrap_or((0.0, 0.0));
     let sc = nice_scale(lo, hi, true);
-    let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
+    let f = ctx.fmt(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
     let ang = |j: usize| j as f32 / ncat as f32 * TAU;
     let pt = |a: f32, rr: f32| [cx + rr * a.sin(), cy - rr * a.cos()];
     let ticks = sc.ticks();
@@ -1303,7 +1315,7 @@ fn box_whisker(ctx: &mut Ctx, data: &ChartData, area: Bx) {
     let labels: Vec<String> = data.series.iter().map(|s| s.name.clone()).collect();
     let Some((lo, hi)) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())) else { return };
     let ys = nice_scale(lo, hi, false);
-    let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
+    let f = ctx.fmt(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
     let plot = frame(ctx, area, CatAxis::Labels(&labels), &ValAxis { scale: ys, fmt: &f }, None, false, true);
     if !plot.ok() {
         return;
@@ -1351,7 +1363,7 @@ fn stock(ctx: &mut Ctx, data: &ChartData, area: Bx) {
     let labels: Vec<String> = (0..ncat).map(|j| cat_label(data, j)).collect();
     let Some((lo, hi)) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())) else { return };
     let ys = nice_scale(lo, hi, false);
-    let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
+    let f = ctx.fmt(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
     let plot = frame(ctx, area, CatAxis::Labels(&labels), &ValAxis { scale: ys, fmt: &f }, None, false, true);
     if !plot.ok() {
         return;

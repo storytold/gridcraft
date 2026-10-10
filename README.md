@@ -81,6 +81,8 @@
 - **Familiar.** Excel's ribbon, formula bar, Name Box, sheet tabs, keyboard shortcuts, fill
   handle, point-mode formula entry with coloured references, Format Cells, Paste Special,
   conditional formatting, tables, charts and more. If you know Excel, you already know GridCraft.
+  The interface is in English or German (Deutsch, with Excel's German terms, `Mappe1`/`Tabelle1`
+  and German samples) and follows the system language; View ▸ Language picks one.
 - **Compatible.** XLSX is the native format: styles, themes, formulas (including dynamic arrays),
   tables, conditional formats, validation, comments, hyperlinks, charts, pictures, sparklines,
   PivotTables and print settings round-trip. CSV and TSV too.

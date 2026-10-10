@@ -1,18 +1,24 @@
 //! GridCraft number formats: Excel format codes (`#,##0.00;[Red](#,##0.00)`, dates, fractions,
-//! scientific…), the General display format and the `TEXT()` worksheet function. en-US only.
+//! scientific…), the General display format and the `TEXT()` worksheet function.
+//!
+//! Format codes are always en-US, as in files. [`format_value_in`] shows a value in a display
+//! locale (German: `1.234,56`, `10.10.2026`, `Okt`, `WAHR`, `#NV`); `TEXT()` and
+//! [`format_value`] stay en-US, so computed results never depend on the interface language.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 mod builtin;
+mod code;
 mod decimal;
 mod parse;
 mod render;
 
 use std::sync::Arc;
 
-use gridcraft_core::{CellError, DateSystem, Value};
+use gridcraft_core::{CellError, DateSystem, Locale, Value};
 
 pub use builtin::{builtin_format, builtin_id};
+pub use code::{code_from_local, code_to_local};
 pub use decimal::format_general_fit;
 
 use parse::{SecKind, Section, Tok};
@@ -229,9 +235,9 @@ impl NumberFormat {
     }
 
     /// Formats a number. The flag is true when the value cannot be shown (date out of range).
-    fn format_number(&self, n: f64, sys: DateSystem) -> (Formatted, bool) {
+    fn format_number(&self, n: f64, sys: DateSystem, loc: Locale) -> (Formatted, bool) {
         let general = |n: f64| Formatted {
-            text: format_general_fit(n, GENERAL_WIDTH).unwrap_or_else(|| OVERFLOW.into()),
+            text: format_general_fit(n, GENERAL_WIDTH).map(|s| loc.number_literal(&s)).unwrap_or_else(|| OVERFLOW.into()),
             color: None,
             fill: None,
             numeric: true,
@@ -242,19 +248,19 @@ impl NumberFormat {
         let Some((sec, drop_sign)) = self.select(n) else { return (general(n), false) };
         let minus = n < 0.0 && !drop_sign;
         let out: Option<Out> = match sec.kind {
-            SecKind::Text => Some(render::render_text(sec, &format_general_fit(n, GENERAL_WIDTH).unwrap_or_default())),
+            SecKind::Text => Some(render::render_text(sec, &loc.number_literal(&format_general_fit(n, GENERAL_WIDTH).unwrap_or_default()))),
             SecKind::General => {
                 let width = if minus { GENERAL_WIDTH - 1 } else { GENERAL_WIDTH };
-                Some(render::render_general(sec, n.abs(), width))
+                Some(render::render_general(sec, n.abs(), width, loc))
             }
             SecKind::Date => {
                 if minus {
                     None
                 } else {
-                    render::render_date(sec, n.abs(), sys)
+                    render::render_date(sec, n.abs(), sys, loc)
                 }
             }
-            SecKind::Number => Some(render::render_number(sec, n.abs())),
+            SecKind::Number => Some(render::render_number(sec, n.abs(), loc)),
         };
         let Some(mut out) = out else {
             return (Formatted { text: OVERFLOW.into(), color: sec.color, fill: None, numeric: true }, true);
@@ -276,20 +282,74 @@ impl NumberFormat {
     }
 }
 
-/// Formats a cell value for display.
+/// Formats a cell value for display (en-US).
 pub fn format_value(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted {
+    format_value_in(v, fmt, sys, Locale::EnUs)
+}
+
+/// Formats a cell value for display in `loc`: its separators, month and day names, booleans
+/// and error names. Excel's locale-dependent built-in date and time formats (short date, the
+/// `[$-F800]` long date and `[$-F400]` time) take the locale's own pattern, as in Excel.
+pub fn format_value_in(v: &Value, fmt: &NumberFormat, sys: DateSystem, loc: Locale) -> Formatted {
     match v {
         Value::Empty => Formatted::default(),
-        Value::Number(n) if !n.is_finite() => Formatted { text: CellError::Num.as_str().into(), ..Formatted::default() },
-        Value::Number(n) => fmt.format_number(*n, sys).0,
+        Value::Number(n) if !n.is_finite() => Formatted { text: loc.error_name(CellError::Num).into(), ..Formatted::default() },
+        Value::Number(n) => match locale_pattern(fmt, loc) {
+            Some(local) => local.format_number(*n, sys, loc).0,
+            None => fmt.format_number(*n, sys, loc).0,
+        },
         Value::Text(t) => fmt.format_text(t),
-        Value::Bool(b) => Formatted { text: if *b { "TRUE" } else { "FALSE" }.into(), ..Formatted::default() },
-        Value::Error(e) => Formatted { text: e.as_str().into(), ..Formatted::default() },
+        Value::Bool(b) => Formatted { text: loc.bool_name(*b).into(), ..Formatted::default() },
+        Value::Error(e) => Formatted { text: loc.error_name(*e).into(), ..Formatted::default() },
         Value::Array(a) => match a.data.first() {
             Some(Value::Array(_)) | None => Formatted::default(),
-            Some(first) => format_value(first, fmt, sys),
+            Some(first) => format_value_in(first, fmt, sys, loc),
         },
     }
+}
+
+/// German Excel's own patterns for the locale-dependent built-in formats.
+const DE_PATTERNS: [&str; 7] = [
+    "dd\".\"mm\".\"yyyy",
+    "dd\". \"mmm\" \"yy",
+    "dd\". \"mmm",
+    "mmm\" \"yy",
+    "dd\".\"mm\".\"yyyy\" \"hh:mm",
+    "dddd\", \"d\". \"mmmm\" \"yyyy",
+    "hh:mm:ss",
+];
+
+fn locale_pattern_index(code: &str) -> Option<usize> {
+    Some(match code.trim() {
+        "m/d/yyyy" => 0,
+        "d-mmm-yy" => 1,
+        "d-mmm" => 2,
+        "mmm-yy" => 3,
+        "m/d/yyyy h:mm" => 4,
+        c if c.to_ascii_uppercase().starts_with("[$-F800]") => 5,
+        c if c.to_ascii_uppercase().starts_with("[$-F400]") => 6,
+        _ => return None,
+    })
+}
+
+/// The code a locale-dependent built-in format shows in `loc` (`m/d/yyyy` is `dd.mm.yyyy` in
+/// German Excel). `None` when the code is shown as written.
+pub(crate) fn locale_pattern_code(code: &str, loc: Locale) -> Option<&'static str> {
+    if loc != Locale::De {
+        return None;
+    }
+    locale_pattern_index(code).and_then(|i| DE_PATTERNS.get(i).copied())
+}
+
+/// The pattern a locale-dependent built-in format takes in `loc` (`m/d/yyyy` is `TT.MM.JJJJ`
+/// in German Excel). `None` when the code is shown as written.
+fn locale_pattern(fmt: &NumberFormat, loc: Locale) -> Option<&'static NumberFormat> {
+    if loc != Locale::De {
+        return None;
+    }
+    static DE: std::sync::OnceLock<Vec<NumberFormat>> = std::sync::OnceLock::new();
+    let de = DE.get_or_init(|| DE_PATTERNS.iter().map(|c| NumberFormat::parse(c)).collect());
+    locale_pattern_index(fmt.code()).and_then(|i| de.get(i))
 }
 
 /// The `TEXT()` worksheet function: formats a value with a format code. Numeric text is
@@ -313,7 +373,7 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    let (f, overflow) = fmt.format_number(n, sys, Locale::EnUs);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 
