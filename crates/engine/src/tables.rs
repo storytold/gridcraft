@@ -276,4 +276,13 @@ mod tests {
         assert_eq!(names, ["x", "x2", "5"]);
         assert_eq!(sh.value(gridcraft_core::CellRef::new(0, 2)), Value::from("5"));
     }
+
+    #[test]
+    fn go_to_a_table_selects_its_data() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["a", "b"], [1, 2], [3, 4]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
+        assert_eq!(s.execute("edit.goTo", json!({"reference": "Table1"})).unwrap()["selection"], "A2:B3");
+    }
 }
