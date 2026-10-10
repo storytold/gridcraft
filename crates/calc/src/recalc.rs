@@ -345,6 +345,16 @@ impl Calc {
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
         self.rebuild(wb);
+        // Spills are laid out again from the formulas where they are now (a structural edit moves
+        // or deletes the formulas, not the values they spilled).
+        for i in 0..wb.sheets.len() {
+            if wb.sheet(i).is_some_and(|s| !s.spill_ranges.is_empty() || !s.spill.is_empty())
+                && let Some(sh) = wb.sheet_mut(i)
+            {
+                sh.spill.clear();
+                sh.spill_ranges.clear();
+            }
+        }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
         self.run(wb, all, true);
     }

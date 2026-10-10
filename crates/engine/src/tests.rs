@@ -174,6 +174,17 @@ fn range_ending_in_index_recalculates() {
 }
 
 #[test]
+fn structural_edits_move_spills_with_their_formula() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A5", "input": "=SEQUENCE(3)"})).unwrap();
+    s.execute("home.deleteRows", json!({"rows": "1:1"})).unwrap();
+    let col = |s: &Session| (4..=7).map(|r| v(s, &format!("A{r}"))).collect::<Vec<_>>();
+    assert_eq!(col(&s), [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0), Value::Empty]);
+    s.execute("home.deleteRows", json!({"rows": "4:4"})).unwrap();
+    assert_eq!(col(&s), [Value::Empty, Value::Empty, Value::Empty, Value::Empty]);
+}
+
+#[test]
 fn every_command_survives_empty_params() {
     let mut s = Session::new();
     s.execute("file.new", json!({"sample": "sales"})).unwrap();
