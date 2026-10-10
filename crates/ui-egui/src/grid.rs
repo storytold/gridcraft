@@ -1090,6 +1090,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         }
         if in_col_header {
             if let Some((c, x)) = col_edge(geo, sh, p.x) {
+                if resp.double_clicked() {
+                    let _ = app.run("home.autofitcolumnwidth", json!({"cols":RangeRef::cols(c, c).a1()}));
+                    return;
+                }
                 app.grid.drag = Drag::ResizeCol { col: c, start: p.x, orig: sh.col_width(c).max(0.0) * 0.0 + (x - geo.x(sh, c)) / geo.z };
                 return;
             }
