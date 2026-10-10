@@ -577,12 +577,23 @@ impl Calc {
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
         self.rebuild(wb);
+        // Spills are laid out again from the formulas where they are now (a structural edit moves
+        // or deletes the formulas, not the values they spilled).
+        for i in 0..wb.sheets.len() {
+            if wb.sheet(i).is_some_and(|s| !s.spill_ranges.is_empty() || !s.spill.is_empty())
+                && let Some(sh) = wb.sheet_mut(i)
+            {
+                sh.spill.clear();
+                sh.spill_ranges.clear();
+            }
+        }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
         self.run(wb, all, true);
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
+        let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
             let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
             match formula.and_then(|f| f.expr()) {
@@ -592,6 +603,15 @@ impl Calc {
                 }
                 None => {
                     self.graph.remove(k);
+                    // A formula replaced by a constant (or cleared) takes its spilled values with it.
+                    if let Some(sh) = wb.sheet_mut(k.0)
+                        && let Some(r) = sh.spill_ranges.remove(&k.1)
+                    {
+                        for c in r.iter() {
+                            sh.spill.remove(&c);
+                        }
+                        cleared.push((k.0, r));
+                    }
                     // A formula that doesn't parse evaluates to #NAME?.
                     if let Some(cell) = wb.sheet_mut(k.0).and_then(|s| s.cells.get_mut(k.1))
                         && cell.formula.is_some()
@@ -609,6 +629,7 @@ impl Calc {
             return;
         }
         let mut seeds: Vec<Key> = changed.to_vec();
+        let mut emptied: Vec<Key> = Vec::new();
         // Typing into (or clearing) a cell a dynamic array spills over (or would spill over)
         // re-evaluates the anchor, which may now be blocked or unblocked.
         for &k in changed {
@@ -623,6 +644,20 @@ impl Calc {
                         seeds.push((k.0, c));
                     }
                 }
+                if !sh.cells.has(k.1) {
+                    match emptied.iter_mut().find(|x| x.0 == k.0) {
+                        Some(x) => x.1 = CellRef::new(x.1.row.max(k.1.row), x.1.col.max(k.1.col)),
+                        None => emptied.push(k),
+                    }
+                }
+            }
+        }
+        // An emptied cell can unblock an anchor any distance above or to the left of it.
+        for (si, end) in emptied {
+            for &(s, c) in self.graph.nodes.keys() {
+                if s == si && c.row <= end.row && c.col <= end.col && wb.sheet(s).is_some_and(|sh| sh.value(c) == Value::Error(CellError::Spill)) {
+                    seeds.push((s, c));
+                }
             }
         }
         // Spill areas of changed anchors also change.
@@ -630,6 +665,9 @@ impl Calc {
             if let Some(r) = wb.sheet(k.0).and_then(|s| s.spill_ranges.get(&k.1)) {
                 seeds.extend(r.iter().take(65536).map(|c| (k.0, c)));
             }
+        }
+        for (si, r) in &cleared {
+            seeds.extend(r.iter().take(65536).map(|c| (*si, c)));
         }
         let t0 = prof_now();
         let dirty = self.dirty_closure(wb, &seeds);
@@ -676,6 +714,7 @@ impl Calc {
 
     /// Evaluates the dirty set and writes results (and spills) back.
     fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
+        let mut dynamic_again = !self.graph.dynamic.is_empty();
         for _round in 0..8 {
             if dirty.is_empty() {
                 break;
@@ -720,6 +759,7 @@ impl Calc {
             self.circular = cycles;
             // Write back.
             let mut spill_changes: Vec<Key> = Vec::new();
+            let mut freed: Vec<(usize, RangeRef)> = Vec::new();
             for (k, v) in results {
                 let Some(sheet) = wb.sheet_mut(k.0) else { continue };
                 if let Some(cell) = sheet.cells.get_mut(k.1)
@@ -766,7 +806,30 @@ impl Calc {
                 if let Some(r) = changed_range {
                     let mut deps = Vec::new();
                     self.graph.dependents_of_range(k.0, r, &mut deps);
-                    spill_changes.extend(deps);
+                    spill_changes.extend(deps.into_iter().filter(|d| d != k));
+                }
+                if let Some(o) = old
+                    && !sheet.spill_ranges.get(&k.1).is_some_and(|n| n.contains(o.start) && n.contains(o.end))
+                {
+                    freed.push((k.0, o));
+                }
+            }
+            // Formulas with references only known while evaluating (INDIRECT, OFFSET) may have read
+            // a spill area before it was laid out: they are evaluated once more.
+            if dynamic_again && !spills.is_empty() {
+                dynamic_again = false;
+                spill_changes.extend(self.graph.dynamic.iter().copied());
+            }
+            // An area a formula no longer spills over may unblock another formula's array.
+            for (si, o) in freed {
+                for &(s, c) in self.graph.nodes.keys() {
+                    if s == si
+                        && c.row <= o.end.row
+                        && c.col <= o.end.col
+                        && wb.sheet(s).is_some_and(|sh| sh.value(c) == Value::Error(CellError::Spill))
+                    {
+                        spill_changes.push((s, c));
+                    }
                 }
             }
             if full {
@@ -777,7 +840,6 @@ impl Calc {
             }
             spill_changes.sort_by_key(|(s, c)| (*s, c.row, c.col));
             spill_changes.dedup();
-            spill_changes.retain(|k| !spills.contains_key(k));
             if spill_changes.is_empty() {
                 break;
             }

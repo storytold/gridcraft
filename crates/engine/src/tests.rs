@@ -946,6 +946,83 @@ fn xlsb_fixture() -> Vec<u8> {
 }
 
 #[test]
+fn replacing_a_spilling_formula_clears_its_spill() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=SUM(A1:A3)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    assert_eq!((v(&s, "A2"), v(&s, "A3"), v(&s, "B1")), (Value::Empty, Value::Empty, Value::Number(2.0)));
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)"})).unwrap();
+    s.execute("edit.clearContents", json!({"range": "A1"})).unwrap();
+    assert_eq!((v(&s, "A2"), v(&s, "B1")), (Value::Empty, Value::Number(0.0)));
+}
+
+#[test]
+fn range_ending_in_index_recalculates() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B6", "input": "=SUM(C3:INDEX(B9:C11,2,2))"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C5", "input": "2"})).unwrap();
+    assert_eq!(v(&s, "B6"), Value::Number(2.0));
+}
+
+#[test]
+fn structural_edits_move_spills_with_their_formula() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A5", "input": "=SEQUENCE(3)"})).unwrap();
+    s.execute("home.deleteRows", json!({"rows": "1:1"})).unwrap();
+    let col = |s: &Session| (4..=7).map(|r| v(s, &format!("A{r}"))).collect::<Vec<_>>();
+    assert_eq!(col(&s), [Value::Number(1.0), Value::Number(2.0), Value::Number(3.0), Value::Empty]);
+    s.execute("home.deleteRows", json!({"rows": "4:4"})).unwrap();
+    assert_eq!(col(&s), [Value::Empty, Value::Empty, Value::Empty, Value::Empty]);
+}
+
+#[test]
+fn clearing_a_distant_blocker_unblocks_the_spill() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(100)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A90", "input": "x"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Error(gridcraft_core::CellError::Spill));
+    s.execute("edit.clearContents", json!({"range": "A90"})).unwrap();
+    assert_eq!((v(&s, "A1"), v(&s, "A100")), (Value::Number(1.0), Value::Number(100.0)));
+}
+
+#[test]
+fn a_spill_that_goes_away_unblocks_another() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "F8", "input": "=SEQUENCE(5)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E10", "input": "=SEQUENCE(1,3)"})).unwrap();
+    assert_eq!(v(&s, "E10"), Value::Error(gridcraft_core::CellError::Spill));
+    // Blocking F8's array frees F10 for E10's.
+    s.execute("cell.set", json!({"cell": "F9", "input": "0"})).unwrap();
+    assert_eq!(v(&s, "F8"), Value::Error(gridcraft_core::CellError::Spill));
+    assert_eq!((v(&s, "E10"), v(&s, "G10")), (Value::Number(1.0), Value::Number(3.0)));
+}
+
+#[test]
+fn an_array_reading_another_arrays_spill_is_updated() {
+    // G5 is evaluated before D11 in the same pass, so it first reads D11's old spill.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D11", "input": "=SEQUENCE(1,3,A1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "G5", "input": "=UNIQUE(VSTACK(F9:F12,A1))"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    assert_eq!((v(&s, "G6"), v(&s, "G7")), (Value::Number(12.0), Value::Number(10.0)));
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!((v(&s, "G6"), v(&s, "G7")), (Value::Number(12.0), Value::Number(10.0)));
+}
+
+#[test]
+fn indirect_reads_a_spill_laid_out_in_the_same_pass() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "F5", "input": "=SEQUENCE(2,2,7)"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "3:3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E5", "input": "=INDIRECT(\"F7\")"})).unwrap();
+    assert_eq!(v(&s, "E5"), Value::Number(9.0));
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(v(&s, "E5"), Value::Number(9.0));
+}
+
+#[test]
 fn every_command_survives_empty_params() {
     let mut s = Session::new();
     s.execute("file.new", json!({"sample": "sales"})).unwrap();
