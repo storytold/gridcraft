@@ -75,6 +75,9 @@ pub struct Services {
     pub open_async: Option<Box<dyn Fn()>>,
     /// Files delivered asynchronously (name, bytes), opened on the next frame.
     pub inbox: Option<Inbox>,
+    /// Web: hand PDF bytes to the browser's print flow directly (no download,
+    /// no intermediate file) — opens the system print dialog on that PDF.
+    pub print: Option<Box<dyn Fn(&[u8])>>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
@@ -163,6 +166,32 @@ impl SheetApp {
                 self.toast = Some((e, now_ms()));
             } else {
                 self.message = Some(("GridCraft".into(), clean_error(&e)));
+            }
+        }
+    }
+
+    /// Runs `file.print`, builds the PDF and (where the host provides the hook — the web
+    /// build) hands the bytes straight to the browser's print flow; errors show the usual
+    /// alert. Desktop builds have no `services.print`, so this falls back to `run_or_alert`
+    /// (which still produces the PDF — just without a UI to act on the result yet).
+    pub fn print_now(&mut self) {
+        match self.run("file.print", json!({})) {
+            Ok(r) => {
+                let Some(b64) = r.get("base64").and_then(Json::as_str) else { return };
+                let Some(bytes) = gridcraft_engine::io::base64_decode(b64) else {
+                    self.message = Some(("GridCraft".into(), "Couldn't decode the generated PDF.".into()));
+                    return;
+                };
+                if let Some(print) = &self.services.print {
+                    print(&bytes);
+                }
+            }
+            Err(e) => {
+                if e.contains("is not available right now") {
+                    self.toast = Some((e, now_ms()));
+                } else {
+                    self.message = Some(("GridCraft".into(), clean_error(&e)));
+                }
             }
         }
     }

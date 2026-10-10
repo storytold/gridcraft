@@ -76,13 +76,15 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     ("New Workbook", "file.new"),
                     ("Open…", "file.open"),
                     ("Save As…", "file.saveAs"),
-                    ("Print…", "file.print"),
                     ("Sort A to Z", "data.sortAscending"),
                     ("Calculate Now", "formulas.calculateNow"),
                 ] {
                     if ui.button(label).clicked() {
                         app.run_or_alert(id, json!({}));
                     }
+                }
+                if ui.button("Print…").clicked() {
+                    app.print_now();
                 }
             });
             // Centered title.
@@ -1715,6 +1717,10 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         Key::O => Some(("file.open", json!({}))),
         Key::N => Some(("file.new", json!({}))),
         Key::W => Some(("file.close", json!({}))),
+        Key::P => {
+            app.print_now();
+            None
+        }
         Key::K => {
             app.open_dialog("insertLink", json!({}));
             None
