@@ -216,7 +216,8 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
     wb.active_sheet = file_to_model.get(active_tab).copied().flatten().unwrap_or(0);
 
-    // Defined names.
+    // Defined names. Chartex parts refer to their data through hidden `_xlchart.*` names.
+    let mut chart_names: Vec<(String, String)> = vec![];
     if let Some(dn) = wb_xml.child("definedNames") {
         for d in dn.kids("definedName") {
             let Some(name) = d.attr("name") else { continue };
@@ -230,6 +231,10 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             let text = d.text.trim();
             let lname = name.to_ascii_lowercase();
             if lname == "_xlnm._filterdatabase" {
+                continue;
+            }
+            if lname.starts_with("_xlchart.") {
+                chart_names.push((lname, crate::fmla::from_file(text)));
                 continue;
             }
             if lname == "_xlnm.print_area" || lname == "_xlnm.print_titles" {
@@ -253,6 +258,23 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
                 comment: d.attr("comment").unwrap_or("").to_string(),
                 hidden: d.flag("hidden", false),
             });
+        }
+    }
+
+    if !chart_names.is_empty() {
+        let resolve = |f: &mut String| {
+            if let Some((_, r)) = chart_names.iter().find(|(n, _)| f.eq_ignore_ascii_case(n)) {
+                *f = r.clone();
+            }
+        };
+        for sheet in wb.sheets.iter_mut().filter(|s| !s.charts.is_empty()) {
+            for ch in Arc::make_mut(sheet).charts.iter_mut() {
+                for s in ch.series.iter_mut() {
+                    resolve(&mut s.values);
+                    s.categories.iter_mut().for_each(&resolve);
+                    s.name.iter_mut().for_each(&resolve);
+                }
+            }
         }
     }
 

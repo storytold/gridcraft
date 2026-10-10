@@ -340,7 +340,7 @@ pub enum LegendPos {
     Right,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Series {
     /// Formula text for the series name (`Sheet1!$B$1`) or a literal.
     pub name: Option<String>,

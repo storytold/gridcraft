@@ -337,3 +337,102 @@ fn drawing_with_picture_and_chart() {
     assert_eq!(ch.legend, gridcraft_model::LegendPos::Top);
     assert_eq!(ch.x_title.as_deref(), Some("Region"));
 }
+
+#[test]
+fn drawing_with_chartex_in_alternate_content() {
+    let drawing = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      <xdr:twoCellAnchor><xdr:from><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>10</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>15</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+        <mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" Requires="cx1">
+          <xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2014/chartex"><cx:chart xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame>
+        </mc:Choice><mc:Fallback><xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:sp></mc:Fallback></mc:AlternateContent>
+        <xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#;
+    let chartex = r#"<cx:chartSpace xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex">
+      <cx:chartData><cx:data id="0"><cx:strDim type="cat"><cx:f>_xlchart.v1.0</cx:f></cx:strDim><cx:numDim type="val"><cx:f>_xlchart.v1.2</cx:f></cx:numDim></cx:data></cx:chartData>
+      <cx:chart><cx:title pos="t" align="ctr" overlay="0"><cx:tx><cx:txData><cx:v>Bridge</cx:v></cx:txData></cx:tx></cx:title>
+        <cx:plotArea><cx:plotAreaRegion><cx:series layoutId="waterfall" uniqueId="{1}"><cx:tx><cx:txData><cx:f>_xlchart.v1.1</cx:f><cx:v>Amount</cx:v></cx:txData></cx:tx><cx:dataLabels pos="outEnd"><cx:visibility seriesName="0" categoryName="0" value="1"/></cx:dataLabels><cx:dataId val="0"/><cx:layoutPr><cx:subtotals><cx:idx val="3"/></cx:subtotals></cx:layoutPr></cx:series></cx:plotAreaRegion>
+        <cx:axis id="0"><cx:catScaling gapWidth="0.5"/><cx:tickLabels/></cx:axis><cx:axis id="1"><cx:valScaling/><cx:majorGridlines/><cx:tickLabels/></cx:axis></cx:plotArea>
+        <cx:legend pos="t" align="ctr" overlay="0"/></cx:chart></cx:chartSpace>"#;
+    let drels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.microsoft.com/office/2014/relationships/chartEx" Target="../charts/chartEx1.xml"/></Relationships>"#;
+    let srels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
+    let bytes = super::minimal(
+        r#"<sheetData/><drawing r:id="rId1"/>"#,
+        &[
+            ("xl/worksheets/_rels/sheet1.xml.rels", srels),
+            ("xl/drawings/drawing1.xml", drawing),
+            ("xl/drawings/_rels/drawing1.xml.rels", drels),
+            ("xl/charts/chartEx1.xml", chartex),
+        ],
+        "",
+        // Chartex data goes through hidden names.
+        r#"<definedNames><definedName name="_xlchart.v1.0" hidden="1">Data!$A$2:$A$5</definedName><definedName name="_xlchart.v1.1" hidden="1">Data!$B$1</definedName><definedName name="_xlchart.v1.2" hidden="1">Data!$B$2:$B$5</definedName></definedNames>"#,
+    );
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.charts.len(), 1);
+    assert!(s.shapes.is_empty(), "the fallback isn't read as well");
+    assert!(wb.names.is_empty(), "the chart's names aren't workbook names");
+    let ch = &s.charts[0];
+    assert_eq!(ch.kind, gridcraft_model::ChartKind::Waterfall);
+    assert_eq!(ch.title.as_deref(), Some("Bridge"));
+    assert_eq!(ch.anchor.cell, at("E2"));
+    assert_eq!(ch.series.len(), 1);
+    assert_eq!(ch.series[0].name.as_deref(), Some("Data!$B$1"));
+    assert_eq!(ch.series[0].categories.as_deref(), Some("Data!$A$2:$A$5"));
+    assert_eq!(ch.series[0].values, "Data!$B$2:$B$5");
+    assert!(ch.data_labels && ch.gridlines);
+    assert_eq!(ch.legend, gridcraft_model::LegendPos::Top);
+}
+
+#[test]
+fn chartex_parts_as_excel_expects_them() {
+    use gridcraft_model::{Chart, ChartKind, LegendPos, Series};
+    let mut wb = gridcraft_model::Workbook::new();
+    let mut sheet = gridcraft_model::Sheet::new("Data");
+    sheet.charts.push(Chart {
+        id: 1,
+        kind: ChartKind::Waterfall,
+        anchor: Default::default(),
+        title: None,
+        series: vec![Series {
+            name: Some("Data!$B$1".into()),
+            categories: Some("Data!$A$2:$A$5".into()),
+            values: "Data!$B$2:$B$5".into(),
+            ..Default::default()
+        }],
+        legend: LegendPos::Bottom,
+        data_labels: false,
+        gridlines: true,
+        style: 2,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+    });
+    wb.sheets = vec![std::sync::Arc::new(sheet)];
+    let bytes = crate::write_xlsx(&wb).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+    let mut part = |n: &str| {
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut z.by_name(n).unwrap_or_else(|_| panic!("{n}")), &mut s).unwrap();
+        s
+    };
+    // Data through hidden `_xlchart` names, with style and colour parts.
+    let cx = part("xl/charts/chartEx1.xml");
+    assert!(cx.contains("<cx:f>_xlchart.v1.2</cx:f>") && !cx.contains("Data!"), "{cx}");
+    // Fills are spelled out, not left to the style part.
+    assert!(cx.contains(r#"<cx:spPr><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></cx:spPr>"#), "{cx}");
+    assert!(cx.contains(r#"</cx:chart><cx:spPr><a:solidFill><a:schemeClr val="bg1"/>"#), "{cx}");
+    let book = part("xl/workbook.xml");
+    assert!(book.contains(r#"<definedName name="_xlchart.v1.1" hidden="1">Data!$B$2:$B$5</definedName>"#), "{book}");
+    let rels = part("xl/charts/_rels/chartEx1.xml.rels");
+    assert!(rels.contains("relationships/chartStyle") && rels.contains("relationships/chartColorStyle"));
+    assert!(part("xl/charts/style1.xml").contains("<cs:chartStyle"));
+    assert!(part("xl/charts/colors1.xml").contains("<cs:colorStyle"));
+    let types = part("[Content_Types].xml");
+    assert!(types.contains("chartstyle+xml") && types.contains("chartcolorstyle+xml") && types.contains("chartex+xml"));
+    // Reading resolves the names and doesn't keep them.
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert!(back.names.is_empty());
+    let s = &back.sheet(0).unwrap().charts[0].series[0];
+    assert_eq!((s.name.as_deref(), s.categories.as_deref(), s.values.as_str()), (Some("Data!$B$1"), Some("Data!$A$2:$A$5"), "Data!$B$2:$B$5"));
+}

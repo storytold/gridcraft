@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 mod chart;
+mod chartex;
 mod csv;
 mod drawing;
 mod fmla;

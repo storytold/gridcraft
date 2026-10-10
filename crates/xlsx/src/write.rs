@@ -43,6 +43,12 @@ impl Rels {
         self.items.push((id.clone(), format!("{NS_REL}/{kind}"), target.to_string(), true));
         id
     }
+    /// Adds a Microsoft extension relationship with its complete namespace URI.
+    pub fn add_uri(&mut self, ty: &str, target: &str) -> String {
+        let id = format!("rId{}", self.items.len() + 1);
+        self.items.push((id.clone(), ty.to_string(), target.to_string(), false));
+        id
+    }
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -91,6 +97,8 @@ pub struct Out {
     pub sst: Sst,
     pub images: u32,
     pub charts: u32,
+    /// References of chartex parts, defined as hidden `_xlchart.v1.N` names.
+    pub chart_names: Vec<String>,
     pub drawings: u32,
     pub tables: u32,
     pub comments: u32,
@@ -138,6 +146,7 @@ pub fn write_xlsx(wb: &Workbook) -> Result<Vec<u8>, IoError> {
         sst: Sst::default(),
         images: 0,
         charts: 0,
+        chart_names: vec![],
         drawings: 0,
         tables: 0,
         comments: 0,
@@ -201,6 +210,14 @@ pub fn write_xlsx(wb: &Workbook) -> Result<Vec<u8>, IoError> {
             let _ = write!(names, " comment=\"{}\"", esc_attr(&n.comment));
         }
         let _ = write!(names, ">{}</definedName>", esc(&crate::fmla::text_to_file(&n.formula)));
+    }
+    for (i, f) in out.chart_names.iter().enumerate() {
+        let _ = write!(
+            names,
+            "<definedName name=\"{}{i}\" hidden=\"1\">{}</definedName>",
+            crate::chartex::NAME_PREFIX,
+            esc(&crate::fmla::text_to_file(f))
+        );
     }
     for (i, sheet) in wb.sheets.iter().enumerate() {
         let q = quote_sheet(&sheet.name);

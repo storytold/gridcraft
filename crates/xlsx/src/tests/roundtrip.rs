@@ -426,8 +426,7 @@ fn full_roundtrip() {
     }
     assert_eq!(b.charts.len(), a.charts.len());
     for (x, y) in a.charts.iter().zip(&b.charts) {
-        let expect_kind = if x.kind == ChartKind::Waterfall { ChartKind::ColumnClustered } else { x.kind };
-        assert_eq!(y.kind, expect_kind, "chart kind");
+        assert_eq!(y.kind, x.kind, "chart kind");
         assert_eq!(y.title, x.title);
         assert_eq!(y.legend, x.legend);
         assert_eq!(y.data_labels, x.data_labels);
