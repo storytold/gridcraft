@@ -107,10 +107,10 @@ fn font_series_name(name: &str) -> String {
 
     // Regional/language variants.
     for suffix in [" TC", " SC", " HK", " MO", "-簡", "-繁", "－簡", "－繁", "-简", "－简", " 簡", " 繁", " 简"] {
-        if let Some(base) = name.strip_suffix(suffix) {
-            if !base.is_empty() {
-                return base.to_owned();
-            }
+        if let Some(base) = name.strip_suffix(suffix)
+            && !base.is_empty()
+        {
+            return base.to_owned();
         }
     }
 

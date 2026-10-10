@@ -760,10 +760,10 @@ fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
 
     app.ui.favorite_fonts = favorites;
 
-    if name != before {
-        if crate::system_fonts::register(ui.ctx(), &name) {
-            act(app, "home.fontName", json!({"name": name}));
-        }
+    if name != before
+        && crate::system_fonts::register(ui.ctx(), &name)
+    {
+        act(app, "home.fontName", json!({"name": name}));
     }
 }
 
