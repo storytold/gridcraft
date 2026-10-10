@@ -954,13 +954,15 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
         .and_then(Json::as_array)
         .map(|a| a.iter().filter_map(|c| col_param(Some(c), r.start.col)).collect())
         .unwrap_or_else(|| vec![r.end.col]);
+    // Labels are cell text, written in the session's language as Excel does (`Nord Ergebnis`).
+    let lang = s.lang;
     let label = match func {
-        "count" => "Count",
-        "average" => "Average",
-        "max" => "Max",
-        "min" => "Min",
-        "product" => "Product",
-        _ => "Total",
+        "count" => lang.pick("Count", "Anzahl"),
+        "average" => lang.pick("Average", "Mittelwert"),
+        "max" => lang.pick("Max", "Maximum"),
+        "min" => lang.pick("Min", "Minimum"),
+        "product" => lang.pick("Product", "Produkt"),
+        _ => lang.pick("Total", "Ergebnis"),
     };
     let sheet = s.doc()?.wb.active_sheet;
     // Group boundaries (header in the first row).
@@ -994,7 +996,11 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
     let last = r.end.row + inserted + 1;
     let lbl = CellRef::new(last, group_col).a1();
     s.execute("home.insertRows", json!({"rows": format!("{}:{}", last + 1, last + 1)}))?;
-    s.execute("cell.set", json!({"cell": lbl, "input": format!("Grand {label}")}))?;
+    let grand = match lang {
+        crate::lang::Lang::English => format!("Grand {label}"),
+        crate::lang::Lang::German => format!("Gesamt{}", label.to_lowercase()),
+    };
+    s.execute("cell.set", json!({"cell": lbl, "input": grand}))?;
     for c in &cols {
         let range = RangeRef::new(CellRef::new(r.start.row + 1, *c), CellRef::new(last - 1, *c)).a1();
         s.execute("cell.set", json!({"cell": CellRef::new(last, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;

@@ -6,6 +6,14 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+/// A string in the interface language ([`i18n::t`]).
+#[macro_export]
+macro_rules! tl {
+    ($s:expr) => {
+        $crate::i18n::t($s)
+    };
+}
+
 pub mod chartview;
 pub mod control;
 pub mod credits;
@@ -13,6 +21,7 @@ pub mod dialogs;
 pub mod editor;
 pub mod formula_bar;
 pub mod grid;
+pub mod i18n;
 pub mod icons;
 pub mod panes;
 pub mod pivot_pane;
@@ -41,6 +50,8 @@ pub struct UiState {
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
     pub recent: Vec<String>,
+    /// Interface language: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
+    pub language: String,
 }
 
 impl Default for UiState {
@@ -53,6 +64,7 @@ impl Default for UiState {
             formula_bar_expanded: false,
             status_bar: true,
             recent: vec![],
+            language: i18n::AUTO.into(),
         }
     }
 }
@@ -195,6 +207,20 @@ impl SheetApp {
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)
+            }
+            "ui.language" => {
+                if let Some(v) = p.get("value").and_then(Json::as_str) {
+                    match i18n::normalize_pref(v) {
+                        Some(code) => self.ui.language = code.to_string(),
+                        None => {
+                            let codes: Vec<&str> = i18n::Lang::all().map(i18n::Lang::code).collect();
+                            return Some(Err(format!("unknown language `{v}`; use auto or one of {}", codes.join(", "))));
+                        }
+                    }
+                }
+                let lang = i18n::Lang::from_pref(&self.ui.language);
+                let available: Vec<Json> = i18n::Lang::all().map(|l| json!({"code": l.code(), "name": l.name()})).collect();
+                Ok(json!({"language": self.ui.language, "effective": lang.code(), "available": available}))
             }
             _ => return None,
         };
@@ -350,8 +376,39 @@ impl SheetApp {
         self.grid.ensure_visible = true;
     }
 
+    /// New workbooks follow the interface language, as in Excel: a German interface makes
+    /// `Mappe1` with `Tabelle1`. The first workbook exists before the language is known, so while
+    /// nobody has touched it, it is renamed too.
+    fn follow_language(&mut self, lang: i18n::Lang) {
+        let new = gridcraft_engine::lang::Lang::from_tag(lang.code());
+        let old = self.session.lang;
+        if new == old {
+            return;
+        }
+        self.session.lang = new;
+        let Some(d) = self.session.active_mut() else { return };
+        let untouched = d.path.is_none() && !d.is_dirty() && d.undo.is_empty();
+        let Some(n) = d.title.strip_prefix(old.book_base()).filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())) else { return };
+        if !untouched {
+            return;
+        }
+        d.title = format!("{}{n}", new.book_base());
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        for i in 0..wb.sheets.len() {
+            if let Some(sh) = wb.sheet_mut(i)
+                && let Some(k) = sh.name.strip_prefix(old.sheet_base()).filter(|k| !k.is_empty() && k.chars().all(|c| c.is_ascii_digit()))
+                && sh.used_range().is_none()
+            {
+                sh.name = format!("{}{k}", new.sheet_base());
+            }
+        }
+    }
+
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        let lang = i18n::Lang::from_pref(&self.ui.language);
+        i18n::set_current(lang);
+        self.follow_language(lang);
         if !self.fonts_ready {
             // New fonts apply from the next frame on: paint nothing until then.
             if self.fonts_set {
@@ -394,6 +451,7 @@ impl SheetApp {
     /// Lays out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        i18n::set_current(i18n::Lang::from_pref(&self.ui.language));
         if !self.fonts_ready {
             ctx.request_repaint();
             return;
@@ -444,7 +502,7 @@ impl SheetApp {
         }
         // Window title.
         if let Some(d) = self.session.active() {
-            let title = format!("{}{}", d.display_title(), if d.is_dirty() { " — Edited" } else { "" });
+            let title = if d.is_dirty() { format!("{} — {}", d.display_title(), tl!("Edited")) } else { d.display_title() };
             if self.grid.last_title.as_deref() != Some(title.as_str()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
                 self.grid.last_title = Some(title);

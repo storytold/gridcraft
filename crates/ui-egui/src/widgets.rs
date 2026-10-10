@@ -17,7 +17,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egu
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, color);
-    resp.on_hover_text(tip)
+    resp.on_hover_text(crate::i18n::tip(tip))
 }
 
 /// A toggle-able small button (e.g. Bold) showing a checked state.
@@ -31,16 +31,27 @@ pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, t.text);
-    resp.on_hover_text(tip)
+    resp.on_hover_text(crate::i18n::tip(tip))
 }
 
-/// Large ribbon button: 32px icon over a one- or two-line label.
+/// Large ribbon button: 32px icon over a one- or two-line label. `label` and `tip` are English and
+/// shown in the interface language.
 pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
+    let label = tl!(label);
     let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(11.5);
     let lines: Vec<&str> = label.split('\n').collect();
-    let text_w = lines.iter().map(|l| ui.painter().layout_no_wrap(l.to_string(), font.clone(), t.text).size().x).fold(0.0, f32::max);
-    let w = (text_w + 12.0).max(44.0);
+    // Measure what is drawn: the last line carries the dropdown arrow. Without it, a long
+    // label (`Finanzmathematik ▾`) ran into the next button.
+    let text_w = lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let shown = if dropdown && i + 1 == lines.len() { format!("{l} ▾") } else { l.to_string() };
+            ui.painter().layout_no_wrap(shown, font.clone(), t.text).size().x
+        })
+        .fold(0.0, f32::max);
+    let w = (text_w + 16.0).max(44.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 72.0), Sense::click());
     if resp.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect, 5.0, t.pressed);
@@ -55,11 +66,12 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
         }
         ui.painter().text(pos2(rect.center().x, rect.top() + 46.0 + i as f32 * 13.0), Align2::CENTER_CENTER, s, font.clone(), t.text);
     }
-    resp.on_hover_text(tip)
+    resp.on_hover_text(crate::i18n::tip(tip))
 }
 
-/// Small ribbon button: 16px icon with optional label to the right.
+/// Small ribbon button: 16px icon with optional label to the right (English, shown translated).
 pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
+    let label = tl!(label);
     let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(12.5);
     let tw = if label.is_empty() { 0.0 } else { ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0 };
@@ -82,7 +94,7 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
             t.text_dim,
         );
     }
-    resp.on_hover_text(tip)
+    resp.on_hover_text(crate::i18n::tip(tip))
 }
 
 /// A split button: main part runs the default action, the arrow opens a menu.
@@ -103,17 +115,17 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
         ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 4.0, main.bottom() - 5.0), vec2(17.0, 3.0)), 0.0, c);
     }
     icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
-    (m.on_hover_text(tip).clicked(), a)
+    (m.on_hover_text(crate::i18n::tip(tip)).clicked(), a)
 }
 
 /// Our colour palette (theme row + tints + standard colours), returns a picked hex colour,
 /// `Some("none")` for No Fill/Automatic.
 pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {
     let mut picked = None;
-    if ui.button(none_label).clicked() {
+    if ui.button(tl!(none_label)).clicked() {
         picked = Some("none".to_string());
     }
-    ui.label(egui::RichText::new("Theme Colors").small());
+    ui.label(egui::RichText::new(tl!("Theme Colors")).small());
     let order = [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 9];
     let tints = [0.0f64, 0.8, 0.6, 0.4, -0.25, -0.5];
     egui::Grid::new(ui.id().with("theme_grid")).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
@@ -136,7 +148,7 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
             ui.end_row();
         }
     });
-    ui.label(egui::RichText::new("Standard Colors").small());
+    ui.label(egui::RichText::new(tl!("Standard Colors")).small());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for hex in ["#C00000", "#FF0000", "#FFC000", "#FFFF00", "#92D050", "#00B050", "#00B0F0", "#0070C0", "#002060", "#7030A0"] {
@@ -170,7 +182,8 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
         });
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("  OK  ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            if ui.button(format!("  {}  ", tl!("OK"))).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape))
+            {
                 close = true;
             }
         });

@@ -34,6 +34,7 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | `ui.dialog` / `ui.dialog.set` / `ui.dialog.confirm` / `ui.dialog.cancel` | `{name}` / `{field, value}` | Open, fill in and confirm dialogs |
 | `ui.screenshot` | `{path?}` | PNG of the window (base64 when no path) |
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?}` | UI preferences |
+| `engine.execute` `ui.language` | `{value?: "auto"\|"en"\|"de"}` | Interface language (`auto` follows the system); returns the setting, the effective language and the available ones. Command ids, parameters and results stay English; new workbooks (`file.new`) follow the language (`Mappe1`/`Tabelle1`, German samples) unless `language` is given |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
 | `app.open` / `app.save` / `app.quit` | `{path}` / `{path?}` | Files and lifetime |
 

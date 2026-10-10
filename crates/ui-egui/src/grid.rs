@@ -1257,8 +1257,13 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             Drag::ResizeCol { col, start, orig } => {
                 let w = (orig + (p.x - start) / geo.z).max(0.0);
-                app.toast =
-                    Some((format!("Width: {:.2} ({} pixels)", gridcraft_engine::cmd::format::points_to_chars(w as f64), w.round()), crate::now_ms()));
+                app.toast = Some((
+                    crate::i18n::fmt(
+                        tl!("Width: {width} ({pixels} pixels)"),
+                        &[("width", &format!("{:.2}", gridcraft_engine::cmd::format::points_to_chars(w as f64))), ("pixels", &w.round().to_string())],
+                    ),
+                    crate::now_ms(),
+                ));
                 let cols = if sel.ranges.iter().any(|r| r.is_full_cols() && col >= r.start.col && col <= r.end.col) {
                     sel.current().a1()
                 } else {
@@ -1269,7 +1274,13 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             Drag::ResizeRow { row, start, orig } => {
                 let h = (orig + (p.y - start) / geo.z).max(0.0);
-                app.toast = Some((format!("Height: {:.2} ({} pixels)", h * 0.75, h.round()), crate::now_ms()));
+                app.toast = Some((
+                    crate::i18n::fmt(
+                        tl!("Height: {height} ({pixels} pixels)"),
+                        &[("height", &format!("{:.2}", h * 0.75)), ("pixels", &h.round().to_string())],
+                    ),
+                    crate::now_ms(),
+                ));
                 let rows = if sel.ranges.iter().any(|r| r.is_full_rows() && row >= r.start.row && row <= r.end.row) {
                     format!("{}:{}", sel.current().start.row + 1, sel.current().end.row + 1)
                 } else {
@@ -1681,21 +1692,21 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo) {
     area.show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_width(230.0);
-            if ui.button("↑  Sort Ascending").clicked() {
+            if ui.button(tl!("↑  Sort Ascending")).clicked() {
                 let _ = app.run("data.sortAscending", json!({"column": col_to_letters(col)}));
                 close = true;
             }
-            if ui.button("↓  Sort Descending").clicked() {
+            if ui.button(tl!("↓  Sort Descending")).clicked() {
                 let _ = app.run("data.sortDescending", json!({"column": col_to_letters(col)}));
                 close = true;
             }
             ui.separator();
-            ui.label(egui::RichText::new("Filter").strong());
+            ui.label(egui::RichText::new(tl!("Filter")).strong());
             let key = egui::Id::new(("filter_sel", col));
             let mut checks: Vec<(String, bool)> = ui.ctx().data_mut(|d| d.get_temp::<Vec<(String, bool)>>(key)).unwrap_or(values.clone());
             let all = checks.iter().all(|(_, b)| *b);
             let mut all_new = all;
-            if ui.checkbox(&mut all_new, "(Select All)").changed() {
+            if ui.checkbox(&mut all_new, tl!("(Select All)")).changed() {
                 for c in checks.iter_mut() {
                     c.1 = all_new;
                 }
@@ -1708,12 +1719,12 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo) {
             ui.ctx().data_mut(|d| d.insert_temp(key, checks.clone()));
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button("Clear Filter").clicked() {
+                if ui.button(tl!("Clear Filter")).clicked() {
                     let _ = app.run("data.filterBy", json!({"column": col_to_letters(col), "clear": true}));
                     ui.ctx().data_mut(|d| d.remove::<Vec<(String, bool)>>(key));
                     close = true;
                 }
-                if ui.button("Apply").clicked() {
+                if ui.button(tl!("Apply")).clicked() {
                     let blanks = checks.iter().any(|(v, on)| v == "(Blanks)" && *on);
                     let vals: Vec<String> = checks.iter().filter(|(v, on)| *on && v != "(Blanks)").map(|(v, _)| v.clone()).collect();
                     let p = if checks.iter().all(|(_, b)| *b) {
@@ -1766,7 +1777,7 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                     ui.separator();
                     continue;
                 }
-                if ui.add(egui::Button::new(*label).frame(false).min_size(vec2(190.0, 20.0))).clicked() {
+                if ui.add(egui::Button::new(tl!(label)).frame(false).min_size(vec2(190.0, 20.0))).clicked() {
                     close = true;
                     match *id {
                         "ui:pasteSpecial" => app.open_dialog("pasteSpecial", json!({})),
@@ -1907,7 +1918,7 @@ fn paint_overlays(
     if let Some(h) = hover.and_then(|c| sh.hyperlinks.get(&c))
         && app.editor.is_none()
     {
-        let tip = h.tooltip.clone().unwrap_or_else(|| format!("{}\nClick once to follow. Click and hold to select this cell.", h.target));
+        let tip = h.tooltip.clone().unwrap_or_else(|| format!("{}\n{}", h.target, tl!("Click once to follow. Click and hold to select this cell.")));
         egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("link_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(tip);
         });
@@ -2015,7 +2026,7 @@ fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                     ui.separator();
                     continue;
                 }
-                if ui.add(egui::Button::new(label).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
+                if ui.add(egui::Button::new(tl!(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
                     close = true;
                     match id {
                         "ui:rowHeight" => app.open_dialog("rowHeight", json!({})),
@@ -2099,7 +2110,7 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
         p.text(
             rr.center(),
             Align2::CENTER_CENTER,
-            format!("Page {n}"),
+            crate::i18n::fmt(tl!("Page {n}"), &[("n", &n.to_string())]),
             theme::ui_bold((rr.height().min(rr.width()) / 6.0).clamp(14.0, 72.0)),
             Color32::from_black_alpha(45),
         );

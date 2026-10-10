@@ -190,3 +190,45 @@ fn ink_strokes_and_ink_to_shape() {
     assert_eq!(s.execute("draw.inkToShape", json!({})).unwrap()["kind"], "Line");
     assert!(s.execute("draw.stroke", json!({"points": [[1.0, 1.0]]})).is_err());
 }
+
+#[test]
+fn german_samples_are_german_workbooks_without_errors() {
+    use crate::lang::Lang;
+    for (name, _) in crate::sample::SAMPLES {
+        let de = crate::sample::build_in(name, Lang::German).unwrap_or_else(|| panic!("German sample {name}"));
+        let en = crate::sample::build(name).unwrap_or_else(|| panic!("sample {name}"));
+        assert_eq!(de.sheets[0].cells.len(), en.sheets[0].cells.len(), "{name}: same layout in both languages");
+        for sh in &de.sheets {
+            for (at, _) in sh.cells.iter() {
+                let value = sh.value(at);
+                assert!(!matches!(value, Value::Error(_)), "{name} {}: {value:?}", at.a1());
+            }
+        }
+        assert_ne!(crate::sample::title_in(name, Lang::German), crate::sample::title(name));
+    }
+    let mut s = Session::new();
+    s.execute("file.new", json!({"sample": "sales", "language": "de"})).unwrap();
+    assert_eq!(s.doc().unwrap().title, "Quartalsumsätze");
+    assert_eq!(s.doc().unwrap().wb.sheets[0].name, "Umsatz");
+    // The structured reference follows the German table and column names.
+    assert_eq!(v(&s, "C14"), Value::Text("Online".into()));
+    assert_eq!(v(&s, "B5"), Value::Text("Nord".into()));
+}
+
+#[test]
+fn new_workbooks_are_named_in_the_session_language() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().title, "Book1");
+    assert_eq!(s.doc().unwrap().wb.sheets[0].name, "Sheet1");
+    s.lang = crate::lang::Lang::German;
+    s.execute("file.new", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().title, "Mappe1");
+    assert_eq!(s.doc().unwrap().wb.sheets[0].name, "Tabelle1");
+    s.execute("home.insertSheet", json!({})).unwrap();
+    assert!(s.doc().unwrap().wb.sheet_index("Tabelle2").is_some());
+    // An explicit language wins over the session's.
+    s.execute("file.new", json!({"language": "en"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].name, "Sheet1");
+    assert_eq!(s.lang, crate::lang::Lang::German, "the session keeps its language");
+}
