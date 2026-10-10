@@ -723,16 +723,42 @@ fn op_param(s: Option<&str>) -> CfOperator {
     }
 }
 
+/// `r` minus `cut`, as up to four non-overlapping rectangles.
+fn subtract_range(r: RangeRef, cut: &RangeRef) -> Vec<RangeRef> {
+    let Some(i) = r.intersection(cut) else { return vec![r] };
+    let mut out = Vec::new();
+    if i.start.row > r.start.row {
+        out.push(RangeRef::new(r.start, CellRef::new(i.start.row - 1, r.end.col)));
+    }
+    if i.end.row < r.end.row {
+        out.push(RangeRef::new(CellRef::new(i.end.row + 1, r.start.col), r.end));
+    }
+    if i.start.col > r.start.col {
+        out.push(RangeRef::new(CellRef::new(i.start.row, r.start.col), CellRef::new(i.end.row, i.start.col - 1)));
+    }
+    if i.end.col < r.end.col {
+        out.push(RangeRef::new(CellRef::new(i.start.row, i.end.col + 1), CellRef::new(i.end.row, r.end.col)));
+    }
+    out
+}
+
+/// Removes the cells of `cuts` from every validation, keeping the rest of each rule's ranges.
+fn remove_validation_cells(validations: &mut Vec<Validation>, cuts: &[RangeRef]) {
+    for dv in validations.iter_mut() {
+        for cut in cuts {
+            dv.ranges = dv.ranges.iter().flat_map(|r| subtract_range(*r, cut)).collect();
+        }
+    }
+    validations.retain(|d| !d.ranges.is_empty());
+}
+
 fn validation(s: &mut Session, p: &Json) -> Result<Json> {
     let ranges = target_ranges(s, p)?;
     let sheet = target_sheet(s, p)?;
     if bool_param(p, "clear").unwrap_or(false) {
         return edit(s, |cx| {
             let sh = cx.sheet_mut(sheet)?;
-            for dv in sh.validations.iter_mut() {
-                dv.ranges.retain(|r| !ranges.iter().any(|x| x.contains_range(r)));
-            }
-            sh.validations.retain(|d| !d.ranges.is_empty());
+            remove_validation_cells(&mut sh.validations, &ranges);
             Ok(Json::Null)
         });
     }
@@ -772,10 +798,7 @@ fn validation(s: &mut Session, p: &Json) -> Result<Json> {
     };
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
-        for v in sh.validations.iter_mut() {
-            v.ranges.retain(|r| !ranges.iter().any(|x| x.contains_range(r)));
-        }
-        sh.validations.retain(|d| !d.ranges.is_empty());
+        remove_validation_cells(&mut sh.validations, &ranges);
         sh.validations.push(dv.clone());
         Ok(Json::Null)
     })
@@ -1010,6 +1033,28 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partial_validation_edits_keep_the_rest_of_the_old_rule() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let rule = |range: &str, lo: &str, hi: &str| json!({"range": range, "type": "whole", "operator": "between", "formula1": lo, "formula2": hi});
+        let ok = |s: &mut Session, cell: &str, input: &str| {
+            s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == json!(true)
+        };
+        s.execute("data.validation", rule("B1:B3", "1", "10")).unwrap();
+        s.execute("data.validation", json!({"range": "B2", "clear": true})).unwrap();
+        assert!(ok(&mut s, "B2", "999"));
+        assert!(!ok(&mut s, "B1", "999"));
+        assert!(!ok(&mut s, "B3", "999"));
+        s.execute("data.validation", rule("B2:B4", "100", "200")).unwrap();
+        for cell in ["B2", "B3", "B4"] {
+            assert!(ok(&mut s, cell, "150"), "{cell}");
+            assert!(!ok(&mut s, cell, "5"), "{cell}");
+        }
+        assert!(ok(&mut s, "B1", "5"));
+        assert!(!ok(&mut s, "B1", "150"));
+    }
 
     #[test]
     fn split() {
