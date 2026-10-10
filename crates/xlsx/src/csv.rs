@@ -42,32 +42,42 @@ pub fn decode_text(bytes: &[u8]) -> String {
 }
 
 /// Picks comma, semicolon or tab: the candidate with the most consistent count per line
-/// (outside quotes) over the first lines.
+/// (outside quotes) over the first non-blank lines. A candidate must appear on every such line, otherwise comma wins.
 pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
     let mut best = (b',', 0usize, 0usize);
     for d in [',', ';', '\t'] {
         let mut counts = vec![];
         let mut n = 0usize;
         let mut in_q = false;
+        let mut blank = true;
         for ch in text.chars().take(64 * 1024) {
+            if !in_q && ch == '\n' {
+                // Blank lines carry no delimiter evidence.
+                if !blank {
+                    counts.push(n);
+                }
+                n = 0;
+                blank = true;
+                if counts.len() >= 20 {
+                    break;
+                }
+                continue;
+            }
+            if ch != '\r' {
+                blank = false;
+            }
             if ch == quote {
                 in_q = !in_q;
             } else if !in_q && ch == d {
                 n += 1;
-            } else if !in_q && ch == '\n' {
-                counts.push(n);
-                n = 0;
-                if counts.len() >= 20 {
-                    break;
-                }
             }
         }
-        if n > 0 {
+        if !blank {
             counts.push(n);
         }
         let min = counts.iter().copied().min().unwrap_or(0);
         let total: usize = counts.iter().sum();
-        if (min, total) > (best.1, best.2) {
+        if min > 0 && (min, total) > (best.1, best.2) {
             best = (d as u8, min, total);
         }
     }
