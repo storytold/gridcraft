@@ -48,7 +48,9 @@ pub struct Sheet {
     pub validations: Vec<Validation>,
     pub tables: Vec<Table>,
     pub autofilter: Option<AutoFilter>,
+    #[serde(with = "crate::cellmap")]
     pub comments: BTreeMap<CellRef, Comment>,
+    #[serde(with = "crate::cellmap")]
     pub hyperlinks: BTreeMap<CellRef, Hyperlink>,
     pub charts: Vec<Chart>,
     pub images: Vec<Image>,

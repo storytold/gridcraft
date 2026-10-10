@@ -1018,3 +1018,20 @@ fn malformed_xlsb_keeps_the_current_workbook() {
     assert_eq!(v(&s, "A1"), Value::from("Keep me"));
     assert!(s.doc().unwrap().is_dirty());
 }
+
+#[test]
+fn notes_comments_and_links_survive_a_json_save() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "note", "author": "Example"})).unwrap();
+    s.execute("review.newComment", json!({"cell": "B2", "text": "comment", "author": "Example"})).unwrap();
+    s.execute("insert.link", json!({"cell": "C3", "target": "Sheet1!A1", "tooltip": "jump"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let bytes = crate::io::save_bytes(wb, "book.json").unwrap();
+    let (back, _) = crate::io::open_bytes("book.json", &bytes).unwrap();
+    let (before, after) = (wb.active().unwrap(), back.active().unwrap());
+    assert_eq!((before.comments.len(), before.hyperlinks.len()), (2, 1));
+    assert_eq!(after.comments, before.comments);
+    assert_eq!(after.hyperlinks, before.hyperlinks);
+    assert_eq!(after.cells, before.cells);
+}
