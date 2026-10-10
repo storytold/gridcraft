@@ -119,7 +119,7 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let d = s.doc()?;
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
-    let c = cell_param(p, "cell").unwrap_or(d.selection.active);
+    let c = cell_param_on(s, p, "cell", sheet)?.unwrap_or(d.selection.active);
     let cell = sh.cell(c);
     let style = d.wb.styles.get(sh.style_id(c));
     Ok(json!({

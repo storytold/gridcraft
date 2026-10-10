@@ -577,7 +577,7 @@ fn insert_chart(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("Select data for the chart first.".into()));
     }
     let id = d.wb.next_object_id();
-    let at = cell_param(p, "at").unwrap_or_else(|| CellRef::new(r.start.row, r.end.col + 2));
+    let at = cell_param_on(s, p, "at", sheet)?.unwrap_or_else(|| CellRef::new(r.start.row, r.end.col + 2));
     let title = str_param(p, "title").map(str::to_string).or_else(|| {
         if series.len() == 1 {
             series[0].name.as_ref().map(|n| gridcraft_calc::evaluate(&d.wb, sheet, at, n).display())
@@ -626,6 +626,7 @@ fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
 
 fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ci) = find_chart(s, p)?;
+    let at = cell_param_on(s, p, "at", si)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let Some(c) = sh.charts.get_mut(ci) else { return Ok(Json::Null) };
@@ -659,7 +660,7 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(t) = p.get("yTitle") {
             c.y_title = t.as_str().map(str::to_string);
         }
-        if let Some(at) = cell_param(p, "at") {
+        if let Some(at) = at {
             c.anchor.cell = at;
         }
         if let Some(w) = f64_param(p, "width") {
@@ -742,7 +743,7 @@ fn chart_delete(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn insert_sparkline(s: &mut Session, p: &Json) -> Result<Json> {
     let src = str_param(p, "range").ok_or_else(|| bad("insert.sparkline", "missing `range`"))?.to_string();
-    let loc = cell_param(p, "location").ok_or_else(|| bad("insert.sparkline", "missing `location`"))?;
+    let loc = cell_param(s, p, "location")?.ok_or_else(|| bad("insert.sparkline", "missing `location`"))?;
     let kind = match str_param(p, "type") {
         Some("column") => SparklineKind::Column,
         Some("winLoss") => SparklineKind::WinLoss,
@@ -801,7 +802,7 @@ fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
     let (w, h) = crate::io::image_size(&data).unwrap_or((320, 240));
     let d = s.doc()?;
     let id = d.wb.next_object_id();
-    let at = cell_param(p, "at").unwrap_or(d.selection.active);
+    let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
     let scale = (640.0 / w.max(1) as f32).min(1.0);
     let img = Image {
         id,
@@ -864,7 +865,7 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let d = s.doc()?;
     let id = d.wb.next_object_id();
-    let at = cell_param(p, "at").unwrap_or(d.selection.active);
+    let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
     let fill =
         super::format::color_param(p.get("fill")).unwrap_or(if kind == ShapeKind::TextBox { Color::rgb(255, 255, 255) } else { Color::Theme(4, 0) });
     let line = super::format::color_param(p.get("line")).unwrap_or(if kind == ShapeKind::TextBox {
@@ -944,6 +945,7 @@ fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
     let id = u32_param(p, "id").ok_or_else(|| bad("object.move", "missing `id`"))?;
     let kind = str_param(p, "kind").unwrap_or("").to_string();
     let sheet = s.doc()?.wb.active_sheet;
+    let at = cell_param(s, p, "at")?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         let anchor = match kind.as_str() {
@@ -953,7 +955,7 @@ fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
             _ => None,
         };
         let Some(a) = anchor else { return Err(bad("object.move", "no such object")) };
-        if let Some(at) = cell_param(p, "at") {
+        if let Some(at) = at {
             a.cell = at;
         }
         if let Some(v) = f64_param(p, "dx") {
@@ -1000,7 +1002,7 @@ fn set_anchor_mode(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
-    let at = cell_param(p, "cell").unwrap_or(s.doc()?.selection.active);
+    let at = cell_param_on(s, p, "cell", sheet)?.unwrap_or(s.doc()?.selection.active);
     if bool_param(p, "remove").unwrap_or(false) {
         return edit(s, |cx| {
             cx.sheet_mut(sheet)?.hyperlinks.remove(&at);
@@ -1032,7 +1034,7 @@ fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn comment(s: &mut Session, p: &Json, threaded: bool) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
-    let at = cell_param(p, "cell").unwrap_or(s.doc()?.selection.active);
+    let at = cell_param_on(s, p, "cell", sheet)?.unwrap_or(s.doc()?.selection.active);
     let text = str_param(p, "text").unwrap_or("").to_string();
     let author = str_param(p, "author").map(str::to_string).unwrap_or_else(|| s.prefs.user_name.clone());
     edit(s, |cx| {
@@ -1045,7 +1047,7 @@ fn comment(s: &mut Session, p: &Json, threaded: bool) -> Result<Json> {
 
 fn reply_comment(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
-    let at = cell_param(p, "cell").unwrap_or(s.doc()?.selection.active);
+    let at = cell_param_on(s, p, "cell", sheet)?.unwrap_or(s.doc()?.selection.active);
     let text = str_param(p, "text").unwrap_or("").to_string();
     let author = str_param(p, "author").map(str::to_string).unwrap_or_else(|| s.prefs.user_name.clone());
     edit(s, |cx| {
@@ -1057,7 +1059,7 @@ fn reply_comment(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn resolve_comment(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
-    let at = cell_param(p, "cell").unwrap_or(s.doc()?.selection.active);
+    let at = cell_param_on(s, p, "cell", sheet)?.unwrap_or(s.doc()?.selection.active);
     let v = bool_param(p, "resolved").unwrap_or(true);
     edit(s, |cx| {
         if let Some(c) = cx.sheet_mut(sheet)?.comments.get_mut(&at) {
@@ -1078,7 +1080,7 @@ fn delete_comment(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn show_note(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
-    let at = cell_param(p, "cell").unwrap_or(s.doc()?.selection.active);
+    let at = cell_param_on(s, p, "cell", sheet)?.unwrap_or(s.doc()?.selection.active);
     edit(s, |cx| {
         if let Some(c) = cx.sheet_mut(sheet)?.comments.get_mut(&at) {
             c.visible = !c.visible;
@@ -1303,7 +1305,7 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
     let size = f64_param(p, "size").unwrap_or(48.0).clamp(8.0, 1000.0) as f32;
     let d = s.doc()?;
     let id = d.wb.next_object_id();
-    let at = cell_param(p, "at").unwrap_or(d.selection.active);
+    let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
     let color = super::format::color_param(p.get("color")).unwrap_or(Color::Theme(1, 0));
     let shape = Shape {
         id,

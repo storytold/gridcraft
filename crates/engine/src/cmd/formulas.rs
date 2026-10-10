@@ -373,7 +373,7 @@ fn create_from_selection(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn trace_precedents(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
-    let at = cell_param(p, "cell").unwrap_or(d.selection.active);
+    let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
     let areas = d.calc.graph.precedents_of((d.wb.active_sheet, at));
     let v: Vec<Json> = areas.iter().map(|a| json!({"sheet": d.wb.sheet(a.sheet).map(|s| s.name.clone()), "range": a.range.a1()})).collect();
     Ok(Json::Array(v))
@@ -381,7 +381,7 @@ fn trace_precedents(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn trace_dependents(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
-    let at = cell_param(p, "cell").unwrap_or(d.selection.active);
+    let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
     let mut deps = Vec::new();
     d.calc.graph.dependents(d.wb.active_sheet, at, &mut deps);
     deps.sort();
@@ -422,7 +422,7 @@ fn error_checking(s: &mut Session, _: &Json) -> Result<Json> {
 
 fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
-    let at = cell_param(p, "cell").unwrap_or(d.selection.active);
+    let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
     let sheet = d.wb.active_sheet;
     let text = match str_param(p, "formula") {
         Some(f) => f.trim_start_matches('=').to_string(),
@@ -454,7 +454,7 @@ fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
 fn evaluate(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let f = str_param(p, "formula").ok_or_else(|| bad("formulas.evaluate", "missing `formula`"))?;
-    let at = cell_param(p, "cell").unwrap_or(d.selection.active);
+    let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
     let v = gridcraft_calc::evaluate(&d.wb, d.wb.active_sheet, at, f);
     Ok(crate::cmd::inspect::value_json(&v))
 }

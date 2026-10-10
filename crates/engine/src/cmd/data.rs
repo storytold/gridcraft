@@ -741,7 +741,7 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
         p.get("fixedWidths").and_then(Json::as_array).map(|a| a.iter().filter_map(|x| x.as_u64().map(|v| v as usize)).collect());
     let consecutive = bool_param(p, "treatConsecutive").unwrap_or(false);
     let quote = str_param(p, "textQualifier").and_then(|q| q.chars().next()).unwrap_or('"');
-    let dest = cell_param(p, "destination").unwrap_or(r.start);
+    let dest = cell_param_on(s, p, "destination", sheet)?.unwrap_or(r.start);
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
         let mut out: Vec<(CellRef, String)> = Vec::new();
@@ -980,7 +980,7 @@ fn compare_op(op: CfOperator, n: f64, a: Option<f64>, b: Option<f64>) -> bool {
 
 fn validate_cmd(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
-    let at = cell_param(p, "cell").unwrap_or(d.selection.active);
+    let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
     let input = str_param(p, "input").unwrap_or("");
     match check_validation(&d.wb, d.wb.active_sheet, at, input) {
         None => Ok(json!({"ok": true})),

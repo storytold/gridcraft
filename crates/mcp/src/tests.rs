@@ -392,3 +392,116 @@ fn file_commands_without_a_file_fail() {
         fails(&mut s, "execute_command", json!({"command": command, "params": {}}));
     }
 }
+
+// ---------- cell references ----------
+
+fn cmd_fails(s: &mut Server, command: &str, params: Value) -> String {
+    fails(s, "execute_command", json!({"command": command, "params": params}))
+}
+
+fn a1_display(s: &mut Server) -> String {
+    ok(s, "get_cell", json!({"cell": "A1"}))["text"].as_str().unwrap_or("").to_string()
+}
+
+#[test]
+fn set_cell_invalid_ref_is_error() {
+    let mut s = server();
+    for bad in ["ZZZZ0", "B0", "A", "1", "A1:B2", "not a cell", "", "XFE1", "A1048577"] {
+        fails(&mut s, "set_cell", json!({"cell": bad, "input": "x"}));
+    }
+    assert_eq!(a1_display(&mut s), "");
+}
+
+#[test]
+fn cell_ref_boundaries_still_work() {
+    let mut s = server();
+    ok(&mut s, "set_cell", json!({"cell": "A1", "input": "first"}));
+    ok(&mut s, "set_cell", json!({"cell": "$B$2", "input": "abs"}));
+    ok(&mut s, "set_cell", json!({"cell": "XFD1048576", "input": "last"}));
+    ok(&mut s, "set_cell", json!({"cell": "xfd1", "input": "lower"}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "B2"}))["text"], "abs");
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "XFD1048576"}))["text"], "last");
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "XFD1"}))["text"], "lower");
+    assert_eq!(a1_display(&mut s), "first");
+    // Ranges are still ranges for the commands that take them.
+    ok(&mut s, "read_range", json!({"range": "A1:B2"}));
+    ok(&mut s, "read_range", json!({"range": "$A$1:$B$2"}));
+    // The active sheet's own name is an accepted prefix; an absent cell still means the selection.
+    ok(&mut s, "set_cell", json!({"cell": "Sheet1!C3", "input": "named"}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "C3"}))["text"], "named");
+    ok(&mut s, "execute_command", json!({"command": "formulas.tracePrecedents", "params": {}}));
+}
+
+#[test]
+fn bad_ref_in_command_is_error() {
+    let mut s = server();
+    ok(&mut s, "set_cell", json!({"cell": "A1", "input": "7"}));
+    for (cmd, key) in [("view.freezePanes", "cell"), ("formulas.tracePrecedents", "cell"), ("formulas.traceDependents", "cell"), ("cell.get", "cell")]
+    {
+        cmd_fails(&mut s, cmd, json!({ key: "B0" }));
+        cmd_fails(&mut s, cmd, json!({ key: "nonsense" }));
+    }
+    assert_eq!(a1_display(&mut s), "7");
+}
+
+#[test]
+fn other_sheet_prefix_is_error() {
+    let mut s = server();
+    ok(&mut s, "execute_command", json!({"command": "home.insertSheet", "params": {"name": "Other"}}));
+    ok(&mut s, "execute_command", json!({"command": "sheet.activate", "params": {"sheet": 0}}));
+    fails(&mut s, "set_cell", json!({"cell": "Nope!B2", "input": "x"}));
+    // A command that cannot honour a sheet prefix must not drop it and use the active sheet.
+    cmd_fails(&mut s, "view.freezePanes", json!({"cell": "Other!B2"}));
+    cmd_fails(&mut s, "formulas.tracePrecedents", json!({"cell": "Other!B2"}));
+    ok(&mut s, "set_cell", json!({"cell": "Sheet1!B2", "input": "here"}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "B2"}))["text"], "here");
+    // cell.set resolves another existing sheet itself and writes there, not to the active sheet.
+    ok(&mut s, "set_cell", json!({"cell": "Other!B3", "input": "there"}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "B3"}))["text"], "");
+    let r = ok(&mut s, "read_range", json!({"range": "Other!B3"}));
+    assert!(r.to_string().contains("there"), "{r}");
+}
+
+#[test]
+fn cross_sheet_cell_refs_resolve() {
+    let mut s = server();
+    ok(&mut s, "execute_command", json!({"command": "home.insertSheet", "params": {"name": "Other"}}));
+    ok(&mut s, "execute_command", json!({"command": "home.insertSheet", "params": {"name": "My Sheet"}}));
+    ok(&mut s, "execute_command", json!({"command": "sheet.activate", "params": {"sheet": 0}}));
+    ok(&mut s, "set_cell", json!({"cell": "Other!B3", "input": "there"}));
+    ok(&mut s, "set_cell", json!({"cell": "'My Sheet'!A1", "input": "quoted"}));
+    // Reads honour the prefix.
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "Other!B3"}))["text"], "there");
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "'My Sheet'!A1"}))["text"], "quoted");
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "B3"}))["text"], "");
+    // Cell-level commands that resolve their own sheet land on it.
+    ok(&mut s, "execute_command", json!({"command": "review.newComment", "params": {"cell": "Other!B3", "text": "note"}}));
+    let c = ok(&mut s, "get_cell", json!({"cell": "Other!B3"}));
+    assert!(c.to_string().contains("note"), "{c}");
+    let c = ok(&mut s, "get_cell", json!({"cell": "B3"}));
+    assert!(!c.to_string().contains("note"), "{c}");
+    // The active sheet may be a quoted name with spaces.
+    ok(&mut s, "execute_command", json!({"command": "sheet.activate", "params": {"sheet": "My Sheet"}}));
+    ok(&mut s, "execute_command", json!({"command": "view.freezePanes", "params": {"cell": "'My Sheet'!B2"}}));
+    cmd_fails(&mut s, "view.freezePanes", json!({"cell": "Other!B2"}));
+    // A prefix naming a different sheet than the `sheet` argument is an error, not resolved in favour of either.
+    cmd_fails(&mut s, "cell.get", json!({"cell": "Other!B3", "sheet": "Sheet1"}));
+}
+
+#[test]
+fn text_to_columns_destination_follows_its_sheet() {
+    let mut s = server();
+    ok(&mut s, "execute_command", json!({"command": "home.insertSheet", "params": {"name": "Other"}}));
+    ok(&mut s, "execute_command", json!({"command": "sheet.activate", "params": {"sheet": 0}}));
+    ok(&mut s, "set_cell", json!({"cell": "Other!A1", "input": "a,b"}));
+    ok(
+        &mut s,
+        "execute_command",
+        json!({"command": "data.textToColumns", "params": {"range": "Other!A1", "delimiters": [","], "destination": "Other!D1"}}),
+    );
+    let r = ok(&mut s, "read_range", json!({"range": "Other!D1:E1"}));
+    assert!(r.to_string().contains('a') && r.to_string().contains('b'), "{r}");
+    // An unparsable destination and a prefix that contradicts the command's sheet are errors, not A1.
+    cmd_fails(&mut s, "data.textToColumns", json!({"range": "Other!A1", "delimiters": [","], "destination": "D0"}));
+    cmd_fails(&mut s, "data.textToColumns", json!({"range": "Other!A1", "delimiters": [","], "destination": "Sheet1!D1"}));
+}

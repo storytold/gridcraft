@@ -219,8 +219,28 @@ pub(crate) fn split_sheet(r: &str) -> (Option<String>, &str) {
     }
 }
 
-pub(crate) fn cell_param(p: &Json, key: &str) -> Option<CellRef> {
-    str_param(p, key).and_then(|t| CellRef::parse(split_sheet(t).1))
+/// A single-cell parameter. Absent or null is `Ok(None)` (callers default it); a value that is not
+/// a cell reference, or that names a sheet other than the active one, is an error rather than a
+/// silent fallback to some other cell.
+pub(crate) fn cell_param(s: &Session, p: &Json, key: &str) -> Result<Option<CellRef>> {
+    cell_param_on(s, p, key, s.doc()?.wb.active_sheet)
+}
+
+/// Like [`cell_param`], for a command that operates on `sheet` (a `Sheet!` prefix must name it).
+pub(crate) fn cell_param_on(s: &Session, p: &Json, key: &str, sheet: usize) -> Result<Option<CellRef>> {
+    let t = match p.get(key) {
+        None | Some(Json::Null) => return Ok(None),
+        Some(Json::String(t)) => t,
+        Some(v) => return Err(bad("cell", format!("invalid cell reference `{v}` for `{key}`"))),
+    };
+    let (sh, body) = split_sheet(t);
+    let c = CellRef::parse(body).ok_or_else(|| bad("cell", format!("invalid cell reference `{t}` for `{key}`")))?;
+    if let Some(name) = sh
+        && s.doc()?.wb.sheet_index(&name) != Some(sheet)
+    {
+        return Err(bad("cell", format!("`{t}` for `{key}` names a sheet other than the one this command works on")));
+    }
+    Ok(Some(c))
 }
 
 /// Applies an edit to a copy of the active workbook, then recalculates and commits it.
