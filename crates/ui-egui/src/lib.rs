@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
 pub use control::{ControlRequest, ControlResponse};
+pub mod desktop_theme;
 
 /// Persisted UI preferences.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -155,6 +156,10 @@ pub struct SheetApp {
     /// only when it changes this (see `theme::HanOrder`).
     fonts_han: Option<theme::HanOrder>,
     effective_dark: bool,
+    /// The desktop's light/dark choice, watched while the app runs (Linux has no winit answer).
+    desktop_theme: desktop_theme::DesktopTheme,
+    /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
+    desktop_dark: Option<bool>,
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,
@@ -189,6 +194,8 @@ impl SheetApp {
             fonts_set: false,
             fonts_han: None,
             effective_dark: false,
+            desktop_theme: desktop_theme::DesktopTheme::start(),
+            desktop_dark: None,
             name_box: None,
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
@@ -543,7 +550,17 @@ impl SheetApp {
                 ctx.request_repaint();
             }
         }
-        let preference = self.ui.theme_preference();
+        if let Some(answer) = self.desktop_theme.take_change() {
+            self.desktop_dark = Some(answer);
+        }
+        let preference = match (
+            self.ui.system_theme,
+            ctx.system_theme().or_else(|| self.desktop_dark.map(|d| if d { egui::Theme::Dark } else { egui::Theme::Light })),
+        ) {
+            (true, Some(egui::Theme::Dark)) => egui::ThemePreference::Dark,
+            (true, Some(egui::Theme::Light)) => egui::ThemePreference::Light,
+            _ => self.ui.theme_preference(),
+        };
         if ctx.options(|o| o.theme_preference) != preference {
             ctx.set_theme(preference);
             ctx.request_repaint();

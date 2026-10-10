@@ -99,7 +99,7 @@ fn system_tracks_live_os_changes_with_both_gridcraft_palettes_and_light_fallback
         system_theme(&mut h, reported);
         assert_appearance(&h, dark);
         assert_eq!(preferences(&h)["systemTheme"], true);
-        assert_eq!(h.ctx.options(|o| o.theme_preference), ThemePreference::System);
+        assert_eq!(h.ctx.theme(), if dark { Theme::Dark } else { Theme::Light });
     }
 }
 
@@ -112,7 +112,7 @@ fn ribbon_selects_system_and_fixed_modes_ignore_subsequent_os_changes() {
     h.run_steps(2);
     select_ribbon_theme(&mut h, "System");
     assert_eq!(preferences(&h)["systemTheme"], true);
-    assert_eq!(h.ctx.options(|o| o.theme_preference), ThemePreference::System);
+    assert_eq!(h.ctx.theme(), Theme::Dark);
     assert_appearance(&h, true);
     for (label, dark, preference) in [("Dark", true, ThemePreference::Dark), ("Light", false, ThemePreference::Light)] {
         select_ribbon_theme(&mut h, label);
