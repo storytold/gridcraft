@@ -186,6 +186,33 @@ impl Geo {
         let c1 = self.ci.at(left + ((self.cells.width() - self.frozen_w) / self.z) as f64).min(MAX_COLS - 1);
         (c0, c1)
     }
+    /// Screen areas of the panes (frozen rows/columns or the scrolling part) that hold part of `r`.
+    /// The panes share one coordinate system, so a range that is not clipped to these is also drawn
+    /// over the frozen rows/columns when it is scrolled under them.
+    pub fn range_panes(&self, r: RangeRef) -> Vec<Rect> {
+        let split = pos2(self.cells.left() + self.frozen_w, self.cells.top() + self.frozen_h);
+        let mut xs = Vec::new();
+        if r.start.col < self.fc {
+            xs.push((self.cells.left(), split.x));
+        }
+        if r.end.col >= self.fc {
+            xs.push((split.x, self.cells.right()));
+        }
+        let mut ys = Vec::new();
+        if r.start.row < self.fr {
+            ys.push((self.cells.top(), split.y));
+        }
+        if r.end.row >= self.fr {
+            ys.push((split.y, self.cells.bottom()));
+        }
+        ys.iter().flat_map(|&(y0, y1)| xs.iter().map(move |&(x0, x1)| Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)))).collect()
+    }
+    /// True when cell `c` is in the scrolling pane but scrolled entirely under the frozen rows or columns.
+    pub fn hidden_under_frozen(&self, sh: &Sheet, c: CellRef) -> bool {
+        let r = self.cell_rect(sh, c);
+        (self.fc > 0 && c.col >= self.fc && r.right() <= self.cells.left() + self.frozen_w)
+            || (self.fr > 0 && c.row >= self.fr && r.bottom() <= self.cells.top() + self.frozen_h)
+    }
 }
 
 /// Resolved look of a cell for painting.
@@ -396,7 +423,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
         let p = painter.with_clip_rect(*clip);
         paint_quadrant(&p, &geo, &wb, si, sh, *rows, *cols, &mut cf, &t);
-        paint_selection(&p, &geo, sh, &sel, &t, app);
+        paint_selection(&p, &geo, sh, &sel, &t, app, *rows, *cols);
     }
     // Freeze lines.
     if geo.fr > 0 {
@@ -901,21 +928,40 @@ fn paint_cf_icon(p: &Painter, r: Rect, set: &str, idx: usize) {
     }
 }
 
-fn paint_selection(p: &Painter, geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::Selection, t: &Tokens, app: &SheetApp) {
+/// True when `r` covers at least one cell of the pane that shows `rows` x `cols` (inclusive).
+/// The panes of a frozen sheet share one coordinate system, so a range that lives only in the
+/// scrolling pane would otherwise be drawn over the frozen pane as well.
+fn range_in_pane(r: RangeRef, rows: (u32, u32), cols: (u32, u32)) -> bool {
+    r.start.row <= rows.1 && r.end.row >= rows.0 && r.start.col <= cols.1 && r.end.col >= cols.0
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_selection(
+    p: &Painter,
+    geo: &Geo,
+    sh: &Sheet,
+    sel: &gridcraft_engine::Selection,
+    t: &Tokens,
+    app: &SheetApp,
+    rows: (u32, u32),
+    cols: (u32, u32),
+) {
     // Fill all areas except the active cell.
     for r in &sel.ranges {
+        if !range_in_pane(*r, rows, cols) {
+            continue;
+        }
         if r.is_single() && sel.ranges.len() == 1 {
             continue;
         }
         let rect = geo.range_rect(sh, *r);
         p.rect_filled(rect, 0.0, t.sel_fill);
     }
-    let active = geo.cell_rect(sh, sh.merge_at(sel.active).map(|m| m.start).unwrap_or(sel.active));
-    let active = match sh.merge_at(sel.active) {
-        Some(m) => geo.range_rect(sh, m),
-        None => active,
-    };
-    if !(sel.ranges.len() == 1 && sel.current().is_single()) {
+    let active_range = sh.merge_at(sel.active).unwrap_or_else(|| RangeRef::cell(sel.active));
+    let active = geo.range_rect(sh, active_range);
+    let active_here = range_in_pane(active_range, rows, cols);
+    let cur_here = range_in_pane(sel.current(), rows, cols);
+    if active_here && !(sel.ranges.len() == 1 && sel.current().is_single()) {
         p.rect_filled(active.shrink(1.0), 0.0, t.grid_bg.gamma_multiply(0.0));
     }
     let cur = geo.range_rect(sh, sel.current());
@@ -927,6 +973,9 @@ fn paint_selection(p: &Painter, geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::S
             if sheet.as_deref().is_some_and(|s| !s.eq_ignore_ascii_case(&sh.name)) {
                 continue;
             }
+            if !range_in_pane(r, rows, cols) {
+                continue;
+            }
             let rr = geo.range_rect(sh, r);
             let col = REF_COLORS[idx];
             p.rect_filled(rr, 0.0, col.gamma_multiply(0.12));
@@ -936,18 +985,22 @@ fn paint_selection(p: &Painter, geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::S
             }
         }
     }
-    p.rect_stroke(cur.expand(0.5), 0.0, Stroke::new(2.0, t.sel_border), StrokeKind::Middle);
-    if sel.ranges.len() > 1 {
+    if cur_here {
+        p.rect_stroke(cur.expand(0.5), 0.0, Stroke::new(2.0, t.sel_border), StrokeKind::Middle);
+    }
+    if active_here && sel.ranges.len() > 1 {
         p.rect_stroke(active, 0.0, Stroke::new(1.0, t.sel_border), StrokeKind::Inside);
     }
     // Fill handle (bottom-right of the current area).
-    if app.editor.is_none() {
+    if app.editor.is_none() && range_in_pane(RangeRef::cell(sel.current().end), rows, cols) {
         let h = Rect::from_center_size(cur.right_bottom(), vec2(6.0, 6.0));
         p.rect_filled(h.expand(1.0), 0.0, Color32::WHITE);
         p.rect_filled(h, 0.0, t.sel_border);
     }
     // Fill-handle drag preview.
-    if let crate::grid::Drag::Fill { target: Some(tr) } = &app.grid.drag {
+    if let crate::grid::Drag::Fill { target: Some(tr) } = &app.grid.drag
+        && range_in_pane(*tr, rows, cols)
+    {
         let rr = geo.range_rect(sh, *tr);
         p.extend(egui::Shape::dashed_line(
             &[rr.left_top(), rr.right_top(), rr.right_bottom(), rr.left_bottom(), rr.left_top()],
@@ -959,12 +1012,15 @@ fn paint_selection(p: &Painter, geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::S
     if let crate::grid::Drag::Move { to: Some(to), .. } = &app.grid.drag {
         let r = sel.current();
         let moved = RangeRef::new(*to, to.offset_clamped(r.height() as i64 - 1, r.width() as i64 - 1));
-        let rr = geo.range_rect(sh, moved);
-        p.rect_stroke(rr, 0.0, Stroke::new(2.0, Color32::from_gray(110)), StrokeKind::Middle);
+        if range_in_pane(moved, rows, cols) {
+            let rr = geo.range_rect(sh, moved);
+            p.rect_stroke(rr, 0.0, Stroke::new(2.0, Color32::from_gray(110)), StrokeKind::Middle);
+        }
     }
     // Marching ants around the copied range.
     if let Some(clip) = &app.session.clipboard
         && app.session.active().is_some_and(|d| d.uid == clip.doc_uid && d.wb.active_sheet == clip.sheet)
+        && range_in_pane(clip.range, rows, cols)
     {
         let rr = geo.range_rect(sh, clip.range).expand(0.5);
         let phase = app.grid.marching_phase;
@@ -1065,6 +1121,12 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     let sel = app.session.active().map(|d| d.selection.clone()).unwrap_or_default();
     let cur_rect = geo.range_rect(sh, sel.current());
     let handle = Rect::from_center_size(cur_rect.right_bottom(), vec2(9.0, 9.0));
+    // The fill handle and the move border only react in the panes where they are painted, not
+    // over the frozen rows/columns that a scrolled selection lies under.
+    let handle_panes = geo.range_panes(RangeRef::cell(sel.current().end));
+    let border_panes = geo.range_panes(sel.current());
+    let on_handle = |p: Pos2| handle.contains(p) && handle_panes.iter().any(|r| r.contains(p));
+    let on_cur_border = |p: Pos2| on_border(cur_rect, p) && border_panes.iter().any(|r| r.contains(p));
 
     // Hover cursors.
     if resp.hovered()
@@ -1076,12 +1138,12 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             ctx.set_cursor_icon(CursorIcon::ResizeColumn);
         } else if near_row_edge {
             ctx.set_cursor_icon(CursorIcon::ResizeRow);
-        } else if handle.contains(p) && app.editor.is_none() {
+        } else if on_handle(p) && app.editor.is_none() {
             ctx.set_cursor_icon(CursorIcon::Crosshair);
             if app.grid.drag == Drag::None && !pointer.any_down() {
                 resp.clone().on_hover_text_at_pointer("Drag to fill cells. Drag from inside a cell to select a range.");
             }
-        } else if in_cells && app.editor.is_none() && on_border(cur_rect, p) {
+        } else if in_cells && app.editor.is_none() && on_cur_border(p) {
             ctx.set_cursor_icon(CursorIcon::Move);
         } else if in_cells {
             ctx.set_cursor_icon(CursorIcon::Cell);
@@ -1258,11 +1320,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         if app.editor.is_some() && !app.commit_edit(0, 0, false, false) {
             return;
         }
-        if handle.contains(p) {
+        if on_handle(p) {
             app.grid.drag = Drag::Fill { target: None };
             return;
         }
-        if on_border(cur_rect, p) && resp.drag_started() {
+        if on_cur_border(p) && resp.drag_started() {
             app.grid.drag = Drag::Move { grab: c, to: None };
             return;
         }
@@ -1442,7 +1504,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     // Double-click the fill handle.
     if resp.double_clicked()
         && let Some(p) = pos
-        && handle.contains(p)
+        && on_handle(p)
     {
         // Fill down as far as the neighbouring column goes.
         let src = sel.current();
@@ -1954,7 +2016,7 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
 /// The dropdown arrow beside a cell with an in-cell list validation.
 pub fn validation_arrow(sh: &Sheet, geo: &Geo, c: CellRef) -> Option<Rect> {
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(c)))?;
-    if dv.kind != gridcraft_engine::model::ValidationKind::List || !dv.in_cell_dropdown {
+    if dv.kind != gridcraft_engine::model::ValidationKind::List || !dv.in_cell_dropdown || geo.hidden_under_frozen(sh, c) {
         return None;
     }
     let r = geo.cell_rect(sh, c);
@@ -1986,6 +2048,7 @@ fn paint_overlays(
         && let Some(dv) = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(sel.active)))
         && dv.show_input
         && !(dv.input_title.is_empty() && dv.input_message.is_empty())
+        && !geo.hidden_under_frozen(sh, sel.active)
     {
         let r = geo.cell_rect(sh, sel.active);
         let at = pos2(r.left() + 8.0, r.bottom() + 6.0);
@@ -2007,7 +2070,7 @@ fn paint_overlays(
             continue;
         }
         let r = geo.cell_rect(sh, *c);
-        if !p.clip_rect().intersects(r) {
+        if !p.clip_rect().intersects(r) || geo.hidden_under_frozen(sh, *c) {
             continue;
         }
         let at = pos2(r.right() + 10.0, r.top());
@@ -2047,7 +2110,9 @@ fn paint_overlays(
             let Some(t) = target else { continue };
             let tr = geo.range_rect(sh, t);
             if !t.is_single() {
-                p.rect_stroke(tr, 0.0, Stroke::new(1.5, blue), StrokeKind::Inside);
+                for pane in geo.range_panes(t) {
+                    p.with_clip_rect(pane.intersect(p.clip_rect())).rect_stroke(tr, 0.0, Stroke::new(1.5, blue), StrokeKind::Inside);
+                }
             }
             let (from, to) = if it.get("range").is_some() { (tr.center(), active) } else { (active, tr.center()) };
             p.line_segment([from, to], Stroke::new(1.5, blue));
@@ -2222,4 +2287,68 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
         );
     }
     p.rect_stroke(pr, 0.0, Stroke::new(3.0, blue), StrokeKind::Outside);
+}
+
+#[cfg(test)]
+mod pane_tests {
+    use super::*;
+
+    fn rng(r0: u32, c0: u32, r1: u32, c1: u32) -> RangeRef {
+        RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1))
+    }
+
+    #[test]
+    fn selection_in_scrolling_pane_is_not_drawn_in_frozen_pane() {
+        // Frozen: 2 rows and 2 columns; the scrolling pane shows rows 2..=20 and columns 2..=10.
+        let frozen_cols = ((2, 20), (0, 1));
+        let frozen_rows = ((0, 1), (2, 10));
+        let corner = ((0, 1), (0, 1));
+        let scrolled = ((2, 20), (2, 10));
+        let sel = rng(5, 4, 7, 6);
+        assert!(range_in_pane(sel, scrolled.0, scrolled.1));
+        assert!(!range_in_pane(sel, frozen_cols.0, frozen_cols.1));
+        assert!(!range_in_pane(sel, frozen_rows.0, frozen_rows.1));
+        assert!(!range_in_pane(sel, corner.0, corner.1));
+    }
+
+    #[test]
+    fn selection_across_the_freeze_line_is_drawn_in_both_panes() {
+        let sel = rng(5, 0, 7, 6);
+        assert!(range_in_pane(sel, (2, 20), (0, 1)));
+        assert!(range_in_pane(sel, (2, 20), (2, 10)));
+    }
+
+    /// Two frozen rows and columns, scrolled right so that columns C:E lie under the frozen columns.
+    fn frozen_geo(sh: &mut Sheet) -> Geo {
+        sh.freeze = Some((2, 2));
+        let scroll = vec2(3.0 * sh.default_col_width + 8.0, 0.0);
+        Geo::new(sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0)), scroll)
+    }
+
+    #[test]
+    fn overlays_skip_cells_scrolled_under_the_frozen_columns() {
+        let mut sh = Sheet::new("S");
+        let geo = frozen_geo(&mut sh);
+        assert!(geo.hidden_under_frozen(&sh, CellRef::new(5, 2)));
+        assert!(geo.hidden_under_frozen(&sh, CellRef::new(5, 4)));
+        assert!(!geo.hidden_under_frozen(&sh, CellRef::new(5, 5)));
+        assert!(!geo.hidden_under_frozen(&sh, CellRef::new(5, 0)));
+        let unscrolled = Geo::new(&sh, geo.rect, vec2(0.0, 0.0));
+        assert!(!unscrolled.hidden_under_frozen(&sh, CellRef::new(5, 2)));
+    }
+
+    #[test]
+    fn ranges_are_clipped_to_the_panes_that_hold_them() {
+        let mut sh = Sheet::new("S");
+        let geo = frozen_geo(&mut sh);
+        let split = pos2(geo.cells.left() + geo.frozen_w, geo.cells.top() + geo.frozen_h);
+        assert_eq!(geo.range_panes(rng(5, 3, 7, 6)), [Rect::from_min_max(split, geo.cells.max)]);
+        assert_eq!(geo.range_panes(rng(5, 0, 7, 6)).len(), 2);
+        assert_eq!(geo.range_panes(rng(0, 0, 7, 6)).len(), 4);
+        assert_eq!(geo.range_panes(rng(0, 0, 1, 1)), [Rect::from_min_max(geo.cells.min, split)]);
+        // The fill handle of D6:E7 sits over the frozen columns, where nothing of it is shown.
+        let handle = geo.range_rect(&sh, rng(5, 3, 6, 4)).right_bottom();
+        assert!(handle.x < split.x);
+        assert!(!geo.range_panes(rng(6, 4, 6, 4)).iter().any(|r| r.contains(handle)));
+    }
 }
