@@ -336,9 +336,11 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         ui.painter().galley(pos, g, Color32::WHITE);
     }
     // Autocomplete list and argument hint under the editor.
-    if mine && (!ed.autocomplete.is_empty() || ed.current_function().is_some()) {
+    if mine && ui.is_rect_visible(resp.rect) && (!ed.autocomplete.is_empty() || ed.current_function().is_some()) {
         let below = resp.rect.left_bottom() + vec2(0.0, 4.0);
-        egui::Area::new(id.with("ac")).fixed_pos(below).order(egui::Order::Tooltip).show(ui.ctx(), |ui| {
+        // Areas have their own clip rect: keep cell helpers inside the worksheet.
+        let bounds = if ed.from_formula_bar { ui.ctx().content_rect() } else { ui.clip_rect() };
+        egui::Area::new(id.with("ac")).fixed_pos(below).constrain_to(bounds).order(egui::Order::Tooltip).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).inner_margin(4.0).show(ui, |ui| {
                 if !ed.autocomplete.is_empty() {
                     let mut pick = None;
