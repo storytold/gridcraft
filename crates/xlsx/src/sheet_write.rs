@@ -291,7 +291,11 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             let cell = sheet.cells.get(*c);
             let ov = overrides.get(c);
             let ex = extra.get(c);
-            write_cell(&mut s, *c, cell, ov, ex, dynamic.get(c), &sid, out);
+            let array = dynamic.get(c).copied().or_else(|| {
+                let f = cell?.formula.as_ref()?;
+                (f.array.is_none() && crate::array_formula::needs_array(wb, si, *c, f)).then_some(RangeRef::cell(*c))
+            });
+            write_cell(&mut s, *c, cell, ov, ex, array.as_ref(), &sid, out);
         }
         s.push_str("</row>");
     }
@@ -564,7 +568,8 @@ fn write_cell(
         Value::Error(CellError::Spill | CellError::Calc) => Value::Error(CellError::Value),
         v => v,
     };
-    if formula.is_some() && dynamic.is_some() {
+    // A non-spilling formula may still need array evaluation to avoid implicit intersection.
+    if dynamic.is_some() && formula.is_some_and(|f| f.array.is_none()) {
         s.push_str(" cm=\"1\"");
         out.dynamic_arrays = true;
     }
