@@ -563,3 +563,53 @@ fn writing_repairs_invalid_models() {
     assert_eq!(s.tables[0].name, "Table1");
     assert_eq!(s.cell(at("B2")).unwrap().style, StyleId::DEFAULT);
 }
+
+#[test]
+fn vba_project_roundtrip() {
+    // A VBA project blob is preserved byte-identically through write and read, and the package
+    // carries the macro-enabled content type plus the vbaProject relationship.
+    let vba = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 fake OLE2 vbaProject".to_vec();
+    let mut wb = Workbook::new();
+    wb.vba_project = Some(vba.clone());
+    let bytes = write_xlsx(&wb).unwrap();
+    assert_eq!(write_xlsx(&wb).unwrap(), bytes, "output is deterministic");
+
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+    let names: Vec<String> = (0..z.len()).map(|i| z.name_for_index(i).unwrap().to_string()).collect();
+    assert!(names.iter().any(|x| x == "xl/vbaProject.bin"), "missing vbaProject.bin");
+    let mut bin = vec![];
+    z.by_name("xl/vbaProject.bin").unwrap().read_to_end(&mut bin).unwrap();
+    assert_eq!(bin, vba, "vbaProject.bin written byte-identically");
+    let mut ct = String::new();
+    z.by_name("[Content_Types].xml").unwrap().read_to_string(&mut ct).unwrap();
+    assert!(ct.contains("macroEnabled.main+xml"), "macro-enabled main content type: {ct}");
+    assert!(ct.contains("/xl/vbaProject.bin"), "vbaProject content type override: {ct}");
+    let mut rels = String::new();
+    z.by_name("xl/_rels/workbook.xml.rels").unwrap().read_to_string(&mut rels).unwrap();
+    assert!(rels.contains("relationships/vbaProject"), "vbaProject relationship: {rels}");
+
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.vba_project.as_deref(), Some(vba.as_slice()), "vbaProject survives the read");
+    assert!(rep.warnings.iter().any(|w| w.contains("not executed")), "{:?}", rep.warnings);
+
+    // A workbook without macros stays macro-free and free of VBA warnings.
+    let (plain, rp) = read_xlsx(&write_xlsx(&Workbook::new()).unwrap()).unwrap();
+    assert_eq!(plain.vba_project, None);
+    assert!(rp.warnings.iter().all(|w| !w.contains("VBA")), "{:?}", rp.warnings);
+}
+
+#[test]
+fn vba_project_read_from_foreign_file() {
+    // An .xlsm built by another producer is captured on read (not dropped with a plain warning).
+    let vba: &[u8] = b"PK\x03\x04-not-really-but-opaque-bytes";
+    let bytes = super::minimal(
+        "<sheetData/>",
+        &[("xl/vbaProject.bin", "ignored-as-text")],
+        r#"<Relationship Id="rId9" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/>"#,
+        "",
+    );
+    let (wb, rep) = read_xlsx(&bytes).unwrap();
+    assert!(wb.vba_project.is_some(), "VBA blob captured");
+    assert!(rep.warnings.iter().any(|w| w.contains("not executed")), "{:?}", rep.warnings);
+    let _ = vba;
+}

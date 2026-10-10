@@ -44,10 +44,12 @@ without losing data, and not hit a crash in a normal session. The gates:
 weeks running continuously with 3–4 parallel agents), so **≈ 215 hours in total from today**.
 Breakdown under "What's left" below.
 
-Scope decisions that affect the count: VBA is out of scope (GridCraft has its own recorded and
-editable scripts instead), and features that need Microsoft cloud services (Copilot, live Stocks/
-Geography data types, co-authoring through OneDrive, Smart Lookup, Translate) will be replaced
-by open equivalents or left out, not cloned.
+Scope decisions that affect the count: VBA macro projects in opened workbooks are **preserved**
+(GridCraft carries `xl/vbaProject.bin` through unchanged so saving a macro-enabled workbook never
+destroys its macros) but **not executed** — GridCraft's own recorded and editable scripts are the
+supported automation path. A VBA interpreter is not planned. Features that need Microsoft cloud
+services (Copilot, live Stocks/Geography data types, co-authoring through OneDrive, Smart Lookup,
+Translate) will be replaced by open equivalents or left out, not cloned.
 
 ### What's left
 

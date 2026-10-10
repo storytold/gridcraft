@@ -786,10 +786,16 @@ fn new_script(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn all_scripts(s: &mut Session, _: &Json) -> Result<Json> {
-    let all = stash_get(&s.doc()?.wb, SCRIPTS_NAME);
-    Ok(Json::Array(
-        all.as_object().map(|o| o.iter().map(|(k, v)| json!({"name": k, "steps": v.as_array().map_or(0, Vec::len)})).collect()).unwrap_or_default(),
-    ))
+    let wb = &s.doc()?.wb;
+    let all = stash_get(wb, SCRIPTS_NAME);
+    let mut list: Vec<Json> =
+        all.as_object().map(|o| o.iter().map(|(k, v)| json!({"name": k, "steps": v.as_array().map_or(0, Vec::len)})).collect()).unwrap_or_default();
+    // A preserved VBA project is reported alongside GridCraft's own scripts; it is carried on
+    // save but never executed here, so it has no step count.
+    if let Some(bytes) = &wb.vba_project {
+        list.push(json!({"name": "(VBA)", "steps": 0, "kind": "vba", "size": bytes.len(), "executed": false}));
+    }
+    Ok(Json::Array(list))
 }
 
 fn run_script(s: &mut Session, p: &Json) -> Result<Json> {

@@ -512,6 +512,11 @@ impl Dialog {
                 d
             }
             "journal" => Dialog::custom("journal", "Action Journal", json!({})),
+            "macros" => {
+                let mut d = Dialog::custom("macros", "Macros", json!({}));
+                d.result = app.session.run("view.macros", json!({})).ok();
+                d
+            }
             "statistics" => {
                 let mut d = Dialog::custom("statistics", "Workbook Statistics", json!({}));
                 d.result = app.session.run("review.workbookStatistics", json!({})).ok();
@@ -638,7 +643,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
         _ => 380.0,
     };
     egui::Window::new(d.title.clone())
@@ -676,6 +681,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         }
                     });
                 }
+                "macros" => macros(ui, &mut d),
                 "statistics" | "accessibility" | "errorChecking" | "evaluateFormula" | "comments" => {
                     let r = if d.name == "comments" {
                         app.session.active().and_then(|doc| doc.wb.active().map(|s| json!(s.comments.iter().map(|(c, m)| json!({"cell": c.a1(), "author": m.author, "text": m.text})).collect::<Vec<_>>())))
@@ -923,6 +929,34 @@ fn about(ui: &mut egui::Ui, d: &mut Dialog) {
             ui.hyperlink_to("Join the ArtCraft Discord", "https://discord.gg/artcraft");
         }
     }
+}
+
+/// The Macros dialog: lists GridCraft's own recorded scripts and (if the file carries one) the
+/// preserved VBA project. Mirrors Excel's Developer ▸ Macros list, but is honest that VBA is
+/// preserved and not executed.
+fn macros(ui: &mut egui::Ui, d: &mut Dialog) {
+    ui.label("Automation in this workbook. GridCraft runs its own scripts; a file's VBA project is preserved but not executed.");
+    ui.add_space(6.0);
+    let items: Vec<Json> = d.result.as_ref().and_then(Json::as_array).cloned().unwrap_or_default();
+    if items.is_empty() {
+        ui.weak("This workbook has no scripts or macros.");
+        return;
+    }
+    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+        for it in &items {
+            let name = it.get("name").and_then(Json::as_str).unwrap_or("(unnamed)");
+            let is_vba = it.get("kind").and_then(Json::as_str) == Some("vba");
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(name).strong());
+                if is_vba {
+                    ui.weak("— VBA project (preserved, not run)");
+                } else {
+                    let steps = it.get("steps").and_then(Json::as_u64).unwrap_or(0);
+                    ui.weak(format!("— {steps} step{}", if steps == 1 { "" } else { "s" }));
+                }
+            });
+        }
+    });
 }
 
 fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {

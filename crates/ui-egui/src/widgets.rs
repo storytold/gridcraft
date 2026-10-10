@@ -198,3 +198,51 @@ pub fn toast(app: &mut SheetApp, ctx: &egui::Context) {
     );
     ctx.request_repaint_after(std::time::Duration::from_millis(200));
 }
+
+/// The info bar under the ribbon (Excel's message-bar slot). Shows an open-time notice with an
+/// optional action button and a dismiss ✕. Returns nothing; dismissing clears `app.notice`.
+pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
+    let Some(notice) = app.notice.clone() else { return };
+    let t = Tokens::get(ui.ctx());
+    let (bg, border) = match notice.kind {
+        crate::NoticeKind::Warning => (t.notice_warn_bg, t.notice_warn_border),
+        crate::NoticeKind::Info => (t.notice_info_bg, t.notice_info_border),
+    };
+    let mut dismiss = false;
+    let mut action: Option<(String, String)> = None;
+    egui::Panel::top("notice_bar").frame(egui::Frame::NONE.fill(bg).inner_margin(egui::Margin::symmetric(12, 0))).show(ui, |ui| {
+        // Bottom border as a 1px strip spanning the bar.
+        let bar = ui.max_rect();
+        ui.painter().rect_stroke(bar, 0.0, Stroke::new(1.0, border), StrokeKind::Inside);
+        ui.horizontal_centered(|ui| {
+            let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+            icons::paint(
+                ui.painter(),
+                r,
+                match notice.kind {
+                    crate::NoticeKind::Warning => Icon::Lock,
+                    crate::NoticeKind::Info => Icon::Note,
+                },
+                border,
+            );
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(&notice.text).font(theme::ui_font(12.5)).color(t.text));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if icon_button(ui, Icon::Close, t.text_dim, "Dismiss", vec2(20.0, 20.0)).clicked() {
+                    dismiss = true;
+                }
+                if let Some((label, dialog)) = &notice.action
+                    && ui.button(egui::RichText::new(label).font(theme::ui_font(12.5))).clicked()
+                {
+                    action = Some((label.clone(), dialog.clone()));
+                }
+            });
+        });
+    });
+    if let Some((_, dialog)) = action {
+        app.open_dialog(&dialog, serde_json::json!({}));
+    }
+    if dismiss {
+        app.notice = None;
+    }
+}

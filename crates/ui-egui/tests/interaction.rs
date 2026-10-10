@@ -113,6 +113,7 @@ fn dialogs_open_and_close() {
         "spelling",
         "goTo",
         "about",
+        "macros",
     ] {
         h.state_mut().open_dialog(name, json!({}));
         h.run_steps(2);
@@ -145,4 +146,88 @@ fn column_autocomplete_completes_on_enter() {
     text(&mut h, "Ea"); // ambiguous: East / Eastern
     key(&mut h, Key::Enter, Modifiers::NONE);
     assert_eq!(value(&h, "A5"), Value::from("Ea"));
+}
+
+/// An .xlsm carrying a VBA project, saved to bytes.
+fn macro_workbook_bytes() -> Vec<u8> {
+    let mut wb = gridcraft_engine::model::Workbook::new();
+    wb.vba_project = Some(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 fake OLE2 vbaProject".to_vec());
+    gridcraft_engine::io::save_bytes(&wb, "macros.xlsm").unwrap()
+}
+
+#[test]
+fn opening_a_macro_workbook_shows_a_notice() {
+    // The reader's "macros kept but not executed" warning must reach a dismissible info bar,
+    // not be silently dropped (issue #6 follow-up: Excel-style message bar).
+    let mut h = harness(blank());
+    let b64 = gridcraft_engine::io::base64_encode(&macro_workbook_bytes());
+    let res = h.state_mut().session.run("file.open", json!({"name": "macros.xlsm", "base64": b64})).unwrap();
+    assert!(
+        res.get("warnings").and_then(|w| w.as_array()).is_some_and(|a| a.iter().any(|m| m.as_str().is_some_and(|s| s.contains("macros")))),
+        "engine reports the macro warning: {res}"
+    );
+    // The UI-side handler turns that open result into the notice (open_path does this in the app).
+    h.state_mut().show_open_warnings(&res);
+    let n = h.state().notice.clone().expect("a notice was shown");
+    assert!(n.text.contains("VBA"), "{}", n.text);
+    assert_eq!(n.kind, gridcraft_ui_egui::NoticeKind::Warning);
+    assert_eq!(n.action.as_ref().map(|a| a.1.as_str()), Some("macros"), "action opens the Macros dialog");
+
+    // The notice bar renders without panic; `ui.notice` surfaces it; dismissing clears it.
+    h.run_steps(2);
+    let got = h.state_mut().run("ui.notice", json!({})).unwrap();
+    assert_eq!(got.get("kind").and_then(|k| k.as_str()), Some("warning"));
+    h.state_mut().run("ui.notice.dismiss", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().notice.is_none());
+}
+
+#[test]
+fn plain_open_warning_becomes_an_info_notice() {
+    let mut h = harness(blank());
+    h.state_mut().show_open_warnings(&json!({"warnings": ["links to external workbooks are not supported"]}));
+    let n = h.state().notice.clone().unwrap();
+    assert_eq!(n.kind, gridcraft_ui_egui::NoticeKind::Info);
+    assert!(n.action.is_none());
+    assert!(n.text.contains("external"));
+    // No warnings → no notice, no panic.
+    h.state_mut().show_open_warnings(&json!({"warnings": []}));
+    assert!(h.state().notice.is_none());
+}
+
+#[test]
+fn macros_dialog_lists_vba_and_scripts() {
+    let mut s = blank();
+    let mut wb = gridcraft_engine::model::Workbook::new();
+    wb.vba_project = Some(vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    s.active_mut().unwrap().wb = std::sync::Arc::new(wb);
+    let mut h = harness(s);
+    h.state_mut().open_dialog("macros", json!({}));
+    h.run_steps(3);
+    let d = h.state().dialog.as_ref().expect("macros dialog open");
+    assert_eq!(d.name(), "macros");
+    let items = d.result.as_ref().and_then(|r| r.as_array()).cloned().unwrap_or_default();
+    assert!(items.iter().any(|i| i.get("kind").and_then(|k| k.as_str()) == Some("vba")), "{items:?}");
+    h.state_mut().dialog = None;
+}
+
+#[test]
+fn status_bar_shows_macro_badge() {
+    let mut s = blank();
+    let mut wb = gridcraft_engine::model::Workbook::new();
+    wb.vba_project = Some(vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    s.active_mut().unwrap().wb = std::sync::Arc::new(wb);
+    // Rendering the status bar must not panic with a VBA project present.
+    let mut h = harness(s);
+    h.run_steps(3);
+    h.state_mut().ui.dark = true;
+    h.run_steps(2);
+}
+
+#[test]
+fn alt_f8_opens_the_macros_dialog() {
+    let mut h = harness(blank());
+    key(&mut h, Key::F8, Modifiers::ALT);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name().to_string()).as_deref(), Some("macros"));
+    h.state_mut().dialog = None;
 }

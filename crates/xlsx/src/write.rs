@@ -20,6 +20,11 @@ pub const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.draw
 pub const CT_CHART: &str = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
 pub const CT_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
 pub const CT_COMMENTS: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
+/// Main workbook part: macro-free and macro-enabled variants (Excel refuses a `.xlsm` whose main
+/// part uses the macro-free content type, and vice versa).
+pub const CT_WORKBOOK_MAIN: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+pub const CT_WORKBOOK_MAIN_MACRO: &str = "application/vnd.ms-excel.sheet.macroEnabled.main+xml";
+pub const CT_VBA: &str = "application/vnd.ms-office.vbaProject";
 
 /// A part's relationships.
 #[derive(Default)]
@@ -33,6 +38,9 @@ impl Rels {
         let id = format!("rId{}", self.items.len() + 1);
         let ty = match kind {
             "core-properties" => "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties".to_string(),
+            // The VBA project relationship lives in the Microsoft-documented namespace, not the
+            // OpenXML one; Excel rejects the file if this type is wrong.
+            "vbaProject" => "http://schemas.microsoft.com/office/2006/relationships/vbaProject".to_string(),
             k => format!("{NS_REL}/{k}"),
         };
         self.items.push((id.clone(), ty, target.to_string(), false));
@@ -273,7 +281,11 @@ pub fn write_xlsx(wb: &Workbook) -> Result<Vec<u8>, IoError> {
         );
         wb_rels.add("sheetMetadata", "metadata.xml");
     }
-    out.part("xl/workbook.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"), w.into_bytes());
+    out.part("xl/workbook.xml", Some(if wb.vba_project.is_some() { CT_WORKBOOK_MAIN_MACRO } else { CT_WORKBOOK_MAIN }), w.into_bytes());
+    if let Some(data) = &wb.vba_project {
+        wb_rels.add("vbaProject", "vbaProject.bin");
+        out.part("xl/vbaProject.bin", Some(CT_VBA), data.clone());
+    }
     out.part("xl/_rels/workbook.xml.rels", None, wb_rels.xml().into_bytes());
 
     // Document properties.

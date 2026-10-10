@@ -49,6 +49,26 @@ pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error>
     decode(&s).ok_or_else(|| serde::de::Error::custom("invalid base64"))
 }
 
+/// Base64 for optional byte blobs (VBA projects): `null`/missing stays `None`.
+pub mod opt {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(data) => s.serialize_str(&super::encode(data)),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+        let s = Option::<String>::deserialize(d)?;
+        match s {
+            None => Ok(None),
+            Some(s) => super::decode(&s).map(Some).ok_or_else(|| serde::de::Error::custom("invalid base64")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

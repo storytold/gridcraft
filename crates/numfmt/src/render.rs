@@ -58,7 +58,7 @@ pub(crate) fn render_general(sec: &Section, v: f64, width: usize) -> Out {
 
 /// Renders a date/time. `None` when the serial is outside the supported range.
 pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out> {
-    if !v.is_finite() || v < 0.0 || v >= 2_958_466.0 {
+    if !v.is_finite() || !(0.0..2_958_466.0).contains(&v) {
         return None;
     }
     let sub_digits = sec.toks.iter().filter_map(|t| if let Tok::Date(DatePart::SubSec(n)) = t { Some(*n) } else { None }).max().unwrap_or(0).min(3);

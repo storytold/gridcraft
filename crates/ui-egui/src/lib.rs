@@ -63,6 +63,23 @@ pub struct SheetView {
     pub scroll: egui::Vec2,
 }
 
+/// Severity of a notice shown in the info bar under the ribbon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoticeKind {
+    Info,
+    Warning,
+}
+
+/// A dismissible bar under the ribbon, in the spirit of Excel's message bar. Used to tell the
+/// user what an opened file carried that GridCraft handled differently (e.g. preserved macros).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Notice {
+    pub text: String,
+    pub kind: NoticeKind,
+    /// Optional button: `(label, dialog name)` — opens that dialog when clicked.
+    pub action: Option<(String, String)>,
+}
+
 /// Host services the platform shell provides (file pickers, opening URLs).
 #[derive(Default)]
 pub struct Services {
@@ -96,6 +113,8 @@ pub struct SheetApp {
     pub dialog: Option<dialogs::Dialog>,
     pub message: Option<(String, String)>,
     pub toast: Option<(String, f64)>,
+    /// Dismissible info bar under the ribbon (open-time notices).
+    pub notice: Option<Notice>,
     pub services: Services,
     /// Synthetic input from agents, one batch per frame (drags need several frames).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
@@ -121,6 +140,7 @@ impl SheetApp {
             dialog: None,
             message: None,
             toast: None,
+            notice: None,
             services,
             synthetic: Default::default(),
             control_rx: None,
@@ -196,6 +216,18 @@ impl SheetApp {
                 self.message = None;
                 Ok(Json::Null)
             }
+            "ui.notice" => Ok(match &self.notice {
+                Some(n) => json!({
+                    "text": n.text,
+                    "kind": match n.kind { NoticeKind::Warning => "warning", NoticeKind::Info => "info" },
+                    "action": n.action,
+                }),
+                None => Json::Null,
+            }),
+            "ui.notice.dismiss" => {
+                self.notice = None;
+                Ok(Json::Null)
+            }
             _ => return None,
         };
         Some(r)
@@ -249,14 +281,46 @@ impl SheetApp {
 
     pub fn open_path(&mut self, path: &str) {
         match self.session.run("file.open", json!({"path": path})) {
-            Ok(_) => {
+            Ok(r) => {
                 self.ui.recent.retain(|p| p != path);
                 self.ui.recent.insert(0, path.to_string());
                 self.ui.recent.truncate(20);
+                self.show_open_warnings(&r);
             }
             Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
         }
         self.after_engine();
+    }
+
+    /// Turns the `warnings` a `file.open` result carries into an info-bar notice, choosing the
+    /// most important one (a preserved VBA project outranks, say, a skipped optional part).
+    /// Kept deliberately generic: any open-time warning can reach the user this way.
+    pub fn show_open_warnings(&mut self, r: &Json) {
+        let Some(list) = r.get("warnings").and_then(Json::as_array) else {
+            self.notice = None;
+            return;
+        };
+        let msgs: Vec<&str> = list.iter().filter_map(Json::as_str).collect();
+        if msgs.is_empty() {
+            // A clean open clears any notice left over from the previous document.
+            self.notice = None;
+            return;
+        }
+        let vba: Vec<&str> = msgs.iter().copied().filter(|m| m.to_lowercase().contains("macro") || m.contains("VBA")).collect();
+        if !vba.is_empty() {
+            self.notice = Some(Notice {
+                text: "This workbook contains VBA macros. GridCraft keeps them intact when you save, but does not run them.".into(),
+                kind: NoticeKind::Warning,
+                action: Some(("What this means".into(), "macros".into())),
+            });
+        } else {
+            let text = if msgs.len() == 1 {
+                msgs[0].to_string()
+            } else {
+                format!("{} items in this file were handled differently. First: {}", msgs.len(), msgs[0])
+            };
+            self.notice = Some(Notice { text, kind: NoticeKind::Info, action: None });
+        }
     }
 
     pub fn view_key(&self) -> Option<(u64, usize)> {
@@ -375,8 +439,9 @@ impl SheetApp {
             .unwrap_or_default();
         for (name, bytes) in arrived {
             let b64 = gridcraft_engine::io::base64_encode(&bytes);
-            if let Err(e) = self.session.run("file.open", json!({"name": name, "base64": b64})) {
-                self.message = Some(("GridCraft".into(), clean_error(&e)));
+            match self.session.run("file.open", json!({"name": name, "base64": b64})) {
+                Ok(r) => self.show_open_warnings(&r),
+                Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
             }
             self.after_engine();
         }
@@ -402,6 +467,7 @@ impl SheetApp {
         let t = theme::Tokens::get(&ctx);
         ribbon::title_bar(self, ui);
         ribbon::show(self, ui);
+        widgets::notice_bar(self, ui);
         if self.ui.formula_bar {
             formula_bar::show(self, ui);
         }

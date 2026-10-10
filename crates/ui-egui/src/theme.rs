@@ -43,6 +43,11 @@ pub struct Tokens {
     pub menu_bg: Color32,
     pub shadow: Color32,
     pub danger: Color32,
+    /// Info-bar (notice strip) fills, by severity.
+    pub notice_warn_bg: Color32,
+    pub notice_warn_border: Color32,
+    pub notice_info_bg: Color32,
+    pub notice_info_border: Color32,
 }
 
 impl Tokens {
@@ -80,6 +85,10 @@ impl Tokens {
             menu_bg: Color32::WHITE,
             shadow: Color32::from_black_alpha(40),
             danger: Color32::from_rgb(0xC4, 0x2B, 0x1C),
+            notice_warn_bg: Color32::from_rgb(0xFF, 0xF4, 0xCE),
+            notice_warn_border: Color32::from_rgb(0xF0, 0xC3, 0x6E),
+            notice_info_bg: Color32::from_rgb(0xEA, 0xF2, 0xFB),
+            notice_info_border: Color32::from_rgb(0xB9, 0xD2, 0xEC),
         }
     }
 
@@ -117,6 +126,10 @@ impl Tokens {
             menu_bg: Color32::from_rgb(0x30, 0x30, 0x30),
             shadow: Color32::from_black_alpha(90),
             danger: Color32::from_rgb(0xF1, 0x70, 0x5F),
+            notice_warn_bg: Color32::from_rgb(0x4A, 0x3F, 0x1E),
+            notice_warn_border: Color32::from_rgb(0x7A, 0x67, 0x30),
+            notice_info_bg: Color32::from_rgb(0x24, 0x33, 0x44),
+            notice_info_border: Color32::from_rgb(0x3B, 0x55, 0x72),
         }
     }
 

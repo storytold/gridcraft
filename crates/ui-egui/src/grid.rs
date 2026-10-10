@@ -577,7 +577,7 @@ fn paint_quadrant(
         };
         let indent = st.align.indent as f32 * 9.0 * z;
         let pad = 2.5 * z;
-        if st.align.wrap || st.align.h == HAlign::Justify || text.contains('\n') && st.align.wrap {
+        if st.align.wrap || st.align.h == HAlign::Justify {
             let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
             let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
             job.halign = match halign {
@@ -1603,6 +1603,9 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                     Key::Space if !cmd && !shift && is_checkbox(sh, app) => app.run_or_alert("cell.toggleCheckbox", json!({})),
                     Key::Space if cmd && !shift => app.run_or_alert("selection.column", json!({})),
                     Key::Space if shift && !cmd => app.run_or_alert("selection.row", json!({})),
+                    Key::F8 if m.alt => {
+                        app.open_dialog("macros", json!({}));
+                    }
                     Key::F9 => app.run_or_alert("formulas.calculateNow", json!({})),
                     Key::F4 if !cmd => {}
                     _ if cmd => crate::ribbon::shortcut(app, key, m),
@@ -1651,12 +1654,7 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo) {
     let Some(sh) = wb.sheet(si) else { return };
     let _ = geo;
     // Tables get an autofilter on demand.
-    let table_range = sh
-        .tables
-        .iter()
-        .find(|t| t.range.start.row <= at.y as u32 || true)
-        .filter(|t| col >= t.range.start.col && col <= t.range.end.col)
-        .map(|t| t.range);
+    let table_range = sh.tables.first().filter(|t| col >= t.range.start.col && col <= t.range.end.col).map(|t| t.range);
     if sh.autofilter.is_none()
         && let Some(r) = table_range
     {

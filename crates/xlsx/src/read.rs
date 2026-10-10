@@ -273,8 +273,18 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         wb.props.company = x.child("Company").map(|e| e.text.trim().to_string()).unwrap_or_default();
     }
 
-    if wb_rels.iter().any(|r| r.kind == "vbaProject") {
-        cx.warn("macros (VBA project) are not supported and were dropped");
+    // A VBA project is carried through unchanged: GridCraft never runs macros, but preserving the
+    // binary keeps macro-enabled workbooks from being silently stripped on save.
+    if let Some(r) = find_rel(&wb_rels, "vbaProject").cloned() {
+        match cx.pkg.read(&r.target) {
+            Ok(Some(data)) => {
+                wb.vba_project = Some(data);
+                cx.warn("macros (VBA project) were kept but not executed");
+            }
+            Ok(None) => cx.warn("macros (VBA project) reference a missing part and were dropped"),
+            Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
+            Err(e) => cx.warn(format!("macros (VBA project) could not be read and were dropped: {e}")),
+        }
     }
     if wb_rels.iter().any(|r| r.kind == "externalLink") {
         cx.warn("links to external workbooks are not supported");
