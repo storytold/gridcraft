@@ -26,6 +26,8 @@ struct App {
     focused: Option<u64>,
     focus_request: Option<u64>,
     #[cfg(target_os = "macos")]
+    root_hidden: bool,
+    #[cfg(target_os = "macos")]
     native_menu: Option<native_menu::NativeMenu>,
     #[cfg(target_os = "macos")]
     apple_events: Option<fmv_macos_events::Inbox>,
@@ -38,6 +40,8 @@ impl App {
             windows: vec![app],
             focused,
             focus_request: None,
+            #[cfg(target_os = "macos")]
+            root_hidden: false,
             #[cfg(target_os = "macos")]
             native_menu: None,
             #[cfg(target_os = "macos")]
@@ -149,6 +153,7 @@ impl App {
         let control_rx = self.windows.iter_mut().find(|app| app.session.documents().is_empty()).and_then(|app| app.control_rx.take());
         if self.windows.first().is_some_and(|app| app.session.documents().is_empty()) {
             if self.windows.len() == 1 {
+                #[cfg(not(target_os = "macos"))]
                 self.windows.clear();
             } else {
                 let promoted_id = Self::window_id(&self.windows[1]);
@@ -218,10 +223,11 @@ impl eframe::App for App {
             if self.native_menu.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
                 self.native_menu = Some(native_menu::NativeMenu::install(ctx));
             }
-            if let Some(menu) = &self.native_menu
-                && let Some(app) = self.focused.and_then(|id| self.windows.iter_mut().find(|app| Self::window_id(app) == Some(id)))
-            {
-                menu.poll(app, ctx);
+            if let Some(menu) = &self.native_menu {
+                let target = self.focused.and_then(|id| self.windows.iter().position(|app| Self::window_id(app) == Some(id))).unwrap_or(0);
+                if let Some(app) = self.windows.get_mut(target) {
+                    menu.poll(app, ctx);
+                }
             }
             if let Some(inbox) = &self.apple_events
                 && let Some(app) = self.focused.and_then(|id| self.windows.iter_mut().find(|app| Self::window_id(app) == Some(id)))
@@ -299,6 +305,14 @@ impl eframe::App for App {
         }
         self.split_workbooks();
         self.remove_closed(&ctx);
+        #[cfg(target_os = "macos")]
+        if let Some(root_id) = self.windows.first().and_then(Self::window_id)
+            && self.root_hidden
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            self.root_hidden = false;
+            self.focus_request = Some(root_id);
+        }
         if let Some(id) = self.focus_request.or(activate)
             && self.windows.iter().any(|app| Self::window_id(app) == Some(id))
         {
@@ -308,7 +322,14 @@ impl eframe::App for App {
                 ctx.request_repaint();
             }
         }
-        if self.windows.is_empty() {
+        if self.windows.first().is_none_or(|app| app.session.documents().is_empty()) {
+            self.focused = None;
+            #[cfg(target_os = "macos")]
+            if !self.root_hidden {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                self.root_hidden = true;
+            }
+            #[cfg(not(target_os = "macos"))]
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
@@ -596,5 +617,20 @@ mod tests {
 
         let titles: Vec<String> = app.windows.iter().filter_map(|window| window.session.active().map(|document| document.title.clone())).collect();
         assert_eq!(titles, ["Report", "Book1", "Book2"]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn closing_the_last_workbook_keeps_an_empty_app_coordinator() {
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut app = App::new(SheetApp::new(session, Services::default()));
+
+        app.windows[0].close_document(0, false);
+        app.remove_closed(&egui::Context::default());
+
+        assert_eq!(app.windows.len(), 1);
+        assert!(app.windows[0].session.documents().is_empty());
+        assert_eq!(app.focused, None);
     }
 }
