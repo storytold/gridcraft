@@ -577,7 +577,7 @@ fn paint_quadrant(
         };
         let indent = st.align.indent as f32 * 9.0 * z;
         let pad = 2.5 * z;
-        if st.align.wrap || st.align.h == HAlign::Justify || text.contains('\n') && st.align.wrap {
+        if st.align.wrap || st.align.h == HAlign::Justify {
             let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
             let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
             job.halign = match halign {
@@ -1654,7 +1654,7 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo) {
     let table_range = sh
         .tables
         .iter()
-        .find(|t| t.range.start.row <= at.y as u32 || true)
+        .find(|t| t.range.start.row <= at.y as u32 && t.range.end.row >= at.y as u32)
         .filter(|t| col >= t.range.start.col && col <= t.range.end.col)
         .map(|t| t.range);
     if sh.autofilter.is_none()

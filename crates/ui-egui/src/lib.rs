@@ -6,6 +6,15 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+/// An English UI string in the current interface language ([`i18n::t`]).
+#[macro_export]
+macro_rules! tl {
+    ($s:expr) => {
+        $crate::i18n::t($s)
+    };
+}
+
+pub mod backstage;
 pub mod chartview;
 pub mod control;
 pub mod credits;
@@ -13,6 +22,7 @@ pub mod dialogs;
 pub mod editor;
 pub mod formula_bar;
 pub mod grid;
+pub mod i18n;
 pub mod icons;
 pub mod panes;
 pub mod pivot_pane;
@@ -41,6 +51,11 @@ pub struct UiState {
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
     pub recent: Vec<String>,
+    pub language: String,
+    #[serde(skip)]
+    pub backstage: bool,
+    #[serde(skip)]
+    pub backstage_page: String,
 }
 
 impl Default for UiState {
@@ -53,6 +68,9 @@ impl Default for UiState {
             formula_bar_expanded: false,
             status_bar: true,
             recent: vec![],
+            language: i18n::AUTO.into(),
+            backstage: false,
+            backstage_page: "new".into(),
         }
     }
 }
@@ -75,6 +93,9 @@ pub struct Services {
     pub open_async: Option<Box<dyn Fn()>>,
     /// Files delivered asynchronously (name, bytes), opened on the next frame.
     pub inbox: Option<Inbox>,
+    /// Web: hand PDF bytes to the browser's print flow directly (no download,
+    /// no intermediate file) — opens the system print dialog on that PDF.
+    pub print: Option<Box<dyn Fn(&[u8])>>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
@@ -163,6 +184,32 @@ impl SheetApp {
                 self.toast = Some((e, now_ms()));
             } else {
                 self.message = Some(("GridCraft".into(), clean_error(&e)));
+            }
+        }
+    }
+
+    /// Runs `file.print`, builds the PDF and (where the host provides the hook — the web
+    /// build) hands the bytes straight to the browser's print flow; errors show the usual
+    /// alert. Desktop builds have no `services.print`, so this falls back to `run_or_alert`
+    /// (which still produces the PDF — just without a UI to act on the result yet).
+    pub fn print_now(&mut self) {
+        match self.run("file.print", json!({})) {
+            Ok(r) => {
+                let Some(b64) = r.get("base64").and_then(Json::as_str) else { return };
+                let Some(bytes) = gridcraft_engine::io::base64_decode(b64) else {
+                    self.message = Some(("GridCraft".into(), "Couldn't decode the generated PDF.".into()));
+                    return;
+                };
+                if let Some(print) = &self.services.print {
+                    print(&bytes);
+                }
+            }
+            Err(e) => {
+                if e.contains("is not available right now") {
+                    self.toast = Some((e, now_ms()));
+                } else {
+                    self.message = Some(("GridCraft".into(), clean_error(&e)));
+                }
             }
         }
     }
@@ -398,24 +445,29 @@ impl SheetApp {
             ctx.request_repaint();
             return;
         }
+        i18n::set_current(i18n::Lang::from_pref(&self.ui.language));
         let t0 = now_ms();
         let t = theme::Tokens::get(&ctx);
-        ribbon::title_bar(self, ui);
-        ribbon::show(self, ui);
-        if self.ui.formula_bar {
-            formula_bar::show(self, ui);
+        if self.ui.backstage {
+            backstage::show(self, ui);
+        } else {
+            ribbon::title_bar(self, ui);
+            ribbon::show(self, ui);
+            if self.ui.formula_bar {
+                formula_bar::show(self, ui);
+            }
+            if self.ui.status_bar {
+                tabs::status_bar(self, ui);
+            }
+            tabs::sheet_tabs(self, ui);
+            pivot_pane::show(self, ui);
+            panes::show(self, ui);
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
+                let g0 = now_ms();
+                grid::show(self, ui);
+                self.perf.grid_ms = now_ms() - g0;
+            });
         }
-        if self.ui.status_bar {
-            tabs::status_bar(self, ui);
-        }
-        tabs::sheet_tabs(self, ui);
-        pivot_pane::show(self, ui);
-        panes::show(self, ui);
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
-            let g0 = now_ms();
-            grid::show(self, ui);
-            self.perf.grid_ms = now_ms() - g0;
-        });
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);

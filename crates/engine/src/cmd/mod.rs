@@ -15,6 +15,7 @@ pub mod print;
 pub mod review;
 pub mod sheet;
 pub mod spelling;
+pub mod vba;
 pub mod view;
 pub mod whatif;
 
@@ -121,6 +122,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(pivot::specs());
         v.extend(whatif::specs());
         v.extend(print::specs());
+        v.extend(vba::specs());
         v
     })
 }

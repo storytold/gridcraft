@@ -273,8 +273,12 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         wb.props.company = x.child("Company").map(|e| e.text.trim().to_string()).unwrap_or_default();
     }
 
-    if wb_rels.iter().any(|r| r.kind == "vbaProject") {
-        cx.warn("macros (VBA project) are not supported and were dropped");
+    if let Some(target) = find_rel(&wb_rels, "vbaProject").map(|r| r.target.clone()) {
+        match cx.pkg.read(&target) {
+            Ok(Some(bytes)) => wb.vba = Some(std::sync::Arc::new(bytes)),
+            Ok(None) => cx.warn("macros (VBA project) couldn't be read and were dropped"),
+            Err(e) => cx.warn(format!("macros (VBA project) couldn't be read and were dropped: {e}")),
+        }
     }
     if wb_rels.iter().any(|r| r.kind == "externalLink") {
         cx.warn("links to external workbooks are not supported");

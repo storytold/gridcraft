@@ -69,6 +69,10 @@ pub struct Workbook {
     pub custom_lists: Vec<Vec<String>>,
     /// Named cell styles (Cell Styles gallery): name → style.
     pub cell_styles: Vec<(String, crate::style::Style)>,
+    /// Raw `xl/vbaProject.bin` bytes from a macro-enabled workbook (`.xlsm`/`.xltm`), kept opaque
+    /// and round-tripped byte-for-byte — GridCraft doesn't modify VBA code, only runs a basic
+    /// subset of it (see `gridcraft-vba`).
+    pub vba: Option<Arc<Vec<u8>>>,
 }
 
 impl Default for Workbook {
@@ -92,6 +96,7 @@ impl Workbook {
             protected_structure: false,
             custom_lists: vec![],
             cell_styles: vec![],
+            vba: None,
         }
     }
     pub fn sheet(&self, i: usize) -> Option<&Sheet> {
