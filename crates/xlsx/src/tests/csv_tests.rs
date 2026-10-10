@@ -74,6 +74,10 @@ fn delimiter_sniffing() {
     assert_eq!(sniff_delimiter("a\tb\n1\t2\n", '"'), b'\t');
     assert_eq!(sniff_delimiter("a,b\n\"x;y;z\",2\n", '"'), b',');
     assert_eq!(sniff_delimiter("single", '"'), b',');
+    // A delimiter missing from some lines is text, not a separator (single-column export round trip).
+    assert_eq!(sniff_delimiter("alpha;beta\r\ngamma\r\n", '"'), b',');
+    assert_eq!(sniff_delimiter("alpha\tbeta\r\ngamma\r\n", '"'), b',');
+    assert_eq!(sniff_delimiter("a;b\r\n\r\nc;d\r\n", '"'), b';');
     let wb = read_csv(b"x;y\n1,5;2", &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
     assert_eq!(v(&wb, 1, 1), Value::Number(2.0));
     assert!(read_csv(b"a", &CsvOptions { delimiter: b'"', ..Default::default() }).is_err());
