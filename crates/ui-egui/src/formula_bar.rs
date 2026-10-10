@@ -70,7 +70,7 @@ fn active_input(app: &SheetApp) -> String {
         if c.formula.is_some() && d.wb.styles.get(c.style).protection.hidden && sh.is_protected() {
             return String::new();
         }
-        return c.input_text();
+        return c.bar_text();
     }
     // A spilled cell shows the anchor's formula greyed out in Excel; we show it plainly.
     for (anchor, r) in &sh.spill_ranges {
