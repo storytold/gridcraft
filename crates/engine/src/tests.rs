@@ -960,6 +960,27 @@ fn every_command_survives_empty_params() {
 }
 
 #[test]
+fn whole_sheet_selection_stays_within_the_data() {
+    // On an empty sheet with everything selected these filled or scanned every cell of the
+    // sheet, running out of memory or time.
+    let mut s = s();
+    s.execute("edit.selectAll", json!({})).unwrap();
+    for cmd in ["edit.fillDown", "edit.fillRight", "edit.fillUp", "edit.fillLeft", "data.removeDuplicates"] {
+        s.execute(cmd, json!({})).unwrap();
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [3, 4], [5, 6]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:XFD1048576"})).unwrap();
+    s.execute("edit.fillUp", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(5.0));
+    assert!(s.execute("edit.fillDown", json!({"range": "A1:Z1000000"})).is_err(), "too large to fill");
+    assert!(s.execute("edit.autoFill", json!({"source": "A1:XFD1048576", "target": "A1"})).is_err(), "too large to fill");
+    s.execute("range.setValues", json!({"range": "D1", "values": [[1], [1], [2]]})).unwrap();
+    let r = s.execute("data.removeDuplicates", json!({"range": "D:D", "header": false})).unwrap();
+    assert_eq!((r["removed"].clone(), r["remaining"].clone()), (json!(1), json!(2)));
+    assert!(s.execute("data.removeDuplicates", json!({"range": "A1:XFD1048576", "header": false})).is_ok());
+}
+
+#[test]
 fn parity_counts() {
     let (done, total) = crate::catalog::parity();
     assert!(total > 250);
