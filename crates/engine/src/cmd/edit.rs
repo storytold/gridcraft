@@ -570,6 +570,7 @@ fn coalesce(cells: &[CellRef]) -> Vec<RangeRef> {
 fn undo(s: &mut Session, p: &Json) -> Result<Json> {
     let steps = u32_param(p, "steps").unwrap_or(1).max(1);
     let d = s.doc_mut()?;
+    let before = d.wb.clone();
     let mut label = String::new();
     for _ in 0..steps {
         let Some(e) = d.undo.pop() else { break };
@@ -579,7 +580,7 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         d.wb = e.wb;
         d.selection = e.selection;
     }
-    d.calc.rebuild(&d.wb);
+    d.calc.sync(&before, &d.wb);
     d.revision += 1;
     Ok(json!({"undone": label}))
 }
@@ -587,6 +588,7 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
 fn redo(s: &mut Session, p: &Json) -> Result<Json> {
     let steps = u32_param(p, "steps").unwrap_or(1).max(1);
     let d = s.doc_mut()?;
+    let before = d.wb.clone();
     let mut label = String::new();
     for _ in 0..steps {
         let Some(e) = d.redo.pop() else { break };
@@ -596,7 +598,7 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         d.wb = e.wb;
         d.selection = e.selection;
     }
-    d.calc.rebuild(&d.wb);
+    d.calc.sync(&before, &d.wb);
     d.revision += 1;
     Ok(json!({"redone": label}))
 }
@@ -1022,16 +1024,16 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
         if keys.is_empty() {
             continue;
         }
+        // Each formula is adjusted on its own, so a large sheet's are spread over threads; only
+        // the ones whose references moved are printed and stored again.
+        let adjusted = gridcraft_calc::par::filter_map(&keys, |(c, f)| {
+            let expr = f.expr_arc()?;
+            let new = gridcraft_formula::adjust::adjust((*expr).clone(), &host, target, e);
+            (new != *expr).then(|| (*c, Formula { text: gridcraft_formula::print(&new), expr: Some(std::sync::Arc::new(new)), array: f.array }))
+        });
         let Some(sheet) = wb.sheet_mut(si) else { continue };
-        for (c, f) in keys {
-            let Some(expr) = f.expr() else { continue };
-            let new = gridcraft_formula::adjust::adjust(expr, &host, target, e);
-            let text = gridcraft_formula::print(&new);
-            if text != f.text
-                && let Some(cell) = sheet.cells.get_mut(c)
-            {
-                let mut nf = Formula::from_expr(new);
-                nf.array = f.array;
+        for (c, nf) in adjusted {
+            if let Some(cell) = sheet.cells.get_mut(c) {
                 cell.formula = Some(std::sync::Arc::new(nf));
             }
         }

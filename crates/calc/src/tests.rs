@@ -671,3 +671,22 @@ fn thread_count_follows_the_settings() {
     s.threads = 0;
     assert!(crate::recalc::thread_count(&s) >= 1);
 }
+
+#[test]
+fn clearing_a_far_blocker_unblocks_a_spill() {
+    // The blocker is 79 rows below the anchor: further than the 64-cell window typed edits look
+    // at, so only the index of blocked anchors finds it when the cell is cleared.
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(100)");
+    t.set("A80", "x");
+    assert_eq!(t.get("A1"), Value::Error(CellError::Spill));
+    t.set("A80", "");
+    assert_eq!((t.num("A1"), t.num("A80")), (1.0, 80.0));
+    // Blocked again, then the graph rebuilt from the workbook (as undo does): the index is
+    // rebuilt from the cells' values.
+    t.set("A90", "y");
+    assert_eq!(t.get("A1"), Value::Error(CellError::Spill));
+    t.calc.rebuild(&t.wb);
+    t.set("A90", "");
+    assert_eq!(t.num("A90"), 90.0);
+}

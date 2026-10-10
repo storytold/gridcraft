@@ -1686,3 +1686,38 @@ fn commands_wait_for_a_background_recalculation() {
     s.finish_calc();
     assert_eq!(v(&s, "C1"), Value::Number(c1));
 }
+
+#[test]
+fn undo_and_redo_keep_the_dependency_graph_in_step() {
+    // Undo and redo update the graph from the cells that differ (not a rebuild): formulas they
+    // bring back, remove or change must still react to edits of what they read.
+    let mut s = s();
+    let set = |s: &mut Session, cell: &str, input: &str| s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    set(&mut s, "A1", "1");
+    set(&mut s, "B1", "=A1*2");
+    set(&mut s, "B1", "=A1*3");
+    s.execute("edit.undo", json!({})).unwrap();
+    set(&mut s, "A1", "5");
+    assert_eq!(v(&s, "B1"), Value::Number(10.0), "the restored formula reads A1");
+    s.execute("edit.undo", json!({})).unwrap(); // A1 back to 1
+    s.execute("edit.redo", json!({})).unwrap(); // A1 = 5 again
+    assert_eq!(v(&s, "B1"), Value::Number(10.0));
+    // Clearing a formula and undoing that brings its dependency back.
+    s.execute("edit.clearAll", json!({"range": "B1"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    set(&mut s, "A1", "7");
+    assert_eq!(v(&s, "B1"), Value::Number(14.0));
+    // A formula removed by undo no longer reacts.
+    set(&mut s, "C1", "=A1+1");
+    s.execute("edit.undo", json!({})).unwrap();
+    set(&mut s, "A1", "8");
+    assert_eq!(v(&s, "C1"), Value::Empty);
+    assert_eq!(v(&s, "B1"), Value::Number(16.0));
+    // Undo across a structural edit (every cell below moves) and a sheet rename (references
+    // resolve again).
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+    s.execute("edit.undo", json!({"steps": 2})).unwrap();
+    set(&mut s, "A1", "9");
+    assert_eq!(v(&s, "B1"), Value::Number(18.0));
+}

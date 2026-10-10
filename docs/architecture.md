@@ -34,7 +34,10 @@ including tests, 2026-10-10.
    enabled, run, journal, undoable }`; ids follow Excel's ribbon (`home.bold`, `insert.chart`,
    `data.sortAscending`) plus primitives (`cell.set`, `selection.set`, `range.setValues`).
    `Session::execute` catches escaped panics and restores the workbook (never-crash guard).
-2. **Edits** change the model through copy-on-write bands; undo keeps the previous snapshot.
+2. **Edits** change the model through copy-on-write bands (64 rows behind an `Arc`; each row a
+   vector of cells sorted by column); undo keeps the previous snapshot, and undo/redo bring the
+   dependency graph along by looking only at the cells that differ (`Calc::sync`; a change of
+   most of the workbook or of its sheets rebuilds it).
 3. **Recalc** marks dependents of changed cells dirty through the dependency graph (with range
    nodes for range dependents), evaluates in topological order (Kahn's algorithm over the dirty
    set; a formula that reads a cell not yet done, through a name, table or INDIRECT, waits on a
@@ -51,7 +54,11 @@ including tests, 2026-10-10.
    recalculate hands them to a thread with a copy of the workbook; the command waits 80 ms, then
    returns and the UI polls (`Session::poll_calc`) for the results, applied as a patch of values
    and spills. Commands that move around run meanwhile; every other command waits first, so it
-   reads final values and every undo snapshot is calculated.
+   reads final values and every undo snapshot is calculated. The graph keeps a referenced cell's
+   one dependent inline (a set only when several formulas read it) and an index of formulas
+   showing `#SPILL!`, so edits never scan the sheet for blocked spills. Bulk work over
+   independent items (adjusting formulas after a row insert, finding precedents in a rebuild)
+   goes through `gridcraft_calc::par::filter_map`, which uses every processor and keeps order.
 4. **Rendering**: the egui grid reads display values (number formats applied in `engine/display.rs`)
    for the visible window only; charts render through `crates/chart` primitives.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
@@ -82,6 +89,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Cell rows as sorted vectors, compact dependents, spill-anchor index, incremental graph sync on undo/redo, parallel bulk helpers |
 | 2026-10-11 | minor | Background recalculation in the desktop app |
 | 2026-10-11 | minor | Recalc: multi-threaded levels |
 | 2026-10-11 | minor | Recalc: shared ranges per pass and lookup indexes |

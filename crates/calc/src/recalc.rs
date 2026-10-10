@@ -49,8 +49,66 @@ pub type Key = (usize, CellRef);
 
 #[derive(Clone, Debug, Default)]
 struct Node {
-    areas: Vec<Area>,
+    areas: Box<[Area]>,
     dynamic: bool,
+}
+
+impl Node {
+    fn new(areas: Vec<Area>, dynamic: bool) -> Node {
+        Node { areas: areas.into_boxed_slice(), dynamic }
+    }
+}
+
+/// The formulas that read one cell. Nearly every cell is read by one formula (`A2*B2` filled
+/// down), which is kept inline; a separate set is allocated only for cells read by several.
+#[derive(Clone, Debug)]
+enum Deps {
+    One(Key),
+    Many(Box<HashSet<Key>>),
+}
+
+impl Deps {
+    fn insert(&mut self, k: Key) {
+        match self {
+            Deps::One(x) if *x == k => {}
+            Deps::One(x) => {
+                let mut set = HashSet::default();
+                set.insert(*x);
+                set.insert(k);
+                *self = Deps::Many(Box::new(set));
+            }
+            Deps::Many(set) => {
+                set.insert(k);
+            }
+        }
+    }
+
+    /// Removes `k`; returns whether no formula is left.
+    fn remove(&mut self, k: &Key) -> bool {
+        match self {
+            Deps::One(x) => x == k,
+            Deps::Many(set) => {
+                set.remove(k);
+                if set.len() == 1
+                    && let Some(&last) = set.iter().next()
+                {
+                    *self = Deps::One(last);
+                }
+                set_is_empty(self)
+            }
+        }
+    }
+
+    fn for_each(&self, mut f: impl FnMut(Key)) {
+        match self {
+            Deps::One(x) => f(*x),
+            Deps::Many(set) => set.iter().copied().for_each(f),
+        }
+    }
+}
+
+fn set_is_empty(d: &Deps) -> bool {
+    matches!(d, Deps::Many(set) if set.is_empty())
 }
 
 /// Ranges wider than this many columns go to the per-sheet wide index instead of per-column ones.
@@ -185,7 +243,7 @@ impl<T: Copy + Ord> Intervals<T> {
 pub struct Graph {
     nodes: HashMap<Key, Node>,
     /// single cell → dependents
-    cell_deps: HashMap<Key, HashSet<Key>>,
+    cell_deps: HashMap<Key, Deps>,
     /// (sheet, col) → row intervals of the ranges (up to `WIDE` columns) that cover the column
     col_deps: HashMap<(usize, u32), Intervals<Key>>,
     /// sheet → row intervals of wider ranges, with their columns: (first, last, dependent)
@@ -232,7 +290,12 @@ impl Graph {
         self.remove(k);
         let (cells, cols, wide) = Self::entries(&node.areas);
         for c in cells {
-            self.cell_deps.entry(c).or_default().insert(k);
+            match self.cell_deps.entry(c) {
+                std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().insert(k),
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(Deps::One(k));
+                }
+            }
         }
         for (s, c, r0, r1) in cols {
             self.col_deps.entry((s, c)).or_default().insert(r0, r1, k);
@@ -252,11 +315,10 @@ impl Graph {
         let Some(old) = self.nodes.remove(&k) else { return };
         let (cells, cols, wide) = Self::entries(&old.areas);
         for c in cells {
-            if let Some(v) = self.cell_deps.get_mut(&c) {
-                v.remove(&k);
-                if v.is_empty() {
-                    self.cell_deps.remove(&c);
-                }
+            if let Some(v) = self.cell_deps.get_mut(&c)
+                && v.remove(&k)
+            {
+                self.cell_deps.remove(&c);
             }
         }
         for (s, c, r0, r1) in cols {
@@ -298,7 +360,7 @@ impl Graph {
     /// Formulas that read cell `c` of `sheet`.
     pub fn dependents(&self, sheet: usize, c: CellRef, out: &mut Vec<Key>) {
         if let Some(v) = self.cell_deps.get(&(sheet, c)) {
-            out.extend(v.iter().copied());
+            v.for_each(|k| out.push(k));
         }
         if let Some(v) = self.col_deps.get(&(sheet, c.col)) {
             v.query(c.row, c.row, &mut |k| out.push(*k));
@@ -317,13 +379,13 @@ impl Graph {
         if range.count() <= 4096 {
             for c in range.iter() {
                 if let Some(v) = self.cell_deps.get(&(sheet, c)) {
-                    out.extend(v.iter().copied());
+                    v.for_each(|k| out.push(k));
                 }
             }
         } else {
             for ((s, c), v) in &self.cell_deps {
                 if *s == sheet && range.contains(*c) {
-                    out.extend(v.iter().copied());
+                    v.for_each(|k| out.push(k));
                 }
             }
         }
@@ -352,7 +414,7 @@ impl Graph {
 
     /// Precedent areas of a formula cell (for Trace Precedents).
     pub fn precedents_of(&self, k: Key) -> Vec<Area> {
-        self.nodes.get(&k).map(|n| n.areas.clone()).unwrap_or_default()
+        self.nodes.get(&k).map(|n| n.areas.to_vec()).unwrap_or_default()
     }
 
     /// The order to evaluate `dirty` in, as levels: each formula after the dirty formulas its
@@ -482,6 +544,9 @@ pub struct Calc {
     /// Where a recalculation reports how far it has got (for a status bar while it runs on
     /// another thread).
     pub progress: Option<Arc<CalcProgress>>,
+    /// Formulas whose value is `#SPILL!`: an edit near one may unblock it. Kept up to date at
+    /// write-back (and by `rebuild`), so edits look at these instead of scanning the sheet.
+    spill_blocked: HashSet<Key>,
 }
 
 /// How far a recalculation has got: formulas evaluated out of those to evaluate (which grows
@@ -495,7 +560,15 @@ pub struct CalcProgress {
 
 impl Default for Calc {
     fn default() -> Self {
-        Calc { graph: Graph::default(), rng: 0x9E37_79B9_7F4A_7C15, fixed_now: None, circular: vec![], last_recalc_cells: 0, progress: None }
+        Calc {
+            graph: Graph::default(),
+            rng: 0x9E37_79B9_7F4A_7C15,
+            fixed_now: None,
+            circular: vec![],
+            last_recalc_cells: 0,
+            progress: None,
+            spill_blocked: HashSet::default(),
+        }
     }
 }
 
@@ -1077,17 +1150,80 @@ impl Calc {
         now_serial()
     }
 
+    /// Brings the graph from workbook `old` to `new` (an undo or redo step) by looking only at
+    /// the cells that differ, which the copy-on-write cell store finds band by band: undoing a
+    /// one-cell edit in a sheet of a million formulas touches one cell. When the sheets differ
+    /// (added, removed, renamed, moved), references resolve differently and the graph is
+    /// rebuilt.
+    pub fn sync(&mut self, old: &Workbook, new: &Workbook) {
+        let same_sheets = old.sheets.len() == new.sheets.len() && old.sheets.iter().zip(&new.sheets).all(|(a, b)| a.name == b.name);
+        if !same_sheets {
+            self.rebuild(new);
+            return;
+        }
+        let changed: Vec<(usize, CellRef)> = old
+            .sheets
+            .iter()
+            .zip(&new.sheets)
+            .enumerate()
+            .filter(|(_, (a, b))| !Arc::ptr_eq(a, b))
+            .flat_map(|(si, (a, b))| b.cells.diff(&a.cells).into_iter().map(move |c| (si, c)))
+            .collect();
+        // Most of the workbook changed (a sort, a structural edit): rebuilding, which works out
+        // precedents on every processor, is quicker than updating cell by cell.
+        if changed.len() > (self.graph.len() / 2).max(4096) {
+            self.rebuild(new);
+            return;
+        }
+        for (si, c) in changed {
+            if let Some(b) = new.sheets.get(si) {
+                let k = (si, c);
+                let cell = b.cell(c);
+                match cell.and_then(|x| x.formula.as_ref()).and_then(|f| f.expr_arc()) {
+                    Some(e) => {
+                        let (areas, dynamic) = precedents(new, si, &e);
+                        self.graph.insert(k, Node::new(areas, dynamic));
+                        if cell.is_some_and(|x| x.value == Value::Error(CellError::Spill)) {
+                            self.spill_blocked.insert(k);
+                        } else {
+                            self.spill_blocked.remove(&k);
+                        }
+                    }
+                    None => {
+                        self.graph.remove(k);
+                        self.spill_blocked.remove(&k);
+                    }
+                }
+            }
+        }
+        self.graph.settle();
+    }
+
     /// Rebuilds the graph from scratch.
     pub fn rebuild(&mut self, wb: &Workbook) {
         self.graph = Graph::default();
-        for (si, sheet) in wb.sheets.iter().enumerate() {
-            for (c, cell) in sheet.cells.iter() {
-                if let Some(f) = &cell.formula
-                    && let Some(e) = f.expr()
-                {
-                    let (areas, dynamic) = precedents(wb, si, &e);
-                    self.graph.insert((si, c), Node { areas, dynamic });
-                }
+        self.spill_blocked.clear();
+        // Sized once: growing the tables formula by formula rehashes them repeatedly and briefly
+        // holds two copies.
+        let formulas: Vec<(Key, &gridcraft_model::Cell)> = wb
+            .sheets
+            .iter()
+            .enumerate()
+            .flat_map(|(si, sh)| sh.cells.iter().filter(|(_, c)| c.formula.is_some()).map(move |(c, cell)| ((si, c), cell)))
+            .collect();
+        self.graph.nodes.reserve(formulas.len());
+        self.graph.cell_deps.reserve(formulas.len());
+        // Working out precedents is independent per formula (spread over threads); the indexes
+        // are filled on this thread.
+        let nodes = crate::par::filter_map(&formulas, |&(k, cell)| {
+            let e = cell.formula.as_ref()?.expr_arc()?;
+            let (areas, dynamic) = precedents(wb, k.0, &e);
+            Some((k, Node::new(areas, dynamic), cell.value == Value::Error(CellError::Spill)))
+        });
+        for (k, node, blocked) in nodes {
+            self.graph.insert(k, node);
+            if blocked {
+                self.spill_blocked.insert(k);
             }
         }
         self.graph.settle();
@@ -1145,10 +1281,11 @@ impl Calc {
             match formula.and_then(|f| f.expr()) {
                 Some(e) => {
                     let (areas, dynamic) = precedents(wb, k.0, &e);
-                    self.graph.insert(k, Node { areas, dynamic });
+                    self.graph.insert(k, Node::new(areas, dynamic));
                 }
                 None => {
                     self.graph.remove(k);
+                    self.spill_blocked.remove(&k);
                     // A formula replaced by a constant (or cleared) takes its spilled values with it.
                     if let Some(sh) = wb.sheet_mut(k.0)
                         && let Some(r) = sh.spill_ranges.remove(&k.1)
@@ -1177,31 +1314,44 @@ impl Calc {
         let mut seeds: Vec<Key> = changed.to_vec();
         let mut emptied: Vec<Key> = Vec::new();
         // Typing into (or clearing) a cell a dynamic array spills over (or would spill over)
-        // re-evaluates the anchor, which may now be blocked or unblocked.
+        // re-evaluates the anchor, which may now be blocked or unblocked. Only the spill ranges
+        // that meet the edited area are checked cell by cell, and only formulas blocked now
+        // (`spill_blocked`, usually none) can be unblocked.
+        let mut boxes: Vec<(usize, RangeRef)> = Vec::new();
+        for &(si, c) in changed {
+            match boxes.iter_mut().find(|b| b.0 == si) {
+                Some(b) => b.1 = b.1.union(&RangeRef::new(c, c)),
+                None => boxes.push((si, RangeRef::new(c, c))),
+            }
+        }
+        let spilling: Vec<(usize, CellRef, RangeRef)> = boxes
+            .iter()
+            .filter_map(|(si, b)| Some((*si, b, wb.sheet(*si)?)))
+            .flat_map(|(si, b, sh)| sh.spill_ranges.iter().filter(|(_, r)| r.intersects(b)).map(move |(a, r)| (si, *a, *r)))
+            .collect();
+        let blocked: Vec<Key> = self.spill_blocked.iter().copied().collect();
         for &k in changed {
-            if let Some(sh) = wb.sheet(k.0) {
-                for (anchor, r) in &sh.spill_ranges {
-                    if *anchor != k.1 && r.contains(k.1) {
-                        seeds.push((k.0, *anchor));
-                    }
+            for &(si, anchor, r) in &spilling {
+                if si == k.0 && anchor != k.1 && r.contains(k.1) {
+                    seeds.push((si, anchor));
                 }
-                for (c, cell) in sh.cells.iter_range(RangeRef::new(CellRef::new(k.1.row.saturating_sub(64), k.1.col.saturating_sub(64)), k.1)) {
-                    if c != k.1 && cell.value == Value::Error(CellError::Spill) {
-                        seeds.push((k.0, c));
-                    }
+            }
+            for &(si, a) in &blocked {
+                if si == k.0 && a != k.1 && a.row <= k.1.row && a.col <= k.1.col && k.1.row - a.row <= 64 && k.1.col - a.col <= 64 {
+                    seeds.push((si, a));
                 }
-                if !sh.cells.has(k.1) {
-                    match emptied.iter_mut().find(|x| x.0 == k.0) {
-                        Some(x) => x.1 = CellRef::new(x.1.row.max(k.1.row), x.1.col.max(k.1.col)),
-                        None => emptied.push(k),
-                    }
+            }
+            if wb.sheet(k.0).is_some_and(|sh| !sh.cells.has(k.1)) {
+                match emptied.iter_mut().find(|x| x.0 == k.0) {
+                    Some(x) => x.1 = CellRef::new(x.1.row.max(k.1.row), x.1.col.max(k.1.col)),
+                    None => emptied.push(k),
                 }
             }
         }
         // An emptied cell can unblock an anchor any distance above or to the left of it.
         for (si, end) in emptied {
-            for &(s, c) in self.graph.nodes.keys() {
-                if s == si && c.row <= end.row && c.col <= end.col && wb.sheet(s).is_some_and(|sh| sh.value(c) == Value::Error(CellError::Spill)) {
+            for &(s, c) in &blocked {
+                if s == si && c.row <= end.row && c.col <= end.col {
                     seeds.push((s, c));
                 }
             }
@@ -1307,6 +1457,11 @@ impl Calc {
             let mut spill_changes: Vec<Key> = Vec::new();
             let mut freed: Vec<(usize, RangeRef)> = Vec::new();
             for (k, v) in results {
+                if v == Value::Error(CellError::Spill) {
+                    self.spill_blocked.insert(k);
+                } else {
+                    self.spill_blocked.remove(&k);
+                }
                 let Some(sheet) = wb.sheet_mut(k.0) else { continue };
                 if let Some(cell) = sheet.cells.get_mut(k.1)
                     && cell.value != v
@@ -1340,6 +1495,7 @@ impl Calc {
                         if let Some(cell) = sheet.cells.get_mut(k.1) {
                             cell.value = Value::Error(CellError::Spill);
                         }
+                        self.spill_blocked.insert(*k);
                     } else {
                         for (i, c) in range.iter().enumerate() {
                             if c != k.1 {
@@ -1369,12 +1525,8 @@ impl Calc {
             }
             // An area a formula no longer spills over may unblock another formula's array.
             for (si, o) in freed {
-                for &(s, c) in self.graph.nodes.keys() {
-                    if s == si
-                        && c.row <= o.end.row
-                        && c.col <= o.end.col
-                        && wb.sheet(s).is_some_and(|sh| sh.value(c) == Value::Error(CellError::Spill))
-                    {
+                for &(s, c) in &self.spill_blocked {
+                    if s == si && c.row <= o.end.row && c.col <= o.end.col {
                         spill_changes.push((s, c));
                     }
                 }

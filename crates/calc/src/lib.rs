@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod eval;
+pub mod par;
 pub mod recalc;
 
 pub use eval::{Area, SPECIAL_FUNCTIONS, is_known_function};

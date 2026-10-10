@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (Performance: recalc order and chain length; shared ranges and lookup indexes; multi-threaded recalc; background recalculation; measured with the `perf` example) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (Performance: recalc order and chain length; shared ranges and lookup indexes; multi-threaded recalc; background recalculation; memory and bulk edits; measured with the `perf` example) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -202,6 +202,10 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 |---|---|---|---|
 | Sheet size limits | 1,048,576 × 16,384 | same | measured (`crates/core/src/addr.rs`) |
 | Window during a long recalculation | responds: an edit returns in ~90 ms, the rest runs on another thread with "Calculating (N threads): x%" in the status bar; commands that read values wait for it | responds; typing interrupts and resumes it | measured: 40,000 formulas over 2,000-cell arrays, desktop app driven over the control channel |
+| Memory, 600,000 values + 200,000 formulas with their dependency graph | 296 MB (~70 B per value; ~590 B per formula cell, ~650 B per formula in the graph); was 390 MB | far less per formula (shared formulas) | measured: a probe building the workbook directly, peak footprint, 2026-10-11 |
+| Paste 1,000,000 values / fill 200,000 formulas | 0.32 s / 0.36 s (was 1.31 s / 0.69 s) | well under 1 s | GridCraft measured: `perf` example, `scale`, 200,000 rows |
+| Insert or delete a row above 200,000 formulas | 0.24 s / 0.22 s (was 0.60 s / 0.58 s); every formula is still recalculated after it | near instant | GridCraft measured: `perf`, `scale` |
+| Undo / redo of one edit in a 200,000-formula sheet | 0.3 ms (was 140 ms: the graph was rebuilt) | instant | GridCraft measured: `perf`, `scale` |
 | Recalc threads | all cores (or a manual count, or off: Excel's Calculation Options, saved as XLSX `concurrentCalc` / `concurrentManualCount`); 1 on the web | all cores | measured: each independent level of the dependency graph with 512+ formulas is split across threads; results match one thread exactly (test `multi_threaded_recalc_matches_one_thread`) |
 | 10,000 independent formulas over a 1,000-cell array each, recalc after an edit | 1.89 s on 1 thread, 0.99 s on 2, 0.57 s on 4, 0.35 s on all 10 cores | scales with cores | GridCraft measured: `perf` example, `heavy`, Apple M2 Pro (6 performance + 4 efficiency cores) |
 | Edit → recalc, 100k dependents | ~50 ms (2026-10-11; was ~0.4 s on 2026-10-07) | tens of ms | measured: `perf` example, `basic`, 50,000 rows (a formula column and a running sum), Apple M2 Pro |
@@ -212,9 +216,10 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 | Open a ~100 MB XLSX | fails (#175) | opens | user report |
 | Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
 
-Work: streaming XLSX reader with shared-string and style dedup, interrupting a background
-recalculation when the user types (it waits today), recalculating on open in the background,
-whole-column reference clamping (#205). The numbers above come from
+Work: shared formulas (one parsed formula per filled block, the largest remaining memory cost),
+structural edits that recalculate only what they affect, streaming XLSX reader with shared-string
+and style dedup, interrupting a background recalculation when the user types (it waits today),
+recalculating on open in the background, whole-column reference clamping (#205). The numbers above come from
 `cargo run --release -p gridcraft-engine --example perf -- [rows]`, which checks every answer.
 
 ## Platforms
@@ -338,6 +343,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Performance: memory (rows as sorted vectors, compact dependency index), bulk and structural edits (spill-anchor index, whole-row shifts, formula rewrite and graph rebuild on every processor), undo/redo that update the graph from the changed cells |
 | 2026-10-11 | minor | Performance: long recalculations run in the background in the desktop app, with progress in the status bar; programmatic callers still get final values |
 | 2026-10-11 | minor | Performance: multi-threaded recalculation (every core by default; Calculation Options and XLSX `concurrentCalc`/`concurrentManualCount` like Excel; one thread on the web); 10,000 heavy formulas 5.4× faster on 10 cores |
 | 2026-10-11 | minor | Performance: ranges read by many formulas are shared per recalculation and lookups (VLOOKUP, HLOOKUP, LOOKUP, MATCH, XLOOKUP, XMATCH) index them: 100,000 VLOOKUPs over 100,000 rows in 0.72 s, was O(n²) |

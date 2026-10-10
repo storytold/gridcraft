@@ -173,6 +173,28 @@ fn heavy(b: &mut Bench) {
     b.check("heavy formula after edit", &s, "C1", (1..1000usize).chain([1]).filter(|a| (a + 1).is_multiple_of(7)).count() as f64);
 }
 
+/// A million values and 200,000 formulas: what memory and bulk operations cost at scale.
+fn scale(b: &mut Bench) {
+    let rows = b.rows.max(10);
+    let mut s = b.session();
+    b.time(&format!("paste {rows}x5 values ({} cells)", rows * 5), || {
+        fill(&mut s, "A", 1, rows, |i| json!([i as f64, (i % 7) as f64, (i % 13) as f64, 1.5, (i * 3) as f64]))
+    });
+    b.time(&format!("fill {rows} formulas F=A*B+C (autoFill)"), || {
+        run(&mut s, "cell.set", json!({"cell": "F1", "input": "=A1*B1+C1"}));
+        run(&mut s, "edit.autoFill", json!({"source": "F1", "target": format!("F1:F{rows}")}));
+    });
+    b.check("filled formula", &s, &format!("F{rows}"), ((rows - 1) * ((rows - 1) % 7) + (rows - 1) % 13) as f64);
+    b.time("edit A1 (1 dependent)", || run(&mut s, "cell.set", json!({"cell": "A1", "input": "2"})));
+    b.time("undo", || run(&mut s, "edit.undo", json!({})));
+    b.time("redo", || run(&mut s, "edit.redo", json!({})));
+    b.time("insert a row at the top", || run(&mut s, "home.insertRows", json!({"rows": "1:1"})));
+    b.check("formula after insert", &s, &format!("F{}", rows + 1), ((rows - 1) * ((rows - 1) % 7) + (rows - 1) % 13) as f64);
+    b.time("delete it again", || run(&mut s, "home.deleteRows", json!({"rows": "1:1"})));
+    b.time(&format!("paste {rows}x5 values over the data"), || fill(&mut s, "A", 1, rows, |i| json!([i as f64, 1.0, 0.0, 1.5, 0.0])));
+    b.check("formula after paste", &s, &format!("F{rows}"), (rows - 1) as f64);
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // The first number that isn't the value of an option.
@@ -185,7 +207,8 @@ fn main() {
         .max(10);
     let only: Option<Vec<String>> =
         args.iter().position(|a| a == "--only").and_then(|i| args.get(i + 1)).map(|v| v.split(',').map(str::to_string).collect());
-    let scenarios: [(&str, fn(&mut Bench)); 5] = [("basic", basic), ("lookup", lookup), ("colsum", colsum), ("chain", chain), ("heavy", heavy)];
+    let scenarios: [(&str, fn(&mut Bench)); 6] =
+        [("basic", basic), ("lookup", lookup), ("colsum", colsum), ("chain", chain), ("heavy", heavy), ("scale", scale)];
     let threads = args.iter().position(|a| a == "--threads").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(0);
     let mut b = Bench { rows, threads, failures: Vec::new() };
     let t = Instant::now();
