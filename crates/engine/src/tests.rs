@@ -207,6 +207,19 @@ fn a_spill_that_goes_away_unblocks_another() {
 }
 
 #[test]
+fn an_array_reading_another_arrays_spill_is_updated() {
+    // G5 is evaluated before D11 in the same pass, so it first reads D11's old spill.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D11", "input": "=SEQUENCE(1,3,A1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "G5", "input": "=UNIQUE(VSTACK(F9:F12,A1))"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    assert_eq!((v(&s, "G6"), v(&s, "G7")), (Value::Number(12.0), Value::Number(10.0)));
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!((v(&s, "G6"), v(&s, "G7")), (Value::Number(12.0), Value::Number(10.0)));
+}
+
+#[test]
 fn every_command_survives_empty_params() {
     let mut s = Session::new();
     s.execute("file.new", json!({"sample": "sales"})).unwrap();

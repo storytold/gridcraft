@@ -571,7 +571,7 @@ impl Calc {
                 if let Some(r) = changed_range {
                     let mut deps = Vec::new();
                     self.graph.dependents_of_range(k.0, r, &mut deps);
-                    spill_changes.extend(deps);
+                    spill_changes.extend(deps.into_iter().filter(|d| d != k));
                 }
                 if let Some(o) = old
                     && !sheet.spill_ranges.get(&k.1).is_some_and(|n| n.contains(o.start) && n.contains(o.end))
@@ -599,7 +599,6 @@ impl Calc {
             }
             spill_changes.sort_by_key(|(s, c)| (*s, c.row, c.col));
             spill_changes.dedup();
-            spill_changes.retain(|k| !spills.contains_key(k));
             if spill_changes.is_empty() {
                 break;
             }
