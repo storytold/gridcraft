@@ -684,15 +684,86 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+fn font_group_name(name: &str) -> String {
+    // Explicit aliases for families with different naming patterns.
+    if name == "MingLiU" || name == "PMingLiU" {
+        return "MingLiU".to_owned();
+    }
+
+    // Remove known regional, language and style suffixes.
+    let mut base = name;
+
+    for suffix in [
+        " TC", " SC", " HK", " MO",
+        "-簡", "-繁", "－簡", "－繁",
+        "-简", "－简",
+        " 簡", " 繁", " 简",
+        "-Regular", "-Bold", "-Light",
+        " Regular", " Bold", " Light",
+    ] {
+        if let Some(prefix) = base.strip_suffix(suffix) {
+            if !prefix.is_empty() {
+                base = prefix;
+                break;
+            }
+        }
+    }
+
+    base.to_owned()
+}
+
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
+    use std::collections::BTreeMap;
+
     let mut name = st.font.name.clone();
     let before = name.clone();
-    egui::ComboBox::from_id_salt("font_name").width(150.0).selected_text(egui::RichText::new(&name).font(theme::ui_font(12.5))).show_ui(ui, |ui| {
-        for f in crate::system_fonts::families() {
-            let fam = theme::cell_family(f, false, false);
-            ui.selectable_value(&mut name, f.clone(), egui::RichText::new(f).font(egui::FontId::new(14.0, fam)));
-        }
-    });
+
+    let mut groups: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+
+    for font in crate::system_fonts::families() {
+        groups
+            .entry(font_group_name(font))
+            .or_default()
+            .push(font.as_str());
+    }
+
+    egui::ComboBox::from_id_salt("font_name")
+        .width(170.0)
+        .close_behavior(
+            egui::PopupCloseBehavior::CloseOnClickOutside
+        )
+        .selected_text(&name)
+        .show_ui(ui, |ui| {
+            ui.set_min_width(250.0);
+
+            for (family, members) in &groups {
+                if members.len() == 1 {
+                    // Single font: select directly, no submenu.
+                    let font = members[0];
+                    if ui.selectable_label(
+                        name == font,
+                        font,
+                    ).clicked() {
+                        name = font.to_owned();
+                        ui.close();
+                    }
+                } else {
+                    // Multiple fonts: use one expandable family.
+                    ui.collapsing(family, |ui| {
+                        for font in members {
+                            if ui.selectable_label(
+                                name == *font,
+                                *font,
+                            ).clicked() {
+                                name = (*font).to_owned();
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+            }
+        });
+
     if name != before {
         if crate::system_fonts::register(ui.ctx(), &name) {
             act(app, "home.fontName", json!({"name": name}));

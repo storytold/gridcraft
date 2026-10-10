@@ -55,6 +55,14 @@ pub fn load(name: &str) -> Option<egui::FontData> {
     db.with_face_data(id, |bytes, index| {
         let mut font = egui::FontData::from_owned(bytes.to_vec());
         font.index = index;
+
+        // DFKai-SB requires TrueType hinting for correct outlines.
+        if name.eq_ignore_ascii_case("DFKai-SB") {
+            font.tweak.hinting = Some(true);
+            font.tweak.hinting_target =
+                egui::epaint::text::HintingTarget::Mono;
+        }
+
         font
     })
 }
