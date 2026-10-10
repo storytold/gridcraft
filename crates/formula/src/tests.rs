@@ -164,6 +164,14 @@ fn moves_and_renames() {
 }
 
 #[test]
+fn rename_sheet_updates_qualified_names() {
+    let e = parse("Data!MyName+MyName+Other!MyName").unwrap();
+    assert_eq!(print(&rename_sheet(e, "data", "Numbers")), "Numbers!MyName+MyName+Other!MyName");
+    let e = parse("Data!MyName").unwrap();
+    assert_eq!(print(&rename_sheet(e, "Data", "New Name")), "'New Name'!MyName");
+}
+
+#[test]
 fn r1c1() {
     let e = parse("A1+$B$2+SUM(C:C)").unwrap();
     assert_eq!(print_r1c1(&e, gridcraft_core::CellRef::new(1, 1)), "R[-1]C[-1]+R2C2+SUM(C[1])");
