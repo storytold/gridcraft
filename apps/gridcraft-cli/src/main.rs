@@ -145,8 +145,7 @@ impl Args {
 // ---------------------------------------------------------------- helpers
 
 fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
-    let r = s.execute(id, params).map_err(|e| e.to_string());
-    s.take_ui_requests();
+    let r = s.execute_headless(id, params).map_err(|e| e.to_string());
     if id == "file.open"
         && let Ok(value) = &r
         && let Some(warnings) = value.get("warnings").and_then(Value::as_array)

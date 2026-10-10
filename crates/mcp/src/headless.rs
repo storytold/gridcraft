@@ -34,12 +34,8 @@ impl Headless {
     }
 
     fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        let r = self.session.execute(id, params).map_err(|e| e.to_string());
-        // Programmatic calls never open dialogs; drop anything a command queued for a UI.
-        for req in self.session.take_ui_requests() {
-            log::debug!("headless: ignoring UI request {req:?}");
-        }
-        r
+        // Programmatic calls never open dialogs; anything a command queued for a UI is dropped.
+        self.session.execute_headless(id, params).map_err(|e| e.to_string())
     }
 
     fn commands(&self, params: &Value) -> Value {
