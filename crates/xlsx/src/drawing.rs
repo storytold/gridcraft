@@ -294,7 +294,9 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
             }
             Obj::Chart(ch, rid) if crate::chartex::is_chartex(ch.kind) => {
                 // Chartex frames come with a fallback for readers that don't know them.
-                s.push_str(&anchor_open(sheet, &ch.anchor));
+                let (open, close) = anchor_open(sheet, &ch.anchor);
+                close_tag = close;
+                s.push_str(&open);
                 let (prefix, ns) = crate::chartex::requires(ch.kind);
                 let _ = write!(
                     s,
