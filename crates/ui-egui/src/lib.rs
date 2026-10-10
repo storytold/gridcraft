@@ -17,6 +17,7 @@ pub mod icons;
 pub mod panes;
 pub mod pivot_pane;
 pub mod ribbon;
+pub mod system_fonts;
 pub mod tabs;
 pub mod theme;
 pub mod widgets;
@@ -352,6 +353,7 @@ impl SheetApp {
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        crate::system_fonts::activate_pending();
         if !self.fonts_ready {
             // New fonts apply from the next frame on: paint nothing until then.
             if self.fonts_set {

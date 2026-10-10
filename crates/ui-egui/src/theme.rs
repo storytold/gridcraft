@@ -143,6 +143,15 @@ pub fn ui_bold(size: f32) -> FontId {
 
 /// The font family to use for a cell font name and weight.
 pub fn cell_family(name: &str, bold: bool, italic: bool) -> FontFamily {
+    if name.eq_ignore_ascii_case("PMingLiU") {
+        return FontFamily::Name("PMingLiU".into());
+    }
+    if name.eq_ignore_ascii_case("DFKai-SB") {
+        return FontFamily::Name("DFKai-SB".into());
+    }
+    if crate::system_fonts::is_registered(name) {
+        return FontFamily::Name(name.into());
+    }
     let lower = name.to_ascii_lowercase();
     if lower.contains("courier") || lower.contains("mono") || lower.contains("consolas") {
         return FontFamily::Name(MONO.into());
@@ -308,6 +317,19 @@ pub fn font_definitions() -> FontDefinitions {
         chain.extend(if role == MONO { base_mono.clone() } else { base_prop.clone() });
         chain.retain(|k| fonts.font_data.contains_key(k));
         fonts.families.insert(FontFamily::Name(role.into()), chain);
+    }
+
+    // Test named system fonts before implementing dynamic loading.
+    for name in ["PMingLiU", "DFKai-SB"] {
+        if let Some(data) = crate::system_fonts::load(name) {
+            let key = format!("installed-{name}");
+            fonts.font_data.insert(key.clone(), Arc::new(data));
+
+            let mut chain = vec![key];
+            chain.extend(base_prop.clone());
+
+            fonts.families.insert(FontFamily::Name(name.into()), chain);
+        }
     }
     // Default proportional text in widgets uses the UI font.
     if let Some(ui) = fonts.families.get(&FontFamily::Name(UI.into())).cloned() {
