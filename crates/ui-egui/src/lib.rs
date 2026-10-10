@@ -162,6 +162,9 @@ pub struct SheetApp {
     /// Chart selected on the sheet (id).
     pub selected_chart: Option<u32>,
     pub started: f64,
+    /// Linux/BSD: the window has no system frame; the title bar draws minimize, maximize and
+    /// close, and the window resizes from its edges (`ribbon::window_frame`).
+    pub window_controls: bool,
 }
 
 impl SheetApp {
@@ -194,6 +197,7 @@ impl SheetApp {
             shots: control::Shots::default(),
             selected_chart: None,
             started: now_ms(),
+            window_controls: false,
         }
     }
 
@@ -625,6 +629,7 @@ impl SheetApp {
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
+        ribbon::window_frame(self, &ctx);
         control::issue_screenshots(self, &ctx);
         control::collect_screenshots(self, &ctx);
         if !ctx.input(|i| i.focused) {
