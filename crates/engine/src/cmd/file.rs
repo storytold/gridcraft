@@ -48,7 +48,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let (wb, warnings) = crate::io::open_bytes(&name, &bytes)?;
     let title = std::path::Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or("Book").to_string();
-    let path = str_param(p, "path").map(str::to_string).filter(|p| crate::io::FileKind::from_path(p) == Some(crate::io::FileKind::Xlsx) || true);
+    let path = str_param(p, "path").map(str::to_string);
     // Replace an untouched blank Book1 like Excel does.
     if s.documents().len() == 1
         && s.active().is_some_and(|d| d.path.is_none() && !d.is_dirty() && d.undo.is_empty() && d.wb.sheets.iter().all(|sh| sh.cells.is_empty()))
