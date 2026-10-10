@@ -171,6 +171,8 @@ fn moves_and_renames() {
     let mv = Edit::Move { from: gridcraft_core::RangeRef::parse("A1:B2").unwrap(), to_row: 9, to_col: 3 };
     let e = parse("A1+B2+C3+SUM(A1:B2)").unwrap();
     assert_eq!(print(&adjust(e, "S", "S", &mv)), "D10+E11+C3+SUM(D10:E11)");
+    let mv = Edit::Move { from: gridcraft_core::RangeRef::parse("B:C").unwrap(), to_row: 0, to_col: 4 };
+    assert_eq!(print(&adjust(parse("SUM(B:B)+SUM($C:$C)+D1").unwrap(), "S", "S", &mv)), "SUM(E:E)+SUM($F:$F)+D1");
     let e = parse("Old!A1+'Old'!B2").unwrap();
     assert_eq!(print(&rename_sheet(e, "Old", "New Name")), "'New Name'!A1+'New Name'!B2");
 }
