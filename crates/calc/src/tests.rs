@@ -544,3 +544,60 @@ fn ranges_over_formulas_wait_for_all_of_them() {
     t.set("B5", "100");
     assert_eq!(t.num("A1"), want + 100.0);
 }
+
+#[test]
+fn indexed_lookups_match_scanning_ones() {
+    // Each lookup appears three times over the same table, so the later copies go through the
+    // shared range and its index (built on the second search): all copies must agree with what a
+    // scan finds.
+    let mut t = T::new();
+    let mut cells: Vec<(String, String)> = (1..=100).map(|r| (format!("A{r}"), format!("=\"Key{r}\""))).collect();
+    cells.extend([
+        ("A5".to_string(), "=\"key3\"".to_string()),
+        ("A10".to_string(), "=0.3".to_string()),
+        ("A11".to_string(), "=TRUE".to_string()),
+        ("A12".to_string(), "=7".to_string()),
+    ]);
+    cells.extend((1..=100).map(|r| (format!("B{r}"), format!("={r}"))));
+    cells.extend((1..=100).map(|r| (format!("C{r}"), format!("={}", r * 10))));
+    let cases = [
+        ("=VLOOKUP(\"KEY3\",$A$1:$B$100,2,FALSE)", Value::Number(3.0)),
+        ("=XLOOKUP(\"key3\",$A$1:$A$100,$B$1:$B$100,,0,-1)", Value::Number(5.0)),
+        ("=MATCH(0.1+0.2,$A$1:$A$100,0)", Value::Number(10.0)),
+        ("=MATCH(TRUE,$A$1:$A$100,0)", Value::Number(11.0)),
+        ("=XMATCH(7,$A$1:$A$100)", Value::Number(12.0)),
+        ("=MATCH(\"7\",$A$1:$A$100,0)", Value::Error(CellError::NA)),
+        ("=VLOOKUP(\"Key2*\",$A$1:$B$100,2,FALSE)", Value::Number(2.0)),
+        ("=MATCH(\"nope\",$A$1:$A$100,0)", Value::Error(CellError::NA)),
+        ("=MATCH(255,$C$1:$C$100,1)", Value::Number(25.0)),
+        ("=XLOOKUP(255,$C$1:$C$100,$B$1:$B$100,,1)", Value::Number(26.0)),
+        ("=XMATCH(990,$C$1:$C$100,0,2)", Value::Number(99.0)),
+        ("=VLOOKUP(5,$C$1:$C$100,1,TRUE)", Value::Error(CellError::NA)),
+    ];
+    for (i, (f, _)) in cases.iter().enumerate() {
+        for col in ["E", "F", "G"] {
+            cells.push((format!("{col}{}", i + 1), f.to_string()));
+        }
+    }
+    t.load(cells);
+    for (i, (f, want)) in cases.iter().enumerate() {
+        for col in ["E", "F", "G"] {
+            assert_eq!(&t.get(&format!("{col}{}", i + 1)), want, "{col}{}: {f}", i + 1);
+        }
+    }
+    // An edit to the table: the next recalculation searches the new values.
+    t.set("A3", "Moved");
+    assert_eq!(t.num("E1"), 5.0);
+    assert_eq!(t.num("G1"), 5.0);
+}
+
+#[test]
+fn a_spill_landing_in_a_shared_range_replaces_it() {
+    // F1:F3 read G2:G100, which G1's spill fills during the same recalculation; a range shared
+    // before the spill landed must not be reused after it.
+    let mut t = T::new();
+    t.load([("G1".to_string(), "=SEQUENCE(100)".to_string())].into_iter().chain((1..=3).map(|r| (format!("F{r}"), "=SUM(G2:G100)".to_string()))));
+    for r in 1..=3 {
+        assert_eq!(t.num(&format!("F{r}")), 5049.0);
+    }
+}

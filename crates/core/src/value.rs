@@ -302,12 +302,16 @@ pub fn compare(a: &Value, b: &Value) -> Ordering {
     }
 }
 
+/// `x` rounded to 15 significant digits, the precision Excel compares numbers at: two numbers are
+/// equal for [`compare_numbers`] exactly when their rounded values are.
+pub fn round15(x: f64) -> f64 {
+    // Whole numbers below 10^15 already have at most 15 digits.
+    if !x.is_finite() || x == 0.0 || (x.fract() == 0.0 && x.abs() < 1e15) { x } else { format!("{x:.14e}").parse().unwrap_or(x) }
+}
+
 /// Compares numbers the way Excel does: both are rounded to 15 significant digits first, so binary
 /// noise such as `0.1+0.2` versus `0.3` counts as equal.
 pub fn compare_numbers(a: f64, b: f64) -> Ordering {
-    fn round15(x: f64) -> f64 {
-        if !x.is_finite() || x == 0.0 { x } else { format!("{x:.14e}").parse().unwrap_or(x) }
-    }
     if a == b {
         return Ordering::Equal;
     }

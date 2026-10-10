@@ -461,6 +461,11 @@ struct PassHost<'a> {
     blocked: Vec<Key>,
     /// The formulas set aside by [`PassHost::settle`] (kept to reuse its allocation).
     stack: Vec<Key>,
+    /// Ranges read more than once in this pass, shared as one array (see `range_array`).
+    ranges: HashMap<(usize, RangeRef), SharedRange>,
+    /// Cells held in `ranges`.
+    shared_cells: usize,
+    lookups: gridcraft_functions::LookupCache,
     /// New spills found during the pass: anchor → array.
     spills: HashMap<Key, std::sync::Arc<Array>>,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
@@ -471,6 +476,18 @@ struct PassHost<'a> {
     cycle: bool,
     cycles: Vec<Key>,
 }
+
+/// How often a range has been read in a pass, and its shared array once it is shared.
+#[derive(Default)]
+struct SharedRange {
+    reads: u32,
+    array: Option<std::sync::Arc<Array>>,
+}
+
+/// Ranges smaller than this are rebuilt for every read: sharing them saves little.
+const MIN_SHARED_CELLS: usize = 64;
+/// Cells shared per pass at most (as many as a dozen full columns).
+const SHARED_CELLS_BUDGET: usize = 1 << 24;
 
 /// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
 /// overlaps merged cells, holds other cells, or another formula's spill (unless that formula is
@@ -570,6 +587,17 @@ impl PassHost<'_> {
                     Array::new(a.rows, a.cols, data).map(std::sync::Arc::new).unwrap_or(a)
                 };
                 if a.rows > 1 || a.cols > 1 {
+                    // Shared ranges the new spill lands in no longer hold what they read.
+                    let end = CellRef::new(
+                        k.1.row.saturating_add((a.rows as u32).saturating_sub(1)),
+                        k.1.col.saturating_add((a.cols as u32).saturating_sub(1)),
+                    );
+                    let area = RangeRef::new(k.1, end);
+                    let before = self.ranges.len();
+                    self.ranges.retain(|(sheet, r), _| *sheet != k.0 || !r.intersects(&area));
+                    if self.ranges.len() != before {
+                        self.shared_cells = self.ranges.values().filter_map(|x| x.array.as_ref()).map(|a| a.data.len()).sum();
+                    }
                     self.spills.insert(k, a.clone());
                 }
                 a.data.first().cloned().unwrap_or_default()
@@ -738,6 +766,39 @@ impl Host for PassHost<'_> {
     fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
         let wb = self.wb;
         *self.used.entry(sheet).or_insert_with(|| wb.sheet(sheet).and_then(|s| s.used_range()))
+    }
+    /// Shares a range from its second read on: a lookup table or `A:A` read by thousands of
+    /// formulas is built once, and lookups can index the one array. A range is shared only when
+    /// building it read no cell that wasn't done yet (no placeholder, no cycle), so it holds the
+    /// final values of the pass; a spill computed later in the pass that lands in it evicts it.
+    fn range_array(&mut self, sheet: usize, range: RangeRef) -> Value {
+        let (h, w) = (range.height() as usize, range.width() as usize);
+        let cells = h.saturating_mul(w);
+        let mut share = false;
+        if cells >= MIN_SHARED_CELLS {
+            let slot = self.ranges.entry((sheet, range)).or_default();
+            if let Some(a) = &slot.array {
+                return Value::Array(std::sync::Arc::clone(a));
+            }
+            slot.reads = slot.reads.saturating_add(1);
+            share = slot.reads >= 2 && self.shared_cells.saturating_add(cells) <= SHARED_CELLS_BUDGET;
+        }
+        let (blocked, cycles) = (self.blocked.len(), self.cycles.len());
+        let data = self.range_values(sheet, range);
+        let Some(array) = Array::new(h, w, data) else { return Value::Error(CellError::Value) };
+        let array = std::sync::Arc::new(array);
+        if share
+            && self.blocked.len() == blocked
+            && self.cycles.len() == cycles
+            && let Some(slot) = self.ranges.get_mut(&(sheet, range))
+        {
+            slot.array = Some(std::sync::Arc::clone(&array));
+            self.shared_cells += cells;
+        }
+        Value::Array(array)
+    }
+    fn lookup_cache(&mut self) -> Option<&mut gridcraft_functions::LookupCache> {
+        Some(&mut self.lookups)
     }
     fn now_serial(&self) -> f64 {
         self.now
@@ -946,6 +1007,9 @@ impl Calc {
                     in_stack: HashSet::default(),
                     blocked: Vec::new(),
                     stack: Vec::new(),
+                    ranges: HashMap::default(),
+                    shared_cells: 0,
+                    lookups: Default::default(),
                     spills: HashMap::default(),
                     used: HashMap::default(),
                     rng: &mut rng,
@@ -1089,6 +1153,9 @@ pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> V
         in_stack: HashSet::default(),
         blocked: Vec::new(),
         stack: Vec::new(),
+        ranges: HashMap::default(),
+        shared_cells: 0,
+        lookups: Default::default(),
         spills: HashMap::default(),
         used: HashMap::default(),
         rng: &mut rng,

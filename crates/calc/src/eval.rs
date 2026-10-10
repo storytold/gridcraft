@@ -71,6 +71,17 @@ pub trait Host {
     fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
         self.workbook().sheet(sheet).and_then(|s| s.used_range())
     }
+    /// A block as an array (`range` already trimmed and within [`MAX_CELLS`]). Hosts can hand
+    /// every formula that reads the same range the same shared array.
+    fn range_array(&mut self, sheet: usize, range: RangeRef) -> Value {
+        let (h, w) = (range.height() as usize, range.width() as usize);
+        let data = self.range_values(sheet, range);
+        Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+    }
+    /// Where lookup functions keep their indexes (see [`gridcraft_functions::LookupCache`]).
+    fn lookup_cache(&mut self) -> Option<&mut gridcraft_functions::LookupCache> {
+        None
+    }
 }
 
 pub struct Evaluator<'h> {
@@ -94,6 +105,9 @@ impl Ctx for FnCtx<'_, '_> {
     }
     fn random(&mut self) -> f64 {
         self.ev.host.random()
+    }
+    fn lookup_cache(&mut self) -> Option<&mut gridcraft_functions::LookupCache> {
+        self.ev.host.lookup_cache()
     }
 }
 
@@ -146,12 +160,10 @@ impl<'h> Evaluator<'h> {
         // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`).
         let cells = u64::from(a.range.height()) * u64::from(a.range.width());
         let range = if cells > FULL_SIZE_CELLS { self.trim(a) } else { a.range };
-        let (h, w) = (range.height() as usize, range.width() as usize);
-        if (h as u64) * (w as u64) > MAX_CELLS {
+        if u64::from(range.height()) * u64::from(range.width()) > MAX_CELLS {
             return Value::Error(CellError::Num);
         }
-        let data = self.host.range_values(a.sheet, range);
-        Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+        self.host.range_array(a.sheet, range)
     }
 
     /// Trims the bottom/right of an area to the sheet's used range (keeps the top-left so

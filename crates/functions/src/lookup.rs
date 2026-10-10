@@ -3,9 +3,12 @@
 //!
 //! Reference-only behaviour (INDEX returning a reference, OFFSET, ROW…) belongs to the host.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use gridcraft_core::{Array, CellError, Value, col_to_letters, compare};
+use gridcraft_core::{Array, CellError, Value, col_to_letters, compare, round15};
 
 use crate::criteria::{has_wildcards, lookup_equal};
 use crate::util::{R, arg, array_val, as_array, has, int, num, opt_bool, opt_int, opt_num, text, text_val};
@@ -33,11 +36,15 @@ fn find_exact(x: &Value, hay: &[Value], wild: bool, reverse: bool) -> Option<usi
     if reverse { hay.iter().rposition(|v| lookup_equal(x, v, wild)) } else { hay.iter().position(|v| lookup_equal(x, v, wild)) }
 }
 
-/// Binary search over the entries of the needle's type, assuming they are sorted ascending
-/// (`desc = false`) or descending. Returns the position of the last entry that is `<= x`
-/// (ascending) or `>= x` (descending), like Excel's approximate match.
-fn bsearch_last(x: &Value, hay: &[Value], desc: bool) -> Option<usize> {
-    let idx: Vec<usize> = hay.iter().enumerate().filter(|(_, v)| same_type(x, v)).map(|(i, _)| i).collect();
+/// Positions in `hay` of the entries of the needle's type (what approximate searches look at).
+fn positions_of_type(x: &Value, hay: &[Value]) -> Vec<usize> {
+    hay.iter().enumerate().filter(|(_, v)| same_type(x, v)).map(|(i, _)| i).collect()
+}
+
+/// Binary search over the entries at `idx` (the needle's type), assuming they are sorted
+/// ascending (`desc = false`) or descending. Returns the position of the last entry that is
+/// `<= x` (ascending) or `>= x` (descending), like Excel's approximate match.
+fn bsearch_last(x: &Value, hay: &[Value], idx: &[usize], desc: bool) -> Option<usize> {
     let (mut lo, mut hi) = (0usize, idx.len());
     // Find the first filtered position where the "passes" predicate fails.
     while lo < hi {
@@ -55,8 +62,7 @@ fn bsearch_last(x: &Value, hay: &[Value], desc: bool) -> Option<usize> {
 }
 
 /// Binary search returning the first entry `>= x` (ascending) or `<= x` (descending).
-fn bsearch_first(x: &Value, hay: &[Value], desc: bool) -> Option<usize> {
-    let idx: Vec<usize> = hay.iter().enumerate().filter(|(_, v)| same_type(x, v)).map(|(i, _)| i).collect();
+fn bsearch_first(x: &Value, hay: &[Value], idx: &[usize], desc: bool) -> Option<usize> {
     let (mut lo, mut hi) = (0usize, idx.len());
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
@@ -72,11 +78,6 @@ fn bsearch_first(x: &Value, hay: &[Value], desc: bool) -> Option<usize> {
     idx.get(lo).copied()
 }
 
-/// A 1-D view of an array (row or column), `None` when it is 2-D.
-fn vector(a: &Array) -> Option<Vec<Value>> {
-    if a.rows == 1 || a.cols == 1 { Some(a.data.clone()) } else { None }
-}
-
 fn column(a: &Array, c: usize) -> Vec<Value> {
     (0..a.rows).map(|r| a.get(r, c).cloned().unwrap_or(Value::Empty)).collect()
 }
@@ -85,45 +86,250 @@ fn row(a: &Array, r: usize) -> Vec<Value> {
     (0..a.cols).map(|c| a.get(r, c).cloned().unwrap_or(Value::Empty)).collect()
 }
 
+fn is_vector(a: &Array) -> bool {
+    a.rows == 1 || a.cols == 1
+}
+
 /// A looked-up cell value: blanks read as 0 like a reference to an empty cell.
 fn cell_result(v: Value) -> Value {
     if matches!(v, Value::Empty) { Value::Number(0.0) } else { v }
 }
 
 // ---------------------------------------------------------------------------------------------
+// Lookup indexes
+//
+// Thousands of lookups often search the same range (`VLOOKUP(x,$A$1:$B$50000,2,FALSE)` filled
+// down). The host hands every formula the same shared array for such a range, so an index
+// built over it once (a hash of the exact-match keys, the positions of each type for binary
+// search) turns each later search into O(1) or O(log n) instead of a copy and a scan.
+
+/// The part of an array a lookup searches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Line {
+    /// The whole array, which is a single row or column.
+    All,
+    Col(usize),
+    Row(usize),
+}
+
+/// What an exact match compares, normalised so that equal keys are exactly the values
+/// [`lookup_equal`] (without wildcards) calls equal: text case-folded, numbers at 15 digits.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum ExactKey {
+    Number(u64),
+    Text(Box<str>),
+    Bool(bool),
+}
+
+fn exact_key(v: &Value) -> Option<ExactKey> {
+    match v {
+        Value::Number(n) => {
+            let r = round15(*n);
+            // -0 and 0 are equal.
+            Some(ExactKey::Number(if r == 0.0 { 0.0f64.to_bits() } else { r.to_bits() }))
+        }
+        Value::Text(t) => Some(ExactKey::Text(t.chars().flat_map(char::to_lowercase).collect::<String>().into_boxed_str())),
+        Value::Bool(b) => Some(ExactKey::Bool(*b)),
+        _ => None,
+    }
+}
+
+/// An index over one line of an array.
+#[derive(Debug)]
+struct LookupIndex {
+    source: Arc<Array>,
+    /// The searched values when they aren't the whole of `source` (a column or row of a table).
+    line: Option<Vec<Value>>,
+    /// First and last position of every exact-match key.
+    exact: HashMap<ExactKey, (usize, usize)>,
+    numbers: Vec<usize>,
+    texts: Vec<usize>,
+    bools: Vec<usize>,
+}
+
+impl LookupIndex {
+    fn build(source: &Arc<Array>, line: Line) -> LookupIndex {
+        let line = match line {
+            Line::All => None,
+            Line::Col(c) => Some(column(source, c)),
+            Line::Row(r) => Some(row(source, r)),
+        };
+        let mut ix =
+            LookupIndex { source: Arc::clone(source), line, exact: HashMap::new(), numbers: Vec::new(), texts: Vec::new(), bools: Vec::new() };
+        let mut exact: HashMap<ExactKey, (usize, usize)> = HashMap::new();
+        let (mut numbers, mut texts, mut bools) = (Vec::new(), Vec::new(), Vec::new());
+        for (i, v) in ix.values().iter().enumerate() {
+            match v {
+                Value::Number(_) => numbers.push(i),
+                Value::Text(_) => texts.push(i),
+                Value::Bool(_) => bools.push(i),
+                _ => {}
+            }
+            if let Some(k) = exact_key(v) {
+                exact.entry(k).and_modify(|e| e.1 = i).or_insert((i, i));
+            }
+        }
+        (ix.exact, ix.numbers, ix.texts, ix.bools) = (exact, numbers, texts, bools);
+        ix
+    }
+
+    fn values(&self) -> &[Value] {
+        self.line.as_deref().unwrap_or(&self.source.data)
+    }
+
+    fn of_type(&self, x: &Value) -> &[usize] {
+        match x {
+            Value::Number(_) => &self.numbers,
+            Value::Text(_) => &self.texts,
+            Value::Bool(_) => &self.bools,
+            _ => &[],
+        }
+    }
+}
+
+/// Indexes built by lookups, kept by the host for one recalculation. An array gets an index the
+/// second time a lookup searches the same line of it (searched once, a scan is cheaper than
+/// building one), within a budget of indexed values.
+#[derive(Debug, Default)]
+pub struct LookupCache {
+    slots: HashMap<(usize, Line), Slot>,
+    indexed: usize,
+}
+
+#[derive(Debug, Default)]
+struct Slot {
+    searches: u32,
+    /// Holds its source array, so the address the slot is keyed by can't be reused meanwhile.
+    index: Option<Arc<LookupIndex>>,
+}
+
+/// Arrays shorter than this are scanned: an index wouldn't pay for itself.
+const MIN_INDEXED: usize = 32;
+/// Values indexed per recalculation at most (about 1 GB of keys at the worst).
+const INDEX_BUDGET: usize = 1 << 25;
+
+impl LookupCache {
+    fn index(&mut self, source: &Arc<Array>, line: Line) -> Option<Arc<LookupIndex>> {
+        let len = match line {
+            Line::All => source.data.len(),
+            Line::Col(_) => source.rows,
+            Line::Row(_) => source.cols,
+        };
+        if len < MIN_INDEXED {
+            return None;
+        }
+        // The address only identifies the array while the slot holds it, which it does once it
+        // has an index; before that a reused address at worst builds an index one search early.
+        let slot = self.slots.entry((Arc::as_ptr(source) as usize, line)).or_default();
+        if let Some(ix) = &slot.index {
+            return Some(Arc::clone(ix));
+        }
+        slot.searches = slot.searches.saturating_add(1);
+        if slot.searches < 2 || self.indexed.saturating_add(len) > INDEX_BUDGET {
+            return None;
+        }
+        self.indexed += len;
+        let ix = Arc::new(LookupIndex::build(source, line));
+        slot.index = Some(Arc::clone(&ix));
+        Some(ix)
+    }
+}
+
+/// The values a lookup searches: borrowed or copied out of the array, or an index over it.
+enum Hay<'a> {
+    Plain(Cow<'a, [Value]>),
+    Indexed(Arc<LookupIndex>),
+}
+
+impl Hay<'_> {
+    fn values(&self) -> &[Value] {
+        match self {
+            Hay::Plain(v) => v,
+            Hay::Indexed(ix) => ix.values(),
+        }
+    }
+
+    fn typed(&self, x: &Value) -> Cow<'_, [usize]> {
+        match self {
+            Hay::Plain(v) => Cow::Owned(positions_of_type(x, v)),
+            Hay::Indexed(ix) => Cow::Borrowed(ix.of_type(x)),
+        }
+    }
+
+    fn find_exact(&self, x: &Value, wild: bool, reverse: bool) -> Option<usize> {
+        let wild = wild && matches!(x, Value::Text(t) if has_wildcards(t));
+        match self {
+            Hay::Indexed(ix) if !wild => exact_key(x).and_then(|k| ix.exact.get(&k)).map(|&(first, last)| if reverse { last } else { first }),
+            _ => find_exact(x, self.values(), wild, reverse),
+        }
+    }
+
+    fn bsearch_last(&self, x: &Value, desc: bool) -> Option<usize> {
+        bsearch_last(x, self.values(), &self.typed(x), desc)
+    }
+
+    fn bsearch_first(&self, x: &Value, desc: bool) -> Option<usize> {
+        bsearch_first(x, self.values(), &self.typed(x), desc)
+    }
+
+    fn bsearch_exact(&self, x: &Value, desc: bool) -> Option<usize> {
+        let p = self.bsearch_first(x, desc)?;
+        let v = self.values().get(p)?;
+        if compare(v, x) == Ordering::Equal { Some(p) } else { None }
+    }
+}
+
+/// The values to search in `line` of `a` (the array `v` holds), through the host's index cache
+/// when `v` is a shared array the host keeps one for.
+fn hay<'a>(c: &mut dyn Ctx, v: &Value, a: &'a Array, line: Line) -> Hay<'a> {
+    if let Value::Array(source) = v
+        && let Some(ix) = c.lookup_cache().and_then(|cache| cache.index(source, line))
+    {
+        return Hay::Indexed(ix);
+    }
+    Hay::Plain(match line {
+        Line::All => Cow::Borrowed(&a.data),
+        Line::Col(col) => Cow::Owned(column(a, col)),
+        Line::Row(r) => Cow::Owned(row(a, r)),
+    })
+}
+
+// ---------------------------------------------------------------------------------------------
 // VLOOKUP / HLOOKUP / LOOKUP / MATCH
 
-fn vh_lookup(args: &[Arg], vertical: bool) -> R<Value> {
+fn vh_lookup(args: &[Arg], vertical: bool, c: &mut dyn Ctx) -> R<Value> {
     let x = needle(args, 0)?;
-    let table = as_array(&arg(args, 1)?.value);
-    if let Value::Error(e) = &arg(args, 1)?.value {
+    let tv = &arg(args, 1)?.value;
+    if let Value::Error(e) = tv {
         return Err(*e);
     }
+    let table = as_array(tv);
     let idx = num(args, 2)?;
     if idx < 1.0 {
         return Err(CellError::Value);
     }
     let idx = idx.trunc() as usize - 1;
     let approx = opt_bool(args, 3, true)?;
-    let (keys, len) = if vertical { (column(&table, 0), table.cols) } else { (row(&table, 0), table.rows) };
+    let len = if vertical { table.cols } else { table.rows };
     if idx >= len {
         return Err(CellError::Ref);
     }
-    let pos = if approx { bsearch_last(&x, &keys, false) } else { find_exact(&x, &keys, true, false) };
+    let keys = hay(c, tv, &table, if vertical { Line::Col(0) } else { Line::Row(0) });
+    let pos = if approx { keys.bsearch_last(&x, false) } else { keys.find_exact(&x, true, false) };
     let pos = pos.ok_or(CellError::NA)?;
     let v = if vertical { table.get(pos, idx) } else { table.get(idx, pos) };
     Ok(cell_result(v.cloned().unwrap_or(Value::Empty)))
 }
 
-fn vlookup(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    vh_lookup(a, true)
+fn vlookup(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    vh_lookup(a, true, c)
 }
 
-fn hlookup(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    vh_lookup(a, false)
+fn hlookup(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    vh_lookup(a, false, c)
 }
 
-fn lookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn lookup(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let x = needle(args, 0)?;
     let lv = &arg(args, 1)?.value;
     if let Value::Error(e) = lv {
@@ -131,16 +337,16 @@ fn lookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     let la = as_array(lv);
     if args.len() >= 3 {
-        let keys = if la.rows == 1 || la.cols == 1 { la.data.clone() } else { column(&la, 0) };
-        let pos = bsearch_last(&x, &keys, false).ok_or(CellError::NA)?;
+        let keys = hay(c, lv, &la, if is_vector(&la) { Line::All } else { Line::Col(0) });
+        let pos = keys.bsearch_last(&x, false).ok_or(CellError::NA)?;
         let rv = &arg(args, 2)?.value;
         if let Value::Error(e) = rv {
             return Err(*e);
         }
         let ra = as_array(rv);
-        let v = if ra.rows == 1 || ra.cols == 1 {
+        let v = if is_vector(&ra) {
             ra.data.get(pos).cloned()
-        } else if ra.rows >= keys.len() {
+        } else if ra.rows >= keys.values().len() {
             ra.get(pos, 0).cloned()
         } else {
             None
@@ -150,30 +356,32 @@ fn lookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     // Array form: search the first row of a wide array, else the first column; return the
     // matching entry from the last row / column.
     if la.cols > la.rows {
-        let keys = row(&la, 0);
-        let pos = bsearch_last(&x, &keys, false).ok_or(CellError::NA)?;
+        let pos = hay(c, lv, &la, Line::Row(0)).bsearch_last(&x, false).ok_or(CellError::NA)?;
         Ok(cell_result(la.get(la.rows - 1, pos).cloned().unwrap_or(Value::Empty)))
     } else {
-        let keys = column(&la, 0);
-        let pos = bsearch_last(&x, &keys, false).ok_or(CellError::NA)?;
+        let pos = hay(c, lv, &la, Line::Col(0)).bsearch_last(&x, false).ok_or(CellError::NA)?;
         Ok(cell_result(la.get(pos, la.cols - 1).cloned().unwrap_or(Value::Empty)))
     }
 }
 
-fn match_fn(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn match_fn(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let x = needle(args, 0)?;
     let av = &arg(args, 1)?.value;
     if let Value::Error(e) = av {
         return Err(*e);
     }
-    let hay = vector(&as_array(av)).ok_or(CellError::NA)?;
+    let a = as_array(av);
+    if !is_vector(&a) {
+        return Err(CellError::NA);
+    }
+    let hay = hay(c, av, &a, Line::All);
     let mt = opt_num(args, 2, 1.0)?;
     let pos = if mt == 0.0 {
-        find_exact(&x, &hay, true, false)
+        hay.find_exact(&x, true, false)
     } else if mt > 0.0 {
-        bsearch_last(&x, &hay, false)
+        hay.bsearch_last(&x, false)
     } else {
-        bsearch_last(&x, &hay, true)
+        hay.bsearch_last(&x, true)
     };
     pos.map(|p| Value::Number((p + 1) as f64)).ok_or(CellError::NA)
 }
@@ -182,7 +390,7 @@ fn match_fn(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 // XLOOKUP / XMATCH
 
 /// Core XMATCH search: 0-based position in `hay`.
-fn xsearch(x: &Value, hay: &[Value], match_mode: i64, search_mode: i64) -> R<Option<usize>> {
+fn xsearch(x: &Value, hay: &Hay<'_>, match_mode: i64, search_mode: i64) -> R<Option<usize>> {
     if !matches!(match_mode, -1..=2) || !matches!(search_mode, -2 | -1 | 1 | 2) {
         return Err(CellError::Value);
     }
@@ -190,39 +398,40 @@ fn xsearch(x: &Value, hay: &[Value], match_mode: i64, search_mode: i64) -> R<Opt
         let desc = search_mode == -2;
         if match_mode == 2 {
             // Wildcards are not supported with binary search: Excel falls back to exact.
-            return Ok(bsearch_exact(x, hay, desc));
+            return Ok(hay.bsearch_exact(x, desc));
         }
         return Ok(match match_mode {
-            0 => bsearch_exact(x, hay, desc),
+            0 => hay.bsearch_exact(x, desc),
             // Next smaller: last <= x (ascending) / first <= x (descending).
             -1 => {
                 if desc {
-                    bsearch_first(x, hay, true)
+                    hay.bsearch_first(x, true)
                 } else {
-                    bsearch_last(x, hay, false)
+                    hay.bsearch_last(x, false)
                 }
             }
             _ => {
                 if desc {
-                    bsearch_last(x, hay, true)
+                    hay.bsearch_last(x, true)
                 } else {
-                    bsearch_first(x, hay, false)
+                    hay.bsearch_first(x, false)
                 }
             }
         });
     }
     let reverse = search_mode == -1;
-    if let Some(p) = find_exact(x, hay, match_mode == 2, reverse) {
+    if let Some(p) = hay.find_exact(x, match_mode == 2, reverse) {
         return Ok(Some(p));
     }
     if match_mode == 0 || match_mode == 2 {
         return Ok(None);
     }
     // Best candidate: the largest value below (mode -1) or smallest above (mode 1).
-    let order: Box<dyn Iterator<Item = usize>> = if reverse { Box::new((0..hay.len()).rev()) } else { Box::new(0..hay.len()) };
+    let values = hay.values();
+    let order: Box<dyn Iterator<Item = usize>> = if reverse { Box::new((0..values.len()).rev()) } else { Box::new(0..values.len()) };
     let mut best: Option<usize> = None;
     for i in order {
-        let Some(v) = hay.get(i) else { continue };
+        let Some(v) = values.get(i) else { continue };
         if !same_type(x, v) {
             continue;
         }
@@ -231,7 +440,7 @@ fn xsearch(x: &Value, hay: &[Value], match_mode: i64, search_mode: i64) -> R<Opt
         if !candidate {
             continue;
         }
-        let better = match best.and_then(|b| hay.get(b)) {
+        let better = match best.and_then(|b| values.get(b)) {
             None => true,
             Some(bv) => {
                 let c = compare(v, bv);
@@ -245,13 +454,7 @@ fn xsearch(x: &Value, hay: &[Value], match_mode: i64, search_mode: i64) -> R<Opt
     Ok(best)
 }
 
-fn bsearch_exact(x: &Value, hay: &[Value], desc: bool) -> Option<usize> {
-    let p = bsearch_first(x, hay, desc)?;
-    let v = hay.get(p)?;
-    if compare(v, x) == Ordering::Equal { Some(p) } else { None }
-}
-
-fn xlookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn xlookup(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let x = needle(args, 0)?;
     let lv = &arg(args, 1)?.value;
     if let Value::Error(e) = lv {
@@ -263,7 +466,9 @@ fn xlookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     let la = as_array(lv);
     let ra = as_array(rv);
-    let hay = vector(&la).ok_or(CellError::Value)?;
+    if !is_vector(&la) {
+        return Err(CellError::Value);
+    }
     // Orientation: a column lookup returns rows of the return array; a row lookup returns columns.
     let vertical = if la.rows == 1 && la.cols == 1 { ra.rows == 1 || ra.cols != 1 } else { la.cols == 1 };
     if vertical && ra.rows != la.rows || !vertical && ra.cols != la.cols {
@@ -271,6 +476,7 @@ fn xlookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     let mm = if has(args, 4) { opt_int(args, 4, 0)? } else { 0 };
     let sm = if has(args, 5) { opt_int(args, 5, 1)? } else { 1 };
+    let hay = hay(c, lv, &la, Line::All);
     match xsearch(&x, &hay, mm, sm)? {
         Some(p) => {
             if vertical {
@@ -297,15 +503,19 @@ fn xlookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
 }
 
-fn xmatch(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn xmatch(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let x = needle(args, 0)?;
     let lv = &arg(args, 1)?.value;
     if let Value::Error(e) = lv {
         return Err(*e);
     }
-    let hay = vector(&as_array(lv)).ok_or(CellError::Value)?;
+    let la = as_array(lv);
+    if !is_vector(&la) {
+        return Err(CellError::Value);
+    }
     let mm = if has(args, 2) { int(args, 2)? } else { 0 };
     let sm = if has(args, 3) { int(args, 3)? } else { 1 };
+    let hay = hay(c, lv, &la, Line::All);
     xsearch(&x, &hay, mm, sm)?.map(|p| Value::Number((p + 1) as f64)).ok_or(CellError::NA)
 }
 

@@ -75,6 +75,7 @@ pub(crate) mod stat;
 pub(crate) mod text;
 pub(crate) mod util;
 
+pub use lookup::LookupCache;
 pub use stat::{aggregate_values, aggregate_values_k};
 
 /// An evaluated argument. Ranges arrive as `Value::Array` (blank cells = `Value::Empty`) with
@@ -103,6 +104,11 @@ pub trait Ctx {
     fn now_serial(&self) -> f64;
     /// Uniform in [0, 1).
     fn random(&mut self) -> f64;
+    /// Where lookups keep the indexes they build over ranges searched again and again (see
+    /// [`LookupCache`]). `None`: every lookup scans.
+    fn lookup_cache(&mut self) -> Option<&mut LookupCache> {
+        None
+    }
 }
 
 pub type FnImpl = fn(&[Arg], &mut dyn Ctx) -> Value;

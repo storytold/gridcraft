@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (Performance: recalc order and chain length, measured with the `perf` example) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (Performance: recalc order and chain length; shared ranges and lookup indexes; measured with the `perf` example) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -204,14 +204,15 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 | Recalc threads | 1 | all cores | measured (no threading in `crates/calc`) |
 | Edit → recalc, 100k dependents | ~50 ms (2026-10-11; was ~0.4 s on 2026-10-07) | tens of ms | measured: `perf` example, `basic`, 50,000 rows (a formula column and a running sum), Apple M2 Pro |
 | Long dependency chains | correct in any direction and at any length (topological order; formulas wait on a heap stack, not the call stack) | correct | measured: `perf` example, `chain`; tests `long_chains_*`. Before 2026-10-11 a chain read against row order past 2,000 cells gave `#CIRC!` |
-| Exact lookups, 10,000 VLOOKUPs over a 10,000-row table | 2.7 s, growing as n² (every lookup copies and scans its table) | well under 1 s | GridCraft measured: `perf` example, `lookup`; Excel not measured |
+| Exact lookups, 100,000 VLOOKUPs over a 100,000-row table | 0.72 s (XLOOKUP 0.76 s, MATCH 0.63 s); an edit to the table with 300,000 dependent lookups 0.25 s. Before 2026-10-11: 2.6 s for 10,000, growing as n² | well under 1 s | GridCraft measured: `perf` example, `lookup`, 500,000 rows, Apple M2 Pro; Excel not measured. A range read by many formulas is built once per recalculation and lookups index it |
+| 1,000 × `SUM(A:A)` over 500,000 rows | 1.06 s (one thread) | well under 1 s (all cores) | GridCraft measured: `perf` example, `colsum` |
 | Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
 | Open a ~100 MB XLSX | fails (#175) | opens | user report |
 | Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
 
 Work: streaming XLSX reader with shared-string and style dedup, multi-threaded recalc of
 independent chains (native only; WASM stays single-threaded), whole-column reference
-clamping, shared lookup ranges with an index (#205). The numbers above come from
+clamping (#205). The numbers above come from
 `cargo run --release -p gridcraft-engine --example perf -- [rows]`, which checks every answer.
 
 ## Platforms
@@ -335,6 +336,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Performance: ranges read by many formulas are shared per recalculation and lookups (VLOOKUP, HLOOKUP, LOOKUP, MATCH, XLOOKUP, XMATCH) index them: 100,000 VLOOKUPs over 100,000 rows in 0.72 s, was O(n²) |
 | 2026-10-11 | minor | Performance: recalc evaluates in topological order without recursion, so long chains are correct in either direction; edit-recalc re-timed at ~50 ms for 100k formulas; lookup scaling measured (O(n²)). Numbers from the extended `perf` example |
 | 2026-10-10 | minor | Readiness-by-audience table: hours to ~95% for each of the three numbers (full 650–1,050, mainstream 200–310, essentials 60–100). Full number confirmed as the additive weighted sum over the written dimension weights (no change) |
 | 2026-10-10 | minor | Added Mainstream practitioner (~50%) and Essentials user (~63%) with written weights and discounts, and user-evidence counts; re-checked the full number after the 10-10 merges (charts 38→30, localization 5→10; still 51.6, ~50%) |

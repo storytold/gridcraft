@@ -39,7 +39,9 @@ including tests, 2026-10-10.
    nodes for range dependents), evaluates in topological order (Kahn's algorithm over the dirty
    set; a formula that reads a cell not yet done, through a name, table or INDIRECT, waits on a
    heap stack, so chains have no length limit), spills dynamic arrays and reports `#SPILL!`/cycles.
-   Volatile functions are always dirty.
+   Volatile functions are always dirty. Within a pass, a range read more than once is built once
+   and shared, and lookup functions index a shared range (`LookupCache`, reached through
+   `Ctx::lookup_cache`) so repeated searches are O(1) or O(log n).
 4. **Rendering**: the egui grid reads display values (number formats applied in `engine/display.rs`)
    for the visible window only; charts render through `crates/chart` primitives.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
@@ -70,5 +72,6 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Recalc: shared ranges per pass and lookup indexes |
 | 2026-10-11 | minor | Recalc: topological order by Kahn's algorithm; formulas that wait for a cell read through a name, table or INDIRECT go on a heap stack, so chain length is unbounded |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |
