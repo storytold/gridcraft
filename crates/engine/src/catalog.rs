@@ -1,6 +1,6 @@
 //! Excel's ribbon and menu tree (feature names only), used as the parity metric: a catalog
 //! entry counts as done when a command with its id is registered. `cargo xtask parity` writes
-//! `docs/parity.md` from this list.
+//! `docs/parity-checklist.md` from this list.
 
 /// (id, tab, group, label)
 pub const CATALOG: &[(&str, &str, &str, &str)] = &[

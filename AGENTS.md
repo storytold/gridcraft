@@ -50,7 +50,7 @@ People trust GridCraft with their numbers; a crash loses their work. **This outr
 - Parallel agents: separate `CARGO_TARGET_DIR` per agent; edit only the crates you own; delete your target dir when done.
 
 ## Roadmap
-`ROADMAP.md` (committed) tracks status, milestones, parity and estimates. Update it whenever a milestone task lands. `cargo xtask parity` regenerates `docs/parity.md` from `crates/engine/src/catalog.rs`.
+`ROADMAP.md` (committed) is the one-page summary: stage, headline numbers, dimensions, languages, progress log. It follows craftrules `standards/progress-docs.md` and points at the detail in `docs/`: `target-app-parity.md` (authoritative assessment), `gaps.md` (ranked work list: pick from it), `roadmap.md` (current focus, beta gates, milestones), `architecture.md`, and the area checklists `function-parity.md`, `chart-parity.md`, `file-format-parity.md`, `ui-parity.md`, `hardware-parity.md`, `localization-parity.md`. Update the affected docs (and their timestamp lines and revision history) whenever work lands. `cargo xtask parity` regenerates `docs/parity-checklist.md` from `crates/engine/src/catalog.rs`.
 
 ## Contributor credits (About window)
 
