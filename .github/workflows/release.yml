@@ -104,6 +104,9 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: packaging/macos/package.sh --arch universal
+      # CI gate: missing secrets would silently fall back to ad-hoc signing; do not ship that.
+      - name: Verify signing and notarization
+        run: packaging/macos/verify-release.sh
       - uses: actions/upload-artifact@v4
         with:
           name: release-macos

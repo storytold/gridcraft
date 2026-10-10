@@ -105,6 +105,9 @@ and upload their artifacts, the environment refuses macOS and Windows, and no re
   [`packaging/macos/dmg/`](../packaging/macos/dmg/README.md), and its volume is named `GridCraft`
   without the version, which the window's background needs; the DMG file name keeps the version.
 - **CLI:** the universal `gridcraft-cli` is signed, zipped and notarized.
+- **Release gate:** CI runs [`packaging/macos/verify-release.sh`](../packaging/macos/verify-release.sh)
+  after packaging and before upload; the release fails unless every DMG and CLI zip is
+  Developer-ID signed and notarized. Locally the script fails on ad-hoc builds by design.
 
 Locally, without certificates, the script signs ad-hoc (`codesign -s -`) and skips notarization:
 
