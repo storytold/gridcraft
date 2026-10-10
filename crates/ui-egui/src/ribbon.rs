@@ -157,28 +157,31 @@ fn workbook_switcher(
             .map(|(_, _, title, _, _)| ui.painter().layout_no_wrap(title.clone(), theme::ui_font(13.0), t.text).size().x)
             .fold(0.0_f32, f32::max)
             .clamp(120.0, 190.0);
-        let row_width = 14.0 + title_width + 56.0 + 22.0 + 12.0;
+        let row_width = 20.0 + title_width + 56.0 + 22.0 + 12.0;
         for (id, index, title, active, dirty) in &documents {
             let (row_rect, row) = ui.allocate_exact_size(vec2(row_width, 24.0), Sense::click());
+            let close_rect = Rect::from_min_size(pos2(row_rect.right() - 22.0, row_rect.top() + 1.0), vec2(22.0, 22.0));
             if ui.rect_contains_pointer(row_rect) {
                 ui.painter().rect_filled(row_rect, 4.0, t.hover);
                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
             }
+            let eye_rect = Rect::from_center_size(pos2(row_rect.left() + 7.0, row_rect.center().y), vec2(14.0, 14.0));
+            if *active {
+                icons::paint(ui.painter(), eye_rect, Icon::Eye, t.text);
+            }
+            let title_rect = Rect::from_min_size(pos2(row_rect.left() + 20.0, row_rect.top()), vec2(title_width, row_rect.height()));
+            ui.painter().with_clip_rect(title_rect).text(title_rect.left_center(), Align2::LEFT_CENTER, title, theme::ui_font(13.0), t.text);
+            if *dirty {
+                ui.painter().text(
+                    pos2(title_rect.right() + 4.0, row_rect.center().y),
+                    Align2::LEFT_CENTER,
+                    "Unsaved",
+                    theme::ui_font(13.0),
+                    t.warning,
+                );
+            }
             let close_clicked = ui
-                .scope_builder(egui::UiBuilder::new().max_rect(row_rect).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    let (mark_rect, _) = ui.allocate_exact_size(vec2(14.0, 22.0), Sense::hover());
-                    if *active {
-                        icons::paint(ui.painter(), Rect::from_center_size(mark_rect.center(), vec2(14.0, 14.0)), Icon::Eye, t.text);
-                    }
-                    ui.add_sized(
-                        [title_width, 22.0],
-                        egui::Label::new(egui::RichText::new(title).color(t.text)).halign(egui::Align::LEFT).truncate(),
-                    );
-                    ui.add_sized(
-                        [56.0, 20.0],
-                        egui::Label::new(if *dirty { egui::RichText::new("Unsaved").color(t.warning) } else { egui::RichText::new("") }),
-                    );
+                .scope_builder(egui::UiBuilder::new().max_rect(close_rect), |ui| {
                     icon_button(ui, Icon::Close, t.text_dim, &format!("Close {title}"), vec2(22.0, 22.0)).clicked()
                 })
                 .inner;

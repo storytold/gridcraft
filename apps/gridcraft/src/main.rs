@@ -59,13 +59,14 @@ impl App {
         app.session.active().map(|d| d.uid)
     }
 
-    fn window_builder(app: &SheetApp) -> egui::ViewportBuilder {
+    fn window_builder(app: &SheetApp, active: bool) -> egui::ViewportBuilder {
         let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "GridCraft".into());
         let mut viewport = egui::ViewportBuilder::default()
             .with_title(title)
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([640.0, 420.0])
             .with_app_id("ai.storyteller.gridcraft")
+            .with_active(active)
             .with_drag_and_drop(true);
         if cfg!(target_os = "macos") {
             viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
@@ -260,6 +261,7 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.split_workbooks();
+        let activate = self.focus_request.take();
         let ctx = ui.ctx().clone();
         let mut actions = Vec::new();
         let mut focused = self.focused;
@@ -275,7 +277,7 @@ impl eframe::App for App {
         for index in 1..self.windows.len() {
             let Some(id) = Self::window_id(&self.windows[index]) else { continue };
             let summaries = self.summaries(id);
-            let builder = Self::window_builder(&self.windows[index]);
+            let builder = Self::window_builder(&self.windows[index], activate == Some(id));
             let app = &mut self.windows[index];
             ctx.show_viewport_immediate(Self::viewport_id(id), builder, |ui, _class| {
                 app.logic_for_workbook_window(ui.ctx());
@@ -297,11 +299,14 @@ impl eframe::App for App {
         }
         self.split_workbooks();
         self.remove_closed(&ctx);
-        if let Some(id) = self.focus_request.take()
+        if let Some(id) = self.focus_request.or(activate)
             && self.windows.iter().any(|app| Self::window_id(app) == Some(id))
         {
             ctx.send_viewport_cmd_to(self.viewport_for_window(id), egui::ViewportCommand::Focus);
             self.focused = Some(id);
+            if self.focus_request.is_some() {
+                ctx.request_repaint();
+            }
         }
         if self.windows.is_empty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
