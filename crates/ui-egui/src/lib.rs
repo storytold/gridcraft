@@ -17,6 +17,7 @@ pub mod icons;
 pub mod panes;
 pub mod pivot_pane;
 pub mod ribbon;
+pub mod system_fonts;
 pub mod tabs;
 pub mod theme;
 pub mod widgets;
@@ -41,6 +42,7 @@ pub struct UiState {
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
     pub recent: Vec<String>,
+    pub favorite_fonts: Vec<String>,
 }
 
 impl Default for UiState {
@@ -53,6 +55,7 @@ impl Default for UiState {
             formula_bar_expanded: false,
             status_bar: true,
             recent: vec![],
+            favorite_fonts: vec![],
         }
     }
 }
@@ -352,6 +355,7 @@ impl SheetApp {
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        crate::system_fonts::activate_pending();
         if !self.fonts_ready {
             // New fonts apply from the next frame on: paint nothing until then.
             if self.fonts_set {

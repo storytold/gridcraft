@@ -41,7 +41,14 @@ impl eframe::App for App {
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let old_favorites = self.0.ui.favorite_fonts.clone();
+
         self.0.ui(ui);
+
+        // Save preferences immediately when font favorites change.
+        if self.0.ui.favorite_fonts != old_favorites {
+            save_prefs(&self.0);
+        }
     }
     fn on_exit(&mut self) {
         save_prefs(&self.0);

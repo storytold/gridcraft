@@ -684,16 +684,85 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+fn favorite_font_row(
+    ui: &mut egui::Ui,
+    font: &str,
+    selected: &mut String,
+    favorites: &mut Vec<String>,
+) {
+    ui.horizontal(|ui| {
+        let starred = favorites.iter().any(|f| f == font);
+
+        let star = if starred { "★" } else { "☆" };
+
+        if ui.small_button(star).clicked() {
+            if starred {
+                favorites.retain(|f| f != font);
+            } else {
+                favorites.push(font.to_owned());
+            }
+        }
+
+        if ui.selectable_label(selected == font, font).clicked() {
+            *selected = font.to_owned();
+            ui.close();
+        }
+    });
+}
+
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let mut name = st.font.name.clone();
     let before = name.clone();
-    egui::ComboBox::from_id_salt("font_name").width(150.0).selected_text(egui::RichText::new(&name).font(theme::ui_font(12.5))).show_ui(ui, |ui| {
-        for f in FONTS {
-            let fam = theme::cell_family(f, false, false);
-            ui.selectable_value(&mut name, f.to_string(), egui::RichText::new(*f).font(egui::FontId::new(14.0, fam)));
-        }
-    });
-    if name != before {
+    let mut favorites = app.ui.favorite_fonts.clone();
+
+    egui::ComboBox::from_id_salt("font_name")
+        .width(170.0)
+        .close_behavior(
+            egui::PopupCloseBehavior::CloseOnClickOutside
+        )
+        .selected_text(&name)
+        .show_ui(ui, |ui| {
+            ui.set_min_width(250.0);
+
+            if !favorites.is_empty() {
+                ui.label("Favorites");
+
+                // Snapshot the list so stars can be toggled safely.
+                let pinned = favorites.clone();
+
+                for font in &pinned {
+                    favorite_font_row(
+                        ui, font, &mut name, &mut favorites
+                    );
+                }
+
+                ui.separator();
+            }
+
+            for (family, members) in
+                crate::system_fonts::grouped_families()
+            {
+                if members.len() == 1 {
+                    favorite_font_row(
+                        ui, &members[0], &mut name, &mut favorites
+                    );
+                } else {
+                    ui.collapsing(family, |ui| {
+                        for font in members {
+                            favorite_font_row(
+                                ui, font, &mut name, &mut favorites
+                            );
+                        }
+                    });
+                }
+            }
+        });
+
+    app.ui.favorite_fonts = favorites;
+
+    if name != before
+        && crate::system_fonts::register(ui.ctx(), &name)
+    {
         act(app, "home.fontName", json!({"name": name}));
     }
 }
