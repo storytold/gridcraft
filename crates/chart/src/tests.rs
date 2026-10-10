@@ -314,6 +314,29 @@ fn palette_beyond_six_series() {
     assert_ne!(p[6], p[12]);
 }
 
+#[test]
+fn scatter_with_text_x_values_numbers_the_points() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    for (i, (label, v)) in [("North", 3.0), ("South", 5.0), ("East", 4.0)].iter().enumerate() {
+        s.set_value(CellRef::new(i as u32, 0), Value::from(*label));
+        s.set_value(CellRef::new(i as u32, 1), Value::Number(*v));
+        s.set_value(CellRef::new(i as u32, 2), Value::Number(i as f64 * 10.0));
+    }
+    for kind in [ChartKind::Scatter, ChartKind::ScatterLines, ChartKind::Bubble] {
+        let mut c = chart(kind);
+        c.series = vec![Series { categories: Some("Sheet1!$A$1:$A$3".into()), values: "Sheet1!$B$1:$B$3".into(), ..Default::default() }];
+        let d = resolve(&wb, 0, &c);
+        assert_eq!(d.series[0].x, None, "{kind:?}");
+        let prims = render(&c, &d, 400.0, 300.0, &ApproxMeasure);
+        let empty = render(&c, &ChartData { categories: vec![], series: vec![] }, 400.0, 300.0, &ApproxMeasure);
+        assert!(prims.len() > empty.len() + 2, "{kind:?} draws its points");
+        // Numeric X values are kept.
+        c.series[0].categories = Some("Sheet1!$C$1:$C$3".into());
+        assert_eq!(resolve(&wb, 0, &c).series[0].x, Some(vec![Some(0.0), Some(10.0), Some(20.0)]));
+    }
+}
+
 fn pixel(img: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
     let i = ((y * w + x) * 4) as usize;
     [img[i], img[i + 1], img[i + 2], img[i + 3]]
