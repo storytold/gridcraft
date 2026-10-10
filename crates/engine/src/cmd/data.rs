@@ -283,6 +283,33 @@ fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_co
         // Row heights travel with rows.
         let heights: Vec<Option<LineInfo>> =
             if by_cols { vec![] } else { order.iter().map(|&i| sh.rows.get(&(body.start.row + i)).copied()).collect() };
+        // Floating objects anchored inside the sorted body travel with their lines, unless they
+        // are pinned absolutely ("Don't move or size with cells", `editAs="absolute"`). Reordering
+        // is the inverse of `order`: `dst_of[src] = dst`.
+        let dst_of: Vec<u32> = {
+            let mut v = vec![0u32; order.len()];
+            for (dst_i, &src_i) in order.iter().enumerate() {
+                if let Some(slot) = v.get_mut(src_i as usize) {
+                    *slot = dst_i as u32;
+                }
+            }
+            v
+        };
+        // The object's own geometry (its top-left anchor cell, offset and size) is read from the
+        // pre-sort `sh`; a two-cell object's bottom-right cell is derived from its size here so it
+        // can be re-fitted to the lines it spans after the sort.
+        let objs: Vec<Anchor> =
+            sh.images.iter().map(|o| o.anchor).chain(sh.charts.iter().map(|o| o.anchor)).chain(sh.shapes.iter().map(|o| o.anchor)).collect();
+        let descs: Vec<(u32, u32, f32, f32)> = objs
+            .iter()
+            .map(|a| {
+                let x2 = sh.col_left(a.cell.col) + a.dx as f64 + a.width.max(0.0) as f64;
+                let y2 = sh.row_top(a.cell.row) + a.dy as f64 + a.height.max(0.0) as f64;
+                let tc = sh.col_at(x2);
+                let tr = sh.row_at(y2);
+                (tc, tr, (x2 - sh.col_left(tc)) as f32, (y2 - sh.row_top(tr)) as f32)
+            })
+            .collect();
         let shm = cx.sheet_mut(sheet)?;
         for (c, cell) in &moved {
             match cell {
@@ -305,6 +332,34 @@ fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_co
                 }
             }
         }
+        // Re-anchor floating objects now that the row heights are final. `objs` was collected as
+        // images ++ charts ++ shapes, so the same index maps straight onto each vec.
+        // Only objects anchored inside the sorted block move: within its lines on the sort axis
+        // and within its span on the other axis (a picture beside the block stays put).
+        let (b0, b1) = if by_cols { (body.start.col, body.end.col) } else { (body.start.row, body.end.row) };
+        let (o0, o1) = if by_cols { (body.start.row, body.end.row) } else { (body.start.col, body.end.col) };
+        let ni = shm.images.len();
+        let nch = shm.charts.len();
+        for (i, (a, desc)) in objs.into_iter().zip(descs).enumerate() {
+            let other = if by_cols { a.cell.row } else { a.cell.col };
+            if other < o0 || other > o1 {
+                continue;
+            }
+            let na = sorted_anchor(shm, a, desc, by_cols, b0, b1, &dst_of);
+            if na != a {
+                if i < ni {
+                    if let Some(o) = shm.images.get_mut(i) {
+                        o.anchor = na;
+                    }
+                } else if i < ni + nch {
+                    if let Some(o) = shm.charts.get_mut(i - ni) {
+                        o.anchor = na;
+                    }
+                } else if let Some(o) = shm.shapes.get_mut(i - ni - nch) {
+                    o.anchor = na;
+                }
+            }
+        }
         for (c, _) in moved {
             cx.changed.push((sheet, c));
         }
@@ -312,6 +367,35 @@ fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_co
         Ok(Json::Null)
     })?;
     Ok(json!({"sorted": body.a1()}))
+}
+
+/// Re-anchor one floating object for a sort. `bottom` is the object's bottom-right line and the
+/// offset of that corner inside it, measured before the sort. `map` (via `dst_of`) translates a
+/// line index on the moving axis and is the identity outside `b0..=b1`. `sh` is the post-sort
+/// grid (row heights already reordered), so re-fitting uses the heights the object lands on.
+/// Objects pinned absolutely ("Don't move or size with cells") never move; "move but don't size"
+/// keeps its size; "move and size" is re-fitted when its whole extent stays inside the body.
+fn sorted_anchor(sh: &Sheet, a: Anchor, bottom: (u32, u32, f32, f32), by_cols: bool, b0: u32, b1: u32, dst_of: &[u32]) -> Anchor {
+    if a.mode == AnchorMode::Absolute {
+        return a;
+    }
+    let (tc, tr, tdx, tdy) = bottom;
+    let map = |v: u32| -> u32 { if v >= b0 && v <= b1 { dst_of.get((v - b0) as usize).map_or(v, |&d| b0 + d) } else { v } };
+    let (axis_start, axis_end) = if by_cols { (a.cell.col, tc) } else { (a.cell.row, tr) };
+    if axis_start < b0 || axis_start > b1 {
+        return a;
+    }
+    let (nr, nc) = if by_cols { (a.cell.row, map(a.cell.col)) } else { (map(a.cell.row), a.cell.col) };
+    if a.mode == AnchorMode::MoveAndSize && axis_end >= b0 && axis_end <= b1 {
+        let (nbr, nbc) = if by_cols { (tr, map(tc)) } else { (map(tr), tc) };
+        let x1 = sh.col_left(nc) + a.dx as f64;
+        let y1 = sh.row_top(nr) + a.dy as f64;
+        let x2 = sh.col_left(nbc) + tdx as f64;
+        let y2 = sh.row_top(nbr) + tdy as f64;
+        Anchor { cell: CellRef::new(nr, nc), dx: a.dx, dy: a.dy, width: (x2 - x1).max(0.0) as f32, height: (y2 - y1).max(0.0) as f32, mode: a.mode }
+    } else {
+        Anchor { cell: CellRef::new(nr, nc), ..a }
+    }
 }
 
 // ---------------------------------------------------------------- filter

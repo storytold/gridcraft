@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_formula::adjust::{Axis, Edit};
-use gridcraft_model::{Sheet, Visibility};
+use gridcraft_model::{Anchor, AnchorMode, Sheet, Visibility};
 use serde_json::{Value as Json, json};
 
 use super::*;
@@ -61,6 +61,46 @@ fn lines(s: &Session, p: &Json, axis: Axis) -> Result<(u32, u32)> {
     Ok((a, count))
 }
 
+/// Bottom-right line of an anchor (the `to` marker of a two-cell anchor) and the offset of that
+/// corner inside it, in points. Measured against `sh`'s current geometry.
+fn anchor_corner(sh: &Sheet, a: &Anchor) -> (u32, u32, f32, f32) {
+    let x2 = sh.col_left(a.cell.col) + a.dx as f64 + a.width.max(0.0) as f64;
+    let y2 = sh.row_top(a.cell.row) + a.dy as f64 + a.height.max(0.0) as f64;
+    let tc = sh.col_at(x2);
+    let tr = sh.row_at(y2);
+    (tc, tr, (x2 - sh.col_left(tc)) as f32, (y2 - sh.row_top(tr)) as f32)
+}
+
+/// Repositions one floating object's anchor for a structural insert/delete, honouring its
+/// [`AnchorMode`]: absolute objects ("Don't move or size with cells") stay put; "move but don't
+/// size" follows its cell and keeps its size; "move and size" is re-fitted to the lines it lands
+/// on. `corner` is the pre-edit bottom-right line/offset (from [`anchor_corner`]); a line deleted
+/// out from under an edge collapses that edge onto `at`. `sh` is the post-edit grid, used to
+/// measure the re-fitted size.
+fn shift_anchor(sh: &Sheet, a: Anchor, corner: (u32, u32, f32, f32), axis: Axis, at: u32, map_line: &impl Fn(u32) -> Option<u32>) -> Anchor {
+    if a.mode == AnchorMode::Absolute {
+        return a;
+    }
+    let main = if axis == Axis::Rows { a.cell.row } else { a.cell.col };
+    // A deleted anchor line collapses onto the line that takes its place.
+    let nmain = map_line(main).unwrap_or(at);
+    let (nr, nc) = if axis == Axis::Rows { (nmain, a.cell.col) } else { (a.cell.row, nmain) };
+    if a.mode == AnchorMode::MoveOnly {
+        return Anchor { cell: CellRef::new(nr, nc), ..a };
+    }
+    // Move and size: re-fit to the lines the object lands on. A far edge whose line was deleted
+    // collapses onto the near cell, shrinking the object.
+    let (tc, tr, tdx, tdy) = corner;
+    let far = if axis == Axis::Rows { tr } else { tc };
+    let nfar = map_line(far).unwrap_or(nmain);
+    let (nbr, nbc) = if axis == Axis::Rows { (nfar, tc) } else { (tr, nfar) };
+    let x1 = sh.col_left(nc) + a.dx as f64;
+    let y1 = sh.row_top(nr) + a.dy as f64;
+    let xn = sh.col_left(nbc) + tdx as f64;
+    let yn = sh.row_top(nbr) + tdy as f64;
+    Anchor { cell: CellRef::new(nr, nc), dx: a.dx, dy: a.dy, width: (xn - x1).max(0.0) as f32, height: (yn - y1).max(0.0) as f32, mode: a.mode }
+}
+
 /// Shifts everything that has a position on the sheet for an insert/delete.
 fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert: bool) {
     let map_line = |v: u32| -> Option<u32> {
@@ -82,6 +122,16 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
             Axis::Cols => map_line(c.col).map(|x| CellRef::new(c.row, x)),
         }
     };
+    // Floating objects: snapshot their bottom-right corners against the pre-shift geometry, so a
+    // re-fit after the shift measures against the grid the object actually lands on.
+    let obj_corners: Vec<(u32, u32, f32, f32)> = sh
+        .charts
+        .iter()
+        .map(|o| &o.anchor)
+        .chain(sh.images.iter().map(|o| &o.anchor))
+        .chain(sh.shapes.iter().map(|o| &o.anchor))
+        .map(|a| anchor_corner(sh, a))
+        .collect();
     // Line info.
     let lines = if axis == Axis::Rows { &mut sh.rows } else { &mut sh.cols };
     let old = std::mem::take(lines);
@@ -139,15 +189,22 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     }
     sh.comments = std::mem::take(&mut sh.comments).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     sh.hyperlinks = std::mem::take(&mut sh.hyperlinks).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
-    for ch in sh.charts.iter_mut() {
-        if let Some(c) = map_cell(ch.anchor.cell) {
-            ch.anchor.cell = c;
-        }
+    // Floating objects follow their anchor lines per their [`AnchorMode`]. Corners were snapshotted
+    // as charts ++ images ++ shapes, matching the three slices below. New anchors are computed
+    // against the post-shift grid first (the re-fit needs its sizes), then written back.
+    let anchored = |ui: usize, a: Anchor| -> Anchor { obj_corners.get(ui).map_or(a, |&corner| shift_anchor(sh, a, corner, axis, at, &map_line)) };
+    let new_charts: Vec<Anchor> = sh.charts.iter().enumerate().map(|(i, o)| anchored(i, o.anchor)).collect();
+    let new_images: Vec<Anchor> = sh.images.iter().enumerate().map(|(i, o)| anchored(new_charts.len() + i, o.anchor)).collect();
+    let base = new_charts.len() + new_images.len();
+    let new_shapes: Vec<Anchor> = sh.shapes.iter().enumerate().map(|(i, o)| anchored(base + i, o.anchor)).collect();
+    for (o, a) in sh.charts.iter_mut().zip(new_charts) {
+        o.anchor = a;
     }
-    for im in sh.images.iter_mut() {
-        if let Some(c) = map_cell(im.anchor.cell) {
-            im.anchor.cell = c;
-        }
+    for (o, a) in sh.images.iter_mut().zip(new_images) {
+        o.anchor = a;
+    }
+    for (o, a) in sh.shapes.iter_mut().zip(new_shapes) {
+        o.anchor = a;
     }
     for sp in sh.sparklines.iter_mut() {
         if let Some(c) = map_cell(sp.cell) {

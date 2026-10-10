@@ -245,7 +245,8 @@ fn sample() -> Workbook {
     let png = b"\x89PNG\r\n\x1a\n0000IHDRfake".to_vec();
     s.images.push(Image {
         id: 10,
-        anchor: Anchor { cell: at("C10"), dx: 5.0, dy: 4.0, width: 120.0, height: 80.0 },
+        // A non-default anchor mode, to prove it survives an xlsx round-trip.
+        anchor: Anchor { cell: at("C10"), dx: 5.0, dy: 4.0, width: 120.0, height: 80.0, mode: AnchorMode::MoveOnly },
         data: png,
         mime: "image/png".into(),
         alt: "Logo \"x\"".into(),
@@ -253,7 +254,7 @@ fn sample() -> Workbook {
     s.shapes.push(Shape {
         id: 11,
         kind: ShapeKind::Ellipse,
-        anchor: Anchor { cell: at("E10"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0 },
+        anchor: Anchor { cell: at("E10"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, mode: AnchorMode::Absolute },
         fill: Color::Rgb(0x4472C4),
         line: Color::Rgb(0x000000),
         text: "Hi\nthere".into(),
@@ -261,7 +262,7 @@ fn sample() -> Workbook {
     s.shapes.push(Shape {
         id: 12,
         kind: ShapeKind::Arrow,
-        anchor: Anchor { cell: at("E14"), dx: 0.0, dy: 0.0, width: 64.0, height: 0.0 },
+        anchor: Anchor { cell: at("E14"), dx: 0.0, dy: 0.0, width: 64.0, height: 0.0, ..Default::default() },
         fill: Color::Auto,
         line: Color::Rgb(0xFF0000),
         text: String::new(),
@@ -269,7 +270,7 @@ fn sample() -> Workbook {
     s.shapes.push(Shape {
         id: 13,
         kind: ShapeKind::TextBox,
-        anchor: Anchor { cell: at("E16"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0 },
+        anchor: Anchor { cell: at("E16"), dx: 0.0, dy: 0.0, width: 64.0, height: 40.0, ..Default::default() },
         fill: Color::Auto,
         line: Color::Auto,
         text: "box".into(),
@@ -277,7 +278,7 @@ fn sample() -> Workbook {
     let base_chart = Chart {
         id: 20,
         kind: ChartKind::ColumnClustered,
-        anchor: Anchor { cell: at("J5"), dx: 0.0, dy: 0.0, width: 480.0, height: 288.0 },
+        anchor: Anchor { cell: at("J5"), dx: 0.0, dy: 0.0, width: 480.0, height: 288.0, ..Default::default() },
         title: Some("Sales".into()),
         series: vec![Series {
             name: Some("'Data & Stuff'!$B$1".into()),
@@ -422,6 +423,10 @@ fn full_roundtrip() {
         ia.cell == ib.cell && close(ia.dx, ib.dx) && close(ia.dy, ib.dy) && close(ia.width, ib.width) && close(ia.height, ib.height),
         "{ia:?} {ib:?}"
     );
+    // The anchor mode (Excel's editAs) survives the round-trip.
+    assert_eq!(ib.mode, AnchorMode::MoveOnly, "image anchor mode");
+    assert_eq!(b.shapes[0].anchor.mode, AnchorMode::Absolute, "shape anchor mode");
+    assert_eq!(b.shapes[1].anchor.mode, AnchorMode::MoveAndSize, "default anchor mode");
     assert_eq!(b.shapes.len(), 3);
     for (x, y) in a.shapes.iter().zip(&b.shapes) {
         assert_eq!((x.kind, &x.text, x.fill, x.line), (y.kind, &y.text, y.fill, y.line));

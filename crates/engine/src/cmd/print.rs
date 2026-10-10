@@ -1688,7 +1688,7 @@ mod tests {
         let id = wb.next_object_id();
         wb.sheet_mut(0).unwrap().images.push(Image {
             id,
-            anchor: Anchor { cell: CellRef::new(5, 5), dx: 0.0, dy: 0.0, width: 40.0, height: 40.0 },
+            anchor: Anchor { cell: CellRef::new(5, 5), dx: 0.0, dy: 0.0, width: 40.0, height: 40.0, mode: gridcraft_model::AnchorMode::MoveAndSize },
             data: png,
             mime: "image/png".into(),
             alt: String::new(),

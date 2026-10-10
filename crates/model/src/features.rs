@@ -290,6 +290,20 @@ pub struct Hyperlink {
 
 // ---------------------------------------------------------------- drawing objects
 
+/// How a floating object is pinned to the grid when its cells move or resize. Mirrors Excel's
+/// Format ▸ Size and Properties ▸ Properties, stored in the file as the anchor's `editAs`:
+/// `twoCell` (absent `editAs`), `oneCell` and `absolute`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AnchorMode {
+    /// Move and size with cells (Excel's default; `<xdr:twoCellAnchor>`).
+    #[default]
+    MoveAndSize,
+    /// Move but don't size with cells (`<xdr:twoCellAnchor editAs="oneCell">` / `<xdr:oneCellAnchor>`).
+    MoveOnly,
+    /// Don't move or size with cells (`editAs="absolute"` / `<xdr:absoluteAnchor>`).
+    Absolute,
+}
+
 /// Position of a floating object: top-left cell plus offset, size in points.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Anchor {
@@ -298,6 +312,9 @@ pub struct Anchor {
     pub dy: f32,
     pub width: f32,
     pub height: f32,
+    /// How the object follows its anchor cell when rows/columns move (sort, insert, delete).
+    #[serde(default)]
+    pub mode: AnchorMode,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]

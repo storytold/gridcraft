@@ -279,6 +279,8 @@ fn drawing_with_picture_and_chart() {
         <xdr:pic><xdr:nvPicPr><xdr:cNvPr id="2" name="P" descr="logo"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId1"/></xdr:blipFill><xdr:spPr/></xdr:pic><xdr:clientData/></xdr:twoCellAnchor>
       <xdr:oneCellAnchor><xdr:from><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="4572000" cy="2743200"/>
         <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="3" name="C"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId2"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:oneCellAnchor>
+      <xdr:twoCellAnchor editAs="absolute"><xdr:from><xdr:col>7</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>8</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+        <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="4" name="S"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>
     </xdr:wsDr>"#;
     let chart = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Sales</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea>
       <c:barChart><c:barDir val="bar"/><c:grouping val="stacked"/><c:ser><c:idx val="0"/><c:tx><c:strRef><c:f>Data!$B$1</c:f></c:strRef></c:tx><c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr><c:cat><c:strRef><c:f>Data!$A$2:$A$5</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Data!$B$2:$B$5</c:f></c:numRef></c:val></c:ser><c:dLbls><c:showVal val="1"/></c:dLbls><c:axId val="1"/><c:axId val="2"/></c:barChart>
@@ -322,10 +324,14 @@ fn drawing_with_picture_and_chart() {
     assert_eq!(img.anchor.dx, 10.0);
     assert_eq!(img.anchor.width, 118.0);
     assert_eq!(img.anchor.height, 100.0);
+    // A plain twoCellAnchor is "Move and size with cells".
+    assert_eq!(img.anchor.mode, gridcraft_model::AnchorMode::MoveAndSize);
     let ch = &s.charts[0];
     assert_eq!(ch.kind, gridcraft_model::ChartKind::Combo);
     assert_eq!(ch.title.as_deref(), Some("Sales"));
     assert_eq!(ch.anchor.width, 480.0);
+    // A oneCellAnchor is "Move but don't size with cells".
+    assert_eq!(ch.anchor.mode, gridcraft_model::AnchorMode::MoveOnly);
     assert_eq!(ch.series.len(), 2);
     assert_eq!(ch.series[0].name.as_deref(), Some("Data!$B$1"));
     assert_eq!(ch.series[0].categories.as_deref(), Some("Data!$A$2:$A$5"));
@@ -336,4 +342,8 @@ fn drawing_with_picture_and_chart() {
     assert!(ch.data_labels && ch.gridlines);
     assert_eq!(ch.legend, gridcraft_model::LegendPos::Top);
     assert_eq!(ch.x_title.as_deref(), Some("Region"));
+    // A twoCellAnchor with editAs="absolute" is "Don't move or size with cells".
+    let sp = &s.shapes[0];
+    assert_eq!(sp.kind, gridcraft_model::ShapeKind::Ellipse);
+    assert_eq!(sp.anchor.mode, gridcraft_model::AnchorMode::Absolute);
 }
