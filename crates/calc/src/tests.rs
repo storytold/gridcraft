@@ -145,6 +145,33 @@ fn spill_into_the_old_area_of_a_blocked_neighbour() {
 }
 
 #[test]
+fn arrays_do_not_spill_in_tables() {
+    // Excel: spilled array formulas aren't supported in tables.
+    let mut t = T::new();
+    t.wb.sheet_mut(0).unwrap().tables.push(gridcraft_model::Table {
+        id: 1,
+        name: "Table1".into(),
+        range: gridcraft_core::RangeRef::parse("B3:C6").unwrap(),
+        header_row: true,
+        totals_row: false,
+        columns: vec![],
+        style: String::new(),
+        banded_rows: false,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: false,
+    });
+    t.set("C4", "=SEQUENCE(2)");
+    t.set("E1", "=SEQUENCE(4)");
+    t.set("H1", "=SUM(C4:C5)");
+    assert_eq!(t.get("C4"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("C5"), Value::Empty);
+    assert_eq!(t.get("H1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("E4"), 4.0);
+}
+
+#[test]
 fn ifs_and_lazy() {
     let mut t = T::new();
     t.set("A1", "5");

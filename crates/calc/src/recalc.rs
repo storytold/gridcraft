@@ -184,9 +184,9 @@ struct PassHost<'a> {
     depth: usize,
 }
 
-/// Whether an array result at `k` can't spill: its area runs off the sheet, overlaps merged cells,
-/// holds other cells, or another formula's spill (unless that formula is recalculated in this
-/// pass, and so may spill elsewhere now).
+/// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
+/// overlaps merged cells, holds other cells, or another formula's spill (unless that formula is
+/// recalculated in this pass, and so may spill elsewhere now).
 fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     let Some(sh) = host.wb.sheet(sheet) else { return false };
     let end =
@@ -200,6 +200,7 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     end.row >= gridcraft_core::MAX_ROWS
         || end.col >= gridcraft_core::MAX_COLS
         || sh.merges.iter().any(|m| m.intersects(&range))
+        || sh.tables.iter().any(|t| t.range.contains(anchor))
         || sh.cells.iter_range(range).any(|(c, cell)| c != anchor && (!cell.value.is_empty() || cell.formula.is_some()))
         || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c) && spilled_over(*c))
 }
@@ -542,7 +543,8 @@ impl Calc {
                     let blocked = end.row >= gridcraft_core::MAX_ROWS
                         || end.col >= gridcraft_core::MAX_COLS
                         || range.iter().any(|c| c != k.1 && (sheet.cells.has(c) || sheet.spill.contains_key(&c)))
-                        || sheet.merges.iter().any(|m| m.intersects(&range));
+                        || sheet.merges.iter().any(|m| m.intersects(&range))
+                        || sheet.tables.iter().any(|t| t.range.contains(k.1));
                     if blocked {
                         if let Some(cell) = sheet.cells.get_mut(k.1) {
                             cell.value = Value::Error(CellError::Spill);
