@@ -30,7 +30,6 @@ public static class GridcraftMsiPreview {
     public static extern uint MsiEnableUIPreview(uint database, out uint preview);
     [DllImport("msi.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
     public static extern uint MsiPreviewDialogW(uint preview, string dialog);
-    public static uint CloseDialog(uint preview) { return MsiPreviewDialogW(preview, null); }
     [DllImport("msi.dll")]
     public static extern uint MsiCloseHandle(uint handle);
     [StructLayout(LayoutKind.Sequential)]
@@ -69,9 +68,10 @@ function Assert-MsiResult([uint32] $Result, [string] $Operation) {
 [uint32] $preview = 0
 try {
   Assert-MsiResult ([GridcraftMsiPreview]::MsiOpenDatabaseW($Msi, [IntPtr]::Zero, [ref] $database)) 'Open read-only MSI'
-  Assert-MsiResult ([GridcraftMsiPreview]::MsiEnableUIPreview($database, [ref] $preview)) 'Enable UI preview'
   $dialogs = 'DesktopShortcutDlg', 'SetupCompleteDlg', 'SetupCanceledDlg', 'SetupFailedDlg', 'GridcraftErrorDlg', 'FilesInUse'
   foreach ($dialog in $dialogs) {
+    # Give each dialog its own preview session; closing its handle releases the UI.
+    Assert-MsiResult ([GridcraftMsiPreview]::MsiEnableUIPreview($database, [ref] $preview)) "Enable preview for $dialog"
     Assert-MsiResult ([GridcraftMsiPreview]::MsiPreviewDialogW($preview, $dialog)) "Preview $dialog"
     $window = [IntPtr]::Zero
     $wait = [Diagnostics.Stopwatch]::StartNew()
@@ -106,14 +106,14 @@ try {
       $graphics.Dispose()
       $bitmap.Dispose()
     }
-    Assert-MsiResult ([GridcraftMsiPreview]::CloseDialog($preview)) "Close $dialog"
+    Assert-MsiResult ([GridcraftMsiPreview]::MsiCloseHandle($preview)) "Close preview for $dialog"
+    $preview = 0
     Write-Host "Saved native MSI dialog preview: $dialog"
   }
   'Native MSI dialog previews only. No installation was run. Support dialogs have no live error or process data.' |
     Set-Content -LiteralPath (Join-Path $OutputDir 'README.txt') -Encoding utf8
 } finally {
   if ($preview -ne 0) {
-    $null = [GridcraftMsiPreview]::CloseDialog($preview)
     $null = [GridcraftMsiPreview]::MsiCloseHandle($preview)
   }
   if ($database -ne 0) { $null = [GridcraftMsiPreview]::MsiCloseHandle($database) }
