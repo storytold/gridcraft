@@ -1,0 +1,6 @@
+# Custom runner labels actionlint can't know about.
+self-hosted-runner:
+  labels:
+    # Pending upstream actionlint support: https://github.com/rhysd/actionlint/pull/683
+    - ubuntu-26.04
+    - ubuntu-26.04-arm
