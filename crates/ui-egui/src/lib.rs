@@ -105,6 +105,8 @@ pub struct SheetView {
 #[derive(Default)]
 pub struct Services {
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Native shells can open a path in a separate application window.
+    pub open_in_new_window: Option<Box<dyn Fn(&str) -> Result<(), String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
@@ -412,6 +414,23 @@ impl SheetApp {
     }
 
     pub fn open_path(&mut self, path: &str) {
+        let has_existing_workbook =
+            self.session.documents().iter().any(|d| d.path.is_some() || d.is_dirty() || d.wb.sheets.iter().any(|sh| !sh.cells.is_empty()));
+        let already_open = self.session.documents().iter().position(|d| Self::paths_match(d.path.as_deref(), path));
+        if let Some(index) = already_open {
+            self.session.set_active(index);
+            return;
+        }
+        if has_existing_workbook && let Some(open) = &self.services.open_in_new_window {
+            if let Err(e) = open(path) {
+                self.message = Some(("GridCraft".into(), e));
+            } else {
+                self.ui.recent.retain(|p| p != path);
+                self.ui.recent.insert(0, path.to_string());
+                self.ui.recent.truncate(20);
+            }
+            return;
+        }
         match self.run("file.open", json!({"path": path})) {
             Ok(_) => {
                 self.ui.recent.retain(|p| p != path);
@@ -425,6 +444,29 @@ impl SheetApp {
 
     pub fn view_key(&self) -> Option<(u64, usize)> {
         self.session.active().map(|d| (d.uid, d.wb.active_sheet))
+    }
+
+    fn paths_match(existing: Option<&str>, requested: &str) -> bool {
+        existing.is_some_and(|path| Self::normalize_path(path) == Self::normalize_path(requested))
+    }
+
+    fn normalize_path(path: &str) -> std::path::PathBuf {
+        let path = std::path::Path::new(path);
+        if let Ok(canonical) = std::fs::canonicalize(path) {
+            return canonical;
+        }
+        let absolute = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().unwrap_or_default().join(path) };
+        let mut normalized = std::path::PathBuf::new();
+        for component in absolute.components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                _ => normalized.push(component.as_os_str()),
+            }
+        }
+        normalized
     }
 
     pub fn view(&self) -> SheetView {
