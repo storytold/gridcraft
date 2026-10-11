@@ -8,12 +8,12 @@ use crate::DocState;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
-        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64} (xlsx, xlsm, xlsb and ods data import, csv, tsv, txt, json)", always, open),
-        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html by extension)", has_doc, save),
-        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path}", has_doc, save_as),
-        cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
+        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path, delimiter?: \";\"} | {name, base64, delimiter?} (xlsx, xlsm, xlsb and ods data import, csv, tsv, txt, json); text files are read with the session's regional format and, without `delimiter`, split on the region's list separator", always, open),
+        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?, delimiter?} (xlsx by default; .csv/.tsv/.json/.html by extension; CSV fields are separated by the region's list separator unless `delimiter` is given)", has_doc, save),
+        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path, delimiter?}", has_doc, save_as),
+        cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html, delimiter?} → {base64}", has_doc, save_bytes),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool}", has_doc, close),
-        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?}", has_doc, |s, p| export(s, p, "csv")),
+        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, delimiter?: \";\"} (default: the region's list separator)", has_doc, |s, p| export(s, p, "csv")),
         cmd!(noundo "file.exportHtml", "Save as Web Page", ["File", "Export"], None, "{path}", has_doc, |s, p| export(s, p, "html")),
         cmd!("file.properties", "Properties", ["File"], None, "{title?, subject?, author?, company?, keywords?, description?}", has_doc, properties),
         cmd!(noundo "window.activate", "Switch Window", ["Window"], None, "{index}", has_doc, activate_window),
@@ -25,7 +25,7 @@ fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
         Some(name) => {
             let wb = crate::sample::build(name).ok_or_else(|| bad("file.new", format!("unknown sample `{name}`")))?;
             let title = crate::sample::title(name);
-            s.add_document(DocState::new(wb, None, title))
+            s.add_document(DocState::new(with_locale(s, wb), None, title))
         }
         None => s.new_workbook(),
     };
@@ -46,13 +46,14 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Dialog("open".into(), json!({})));
         return ok();
     };
-    let (wb, warnings) = crate::io::open_bytes(&name, &bytes)?;
+    let delimiter = delimiter_param(p, "file.open")?;
+    let (wb, warnings) = crate::io::open_bytes_with(&name, &bytes, &s.locale(), delimiter)?;
     let imported = matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Ods | crate::io::FileKind::Xlsb))
         || matches!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Ods | gridcraft_xlsx::Format::Xlsb);
     let title = if imported {
-        format!("{} (imported).xlsx", std::path::Path::new(&name).file_stem().and_then(|n| n.to_str()).unwrap_or("Book"))
+        format!("{} (imported).xlsx", std::path::Path::new(&name).file_stem().and_then(|n| n.to_str()).unwrap_or(s.locale().ui.content("book")))
     } else {
-        std::path::Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or("Book").to_string()
+        std::path::Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or(s.locale().ui.content("book")).to_string()
     };
     // An import has no save target: ordinary Save must ask for a new destination.
     let path = str_param(p, "path").filter(|_| !imported).map(str::to_string);
@@ -62,7 +63,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     {
         s.close_document(0);
     }
-    let i = s.add_document(DocState::new(wb, path, title));
+    let i = s.add_document(DocState::new(with_locale(s, wb), path, title));
     if !warnings.is_empty() {
         let mut message = warnings.iter().take(5).cloned().collect::<Vec<_>>().join("\n\n");
         if warnings.len() > 5 {
@@ -84,8 +85,9 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
             return ok();
         }
     };
+    let delimiter = delimiter_param(p, "file.save")?;
     let d = s.doc_mut()?;
-    let bytes = crate::io::save_bytes(&d.wb, &path)?;
+    let bytes = crate::io::save_bytes_with(&d.wb, &path, delimiter)?;
     crate::io::write_file(&path, &bytes)?;
     let kind = crate::io::FileKind::from_path(&path).unwrap_or(crate::io::FileKind::Xlsx);
     // Only a full-fidelity format clears the dirty flag and becomes the document's file.
@@ -106,9 +108,11 @@ fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let fmt = str_param(p, "format").unwrap_or("xlsx");
+    let delimiter = delimiter_param(p, "file.saveBytes")?;
     let d = s.doc()?;
-    let bytes = crate::io::save_bytes(&d.wb, &format!("x.{fmt}"))?;
-    let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
+    let bytes = crate::io::save_bytes_with(&d.wb, &format!("x.{fmt}"), delimiter)?;
+    let name =
+        format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or(s.locale().ui.content("book")));
     Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len()}))
 }
 
@@ -126,15 +130,38 @@ fn close(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
     let path = str_param(p, "path").ok_or_else(|| bad("file.export", "missing `path`"))?.to_string();
+    let delimiter = delimiter_param(p, "file.export")?;
     let d = s.doc()?;
     let mut wb = (*d.wb).clone();
     if p.get("sheet").is_some() {
         wb.active_sheet = target_sheet(s, p)?;
     }
     let target = if path.ends_with(&format!(".{ext}")) { path.clone() } else { format!("{path}.{ext}") };
-    let bytes = crate::io::save_bytes(&wb, &target)?;
+    let bytes = crate::io::save_bytes_with(&wb, &target, delimiter)?;
     crate::io::write_file(&target, &bytes)?;
     Ok(json!({"path": target, "bytes": bytes.len()}))
+}
+
+/// The workbook with the session's locale (`Workbook::locale` is never read from a file).
+pub(crate) fn with_locale(s: &Session, mut wb: gridcraft_model::Workbook) -> gridcraft_model::Workbook {
+    wb.locale = s.locale();
+    wb
+}
+
+/// The optional single-character `delimiter` parameter of the CSV readers and writers: one
+/// printable ASCII character (or a tab) that is not the quote character.
+pub(crate) fn delimiter_param(p: &Json, cmd: &str) -> Result<Option<u8>> {
+    match p.get("delimiter") {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::String(t)) => {
+            let mut it = t.chars();
+            match (it.next(), it.next()) {
+                (Some(c), None) if c == '\t' || (c.is_ascii() && !c.is_ascii_control() && c != '"') => Ok(Some(c as u8)),
+                _ => Err(bad(cmd, "`delimiter` must be a single printable ASCII character or a tab, and not a double quote")),
+            }
+        }
+        Some(_) => Err(bad(cmd, "`delimiter` must be a string")),
+    }
 }
 
 fn properties(s: &mut Session, p: &Json) -> Result<Json> {

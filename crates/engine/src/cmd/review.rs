@@ -82,16 +82,19 @@ fn stats(s: &mut Session, _: &Json) -> Result<Json> {
 fn accessibility(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?;
     let mut issues = Vec::new();
+    let loc = &d.wb.locale;
+    let default_prefix = loc.ui.content("sheet");
+    let picture = loc.ui.content("picture");
     for sh in &d.wb.sheets {
         for im in &sh.images {
             if im.alt.is_empty() {
-                issues.push(json!({"sheet": sh.name, "issue": "Missing alternative text", "object": format!("Picture {}", im.id)}));
+                issues.push(json!({"sheet": sh.name, "issue": "Missing alternative text", "object": format!("{picture} {}", im.id)}));
             }
         }
         if !sh.merges.is_empty() {
             issues.push(json!({"sheet": sh.name, "issue": "Merged cells", "count": sh.merges.len()}));
         }
-        if sh.name.starts_with("Sheet") {
+        if sh.name.starts_with(default_prefix) || sh.name.starts_with("Sheet") {
             issues.push(json!({"sheet": sh.name, "issue": "Default sheet name"}));
         }
     }

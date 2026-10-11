@@ -1,0 +1,28 @@
+# Regional conventions (separators, dates, names, currency) equivalent to what the operating
+# system supplies to Excel for this region. Codes use canonical (en-US) format letters.
+tag = "pt-BR"
+native_name = "Português (Brasil)"
+lcid = 0x0416
+decimal = ","
+group = "."
+list = ";"
+array_col = "\\"
+array_row = ";"
+date_order = "DMY"
+date_sep = "/"
+time_sep = ":"
+short_date = "dd/mm/yyyy"
+long_date = "dddd, d \"de\" mmmm \"de\" yyyy"
+short_time = "hh:mm"
+long_time = "hh:mm:ss"
+months = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+months_abbr = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
+weekdays = ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"]
+weekdays_abbr = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"]
+am_pm = ["AM", "PM"]
+currency = "R$"
+currency_format = "\"R$\" #,##0.00"
+
+[provenance]
+method = "Hand-written from the published regional conventions of the operating systems (CLDR / Windows NLS); plan §3 step 5."
+written = "2026-10-10"

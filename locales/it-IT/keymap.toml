@@ -1,0 +1,14 @@
+# Keyboard shortcuts of it-IT. Same format as en-US/keymap.toml.
+#
+# Only chords that the Microsoft it-IT keyboard-shortcuts page (machine-translated, partly inconsistent)
+# confirms in at least two rows, or that are forced by those chords, are overridden; every other command
+# inherits its en-US chord. Chords that equal the en-US chord in some rows are unlocalized leftovers of the
+# English source, not evidence for the English letter. `mac` keeps the macOS chord, because the page shows
+# Command-key chords unchanged. The page was not used for italic (one row says Ctrl+C, which is Copy), open,
+# new, select all, find or replace: its rows are single or contradict each other there.
+
+[shortcuts]
+"file.save" = { keys = "Cmd+B", mac = "Cmd+S", source = 'Microsoft Excel keyboard-shortcuts page, it-IT, retrieved 2026-10-10 (https://support.microsoft.com/it-it/accessibility/excel/keyboard-shortcuts-in-excel): two rows (Mac section "Salvare la cartella di lavoro: CMD+S oppure CTRL+B" and Android section "Salvare un foglio di lavoro: CTRL+B") give Ctrl+B (en-US Ctrl+S); the Windows rows that print Ctrl+S are unlocalized, because Ctrl+S is underline in this language' }
+"home.bold" = { keys = "Cmd+G", mac = "Cmd+B", source = 'Microsoft Excel keyboard-shortcuts page, it-IT, retrieved 2026-10-10 (https://support.microsoft.com/it-it/accessibility/excel/keyboard-shortcuts-in-excel): four rows (Windows "Applicare il formato grassetto: CTRL+G", "CTRL+G o CTRL+2", Mac "CMD+B oppure CTRL+G", web "CTRL+G") give Ctrl+G (en-US Ctrl+B); the Android and iOS rows that print Ctrl+B are unlocalized' }
+"home.underline" = { keys = "Cmd+S", mac = "Cmd+U", source = 'Microsoft Excel keyboard-shortcuts page, it-IT, retrieved 2026-10-10 (https://support.microsoft.com/it-it/accessibility/excel/keyboard-shortcuts-in-excel): two rows (Windows "Sottolineare il testo o rimuovere la sottolineatura: CTRL+S o CTRL+4" and Android "Applicare il formato di sottolineatura: CTRL+S") give Ctrl+S (en-US Ctrl+U)' }
+"edit.goTo" = { keys = "Ctrl+Alt+G", source = 'Microsoft Excel keyboard-shortcuts page, it-IT, retrieved 2026-10-10 (https://support.microsoft.com/it-it/accessibility/excel/keyboard-shortcuts-in-excel): two rows (Mac section "Visualizzare la finestra di dialogo Vai a: CTRL+ALT+G oppure F5" and "CTRL+ALT+G") give Ctrl+Alt+G (en-US Ctrl+G); Ctrl+G is bold in this language, so the Go To chord moves' }

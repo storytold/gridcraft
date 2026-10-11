@@ -1,6 +1,6 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
-use gridcraft_engine::Session;
+use gridcraft_engine::{Prefs, Session};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
 use wasm_bindgen::JsCast as _;
 
@@ -31,6 +31,11 @@ pub fn start() {
                 Box::new(move |cc| {
                     let inbox: Inbox = Inbox::default();
                     let mut session = Session::new();
+                    // Saved preferences first, then the browser language ("system" prefs follow it).
+                    if let Some(prefs) = load_json::<Prefs>(PREFS_KEY) {
+                        session.prefs = prefs;
+                    }
+                    session.set_system_locale(&browser_locale());
                     let q = query();
                     if let Some(name) = q.split(['?', '&']).find_map(|kv| kv.strip_prefix("sample=")) {
                         let _ = session.execute("file.new", serde_json::json!({"sample": name}));
@@ -38,17 +43,11 @@ pub fn start() {
                         let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
                     }
                     let mut app = SheetApp::new(session, services(inbox.clone(), cc.egui_ctx.clone()));
-                    // Follow the browser's language, except a CJK one: the web build has no system
-                    // CJK fonts (none are bundled), so that interface would render as tofu.
-                    let browser = gridcraft_ui_egui::i18n::Language::system();
-                    if !matches!(
-                        browser,
-                        gridcraft_ui_egui::i18n::Language::Zh | gridcraft_ui_egui::i18n::Language::Ja | gridcraft_ui_egui::i18n::Language::Ko
-                    ) {
-                        app.ui.language = browser;
+                    if let Some(ui) = load_json::<gridcraft_ui_egui::UiState>(UI_KEY) {
+                        app.ui = ui;
                     }
-                    SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
-                    Ok(Box::new(WebShell { app, inbox }))
+                    SheetApp::setup_context(&cc.egui_ctx, app.ui.dark);
+                    Ok(Box::new(WebShell::new(app, inbox)))
                 }),
             )
             .await;
@@ -65,9 +64,64 @@ fn query() -> String {
     web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
 }
 
+/// `localStorage` keys of the saved preferences (engine preferences and interface state), JSON.
+const PREFS_KEY: &str = "gridcraft.prefs";
+const UI_KEY: &str = "gridcraft.ui";
+
+/// Seconds between two checks for changed preferences.
+const SAVE_INTERVAL: f64 = 0.25;
+
+fn storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok().flatten()
+}
+
+/// The browser's preferred language (`navigator.language`, e.g. `pt-BR`); en-US when unavailable.
+fn browser_locale() -> String {
+    web_sys::window().and_then(|w| w.navigator().language()).unwrap_or_else(|| "en-US".to_string())
+}
+
+fn load_json<T: serde::de::DeserializeOwned>(key: &str) -> Option<T> {
+    let text = storage()?.get_item(key).ok().flatten()?;
+    serde_json::from_str(&text).ok()
+}
+
 struct WebShell {
     app: SheetApp,
     inbox: Inbox,
+    /// Last saved JSON of the engine preferences and the interface state.
+    saved_prefs: String,
+    saved_ui: String,
+    /// Egui time of the next check for changed preferences.
+    next_save_check: f64,
+}
+
+impl WebShell {
+    fn new(app: SheetApp, inbox: Inbox) -> WebShell {
+        let saved_prefs = serde_json::to_string(&app.session.prefs).unwrap_or_default();
+        let saved_ui = serde_json::to_string(&app.ui).unwrap_or_default();
+        WebShell { app, inbox, saved_prefs, saved_ui, next_save_check: 0.0 }
+    }
+
+    /// Writes the preferences to `localStorage` when they changed, at most every [`SAVE_INTERVAL`].
+    fn save_prefs(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        if now < self.next_save_check {
+            return;
+        }
+        self.next_save_check = now + SAVE_INTERVAL;
+        let Some(storage) = storage() else { return };
+        for (key, current, saved) in [
+            (PREFS_KEY, serde_json::to_string(&self.app.session.prefs), &mut self.saved_prefs),
+            (UI_KEY, serde_json::to_string(&self.app.ui), &mut self.saved_ui),
+        ] {
+            if let Ok(text) = current
+                && text != *saved
+                && storage.set_item(key, &text).is_ok()
+            {
+                *saved = text;
+            }
+        }
+    }
 }
 
 impl eframe::App for WebShell {
@@ -88,6 +142,7 @@ impl eframe::App for WebShell {
             });
         }
         self.app.logic(ctx);
+        self.save_prefs(ctx);
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -96,11 +151,20 @@ impl eframe::App for WebShell {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.app.ui(ui);
+        // Preferences only change in response to input. After a frame with input, one more frame
+        // once the throttle has elapsed compares and saves what this frame changed, even when
+        // nothing else repaints; idle frames schedule nothing, so the canvas can stay idle.
+        if ui.ctx().input(|i| !i.events.is_empty() || i.pointer.any_down()) {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(SAVE_INTERVAL));
+        }
     }
 }
 
 fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     let open_inbox = inbox.clone();
+    let font_inbox = Inbox::default();
+    let fetch_inbox = font_inbox.clone();
+    let fetch_ctx = ctx.clone();
     let picture_ctx = ctx.clone();
     Services {
         copy_html: Some(Box::new(copy_html)),
@@ -142,8 +206,38 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             }
         })),
         inbox: Some(inbox),
+        // CJK text and CJK interface languages need a font that is not part of the bundle: the page
+        // serves it from `./fonts/<name>` (see packaging/web/README.md).
+        fetch_font: Some(Box::new(move |name: &str| {
+            let name = name.to_string();
+            let inbox = fetch_inbox.clone();
+            let ctx = fetch_ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match fetch_bytes(&format!("./fonts/{name}")).await {
+                    Ok(bytes) => {
+                        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                        ctx.request_repaint();
+                    }
+                    Err(e) => log::warn!("font ./fonts/{name} is not available ({e}); CJK text shows as boxes without it"),
+                }
+            });
+        })),
+        font_inbox: Some(font_inbox),
         ..Default::default()
     }
+}
+
+/// Downloads `url` (relative to the page) and returns the response body.
+async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    let window = web_sys::window().ok_or("no window")?;
+    let response = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(url)).await.map_err(js)?;
+    let response: web_sys::Response = response.dyn_into().map_err(|_| "not a response")?;
+    if !response.ok() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+    let buffer = wasm_bindgen_futures::JsFuture::from(response.array_buffer().map_err(js)?).await.map_err(js)?;
+    Ok(js_sys::Uint8Array::new(&buffer).to_vec())
 }
 
 /// Start inside the copy gesture; deferring `write` can lose browser user activation.

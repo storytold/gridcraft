@@ -4,6 +4,7 @@ use egui::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2,
 use gridcraft_engine::model::{BorderStyle, Borders, Theme};
 
 use crate::grid::paint_border;
+use crate::l10n::{Localizer, Tr};
 use crate::theme::{self, Tokens};
 
 /// A labelled menu button with a two-by-two diagram to distinguish inside edges
@@ -51,11 +52,11 @@ pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response 
 
 /// Preview only reads the dialog draft. A white worksheet surface keeps automatic
 /// and explicit border colors faithful in both light and dark application themes.
-pub(crate) fn sample(ui: &mut Ui, borders: &Borders, theme: &Theme) {
+pub(crate) fn sample(ui: &mut Ui, l: Localizer, borders: &Borders, theme: &Theme) {
     ui.add_space(8.0);
-    ui.label("Preview");
+    ui.label(l.tr("Preview"));
     let (area, response) = ui.allocate_exact_size(vec2(248.0, 104.0), Sense::hover());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, "Border preview"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, l.tr("Border preview")));
     let t = Tokens::get(ui.ctx());
     ui.painter().rect_filled(area, 4.0, t.grid_bg);
     ui.painter().rect_stroke(area, 4.0, Stroke::new(1.0, t.input_border), StrokeKind::Inside);

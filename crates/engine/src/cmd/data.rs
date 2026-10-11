@@ -68,11 +68,11 @@ pub fn specs() -> Vec<CommandSpec> {
             "Data Validation…",
             ["Data", "Data Tools"],
             None,
-            "{range?, type: any|whole|decimal|list|date|time|textLength|custom, operator?: between|notBetween|equal|notEqual|greater|less|greaterOrEqual|lessOrEqual, formula1, formula2?, ignoreBlank?, dropdown?, inputTitle?, inputMessage?, errorStyle?: stop|warning|information, errorTitle?, errorMessage?, clear?: bool}",
+            "{range?, type: any|whole|decimal|list|date|time|textLength|custom, operator?: between|notBetween|equal|notEqual|greater|less|greaterOrEqual|lessOrEqual, formula1|formula1Local, formula2?|formula2Local? (Local = spelled in the session's language and region, or the `locale` tag; a list may be typed `Sim;Não`), locale?, ignoreBlank?, dropdown?, inputTitle?, inputMessage?, errorStyle?: stop|warning|information, errorTitle?, errorMessage?, clear?: bool}",
             has_doc,
             validation
         ),
-        cmd!(query "data.validate", "Check Value Against Validation", [], None, "{cell?, input} → {ok, message?}", has_doc, validate_cmd),
+        cmd!(query "data.validate", "Check Value Against Validation", [], None, "{cell?, input | inputLocal (typed in the session's language and region, or the `locale` tag)} → {ok, message?}", has_doc, validate_cmd),
         cmd!(noundo "data.circleInvalid", "Circle Invalid Data", ["Data", "Data Tools", "Data Validation"], None, "{} → invalid cells", has_doc, circle_invalid),
         cmd!("data.group", "Group", ["Data", "Outline"], Some("Cmd+Shift+K"), "{rows?: \"2:5\" | cols?: \"B:C\"}", has_doc, |s, p| group(s, p, true)),
         cmd!("data.ungroup", "Ungroup", ["Data", "Outline"], Some("Cmd+Shift+J"), "{rows? | cols?}", has_doc, |s, p| group(s, p, false)),
@@ -637,7 +637,7 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
     for row in af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000) {
         let c = CellRef::new(row, col);
         let v = sh.value(c);
-        let t = if v.is_empty() { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
+        let t = if v.is_empty() { wb.locale.ui.content("blanks").to_string() } else { crate::display::cell_text(wb, sh, c) };
         let on = match selected {
             Some(FilterCriterion::Values { values, blanks }) => {
                 if v.is_empty() {
@@ -743,10 +743,17 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
     let quote = str_param(p, "textQualifier").and_then(|q| q.chars().next()).unwrap_or('"');
     let dest = cell_param(p, "destination").unwrap_or(r.start);
     edit(s, |cx| {
+        let loc = *cx.wb.locale;
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
         let mut out: Vec<(CellRef, String)> = Vec::new();
         for (i, row) in (r.start.row..=r.end.row).enumerate() {
-            let text = sh.value(CellRef::new(row, r.start.col)).display();
+            // Numbers, booleans and errors are spelled the way the region reads them back; only
+            // real text goes through the regional parse unchanged.
+            let text = match sh.value(CellRef::new(row, r.start.col)) {
+                v @ Value::Text(_) => v.display(),
+                Value::Error(e) => loc.formula.local_error(e.as_str()).to_string(),
+                v => v.to_text_in(&loc).unwrap_or_default(),
+            };
             let parts: Vec<String> = match &fixed {
                 Some(w) => {
                     let chars: Vec<char> = text.chars().collect();
@@ -764,7 +771,8 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         for (c, t) in out {
-            let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb).unwrap_or(None);
+            let loc = *cx.wb.locale;
+            let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb, &loc).unwrap_or(None);
             let shm = cx.sheet_mut(sheet)?;
             match cell {
                 Some(x) => shm.set_cell(c, x),
@@ -825,6 +833,44 @@ fn op_param(s: Option<&str>) -> CfOperator {
     }
 }
 
+/// A validation formula (`formula1`/`formula2`, canonical) or its `…Local` twin spelled in `loc`.
+/// A list definition without a leading `=` is a literal list, as in Excel (`Sim;Não`,
+/// `"Sim;Não"`, `1,5;2`): its items are split at the region's list separator, numbers are
+/// respelled canonically, and the list is stored as a quoted comma-separated string. Every other
+/// local text must convert (with the workbook names `known`), and a conversion error is returned.
+pub(crate) fn validation_formula(
+    p: &Json,
+    key: &str,
+    loc: &gridcraft_locale::Locale,
+    sys: gridcraft_core::DateSystem,
+    list: bool,
+    known: gridcraft_formula::KnownNames<'_>,
+) -> Result<Option<String>> {
+    let Some(local) = str_param(p, &format!("{key}Local")) else {
+        return Ok(str_param(p, key).map(|f| f.trim_start_matches('=').to_string()));
+    };
+    let local = local.trim();
+    crate::locale::check_formula_len(local)?;
+    if list && !local.starts_with('=') {
+        let text = match local.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+            Some(inner) => inner.replace("\"\"", "\""),
+            None => local.to_string(),
+        };
+        let items: Vec<String> = text
+            .split(loc.regional.list)
+            .map(|item| {
+                let item = item.trim();
+                match gridcraft_core::parse::parse_number_text_in(item, sys, &loc.regional) {
+                    Some(n) => gridcraft_core::number_to_text(n),
+                    None => item.to_string(),
+                }
+            })
+            .collect();
+        return Ok(Some(format!("\"{}\"", items.join(","))));
+    }
+    crate::locale::from_local_body(local.trim_start_matches('='), &loc.dialect(), known).map(Some)
+}
+
 /// `r` minus `cut`, as up to four non-overlapping rectangles.
 fn subtract_range(r: RangeRef, cut: &RangeRef) -> Vec<RangeRef> {
     let Some(i) = r.intersection(cut) else { return vec![r] };
@@ -878,12 +924,19 @@ fn validation(s: &mut Session, p: &Json) -> Result<Json> {
         "custom" => ValidationKind::Custom,
         _ => ValidationKind::Any,
     };
+    let loc = crate::locale::call_locale(s, p)?;
+    let is_list = kind == ValidationKind::List;
+    let d = s.doc()?;
+    let sys = d.wb.date_system;
+    let known = |n: &str| d.wb.knows_name(n, sheet);
+    let f1 = validation_formula(p, "formula1", &loc, sys, is_list, &known)?.unwrap_or_default();
+    let f2 = validation_formula(p, "formula2", &loc, sys, is_list, &known)?;
     let dv = Validation {
         ranges: ranges.clone(),
         kind,
         op: op_param(str_param(p, "operator")),
-        f1: str_param(p, "formula1").unwrap_or("").trim_start_matches('=').to_string(),
-        f2: str_param(p, "formula2").map(|f| f.trim_start_matches('=').to_string()),
+        f1,
+        f2,
         allow_blank: bool_param(p, "ignoreBlank").unwrap_or(true),
         in_cell_dropdown: bool_param(p, "dropdown").unwrap_or(true),
         input_title: str_param(p, "inputTitle").unwrap_or("").into(),
@@ -906,25 +959,40 @@ fn validation(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// List entries of a list validation (literal or from a range).
-pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
+/// Whether a list validation's source is a literal comma list rather than a range or name.
+fn list_is_literal(dv: &Validation) -> bool {
     let f = dv.f1.trim();
-    if f.starts_with('"')
+    f.starts_with('"')
         || (!f.contains('!')
             && gridcraft_formula::parse(f).map(|e| !matches!(e, gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_))).unwrap_or(true))
-    {
-        return f.trim_matches('"').split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
-    }
+}
+
+/// The typed entries of a range- or name-backed list validation (empty cells skipped).
+fn list_source_values(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<Value> {
     let at = dv.ranges.first().map(|r| r.start).unwrap_or_default();
-    match gridcraft_calc::evaluate(wb, sheet, at, f) {
-        Value::Array(a) => a.data.iter().filter(|v| !v.is_empty()).map(Value::display).collect(),
-        v if !v.is_empty() && !v.is_error() => vec![v.display()],
+    match gridcraft_calc::evaluate(wb, sheet, at, dv.f1.trim()) {
+        Value::Array(a) => a.data.iter().filter(|v| !v.is_empty()).cloned().collect(),
+        v if !v.is_empty() && !v.is_error() => vec![v],
         _ => vec![],
     }
 }
 
-/// Checks typed input against the validation of a cell. `Ok(None)` = valid.
+/// List entries of a list validation (literal or from a range).
+pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
+    if list_is_literal(dv) {
+        return dv.f1.trim().trim_matches('"').split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
+    }
+    list_source_values(wb, sheet, dv).iter().map(Value::display).collect()
+}
+
+/// Checks input typed in the workbook's language and region against the validation of a cell.
 pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
+    check_validation_in(wb, sheet, at, input, &wb.locale)
+}
+
+/// [`check_validation`] reading `input` the way `loc` spells numbers, dates and booleans
+/// (`INVARIANT` for canonical text).
+pub fn check_validation_in(wb: &Workbook, sheet: usize, at: CellRef, input: &str, loc: &gridcraft_locale::Locale) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at)))?;
     if dv.kind == ValidationKind::Any || !dv.show_error {
@@ -933,10 +1001,20 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     if input.is_empty() && dv.allow_blank {
         return None;
     }
-    let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
+    let v = gridcraft_core::parse::parse_input_in(input, wb.date_system, &loc.regional, loc.formula).value;
     let num = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, f).to_number().ok();
     let ok = match dv.kind {
-        ValidationKind::List => list_items(wb, sheet, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
+        ValidationKind::List if list_is_literal(dv) => list_items(wb, sheet, dv)
+            .iter()
+            .any(|x| x.eq_ignore_ascii_case(input) || matches!(&v, Value::Number(n) if gridcraft_core::parse::parse_number_text(x) == Some(*n))),
+        ValidationKind::List => {
+            // Range-backed lists compare typed values: `1,5` typed in pt-BR matches a cell holding 1.5.
+            list_source_values(wb, sheet, dv).iter().any(|x| match (x, &v) {
+                (Value::Number(a), Value::Number(b)) => a == b,
+                (Value::Bool(a), Value::Bool(b)) => a == b,
+                _ => x.display().eq_ignore_ascii_case(input) || x.to_text_in(loc).is_ok_and(|t| t.eq_ignore_ascii_case(input)),
+            })
+        }
         ValidationKind::Custom => gridcraft_calc::evaluate(wb, sheet, at, &dv.f1).to_bool().unwrap_or(false),
         ValidationKind::TextLength => {
             let n = input.chars().count() as f64;
@@ -981,8 +1059,11 @@ fn compare_op(op: CfOperator, n: f64, a: Option<f64>, b: Option<f64>) -> bool {
 fn validate_cmd(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = cell_param(p, "cell").unwrap_or(d.selection.active);
-    let input = str_param(p, "input").unwrap_or("");
-    match check_validation(&d.wb, d.wb.active_sheet, at, input) {
+    let (input, loc) = match str_param(p, "inputLocal") {
+        Some(t) => (t, crate::locale::call_locale(s, p)?),
+        None => (str_param(p, "input").unwrap_or(""), gridcraft_locale::INVARIANT),
+    };
+    match check_validation_in(&d.wb, d.wb.active_sheet, at, input, &loc) {
         None => Ok(json!({"ok": true})),
         Some((dv, msg)) => Ok(json!({"ok": false, "message": msg, "title": dv.error_title, "style": format!("{:?}", dv.error_style)})),
     }
@@ -999,7 +1080,7 @@ fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
             let Some(r) = r else { continue };
             for c in r.iter().take(100_000) {
                 let text = sh.input_text(c);
-                if !text.is_empty() && check_validation(&d.wb, sheet, c, &text).is_some() {
+                if !text.is_empty() && check_validation_in(&d.wb, sheet, c, &text, &gridcraft_locale::INVARIANT).is_some() {
                     bad_cells.push(c.a1());
                 }
             }
@@ -1084,14 +1165,15 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
         .and_then(Json::as_array)
         .map(|a| a.iter().filter_map(|c| col_param(Some(c), r.start.col)).collect())
         .unwrap_or_else(|| vec![r.end.col]);
-    let label = match func {
-        "count" => "Count",
-        "average" => "Average",
-        "max" => "Max",
-        "min" => "Min",
-        "product" => "Product",
-        _ => "Total",
-    };
+    let loc = *s.locale();
+    let label = loc.ui.content(match func {
+        "count" => "func_count",
+        "average" => "func_average",
+        "max" => "func_max",
+        "min" => "func_min",
+        "product" => "func_product",
+        _ => "total",
+    });
     let sheet = s.doc()?.wb.active_sheet;
     // Group boundaries (header in the first row).
     let d = s.doc()?;
@@ -1112,7 +1194,8 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
         s.execute("home.insertRows", json!({"rows": format!("{}:{}", g1 + 2, g1 + 2)}))?;
         let row = g1 + 1;
         let lbl = CellRef::new(row, group_col).a1();
-        s.execute("cell.set", json!({"cell": lbl, "input": format!("{name} {label}")}))?;
+        let text = crate::locale::content_fmt(&loc, "subtotal_group", &[("name", name.as_str()), ("label", label)]);
+        s.execute("cell.set", json!({"cell": lbl, "input": text}))?;
         for c in &cols {
             let range = RangeRef::new(CellRef::new(*g0, *c), CellRef::new(*g1, *c)).a1();
             s.execute("cell.set", json!({"cell": CellRef::new(row, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
@@ -1124,7 +1207,13 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
     let last = r.end.row + inserted + 1;
     let lbl = CellRef::new(last, group_col).a1();
     s.execute("home.insertRows", json!({"rows": format!("{}:{}", last + 1, last + 1)}))?;
-    s.execute("cell.set", json!({"cell": lbl, "input": format!("Grand {label}")}))?;
+    // Sum uses the PivotTable grand-total word, as Excel does in every language.
+    let grand = if matches!(func, "count" | "average" | "max" | "min" | "product") {
+        crate::locale::content_fmt(&loc, "subtotal_grand", &[("label", label)])
+    } else {
+        loc.ui.content("grand_total").to_string()
+    };
+    s.execute("cell.set", json!({"cell": lbl, "input": grand}))?;
     for c in &cols {
         let range = RangeRef::new(CellRef::new(r.start.row + 1, *c), CellRef::new(last - 1, *c)).a1();
         s.execute("cell.set", json!({"cell": CellRef::new(last, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;

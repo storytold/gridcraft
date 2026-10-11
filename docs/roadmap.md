@@ -1,6 +1,6 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created; milestones moved here from ROADMAP.md, beta gates added) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (M12 languages, #191: M12 and M15 status, post-beta localization row, `cargo xtask locales`) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
@@ -11,8 +11,8 @@ list is [`gaps.md`](gaps.md); numbers and method are in
 1. **Review and land the open PR queue** (50 PRs on 2026-10-10): recalc and spill fixes (#148,
    #155, #156, #157), whole-sheet and large-range fixes (#151, #152, #153, #154), chart kinds
    (#158, #161), macOS document open (#164, #167), German UI, numbers and formulas (#163),
-   15-digit comparison (#187). 8–15 h. Language work should extend the new `i18n` catalog past the
-   ribbon rather than add scattered literals.
+   15-digit comparison (#187). 8–15 h. Language work goes into the Fluent catalog (`locales/`) and
+   the locale data (`crates/locale/data/`), checked by `cargo xtask locales`, never scattered literals.
 2. **XLSX on real files** (gaps #1, #3): corpus run plus Excel opening our output.
 3. **Large workbooks and multi-threaded recalc** (gap #2).
 
@@ -74,17 +74,17 @@ to check our files, and Windows machines with the reported GPU drivers.
 | M9 | Page layout & print | most; Page Layout view remains |
 | M10 | PivotTables, Solver, Analysis ToolPak | PivotTables in; slicers, Solver, ToolPak remain |
 | M11 | Automation (record actions, scripts) | done |
-| M12 | Performance, accessibility, i18n | partial; i18n not started |
+| M12 | Performance, accessibility, i18n | partial; i18n in (12 languages, #191); performance and accessibility remain |
 | M13 | Release & polish | releases shipping (v0.2.0–v0.4.0, signed) |
 | M14 | **Beta gates** (table above) | not started as a milestone; parts in open PRs |
-| M15 | Localization infrastructure and the twelve languages | started: ribbon catalog in ja, zh, ko, pt-BR, ru (#31, #104, #82); German in PR #163 |
+| M15 | Localization infrastructure and the twelve languages | infrastructure done (M12, #191): 8 of the 12 target languages, plus zh-TW, pt-PT, it and ru; Hindi, Arabic, Indonesian, Vietnamese, shaping and right-to-left remain |
 | M16 | Get & Transform, data model | not started |
 
 ## After beta (ranked)
 
 | Work | Gap | Hours |
 |---|---|---|
-| Localization: catalog past the ribbon, then twelve languages | #11 | 100–165 |
+| Localization: Hindi, Arabic, Indonesian, Vietnamese; shaping, right-to-left; native review | #11 | 45–65 |
 | Get & Transform and the data model | #12 | 60–100 |
 | Solver, Analysis ToolPak, Forecast Sheet | #13 | 22–35 |
 | Remaining functions, oracle suite | #15 | 18–30 |
@@ -100,6 +100,8 @@ to check our files, and Windows machines with the reported GPU drivers.
 
 - `cargo xtask parity` regenerates [`parity-checklist.md`](parity-checklist.md) (ribbon
   catalog vs registered commands); `cargo xtask ci` checks it is current.
+- `cargo xtask locales` reports per-language coverage (messages, function names, shortcuts) and
+  fails on missing or extra message keys; `cargo xtask ci` runs it.
 - `cargo test --workspace`: engine, formula, function, XLSX and UI behaviour.
 - `cargo run --release -p gridcraft-ui-egui --example snapshot -- --sample sales out.png`: look at
   the UI offscreen.
@@ -112,6 +114,7 @@ to check our files, and Windows machines with the reported GPU drivers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | M12 languages (#191): M12 and M15 status, localization post-beta row 100–165 h → 45–65 h, language-work rule and `cargo xtask locales` |
 | 2026-10-10 | minor | Current focus and M15 updated for the 10-10 merges |
 | 2026-10-10 | minor | Added the alpha gate table (six core workflows; passes, stays alpha) |
 | 2026-10-10 | major | Created: current focus, beta gates (~160–240 h), milestones moved from ROADMAP.md, post-beta ranking |

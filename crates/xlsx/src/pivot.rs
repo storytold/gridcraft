@@ -1328,7 +1328,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
             let number_format = d
                 .attr_u32("numFmtId")
                 .filter(|id| *id != 0)
-                .and_then(|id| crate::tables::builtin_format(id).map(str::to_string).or_else(|| cx.num_fmts.get(&id).cloned()));
+                .and_then(|id| gridcraft_numfmt::builtin_format(id).map(str::to_string).or_else(|| cx.num_fmts.get(&id).cloned()));
             let name = d.attr("name").map(str::to_string).unwrap_or_else(|| format!("{} of {}", func_caption(func), f.name));
             pt.values.push(PivotValue { source_col: f.name.clone(), func, name, show_as, number_format });
         }

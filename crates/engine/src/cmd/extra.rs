@@ -134,25 +134,25 @@ pub fn specs() -> Vec<CommandSpec> {
             .execute("data.removeDuplicates", p.clone())),
         // Get & Transform
         cmd!(
-            "data.fromTextCsv",
+            nested "data.fromTextCsv",
             "From Text/CSV",
             ["Data", "Get & Transform Data"],
             None,
-            "{path | text, delimiter?: \",\", sheet?: new sheet name} → imports into a new sheet as a table",
+            "{path | text, delimiter?: \",\" (a tab when the first line has one), sheet?: new sheet name, local?: bool (read the delimiter default and the numbers, dates and booleans in the session's region, or the `locale` tag, as Excel's text import does, instead of canonical en-US), locale?} → imports into a new sheet as a table",
             has_doc,
-            from_csv
+            |s, p| from_csv(s, p, "data.fromTextCsv")
         ),
         cmd!(
-            "data.getData",
+            nested "data.getData",
             "Get Data",
             ["Data", "Get & Transform Data"],
             None,
-            "{path | text} (CSV/TSV/JSON array of objects) → new sheet table",
+            "{path | text, delimiter?, local?: bool, locale?} (CSV/TSV/JSON array of objects; delimiter and values canonical en-US unless `local`, as in data.fromTextCsv) → new sheet table",
             has_doc,
-            from_csv
+            |s, p| from_csv(s, p, "data.getData")
         ),
         cmd!(
-            "data.fromTableRange",
+            nested "data.fromTableRange",
             "From Table/Range",
             ["Data", "Get & Transform Data"],
             None,
@@ -242,7 +242,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             use_in_formula
         ),
-        cmd!(query "formulas.watchWindow", "Watch Window", ["Formulas", "Formula Auditing"], None, "{add?: \"Sheet1!B5\", remove?: \"…\"} → watched cells with current values", has_doc, watch_window),
+        cmd!(query "formulas.watchWindow", "Watch Window", ["Formulas", "Formula Auditing"], None, "{add?: \"Sheet1!B5\", remove?: \"…\"} → [{cell, value, formula (canonical), text (as displayed), formulaLocal}]", has_doc, watch_window),
     ]
 }
 
@@ -270,9 +270,13 @@ fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
     let el = str_param(p, "element").unwrap_or("title").to_string();
     let on = bool_param(p, "on").unwrap_or(true);
     let pos = str_param(p, "position").map(str::to_string);
+    let loc = *s.locale();
     with_chart(s, p, |c| {
         match el.as_str() {
-            "title" => c.title = if on { c.title.clone().filter(|t| !t.is_empty()).or(Some("Chart Title".into())) } else { Some(String::new()) },
+            "title" => {
+                c.title =
+                    if on { c.title.clone().filter(|t| !t.is_empty()).or(Some(loc.ui.content("chart_title").into())) } else { Some(String::new()) }
+            }
             "legend" => {
                 c.legend = if !on {
                     LegendPos::None
@@ -288,8 +292,8 @@ fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
             "dataLabels" => c.data_labels = on,
             "gridlines" => c.gridlines = on,
             "axisTitles" => {
-                c.x_title = on.then(|| c.x_title.clone().unwrap_or_else(|| "Axis Title".into()));
-                c.y_title = on.then(|| c.y_title.clone().unwrap_or_else(|| "Axis Title".into()));
+                c.x_title = on.then(|| c.x_title.clone().unwrap_or_else(|| loc.ui.content("axis_title").into()));
+                c.y_title = on.then(|| c.y_title.clone().unwrap_or_else(|| loc.ui.content("axis_title").into()));
             }
             "smooth" => {
                 for s in &mut c.series {
@@ -304,6 +308,7 @@ fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn quick_layout(s: &mut Session, p: &Json) -> Result<Json> {
     let n = u32_param(p, "layout").unwrap_or(1);
+    let loc = *s.locale();
     with_chart(s, p, |c| {
         let (legend, labels, grid, axes) = match n {
             2 => (LegendPos::Top, true, false, false),
@@ -317,8 +322,8 @@ fn quick_layout(s: &mut Session, p: &Json) -> Result<Json> {
         c.data_labels = labels;
         c.gridlines = grid;
         if axes {
-            c.x_title.get_or_insert_with(|| "Axis Title".into());
-            c.y_title.get_or_insert_with(|| "Axis Title".into());
+            c.x_title.get_or_insert_with(|| loc.ui.content("axis_title").into());
+            c.y_title.get_or_insert_with(|| loc.ui.content("axis_title").into());
         } else {
             c.x_title = None;
             c.y_title = None;
@@ -476,10 +481,10 @@ fn selection_pane(s: &mut Session, _: &Json) -> Result<Json> {
         v.push(json!({"kind": "shape", "id": c.id, "name": format!("{:?} {}", c.kind, c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
     }
     for c in &sh.images {
-        v.push(json!({"kind": "image", "id": c.id, "name": format!("Picture {}", c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
+        v.push(json!({"kind": "image", "id": c.id, "name": format!("{} {}", d.wb.locale.ui.content("picture"), c.id), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
     }
     for c in &sh.charts {
-        v.push(json!({"kind": "chart", "id": c.id, "name": format!("Chart {}", c.id), "title": c.title, "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
+        v.push(json!({"kind": "chart", "id": c.id, "name": format!("{} {}", d.wb.locale.ui.content("chart"), c.id), "title": c.title, "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
     }
     Ok(Json::Array(v))
 }
@@ -647,6 +652,7 @@ fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
     let r = str_param(p, "range").and_then(RangeRef::parse).ok_or_else(|| bad("table.resize", "missing `range`"))?;
     let d = s.doc()?;
     let si = d.wb.active_sheet;
+    let loc = *d.wb.locale;
     let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
     let ti = match str_param(p, "table") {
         Some(n) => sh.tables.iter().position(|t| t.name.eq_ignore_ascii_case(n)),
@@ -662,20 +668,63 @@ fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
                 "The headers must remain in the same row, and the resulting table range must overlap the original table range.".into(),
             ));
         }
-        let mut cols = Vec::new();
-        for (i, h) in headers.iter().enumerate() {
-            let name = if h.is_empty() { format!("Column{}", i + 1) } else { h.clone() };
-            let existing = t.columns.iter().find(|c| c.name.eq_ignore_ascii_case(&name)).cloned();
-            cols.push(existing.unwrap_or(TableColumn { name, totals: TotalsFn::None, totals_label: None, formula: None }));
+        // A blank header keeps the column that sat at the same sheet position (whatever language
+        // named it), unless a header typed elsewhere in the row claims its name; the rest are new.
+        let mut cols: Vec<Option<TableColumn>> = headers
+            .iter()
+            .enumerate()
+            .map(|(i, h)| {
+                if h.is_empty() {
+                    let abs = r.start.col + i as u32;
+                    let old = abs.checked_sub(t.range.start.col).and_then(|k| t.columns.get(k as usize));
+                    return old.filter(|c| !headers.iter().any(|h| h.eq_ignore_ascii_case(&c.name))).cloned();
+                }
+                let existing = t.columns.iter().find(|c| c.name.eq_ignore_ascii_case(h)).cloned();
+                Some(existing.unwrap_or(TableColumn { name: h.clone(), totals: TotalsFn::None, totals_label: None, formula: None }))
+            })
+            .collect();
+        // Names must be unique (structured references need them): a repeated header keeps the
+        // first column and the repeat becomes a new one numbered as `insert.table` does (`Sales2`);
+        // new columns get the first default name nothing else uses. Sets keep thousands of
+        // equal headers from taking cubic time.
+        let base = loc.ui.content("column");
+        let mut all: std::collections::HashSet<String> = cols.iter().flatten().map(|c| c.name.to_ascii_lowercase()).collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut next_suffix: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (i, slot) in cols.iter_mut().enumerate() {
+            let fresh = match slot {
+                Some(c) if seen.insert(c.name.to_ascii_lowercase()) => continue,
+                Some(c) => {
+                    let k = next_suffix.entry(c.name.to_ascii_lowercase()).or_insert(2);
+                    let mut n = format!("{}{k}", c.name);
+                    while all.contains(&n.to_ascii_lowercase()) {
+                        *k += 1;
+                        n = format!("{}{k}", c.name);
+                    }
+                    *k += 1;
+                    n
+                }
+                None => (i + 1..).map(|k| format!("{base}{k}")).find(|n| !all.contains(&n.to_ascii_lowercase())).unwrap_or_default(),
+            };
+            all.insert(fresh.to_ascii_lowercase());
+            seen.insert(fresh.to_ascii_lowercase());
+            *slot = Some(TableColumn { name: fresh, totals: TotalsFn::None, totals_label: None, formula: None });
         }
-        t.columns = cols;
+        t.columns = cols.into_iter().flatten().collect();
         t.range = r;
+        let names: Vec<String> = t.columns.iter().map(|c| c.name.clone()).collect();
+        // Header cells show their column's name, so a blank or repeated header is filled in.
+        for (i, (name, shown)) in names.iter().zip(&headers).enumerate() {
+            if name != shown {
+                sheet.set_value(CellRef::new(r.start.row, r.start.col + i as u32), Value::text(name.as_str()));
+            }
+        }
         cx.structural = true;
         Ok(Json::Null)
     })
 }
 
-fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
+fn from_csv(s: &mut Session, p: &Json, id: &str) -> Result<Json> {
     let bytes = if let Some(t) = str_param(p, "text") {
         t.as_bytes().to_vec()
     } else if let Some(path) = str_param(p, "path") {
@@ -685,46 +734,47 @@ fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
         return ok();
     };
     let text = String::from_utf8_lossy(&bytes);
+    let mut from_csv_local = false;
     // JSON array of objects → rows.
-    let rows: Vec<Vec<Json>> =
-        if text.trim_start().starts_with('[') {
-            let arr: Vec<Json> = serde_json::from_str(&text).map_err(|e| bad("data.getData", e.to_string()))?;
-            let mut keys: Vec<String> = Vec::new();
-            for o in &arr {
-                if let Some(m) = o.as_object() {
-                    for k in m.keys() {
-                        if !keys.contains(k) {
-                            keys.push(k.clone());
-                        }
+    let rows: Vec<Vec<Json>> = if text.trim_start().starts_with('[') {
+        let arr: Vec<Json> = serde_json::from_str(&text).map_err(|e| bad(id, e.to_string()))?;
+        let mut keys: Vec<String> = Vec::new();
+        for o in &arr {
+            if let Some(m) = o.as_object() {
+                for k in m.keys() {
+                    if !keys.contains(k) {
+                        keys.push(k.clone());
                     }
                 }
             }
-            let mut out = vec![keys.iter().map(|k| json!(k)).collect::<Vec<_>>()];
-            for o in &arr {
-                out.push(keys.iter().map(|k| o.get(k).cloned().unwrap_or(Json::Null)).collect());
-            }
-            out
-        } else {
-            let delim = str_param(p, "delimiter")
-                .and_then(|d| d.chars().next())
-                .unwrap_or(if text.lines().next().is_some_and(|l| l.contains('\t')) { '\t' } else { ',' });
-            let opts = gridcraft_xlsx::CsvOptions { delimiter: delim as u8, ..Default::default() };
-            let wb = gridcraft_xlsx::read_csv(&bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
-            let sh = wb.sheet(0).ok_or(EngineError::NoDocument)?;
-            let Some(u) = sh.used_range() else { return Err(EngineError::Other("The file is empty.".into())) };
-            (u.start.row..=u.end.row)
-                .map(|r| {
-                    (u.start.col..=u.end.col)
-                        .map(|c| match sh.value(CellRef::new(r, c)) {
-                            Value::Number(n) => json!(n),
-                            Value::Bool(b) => json!(b),
-                            Value::Empty => Json::Null,
-                            v => json!(v.display()),
-                        })
-                        .collect()
-                })
-                .collect()
-        };
+        }
+        let mut out = vec![keys.iter().map(|k| json!(k)).collect::<Vec<_>>()];
+        for o in &arr {
+            out.push(keys.iter().map(|k| o.get(k).cloned().unwrap_or(Json::Null)).collect());
+        }
+        out
+    } else {
+        // Canonical en-US (comma delimiter, `.` decimal) unless the caller asks for the region.
+        let loc = if bool_param(p, "local").unwrap_or(false) { crate::locale::call_locale(s, p)? } else { gridcraft_locale::INVARIANT };
+        let tabs = text.lines().next().is_some_and(|l| l.contains('\t'));
+        let delim = super::file::delimiter_param(p, id)?.unwrap_or(if tabs { b'\t' } else { u8::try_from(loc.regional.list).unwrap_or(b',') });
+        // Raw text fields: the typed parse happens once, in `range.setValues` with `local`.
+        let opts = gridcraft_xlsx::CsvOptions { delimiter: delim, locale: loc, parse_values: false, ..Default::default() };
+        let wb = gridcraft_xlsx::read_csv(&bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
+        let sh = wb.sheet(0).ok_or(EngineError::NoDocument)?;
+        let Some(u) = sh.used_range() else { return Err(EngineError::Other("The file is empty.".into())) };
+        from_csv_local = bool_param(p, "local").unwrap_or(false);
+        (u.start.row..=u.end.row)
+            .map(|r| {
+                (u.start.col..=u.end.col)
+                    .map(|c| match sh.value(CellRef::new(r, c)) {
+                        Value::Empty => Json::Null,
+                        v => json!(v.display()),
+                    })
+                    .collect()
+            })
+            .collect()
+    };
     if rows.is_empty() || rows.len() > 1_048_576 {
         return Err(EngineError::Other("Nothing to import.".into()));
     }
@@ -733,7 +783,7 @@ fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
     });
     let r = s.execute("home.insertSheet", json!({"name": name})).or_else(|_| s.execute("home.insertSheet", json!({})))?;
     let w = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
-    s.execute("range.setValues", json!({"range": "A1", "values": rows}))?;
+    s.execute("range.setValues", json!({"range": "A1", "values": rows, "local": from_csv_local, "locale": p.get("locale")}))?;
     let range = RangeRef::new(CellRef::new(0, 0), CellRef::new(rows.len() as u32 - 1, w as u32 - 1));
     let _ = s.execute("insert.table", json!({"range": range.a1(), "header": true}));
     let _ = s.execute("home.autofitColumnWidth", json!({"cols": RangeRef::cols(0, w as u32 - 1).a1()}));
@@ -746,7 +796,12 @@ fn from_table_range(s: &mut Session, p: &Json) -> Result<Json> {
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let r = if r.is_single() { crate::selection::current_region(sh, r.start) } else { r };
     let text = crate::display::range_text(&d.wb, d.wb.active_sheet, r);
-    from_csv(s, &json!({"text": text, "delimiter": "\t", "sheet": format!("{} (2)", sh.name).chars().take(31).collect::<String>()}))
+    // The text is what the sheet displays, in the session's language and region.
+    from_csv(
+        s,
+        &json!({"text": text, "delimiter": "\t", "local": true, "sheet": format!("{} (2)", sh.name).chars().take(31).collect::<String>()}),
+        "data.fromTableRange",
+    )
 }
 
 fn queries(s: &mut Session, _: &Json) -> Result<Json> {
@@ -987,7 +1042,18 @@ fn watch_window(s: &mut Session, p: &Json) -> Result<Json> {
             let si = sheet.and_then(|n| d.wb.sheet_index(&n)).unwrap_or(d.wb.active_sheet);
             let c = CellRef::parse(body).unwrap_or_default();
             let sh = d.wb.sheet(si);
-            json!({"cell": w, "value": sh.map(|s| s.value(c).display()), "formula": sh.and_then(|s| s.cell(c)).and_then(|x| x.formula.as_ref()).map(|f| format!("={}", f.text))})
+            let formula = sh
+                .filter(|s| !crate::display::formula_hidden(&d.wb, s, c))
+                .and_then(|s| s.cell(c))
+                .and_then(|x| x.formula.as_ref())
+                .map(|f| format!("={}", f.text));
+            json!({
+                "cell": w,
+                "value": sh.map(|s| s.value(c).display()),
+                "formula": formula,
+                "text": sh.map(|s| crate::display::cell_text(&d.wb, s, c)),
+                "formulaLocal": formula.as_deref().map(|f| crate::locale::to_local_formula(f, &d.wb.locale.dialect(), &|n: &str| d.wb.knows_name(n, si))),
+            })
         })
         .collect();
     Ok(Json::Array(rows))

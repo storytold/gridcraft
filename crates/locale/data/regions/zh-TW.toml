@@ -1,0 +1,28 @@
+# Regional conventions (separators, dates, names, currency) equivalent to what the operating
+# system supplies to Excel for this region. Codes use canonical (en-US) format letters.
+tag = "zh-TW"
+native_name = "中文 (台灣)"
+lcid = 0x0404
+decimal = "."
+group = ","
+list = ","
+array_col = ","
+array_row = ";"
+date_order = "YMD"
+date_sep = "/"
+time_sep = ":"
+short_date = "yyyy/m/d"
+long_date = "yyyy\"年\"m\"月\"d\"日\""
+short_time = "AM/PM hh:mm"
+long_time = "AM/PM hh:mm:ss"
+months = ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"]
+months_abbr = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"]
+weekdays = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"]
+weekdays_abbr = ["週日", "週一", "週二", "週三", "週四", "週五", "週六"]
+am_pm = ["上午", "下午"]
+currency = "NT$"
+currency_format = "\"NT$\"#,##0.00"
+
+[provenance]
+method = "Hand-written from the published regional conventions of the operating systems (CLDR / Windows NLS); plan §3 step 5."
+written = "2026-10-10"

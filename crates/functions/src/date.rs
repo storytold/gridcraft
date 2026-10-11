@@ -1,10 +1,10 @@
 //! Date and time functions.
 
 use gridcraft_core::date::{DateTime, datetime_from_serial, days_in_month, days_in_month_in, is_leap, serial_from_ymd};
-use gridcraft_core::parse::parse_input;
+use gridcraft_core::parse::parse_input_in;
 use gridcraft_core::{CellError, DateSystem, Value};
 
-use crate::util::{R, S, arg, as_array, has, num, num_val, opt_bool, opt_num, scalar, text, to_int};
+use crate::util::{R, S, arg, as_array, has, num, num_val, opt_bool, opt_num, scalar, text, to_int, to_num};
 use crate::{Arg, Ctx, FnSpec};
 
 const MAX_SERIAL: f64 = 2_958_465.0;
@@ -13,16 +13,16 @@ const ND: &[bool] = &[true, true, false];
 const NDI: &[bool] = &[true, true, true, false];
 
 /// A date serial argument (truncated to whole days when `whole`). Out of range → `#NUM!`.
-fn serial_arg(a: &[Arg], i: usize) -> R<f64> {
-    let n = num(a, i)?;
+fn serial_arg(c: &dyn Ctx, a: &[Arg], i: usize) -> R<f64> {
+    let n = num(c, a, i)?;
     if !(0.0..MAX_SERIAL + 1.0).contains(&n) {
         return Err(CellError::Num);
     }
     Ok(n)
 }
 
-fn day_arg(a: &[Arg], i: usize) -> R<i64> {
-    Ok(serial_arg(a, i)?.floor() as i64)
+fn day_arg(c: &dyn Ctx, a: &[Arg], i: usize) -> R<i64> {
+    Ok(serial_arg(c, a, i)?.floor() as i64)
 }
 
 fn dt(sys: DateSystem, serial: f64) -> R<DateTime> {
@@ -42,19 +42,19 @@ fn weekday0(sys: DateSystem, serial: i64) -> usize {
 }
 
 fn date(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let y = to_int(num(a, 0)?)?;
-    let m = to_int(num(a, 1)?)?;
-    let d = to_int(num(a, 2)?)?;
+    let y = to_int(num(c, a, 0)?)?;
+    let m = to_int(num(c, a, 1)?)?;
+    let d = to_int(num(c, a, 2)?)?;
     if !(0..10000).contains(&y) || m.abs() > 1_000_000 || d.abs() > 100_000_000 {
         return Err(CellError::Num);
     }
     num_val(ymd_serial(c.date_system(), y, m, d)? as f64)
 }
 
-fn time(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let h = num(a, 0)?.trunc();
-    let m = num(a, 1)?.trunc();
-    let s = num(a, 2)?.trunc();
+fn time(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let h = num(c, a, 0)?.trunc();
+    let m = num(c, a, 1)?.trunc();
+    let s = num(c, a, 2)?.trunc();
     if h > 32767.0 || m > 32767.0 || s > 32767.0 {
         return Err(CellError::Num);
     }
@@ -66,7 +66,7 @@ fn time(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn part(a: &[Arg], c: &mut dyn Ctx, f: fn(&DateTime) -> f64) -> R<Value> {
-    let s = serial_arg(a, 0)?;
+    let s = serial_arg(c, a, 0)?;
     num_val(f(&dt(c.date_system(), s.floor())?))
 }
 
@@ -81,20 +81,20 @@ fn day(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 /// Seconds into the day, rounded to the nearest second.
-fn day_seconds(a: &[Arg]) -> R<i64> {
-    let s = serial_arg(a, 0)?;
+fn day_seconds(c: &dyn Ctx, a: &[Arg]) -> R<i64> {
+    let s = serial_arg(c, a, 0)?;
     let secs = ((s - s.floor()) * 86400.0).round() as i64;
     Ok(if secs >= 86400 { 0 } else { secs })
 }
 
-fn hour(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val((day_seconds(a)? / 3600) as f64)
+fn hour(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val((day_seconds(c, a)? / 3600) as f64)
 }
-fn minute(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val((day_seconds(a)? / 60 % 60) as f64)
+fn minute(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val((day_seconds(c, a)? / 60 % 60) as f64)
 }
-fn second(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val((day_seconds(a)? % 60) as f64)
+fn second(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val((day_seconds(c, a)? % 60) as f64)
 }
 
 fn now(_a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
@@ -105,8 +105,8 @@ fn today(_a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn weekday(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let s = day_arg(a, 0)?;
-    let t = to_int(opt_num(a, 1, 1.0)?)?;
+    let s = day_arg(c, a, 0)?;
+    let t = to_int(opt_num(c, a, 1, 1.0)?)?;
     let wd = weekday0(c.date_system(), s) as i64;
     let r = match t {
         1 | 17 => wd + 1,
@@ -128,8 +128,8 @@ fn isoweek(sys: DateSystem, s: i64) -> R<i64> {
 
 fn weeknum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let s = day_arg(a, 0)?;
-    let t = to_int(opt_num(a, 1, 1.0)?)?;
+    let s = day_arg(c, a, 0)?;
+    let t = to_int(opt_num(c, a, 1, 1.0)?)?;
     let start = match t {
         1 | 17 => 0,
         2 | 11 => 1,
@@ -144,11 +144,11 @@ fn weeknum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn isoweeknum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    num_val(isoweek(c.date_system(), day_arg(a, 0)?)? as f64)
+    num_val(isoweek(c.date_system(), day_arg(c, a, 0)?)? as f64)
 }
 
-fn months_arg(a: &[Arg], i: usize) -> R<i64> {
-    let m = to_int(num(a, i)?)?;
+fn months_arg(c: &dyn Ctx, a: &[Arg], i: usize) -> R<i64> {
+    let m = to_int(num(c, a, i)?)?;
     if m.abs() > 200_000 {
         return Err(CellError::Num);
     }
@@ -157,8 +157,8 @@ fn months_arg(a: &[Arg], i: usize) -> R<i64> {
 
 fn edate(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let d = dt(sys, day_arg(a, 0)? as f64)?;
-    let m = months_arg(a, 1)?;
+    let d = dt(sys, day_arg(c, a, 0)? as f64)?;
+    let m = months_arg(c, a, 1)?;
     let total = d.year as i64 * 12 + d.month as i64 - 1 + m;
     let (y, mo) = (total.div_euclid(12), total.rem_euclid(12) + 1);
     if !(1900..=9999).contains(&y) {
@@ -170,8 +170,8 @@ fn edate(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 
 fn eomonth(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let d = dt(sys, day_arg(a, 0)? as f64)?;
-    let m = months_arg(a, 1)?;
+    let d = dt(sys, day_arg(c, a, 0)? as f64)?;
+    let m = months_arg(c, a, 1)?;
     let total = d.year as i64 * 12 + d.month as i64 - 1 + m;
     let (y, mo) = (total.div_euclid(12), total.rem_euclid(12) + 1);
     if !(1900..=9999).contains(&y) {
@@ -182,9 +182,9 @@ fn eomonth(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 
 fn datedif(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let s = day_arg(a, 0)?;
-    let e = day_arg(a, 1)?;
-    let unit = text(a, 2)?.to_ascii_uppercase();
+    let s = day_arg(c, a, 0)?;
+    let e = day_arg(c, a, 1)?;
+    let unit = text(c, a, 2)?.to_ascii_uppercase();
     if s > e {
         return Err(CellError::Num);
     }
@@ -224,7 +224,8 @@ fn parsed_text(a: &[Arg], c: &mut dyn Ctx) -> R<(f64, &'static str)> {
             _ => CellError::Value,
         });
     };
-    let p = parse_input(&t, c.date_system());
+    let locale = c.locale();
+    let p = parse_input_in(&t, c.date_system(), &locale.regional, locale.formula);
     match (p.value, p.format) {
         (Value::Number(n), Some(f)) if f.contains(['d', 'y', 'h']) => Ok((n, f)),
         _ => Err(CellError::Value),
@@ -244,8 +245,8 @@ fn timevalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     num_val(n - n.floor())
 }
 
-fn days(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val((day_arg(a, 0)? - day_arg(a, 1)?) as f64)
+fn days(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val((day_arg(c, a, 0)? - day_arg(c, a, 1)?) as f64)
 }
 
 fn last_of_feb(d: &DateTime) -> bool {
@@ -254,9 +255,9 @@ fn last_of_feb(d: &DateTime) -> bool {
 
 fn days360(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let d1 = dt(sys, day_arg(a, 0)? as f64)?;
-    let d2 = dt(sys, day_arg(a, 1)? as f64)?;
-    let european = opt_bool(a, 2, false)?;
+    let d1 = dt(sys, day_arg(c, a, 0)? as f64)?;
+    let d2 = dt(sys, day_arg(c, a, 1)? as f64)?;
+    let european = opt_bool(c, a, 2, false)?;
     num_val(days360_core(&d1, &d2, european) as f64)
 }
 
@@ -277,7 +278,7 @@ fn days360_core(d1: &DateTime, d2: &DateTime, european: bool) -> i64 {
 }
 
 /// Weekend mask indexed by weekday (0 = Sunday).
-fn weekend_mask(v: Option<&Arg>) -> R<[bool; 7]> {
+fn weekend_mask(c: &dyn Ctx, v: Option<&Arg>) -> R<[bool; 7]> {
     let Some(arg) = v else { return Ok([true, false, false, false, false, false, true]) };
     match scalar(arg) {
         Value::Empty if !arg.from_ref => Ok([true, false, false, false, false, false, true]),
@@ -295,7 +296,7 @@ fn weekend_mask(v: Option<&Arg>) -> R<[bool; 7]> {
         }
         Value::Error(e) => Err(e),
         other => {
-            let k = to_int(other.to_number()?)?;
+            let k = to_int(to_num(c, &other)?)?;
             let mut m = [false; 7];
             match k {
                 1..=7 => {
@@ -310,7 +311,7 @@ fn weekend_mask(v: Option<&Arg>) -> R<[bool; 7]> {
     }
 }
 
-fn holidays(v: Option<&Arg>) -> R<Vec<i64>> {
+fn holidays(c: &dyn Ctx, v: Option<&Arg>) -> R<Vec<i64>> {
     let mut out = Vec::new();
     if let Some(a) = v {
         for x in as_array(&a.value).iter() {
@@ -318,7 +319,7 @@ fn holidays(v: Option<&Arg>) -> R<Vec<i64>> {
                 Value::Empty => {}
                 Value::Error(e) => return Err(*e),
                 other => {
-                    let n = other.to_number()?;
+                    let n = to_num(c, other)?;
                     if !(0.0..MAX_SERIAL + 1.0).contains(&n) {
                         return Err(CellError::Num);
                     }
@@ -350,9 +351,9 @@ fn count_workdays(sys: DateSystem, a: i64, b: i64, mask: &[bool; 7]) -> i64 {
 
 fn networkdays_core(a: &[Arg], c: &mut dyn Ctx, mask: [bool; 7], hol: Option<&Arg>) -> R<Value> {
     let sys = c.date_system();
-    let s = day_arg(a, 0)?;
-    let e = day_arg(a, 1)?;
-    let hs = holidays(hol)?;
+    let s = day_arg(c, a, 0)?;
+    let e = day_arg(c, a, 1)?;
+    let hs = holidays(c, hol)?;
     let (lo, hi, sign) = if s <= e { (s, e, 1) } else { (e, s, -1) };
     let mut n = count_workdays(sys, lo, hi, &mask);
     n -= hs.iter().filter(|&&h| h >= lo && h <= hi && !mask[weekday0(sys, h)]).count() as i64;
@@ -360,11 +361,12 @@ fn networkdays_core(a: &[Arg], c: &mut dyn Ctx, mask: [bool; 7], hol: Option<&Ar
 }
 
 fn networkdays(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    networkdays_core(a, c, weekend_mask(None)?, a.get(2))
+    let mask = weekend_mask(c, None)?;
+    networkdays_core(a, c, mask, a.get(2))
 }
 
 fn networkdays_intl(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let mask = weekend_mask(a.get(2))?;
+    let mask = weekend_mask(c, a.get(2))?;
     networkdays_core(a, c, mask, a.get(3))
 }
 
@@ -384,13 +386,13 @@ fn advance(sys: DateSystem, start: i64, n: i64, dir: i64, mask: &[bool; 7], per_
 
 fn workday_core(a: &[Arg], c: &mut dyn Ctx, mask: [bool; 7], hol: Option<&Arg>) -> R<Value> {
     let sys = c.date_system();
-    let start = day_arg(a, 0)?;
-    let days = num(a, 1)?.trunc();
+    let start = day_arg(c, a, 0)?;
+    let days = num(c, a, 1)?.trunc();
     if days.abs() > 1e7 {
         return Err(CellError::Num);
     }
     let days = days as i64;
-    let hs = holidays(hol)?;
+    let hs = holidays(c, hol)?;
     let per_week = mask.iter().filter(|w| !**w).count() as i64;
     if per_week == 0 {
         return Err(CellError::Value);
@@ -414,11 +416,12 @@ fn workday_core(a: &[Arg], c: &mut dyn Ctx, mask: [bool; 7], hol: Option<&Arg>) 
 }
 
 fn workday(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    workday_core(a, c, weekend_mask(None)?, a.get(2))
+    let mask = weekend_mask(c, None)?;
+    workday_core(a, c, mask, a.get(2))
 }
 
 fn workday_intl(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let mask = weekend_mask(a.get(2))?;
+    let mask = weekend_mask(c, a.get(2))?;
     workday_core(a, c, mask, a.get(3))
 }
 
@@ -473,9 +476,9 @@ fn feb29_between(sys: DateSystem, s: i64, e: i64, d1: &DateTime, d2: &DateTime) 
 }
 
 fn yearfrac(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let s = day_arg(a, 0)?;
-    let e = day_arg(a, 1)?;
-    let basis = if has(a, 2) { to_int(num(a, 2)?)? } else { 0 };
+    let s = day_arg(c, a, 0)?;
+    let e = day_arg(c, a, 1)?;
+    let basis = if has(a, 2) { to_int(num(c, a, 2)?)? } else { 0 };
     num_val(yearfrac_core(c.date_system(), s, e, basis)?)
 }
 

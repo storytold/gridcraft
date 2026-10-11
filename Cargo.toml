@@ -12,6 +12,7 @@ repository = "https://github.com/storytold/gridcraft"
 
 [workspace.dependencies]
 # internal
+gridcraft-locale = { path = "crates/locale" }
 gridcraft-core = { path = "crates/core" }
 gridcraft-numfmt = { path = "crates/numfmt" }
 gridcraft-formula = { path = "crates/formula" }
@@ -24,6 +25,7 @@ gridcraft-engine = { path = "crates/engine" }
 gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
+gridcraft-l10n = { path = "crates/l10n" }
 
 # foundation
 thiserror = "2"
@@ -35,16 +37,22 @@ regex = { version = "1", default-features = false, features = ["std", "unicode",
 quick-xml = "0.38"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+toml = "1"
+
+# localization
+fluent-bundle = "0.16"
+unic-langid = "0.9"
+sys-locale = "0.3"
 
 # ui
 egui = "0.36"
 egui_extras = { version = "0.36", default-features = false }
 eframe = { version = "0.36", default-features = false }
 egui_kittest = "0.36"
+# The font parser epaint uses (same version): font files are validated before egui sees them.
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
 rfd = "0.17"
 arboard = { version = "3.6", default-features = false }
-# The desktop's preferred language, for the first-run interface language (native only).
-sys-locale = "0.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

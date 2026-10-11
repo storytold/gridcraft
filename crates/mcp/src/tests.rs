@@ -138,7 +138,7 @@ fn malformed_input_never_panics() {
     assert_eq!(err_code(&rpc(&mut s, 2, "tools/call", json!({}))), -32602);
     assert_eq!(err_code(&rpc(&mut s, 3, "tools/call", json!({"name": "no_such_tool"}))), -32602);
     assert_eq!(err_code(&rpc(&mut s, 4, "tools/call", json!({"name": "set_cell", "arguments": "x"}))), -32602);
-    assert_eq!(err_code(&rpc(&mut s, 5, "tools/call", json!({"name": "set_cell", "arguments": {"cell": "A1"}}))), -32602);
+    assert_eq!(err_code(&rpc(&mut s, 5, "tools/call", json!({"name": "set_cell", "arguments": {"input": "x"}}))), -32602);
     assert_eq!(err_code(&rpc(&mut s, 6, "tools/call", json!({"name": "set_cell", "arguments": {"cell": 5, "input": "x"}}))), -32602);
     assert_eq!(err_code(&rpc(&mut s, 7, "tools/call", json!({"name": "insert_chart", "arguments": {"range": "A1", "type": "piechart"}}))), -32602);
     assert_eq!(err_code(&rpc(&mut s, 8, "tools/call", json!({"name": "get_cell", "arguments": {"cell": "A1", "bogus": 1}}))), -32602);
@@ -380,6 +380,81 @@ fn remote_backend_over_tcp() {
     drop(s);
     handle.join().unwrap();
     assert!(Remote::connect("127.0.0.1:1").is_err());
+}
+
+// ---------- language and regional format ----------
+
+fn pt_br_region(s: &mut Server) {
+    ok(s, "execute_command", json!({"command": "app.setLocale", "params": {"regionalFormat": "pt-BR"}}));
+}
+
+#[test]
+fn set_cell_takes_text_typed_in_the_regional_format() {
+    let mut s = server();
+    pt_br_region(&mut s);
+    let intl = ok(&mut s, "execute_command", json!({"command": "app.getInternational", "params": {}}));
+    assert_eq!(intl["regionalFormat"], "pt-BR");
+    assert_eq!(intl["decimal"], ",");
+    ok(&mut s, "set_cell", json!({"cell": "A1", "inputLocal": "1,5"}));
+    ok(&mut s, "set_cell", json!({"cell": "A2", "inputLocal": "=A1+0,25"}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "A1"}))["value"], json!(1.5));
+    let a2 = ok(&mut s, "get_cell", json!({"cell": "A2"}));
+    assert_eq!(a2["value"], json!(1.75));
+    // Stored and canonical forms stay English; the local forms are next to them.
+    assert_eq!(a2["formula"], "=A1+0.25");
+    assert_eq!(a2["formulaLocal"], "=A1+0,25");
+    // `input` is canonical whatever the session's region.
+    ok(&mut s, "set_cell", json!({"cell": "A3", "input": "=A1+0.5"}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "A3"}))["value"], json!(2.0));
+}
+
+#[test]
+fn evaluate_formula_takes_a_local_formula() {
+    let mut s = server();
+    // `locale` applies to this call only.
+    let v = ok(&mut s, "evaluate_formula", json!({"formulaLocal": "=SUMME(1,5;2)", "locale": "de-DE"}));
+    assert_eq!(v["result"], json!(3.5), "{v}");
+    // The session language is unchanged, so the English name is still the canonical one.
+    let v = ok(&mut s, "evaluate_formula", json!({"formula": "=SUM(1.5,2)"}));
+    assert_eq!(v["result"], json!(3.5), "{v}");
+    assert!(fails(&mut s, "evaluate_formula", json!({"formula": "=1", "formulaLocal": "=1"})).contains("not both"));
+}
+
+#[test]
+fn set_cell_rejects_ambiguous_or_missing_input() {
+    let mut s = server();
+    assert!(fails(&mut s, "set_cell", json!({"cell": "A1", "input": "1", "inputLocal": "1"})).contains("not both"));
+    assert!(fails(&mut s, "set_cell", json!({"cell": "A1"})).contains("inputLocal"));
+    assert!(fails(&mut s, "set_cell", json!({"cell": "A1", "input": "1", "locale": "pt-BR"})).contains("inputLocal"));
+}
+
+#[test]
+fn format_range_takes_a_local_number_format() {
+    let mut s = server();
+    pt_br_region(&mut s);
+    ok(&mut s, "set_cell", json!({"cell": "A1", "input": "1234.5"}));
+    ok(&mut s, "format_range", json!({"range": "A1", "numberFormatLocal": "#.##0,00"}));
+    let cell = ok(&mut s, "get_cell", json!({"cell": "A1"}));
+    assert_eq!(cell["numberFormat"], "#,##0.00");
+    assert_eq!(cell["numberFormatLocal"], "#.##0,00");
+    assert_eq!(cell["text"], "1.234,50");
+    assert!(fails(&mut s, "format_range", json!({"range": "A1", "numberFormat": "0", "numberFormatLocal": "0"})).contains("not both"));
+}
+
+#[test]
+fn schemas_describe_the_local_arguments() {
+    let defs = tool_definitions();
+    let props = |name: &str| defs.iter().find(|d| d["name"] == name).map(|d| d["inputSchema"]["properties"].clone()).unwrap();
+    for (tool, arg) in [
+        ("set_cell", "inputLocal"),
+        ("set_cell", "locale"),
+        ("evaluate_formula", "formulaLocal"),
+        ("evaluate_formula", "locale"),
+        ("format_range", "numberFormatLocal"),
+        ("read_range", "local"),
+    ] {
+        assert!(props(tool).get(arg).is_some(), "{tool} has no `{arg}`");
+    }
 }
 
 #[test]

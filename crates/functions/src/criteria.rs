@@ -2,8 +2,11 @@
 
 use std::cmp::Ordering;
 
-use gridcraft_core::parse::parse_number_text;
-use gridcraft_core::{CellError, Value, compare_numbers, compare_text};
+use gridcraft_core::parse::{parse_error_in, parse_number_text_in};
+use gridcraft_core::{CellError, DateSystem, Value, compare_numbers, compare_text};
+use gridcraft_locale::Locale;
+
+use crate::Ctx;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Op {
@@ -33,22 +36,31 @@ pub(crate) struct Criterion {
     operand: Operand,
     /// The criterion was a bare `""` (or empty cell text): matches blanks and empty strings.
     bare_empty: bool,
+    /// How numeric text in the cells under test is read: the same as in the criterion.
+    locale: Locale,
+    sys: DateSystem,
 }
 
 impl Criterion {
-    /// Parses a criterion value the way COUNTIF does.
-    pub(crate) fn parse(v: &Value) -> Criterion {
+    /// Parses a criterion value the way COUNTIF does: numbers, `TRUE`/`FALSE` and error literals
+    /// are read in the workbook's language and region (`"<1,5"` in pt-BR).
+    pub(crate) fn parse(ctx: &dyn Ctx, v: &Value) -> Criterion {
+        Criterion::parse_in(*ctx.locale(), ctx.date_system(), v)
+    }
+
+    fn parse_in(locale: Locale, sys: DateSystem, v: &Value) -> Criterion {
+        let plain = |operand| Criterion { op: Op::Eq, operand, bare_empty: false, locale, sys };
         match v {
-            Value::Number(n) => Criterion { op: Op::Eq, operand: Operand::Number(*n), bare_empty: false },
-            Value::Bool(b) => Criterion { op: Op::Eq, operand: Operand::Bool(*b), bare_empty: false },
-            Value::Error(e) => Criterion { op: Op::Eq, operand: Operand::Error(*e), bare_empty: false },
-            Value::Empty => Criterion { op: Op::Eq, operand: Operand::Number(0.0), bare_empty: false },
-            Value::Array(a) => Criterion::parse(a.data.first().unwrap_or(&Value::Empty)),
-            Value::Text(t) => Criterion::parse_text(t),
+            Value::Number(n) => plain(Operand::Number(*n)),
+            Value::Bool(b) => plain(Operand::Bool(*b)),
+            Value::Error(e) => plain(Operand::Error(*e)),
+            Value::Empty => plain(Operand::Number(0.0)),
+            Value::Array(a) => Criterion::parse_in(locale, sys, a.data.first().unwrap_or(&Value::Empty)),
+            Value::Text(t) => Criterion::parse_text(t, locale, sys),
         }
     }
 
-    fn parse_text(t: &str) -> Criterion {
+    fn parse_text(t: &str, locale: Locale, sys: DateSystem) -> Criterion {
         let (op, rest) = if let Some(r) = t.strip_prefix(">=") {
             (Op::Ge, r)
         } else if let Some(r) = t.strip_prefix("<=") {
@@ -63,24 +75,22 @@ impl Criterion {
             (Op::Lt, r)
         } else {
             if t.is_empty() {
-                return Criterion { op: Op::Eq, operand: Operand::Blank, bare_empty: true };
+                return Criterion { op: Op::Eq, operand: Operand::Blank, bare_empty: true, locale, sys };
             }
             (Op::Eq, t)
         };
         let operand = if rest.is_empty() {
             Operand::Blank
-        } else if let Some(n) = parse_number_text(rest) {
+        } else if let Some(n) = parse_number_text_in(rest, sys, &locale.regional) {
             Operand::Number(n)
-        } else if rest.eq_ignore_ascii_case("TRUE") {
-            Operand::Bool(true)
-        } else if rest.eq_ignore_ascii_case("FALSE") {
-            Operand::Bool(false)
-        } else if let Some(e) = CellError::parse(rest) {
+        } else if let Some(b) = locale.formula.parse_bool(rest) {
+            Operand::Bool(b)
+        } else if let Some(e) = parse_error_in(rest, locale.formula) {
             Operand::Error(e)
         } else {
             Operand::Text(rest.to_string())
         };
-        Criterion { op, operand, bare_empty: false }
+        Criterion { op, operand, bare_empty: false, locale, sys }
     }
 
     /// Whether a cell value satisfies the criterion.
@@ -109,7 +119,7 @@ impl Criterion {
                 let cell = match &v {
                     Value::Number(x) => Some(*x),
                     // Numeric text matches only for equality (COUNTIF("1") counts text "1").
-                    Value::Text(t) if matches!(self.op, Op::Eq | Op::Ne) => parse_number_text(t),
+                    Value::Text(t) if matches!(self.op, Op::Eq | Op::Ne) => parse_number_text_in(t, self.sys, &self.locale.regional),
                     _ => None,
                 };
                 match cell {
@@ -263,9 +273,28 @@ pub(crate) fn lookup_equal(needle: &Value, hay: &Value, wild: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::testutil::{TestCtx, pt_br};
 
     fn m(c: &str, v: Value) -> bool {
-        Criterion::parse(&Value::from(c)).matches(&v)
+        Criterion::parse(&TestCtx::default(), &Value::from(c)).matches(&v)
+    }
+
+    fn m_pt(c: &str, v: Value) -> bool {
+        Criterion::parse(&TestCtx { locale: pt_br(), ..TestCtx::default() }, &Value::from(c)).matches(&v)
+    }
+
+    #[test]
+    fn local_numbers_and_literals() {
+        assert!(m_pt("<1,5", Value::Number(1.0)));
+        assert!(!m_pt("<1,5", Value::Number(2.0)));
+        assert!(m_pt("1,5", Value::from("1,5")));
+        assert!(m_pt(">=1.234,5", Value::Number(2000.0)));
+        assert!(m_pt("VERDADEIRO", Value::Bool(true)));
+        assert!(!m_pt("TRUE", Value::Bool(true)));
+        assert!(m_pt("#N/D", Value::Error(CellError::NA)));
+        // The English spelling keeps meaning text in pt-BR.
+        assert!(m_pt("TRUE", Value::from("true")));
+        assert!(!m("<1,5", Value::Number(1.0)));
     }
 
     #[test]
@@ -293,8 +322,8 @@ mod tests {
         assert!(m("<b", Value::from("apple")));
         assert!(!m("<b", Value::Number(1.0)));
         assert!(m("#N/A", Value::Error(CellError::NA)));
-        assert!(Criterion::parse(&Value::Number(3.0)).matches(&Value::Number(3.0)));
-        assert!(Criterion::parse(&Value::Number(0.3)).matches(&Value::Number(0.1 + 0.2)));
+        assert!(Criterion::parse(&TestCtx::default(), &Value::Number(3.0)).matches(&Value::Number(3.0)));
+        assert!(Criterion::parse(&TestCtx::default(), &Value::Number(0.3)).matches(&Value::Number(0.1 + 0.2)));
         assert!(lookup_equal(&Value::Number(0.3), &Value::Number(0.1 + 0.2), false));
         assert!(m("<>a*", Value::from("bcd")));
         assert!(m(">1/1/2020", Value::Number(44000.0)));

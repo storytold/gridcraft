@@ -19,10 +19,17 @@ pub enum FillMode {
 }
 
 /// Built-in custom lists.
-fn lists() -> Vec<Vec<String>> {
+fn lists(reg: &gridcraft_locale::Regional) -> Vec<Vec<String>> {
     let short_days: Vec<String> = WEEKDAYS.iter().map(|d| d.get(..3).unwrap_or(d).to_string()).collect();
     let short_months: Vec<String> = MONTHS.iter().map(|m| m.get(..3).unwrap_or(m).to_string()).collect();
+    let own = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+    // The region's own lists come first (so `mar` resolves in the region's language);
+    // the English lists stay recognised everywhere.
     vec![
+        own(&reg.weekdays_abbr),
+        own(&reg.weekdays),
+        own(&reg.months_abbr),
+        own(&reg.months),
         short_days,
         WEEKDAYS.iter().map(|s| s.to_string()).collect(),
         short_months,
@@ -66,6 +73,7 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
             Pattern::detect(
                 &src_cells,
                 &custom,
+                &cx.wb.locale.regional,
                 cx.wb.date_system,
                 cx.wb.styles.get(src_cells.first().and_then(|c| c.1.as_ref()).map(|c| c.style).unwrap_or_default()).num_fmt.as_str(),
             )
@@ -157,7 +165,13 @@ enum Pattern {
 }
 
 impl Pattern {
-    fn detect(cells: &[(CellRef, Option<Cell>)], custom: &[Vec<String>], sys: gridcraft_core::DateSystem, fmt: &str) -> Pattern {
+    fn detect(
+        cells: &[(CellRef, Option<Cell>)],
+        custom: &[Vec<String>],
+        reg: &gridcraft_locale::Regional,
+        sys: gridcraft_core::DateSystem,
+        fmt: &str,
+    ) -> Pattern {
         let vals: Vec<Value> = cells.iter().map(|(_, c)| c.as_ref().map(|c| c.value.clone()).unwrap_or_default()).collect();
         if cells.iter().any(|(_, c)| c.as_ref().is_some_and(|c| c.formula.is_some())) {
             return Pattern::Copy;
@@ -202,9 +216,9 @@ impl Pattern {
         // Text.
         if !vals.is_empty() && vals.iter().all(|v| v.is_text()) {
             let texts: Vec<String> = vals.iter().filter_map(|v| v.as_text().map(str::to_string)).collect();
-            let all_lists: Vec<Vec<String>> = custom.iter().cloned().chain(lists()).collect();
+            let all_lists: Vec<Vec<String>> = custom.iter().cloned().chain(lists(reg)).collect();
             for list in &all_lists {
-                let idx: Vec<Option<usize>> = texts.iter().map(|t| list.iter().position(|l| l.eq_ignore_ascii_case(t))).collect();
+                let idx: Vec<Option<usize>> = texts.iter().map(|t| list.iter().position(|l| l.to_lowercase() == t.to_lowercase())).collect();
                 if idx.iter().all(Option::is_some) {
                     let idx: Vec<usize> = idx.into_iter().flatten().collect();
                     let first = idx.first().copied().unwrap_or(0);

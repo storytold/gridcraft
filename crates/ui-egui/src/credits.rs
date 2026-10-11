@@ -3,9 +3,12 @@
 //! build.rs from contributors/contributors.json (craftrules standards/contributors.md); nothing is
 //! read at run time.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 
 use egui::RichText;
+
+use crate::l10n::{Arg, Localizer, Tr, msg};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Contributor {
@@ -47,11 +50,12 @@ pub enum NameMode {
 impl NameMode {
     pub const ALL: [NameMode; 3] = [NameMode::Username, NameMode::DisplayName, NameMode::RealName];
 
+    /// English name of the mode; show it through [`Tr::tr`].
     pub fn label(self) -> &'static str {
         match self {
-            NameMode::Username => "Username",
-            NameMode::DisplayName => "Display name",
-            NameMode::RealName => "Real name",
+            NameMode::Username => msg!("Username"),
+            NameMode::DisplayName => msg!("Display name"),
+            NameMode::RealName => msg!("Real name"),
         }
     }
 }
@@ -85,19 +89,35 @@ impl SortKey {
         SortKey::LastCommit,
     ];
 
-    /// Menu label and table header.
-    pub fn label(self) -> (&'static str, &'static str) {
+    /// English menu label; show it through [`Tr::tr`]. The table header is [`SortKey::header`].
+    pub fn label(self) -> &'static str {
         match self {
-            SortKey::Name => ("Name (A–Z)", "Name"),
-            SortKey::Prs => ("Merged PRs", "PRs"),
-            SortKey::Commits => ("Commits", "Commits"),
-            SortKey::LinesAdded => ("Lines added", "+LOC"),
-            SortKey::LinesDeleted => ("Lines deleted", "−LOC"),
-            SortKey::LinesDelta => ("Line delta", "ΔLOC"),
-            SortKey::BinaryAdded => ("Binary assets added", "+Bin"),
-            SortKey::BinaryDeleted => ("Binary assets removed", "−Bin"),
-            SortKey::FirstCommit => ("First commit", "First"),
-            SortKey::LastCommit => ("Last commit", "Last"),
+            SortKey::Name => msg!("Name (A–Z)"),
+            SortKey::Prs => msg!("Merged PRs"),
+            SortKey::Commits => msg!("Commits"),
+            SortKey::LinesAdded => msg!("Lines added"),
+            SortKey::LinesDeleted => msg!("Lines deleted"),
+            SortKey::LinesDelta => msg!("Line delta"),
+            SortKey::BinaryAdded => msg!("Binary assets added"),
+            SortKey::BinaryDeleted => msg!("Binary assets removed"),
+            SortKey::FirstCommit => msg!("First commit"),
+            SortKey::LastCommit => msg!("Last commit"),
+        }
+    }
+
+    /// Table header in the language of `l`.
+    pub fn header(self, l: &Localizer) -> Cow<'static, str> {
+        match self {
+            SortKey::Name => l.tr("Name"),
+            SortKey::Prs => l.tr("PRs"),
+            SortKey::Commits => l.tr("Commits"),
+            SortKey::LinesAdded => l.text("ui-credits-header-lines-added", &[]),
+            SortKey::LinesDeleted => l.text("ui-credits-header-lines-deleted", &[]),
+            SortKey::LinesDelta => l.text("ui-credits-header-line-delta", &[]),
+            SortKey::BinaryAdded => l.text("ui-credits-header-binary-added", &[]),
+            SortKey::BinaryDeleted => l.text("ui-credits-header-binary-removed", &[]),
+            SortKey::FirstCommit => l.tr("First"),
+            SortKey::LastCommit => l.tr("Last"),
         }
     }
 
@@ -122,20 +142,30 @@ impl Contributor {
     }
 
     /// One line with everything we know, for tooltips.
-    pub fn summary(&self) -> String {
-        format!(
-            "@{}: {} PRs, {} commits, +{} / −{} lines (Δ {}), +{} / −{} binary assets, {} – {}",
-            self.login,
-            self.prs,
-            self.commits,
-            group(self.lines_added),
-            group(self.lines_deleted),
-            signed(self.lines_delta()),
-            self.binary_added,
-            self.binary_deleted,
-            day(self.first_commit),
-            day(self.last_commit),
+    pub fn summary(&self, l: &Localizer) -> String {
+        let prs = self.prs.to_string();
+        let commits = self.commits.to_string();
+        let added = group(self.lines_added);
+        let deleted = group(self.lines_deleted);
+        let delta = signed(self.lines_delta());
+        let binary_added = self.binary_added.to_string();
+        let binary_deleted = self.binary_deleted.to_string();
+        l.text(
+            "ui-credits-summary",
+            &[
+                ("login", Arg::from(self.login)),
+                ("prs", Arg::from(prs.as_str())),
+                ("commits", Arg::from(commits.as_str())),
+                ("added", Arg::from(added.as_str())),
+                ("deleted", Arg::from(deleted.as_str())),
+                ("delta", Arg::from(delta.as_str())),
+                ("binary_added", Arg::from(binary_added.as_str())),
+                ("binary_deleted", Arg::from(binary_deleted.as_str())),
+                ("first", Arg::from(day(self.first_commit))),
+                ("last", Arg::from(day(self.last_commit))),
+            ],
         )
+        .into_owned()
     }
 }
 
@@ -211,52 +241,53 @@ impl Default for View {
 }
 
 /// About ▸ Contributors: a name toggle, a sort, and the list as a grab bag or a table.
-pub fn contributors_ui(ui: &mut egui::Ui) {
+pub fn contributors_ui(ui: &mut egui::Ui, l: Localizer) {
     let id = egui::Id::new("credits_view");
     let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
-        ui.label("Show");
+        ui.label(l.tr("Show"));
         for m in NameMode::ALL {
-            if ui.selectable_label(v.names == m, m.label()).clicked() {
+            if ui.selectable_label(v.names == m, l.tr(m.label())).clicked() {
                 v.names = m;
             }
         }
         ui.separator();
-        ui.label("Sort");
-        egui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).show_ui(ui, |ui| {
+        ui.label(l.tr("Sort"));
+        egui::ComboBox::from_id_salt("credits_sort").selected_text(l.tr(v.key.label())).show_ui(ui, |ui| {
             for k in SortKey::ALL {
-                if ui.selectable_label(v.key == k, k.label().0).clicked() {
+                if ui.selectable_label(v.key == k, l.tr(k.label())).clicked() {
                     v.key = k;
                     v.ascending = k.default_ascending();
                 }
             }
         });
-        if ui.button(if v.ascending { "▲" } else { "▼" }).on_hover_text("Reverse the order").clicked() {
+        if ui.button(if v.ascending { "▲" } else { "▼" }).on_hover_text(l.tr("Reverse the order")).clicked() {
             v.ascending = !v.ascending;
         }
         ui.separator();
-        if ui.selectable_label(!v.table, "Grab bag").clicked() {
+        if ui.selectable_label(!v.table, l.tr("Grab bag")).clicked() {
             v.table = false;
         }
-        if ui.selectable_label(v.table, "Table").clicked() {
+        if ui.selectable_label(v.table, l.tr("Table")).clicked() {
             v.table = true;
         }
     });
     let list = sorted(CONTRIBUTORS, v.names, v.key, v.ascending);
-    ui.label(RichText::new(format!("{} contributors · {} commits", list.len(), group(TOTAL_COMMITS))).small().weak());
+    let totals = l.text("ui-credits-totals", &[("contributors", Arg::from(list.len())), ("commits", Arg::from(group(TOTAL_COMMITS).as_str()))]);
+    ui.label(RichText::new(totals).small().weak());
     ui.separator();
     egui::ScrollArea::both().auto_shrink([false, false]).max_height(340.0).show(ui, |ui| {
         if list.is_empty() {
-            ui.label("No contributor data was built into this copy.");
+            ui.label(l.tr("No contributor data was built into this copy."));
         } else if v.table {
-            table(ui, &list, &mut v);
+            table(ui, &list, &mut v, &l);
         } else {
             ui.horizontal_wrapped(|ui| {
                 for (i, c) in list.iter().enumerate() {
                     if i > 0 {
                         ui.label(RichText::new("·").weak());
                     }
-                    ui.hyperlink_to(c.name(v.names), format!("https://github.com/{}", c.login)).on_hover_text(c.summary());
+                    ui.hyperlink_to(c.name(v.names), format!("https://github.com/{}", c.login)).on_hover_text(c.summary(&l));
                 }
             });
         }
@@ -264,11 +295,11 @@ pub fn contributors_ui(ui: &mut egui::Ui) {
     ui.data_mut(|d| d.insert_temp(id, v));
 }
 
-fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
+fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View, l: &Localizer) {
     egui::Grid::new("credits_table").striped(true).num_columns(SortKey::ALL.len()).show(ui, |ui| {
         for k in SortKey::ALL {
             let arrow = if v.key == k { if v.ascending { " ▲" } else { " ▼" } } else { "" };
-            if ui.button(RichText::new(format!("{}{arrow}", k.label().1)).strong()).on_hover_text(k.label().0).clicked() {
+            if ui.button(RichText::new(format!("{}{arrow}", k.header(l))).strong()).on_hover_text(l.tr(k.label())).clicked() {
                 if v.key == k {
                     v.ascending = !v.ascending;
                 } else {
@@ -279,7 +310,7 @@ fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
         }
         ui.end_row();
         for c in list {
-            ui.hyperlink_to(c.name(v.names), format!("https://github.com/{}", c.login)).on_hover_text(c.summary());
+            ui.hyperlink_to(c.name(v.names), format!("https://github.com/{}", c.login)).on_hover_text(c.summary(l));
             ui.label(group(c.prs));
             ui.label(group(c.commits));
             ui.label(group(c.lines_added));
@@ -295,16 +326,16 @@ fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
 }
 
 /// About ▸ Models: AI models credited in Co-Authored-By trailers.
-pub fn models_ui(ui: &mut egui::Ui) {
+pub fn models_ui(ui: &mut egui::Ui, l: Localizer) {
     if MODELS.is_empty() {
-        ui.label("No model credits were built into this copy.");
+        ui.label(l.tr("No model credits were built into this copy."));
         return;
     }
     let assisted: u64 = MODELS.iter().map(|m| m.commits).max().unwrap_or(0).max(1);
     egui::ScrollArea::both().auto_shrink([false, false]).max_height(340.0).show(ui, |ui| {
         egui::Grid::new("credits_models").striped(true).num_columns(6).show(ui, |ui| {
-            for h in ["Company", "Model", "Version", "Commits", "% of all commits", "Lines +/−"] {
-                ui.label(RichText::new(h).strong());
+            for h in [msg!("Company"), msg!("Model"), msg!("Version"), msg!("Commits"), msg!("% of all commits"), msg!("Lines +/−")] {
+                ui.label(RichText::new(l.tr(h)).strong());
             }
             ui.end_row();
             for m in MODELS {

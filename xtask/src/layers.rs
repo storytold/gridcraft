@@ -26,6 +26,7 @@ impl Class {
 /// The layering table (AGENTS.md "Layering", plan/architecture.md). Names are package names
 /// without the `gridcraft-` prefix.
 pub const TABLE: &[(&str, Class)] = &[
+    ("locale", Class::Layer(0)),
     ("core", Class::Layer(0)),
     ("numfmt", Class::Layer(0)),
     ("pdf", Class::Layer(0)),
@@ -35,6 +36,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("calc", Class::Layer(2)),
     ("xlsx", Class::Layer(2)),
     ("chart", Class::Layer(3)),
+    ("l10n", Class::Layer(4)),
     ("engine", Class::Layer(5)),
     ("ui-egui", Class::Layer(6)),
     ("mcp", Class::Layer(6)),
@@ -47,7 +49,7 @@ pub const TABLE: &[(&str, Class)] = &[
 
 /// Explicit orderings *within* a layer (earlier may be used by later). Each chain is separate:
 /// `calc` and `xlsx` both build on `model` but not on each other.
-pub const INTRA_LAYER_ORDER: &[&[&str]] = &[&["core", "numfmt"], &["formula", "functions"], &["model", "calc"], &["model", "xlsx"]];
+pub const INTRA_LAYER_ORDER: &[&[&str]] = &[&["locale", "core", "numfmt"], &["formula", "functions"], &["model", "calc"], &["model", "xlsx"]];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {
     let (from, to) = (short_name(from), short_name(to));
@@ -59,7 +61,7 @@ fn intra_layer_allowed(from: &str, to: &str) -> bool {
 
 /// Format crates may only depend on these workspace crates (on top of the layer rule), so a
 /// file format never pulls in calculation or engine code.
-pub const FORMAT_ALLOWED: &[(&str, &[&str])] = &[("xlsx", &["core", "formula", "model"])];
+pub const FORMAT_ALLOWED: &[(&str, &[&str])] = &[("xlsx", &["locale", "core", "numfmt", "formula", "model"])];
 
 /// External crates that constitute a UI toolkit / windowing dependency.
 /// Entries ending in `*` are prefixes.
@@ -123,7 +125,7 @@ impl std::fmt::Display for Violation {
                 write!(f, "{krate} (L{from}) -> {dep} (L{to}) [{kind:?}]: may only depend on strictly lower layers")
             }
             Violation::FormatDep { krate, dep } => {
-                write!(f, "{krate}: format crates may only depend on core/formula/model, not {dep}")
+                write!(f, "{krate}: format crates may only depend on locale/core/numfmt/formula/model, not {dep}")
             }
             Violation::UiBelowL6 { krate, dep, layer } => {
                 write!(f, "{krate} (L{layer}) depends on UI crate `{dep}`; UI toolkits are only allowed in L6+")
@@ -264,11 +266,20 @@ mod tests {
     }
 
     #[test]
-    fn format_crate_limited_to_core_formula_model() {
-        let v = check(&[c("gridcraft-xlsx", &[("gridcraft-numfmt", Normal, true)])]);
-        assert!(matches!(&v[..], [Violation::FormatDep { dep, .. }] if dep == "gridcraft-numfmt"), "{v:?}");
+    fn format_crate_dependencies_are_limited() {
+        let v = check(&[c("gridcraft-xlsx", &[("gridcraft-functions", Normal, true)])]);
+        assert!(matches!(&v[..], [Violation::FormatDep { dep, .. }] if dep == "gridcraft-functions"), "{v:?}");
+        assert!(check(&[c("gridcraft-xlsx", &[("gridcraft-numfmt", Normal, true), ("gridcraft-locale", Normal, true)])]).is_empty());
         // Dev-dependencies (round-trip tests through the calculator, say) are allowed if lower.
-        assert!(check(&[c("gridcraft-xlsx", &[("gridcraft-numfmt", Dev, true)])]).is_empty());
+        assert!(check(&[c("gridcraft-xlsx", &[("gridcraft-functions", Dev, true)])]).is_empty());
+    }
+
+    #[test]
+    fn locale_sits_under_core_and_l10n_under_engine() {
+        assert!(check(&[c("gridcraft-core", &[("gridcraft-locale", Normal, true)])]).is_empty());
+        assert!(!check(&[c("gridcraft-locale", &[("gridcraft-core", Normal, true)])]).is_empty());
+        assert!(check(&[c("gridcraft-engine", &[("gridcraft-l10n", Normal, true)])]).is_empty());
+        assert!(!check(&[c("gridcraft-l10n", &[("gridcraft-engine", Normal, true)])]).is_empty());
     }
 
     #[test]

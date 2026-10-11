@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use gridcraft_core::DateSystem;
 use gridcraft_formula::Expr;
+use gridcraft_locale::Locale;
 use serde::{Deserialize, Serialize};
 
 use crate::cell::Formula;
@@ -71,6 +72,10 @@ pub struct Workbook {
     pub custom_lists: Vec<Vec<String>>,
     /// Named cell styles (Cell Styles gallery): name → style.
     pub cell_styles: Vec<(String, crate::style::Style)>,
+    /// Runtime locale (interface, formula language and region). Never serialized: files and the
+    /// journal are canonical, and the engine assigns it to every open document.
+    #[serde(skip)]
+    pub locale: Arc<Locale>,
 }
 
 impl Default for Workbook {
@@ -82,8 +87,14 @@ impl Default for Workbook {
 impl Workbook {
     /// A new workbook with one sheet, "Sheet1".
     pub fn new() -> Workbook {
+        Workbook::new_in(Arc::new(Locale::default()))
+    }
+    /// A new workbook in `locale`: the first sheet gets the interface language's name
+    /// (`Planilha1`).
+    pub fn new_in(locale: Arc<Locale>) -> Workbook {
+        let first = format!("{}1", locale.ui.content("sheet"));
         Workbook {
-            sheets: vec![Arc::new(Sheet::new("Sheet1"))],
+            sheets: vec![Arc::new(Sheet::new(first))],
             names: vec![],
             styles: StyleTable::default(),
             theme: Theme::default(),
@@ -94,6 +105,7 @@ impl Workbook {
             protected_structure: false,
             custom_lists: vec![],
             cell_styles: vec![],
+            locale,
         }
     }
     pub fn sheet(&self, i: usize) -> Option<&Sheet> {
@@ -108,9 +120,10 @@ impl Workbook {
     pub fn active(&self) -> Option<&Sheet> {
         self.sheet(self.active_sheet)
     }
-    /// A fresh sheet name `SheetN` not in use.
+    /// A fresh sheet name `SheetN` (in the interface language: `PlanilhaN`) not in use.
     pub fn next_sheet_name(&self) -> String {
-        (1..).map(|n| format!("Sheet{n}")).find(|n| self.sheet_index(n).is_none()).unwrap_or_else(|| "Sheet".into())
+        let base = self.locale.ui.content("sheet");
+        (1..).map(|n| format!("{base}{n}")).find(|n| self.sheet_index(n).is_none()).unwrap_or_else(|| base.into())
     }
     /// Validates a sheet name like Excel: 1–31 chars, none of `: \ / ? * [ ]`, not starting or
     /// ending with `'`, unique (case-insensitive) unless it is `except`'s own name.
@@ -144,6 +157,12 @@ impl Workbook {
             .iter()
             .find(|n| n.scope == Some(sheet) && n.name.eq_ignore_ascii_case(name))
             .or_else(|| self.names.iter().find(|n| n.scope.is_none() && n.name.eq_ignore_ascii_case(name)))
+    }
+    /// Whether `name` is a defined name visible from `sheet` or a table name. Formula text read
+    /// or written in a localized dialect lets these names win over the dialect's function names
+    /// and booleans (`gridcraft_formula::parse_local_with`).
+    pub fn knows_name(&self, name: &str, sheet: usize) -> bool {
+        self.name(name, sheet).is_some() || self.table(name).is_some()
     }
     /// Spells calls of LAMBDA names the way the names are defined (`Double(4)`, where the
     /// parser gives `DOUBLE(4)`: it upper-cases function names, as built-in ones are shown).

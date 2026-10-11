@@ -1,6 +1,6 @@
 //! Workspace tooling: `cargo xtask <command>` (or `cargo run -p xtask -- <command>`).
 //!
-//! Pure Rust (std + serde_json, plus the engine for `parity`). External tools (`cargo`, `git`)
+//! Pure Rust (std + serde_json, plus the engine and locale crates for `parity` and `locales`). External tools (`cargo`, `git`)
 //! are invoked through `std::process::Command`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -8,6 +8,8 @@
 mod assets;
 mod ico;
 mod layers;
+#[cfg(feature = "engine")]
+mod locales;
 #[cfg_attr(not(feature = "engine"), allow(dead_code))]
 mod parity;
 mod stats;
@@ -20,11 +22,12 @@ const USAGE: &str = "\
 usage: cargo xtask <command>
 
 commands:
-  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm, parity --check
+  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm, locales, parity --check
                   (stops at the first failure; the parity check runs only if docs/parity-checklist.md exists)
   assets          check that every icon/image/font/sample file is attributed in ATTRIBUTION.md
   layers          enforce the crate dependency layering (AGENTS.md \"Layering\")
   wasm            cargo check --target wasm32-unknown-unknown for the L0-L5 crates (+ gridcraft-web)
+  locales         per-language coverage (function names, message files, shortcuts); fails on inconsistent locale data
   parity [--check] [--out PATH]
                   write docs/parity-checklist.md from gridcraft_engine::catalog (implemented vs missing ids)
   version [set X.Y.Z[-pre]]
@@ -40,6 +43,7 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("assets") => assets::run(&root()),
         Some("layers") => cmd_layers(),
+        Some("locales") => cmd_locales(),
         Some("wasm") => cmd_wasm(),
         Some("ci") => cmd_ci(),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
@@ -121,6 +125,16 @@ fn cmd_layers() -> Result<(), String> {
     }
 }
 
+#[cfg(feature = "engine")]
+fn cmd_locales() -> Result<(), String> {
+    locales::run(&root())
+}
+
+#[cfg(not(feature = "engine"))]
+fn cmd_locales() -> Result<(), String> {
+    Err("xtask was built without the `engine` feature; run `cargo xtask locales` with default features".into())
+}
+
 /// Workspace packages that must build for wasm32: every L0–L5 crate, plus the web app once it
 /// exists (`apps/gridcraft-web`).
 fn wasm_set() -> Result<Vec<String>, String> {
@@ -183,6 +197,7 @@ fn cmd_ci() -> Result<(), String> {
         ("assets", Box::new(|| assets::run(&root()))),
         ("layers", Box::new(cmd_layers)),
         ("wasm", Box::new(cmd_wasm)),
+        ("locales", Box::new(cmd_locales)),
         (
             "parity",
             Box::new(|| {

@@ -1,0 +1,28 @@
+# Regional conventions (separators, dates, names, currency) equivalent to what the operating
+# system supplies to Excel for this region. Codes use canonical (en-US) format letters.
+tag = "ko-KR"
+native_name = "한국어 (대한민국)"
+lcid = 0x0412
+decimal = "."
+group = ","
+list = ","
+array_col = ","
+array_row = ";"
+date_order = "YMD"
+date_sep = "-"
+time_sep = ":"
+short_date = "yyyy-mm-dd"
+long_date = "yyyy\"년\" m\"월\" d\"일\" dddd"
+short_time = "AM/PM h:mm"
+long_time = "AM/PM h:mm:ss"
+months = ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"]
+months_abbr = ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"]
+weekdays = ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"]
+weekdays_abbr = ["일", "월", "화", "수", "목", "금", "토"]
+am_pm = ["오전", "오후"]
+currency = "₩"
+currency_format = "\"₩\"#,##0"
+
+[provenance]
+method = "Hand-written from the published regional conventions of the operating systems (CLDR / Windows NLS); plan §3 step 5."
+written = "2026-10-10"

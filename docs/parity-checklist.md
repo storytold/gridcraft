@@ -4,11 +4,11 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 258 / 290 commands implemented (89.0%).**
+**Overall: 259 / 290 commands implemented (89.3%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
-| File | 10 | 11 | 91% |
+| File | 11 | 11 | 100% |
 | Home | 94 | 94 | 100% |
 | Insert | 15 | 25 | 60% |
 | Draw | 4 | 4 | 100% |
@@ -24,7 +24,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | PivotTable Analyze | 12 | 13 | 92% |
 | PivotTable Design | 4 | 4 | 100% |
 
-## File (10 / 11, 91%)
+## File (11 / 11, 100%)
 
 Implemented:
 
@@ -38,9 +38,6 @@ Implemented:
 - `file.exportCsv` CSV (Export)
 - `file.exportHtml` Web Page (Export)
 - `file.properties` Properties (Info)
-
-Missing:
-
 - `file.options` Options (Options)
 
 ## Home (94 / 94, 100%)

@@ -98,10 +98,8 @@ fn main() {
             {
                 let mut app = SheetApp::new(session, Default::default());
                 app.ui.dark = dark;
-                if let Some(code) = &language
-                    && let Some(l) = gridcraft_ui_egui::i18n::Language::parse(code)
-                {
-                    app.ui.language = l;
+                if let Some(code) = &language {
+                    app.run("app.language.set", json!({"language": code})).expect("language");
                 }
                 if let Some(t) = tab {
                     app.ui.ribbon_tab = t;

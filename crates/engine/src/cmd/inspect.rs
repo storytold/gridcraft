@@ -7,9 +7,9 @@ use super::*;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "document.inspect", "Inspect Workbook", [], None, "{} → sheets, selection, names, tables, charts, dirty, history", has_doc, inspect),
-        cmd!(query "sheet.read", "Read Range", [], None, "{range?: \"A1:D10\" (default: used range), sheet?, formulas?: bool, formatted?: bool} → rows of values", has_doc, read),
-        cmd!(query "cell.get", "Get Cell", [], None, "{cell?, sheet?} → value, formula, display text, style, comment, link", has_doc, cell_get),
+        cmd!(query "document.inspect", "Inspect Workbook", [], None, "{} → sheets, selection, names (refersTo canonical, refersToLocal), tables, charts, dirty, history, locale", has_doc, inspect),
+        cmd!(query "sheet.read", "Read Range", [], None, "{range?: \"A1:D10\" (default: used range), sheet?, formulas?: bool, local?: bool (formulas in the session's formula language and separators), formatted?: bool} → rows of values", has_doc, read),
+        cmd!(query "cell.get", "Get Cell", [], None, "{cell?, sheet?} → value, formula, formulaLocal, numberFormat, numberFormatLocal, display text, input, inputLocal, style, comment, link", has_doc, cell_get),
         cmd!(query "selection.stats", "Selection Statistics", [], None, "{} → count, sum, average, min, max", has_doc, sel_stats),
         cmd!(query "history.list", "Undo History", [], None, "{} → undo/redo labels", has_doc, history),
         cmd!(query "app.commands", "List Commands", [], None, "{search?} → ids, labels, params", always, list_commands),
@@ -67,12 +67,16 @@ fn inspect(s: &mut Session, _: &Json) -> Result<Json> {
         "sheets": sheets,
         "selection": d.selection.a1(),
         "activeCell": d.selection.active.a1(),
-        "names": wb.names.iter().map(|n| json!({"name": n.name, "refersTo": format!("={}", n.formula), "scope": n.scope})).collect::<Vec<_>>(),
+        "names": wb.names.iter().map(|n| {
+            let local = crate::locale::to_local_body(&n.formula, &wb.locale.dialect(), &|x: &str| wb.knows_name(x, n.scope.unwrap_or(wb.active_sheet)));
+            json!({"name": n.name, "refersTo": format!("={}", n.formula), "refersToLocal": format!("={local}"), "scope": n.scope})
+        }).collect::<Vec<_>>(),
         "calcMode": format!("{:?}", wb.calc.mode),
         "undo": d.undo.iter().rev().take(20).map(|e| e.label.clone()).collect::<Vec<_>>(),
         "redo": d.redo.iter().rev().take(20).map(|e| e.label.clone()).collect::<Vec<_>>(),
         "theme": wb.theme.name,
         "mode": format!("{:?}", s.mode),
+        "locale": {"uiLanguage": wb.locale.ui.tag, "formulaLanguage": wb.locale.formula.tag, "regionalFormat": wb.locale.regional.tag},
     }))
 }
 
@@ -95,14 +99,23 @@ fn read(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("sheet.read", "range larger than 1,000,000 cells; read it in parts"));
     }
     let formulas = bool_param(p, "formulas").unwrap_or(false);
+    let local = bool_param(p, "local").unwrap_or(false);
     let formatted = bool_param(p, "formatted").unwrap_or(false);
     let mut rows = Vec::with_capacity(r.height() as usize);
     for row in r.start.row..=r.end.row {
         let mut cols = Vec::with_capacity(r.width() as usize);
         for col in r.start.col..=r.end.col {
             let c = CellRef::new(row, col);
-            let v = if formulas && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref()) {
-                json!(format!("={}", f.text))
+            let v = if formulas
+                && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref())
+                && !crate::display::formula_hidden(&d.wb, sh, c)
+            {
+                let canonical = format!("={}", f.text);
+                json!(if local {
+                    crate::locale::to_local_formula(&canonical, &d.wb.locale.dialect(), &|n: &str| d.wb.knows_name(n, sheet))
+                } else {
+                    canonical
+                })
             } else if formatted {
                 json!(crate::display::cell_text(&d.wb, sh, c))
             } else {
@@ -122,13 +135,22 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
     let c = cell_param(p, "cell").unwrap_or(d.selection.active);
     let cell = sh.cell(c);
     let style = d.wb.styles.get(sh.style_id(c));
+    let loc = &d.wb.locale;
+    // A hidden formula on a protected sheet is not shown in any spelling.
+    let hidden = crate::display::formula_hidden(&d.wb, sh, c);
+    let known = |n: &str| d.wb.knows_name(n, sheet);
+    let formula = cell.and_then(|x| x.formula.as_ref()).filter(|_| !hidden).map(|f| format!("={}", f.text));
     Ok(json!({
         "cell": c.a1(),
         "value": value_json(&sh.value(c)),
         "type": if sh.cell_pictures.contains_key(&c) { "picture" } else { match sh.value(c) { Value::Empty => "empty", Value::Number(_) => "number", Value::Text(_) => "text", Value::Bool(_) => "boolean", Value::Error(_) => "error", Value::Array(_) => "array" } },
-        "formula": cell.and_then(|x| x.formula.as_ref()).map(|f| format!("={}", f.text)),
+        "formula": formula,
+        "formulaLocal": formula.as_deref().map(|f| crate::locale::to_local_formula(f, &loc.dialect(), &known)),
+        "numberFormat": style.num_fmt.as_str(),
+        "numberFormatLocal": crate::locale::to_local_format(style.num_fmt.as_str(), &loc.dialect()),
         "text": crate::display::cell_text(&d.wb, sh, c),
-        "input": sh.input_text(c),
+        "input": if hidden { sh.value(c).display() } else { sh.input_text(c) },
+        "inputLocal": if hidden { crate::locale::value_local(&sh.value(c), loc) } else { crate::locale::sheet_input_local(sh, c, loc, &known) },
         "picture": sh.cell_pictures.get(&c).map(|picture| json!({"mime": picture.mime, "alt": picture.alt, "bytes": picture.data.len()})),
         "spilledFrom": sh.spill_ranges.iter().find(|(a, r)| **a != c && r.contains(c)).map(|(a, _)| a.a1()),
         "spill": sh.spill_ranges.get(&c).map(|r| r.a1()),

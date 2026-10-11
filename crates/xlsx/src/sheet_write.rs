@@ -493,7 +493,11 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         for sh in &sheet.shapes {
             objs.push(Obj::Shape(sh));
         }
-        out.part(&format!("xl/drawings/drawing{dn}.xml"), Some(CT_DRAWING), crate::drawing::write_drawing(sheet, &wb.theme, &objs).into_bytes());
+        out.part(
+            &format!("xl/drawings/drawing{dn}.xml"),
+            Some(CT_DRAWING),
+            crate::drawing::write_drawing(sheet, &wb.theme, &objs, wb.locale.ui.tag).into_bytes(),
+        );
         if !drels.is_empty() {
             out.part(&format!("xl/drawings/_rels/drawing{dn}.xml.rels"), None, drels.xml().into_bytes());
         }

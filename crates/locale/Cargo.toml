@@ -1,0 +1,14 @@
+[package]
+name = "gridcraft-locale"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft locale tables: localized function names, error and boolean literals, regional conventions"
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[build-dependencies]
+serde = { workspace = true }
+toml = { workspace = true }

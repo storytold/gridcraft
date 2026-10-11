@@ -1,0 +1,10 @@
+# Keyboard shortcuts of ko-KR. Same format as en-US/keymap.toml.
+#
+# No overrides: the Microsoft ko-KR keyboard-shortcuts page (retrieved 2026-10-10,
+# https://support.microsoft.com/ko-kr/accessibility/excel/keyboard-shortcuts-in-excel) lists the same
+# Ctrl chords as the English page for the commands GridCraft binds (Ctrl+O open, Ctrl+S save, Ctrl+W close,
+# Ctrl+B bold, Ctrl+I italic, Ctrl+U underline, Ctrl+Z undo, Ctrl+Y redo, Ctrl+C/X/V clipboard, Ctrl+D/R
+# fill, Ctrl+E flash fill, Ctrl+G go to, Ctrl+1 format cells, Ctrl+K link), because Korean Excel keeps the
+# Latin shortcut letters. Every command therefore inherits its en-US chord.
+
+[shortcuts]

@@ -187,7 +187,7 @@ fn saving_and_switching_context_commit_to_the_original_text_box() {
     assert!(h.state().text_box_editor.is_some());
     let saved = h.state_mut().run("file.saveBytes", json!({"format": "xlsx"})).unwrap();
     let bytes = gridcraft_engine::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
-    let (reopened, _) = gridcraft_engine::io::open_bytes("edited.xlsx", &bytes).unwrap();
+    let (reopened, _) = gridcraft_engine::io::open_bytes("edited.xlsx", &bytes, &gridcraft_locale::INVARIANT).unwrap();
     assert_eq!(shape_text(&reopened, 0, id), "Saved draft\nSecond paragraph");
     assert_eq!(reopened.sheet(0).unwrap().value(at("B2")), Value::text("cell stays"));
 
@@ -199,7 +199,7 @@ fn saving_and_switching_context_commit_to_the_original_text_box() {
         edit_box(&mut h, id);
         replace(&mut h, "Saved from the text editor");
         key(&mut h, Key::S, modifiers);
-        let (saved, _) = gridcraft_engine::io::open_bytes("shortcut.xlsx", &downloaded.lock().unwrap()).unwrap();
+        let (saved, _) = gridcraft_engine::io::open_bytes("shortcut.xlsx", &downloaded.lock().unwrap(), &gridcraft_locale::INVARIANT).unwrap();
         assert_eq!(shape_text(&saved, 0, id), "Saved from the text editor");
         downloaded.lock().unwrap().clear();
     }

@@ -431,7 +431,7 @@ fn check_lines_protection(s: &Session, p: &Json, axis: Axis, at: u32, count: u32
         (Axis::Cols, false) => pr.delete_columns,
     };
     let locked = |st: gridcraft_model::StyleId| wb.styles.get(st).protection.locked;
-    let refuse = || EngineError::Other(PROTECTED.into());
+    let refuse = || EngineError::Protected;
     if !allowed {
         return Err(refuse());
     }

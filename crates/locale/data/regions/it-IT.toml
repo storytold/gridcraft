@@ -1,0 +1,29 @@
+# Regional conventions (separators, dates, names, currency) equivalent to what the operating
+# system supplies to Excel for this region. Codes use canonical (en-US) format letters.
+tag = "it-IT"
+native_name = "Italiano (Italia)"
+lcid = 0x0410
+decimal = ","
+group = "."
+list = ";"
+array_col = "\\"
+array_row = "."
+date_order = "DMY"
+date_sep = "/"
+time_sep = ":"
+short_date = "dd/mm/yyyy"
+long_date = "dddd d mmmm yyyy"
+short_time = "hh:mm"
+long_time = "hh:mm:ss"
+months = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"]
+months_abbr = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"]
+weekdays = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"]
+weekdays_abbr = ["dom", "lun", "mar", "mer", "gio", "ven", "sab"]
+am_pm = ["AM", "PM"]
+currency = "€"
+currency_format = "#,##0.00 \"€\""
+
+[provenance]
+method = "Hand-written from the published regional conventions of the operating systems (CLDR / Windows NLS); plan §3 step 5."
+written = "2026-10-10"
+array_separators = "Italian Excel's array constants: columns `\\`, rows `.`. Microsoft Support it-IT excel/use-array-constants-in-array-formulas (the localized 2-D example ={1\\2\\3\\4.5\\6\\7\\8.9\\10\\11\\12}) and excelacademy.it/1673 ('backslash per le costanti di matrice orizzontali e punto per quelle verticali', {1\\2\\3\\4}, {11.22.33.44}), retrieved 2026-10-10. The function pages' examples (=RIGHE({1;2;3\\4;5;6})) swap the roles and are not used."

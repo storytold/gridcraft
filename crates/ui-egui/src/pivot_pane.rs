@@ -6,6 +6,7 @@ use egui::{Color32, Ui, vec2};
 use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
+use crate::l10n::{Arg, Tr, msg};
 use crate::theme::{self, Tokens};
 
 /// Whether the active cell is inside a pivot report (so the pane should show).
@@ -19,13 +20,14 @@ pub fn active_pivot(app: &SheetApp) -> Option<String> {
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let Some(name) = active_pivot(app) else { return };
     let t = Tokens::get(ui.ctx());
+    let l = app.l10n;
     let info = match app.session.run("pivot.fields", json!({"pivot": name})) {
         Ok(v) => v,
         Err(_) => return,
     };
     egui::Panel::right("pivot_pane").default_size(280.0).resizable(true).frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(10)).show(ui, |ui| {
-        ui.label(egui::RichText::new("PivotTable Fields").font(theme::ui_bold(15.0)));
-        ui.label(egui::RichText::new("Choose fields to add to report:").small().color(t.text_dim));
+        ui.label(egui::RichText::new(l.tr("PivotTable Fields")).font(theme::ui_bold(15.0)));
+        ui.label(egui::RichText::new(l.tr("Choose fields to add to report:")).small().color(t.text_dim));
         ui.add_space(4.0);
         let fields = info["fields"].as_array().cloned().unwrap_or_default();
         egui::ScrollArea::vertical().max_height(220.0).id_salt("pv_fields").show(ui, |ui| {
@@ -38,12 +40,12 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 let r = ui.checkbox(&mut on, egui::RichText::new(&fname).font(theme::ui_font(13.0)));
                 if r.changed() {
                     let res = if on {
-                        app.run("pivot.addField", json!({"pivot": name, "field": fname, "area": if numeric { "values" } else { "rows" }}))
+                        app.run_typed("pivot.addField", json!({"pivot": name, "field": fname, "area": if numeric { "values" } else { "rows" }}))
                     } else {
-                        app.run("pivot.removeField", json!({"pivot": name, "field": fname}))
+                        app.run_typed("pivot.removeField", json!({"pivot": name, "field": fname}))
                     };
                     if let Err(e) = res {
-                        app.message = Some(("PivotTable".into(), crate::clean_error(&e)));
+                        app.message = Some((l.tr("PivotTable").into(), app.error_text(&e)));
                     }
                 }
                 let samples: Vec<String> =
@@ -52,7 +54,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
         ui.separator();
-        ui.label(egui::RichText::new("Use a field's menu to move it between areas:").small().color(t.text_dim));
+        ui.label(egui::RichText::new(l.tr("Use a field's menu to move it between areas:")).small().color(t.text_dim));
         let area = |key: &str| -> Vec<String> {
             info["pivot"][key]
                 .as_array()
@@ -65,9 +67,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 .unwrap_or_default()
         };
         ui.columns(2, |cols| {
-            for (i, (key, label)) in [("filters", "Filters"), ("columns", "Columns"), ("rows", "Rows"), ("values", "Values")].iter().enumerate() {
+            for (i, (key, label)) in
+                [("filters", msg!("Filters")), ("columns", msg!("Columns")), ("rows", msg!("Rows")), ("values", msg!("Values"))].iter().enumerate()
+            {
                 let ui = &mut cols[i % 2];
-                ui.label(egui::RichText::new(*label).strong());
+                ui.label(egui::RichText::new(l.tr(label)).strong());
                 egui::Frame::NONE.fill(t.window).corner_radius(4.0).inner_margin(4.0).show(ui, |ui| {
                     ui.set_min_size(vec2(ui.available_width(), 60.0));
                     for f in area(key) {
@@ -77,53 +81,59 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                                 .min_size(vec2(ui.available_width(), 20.0)),
                         );
                         egui::Popup::menu(&b).show(|ui| {
-                            for (to, l) in [
-                                ("rows", "Move to Row Labels"),
-                                ("columns", "Move to Column Labels"),
-                                ("filters", "Move to Report Filter"),
-                                ("values", "Move to Values"),
+                            for (to, label) in [
+                                ("rows", msg!("Move to Row Labels")),
+                                ("columns", msg!("Move to Column Labels")),
+                                ("filters", msg!("Move to Report Filter")),
+                                ("values", msg!("Move to Values")),
                             ] {
-                                if to != *key && ui.button(l).clicked() {
+                                if to != *key && ui.button(l.tr(label)).clicked() {
                                     app.run_or_alert("pivot.moveField", json!({"pivot": name, "field": f, "from": key, "to": to}));
                                 }
                             }
                             if *key == "values" {
                                 ui.separator();
-                                for (func, l) in [("sum", "Sum"), ("count", "Count"), ("average", "Average"), ("max", "Max"), ("min", "Min")] {
-                                    if ui.button(format!("Summarize by {l}")).clicked() {
+                                for (func, label) in [
+                                    ("sum", msg!("Sum")),
+                                    ("count", msg!("Count")),
+                                    ("average", msg!("Average")),
+                                    ("max", msg!("Max")),
+                                    ("min", msg!("Min")),
+                                ] {
+                                    if ui.button(l.text("ui-pivot-summarize-by", &[("function", Arg::from(&*l.tr(label)))])).clicked() {
                                         app.run_or_alert("pivot.valueSettings", json!({"pivot": name, "field": f, "func": func}));
                                     }
                                 }
-                                for (sa, l) in [
-                                    ("normal", "No Calculation"),
-                                    ("percentOfGrandTotal", "% of Grand Total"),
-                                    ("runningTotal", "Running Total"),
-                                    ("rank", "Rank"),
+                                for (sa, label) in [
+                                    ("normal", msg!("No Calculation")),
+                                    ("percentOfGrandTotal", msg!("% of Grand Total")),
+                                    ("runningTotal", msg!("Running Total")),
+                                    ("rank", msg!("Rank")),
                                 ] {
-                                    if ui.button(format!("Show as {l}")).clicked() {
+                                    if ui.button(l.text("ui-pivot-show-as", &[("calculation", Arg::from(&*l.tr(label)))])).clicked() {
                                         app.run_or_alert("pivot.valueSettings", json!({"pivot": name, "field": f, "showAs": sa}));
                                     }
                                 }
                             } else {
                                 ui.separator();
-                                for (o, l) in [("asc", "Sort A to Z"), ("desc", "Sort Z to A")] {
-                                    if ui.button(l).clicked() {
+                                for (o, label) in [("asc", msg!("Sort A to Z")), ("desc", msg!("Sort Z to A"))] {
+                                    if ui.button(l.tr(label)).clicked() {
                                         app.run_or_alert("pivot.sort", json!({"pivot": name, "field": f, "order": o}));
                                     }
                                 }
-                                for (g, l) in [
-                                    ("years", "Group by Years"),
-                                    ("quarters", "Group by Quarters"),
-                                    ("months", "Group by Months"),
-                                    ("none", "Ungroup"),
+                                for (g, label) in [
+                                    ("years", msg!("Group by Years")),
+                                    ("quarters", msg!("Group by Quarters")),
+                                    ("months", msg!("Group by Months")),
+                                    ("none", msg!("Ungroup")),
                                 ] {
-                                    if ui.button(l).clicked() {
+                                    if ui.button(l.tr(label)).clicked() {
                                         app.run_or_alert("pivot.group", json!({"pivot": name, "field": f, "by": g}));
                                     }
                                 }
                             }
                             ui.separator();
-                            if ui.button("Remove Field").clicked() {
+                            if ui.button(l.tr("Remove Field")).clicked() {
                                 app.run_or_alert("pivot.removeField", json!({"pivot": name, "field": f, "area": key}));
                             }
                         });
@@ -133,12 +143,12 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         });
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.button("Refresh").clicked() {
+            if ui.button(l.tr("Refresh")).clicked() {
                 app.run_or_alert("pivot.refresh", json!({"pivot": name}));
             }
-            egui::ComboBox::from_id_salt("pv_layout").selected_text("Report Layout").show_ui(ui, |ui| {
-                for (l, v) in [("Compact", "compact"), ("Outline", "outline"), ("Tabular", "tabular")] {
-                    if ui.button(l).clicked() {
+            egui::ComboBox::from_id_salt("pv_layout").selected_text(l.tr("Report Layout")).show_ui(ui, |ui| {
+                for (label, v) in [(msg!("Compact"), "compact"), (msg!("Outline"), "outline"), (msg!("Tabular"), "tabular")] {
+                    if ui.button(l.tr(label)).clicked() {
                         app.run_or_alert("pivot.layout", json!({"pivot": name, "layout": v}));
                     }
                 }

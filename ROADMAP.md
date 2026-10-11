@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (full re-measure against Excel for Mac 16.113.4; restructured to the craftrules progress-docs standard) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (languages re-measured for M12, #191: localization 10% → 50%) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -21,16 +21,16 @@ This page is the summary. The detail is in:
 
 | Number | Value | Kind |
 |---|---|---|
-| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 258 / 290 (89.0%), worksheet functions 501 / 523 (95.8%; 492 working, 94.1%) |
-| **Ready for real work** | **~50%** | estimated from written weights (51.6); [target-app-parity.md](docs/target-app-parity.md) |
+| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 259 / 290 (89.3%), worksheet functions 501 / 523 (95.8%; 492 working, 94.1%) |
+| **Ready for real work** | **~50%** | estimated from written weights (53.2); [target-app-parity.md](docs/target-app-parity.md) |
 | **Mainstream practitioner** | **~50%** | estimated: typical analyst/finance user, weekly features, × 0.90 interaction × 0.92 stability × 0.88 file exchange; [method](docs/target-app-parity.md#mainstream-practitioner) |
 | **Essentials user** | **~63%** | estimated: core features only, × 0.92 launch/stability × 0.95 clarity × 0.90 opening sent files; [method](docs/target-app-parity.md#essentials-user) |
 | Remaining to **beta** | **~160–240 Opus 5.5 agent-hours** | estimated; itemized in [roadmap.md](docs/roadmap.md#beta-gates) |
-| Remaining to **full parity** | **~700–1,100 Opus 5.5 agent-hours** | estimated; sum of the dimension rows below |
+| Remaining to **full parity** | **~650–1,000 Opus 5.5 agent-hours** | estimated; sum of the dimension rows below |
 
 | Audience | Ready % | Opus 5.5 agent wall-clock hours to ~95% | Work that dominates |
 |---|---|---|---|
-| Full target (ready for real work) | ~50% | ~650–1,050 | Get & Transform and the data model, localization (twelve languages), charts depth, file fidelity (`.xls`, corpus, pass-through), PivotTables, collaboration, mobile |
+| Full target (ready for real work) | ~50% | ~600–950 | Get & Transform and the data model, charts depth, file fidelity (`.xls`, corpus, pass-through), PivotTables, collaboration, mobile, localization (Hindi, Arabic, right-to-left, non-Latin PDF) |
 | Mainstream practitioner | ~50% | ~200–310 | File exchange with Excel users (corpus and Excel verification, pass-through, large files, `.xls`, encryption: 63–97 h), common-chart depth (30–45 h), PivotTables (20–30 h), keyboard and interaction (18–28 h), calc correctness and functions (20–33 h) |
 | Essentials user | ~63% | ~60–100 | Opening files people send (`.xls` and encrypted import 28–42 h; macOS Finder open 2–4 h), launch stability (6–10 h), basic chart resize and polish (6–10 h), print and Page Layout (8–12 h), small editing and UI fixes (10–16 h) |
 
@@ -62,12 +62,12 @@ collaboration, mobile, AI).
 | File formats | ~50% | 80–120 | [file-format-parity.md](docs/file-format-parity.md) |
 | Performance | ~35% | 35–55 | [target-app-parity.md](docs/target-app-parity.md#performance) |
 | Stability | ~60% | 15–25 | [gaps.md](docs/gaps.md) |
-| Localization | ~10% (ribbon in 5 languages) | 100–165 | [localization-parity.md](docs/localization-parity.md) |
+| Localization | ~50% (12 languages: interface, formulas, regional formats) | 45–65 | [localization-parity.md](docs/localization-parity.md) |
 | Hardware (multi-core calc, GPU, pen, multi-window) | ~40% | 25–40 | [hardware-parity.md](docs/hardware-parity.md) |
 | Platforms | ~80% (no iOS/Android; ahead on Linux, BSD, RISC-V) | 30–60 | [target-app-parity.md](docs/target-app-parity.md#platforms) |
 | Ecosystem / add-ins | ~10% (VBA out of scope; own scripts, MCP, CLI) | 25–40 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
 | AI features | ~15% (agent control strong; no in-app assistant) | 30–50 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
-| **Total** | **~50%** | **~700–1,100** | |
+| **Total** | **~50%** | **~650–1,000** | |
 
 ## Features
 
@@ -89,28 +89,35 @@ collaboration, mobile, AI).
 
 ## Languages
 
-The ribbon is translated into Japanese, Simplified Chinese, Korean, Brazilian Portuguese and
-Russian (266–268 labels each, ~12% of ~2,200 strings; merged 10-10 in #31, #104, #82), the
-interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
-(#38). Dialogs, menus and messages are English; formulas and number formats are en-US only. German
-is in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
+The interface, function names, error values, booleans, number-format codes and separators are in
+12 languages (M12, #191): English (US), Portuguese (Brazil, Portugal), Spanish, French, German,
+Italian, Russian, Japanese, Korean and Chinese (Simplified, Traditional). As in Excel, function
+names follow the formula language and separators follow the regional format (`=SOMA(1,5;2)`,
+`{1\2;3\4}` in pt-BR), while files and the journal stay canonical (English names), so a workbook
+opens the same in every language; Japanese, Korean and Chinese keep English function names, as
+Excel does. Interface language and regional format are chosen in Options › Language (the View tab
+switches the interface language), with `app.setLocale`, or with `--locale` (CLI, MCP), and default
+to the system or browser. CJK, Thai and Hebrew text falls back to system fonts (#38); there is no
+shaping or right-to-left layout yet. Translations are agent-made and unreviewed. Detail:
+[localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |
 |---|---|---|---|
 | English | en | full (source language) | 100% |
-| Simplified Chinese | zh-Hans | menus only | ~12% |
-| Spanish | es | none | 0% |
+| Simplified Chinese | zh-Hans | interface and formats; IME unverified; PDF can't export | 100% |
+| Spanish | es | interface, function names, formats; unreviewed | 100% |
 | Hindi | hi | none | 0% |
 | Arabic | ar | none (no RTL layout, no shaping) | 0% |
-| French | fr | none | 0% |
-| Portuguese | pt-BR | menus only | ~12% |
+| French | fr | interface, function names, formats; unreviewed | 100% |
+| Portuguese | pt-BR | interface, function names, formats; unreviewed | 100% |
 | Indonesian | id | none | 0% |
-| Japanese | ja | menus only | ~12% |
-| German | de | none (PR #163 open) | 0% |
-| Korean | ko | menus only | ~12% |
+| Japanese | ja | interface and formats; IME unverified; PDF can't export | 100% |
+| German | de | interface, function names, formats; unreviewed | 100% |
+| Korean | ko | interface and formats; IME unverified; PDF can't export | 100% |
 | Vietnamese | vi | none | 0% |
 
-Other shipped languages: 1 (Russian, menus only, ~12%).
+Other shipped languages: 4 (Traditional Chinese, European Portuguese, Italian, Russian), at the
+same depth as the rows above.
 
 ## Upcoming
 
@@ -125,13 +132,14 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 4. **Charts depth**: kinds and options round-trip, axes, trendlines, error bars: 25–35 h.
 5. **Text in every script** (CJK, Thai, Arabic, Devanagari) in cells and PDF: 12–20 h.
 6. **Legacy `.xls` import and password-protected workbooks**: 20–30 h.
-7. **Localization**: extend the catalog past the ribbon, then the twelve languages: 100–165 h.
+7. **Localization**: Hindi, Arabic, Indonesian and Vietnamese, with shaping and right-to-left
+   layout; native review of every language: 45–65 h.
 
 ## Progress log
 
 | Date | What landed |
 |---|---|
-| 2026-10-10 | Ribbon translated into Japanese, Chinese, Korean, Brazilian Portuguese and Russian with system-language default (#31, #104, #82); CJK/Thai/Hebrew font fallback (#38); clear messages for encrypted and `.xls` files (#17); smooth line charts (#62). Progress docs restructured to the craftrules standard; full re-measure (this page). Initial ribbon key tips (#43), in-place text box editing (#84), copy as HTML table (#36). ODS and XLSB data import (#100, #101); recalc linear in the number of range formulas (#66); RISC-V Linux build; Flatpak repository on Pages; web cell-commit trap fixed |
+| 2026-10-10 | Ribbon translated into Japanese, Chinese, Korean, Brazilian Portuguese and Russian with system-language default (#31, #104, #82); CJK/Thai/Hebrew font fallback (#38); clear messages for encrypted and `.xls` files (#17); smooth line charts (#62). Progress docs restructured to the craftrules standard; full re-measure (this page). Initial ribbon key tips (#43), in-place text box editing (#84), copy as HTML table (#36). ODS and XLSB data import (#100, #101); recalc linear in the number of range formulas (#66); RISC-V Linux build; Flatpak repository on Pages; web cell-commit trap fixed. M12 languages (#191): the whole interface, function names, separators and regional formats in 12 languages, Excel-style |
 | 2026-10-09 | Community fixes: spill range operator `A1#`, sheet-scoped names, protection refuses locked-cell edits, Insert/Delete Cells adjust references, `DATE(1900,2,29)`, SUMIF sizing, `ROUND` at 15 digits, `_xlpm.` LAMBDA parameters in XLSX, vertical scrollbar, system appearance, border previews; v0.4.0 |
 | 2026-10-08 | v0.2.0 and v0.3.0 releases; Flatpak, AppImage zsync, branded DMG; desktop log file; DirectX 12 default on Windows |
 | 2026-10-07 | About window with contributor and model credits; macOS release runner |
@@ -142,6 +150,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Languages re-measured for M12 (#191): interface, formulas and regional formats in 12 languages; localization 10%→50%; full number 53.2 (still ~50%); ~650–1,000 h to full parity |
 | 2026-10-10 | minor | Readiness-by-audience table with hours to ~95% per audience; full number unchanged (additive weighted sum) |
 | 2026-10-10 | minor | Added Mainstream practitioner (~50%) and Essentials user (~63%); languages updated for the 10-10 merges (ribbon in ja, zh, ko, pt-BR, ru); localization 5%→10%; full number re-checked (51.6, unchanged) |
 | 2026-10-10 | minor | Checked against the alpha gate (six core workflows pass): stays alpha |

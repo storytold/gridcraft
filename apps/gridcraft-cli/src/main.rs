@@ -3,12 +3,12 @@
 //! ```text
 //! gridcraft-cli info <file> [--json]
 //! gridcraft-cli convert <in> <out> [--sheet NAME]
-//! gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
+//! gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--locale TAG] [--json]
 //! gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
-//! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
+//! gridcraft-cli run [--in FILE | --sample NAME] [--locale TAG] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
 //! gridcraft-cli commands [--json] [--search X]
-//! gridcraft-cli functions [--json] [--search X] [--category C]
-//! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
+//! gridcraft-cli functions [--json] [--search X] [--category C] [--locale TAG]
+//! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME] [--locale TAG]
 //! gridcraft-cli send <port> <method> [json]
 //! gridcraft-cli version | --version
 //! ```
@@ -34,15 +34,19 @@ use serde_json::{Value, json};
 const USAGE: &str = "usage:
   gridcraft-cli info <file> [--json]                      sheets, used ranges, tables, charts, names
   gridcraft-cli convert <in> <out> [--sheet NAME]         xlsx/csv/tsv/json/html by extension
-  gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
+  gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--locale TAG] [--json]
   gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
-  gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl]
-                     [--out FILE] [--print RANGE] [--quiet]
+  gridcraft-cli run [--in FILE | --sample NAME] [--locale TAG] [--cmd 'id={json}']...
+                     [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
   gridcraft-cli commands [--json] [--search X]
-  gridcraft-cli functions [--json] [--search X] [--category C]
-  gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
+  gridcraft-cli functions [--json] [--search X] [--category C] [--locale TAG]
+  gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME] [--locale TAG]
   gridcraft-cli send <port> <method> [json]
-  gridcraft-cli version";
+  gridcraft-cli version
+
+--locale TAG   language and regional format of the session (pt-BR, de-DE, ja-JP, ...). With eval the formula is
+               written in that language (`=SOMA(1,5;2)` in pt-BR) and the result is shown with its separators;
+               with run, commands may take `inputLocal` and displayed values follow the region.";
 
 /// stdout went away. A reader that stopped early (a closed pipe) ends the program quietly; any
 /// other write error is reported.
@@ -157,16 +161,55 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
     r
 }
 
-fn open(path: &str) -> Result<Session, String> {
+/// A session with `--locale` already applied, so that everything created or read afterwards
+/// (sheet names, CSV import, new workbooks) follows the language and region.
+fn session_in(locale: Option<&str>) -> Result<Session, String> {
     let mut s = Session::new();
+    if let Some(tag) = locale {
+        apply_locale(&mut s, tag)?;
+    }
+    Ok(s)
+}
+
+fn open(path: &str, locale: Option<&str>) -> Result<Session, String> {
+    let mut s = session_in(locale)?;
     exec(&mut s, "file.open", json!({"path": path}))?;
     Ok(s)
 }
 
-fn blank() -> Session {
-    let mut s = Session::new();
+fn blank(locale: Option<&str>) -> Result<Session, String> {
+    let mut s = session_in(locale)?;
     s.new_workbook();
-    s
+    Ok(s)
+}
+
+fn sample(name: &str, locale: Option<&str>) -> Result<Session, String> {
+    let mut s = session_in(locale)?;
+    exec(&mut s, "file.new", json!({"sample": name}))?;
+    Ok(s)
+}
+
+/// The language and region tags (`pt-BR`, `de-DE`) that `--locale` names, with the negotiation the
+/// apps use (`pt_BR.UTF-8`, `pt`, `pt-AO`, `zh-HK`); `C` and `POSIX` (`C.UTF-8`) are en-US. An
+/// unknown language is an error instead of a silent en-US.
+fn resolve_locale(tag: &str) -> Result<(&'static str, &'static str), String> {
+    let base = tag.split(['.', '@']).next().unwrap_or("").trim();
+    if base.eq_ignore_ascii_case("C") || base.eq_ignore_ascii_case("POSIX") {
+        return Ok(("en-US", "en-US"));
+    }
+    let languages = gridcraft_locale::LANGUAGES;
+    let Some(language) = gridcraft_locale::negotiate_index(tag, languages, |l| l.tag).and_then(|i| languages.get(i)) else {
+        let known: Vec<&str> = languages.iter().map(|l| l.tag).collect();
+        return Err(format!("unknown locale `{tag}` (available: {})", known.join(", ")));
+    };
+    Ok((language.tag, gridcraft_locale::negotiate_region(tag).tag))
+}
+
+/// Sets the language (interface, formulas) and regional format of `s` to `tag`.
+fn apply_locale(s: &mut Session, tag: &str) -> Result<(), String> {
+    let (language, region) = resolve_locale(tag)?;
+    exec(s, "app.setLocale", json!({"uiLanguage": language, "formulaLanguage": "followUi", "regionalFormat": region, "useSystemSeparators": true}))?;
+    Ok(())
 }
 
 fn activate_sheet(s: &mut Session, sheet: Option<&str>) -> Result<(), String> {
@@ -192,17 +235,28 @@ fn number_text(n: f64) -> String {
 
 /// A computed value (as returned by `formulas.evaluate` / `sheet.read`) as plain text.
 fn value_text(v: &Value) -> String {
-    match v {
-        Value::Null => String::new(),
-        Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
-        Value::Number(n) => n.as_f64().map(number_text).unwrap_or_else(|| n.to_string()),
-        Value::String(s) => s.clone(),
-        Value::Object(o) => o.get("error").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| v.to_string()),
-        Value::Array(rows) => rows
+    value_text_in(v, None)
+}
+
+/// Like [`value_text`]; with a locale, numbers use its decimal separator and booleans and errors
+/// their local spelling.
+fn value_text_in(v: &Value, loc: Option<&gridcraft_locale::Locale>) -> String {
+    match (v, loc) {
+        (Value::Null, _) => String::new(),
+        (Value::Bool(b), Some(l)) => l.formula.bool_text(*b).to_string(),
+        (Value::Bool(b), None) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+        (Value::Number(n), Some(l)) => n.as_f64().map(|f| gridcraft_core::number_to_text_in(f, &l.regional)).unwrap_or_else(|| n.to_string()),
+        (Value::Number(n), None) => n.as_f64().map(number_text).unwrap_or_else(|| n.to_string()),
+        (Value::String(s), _) => s.clone(),
+        (Value::Object(o), _) => match o.get("error").and_then(Value::as_str) {
+            Some(e) => loc.map_or_else(|| e.to_string(), |l| l.formula.local_error(e).to_string()),
+            None => v.to_string(),
+        },
+        (Value::Array(rows), _) => rows
             .iter()
             .map(|r| match r {
-                Value::Array(cells) => cells.iter().map(value_text).collect::<Vec<_>>().join("\t"),
-                other => value_text(other),
+                Value::Array(cells) => cells.iter().map(|c| value_text_in(c, loc)).collect::<Vec<_>>().join("\t"),
+                other => value_text_in(other, loc),
             })
             .collect::<Vec<_>>()
             .join("\n"),
@@ -223,7 +277,7 @@ fn info(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &[], &["json"])?;
     let path = a.pos(0, "<file>")?;
     a.no_extra(1)?;
-    let mut s = open(path)?;
+    let mut s = open(path, None)?;
     let v = exec(&mut s, "document.inspect", json!({}))?;
     if a.has("json") {
         outln!("{}", pretty(&v));
@@ -268,7 +322,7 @@ fn convert(args: &[String]) -> Result<(), String> {
     if gridcraft_engine::io::FileKind::from_path(out).is_none() {
         return Err(format!("{out}: unknown output format (use .xlsx, .csv, .tsv, .json or .html)"));
     }
-    let mut s = open(input)?;
+    let mut s = open(input, None)?;
     activate_sheet(&mut s, a.opt("sheet"))?;
     let d = s.doc().map_err(|e| e.to_string())?;
     let bytes = gridcraft_engine::io::save_bytes(&d.wb, out).map_err(|e| e.to_string())?;
@@ -278,16 +332,18 @@ fn convert(args: &[String]) -> Result<(), String> {
 }
 
 fn eval(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["in", "sheet", "cell"], &["json"])?;
+    let a = Args::parse(args, &["in", "sheet", "cell", "locale"], &["json"])?;
     let formula = a.pos(0, "<formula>")?;
     a.no_extra(1)?;
     let mut s = match a.opt("in") {
-        Some(p) => open(p)?,
-        None => blank(),
+        Some(p) => open(p, a.opt("locale"))?,
+        None => blank(a.opt("locale"))?,
     };
+    let locale = a.opt("locale").map(|_| s.locale());
     activate_sheet(&mut s, a.opt("sheet"))?;
     let formula = if formula.starts_with('=') { formula.to_string() } else { format!("={formula}") };
-    let mut p = json!({"formula": formula});
+    // With --locale the text is local: the engine reads `formulaLocal` in the session's language.
+    let mut p = if locale.is_some() { json!({"formulaLocal": formula}) } else { json!({"formula": formula}) };
     if let Some(c) = a.opt("cell") {
         p["cell"] = json!(c);
     }
@@ -295,7 +351,7 @@ fn eval(args: &[String]) -> Result<(), String> {
     if a.has("json") {
         outln!("{}", serde_json::to_string(&v).unwrap_or_default());
     } else {
-        outln!("{}", value_text(&v));
+        outln!("{}", value_text_in(&v, locale.as_deref()));
     }
     Ok(())
 }
@@ -320,8 +376,10 @@ fn print_range(s: &mut Session, range: Option<&str>, sheet: Option<&str>, formul
         .map(|r| r.as_array().into_iter().flatten().map(|c| c.as_str().map(str::to_string).unwrap_or_else(|| value_text(c))).collect())
         .collect();
     if csv {
+        // The region's list separator keeps localized numbers (`1,5`) unambiguous.
+        let delim = s.locale().regional.list;
         for r in &rows {
-            outln!("{}", r.iter().map(|c| csv_field(c, ',')).collect::<Vec<_>>().join(","));
+            outln!("{}", r.iter().map(|c| csv_field(c, delim)).collect::<Vec<_>>().join(&delim.to_string()));
         }
         return Ok(());
     }
@@ -351,7 +409,7 @@ fn cat(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["range", "sheet"], &["formulas", "csv"])?;
     let path = a.pos(0, "<file>")?;
     a.no_extra(1)?;
-    let mut s = open(path)?;
+    let mut s = open(path, None)?;
     print_range(&mut s, a.opt("range"), a.opt("sheet"), a.has("formulas"), a.has("csv"))
 }
 
@@ -376,17 +434,14 @@ fn parse_command(text: &str) -> Result<Option<(String, Value)>, String> {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet"], &["quiet", "csv", "formulas"])?;
+    let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet", "locale"], &["quiet", "csv", "formulas"])?;
     a.no_extra(0)?;
+    let locale = a.opt("locale");
     let mut s = match (a.opt("in"), a.opt("sample")) {
         (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
-        (Some(p), None) => open(p)?,
-        (None, Some(name)) => {
-            let mut s = Session::new();
-            exec(&mut s, "file.new", json!({"sample": name}))?;
-            s
-        }
-        (None, None) => blank(),
+        (Some(p), None) => open(p, locale)?,
+        (None, Some(name)) => sample(name, locale)?,
+        (None, None) => blank(locale)?,
     };
     let quiet = a.has("quiet");
     let mut step = 0usize;
@@ -460,7 +515,7 @@ fn commands(args: &[String]) -> Result<(), String> {
 }
 
 fn functions(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["search", "category"], &["json"])?;
+    let a = Args::parse(args, &["search", "category", "locale"], &["json"])?;
     let mut p = json!({});
     if let Some(q) = a.opt("search").or(a.positional.first().map(String::as_str)) {
         p["search"] = json!(q);
@@ -468,7 +523,7 @@ fn functions(args: &[String]) -> Result<(), String> {
     if let Some(c) = a.opt("category") {
         p["category"] = json!(c);
     }
-    let mut s = Session::new();
+    let mut s = session_in(a.opt("locale"))?;
     let v = exec(&mut s, "formulas.functions", p)?;
     if a.has("json") {
         outln!("{}", pretty(&v));
@@ -476,8 +531,14 @@ fn functions(args: &[String]) -> Result<(), String> {
     }
     let list = v.as_array().cloned().unwrap_or_default();
     for f in &list {
-        let sig = f["signature"].as_str().or(f["name"].as_str()).unwrap_or("?");
-        outln!("{sig}");
+        let name = f["name"].as_str().unwrap_or("?");
+        let sig = f["signature"].as_str().unwrap_or(name);
+        // With --locale the function is listed under the name typed in that language.
+        let shown = match f["localName"].as_str() {
+            Some(local) if local != name && sig.starts_with(name) => format!("{local}{}", sig.get(name.len()..).unwrap_or("")),
+            _ => sig.to_string(),
+        };
+        outln!("{shown}");
         let cat = f["category"].as_str().unwrap_or("");
         let desc = f["description"].as_str().unwrap_or("");
         outln!("    {cat}: {desc}");
@@ -490,10 +551,13 @@ fn functions(args: &[String]) -> Result<(), String> {
 /// started with `gridcraft --control PORT`). JSON-RPC on stdin/stdout; logs on stderr.
 fn mcp(args: &[String]) -> Result<(), String> {
     use gridcraft_mcp::{Backend, Headless, Remote, Server, control_addr};
-    let a = Args::parse(args, &["connect", "in", "sample"], &[])?;
+    let a = Args::parse(args, &["connect", "in", "sample", "locale"], &[])?;
     a.no_extra(0)?;
     let backend: Box<dyn Backend> = match a.opt("connect") {
         Some(c) => {
+            if a.opt("locale").is_some() {
+                return Err("--locale applies to the headless server; change a running app with the app.setLocale command".into());
+            }
             let addr = control_addr(c);
             Box::new(
                 Remote::connect(&addr)
@@ -501,14 +565,11 @@ fn mcp(args: &[String]) -> Result<(), String> {
             )
         }
         None => {
+            let locale = a.opt("locale");
             let session = match (a.opt("in"), a.opt("sample")) {
-                (Some(p), _) => open(p)?,
-                (None, Some(name)) => {
-                    let mut s = Session::new();
-                    exec(&mut s, "file.new", json!({"sample": name}))?;
-                    s
-                }
-                (None, None) => blank(),
+                (Some(p), _) => open(p, locale)?,
+                (None, Some(name)) => sample(name, locale)?,
+                (None, None) => blank(locale)?,
             };
             Box::new(Headless::with_session(session))
         }

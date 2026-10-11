@@ -1,0 +1,15 @@
+# Keyboard shortcuts of pt-PT. Same format as en-US/keymap.toml.
+#
+# Only chords that the Microsoft pt-PT page (machine-translated, partly inconsistent) confirms in at
+# least two rows, or that are forced by those chords, are overridden; every other command inherits
+# its en-US chord. `mac` keeps the macOS chord, because the page shows Command-key chords unchanged.
+# The page was not used for save/underline (both claim Ctrl+S in several rows), redo/fill right
+# (both claim Ctrl+R), find/align left (both claim Ctrl+L), replace, alignment, Flash Fill or tables:
+# its rows contradict each other there.
+
+[shortcuts]
+"file.new" = { keys = "Cmd+O", mac = "Cmd+N", source = 'Microsoft Excel keyboard-shortcuts page, pt-PT, retrieved 2026-10-10 (https://support.microsoft.com/pt-pt/accessibility/excel/keyboard-shortcuts-in-excel): the row for opening a new blank workbook reads "Cmd+N ou Ctrl+O"; Ctrl+N is taken by bold in this language (four rows), so Ctrl+O is used' }
+"file.open" = { keys = "Cmd+A", mac = "Cmd+O", source = 'Microsoft Excel keyboard-shortcuts page, pt-PT, retrieved 2026-10-10 (https://support.microsoft.com/pt-pt/accessibility/excel/keyboard-shortcuts-in-excel): three rows (open a workbook, open workbook, "Cmd+O ou Ctrl+A") give Ctrl+A (en-US Ctrl+O)' }
+"home.bold" = { keys = "Cmd+N", mac = "Cmd+B", source = 'Microsoft Excel keyboard-shortcuts page, pt-PT, retrieved 2026-10-10 (https://support.microsoft.com/pt-pt/accessibility/excel/keyboard-shortcuts-in-excel): three rows ("Cmd+B ou Ctrl+N" and two plain "apply bold" rows) give Ctrl+N (en-US Ctrl+B); the rows "Ctrl+B ou Ctrl+2" and "Ctrl+Alt+N" contradict them and are treated as page errors' }
+"edit.goTo" = { keys = "Ctrl+B", source = 'Microsoft Excel keyboard-shortcuts page, pt-PT, retrieved 2026-10-10 (https://support.microsoft.com/pt-pt/accessibility/excel/keyboard-shortcuts-in-excel): four rows (show Go To dialog "Ctrl+B ou F5", "Ctrl+B", and two go-to-a-specific-cell rows) give Ctrl+B (en-US Ctrl+G); the macOS rows also show the Control key, so the chord is the same on every platform' }
+"edit.selectAll" = { keys = "Cmd+Shift+Space", mac = "Cmd+A", source = 'Microsoft Excel keyboard-shortcuts page, pt-PT, retrieved 2026-10-10 (https://support.microsoft.com/pt-pt/accessibility/excel/keyboard-shortcuts-in-excel): the select-the-whole-sheet rows list "Ctrl+A ou Ctrl+Shift+Barra de Espaço"; Ctrl+A is taken by Open in this language, so the second chord is used' }

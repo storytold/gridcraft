@@ -9,6 +9,7 @@ description = "GridCraft core types: cell addresses, values, errors, date serial
 workspace = true
 
 [dependencies]
+gridcraft-locale = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

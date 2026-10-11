@@ -20,19 +20,27 @@ pub fn specs() -> Vec<CommandSpec> {
 
 fn dictionary() -> &'static HashSet<String> {
     static DICT: OnceLock<HashSet<String>> = OnceLock::new();
-    DICT.get_or_init(|| {
-        let mut set = HashSet::new();
-        #[cfg(not(target_arch = "wasm32"))]
-        for path in ["/usr/share/dict/words", "/usr/share/dict/american-english", "/usr/share/dict/british-english"] {
-            if let Ok(text) = std::fs::read_to_string(path) {
-                for w in text.lines().take(2_000_000) {
-                    set.insert(w.trim().to_lowercase());
-                }
-                break;
+    DICT.get_or_init(load_dictionary)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_dictionary() -> HashSet<String> {
+    let mut set = HashSet::new();
+    for path in ["/usr/share/dict/words", "/usr/share/dict/american-english", "/usr/share/dict/british-english"] {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            for w in text.lines().take(2_000_000) {
+                set.insert(w.trim().to_lowercase());
             }
+            break;
         }
-        set
-    })
+    }
+    set
+}
+
+/// There is no system word list in the browser.
+#[cfg(target_arch = "wasm32")]
+fn load_dictionary() -> HashSet<String> {
+    HashSet::new()
 }
 
 fn known(s: &Session, w: &str) -> bool {

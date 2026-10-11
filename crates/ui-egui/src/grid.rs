@@ -13,6 +13,7 @@ use serde_json::json;
 
 use crate::SheetApp;
 use crate::editor::{EditState, REF_COLORS};
+use crate::l10n::{Arg, Tr, msg};
 use crate::theme::{self, Tokens};
 
 pub const COL_HEADER_H: f32 = 21.0;
@@ -63,6 +64,8 @@ pub struct GridState {
     pub rect: Option<Rect>,
     pub cells_rect: Option<Rect>,
     pub filter_menu: Option<(u32, Pos2)>,
+    /// Check boxes of the open AutoFilter drop-down (column, label and state), until it closes.
+    pub filter_checks: Option<(u32, Vec<(String, bool)>)>,
     pub context_menu: Option<Pos2>,
     pub marching_phase: f32,
     pub last_click: Option<(CellRef, f64)>,
@@ -92,6 +95,12 @@ impl GridState {
     }
     pub fn toggle_autosave(&mut self) {
         self.autosave = !self.autosave;
+    }
+    /// Closes the AutoFilter drop-down and forgets its unapplied check boxes, so reopening it
+    /// (or reopening it in another language) starts from the filter's real state.
+    pub fn close_filter_menu(&mut self) {
+        self.filter_menu = None;
+        self.filter_checks = None;
     }
 }
 
@@ -278,6 +287,7 @@ fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (
 /// Text for a value with General narrowing to the available width.
 fn display_text(
     wb: &Workbook,
+    si: usize,
     sh: &Sheet,
     c: CellRef,
     v: &Value,
@@ -288,7 +298,8 @@ fn display_text(
     if sh.show_formulas
         && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref())
     {
-        return (format!("={}", f.text), None, false, None);
+        let text = gridcraft_engine::locale::to_local_formula(&format!("={}", f.text), &wb.locale.dialect(), &|n: &str| wb.knows_name(n, si));
+        return (text, None, false, None);
     }
     if !sh.show_zeros && v.as_f64() == Some(0.0) {
         return (String::new(), None, false, None);
@@ -301,7 +312,7 @@ fn display_text(
         && let Value::Number(n) = v
     {
         let max_chars = ((width_px - 4.0) / char_w).floor().max(1.0) as usize;
-        return match gridcraft_engine::numfmt::format_general_fit(*n, max_chars.min(11)) {
+        return match gridcraft_engine::numfmt::format_general_fit_in(*n, max_chars.min(11), &wb.locale.regional) {
             Some(t) => (t, None, true, None),
             None => ("#".repeat(max_chars.max(1)), None, true, None),
         };
@@ -608,10 +619,7 @@ fn paint_quadrant(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet, 
         // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
         let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
         let avail_w = rect.right() - text_left;
-        let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / z.max(0.1) * z, char_w);
-        if sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) {
-            text = crate::formula_locale::display(&text, crate::i18n::current(p.ctx()).formula_locale(), wb, si);
-        }
+        let (text, ncolor, numeric, fill_char) = display_text(wb, si, sh, c, &v, st, avail_w / z.max(0.1) * z, char_w);
         if text.is_empty() {
             continue;
         }
@@ -923,7 +931,7 @@ fn paint_selection(p: &Painter, geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::S
     if let Some(ed) = &app.editor
         && ed.is_formula()
     {
-        for (_, _, r, sheet, idx) in crate::editor::formula_refs(&ed.text) {
+        for (_, _, r, sheet, idx) in ed.refs() {
             if sheet.as_deref().is_some_and(|s| !s.eq_ignore_ascii_case(&sh.name)) {
                 continue;
             }
@@ -1079,7 +1087,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         } else if handle.contains(p) && app.editor.is_none() {
             ctx.set_cursor_icon(CursorIcon::Crosshair);
             if app.grid.drag == Drag::None && !pointer.any_down() {
-                resp.clone().on_hover_text_at_pointer("Drag to fill cells. Drag from inside a cell to select a range.");
+                resp.clone().on_hover_text_at_pointer(app.l10n.tr("Drag to fill cells. Drag from inside a cell to select a range."));
             }
         } else if in_cells && app.editor.is_none() && on_border(cur_rect, p) {
             ctx.set_cursor_icon(CursorIcon::Move);
@@ -1231,6 +1239,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         }
         // Filter dropdown buttons.
         if is_filter_button(sh, geo, p) {
+            app.grid.close_filter_menu();
             app.grid.filter_menu = Some((c.col, p));
             return;
         }
@@ -1357,8 +1366,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             Drag::ResizeCol { col, start, orig } => {
                 let w = (orig + (p.x - start) / geo.z).max(0.0);
-                app.toast =
-                    Some((format!("Width: {:.2} ({} pixels)", gridcraft_engine::cmd::format::points_to_chars(w as f64), w.round()), crate::now_ms()));
+                let width = app.localize_decimal(&format!("{:.2}", gridcraft_engine::cmd::format::points_to_chars(w as f64)));
+                let pixels = w.round().to_string();
+                let text =
+                    app.l10n.text("ui-grid-column-width-toast", &[("width", Arg::from(width.as_str())), ("pixels", Arg::from(pixels.as_str()))]);
+                app.toast = Some((text.into_owned(), crate::now_ms()));
                 let cols = if sel.ranges.iter().any(|r| r.is_full_cols() && col >= r.start.col && col <= r.end.col) {
                     sel.current().a1()
                 } else {
@@ -1369,7 +1381,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             Drag::ResizeRow { row, start, orig } => {
                 let h = (orig + (p.y - start) / geo.z).max(0.0);
-                app.toast = Some((format!("Height: {:.2} ({} pixels)", h * 0.75, h.round()), crate::now_ms()));
+                let height = app.localize_decimal(&format!("{:.2}", h * 0.75));
+                let pixels = h.round().to_string();
+                let text =
+                    app.l10n.text("ui-grid-row-height-toast", &[("height", Arg::from(height.as_str())), ("pixels", Arg::from(pixels.as_str()))]);
+                app.toast = Some((text.into_owned(), crate::now_ms()));
                 let rows = if sel.ranges.iter().any(|r| r.is_full_rows() && row >= r.start.row && row <= r.end.row) {
                     format!("{}:{}", sel.current().start.row + 1, sel.current().end.row + 1)
                 } else {
@@ -1422,8 +1438,8 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 let src = sel.current();
                 if t != src {
                     let mode = if mods.command { "copy" } else { "series" };
-                    if let Err(e) = app.run("edit.autoFill", json!({"source": src.a1(), "target": t.a1(), "mode": mode})) {
-                        app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+                    if let Err(e) = app.run_typed("edit.autoFill", json!({"source": src.a1(), "target": t.a1(), "mode": mode})) {
+                        app.message = Some(("GridCraft".into(), app.error_text(&e)));
                     }
                 }
             }
@@ -1657,6 +1673,20 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                 app.copy_to_clipboard(ctx, "edit.cut");
             }
             egui::Event::Paste(text) => app.run_or_alert("edit.paste", json!({"text": text})),
+            egui::Event::Ime(egui::ImeEvent::Preedit { text, active_range_chars }) if !text.is_empty() => {
+                // Composition started on the grid: the cell editor takes over and receives the
+                // same composition on the next frame, once it has focus.
+                app.begin_edit(Some(String::new()), false);
+                app.synthetic.push_front(vec![egui::Event::Ime(egui::ImeEvent::Preedit { text, active_range_chars })]);
+                return;
+            }
+            egui::Event::Ime(egui::ImeEvent::Commit(text)) if !text.is_empty() && !text.contains(['\n', '\r']) => {
+                app.begin_edit(Some(text), false);
+                if let Some(ed) = app.editor.as_mut() {
+                    ed.caret = ed.text.chars().count();
+                }
+                return;
+            }
             egui::Event::Text(text) => {
                 if text.chars().all(|c| !c.is_control()) && !text.is_empty() {
                     app.begin_edit(Some(text), false);
@@ -1725,12 +1755,30 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                     Key::Space if shift && !cmd => app.run_or_alert("selection.row", json!({})),
                     Key::F9 => app.run_or_alert("formulas.calculateNow", json!({})),
                     Key::F4 if !cmd => {}
-                    _ if cmd => crate::ribbon::shortcut(app, key, m),
+                    _ if cmd => {
+                        crate::keymap::dispatch(app, key, m);
+                    }
                     _ => {}
                 }
             }
             _ => {}
         }
+    }
+    // With the grid focused an input method may start composing: tell it where the active cell is.
+    if let Some(d) = app.session.active() {
+        let at = d.selection.active;
+        let cell = match sh.merge_at(at) {
+            Some(m) => geo.range_rect(sh, m),
+            None => geo.cell_rect(sh, at),
+        };
+        ctx.output_mut(|o| {
+            o.ime = Some(egui::output::IMEOutput {
+                purpose: egui::IMEPurpose::Normal,
+                rect: cell,
+                cursor_rect: Rect::from_min_size(cell.left_top(), vec2(1.0, cell.height())),
+                should_interrupt_composition: false,
+            });
+        });
     }
 }
 
@@ -1776,6 +1824,7 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
     let si = wb.active_sheet;
     let Some(sh) = wb.sheet(si) else { return };
     let _ = geo;
+    let l = app.l10n;
     // Tables get an autofilter on demand.
     let table_range = sh
         .tables
@@ -1802,26 +1851,30 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
     }
     let wb = app.session.active().map(|d| d.wb.clone()).unwrap_or(wb);
     let values = gridcraft_engine::cmd::data::filter_values(&wb, si, col);
-    let key = egui::Id::new(("filter_sel", col));
+    // The engine names the row of empty cells with the interface language's word for "(Blanks)".
+    let blanks_label = wb.locale.ui.content("blanks");
     let mut close = false;
     let area = egui::Area::new(egui::Id::new("filter_menu")).fixed_pos(at + vec2(-180.0, 10.0)).order(egui::Order::Foreground);
     let response = area.show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_width(230.0);
-            if ui.button("↑  Sort Ascending").clicked() {
+            if ui.button(l.text("ui-filter-sort-ascending", &[])).clicked() {
                 let _ = app.run("data.sortAscending", json!({"column": col_to_letters(col)}));
                 close = true;
             }
-            if ui.button("↓  Sort Descending").clicked() {
+            if ui.button(l.text("ui-filter-sort-descending", &[])).clicked() {
                 let _ = app.run("data.sortDescending", json!({"column": col_to_letters(col)}));
                 close = true;
             }
             ui.separator();
-            ui.label(egui::RichText::new("Filter").strong());
-            let mut checks: Vec<(String, bool)> = ui.ctx().data_mut(|d| d.get_temp::<Vec<(String, bool)>>(key)).unwrap_or(values.clone());
+            ui.label(egui::RichText::new(l.tr("Filter")).strong());
+            let mut checks: Vec<(String, bool)> = match app.grid.filter_checks.take() {
+                Some((c, checks)) if c == col => checks,
+                _ => values.clone(),
+            };
             let all = checks.iter().all(|(_, b)| *b);
             let mut all_new = all;
-            if ui.checkbox(&mut all_new, "(Select All)").changed() {
+            if ui.checkbox(&mut all_new, l.text("ui-filter-select-all", &[])).changed() {
                 for c in checks.iter_mut() {
                     c.1 = all_new;
                 }
@@ -1831,67 +1884,69 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
                     ui.checkbox(on, v.as_str());
                 }
             });
-            ui.ctx().data_mut(|d| d.insert_temp(key, checks.clone()));
+            app.grid.filter_checks = Some((col, checks.clone()));
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button("Clear Filter").clicked() {
+                if ui.button(l.tr("Clear Filter")).clicked() {
                     let _ = app.run("data.filterBy", json!({"column": col_to_letters(col), "clear": true}));
+                    app.grid.filter_checks = None;
                     close = true;
                 }
-                if ui.button("Apply").clicked() {
-                    let blanks = checks.iter().any(|(v, on)| v == "(Blanks)" && *on);
-                    let vals: Vec<String> = checks.iter().filter(|(v, on)| *on && v != "(Blanks)").map(|(v, _)| v.clone()).collect();
+                if ui.button(l.tr("Apply")).clicked() {
+                    let blanks = checks.iter().any(|(v, on)| v == blanks_label && *on);
+                    let vals: Vec<String> = checks.iter().filter(|(v, on)| *on && v != blanks_label).map(|(v, _)| v.clone()).collect();
                     let p = if checks.iter().all(|(_, b)| *b) {
                         json!({"column": col_to_letters(col), "clear": true})
                     } else {
                         json!({"column": col_to_letters(col), "values": vals, "blanks": blanks})
                     };
                     let _ = app.run("data.filterBy", p);
+                    app.grid.filter_checks = None;
                     close = true;
                 }
             });
         });
     });
     if close || popup_dismissed(&response.response, was_open) {
-        ui.ctx().data_mut(|d| d.remove::<Vec<(String, bool)>>(key));
-        app.grid.filter_menu = None;
+        app.grid.close_filter_menu();
     }
 }
 
 fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let Some(at) = app.grid.context_menu else { return };
+    let l = app.l10n;
     let mut close = false;
     let resp = egui::Area::new(egui::Id::new("cell_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(200.0);
             let items: &[(&str, &str)] = &[
-                ("Cut", "edit.cut"),
-                ("Copy", "edit.copy"),
-                ("Paste", "edit.paste"),
-                ("Paste Special…", "ui:pasteSpecial"),
+                (msg!("Cut"), "edit.cut"),
+                (msg!("Copy"), "edit.copy"),
+                (msg!("Paste"), "edit.paste"),
+                (msg!("Paste Special…"), "ui:pasteSpecial"),
                 ("-", ""),
-                ("Insert…", "ui:insertCells"),
-                ("Delete…", "ui:deleteCells"),
-                ("Clear Contents", "edit.clearContents"),
+                (msg!("Insert…"), "ui:insertCells"),
+                (msg!("Delete…"), "ui:deleteCells"),
+                (msg!("Clear Contents"), "edit.clearContents"),
                 ("-", ""),
-                ("Filter by Selected Cell's Value", "ui:filterValue"),
-                ("Sort A to Z", "data.sortAscending"),
-                ("Sort Z to A", "data.sortDescending"),
+                (msg!("Filter by Selected Cell's Value"), "ui:filterValue"),
+                (msg!("Sort A to Z"), "data.sortAscending"),
+                (msg!("Sort Z to A"), "data.sortDescending"),
                 ("-", ""),
-                ("New Comment", "ui:newComment"),
-                ("New Note", "ui:newNote"),
+                (msg!("New Comment"), "ui:newComment"),
+                (msg!("New Note"), "ui:newNote"),
                 ("-", ""),
-                ("Format Cells…", "ui:formatCells"),
-                ("Pick From Drop-down List…", "ui:pickList"),
-                ("Define Name…", "ui:defineName"),
-                ("Link…", "ui:insertLink"),
+                (msg!("Format Cells…"), "ui:formatCells"),
+                (msg!("Pick From Drop-down List…"), "ui:pickList"),
+                (msg!("Define Name…"), "ui:defineName"),
+                (msg!("Link…"), "ui:insertLink"),
             ];
             for (label, id) in items {
                 if *label == "-" {
                     ui.separator();
                     continue;
                 }
-                if ui.add(egui::Button::new(*label).frame(false).min_size(vec2(190.0, 20.0))).clicked() {
+                if ui.add(egui::Button::new(l.tr(label)).frame(false).min_size(vec2(190.0, 20.0))).clicked() {
                     close = true;
                     match *id {
                         "ui:pasteSpecial" => app.open_dialog("pasteSpecial", json!({})),
@@ -1973,6 +2028,7 @@ fn paint_overlays(
     sh: &Sheet,
     sel: &gridcraft_engine::Selection,
 ) {
+    let l = app.l10n;
     // Validation dropdown arrow for the active cell.
     if app.editor.is_none()
         && let Some(r) = validation_arrow(sh, geo, sel.active)
@@ -2028,7 +2084,7 @@ fn paint_overlays(
     if let Some(h) = hover.and_then(|c| sh.hyperlinks.get(&c))
         && app.editor.is_none()
     {
-        let tip = h.tooltip.clone().unwrap_or_else(|| format!("{}\nClick once to follow. Click and hold to select this cell.", h.target));
+        let tip = h.tooltip.clone().unwrap_or_else(|| format!("{}\n{}", h.target, l.tr("Click once to follow. Click and hold to select this cell.")));
         egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("link_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(tip);
         });
@@ -2093,42 +2149,43 @@ fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
 
 fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
     let Some((at, rows)) = app.grid.header_menu else { return };
+    let l = app.l10n;
     let mut close = false;
     let response = egui::Area::new(egui::Id::new("header_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(190.0);
             let items: Vec<(&str, &str)> = if rows {
                 vec![
-                    ("Cut", "edit.cut"),
-                    ("Copy", "edit.copy"),
-                    ("Paste", "edit.paste"),
+                    (msg!("Cut"), "edit.cut"),
+                    (msg!("Copy"), "edit.copy"),
+                    (msg!("Paste"), "edit.paste"),
                     ("-", ""),
-                    ("Insert", "home.insertRows"),
-                    ("Delete", "home.deleteRows"),
-                    ("Clear Contents", "edit.clearContents"),
+                    (msg!("Insert"), "home.insertRows"),
+                    (msg!("Delete"), "home.deleteRows"),
+                    (msg!("Clear Contents"), "edit.clearContents"),
                     ("-", ""),
-                    ("Row Height…", "ui:rowHeight"),
-                    ("AutoFit Row Height", "home.autofitRowHeight"),
-                    ("Hide", "home.hideRows"),
-                    ("Unhide", "home.unhideRows"),
-                    ("Group", "data.group"),
+                    (msg!("Row Height…"), "ui:rowHeight"),
+                    (msg!("AutoFit Row Height"), "home.autofitRowHeight"),
+                    (msg!("Hide"), "home.hideRows"),
+                    (msg!("Unhide"), "home.unhideRows"),
+                    (msg!("Group"), "data.group"),
                 ]
             } else {
                 vec![
-                    ("Cut", "edit.cut"),
-                    ("Copy", "edit.copy"),
-                    ("Paste", "edit.paste"),
+                    (msg!("Cut"), "edit.cut"),
+                    (msg!("Copy"), "edit.copy"),
+                    (msg!("Paste"), "edit.paste"),
                     ("-", ""),
-                    ("Insert", "home.insertColumns"),
-                    ("Delete", "home.deleteColumns"),
-                    ("Clear Contents", "edit.clearContents"),
+                    (msg!("Insert"), "home.insertColumns"),
+                    (msg!("Delete"), "home.deleteColumns"),
+                    (msg!("Clear Contents"), "edit.clearContents"),
                     ("-", ""),
-                    ("Column Width…", "ui:columnWidth"),
-                    ("AutoFit Column Width", "home.autofitColumnWidth"),
-                    ("Hide", "home.hideColumns"),
-                    ("Unhide", "home.unhideColumns"),
-                    ("Sort A to Z", "data.sortAscending"),
-                    ("Group", "data.group"),
+                    (msg!("Column Width…"), "ui:columnWidth"),
+                    (msg!("AutoFit Column Width"), "home.autofitColumnWidth"),
+                    (msg!("Hide"), "home.hideColumns"),
+                    (msg!("Unhide"), "home.unhideColumns"),
+                    (msg!("Sort A to Z"), "data.sortAscending"),
+                    (msg!("Group"), "data.group"),
                 ]
             };
             for (label, id) in items {
@@ -2136,7 +2193,7 @@ fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
                     ui.separator();
                     continue;
                 }
-                if ui.add(egui::Button::new(label).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
+                if ui.add(egui::Button::new(l.tr(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
                     close = true;
                     match id {
                         "ui:rowHeight" => app.open_dialog("rowHeight", json!({})),
@@ -2161,6 +2218,7 @@ fn is_checkbox(sh: &Sheet, app: &SheetApp) -> bool {
 }
 
 fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
+    let l = app.l10n;
     let Some(d) = app.session.active() else { return };
     let key = (d.uid, d.revision, d.wb.active_sheet);
     if app.grid.pages.as_ref().is_none_or(|(k, _)| *k != key) {
@@ -2216,7 +2274,7 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
         p.text(
             rr.center(),
             Align2::CENTER_CENTER,
-            format!("Page {n}"),
+            l.text("ui-grid-page-number", &[("n", Arg::from(*n))]),
             theme::ui_bold((rr.height().min(rr.width()) / 6.0).clamp(14.0, 72.0)),
             Color32::from_black_alpha(45),
         );

@@ -1,54 +1,75 @@
-//! Language selection must affect UI entry, never the canonical engine/file boundary.
+//! The formula language and region affect what a person types and reads, never the canonical
+//! text the engine, the API and files use.
 use gridcraft_engine::{
     Session,
     core::{CellRef, Value},
 };
-use gridcraft_ui_egui::{SheetApp, UiState, i18n::Language};
+use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 
 fn app() -> SheetApp {
     let mut session = Session::new();
     session.new_workbook();
     let mut app = SheetApp::new(session, Default::default());
-    app.ui.language = Language::En;
+    english(&mut app);
     app
 }
+
+/// A Spanish interface (function names follow it, as in Excel) with Spain's separators.
+fn spanish(app: &mut SheetApp) {
+    app.run("app.language.set", json!({"language": "es"})).unwrap();
+    app.run("app.setLocale", json!({"formulaLanguage": "followUi", "regionalFormat": "es-ES"})).unwrap();
+}
+
+fn english(app: &mut SheetApp) {
+    app.run("app.language.set", json!({"language": "en"})).unwrap();
+    app.run("app.setLocale", json!({"formulaLanguage": "followUi", "regionalFormat": "en-US"})).unwrap();
+}
+
 fn formula(app: &SheetApp) -> String {
     app.session.active().unwrap().wb.active().unwrap().cell(CellRef::new(0, 0)).unwrap().formula.as_ref().unwrap().text.to_string()
 }
+
+fn value(app: &SheetApp) -> Value {
+    app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0))
+}
+
+fn editor_text(app: &SheetApp) -> &str {
+    &app.editor.as_ref().unwrap().text
+}
+
 fn enter(app: &mut SheetApp, text: &str) -> bool {
     app.begin_edit(Some(text.into()), false);
     app.commit_edit(0, 0, false, false)
 }
 
 #[test]
-fn language_controls_entry_display_persistence_and_xlsx_roundtrip() {
+fn language_controls_entry_display_and_xlsx_roundtrip() {
     let mut app = app();
     assert!(!enter(&mut app, "=SUM(1;2)"));
-    app.run("app.language.set", json!({"language":"es"})).unwrap();
+    spanish(&mut app);
     assert!(enter(&mut app, "=SI(VERDADERO;SUMA(1,5;2,25);0)"));
     assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
-    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
-    app.run("file.open", json!({"name":"locale.xlsx", "base64":saved["base64"]})).unwrap();
+    let saved = app.run("file.save", json!({"format": "xlsx"})).unwrap();
+    app.run("file.open", json!({"name": "locale.xlsx", "base64": saved["base64"]})).unwrap();
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SI(VERDADERO;SUMA(1,5;2,25);0)");
+    assert_eq!(editor_text(&app), "=SI(VERDADERO;SUMA(1,5;2,25);0)");
     assert!(app.commit_edit(0, 0, false, false));
     assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
-    let state: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
-    assert_eq!(state.language, Language::Es);
-    app.run("app.language.set", json!({"language":"en"})).unwrap();
+    english(&mut app);
     app.begin_edit(None, false);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=IF(TRUE,SUM(1.5,2.25),0)");
+    assert_eq!(editor_text(&app), "=IF(TRUE,SUM(1.5,2.25),0)");
 }
 
 #[test]
-fn language_does_not_change_api_syntax_or_an_edit_already_in_progress() {
+fn language_does_not_change_api_syntax_and_rewrites_an_edit_in_progress() {
     let mut app = app();
-    app.run("app.language.set", json!({"language":"es"})).unwrap();
-    assert!(app.run("cell.set", json!({"cell":"A1","input":"=SUM(1,2)"})).is_ok());
-    assert!(app.run("cell.set", json!({"cell":"A2","input":"=SUMA(1;2)"})).is_err());
+    spanish(&mut app);
+    assert!(app.run("cell.set", json!({"cell": "A1", "input": "=SUM(1,2)"})).is_ok());
+    assert!(app.run("cell.set", json!({"cell": "A2", "input": "=SUMA(1;2)"})).is_err());
     app.begin_edit(Some("=SUMA(1,5;2)".into()), false);
-    app.run("app.language.set", json!({"language":"en"})).unwrap();
+    english(&mut app);
+    assert_eq!(editor_text(&app), "=SUM(1.5,2)");
     assert!(app.commit_edit(0, 0, false, false));
     assert_eq!(formula(&app), "SUM(1.5,2)");
 }
@@ -56,31 +77,36 @@ fn language_does_not_change_api_syntax_or_an_edit_already_in_progress() {
 #[test]
 fn defined_and_local_names_survive_localized_editing() {
     let mut app = app();
-    app.run("formulas.defineName", json!({"name":"FALSO", "refersTo":"=7"})).unwrap();
-    app.run("app.language.set", json!({"language":"es"})).unwrap();
+    app.run("formulas.defineName", json!({"name": "FALSO", "refersTo": "=7"})).unwrap();
+    spanish(&mut app);
     assert!(enter(&mut app, "=LET(SUMA;LAMBDA(x;x+1);SUMA(2))+FALSO"));
     let original = formula(&app);
+    assert_eq!(original, "LET(SUMA,LAMBDA(x,x+1),SUMA(2))+FALSO");
     app.begin_edit(None, false);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=LET(SUMA;LAMBDA(x;x+1);SUMA(2))+FALSO");
+    assert_eq!(editor_text(&app), "=LET(SUMA;LAMBDA(x;x+1);SUMA(2))+FALSO");
+    // Switching languages while editing keeps the names names.
+    english(&mut app);
+    assert_eq!(editor_text(&app), "=LET(SUMA,LAMBDA(x,x+1),SUMA(2))+FALSO");
+    spanish(&mut app);
     assert!(app.commit_edit(0, 0, false, false));
     assert_eq!(formula(&app), original);
-    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(10.0));
+    assert_eq!(value(&app), Value::Number(10.0));
 }
 
 #[test]
 fn localized_argument_hints_ignore_decimal_commas_arrays_and_nested_calls() {
     let mut app = app();
-    app.run("app.language.set", json!({"language":"es"})).unwrap();
+    spanish(&mut app);
     for (text, expected) in [("=SI(1,5;SUMA(2;3);", 2), ("=SUMA({1,5\\2;3\\4};", 1), ("=SUMA(Table1[[a],[b]];", 1)] {
         app.begin_edit(Some(text.into()), false);
-        assert_eq!(app.editor.as_ref().unwrap().current_function().unwrap().1, expected);
+        assert_eq!(app.editor.as_ref().unwrap().current_function().unwrap().1, expected, "{text}");
     }
 }
 
 #[test]
 fn localized_autocomplete_is_rendered_and_inserts_the_selected_name() {
     let mut app = app();
-    app.run("app.language.set", json!({"language":"es"})).unwrap();
+    spanish(&mut app);
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
@@ -94,11 +120,9 @@ fn localized_autocomplete_is_rendered_and_inserts_the_selected_name() {
     h.run_steps(4);
     h.input_mut().events.push(egui::Event::Text("M".into()));
     h.run_steps(4);
-    assert!(h.state().editor.as_ref().unwrap().autocomplete.iter().any(|n| n == "SUMA"));
-    assert!(!h.state().editor.as_ref().unwrap().autocomplete.iter().any(|n| n == "SUM"));
-    if let Ok(path) = std::env::var("GRIDCRAFT_LOCALE_SCREENSHOT") {
-        h.render().unwrap().save(path).unwrap();
-    }
+    let offered = |h: &egui_kittest::Harness<SheetApp>, n: &str| h.state().editor.as_ref().unwrap().autocomplete.iter().any(|x| x == n);
+    assert!(offered(&h, "SUMA"));
+    assert!(!offered(&h, "SUM"));
     let ed = h.state_mut().editor.as_mut().unwrap();
     ed.ac_index = ed.autocomplete.iter().position(|n| n == "SUMA").unwrap();
     assert!(ed.accept_autocomplete());
@@ -107,81 +131,60 @@ fn localized_autocomplete_is_rendered_and_inserts_the_selected_name() {
     h.input_mut().events.push(egui::Event::Text("1,5;".into()));
     h.run_steps(4);
     assert_eq!(h.state().editor.as_ref().unwrap().current_function(), Some(("SUMA".into(), 1)));
-    if let Ok(path) = std::env::var("GRIDCRAFT_LOCALE_SCREENSHOT") {
-        h.render().unwrap().save(std::path::Path::new(&path).with_file_name("spanish-hints.png")).unwrap();
-        h.state_mut().cancel_edit();
-        h.state_mut().ui.ribbon_tab = "View".into();
-        h.run_steps(4);
-        h.render().unwrap().save(std::path::Path::new(&path).with_file_name("spanish-setting.png")).unwrap();
-    }
     h.state_mut().cancel_edit();
-    h.state_mut().run("app.language.set", json!({"language":"en"})).unwrap();
+    english(h.state_mut());
     h.state_mut().begin_edit(Some("=SU".into()), true);
     h.run_steps(4);
     h.input_mut().events.push(egui::Event::Text("M".into()));
     h.run_steps(4);
-    assert!(h.state().editor.as_ref().unwrap().autocomplete.iter().any(|n| n == "SUM"));
-    assert!(!h.state().editor.as_ref().unwrap().autocomplete.iter().any(|n| n == "SUMA"));
+    assert!(offered(&h, "SUM"));
+    assert!(!offered(&h, "SUMA"));
 }
 
 #[test]
 fn locale_preserves_text_cells_and_existing_entry_conveniences() {
     let mut app = app();
-    app.run("app.language.set", json!({"language":"es"})).unwrap();
+    spanish(&mut app);
     assert!(enter(&mut app, "=SUMA(1,5;2"));
     assert_eq!(formula(&app), "SUM(1.5,2)");
     assert!(enter(&mut app, "-1,5"));
-    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(-1.5));
-    app.run("home.numberFormat", json!({"format":"@"})).unwrap();
+    assert_eq!(value(&app), Value::Number(-1.5));
+    app.run("home.numberFormat", json!({"code": "@"})).unwrap();
     assert!(enter(&mut app, "=SUM(1,2)"));
-    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("=SUM(1,2)"));
+    assert_eq!(value(&app), Value::text("=SUM(1,2)"));
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1,2)");
+    assert_eq!(editor_text(&app), "=SUM(1,2)");
 }
 
 #[test]
 fn canonical_engine_templates_enter_the_selected_formula_language() {
     let mut app = app();
-    app.run("app.language.set", json!({"language":"es"})).unwrap();
-    app.run("formulas.insertFunction", json!({"name":"SUM"})).unwrap();
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUMA(");
+    spanish(&mut app);
+    app.run("formulas.insertFunction", json!({"name": "SUM"})).unwrap();
+    assert_eq!(editor_text(&app), "=SUMA(");
     app.cancel_edit();
-    app.run("cell.set", json!({"cell":"A1","input":"2"})).unwrap();
-    app.run("selection.set", json!({"range":"A2"})).unwrap();
-    app.run("formulas.autoSum", json!({"enter":false})).unwrap();
-    assert!(app.editor.as_ref().unwrap().text.starts_with("=SUMA("));
+    app.run("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    app.run("selection.set", json!({"range": "A2"})).unwrap();
+    app.run("formulas.autoSum", json!({"enter": false})).unwrap();
+    assert!(editor_text(&app).starts_with("=SUMA("), "{}", editor_text(&app));
     app.cancel_edit();
-    // Text supplied by the user is already in the selected UI syntax; do not translate it twice.
+    // Text the user supplies is already in the selected syntax; it is not translated twice.
     app.begin_edit(Some("=SUMA(1,5;2)".into()), false);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUMA(1,5;2)");
+    assert_eq!(editor_text(&app), "=SUMA(1,5;2)");
     assert!(app.commit_edit(0, 0, false, false));
-    if let Ok(path) = std::env::var("GRIDCRAFT_LOCALE_SCREENSHOT") {
-        app.ui.ribbon_tab = "Formulas".into();
-        app.run("formulas.insertFunction", json!({"name":"SUM"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-            |ui, app: &mut SheetApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
-        h.run_steps(5);
-        h.render().unwrap().save(std::path::Path::new(&path).with_file_name("spanish-ribbon-template.png")).unwrap();
-    }
 }
 
 #[test]
-fn portuguese_interface_retains_its_canonical_formula_fallback() {
+fn portuguese_interface_writes_portuguese_formulas() {
     let mut app = app();
-    app.run("app.language.set", json!({"code":"pt-BR"})).unwrap();
-    assert_eq!(app.ui.language, Language::PtBr);
-    assert_eq!(app.ui.language.tr("Data"), "Dados");
-    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
+    app.run("app.language.set", json!({"code": "pt-BR"})).unwrap();
+    app.run("app.setLocale", json!({"regionalFormat": "pt-BR"})).unwrap();
+    assert_eq!(app.session.prefs.ui_language, "pt-BR");
+    assert!(enter(&mut app, "=SOMA(1,5;2,25)"));
+    assert_eq!(formula(&app), "SUM(1.5,2.25)");
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
-    assert!(!enter(&mut app, "=SUMA(1;2)"));
-    let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
-    assert_eq!(restored.language, Language::PtBr);
-    assert_eq!(Language::Es.tr("Page Layout|Orientation"), "Orientation");
+    assert_eq!(editor_text(&app), "=SOMA(1,5;2,25)");
+    // Spanish names are not Portuguese ones.
+    assert!(enter(&mut app, "=SUMA(1;2)"));
+    assert_eq!(value(&app), Value::Error(gridcraft_engine::core::CellError::Name));
 }

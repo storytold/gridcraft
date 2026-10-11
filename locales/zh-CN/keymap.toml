@@ -1,0 +1,9 @@
+# 简体中文 (zh-CN) 的键盘快捷键。格式与 en-US/keymap.toml 相同。
+#
+# 依据：Microsoft Excel 快捷键页面 zh-CN 版（https://support.microsoft.com/zh-cn/accessibility/excel/keyboard-shortcuts-in-excel），
+# 于 2026-10-10 缓存读取。该页面中与 GridCraft 命令对应的所有快捷键（新建、打开、保存、关闭、复制、剪切、粘贴、撤消、恢复、
+# 加粗、倾斜、下划线、查找、替换、转到、全选、填充、快速填充、插入超链接、创建表、隐藏/取消隐藏行列、设置单元格格式、
+# 打印等）与 en-US 的快捷键一致，没有任何一行把某个命令改到别的按键上，因此本语言不覆盖任何条目，
+# 每个命令都沿用 en-US 的快捷键。
+
+[shortcuts]

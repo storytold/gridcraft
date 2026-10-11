@@ -82,7 +82,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Format Cells…",
             ["Home", "Cells", "Format"],
             Some("Cmd+1"),
-            "{range?, style: {font?, fill?, borders?, align?, numFmt?, protection?}} (partial Style JSON merged in)",
+            "{range?, style: {font?, fill?, borders?, align?, numFmt?, protection?}, numberFormatLocal?: \"#.##0,00\" (the format code as typed in the session's language and region, or the `locale` tag; wins over style.numFmt), locale?} (partial Style JSON merged in)",
             has_doc,
             format_cells
         ),
@@ -129,7 +129,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Number Format",
             ["Home", "Number"],
             None,
-            "{range?, format: \"General\"|\"Number\"|\"Currency\"|\"Accounting\"|\"Short Date\"|\"Long Date\"|\"Time\"|\"Percentage\"|\"Fraction\"|\"Scientific\"|\"Text\" | code: \"0.00\"}",
+            "{range?, format: \"General\"|\"Number\"|\"Currency\"|\"Accounting\"|\"Short Date\"|\"Long Date\"|\"Time\"|\"Percentage\"|\"Fraction\"|\"Scientific\"|\"Text\" | code: \"0.00\" | numberFormatLocal: \"#.##0,00\" (as typed in the session's language and region), locale?}",
             has_doc,
             number_format
         ),
@@ -213,7 +213,7 @@ pub(crate) fn apply_style(s: &mut Session, p: &Json, f: impl Fn(&mut Style)) -> 
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
     if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.protection.as_ref().is_some_and(|pr| !pr.format_cells)) {
-        return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
+        return Err(EngineError::Protected);
     }
     edit(s, |cx| {
         let mut cache: std::collections::HashMap<StyleId, StyleId> = std::collections::HashMap::new();
@@ -366,7 +366,7 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
     if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.protection.as_ref().is_some_and(|pr| !pr.format_cells)) {
-        return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
+        return Err(EngineError::Protected);
     }
     edit(s, |cx| {
         for r in &ranges {
@@ -486,11 +486,18 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
-    let Some(patch) = p.get("style").cloned() else {
+    let local_fmt = match str_param(p, "numberFormatLocal") {
+        Some(t) => Some(crate::locale::from_local_format(t, &crate::locale::call_locale(s, p)?.dialect())),
+        None => None,
+    };
+    let Some(mut patch) = p.get("style").cloned().or_else(|| local_fmt.as_ref().map(|_| json!({}))) else {
         // Menu invocation without params: the UI opens the dialog.
         s.ui_requests.push(crate::UiRequest::Dialog("formatCells".into(), json!({})));
         return ok();
     };
+    if let (Some(code), Some(o)) = (local_fmt, patch.as_object_mut()) {
+        o.insert("numFmt".into(), json!(code));
+    }
     // Validate by merging into the active style once.
     let base = serde_json::to_value(active_style(s)?).map_err(|e| EngineError::Other(e.to_string()))?;
     let merged = merge_json(base, &patch);
@@ -622,10 +629,14 @@ pub fn format_code_for(name: &str) -> &str {
 }
 
 fn number_format(s: &mut Session, p: &Json) -> Result<Json> {
-    let code = str_param(p, "code")
-        .map(str::to_string)
+    let local = match str_param(p, "numberFormatLocal") {
+        Some(t) => Some(crate::locale::from_local_format(t, &crate::locale::call_locale(s, p)?.dialect())),
+        None => None,
+    };
+    let code = local
+        .or_else(|| str_param(p, "code").map(str::to_string))
         .or_else(|| str_param(p, "format").map(|f| format_code_for(f).to_string()))
-        .ok_or_else(|| bad("home.numberFormat", "missing `format` or `code`"))?;
+        .ok_or_else(|| bad("home.numberFormat", "missing `format`, `code` or `numberFormatLocal`"))?;
     set_fmt(s, p, &code)
 }
 

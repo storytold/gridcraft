@@ -4,14 +4,51 @@
 use egui::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
 use crate::SheetApp;
-use crate::i18n;
 use crate::icons::{self, Icon};
+use crate::l10n::{Localizer, Tr};
 use crate::theme::{self, Tokens};
 
-/// Translates a label or tooltip for the language of the frame being drawn (English if untranslated).
-/// Ribbon chrome all flows through these widgets, so translating here localises it in one place.
-fn tr<'a>(ui: &Ui, text: &'a str) -> &'a str {
-    i18n::current(ui.ctx()).tr(text)
+/// How number boxes (drag values, slider fields) show and read numbers: the region's decimal
+/// and thousands separators. Copy, so a widget can own it.
+#[derive(Clone, Copy)]
+pub struct NumberStyle {
+    region: gridcraft_locale::Regional,
+}
+
+impl NumberStyle {
+    pub fn new(region: gridcraft_locale::Regional) -> NumberStyle {
+        NumberStyle { region }
+    }
+
+    /// `n` spelled in the region (`1,5` in de-DE).
+    pub fn text(self, n: f64) -> String {
+        gridcraft_engine::core::number_to_text_in(n, &self.region)
+    }
+
+    /// A plain number typed in the region's spelling (`1,5`, `1.000`, `10%`); a number box reads
+    /// no fractions, dates or times.
+    pub fn parse(self, text: &str) -> Option<f64> {
+        gridcraft_engine::core::parse::parse_plain_number_in(text, &self.region)
+    }
+
+    /// `n` rounded to the widget's decimal places, as egui's own formatter does, then spelled in
+    /// the region (a dragged size shows `12,5`, not `12,499999`).
+    fn shown(self, n: f64, decimals: std::ops::RangeInclusive<usize>) -> String {
+        let places = (*decimals.end()).min(15);
+        // `+ 0.0` turns a rounded `-0` into `0`.
+        let rounded = format!("{n:.places$}").parse::<f64>().map_or(n, |r| r + 0.0);
+        self.text(rounded)
+    }
+
+    /// A drag value that shows and reads numbers in the region's spelling.
+    pub fn drag<'a, N: egui::emath::Numeric>(self, value: &'a mut N) -> egui::DragValue<'a> {
+        egui::DragValue::new(value).custom_formatter(move |n, decimals| self.shown(n, decimals)).custom_parser(move |s| self.parse(s))
+    }
+
+    /// A slider whose number box shows and reads numbers in the region's spelling.
+    pub fn slider<'a, N: egui::emath::Numeric>(self, value: &'a mut N, range: std::ops::RangeInclusive<N>) -> egui::Slider<'a> {
+        egui::Slider::new(value, range).custom_formatter(move |n, decimals| self.shown(n, decimals)).custom_parser(move |s| self.parse(s))
+    }
 }
 
 /// A flat square icon button with hover highlight and tooltip.
@@ -24,7 +61,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egu
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, color);
-    resp.on_hover_text(tr(ui, tip))
+    resp.on_hover_text(tip)
 }
 
 /// A toggle-able small button (e.g. Bold) showing a checked state.
@@ -38,14 +75,13 @@ pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, t.text);
-    resp.on_hover_text(tr(ui, tip))
+    resp.on_hover_text(tip)
 }
 
 /// Large ribbon button: 32px icon over a one- or two-line label.
 pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(11.5);
-    let label = tr(ui, label);
     let lines: Vec<_> = label.split('\n').map(|line| ui.painter().layout_no_wrap(line.to_string(), font.clone(), t.text)).collect();
     let arrow_size = 10.0;
     let arrow_space = if dropdown { 4.0 + arrow_size } else { 0.0 };
@@ -73,14 +109,13 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
             );
         }
     }
-    resp.on_hover_text(tr(ui, tip))
+    resp.on_hover_text(tip)
 }
 
 /// Small ribbon button: 16px icon with optional label to the right.
 pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(12.5);
-    let label = tr(ui, label);
     let tw = if label.is_empty() { 0.0 } else { ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0 };
     let w = 24.0 + tw + if dropdown { 12.0 } else { 0.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 23.0), Sense::click());
@@ -101,7 +136,7 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
             t.text_dim,
         );
     }
-    resp.on_hover_text(tr(ui, tip))
+    resp.on_hover_text(tip)
 }
 
 /// A split button: main part runs the default action, the arrow opens a menu.
@@ -122,17 +157,17 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
         ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 4.0, main.bottom() - 5.0), vec2(17.0, 3.0)), 0.0, c);
     }
     icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
-    (m.on_hover_text(tr(ui, tip)).clicked(), a)
+    (m.on_hover_text(tip).clicked(), a)
 }
 
 /// Our colour palette (theme row + tints + standard colours), returns a picked hex colour,
 /// `Some("none")` for No Fill/Automatic.
-pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {
+pub fn color_palette(ui: &mut Ui, l: Localizer, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {
     let mut picked = None;
     if ui.button(none_label).clicked() {
         picked = Some("none".to_string());
     }
-    ui.label(egui::RichText::new("Theme Colors").small());
+    ui.label(egui::RichText::new(&*l.tr("Theme Colors")).small());
     let order = [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 9];
     let tints = [0.0f64, 0.8, 0.6, 0.4, -0.25, -0.5];
     egui::Grid::new(ui.id().with("theme_grid")).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
@@ -155,7 +190,7 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
             ui.end_row();
         }
     });
-    ui.label(egui::RichText::new("Standard Colors").small());
+    ui.label(egui::RichText::new(&*l.tr("Standard Colors")).small());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for hex in ["#C00000", "#FF0000", "#FFC000", "#FFFF00", "#92D050", "#00B050", "#00B0F0", "#0070C0", "#002060", "#7030A0"] {
@@ -175,6 +210,7 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
 
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((title, msg)) = app.message.clone() else { return };
+    let l = app.l10n;
     let mut close = false;
     egui::Modal::new(egui::Id::new("message_box")).show(ctx, |ui| {
         ui.set_width(380.0);
@@ -189,7 +225,8 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
         });
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("  OK  ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            if ui.button(format!("  {}  ", l.tr("OK"))).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape))
+            {
                 close = true;
             }
         });
@@ -216,4 +253,18 @@ pub fn toast(app: &mut SheetApp, ctx: &egui::Context) {
         },
     );
     ctx.request_repaint_after(std::time::Duration::from_millis(200));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn number_boxes_round_to_the_widget_decimals_in_the_region() {
+        let de = NumberStyle::new(*gridcraft_locale::negotiate_region("de-DE"));
+        assert_eq!(de.shown(12.499_999_9, 0..=1), "12,5");
+        assert_eq!(de.shown(72.0, 0..=0), "72");
+        assert_eq!(de.shown(-0.000_1, 0..=2), "0");
+        assert_eq!(de.shown(1e300, 0..=usize::MAX), de.text(1e300));
+    }
 }

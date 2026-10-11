@@ -150,7 +150,7 @@ impl BinOp {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Expr {
     Number(f64),
     Text(Arc<str>),
@@ -173,37 +173,202 @@ pub enum Expr {
     Paren(Box<Expr>),
 }
 
+/// Left-nested chains (`1+1+…`, `A1%%%`, `f(1)(2)…`) can be arbitrarily deep, so cloning and
+/// comparing follow the left spine with a loop; only right operands and arguments recurse, and
+/// those are bounded by the parser's nesting limit.
+impl Clone for Expr {
+    fn clone(&self) -> Expr {
+        enum Up {
+            Binary(BinOp, Expr),
+            Percent,
+            Invoke(Vec<Expr>),
+        }
+        let mut ups: Vec<Up> = Vec::new();
+        let mut cur = self;
+        let mut node = loop {
+            match cur {
+                Expr::Binary(op, a, b) => {
+                    ups.push(Up::Binary(*op, (**b).clone()));
+                    cur = a;
+                }
+                Expr::Unary(UnOp::Percent, x) => {
+                    ups.push(Up::Percent);
+                    cur = x;
+                }
+                Expr::Invoke(c, args) => {
+                    ups.push(Up::Invoke(args.clone()));
+                    cur = c;
+                }
+                Expr::Number(n) => break Expr::Number(*n),
+                Expr::Text(t) => break Expr::Text(t.clone()),
+                Expr::Bool(b) => break Expr::Bool(*b),
+                Expr::Error(e) => break Expr::Error(*e),
+                Expr::Array(rows) => break Expr::Array(rows.clone()),
+                Expr::Ref(r) => break Expr::Ref(r.clone()),
+                Expr::Name(n) => break Expr::Name(n.clone()),
+                Expr::Struct(s) => break Expr::Struct(s.clone()),
+                Expr::Unary(op, x) => break Expr::Unary(*op, x.clone()),
+                Expr::Call(n, args) => break Expr::Call(n.clone(), args.clone()),
+                Expr::Missing => break Expr::Missing,
+                Expr::Paren(x) => break Expr::Paren(x.clone()),
+            }
+        };
+        while let Some(up) = ups.pop() {
+            node = match up {
+                Up::Binary(op, b) => Expr::Binary(op, Box::new(node), Box::new(b)),
+                Up::Percent => Expr::Unary(UnOp::Percent, Box::new(node)),
+                Up::Invoke(args) => Expr::Invoke(Box::new(node), args),
+            };
+        }
+        node
+    }
+}
+
+impl PartialEq for Expr {
+    fn eq(&self, other: &Expr) -> bool {
+        enum Later<'a> {
+            Operand(&'a Expr, &'a Expr),
+            Args(&'a [Expr], &'a [Expr]),
+        }
+        let mut later: Vec<Later<'_>> = Vec::new();
+        let (mut a, mut b) = (self, other);
+        loop {
+            match (a, b) {
+                (Expr::Binary(o1, l1, r1), Expr::Binary(o2, l2, r2)) => {
+                    if o1 != o2 {
+                        return false;
+                    }
+                    later.push(Later::Operand(r1, r2));
+                    (a, b) = (l1, l2);
+                }
+                (Expr::Unary(UnOp::Percent, x), Expr::Unary(UnOp::Percent, y)) => (a, b) = (x, y),
+                (Expr::Invoke(c1, a1), Expr::Invoke(c2, a2)) => {
+                    later.push(Later::Args(a1, a2));
+                    (a, b) = (c1, c2);
+                }
+                (Expr::Number(x), Expr::Number(y)) if x != y => return false,
+                (Expr::Text(x), Expr::Text(y)) if x != y => return false,
+                (Expr::Bool(x), Expr::Bool(y)) if x != y => return false,
+                (Expr::Error(x), Expr::Error(y)) if x != y => return false,
+                (Expr::Array(x), Expr::Array(y)) if x != y => return false,
+                (Expr::Ref(x), Expr::Ref(y)) if x != y => return false,
+                (Expr::Name(x), Expr::Name(y)) if x != y => return false,
+                (Expr::Struct(x), Expr::Struct(y)) if x != y => return false,
+                (Expr::Unary(o1, x), Expr::Unary(o2, y)) if o1 != o2 || x != y => return false,
+                (Expr::Call(n1, x), Expr::Call(n2, y)) if n1 != n2 || x != y => return false,
+                (Expr::Paren(x), Expr::Paren(y)) if x != y => return false,
+                (Expr::Number(_), Expr::Number(_))
+                | (Expr::Text(_), Expr::Text(_))
+                | (Expr::Bool(_), Expr::Bool(_))
+                | (Expr::Error(_), Expr::Error(_))
+                | (Expr::Array(_), Expr::Array(_))
+                | (Expr::Ref(_), Expr::Ref(_))
+                | (Expr::Name(_), Expr::Name(_))
+                | (Expr::Struct(_), Expr::Struct(_))
+                | (Expr::Unary(..), Expr::Unary(..))
+                | (Expr::Call(..), Expr::Call(..))
+                | (Expr::Paren(_), Expr::Paren(_))
+                | (Expr::Missing, Expr::Missing) => break,
+                _ => return false,
+            }
+        }
+        later.into_iter().all(|l| match l {
+            Later::Operand(x, y) => x == y,
+            Later::Args(x, y) => x == y,
+        })
+    }
+}
+
 impl Expr {
-    /// Visits every node depth-first.
+    /// Visits every node depth-first (parents before children, operands left to right).
+    ///
+    /// Left-nested chains (`1+1+…`, `A1%%%`, `f(1)(2)…`) can be arbitrarily deep, so the left
+    /// spine is followed with a loop; only right operands and arguments recurse, and those are
+    /// bounded by the parser's nesting limit.
     pub fn walk<'a>(&'a self, f: &mut dyn FnMut(&'a Expr)) {
-        f(self);
-        match self {
-            Expr::Array(rows) => rows.iter().flatten().for_each(|e| e.walk(f)),
-            Expr::Unary(_, e) | Expr::Paren(e) => e.walk(f),
-            Expr::Binary(_, a, b) => {
-                a.walk(f);
-                b.walk(f);
+        enum Later<'a> {
+            Operand(&'a Expr),
+            Args(&'a [Expr]),
+        }
+        let mut later: Vec<Later<'a>> = Vec::new();
+        let mut cur = self;
+        loop {
+            f(cur);
+            match cur {
+                Expr::Binary(_, a, b) => {
+                    later.push(Later::Operand(b));
+                    cur = a;
+                }
+                Expr::Unary(UnOp::Percent, x) => cur = x,
+                Expr::Invoke(c, args) => {
+                    later.push(Later::Args(args));
+                    cur = c;
+                }
+                Expr::Array(rows) => {
+                    rows.iter().flatten().for_each(|e| e.walk(f));
+                    break;
+                }
+                Expr::Unary(_, e) | Expr::Paren(e) => {
+                    e.walk(f);
+                    break;
+                }
+                Expr::Call(_, args) => {
+                    args.iter().for_each(|e| e.walk(f));
+                    break;
+                }
+                _ => break,
             }
-            Expr::Call(_, args) => args.iter().for_each(|e| e.walk(f)),
-            Expr::Invoke(c, args) => {
-                c.walk(f);
-                args.iter().for_each(|e| e.walk(f));
+        }
+        while let Some(l) = later.pop() {
+            match l {
+                Later::Operand(e) => e.walk(f),
+                Later::Args(args) => args.iter().for_each(|e| e.walk(f)),
             }
-            _ => {}
         }
     }
-    /// Rewrites every node bottom-up.
+    /// Rewrites every node bottom-up. The left spine is handled iteratively (see [`Expr::walk`]).
     pub fn map(self, f: &mut dyn FnMut(Expr) -> Expr) -> Expr {
-        let e = match self {
-            Expr::Array(rows) => Expr::Array(rows.into_iter().map(|r| r.into_iter().map(|e| e.map(f)).collect()).collect()),
-            Expr::Unary(op, e) => Expr::Unary(op, Box::new(e.map(f))),
-            Expr::Paren(e) => Expr::Paren(Box::new(e.map(f))),
-            Expr::Binary(op, a, b) => Expr::Binary(op, Box::new(a.map(f)), Box::new(b.map(f))),
-            Expr::Call(n, args) => Expr::Call(n, args.into_iter().map(|e| e.map(f)).collect()),
-            Expr::Invoke(c, args) => Expr::Invoke(Box::new(c.map(f)), args.into_iter().map(|e| e.map(f)).collect()),
-            other => other,
+        enum Up {
+            Binary(BinOp, Expr),
+            Percent,
+            Invoke(Vec<Expr>),
+        }
+        let mut ups: Vec<Up> = Vec::new();
+        let mut cur = self;
+        let mut e = loop {
+            match cur {
+                Expr::Binary(op, a, b) => {
+                    ups.push(Up::Binary(op, *b));
+                    cur = *a;
+                }
+                Expr::Unary(UnOp::Percent, x) => {
+                    ups.push(Up::Percent);
+                    cur = *x;
+                }
+                Expr::Invoke(c, args) => {
+                    ups.push(Up::Invoke(args));
+                    cur = *c;
+                }
+                Expr::Array(rows) => break Expr::Array(rows.into_iter().map(|r| r.into_iter().map(|e| e.map(f)).collect()).collect()),
+                Expr::Unary(op, e) => break Expr::Unary(op, Box::new(e.map(f))),
+                Expr::Paren(e) => break Expr::Paren(Box::new(e.map(f))),
+                Expr::Call(n, args) => break Expr::Call(n, args.into_iter().map(|e| e.map(f)).collect()),
+                other => break other,
+            }
         };
-        f(e)
+        e = f(e);
+        while let Some(up) = ups.pop() {
+            e = match up {
+                Up::Binary(op, b) => {
+                    let b = b.map(f);
+                    Expr::Binary(op, Box::new(e), Box::new(b))
+                }
+                Up::Percent => Expr::Unary(UnOp::Percent, Box::new(e)),
+                Up::Invoke(args) => Expr::Invoke(Box::new(e), args.into_iter().map(|a| a.map(f)).collect()),
+            };
+            e = f(e);
+        }
+        e
     }
     /// All references in the formula.
     pub fn references(&self) -> Vec<&Reference> {

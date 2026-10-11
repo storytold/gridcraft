@@ -1,0 +1,76 @@
+# Keyboard shortcuts of the en-US reference language.
+#
+# Format: [shortcuts."<command id>"] keys = "<chord>", optional mac = "<chord>", source = "<provenance>".
+# A chord is modifiers joined by '+' and a final key: `Cmd` is the platform command modifier (Ctrl on
+# Windows and Linux, the Command key on macOS), `Ctrl`, `Alt` and `Shift` are literal. `mac` overrides
+# `keys` on macOS only. Every command id must exist in commands.ftl; a language inherits the en-US
+# entry for each id it does not list.
+#
+# Provenance: the chords are the ones registered by the engine commands (crates/engine/src/cmd) and
+# handled by crates/ui-egui/src/ribbon.rs `shortcut`; both were read on 2026-10-10.
+
+[shortcuts]
+"file.new" = { keys = "Cmd+N", source = "engine command table" }
+"file.open" = { keys = "Cmd+O", source = "engine command table" }
+"file.save" = { keys = "Cmd+S", source = "engine command table" }
+"file.saveAs" = { keys = "Cmd+Shift+S", source = "engine command table" }
+"file.close" = { keys = "Cmd+W", source = "engine command table" }
+"range.fill" = { keys = "Ctrl+Enter", source = "engine command table" }
+"edit.selectAll" = { keys = "Cmd+A", source = "engine command table" }
+"selection.currentRegion" = { keys = "Ctrl+Shift+8", source = "engine command table" }
+"selection.row" = { keys = "Shift+Space", source = "engine command table" }
+"selection.column" = { keys = "Ctrl+Space", source = "engine command table" }
+"edit.goTo" = { keys = "Ctrl+G", source = "engine command table" }
+"edit.undo" = { keys = "Cmd+Z", source = "engine command table" }
+"edit.redo" = { keys = "Cmd+Y", source = "engine command table" }
+"edit.copy" = { keys = "Cmd+C", source = "engine command table" }
+"edit.cut" = { keys = "Cmd+X", source = "engine command table" }
+"edit.paste" = { keys = "Cmd+V", source = "engine command table" }
+"edit.pasteSpecial" = { keys = "Ctrl+Cmd+V", source = "engine command table" }
+"edit.clearClipboard" = { keys = "Escape", source = "engine command table" }
+"edit.clearContents" = { keys = "Delete", source = "engine command table" }
+"edit.fillDown" = { keys = "Cmd+D", source = "engine command table" }
+"edit.fillRight" = { keys = "Cmd+R", source = "engine command table" }
+"edit.flashFill" = { keys = "Cmd+E", source = "engine command table" }
+"edit.find" = { keys = "Cmd+F", source = "engine command table" }
+"edit.replace" = { keys = "Ctrl+H", source = "engine command table" }
+"edit.beginEdit" = { keys = "F2", source = "engine command table" }
+"home.bold" = { keys = "Cmd+B", source = "engine command table" }
+"home.italic" = { keys = "Cmd+I", source = "engine command table" }
+"home.underline" = { keys = "Cmd+U", source = "engine command table" }
+"home.strikethrough" = { keys = "Cmd+Shift+X", source = "engine command table" }
+"home.increaseFontSize" = { keys = "Cmd+Shift+>", source = "engine command table" }
+"home.decreaseFontSize" = { keys = "Cmd+Shift+<", source = "engine command table" }
+"home.formatCells" = { keys = "Cmd+1", source = "engine command table" }
+"home.alignLeft" = { keys = "Cmd+L", source = "engine command table" }
+"home.alignCenter" = { keys = "Cmd+E", source = "engine command table" }
+"home.alignRight" = { keys = "Cmd+R", source = "engine command table" }
+"home.increaseIndent" = { keys = "Ctrl+Alt+Tab", source = "engine command table" }
+"home.decreaseIndent" = { keys = "Ctrl+Alt+Shift+Tab", source = "engine command table" }
+"home.percent" = { keys = "Ctrl+Shift+%", source = "engine command table" }
+"home.hideRows" = { keys = "Cmd+9", source = "engine command table" }
+"home.hideColumns" = { keys = "Cmd+0", source = "engine command table" }
+"home.unhideRows" = { keys = "Cmd+Shift+9", source = "engine command table" }
+"home.unhideColumns" = { keys = "Cmd+Shift+0", source = "engine command table" }
+"home.insertRows" = { keys = "Ctrl+Shift+=", source = "engine command table" }
+"home.deleteRows" = { keys = "Cmd+-", source = "engine command table" }
+"home.insertSheet" = { keys = "Shift+F11", source = "engine command table" }
+"sheet.next" = { keys = "Ctrl+PageDown", source = "engine command table" }
+"sheet.previous" = { keys = "Ctrl+PageUp", source = "engine command table" }
+"insert.table" = { keys = "Cmd+T", source = "engine command table" }
+"insert.link" = { keys = "Cmd+K", source = "engine command table" }
+"data.filter" = { keys = "Cmd+Shift+F", source = "engine command table" }
+"data.group" = { keys = "Cmd+Shift+K", source = "engine command table" }
+"data.ungroup" = { keys = "Cmd+Shift+J", source = "engine command table" }
+"formulas.autoSum" = { keys = "Cmd+Shift+T", source = "engine command table" }
+"formulas.insertFunction" = { keys = "Shift+F3", source = "engine command table" }
+"formulas.nameManager" = { keys = "Cmd+F3", source = "engine command table" }
+"formulas.createFromSelection" = { keys = "Cmd+Shift+F3", source = "engine command table" }
+"formulas.showFormulas" = { keys = "Ctrl+`", source = "engine command table" }
+"formulas.calculateNow" = { keys = "F9", source = "engine command table" }
+"formulas.calculateSheet" = { keys = "Shift+F9", source = "engine command table" }
+"cell.toggleCheckbox" = { keys = "Space", source = "engine command table" }
+"review.spelling" = { keys = "F7", source = "engine command table" }
+"pivot.refresh" = { keys = "Alt+F5", source = "engine command table" }
+"data.refreshAll" = { keys = "Cmd+Alt+F5", source = "engine command table" }
+"file.print" = { keys = "Cmd+P", source = "engine command table" }

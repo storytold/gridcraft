@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the full re-measure against Excel for Mac 16.113.4 and the issue tracker) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (gap #11 re-measured for M12, #191) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -88,10 +88,12 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ## After beta
 
-### 11. No localization at all (L)
-- Ribbon-only catalog in five languages (#31, #104, #82; ~12% of strings each); dialogs, menus and
-  messages English; en-US function names and separators (#45); German in PR #163. **Estimate:**
-  100–165 h including #5. [localization-parity.md](localization-parity.md)
+### 11. Localization: four target languages, shaping, native review (L)
+- Since M12 (#191, answering #45) the interface, function names, separators and regional formats
+  are in 12 languages, 8 of them among the twelve target languages. Missing: Hindi, Arabic,
+  Indonesian and Vietnamese; shaping and right-to-left (#5, #146); IME verification with real
+  Chinese, Japanese and Korean input methods; native review of every language. **Estimate:**
+  45–65 h including #5. [localization-parity.md](localization-parity.md)
 
 ### 12. Get & Transform, external data, data model (F)
 - No Power Query editor, connections, refresh, From Web/database/folder sources, relationships or
@@ -149,6 +151,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | #11 re-measured for M12 (#191): 12 languages with interface, formulas and regional formats; Hindi, Arabic, Indonesian, Vietnamese, shaping and review remain; 100–165 h → 45–65 h |
 | 2026-10-10 | minor | Updated for the 10-10 merges (#17, #31, #38, #62, #82, #104, #116) and the new chart resize bug (#190) |
 | 2026-10-10 | minor | Noted that no gap blocks the alpha gate |
 | 2026-10-10 | major | Created: 24 ranked gaps with evidence, from the full re-measure and the 60 open issues |
