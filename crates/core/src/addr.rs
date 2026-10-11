@@ -30,14 +30,14 @@ impl CellRef {
     }
     /// Moved by `(dr, dc)`, `None` when the result leaves the sheet.
     pub fn offset(&self, dr: i64, dc: i64) -> Option<CellRef> {
-        let r = self.row as i64 + dr;
-        let c = self.col as i64 + dc;
+        let r = (self.row as i64).checked_add(dr)?;
+        let c = (self.col as i64).checked_add(dc)?;
         if (0..MAX_ROWS as i64).contains(&r) && (0..MAX_COLS as i64).contains(&c) { Some(CellRef::new(r as u32, c as u32)) } else { None }
     }
     /// Moved by `(dr, dc)` and clamped to the sheet.
     pub fn offset_clamped(&self, dr: i64, dc: i64) -> CellRef {
-        let r = (self.row as i64 + dr).clamp(0, MAX_ROWS as i64 - 1);
-        let c = (self.col as i64 + dc).clamp(0, MAX_COLS as i64 - 1);
+        let r = (self.row as i64).saturating_add(dr).clamp(0, MAX_ROWS as i64 - 1);
+        let c = (self.col as i64).saturating_add(dc).clamp(0, MAX_COLS as i64 - 1);
         CellRef::new(r as u32, c as u32)
     }
     /// Parses `A1`, `$A$1`, `xfd1048576` (case-insensitive). `None` if malformed or out of range.
@@ -270,6 +270,21 @@ mod tests {
         assert_eq!(a.intersection(&b).unwrap().a1(), "B2:C3");
         assert_eq!(a.union(&b).a1(), "A1:D4");
         assert_eq!(a.iter().count(), 9);
+    }
+
+    #[test]
+    fn extreme_offsets() {
+        let cell = CellRef::new(1, 1);
+        for delta in [i64::MIN, i64::MAX] {
+            assert_eq!(cell.offset(delta, 0), None);
+            assert_eq!(cell.offset(0, delta), None);
+            assert_eq!(cell.offset(delta, delta), None);
+        }
+        assert_eq!(cell.offset_clamped(i64::MAX, i64::MAX), CellRef::new(MAX_ROWS - 1, MAX_COLS - 1));
+        assert_eq!(cell.offset_clamped(i64::MIN, i64::MIN), CellRef::new(0, 0));
+        assert_eq!(cell.offset_clamped(i64::MAX, i64::MIN), CellRef::new(MAX_ROWS - 1, 0));
+        assert_eq!(cell.offset_clamped(i64::MIN, i64::MAX), CellRef::new(0, MAX_COLS - 1));
+        assert_eq!(cell.offset(2, -1), Some(CellRef::new(3, 0)));
     }
 
     #[test]
