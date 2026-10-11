@@ -247,8 +247,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: x86_64, runner: ubuntu-24.04 }
-          - { arch: aarch64, runner: ubuntu-24.04-arm }
+          - { arch: x86_64, runner: ubuntu-26.04 }
+          - { arch: aarch64, runner: ubuntu-26.04-arm }
     env:
       GRIDCRAFT_VERSION: ${{ needs.version.outputs.version }}
       GRIDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
@@ -320,14 +320,14 @@ jobs:
     name: Linux riscv64
     needs: version
     # Cross-compiled on x86_64 (no hosted RISC-V runners) against the runner's own Ubuntu release
-    # from ports.ubuntu.com, so the binaries need that release's glibc (24.04: 2.39). 22.04's
-    # riscv64 ports lag its amd64 updates, which breaks the multiarch install. tar.gz only; the
+    # from ports.ubuntu.com, so the binaries need that release's glibc. deb, rpm, and tar.gz; the
     # CLI is smoke-tested under QEMU.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # No `environment: release`: this job signs nothing, so it gets no release secrets.
     env:
       GRIDCRAFT_VERSION: ${{ needs.version.outputs.version }}
       GRIDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      NFPM_VERSION: 2.47.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check out craft-fonts
@@ -365,7 +365,10 @@ jobs:
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross libc6-dev:riscv64 qemu-user \
             libxkbcommon-dev:riscv64 libwayland-dev:riscv64 libx11-dev:riscv64 libxrandr-dev:riscv64 \
             libxi-dev:riscv64 libgl1-mesa-dev:riscv64
-      - name: Build and package (tar.gz)
+          curl -fsSL -o "$RUNNER_TEMP/nfpm.deb" \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_amd64.deb"
+          sudo dpkg -i "$RUNNER_TEMP/nfpm.deb"
+      - name: Build and package (deb, rpm, tar.gz)
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
@@ -378,11 +381,11 @@ jobs:
           CROSS_COMPILE: riscv64-linux-gnu-
           EMULATOR: qemu-riscv64
           QEMU_LD_PREFIX: /usr/riscv64-linux-gnu
-        run: packaging/linux/package.sh --formats tar
+        run: packaging/linux/package.sh --formats "deb rpm tar"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-linux-riscv64
-          path: dist/release/*.tar.gz
+          path: dist/release/*
           if-no-files-found: error
 
   # FreeBSD has no hosted runners: freebsd.yml builds in a FreeBSD VM and, with package: true,
