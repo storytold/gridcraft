@@ -183,5 +183,5 @@ fn portuguese_interface_retains_its_canonical_formula_fallback() {
     assert!(!enter(&mut app, "=SUMA(1;2)"));
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::PtBr);
-    assert_eq!(Language::Es.tr("Page Layout|Orientation"), "Orientation");
+    assert_eq!(Language::Es.tr("Page Layout|Orientation"), "Orientación");
 }
