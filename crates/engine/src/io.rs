@@ -38,9 +38,16 @@ impl FileKind {
 /// Parses a file's bytes into a workbook. `name` picks the format by extension when the bytes
 /// don't say.
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
-    let (mut wb, warnings) = read_bytes(name, bytes)?;
+    open_bytes_with_plan(name, bytes).map(|(wb, warnings, _)| (wb, warnings))
+}
+
+/// [`open_bytes`], with what to recalculate (see [`crate::DocState::opened`]): for an XLSX file
+/// whose cached values can stand, the formulas whose values it didn't keep; `None` (everything)
+/// for other formats and for files that ask for a full recalculation.
+pub fn open_bytes_with_plan(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>, Option<Vec<gridcraft_calc::Key>>)> {
+    let (mut wb, warnings, stale) = read_bytes(name, bytes)?;
     share_formulas(&mut wb);
-    Ok((wb, warnings))
+    Ok((wb, warnings, stale))
 }
 
 /// Shares the formulas of a loaded workbook that are the same relative to their cells (filled
@@ -49,8 +56,10 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
 fn share_formulas(wb: &mut Workbook) {
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheets.get(si) else { continue };
+        // Formulas that already share a parse (the reader shares filled columns and the file's
+        // shared formulas) are left alone.
         let formulas: Vec<(gridcraft_core::CellRef, std::sync::Arc<gridcraft_model::Formula>)> =
-            sh.cells.iter().filter_map(|(c, cell)| cell.formula.clone().map(|f| (c, f))).collect();
+            sh.cells.iter().filter_map(|(c, cell)| cell.formula.clone().filter(|f| !f.is_shared()).map(|f| (c, f))).collect();
         if formulas.len() < 2 {
             continue;
         }
@@ -67,7 +76,7 @@ fn share_formulas(wb: &mut Workbook) {
     }
 }
 
-fn read_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
+fn read_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>, Option<Vec<gridcraft_calc::Key>>)> {
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
     if sniffed == gridcraft_xlsx::Format::Encrypted {
@@ -90,11 +99,11 @@ fn read_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     if let Some(import) = import {
         let read = if import == FileKind::Ods { gridcraft_xlsx::read_ods } else { gridcraft_xlsx::read_xlsb };
         let (wb, report) = read(bytes).map_err(|e| EngineError::Other(format!("We can't import '{name}': {e}")))?;
-        return Ok((wb, report.warnings));
+        return Ok((wb, report.warnings, None));
     }
     if sniffed == gridcraft_xlsx::Format::Xlsx || kind == Some(FileKind::Xlsx) {
         let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
-        return Ok((wb, report.warnings));
+        return Ok((wb, report.warnings, report.recalc));
     }
     match kind {
         Some(FileKind::Json) => {
@@ -103,19 +112,19 @@ fn read_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
             if wb.sheets.is_empty() {
                 wb = Workbook::new();
             }
-            Ok((wb, vec![]))
+            Ok((wb, vec![], None))
         }
         Some(FileKind::Tsv) => {
             let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', ..Default::default() };
             let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             rename_first_sheet(&mut wb, name);
-            Ok((wb, vec![]))
+            Ok((wb, vec![], None))
         }
         _ => {
             let opts = gridcraft_xlsx::CsvOptions { delimiter: 0, ..Default::default() };
             let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             rename_first_sheet(&mut wb, name);
-            Ok((wb, vec![]))
+            Ok((wb, vec![], None))
         }
     }
 }

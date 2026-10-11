@@ -85,6 +85,11 @@ impl Formula {
     pub fn parsed_ref(&self) -> Option<(&Expr, (i32, i32))> {
         self.expr.as_deref().map(|e| (e, self.offset))
     }
+    /// Whether this formula's parsed expression is shared with other formulas (it was copied, or
+    /// they were copied from it).
+    pub fn is_shared(&self) -> bool {
+        self.expr.as_ref().is_some_and(|e| Arc::strong_count(e) > 1)
+    }
     /// The parsed expression as it reads at this formula's cell.
     pub fn expr(&self) -> Option<Expr> {
         let (e, (r, c)) = self.parsed()?;

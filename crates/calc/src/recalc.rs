@@ -1264,6 +1264,16 @@ impl Calc {
         self.graph.nodes.keys().copied().collect()
     }
 
+    /// Prepares a workbook just loaded with the values its file stored, as Excel does: the graph
+    /// is built and only `stale` (formulas whose stored values can't be used), the formulas that
+    /// depend on them, and the volatile and dynamic-reference ones are recalculated. Spills are
+    /// laid out by recalculating their anchors (which the reader lists in `stale`).
+    pub fn load(&mut self, wb: &mut Workbook, stale: &[Key]) {
+        self.rebuild(wb);
+        let dirty = self.dirty_closure(wb, stale);
+        self.run(wb, dirty, false);
+    }
+
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
         let all = self.prepare_all(wb);

@@ -396,6 +396,13 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     }
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
+    // A formula stored without a value, or an array formula (its other cells' values are
+    // dropped below), is recalculated after loading; the others keep the file's values.
+    if formula.as_ref().is_some_and(|f| v.is_none() || dynamic || f.array.is_some_and(|r| !r.is_single()))
+        || st.dynamic.last().is_some_and(|r| r.start == pos)
+    {
+        cx.recalc.push(pos);
+    }
     let value = if formula.is_none() && st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos) { Value::Empty } else { value };
     st.row_cells.push((pos, Cell { value, formula: formula.map(Arc::new), style }));
 }

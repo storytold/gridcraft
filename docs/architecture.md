@@ -47,6 +47,10 @@ including tests, 2026-10-10.
    reuses each row's parsed elements for the next; a row's cells are stored at once, and a formula
    that is the one above it moved down (a filled column in a file that doesn't mark shared
    formulas) is recognised by its text and shares that formula's parse instead of being parsed.
+   An opened XLSX keeps the values its file stored, as Excel does (`Calc::load`): the graph is
+   built and only formulas stored without a value, array anchors (whose spilled values the reader
+   drops), volatile and dynamic-reference formulas, and what depends on them are recalculated;
+   a file with `fullCalcOnLoad` or no calculation properties is recalculated in full.
 3. **Recalc** marks dependents of changed cells dirty through the dependency graph (with range
    nodes for range dependents), evaluates in topological order (Kahn's algorithm over the dirty
    set; a formula that reads a cell not yet done, through a name, table or INDIRECT, waits on a
@@ -98,6 +102,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Opening keeps the file's cached values |
 | 2026-10-11 | minor | XLSX reader: element reuse, row-at-once storage, filled columns without parsing |
 | 2026-10-11 | minor | Shared formulas |
 | 2026-10-11 | minor | Cell rows as sorted vectors, compact dependents, spill-anchor index, incremental graph sync on undo/redo, parallel bulk helpers |

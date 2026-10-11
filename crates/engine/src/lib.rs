@@ -108,9 +108,19 @@ static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 const UNDO_LIMIT: usize = 100;
 
 impl DocState {
-    pub fn new(mut wb: Workbook, path: Option<String>, title: String) -> DocState {
+    pub fn new(wb: Workbook, path: Option<String>, title: String) -> DocState {
+        DocState::opened(wb, path, title, None)
+    }
+
+    /// A document for a workbook read from a file: `stale` as [`crate::io::open_bytes_with_plan`]
+    /// gives it (`None`: recalculate everything; otherwise keep the file's values except for
+    /// those formulas and what depends on them).
+    pub fn opened(mut wb: Workbook, path: Option<String>, title: String, stale: Option<Vec<gridcraft_calc::Key>>) -> DocState {
         let mut calc = Calc::new();
-        calc.recalc_all(&mut wb);
+        match stale {
+            Some(stale) => calc.load(&mut wb, &stale),
+            None => calc.recalc_all(&mut wb),
+        }
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
         DocState {

@@ -1831,3 +1831,60 @@ fn opening_a_file_shares_its_filled_formulas() {
         assert_eq!(v(&s, "C1"), Value::Number((1..=50).map(|r| if r == 1 { 300.0 } else { f64::from(r) * 2.0 + 100.0 }).sum()), "{format}");
     }
 }
+
+/// Saves the session's workbook with B1's stored value replaced by 99 (as a file written by an
+/// application that calculated differently would hold), and opens it again.
+fn reopen_with_stale_b1(s: &mut Session, full_calc_on_load: bool) {
+    {
+        let d = s.active_mut().unwrap();
+        let sh = std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap();
+        sh.cells.get_mut(CellRef::parse("B1").unwrap()).unwrap().value = Value::Number(99.0);
+    }
+    let bytes = gridcraft_xlsx::write_xlsx(&s.active().unwrap().wb).unwrap();
+    let bytes = if full_calc_on_load { patch_full_calc(&bytes) } else { bytes };
+    s.execute("file.open", json!({"name": "stored.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+}
+
+/// The same package with `fullCalcOnLoad="1"` on its calculation properties.
+fn patch_full_calc(bytes: &[u8]) -> Vec<u8> {
+    use std::io::{Read, Write};
+    let mut zin = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..zin.len() {
+        let mut f = zin.by_index(i).unwrap();
+        let name = f.name().to_string();
+        let mut data = Vec::new();
+        f.read_to_end(&mut data).unwrap();
+        if name == "xl/workbook.xml" {
+            data = String::from_utf8(data).unwrap().replace("<calcPr ", "<calcPr fullCalcOnLoad=\"1\" ").into_bytes();
+        }
+        out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        out.write_all(&data).unwrap();
+    }
+    out.finish().unwrap().into_inner()
+}
+
+#[test]
+fn opening_keeps_stored_values_and_recalculates_what_must_be() {
+    let mut s = s();
+    for (cell, input) in [("A1", "1"), ("B1", "=A1+1"), ("C1", "=NOW()"), ("E1", "=SEQUENCE(3)"), ("F1", "=SUM(E1#)")] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    {
+        // A stored NOW() from long ago.
+        let d = s.active_mut().unwrap();
+        let sh = std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap();
+        sh.cells.get_mut(CellRef::parse("C1").unwrap()).unwrap().value = Value::Number(1.0);
+    }
+    reopen_with_stale_b1(&mut s, false);
+    // The stored value stands (as in Excel), but it is a live formula.
+    assert_eq!(v(&s, "B1"), Value::Number(99.0));
+    // Volatile functions are recalculated; spills are laid out again, and what reads them is right.
+    assert!(v(&s, "C1").as_f64().unwrap() > 40_000.0, "NOW() kept its stored value: {:?}", v(&s, "C1"));
+    assert_eq!((v(&s, "E2"), v(&s, "E3"), v(&s, "F1")), (Value::Number(2.0), Value::Number(3.0), Value::Number(6.0)));
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(6.0));
+    // A file that asks for a full recalculation gets one.
+    reopen_with_stale_b1(&mut s, true);
+    assert_eq!(v(&s, "B1"), Value::Number(6.0));
+}

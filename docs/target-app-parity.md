@@ -203,6 +203,7 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 | Sheet size limits | 1,048,576 × 16,384 | same | measured (`crates/core/src/addr.rs`) |
 | Window during a long recalculation | responds: an edit returns in ~90 ms, the rest runs on another thread with "Calculating (N threads): x%" in the status bar; commands that read values wait for it | responds; typing interrupts and resumes it | measured: 40,000 formulas over 2,000-cell arrays, desktop app driven over the control channel |
 | Memory, 600,000 values + 200,000 formulas with their dependency graph | ~70 B per value; a filled formula ~150 B (it shares its parsed expression; ~590 B when typed alone) plus ~650 B in the dependency graph; was 390 MB for this workbook unshared | far less per formula | measured: a probe building the workbook directly, peak footprint, 2026-10-11 |
+| Save that workbook as XLSX | 4.6 s (was 6.6 s; 3.5 s of it compressing the 327 MB sheet, now at deflate level 3 for parts of 16 MB or more: 58 MB instead of 54 MB) | | GridCraft measured |
 | Peak memory, `perf` `scale` (1,000,000 values, 200,000 filled formulas, undo history) | 0.70 GB (was 1.26 GB) | | GridCraft measured |
 | Paste 1,000,000 values / fill 200,000 formulas | 0.32 s / 0.36 s (was 1.31 s / 0.69 s) | well under 1 s | GridCraft measured: `perf` example, `scale`, 200,000 rows |
 | Insert or delete a row above 200,000 formulas | 0.24 s / 0.22 s (was 0.60 s / 0.58 s); every formula is still recalculated after it | near instant | GridCraft measured: `perf`, `scale` |
@@ -214,11 +215,11 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 | Exact lookups, 100,000 VLOOKUPs over a 100,000-row table | 0.72 s (XLOOKUP 0.76 s, MATCH 0.63 s); an edit to the table with 300,000 dependent lookups 0.25 s. Before 2026-10-11: 2.6 s for 10,000, growing as n² | well under 1 s | GridCraft measured: `perf` example, `lookup`, 500,000 rows, Apple M2 Pro; Excel not measured. A range read by many formulas is built once per recalculation and lookups index it |
 | 1,000 × `SUM(A:A)` over 50,000 rows, recalc after an edit | 20 ms on all cores (86 ms on one) | fast | GridCraft measured: `perf` example, `colsum` |
 | Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
-| Open a large XLSX: 1,000,000 rows × 8 columns, 2,000,000 formulas (47 MB file, 313 MB sheet XML) | 5.5 s, 2.2 GB peak (was 10.7 s, 3.05 GB): reading 3.3 s, full recalculation 1.8 s | a few seconds, under 1 GB; Excel doesn't recalculate on open | GridCraft measured: `gridcraft-cli info` on a file written by GridCraft, Apple M2 Pro, 2026-10-11. #175 reports a ~100 MB file failing; a public 100 MB sample opens (comment on #175) |
+| Open a large XLSX: 1,000,000 rows × 8 columns, 2,000,000 formulas (54 MB file with cached values) | 4.6 s, ~2.0 GB peak (was 10.7 s, 3.05 GB): reading 3.8 s; the file's cached values are kept (as Excel does), so only formulas without one, array anchors and volatile formulas are recalculated | a few seconds, under 1 GB | GridCraft measured: `gridcraft-cli info` on a file written by GridCraft, Apple M2 Pro, 2026-10-11. #175 reports a ~100 MB file failing; a public 100 MB sample opens (comment on #175) |
 | Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
 
-Work: open with the file's cached values instead of recalculating everything (as Excel does),
-writing shared formulas to XLSX (`t="shared"`), a smaller dependency graph for filled blocks (now
+Work: a sheet scanner specialised for `sheetData` (XML tokenising is ~45% of reading), parallel
+compression of large parts, writing shared formulas to XLSX (`t="shared"`), a smaller dependency graph for filled blocks (now
 the largest cost per formula), structural edits that recalculate only what they affect, streaming XLSX reader with shared-string
 and style dedup, interrupting a background recalculation when the user types (it waits today),
 recalculating on open in the background, whole-column reference clamping (#205). The numbers above come from
@@ -345,6 +346,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Performance: XLSX files open with their cached values (formulas without one, array anchors, volatile formulas and `fullCalcOnLoad` files are recalculated); large parts compress faster on save |
 | 2026-10-11 | minor | Performance: large XLSX files open 1.9× faster with 28% less memory (streaming reader reuses its elements, rows stored at once, filled columns read without parsing) and full recalculation writes results back in order |
 | 2026-10-11 | minor | Performance: shared formulas: copied and filled formulas, XLSX shared formulas and repeated formulas in loaded files share one parsed expression (peak memory of the `scale` benchmark 1.0 → 0.70 GB) |
 | 2026-10-11 | minor | Performance: memory (rows as sorted vectors, compact dependency index), bulk and structural edits (spill-anchor index, whole-row shifts, formula rewrite and graph rebuild on every processor), undo/redo that update the graph from the changed cells |
