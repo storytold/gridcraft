@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use gridcraft_core::{CellRef, col_to_letters, number_to_text};
+use gridcraft_core::{CellRef, number_to_text};
 
 use crate::ast::*;
 
@@ -34,20 +34,71 @@ fn sheet_prefix(s: &SheetSel) -> String {
     }
 }
 
-fn anchor_a1(a: &Anchor) -> String {
-    format!("{}{}{}{}", if a.col_abs { "$" } else { "" }, col_to_letters(a.col), if a.row_abs { "$" } else { "" }, a.row as u64 + 1)
+/// Column letters (`A`, `XFD`) written straight into `s`, without a temporary string: this runs
+/// for every reference of every formula printed (saving, copying, loading).
+fn write_col(s: &mut String, col: u32) {
+    let mut letters = [0u8; 8];
+    let mut n = u64::from(col) + 1;
+    let mut i = letters.len();
+    while n > 0 && i > 0 {
+        i -= 1;
+        if let Some(slot) = letters.get_mut(i) {
+            *slot = b'A' + ((n - 1) % 26) as u8;
+        }
+        n = (n - 1) / 26;
+    }
+    for &b in letters.get(i..).unwrap_or(&[]) {
+        s.push(char::from(b));
+    }
+}
+
+fn write_anchor_a1(s: &mut String, a: &Anchor) {
+    if a.col_abs {
+        s.push('$');
+    }
+    write_col(s, a.col);
+    if a.row_abs {
+        s.push('$');
+    }
+    let _ = write!(s, "{}", u64::from(a.row) + 1);
+}
+
+fn write_reference_a1(s: &mut String, r: &Reference) {
+    if !matches!(r.sheet, SheetSel::Current) {
+        s.push_str(&sheet_prefix(&r.sheet));
+    }
+    let dollar = |s: &mut String, abs: bool| {
+        if abs {
+            s.push('$');
+        }
+    };
+    match &r.kind {
+        RefKind::Cell(a) => write_anchor_a1(s, a),
+        RefKind::Range(a, b) => {
+            write_anchor_a1(s, a);
+            s.push(':');
+            write_anchor_a1(s, b);
+        }
+        RefKind::Rows(r0, a0, r1, a1) => {
+            dollar(s, *a0);
+            let _ = write!(s, "{}:", u64::from(*r0) + 1);
+            dollar(s, *a1);
+            let _ = write!(s, "{}", u64::from(*r1) + 1);
+        }
+        RefKind::Cols(c0, a0, c1, a1) => {
+            dollar(s, *a0);
+            write_col(s, *c0);
+            s.push(':');
+            dollar(s, *a1);
+            write_col(s, *c1);
+        }
+    }
 }
 
 pub fn reference_a1(r: &Reference) -> String {
-    let body = match &r.kind {
-        RefKind::Cell(a) => anchor_a1(a),
-        RefKind::Range(a, b) => format!("{}:{}", anchor_a1(a), anchor_a1(b)),
-        RefKind::Rows(r0, a0, r1, a1) => format!("{}{}:{}{}", if *a0 { "$" } else { "" }, r0 + 1, if *a1 { "$" } else { "" }, r1 + 1),
-        RefKind::Cols(c0, a0, c1, a1) => {
-            format!("{}{}:{}{}", if *a0 { "$" } else { "" }, col_to_letters(*c0), if *a1 { "$" } else { "" }, col_to_letters(*c1))
-        }
-    };
-    format!("{}{}", sheet_prefix(&r.sheet), body)
+    let mut s = String::new();
+    write_reference_a1(&mut s, r);
+    s
 }
 
 fn r1c1_part(letter: char, v: u32, abs: bool, base: u32) -> String {
@@ -198,7 +249,7 @@ fn write_expr(s: &mut String, e: &Expr, p: Print) {
             };
             match p.r1c1 {
                 Some(at) => s.push_str(&reference_r1c1(r, at)),
-                None => s.push_str(&reference_a1(r)),
+                None => write_reference_a1(s, r),
             }
         }
         Expr::Name(n) => s.push_str(n),
@@ -262,6 +313,18 @@ fn write_expr(s: &mut String, e: &Expr, p: Print) {
             s.push('(');
             write_expr(s, x, p);
             s.push(')');
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn column_letters_match_core() {
+        for col in 0..gridcraft_core::MAX_COLS {
+            let mut s = String::new();
+            super::write_col(&mut s, col);
+            assert_eq!(s, gridcraft_core::col_to_letters(col), "{col}");
         }
     }
 }

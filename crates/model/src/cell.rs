@@ -63,6 +63,15 @@ impl Formula {
         };
         Formula { text: gridcraft_formula::print_shifted(&expr, r, c), expr: Some(expr), offset: (r32, c32), array: None }
     }
+    /// [`Formula::moved`] when the caller already has the copy's text (what `moved` would print):
+    /// a file reader that just compared it. `None` when the expression isn't parsed here or the
+    /// offset is beyond any sheet.
+    pub fn moved_with_text(&self, dr: i64, dc: i64, text: String) -> Option<Formula> {
+        let expr = Arc::clone(self.expr.as_ref()?);
+        let r = i32::try_from(i64::from(self.offset.0).checked_add(dr)?).ok()?;
+        let c = i32::try_from(i64::from(self.offset.1).checked_add(dc)?).ok()?;
+        Some(Formula { text, expr: Some(expr), offset: (r, c), array: None })
+    }
     /// The parsed expression shared with the formulas copied from it, and this formula's offset
     /// from it (re-parsing after deserialization, at offset 0).
     pub fn parsed(&self) -> Option<(Arc<Expr>, (i32, i32))> {

@@ -27,6 +27,12 @@ struct Shared {
 #[derive(Default)]
 struct RowState {
     next_row: u32,
+    /// The last formula read in each column: a filled column repeats it moved down, which is
+    /// checked before parsing (see `read_formula`).
+    above: HashMap<u32, (CellRef, Formula)>,
+    file_exprs: crate::fmla::FileExprs,
+    /// The cells of the row being read, stored together at its end.
+    row_cells: Vec<(CellRef, Cell)>,
     shared: HashMap<u32, Shared>,
     /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
     /// the anchor) are not stored, so the formula can fill them again.
@@ -43,7 +49,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     let mut sheet = Sheet::new(name);
     let mut st = RowState::default();
     let res = xml::parse_streaming(&bytes, &["row"], &mut |row| {
-        read_row(cx, &mut sheet, &mut st, &row);
+        read_row(cx, &mut sheet, &mut st, row);
         Ok(())
     });
     let root = match res {
@@ -317,6 +323,15 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
         next_col = pos.col + 1;
         read_cell(cx, sheet, st, c, pos);
     }
+    // A row's cells are stored together (cells naming another row, in a damaged file, one by one).
+    let cells = std::mem::take(&mut st.row_cells);
+    if cells.iter().all(|(p, _)| p.row == r) {
+        sheet.cells.set_row(r, cells.into_iter().map(|(p, cell)| (p.col, cell)).collect());
+    } else {
+        for (p, cell) in cells {
+            sheet.cells.set(p, cell);
+        }
+    }
 }
 
 fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos: CellRef) {
@@ -382,7 +397,7 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     let value = if formula.is_none() && st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos) { Value::Empty } else { value };
-    sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
+    st.row_cells.push((pos, Cell { value, formula: formula.map(Arc::new), style }));
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
@@ -422,10 +437,20 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
         }
         _ => {
             if text.is_empty() {
-                None
-            } else {
-                Some(Formula::new(text))
+                return None;
             }
+            // A filled column (in a file that doesn't mark shared formulas) repeats the formula
+            // above it moved down: if this one is that, share its parse instead of parsing.
+            if let Some((above, prev)) = st.above.get(&pos.col)
+                && pos.row > above.row
+                && let Some(copy) = crate::fmla::copy_if_file_text(prev, i64::from(pos.row - above.row), 0, text, &mut st.file_exprs)
+            {
+                st.above.insert(pos.col, (pos, copy.clone()));
+                return Some(copy);
+            }
+            let f = Formula::new(text);
+            st.above.insert(pos.col, (pos, f.clone()));
+            Some(f)
         }
     }
 }

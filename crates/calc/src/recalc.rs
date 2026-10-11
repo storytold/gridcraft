@@ -1474,16 +1474,21 @@ impl Calc {
             // Write back.
             let mut spill_changes: Vec<Key> = Vec::new();
             let mut freed: Vec<(usize, RangeRef)> = Vec::new();
-            for (k, v) in results {
+            // In row-major order (`dirty` is sorted), so the cell store is walked band by band;
+            // a cell is borrowed for writing (which copies its band if an undo step shares it) only
+            // when its value changed.
+            let mut results = results;
+            for k in &dirty {
+                let Some(v) = results.remove(k) else { continue };
                 if v == Value::Error(CellError::Spill) {
-                    self.spill_blocked.insert(k);
-                } else {
-                    self.spill_blocked.remove(&k);
+                    self.spill_blocked.insert(*k);
+                } else if !self.spill_blocked.is_empty() {
+                    self.spill_blocked.remove(k);
                 }
-                let Some(sheet) = wb.sheet_mut(k.0) else { continue };
-                if let Some(cell) = sheet.cells.get_mut(k.1)
-                    && cell.value != v
-                {
+                if wb.sheet(k.0).and_then(|s| s.cells.get(k.1)).is_none_or(|cell| cell.value == v) {
+                    continue;
+                }
+                if let Some(cell) = wb.sheet_mut(k.0).and_then(|s| s.cells.get_mut(k.1)) {
                     cell.value = v;
                 }
             }

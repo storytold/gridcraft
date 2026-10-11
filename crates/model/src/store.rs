@@ -137,6 +137,37 @@ impl CellStore {
             self.len += 1;
         }
     }
+    /// Stores the cells of one row (`row`) at once, as a file reader does: when the row is empty
+    /// so far, its cells go into one vector of exactly their number; otherwise one by one. Blank
+    /// cells are skipped; of two cells in the same column the last wins.
+    pub fn set_row(&mut self, row: u32, mut cells: Vec<(u32, Cell)>) {
+        cells.retain(|(_, c)| !c.is_blank());
+        if cells.is_empty() {
+            return;
+        }
+        let band = Arc::make_mut(self.bands.entry(row / BAND).or_default());
+        let slot = band.rows.entry(row).or_default();
+        if !slot.is_empty() {
+            for (col, cell) in cells {
+                if slot.insert(col, cell).is_none() {
+                    self.len += 1;
+                }
+            }
+            return;
+        }
+        // Stable sort, then keep the last of each column.
+        cells.sort_by_key(|(col, _)| *col);
+        let mut out: Vec<(u32, Cell)> = Vec::with_capacity(cells.len());
+        for (col, cell) in cells {
+            match out.last_mut() {
+                Some(last) if last.0 == col => last.1 = cell,
+                _ => out.push((col, cell)),
+            }
+        }
+        out.shrink_to_fit();
+        self.len += out.len();
+        *slot = Row(out);
+    }
     pub fn remove(&mut self, c: CellRef) -> Option<Cell> {
         let key = c.row / BAND;
         let band = self.bands.get_mut(&key)?;
@@ -451,5 +482,18 @@ mod tests {
         let back: CellStore = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
         assert_eq!(back.row(3, 0, 10).map(|(col, _)| col).collect::<Vec<_>>(), [2, 7]);
+    }
+
+    #[test]
+    fn set_row_stores_a_row_at_once() {
+        let v = |n: f64| Cell::value(Value::Number(n));
+        let mut s = CellStore::new();
+        s.set_row(4, vec![(5, v(1.0)), (2, v(2.0)), (5, v(3.0)), (7, Cell::default())]);
+        assert_eq!(s.len(), 2);
+        assert_eq!(s.row(4, 0, 10).map(|(c, x)| (c, x.value.clone())).collect::<Vec<_>>(), [(2, Value::Number(2.0)), (5, Value::Number(3.0))]);
+        // Into a row that has cells: merged, later cells win.
+        s.set_row(4, vec![(2, v(9.0)), (8, v(4.0))]);
+        assert_eq!(s.len(), 3);
+        assert_eq!(s.get(c(4, 2)).map(|x| x.value.clone()), Some(Value::Number(9.0)));
     }
 }

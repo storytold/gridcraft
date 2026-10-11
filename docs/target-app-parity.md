@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (Performance: recalc order and chain length; shared ranges and lookup indexes; multi-threaded recalc; background recalculation; memory and bulk edits; shared formulas; measured with the `perf` example) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (Performance: recalc order and chain length; shared ranges and lookup indexes; multi-threaded recalc; background recalculation; memory and bulk edits; shared formulas; large XLSX files; measured with the `perf` example) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -214,11 +214,12 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 | Exact lookups, 100,000 VLOOKUPs over a 100,000-row table | 0.72 s (XLOOKUP 0.76 s, MATCH 0.63 s); an edit to the table with 300,000 dependent lookups 0.25 s. Before 2026-10-11: 2.6 s for 10,000, growing as n² | well under 1 s | GridCraft measured: `perf` example, `lookup`, 500,000 rows, Apple M2 Pro; Excel not measured. A range read by many formulas is built once per recalculation and lookups index it |
 | 1,000 × `SUM(A:A)` over 50,000 rows, recalc after an edit | 20 ms on all cores (86 ms on one) | fast | GridCraft measured: `perf` example, `colsum` |
 | Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
-| Open a ~100 MB XLSX | fails (#175) | opens | user report |
+| Open a large XLSX: 1,000,000 rows × 8 columns, 2,000,000 formulas (47 MB file, 313 MB sheet XML) | 5.5 s, 2.2 GB peak (was 10.7 s, 3.05 GB): reading 3.3 s, full recalculation 1.8 s | a few seconds, under 1 GB; Excel doesn't recalculate on open | GridCraft measured: `gridcraft-cli info` on a file written by GridCraft, Apple M2 Pro, 2026-10-11. #175 reports a ~100 MB file failing; a public 100 MB sample opens (comment on #175) |
 | Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
 
-Work: a smaller dependency graph for filled blocks (now the largest cost per formula), writing
-shared formulas to XLSX (`t="shared"`), structural edits that recalculate only what they affect, streaming XLSX reader with shared-string
+Work: open with the file's cached values instead of recalculating everything (as Excel does),
+writing shared formulas to XLSX (`t="shared"`), a smaller dependency graph for filled blocks (now
+the largest cost per formula), structural edits that recalculate only what they affect, streaming XLSX reader with shared-string
 and style dedup, interrupting a background recalculation when the user types (it waits today),
 recalculating on open in the background, whole-column reference clamping (#205). The numbers above come from
 `cargo run --release -p gridcraft-engine --example perf -- [rows]`, which checks every answer.
@@ -344,6 +345,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Performance: large XLSX files open 1.9× faster with 28% less memory (streaming reader reuses its elements, rows stored at once, filled columns read without parsing) and full recalculation writes results back in order |
 | 2026-10-11 | minor | Performance: shared formulas: copied and filled formulas, XLSX shared formulas and repeated formulas in loaded files share one parsed expression (peak memory of the `scale` benchmark 1.0 → 0.70 GB) |
 | 2026-10-11 | minor | Performance: memory (rows as sorted vectors, compact dependency index), bulk and structural edits (spill-anchor index, whole-row shifts, formula rewrite and graph rebuild on every processor), undo/redo that update the graph from the changed cells |
 | 2026-10-11 | minor | Performance: long recalculations run in the background in the desktop app, with progress in the status bar; programmatic callers still get final values |

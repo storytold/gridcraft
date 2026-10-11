@@ -108,16 +108,22 @@ fn to_utf8(xml: &[u8]) -> std::borrow::Cow<'_, [u8]> {
     std::borrow::Cow::Borrowed(xml)
 }
 
-fn local(name: &[u8]) -> String {
+fn local(name: &[u8]) -> std::borrow::Cow<'_, str> {
     let n = match name.iter().rposition(|&b| b == b':') {
         Some(i) => name.get(i + 1..).unwrap_or(name),
         None => name,
     };
-    String::from_utf8_lossy(n).into_owned()
+    String::from_utf8_lossy(n)
 }
 
-fn start_el(e: &BytesStart<'_>) -> El {
-    let mut el = El { name: local(e.name().as_ref()), ..Default::default() };
+/// An element for `e`, reusing one from `pool` (its strings and vectors keep their capacity),
+/// so streaming a large part allocates almost nothing once warmed up.
+fn start_el(e: &BytesStart<'_>, pool: &mut Vec<El>) -> El {
+    let mut el = pool.pop().unwrap_or_default();
+    el.name.clear();
+    el.name.push_str(&local(e.name().as_ref()));
+    el.text.clear();
+    let mut n = 0;
     for a in e.attributes().with_checks(false).flatten() {
         let key = a.key.as_ref();
         // Namespace declarations carry no data for us.
@@ -125,12 +131,34 @@ fn start_el(e: &BytesStart<'_>) -> El {
             continue;
         }
         let v = match a.unescape_value() {
-            Ok(v) => v.into_owned(),
-            Err(_) => String::from_utf8_lossy(&a.value).into_owned(),
+            Ok(v) => v,
+            Err(_) => String::from_utf8_lossy(&a.value),
         };
-        el.attrs.push((local(key), v));
+        match el.attrs.get_mut(n) {
+            Some((k, val)) => {
+                k.clear();
+                k.push_str(&local(key));
+                val.clear();
+                val.push_str(&v);
+            }
+            None => el.attrs.push((local(key).into_owned(), v.into_owned())),
+        }
+        n += 1;
     }
+    el.attrs.truncate(n);
     el
+}
+
+/// Puts `el` and its children back in `pool` for [`start_el`] to reuse.
+fn recycle(pool: &mut Vec<El>, mut el: El) {
+    // A bounded pool: a row's worth of elements is plenty, and a huge element isn't kept.
+    if pool.len() >= 4096 {
+        return;
+    }
+    for child in el.children.drain(..) {
+        recycle(pool, child);
+    }
+    pool.push(el);
 }
 
 fn named_entity(name: &str) -> Option<char> {
@@ -151,7 +179,7 @@ pub fn parse(xml: &[u8]) -> Result<El, IoError> {
 
 /// Parses a part; complete elements named in `split` (below the root) are handed to `cb` and not
 /// kept in the returned tree.
-pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
+pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(&El) -> Result<(), IoError>) -> Result<El, IoError> {
     let data = to_utf8(xml);
     let mut reader = Reader::from_reader(data.as_ref());
     {
@@ -164,13 +192,22 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
     }
     let mut stack: Vec<El> = Vec::new();
     let mut root: Option<El> = None;
-    let mut buf = Vec::new();
-    // Attach a finished element to its parent (or emit it / make it the root).
-    fn finish(stack: &mut [El], root: &mut Option<El>, el: El, split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<(), IoError> {
+    let mut pool: Vec<El> = Vec::new();
+    // Attach a finished element to its parent (or emit it and reuse it / make it the root).
+    fn finish(
+        stack: &mut [El],
+        root: &mut Option<El>,
+        el: El,
+        split: &[&str],
+        cb: &mut dyn FnMut(&El) -> Result<(), IoError>,
+        pool: &mut Vec<El>,
+    ) -> Result<(), IoError> {
         match stack.last_mut() {
             Some(parent) => {
                 if split.contains(&el.name.as_str()) {
-                    cb(el)?;
+                    let r = cb(&el);
+                    recycle(pool, el);
+                    r?;
                 } else {
                     parent.children.push(el);
                 }
@@ -184,21 +221,22 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
         Ok(())
     }
     loop {
-        let ev = reader.read_event_into(&mut buf).map_err(|e| IoError::Xml(format!("{e} at byte {}", reader.buffer_position())))?;
+        // The part is in memory: events borrow from it instead of being copied into a buffer.
+        let ev = reader.read_event().map_err(|e| IoError::Xml(format!("{e} at byte {}", reader.buffer_position())))?;
         match ev {
             Event::Start(e) => {
                 if stack.len() >= MAX_DEPTH {
                     return Err(IoError::Xml("XML nested too deeply".into()));
                 }
-                stack.push(start_el(&e));
+                stack.push(start_el(&e, &mut pool));
             }
             Event::Empty(e) => {
-                let el = start_el(&e);
-                finish(&mut stack, &mut root, el, split, cb)?;
+                let el = start_el(&e, &mut pool);
+                finish(&mut stack, &mut root, el, split, cb, &mut pool)?;
             }
             Event::End(_) => {
                 if let Some(el) = stack.pop() {
-                    finish(&mut stack, &mut root, el, split, cb)?;
+                    finish(&mut stack, &mut root, el, split, cb, &mut pool)?;
                 }
             }
             Event::Text(t) => {
@@ -233,11 +271,10 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
             Event::Eof => break,
             _ => {}
         }
-        buf.clear();
     }
     // Unclosed elements (truncated part): close them so we keep what we have.
     while let Some(el) = stack.pop() {
-        finish(&mut stack, &mut root, el, split, cb)?;
+        finish(&mut stack, &mut root, el, split, cb, &mut pool)?;
     }
     root.ok_or_else(|| IoError::Xml("no root element".into()))
 }

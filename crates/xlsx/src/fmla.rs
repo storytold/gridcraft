@@ -12,8 +12,18 @@ pub fn to_file(f: &Formula) -> String {
     }
 }
 
-/// Expressions shared by copied formulas, converted to file form, by the expression they share.
-pub type FileExprs = std::collections::HashMap<usize, (std::sync::Arc<Expr>, Expr)>;
+/// Expressions shared by copied formulas, converted to file form, by the expression they share
+/// (and whether the file form is the expression itself, which it is unless a function needs a
+/// prefix or LET/LAMBDA has parameters).
+pub type FileExprs = std::collections::HashMap<usize, (std::sync::Arc<Expr>, Expr, bool)>;
+
+fn file_form(cache: &mut FileExprs, shared: std::sync::Arc<Expr>) -> &(std::sync::Arc<Expr>, Expr, bool) {
+    cache.entry(std::sync::Arc::as_ptr(&shared) as usize).or_insert_with(|| {
+        let file = file_expr((*shared).clone());
+        let same = file == *shared;
+        (shared, file, same)
+    })
+}
 
 /// [`to_file`] for many formulas: a copy of a shared formula converts the shared expression
 /// once (the conversion doesn't touch references) and prints it moved to the copy's cell.
@@ -22,11 +32,25 @@ pub fn to_file_shared(f: &Formula, cache: &mut FileExprs) -> String {
     if (r, c) == (0, 0) {
         return to_file(f);
     }
-    let (_, file) = cache.entry(std::sync::Arc::as_ptr(&shared) as usize).or_insert_with(|| {
-        let file = file_expr((*shared).clone());
-        (shared, file)
-    });
+    let (_, file, _) = file_form(cache, shared);
     gridcraft_formula::print_shifted(file, r.into(), c.into())
+}
+
+/// The copy of `prev` `dr` rows and `dc` columns away, if `file_text` (a formula read from a
+/// file) is that copy's text in file form: a filled column read without parsing. Usually the
+/// file form is the expression's own text, which is then the copy's text as is.
+pub fn copy_if_file_text(prev: &Formula, dr: i64, dc: i64, file_text: &str, cache: &mut FileExprs) -> Option<Formula> {
+    // Only a formula with its expression parsed can share it (one read from text alone can't).
+    prev.parsed_ref()?;
+    let (shared, (r, c)) = prev.parsed()?;
+    let (r, c) = (i64::from(r).checked_add(dr)?, i64::from(c).checked_add(dc)?);
+    let (shared, file, same) = file_form(cache, shared);
+    let candidate = gridcraft_formula::print_shifted(file, r, c);
+    if candidate != file_text {
+        return None;
+    }
+    let text = if *same { candidate } else { gridcraft_formula::print_shifted(shared, r, c) };
+    prev.moved_with_text(dr, dc, text)
 }
 
 /// Arbitrary formula text (names, CF, validation) for a file. Unparseable text is kept.

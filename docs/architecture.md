@@ -43,7 +43,10 @@ including tests, 2026-10-10.
    the precedents walk move the relative parts of the formula's own references by the offset as
    they resolve them (names, INDIRECT text and LAMBDAs from names don't move). Loading a file
    shares formulas that are the same relative to their cells (`FormulaSharer`, keyed by R1C1
-   text), as does the rewrite after a structural edit.
+   text), as does the rewrite after a structural edit. The XLSX reader streams worksheet rows and
+   reuses each row's parsed elements for the next; a row's cells are stored at once, and a formula
+   that is the one above it moved down (a filled column in a file that doesn't mark shared
+   formulas) is recognised by its text and shares that formula's parse instead of being parsed.
 3. **Recalc** marks dependents of changed cells dirty through the dependency graph (with range
    nodes for range dependents), evaluates in topological order (Kahn's algorithm over the dirty
    set; a formula that reads a cell not yet done, through a name, table or INDIRECT, waits on a
@@ -95,6 +98,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | XLSX reader: element reuse, row-at-once storage, filled columns without parsing |
 | 2026-10-11 | minor | Shared formulas |
 | 2026-10-11 | minor | Cell rows as sorted vectors, compact dependents, spill-anchor index, incremental graph sync on undo/redo, parallel bulk helpers |
 | 2026-10-11 | minor | Background recalculation in the desktop app |

@@ -132,7 +132,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             Some(b) => {
                 let mut sst = Vec::new();
                 let res = xml::parse_streaming(&b, &["si"], &mut |si| {
-                    sst.push(Arc::from(xml::rich_text(&si)));
+                    sst.push(Arc::from(xml::rich_text(si)));
                     Ok(())
                 });
                 if let Err(e) = res {
