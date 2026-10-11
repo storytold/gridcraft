@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use gridcraft_core::date::{serial_from_ymd, time_fraction};
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
-use gridcraft_formula::Expr;
 use gridcraft_model::{
     AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo, Orientation,
     Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation, ValidationKind,
@@ -19,15 +18,21 @@ use crate::styles::read_color;
 use crate::tables::{col_width_to_px, paper_name, pt_to_px};
 use crate::xml::{self, El};
 
+/// The master of a shared formula: the cells sharing it are copies of it.
 struct Shared {
     anchor: CellRef,
-    expr: Option<Expr>,
-    text: String,
+    formula: Formula,
 }
 
 #[derive(Default)]
 struct RowState {
     next_row: u32,
+    /// The last formula read in each column: a filled column repeats it moved down, which is
+    /// checked before parsing (see `read_formula`).
+    above: HashMap<u32, (CellRef, Formula)>,
+    file_exprs: crate::fmla::FileExprs,
+    /// The cells of the row being read, stored together at its end.
+    row_cells: Vec<(CellRef, Cell)>,
     shared: HashMap<u32, Shared>,
     /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
     /// the anchor) are not stored, so the formula can fill them again.
@@ -44,7 +49,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     let mut sheet = Sheet::new(name);
     let mut st = RowState::default();
     let res = xml::parse_streaming(&bytes, &["row"], &mut |row| {
-        read_row(cx, &mut sheet, &mut st, &row);
+        read_row(cx, &mut sheet, &mut st, row);
         Ok(())
     });
     let root = match res {
@@ -318,6 +323,15 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
         next_col = pos.col + 1;
         read_cell(cx, sheet, st, c, pos);
     }
+    // A row's cells are stored together (cells naming another row, in a damaged file, one by one).
+    let cells = std::mem::take(&mut st.row_cells);
+    if cells.iter().all(|(p, _)| p.row == r) {
+        sheet.cells.set_row(r, cells.into_iter().map(|(p, cell)| (p.col, cell)).collect());
+    } else {
+        for (p, cell) in cells {
+            sheet.cells.set(p, cell);
+        }
+    }
 }
 
 fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos: CellRef) {
@@ -382,8 +396,15 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     }
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
+    // A formula stored without a value, or an array formula (its other cells' values are
+    // dropped below), is recalculated after loading; the others keep the file's values.
+    if formula.as_ref().is_some_and(|f| v.is_none() || dynamic || f.array.is_some_and(|r| !r.is_single()))
+        || st.dynamic.last().is_some_and(|r| r.start == pos)
+    {
+        cx.recalc.push(pos);
+    }
     let value = if formula.is_none() && st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos) { Value::Empty } else { value };
-    sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
+    st.row_cells.push((pos, Cell { value, formula: formula.map(Arc::new), style }));
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
@@ -392,22 +413,15 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
         "shared" => {
             let si = f.attr_u32("si")?;
             if !text.is_empty() {
-                let expr = gridcraft_formula::parse(text).ok();
-                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string() });
-                Some(Formula::new(text))
+                let formula = Formula::new(text);
+                st.shared.insert(si, Shared { anchor: pos, formula: formula.clone() });
+                Some(formula)
             } else {
                 let Some(sh) = st.shared.get(&si) else {
                     cx.warn("a shared formula refers to a missing master cell; kept the cached value");
                     return None;
                 };
-                Some(match &sh.expr {
-                    Some(e) => {
-                        let dr = pos.row as i64 - sh.anchor.row as i64;
-                        let dc = pos.col as i64 - sh.anchor.col as i64;
-                        Formula::from_expr(gridcraft_formula::adjust::shift_relative(e.clone(), dr, dc))
-                    }
-                    None => Formula::new(&sh.text),
-                })
+                Some(sh.formula.moved(pos.row as i64 - sh.anchor.row as i64, pos.col as i64 - sh.anchor.col as i64))
             }
         }
         "array" => {
@@ -430,10 +444,20 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
         }
         _ => {
             if text.is_empty() {
-                None
-            } else {
-                Some(Formula::new(text))
+                return None;
             }
+            // A filled column (in a file that doesn't mark shared formulas) repeats the formula
+            // above it moved down: if this one is that, share its parse instead of parsing.
+            if let Some((above, prev)) = st.above.get(&pos.col)
+                && pos.row > above.row
+                && let Some(copy) = crate::fmla::copy_if_file_text(prev, i64::from(pos.row - above.row), 0, text, &mut st.file_exprs)
+            {
+                st.above.insert(pos.col, (pos, copy.clone()));
+                return Some(copy);
+            }
+            let f = Formula::new(text);
+            st.above.insert(pos.col, (pos, f.clone()));
+            Some(f)
         }
     }
 }

@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (recalc order: Kahn's algorithm, no recursion) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -34,10 +34,44 @@ including tests, 2026-10-10.
    enabled, run, journal, undoable }`; ids follow Excel's ribbon (`home.bold`, `insert.chart`,
    `data.sortAscending`) plus primitives (`cell.set`, `selection.set`, `range.setValues`).
    `Session::execute` catches escaped panics and restores the workbook (never-crash guard).
-2. **Edits** change the model through copy-on-write bands; undo keeps the previous snapshot.
+2. **Edits** change the model through copy-on-write bands (64 rows behind an `Arc`; each row a
+   vector of cells sorted by column); undo keeps the previous snapshot, and undo/redo bring the
+   dependency graph along by looking only at the cells that differ (`Calc::sync`; a change of
+   most of the workbook or of its sheets rebuilds it). Formulas copied or filled from one formula
+   share its parsed expression (Excel's shared formulas): a `Formula` keeps its own text and the
+   shared expression with its (row, column) offset from where that was parsed; the evaluator and
+   the precedents walk move the relative parts of the formula's own references by the offset as
+   they resolve them (names, INDIRECT text and LAMBDAs from names don't move). Loading a file
+   shares formulas that are the same relative to their cells (`FormulaSharer`, keyed by R1C1
+   text), as does the rewrite after a structural edit. The XLSX reader streams worksheet rows and
+   reuses each row's parsed elements for the next; a row's cells are stored at once, and a formula
+   that is the one above it moved down (a filled column in a file that doesn't mark shared
+   formulas) is recognised by its text and shares that formula's parse instead of being parsed.
+   An opened XLSX keeps the values its file stored, as Excel does (`Calc::load`): the graph is
+   built and only formulas stored without a value, array anchors (whose spilled values the reader
+   drops), volatile and dynamic-reference formulas, and what depends on them are recalculated;
+   a file with `fullCalcOnLoad` or no calculation properties is recalculated in full.
 3. **Recalc** marks dependents of changed cells dirty through the dependency graph (with range
-   nodes for range dependents), evaluates in topological order, spills dynamic arrays and reports
-   `#SPILL!`/cycles. Volatile functions are always dirty.
+   nodes for range dependents), evaluates in topological order (Kahn's algorithm over the dirty
+   set; a formula that reads a cell not yet done, through a name, table or INDIRECT, waits on a
+   heap stack, so chains have no length limit), spills dynamic arrays and reports `#SPILL!`/cycles.
+   Volatile functions are always dirty. Within a pass, a range read more than once is built once
+   and shared, and lookup functions index a shared range (`LookupCache`, reached through
+   `Ctx::lookup_cache`) so repeated searches are O(1) or O(log n). The plan is split into levels
+   of formulas that don't read each other; a level of 512+ formulas runs on worker threads
+   (`std::thread::scope`, count from `CalcSettings::multi_threaded`/`threads`, one on wasm) that
+   read the main thread's results and write their own, merged after the level. A formula that
+   turns out to read a cell still pending in its level, or that draws random numbers, is
+   finished on the main thread, so results don't depend on the thread count. With
+   `Session::set_background_calc` (the desktop app), a commit that leaves 512+ formulas to
+   recalculate hands them to a thread with a copy of the workbook; the command waits 80 ms, then
+   returns and the UI polls (`Session::poll_calc`) for the results, applied as a patch of values
+   and spills. Commands that move around run meanwhile; every other command waits first, so it
+   reads final values and every undo snapshot is calculated. The graph keeps a referenced cell's
+   one dependent inline (a set only when several formulas read it) and an index of formulas
+   showing `#SPILL!`, so edits never scan the sheet for blocked spills. Bulk work over
+   independent items (adjusting formulas after a row insert, finding precedents in a rebuild)
+   goes through `gridcraft_calc::par::filter_map`, which uses every processor and keeps order.
 4. **Rendering**: the egui grid reads display values (number formats applied in `engine/display.rs`)
    for the visible window only; charts render through `crates/chart` primitives.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
@@ -68,4 +102,12 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Opening keeps the file's cached values |
+| 2026-10-11 | minor | XLSX reader: element reuse, row-at-once storage, filled columns without parsing |
+| 2026-10-11 | minor | Shared formulas |
+| 2026-10-11 | minor | Cell rows as sorted vectors, compact dependents, spill-anchor index, incremental graph sync on undo/redo, parallel bulk helpers |
+| 2026-10-11 | minor | Background recalculation in the desktop app |
+| 2026-10-11 | minor | Recalc: multi-threaded levels |
+| 2026-10-11 | minor | Recalc: shared ranges per pass and lookup indexes |
+| 2026-10-11 | minor | Recalc: topological order by Kahn's algorithm; formulas that wait for a cell read through a name, table or INDIRECT go on a heap stack, so chain length is unbounded |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

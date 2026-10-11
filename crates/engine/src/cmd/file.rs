@@ -46,7 +46,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Dialog("open".into(), json!({})));
         return ok();
     };
-    let (wb, warnings) = crate::io::open_bytes(&name, &bytes)?;
+    let (wb, warnings, stale) = crate::io::open_bytes_with_plan(&name, &bytes)?;
     let imported = matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Ods | crate::io::FileKind::Xlsb))
         || matches!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Ods | gridcraft_xlsx::Format::Xlsb);
     let title = if imported {
@@ -62,7 +62,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     {
         s.close_document(0);
     }
-    let i = s.add_document(DocState::new(wb, path, title));
+    let i = s.add_document(DocState::opened(wb, path, title, stale));
     if !warnings.is_empty() {
         let mut message = warnings.iter().take(5).cloned().collect::<Vec<_>>().join("\n\n");
         if warnings.len() > 5 {

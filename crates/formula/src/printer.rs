@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use gridcraft_core::{CellRef, col_to_letters, number_to_text};
+use gridcraft_core::{CellRef, number_to_text};
 
 use crate::ast::*;
 
@@ -34,20 +34,71 @@ fn sheet_prefix(s: &SheetSel) -> String {
     }
 }
 
-fn anchor_a1(a: &Anchor) -> String {
-    format!("{}{}{}{}", if a.col_abs { "$" } else { "" }, col_to_letters(a.col), if a.row_abs { "$" } else { "" }, a.row as u64 + 1)
+/// Column letters (`A`, `XFD`) written straight into `s`, without a temporary string: this runs
+/// for every reference of every formula printed (saving, copying, loading).
+fn write_col(s: &mut String, col: u32) {
+    let mut letters = [0u8; 8];
+    let mut n = u64::from(col) + 1;
+    let mut i = letters.len();
+    while n > 0 && i > 0 {
+        i -= 1;
+        if let Some(slot) = letters.get_mut(i) {
+            *slot = b'A' + ((n - 1) % 26) as u8;
+        }
+        n = (n - 1) / 26;
+    }
+    for &b in letters.get(i..).unwrap_or(&[]) {
+        s.push(char::from(b));
+    }
+}
+
+fn write_anchor_a1(s: &mut String, a: &Anchor) {
+    if a.col_abs {
+        s.push('$');
+    }
+    write_col(s, a.col);
+    if a.row_abs {
+        s.push('$');
+    }
+    let _ = write!(s, "{}", u64::from(a.row) + 1);
+}
+
+fn write_reference_a1(s: &mut String, r: &Reference) {
+    if !matches!(r.sheet, SheetSel::Current) {
+        s.push_str(&sheet_prefix(&r.sheet));
+    }
+    let dollar = |s: &mut String, abs: bool| {
+        if abs {
+            s.push('$');
+        }
+    };
+    match &r.kind {
+        RefKind::Cell(a) => write_anchor_a1(s, a),
+        RefKind::Range(a, b) => {
+            write_anchor_a1(s, a);
+            s.push(':');
+            write_anchor_a1(s, b);
+        }
+        RefKind::Rows(r0, a0, r1, a1) => {
+            dollar(s, *a0);
+            let _ = write!(s, "{}:", u64::from(*r0) + 1);
+            dollar(s, *a1);
+            let _ = write!(s, "{}", u64::from(*r1) + 1);
+        }
+        RefKind::Cols(c0, a0, c1, a1) => {
+            dollar(s, *a0);
+            write_col(s, *c0);
+            s.push(':');
+            dollar(s, *a1);
+            write_col(s, *c1);
+        }
+    }
 }
 
 pub fn reference_a1(r: &Reference) -> String {
-    let body = match &r.kind {
-        RefKind::Cell(a) => anchor_a1(a),
-        RefKind::Range(a, b) => format!("{}:{}", anchor_a1(a), anchor_a1(b)),
-        RefKind::Rows(r0, a0, r1, a1) => format!("{}{}:{}{}", if *a0 { "$" } else { "" }, r0 + 1, if *a1 { "$" } else { "" }, r1 + 1),
-        RefKind::Cols(c0, a0, c1, a1) => {
-            format!("{}{}:{}{}", if *a0 { "$" } else { "" }, col_to_letters(*c0), if *a1 { "$" } else { "" }, col_to_letters(*c1))
-        }
-    };
-    format!("{}{}", sheet_prefix(&r.sheet), body)
+    let mut s = String::new();
+    write_reference_a1(&mut s, r);
+    s
 }
 
 fn r1c1_part(letter: char, v: u32, abs: bool, base: u32) -> String {
@@ -124,21 +175,38 @@ fn number(n: f64) -> String {
     number_to_text(n)
 }
 
+/// How to print: A1, or R1C1 relative to a cell; with the relative parts of references moved
+/// by a shift (a formula copied that far, see [`print_shifted`]).
+#[derive(Clone, Copy)]
+struct Print {
+    r1c1: Option<CellRef>,
+    shift: (i64, i64),
+}
+
 /// Prints an expression in A1 notation.
 pub fn print(e: &Expr) -> String {
     let mut s = String::new();
-    write_expr(&mut s, e, None);
+    write_expr(&mut s, e, Print { r1c1: None, shift: (0, 0) });
     s
 }
 
 /// Prints an expression in R1C1 notation relative to `at`.
 pub fn print_r1c1(e: &Expr, at: CellRef) -> String {
     let mut s = String::new();
-    write_expr(&mut s, e, Some(at));
+    write_expr(&mut s, e, Print { r1c1: Some(at), shift: (0, 0) });
     s
 }
 
-fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
+/// Prints `e` copied `dr` rows and `dc` columns away, in A1 notation: the same text as
+/// `print(&shift_relative(e, dr, dc))` (references pushed off the sheet print `#REF!`), without
+/// building the moved expression.
+pub fn print_shifted(e: &Expr, dr: i64, dc: i64) -> String {
+    let mut s = String::new();
+    write_expr(&mut s, e, Print { r1c1: None, shift: (dr, dc) });
+    s
+}
+
+fn write_expr(s: &mut String, e: &Expr, p: Print) {
     match e {
         Expr::Number(n) => s.push_str(&number(*n)),
         Expr::Text(t) => {
@@ -158,46 +226,65 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
                     if ci > 0 {
                         s.push(',');
                     }
-                    write_expr(s, el, r1c1);
+                    write_expr(s, el, p);
                 }
             }
             s.push('}');
         }
-        Expr::Ref(r) => match r1c1 {
-            Some(at) => s.push_str(&reference_r1c1(r, at)),
-            None => s.push_str(&reference_a1(r)),
-        },
+        Expr::Ref(r) => {
+            let moved;
+            let r = if p.shift == (0, 0) {
+                r
+            } else {
+                match crate::adjust::shift_ref(r, p.shift.0, p.shift.1) {
+                    Some(x) => {
+                        moved = x;
+                        &moved
+                    }
+                    None => {
+                        s.push_str(gridcraft_core::CellError::Ref.as_str());
+                        return;
+                    }
+                }
+            };
+            match p.r1c1 {
+                Some(at) => s.push_str(&reference_r1c1(r, at)),
+                None => write_reference_a1(s, r),
+            }
+        }
         Expr::Name(n) => s.push_str(n),
         Expr::Struct(st) => s.push_str(&struct_ref(st)),
         Expr::Unary(op, x) => match op {
             UnOp::Neg => {
                 s.push('-');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, p);
             }
             UnOp::Plus => {
                 s.push('+');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, p);
             }
             UnOp::At => {
                 s.push('@');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, p);
             }
             UnOp::Percent => {
-                write_expr(s, x, r1c1);
+                write_expr(s, x, p);
                 s.push('%');
             }
             UnOp::Spill => {
-                write_expr(s, x, r1c1);
-                // A reference that became #REF! (its sheet or cell was deleted) stays `#REF!`.
-                if !matches!(**x, Expr::Error(_)) {
+                write_expr(s, x, p);
+                // A reference that became #REF! (its sheet or cell was deleted, or a copy moved it
+                // off the sheet) stays `#REF!`.
+                let off_sheet = p.shift != (0, 0) && matches!(&**x, Expr::Ref(r) if crate::adjust::shift_ref(r, p.shift.0, p.shift.1).is_none());
+                if !matches!(**x, Expr::Error(_)) && !off_sheet {
                     s.push('#');
                 }
             }
         },
         Expr::Binary(op, a, b) => {
-            write_expr(s, a, r1c1);
+            write_expr(s, a, p);
             s.push_str(op.symbol());
-            write_expr(s, b, r1c1);
+            write_expr(s, b, p);
         }
         Expr::Call(name, args) => {
             s.push_str(name);
@@ -206,26 +293,38 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
                 if i > 0 {
                     s.push(',');
                 }
-                write_expr(s, a, r1c1);
+                write_expr(s, a, p);
             }
             s.push(')');
         }
         Expr::Invoke(c, args) => {
-            write_expr(s, c, r1c1);
+            write_expr(s, c, p);
             s.push('(');
             for (i, a) in args.iter().enumerate() {
                 if i > 0 {
                     s.push(',');
                 }
-                write_expr(s, a, r1c1);
+                write_expr(s, a, p);
             }
             s.push(')');
         }
         Expr::Missing => {}
         Expr::Paren(x) => {
             s.push('(');
-            write_expr(s, x, r1c1);
+            write_expr(s, x, p);
             s.push(')');
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn column_letters_match_core() {
+        for col in 0..gridcraft_core::MAX_COLS {
+            let mut s = String::new();
+            super::write_col(&mut s, col);
+            assert_eq!(s, gridcraft_core::col_to_letters(col), "{col}");
         }
     }
 }

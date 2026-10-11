@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created; every format Excel reads or writes, against the code on main) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (XLSX: cached values on open, calcPr multi-threading attributes, large files) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -15,7 +15,7 @@ support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and
 
 | Format | Excel | GridCraft read | GridCraft write | Fidelity / notes | Tests |
 |---|---|---|---|---|---|
-| `.xlsx` Excel Workbook (transitional) | R/W, native | yes | yes | Cells, shared/array/dynamic formulas, styles, themes, merges, CF, validation, tables, comments and notes, hyperlinks, names, freeze panes, outline, print settings, pictures, shapes, charts (simplified, see [chart-parity.md](chart-parity.md)), sparklines, PivotTables (caches and tables), protection, calc settings. **Not preserved:** unmodelled parts and extensions (form controls, slicer caches, timelines, external links, OLE objects, custom XML, data model, query tables, chart details). Never checked in Excel across a corpus: repair prompts unknown. 100 MB files fail (#175) | `roundtrip.rs`, `fixtures.rs`, `malformed.rs`, `pivot_tests.rs` |
+| `.xlsx` Excel Workbook (transitional) | R/W, native | yes | yes | Cells, shared/array/dynamic formulas, styles, themes, merges, CF, validation, tables, comments and notes, hyperlinks, names, freeze panes, outline, print settings, pictures, shapes, charts (simplified, see [chart-parity.md](chart-parity.md)), sparklines, PivotTables (caches and tables), protection, calc settings (including multi-threading: `concurrentCalc`, `concurrentManualCount`). Opening keeps the cached formula values, as Excel does, unless the file sets `fullCalcOnLoad` or has no calculation properties; formulas without a cached value, array anchors and volatile formulas are recalculated. **Not preserved:** unmodelled parts and extensions (form controls, slicer caches, timelines, external links, OLE objects, custom XML, data model, query tables, chart details). Never checked in Excel across a corpus: repair prompts unknown. A 1,000,000-row × 8-column file (54 MB) opens in ~4.6 s; #175 reports a ~100 MB file failing | `roundtrip.rs`, `fixtures.rs`, `malformed.rs`, `pivot_tests.rs` |
 | `.xlsx` Strict Open XML | R/W | yes | no (writes transitional) | Excel also saves transitional by default | fixtures |
 | `.xlsm` Macro-Enabled Workbook | R/W | yes | yes, **without macros** | VBA project dropped with a warning; saving as `.xlsm` loses the macros (#6) | — |
 | `.xltx` / `.xltm` templates | R/W | yes | partial | Saved with the workbook content type, not the template one; "new from template" behaviour missing | — |
@@ -74,5 +74,6 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | XLSX: cached values kept on open (`fullCalcOnLoad` honoured), `concurrentCalc`/`concurrentManualCount` read and written, large-file numbers |
 | 2026-10-10 | minor | Encrypted and `.xls` files are now recognised and refused with a message (#17) |
 | 2026-10-10 | major | Created: every Excel format with our read/write support; XLSB and ODS values-only imports recorded; `.xls`, encryption and large files flagged as beta gates |

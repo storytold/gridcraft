@@ -274,10 +274,8 @@ fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_co
                 let mut cell = sh.cell(src).cloned();
                 if let Some(c) = cell.as_mut()
                     && let Some(f) = &c.formula
-                    && let Some(e) = f.expr()
                 {
-                    let shifted = gridcraft_formula::adjust::shift_relative(e, dst.row as i64 - src.row as i64, dst.col as i64 - src.col as i64);
-                    c.formula = Some(Arc::new(Formula::from_expr(shifted)));
+                    c.formula = Some(Arc::new(f.moved(dst.row as i64 - src.row as i64, dst.col as i64 - src.col as i64)));
                 }
                 if let Some(picture) = sh.cell_pictures.get(&src) {
                     pictures.push((dst, picture.clone()));

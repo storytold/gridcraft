@@ -26,11 +26,30 @@ pub struct CalcSettings {
     pub max_change: f64,
     /// Use precision as displayed.
     pub precision_as_displayed: bool,
+    /// Calculate on several threads (Excel's "Enable multi-threaded calculation"; XLSX
+    /// `concurrentCalc`).
+    #[serde(default = "multi_threaded_default")]
+    pub multi_threaded: bool,
+    /// Calculation threads; 0 uses every processor (XLSX `concurrentManualCount`).
+    #[serde(default)]
+    pub threads: u32,
+}
+
+fn multi_threaded_default() -> bool {
+    true
 }
 
 impl Default for CalcSettings {
     fn default() -> Self {
-        CalcSettings { mode: CalcMode::Automatic, iterative: false, max_iterations: 100, max_change: 0.001, precision_as_displayed: false }
+        CalcSettings {
+            mode: CalcMode::Automatic,
+            iterative: false,
+            max_iterations: 100,
+            max_change: 0.001,
+            precision_as_displayed: false,
+            multi_threaded: true,
+            threads: 0,
+        }
     }
 }
 
@@ -165,7 +184,11 @@ impl Workbook {
                     let f = cell.formula.as_ref()?;
                     let e = f.expr()?;
                     let ne = spell_calls(e.clone(), &lambdas);
-                    (ne != e).then(|| (c, Formula { array: f.array, ..Formula::from_expr(ne) }))
+                    (ne != e).then(|| {
+                        let mut nf = Formula::from_expr(ne);
+                        nf.array = f.array;
+                        (c, nf)
+                    })
                 })
                 .collect();
             if fixed.is_empty() {

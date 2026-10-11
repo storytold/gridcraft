@@ -155,6 +155,9 @@ pub fn resolve(dir: &str, target: &str) -> String {
 
 // ---------------------------------------------------------------- writing
 
+/// Parts at least this big are compressed faster (see [`ZipOut::add`]).
+const LARGE_PART: usize = 16 * 1024 * 1024;
+
 pub struct ZipOut {
     zip: zip::ZipWriter<Cursor<Vec<u8>>>,
 }
@@ -164,9 +167,13 @@ impl ZipOut {
         ZipOut { zip: zip::ZipWriter::new(Cursor::new(Vec::new())) }
     }
     pub fn add(&mut self, name: &str, data: &[u8]) -> Result<(), IoError> {
+        // Level 6 for ordinary parts; a very large part (a sheet of a million rows) at level 3,
+        // about three times faster to compress for ~12% more bytes: saving shouldn't take seconds
+        // longer to shave a few megabytes.
+        let level = if data.len() >= LARGE_PART { 3 } else { 6 };
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
-            .compression_level(Some(6))
+            .compression_level(Some(level))
             .last_modified_time(zip::DateTime::default())
             .large_file(data.len() as u64 >= u32::MAX as u64);
         self.zip.start_file(name, opts).map_err(|e| IoError::Zip(e.to_string()))?;

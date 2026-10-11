@@ -312,11 +312,8 @@ fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
             }
             for at in r.iter() {
                 let mut cell = base.clone().unwrap_or_default();
-                if let Some(f) = &cell.formula
-                    && let Some(e) = f.expr()
-                {
-                    let shifted = gridcraft_formula::adjust::shift_relative(e, at.row as i64 - origin.row as i64, at.col as i64 - origin.col as i64);
-                    cell.formula = Some(std::sync::Arc::new(Formula::from_expr(shifted)));
+                if let Some(f) = &cell.formula {
+                    cell.formula = Some(std::sync::Arc::new(f.moved(at.row as i64 - origin.row as i64, at.col as i64 - origin.col as i64)));
                 }
                 cell.style = cx.wb.sheet(sheet).and_then(|sh| sh.cell(at)).map(|c| c.style).unwrap_or(cell.style);
                 cx.sheet_mut(sheet)?.set_cell(at, cell);
@@ -570,6 +567,7 @@ fn coalesce(cells: &[CellRef]) -> Vec<RangeRef> {
 fn undo(s: &mut Session, p: &Json) -> Result<Json> {
     let steps = u32_param(p, "steps").unwrap_or(1).max(1);
     let d = s.doc_mut()?;
+    let before = d.wb.clone();
     let mut label = String::new();
     for _ in 0..steps {
         let Some(e) = d.undo.pop() else { break };
@@ -579,7 +577,7 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         d.wb = e.wb;
         d.selection = e.selection;
     }
-    d.calc.rebuild(&d.wb);
+    d.calc.sync(&before, &d.wb);
     d.revision += 1;
     Ok(json!({"undone": label}))
 }
@@ -587,6 +585,7 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
 fn redo(s: &mut Session, p: &Json) -> Result<Json> {
     let steps = u32_param(p, "steps").unwrap_or(1).max(1);
     let d = s.doc_mut()?;
+    let before = d.wb.clone();
     let mut label = String::new();
     for _ in 0..steps {
         let Some(e) = d.redo.pop() else { break };
@@ -596,7 +595,7 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         d.wb = e.wb;
         d.selection = e.selection;
     }
-    d.calc.rebuild(&d.wb);
+    d.calc.sync(&before, &d.wb);
     d.revision += 1;
     Ok(json!({"redone": label}))
 }
@@ -832,8 +831,8 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         let mut new = old.clone();
                         let shift = |cell: &Cell| -> Option<std::sync::Arc<Formula>> {
                             let f = cell.formula.as_ref()?;
-                            let e = f.expr()?;
                             if cut_move {
+                                let e = f.expr()?;
                                 // A moved formula still reads cells on its original sheet. Qualify
                                 // those references before the workbook-wide move adjustment below.
                                 let e = if dest_sheet != clip.sheet {
@@ -851,9 +850,8 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                 moved.array = f.array;
                                 return Some(std::sync::Arc::new(moved));
                             }
-                            let moved =
-                                gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
-                            Some(std::sync::Arc::new(Formula::from_expr(moved)))
+                            f.parsed()?;
+                            Some(std::sync::Arc::new(f.moved(dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64)))
                         };
                         if link {
                             let sheet_prefix = if dest_sheet == clip.sheet && same_doc {
@@ -1022,17 +1020,24 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
         if keys.is_empty() {
             continue;
         }
-        let Some(sheet) = wb.sheet_mut(si) else { continue };
-        for (c, f) in keys {
-            let Some(expr) = f.expr() else { continue };
-            let new = gridcraft_formula::adjust::adjust(expr, &host, target, e);
-            let text = gridcraft_formula::print(&new);
-            if text != f.text
-                && let Some(cell) = sheet.cells.get_mut(c)
-            {
+        // Each formula is adjusted on its own, so a large sheet's are spread over threads; only
+        // the ones whose references moved are printed and stored again.
+        let adjusted = gridcraft_calc::par::filter_map(&keys, |(c, f)| {
+            let expr = f.expr_arc()?;
+            let new = gridcraft_formula::adjust::adjust((*expr).clone(), &host, target, e);
+            (new != *expr).then(|| {
                 let mut nf = Formula::from_expr(new);
                 nf.array = f.array;
-                cell.formula = Some(std::sync::Arc::new(nf));
+                let key = gridcraft_model::FormulaSharer::key(*c, &nf);
+                (*c, nf, key)
+            })
+        });
+        // Formulas that were copies of one another mostly still are: share them again.
+        let mut sharer = gridcraft_model::FormulaSharer::default();
+        let Some(sheet) = wb.sheet_mut(si) else { continue };
+        for (c, nf, key) in adjusted {
+            if let Some(cell) = sheet.cells.get_mut(c) {
+                cell.formula = Some(sharer.share_keyed(si, c, nf, key));
             }
         }
     }

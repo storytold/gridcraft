@@ -199,6 +199,18 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     gridcraft_engine::Mode::Point => "Point",
                 };
                 ui.label(egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
+                if let Some((done, total, threads)) = app.session.calc_progress() {
+                    // Like Excel's "Calculating (8 threads): 45%".
+                    let percent = (done.saturating_mul(100) / total.max(1)).min(99);
+                    let lang = app.ui.language;
+                    let unit = if threads == 1 { lang.tr("thread") } else { lang.tr("threads") };
+                    ui.add_space(12.0);
+                    ui.label(
+                        egui::RichText::new(format!("{} ({threads} {unit}): {percent}%", lang.tr("Calculating")))
+                            .font(theme::ui_font(12.5))
+                            .color(t.text_dim),
+                    );
+                }
                 if let Some(d) = app.session.active() {
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);

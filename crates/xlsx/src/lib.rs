@@ -58,6 +58,11 @@ pub enum IoError {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ReadReport {
     pub warnings: Vec<String>,
+    /// What to recalculate after loading. `None`: everything (the file asks for it with
+    /// `fullCalcOnLoad`, or has no calculation properties). Otherwise the file's cached values
+    /// stand, as in Excel, except for these formulas (sheet index, cell): those stored without a
+    /// value, and array formulas whose other cells' values aren't kept.
+    pub recalc: Option<Vec<(usize, gridcraft_core::CellRef)>>,
 }
 
 impl ReadReport {

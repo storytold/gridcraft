@@ -1633,3 +1633,258 @@ fn notes_comments_and_links_survive_a_json_save() {
     assert_eq!(after.hyperlinks, before.hyperlinks);
     assert_eq!(after.cells, before.cells);
 }
+
+/// A sheet with enough formulas that an edit to A1 leaves its recalculation for a background
+/// thread (when background calculation is on): 1,500 formulas over a 500-cell column.
+fn heavy_session(background: bool) -> Session {
+    let mut s = s();
+    s.set_background_calc(background);
+    let data: Vec<_> = (0..500).map(|i| json!([i])).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": data})).unwrap();
+    let formulas: Vec<_> = (0..1500).map(|_| json!(["=SUMPRODUCT(--(MOD($A$1:$A$500+ROW(),7)=0))+$A$1"])).collect();
+    s.execute("range.setValues", json!({"range": "C1", "values": formulas})).unwrap();
+    s
+}
+
+fn column_c(s: &Session) -> Vec<Value> {
+    (1..=1500).map(|r| v(s, &format!("C{r}"))).collect()
+}
+
+#[test]
+fn background_recalculation_gives_the_same_values() {
+    let mut fg = heavy_session(false);
+    let mut bg = heavy_session(true);
+    for input in ["7", "=A2*3", "-1"] {
+        fg.execute("cell.set", json!({"cell": "A1", "input": input})).unwrap();
+        bg.execute("cell.set", json!({"cell": "A1", "input": input})).unwrap();
+        bg.finish_calc();
+        assert!(!bg.calculating());
+        assert_eq!(column_c(&fg), column_c(&bg), "after A1 = {input}");
+    }
+    fg.execute("edit.undo", json!({})).unwrap();
+    bg.execute("edit.undo", json!({})).unwrap();
+    bg.finish_calc();
+    assert_eq!(column_c(&fg), column_c(&bg), "after undo");
+    // The calculation state came back from the thread: later edits still recalculate.
+    fg.execute("cell.set", json!({"cell": "A1", "input": "100"})).unwrap();
+    bg.execute("cell.set", json!({"cell": "A1", "input": "100"})).unwrap();
+    bg.finish_calc();
+    assert_eq!(column_c(&fg), column_c(&bg), "after a later edit");
+}
+
+#[test]
+fn commands_wait_for_a_background_recalculation() {
+    let mut s = heavy_session(true);
+    s.execute("cell.set", json!({"cell": "A1", "input": "1000"})).unwrap();
+    // Moving around doesn't wait; anything that reads or changes values does, so E1 reads C1's
+    // new value without anyone polling.
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E1", "input": "=C1+1"})).unwrap();
+    let c1 = v(&s, "C1").as_f64().unwrap();
+    assert!(c1 >= 1000.0, "C1 = {c1}");
+    assert_eq!(v(&s, "E1"), Value::Number(c1 + 1.0));
+    s.finish_calc();
+    assert_eq!(v(&s, "C1"), Value::Number(c1));
+}
+
+#[test]
+fn undo_and_redo_keep_the_dependency_graph_in_step() {
+    // Undo and redo update the graph from the cells that differ (not a rebuild): formulas they
+    // bring back, remove or change must still react to edits of what they read.
+    let mut s = s();
+    let set = |s: &mut Session, cell: &str, input: &str| s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    set(&mut s, "A1", "1");
+    set(&mut s, "B1", "=A1*2");
+    set(&mut s, "B1", "=A1*3");
+    s.execute("edit.undo", json!({})).unwrap();
+    set(&mut s, "A1", "5");
+    assert_eq!(v(&s, "B1"), Value::Number(10.0), "the restored formula reads A1");
+    s.execute("edit.undo", json!({})).unwrap(); // A1 back to 1
+    s.execute("edit.redo", json!({})).unwrap(); // A1 = 5 again
+    assert_eq!(v(&s, "B1"), Value::Number(10.0));
+    // Clearing a formula and undoing that brings its dependency back.
+    s.execute("edit.clearAll", json!({"range": "B1"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    set(&mut s, "A1", "7");
+    assert_eq!(v(&s, "B1"), Value::Number(14.0));
+    // A formula removed by undo no longer reacts.
+    set(&mut s, "C1", "=A1+1");
+    s.execute("edit.undo", json!({})).unwrap();
+    set(&mut s, "A1", "8");
+    assert_eq!(v(&s, "C1"), Value::Empty);
+    assert_eq!(v(&s, "B1"), Value::Number(16.0));
+    // Undo across a structural edit (every cell below moves) and a sheet rename (references
+    // resolve again).
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+    s.execute("edit.undo", json!({"steps": 2})).unwrap();
+    set(&mut s, "A1", "9");
+    assert_eq!(v(&s, "B1"), Value::Number(18.0));
+}
+
+#[test]
+fn shared_formula_copies_calculate_like_typed_formulas() {
+    // Each formula is entered in rows 1-20 of its column from row 2 (Ctrl+Enter: copies that
+    // share one parsed expression, the row-1 copy moved up so some of its references fall off
+    // the sheet). A second sheet holds the same data with every copy's text typed at the same
+    // address (formulas of their own). Every value must match, before and after edits, an
+    // undo and a row insert.
+    let mut s = s();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    let names: Vec<String> = s.doc().unwrap().wb.sheets.iter().map(|sh| sh.name.clone()).collect();
+    let data: Vec<_> = (1..=20).map(|i| json!([i, if i == 1 { json!(7) } else { json!(null) }])).collect();
+    for n in &names {
+        s.execute("range.setValues", json!({"sheet": n, "range": "A1", "values": data})).unwrap();
+    }
+    let (shared_sheet, typed_sheet) = (names[0].clone(), names[1].clone());
+    s.execute("sheet.activate", json!({"sheet": shared_sheet})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Base", "refersTo": format!("={shared_sheet}!$B$1")})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Rel", "refersTo": format!("={shared_sheet}!A1")})).unwrap();
+    let formulas = [
+        "=A2*2+$B$1",
+        "=SUM(A1:A3)+SUM($A:$A)/100",
+        "=IF(A2>5,\"big\",A2&\"!\")",
+        "=INDEX($A$1:$A$20,ROW())+COLUMN()",
+        "=INDIRECT(\"A\"&ROW())+Base+Rel",
+        "=LET(x,A2,LAMBDA(y,y+x+A1)(1))",
+        "=SUMIF(A1:A5,\">3\")+SUMIF(A1:A3,\">0\",A2:A4)",
+        "=OFFSET(A2,1,0)+A1",
+        "=XLOOKUP(A2,$A$1:$A$20,$A$1:$A$20)*2",
+        "=MAX(A1:A2)",
+    ];
+    let col = |i: usize| gridcraft_core::col_to_letters(i as u32);
+    for (i, f) in formulas.iter().enumerate() {
+        s.execute("selection.set", json!({"range": format!("{}2", col(3 + i))})).unwrap();
+        s.execute("range.fill", json!({"range": format!("{0}1:{0}20", col(3 + i)), "input": f})).unwrap();
+    }
+    let cell = |s: &Session, sheet: usize, a1: &str| s.doc().unwrap().wb.sheet(sheet).unwrap().cell(CellRef::parse(a1).unwrap()).cloned();
+    let text = |s: &Session, a1: &str| cell(s, 0, a1).and_then(|c| c.formula).map(|f| f.text.clone());
+    for (i, f) in formulas.iter().enumerate() {
+        // The copies share one parsed expression.
+        let parsed = |a1: &str| cell(&s, 0, a1).and_then(|c| c.formula).and_then(|f| f.parsed()).map(|p| p.0);
+        let (a, b) = (parsed(&format!("{}3", col(3 + i))).unwrap(), parsed(&format!("{}17", col(3 + i))).unwrap());
+        assert!(std::sync::Arc::ptr_eq(&a, &b), "{f}: copies don't share");
+        for r in 1..=20 {
+            let at = format!("{}{r}", col(3 + i));
+            let t = text(&s, &at).unwrap();
+            s.execute("cell.set", json!({"sheet": typed_sheet, "cell": at, "input": format!("={t}")})).unwrap();
+        }
+    }
+    let check = |s: &Session, when: &str| {
+        for (i, f) in formulas.iter().enumerate() {
+            for r in 1..=20 {
+                let at = format!("{}{r}", col(3 + i));
+                let value = |sheet| cell(s, sheet, &at).map(|c| c.value).unwrap_or_default();
+                assert_eq!(value(0), value(1), "{when}: {f} copied to {at} ({:?})", text(s, &at));
+            }
+        }
+    };
+    check(&s, "entered");
+    // The row-1 copies whose references fell off the sheet are #REF!, as typed ones are.
+    assert_eq!(text(&s, "D1").as_deref(), Some("A1*2+$B$1"));
+    assert_eq!(text(&s, "M1").as_deref(), Some("MAX(#REF!)"));
+    assert_eq!(cell(&s, 0, "M1").map(|c| c.value), Some(Value::Error(gridcraft_core::CellError::Ref)));
+    for n in [&shared_sheet, &typed_sheet] {
+        s.execute("cell.set", json!({"sheet": n, "cell": "A5", "input": "100"})).unwrap();
+        s.execute("cell.set", json!({"sheet": n, "cell": "B1", "input": "-3"})).unwrap();
+    }
+    check(&s, "after edits");
+    s.execute("edit.undo", json!({"steps": 4})).unwrap();
+    check(&s, "after undo");
+    for n in [&shared_sheet, &typed_sheet] {
+        s.execute("home.insertRows", json!({"sheet": n, "rows": "3:3"})).unwrap();
+    }
+    check(&s, "after inserting a row");
+}
+
+#[test]
+fn opening_a_file_shares_its_filled_formulas() {
+    // Typed one by one, the formulas each have their own parse; written to a file and opened
+    // again, those that are the same relative to their cells share one, and still calculate
+    // the same.
+    for format in ["xlsx", "json"] {
+        let mut s = s();
+        for r in 1..=50 {
+            s.execute("cell.set", json!({"cell": format!("A{r}"), "input": format!("{r}")})).unwrap();
+            s.execute("cell.set", json!({"cell": format!("B{r}"), "input": format!("=A{r}*2+$A$1")})).unwrap();
+        }
+        s.execute("cell.set", json!({"cell": "C1", "input": "=SUM(B1:B50)"})).unwrap();
+        let before: Vec<Value> = (1..=50).map(|r| v(&s, &format!("B{r}"))).collect();
+        let saved = s.execute("file.saveBytes", json!({"format": format})).unwrap();
+        let b64 = saved["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": format!("book.{format}"), "base64": b64})).unwrap();
+        let parsed = |s: &Session, a1: &str| {
+            s.doc()
+                .unwrap()
+                .wb
+                .active()
+                .unwrap()
+                .cell(CellRef::parse(a1).unwrap())
+                .and_then(|c| c.formula.as_ref())
+                .and_then(|f| f.parsed())
+                .map(|p| p.0)
+        };
+        assert!(std::sync::Arc::ptr_eq(&parsed(&s, "B2").unwrap(), &parsed(&s, "B49").unwrap()), "{format}: not shared");
+        assert_eq!((1..=50).map(|r| v(&s, &format!("B{r}"))).collect::<Vec<_>>(), before, "{format}");
+        s.execute("cell.set", json!({"cell": "A1", "input": "100"})).unwrap();
+        assert_eq!(v(&s, "B10"), Value::Number(120.0), "{format}");
+        assert_eq!(v(&s, "C1"), Value::Number((1..=50).map(|r| if r == 1 { 300.0 } else { f64::from(r) * 2.0 + 100.0 }).sum()), "{format}");
+    }
+}
+
+/// Saves the session's workbook with B1's stored value replaced by 99 (as a file written by an
+/// application that calculated differently would hold), and opens it again.
+fn reopen_with_stale_b1(s: &mut Session, full_calc_on_load: bool) {
+    {
+        let d = s.active_mut().unwrap();
+        let sh = std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap();
+        sh.cells.get_mut(CellRef::parse("B1").unwrap()).unwrap().value = Value::Number(99.0);
+    }
+    let bytes = gridcraft_xlsx::write_xlsx(&s.active().unwrap().wb).unwrap();
+    let bytes = if full_calc_on_load { patch_full_calc(&bytes) } else { bytes };
+    s.execute("file.open", json!({"name": "stored.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+}
+
+/// The same package with `fullCalcOnLoad="1"` on its calculation properties.
+fn patch_full_calc(bytes: &[u8]) -> Vec<u8> {
+    use std::io::{Read, Write};
+    let mut zin = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..zin.len() {
+        let mut f = zin.by_index(i).unwrap();
+        let name = f.name().to_string();
+        let mut data = Vec::new();
+        f.read_to_end(&mut data).unwrap();
+        if name == "xl/workbook.xml" {
+            data = String::from_utf8(data).unwrap().replace("<calcPr ", "<calcPr fullCalcOnLoad=\"1\" ").into_bytes();
+        }
+        out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        out.write_all(&data).unwrap();
+    }
+    out.finish().unwrap().into_inner()
+}
+
+#[test]
+fn opening_keeps_stored_values_and_recalculates_what_must_be() {
+    let mut s = s();
+    for (cell, input) in [("A1", "1"), ("B1", "=A1+1"), ("C1", "=NOW()"), ("E1", "=SEQUENCE(3)"), ("F1", "=SUM(E1#)")] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    {
+        // A stored NOW() from long ago.
+        let d = s.active_mut().unwrap();
+        let sh = std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap();
+        sh.cells.get_mut(CellRef::parse("C1").unwrap()).unwrap().value = Value::Number(1.0);
+    }
+    reopen_with_stale_b1(&mut s, false);
+    // The stored value stands (as in Excel), but it is a live formula.
+    assert_eq!(v(&s, "B1"), Value::Number(99.0));
+    // Volatile functions are recalculated; spills are laid out again, and what reads them is right.
+    assert!(v(&s, "C1").as_f64().unwrap() > 40_000.0, "NOW() kept its stored value: {:?}", v(&s, "C1"));
+    assert_eq!((v(&s, "E2"), v(&s, "E3"), v(&s, "F1")), (Value::Number(2.0), Value::Number(3.0), Value::Number(6.0)));
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(6.0));
+    // A file that asks for a full recalculation gets one.
+    reopen_with_stale_b1(&mut s, true);
+    assert_eq!(v(&s, "B1"), Value::Number(6.0));
+}

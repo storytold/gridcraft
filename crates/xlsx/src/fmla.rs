@@ -12,6 +12,47 @@ pub fn to_file(f: &Formula) -> String {
     }
 }
 
+/// Expressions shared by copied formulas, converted to file form, by the expression they share
+/// (and whether the file form is the expression itself, which it is unless a function needs a
+/// prefix or LET/LAMBDA has parameters).
+pub type FileExprs = std::collections::HashMap<usize, (std::sync::Arc<Expr>, Expr, bool)>;
+
+fn file_form(cache: &mut FileExprs, shared: std::sync::Arc<Expr>) -> &(std::sync::Arc<Expr>, Expr, bool) {
+    cache.entry(std::sync::Arc::as_ptr(&shared) as usize).or_insert_with(|| {
+        let file = file_expr((*shared).clone());
+        let same = file == *shared;
+        (shared, file, same)
+    })
+}
+
+/// [`to_file`] for many formulas: a copy of a shared formula converts the shared expression
+/// once (the conversion doesn't touch references) and prints it moved to the copy's cell.
+pub fn to_file_shared(f: &Formula, cache: &mut FileExprs) -> String {
+    let Some((shared, (r, c))) = f.parsed() else { return f.text.clone() };
+    if (r, c) == (0, 0) {
+        return to_file(f);
+    }
+    let (_, file, _) = file_form(cache, shared);
+    gridcraft_formula::print_shifted(file, r.into(), c.into())
+}
+
+/// The copy of `prev` `dr` rows and `dc` columns away, if `file_text` (a formula read from a
+/// file) is that copy's text in file form: a filled column read without parsing. Usually the
+/// file form is the expression's own text, which is then the copy's text as is.
+pub fn copy_if_file_text(prev: &Formula, dr: i64, dc: i64, file_text: &str, cache: &mut FileExprs) -> Option<Formula> {
+    // Only a formula with its expression parsed can share it (one read from text alone can't).
+    prev.parsed_ref()?;
+    let (shared, (r, c)) = prev.parsed()?;
+    let (r, c) = (i64::from(r).checked_add(dr)?, i64::from(c).checked_add(dc)?);
+    let (shared, file, same) = file_form(cache, shared);
+    let candidate = gridcraft_formula::print_shifted(file, r, c);
+    if candidate != file_text {
+        return None;
+    }
+    let text = if *same { candidate } else { gridcraft_formula::print_shifted(shared, r, c) };
+    prev.moved_with_text(dr, dc, text)
+}
+
 /// Arbitrary formula text (names, CF, validation) for a file. Unparseable text is kept.
 pub fn text_to_file(text: &str) -> String {
     let body = text.strip_prefix('=').unwrap_or(text);
@@ -70,8 +111,13 @@ fn prefix_params(e: Expr, scope: &[String]) -> Expr {
 }
 
 fn expr_to_file(e: Expr) -> String {
+    gridcraft_formula::print(&file_expr(e))
+}
+
+/// The expression as files write it (references untouched).
+fn file_expr(e: Expr) -> Expr {
     let e = prefix_params(e, &[]);
-    let e = e.map(&mut |x| match x {
+    e.map(&mut |x| match x {
         Expr::Call(name, args) => match crate::tables::file_function_name(&name) {
             Some(n) => Expr::Call(n, args),
             None => Expr::Call(name, args),
@@ -79,8 +125,7 @@ fn expr_to_file(e: Expr) -> String {
         // Files have no `#` operator: Excel writes `A1#` as `_xlfn.ANCHORARRAY(A1)`.
         Expr::Unary(gridcraft_formula::UnOp::Spill, r) => Expr::Call("_xlfn.ANCHORARRAY".into(), vec![*r]),
         other => other,
-    });
-    gridcraft_formula::print(&e)
+    })
 }
 
 /// `_xlpm.x` → `x` (any case, as the parser upper-cases function names).
@@ -135,5 +180,26 @@ mod tests {
         // A LET-bound LAMBDA called by name.
         assert_eq!(to_file(&Formula::new("LET(f,LAMBDA(x,x*2),f(3))")), "_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2),_xlpm.F(3))");
         assert_eq!(from_file("_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2),_xlpm.f(3))"), "LET(f,LAMBDA(x,x*2),F(3))");
+    }
+}
+
+#[cfg(test)]
+mod shared_tests {
+    use super::*;
+
+    #[test]
+    fn shared_copies_write_the_same_text_as_their_own_formulas() {
+        let formulas = ["XLOOKUP(A2,$A$1:$A$9,B1:B9)", "LET(x,A2,LAMBDA(y,y+x)(B1))", "SUM(A2#)+SEQUENCE(A1)", "MAX(A1:A2)+_xlfn.CONCAT(C1)"];
+        let mut cache = FileExprs::default();
+        for f in formulas {
+            let origin = Formula::new(f);
+            for (dr, dc) in [(1, 0), (5, 2), (-1, 0), (0, -1)] {
+                // What a copy wrote before copies shared expressions: its own moved expression.
+                let copy = origin.moved(dr, dc);
+                let own = Formula::from_expr(gridcraft_formula::adjust::shift_relative(gridcraft_formula::parse(f).unwrap(), dr, dc));
+                assert_eq!(copy.text, own.text);
+                assert_eq!(to_file_shared(&copy, &mut cache), to_file(&own), "{f} by ({dr}, {dc})");
+            }
+        }
     }
 }

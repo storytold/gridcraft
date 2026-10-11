@@ -96,15 +96,31 @@ pub struct DocState {
     pub title: String,
     /// Per-sheet selection memory.
     pub sheet_selections: Vec<Selection>,
+    /// Formulas still to recalculate, and rows to fit afterwards: what an edit leaves for a
+    /// background recalculation (see [`Session::set_background_calc`]).
+    pub(crate) deferred: Vec<gridcraft_calc::Key>,
+    pub(crate) deferred_rows: Vec<(usize, u32)>,
+    /// Whether edits may leave large recalculations for another thread.
+    pub(crate) background: bool,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 const UNDO_LIMIT: usize = 100;
 
 impl DocState {
-    pub fn new(mut wb: Workbook, path: Option<String>, title: String) -> DocState {
+    pub fn new(wb: Workbook, path: Option<String>, title: String) -> DocState {
+        DocState::opened(wb, path, title, None)
+    }
+
+    /// A document for a workbook read from a file: `stale` as [`crate::io::open_bytes_with_plan`]
+    /// gives it (`None`: recalculate everything; otherwise keep the file's values except for
+    /// those formulas and what depends on them).
+    pub fn opened(mut wb: Workbook, path: Option<String>, title: String, stale: Option<Vec<gridcraft_calc::Key>>) -> DocState {
         let mut calc = Calc::new();
-        calc.recalc_all(&mut wb);
+        match stale {
+            Some(stale) => calc.load(&mut wb, &stale),
+            None => calc.recalc_all(&mut wb),
+        }
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
         DocState {
@@ -119,6 +135,9 @@ impl DocState {
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             title,
             sheet_selections: vec![],
+            deferred: Vec::new(),
+            deferred_rows: Vec::new(),
+            background: false,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -200,6 +219,44 @@ pub struct Session {
     pub draw_tool: String,
     pub draw_color: String,
     pub draw_width: f32,
+    /// Large recalculations run on another thread (see [`Session::set_background_calc`]).
+    background_calc: bool,
+    jobs: Vec<CalcJob>,
+    /// Nesting of `execute` (commands run other commands).
+    depth: u32,
+}
+
+/// A recalculation running on another thread: it evaluates a copy of the workbook as it was
+/// after the edit (`base`) and sends the copy back with the calculation state.
+struct CalcJob {
+    uid: u64,
+    base: Arc<Workbook>,
+    rows: Vec<(usize, u32)>,
+    progress: Arc<gridcraft_calc::CalcProgress>,
+    rx: std::sync::mpsc::Receiver<std::thread::Result<(Workbook, Calc)>>,
+}
+
+/// How long a command waits for its recalculation before letting it finish in the background:
+/// short enough that the window keeps responding, long enough that ordinary edits show their
+/// results at once.
+const BACKGROUND_WAIT: std::time::Duration = std::time::Duration::from_millis(80);
+
+/// Commands that run while a recalculation is in progress: they move around and don't read or
+/// change values. Every other command waits for the recalculation first, so it sees final
+/// values and every undo step is calculated.
+fn runs_while_calculating(id: &str) -> bool {
+    matches!(
+        id,
+        "selection.set"
+            | "selection.move"
+            | "selection.next"
+            | "selection.currentRegion"
+            | "selection.row"
+            | "selection.column"
+            | "sheet.activate"
+            | "sheet.next"
+            | "sheet.previous"
+    )
 }
 
 impl Session {
@@ -260,6 +317,26 @@ impl Session {
     /// Runs a command by id. Undoable commands record a history step when the workbook changed.
     /// Panics inside commands are caught and reported; the workbook is restored.
     pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
+        let top = self.depth == 0;
+        if top {
+            if !self.jobs.is_empty() && !runs_while_calculating(id) {
+                self.finish_calc();
+            }
+            let background = self.background_calc;
+            for d in &mut self.docs {
+                d.background = background;
+            }
+        }
+        self.depth += 1;
+        let r = self.execute_command(id, params);
+        self.depth -= 1;
+        if top {
+            self.start_deferred();
+        }
+        r
+    }
+
+    fn execute_command(&mut self, id: &str, params: Json) -> Result<Json> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         if let Err(why) = (spec.enabled)(self) {
             return Err(EngineError::Disabled(id.to_string(), why));
@@ -279,6 +356,8 @@ impl Session {
                     d.wb = wb.clone();
                     d.selection = sel.clone();
                     d.calc.rebuild(&d.wb);
+                    d.deferred.clear();
+                    d.deferred_rows.clear();
                 }
                 return Err(EngineError::Internal(id.to_string(), msg));
             }
@@ -306,6 +385,150 @@ impl Session {
 
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {
         self.execute(id, params).map_err(|e| e.to_string())
+    }
+
+    /// Lets large recalculations run on another thread, as an interactive app wants: a command
+    /// waits a moment for its recalculation and then returns, leaving it to finish in the
+    /// background (the grid shows the previous values meanwhile, and [`Session::poll_calc`]
+    /// brings the results in). Commands that move around keep working; any other command waits
+    /// for the recalculation. Off by default, so programmatic callers (CLI, MCP) always see
+    /// final values; never on wasm.
+    pub fn set_background_calc(&mut self, on: bool) {
+        self.background_calc = on && !cfg!(target_arch = "wasm32");
+    }
+
+    /// Whether a recalculation is running in the background.
+    pub fn calculating(&self) -> bool {
+        !self.jobs.is_empty()
+    }
+
+    /// The active workbook's background recalculation: formulas done, formulas to do, threads.
+    pub fn calc_progress(&self) -> Option<(usize, usize, usize)> {
+        let uid = self.active()?.uid;
+        let p = &self.jobs.iter().find(|j| j.uid == uid)?.progress;
+        let get = |a: &std::sync::atomic::AtomicUsize| a.load(std::sync::atomic::Ordering::Relaxed);
+        Some((get(&p.done), get(&p.total), get(&p.threads)))
+    }
+
+    /// Brings in the results of background recalculations that have finished. Returns whether
+    /// any did (the window should repaint).
+    pub fn poll_calc(&mut self) -> bool {
+        let mut done = Vec::new();
+        let mut i = 0;
+        while i < self.jobs.len() {
+            let r = match self.jobs.get(i).map(|j| j.rx.try_recv()) {
+                Some(Ok(r)) => Some(r),
+                Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                    Some(Err(Box::new("calculation thread ended") as Box<dyn std::any::Any + Send>))
+                }
+                _ => None,
+            };
+            match r {
+                Some(r) => done.push((self.jobs.remove(i), r)),
+                None => i += 1,
+            }
+        }
+        let any = !done.is_empty();
+        for (job, r) in done {
+            self.apply_calc(job, r);
+        }
+        any
+    }
+
+    /// Waits for every background recalculation and brings its results in.
+    pub fn finish_calc(&mut self) {
+        for job in std::mem::take(&mut self.jobs) {
+            let r = job.rx.recv().unwrap_or_else(|_| Err(Box::new("calculation thread ended")));
+            self.apply_calc(job, r);
+        }
+    }
+
+    /// Starts the recalculations that the last command left (see `cmd::recalc`), waiting
+    /// [`BACKGROUND_WAIT`] for each before leaving it to run.
+    fn start_deferred(&mut self) {
+        for i in 0..self.docs.len() {
+            let Some(d) = self.docs.get_mut(i) else { continue };
+            if d.deferred.is_empty() {
+                continue;
+            }
+            let dirty = std::mem::take(&mut d.deferred);
+            let rows = std::mem::take(&mut d.deferred_rows);
+            let progress = Arc::new(gridcraft_calc::CalcProgress::default());
+            let mut calc = std::mem::take(&mut d.calc);
+            calc.progress = Some(Arc::clone(&progress));
+            let base = Arc::clone(&d.wb);
+            let input = Arc::clone(&base);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let spawned = std::thread::Builder::new().name("gridcraft-recalc".into()).stack_size(16 << 20).spawn(move || {
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    let mut wb = (*input).clone();
+                    calc.run_dirty(&mut wb, dirty);
+                    (wb, calc)
+                }));
+                let _ = tx.send(r);
+            });
+            let job = CalcJob { uid: d.uid, base, rows, progress, rx };
+            if spawned.is_err() {
+                // The thread didn't start: its closure, and the calculation state with it, is gone.
+                self.apply_calc(job, Err(Box::new("calculation thread did not start")));
+                continue;
+            }
+            match job.rx.recv_timeout(BACKGROUND_WAIT) {
+                Ok(r) => self.apply_calc(job, r),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => self.jobs.push(job),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => self.apply_calc(job, Err(Box::new("calculation thread ended"))),
+            }
+        }
+    }
+
+    /// Brings a finished background recalculation into its workbook: the values and spills it
+    /// worked out replace those of the cells it evaluated, whatever the commands that ran
+    /// meanwhile (moving around) changed elsewhere. If it failed, the workbook is recalculated
+    /// here instead.
+    fn apply_calc(&mut self, job: CalcJob, r: std::thread::Result<(Workbook, Calc)>) {
+        let Some(d) = self.docs.iter_mut().find(|d| d.uid == job.uid) else { return };
+        match r {
+            Ok((done, mut calc)) => {
+                calc.progress = None;
+                d.calc = calc;
+                let wb = Arc::make_mut(&mut d.wb);
+                for (si, after) in done.sheets.iter().enumerate() {
+                    let (Some(before), Some(live)) = (job.base.sheets.get(si), wb.sheets.get_mut(si)) else { continue };
+                    let changed = after.cells.diff(&before.cells);
+                    let spills = after.spill != before.spill || after.spill_ranges != before.spill_ranges;
+                    if changed.is_empty() && !spills {
+                        continue;
+                    }
+                    let live = Arc::make_mut(live);
+                    for c in changed {
+                        if let (Some(new), Some(cell)) = (after.cells.get(c), live.cells.get_mut(c))
+                            && cell.formula.is_some()
+                        {
+                            cell.value = new.value.clone();
+                        }
+                    }
+                    if spills {
+                        live.spill = after.spill.clone();
+                        live.spill_ranges = after.spill_ranges.clone();
+                    }
+                }
+            }
+            Err(_) => {
+                log::warn!("background recalculation failed; recalculating on this thread");
+                let fixed_now = d.calc.fixed_now;
+                d.calc = Calc::new();
+                d.calc.fixed_now = fixed_now;
+                let wb = Arc::make_mut(&mut d.wb);
+                d.calc.recalc_all(wb);
+            }
+        }
+        let mut rows = job.rows;
+        rows.sort_unstable();
+        rows.dedup();
+        let wb = Arc::make_mut(&mut d.wb);
+        for (si, row) in rows {
+            cmd::auto_row_height(wb, si, row);
+        }
     }
 
     pub fn take_ui_requests(&mut self) -> Vec<UiRequest> {

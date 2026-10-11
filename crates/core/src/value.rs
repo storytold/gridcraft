@@ -302,12 +302,16 @@ pub fn compare(a: &Value, b: &Value) -> Ordering {
     }
 }
 
+/// `x` rounded to 15 significant digits, the precision Excel compares numbers at: two numbers are
+/// equal for [`compare_numbers`] exactly when their rounded values are.
+pub fn round15(x: f64) -> f64 {
+    // Whole numbers below 10^15 already have at most 15 digits.
+    if !x.is_finite() || x == 0.0 || (x.fract() == 0.0 && x.abs() < 1e15) { x } else { format!("{x:.14e}").parse().unwrap_or(x) }
+}
+
 /// Compares numbers the way Excel does: both are rounded to 15 significant digits first, so binary
 /// noise such as `0.1+0.2` versus `0.3` counts as equal.
 pub fn compare_numbers(a: f64, b: f64) -> Ordering {
-    fn round15(x: f64) -> f64 {
-        if !x.is_finite() || x == 0.0 { x } else { format!("{x:.14e}").parse().unwrap_or(x) }
-    }
     if a == b {
         return Ordering::Equal;
     }
@@ -354,6 +358,10 @@ pub fn number_to_text(n: f64) -> String {
     let a = n.abs();
     if !(1e-9..1e15).contains(&a) && a.round() != a || a >= 1e15 {
         return sci_text(n, 15);
+    }
+    // Whole numbers below 10^15 are exact in an i64: no 15-digit rounding to do.
+    if a.fract() == 0.0 {
+        return (n as i64).to_string();
     }
     // 15 significant digits, trailing zeros trimmed.
     let mag = a.log10().floor() as i32;
@@ -445,5 +453,25 @@ mod tests {
         assert!(Array::new(2, 2, vec![]).is_none());
         let row = Array::row(vec![1.0.into(), 2.0.into()]);
         assert_eq!(row.get_broadcast(5, 1), Value::Number(2.0));
+    }
+}
+
+#[cfg(test)]
+mod number_text_tests {
+    use super::*;
+
+    #[test]
+    fn whole_numbers_print_as_the_15_digit_path_does() {
+        // The general path: 15 significant digits, trailing zeros trimmed.
+        let general = |n: f64| {
+            let mag = n.abs().log10().floor() as i32;
+            trim_decimal(&format!("{:.*}", (14 - mag).clamp(0, 30) as usize, n))
+        };
+        for n in [1.0, 7.0, 10.0, 500.0, -500.0, 123_456.0, 1e14, 999_999_999_999_999.0, -987_654_321_012_345.0, 4_503_599_627_370_496.0 / 8.0] {
+            assert_eq!(number_to_text(n), general(n), "{n}");
+        }
+        assert_eq!(number_to_text(0.5), "0.5");
+        assert_eq!(number_to_text(-0.0), "0");
+        assert_eq!(number_to_text(1e15), "1E+15");
     }
 }

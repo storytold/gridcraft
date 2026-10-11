@@ -28,6 +28,9 @@ pub struct Ctx<'a> {
     pub num_fmts: std::collections::HashMap<u32, String>,
     /// Value metadata blocks, indexed by the worksheet's one-based `vm` attribute.
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
+    /// Formulas of the sheet being read whose cached values can't be used (see
+    /// [`ReadReport::recalc`]).
+    pub recalc: Vec<gridcraft_core::CellRef>,
 }
 
 impl Ctx<'_> {
@@ -79,6 +82,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         next_id: 1,
         num_fmts: Default::default(),
         cell_pictures: vec![],
+        recalc: Vec::new(),
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -132,7 +136,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             Some(b) => {
                 let mut sst = Vec::new();
                 let res = xml::parse_streaming(&b, &["si"], &mut |si| {
-                    sst.push(Arc::from(xml::rich_text(&si)));
+                    sst.push(Arc::from(xml::rich_text(si)));
                     Ok(())
                 });
                 if let Err(e) = res {
@@ -175,6 +179,12 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             wb.calc.max_change = d.abs();
         }
         wb.calc.precision_as_displayed = !c.flag("fullPrecision", true);
+        // The cached values stand unless the file asks for a full recalculation.
+        if !c.flag("fullCalcOnLoad", false) {
+            cx.report.recalc = Some(Vec::new());
+        }
+        wb.calc.multi_threaded = c.flag("concurrentCalc", true);
+        wb.calc.threads = c.attr_u32("concurrentManualCount").unwrap_or(0).min(1024);
     }
     if let Some(p) = wb_xml.child("workbookProtection") {
         wb.protected_structure = p.flag("lockStructure", false);
@@ -218,6 +228,11 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             _ => Visibility::Visible,
         };
         file_to_model.push(Some(wb.sheets.len()));
+        let si = wb.sheets.len();
+        let stale = std::mem::take(&mut cx.recalc);
+        if let Some(list) = cx.report.recalc.as_mut() {
+            list.extend(stale.into_iter().map(|c| (si, c)));
+        }
         wb.sheets.push(Arc::new(sheet));
     }
     if wb.sheets.is_empty() {

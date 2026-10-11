@@ -4,10 +4,11 @@
 #![forbid(unsafe_code)]
 
 pub mod eval;
+pub mod par;
 pub mod recalc;
 
 pub use eval::{Area, SPECIAL_FUNCTIONS, is_known_function};
-pub use recalc::{Calc, Key, evaluate, now_serial};
+pub use recalc::{Calc, CalcProgress, Key, evaluate, now_serial};
 
 #[cfg(test)]
 mod tests;
