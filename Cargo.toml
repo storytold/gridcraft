@@ -32,7 +32,7 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
 rayon = "1"
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
-quick-xml = "0.38"
+quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 

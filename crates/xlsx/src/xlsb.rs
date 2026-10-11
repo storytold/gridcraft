@@ -7,6 +7,7 @@ use std::sync::Arc;
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{Cell, Sheet, Visibility, Workbook};
 use quick_xml::NsReader;
+use quick_xml::XmlVersion;
 use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
 
@@ -160,7 +161,7 @@ fn metadata(bytes: &[u8], ns: &[u8], root_name: &[u8]) -> Result<Vec<Entry>, IoE
         let event = reader.read_event().map_err(|e| IoError::Xml(e.to_string()))?;
         match &event {
             Event::Start(e) | Event::Empty(e) => {
-                let (namespace, local) = reader.resolve_element(e.name());
+                let (namespace, local) = reader.resolver_mut().resolve_element(e.name());
                 let valid_ns = matches!(namespace, ResolveResult::Bound(n) if n.as_ref() == ns);
                 if depth == 0 {
                     if seen || !valid_ns || local.as_ref() != root_name {
@@ -174,7 +175,7 @@ fn metadata(bytes: &[u8], ns: &[u8], root_name: &[u8]) -> Result<Vec<Entry>, IoE
                         if !a.key.as_ref().contains(&b':') {
                             attrs.push((
                                 String::from_utf8_lossy(a.key.as_ref()).into_owned(),
-                                a.unescape_value().map_err(|e| IoError::Xml(e.to_string()))?.into_owned(),
+                                a.normalized_value(XmlVersion::Explicit1_0).map_err(|e| IoError::Xml(e.to_string()))?.into_owned(),
                             ));
                         }
                     }
@@ -188,7 +189,7 @@ fn metadata(bytes: &[u8], ns: &[u8], root_name: &[u8]) -> Result<Vec<Entry>, IoE
                 }
             }
             Event::End(_) => depth = depth.checked_sub(1).ok_or_else(|| invalid("unexpected metadata end"))?,
-            Event::Text(t) if depth == 0 && !t.xml_content().map_err(|e| IoError::Xml(e.to_string()))?.trim().is_empty() => {
+            Event::Text(t) if depth == 0 && !t.xml_content(XmlVersion::Explicit1_0).map_err(|e| IoError::Xml(e.to_string()))?.trim().is_empty() => {
                 return Err(invalid("text outside package metadata"));
             }
             Event::DocType(_) => return Err(invalid("DOCTYPE in package metadata is unsupported")),
