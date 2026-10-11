@@ -2,6 +2,7 @@
 //! shared strings) so large parts never need a full tree, plus escaping helpers for writing.
 
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
 
 use crate::IoError;
@@ -124,7 +125,7 @@ fn start_el(e: &BytesStart<'_>) -> El {
         if key == b"xmlns" || key.starts_with(b"xmlns:") {
             continue;
         }
-        let v = match a.unescape_value() {
+        let v = match a.normalized_value(XmlVersion::Explicit1_0) {
             Ok(v) => v.into_owned(),
             Err(_) => String::from_utf8_lossy(&a.value).into_owned(),
         };
@@ -203,7 +204,7 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
             }
             Event::Text(t) => {
                 if let Some(top) = stack.last_mut() {
-                    let s = t.xml_content().map_err(|e| IoError::Xml(e.to_string()))?;
+                    let s = t.xml_content(XmlVersion::Explicit1_0).map_err(|e| IoError::Xml(e.to_string()))?;
                     top.text.push_str(&s);
                 }
             }

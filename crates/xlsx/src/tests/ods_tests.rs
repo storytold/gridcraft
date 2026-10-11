@@ -23,6 +23,22 @@ fn text(s: &str) -> Value {
     Value::Text(s.into())
 }
 
+/// A start tag with thousands of `xmlns:` declarations is refused instead of allocated
+/// (RUSTSEC-2026-0195: the resolver kept a binding per declaration, with no cap).
+#[test]
+fn ods_namespace_declaration_bomb_is_rejected() {
+    let bomb = |n: usize| -> String { (0..n).map(|i| format!(" xmlns:p{i}=\"urn:p{i}\"")).collect() };
+    let doc = |decls: &str| {
+        format!(
+            r#"<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"{decls}><office:body><office:spreadsheet><table:table table:name="Data"><table:table-row><table:table-cell office:value-type="float" office:value="1"><text:p>1</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#
+        )
+    };
+    let build = |decls: &str| make_zip(&[("mimetype", MIME), ("META-INF/manifest.xml", MANIFEST), ("content.xml", doc(decls).as_bytes())]);
+    let ok = read_ods(&build(&bomb(8)));
+    assert!(ok.is_ok(), "a handful of namespaces still reads: {:?}", ok.err());
+    assert!(read_ods(&build(&bomb(10_000))).is_err(), "a tag with thousands of declarations is refused");
+}
+
 #[test]
 fn ods_typed_values_and_formula_caches_are_constants_and_survive_xlsx() {
     let bytes = row(r#"

@@ -10,6 +10,7 @@ use gridcraft_core::date::{days_in_month, serial_from_ymd};
 use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
 use quick_xml::NsReader;
+use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::ResolveResult;
 
@@ -67,13 +68,13 @@ fn is_ns(ns: ResolveResult<'_>, expected: &[u8]) -> bool {
     matches!(ns, ResolveResult::Bound(n) if n.as_ref() == expected)
 }
 
-fn attr(reader: &NsReader<&[u8]>, e: &BytesStart<'_>, ns: &[u8], name: &[u8]) -> Result<Option<String>, IoError> {
+fn attr(reader: &mut NsReader<&[u8]>, e: &BytesStart<'_>, ns: &[u8], name: &[u8]) -> Result<Option<String>, IoError> {
     let mut found = None;
     for a in e.attributes() {
         let a = a.map_err(|e| IoError::Xml(e.to_string()))?;
-        let (resolved, local) = reader.resolve_attribute(a.key);
+        let (resolved, local) = reader.resolver_mut().resolve_attribute(a.key);
         if is_ns(resolved, ns) && local.as_ref() == name {
-            let value = a.unescape_value().map_err(|e| IoError::Xml(e.to_string()))?;
+            let value = a.normalized_value(XmlVersion::Explicit1_0).map_err(|e| IoError::Xml(e.to_string()))?;
             if value.len() > MAX_CELL_TEXT {
                 return Err(IoError::TooLarge("ODS attribute exceeds 1 MiB".into()));
             }
@@ -106,7 +107,7 @@ fn check_manifest(bytes: &[u8]) -> Result<(), IoError> {
         let event = reader.read_event().map_err(xml_error)?;
         match &event {
             Event::Start(e) | Event::Empty(e) => {
-                let (ns, name) = reader.resolve_element(e.name());
+                let (ns, name) = reader.resolver_mut().resolve_element(e.name());
                 if is_ns(ns.clone(), MANIFEST) && name.as_ref() == b"encryption-data" {
                     return Err(IoError::Format("encrypted ODS files are not supported".into()));
                 }
@@ -153,8 +154,8 @@ enum Tag {
     Other,
 }
 
-fn tag(reader: &NsReader<&[u8]>, e: &BytesStart<'_>) -> Tag {
-    let (ns, name) = reader.resolve_element(e.name());
+fn tag(reader: &mut NsReader<&[u8]>, e: &BytesStart<'_>) -> Tag {
+    let (ns, name) = reader.resolver_mut().resolve_element(e.name());
     let local = name.as_ref();
     if is_ns(ns.clone(), OFFICE) {
         return match local {
@@ -253,23 +254,23 @@ impl Import {
                         return Err(xml_error("XML nested too deeply"));
                     }
                     if self.stack.is_empty() {
-                        if root_seen || tag(&reader, &e) != Tag::Document {
+                        if root_seen || tag(&mut reader, &e) != Tag::Document {
                             return Err(xml_error("expected one office:document-content root"));
                         }
                         root_seen = true;
                     }
-                    self.start(&reader, &e)?;
+                    self.start(&mut reader, &e)?;
                 }
                 Event::Empty(e) => {
                     if self.stack.is_empty() {
                         return Err(xml_error("expected office:document-content with a spreadsheet"));
                     }
-                    self.start(&reader, &e)?;
+                    self.start(&mut reader, &e)?;
                     self.end()?;
                 }
                 Event::End(_) => self.end()?,
                 Event::Text(t) => {
-                    let text = t.xml_content().map_err(xml_error)?;
+                    let text = t.xml_content(XmlVersion::Explicit1_0).map_err(xml_error)?;
                     if self.stack.is_empty() && !text.trim().is_empty() {
                         return Err(xml_error("text outside the document"));
                     }
@@ -301,7 +302,7 @@ impl Import {
         Ok(())
     }
 
-    fn start(&mut self, reader: &NsReader<&[u8]>, e: &BytesStart<'_>) -> Result<(), IoError> {
+    fn start(&mut self, reader: &mut NsReader<&[u8]>, e: &BytesStart<'_>) -> Result<(), IoError> {
         let t = tag(reader, e);
         let depth = self.stack.len();
         match t {
