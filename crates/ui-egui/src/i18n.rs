@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
+mod es;
 mod ko;
 mod pt;
 mod ru;
@@ -97,7 +98,8 @@ impl Language {
     /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
         let translated = match self {
-            Self::En | Self::Es => None,
+            Self::En => None,
+            Self::Es => es::translate(text),
             Self::Ja => JAPANESE.iter().find(|(english, _)| *english == text).map(|(_, translated)| *translated),
             Self::Zh => zh::translate(text),
             Self::Ko => ko::translate(text),
@@ -434,12 +436,16 @@ mod tests {
             assert!(ko::translate(english).is_some_and(|text| !text.is_empty()), "missing Korean: {english}");
             assert!(ru::translate(english).is_some_and(|text| !text.is_empty()), "missing Russian: {english}");
             assert!(pt::translate(english).is_some_and(|text| !text.is_empty()), "missing Portuguese: {english}");
+            assert!(es::translate(english).is_some_and(|text| !text.is_empty()), "missing Spanish: {english}");
         }
         assert_eq!(Language::Ja.tr("Data"), "データ");
         assert_eq!(Language::Zh.tr("Data"), "数据");
         assert_eq!(Language::Ko.tr("Data"), "데이터");
         assert_eq!(Language::Ru.tr("Data"), "Данные");
         assert_eq!(Language::PtBr.tr("Data"), "Dados");
+        assert_eq!(Language::Es.tr("Data"), "Datos");
+        assert_eq!(Language::Es.tr("Freeze Panes"), "Inmovilizar paneles");
+        assert_eq!(Language::Es.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::PtBr.tr("Date"), "Data");
         assert_eq!(Language::PtBr.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::Ja.tr("Sheet1!A1"), "Sheet1!A1");
