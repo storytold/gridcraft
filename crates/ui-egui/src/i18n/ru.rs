@@ -489,6 +489,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показать",
         "Collapse dialog" => "Свернуть диалоговое окно",
         "Expand dialog" => "Развернуть диалоговое окно",
+        "Minimize" => "Свернуть",
+        "Maximize" => "Развернуть",
+        "Restore" => "Восстановить",
+        "Use system title bar" => "Использовать системный заголовок окна",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Показывать простой заголовок окна с кнопками окна над заголовком GridCraft. GNOME не рисует заголовки для приложений, поэтому он не следует теме оформления."
+        }
         _ => return None,
     })
 }

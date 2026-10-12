@@ -58,6 +58,7 @@ pub mod theme;
 #[cfg(not(target_arch = "wasm32"))]
 mod updates_ui;
 pub mod widgets;
+pub mod window_controls;
 mod window_ui;
 
 pub use window_ui::WindowUi;
@@ -126,6 +127,9 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
+    /// Options ▸ Use system title bar: where the desktop leaves the window frame to the app
+    /// ([`SheetApp::window_controls`]), keep winit's frame instead of drawing the header bar.
+    pub system_title_bar: bool,
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
@@ -161,6 +165,7 @@ impl Default for UiState {
             keytip_invoke_next: None,
             language: i18n::Language::En,
             interface_scale: 100,
+            system_title_bar: false,
         }
     }
 }
@@ -271,6 +276,12 @@ pub struct SheetApp {
     desktop_theme: desktop_theme::DesktopTheme,
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
     desktop_dark: Option<bool>,
+    /// Set when the desktop leaves the window frame to the app (GNOME on Wayland): the title bar
+    /// carries these window buttons and the window's edges resize it.
+    pub window_controls: Option<window_controls::Layout>,
+    /// Whether each window has the app's header bar, by viewport; a window not listed yet has
+    /// the frame it opened with.
+    app_frame_shown: HashMap<egui::ViewportId, bool>,
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,
