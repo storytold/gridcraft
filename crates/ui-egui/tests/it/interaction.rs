@@ -881,10 +881,19 @@ fn solver_reset_all_and_load_model_drop_the_old_models_options() {
     // A GRG Nonlinear model on cells, which has no Evolutionary options.
     s.execute("data.solverSaveModel", json!({"to": "H1", "model": {"objective": "B1", "goal": "min", "variables": "A1"}})).unwrap();
     let mut h = harness(s);
-    let old = json!({"objective": "B1", "goal": "min", "variables": "A1", "method": "evolutionary", "requireBounds": false, "convergence": "0.5", "randomSeed": "11", "populationSize": "40", "mutationRate": "0.5", "generationsWithoutImprovement": "5", "modelArea": true, "modelRange": "H1"});
+    let old = json!({"objective": "B1", "goal": "min", "variables": "A1", "method": "evolutionary", "maxEvaluations": "7", "integerOptimality": "5", "requireBounds": false, "convergence": "0.5", "randomSeed": "11", "populationSize": "40", "mutationRate": "0.5", "generationsWithoutImprovement": "5", "modelArea": true, "modelRange": "H1"});
     h.state_mut().open_dialog("solver", old.clone());
     h.run_steps(2);
-    let keys = ["requireBounds", "convergence", "randomSeed", "populationSize", "mutationRate", "generationsWithoutImprovement"];
+    let keys = [
+        "maxEvaluations",
+        "integerOptimality",
+        "requireBounds",
+        "convergence",
+        "randomSeed",
+        "populationSize",
+        "mutationRate",
+        "generationsWithoutImprovement",
+    ];
     let left = |h: &egui_kittest::Harness<'_, SheetApp>| -> Vec<&str> {
         let d = h.state().dialog.as_ref().unwrap();
         keys.into_iter().filter(|k| d.values.contains_key(*k)).collect()
@@ -933,6 +942,42 @@ fn solver_reset_all_and_load_model_drop_the_old_models_options() {
         "{saved}"
     );
     assert_eq!((saved["populationSize"].as_f64(), saved["generationsWithoutImprovement"].as_f64()), (Some(100.0), Some(50.0)), "{saved}");
+    assert_eq!((saved["maxEvaluations"].as_f64(), saved["integerOptimality"].as_f64()), (Some(20000.0), Some(0.0)), "{saved}");
+}
+
+#[test]
+fn solver_options_go_with_the_solve() {
+    let mut s = blank();
+    for (c, v) in [("A1", "1"), ("B1", "=ABS(A1-4)")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let mut h = harness(s);
+    h.state_mut().open_dialog("solver", json!({"objective": "B1", "goal": "min", "variables": "A1", "method": "evolutionary"}));
+    h.run_steps(2);
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().unwrap().title, "Solver Options");
+    // Cancel keeps the options as they were; OK keeps the edits.
+    let put = |h: &mut egui_kittest::Harness<'_, SheetApp>, k: &str, v: serde_json::Value| {
+        h.state_mut().dialog.as_mut().unwrap().values.insert(k.into(), v);
+    };
+    put(&mut h, "maxEvaluations", json!("7"));
+    h.get_by_label(" Cancel ").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!((d.title.as_str(), d.values.get("maxEvaluations")), ("Solver Parameters", Some(&json!("20000"))));
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    put(&mut h, "requireBounds", json!(false));
+    put(&mut h, "randomSeed", json!("11"));
+    h.get_by_label("  OK  ").click();
+    h.run_steps(2);
+    h.get_by_label("  Solve  ").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("solverResults"), "{:?}", h.state().message);
+    assert!(matches!(value(&h, "A1"), Value::Number(v) if (v - 4.0).abs() < 1e-6));
+    let saved = gridcraft_engine::cmd::solver::saved_model(&h.state().session.active().unwrap().wb, 0).unwrap();
+    assert_eq!((saved["randomSeed"].as_f64(), saved["requireBounds"].as_bool()), (Some(11.0), Some(false)));
 }
 
 #[test]

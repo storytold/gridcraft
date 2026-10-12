@@ -680,7 +680,8 @@ impl Dialog {
                 if let Some(v) = values.as_object_mut() {
                     v.insert("newOp".into(), json!("<="));
                 }
-                let mut d = Dialog::custom("solver", "Solver Parameters", values);
+                let options = values.get("optionsView").and_then(Json::as_bool) == Some(true);
+                let mut d = Dialog::custom("solver", if options { "Solver Options" } else { "Solver Parameters" }, values);
                 d.command = Some("data.solver");
                 d
             }
