@@ -42,3 +42,13 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 | `docs/images/pivot.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
 | `docs/images/format-chart.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
 | `docs/images/page-break.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
+
+## Optional embedded Arabic font
+
+Builds using `CRAFT_FONTS_DIR` embed the `Arab` faces listed in that checkout's
+`fonts/manifest.txt` for native and web text fallback. Font files remain in
+[craft-fonts](https://github.com/storytold/craft-fonts).
+
+| Font | Author | Source | Licence |
+|---|---|---|---|
+| Noto Sans Arabic | The Noto Project Authors | [craft-fonts manifest](https://github.com/storytold/craft-fonts/blob/3d9ab3a132ed0eff457e424226a435a901da30d3/fonts/manifest.txt), with pinned upstream source and SHA-256 | SIL OFL 1.1, `fonts/noto-sans-arabic/OFL.txt` in craft-fonts |

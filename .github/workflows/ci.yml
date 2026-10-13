@@ -24,8 +24,17 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: "0"
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/.build-inputs/craft-fonts
+      CRAFT_FONTS_REQUIRED: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check out the approved Arabic font build input
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
+          path: .build-inputs/craft-fonts
 
       - name: Install Linux build dependencies (winit, wgpu, rfd)
         run: |

@@ -12,5 +12,7 @@ Third-party material
 This product bundles third-party material under its own licenses, listed below. The per-file
 list (author, source, license) is in ATTRIBUTION.md.
 
-None: every bundled asset is original to GridCraft. Builds made with craft-fonts
-(CRAFT_FONTS_DIR) embed the fonts listed in ATTRIBUTION.md under the SIL Open Font License 1.1.
+Builds made with craft-fonts (CRAFT_FONTS_DIR) embed its Arabic fonts under the
+SIL Open Font License 1.1. Sources, authors and licences are recorded in
+https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md. Distributions
+include the corresponding fonts/*/OFL.txt licence files from that checkout.
