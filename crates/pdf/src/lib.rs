@@ -14,6 +14,38 @@
 mod arabic;
 mod metrics;
 
+/// Paragraph base direction. Context follows spreadsheet reading order: the first
+/// non-whitespace character determines direction, including digits and punctuation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextDirection {
+    #[default]
+    Auto,
+    Context,
+    LeftToRight,
+    RightToLeft,
+}
+
+impl TextDirection {
+    /// Resolve once for a paragraph before wrapping it into visual lines.
+    pub fn resolve(self, text: &str) -> Self {
+        use unicode_bidi::{BidiClass, BidiInfo, bidi_class};
+        let rtl = match self {
+            Self::Auto => BidiInfo::new(text, None).paragraphs.first().is_some_and(|p| p.level.is_rtl()),
+            Self::Context => text.chars().find(|ch| !ch.is_whitespace()).is_some_and(|ch| matches!(bidi_class(ch), BidiClass::R | BidiClass::AL)),
+            explicit => return explicit,
+        };
+        if rtl { Self::RightToLeft } else { Self::LeftToRight }
+    }
+
+    fn level(self) -> Option<unicode_bidi::Level> {
+        match self {
+            Self::Auto => None,
+            Self::LeftToRight | Self::Context => Some(unicode_bidi::Level::ltr()),
+            Self::RightToLeft => Some(unicode_bidi::Level::rtl()),
+        }
+    }
+}
+
 /// A PDF export could not preserve the requested text.
 #[derive(Clone, Debug)]
 pub struct Error(String);
@@ -159,12 +191,19 @@ impl Font {
 /// Arabic uses shaped advances. If its font cannot render the text, measurement returns zero
 /// and drawing that text causes [`PdfDoc::finish`] to return the rendering error.
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
+    text_width_with_direction(font, size, text, TextDirection::Auto)
+}
+
+/// Width measured with the same base direction as drawing.
+pub fn text_width_with_direction(font: Font, size: f32, text: &str, direction: TextDirection) -> f32 {
+    let direction = if direction == TextDirection::Context { direction.resolve(text) } else { direction };
     if arabic::needed(text) {
         // Drawing records the error and finish rejects the document; measuring never substitutes ?.
-        return arabic::layout(font, text).map(|layout| layout.width * size / 1000.0).unwrap_or(0.0);
+        return arabic::layout(font, text, direction).map(|layout| layout.width * size / 1000.0).unwrap_or(0.0);
     }
     // u64: a u32 sum overflows for ~8 million characters.
-    let units: u64 = text.chars().map(|c| u64::from(font.char_width(c))).sum();
+    let Ok(visual) = arabic::latin_visual(text, direction) else { return 0.0 };
+    let units: u64 = visual.chars().map(|c| u64::from(font.char_width(c))).sum();
     units as f32 * size / 1000.0
 }
 
@@ -471,10 +510,15 @@ impl Page {
     /// Arabic ink extents above and below the baseline, in points. Standard font text returns
     /// `None`. Font errors are recorded for [`PdfDoc::finish`], just as when drawing text.
     pub fn text_vertical_extents(&mut self, font: Font, size: f32, text: &str) -> Option<(f32, f32)> {
+        self.text_vertical_extents_with_direction(font, size, text, TextDirection::Auto)
+    }
+
+    /// Arabic ink extents with an explicit paragraph base direction.
+    pub fn text_vertical_extents_with_direction(&mut self, font: Font, size: f32, text: &str, direction: TextDirection) -> Option<(f32, f32)> {
         if !arabic::needed(text) {
             return None;
         }
-        match arabic::vertical_extents(font, text) {
+        match arabic::vertical_extents(font, text, direction) {
             Ok((ascent, descent)) => Some((ascent * size / 1000.0, descent * size / 1000.0)),
             Err(error) => {
                 self.error.get_or_insert(error);
@@ -485,25 +529,46 @@ impl Page {
 
     /// Text with its baseline starting at `(x, y)`.
     pub fn text(&mut self, x: f32, y: f32, size: f32, font: Font, color: Rgb, text: &str) {
-        self.text_rotated(x, y, size, font, color, text, 0.0);
+        self.text_with_direction(x, y, size, font, color, text, TextDirection::Auto);
+    }
+
+    /// Text drawn with an explicit paragraph base direction.
+    pub fn text_with_direction(&mut self, x: f32, y: f32, size: f32, font: Font, color: Rgb, text: &str, direction: TextDirection) {
+        self.text_rotated_with_direction(x, y, size, font, color, text, 0.0, direction);
     }
 
     /// Text rotated by `angle` radians (clockwise on the page, like the y-down coordinate
     /// system) about its baseline origin.
     pub fn text_rotated(&mut self, x: f32, y: f32, size: f32, font: Font, color: Rgb, text: &str, angle: f32) {
+        self.text_rotated_with_direction(x, y, size, font, color, text, angle, TextDirection::Auto);
+    }
+
+    /// Rotated text with an explicit paragraph base direction.
+    pub fn text_rotated_with_direction(
+        &mut self,
+        x: f32,
+        y: f32,
+        size: f32,
+        font: Font,
+        color: Rgb,
+        text: &str,
+        angle: f32,
+        direction: TextDirection,
+    ) {
         if text.is_empty() || !extent(size) || !finite(&[x, y]) {
             return;
         }
+        let direction = if direction == TextDirection::Context { direction.resolve(text) } else { direction };
         let fi = font.index();
         if let Some(f) = self.fonts.get_mut(fi) {
             *f = true;
         }
         let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
         if arabic::needed(text) {
-            match self.arabic.text(font, text, size.min(10_000.0)) {
+            match self.arabic.text(font, text, size.min(10_000.0), direction) {
                 Ok(body) => {
                     let s = format!("q\n{} {} {} {} {} {} cm\n{}\n{body}\nQ", n(cs), n(-sn), n(sn), n(cs), n(x), n(self.y(y)), rgb_op(color, false));
-                    if self.content.len().saturating_add(s.len()) > MAX_PAGE_CONTENT {
+                    if self.content.len().saturating_add(s.len()).saturating_add(1) > MAX_PAGE_CONTENT {
                         self.error.get_or_insert_with(|| Error("PDF page text exceeds the size limit".into()));
                     } else {
                         self.op(&s);
@@ -515,6 +580,13 @@ impl Page {
             }
             return;
         }
+        let visual = match arabic::latin_visual(text, direction) {
+            Ok(visual) => visual,
+            Err(error) => {
+                self.error.get_or_insert(error);
+                return;
+            }
+        };
         // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
         let s = format!(
             "BT\n{}\n/F{} {} Tf\n{} {} {} {} {} {} Tm\n{} Tj\nET",
@@ -527,9 +599,14 @@ impl Page {
             n(cs),
             n(x),
             n(self.y(y)),
-            pdf_string(text)
+            pdf_string(&visual)
         );
-        self.op(&s);
+        let s = if visual != text { format!("/Span << /ActualText {} >> BDC\n{s}\nEMC", arabic::unicode_string(text, true)) } else { s };
+        if self.content.len().saturating_add(s.len()).saturating_add(1) > MAX_PAGE_CONTENT {
+            self.error.get_or_insert_with(|| Error("PDF page text exceeds the size limit".into()));
+        } else {
+            self.op(&s);
+        }
     }
 
     /// Draws an RGBA image (`pw`×`ph` pixels, row-major, straight alpha) into the box

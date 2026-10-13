@@ -1,5 +1,16 @@
 use super::*;
 
+#[test]
+fn rtl_marked_text_limit_fails_without_appending_partial_content() {
+    let mut doc = PdfDoc::new();
+    let page = doc.add_page(600.0, 300.0);
+    page.content = " ".repeat(MAX_PAGE_CONTENT - 8);
+    let before = page.content.len();
+    page.text_with_direction(10.0, 20.0, 12.0, Font::Helvetica, [0, 0, 0], "ABC !", TextDirection::RightToLeft);
+    assert_eq!(page.content.len(), before, "the marked-content block must append atomically");
+    assert!(doc.finish().unwrap_err().to_string().contains("size limit"));
+}
+
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
@@ -284,7 +295,7 @@ fn arabic_is_shaped_and_preserved_or_export_reports_missing_font() {
     let mut doc = PdfDoc::new();
     let page = doc.add_page(600.0, 300.0);
     page.text(30.0, 70.0, 20.0, Font::Helvetica, [0, 0, 0], text);
-    let layout = arabic::layout(Font::Helvetica, text);
+    let layout = arabic::layout(Font::Helvetica, text, TextDirection::Auto);
     let Ok(layout) = layout else {
         let error = doc.finish().unwrap_err().to_string();
         assert!(error.contains("Arabic PDF"), "{error}");
@@ -310,11 +321,11 @@ fn oversized_arabic_text_is_an_error_instead_of_partial_pdf() {
 
 #[test]
 fn arabic_joining_marks_styles_and_rotation() {
-    if arabic::layout(Font::Helvetica, "مرحبا").is_err() && arabic::ARABIC_FONTS.is_empty() {
+    if arabic::layout(Font::Helvetica, "مرحبا", TextDirection::Auto).is_err() && arabic::ARABIC_FONTS.is_empty() {
         return; // Optional font input; required-font CI exercises this regression.
     }
     for (text, expected) in [("مرحبا 123 (ABC)", "(ABC)"), ("مرحبا [ABC]", "[ABC]"), ("مرحبا <ABC>", "<ABC>")] {
-        let mixed = arabic::layout(Font::Helvetica, text).unwrap();
+        let mixed = arabic::layout(Font::Helvetica, text, TextDirection::Auto).unwrap();
         let latin: String = mixed
             .items
             .iter()
@@ -335,14 +346,14 @@ fn arabic_joining_marks_styles_and_rotation() {
         "spaces in variable fonts have empty outlines"
     );
     metrics.finish().unwrap();
-    let joined = arabic::layout(Font::Helvetica, "سلام").unwrap();
+    let joined = arabic::layout(Font::Helvetica, "سلام", TextDirection::Auto).unwrap();
     let separate_width: f32 = "سلام".chars().map(|c| text_width(Font::Helvetica, 1000.0, &c.to_string())).sum();
     assert!((joined.width - separate_width).abs() > 10.0, "joining changes advances");
-    let marked = arabic::layout(Font::Helvetica, "مَرْحَبًا").unwrap();
-    let plain = arabic::layout(Font::Helvetica, "مرحبا").unwrap();
+    let marked = arabic::layout(Font::Helvetica, "مَرْحَبًا", TextDirection::Auto).unwrap();
+    let plain = arabic::layout(Font::Helvetica, "مرحبا", TextDirection::Auto).unwrap();
     assert!(marked.items.len() > plain.items.len());
     assert!(marked.items.iter().any(|item| matches!(item, arabic::Item::Glyph { y, .. } if *y != 0.0)));
-    let bold = arabic::layout(Font::HelveticaBold, "مرحبا").unwrap();
+    let bold = arabic::layout(Font::HelveticaBold, "مرحبا", TextDirection::Auto).unwrap();
     assert!(bold.width > plain.width, "bold metrics use the bold font instance");
     let mut regular = PdfDoc::new();
     regular.add_page(500.0, 300.0).text(30.0, 60.0, 20.0, Font::Helvetica, [0, 0, 0], "مرحبا");
@@ -361,7 +372,7 @@ fn arabic_joining_marks_styles_and_rotation() {
 
 #[test]
 fn arabic_subsets_split_after_255_character_codes() {
-    if arabic::layout(Font::Helvetica, "مرحبا").is_err() && arabic::ARABIC_FONTS.is_empty() {
+    if arabic::layout(Font::Helvetica, "مرحبا", TextDirection::Auto).is_err() && arabic::ARABIC_FONTS.is_empty() {
         return; // Optional font input; required-font CI exercises this regression.
     }
     let mut doc = PdfDoc::new();
@@ -376,4 +387,74 @@ fn arabic_subsets_split_after_255_character_codes() {
     assert!(find(&pdf, b"/A2 ").is_some());
     assert!(find(&pdf, b"/LastChar 255").is_some());
     assert!(find(&pdf, b"<100> Tj").is_none(), "Type3 codes are always one byte");
+}
+
+#[test]
+fn spreadsheet_context_is_first_character_not_first_strong() {
+    use TextDirection::{Auto, Context, LeftToRight as Ltr, RightToLeft as Rtl};
+    for (text, expected) in [("  مرحبا", Rtl), ("123 مرحبا", Ltr), ("(مرحبا)", Ltr), ("  ١٢٣ مرحبا", Ltr), ("\t\n", Ltr)] {
+        assert_eq!(Context.resolve(text), expected, "{text}");
+    }
+    assert_eq!(Auto.resolve("123 مرحبا"), Rtl);
+    assert_eq!(Auto.resolve("(مرحبا)"), Rtl);
+}
+
+#[test]
+fn explicit_rtl_standard_text_reorders_without_an_arabic_font() {
+    let source = "ABC !";
+    let mut doc = PdfDoc::new();
+    let page = doc.add_page(300.0, 100.0);
+    page.text_with_direction(10.0, 30.0, 12.0, Font::Helvetica, [0, 0, 0], source, TextDirection::RightToLeft);
+    assert!(page.content.contains("(! ABC) Tj"), "{}", page.content);
+    assert!(page.arabic.objects(&mut 4, &mut Vec::new()).is_empty());
+    assert_eq!(text_width_with_direction(Font::Helvetica, 12.0, source, TextDirection::RightToLeft), text_width(Font::Helvetica, 12.0, source));
+    let pdf = doc.finish().unwrap();
+    assert_eq!(utf16_entry(&pdf, "/ActualText"), source);
+    assert!(find(&pdf, b"/Subtype /Type3").is_none());
+
+    let mut huge = PdfDoc::new();
+    huge.add_page(300.0, 100.0).text_with_direction(
+        10.0,
+        30.0,
+        12.0,
+        Font::Helvetica,
+        [0, 0, 0],
+        &"A".repeat(128 * 1024 + 1),
+        TextDirection::RightToLeft,
+    );
+    assert!(huge.finish().unwrap_err().to_string().contains("128 KiB"));
+}
+
+#[test]
+fn arabic_explicit_base_changes_visual_order_and_preserves_logical_text() {
+    if arabic::layout(Font::Helvetica, "مرحبا", TextDirection::Auto).is_err() && arabic::ARABIC_FONTS.is_empty() {
+        return;
+    }
+    let sources = |text: &str, direction| {
+        arabic::layout(Font::Helvetica, text, direction)
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| match item {
+                arabic::Item::Glyph { source, .. } => source,
+                arabic::Item::Latin { text, .. } => text,
+            })
+            .collect::<String>()
+    };
+    let text = "مرحبا ABC";
+    let ltr = sources(text, TextDirection::LeftToRight);
+    let rtl = sources(text, TextDirection::RightToLeft);
+    assert!(ltr.ends_with("ABC"), "{ltr}");
+    assert!(rtl.starts_with("ABC"), "{rtl}");
+    assert_ne!(ltr, rtl);
+    assert_eq!(sources("123 مرحبا", TextDirection::Context), sources("123 مرحبا", TextDirection::LeftToRight));
+    let mut documents = Vec::new();
+    for direction in [TextDirection::LeftToRight, TextDirection::RightToLeft] {
+        let mut doc = PdfDoc::new();
+        doc.add_page(300.0, 100.0).text_rotated_with_direction(30.0, 70.0, 20.0, Font::Helvetica, [0, 0, 0], text, 0.3, direction);
+        let pdf = doc.finish().unwrap();
+        assert_eq!(utf16_entry(&pdf, "/ActualText"), text);
+        documents.push(pdf);
+    }
+    assert_ne!(documents[0], documents[1]);
 }

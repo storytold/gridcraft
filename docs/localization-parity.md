@@ -1,13 +1,13 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (Arabic PDF export joins letters and preserves logical text) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (Arabic PDF cell direction and RTL pages) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
 right-to-left sheets and full complex-script support. Part of
 [target-app-parity.md](target-app-parity.md). **Localization: ~10% ready, 100–165 h** (estimated).
 
-Arabic PDF output uses harfrust shaping, Unicode bidi and licensed Noto Arabic glyph outlines with ToUnicode and logical ActualText. Cells, headers and chart labels support marks, digits, rotation and style. Bundled builds use the optional `CRAFT_FONTS_DIR` input; unbundled native builds look for Noto Sans Arabic. Unsupported text fails export before writing the destination. Explicit cell reading-direction integration is separate.
+Arabic PDF output uses harfrust shaping, Unicode bidi and licensed Noto Arabic glyph outlines with ToUnicode and logical ActualText. Cells, headers and chart labels support marks, digits, rotation and style. Bundled builds use the optional `CRAFT_FONTS_DIR` input; unbundled native builds look for Noto Sans Arabic. Unsupported text fails export before writing the destination. Cell Context/LTR/RTL direction is carried through measurement, wrapping and drawing. RTL sheet geometry mirrors while text stays readable. Latin-only RTL text uses bidi ordering without requiring an Arabic font.
 
 ## Where we are (measured from source on `main`, after the 2026-10-10 merges)
 
@@ -80,6 +80,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Arabic PDF cells inherit explicit or contextual direction; wrapped lines retain paragraph direction, and RTL pages mirror cell and object geometry |
 | 2026-10-13 | minor | Arabic PDF cells, headers and chart labels support joined letters, combining marks, digits, bold/italic, rotation and grapheme wrapping |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
