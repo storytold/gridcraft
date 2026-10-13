@@ -271,6 +271,20 @@ handling again for troubleshooting.
 | Fedora/RHEL/openSUSE | `gridcraft-<ver>-linux-x86_64.rpm` | `gridcraft-<ver>-linux-aarch64.rpm` | |
 | Tarball | `gridcraft-<ver>-linux-x86_64.tar.gz` | `gridcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
 
+#### Community packages
+
+These packages are maintained by community members, not by the GridCraft team.
+
+On Gentoo, the [::snakebyte overlay](https://github.com/switch87/snakebyte-overlay) packages the
+Linux release as `app-office/gridcraft-bin` (prebuilt) and `app-office/gridcraft` (built from source):
+
+```sh
+eselect repository add snakebyte git https://github.com/switch87/snakebyte-overlay.git
+emaint sync -r snakebyte
+echo 'app-office/gridcraft-bin ~amd64' >> /etc/portage/package.accept_keywords/gridcraft
+emerge --ask app-office/gridcraft-bin
+```
+
 ### FreeBSD
 
 | Build | File |
