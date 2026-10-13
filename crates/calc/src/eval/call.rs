@@ -67,6 +67,7 @@ impl<'h> Evaluator<'h> {
             "INDIRECT" => self.indirect(args),
             "INDEX" => self.index(args),
             "XLOOKUP" => self.xlookup(args),
+            "VLOOKUP" | "HLOOKUP" => self.vh_lookup(name, args),
             "CELL" => self.cell_info(args),
             "TRIMRANGE" => self.trimrange(args),
             "SUBTOTAL" | "AGGREGATE" => self.subtotal(name, args),
