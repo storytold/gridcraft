@@ -82,7 +82,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Format Cells…",
             ["Home", "Cells", "Format"],
             Some("Cmd+1"),
-            "{range?, style: {font?, fill?, borders?, align?, numFmt?, protection?}} (partial Style JSON merged in)",
+            "{range?, style: {font?, fill?, borders?, align?: {reading_order?: Context|LeftToRight|RightToLeft|null, ...}, numFmt?, protection?}} (partial Style JSON merged in; null clears reading_order)",
             has_doc,
             format_cells
         ),

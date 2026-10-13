@@ -1588,7 +1588,7 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
             st.num_fmt = gridcraft_engine::model::NumFmt::new(&code);
         }
         "Alignment" => {
-            use gridcraft_engine::model::{HAlign, VAlign};
+            use gridcraft_engine::model::{HAlign, ReadingOrder, VAlign};
             ui.label(egui::RichText::new(lang.tr("Horizontal")).strong());
             ui.horizontal_wrapped(|ui| {
                 for (h, n) in [
@@ -1614,6 +1614,17 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
                     (VAlign::Distributed, "Distributed"),
                 ] {
                     ui.radio_value(&mut st.align.v, v, lang.tr(n));
+                }
+            });
+            ui.label(egui::RichText::new(lang.tr("Reading direction")).strong());
+            ui.horizontal_wrapped(|ui| {
+                for (order, name) in
+                    [(ReadingOrder::Context, "Context"), (ReadingOrder::LeftToRight, "Left to right"), (ReadingOrder::RightToLeft, "Right to left")]
+                {
+                    let selected = st.align.reading_order.unwrap_or_default() == order;
+                    if ui.radio(selected, lang.tr(name)).clicked() {
+                        st.align.reading_order = Some(order);
+                    }
                 }
             });
             let mut indent = st.align.indent as f32;
