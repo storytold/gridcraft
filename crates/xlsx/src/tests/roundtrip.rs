@@ -242,7 +242,18 @@ fn sample() -> Workbook {
     s.autofilter = Some(AutoFilter {
         range: rr("K1:N20"),
         criteria: vec![
-            (0, FilterCriterion::Values { values: vec!["a".into(), "b".into()], blanks: true }),
+            (
+                0,
+                FilterCriterion::Values {
+                    values: vec!["a".into(), "b".into()],
+                    blanks: true,
+                    dates: vec![
+                        DateGroupItem { grouping: DateGrouping::Year, year: 2024, month: 0, day: 0, hour: 0, minute: 0, second: 0 },
+                        DateGroupItem { grouping: DateGrouping::Month, year: 2026, month: 3, day: 0, hour: 0, minute: 0, second: 0 },
+                        DateGroupItem { grouping: DateGrouping::Minute, year: 2025, month: 12, day: 24, hour: 18, minute: 30, second: 0 },
+                    ],
+                },
+            ),
             (1, FilterCriterion::Custom { a: (">=".into(), "5".into()), b: Some(("<".into(), "9".into())), and: true }),
             (2, FilterCriterion::Top10 { bottom: true, percent: false, count: 3 }),
             (3, FilterCriterion::FillColor(Color::Rgb(0xFF0000))),
@@ -315,7 +326,7 @@ fn sample() -> Workbook {
         last_col: false,
         filter_button: true,
         filter: vec![
-            (0, FilterCriterion::Values { values: vec!["East".into()], blanks: false }),
+            (0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, dates: vec![] }),
             (1, FilterCriterion::Icon { set: "3TrafficLights1".into(), id: Some(1) }),
         ],
         table_type: None,

@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and row formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (AutoFilter lists dates as a Year › Month › Day tree) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -297,8 +297,8 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
   duplicates, top/bottom, averages, data bars, colour scales, icon sets, formulas), automatic
   row heights, autofit, hide/unhide, freeze panes.
   Border presets include visual diagrams; Format Cells previews draft borders before applying.
-- Data: sort (multi-level, by colour, custom lists), AutoFilter (values, custom, top 10,
-  average, colour), tables with totals rows, remove duplicates, text to columns, data validation
+- Data: sort (multi-level, by colour, custom lists), AutoFilter (values, dates grouped by year,
+  month and day, custom, top 10, average, colour), tables with totals rows, remove duplicates, text to columns, data validation
   with error alerts, grouping/outline, subtotals.
 - PivotTables: Insert/Recommended PivotTables, field list pane, compact/outline/tabular layouts,
   values on rows or columns, date grouping, sort, filters, show-values-as, refresh, and XLSX round-trip.
@@ -332,6 +332,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | AutoFilter: date cells are listed as a Year › Month › Day tree (› Hour › Minute › Second with times) with mixed checkboxes, `data.filterBy` takes `dates`, and XLSX `dateGroupItem` criteria are read and written; no score change |
 | 2026-10-12 | minor | Essentials AutoFit evidence: rows auto-fit oversized fonts on open and row formatting (#833) |
 | 2026-10-12 | minor | Sheet tabs: reveal the selected tab on navigation and resize while preserving manual scrolling (#681); no score change |
 | 2026-10-12 | minor | PivotTables: values on rows (Σ Values in Rows at any position, all three layouts; `pivot.moveField` and the field pane move it; `dataOnRows` round-trips) (no score change) |

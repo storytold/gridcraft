@@ -7,9 +7,11 @@ use std::sync::Arc;
 
 use egui::{Align2, Color32, CursorIcon, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_engine::cf::{CfCache, CfLook};
+use gridcraft_engine::cmd::data::{DateNode, FilterList};
 use gridcraft_engine::core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
 use gridcraft_engine::model::{BorderLine, BorderStyle, Color, HAlign, LineIndex, PatternType, Sheet, Style, Underline, VAlign, Workbook};
-use serde_json::json;
+use gridcraft_engine::model::{DateGroupItem, DateGrouping};
+use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
 use crate::editor::{EditState, REF_COLORS};
@@ -2765,9 +2767,10 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
         }
     }
     let wb = app.session.active().map(|d| d.wb.clone()).unwrap_or(wb);
-    let values = gridcraft_engine::cmd::data::filter_values(&wb, si, col);
+    let list = gridcraft_engine::cmd::data::filter_list(&wb, si, col);
     let key = egui::Id::new(("filter_sel", col));
     let search_key = egui::Id::new(("filter_search", col));
+    let open_key = egui::Id::new(("filter_open", col));
     let mut close = false;
     let area = egui::Area::new(egui::Id::new("filter_menu")).fixed_pos(at + vec2(-180.0, 10.0)).order(egui::Order::Foreground);
     let response = area.show(ui.ctx(), |ui| {
@@ -2783,7 +2786,8 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             }
             ui.separator();
             ui.label(egui::RichText::new("Filter").strong());
-            let mut checks: Vec<(String, bool)> = ui.ctx().data_mut(|d| d.get_temp::<Vec<(String, bool)>>(key)).unwrap_or(values.clone());
+            let mut list: FilterList = ui.ctx().data_mut(|d| d.get_temp::<FilterList>(key)).unwrap_or(list.clone());
+            let mut open: Vec<DateGroupItem> = ui.ctx().data_mut(|d| d.get_temp(open_key)).unwrap_or_default();
             // A search narrows the list; Select All and Apply then only cover the matches.
             let mut search: String = ui.ctx().data_mut(|d| d.get_temp(search_key)).unwrap_or_default();
             let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search").desired_width(f32::INFINITY));
@@ -2792,26 +2796,44 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             }
             let needle = search.trim().to_lowercase();
             let matches = |v: &str| needle.is_empty() || v.to_lowercase().contains(&needle);
-            let all = checks.iter().filter(|(v, _)| matches(v)).all(|(_, b)| *b);
+            // Every shown leaf: the flat values and the date tree's leaves that match the search.
+            let mut shown: Vec<bool> = list.values.iter().filter(|(v, _)| matches(v)).map(|(_, b)| *b).collect();
+            for n in &mut list.dates {
+                date_leaves(n, "", &needle, &mut |leaf| shown.push(leaf.checked));
+            }
+            let all = shown.iter().all(|b| *b);
             let mut all_new = all;
             let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
-            if ui.checkbox(&mut all_new, label).changed() {
-                for c in checks.iter_mut().filter(|(v, _)| matches(v)) {
+            if ui.add(egui::Checkbox::new(&mut all_new, label).indeterminate(!all && shown.iter().any(|b| *b))).changed() {
+                for c in list.values.iter_mut().filter(|(v, _)| matches(v)) {
                     c.1 = all_new;
+                }
+                for n in &mut list.dates {
+                    date_leaves(n, "", &needle, &mut |leaf| leaf.checked = all_new);
                 }
             }
             // Full width: shrunk to the longest value, the scroll bar sat mid-menu and the wheel only
             // worked over the values themselves (#432).
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
-                for (v, on) in checks.iter_mut().filter(|(v, _)| matches(v)) {
+                // Dates first as a Year › Month › Day tree, as in Excel; then the other values.
+                date_tree_ui(ui, &mut list.dates, "", &needle, &mut open, 0);
+                for (v, on) in list.values.iter_mut().filter(|(v, _)| matches(v)) {
                     ui.checkbox(on, v.as_str());
                 }
             });
             ui.ctx().data_mut(|d| {
-                d.insert_temp(key, checks.clone());
+                d.insert_temp(key, list.clone());
                 d.insert_temp(search_key, search.clone());
+                d.insert_temp(open_key, open);
             });
-            let checks: Vec<(String, bool)> = checks.iter().map(|(v, on)| (v.clone(), *on && matches(v))).collect();
+            // Apply and the all-checked test only cover what the search shows.
+            let checks: Vec<(String, bool)> = list.values.iter().map(|(v, on)| (v.clone(), *on && matches(v))).collect();
+            let mut dates = list.dates.clone();
+            for n in &mut dates {
+                uncheck_unmatched(n, "", &needle);
+            }
+            let all_dates = dates.iter().all(DateNode::all_checked);
+            let date_items = gridcraft_engine::cmd::data::checked_date_items(&dates);
             ui.separator();
             ui.horizontal(|ui| {
                 if ui.button("Clear Filter").clicked() {
@@ -2821,10 +2843,11 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
                 if ui.button("Apply").clicked() {
                     let blanks = checks.iter().any(|(v, on)| v == "(Blanks)" && *on);
                     let vals: Vec<String> = checks.iter().filter(|(v, on)| *on && v != "(Blanks)").map(|(v, _)| v.clone()).collect();
-                    let p = if checks.iter().all(|(_, b)| *b) {
+                    let p = if checks.iter().all(|(_, b)| *b) && all_dates {
                         json!({"column": col_to_letters(col), "clear": true})
                     } else {
-                        json!({"column": col_to_letters(col), "values": vals, "blanks": blanks})
+                        let dates: Vec<Json> = date_items.iter().map(date_item_json).collect();
+                        json!({"column": col_to_letters(col), "values": vals, "blanks": blanks, "dates": dates})
                     };
                     let _ = app.run("data.filterBy", p);
                     close = true;
@@ -2834,11 +2857,96 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
     });
     if close || popup_dismissed(&response.response, was_open) {
         ui.ctx().data_mut(|d| {
-            d.remove::<Vec<(String, bool)>>(key);
+            d.remove::<FilterList>(key);
             d.remove::<String>(search_key);
+            d.remove::<Vec<DateGroupItem>>(open_key);
         });
         app.grid.filter_menu = None;
     }
+}
+
+/// Does a date leaf match the search? Its year, month and day labels (`path`) or the text of its cells.
+fn leaf_matches(leaf: &DateNode, path: &str, needle: &str) -> bool {
+    needle.is_empty() || path.to_lowercase().contains(needle) || leaf.texts.iter().any(|t| t.to_lowercase().contains(needle))
+}
+
+/// Visits the leaves under `n` that match the search; `path` holds the labels above `n`.
+fn date_leaves(n: &mut DateNode, path: &str, needle: &str, f: &mut dyn FnMut(&mut DateNode)) {
+    let path = format!("{path} {}", n.label);
+    if n.children.is_empty() {
+        if leaf_matches(n, &path, needle) {
+            f(n);
+        }
+        return;
+    }
+    for c in &mut n.children {
+        date_leaves(c, &path, needle, f);
+    }
+}
+
+/// Unchecks the leaves under `n` that the search hides.
+fn uncheck_unmatched(n: &mut DateNode, path: &str, needle: &str) {
+    let path = format!("{path} {}", n.label);
+    if n.children.is_empty() {
+        n.checked &= leaf_matches(n, &path, needle);
+    }
+    for c in &mut n.children {
+        uncheck_unmatched(c, &path, needle);
+    }
+}
+
+fn date_node_matches(n: &DateNode, path: &str, needle: &str) -> bool {
+    let path = format!("{path} {}", n.label);
+    if n.children.is_empty() { leaf_matches(n, &path, needle) } else { n.children.iter().any(|c| date_node_matches(c, &path, needle)) }
+}
+
+/// One level of the filter dropdown's date tree: an expander, then a checkbox that is mixed when
+/// only some of the dates under it are checked. A search expands the matching branches.
+fn date_tree_ui(ui: &mut egui::Ui, nodes: &mut [DateNode], path: &str, needle: &str, open: &mut Vec<DateGroupItem>, depth: usize) {
+    for n in nodes.iter_mut() {
+        if !needle.is_empty() && !date_node_matches(n, path, needle) {
+            continue;
+        }
+        let expanded = !needle.is_empty() || open.contains(&n.item);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.add_space(depth as f32 * 14.0);
+            let toggle = ui.add_visible(!n.children.is_empty(), egui::Button::new(if expanded { "▼" } else { "▶" }).small().frame(false));
+            if toggle.clicked() {
+                if let Some(i) = open.iter().position(|o| *o == n.item) {
+                    open.remove(i);
+                } else {
+                    open.push(n.item);
+                }
+            }
+            let all = n.all_checked();
+            let mut on = all;
+            if ui.add(egui::Checkbox::new(&mut on, n.label.as_str()).indeterminate(!all && n.any_checked())).changed() {
+                n.set_all(on);
+            }
+        });
+        if expanded && !n.children.is_empty() {
+            let path = format!("{path} {}", n.label);
+            date_tree_ui(ui, &mut n.children, &path, needle, open, depth + 1);
+        }
+    }
+}
+
+/// A `dates` entry of `data.filterBy`: the fields down to the item's grouping.
+fn date_item_json(d: &DateGroupItem) -> Json {
+    let mut j = json!({"year": d.year});
+    for (g, name, v) in [
+        (DateGrouping::Month, "month", d.month),
+        (DateGrouping::Day, "day", d.day),
+        (DateGrouping::Hour, "hour", d.hour),
+        (DateGrouping::Minute, "minute", d.minute),
+        (DateGrouping::Second, "second", d.second),
+    ] {
+        if d.grouping >= g {
+            j[name] = json!(v);
+        }
+    }
+    j
 }
 
 fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {

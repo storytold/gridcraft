@@ -7,9 +7,9 @@ use gridcraft_core::date::{serial_from_ymd, time_fraction};
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{
-    AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
-    Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation, ValidationKind,
-    XmlColumnPr,
+    AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, DateGroupItem, DateGrouping, EditRange, ErrorStyle, FilterCriterion,
+    Formula, Hyperlink, LineInfo, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn,
+    Validation, ValidationKind, XmlColumnPr,
 };
 
 use crate::IoError;
@@ -757,6 +757,28 @@ fn filter_op(s: Option<&str>) -> &'static str {
     }
 }
 
+/// `<dateGroupItem year="2026" month="3" dateTimeGrouping="month"/>`; fields below the grouping
+/// are ignored, a missing or out-of-range one drops the item.
+fn read_date_group_item(e: &El) -> Option<DateGroupItem> {
+    let grouping = DateGrouping::from_xml(e.attr("dateTimeGrouping")?)?;
+    let field = |name: &str, g: DateGrouping, max: u32| -> Option<u32> {
+        if grouping < g {
+            return Some(0);
+        }
+        e.attr_u32(name).filter(|v| *v <= max)
+    };
+    let year = e.attr_u32("year").filter(|y| *y <= 9999)? as i32;
+    Some(DateGroupItem {
+        grouping,
+        year,
+        month: field("month", DateGrouping::Month, 12)?,
+        day: field("day", DateGrouping::Day, 31)?,
+        hour: field("hour", DateGrouping::Hour, 23)?,
+        minute: field("minute", DateGrouping::Minute, 59)?,
+        second: field("second", DateGrouping::Second, 59)?,
+    })
+}
+
 pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
     let range = e.attr("ref").and_then(RangeRef::parse)?;
     let mut criteria = vec![];
@@ -766,6 +788,7 @@ pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
             FilterCriterion::Values {
                 values: f.kids("filter").filter_map(|x| x.attr("val")).map(str::to_string).collect(),
                 blanks: f.flag("blank", false),
+                dates: f.kids("dateGroupItem").filter_map(read_date_group_item).collect(),
             }
         } else if let Some(cf) = fc.child("customFilters") {
             let mut it = cf.kids("customFilter").map(|c| (filter_op(c.attr("operator")).to_string(), c.attr("val").unwrap_or("").to_string()));

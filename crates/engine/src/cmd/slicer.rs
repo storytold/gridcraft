@@ -90,7 +90,7 @@ fn reapply_slicer(wb: &mut Workbook, sheet: usize, id: u32) {
         let off = abs_col.saturating_sub(af.range.start.col);
         af.criteria.retain(|(o, _)| *o != off);
         if let Some(values) = selected {
-            af.criteria.push((off, FilterCriterion::Values { values, blanks: false }));
+            af.criteria.push((off, FilterCriterion::Values { values, blanks: false, dates: vec![] }));
         }
     }
     super::data::apply_filter(wb, sheet);
