@@ -119,10 +119,15 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     if std::path::Path::new(&path).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
         return super::print::export_pdf(s, &json!({"path": path}));
     }
+    let user = s.prefs.user_name.clone();
     let d = s.doc_mut()?;
     // The document's own file keeps the format its content had when opened; any other path
     // goes by its extension. Relative paths to linked workbooks are rewritten for the new folder.
     let kind = crate::io::FileKind::from_path(&path).or(d.content_kind.filter(|_| d.path.as_deref() == Some(path.as_str())));
+    // A workbook saved as .xlsx records who saved it and when, as Excel does (File › Info).
+    if matches!(kind, None | Some(crate::io::FileKind::Xlsx)) {
+        crate::io::stamp_saved(&mut std::sync::Arc::make_mut(&mut d.wb).props, &user, &crate::io::w3cdtf_now());
+    }
     let rebased = crate::io::source_dir(&path).and_then(|f| gridcraft_xlsx::rebase_links(&d.wb, &f));
     let wb = rebased.as_ref().unwrap_or(&d.wb);
     let bytes = match kind {
@@ -210,6 +215,7 @@ fn properties(s: &mut Session, p: &Json) -> Result<Json> {
             ("company", &mut pr.company),
             ("keywords", &mut pr.keywords),
             ("description", &mut pr.description),
+            ("category", &mut pr.category),
         ] {
             if let Some(v) = str_param(p, k) {
                 *slot = v.to_string();

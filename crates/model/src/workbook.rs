@@ -152,6 +152,20 @@ pub struct DocProps {
     pub company: String,
     pub keywords: String,
     pub description: String,
+    /// `cp:category` (Excel's File › Info "Categories").
+    #[serde(default)]
+    pub category: String,
+    /// `cp:lastModifiedBy`: who saved the file last.
+    #[serde(default)]
+    pub last_modified_by: String,
+    /// `dcterms:created`, `dcterms:modified` and `cp:lastPrinted` as stored (W3CDTF, normally
+    /// UTC such as `2022-05-27T04:57:00Z`); empty when the file doesn't say.
+    #[serde(default)]
+    pub created: String,
+    #[serde(default)]
+    pub modified: String,
+    #[serde(default)]
+    pub last_printed: String,
 }
 
 /// One phonetic (furigana) run of a string item (`<rPh>`): the reading `text` and the range of the
