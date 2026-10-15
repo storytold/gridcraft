@@ -147,6 +147,19 @@ fn data_range(s: &Session, p: &Json) -> Result<RangeRef> {
     Ok(current_region(sh, d.selection.active))
 }
 
+/// The range Custom Sort works on and whether its first row looks like a header.
+pub fn sort_context(s: &Session, p: &Json) -> Result<(RangeRef, bool)> {
+    let d = s.doc()?;
+    let sel = d.selection.current();
+    // Unlike other data commands, an explicit block wins over the table it sits in, so a totals row can be sorted.
+    let r = match d.wb.active().and_then(|sh| sh.used_range()) {
+        Some(used) if p.get("range").is_none() && !sel.is_single() => sel.intersection(&used).unwrap_or(sel),
+        _ => data_range(s, p)?,
+    };
+    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    Ok((r, bool_param(p, "header").unwrap_or_else(|| guess_header(&d.wb, sh, r))))
+}
+
 /// Excel's header guess: the first row is text over a column of numbers, or is bold.
 fn guess_header(wb: &Workbook, sh: &Sheet, r: RangeRef) -> bool {
     if let Some(t) = sh.table_at(r.start) {
@@ -1312,6 +1325,25 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_sort_context_sorts_a_selected_block_even_inside_a_table() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["H"], [2], [1]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:A3", "header": true, "name": "T"})).unwrap();
+        s.execute("table.totalRow", json!({"table": "T", "on": true})).unwrap();
+        // One cell in the table: the table's data, without its totals row.
+        s.execute("selection.set", json!({"cell": "A2"})).unwrap();
+        assert_eq!(sort_context(&s, &json!({})).unwrap().0.a1(), "A1:A3");
+        // A selected block that includes the totals row is sorted as selected.
+        s.execute("selection.set", json!({"range": "A1:A4"})).unwrap();
+        assert_eq!(sort_context(&s, &json!({})).unwrap().0.a1(), "A1:A4");
+        // Other data commands keep the table's range.
+        assert_eq!(data_range(&s, &json!({})).unwrap().a1(), "A1:A3");
+        // An explicit range wins over the selection.
+        assert_eq!(sort_context(&s, &json!({"range": "A1:A2"})).unwrap().0.a1(), "A1:A2");
+    }
 
     #[test]
     fn filter_by_huge_numeric_column_is_rejected_not_overflowed() {
