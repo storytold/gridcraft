@@ -1,7 +1,7 @@
 #[cfg(test)]
 use super::show::build_params;
 use super::show::{form_fields, ok_cancel};
-use super::{Dialog, Field, Icon, Json, SheetApp, json, vec2};
+use super::{Dialog, Field, Json, Sense, SheetApp, SortChoicesCache, json, vec2};
 
 /// Initial values of the Data Validation form: the rule stored on the active cell, so OK without
 /// edits keeps it; a plain list rule when the cell has none.
@@ -180,105 +180,242 @@ pub(super) fn advanced_filter_form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &
     ui.allocate_ui(vec2(ui.available_width(), ui.spacing().interact_size.y + 8.0), |ui| ok_cancel(ui, confirm, open));
 }
 
-/// Draws the sort-level editor: header toggle, column/by/order controls, add/remove level, and `data.sort` on confirmation.
-pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
-    let lang = app.ui.language;
+pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let mut header = d.values.get("header").and_then(Json::as_bool).unwrap_or(true);
-    ui.checkbox(&mut header, "My list has headers");
-    d.values.insert("header".into(), json!(header));
-    let mut levels: Vec<Json> = d.values.get("levels").and_then(Json::as_array).cloned().unwrap_or_default();
-    // Columns of the region around the active cell, labelled with their header (or first value).
-    let columns: Vec<(String, String)> = app
-        .session
-        .active()
-        .and_then(|d| {
-            let sh = d.wb.active()?;
-            let region = gridcraft_engine::selection::current_region(sh, d.selection.active);
-            Some(
-                (region.start.col..=region.end.col)
+    let was_header = header;
+    let range = d.values.get("range").and_then(Json::as_str).and_then(gridcraft_engine::core::RangeRef::parse);
+    let (doc_uid, sheet_index, revision) =
+        app.session.active().map(|doc| (Some(doc.uid), Some(doc.wb.active_sheet()), Some(doc.revision))).unwrap_or_default();
+    let range_key = range.map(|r| r.a1());
+    let cache_is_valid = d.sort_choices_cache.as_ref().is_some_and(|cache| {
+        cache.doc_uid == doc_uid
+            && cache.sheet_index == sheet_index
+            && cache.revision == revision
+            && cache.range == range_key
+            && cache.header == header
+    });
+    let choices = if cache_is_valid {
+        d.sort_choices_cache.as_ref().map(|cache| cache.choices.clone()).unwrap_or_default()
+    } else {
+        let choices: Vec<(String, String, bool)> = range
+            .map(|r| {
+                let doc = app.session.active();
+                let sh = doc.and_then(|d| d.wb.active());
+                let body_start = r.start.row.saturating_add(u32::from(header));
+                let cols = r.end.col.saturating_sub(r.start.col).saturating_add(1).max(1) as usize;
+                // Total sampled cells are bounded across all columns, not per column.
+                let rows_per_col = (200_000 / cols).max(1);
+                (r.start.col..=r.end.col)
                     .map(|c| {
-                        let letter = gridcraft_engine::core::col_to_letters(c);
-                        // The region starts at the header row when one is present, so the
-                        // label always comes from start.row: header text with headers on,
-                        // first data value with them off.
-                        let label_row = region.start.row;
-                        let text = gridcraft_engine::display::cell_text(&d.wb, sh, gridcraft_engine::core::CellRef::new(label_row, c));
-                        let text: String = text.chars().take(24).collect();
-                        (letter.clone(), if text.is_empty() { letter } else { format!("{letter}: {text}") })
+                        let letters = gridcraft_engine::core::col_to_letters(c);
+                        let text = match (header, sh) {
+                            (true, Some(sh)) => sh.value(gridcraft_engine::core::CellRef::new(r.start.row, c)).display().trim().to_string(),
+                            _ => String::new(),
+                        };
+                        let label = if text.is_empty() { format!("Column {letters}") } else { text };
+                        let numeric = sh.is_some_and(|sh| {
+                            sort_values_are_numeric(
+                                (body_start..=r.end.row).take(rows_per_col).map(|row| sh.value(gridcraft_engine::core::CellRef::new(row, c))),
+                            )
+                        });
+                        (letters, label, numeric)
                     })
-                    .collect(),
-            )
-        })
-        .unwrap_or_default();
-    let mut remove = None;
-    for (i, lv) in levels.iter_mut().enumerate() {
+                    .collect()
+            })
+            .unwrap_or_default();
+        d.sort_choices_cache = Some(SortChoicesCache { doc_uid, sheet_index, revision, range: range_key, header, choices: choices.clone() });
+        choices
+    };
+    let mut levels: Vec<Json> = d.values.get("levels").and_then(Json::as_array).cloned().unwrap_or_default();
+    let mut selected = d.list_index.min(levels.len().saturating_sub(1));
+    ui.horizontal_wrapped(|ui| {
+        // New levels must use an unused column in the selected sort range.
+        let used: Vec<&str> = levels.iter().filter_map(|l| l["column"].as_str()).collect();
+        let next_column = choices.iter().map(|(l, _, _)| l).find(|l| !used.contains(&l.as_str())).cloned();
+        if sort_text_icon_button(
+            ui,
+            crate::icons::Icon::Plus,
+            crate::theme::Tokens::get(ui.ctx()).accent,
+            "Add Level",
+            levels.len() < 64 && next_column.is_some(),
+        )
+        .clicked()
+            && let Some(next) = next_column
+        {
+            levels.push(json!({"column": next, "order": "asc"}));
+            selected = levels.len() - 1;
+        }
+        if sort_text_icon_button(ui, crate::icons::Icon::Close, crate::theme::Tokens::get(ui.ctx()).danger, "Delete Level", !levels.is_empty())
+            .clicked()
+            && selected < levels.len()
+        {
+            levels.remove(selected);
+            selected = selected.saturating_sub(1);
+        }
+        if sort_text_icon_button(
+            ui,
+            crate::icons::Icon::Copy,
+            crate::theme::Tokens::get(ui.ctx()).text,
+            "Copy Level",
+            !levels.is_empty() && levels.len() < 64,
+        )
+        .clicked()
+            && let Some(lv) = levels.get(selected).cloned()
+        {
+            levels.insert(selected + 1, lv);
+            selected += 1;
+        }
+        if sort_icon_button(ui, crate::icons::Icon::ChevronUp, crate::theme::Tokens::get(ui.ctx()).text, "Move Up", selected > 0).clicked() {
+            levels.swap(selected, selected - 1);
+            selected -= 1;
+        }
+        if sort_icon_button(ui, crate::icons::Icon::Chevron, crate::theme::Tokens::get(ui.ctx()).text, "Move Down", selected + 1 < levels.len())
+            .clicked()
+        {
+            levels.swap(selected, selected + 1);
+            selected += 1;
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.checkbox(&mut header, "My list has headers");
+        });
+    });
+    d.values.insert("header".into(), json!(header));
+    if header != was_header
+        && let Some(r) = range
+    {
+        let shown = if header && r.height() > 1 {
+            gridcraft_engine::core::RangeRef::new(gridcraft_engine::core::CellRef::new(r.start.row + 1, r.start.col), r.end)
+        } else {
+            r
+        };
+        let _ = app.run("selection.set", json!({"range": shown.a1()}));
+    }
+    ui.add_space(4.0);
+    let table_height = (ui.available_height() - 48.0).max(60.0);
+    egui::ScrollArea::vertical().max_height(table_height).min_scrolled_height(table_height).auto_shrink([false, false]).show(ui, |ui| {
+        let gap = ui.spacing().item_spacing.x;
+        let label_w = 64.0;
+        let row_h = 26.0;
+        let rest = (ui.available_width() - 16.0 - label_w - 3.0 * gap).max(300.0);
+        let w = rest / 3.0;
+        let (w_col, w_on, w_ord) = (w, w, w);
+        let cell = |ui: &mut egui::Ui, w: f32, h: f32, add: &mut dyn FnMut(&mut egui::Ui)| {
+            ui.allocate_ui_with_layout(vec2(w, h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.set_min_size(vec2(w, h));
+                add(ui);
+            });
+        };
         ui.horizontal(|ui| {
-            let label = ui.label(lang.tr(if i == 0 { "Sort by" } else { "Then by" }));
-            let mut col = lv["column"].as_str().unwrap_or("A").to_string();
-            if columns.is_empty() {
-                ui.add(egui::TextEdit::singleline(&mut col).desired_width(50.0)).labelled_by(label.id);
-            } else {
-                craft_ui::ComboBox::from_id_salt(("sort_col", i))
-                    .selected_text(col.clone())
-                    .show_ui(ui, |ui| {
-                        for (letter, label) in &columns {
-                            ui.selectable_value(&mut col, letter.clone(), label.as_str());
-                        }
-                    })
-                    .response
-                    .labelled_by(label.id);
+            cell(ui, label_w + gap + w_col, 18.0, &mut |ui| {
+                ui.strong("Column");
+            });
+            cell(ui, w_on, 18.0, &mut |ui| {
+                ui.strong("Sort On");
+            });
+            cell(ui, w_ord, 18.0, &mut |ui| {
+                ui.strong("Order");
+            });
+        });
+        let accent = crate::theme::Tokens::get(ui.ctx()).accent;
+        for (i, lv) in levels.iter_mut().enumerate() {
+            let row_rect = egui::Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), row_h));
+            let row = ui.interact(row_rect, ui.scope_id().with(("sortRow", i)), Sense::click());
+            if i == selected {
+                ui.painter().rect_filled(row_rect, 3.0, accent.gamma_multiply(0.18));
+            } else if row.hovered() {
+                ui.painter().rect_filled(row_rect, 3.0, accent.gamma_multiply(0.07));
             }
-            lv["column"] = json!(col.to_ascii_uppercase());
-            let mut by = lv["by"].as_str().unwrap_or("values").to_string();
-            craft_ui::ComboBox::from_id_salt(("by", i))
-                .selected_text(match by.as_str() {
+            if row.clicked() {
+                selected = i;
+            }
+            ui.allocate_ui_with_layout(row_rect.size(), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                cell(ui, label_w, row_h, &mut |ui| {
+                    ui.add(egui::Label::new(if i == 0 { "Sort by" } else { "Then by" }).selectable(false));
+                });
+                let mut col = lv["column"].as_str().unwrap_or("A").to_string();
+                let shown = choices.iter().find(|(l, _, _)| *l == col).map(|(_, t, _)| t.clone()).unwrap_or_else(|| format!("Column {col}"));
+                let r = craft_ui::ComboBox::from_id_salt(("col", i)).selected_text(shown.clone()).width(w_col).show_ui(ui, |ui| {
+                    for (letters, label, _) in &choices {
+                        ui.selectable_value(&mut col, letters.clone(), label);
+                    }
+                });
+                r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Sort column"));
+                if r.response.clicked() {
+                    selected = i;
+                }
+                lv["column"] = json!(col);
+                let mut by = lv["by"].as_str().unwrap_or("values").to_string();
+                let by_label = match by.as_str() {
                     "cellColor" => "Cell Color",
                     "fontColor" => "Font Color",
                     _ => "Cell Values",
-                })
-                .show_ui(ui, |ui| {
+                };
+                let r = craft_ui::ComboBox::from_id_salt(("by", i)).selected_text(by_label).width(w_on).show_ui(ui, |ui| {
                     ui.selectable_value(&mut by, "values".into(), "Cell Values");
                     ui.selectable_value(&mut by, "cellColor".into(), "Cell Color");
                     ui.selectable_value(&mut by, "fontColor".into(), "Font Color");
-                })
-                .response
-                .accessible_name(lang.tr("Sort On"));
-            lv["by"] = json!(by);
-            let mut desc = lv["order"].as_str() == Some("desc");
-            ui.radio_value(&mut desc, false, "A to Z");
-            ui.radio_value(&mut desc, true, "Z to A");
-            lv["order"] = json!(if desc { "desc" } else { "asc" });
-            if crate::widgets::icon_button(ui, Icon::Close, crate::theme::Tokens::get(ui.ctx()).text_dim, "Remove level", vec2(18.0, 18.0)).clicked()
-            {
-                remove = Some(i);
-            }
-        });
-    }
-    if let Some(i) = remove
-        && levels.len() > 1
-    {
-        levels.remove(i);
-    }
-    if ui.button("+ Add Level").clicked() {
-        let used: Vec<String> = levels.iter().filter_map(|l| l.get("column").and_then(Json::as_str).map(str::to_string)).collect();
-        let next = columns
-            .iter()
-            .map(|(l, _)| l)
-            .find(|l| !used.contains(l))
-            .cloned()
-            .or_else(|| columns.last().map(|(l, _)| l.clone()))
-            .unwrap_or_else(|| "B".into());
-        levels.push(json!({"column": next, "order": "asc"}));
-    }
+                });
+                r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Sort on"));
+                if r.response.clicked() {
+                    selected = i;
+                }
+                lv["by"] = json!(by);
+                let numeric = choices.iter().find(|(l, _, _)| lv["column"].as_str() == Some(l.as_str())).is_some_and(|(_, _, n)| *n);
+                let (asc_label, desc_label) = if numeric { ("Smallest to Largest", "Largest to Smallest") } else { ("A to Z", "Z to A") };
+                let mut desc = lv["order"].as_str() == Some("desc");
+                let order_label = if desc { desc_label } else { asc_label };
+                let r = craft_ui::ComboBox::from_id_salt(("order", i)).selected_text(order_label).width(w_ord).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut desc, false, asc_label);
+                    ui.selectable_value(&mut desc, true, desc_label);
+                });
+                r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Sort order"));
+                if r.response.clicked() {
+                    selected = i;
+                }
+                lv["order"] = json!(if desc { "desc" } else { "asc" });
+            });
+        }
+    });
+    d.list_index = selected;
     d.values.insert("levels".into(), Json::Array(levels.clone()));
-    let mut open = true;
-    ok_cancel(ui, confirm, &mut open);
-    if *confirm {
-        app.run_or_alert("data.sort", json!({"header": header, "keys": levels}));
+    ok_cancel(ui, confirm, open);
+    if *confirm && !levels.is_empty() {
+        let mut p = json!({"header": header, "keys": levels});
+        if let Some(r) = d.values.get("range").and_then(Json::as_str) {
+            p["range"] = json!(r);
+        }
+        app.run_or_alert("data.sort", p);
     }
-    if !open {
-        *confirm = true;
+}
+
+fn sort_icon_button(ui: &mut egui::Ui, icon: crate::icons::Icon, color: egui::Color32, tip: &str, enabled: bool) -> egui::Response {
+    let color = if enabled { color } else { crate::theme::Tokens::get(ui.ctx()).text_disabled };
+    let response = ui.add_enabled_ui(enabled, |ui| crate::widgets::icon_button(ui, icon, color, tip, vec2(24.0, 24.0))).inner;
+    sort_button_border(ui, response.rect);
+    response
+}
+
+fn sort_text_icon_button(ui: &mut egui::Ui, icon: crate::icons::Icon, color: egui::Color32, label: &str, enabled: bool) -> egui::Response {
+    let response = ui.add_enabled_ui(enabled, |ui| crate::widgets::small_button_with_color(ui, icon, color, label, label, false)).inner;
+    sort_button_border(ui, response.rect);
+    response
+}
+
+fn sort_button_border(ui: &egui::Ui, rect: egui::Rect) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
+}
+
+fn sort_values_are_numeric(values: impl IntoIterator<Item = gridcraft_engine::core::Value>) -> bool {
+    let mut has_number = false;
+    for value in values {
+        match value {
+            gridcraft_engine::core::Value::Empty => {}
+            gridcraft_engine::core::Value::Number(_) => has_number = true,
+            _ => return false,
+        }
     }
+    has_number
 }
 
 #[cfg(test)]

@@ -16,6 +16,11 @@ use super::{
 #[cfg(test)]
 use super::{CellRef, Pos2};
 
+/// The grid ignores the mouse while Sort is open, so the selection cannot change under the dialog.
+fn grid_sense(app: &SheetApp) -> Sense {
+    if app.dialog.as_ref().is_some_and(|d| d.name == "sort") { Sense::hover() } else { Sense::click_and_drag() }
+}
+
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let available = ui.available_rect_before_wrap();
@@ -27,7 +32,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     } else {
         Rect::from_min_max(available.min, pos2(available.right() - bar, available.bottom()))
     };
-    let resp = ui.allocate_rect(rect, Sense::click_and_drag());
+    let sense = grid_sense(app);
+    let resp = ui.allocate_rect(rect, sense);
     app.grid.rect = Some(rect);
     let Some(d) = app.session.active() else { return };
     let wb: Arc<Workbook> = d.wb.clone();

@@ -197,10 +197,23 @@ fn data_target(s: &Session, p: &Json, cmd: &str) -> Result<(usize, RangeRef)> {
     Ok((sheet, data_range(s, p)?))
 }
 
+/// The range Custom Sort works on and whether its first row looks like a header.
+pub fn sort_context(s: &Session, p: &Json) -> Result<(RangeRef, bool)> {
+    let d = s.doc()?;
+    let sel = d.selection.current();
+    // An explicit block wins over the table range, so a selected totals row can be sorted.
+    let r = match d.wb.active().and_then(|sh| sh.used_range()) {
+        Some(used) if p.get("range").is_none() && !sel.is_single() => sel.intersection(&used).unwrap_or(sel),
+        _ => data_range(s, p)?,
+    };
+    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    Ok((r, bool_param(p, "header").unwrap_or_else(|| guess_header(&d.wb, sh, r))))
+}
+
 /// Excel's header guess: the first row is text over a column of numbers, or is bold.
 fn guess_header(wb: &Workbook, sh: &Sheet, r: RangeRef) -> bool {
     if let Some(t) = sh.table_at(r.start) {
-        return t.header_row;
+        return t.header_row && r.start.row == t.range.start.row;
     }
     if r.height() < 2 {
         return false;

@@ -28,6 +28,30 @@ fn test_app() -> SheetApp {
     SheetApp::new(session, crate::Services::default())
 }
 
+fn app_with_sort_selection() -> SheetApp {
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range":"A1", "values":[["Month", "Revenue"], ["Mar", 30], ["Jan", 10], ["Feb", 20]]})).unwrap();
+    session.execute("selection.set", json!({"range":"B2"})).unwrap();
+    SheetApp::new(session, crate::Services::default())
+}
+
+#[test]
+fn sort_selection_is_restored_when_control_cancels_or_replaces_the_dialog() {
+    let mut cancelled = app_with_sort_selection();
+    cancelled.open_dialog("sort", json!({}));
+    let Outcome::Done(_) = handle(&mut cancelled, &egui::Context::default(), "ui.dialog.cancel", &json!({})) else {
+        panic!("dialog cancellation should complete");
+    };
+    assert_eq!(cancelled.session.active().unwrap().selection.a1(), "B2");
+
+    let mut replaced = app_with_sort_selection();
+    replaced.open_dialog("sort", json!({}));
+    replaced.open_dialog("zoom", json!({}));
+    assert_eq!(replaced.dialog.as_ref().unwrap().name(), "zoom");
+    assert_eq!(replaced.session.active().unwrap().selection.a1(), "B2");
+}
+
 #[test]
 /// Checks that oversized click/drag counts are refused without changing already queued batches, that queued input counts toward the budget, and that normal gestures still queue fully.
 fn oversized_pointer_requests_are_refused_and_leave_the_queue_alone() {

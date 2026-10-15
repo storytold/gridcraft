@@ -289,7 +289,9 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                     Err(e) => err(e),
                 };
             }
-            app.dialog = None;
+            if let Some(mut dialog) = app.dialog.take() {
+                dialog.restore_selection(&mut app.session);
+            }
             ok(Json::Null)
         }
         "ui.message.dismiss" => {

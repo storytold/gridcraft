@@ -143,6 +143,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "sort" => 500.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
         _ => 380.0,
@@ -150,7 +151,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let window = egui::Window::new(app.ui.language.tr(&d.title))
         .id(egui::Id::unique("dialog").with(&d.name))
         .collapsible(false)
-        .resizable(false)
+        .resizable(d.name == "sort")
+        .min_width(if d.name == "sort" { 480.0 } else { 0.0 })
+        .min_height(if d.name == "sort" { 260.0 } else { 0.0 })
         .default_width(width)
         // A default position, not an anchor: egui anchors can't be dragged, and dialogs move by their title bar.
         .pivot(egui::Align2::CENTER_CENTER)
@@ -159,6 +162,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let window = match d.name.as_str() {
         "insertPicture" => window.default_height(240.0),
         "advancedFilter" => window.default_height(0.0),
+        "sort" => window.default_height(320.0),
         _ => window,
     };
     window.show(ctx, |ui| {
@@ -171,7 +175,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "find" => find(app, ui, &mut d),
                 "goTo" => go_to(app, ui, &mut d, &mut confirm),
                 "zoom" => zoom(ui, &mut d, &mut confirm, &mut open),
-                "sort" => sort(app, ui, &mut d, &mut confirm),
+                "sort" => sort(app, ui, &mut d, &mut confirm, &mut open),
                 "nameManager" => name_manager(app, ui, &mut d, &mut open),
                 "pasteName" => paste_name(app, ui, &mut d, &mut confirm, &mut open),
                 "manageRules" => manage_rules(app, ui),
@@ -407,6 +411,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
     } else if confirm {
         open = false;
+    }
+    if !open && d.name == "sort" {
+        d.restore_selection(&mut app.session);
     }
     if app.ui_window() != home {
         // A command run from the dialog switched windows: whatever it opened shows in the new
