@@ -28,6 +28,7 @@ mod read;
 mod richdata;
 mod sheet_read;
 mod sheet_write;
+mod slicer;
 mod styles;
 mod tables;
 #[cfg(any(test, feature = "test-support"))]
