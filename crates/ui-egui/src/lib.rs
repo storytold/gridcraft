@@ -809,7 +809,11 @@ impl SheetApp {
             let text = if msgs.len() == 1 {
                 msgs[0].to_string()
             } else {
-                format!("{} items in this file were handled differently. First: {}", msgs.len(), msgs[0])
+                self.ui
+                    .language
+                    .tr("{count} items in this file were handled differently. First: {first}")
+                    .replace("{count}", &msgs.len().to_string())
+                    .replace("{first}", msgs[0])
             };
             self.notice = Some(Notice { text, kind: NoticeKind::Info, action: None });
         }
@@ -1158,7 +1162,8 @@ impl SheetApp {
         }
         // Window title.
         if let Some(d) = self.session.active() {
-            let title = format!("{}{}", d.display_title(), if d.is_dirty() { " — Edited" } else { "" });
+            let edited = if d.is_dirty() { format!(" — {}", self.ui.language.tr("Edited")) } else { String::new() };
+            let title = format!("{}{edited}", d.display_title());
             if self.grid.last_title.as_deref() != Some(title.as_str()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
                 self.grid.last_title = Some(title);

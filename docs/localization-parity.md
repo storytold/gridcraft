@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Format Cells dialog looks its labels up in the catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (menus, task panes, status bar and print page look up the catalog; Korean catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -15,9 +15,12 @@ right-to-left sheets and full complex-script support. Part of
   Japanese 268 labels, Simplified Chinese, Korean, Russian, Brazilian Portuguese, German and Czech 266
   each. The tables are used by
   the ribbon, sheet tabs and widgets (`ribbon.rs`, `tabs.rs`, `widgets.rs`), the Format Cells
-  dialog, every dialog title and the shared OK/Cancel buttons; the other dialogs, menus,
-  context menus, task panes, status messages, command labels and function descriptions are still
-  English literals. Untranslated labels fall back to English.
+  dialog, every dialog title and the shared OK/Cancel buttons; since 10-15 also the ribbon's
+  drop-down menus and galleries, the Quick Access Toolbar menus and Undo list (command labels),
+  the sheet tab menu, the AutoFilter menu, the task panes (Comments, Watch Window, Selection,
+  Format Chart), the status bar, toasts and notices, the colour palette, the About credits and the
+  remaining grid tooltips. The other dialogs (#669), command palette entries and function
+  descriptions are still English literals. Untranslated labels fall back to English.
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so each shipped language covers **~12%** (measured
   count / estimated total).
@@ -53,7 +56,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display | no | menus only | 8–12 h |
 | German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
-| Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
+| Korean | ko | 1,447 (~66%) | dialogs, tooltips, menus, panes and messages (dialogs take effect with #669) | Hangul via the CJK fallback; IME unverified | no | ribbon, menus, panes, File view, dialogs | 2–4 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 
 Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only.
@@ -78,6 +81,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Ribbon drop-down menus and galleries, the Undo list, sheet tab and AutoFilter menus, task panes, status bar, toasts, notices, colour palette and About credits look up their labels through `Language::tr`; value-bearing text uses `{name}` templates. Labels some languages word apart are keyed by context (`Shapes\|Line`, `Report Layout\|Outline`, `Cell Styles\|Normal`, `Format Chart\|Size`). Korean catalog (`i18n/ko.rs`) grows from 398 to 1,447 entries (~66%), covering every key the other catalogs translate, the #669 dialog strings, engine messages and undoable command names |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |

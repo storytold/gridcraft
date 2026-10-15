@@ -648,6 +648,23 @@ mod tests {
     }
 
     #[test]
+    fn context_keys_split_labels_that_some_languages_word_apart() {
+        // The Line shape is not the Line chart, the Outline report layout is not the Outline border
+        // and the Normal cell style is not the Normal margins; English shows the label after `|`.
+        assert_eq!(Language::En.tr("Shapes|Line"), "Line");
+        assert_eq!(Language::Ko.tr("Shapes|Line"), "선");
+        assert_eq!(Language::Ko.tr("Line"), "꺾은선형");
+        assert_eq!(Language::En.tr("Report Layout|Outline"), "Outline");
+        assert_eq!(Language::Ko.tr("Report Layout|Outline"), "개요 형식");
+        assert_eq!(Language::Ko.tr("Outline"), "윤곽선");
+        assert_eq!(Language::Es.tr("Report Layout|Outline"), "Esquema");
+        assert_eq!(Language::Ko.tr("Cell Styles|Normal"), "표준");
+        assert_eq!(Language::Ko.tr("Format Chart|Size"), "크기");
+        assert_eq!(Language::Ko.tr("Size"), "크기");
+        assert_eq!(Language::Ko.tr("Paper Size"), "용지 크기");
+    }
+
+    #[test]
     fn unknown_saved_language_keeps_the_other_preferences() {
         let ui: crate::UiState = serde_json::from_str(r#"{"dark": true, "language": "xx"}"#).unwrap();
         assert!(ui.dark);

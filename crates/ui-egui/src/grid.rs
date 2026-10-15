@@ -1832,7 +1832,8 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         } else if on_handle(p) && app.editor.is_none() {
             ctx.set_cursor_icon(CursorIcon::Crosshair);
             if app.grid.drag == Drag::None && !pointer.any_down() {
-                resp.clone().on_hover_text_at_pointer("Drag to fill cells. Drag from inside a cell to select a range.");
+                resp.clone()
+                    .on_hover_text_at_pointer(crate::i18n::current(&ctx).tr("Drag to fill cells. Drag from inside a cell to select a range."));
             }
         } else if in_cells && app.editor.is_none() && on_cur_border(p) {
             ctx.set_cursor_icon(CursorIcon::Move);
@@ -2192,8 +2193,13 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             Drag::ResizeCol { col, start, orig } => {
                 let w = (orig + (p.x - start) / geo.z).max(0.0);
-                app.toast =
-                    Some((format!("Width: {:.2} ({} pixels)", gridcraft_engine::cmd::format::points_to_chars(w as f64), w.round()), crate::now_ms()));
+                let text = app
+                    .ui
+                    .language
+                    .tr("Width: {width} ({pixels} pixels)")
+                    .replace("{width}", &format!("{:.2}", gridcraft_engine::cmd::format::points_to_chars(w as f64)))
+                    .replace("{pixels}", &w.round().to_string());
+                app.toast = Some((text, crate::now_ms()));
                 // Inside a selection of whole columns, every selected column takes the new width
                 // (Ctrl-selected areas included); otherwise only the dragged one.
                 let cols = if sel.ranges.iter().any(|r| r.is_full_cols() && col >= r.start.col && col <= r.end.col) {
@@ -2206,7 +2212,13 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             Drag::ResizeRow { row, start, orig } => {
                 let h = (orig + (p.y - start) / geo.z).max(0.0);
-                app.toast = Some((format!("Height: {:.2} ({} pixels)", h * 0.75, h.round()), crate::now_ms()));
+                let text = app
+                    .ui
+                    .language
+                    .tr("Height: {height} ({pixels} pixels)")
+                    .replace("{height}", &format!("{:.2}", h * 0.75))
+                    .replace("{pixels}", &h.round().to_string());
+                app.toast = Some((text, crate::now_ms()));
                 let rows = if sel.ranges.iter().any(|r| r.is_full_rows() && row >= r.start.row && row <= r.end.row) {
                     sel.ranges
                         .iter()
@@ -2773,20 +2785,21 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
     let response = area.show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_width(230.0);
-            if ui.button("↑  Sort Ascending").clicked() {
+            let lang = crate::i18n::current(ui.ctx());
+            if ui.button(lang.tr("↑  Sort Ascending")).clicked() {
                 let _ = app.run("data.sortAscending", json!({"column": col_to_letters(col)}));
                 close = true;
             }
-            if ui.button("↓  Sort Descending").clicked() {
+            if ui.button(lang.tr("↓  Sort Descending")).clicked() {
                 let _ = app.run("data.sortDescending", json!({"column": col_to_letters(col)}));
                 close = true;
             }
             ui.separator();
-            ui.label(egui::RichText::new("Filter").strong());
+            ui.label(egui::RichText::new(lang.tr("Filter")).strong());
             let mut checks: Vec<(String, bool)> = ui.ctx().data_mut(|d| d.get_temp::<Vec<(String, bool)>>(key)).unwrap_or(values.clone());
             // A search narrows the list; Select All and Apply then only cover the matches.
             let mut search: String = ui.ctx().data_mut(|d| d.get_temp(search_key)).unwrap_or_default();
-            let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search").desired_width(f32::INFINITY));
+            let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text(lang.tr("Search")).desired_width(f32::INFINITY));
             if !was_open {
                 field.request_focus();
             }
@@ -2795,7 +2808,7 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             let all = checks.iter().filter(|(v, _)| matches(v)).all(|(_, b)| *b);
             let mut all_new = all;
             let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
-            if ui.checkbox(&mut all_new, label).changed() {
+            if ui.checkbox(&mut all_new, lang.tr(label)).changed() {
                 for c in checks.iter_mut().filter(|(v, _)| matches(v)) {
                     c.1 = all_new;
                 }
@@ -2804,7 +2817,8 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             // worked over the values themselves (#432).
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
                 for (v, on) in checks.iter_mut().filter(|(v, _)| matches(v)) {
-                    ui.checkbox(on, v.as_str());
+                    // "(Blanks)" is the list's own entry; the other values are cell text.
+                    ui.checkbox(on, if v == "(Blanks)" { lang.tr(v) } else { v.as_str() });
                 }
             });
             ui.ctx().data_mut(|d| {
@@ -2814,11 +2828,11 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             let checks: Vec<(String, bool)> = checks.iter().map(|(v, on)| (v.clone(), *on && matches(v))).collect();
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button("Clear Filter").clicked() {
+                if ui.button(lang.tr("Clear Filter")).clicked() {
                     let _ = app.run("data.filterBy", json!({"column": col_to_letters(col), "clear": true}));
                     close = true;
                 }
-                if ui.button("Apply").clicked() {
+                if ui.button(lang.tr("Apply")).clicked() {
                     let blanks = checks.iter().any(|(v, on)| v == "(Blanks)" && *on);
                     let vals: Vec<String> = checks.iter().filter(|(v, on)| *on && v != "(Blanks)").map(|(v, _)| v.clone()).collect();
                     let p = if checks.iter().all(|(_, b)| *b) {
@@ -3035,7 +3049,9 @@ pub(crate) fn paint_overlays(
     if let Some(h) = hover.and_then(|c| sh.hyperlinks.get(&c))
         && app.editor.is_none()
     {
-        let tip = h.tooltip.clone().unwrap_or_else(|| format!("{}\nClick once to follow. Click and hold to select this cell.", h.target));
+        let tip = h.tooltip.clone().unwrap_or_else(|| {
+            format!("{}\n{}", h.target, crate::i18n::current(ui.ctx()).tr("Click once to follow. Click and hold to select this cell."))
+        });
         egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("link_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(tip);
         });
@@ -3248,7 +3264,7 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
         p.text(
             rr.center(),
             Align2::CENTER_CENTER,
-            format!("Page {n}"),
+            app.ui.language.tr("Page {n}").replace("{n}", &n.to_string()),
             theme::ui_bold((rr.height().min(rr.width()) / 6.0).clamp(14.0, 72.0)),
             Color32::from_black_alpha(45),
         );

@@ -404,6 +404,26 @@ fn pivot_fields_pane_follows_the_interface_language() {
 }
 
 #[test]
+fn task_panes_and_status_bar_follow_the_interface_language() {
+    // The task panes and the status bar's Sum/Count/Average drew English literals in every language.
+    let mut h = harness(blank());
+    h.state_mut().run("range.setValues", json!({"range": "A1:B2", "values": [[1, 2], [3, 4]]})).unwrap();
+    h.state_mut().run("selection.set", json!({"range": "A1:B2"})).unwrap();
+    h.state_mut().run("app.language.set", json!({"language": "ko"})).unwrap();
+    h.state_mut().grid.pane = Some("watch".into());
+    h.run_steps(4);
+    for label in ["합계: 10", "개수: 4", "평균: 2.5", "감시 추가(활성 셀)"] {
+        assert!(h.query_by_label(label).is_some(), "shows `{label}`");
+    }
+    assert!(h.query_by_label("Sum: 10").is_none(), "no English status text is left");
+    h.state_mut().run("app.language.set", json!({"language": "en"})).unwrap();
+    h.run_steps(4);
+    for label in ["Sum: 10", "Count: 4", "Average: 2.5", "Add Watch (active cell)"] {
+        assert!(h.query_by_label(label).is_some(), "English is unchanged: `{label}`");
+    }
+}
+
+#[test]
 fn format_cells_draws_its_labels_in_the_interface_language() {
     let mut h = harness(blank());
     h.state_mut().run("app.language.set", json!({"language": "de"})).unwrap();
