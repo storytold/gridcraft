@@ -9,7 +9,7 @@ use std::sync::Arc;
 use gridcraft_core::{Array, CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, compare};
 use gridcraft_formula::{BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, UnOp};
 use gridcraft_functions::{Arg, Ctx};
-use gridcraft_model::Workbook;
+use gridcraft_model::{ExternalSheet, Workbook};
 
 /// Largest array a reference may expand to.
 pub const MAX_CELLS: u64 = 16_000_000;
@@ -18,6 +18,14 @@ pub const MAX_CELLS: u64 = 16_000_000;
 /// formulas over them stay fast.
 const FULL_SIZE_CELLS: u64 = 16_384;
 const MAX_DEPTH: usize = 400;
+/// Areas in a linked workbook (`[2]Prices!A:A`) have sheet numbers from here up, so that they stay
+/// references (`@`, INDEX, ROWS and the like see their position and size) while their cells are
+/// read from the values saved with the link: see [`linked_sheet_number`]. 2^30 + 2^30 - 1 still
+/// fits a 32-bit `usize` (wasm).
+const LINKED_SHEETS: usize = 1 << 30;
+/// Bits of a linked area's sheet number for the sheet within its workbook, and for the workbook.
+const LINKED_SHEET_BITS: u32 = 16;
+const LINKED_BOOK_BITS: u32 = 30 - LINKED_SHEET_BITS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Area {
@@ -66,10 +74,10 @@ pub trait Host {
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
         range.iter().map(|c| self.cell_value(sheet, c)).collect()
     }
-    /// The sheet's used range (`Sheet::used_range`, which walks every stored row). Hosts that
-    /// keep the workbook unchanged while evaluating can remember it.
+    /// The sheet's used range ([`used_range_of`]). Hosts that keep the workbook unchanged while
+    /// evaluating can remember it.
     fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
-        self.workbook().sheet(sheet).and_then(|s| s.used_range())
+        used_range_of(self.workbook(), sheet)
     }
     /// Calls `f` on each stored value of a block, row-major (formula cells evaluated first),
     /// until `f` returns false. `false` when this host can't (callers use `range_values`).
@@ -154,6 +162,90 @@ impl<'h> Evaluator<'h> {
         Ok(self.resolve_sheet(&r.sheet)?.into_iter().map(|sheet| Area { sheet, range }).collect())
     }
 
+    /// A reference into a linked workbook (`'[2]Prices'!B2`, `[2]Prices!A:A`): an area that keeps
+    /// the position and size written, read from the values saved with the link, as Excel
+    /// calculates while the source is closed (see [`LINKED_SHEETS`]). `None` = not a reference
+    /// into a linked workbook; `#REF!` = the link didn't save that workbook or sheet.
+    fn linked_area(&self, r: &Reference) -> Option<Result<Area, CellError>> {
+        let SheetSel::Named(name) = &r.sheet else { return None };
+        let (book, sheet) = external_sheet(name)?;
+        let wb = self.host.workbook();
+        let found = book.checked_sub(1).and_then(|b| Some((b, wb.external_books.get(b)?.sheet_index(sheet)?)));
+        Some(found.and_then(|(b, s)| linked_sheet_number(b, s)).map(|sheet| Area { sheet, range: r.range() }).ok_or(CellError::Ref))
+    }
+
+    /// The saved sheet of a linked workbook that an area's sheet number stands for.
+    fn linked_sheet(&self, sheet: usize) -> Option<&ExternalSheet> {
+        let (book, s) = linked_parts(sheet)?;
+        self.host.workbook().external_books.get(book)?.sheets.get(s)
+    }
+
+    /// The value of a cell, in this workbook or in a linked one's saved values.
+    fn cell(&mut self, sheet: usize, c: CellRef) -> Value {
+        if linked_parts(sheet).is_none() {
+            return self.host.cell_value(sheet, c);
+        }
+        match self.linked_sheet(sheet) {
+            Some(s) => linked_value(s, s.value(c)),
+            None => Value::Error(CellError::Ref),
+        }
+    }
+
+    /// Values of a block, row-major, in this workbook or in a linked one's saved values.
+    pub(crate) fn block_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
+        if linked_parts(sheet).is_none() {
+            return self.host.range_values(sheet, range);
+        }
+        let Some(s) = self.linked_sheet(sheet) else { return vec![Value::Error(CellError::Ref); range.count() as usize] };
+        let w = range.width() as usize;
+        let mut out = vec![linked_value(s, Value::Empty); range.height() as usize * w];
+        for (c, v) in s.cells_in(range) {
+            let i = (c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize;
+            if let Some(slot) = out.get_mut(i) {
+                *slot = v.clone();
+            }
+        }
+        out
+    }
+
+    /// A defined name of a linked workbook (`[1]!Rates`, `[1]Prices!Rates`): what it refers to in
+    /// that workbook, read from the values saved with the link.
+    fn external_name(&mut self, book: usize, sheet: &str, name: &str) -> Ev {
+        // `[0]!Name`: book 0 is the workbook itself.
+        if book == 0 {
+            return self.eval(&Expr::Name(if sheet.is_empty() { name.to_string() } else { format!("{sheet}!{name}") }));
+        }
+        let wb = self.host.workbook();
+        let Some(b) = book.checked_sub(1).and_then(|i| wb.external_books.get(i)) else { return err(CellError::Ref) };
+        let Some(def) = b.name(name, (!sheet.is_empty()).then_some(sheet)) else { return err(CellError::Ref) };
+        let scope = def.sheet.and_then(|i| b.sheets.get(i)).map(|s| format!("[{book}]{}", s.name));
+        let Ok(expr) = gridcraft_formula::parse(&def.refers_to) else { return err(CellError::Ref) };
+        // Everything it names is in the linked workbook: its sheets and names. A sheet range, a
+        // sheetless reference in a workbook-level name and a table can't be read from the
+        // values saved with the link.
+        let expr = expr.map(&mut |e| match e {
+            Expr::Ref(mut r) => {
+                r.sheet = match r.sheet {
+                    SheetSel::Named(s) => SheetSel::Named(format!("[{book}]{s}")),
+                    SheetSel::Current => match &scope {
+                        Some(s) => SheetSel::Named(s.clone()),
+                        None => return Expr::Error(CellError::Ref),
+                    },
+                    SheetSel::Span(..) => return Expr::Error(CellError::Ref),
+                };
+                Expr::Ref(r)
+            }
+            Expr::Name(n) => Expr::Name(match (n.split_once('!'), &scope) {
+                (Some(_), _) => format!("[{book}]{n}"),
+                (None, Some(s)) => format!("{s}!{n}"),
+                (None, None) => format!("[{book}]!{n}"),
+            }),
+            Expr::Struct(_) => Expr::Error(CellError::Ref),
+            e => e,
+        });
+        self.eval(&expr)
+    }
+
     /// Dereferences: one cell → its value; a block → an array (trimmed to the used range);
     /// several areas → `#VALUE!`.
     pub fn deref(&mut self, ev: Ev) -> Value {
@@ -169,7 +261,7 @@ impl<'h> Evaluator<'h> {
 
     pub fn area_value(&mut self, a: &Area) -> Value {
         if a.range.is_single() {
-            return self.host.cell_value(a.sheet, a.range.start);
+            return self.cell(a.sheet, a.range.start);
         }
         // A reference keeps its size, so the array has its shape and its blanks count
         // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`).
@@ -179,14 +271,14 @@ impl<'h> Evaluator<'h> {
         if (h as u64) * (w as u64) > MAX_CELLS {
             return Value::Error(CellError::Num);
         }
-        let data = self.host.range_values(a.sheet, range);
+        let data = self.block_values(a.sheet, range);
         Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
     }
 
     /// Trims the bottom/right of an area to the sheet's used range (keeps the top-left so
     /// positions stay right).
     pub fn trim(&mut self, a: &Area) -> RangeRef {
-        if self.host.workbook().sheet(a.sheet).is_none() {
+        if linked_parts(a.sheet).is_none() && self.host.workbook().sheet(a.sheet).is_none() {
             return a.range;
         }
         let used = self.host.used_range(a.sheet);
@@ -237,7 +329,11 @@ impl<'h> Evaluator<'h> {
             }
             Expr::Ref(r) => match self.reference_areas(r) {
                 Ok(a) => Ev::R(a),
-                Err(x) => err(x),
+                Err(x) => match self.linked_area(r) {
+                    Some(Ok(a)) => Ev::R(vec![a]),
+                    Some(Err(e)) => err(e),
+                    None => err(x),
+                },
             },
             Expr::Name(n) => self.name(n),
             Expr::Struct(s) => self.structured(s),
@@ -258,6 +354,9 @@ impl<'h> Evaluator<'h> {
     fn name(&mut self, n: &str) -> Ev {
         if let Some((_, v)) = self.env.iter().rev().find(|(k, _)| k.eq_ignore_ascii_case(n)) {
             return v.clone();
+        }
+        if let Some((book, sheet, bare)) = external_name(n) {
+            return self.external_name(book, sheet, bare);
         }
         let wb = self.host.workbook();
         // Sheet-qualified `Sheet1!Name`.
@@ -397,7 +496,7 @@ impl<'h> Evaluator<'h> {
             return match ev {
                 Ev::R(areas) => match areas.as_slice() {
                     [a] => match self.implicit_intersect(a) {
-                        Some(c) => Ev::V(self.host.cell_value(a.sheet, c)),
+                        Some(c) => Ev::V(self.cell(a.sheet, c)),
                         None => err(CellError::Value),
                     },
                     _ => err(CellError::Value),
@@ -713,7 +812,12 @@ impl<'h> Evaluator<'h> {
                 match self.eval(&args[0]) {
                     Ev::R(a) => {
                         if name == "SHEET" {
-                            a.first().map_or(err(CellError::Ref), |a| Ev::V(Value::number(a.sheet as f64 + 1.0)))
+                            // A sheet of a linked workbook has no number in this one.
+                            match a.first() {
+                                Some(a) if linked_parts(a.sheet).is_some() => err(CellError::NA),
+                                Some(a) => Ev::V(Value::number(a.sheet as f64 + 1.0)),
+                                None => err(CellError::Ref),
+                            }
                         } else {
                             let mut s: Vec<usize> = a.iter().map(|x| x.sheet).collect();
                             s.dedup();
@@ -826,6 +930,16 @@ impl<'h> Evaluator<'h> {
             {
                 criteria = Some(*area);
             }
+            // Range parameters of the *IF(S) family take only references, and not references into
+            // a linked workbook: Excel answers `#VALUE!` (or the cell's error) while the source
+            // workbook is closed. A written error (`#REF!` left by a deleted range) is that error.
+            let linked = matches!(&ev, Ev::R(areas) if areas.iter().any(|x| linked_parts(x.sheet).is_some()));
+            if takes_reference(spec.name, i) && (linked || matches!(a, Expr::Error(_))) {
+                return err(match self.deref(ev) {
+                    Value::Error(e) => e,
+                    _ => CellError::Value,
+                });
+            }
             if resizes_sum_range(name, args.len()) {
                 if i == 0 {
                     criteria_shape = ev_shape(&ev);
@@ -882,7 +996,8 @@ impl<'h> Evaluator<'h> {
 
     /// Adds one area to `acc`; `Err` is the result the function ends with.
     fn aggregate_area(&mut self, kind: Agg, a: &Area, acc: &mut Acc) -> Result<(), Ev> {
-        if !a.range.is_single() {
+        // Linked workbooks' saved values are read through `area_value`.
+        if !a.range.is_single() && linked_parts(a.sheet).is_none() {
             let mut error = None;
             let walked = self.host.visit_range(a.sheet, a.range, &mut |v| match acc.add_cell(kind, v) {
                 Ok(()) => true,
@@ -1180,7 +1295,9 @@ impl<'h> Evaluator<'h> {
         match gridcraft_formula::parse(&text) {
             Ok(Expr::Ref(_)) if !a1_ok => err(CellError::Ref),
             Ok(e @ (Expr::Ref(_) | Expr::Name(_) | Expr::Struct(_))) => match self.eval(&e) {
-                r @ Ev::R(_) => r,
+                // INDIRECT reads another workbook only while it is open (Microsoft's INDIRECT
+                // documentation): `#REF!` for a linked one.
+                Ev::R(a) if a.iter().all(|x| linked_parts(x.sheet).is_none()) => Ev::R(a),
                 _ => err(CellError::Ref),
             },
             _ => err(CellError::Ref),
@@ -1363,9 +1480,9 @@ impl<'h> Evaluator<'h> {
             "address" => Ev::V(Value::text(format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1))),
             "row" => Ev::V(Value::number(c.row as f64 + 1.0)),
             "col" => Ev::V(Value::number(c.col as f64 + 1.0)),
-            "contents" => Ev::V(self.host.cell_value(a.sheet, c)),
+            "contents" => Ev::V(self.cell(a.sheet, c)),
             "type" => {
-                let v = self.host.cell_value(a.sheet, c);
+                let v = self.cell(a.sheet, c);
                 Ev::V(Value::text(match v {
                     Value::Empty => "b",
                     Value::Text(_) => "l",
@@ -1443,7 +1560,7 @@ impl<'h> Evaluator<'h> {
                             if hidden || nested {
                                 continue;
                             }
-                            let v = self.host.cell_value(a.sheet, c);
+                            let v = self.cell(a.sheet, c);
                             if skip_errors && v.is_error() {
                                 continue;
                             }
@@ -1729,6 +1846,65 @@ pub fn resized_sum_range(sum: RangeRef, height: u32, width: u32) -> RangeRef {
     let row = sum.start.row.saturating_add(height.saturating_sub(1)).min(MAX_ROWS - 1);
     let col = sum.start.col.saturating_add(width.saturating_sub(1)).min(MAX_COLS - 1);
     RangeRef::new(sum.start, CellRef::new(row, col))
+}
+
+/// `[2]!Rates` → linked workbook 2, no sheet, `Rates`; `[2]Prices!Rates` → sheet `Prices`.
+fn external_name(name: &str) -> Option<(usize, &str, &str)> {
+    let (book, rest) = name.strip_prefix('[')?.split_once(']')?;
+    let (sheet, bare) = rest.split_once('!')?;
+    if book.is_empty() || !book.bytes().all(|b| b.is_ascii_digit()) || bare.is_empty() {
+        return None;
+    }
+    Some((book.parse().ok()?, sheet, bare))
+}
+
+/// Whether argument `i` of `name` is a range parameter that takes only a reference.
+fn takes_reference(name: &str, i: usize) -> bool {
+    match name {
+        "SUMIF" | "AVERAGEIF" => i == 0 || i == 2,
+        "COUNTIF" | "COUNTBLANK" => i == 0,
+        "COUNTIFS" => i.is_multiple_of(2),
+        "SUMIFS" | "AVERAGEIFS" | "MAXIFS" | "MINIFS" => i == 0 || i % 2 == 1,
+        _ => false,
+    }
+}
+
+/// `[2]Prices` (the sheet part of `'[2]Prices'!B2`) → linked workbook 2, sheet `Prices`.
+fn external_sheet(name: &str) -> Option<(usize, &str)> {
+    let (book, sheet) = name.strip_prefix('[')?.split_once(']')?;
+    if book.is_empty() || !book.bytes().all(|b| b.is_ascii_digit()) || sheet.is_empty() {
+        return None;
+    }
+    Some((book.parse().ok()?, sheet))
+}
+
+/// The sheet number of an [`Area`] in linked workbook `book` (index into
+/// `Workbook::external_books`), sheet `sheet` (index into its `sheets`); `None` past the limits.
+fn linked_sheet_number(book: usize, sheet: usize) -> Option<usize> {
+    (book < 1 << LINKED_BOOK_BITS && sheet < 1 << LINKED_SHEET_BITS).then_some(LINKED_SHEETS + (book << LINKED_SHEET_BITS) + sheet)
+}
+
+/// `(book, sheet)` of an area's sheet number in a linked workbook (see [`linked_sheet_number`]);
+/// `None` for a sheet of this workbook.
+fn linked_parts(sheet: usize) -> Option<(usize, usize)> {
+    let k = sheet.checked_sub(LINKED_SHEETS)?;
+    Some((k >> LINKED_SHEET_BITS, k & ((1 << LINKED_SHEET_BITS) - 1)))
+}
+
+/// The used range of an area's sheet (`Sheet::used_range`, which walks every stored row); for a
+/// sheet of a linked workbook, the block its saved cells cover.
+pub(crate) fn used_range_of(wb: &Workbook, sheet: usize) -> Option<RangeRef> {
+    match linked_parts(sheet) {
+        Some((book, s)) => wb.external_books.get(book)?.sheets.get(s)?.extent(),
+        None => wb.sheet(sheet)?.used_range(),
+    }
+}
+
+/// A value read from a linked sheet's saved cells. When the last update of the link failed for
+/// the sheet (`refreshError`), Excel keeps the values it had and shows `#REF!` for anything it
+/// hadn't saved.
+fn linked_value(s: &ExternalSheet, v: Value) -> Value {
+    if v.is_empty() && s.refresh_error { Value::Error(CellError::Ref) } else { v }
 }
 
 /// Collects the static references of an expression with their sheets resolved; `dynamic` is

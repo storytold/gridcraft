@@ -765,7 +765,7 @@ impl Host for PassHost<'_> {
     }
     fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
         let wb = self.wb;
-        *self.used.entry(sheet).or_insert_with(|| wb.sheet(sheet).and_then(|s| s.used_range()))
+        *self.used.entry(sheet).or_insert_with(|| crate::eval::used_range_of(wb, sheet))
     }
     fn now_serial(&self) -> f64 {
         self.now

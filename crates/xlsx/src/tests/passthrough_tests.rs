@@ -209,6 +209,10 @@ fn unmodelled_parts_survive_a_round_trip() {
     assert!(data.preserved.is_some(), "{:?}", rep.warnings);
     assert!(!rep.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep.warnings);
     assert_eq!(data.comments.len(), 1, "the note is modelled");
+    // The values saved with the link are read, for formulas into the linked workbook.
+    let book = &wb.external_books;
+    assert_eq!(book.len(), 1);
+    assert_eq!(book[0].sheet("sheet1").map(|s| s.value(gridcraft_core::CellRef::new(0, 0))), Some(gridcraft_core::Value::Number(7.0)));
 
     let out = write_xlsx(&wb).unwrap();
     let u = Unpacked::new(&out);
@@ -328,6 +332,46 @@ fn edited_workbooks_keep_consistent_relationships() {
     for d in [CUSTOM_XML.as_bytes(), EXTERNAL_LINK.as_bytes(), CONNECTIONS.as_bytes(), CUSTOM_PROPS.as_bytes()] {
         assert_eq!(u.find(d).len(), 1);
     }
+}
+
+/// #804: a link added after reading (a typed reference to another workbook) is written after the
+/// kept ones, so `[1]` stays the kept link and `[2]` is the new one.
+#[test]
+fn a_new_link_follows_the_kept_ones() {
+    let (mut wb, _) = read_xlsx(&rich_package()).unwrap();
+    assert_eq!(wb.external_books.iter().map(|b| b.path.as_str()).collect::<Vec<_>>(), ["C:/never/opened/Book2.xlsx"]);
+    let typed = wb.link_typed_text(r"'C:\links\[Source.xlsx]Sheet1'!A1+[Book2.xlsx]Sheet1!A1");
+    assert_eq!(typed, "[2]Sheet1!A1+[1]Sheet1!A1");
+    wb.sheet_mut(1).unwrap().set_cell(gridcraft_core::CellRef::new(0, 0), gridcraft_model::Cell::formula(gridcraft_model::Formula::new(&typed)));
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    let wbx = u.text("xl/workbook.xml");
+    let refs = &wbx[wbx.find("<externalReferences").unwrap()..wbx.find("</externalReferences>").unwrap()];
+    let ids: Vec<&str> = refs.split("r:id=\"").skip(1).map(|s| &s[..s.find('"').unwrap()]).collect();
+    assert_eq!(ids.len(), 2, "{wbx}");
+    assert_eq!(u.parts.get(&u.target("xl/workbook.xml", ids[0]).1).unwrap(), EXTERNAL_LINK.as_bytes());
+    let new = u.target("xl/workbook.xml", ids[1]).1;
+    let link = u.text(&new);
+    assert!(
+        link.contains(r#"<sheetNames><sheetName val="Sheet1"/></sheetNames><sheetDataSet><sheetData sheetId="0" refreshError="1"/></sheetDataSet>"#),
+        "{link}"
+    );
+    let path = u.rels(&new);
+    assert_eq!(
+        (path[0].0.as_str(), path[0].2.as_str(), path[0].3),
+        (attr_of(&link, "externalBook", "r:id").as_str(), r"file:///C:\links\Source.xlsx", true)
+    );
+    assert!(path[0].1.ends_with("/externalLinkPath"));
+    assert!(u.text(&sheet_part(&u, "Other")).contains("<f>[2]Sheet1!A1+[1]Sheet1!A1</f>"));
+
+    // Read back: both links, in order, with their paths; the new one has no values yet.
+    let (wb2, _) = read_xlsx(&out).unwrap();
+    assert_eq!(wb2.external_books.iter().map(|b| b.path.as_str()).collect::<Vec<_>>(), ["C:/never/opened/Book2.xlsx", r"C:\links\Source.xlsx"]);
+    assert!(wb2.external_books[1].sheets.iter().all(|s| s.refresh_error && s.cells.is_empty()));
+    // Written again, the new link is now kept as it was read.
+    let again = Unpacked::new(&write_xlsx(&wb2).unwrap());
+    assert_eq!(again.find(link.as_bytes()).len(), 1);
 }
 
 /// #324: an openpyxl-style workbook whose sheet carries printer settings.

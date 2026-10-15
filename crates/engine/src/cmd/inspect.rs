@@ -67,7 +67,7 @@ fn inspect(s: &mut Session, _: &Json) -> Result<Json> {
         "sheets": sheets,
         "selection": d.selection.a1(),
         "activeCell": d.selection.active.a1(),
-        "names": wb.names.iter().map(|n| json!({"name": n.name, "refersTo": format!("={}", n.formula), "scope": n.scope})).collect::<Vec<_>>(),
+        "names": wb.names.iter().map(|n| json!({"name": n.name, "refersTo": format!("={}", wb.shown_formula(&n.formula)), "scope": n.scope})).collect::<Vec<_>>(),
         "calcMode": format!("{:?}", wb.calc.mode),
         "undo": d.undo.iter().rev().take(20).map(|e| e.label.clone()).collect::<Vec<_>>(),
         "redo": d.redo.iter().rev().take(20).map(|e| e.label.clone()).collect::<Vec<_>>(),

@@ -53,6 +53,36 @@ fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '.' | '$' | '\\' | '?')
 }
 
+/// `[1]Prices!`, `[1]Jan:Dec!` or `[1]!` (before a linked workbook's name) at `i`: the position of
+/// the `!` after a linked workbook's index and unquoted sheet names, and of the `:` between the two
+/// sheets of a sheet range (MS-XLSX `sheet-range = [workbook-index] sheet-name ":" sheet-name`).
+/// As typed, the brackets can hold the workbook's file name instead (`[Source.xlsx]Sheet1!`).
+fn external_sheet_end(chars: &[(usize, char)], i: usize) -> Option<(usize, Option<usize>)> {
+    let ch = |k: usize| chars.get(k).map(|c| c.1);
+    let word_end = |mut k: usize| {
+        while ch(k).is_some_and(is_word_char) {
+            k += 1;
+        }
+        k
+    };
+    let mut j = i + 1;
+    while ch(j).is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '.')) {
+        j += 1;
+    }
+    if j == i + 1 || ch(j) != Some(']') {
+        return None;
+    }
+    let k = word_end(j + 1);
+    match ch(k) {
+        Some('!') => Some((k, None)),
+        Some(':') if k > j + 1 => {
+            let m = word_end(k + 1);
+            (m > k + 1 && ch(m) == Some('!')).then_some((m, Some(k)))
+        }
+        _ => None,
+    }
+}
+
 /// `A1`, `$A$1`, `A`, `$A`, `1`, `$1`: a word that can end a range, so `A1.:` is a trim
 /// reference and not a name ending in a dot.
 fn is_range_end(w: &str) -> bool {
@@ -141,7 +171,11 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 if ch(j) != Some('!') {
                     return Err(LexError { msg: "expected ! after sheet name".into(), pos: pos_of(j) });
                 }
-                let (a, b) = match s.split_once(':') {
+                // A linked workbook's path (`'C:\links\[Source.xlsx]Sheet1'`) can hold a drive's
+                // colon. Sheet names can't hold `\` or `/`, so a sheet range's colon comes after them.
+                let after = s.rfind(['\\', '/']).map_or(0, |k| k + 1);
+                let colon = s.get(after..).and_then(|t| t.find(':')).map(|k| k + after);
+                let (a, b) = match colon.and_then(|k| Some((s.get(..k)?, s.get(k + 1..)?))) {
                     Some((a, b)) => (a.to_string(), Some(b.to_string())),
                     None => (s, None),
                 };
@@ -169,6 +203,18 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 // `#REF!A1` style is not valid; `#REF!` is an error literal.
                 push(&mut out, Tok::Error(e), i + len);
                 i += len;
+            }
+            '[' if external_sheet_end(&chars, i).is_some() => {
+                // Sheet (or sheet range) in a linked workbook, unquoted: `[1]Prices!B2`,
+                // `[1]Jan:Dec!B2` (`'[1]My Prices'!B2` is lexed as a quoted sheet name).
+                let (bang, colon) = external_sheet_end(&chars, i).unwrap_or((i, None));
+                let text = |a: usize, b: usize| -> String { chars.get(a..b).map(|s| s.iter().map(|c| c.1).collect()).unwrap_or_default() };
+                let tok = match colon {
+                    Some(colon) => Tok::Sheet(text(i, colon), Some(text(colon + 1, bang))),
+                    None => Tok::Sheet(text(i, bang), None),
+                };
+                push(&mut out, tok, bang + 1);
+                i = bang + 1;
             }
             '[' => {
                 // Structured reference body: balanced brackets.

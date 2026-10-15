@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use gridcraft_core::DateSystem;
+use gridcraft_core::{CellRef, DateSystem, RangeRef, Value};
 use gridcraft_formula::Expr;
 use serde::{Deserialize, Serialize};
 
@@ -85,6 +85,88 @@ pub struct DocProps {
     pub description: String,
 }
 
+/// The values a linked workbook had when the file was last saved with the link updated
+/// (`<externalLink>` `sheetDataSet`). `[n]` in a formula is the workbook's `external_books[n - 1]`.
+/// GridCraft doesn't open linked files: references into them read these values, as Excel does
+/// while the source is closed.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExternalBook {
+    /// The linked file as the link stores it: absolute (`C:\links\Source.xlsx`) or relative to
+    /// this workbook's folder (`Source.xlsx`). Empty when the link names no file.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub path: String,
+    /// Added in GridCraft (by a typed reference) rather than read from the file: saving writes
+    /// its link part from this model, where links read from the file are kept as they were.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub added: bool,
+    pub sheets: Vec<ExternalSheet>,
+    /// The linked workbook's defined names (`[1]!Rates`, `[1]Sheet1!Rates`).
+    pub names: Vec<ExternalName>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExternalSheet {
+    pub name: String,
+    /// Cached cells, sorted by position (row, then column).
+    pub cells: Vec<(CellRef, Value)>,
+    /// The last update of the link couldn't read this sheet (`refreshError`): Excel keeps the
+    /// cells it had saved, and references to anything else in it are `#REF!`.
+    pub refresh_error: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExternalName {
+    pub name: String,
+    /// Index into the book's `sheets` of the sheet the name is scoped to; `None` = workbook scope.
+    pub sheet: Option<usize>,
+    /// What the name refers to (without `=`); its sheets are the linked workbook's.
+    pub refers_to: String,
+}
+
+impl ExternalBook {
+    /// The linked file's name, without its folder.
+    pub fn file_name(&self) -> &str {
+        self.path.rsplit(['\\', '/']).next().unwrap_or(&self.path)
+    }
+    /// The linked file's folder with its trailing separator (`C:\links\`); empty for a bare
+    /// file name.
+    pub fn folder(&self) -> &str {
+        self.path.get(..self.path.len() - self.file_name().len()).unwrap_or("")
+    }
+    pub fn sheet(&self, name: &str) -> Option<&ExternalSheet> {
+        self.sheets.get(self.sheet_index(name)?)
+    }
+    /// The position in `sheets` of the sheet named `name`.
+    pub fn sheet_index(&self, name: &str) -> Option<usize> {
+        self.sheets.iter().position(|s| s.name.eq_ignore_ascii_case(name))
+    }
+    /// The name `name` as seen from sheet `sheet` (`None` = from the workbook): the sheet's own
+    /// name first, then the workbook-scoped one.
+    pub fn name(&self, name: &str, sheet: Option<&str>) -> Option<&ExternalName> {
+        let si = sheet.and_then(|s| self.sheet_index(s));
+        let find = |scope: Option<usize>| self.names.iter().find(|n| n.sheet == scope && n.name.eq_ignore_ascii_case(name));
+        si.and_then(|i| find(Some(i))).or_else(|| find(None))
+    }
+}
+
+impl ExternalSheet {
+    /// The cached value at `c` (blank when the link didn't store the cell).
+    pub fn value(&self, c: CellRef) -> Value {
+        self.cells.binary_search_by(|(p, _)| p.cmp(&c)).ok().and_then(|i| self.cells.get(i)).map(|(_, v)| v.clone()).unwrap_or_default()
+    }
+    /// The cached cells inside `range`, in order.
+    pub fn cells_in(&self, range: RangeRef) -> impl Iterator<Item = &(CellRef, Value)> {
+        let from = self.cells.partition_point(|(p, _)| p.row < range.start.row);
+        self.cells.get(from..).unwrap_or_default().iter().take_while(move |(p, _)| p.row <= range.end.row).filter(move |(p, _)| range.contains(*p))
+    }
+    /// The smallest range holding every cached cell.
+    pub fn extent(&self) -> Option<RangeRef> {
+        let (first, last) = (self.cells.first()?.0, self.cells.last()?.0);
+        let (c0, c1) = self.cells.iter().fold((u32::MAX, 0), |(a, b), (p, _)| (a.min(p.col), b.max(p.col)));
+        Some(RangeRef::new(CellRef::new(first.row, c0), CellRef::new(last.row, c1)))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Arc<Sheet>>,
@@ -120,6 +202,10 @@ pub struct Workbook {
     /// `preserved` are relative to. Saving into another folder rewrites them from there. Not in JSON.
     #[serde(skip)]
     pub source_dir: Option<std::path::PathBuf>,
+    /// Linked workbooks' cached values, in `<externalReferences>` order (`[1]` is the first).
+    /// Read from the file; the link parts themselves are kept for saving in `preserved`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_books: Vec<ExternalBook>,
 }
 
 impl Default for Workbook {
@@ -148,6 +234,7 @@ impl Workbook {
             csv_delimiter: None,
             preserved: None,
             source_dir: None,
+            external_books: vec![],
         }
     }
     pub fn sheet(&self, i: usize) -> Option<&Sheet> {

@@ -311,9 +311,10 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && n.scope == scope));
+        let refers = cx.wb.link_typed_text(&refers);
         cx.wb.names.push(DefinedName { name: name.clone(), scope, formula: refers.clone(), comment: comment.clone(), hidden: false });
         cx.structural = true;
-        Ok(json!({"name": name, "refersTo": format!("={refers}")}))
+        Ok(json!({"name": name, "refersTo": format!("={}", cx.wb.shown_formula(&refers))}))
     })
 }
 
@@ -390,7 +391,7 @@ fn name_manager(s: &mut Session, _: &Json) -> Result<Json> {
         .map(|n| {
             let sheet = n.scope.unwrap_or(d.wb.active_sheet);
             let v = gridcraft_calc::evaluate(&d.wb, sheet, CellRef::default(), &n.formula);
-            json!({"name": n.name, "refersTo": format!("={}", n.formula), "scope": n.scope.and_then(|i| d.wb.sheet(i)).map(|s| s.name.clone()).unwrap_or_else(|| "Workbook".into()), "value": crate::cmd::inspect::value_json(&v), "comment": n.comment})
+            json!({"name": n.name, "refersTo": format!("={}", d.wb.shown_formula(&n.formula)), "scope": n.scope.and_then(|i| d.wb.sheet(i)).map(|s| s.name.clone()).unwrap_or_else(|| "Workbook".into()), "value": crate::cmd::inspect::value_json(&v), "comment": n.comment})
         })
         .collect();
     Ok(Json::Array(list))

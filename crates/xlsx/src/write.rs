@@ -321,7 +321,7 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
         let _ = write!(w, "<workbookProtection{pw} lockStructure=\"1\"/>");
     }
     let _ = write!(w, "<bookViews><workbookView activeTab=\"{}\"/></bookViews><sheets>{sheets_xml}</sheets>", kept.file_index(active));
-    w.push_str(&kept.elements);
+    w.push_str(&crate::external::write(wb, kept.elements, &mut wb_rels, &mut out));
     if !names.is_empty() {
         let _ = write!(w, "<definedNames>{names}</definedNames>");
     }

@@ -298,8 +298,14 @@ impl Parser {
                     Some(b) => SheetSel::Span(a, b),
                     None => SheetSel::Named(a),
                 };
+                // `[Book.xlsx]!A1`, `'C:\links\[Book.xlsx]'!A1`: a cell in another workbook needs
+                // a sheet (only a name, `[1]!Rate`, follows the workbook directly).
+                let no_sheet = matches!(&sheet, SheetSel::Named(s) | SheetSel::Span(s, _) if s.ends_with(']') && s.contains('['));
                 match self.next() {
-                    Tok::Word(w) => self.reference_from_word(sheet, &w),
+                    Tok::Word(w) => match self.reference_from_word(sheet, &w)? {
+                        e if no_sheet && !matches!(e, Expr::Name(_)) => Err(self.err("a reference to another workbook needs a sheet name")),
+                        e => Ok(e),
+                    },
                     Tok::Error(CellError::Ref) => Ok(Expr::Error(CellError::Ref)),
                     t => Err(self.err(format!("expected a reference after the sheet name, found {}", describe(&t)))),
                 }

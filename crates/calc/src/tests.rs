@@ -95,6 +95,133 @@ fn chains_out_of_order() {
 }
 
 #[test]
+fn references_into_linked_workbooks_read_the_saved_values() {
+    use gridcraft_model::{ExternalBook, ExternalName, ExternalSheet};
+    let mut t = T::new();
+    let prices = ExternalSheet {
+        name: "P&L Prices".into(),
+        cells: vec![(c("A1"), Value::text("gas")), (c("B1"), Value::Number(4.5)), (c("A2"), Value::text("power")), (c("B2"), Value::Number(61.0))],
+        refresh_error: false,
+    };
+    let rates = ExternalSheet { name: "Rates".into(), cells: vec![(c("C3"), Value::Number(2.0))], refresh_error: false };
+    let failed = ExternalSheet { name: "Failed".into(), cells: vec![(c("A1"), Value::Number(9.0))], refresh_error: true };
+    let names = vec![
+        ExternalName { name: "Gas".into(), sheet: None, refers_to: "'P&L Prices'!$B$1".into() },
+        ExternalName { name: "Rate".into(), sheet: Some(1), refers_to: "$C$3".into() },
+        // Names inside a linked name are the linked workbook's too.
+        ExternalName { name: "GasTwice".into(), sheet: None, refers_to: "Gas*2".into() },
+        ExternalName { name: "RatePlus".into(), sheet: Some(1), refers_to: "Rate+GasTwice".into() },
+        // A sheet range or a sheetless reference in a workbook-level name can't be resolved
+        // from the saved values (and must not read this workbook's cells).
+        ExternalName { name: "Span".into(), sheet: None, refers_to: "Rates:Failed!$A$1".into() },
+        ExternalName { name: "Loose".into(), sheet: None, refers_to: "$E$9".into() },
+    ];
+    t.wb.external_books = vec![ExternalBook::default(), ExternalBook { sheets: vec![prices, rates, failed], names, ..Default::default() }];
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "Price".into(),
+        scope: None,
+        formula: "'[2]P&L Prices'!$A$1:$B$65536".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    t.set("A1", "='[2]P&L Prices'!B2*2");
+    t.set("A2", "=VLOOKUP(\"gas\",Price,2,FALSE)");
+    t.set("A3", "=SUM('[2]P&L Prices'!B1:B9)+[2]Rates!C3");
+    t.set("A4", "=[2]Rates!A1");
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3"), t.num("A4")), (122.0, 4.5, 67.5, 0.0));
+    // A sheet the link didn't save, or a book that isn't linked, is #REF! as before.
+    t.set("A5", "=[2]Other!A1");
+    t.set("A6", "=[1]Rates!C3");
+    t.set("A7", "='[3]Rates'!C3");
+    for at in ["A5", "A6", "A7"] {
+        assert_eq!(t.get(at), Value::Error(CellError::Ref), "{at}");
+    }
+    // A sheet whose last refresh failed keeps its saved cells; anything else in it is #REF!.
+    t.set("A8", "=[2]Failed!A1+[2]Failed!B1");
+    t.set("A9", "=[2]Failed!A1");
+    t.set("A10", "=SUM([2]Failed!A1:B1)");
+    assert_eq!((t.get("A8"), t.num("A9"), t.get("A10")), (Value::Error(CellError::Ref), 9.0, Value::Error(CellError::Ref)));
+    // `[0]!` is the workbook itself.
+    t.set("D1", "=VLOOKUP(\"power\",[0]!Price,2,FALSE)");
+    assert_eq!(t.num("D1"), 61.0);
+    // The linked workbook's own names: workbook-scoped and sheet-scoped.
+    t.set("B1", "=[2]!Gas*10");
+    t.set("B2", "=[2]Rates!Rate+1");
+    assert_eq!((t.num("B1"), t.num("B2")), (45.0, 3.0));
+    t.set("B3", "=[2]!Missing");
+    assert_eq!(t.get("B3"), Value::Error(CellError::Ref));
+    t.set("E9", "100");
+    t.set("B4", "=[2]!GasTwice");
+    t.set("B5", "=[2]Rates!RatePlus");
+    t.set("B6", "=[2]!Span");
+    t.set("B7", "=[2]!Loose");
+    assert_eq!((t.num("B4"), t.num("B5")), (9.0, 11.0));
+    assert_eq!((t.get("B6"), t.get("B7")), (Value::Error(CellError::Ref), Value::Error(CellError::Ref)));
+    // SUMIF and friends need references; Excel can't read a closed workbook through them.
+    t.set("C1", "=SUMIF('[2]P&L Prices'!A1:A2,\"gas\",'[2]P&L Prices'!B1:B2)");
+    t.set("C2", "=COUNTIF(#REF!,\">0\")");
+    t.set("C3", "=SUMIF(Price,\"gas\")");
+    assert_eq!(
+        (t.get("C1"), t.get("C2"), t.get("C3")),
+        (Value::Error(CellError::Value), Value::Error(CellError::Ref), Value::Error(CellError::Value))
+    );
+    // Linked sheets print as Excel writes them: quoted only when the sheet name needs it.
+    let f = t.wb.sheet(0).unwrap().cells.get(c("A3")).and_then(|x| x.formula.clone()).unwrap();
+    assert_eq!(gridcraft_formula::print(f.expr.as_ref().unwrap()), "SUM('[2]P&L Prices'!B1:B9)+[2]Rates!C3");
+}
+
+#[test]
+fn references_into_linked_workbooks_keep_their_position_and_size() {
+    use gridcraft_model::{ExternalBook, ExternalSheet};
+    let mut t = T::new();
+    // Data!A1:B6: a header row, then items a..e priced 10..14.
+    let mut cells = vec![(c("A1"), Value::text("Item")), (c("B1"), Value::text("Price"))];
+    for (i, item) in ["a", "b", "c", "d", "e"].into_iter().enumerate() {
+        cells.push((CellRef::new(i as u32 + 1, 0), Value::text(item)));
+        cells.push((CellRef::new(i as u32 + 1, 1), Value::Number(10.0 + i as f64)));
+    }
+    cells.sort_by_key(|(p, _)| *p);
+    t.wb.external_books =
+        vec![ExternalBook { sheets: vec![ExternalSheet { name: "Data".into(), cells, refresh_error: false }], names: vec![], ..Default::default() }];
+    // `@` takes the cell on the formula's row (or column), as for this workbook's references.
+    for at in ["D2", "D3", "D4", "D5", "D6"] {
+        t.set(at, "=@[1]Data!B:B");
+    }
+    assert_eq!([t.num("D2"), t.num("D3"), t.num("D4"), t.num("D5"), t.num("D6")], [10.0, 11.0, 12.0, 13.0, 14.0]);
+    t.set("F4", "=@[1]Data!B3:B6");
+    t.set("F9", "=@[1]Data!B3:B6");
+    t.set("B10", "=@[1]Data!A1:B1");
+    assert_eq!((t.num("F4"), t.get("F9"), t.get("B10")), (12.0, Value::Error(CellError::Value), Value::text("Price")));
+    // The reference keeps the size written, past the last saved cell.
+    t.set("G1", "=ROWS([1]Data!A:A)");
+    t.set("G2", "=ROWS([1]Data!A1:A100000)");
+    t.set("G3", "=COLUMNS([1]Data!1:1)");
+    t.set("G4", "=INDEX([1]Data!B:B,4)");
+    t.set("G5", "=INDEX([1]Data!A:A,10)");
+    t.set("G6", "=SUM([1]Data!B:B)+VLOOKUP(\"c\",[1]Data!A:B,2,FALSE)");
+    t.set("G7", "=ISREF([1]Data!B2)");
+    assert_eq!(
+        (t.num("G1"), t.num("G2"), t.num("G3"), t.num("G4"), t.num("G5"), t.num("G6"), t.get("G7")),
+        (1_048_576.0, 100_000.0, 16_384.0, 12.0, 0.0, 72.0, Value::Bool(true))
+    );
+    // INDIRECT reads another workbook only while it is open.
+    t.set("H1", "=INDIRECT(\"[1]Data!B2\")");
+    assert_eq!(t.get("H1"), Value::Error(CellError::Ref));
+}
+
+#[test]
+fn if_family_ranges_inside_lambdas_stay_references() {
+    // MAP/BYROW hand their LAMBDA ranges of this workbook: COUNTIF and SUMIF take them.
+    let mut t = T::new();
+    for (at, v) in [("E1", "1"), ("F1", "-2"), ("G1", "3"), ("E2", "-1"), ("F2", "5"), ("G2", "6")] {
+        t.set(at, v);
+    }
+    t.set("H1", "=BYROW(E1:G2,LAMBDA(r,COUNTIF(r,\">0\")))");
+    t.set("I1", "=MAP(E1:E2,LAMBDA(x,SUMIF(x,\">0\")))");
+    assert_eq!((t.num("H1"), t.num("H2"), t.num("I1"), t.num("I2")), (2.0, 2.0, 1.0, 0.0));
+}
+
+#[test]
 fn xlookup_returns_a_reference() {
     let mut t = T::new();
     for (i, (k, v)) in [("a", 1), ("b", 2), ("c", 3), ("d", 4)].iter().enumerate() {

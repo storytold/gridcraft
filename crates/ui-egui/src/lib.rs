@@ -881,7 +881,9 @@ impl SheetApp {
             String::new()
         } else {
             match sh.cell(at) {
-                Some(c) if c.formula.is_some() => formula_locale::display(&c.input_text(), locale, &d.wb, d.wb.active_sheet),
+                Some(c) if c.formula.is_some() => {
+                    formula_locale::display(&gridcraft_engine::display::edit_text(&d.wb, sh, at), locale, &d.wb, d.wb.active_sheet)
+                }
                 _ => gridcraft_engine::display::edit_text(&d.wb, sh, at),
             }
         };

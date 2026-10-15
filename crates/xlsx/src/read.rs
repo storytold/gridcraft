@@ -247,6 +247,8 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
     wb.active_sheet = file_to_model.get(active_tab).copied().flatten().unwrap_or(0);
 
+    wb.external_books = crate::external::read(&mut cx, &wb_xml, &wb_rels)?;
+
     // Defined names. Chartex parts refer to their data through hidden `_xlchart.*` names.
     let mut chart_names: Vec<(String, String)> = vec![];
     if let Some(dn) = wb_xml.child("definedNames") {

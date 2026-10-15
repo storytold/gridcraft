@@ -78,6 +78,75 @@ fn normalises() {
 }
 
 #[test]
+fn linked_workbook_sheet_ranges_round_trip() {
+    // MS-XLSX `sheet-range = [workbook-index] sheet-name ":" sheet-name`, quoted or not.
+    let span = |a: &str, b: &str| SheetSel::Span(a.into(), b.into());
+    for (src, sheet) in [
+        ("SUM([1]Jan:Dec!A1)", span("[1]Jan", "Dec")),
+        ("SUM('[1]Jan:Dec'!A1)", span("[1]Jan", "Dec")),
+        ("SUM('[1]Jan:My Dec'!A1)", span("[1]Jan", "My Dec")),
+        ("SUM('Jan:[1]Dec'!A1)", span("Jan", "[1]Dec")),
+        ("[2]Prices!B2", SheetSel::Named("[2]Prices".into())),
+    ] {
+        let e = parse(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        let first = match &e {
+            Expr::Call(_, args) => args.first(),
+            r => Some(r),
+        };
+        let Some(Expr::Ref(r)) = first else { panic!("{src}: {e:?}") };
+        assert_eq!(r.sheet, sheet, "{src}");
+        // What the printer writes reads back as the same formula.
+        let printed = print(&e);
+        assert_eq!(parse(&printed).ok(), Some(e), "{src} printed as {printed}");
+    }
+}
+
+#[test]
+fn another_workbook_without_a_sheet_is_not_a_cell_reference() {
+    // A cell or range needs a sheet after the workbook: Excel refuses these. A name doesn't.
+    for src in ["[Sheet1]!A1", "'[Source.xlsx]'!A1", "'Q1 [draft]'!A1", r"'C:\links\[Source.xlsx]'!A1:B2", "[1]!A1"] {
+        assert!(parse(src).is_err(), "{src}: {:?}", parse(src));
+    }
+    for (src, name) in [("[1]!Rate", "[1]!Rate"), ("[Source.xlsx]!Rate", "[Source.xlsx]!Rate"), ("Source.xlsx!Rate", "Source.xlsx!Rate")] {
+        assert_eq!(parse(src).ok(), Some(Expr::Name(name.into())), "{src}");
+        assert_eq!(print(&Expr::Name(name.into())), src, "{src}");
+    }
+}
+
+#[test]
+fn another_workbook_by_file_name_or_path_parses() {
+    // Typed references to a workbook that isn't linked yet: the file name in brackets, with or
+    // without its folder. A drive's `C:` isn't the colon of a sheet range.
+    let named = |s: &str| SheetSel::Named(s.into());
+    for (src, sheet, printed) in [
+        ("[Source.xlsx]Sheet1!A1", named("[Source.xlsx]Sheet1"), "[Source.xlsx]Sheet1!A1"),
+        ("'[Source.xlsx]Sheet1'!A1", named("[Source.xlsx]Sheet1"), "[Source.xlsx]Sheet1!A1"),
+        ("'[Source.xlsx]P&L Data'!A1", named("[Source.xlsx]P&L Data"), "'[Source.xlsx]P&L Data'!A1"),
+        (r"'C:\links\[Source.xlsx]Sheet1'!A1", named(r"C:\links\[Source.xlsx]Sheet1"), r"'C:\links\[Source.xlsx]Sheet1'!A1"),
+        (r"SUM('C:\links\[Source.xlsx]Sheet1'!A1:A3)", named(r"C:\links\[Source.xlsx]Sheet1"), r"SUM('C:\links\[Source.xlsx]Sheet1'!A1:A3)"),
+        (r"'C:\links\[Source.xlsx]P&L Data'!A1", named(r"C:\links\[Source.xlsx]P&L Data"), r"'C:\links\[Source.xlsx]P&L Data'!A1"),
+        (
+            r"SUM('C:\links\[Source.xlsx]Jan:Dec'!A1)",
+            SheetSel::Span(r"C:\links\[Source.xlsx]Jan".into(), "Dec".into()),
+            r"SUM('C:\links\[Source.xlsx]Jan:Dec'!A1)",
+        ),
+    ] {
+        let e = parse(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        let first = match &e {
+            Expr::Call(_, args) => args.first(),
+            r => Some(r),
+        };
+        let Some(Expr::Ref(r)) = first else { panic!("{src}: {e:?}") };
+        assert_eq!(r.sheet, sheet, "{src}");
+        assert_eq!(print(&e), printed, "{src}");
+        assert_eq!(parse(printed).ok(), Some(e), "{src} printed as {printed}");
+    }
+    for (src, name) in [("Source.xlsx!Rate", "Source.xlsx!Rate"), (r"'C:\links\Source.xlsx'!Rate", r"C:\links\Source.xlsx!Rate")] {
+        assert_eq!(parse(src).ok(), Some(Expr::Name(name.into())), "{src}");
+    }
+}
+
+#[test]
 fn spill_operator() {
     for f in ["A1#", "Sheet1!$D$1#", "SUM(B2#)", "'My Sheet'!A1#*2", "ROWS(A1#)+1", "IF(A1,#N/A,#REF!)"] {
         assert_eq!(rt(f), f);

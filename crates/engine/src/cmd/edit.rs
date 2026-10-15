@@ -151,6 +151,8 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         let expr = parsed.map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))?;
         let expr = wb.name_call_case(expr);
         check_arg_counts(&expr)?;
+        // Another workbook by file name or path: files only hold the number of its link, `[1]`.
+        let expr = wb.link_typed_books(expr);
         let mut cell = Cell::formula(Formula::from_expr(expr));
         cell.style = style;
         // Formulas whose result is a date/time get a format from functions like TODAY().

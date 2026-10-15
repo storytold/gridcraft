@@ -8,6 +8,22 @@ use crate::ast::*;
 
 /// Whether a sheet name needs quotes in a reference.
 pub fn needs_quotes(name: &str) -> bool {
+    // A sheet in a linked workbook, `[1]Prices` or `[Source.xlsx]Prices`: Excel quotes it only
+    // when the sheet name needs it.
+    match linked_sheet(name) {
+        Some(sheet) => sheet_needs_quotes(sheet),
+        None => sheet_needs_quotes(name),
+    }
+}
+
+/// The sheet after a linked workbook's `[1]` or `[Source.xlsx]`, empty when there is none.
+fn linked_sheet(name: &str) -> Option<&str> {
+    let (book, sheet) = name.strip_prefix('[')?.split_once(']')?;
+    (!book.is_empty() && book.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '.'))).then_some(sheet)
+}
+
+/// Whether a sheet name, without a linked workbook's `[n]`, needs quotes.
+fn sheet_needs_quotes(name: &str) -> bool {
     if name.is_empty() {
         return true;
     }
@@ -28,8 +44,9 @@ fn sheet_prefix(s: &SheetSel) -> String {
         SheetSel::Current => String::new(),
         SheetSel::Named(n) => format!("{}!", quote_sheet(n)),
         SheetSel::Span(a, b) => {
+            // `[1]Jan:Dec!A1`: a linked workbook's index can start the range, not its second sheet.
             let joined = format!("{a}:{b}");
-            if needs_quotes(a) || needs_quotes(b) { format!("'{}'!", joined.replace('\'', "''")) } else { format!("{joined}!") }
+            if needs_quotes(a) || sheet_needs_quotes(b) { format!("'{}'!", joined.replace('\'', "''")) } else { format!("{joined}!") }
         }
     }
 }
@@ -194,6 +211,9 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
             None => s.push_str(&reference_a1(r)),
         },
         Expr::Name(n) => match n.rsplit_once('!') {
+            // A linked workbook's own name (`[1]!Rate`) has no sheet to quote: `'[1]'!Rate` would
+            // read as a sheet named `[1]`.
+            Some((book, _)) if linked_sheet(book) == Some("") => s.push_str(n),
             // A sheet-qualified name is stored with the bare sheet name (`My Sheet!Total`): quote it so it parses back.
             Some((sheet, name)) => {
                 s.push_str(&quote_sheet(sheet));
