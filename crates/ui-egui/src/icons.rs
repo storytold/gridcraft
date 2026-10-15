@@ -32,6 +32,7 @@ pub enum Icon {
     IndentInc,
     Wrap,
     Merge,
+    Palette,
     Currency,
     Percent,
     Comma,
@@ -325,6 +326,31 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.stroke(&[(4.0, 8.0), (12.0, 8.0)], BLUE);
             g.poly(&[(3.0, 8.0), (5.5, 6.5), (5.5, 9.5)], BLUE);
             g.poly(&[(13.0, 8.0), (10.5, 6.5), (10.5, 9.5)], BLUE);
+        }
+        // An artist's palette: an outline with a notch for the thumb and four paint dots.
+        Icon::Palette => {
+            g.line(
+                &[
+                    (8.0, 1.8),
+                    (12.5, 2.8),
+                    (14.6, 6.5),
+                    (14.0, 10.5),
+                    (11.0, 11.0),
+                    (9.5, 12.5),
+                    (9.0, 14.3),
+                    (5.0, 13.8),
+                    (2.0, 11.0),
+                    (1.5, 6.5),
+                    (3.8, 3.0),
+                    (8.0, 1.8),
+                ],
+                c,
+                1.1,
+            );
+            g.rect(4.0, 5.0, 2.2, 2.2, Some(Color32::from_rgb(0xE0, 0x40, 0x40)), None);
+            g.rect(7.2, 3.8, 2.2, 2.2, Some(Color32::from_rgb(0xF0, 0xB0, 0x20)), None);
+            g.rect(10.4, 5.2, 2.2, 2.2, Some(Color32::from_rgb(0x40, 0xA0, 0x50)), None);
+            g.rect(3.8, 8.6, 2.2, 2.2, Some(Color32::from_rgb(0x30, 0x70, 0xD0)), None);
         }
         Icon::Currency => g.text(8.0, 8.5, "$", 12.0, c, false, false),
         Icon::Percent => g.text(8.0, 8.5, "%", 11.0, c, false, false),

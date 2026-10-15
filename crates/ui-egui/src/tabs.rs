@@ -186,7 +186,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                     }
                                     ui.menu_button("Tab Color", |ui| {
                                         let colors = app.session.active().map(|d| d.wb.theme.colors).unwrap_or_default();
-                                        if let Some(c) = crate::widgets::color_palette(ui, &colors, "No Color") {
+                                        if let Some(c) = crate::widgets::color_palette_fixed(ui, &colors, "No Color") {
                                             app.run_or_alert("sheet.tabColor", json!({"sheet": i, "color": c}));
                                             ui.close();
                                         }

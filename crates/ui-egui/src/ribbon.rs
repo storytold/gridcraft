@@ -8,7 +8,7 @@ use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Tokens};
-use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::widgets::{big_button, color_palette_current, icon_button, small_button, split_button, toggle_button};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -669,15 +669,29 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
                 act(app, "home.fillColor", json!({"color": fill}));
             }
             let forced = invoke(app, "home.fillColor");
-            egui::Popup::menu(&fa).open_memory(popup_command(forced, fa.clicked())).show(|ui| {
-                if let Some(c) = color_palette(ui, &theme_colors(app), "No Fill") {
-                    if c != "none" {
-                        app.grid.last_fill = c.clone();
+            // Opened with keytips (H, H / H, F, C): the menu's rows show their letters as badges.
+            let kb_id = fa.id.with("keytips");
+            if forced || fa.clicked() {
+                ui.data_mut(|d| d.insert_temp(kb_id, forced));
+            }
+            let badges = ui.data(|d| d.get_temp::<bool>(kb_id)).unwrap_or(false);
+            egui::Popup::menu(&fa)
+                .anchor(crate::widgets::split_button_rect(&fa))
+                .align(egui::RectAlign::BOTTOM_START)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .open_memory(popup_command(forced, fa.clicked()))
+                .show(|ui| {
+                    let st = active_style(app);
+                    let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
+                    let current = (st.fill.pattern != gridcraft_engine::model::PatternType::None).then(|| st.fill.fg.resolve(&theme)).flatten();
+                    if let Some(c) = color_palette_current(ui, &theme_colors(app), "No Fill", current, badges) {
+                        if c != "none" {
+                            app.grid.last_fill = c.clone();
+                        }
+                        act(app, "home.fillColor", json!({"color": c}));
+                        ui.close();
                     }
-                    act(app, "home.fillColor", json!({"color": c}));
-                    ui.close();
-                }
-            });
+                });
             let fc = app.grid.last_font_color.clone();
             let fc_c = gridcraft_engine::model::Color::from_hex(&fc).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
             let (c, ca) = split_button(ui, Icon::FontColor, fc_c, "Font Color");
@@ -686,15 +700,29 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
                 act(app, "home.fontColor", json!({"color": fc}));
             }
             let forced = invoke(app, "home.fontColor");
-            egui::Popup::menu(&ca).open_memory(popup_command(forced, ca.clicked())).show(|ui| {
-                if let Some(c) = color_palette(ui, &theme_colors(app), "Automatic") {
-                    if c != "none" {
-                        app.grid.last_font_color = c.clone();
+            // Opened with keytips (H, H / H, F, C): the menu's rows show their letters as badges.
+            let kb_id = ca.id.with("keytips");
+            if forced || ca.clicked() {
+                ui.data_mut(|d| d.insert_temp(kb_id, forced));
+            }
+            let badges = ui.data(|d| d.get_temp::<bool>(kb_id)).unwrap_or(false);
+            egui::Popup::menu(&ca)
+                .anchor(crate::widgets::split_button_rect(&ca))
+                .align(egui::RectAlign::BOTTOM_START)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .open_memory(popup_command(forced, ca.clicked()))
+                .show(|ui| {
+                    let st = active_style(app);
+                    let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
+                    let current = st.font.color.resolve(&theme);
+                    if let Some(c) = color_palette_current(ui, &theme_colors(app), "Automatic", current, badges) {
+                        if c != "none" {
+                            app.grid.last_font_color = c.clone();
+                        }
+                        act(app, "home.fontColor", json!({"color": if c == "none" { "auto".to_string() } else { c }}));
+                        ui.close();
                     }
-                    act(app, "home.fontColor", json!({"color": if c == "none" { "auto".to_string() } else { c }}));
-                    ui.close();
-                }
-            });
+                });
         });
     });
     sep(ui);
