@@ -75,3 +75,13 @@ opt-level = 3
 lto = "thin"
 codegen-units = 16
 debug = 0
+
+# Windows 11: winit 0.30.13 resizes a window wrongly while it is dragged across monitors with
+# different display scales (rust-windowing/winit#4041, #4600). It flips between the two scales,
+# grows by the scale ratio (3600×2250 → 9048×5757 between 250 % and 100 %) and outgrows the GPU
+# surface, which closed GridCraft. Pinned to the one commit of rust-windowing/winit#4694, the
+# 0.30.x backport of the fix winit master has had since 488c036a (#4341): during a live drag it
+# applies the rect Windows suggests (+21/−34 lines in src/platform_impl/windows/event_loop.rs on
+# top of v0.30.13). Remove once eframe depends on a winit release with the fix.
+[patch.crates-io]
+winit = { git = "https://github.com/rust-windowing/winit", rev = "39c4009c41e5977d779cf8a365792c8153ca77c5" }
