@@ -932,17 +932,18 @@ fn activate(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"sheet": i, "name": d.wb.active().map(|s| s.name.clone())}))
 }
 
-fn step_sheet(s: &mut Session, dir: i64) -> Result<Json> {
+fn step_sheet(s: &mut Session, dir: isize) -> Result<Json> {
     let d = s.doc()?;
-    let n = d.wb.sheets.len() as i64;
-    let mut i = d.wb.active_sheet as i64;
-    for _ in 0..n {
-        i = (i + dir).clamp(0, n - 1);
-        if d.wb.sheet(i as usize).is_some_and(|s| s.visibility == Visibility::Visible) {
-            break;
+    let mut i = d.wb.active_sheet;
+    while let Some(next) = i.checked_add_signed(dir) {
+        let Some(sheet) = d.wb.sheet(next) else { break };
+        if sheet.visibility == Visibility::Visible {
+            s.doc_mut()?.wb_switch_sheet(next);
+            return ok();
         }
+        i = next;
     }
-    s.doc_mut()?.wb_switch_sheet(i as usize);
+    // No visible sheet in this direction: keep the current sheet and its selection.
     ok()
 }
 
