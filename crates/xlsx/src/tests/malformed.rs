@@ -227,3 +227,32 @@ fn hyperlinks_past_the_cell_cap_are_reported() {
     assert_eq!(wb.sheet(0).unwrap().hyperlinks.len(), 3);
     assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
 }
+
+/// Formula text built to overflow a recursive parser or tree walk (a million `%`, a 200,000-term
+/// sum): the cells keep their formula text and cached value, nothing overflows the stack.
+#[test]
+fn hostile_formula_text_does_not_overflow_the_stack() {
+    let percents = format!("1{}", "%".repeat(1_000_000));
+    let chain = format!("1{}", "+1".repeat(100_000));
+    let body = format!(r#"<sheetData><row r="1"><c r="A1"><f>{percents}</f><v>3</v></c><c r="B1"><f>{chain}</f><v>4</v></c></row></sheetData>"#);
+    let names = format!(r#"<definedNames><definedName name="Deep">{percents}</definedName></definedNames>"#);
+    let bytes = minimal(&body, &[], "", &names);
+    let handle = std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(move || {
+            let (wb, _) = read_xlsx(&bytes).expect("readable");
+            let s = wb.sheet(0).expect("sheet");
+            let a1 = s.cell(gridcraft_core::CellRef::new(0, 0)).and_then(|c| c.formula.clone()).expect("formula kept");
+            let b1 = s.cell(gridcraft_core::CellRef::new(0, 1)).and_then(|c| c.formula.clone()).expect("formula kept");
+            let kept = (a1.expr.is_none(), b1.expr.is_none(), a1.text.len(), s.value(gridcraft_core::CellRef::new(0, 0)));
+            assert_eq!(wb.names.first().map(|n| n.formula.len()), Some(1_000_001));
+            let out = write_xlsx(&wb).expect("writable");
+            drop(wb);
+            (kept, !out.is_empty())
+        })
+        .expect("spawn");
+    let ((a_unparsed, b_unparsed, a_len, a_value), written) = handle.join().expect("no stack overflow");
+    assert!(a_unparsed && b_unparsed && written);
+    assert_eq!(a_len, 1_000_001);
+    assert_eq!(a_value, gridcraft_core::Value::Number(3.0));
+}

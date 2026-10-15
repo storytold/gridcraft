@@ -19,6 +19,7 @@ concurrency:
 
 jobs:
   build:
+    timeout-minutes: 60
     name: Build Flatpak repository
     # Pre-releases (rc builds) never reach the stable branch: a published pre-release is skipped
     # here, and the validation step below refuses a manual tag with a pre-release suffix.
@@ -161,6 +162,7 @@ jobs:
           include-hidden-files: true
 
   deploy:
+    timeout-minutes: 60
     name: Deploy Pages
     needs: build
     runs-on: ubuntu-24.04

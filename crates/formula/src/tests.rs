@@ -366,3 +366,38 @@ fn prints_long_flat_chain_without_deep_recursion() {
     assert_eq!(text, vec!["1"; 20001].join("+"));
     assert_eq!(r1c1, text);
 }
+
+#[test]
+fn hostile_formulas_are_errors_not_stack_overflows() {
+    // A small stack: parsing must fail cleanly instead of building trees deeper than the nesting
+    // limit, which dropping, printing and evaluating walk recursively.
+    let handle = std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            let percents = format!("1{}", "%".repeat(1_000));
+            let invokes = format!("LAMBDA(x,x)(1){}", "(1)".repeat(1_000));
+            let long_chain = format!("1{}", "+1".repeat(100_000));
+            let huge_percents = format!("1{}", "%".repeat(1_000_000));
+            (parse(&percents).is_err(), parse(&invokes).is_err(), parse(&long_chain).is_err(), parse(&huge_percents).is_err())
+        })
+        .expect("spawn");
+    assert_eq!(handle.join().expect("parsing must not overflow the stack"), (true, true, true, true));
+    // Within the limits these still parse.
+    assert!(parse(&format!("1{}", "%".repeat(100))).is_ok());
+    assert!(parse("LAMBDA(x,x)(1)(2)").is_ok());
+}
+
+#[test]
+fn formulas_longer_than_excel_allows_are_refused() {
+    let at_limit = format!("1{}", "+1".repeat((crate::MAX_FORMULA_LEN - 1) / 2));
+    assert_eq!(at_limit.chars().count(), crate::MAX_FORMULA_LEN - 1);
+    assert!(parse(&at_limit).is_ok());
+    assert!(parse(&format!("={at_limit}")).is_ok(), "the leading = does not count");
+    let over = format!("{at_limit}+1");
+    let err = parse(&over).unwrap_err();
+    assert!(err.msg.contains("8192"), "{}", err.msg);
+    // Characters, not bytes: 8,000 two-byte characters in a text literal are within the limit.
+    let text = format!("\"{}\"", "é".repeat(8_000));
+    assert!(text.len() > crate::MAX_FORMULA_LEN);
+    assert!(parse(&text).is_ok());
+}

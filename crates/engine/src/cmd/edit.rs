@@ -1246,6 +1246,9 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
             };
             let cells: Vec<(CellRef, Cell)> =
                 cx.wb.sheet(sheet).map(|sh| sh.cells.iter_range(r).map(|(c, x)| (c, x.clone())).collect()).unwrap_or_default();
+            // Report every stored cell we touch, even beyond a million coordinates in a sparse
+            // selection. Removed formula anchors must also reach calc so their spills disappear.
+            cx.changed.extend(cells.iter().map(|(c, _)| (sheet, *c)));
             let mut cells = cells;
             if what == "contents" {
                 for (_, cell) in cells.iter_mut() {
@@ -1284,10 +1287,24 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                 sh.hyperlinks.retain(|c, _| !r.contains(*c));
             }
             if matches!(what, "all" | "formats") {
-                sh.merges.retain(|m| !r.contains_range(m));
-            }
-            for c in r.iter().take(1_000_000) {
-                cx.changed.push((sheet, c));
+                let mut unmerged = false;
+                sh.merges.retain(|m| {
+                    let keep = !r.contains_range(m);
+                    unmerged |= !keep;
+                    keep
+                });
+                if unmerged {
+                    // An empty merge can block a spill without storing any cells in this range.
+                    // As in Unmerge, retry blocked formula anchors that could reach the freed area.
+                    let reach = RangeRef::new(CellRef::new(0, 0), r.end);
+                    let blocked: Vec<_> = sh
+                        .cells
+                        .iter_range(reach)
+                        .filter(|(_, cell)| cell.formula.is_some() && cell.value == Value::Error(gridcraft_core::CellError::Spill))
+                        .map(|(c, _)| (sheet, c))
+                        .collect();
+                    cx.changed.extend(blocked);
+                }
             }
         }
         Ok(Json::Null)

@@ -17,6 +17,11 @@ pub struct ParseError {
 
 pub(crate) const MAX_DEPTH: usize = 256;
 
+/// Longest formula accepted, in characters: Excel's limit for formula contents. It also bounds
+/// the depth of the trees long operator chains build (`1+1+…`), which dropping and evaluating
+/// walk recursively; without it a formula of a few hundred kilobytes in a file overflows the stack.
+pub const MAX_FORMULA_LEN: usize = 8_192;
+
 /// Parses formula text. A leading `=` (or `+`/`-` as Lotus users type) is accepted and skipped
 /// for `=`.
 pub fn parse(src: &str) -> Result<Expr, ParseError> {
@@ -25,6 +30,9 @@ pub fn parse(src: &str) -> Result<Expr, ParseError> {
 
 pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale) -> Result<Expr, ParseError> {
     let body = src.strip_prefix('=').unwrap_or(src);
+    if body.len() > MAX_FORMULA_LEN && body.chars().count() > MAX_FORMULA_LEN {
+        return Err(ParseError { msg: format!("formula is longer than {MAX_FORMULA_LEN} characters"), pos: 0 });
+    }
     let toks = tokenize_locale(body, locale).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
     let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
@@ -160,10 +168,17 @@ impl Parser {
             return Err(self.err("formula is nested too deeply"));
         }
         let mut lhs = self.prefix(allow_union)?;
+        // Postfix operators (`%`, invoking a result) wrap `lhs` without recursing: they count
+        // towards the nesting limit, so `1%%%…` can't build a tree deeper than it.
+        let mut postfix = 0;
         loop {
             if *self.peek() == Tok::Op("%") {
                 if 70 < min_bp {
                     break;
+                }
+                postfix += 1;
+                if self.depth + postfix > MAX_DEPTH {
+                    return Err(self.err("formula is nested too deeply"));
                 }
                 self.next();
                 lhs = Expr::Unary(UnOp::Percent, Box::new(lhs));
@@ -173,6 +188,10 @@ impl Parser {
                 // Invoking a LAMBDA result.
                 if let Expr::Name(_) = lhs {
                     // A name followed by '(' was lexed as Func; this is `(name)(…)` only.
+                }
+                postfix += 1;
+                if self.depth + postfix > MAX_DEPTH {
+                    return Err(self.err("formula is nested too deeply"));
                 }
                 self.next();
                 let args = self.args()?;
