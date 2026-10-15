@@ -881,3 +881,12 @@ fn the_merge_index_holds_a_bounded_number_of_cells() {
     sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(1_000_000, 0))];
     assert!(merge_index(&sh, rect).is_none());
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn read_bounded_enforces_the_limit_while_reading() {
+    assert_eq!(read_bounded(&[1u8; 15][..], 16).unwrap().map(|b| b.len()), Some(15));
+    assert_eq!(read_bounded(&[1u8; 16][..], 16).unwrap().map(|b| b.len()), Some(16));
+    assert_eq!(read_bounded(&[1u8; 17][..], 16).unwrap(), None);
+    assert_eq!(read_bounded(std::io::repeat(1), 16).unwrap(), None);
+}

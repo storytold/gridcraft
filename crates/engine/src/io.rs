@@ -1011,27 +1011,36 @@ const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
-    use std::io::Read;
     script_sandbox_check(path)?;
-    // Checked before opening: opening a FIFO nobody writes to blocks the calling (GUI) thread.
-    // shortcut: a FIFO swapped in between this check and the open still blocks; close that with
-    // O_NONBLOCK when the crate takes a libc dependency.
-    if !std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
-        return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
+    let io_err = |e: std::io::Error| EngineError::Other(format!("{path}: {e}"));
+    let not_regular = || EngineError::Other(format!("{path}: only regular files can be opened"));
+    let too_large = || EngineError::Other("files larger than 2 GB aren't supported".into());
+    // Reject special files before opening: opening a FIFO without a writer blocks the calling
+    // (GUI) thread. shortcut: a FIFO swapped in between this check and the open still blocks;
+    // close that with O_NONBLOCK when the crate takes a libc dependency.
+    if !std::fs::metadata(path).map_err(io_err)?.is_file() {
+        return Err(not_regular());
     }
-    let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    // A symlink to an endless device reports length 0 but streams forever, so metadata
-    // alone never bounds the read: require a real file and cap the bytes actually taken.
-    if !f.metadata().map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
-        return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
+    // Inspect the opened handle too, in case the path was swapped since the check above.
+    let file = std::fs::File::open(path).map_err(io_err)?;
+    let meta = file.metadata().map_err(io_err)?;
+    if !meta.is_file() {
+        return Err(not_regular());
     }
-    let mut buf = Vec::new();
-    let mut limited = (&f).take(MAX_READ_BYTES + 1);
-    limited.read_to_end(&mut buf).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if buf.len() as u64 > MAX_READ_BYTES {
-        return Err(EngineError::Other("files larger than 2 GB aren't supported".into()));
+    if meta.len() > MAX_READ_BYTES {
+        return Err(too_large());
     }
-    Ok(buf)
+    // The reported size can be stale (a growing file), so the read itself is bounded too.
+    read_bounded(file, MAX_READ_BYTES).map_err(io_err)?.ok_or_else(too_large)
+}
+
+/// Reads at most `limit` bytes; `None` when the reader supplies more than that.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_bounded(reader: impl std::io::Read, limit: u64) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read as _;
+    let mut out = Vec::new();
+    reader.take(limit.saturating_add(1)).read_to_end(&mut out)?;
+    Ok((out.len() as u64 <= limit).then_some(out))
 }
 
 #[cfg(target_arch = "wasm32")]
