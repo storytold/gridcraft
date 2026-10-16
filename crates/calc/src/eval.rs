@@ -1360,7 +1360,14 @@ impl<'h> Evaluator<'h> {
         let wb = self.host.workbook();
         let sheet = wb.sheet(a.sheet);
         match kind.as_str() {
-            "address" => Ev::V(Value::text(format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1))),
+            "address" => {
+                // Another sheet's cell carries its sheet name, so INDIRECT reads it back from there.
+                let prefix = match sheet {
+                    Some(s) if a.sheet != self.sheet => format!("{}!", gridcraft_formula::quote_sheet(&s.name)),
+                    _ => String::new(),
+                };
+                Ev::V(Value::text(format!("{prefix}${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1)))
+            }
             "row" => Ev::V(Value::number(c.row as f64 + 1.0)),
             "col" => Ev::V(Value::number(c.col as f64 + 1.0)),
             "contents" => Ev::V(self.host.cell_value(a.sheet, c)),

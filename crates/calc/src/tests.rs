@@ -658,6 +658,26 @@ fn names_and_sheets() {
 }
 
 #[test]
+fn cell_address_names_another_sheet() {
+    let mut t = T::new();
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("My Sheet")));
+    t.wb.sheet_mut(0).unwrap().set_value(c("C7"), Value::Number(1.0));
+    t.wb.sheet_mut(1).unwrap().set_value(c("C7"), Value::Number(2.0));
+    t.calc.rebuild(&t.wb);
+    t.set("A1", "=CELL(\"address\",Data!C7)");
+    assert_eq!(t.get("A1"), Value::from("Data!$C$7"));
+    t.set("A2", "=CELL(\"address\",'My Sheet'!C7)");
+    assert_eq!(t.get("A2"), Value::from("'My Sheet'!$C$7"));
+    // The reference's own sheet keeps the bare address.
+    t.set("A3", "=CELL(\"address\",Sheet1!C7)");
+    assert_eq!(t.get("A3"), Value::from("$C$7"));
+    // Fed back to INDIRECT it reads the other sheet, not the formula's (#904).
+    t.set("A4", "=INDIRECT(CELL(\"address\",Data!C7))");
+    assert_eq!(t.num("A4"), 2.0);
+}
+
+#[test]
 fn legacy_array_formulas_fill_their_range() {
     let mut t = T::new();
     t.set("A1", "1");
