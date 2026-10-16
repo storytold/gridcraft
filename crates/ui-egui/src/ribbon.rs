@@ -8,7 +8,9 @@ use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Tokens};
-use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::widgets::{
+    big_button, color_palette, icon_button, small_button, split_button, split_text_button, text_column_width, toggle_button, toggle_text_button,
+};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -301,6 +303,13 @@ fn sep(ui: &mut Ui) {
     ui.painter().line_segment([pos2(r.center().x, r.top() + 6.0), pos2(r.center().x, r.bottom() - 6.0)], Stroke::new(1.0, t.separator));
 }
 
+/// A [`sep`] inside a group, as tall as the rows it divides (Alignment: one row, or both).
+fn inner_sep(ui: &mut Ui, height: f32) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(9.0, height), Sense::hover());
+    ui.painter().line_segment([pos2(r.center().x, r.top() + 3.0), pos2(r.center().x, r.bottom() - 3.0)], Stroke::new(1.0, t.separator));
+}
+
 fn active_style(app: &SheetApp) -> Style {
     app.session
         .active()
@@ -499,6 +508,52 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, serde_json:
             }
         }
     }
+}
+
+/// Menu rows with an icon and the access letter underlined, as in Excel's Merge & Center menu.
+fn icon_menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(Icon, &str, char, &str, serde_json::Value)]) {
+    let t = Tokens::get(ui.ctx());
+    let font = ui.style().text_styles.get(&egui::TextStyle::Button).cloned().unwrap_or_else(|| theme::ui_font(13.0));
+    for (icon, label, letter, id, params) in items {
+        let text = app.ui.language.tr(label).to_string();
+        let job = underlined(&text, Some(*letter), font.clone(), t.text);
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        let (rect, response) = ui.allocate_exact_size(vec2((galley.size().x + 50.0).max(220.0), 30.0), Sense::click());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &text));
+        if response.hovered() {
+            ui.painter().rect_filled(rect, 4.0, t.hover);
+        }
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 17.0, rect.center().y), vec2(18.0, 18.0)), *icon, t.text);
+        ui.painter().galley(pos2(rect.left() + 38.0, rect.center().y - galley.size().y / 2.0), galley, t.text);
+        if let Some(sequence) = keytip_table::item_letter(app.keytips.prefix().unwrap_or_default(), id) {
+            keytip(app, ui, sequence, pos2(rect.right() - 10.0, rect.center().y));
+        }
+        if response.clicked() {
+            act(app, id, params.clone());
+            ui.close();
+        }
+    }
+}
+
+/// `text` with the access letter underlined: its first capital occurrence (Merge & **C**enter),
+/// else its first occurrence in any case.
+fn underlined(text: &str, letter: Option<char>, font: egui::FontId, color: Color32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let plain = egui::TextFormat { font_id: font, color, ..Default::default() };
+    let at = letter.and_then(|l| {
+        let upper = l.to_ascii_uppercase();
+        text.char_indices().find(|&(_, c)| c == upper).or_else(|| text.char_indices().find(|&(_, c)| c.eq_ignore_ascii_case(&l)))
+    });
+    match at {
+        Some((i, c)) => {
+            let end = i + c.len_utf8();
+            job.append(&text[..i], 0.0, plain.clone());
+            job.append(&text[i..end], 0.0, egui::TextFormat { underline: Stroke::new(1.0, color), ..plain.clone() });
+            job.append(&text[end..], 0.0, plain);
+        }
+        None => job.append(text, 0.0, plain),
+    }
+    job
 }
 
 fn home(app: &mut SheetApp, ui: &mut Ui) {
@@ -712,6 +767,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
                     act(app, id, json!({}));
                 }
             }
+            inner_sep(ui, 24.0);
             let o = small_button(ui, Icon::Orientation, "", "Orientation", true);
             control_keytip(app, ui, &o, "home.orientation");
             let forced_o = invoke(app, "home.orientation");
@@ -731,12 +787,6 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
                     ],
                 );
             });
-            let wrap = toggle_button(ui, Icon::Wrap, st.align.wrap, "Wrap Text");
-            control_keytip(app, ui, &wrap, "home.wrapText");
-            if wrap.clicked() {
-                act(app, "home.wrapText", json!({}));
-            }
-            ui.label(egui::RichText::new(app.ui.language.tr("Wrap Text")).font(theme::ui_font(12.5)));
         });
         ui.horizontal(|ui| {
             for (icon, h, id, tip) in [
@@ -752,6 +802,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
                     act(app, id, json!({}));
                 }
             }
+            inner_sep(ui, 24.0);
             let __k = icon_button(ui, Icon::IndentDec, t.text, "Decrease Indent", vec2(24.0, 23.0));
             control_keytip(app, ui, &__k, "home.decreaseIndent");
             if __k.clicked() {
@@ -762,24 +813,37 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             if __k.clicked() {
                 act(app, "home.increaseIndent", json!({}));
             }
-            let (m, ma) = split_button(ui, Icon::Merge, None, "Merge & Center");
-            control_keytip(app, ui, &ma, "home.mergeCenter");
-            if m {
-                act(app, "home.mergeCenter", json!({}));
-            }
-            ui.label(egui::RichText::new(app.ui.language.tr("Merge & Center")).font(theme::ui_font(12.5)));
-            egui::Popup::menu(&ma).show(|ui| {
-                menu_items(
-                    app,
-                    ui,
-                    &[
-                        ("Merge & Center", "home.mergeCenter", json!({})),
-                        ("Merge Across", "home.mergeAcross", json!({})),
-                        ("Merge Cells", "home.mergeCells", json!({})),
-                        ("Unmerge Cells", "home.unmergeCells", json!({})),
-                    ],
-                );
-            });
+        });
+    });
+    inner_sep(ui, 50.0);
+    // Wrap Text and Merge & Center are one column of equal buttons, the arrow at its right edge.
+    ui.vertical(|ui| {
+        let width = text_column_width(ui, &["Wrap Text", "Merge & Center"]);
+        let wrap = toggle_text_button(ui, Icon::Wrap, "Wrap Text", st.align.wrap, "Wrap Text", width);
+        control_keytip(app, ui, &wrap, "home.wrapText");
+        if wrap.clicked() {
+            act(app, "home.wrapText", json!({}));
+        }
+        let (m, ma, whole) = split_text_button(ui, Icon::Merge, "Merge & Center", "Merge & Center", width);
+        control_keytip(app, ui, &ma, "home.mergeCenter");
+        if m {
+            act(app, "home.mergeCenter", json!({}));
+        }
+        // As in Excel: under the whole button, left edges aligned, each item with its icon and
+        // its access letter underlined.
+        egui::Popup::menu(&ma).anchor(whole).align(egui::RectAlign::BOTTOM_START).show(|ui| {
+            icon_menu_items(
+                app,
+                ui,
+                &[
+                    (Icon::Merge, "Merge & Center", 'C', "home.mergeCenter", json!({})),
+                    (Icon::MergeAcross, "Merge Across", 'A', "home.mergeAcross", json!({})),
+                    (Icon::MergeCells, "Merge Cells", 'M', "home.mergeCells", json!({})),
+                    (Icon::Unmerge, "Unmerge Cells", 'U', "home.unmergeCells", json!({})),
+                    // Centres the text over the empty cells to its right without merging them.
+                    (Icon::CenterAcross, "Center Across Selection", 'S', "home.formatCells", json!({"style": {"align": {"h": "CenterAcross"}}})),
+                ],
+            );
         });
     });
     sep(ui);

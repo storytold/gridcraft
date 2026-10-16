@@ -704,6 +704,9 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.button_padding = egui::vec2(6.0, 3.0);
         s.spacing.interact_size.y = 22.0;
+        // Chrome text (ribbon, dialogs, status bar) is not page text: a drag over it must not select it.
+        // Labels worth copying opt back in with `Label::selectable(true)`.
+        s.interaction.selectable_labels = false;
         s.text_styles.insert(egui::TextStyle::Body, ui_font(13.0));
         s.text_styles.insert(egui::TextStyle::Button, ui_font(13.0));
         s.text_styles.insert(egui::TextStyle::Small, ui_font(11.0));

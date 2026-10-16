@@ -32,6 +32,10 @@ pub enum Icon {
     IndentInc,
     Wrap,
     Merge,
+    MergeAcross,
+    MergeCells,
+    Unmerge,
+    CenterAcross,
     Currency,
     Percent,
     Comma,
@@ -325,6 +329,39 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.stroke(&[(4.0, 8.0), (12.0, 8.0)], BLUE);
             g.poly(&[(3.0, 8.0), (5.5, 6.5), (5.5, 9.5)], BLUE);
             g.poly(&[(13.0, 8.0), (10.5, 6.5), (10.5, 9.5)], BLUE);
+        }
+        // Two rows, each merged across with a double arrow.
+        Icon::MergeAcross => {
+            for y in [2.5, 8.5] {
+                g.rect(1.5, y, 13.0, 5.0, None, Some(c));
+                g.stroke(&[(4.5, y + 2.5), (11.5, y + 2.5)], BLUE);
+                g.poly(&[(3.5, y + 2.5), (5.5, y + 1.0), (5.5, y + 4.0)], BLUE);
+                g.poly(&[(12.5, y + 2.5), (10.5, y + 1.0), (10.5, y + 4.0)], BLUE);
+            }
+        }
+        // A grid whose top row is one merged cell.
+        Icon::MergeCells => {
+            g.rect(1.5, 2.5, 13.0, 11.0, None, Some(c));
+            g.stroke(&[(1.5, 8.0), (14.5, 8.0)], c);
+            g.stroke(&[(8.0, 8.0), (8.0, 13.5)], c);
+            g.rect(2.5, 3.5, 11.0, 3.5, Some(BLUE), None);
+        }
+        // A merged cell split back into columns.
+        Icon::Unmerge => {
+            g.rect(1.5, 3.5, 13.0, 9.0, None, Some(c));
+            for x in [5.8, 10.2] {
+                g.stroke(&[(x, 3.5), (x, 12.5)], BLUE);
+            }
+        }
+        // Centred lines of text spanning a row of cells, with the cell borders dashed.
+        Icon::CenterAcross => {
+            g.rect(1.5, 3.5, 13.0, 9.0, None, Some(c));
+            for x in [5.8, 10.2] {
+                g.stroke(&[(x, 3.5), (x, 5.0)], c);
+                g.stroke(&[(x, 11.0), (x, 12.5)], c);
+            }
+            g.stroke(&[(4.0, 7.0), (12.0, 7.0)], BLUE);
+            g.stroke(&[(5.5, 9.0), (10.5, 9.0)], BLUE);
         }
         Icon::Currency => g.text(8.0, 8.5, "$", 12.0, c, false, false),
         Icon::Percent => g.text(8.0, 8.5, "%", 11.0, c, false, false),

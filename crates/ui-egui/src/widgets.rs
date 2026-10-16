@@ -125,6 +125,58 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
     (m.on_hover_text(tr(ui, tip)).clicked(), a)
 }
 
+/// The width of a small button's caption, including the gap after the icon.
+fn caption_width(ui: &Ui, label: &str) -> f32 {
+    ui.painter().layout_no_wrap(label.to_string(), theme::ui_font(12.5), Color32::WHITE).size().x + 6.0
+}
+
+/// The shared width of a column of [`toggle_text_button`]s and [`split_text_button`]s (Wrap Text over
+/// Merge & Center): icon, the widest caption, and room for a dropdown arrow at the right edge.
+pub fn text_column_width(ui: &Ui, labels: &[&str]) -> f32 {
+    26.0 + labels.iter().map(|label| caption_width(ui, tr(ui, label))).fold(0.0, f32::max) + 13.0
+}
+
+/// [`toggle_button`] with its caption right of the icon (Wrap Text): icon and caption are one hover
+/// highlight and one click target, as in Excel. `width` lines it up with the column it stands in.
+pub fn toggle_text_button(ui: &mut Ui, icon: Icon, label: &str, on: bool, tip: &str, width: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let label = tr(ui, label);
+    let (rect, resp) = ui.allocate_exact_size(vec2(width.max(26.0 + caption_width(ui, label)), 24.0), Sense::click());
+    if on {
+        ui.painter().rect_filled(rect, 4.0, t.pressed);
+        ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, 4.0, t.hover);
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 13.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
+    ui.painter().text(pos2(rect.left() + 26.0, rect.center().y), Align2::LEFT_CENTER, label, theme::ui_font(12.5), t.text);
+    resp.on_hover_text(tr(ui, tip))
+}
+
+/// [`split_button`] with its caption in the main part (Merge & Center): icon and caption run the
+/// default action, the arrow at the right edge opens the menu. `width` lines it up with the column it
+/// stands in. Returns (main clicked, arrow response).
+/// Returns whether the main part was clicked, the arrow's response and the whole button's rect
+/// (Excel drops the arrow's menu under the whole button).
+pub fn split_text_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, width: f32) -> (bool, Response, Rect) {
+    let t = Tokens::get(ui.ctx());
+    let label = tr(ui, label);
+    let main_w = (width - 13.0).max(26.0 + caption_width(ui, label));
+    let (rect, _) = ui.allocate_exact_size(vec2(main_w + 13.0, 24.0), Sense::hover());
+    let main = Rect::from_min_size(rect.min, vec2(main_w, 24.0));
+    let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
+    let m = ui.interact(main, ui.id().with((tip, "main")), Sense::click());
+    let a = ui.interact(arrow, ui.id().with((tip, "arrow")), Sense::click());
+    if m.hovered() || a.hovered() {
+        ui.painter().rect_filled(rect, 4.0, t.hover);
+        ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(main.left() + 13.0, main.center().y), vec2(16.0, 16.0)), icon, t.text);
+    ui.painter().text(pos2(main.left() + 26.0, main.center().y), Align2::LEFT_CENTER, label, theme::ui_font(12.5), t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
+    (m.on_hover_text(tr(ui, tip)).clicked(), a, rect)
+}
+
 /// A one-line text field for a value stored in the workbook, which callers reload every frame. The text being typed is
 /// kept in egui memory until the field loses focus, then returned to commit (`None` when Escape cancels the edit).
 pub fn committed_text(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f32>) -> Option<String> {
@@ -281,7 +333,7 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
             ui.painter().text(r.center(), Align2::CENTER_CENTER, "!", theme::ui_bold(20.0), Color32::WHITE);
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(title).strong());
-                ui.add(egui::Label::new(msg).wrap());
+                ui.add(egui::Label::new(msg).wrap().selectable(true));
             });
         });
         ui.add_space(8.0);
