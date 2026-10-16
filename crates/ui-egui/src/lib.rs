@@ -220,6 +220,12 @@ pub struct SheetApp {
     pub backstage: Option<backstage::Backstage>,
     pub message: Option<(String, String)>,
     pub toast: Option<(String, f64)>,
+    /// The active document's file icon as drawn in the title bar (set by the app shell when the
+    /// platform provides one — macOS; `None` without a file, or where there is no such icon).
+    pub doc_icon: Option<egui::TextureHandle>,
+    /// The file a title-bar icon drag should drag out; the app shell takes it and starts the
+    /// platform's native drag (macOS). Set by `ribbon::title_bar`.
+    pub drag_file: Option<String>,
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
     pub services: Services,
@@ -270,6 +276,8 @@ impl SheetApp {
         SheetApp {
             session,
             ui: UiState::default(),
+            doc_icon: None,
+            drag_file: None,
             views: HashMap::new(),
             editor: None,
             text_box_editor: None,

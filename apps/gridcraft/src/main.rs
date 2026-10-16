@@ -11,6 +11,8 @@
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
+#[cfg(target_os = "macos")]
+mod document_window;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
@@ -25,10 +27,15 @@ use gridcraft_engine::Session;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
-struct App(SheetApp, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+struct App(
+    SheetApp,
+    #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+    #[cfg(target_os = "macos")] document_window::DocumentWindow,
+);
 
 impl eframe::App for App {
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         {
             if self.1.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
@@ -40,6 +47,44 @@ impl eframe::App for App {
             apple_events::poll(&self.2, &mut self.0, ctx);
         }
         self.0.logic(ctx);
+        // The window's document state follows the active document; after `logic`, so a change it
+        // made (control channel, an opened file) is the state this frame reflects.
+        #[cfg(target_os = "macos")]
+        {
+            let path = self.0.session.active().and_then(|d| d.path.clone());
+            let dirty = self.0.session.active().is_some_and(|d| d.is_dirty());
+            self.3.sync(frame, dirty);
+            // The title bar draws the active file's icon; load it when the file changes.
+            if self.3.doc_icon_path != path {
+                self.3.doc_icon_path = path.clone();
+                self.0.doc_icon = path.and_then(|p| document_window::load_doc_icon(ctx, &p));
+            }
+            // A drag of the title-bar icon becomes a native drag of the file.
+            if let Some(w) = frame.winit_window() {
+                // Hold the window where it stood while the drag owns the mouse.
+                self.3.pin(w);
+            }
+            if let Some(p) = self.0.drag_file.take() {
+                match frame
+                    .winit_window()
+                    .ok_or(gridcraft_macos_window::Error::Window)
+                    .and_then(|w| gridcraft_macos_window::begin_file_drag(w.as_ref(), &p))
+                {
+                    // The session owns the mouse until the drop: egui never sees the release, so
+                    // the next frame's input owes it one (raw_input_hook), or egui believes the
+                    // button still down and every later move re-enters a drag — the title bar's
+                    // window drag included.
+                    Ok(()) => {
+                        if let Some(w) = frame.winit_window() {
+                            self.3.drag_began(w);
+                        }
+                    }
+                    Err(e) => log::warn!("document drag of {p}: {e}"),
+                }
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = frame;
         self.0.poll_printing(ctx);
         if ctx.input(|input| input.viewport().close_requested()) && self.0.printing.busy() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -52,6 +97,27 @@ impl eframe::App for App {
             if let Some(p) = f.path().to_str().map(str::to_string).filter(|p| !p.is_empty()) {
                 self.0.open_path(&p);
             }
+        }
+        // The native document drag took the mouse over: deliver the release egui will never see,
+        // and drop the pointer, so no leftover drag state re-enters a drag on the next move.
+        #[cfg(target_os = "macos")]
+        if self.3.take_pending_release() {
+            let pos = raw
+                .events
+                .iter()
+                .rev()
+                .find_map(|e| match e {
+                    egui::Event::PointerMoved(pos) => Some(*pos),
+                    _ => None,
+                })
+                .unwrap_or(egui::Pos2::ZERO);
+            raw.events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            raw.events.push(egui::Event::PointerGone);
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -339,6 +405,12 @@ fn main() -> eframe::Result<()> {
     let apple_events = apple_events::AppleEvents::install();
     #[cfg(target_os = "macos")]
     let apple_events = &apple_events;
+    // The document icon's drag anchors on the press the user is making; the watch keeps that
+    // event fresh (AppKit's own current event lags behind the frame, document_window.rs).
+    #[cfg(target_os = "macos")]
+    if let Err(e) = gridcraft_macos_window::watch_mouse_gestures() {
+        log::warn!("mouse gesture watch: {e}");
+    }
     // The app waits here until a start gets as far as creating it; a start that fails before
     // (no graphics adapter, device or surface) leaves it here for the next attempt.
     let pending = std::cell::Cell::new(Some(app));
@@ -363,6 +435,8 @@ fn main() -> eframe::Result<()> {
                     None,
                     #[cfg(target_os = "macos")]
                     apple_events.connect(&cc.egui_ctx),
+                    #[cfg(target_os = "macos")]
+                    document_window::DocumentWindow::default(),
                 )))
             }),
         )

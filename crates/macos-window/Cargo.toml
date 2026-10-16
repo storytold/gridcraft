@@ -1,0 +1,34 @@
+[package]
+name = "gridcraft-macos-window"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "macOS document-window interop for GridCraft: the title bar's file icon and native file drags, behind a safe API"
+
+[dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSApplication",
+    "NSEvent",
+    "NSBitmapImageRep",
+    "NSDragging",
+    "NSDraggingItem",
+    "NSDraggingSession",
+    "NSImage",
+    "NSImageRep",
+    "NSPasteboard",
+    "NSResponder",
+    "NSWindow",
+    "NSWorkspace",
+] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSArray", "NSDictionary", "NSGeometry", "NSURL", "NSString"] }
+block2 = "0.6"
+log = { workspace = true }
+raw-window-handle = "0.6"
+
+# Not `[lints] workspace = true`: the workspace forbids `unsafe`, and wrapping AppKit is this
+# crate's whole job. Everything above the `unsafe` blocks is lint-guarded as usual, and the two
+# `unsafe` blocks are the audited surface (see lib.rs). Everything else in the workspace keeps the
+# forbid.

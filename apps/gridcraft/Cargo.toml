@@ -37,6 +37,14 @@ pollster = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "0.21", default-features = false }
+# The title bar's document icon (the file's Finder icon) and the native drag of the file out of
+# the window; also in-tree at `crates/macos-window` because Objective-C interop needs `unsafe`,
+# which our workspace forbids everywhere else. Kept out of `plan/`'s layering table as a leaf.
+gridcraft-macos-window = { path = "../../crates/macos-window" }
+# The window's edited dot (`WindowExtMacOS::set_document_edited`, safe). Already in Cargo.lock via
+# eframe; pinned to the same minor so the `Window` type is the one `frame.winit_window()` returns.
+winit = "0.30"
+
 # Finder double-click, Open With, Dock drops and `open -a GridCraft file.xlsx` arrive as a
 # kAEOpenDocuments Apple event, which winit 0.30 doesn't handle (#69). This audited crate (also used
 # by PdfCraft and PhotoCraft) registers the handler (Objective-C interop needs unsafe, which our

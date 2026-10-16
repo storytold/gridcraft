@@ -162,12 +162,14 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 24. Fonts and look (U)
 - Font weights beyond regular/bold (#168), system font list (#4), Calibri metrics (#29), macOS
-  chrome (#169, #170), Linux title bar (#54), icon consistency across apps (#173). **Estimate:** 7–12 h.
+  chrome (#169, #170; the document icon and edited dot are done, #1169), Linux title bar (#54),
+  icon consistency across apps (#173). **Estimate:** 7–12 h.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | §24: the title bar carries the document's file icon, drags the file out, and the close button wears the edited dot (macOS, #1169) |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
 | 2026-10-12 | minor | Page Layout view: dragging margins on the rulers (#792) removed from the §14 remainder |
 | 2026-10-12 | minor | §13: Forecast Sheet Forecast Start (hindcast) landed (#785) |

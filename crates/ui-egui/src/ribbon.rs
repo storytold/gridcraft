@@ -1,6 +1,6 @@
 //! Title bar (Quick Access Toolbar), ribbon tabs and ribbon groups, and keyboard shortcuts.
 
-use egui::{Align2, Color32, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align2, Color32, Key, Modifiers, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use gridcraft_engine::model::{HAlign, Style, VAlign};
 use serde_json::json;
 
@@ -19,11 +19,12 @@ pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas",
 const MAC: bool = cfg!(target_os = "macos");
 pub const MAC_TITLE_BAR: f32 = 28.0;
 /// The traffic lights as AppKit lays them out: button diameter, centre-to-centre pitch and the
-/// first button's left edge (8–10 pt depending on the macOS version; the larger value keeps the
-/// gap after them from shrinking).
-const MAC_LIGHT: f32 = 12.0;
-const MAC_LIGHT_PITCH: f32 = 20.0;
-const MAC_LIGHTS_LEFT: f32 = 10.0;
+/// first button's left edge. Measured on macOS 26 from a running window (pixel-scanned the three
+/// buttons), where the lights grew from the 12 pt / 20 pt pitch of earlier releases (#170): the
+/// old numbers left only a hair between the lights and the controls.
+const MAC_LIGHT: f32 = 13.0;
+const MAC_LIGHT_PITCH: f32 = 23.0;
+const MAC_LIGHTS_LEFT: f32 = 9.0;
 /// Where title-bar content starts on macOS: the end of the three lights plus the gap the lights
 /// keep from the top of the window.
 pub const MAC_CONTENT_LEFT: f32 = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT + (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
@@ -112,16 +113,35 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     app.print_now(json!({}));
                 }
             });
-            // Centered title.
+            // Centred title, with the document's file icon on its left (the Excel arrangement).
+            // AppKit's own proxy icon would sit after the traffic lights, where the controls are,
+            // so the icon here is the file's real Finder icon and dragging it hands the file to a
+            // native drag session (the app shell does that: `document_window.rs`).
             let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
             let dirty = app.session.active().is_some_and(|d| d.is_dirty());
-            ui.painter().text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                format!("{title}{}", if dirty { " •" } else { "" }),
-                theme::ui_bold(13.0),
-                t.text,
-            );
+            let text = ui.painter().layout_no_wrap(format!("{title}{}", if dirty { " •" } else { "" }), theme::ui_bold(13.0), t.text);
+            const ICON: f32 = 16.0;
+            const GAP: f32 = 6.0;
+            let has_icon = app.doc_icon.is_some();
+            let icon_w = if has_icon { ICON + GAP } else { 0.0 };
+            let center = rect.center();
+            let left = center.x - (text.size().x + icon_w) / 2.0;
+            if has_icon {
+                let icon_rect = Rect::from_min_size(pos2(left, center.y - ICON / 2.0), vec2(ICON, ICON));
+                if let Some(tex) = app.doc_icon.as_ref() {
+                    ui.painter().image(tex.id(), icon_rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+                }
+                // Grabbed by feel, like the native proxy icon: the hit area reaches past the
+                // drawn icon (a miss here lands on the window drag instead, which feels broken).
+                let grab = icon_rect.expand(6.0);
+                let icon = ui.interact(grab, ui.id().with("doc_icon"), Sense::click_and_drag());
+                if icon.drag_started()
+                    && let Some(p) = app.session.active().and_then(|d| d.path.clone())
+                {
+                    app.drag_file = Some(p);
+                }
+            }
+            ui.painter().galley(pos2(left + icon_w, center.y - text.size().y / 2.0), text, t.text);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
                 let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, ch));

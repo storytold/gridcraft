@@ -29,6 +29,10 @@ pub const TABLE: &[(&str, Class)] = &[
     ("core", Class::Layer(0)),
     ("numfmt", Class::Layer(0)),
     ("pdf", Class::Layer(0)),
+    // macOS window interop (AppKit via objc2): a leaf with no workspace dependencies, used only
+    // by the app shell (L7). It deliberately does not inherit the workspace lints — wrapping
+    // AppKit is its job — see its Cargo.toml.
+    ("macos-window", Class::Layer(0)),
     ("formula", Class::Layer(1)),
     ("functions", Class::Layer(1)),
     ("model", Class::Layer(2)),
