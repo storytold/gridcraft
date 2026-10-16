@@ -408,7 +408,8 @@ fn range_source_xml(sheet: &str, r: RangeRef) -> String {
 fn header_text(v: &Value) -> String {
     match v {
         Value::Empty => String::new(),
-        v => label(v).trim().to_string(),
+        // Excel names the cache field by the header as it is, spaces included.
+        v => Some(label(v)).filter(|t| !t.trim().is_empty()).unwrap_or_default(),
     }
 }
 
