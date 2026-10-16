@@ -13,7 +13,10 @@ use std::fmt::Write as _;
 use serde_json::Value;
 
 fn main() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contributors");
+    // Read when the script runs: `env!` would keep the path from when the script was compiled,
+    // which goes stale if the checkout moves (and a missing file reruns the script every build).
+    let manifest = std::env::var_os("CARGO_MANIFEST_DIR").map(std::path::PathBuf::from).unwrap_or_default();
+    let dir = manifest.join("../../contributors");
     let json = read(&dir.join("contributors.json"), "the About window shows no contributors", |t| {
         serde_json::from_str::<Value>(t).map_err(|e| e.to_string())
     })
