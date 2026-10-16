@@ -120,6 +120,13 @@ pub struct Workbook {
     /// `preserved` are relative to. Saving into another folder rewrites them from there. Not in JSON.
     #[serde(skip)]
     pub source_dir: Option<std::path::PathBuf>,
+    /// The file this workbook reports as its own, which is what `CELL("filename")` returns.
+    /// `None` = no file yet, which Excel reports as an empty string until the workbook has been
+    /// saved once. Deliberately separate from `source_dir`: that one names the folder relative
+    /// links are relative to and must keep naming it after a Save As into another folder, since
+    /// the links in memory are still written for the old one. Not in JSON.
+    #[serde(skip)]
+    pub source_path: Option<std::path::PathBuf>,
 }
 
 impl Default for Workbook {
@@ -148,6 +155,7 @@ impl Workbook {
             csv_delimiter: None,
             preserved: None,
             source_dir: None,
+            source_path: None,
         }
     }
     pub fn sheet(&self, i: usize) -> Option<&Sheet> {

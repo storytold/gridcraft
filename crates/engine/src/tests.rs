@@ -3282,3 +3282,58 @@ fn paste_special_validation_moves_relative_references() {
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
 }
+
+/// Open a workbook by path, and `CELL("filename")` names the file it came from, as Excel does;
+/// Save As makes the new file the one it names. The sheet-name formula of #1489 depends on it.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn cell_filename_follows_the_file_the_workbook_lives_in() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-cellname-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let name = "=CELL(\"filename\",A1)";
+    let sheet_of = "=MID(CELL(\"filename\",A1),FIND(\"]\",CELL(\"filename\",A1))+1,31)";
+
+    // A new workbook has no file: empty, and the sheet-name formula cannot work yet.
+    let mut fresh = s();
+    fresh.execute("cell.set", json!({"cell": "A1", "input": name})).unwrap();
+    fresh.execute("cell.set", json!({"cell": "A2", "input": sheet_of})).unwrap();
+    assert_eq!(v(&fresh, "A1"), Value::from(""));
+    assert_eq!(v(&fresh, "A2"), Value::Error(gridcraft_core::CellError::Value));
+
+    // Saved: it names the file. `CELL` is volatile, so the cells holding it answer from the next
+    // recalculation (F9), the same as every other volatile function; the save itself is not one.
+    let first = dir.join("book one.xlsx");
+    fresh.execute("file.saveAs", json!({"path": first})).unwrap();
+    let sheet = fresh.doc().unwrap().wb.active().unwrap().name.clone();
+    // Saving did not leave the workbook looking modified.
+    assert!(!fresh.doc().unwrap().is_dirty());
+    fresh.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(v(&fresh, "A1"), Value::from(dir.join(format!("[book one.xlsx]{sheet}")).to_string_lossy().into_owned().as_str()));
+    assert_eq!(v(&fresh, "A2"), Value::from(sheet.as_str()));
+
+    // Opened from that path in another session: the same answer, from the file alone.
+    let mut opened = s();
+    opened.execute("file.open", json!({"path": first})).unwrap();
+    opened.take_ui_requests();
+    assert_eq!(v(&opened, "A2"), Value::from(sheet.as_str()));
+
+    // Save As into another folder: it follows the new file, not the old one.
+    let other = dir.join("sub");
+    std::fs::create_dir(&other).unwrap();
+    opened.execute("file.saveAs", json!({"path": other.join("book two.xlsx")})).unwrap();
+    assert!(!opened.doc().unwrap().is_dirty());
+    opened.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(v(&opened, "A1"), Value::from(other.join(format!("[book two.xlsx]{sheet}")).to_string_lossy().into_owned().as_str()));
+
+    // Opened from bytes there is no folder, only a name — still splittable on the `]`.
+    let saved = opened.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let mut from_bytes = s();
+    from_bytes.execute("file.open", json!({"name": "from bytes.xlsx", "base64": saved["base64"]})).unwrap();
+    from_bytes.take_ui_requests();
+    assert_eq!(v(&from_bytes, "A1"), Value::from(format!("[from bytes.xlsx]{sheet}").as_str()));
+    assert_eq!(v(&from_bytes, "A2"), Value::from(sheet.as_str()));
+
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -1373,7 +1373,16 @@ impl<'h> Evaluator<'h> {
                 }))
             }
             "width" => Ev::V(Value::number(sheet.map_or(8.43, |s| gridcraft_model::points_to_chars(s.col_width(c.col) as f64)).round())),
-            "filename" => Ev::V(Value::text(String::new())),
+            // Excel's `<folder>/[<file>]<sheet>`, which the classic sheet-name formula splits on
+            // the `]`. Empty until the workbook has a file of its own, as in Excel (#1489).
+            "filename" => Ev::V(Value::text(match &wb.source_path {
+                Some(file) => {
+                    let name = file.file_name().unwrap_or_default().to_string_lossy();
+                    let on = sheet.map_or("", |s| s.name.as_str());
+                    file.parent().unwrap_or(std::path::Path::new("")).join(format!("[{name}]{on}")).to_string_lossy().into_owned()
+                }
+                None => String::new(),
+            })),
             "sheetname" => Ev::V(Value::text(sheet.map(|s| s.name.clone()).unwrap_or_default())),
             "protect" => Ev::V(Value::number(if sheet.is_some_and(|s| wb.styles.get(s.style_id(c)).protection.locked) { 1.0 } else { 0.0 })),
             "format" => {

@@ -1266,3 +1266,40 @@ fn offset_extreme_arguments_return_ref() {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
     }
 }
+
+#[test]
+fn cell_filename_names_the_workbook_file() {
+    // Excel returns `<folder>/[<file>]<sheet>`, and the classic sheet-name formula splits it on
+    // the `]`; an empty string broke that formula in every German workbook that used it (#1489).
+    let dir = std::path::Path::new("books");
+    let mut t = T::new();
+    t.wb.sheet_mut(0).unwrap().name = "Info".into();
+
+    // No file yet: empty, as in a workbook Excel has never saved.
+    t.set("A1", "1");
+    t.set("B1", "=CELL(\"filename\",A1)");
+    assert_eq!(t.get("B1"), Value::from(""));
+
+    t.wb.source_path = Some(dir.join("gc_cell_info_de.xlsx"));
+    t.calc = Calc::new();
+    let expect = dir.join("[gc_cell_info_de.xlsx]Info").to_string_lossy().into_owned();
+
+    t.set("B2", "=CELL(\"filename\",A1)");
+    assert_eq!(t.get("B2"), Value::from(expect.as_str()));
+
+    // The two formulas from the report: the sheet name, and the test that the `]` is there.
+    t.set("B3", "=MID(CELL(\"filename\",A1),FIND(\"]\",CELL(\"filename\",A1))+1,31)");
+    assert_eq!(t.get("B3"), Value::from("Info"), "the sheet-name formula");
+    t.set("B4", "=ISNUMBER(FIND(\"]\",CELL(\"filename\",A1)))");
+    assert_eq!(t.get("B4"), Value::Bool(true));
+    // The sheet is the one the reference is on, not the active one.
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Second")));
+    t.set("B6", "=CELL(\"filename\",Second!A1)");
+    assert_eq!(t.get("B6"), Value::from(dir.join("[gc_cell_info_de.xlsx]Second").to_string_lossy().into_owned().as_str()));
+
+    // A workbook that arrived as bytes knows its name but no folder: still splittable.
+    t.wb.source_path = Some(std::path::PathBuf::from("Book.xlsx"));
+    t.calc = Calc::new();
+    t.set("B7", "=CELL(\"filename\",A1)");
+    assert_eq!(t.get("B7"), Value::from("[Book.xlsx]Info"));
+}
