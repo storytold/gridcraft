@@ -69,7 +69,8 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                     .map(|(i, s)| (i, s.name.clone(), s.tab_color.and_then(|c| c.resolve(&d.wb.theme)), i == d.wb.active_sheet))
                     .collect();
             // Keep worksheet tabs in their own horizontally scrollable viewport. As in Excel, the
-            // tabs get 60% of the bar and the grid's horizontal scrollbar the rest.
+            // tabs get up to 60% of the bar and the grid's horizontal scrollbar the rest; a strip
+            // that needs less shrinks to its tabs, so New sheet (+) sits right after the last one.
             let tabs_width = (ui.available_width() * 0.6).max(100.0);
             // Reveal the selected sheet after navigation or layout changes, but
             // allow browsing other tabs without snapping back on every frame.
@@ -94,7 +95,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
 
                 egui::ScrollArea::horizontal()
                     .id_salt("worksheet_tabs_horizontal")
-                    .auto_shrink([false, false])
+                    .auto_shrink([true, false])
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .show(ui, |ui| {
                         if wheel_scroll.abs() > 0.0 {

@@ -7,10 +7,14 @@ use serde_json::json;
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness(width: f32, active: usize) -> Harness {
+    harness_with(width, 30, active)
+}
+
+fn harness_with(width: f32, sheets: usize, active: usize) -> Harness {
     let mut s = Session::new();
     s.new_workbook();
     s.execute("sheet.rename", json!({"sheet":0,"name":"Tab00"})).unwrap();
-    for i in 1..30 {
+    for i in 1..sheets {
         s.execute("home.insertSheet", json!({"name":format!("Tab{i:02}")})).unwrap();
     }
     s.execute("sheet.activate", json!({"sheet":active})).unwrap();
@@ -160,5 +164,45 @@ fn overflow_leaves_the_worksheet_scrollbar_reachable() {
         let track = h.state().grid.hscroll.expect("the tab bar has a horizontal scrollbar");
         assert!(track.width() >= 100.0, "{width}: the scrollbar keeps a usable width: {track:?}");
         assert!(track.left() >= 0.0 && track.right() <= width + 0.5, "{width}: the scrollbar is offscreen: {track:?}");
+    }
+}
+
+/// The New sheet button's left edge. The scrollbar track starts 8 px after the 26 px button.
+fn new_sheet_left(h: &Harness) -> f32 {
+    h.state().grid.hscroll.expect("the tab bar has a horizontal scrollbar").left() - 8.0 - 26.0
+}
+
+/// The painted background of the active tab: the smallest fill enclosing its name (the bar's own fill encloses it too).
+fn active_tab_rect(h: &Harness, name: &str) -> Rect {
+    let (text, _) = tab(h, name).unwrap();
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Rect(r) if r.rect.contains_rect(text) => Some(r.rect),
+            _ => None,
+        })
+        .min_by(|a, b| a.area().total_cmp(&b.area()))
+        .unwrap_or_else(|| panic!("{name} has no painted tab background"))
+}
+
+#[test]
+fn new_sheet_button_follows_the_last_tab() {
+    for width in [700.0, 1200.0] {
+        let h = harness_with(width, 2, 1);
+        let last = active_tab_rect(&h, "Tab01");
+        let plus = new_sheet_left(&h);
+        assert!(plus >= last.right() && plus - last.right() <= 12.0, "{width}: + at {plus}, last tab ends at {}", last.right());
+    }
+}
+
+#[test]
+fn overflowing_tabs_keep_their_share_and_the_new_sheet_button_after_it() {
+    for width in [700.0, 1200.0] {
+        let h = harness(width, 0);
+        let (_, viewport) = tab(&h, "Tab00").unwrap();
+        assert!(viewport.width() <= width * 0.6, "{width}: the tab strip grew past its share: {viewport:?}");
+        let plus = new_sheet_left(&h);
+        assert!(plus >= viewport.right() && plus - viewport.right() <= 12.0, "{width}: + at {plus}, strip ends at {}", viewport.right());
     }
 }
