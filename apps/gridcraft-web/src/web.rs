@@ -65,7 +65,13 @@ pub fn start() {
                         }
                         bridge.post_ready();
                     }
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge }))
+                    Ok(Box::new(WebShell {
+                        app,
+                        inbox,
+                        bridge: app_bridge,
+                        #[cfg(feature = "self-hosted-update")]
+                        updates: crate::updates::browser(cc.egui_ctx.clone()),
+                    }))
                 }),
             )
             .await;
@@ -93,6 +99,8 @@ struct WebShell {
     app: SheetApp,
     inbox: Inbox,
     bridge: Option<crate::host::Bridge>,
+    #[cfg(feature = "self-hosted-update")]
+    updates: crate::updates::Updates<craft_update::web::Client>,
 }
 
 impl eframe::App for WebShell {
@@ -120,6 +128,8 @@ impl eframe::App for WebShell {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        #[cfg(feature = "self-hosted-update")]
+        self.updates.show(ui, self.app.ui.language);
         self.app.ui(ui);
         if let Some(bridge) = &self.bridge {
             bridge.sync(&mut self.app);

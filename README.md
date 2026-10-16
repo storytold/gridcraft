@@ -121,6 +121,8 @@ cd apps/gridcraft-web && trunk serve --release     # http://127.0.0.1:8771  (?sa
 
 You need [trunk](https://trunkrs.dev) and the `wasm32-unknown-unknown` target. Open uses the
 browser's file picker (dropping files works too) and Save downloads the workbook.
+Hosting it yourself? The optional `self-hosted-update` feature adds update notices and an
+administrator-triggered update; see [`docs/self-hosted-updates.md`](docs/self-hosted-updates.md).
 
 ### Ribbon access keys
 

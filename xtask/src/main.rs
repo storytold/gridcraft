@@ -21,7 +21,7 @@ const USAGE: &str = "\
 usage: cargo xtask <command>
 
 commands:
-  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm, parity --check
+  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm, self-hosted-update, parity --check
                   (stops at the first failure; the parity check runs only if docs/parity-checklist.md exists)
   assets          check that every icon/image/font/sample file is attributed in ATTRIBUTION.md
   layers          enforce the crate dependency layering (AGENTS.md \"Layering\")
@@ -157,6 +157,21 @@ fn cmd_wasm() -> Result<(), String> {
     r
 }
 
+/// The web app's opt-in `self-hosted-update` feature is off in every other step, so it gets its
+/// own: clippy, its tests and the wasm build with the feature on.
+fn cmd_self_hosted_update() -> Result<(), String> {
+    let feature = ["-p", "gridcraft-web", "--features", "self-hosted-update"];
+    let mut c = cargo();
+    c.args(["clippy", "--all-targets"]).args(feature).args(["--", "-D", "warnings"]);
+    run(c, "cargo clippy --all-targets -p gridcraft-web --features self-hosted-update -- -D warnings")?;
+    let mut c = cargo();
+    c.arg("test").args(feature);
+    run(c, "cargo test -p gridcraft-web --features self-hosted-update")?;
+    let mut c = cargo();
+    c.args(["check", "--target", "wasm32-unknown-unknown"]).args(feature);
+    run(c, "cargo check --target wasm32-unknown-unknown -p gridcraft-web --features self-hosted-update")
+}
+
 fn cmd_ci() -> Result<(), String> {
     type Step = (&'static str, Box<dyn Fn() -> Result<(), String>>);
     let steps: Vec<Step> = vec![
@@ -187,6 +202,7 @@ fn cmd_ci() -> Result<(), String> {
         ("assets", Box::new(|| assets::run(&root()))),
         ("layers", Box::new(cmd_layers)),
         ("wasm", Box::new(cmd_wasm)),
+        ("self-hosted-update", Box::new(cmd_self_hosted_update)),
         (
             "parity",
             Box::new(|| {
