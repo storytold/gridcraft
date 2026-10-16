@@ -752,6 +752,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu);
     crate::paper_view::interact(app, ui, &resp, &geo, sh, &wb);
     interact(app, ui, &resp, &geo, sh, &wb);
+    update_cursor(app, ui, &resp, &geo, sh);
     crate::text_box::show(app, ui, &geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
         in_cell_editor(app, ui, &geo, sh, &wb);
@@ -1774,6 +1775,95 @@ pub(crate) fn paint_headers(
 /// How close (in points) a press must be to an object's bottom-right corner to resize it instead of moving it.
 const OBJECT_RESIZE_RADIUS: f32 = 10.0;
 
+/// Decide after interaction so drag start and release use the new state in the same frame.
+fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
+    if app.text_box_editor.is_some() || app.grid.hf_edit.is_some() {
+        return;
+    }
+    let ctx = ui.ctx();
+    let pointer = ctx.input(|i| i.pointer.clone());
+    let pos = pointer.interact_pos().or(pointer.hover_pos()).map(|p| geo.mirror_pos(p));
+    let in_cells = pos.is_some_and(|p| geo.in_cells(p));
+    let (freeze_cols, freeze_rows) = freeze_handles(geo);
+    // Hover bookkeeping also serves cell notes, independently of who owns the cursor.
+    if resp.hovered()
+        && let Some(p) = pos
+        && !freeze_cols.contains(p)
+        && !freeze_rows.contains(p)
+        && !matches!(app.grid.drag, Drag::Freeze { .. })
+    {
+        app.grid.hover_cell = in_cells.then(|| geo.cell_at(sh, p));
+    }
+    // Draw tools own the cursor over cells, including while recording a stroke.
+    if !app.session.draw_tool.is_empty() && in_cells {
+        ctx.set_cursor_icon(CursorIcon::Crosshair);
+        return;
+    }
+    // A held drag owns the cursor even outside the grid; a press below egui's threshold still
+    // has Drag::None and uses hover. A click can briefly leave a drag state after release.
+    if resp.dragged() && pointer.primary_down() {
+        let cursor = match app.grid.drag {
+            Drag::None => None,
+            Drag::Select => Some(CursorIcon::Cell),
+            Drag::Rows(_) | Drag::Cols(_) => Some(CursorIcon::Default),
+            Drag::Fill { .. } => Some(CursorIcon::Crosshair),
+            Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { resize: false, .. } => Some(CursorIcon::Move),
+            Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
+            Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
+            Drag::Freeze { cols, .. } => Some(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
+            Drag::Object { resize: true, .. } => Some(CursorIcon::ResizeNwSe),
+        };
+        if let Some(cursor) = cursor {
+            ctx.set_cursor_icon(cursor);
+            return;
+        }
+    }
+    if !resp.hovered() {
+        return;
+    }
+    let Some(p) = pos else { return };
+    if freeze_cols.contains(p) || freeze_rows.contains(p) {
+        let cols = freeze_cols.contains(p);
+        ctx.set_cursor_icon(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical });
+        if app.grid.drag == Drag::None && !pointer.any_down() {
+            let tip = if cols { "Drag to freeze columns" } else { "Drag to freeze rows" };
+            resp.clone().on_hover_text_at_pointer(crate::i18n::current(ctx).tr(tip));
+        }
+        return;
+    }
+    let in_col_header = p.y < geo.cells.top() && p.y >= geo.head_top() && p.x >= geo.cells.left();
+    let in_row_header = p.x < geo.cells.left() && p.x >= geo.head_left() && p.y >= geo.cells.top();
+    let sel = app.session.active().map(|d| d.selection.clone()).unwrap_or_default();
+    let cur_rect = geo.range_rect(sh, sel.current());
+    let handle = Rect::from_center_size(cur_rect.right_bottom(), vec2(9.0, 9.0));
+    let handle_panes = geo.range_panes(RangeRef::cell(sel.current().end));
+    let border_panes = geo.range_panes(sel.current());
+    let on_handle = handle.contains(p) && handle_panes.iter().any(|r| r.contains(p));
+    let on_cur_border = on_border(cur_rect, p) && border_panes.iter().any(|r| r.contains(p));
+    let selected_object = crate::chartview::hit(app, geo, sh, p).filter(|&(_, id, _)| app.selected_chart == Some(id));
+    let near_corner = selected_object.is_some_and(|(_, _, rect)| (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS);
+    if app.grid.drag == Drag::None && near_corner {
+        ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
+    } else if in_col_header && col_edge(geo, sh, p.x).is_some() {
+        ctx.set_cursor_icon(CursorIcon::ResizeColumn);
+    } else if in_row_header && row_edge(geo, sh, p.y).is_some() {
+        ctx.set_cursor_icon(CursorIcon::ResizeRow);
+    } else if on_handle && app.editor.is_none() {
+        ctx.set_cursor_icon(CursorIcon::Crosshair);
+        if app.grid.drag == Drag::None && !pointer.any_down() {
+            resp.clone().on_hover_text_at_pointer("Drag to fill cells. Drag from inside a cell to select a range.");
+        }
+    } else if in_cells && app.editor.is_none() && on_cur_border {
+        ctx.set_cursor_icon(CursorIcon::Move);
+    } else if in_cells {
+        ctx.set_cursor_icon(CursorIcon::Cell);
+    } else if in_col_header {
+        let col = geo.col_at(sh, p.x);
+        let selected = sel.ranges.len() == 1 && sel.current().is_full_cols() && sel.current().contains(CellRef::new(0, col));
+        ctx.set_cursor_icon(if selected { CursorIcon::Move } else { CursorIcon::Default });
+    }
+}
+
 fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     // Text selection and editing must not also move the object or edit worksheet cells.
     if app.text_box_editor.is_some() || app.grid.hf_edit.is_some() {
@@ -1801,51 +1891,6 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     let on_cur_border = |p: Pos2| on_border(cur_rect, p) && border_panes.iter().any(|r| r.contains(p));
 
     let (freeze_cols, freeze_rows) = freeze_handles(geo);
-    // Hover cursors.
-    if resp.hovered()
-        && let Some(p) = pos
-        && (freeze_cols.contains(p) || freeze_rows.contains(p) || matches!(app.grid.drag, Drag::Freeze { .. }))
-    {
-        let cols = match app.grid.drag {
-            Drag::Freeze { cols, .. } => cols,
-            _ => freeze_cols.contains(p),
-        };
-        ctx.set_cursor_icon(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical });
-        if app.grid.drag == Drag::None && !pointer.any_down() {
-            let tip = if cols { "Drag to freeze columns" } else { "Drag to freeze rows" };
-            resp.clone().on_hover_text_at_pointer(crate::i18n::current(&ctx).tr(tip));
-        }
-    } else if resp.hovered()
-        && let Some(p) = pos
-    {
-        let near_col_edge = in_col_header && col_edge(geo, sh, p.x).is_some();
-        let near_row_edge = in_row_header && row_edge(geo, sh, p.y).is_some();
-        let selected_object = crate::chartview::hit(app, geo, sh, p).filter(|&(_, id, _)| app.selected_chart == Some(id));
-        let near_corner = selected_object.is_some_and(|(_, _, rect)| (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS);
-        let near_object_corner = app.grid.drag == Drag::None && near_corner;
-        if near_object_corner || matches!(app.grid.drag, Drag::Object { resize: true, .. }) {
-            ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
-        } else if near_col_edge {
-            ctx.set_cursor_icon(CursorIcon::ResizeColumn);
-        } else if near_row_edge {
-            ctx.set_cursor_icon(CursorIcon::ResizeRow);
-        } else if on_handle(p) && app.editor.is_none() {
-            ctx.set_cursor_icon(CursorIcon::Crosshair);
-            if app.grid.drag == Drag::None && !pointer.any_down() {
-                resp.clone().on_hover_text_at_pointer("Drag to fill cells. Drag from inside a cell to select a range.");
-            }
-        } else if in_cells && app.editor.is_none() && on_cur_border(p) {
-            ctx.set_cursor_icon(CursorIcon::Move);
-        } else if in_cells {
-            ctx.set_cursor_icon(CursorIcon::Cell);
-        } else if in_col_header {
-            let col = geo.col_at(sh, p.x);
-            let selected = sel.ranges.len() == 1 && sel.current().is_full_cols() && sel.current().contains(CellRef::new(0, col));
-            ctx.set_cursor_icon(if selected { CursorIcon::Move } else { CursorIcon::Default });
-        }
-        app.grid.hover_cell = in_cells.then(|| geo.cell_at(sh, p));
-    }
-
     // Draw tab tools: the pen records a stroke, the eraser deletes ink under the pointer.
     if !app.session.draw_tool.is_empty() && in_cells {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
