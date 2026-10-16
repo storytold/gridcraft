@@ -776,6 +776,7 @@ impl Dialog {
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title")})),
+            "mergeDiscard" => Dialog::custom("mergeDiscard", "GridCraft", json!({"command": p("command"), "params": p("params")})),
             "start" => Dialog::custom("start", "GridCraft", json!({})),
             "comments" => {
                 app.grid.pane = None;
@@ -1200,6 +1201,15 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             open = false;
                         }
                     });
+                }
+                "mergeDiscard" => {
+                    ui.label(format!("{}.", gridcraft_engine::cmd::format::MERGE_DISCARD_ERROR));
+                    ok_cancel(ui, &mut confirm, &mut open);
+                    if confirm && let Some(id) = d.values.get("command").and_then(Json::as_str).map(str::to_string) {
+                        let mut params = d.values.get("params").filter(|p| p.is_object()).cloned().unwrap_or_else(|| json!({}));
+                        params["discard"] = json!(true);
+                        app.run_or_alert(&id, params);
+                    }
                 }
                 "start" => {
                     ui.heading("Start a new workbook");

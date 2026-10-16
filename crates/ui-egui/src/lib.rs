@@ -505,8 +505,14 @@ impl SheetApp {
         if id == "file.exportPdf" && self.services.pick_save.is_some() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
             return self.export_pdf_with_picker(params);
         }
-        if let Err(e) = self.run(id, params) {
-            self.alert(e);
+        let retry = id.starts_with("home.merge").then(|| params.clone());
+        match self.run(id, params) {
+            // Merging would discard values: ask first, then merge with `discard: true`.
+            Err(e) if e.contains(gridcraft_engine::cmd::format::MERGE_DISCARD_ERROR) => {
+                self.open_dialog("mergeDiscard", json!({"command": id, "params": retry}));
+            }
+            Err(e) => self.alert(e),
+            Ok(_) => {}
         }
     }
 
