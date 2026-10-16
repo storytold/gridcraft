@@ -35,6 +35,26 @@ fn activate_sheet(app: &mut SheetApp, i: usize) {
     }
 }
 
+/// A tab released with Ctrl held (Cmd on macOS, as for the fill handle) drops a copy of the sheet. Excel for Mac uses
+/// Option for this, so Option copies there too.
+fn drop_copies_sheet(m: egui::Modifiers, mac: bool) -> bool {
+    m.command || (mac && m.alt)
+}
+
+/// `sheet.move` params for tab `i` dropped `steps` tabs away, or `None` when it lands where it started.
+fn tab_drop(i: usize, steps: i64, copy: bool) -> Option<serde_json::Value> {
+    if steps == 0 {
+        return None;
+    }
+    let to = (i as i64 + steps).max(0) as usize;
+    if copy {
+        // A move indexes the list without the sheet, a copy the list with it: to the right, the copy goes one further.
+        let to = if steps > 0 { to + 1 } else { to };
+        return Some(json!({"sheet": i, "to": to, "copy": true}));
+    }
+    Some(json!({"sheet": i, "to": to}))
+}
+
 pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("sheet_tabs").exact_size(32.0).frame(egui::Frame::NONE.fill(t.tab_bar)).show(ui, |ui| {
@@ -155,15 +175,18 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                     app.grid.renaming_tab = Some(i);
                                     app.grid.rename_text = name.clone();
                                 }
-                                // Drag to reorder.
+                                // Drag to reorder; with the copy modifier held, drop a copy instead.
+                                let copy = drop_copies_sheet(ui.input(|inp| inp.modifiers), ui.ctx().os() == egui::os::OperatingSystem::Mac);
+                                if resp.dragged() && copy {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
+                                }
                                 if resp.drag_stopped()
                                     && let Some(p) = ui.input(|inp| inp.pointer.interact_pos())
                                 {
                                     let dx = p.x - r.center().x;
                                     let steps = (dx / w).round() as i64;
-                                    if steps != 0 {
-                                        let to = (i as i64 + steps).max(0) as usize;
-                                        app.run_or_alert("sheet.move", json!({"sheet": i, "to": to}));
+                                    if let Some(params) = tab_drop(i, steps, copy) {
+                                        app.run_or_alert("sheet.move", params);
                                     }
                                 }
                                 resp.context_menu(|ui| {
@@ -340,9 +363,55 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
 
 #[cfg(test)]
 mod tests {
-    use super::{navigator_items, rename_needs_focus};
+    use super::{drop_copies_sheet, navigator_items, rename_needs_focus, tab_drop};
+    use crate::SheetApp;
+    use egui::Modifiers;
     use gridcraft_engine::model::{Sheet, Visibility};
+    use serde_json::json;
     use std::sync::Arc;
+
+    fn workbook_abc() -> SheetApp {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("home.insertSheet", json!({})).unwrap();
+        app.run("home.insertSheet", json!({})).unwrap();
+        for (i, name) in ["A", "B", "C"].into_iter().enumerate() {
+            app.run("sheet.rename", json!({"sheet": i, "name": name})).unwrap();
+        }
+        app
+    }
+
+    fn names(app: &SheetApp) -> Vec<String> {
+        app.session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect()
+    }
+
+    #[test]
+    fn copy_drop_modifier_is_ctrl_or_cmd_or_option_on_mac() {
+        // egui reports Ctrl as `command` too off macOS, and Cmd as `mac_cmd` and `command` on macOS.
+        assert!(drop_copies_sheet(Modifiers::CTRL | Modifiers::COMMAND, false));
+        assert!(!drop_copies_sheet(Modifiers::ALT, false));
+        assert!(drop_copies_sheet(Modifiers::MAC_CMD | Modifiers::COMMAND, true));
+        assert!(drop_copies_sheet(Modifiers::ALT, true));
+        assert!(!drop_copies_sheet(Modifiers::CTRL, true), "Ctrl+click is the context menu on macOS");
+        assert!(!drop_copies_sheet(Modifiers::NONE, false));
+    }
+
+    #[test]
+    fn tab_dropped_with_the_copy_modifier_leaves_a_copy_where_a_move_would_land() {
+        let mut app = workbook_abc();
+        app.run("sheet.move", tab_drop(0, 1, true).unwrap()).unwrap();
+        assert_eq!(names(&app), ["A", "B", "A (2)", "C"]);
+
+        let mut app = workbook_abc();
+        app.run("sheet.move", tab_drop(2, -1, true).unwrap()).unwrap();
+        assert_eq!(names(&app), ["A", "C (2)", "B", "C"]);
+
+        let mut app = workbook_abc();
+        app.run("sheet.move", tab_drop(0, 1, false).unwrap()).unwrap();
+        assert_eq!(names(&app), ["B", "A", "C"]);
+        assert!(tab_drop(1, 0, true).is_none());
+    }
 
     #[test]
     fn rename_field_takes_focus_once_and_lets_go_on_commit() {

@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (horizontal scrollbar in the sheet tab bar, #840) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (Ctrl/Option-drag a sheet tab drops a copy, #971) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -14,6 +14,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 
 | Element | Excel | GridCraft | Status |
 |---|---|---|---|
+| 2026-10-13 | minor | Dragging a sheet tab with Ctrl held (Cmd or Option on macOS) drops a copy of the sheet where the tab is released, with the copy cursor (#971) |
 | Title bar, Quick Access Toolbar, AutoSave toggle | yes | yes | done; macOS window controls misaligned (#170), Dock icon size (#169) |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable, Header & Footer tabs) | done; missing contextual tabs for pictures, shapes, sparklines, slicers |
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing (File ▸ Options is the one missing File command) |
@@ -21,7 +22,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing |
 | Key tips (Alt / F10 then letters) | yes, every ribbon control | **initial** (#43, 10-10): Alt or F10 shows key tips on Home for alignment, Paste Special and AutoFit plus legacy Alt sequences; other tabs and controls not yet (#33, #49) | 3–5 h |
 | Formula bar with Name Box, expand, function hints | yes | yes | done |
-| Sheet tabs: rename, reorder, colour, hide, scroll | yes | yes | active tab revealed on navigation and resize (#681); manual wheel/trackpad browsing preserved; rename focus bug on macOS (#145) |
+| Sheet tabs: rename, reorder, colour, hide, scroll | yes | yes | Ctrl-drag (Cmd or Option on macOS) drops a copy (#971); active tab revealed on navigation and resize (#681); manual wheel/trackpad browsing preserved; rename focus bug on macOS (#145) |
 | Status bar: Sum/Count/Average and more, view buttons, zoom | yes | yes | customizable statistics partial |
 | Task panes (Format Chart, Comments, Watch, Selection, PivotTable fields) | yes | yes | element-level Format pane for shapes and pictures missing |
 | Backstage (File) view: Info, New with templates, Open recent, Export, Options | yes | partial | Options dialog and template gallery missing |
