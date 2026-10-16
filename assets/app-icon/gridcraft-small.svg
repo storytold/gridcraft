@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- GridCraft PLACEHOLDER icon, small-size cut of gridcraft.svg for 16-32 px renders:
+       same page, fold, header row, row column and selected cell, but no title line, a 2x2 grid
+       and strokes thick enough to land on whole pixels. Palette as in gridcraft.svg. -->
+  <defs>
+    <clipPath id="tile"><rect width="512" height="512" rx="112"/></clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="512" height="512" fill="#1f9d55"/>
+    <g transform="rotate(-6 260 260)" stroke="#0b0b0c" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M96 64 H344 L424 144 V456 H96 Z" fill="#efe9dc" stroke-width="30"/>
+      <path d="M104 144 H416 V216 H184 V448 H104 Z" fill="#147a40" stroke="none"/>
+      <path d="M96 144 H424 M96 216 H424 M184 144 V456 M304 144 V456 M96 336 H424"
+            fill="none" stroke-width="22"/>
+      <path d="M96 64 H344 L424 144 V456 H96 Z" fill="none" stroke-width="30"/>
+      <rect x="304" y="216" width="120" height="120" fill="#0b0b0c" stroke-width="22"/>
+    </g>
+  </g>
+</svg>
