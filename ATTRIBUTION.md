@@ -42,3 +42,12 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 | `docs/images/pivot.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
 | `docs/images/format-chart.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
 | `docs/images/page-break.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
+
+## Print-preview dependency material
+
+The `hayro` / `hayro-interpret` dependencies (MIT OR Apache-2.0) include PDFium/Foxit
+standard-font substitutes (Copyright 2014 PDFium Authors / Foxit Software Inc., BSD-3-Clause)
+and color profiles (CGATS001Compat-v2-micro.icc, saucecontrol/Compact-ICC-Profiles, CC0-1.0;
+LAB.icc generated with LCMS2). The BSD notice is reproduced in NOTICE, shipped by packaging.
+See [hayro-interpret assets](https://github.com/LaurenzV/hayro/tree/0c98904d2ced8e37b63ed2bd1e60f95bc0c7c774/hayro-interpret/assets).
+No font/profile binary is added to this repository. Predefined CMap embedding is disabled.

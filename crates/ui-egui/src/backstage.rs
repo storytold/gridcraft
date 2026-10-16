@@ -98,6 +98,15 @@ const PROPERTIES: [(&str, &str); 6] = [
     ("description", "Description"),
 ];
 
+#[derive(Clone)]
+struct PreviewTexture(egui::TextureHandle);
+
+impl std::fmt::Debug for PreviewTexture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PreviewTexture")
+    }
+}
+
 /// The open Backstage view.
 #[derive(Clone, Debug)]
 pub struct Backstage {
@@ -110,8 +119,10 @@ pub struct Backstage {
     pub fit_to_page: bool,
     /// Print: the previewed page (0-based).
     preview_page: usize,
-    /// Print: the preview for (document, revision, whole workbook, fit to page).
-    preview: Option<((u64, u64, bool, bool), Json)>,
+    /// Print: the preview for (document, revision, active sheet, whole workbook, fit to page).
+    preview: Option<((u64, u64, usize, bool, bool), Json)>,
+    preview_pdf: Option<Result<Arc<Vec<u8>>, String>>,
+    preview_image: Option<(usize, Result<PreviewTexture, String>)>,
     /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
@@ -132,6 +143,8 @@ impl Backstage {
             fit_to_page: false,
             preview_page: 0,
             preview: None,
+            preview_pdf: None,
+            preview_image: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
         }
@@ -691,7 +704,7 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
 fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
-    let Some((uid, revision)) = app.session.active().map(|d| (d.uid, d.revision)) else {
+    let Some((uid, revision, sheet)) = app.session.active().map(|d| (d.uid, d.revision, d.wb.active_sheet)) else {
         dim(ui, lang.tr("No workbook is open."));
         return;
     };
@@ -699,10 +712,12 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
     if bs.fit_to_page {
         params["fitToPage"] = json!(true);
     }
-    let key = (uid, revision, bs.print_all, bs.fit_to_page);
+    let key = (uid, revision, sheet, bs.print_all, bs.fit_to_page);
     if bs.preview.as_ref().is_none_or(|(k, _)| *k != key) {
         let preview = app.session.run("file.printPreview", params.clone()).unwrap_or(Json::Null);
         bs.preview = Some((key, preview));
+        bs.preview_pdf = None;
+        bs.preview_image = None;
     }
     let pages: Vec<Json> = bs.preview.as_ref().and_then(|(_, p)| p.get("pageList")).and_then(Json::as_array).cloned().unwrap_or_default();
     ui.horizontal_top(|ui| {
@@ -753,10 +768,35 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
             let (rect, _) = ui.allocate_exact_size(vec2(w * scale, h * scale), Sense::hover());
             let p = ui.painter();
             p.rect_filled(rect.translate(vec2(2.0, 3.0)), 2.0, t.shadow);
-            p.rect_filled(rect, 2.0, t.grid_bg);
+            p.rect_filled(rect, 2.0, Color32::WHITE);
             p.rect_stroke(rect, 2.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
-            if let Some(d) = app.session.active() {
-                paint_page(p, rect, w, page, &d.wb, &t);
+            if bs.preview_pdf.is_none() {
+                bs.preview_pdf = Some(app.session.run("file.print", params.clone()).map_err(|e| e.to_string()).and_then(|data| {
+                    data.get("base64")
+                        .and_then(Json::as_str)
+                        .and_then(gridcraft_engine::io::base64_decode)
+                        .map(Arc::new)
+                        .ok_or_else(|| "No print preview data was returned.".into())
+                }));
+            }
+            if bs.preview_image.as_ref().is_none_or(|(index, _)| *index != bs.preview_page) {
+                let image = match bs.preview_pdf.as_ref() {
+                    Some(Ok(bytes)) => crate::print_preview::render(bytes.clone(), bs.preview_page)
+                        .map(|image| ui.ctx().load_texture("print-preview-page", image, egui::TextureOptions::LINEAR))
+                        .map(PreviewTexture),
+                    Some(Err(error)) => Err(error.clone()),
+                    None => Err("No print preview is available.".into()),
+                };
+                bs.preview_image = Some((bs.preview_page, image));
+            }
+            match bs.preview_image.as_ref() {
+                Some((_, Ok(texture))) => {
+                    p.image(texture.0.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                }
+                Some((_, Err(error))) => {
+                    ui.colored_label(t.cell_text, error);
+                }
+                None => {}
             }
             let sheet = page.get("sheet").and_then(Json::as_str).unwrap_or("");
             let range = page.get("range").and_then(Json::as_str).unwrap_or("");
@@ -778,74 +818,6 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
             });
         });
     });
-}
-
-/// Most rows and columns one preview page draws (a page holds far fewer at any readable scale).
-const PREVIEW_ROWS: u32 = 200;
-const PREVIEW_COLS: u32 = 60;
-
-/// Draws one printed page in miniature: the cells' displayed text at the page's print scale,
-/// inside the sheet's margins. `paper_w` is the page width in points.
-fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, wb: &gridcraft_engine::model::Workbook, t: &Tokens) {
-    let Some(range) = page.get("range").and_then(Json::as_str).and_then(gridcraft_engine::core::RangeRef::parse) else { return };
-    let Some(sh) = page.get("sheet").and_then(Json::as_str).and_then(|n| wb.sheet_index(n)).and_then(|i| wb.sheets.get(i)) else { return };
-    // Preview pixels per point, and per sheet pixel (sheet geometry is 96 dpi: 0.75 pt per pixel).
-    let per_pt = rect.width() / paper_w;
-    let print_scale =
-        page.get("scale").and_then(Json::as_f64).filter(|s| s.is_finite() && *s > 0.0).map_or(1.0, |s| (s / 100.0) as f32).clamp(0.1, 4.0);
-    let per_px = per_pt * 0.75 * print_scale;
-    let margin =
-        |i: usize, default: f32| sh.print.margins.get(i).copied().filter(|m| m.is_finite()).unwrap_or(default).clamp(0.0, 3.0) * 72.0 * per_pt;
-    let body = Rect::from_min_max(
-        pos2(rect.left() + margin(0, 0.7), rect.top() + margin(2, 0.75)),
-        pos2(rect.right() - margin(1, 0.7), rect.bottom() - margin(3, 0.75)),
-    );
-    if !body.is_positive() {
-        return;
-    }
-    let font = theme::ui_font((11.0 * per_pt * print_scale).clamp(3.0, 14.0));
-    let last_row = range.end.row.min(range.start.row.saturating_add(PREVIEW_ROWS));
-    let last_col = range.end.col.min(range.start.col.saturating_add(PREVIEW_COLS));
-    let mut y = body.top();
-    for row in range.start.row..=last_row {
-        let h = sh.row_height(row) * per_px;
-        if h <= 0.0 {
-            continue;
-        }
-        if y >= body.bottom() {
-            break;
-        }
-        let mut x = body.left();
-        for col in range.start.col..=last_col {
-            let w = sh.col_width(col) * per_px;
-            if w <= 0.0 {
-                continue;
-            }
-            if x >= body.right() {
-                break;
-            }
-            let cell = gridcraft_engine::core::CellRef::new(row, col);
-            let text = gridcraft_engine::display::cell_text(wb, sh, cell);
-            if !text.is_empty() {
-                let numeric = sh.value(cell).as_f64().is_some();
-                // Text runs on over empty neighbours, as on the sheet; numbers stay in their cell.
-                let mut span = w;
-                if !numeric {
-                    let mut next = col.saturating_add(1);
-                    while next <= last_col && x + span < body.right() && sh.value(gridcraft_engine::core::CellRef::new(row, next)).is_empty() {
-                        span += sh.col_width(next) * per_px;
-                        next = next.saturating_add(1);
-                    }
-                }
-                let clip = Rect::from_min_size(pos2(x, y), vec2(span, h)).intersect(body);
-                let (anchor, at) =
-                    if numeric { (Align2::RIGHT_CENTER, pos2(x + w - 1.0, y + h / 2.0)) } else { (Align2::LEFT_CENTER, pos2(x + 1.0, y + h / 2.0)) };
-                p.with_clip_rect(clip).text(at, anchor, text, font.clone(), t.cell_text);
-            }
-            x += w;
-        }
-        y += h;
-    }
 }
 
 fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
@@ -1084,5 +1056,54 @@ mod tests {
     fn recent_paths_split_without_touching_the_disk() {
         assert_eq!(split_path("/home/me/Budget.xlsx"), ("Budget.xlsx".into(), "/home/me".into()));
         assert_eq!(split_path("Budget.xlsx"), ("Budget.xlsx".into(), "".into()));
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::unwrap_used)]
+mod preview_cache_tests {
+    use super::*;
+
+    fn draw(app: &mut SheetApp, bs: &mut Backstage, ctx: &egui::Context) {
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1440.0, 900.0))), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| print(app, ui, bs, &mut Outcome::default()));
+        output.textures_delta.clear();
+        assert!(bs.preview_image.as_ref().unwrap().1.is_ok());
+    }
+
+    #[test]
+    fn preview_tracks_edits_sheet_switches_and_print_options() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session.run("cell.set", json!({"cell":"A1","input":"First"})).unwrap();
+        session.run("home.insertSheet", json!({"name":"Other"})).unwrap();
+        session.run("cell.set", json!({"cell":"A1","input":"Second"})).unwrap();
+        session.run("sheet.activate", json!({"sheet":0})).unwrap();
+        let mut app = SheetApp::new(session, Default::default());
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let mut bs = Backstage::new(Page::Print);
+        draw(&mut app, &mut bs, &ctx);
+        let first = bs.preview_pdf.as_ref().unwrap().as_ref().unwrap().clone();
+        assert!(String::from_utf8_lossy(&first).contains("(First) Tj"));
+        draw(&mut app, &mut bs, &ctx);
+        assert!(Arc::ptr_eq(&first, bs.preview_pdf.as_ref().unwrap().as_ref().unwrap()), "unchanged previews reuse the PDF");
+
+        app.session.run("cell.set", json!({"cell":"A1","input":"Edited"})).unwrap();
+        draw(&mut app, &mut bs, &ctx);
+        assert!(String::from_utf8_lossy(bs.preview_pdf.as_ref().unwrap().as_ref().unwrap()).contains("(Edited) Tj"));
+        let revision = app.session.active().unwrap().revision;
+        app.session.run("sheet.activate", json!({"sheet":1})).unwrap();
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        draw(&mut app, &mut bs, &ctx);
+        assert!(String::from_utf8_lossy(bs.preview_pdf.as_ref().unwrap().as_ref().unwrap()).contains("(Second) Tj"));
+
+        bs.print_all = true;
+        draw(&mut app, &mut bs, &ctx);
+        assert_eq!(bs.preview.as_ref().unwrap().1["pageList"].as_array().unwrap().len(), 2);
+        let all = bs.preview_pdf.as_ref().unwrap().as_ref().unwrap().clone();
+        bs.fit_to_page = true;
+        draw(&mut app, &mut bs, &ctx);
+        assert!(!Arc::ptr_eq(&all, bs.preview_pdf.as_ref().unwrap().as_ref().unwrap()));
     }
 }
