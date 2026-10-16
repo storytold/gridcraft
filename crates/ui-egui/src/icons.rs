@@ -131,6 +131,8 @@ pub enum Icon {
     OpenFolder,
     Info,
     Print,
+    /// Quick Analysis: a small table with a spark.
+    QuickAnalysis,
 }
 
 struct G<'a> {
@@ -713,6 +715,13 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.line(&[(4.0, 11.5), (1.5, 11.5), (1.5, 5.5), (14.5, 5.5), (14.5, 11.5), (12.0, 11.5)], c, 1.1);
             g.line(&[(4.5, 9.0), (4.5, 14.5), (11.5, 14.5), (11.5, 9.0), (4.5, 9.0)], c, 1.1);
             g.circle(12.3, 7.6, 0.6, Some(c), None);
+        }
+        Icon::QuickAnalysis => {
+            g.rect(2.0, 3.0, 12.0, 10.0, None, Some(c));
+            g.stroke(&[(2.0, 6.5), (14.0, 6.5)], light);
+            g.stroke(&[(6.0, 3.0), (6.0, 13.0)], light);
+            g.stroke(&[(10.0, 3.0), (10.0, 13.0)], light);
+            g.line(&[(10.0, 1.0), (6.5, 8.0), (9.5, 8.0), (6.5, 15.0)], BLUE, 1.7);
         }
     }
 }
