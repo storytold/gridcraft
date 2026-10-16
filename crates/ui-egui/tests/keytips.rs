@@ -495,7 +495,10 @@ fn editable_combos_filter_by_typing_and_move_by_arrows() {
     key(&mut h, Key::Enter);
     h.run_steps(3);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "custom sizes must apply");
-    assert_eq!(h.query_all_by_label("13.5").count(), 1, "the button must show the custom size");
+    assert!(
+        h.get_all_by_role(egui::accesskit::Role::TextInput).any(|n| n.value().as_deref() == Some("13.5")),
+        "the size box must show the custom size"
+    );
 
     // Closing without applying (Escape) and reopening must reset the filter to the full list.
     let mut h = harness(blank());
