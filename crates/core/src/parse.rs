@@ -174,13 +174,13 @@ fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
     let t = t.trim();
     let lower = t.to_ascii_lowercase();
     let (body, ampm) = if let Some(b) = lower.strip_suffix("am").or_else(|| lower.strip_suffix('a')) {
-        (b.trim().to_string(), Some(false))
+        (b.trim(), Some(false))
     } else if let Some(b) = lower.strip_suffix("pm").or_else(|| lower.strip_suffix('p')) {
-        (b.trim().to_string(), Some(true))
+        (b.trim(), Some(true))
     } else {
-        (lower.clone(), None)
+        (lower.as_str(), None)
     };
-    let parts: Vec<&str> = body.split(':').collect();
+    let parts: Vec<&str> = body.split(':').take(4).collect();
     if parts.len() == 1 && ampm.is_none() {
         return None;
     }
@@ -214,7 +214,7 @@ fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
     let num = |s: &str| s.trim().parse::<i64>().ok();
     // ISO yyyy-mm-dd or yyyy/mm/dd
     let seps: &[char] = &['/', '-', '.'];
-    let parts: Vec<&str> = t.split(seps).collect();
+    let parts: Vec<&str> = t.split(seps).take(4).collect();
     if parts.len() == 3 {
         let (a, b, c) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
         if a.len() == 4
@@ -255,7 +255,7 @@ fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
         }
     }
     // "Mar 4, 2026" / "March 4 2026" / "4 March 2026"
-    let words: Vec<&str> = t.split([' ', ',']).filter(|w| !w.is_empty()).collect();
+    let words: Vec<&str> = t.split([' ', ',']).filter(|w| !w.is_empty()).take(4).collect();
     if words.len() == 3 {
         // Two-digit years follow the same 2029 rule as the dashed forms above.
         let expand = |w: &str, y: i64| if w.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
@@ -308,14 +308,32 @@ fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>
     if let Some((d, f)) = parse_date(t, sys) {
         return Some((d, Some(f)));
     }
-    // date + time: split at the last space(s) before a time-looking tail.
-    for (i, _) in t.match_indices(' ') {
-        let (a, b) = (t.get(..i)?, t.get(i + 1..)?);
-        if let (Some((d, _)), Some((tf, _, _))) = (parse_date(a, sys), parse_time(b)) {
+    // A time has one token, optionally followed by AM/PM. Only these two boundaries can
+    // separate a date from a time; scanning every space repeatedly rescans long text.
+    for (a, b) in datetime_candidates(t) {
+        if let Some((d, _)) = parse_date(a, sys)
+            && let Some((tf, _, _)) = parse_time(b)
+        {
             return Some((d + tf, Some("m/d/yyyy h:mm")));
         }
     }
     None
+}
+
+fn datetime_candidates(t: &str) -> impl Iterator<Item = (&str, &str)> {
+    let mut prefix = t.trim_end();
+    (0..2).filter_map(move |_| {
+        let word = prefix.split_whitespace().next_back()?;
+        let start = prefix.len().checked_sub(word.len())?;
+        let date = prefix.get(..start)?.trim_end();
+        let separator = prefix.get(date.len()..start)?;
+        prefix = date;
+        // Keep the existing ASCII-space separator rule, including mixed whitespace runs.
+        if !separator.contains(' ') {
+            return None;
+        }
+        Some((date, t.get(start..)?))
+    })
 }
 
 #[cfg(test)]
@@ -324,6 +342,48 @@ mod tests {
 
     fn p(s: &str) -> Parsed {
         parse_input(s, DateSystem::D1900)
+    }
+
+    #[test]
+    fn datetime_candidate_work_is_bounded_for_space_rich_text() {
+        for count in [10, 100, 1000] {
+            let text = "ordinary text ".repeat(count);
+            assert!(datetime_candidates(&text).count() <= 2);
+            assert_eq!(p(&text).value, Value::text(text.as_str()));
+        }
+    }
+
+    #[test]
+    fn bounded_datetime_candidates_preserve_supported_forms() {
+        for sys in [DateSystem::D1900, DateSystem::D1904] {
+            for date in ["2026-03-04", "03 / 04 / 2026", "4-Mar-2026", "Mar 4, 2026", "4 March 2026", "March  4,  2026"] {
+                for time in ["18:00", "6 PM", "6:00:00 pm", "6p", "6\t PM", "6 \tPM", "6  \u{2003} PM", "18:00:00.000"] {
+                    for sep in [" ", "    ", "\t ", " \t", "\u{2003} \u{2003}"] {
+                        let input = format!("{date}{sep}{time}");
+                        let expected = parse_date(date, sys).unwrap().0 + parse_time(time).unwrap().0;
+                        assert_eq!(parse_input(&input, sys).value, Value::Number(expected), "{input:?}");
+                    }
+                }
+            }
+        }
+        for input in ["2026-03-04\t18:00", "2026-03-04 nonsense 18:00", "Mar 4 2026 18:00 junk", "三月 四日 2026 18:00"] {
+            assert_eq!(p(input).value, Value::text(input), "{input}");
+        }
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::disallowed_methods)] // Manual native benchmark only; never executed on wasm.
+    #[ignore = "manual bounded timing comparison; no timing assertion"]
+    fn space_rich_input_timing() {
+        for count in [1000, 2000, 4000] {
+            let text = "x ".repeat(count);
+            let start = std::time::Instant::now();
+            for _ in 0..5 {
+                std::hint::black_box(p(&text));
+            }
+            eprintln!("{count} words, 5 parses: {:?}", start.elapsed());
+        }
     }
 
     #[test]

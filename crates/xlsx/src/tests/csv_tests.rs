@@ -9,6 +9,18 @@ fn v(wb: &Workbook, r: u32, c: u32) -> Value {
 }
 
 #[test]
+fn long_space_rich_fields_remain_text_beside_datetimes() {
+    let text = "ordinary text ".repeat(4000);
+    let src = format!("\"{text}\",\"Mar 4, 2026 6 PM\",42\n");
+    for date_system in [DateSystem::D1900, DateSystem::D1904] {
+        let wb = read_csv(src.as_bytes(), &CsvOptions { date_system, ..Default::default() }).unwrap();
+        assert_eq!(v(&wb, 0, 0), Value::text(text.as_str()));
+        assert_eq!(v(&wb, 0, 1), gridcraft_core::parse::parse_input("2026-03-04 18:00", date_system).value);
+        assert_eq!(v(&wb, 0, 2), Value::Number(42.0));
+    }
+}
+
+#[test]
 fn quoting_and_newlines() {
     let src = "a,\"b,c\",\"say \"\"hi\"\"\"\r\n\"multi\nline\",,3\n\nlast";
     let wb = read_csv(src.as_bytes(), &CsvOptions::default()).unwrap();
