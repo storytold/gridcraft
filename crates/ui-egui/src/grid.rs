@@ -3084,6 +3084,18 @@ pub(crate) fn paint_overlays(
     let _ = (wb, si);
 }
 
+/// Rows the list-validation dropdown shows before it scrolls (Excel shows 8).
+const LIST_PICKER_MAX_ROWS: usize = 8;
+const LIST_PICKER_ROW_H: f32 = 18.0;
+/// Popup frame around the rows: 2 px inner margin and the window stroke on each side, rounded up.
+const LIST_PICKER_CHROME: f32 = 8.0;
+
+/// Popup height for `n` items: every item up to `LIST_PICKER_MAX_ROWS`, then a scrollbar.
+fn list_picker_height(n: usize, row_h: f32, gap: f32) -> f32 {
+    let rows = n.clamp(1, LIST_PICKER_MAX_ROWS) as f32;
+    rows * row_h + (rows - 1.0) * gap
+}
+
 fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
     let Some(c) = app.grid.list_picker else { return };
     let Some(d) = app.session.active() else { return };
@@ -3096,14 +3108,24 @@ fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
     };
     let items = gridcraft_engine::cmd::data::list_items(&wb, si, &dv);
     let r = geo.cell_rect(sh, c);
-    let (at, pivot) = (geo.mirror_pos(r.left_bottom()), if geo.rtl { Align2::RIGHT_TOP } else { Align2::LEFT_TOP });
+    // Fit the popup to its rows (up to LIST_PICKER_MAX_ROWS); without a minimum the scroll area collapses to its 64 px default.
+    let height = list_picker_height(items.len(), LIST_PICKER_ROW_H, ui.spacing().item_spacing.y);
+    // Open below the cell, or above it when the rows would run past the bottom of the window (as Excel does).
+    let screen = ui.ctx().content_rect();
+    let above = r.bottom() + height + LIST_PICKER_CHROME > screen.bottom() && r.top() - height - LIST_PICKER_CHROME >= screen.top();
+    let (at, pivot) = match (above, geo.rtl) {
+        (false, false) => (geo.mirror_pos(r.left_bottom()), Align2::LEFT_TOP),
+        (false, true) => (geo.mirror_pos(r.left_bottom()), Align2::RIGHT_TOP),
+        (true, false) => (geo.mirror_pos(r.left_top()), Align2::LEFT_BOTTOM),
+        (true, true) => (geo.mirror_pos(r.left_top()), Align2::RIGHT_BOTTOM),
+    };
     let mut close = false;
     let response = egui::Area::new(egui::Id::new("dv_list")).fixed_pos(at).pivot(pivot).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_width(r.width().max(100.0));
-            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+            egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).show(ui, |ui| {
                 for it in &items {
-                    if ui.add(egui::Button::new(it.as_str()).frame(false).min_size(vec2(r.width().max(100.0), 18.0))).clicked() {
+                    if ui.add(egui::Button::new(it.as_str()).frame(false).min_size(vec2(r.width().max(100.0), LIST_PICKER_ROW_H))).clicked() {
                         app.run_or_alert("cell.set", json!({"cell": c.a1(), "input": it}));
                         close = true;
                     }
@@ -3335,6 +3357,14 @@ mod selection_fill_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_picker_fits_up_to_eight_rows_then_scrolls() {
+        assert_eq!(list_picker_height(5, 18.0, 3.0), 5.0 * 18.0 + 4.0 * 3.0);
+        assert_eq!(list_picker_height(8, 18.0, 3.0), 8.0 * 18.0 + 7.0 * 3.0);
+        assert_eq!(list_picker_height(30, 18.0, 3.0), list_picker_height(8, 18.0, 3.0));
+        assert_eq!(list_picker_height(0, 18.0, 3.0), 18.0);
+    }
 
     #[test]
     fn wheel_zoom_steps_along_the_ladder_and_stops_at_100() {

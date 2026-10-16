@@ -174,3 +174,42 @@ fn worksheet_popups_close_on_escape_or_window_focus_loss() {
         }
     }
 }
+
+/// Gives `cell` a list validation of `count` items, opens its dropdown and returns the popup's rectangle.
+fn open_list_of(h: &mut Harness, cell: CellRef, count: usize) -> egui::Rect {
+    let items: Vec<String> = (1..=count).map(|i| format!("Item {i}")).collect();
+    let formula1 = format!("\"{}\"", items.join(","));
+    h.state_mut().session.execute("data.validation", json!({"range": cell.a1(), "type": "list", "formula1": formula1})).unwrap();
+    h.state_mut().run("selection.set", json!({"cell": cell.a1()})).unwrap();
+    h.run_steps(2);
+    let geometry = geo(h);
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    let arrow = grid::validation_arrow(sh, &geometry, cell).unwrap().center();
+    click(h, arrow, PointerButton::Primary);
+    assert!(is_open(h, Menu::Validation));
+    h.ctx.memory(|m| m.area_rect(egui::Id::new("dv_list"))).unwrap()
+}
+
+#[test]
+fn validation_dropdown_fits_up_to_eight_items_then_scrolls() {
+    // Each item row is 18 px high; the popup used to collapse to egui's 64 px scroll minimum (about three items).
+    for (count, min_h, max_h) in [(5, 5.0 * 18.0, 12.0 * 18.0), (12, 8.0 * 18.0, 12.0 * 18.0)] {
+        let mut h = harness();
+        let popup = open_list_of(&mut h, CellRef::parse("E5").unwrap(), count);
+        assert!(popup.height() >= min_h && popup.height() < max_h, "{count} items: popup is {} px high", popup.height());
+    }
+}
+
+#[test]
+fn validation_dropdown_opens_above_a_cell_near_the_bottom_of_the_window() {
+    let mut h = harness();
+    let bottom = h.state().grid.rect.unwrap().bottom();
+    let geometry = geo(&h);
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    // The last row of column E that is fully visible above the bottom of the grid.
+    let visible = |row: u32| CellRef::parse(&format!("E{row}")).filter(|&c| geometry.cell_rect(sh, c).bottom() <= bottom);
+    let cell = (1..200).map_while(visible).last().unwrap();
+    let popup = open_list_of(&mut h, cell, 8);
+    let r = geo(&h).cell_rect(h.state().session.active().unwrap().wb.active().unwrap(), cell);
+    assert!(popup.bottom() <= r.top() + 0.5, "popup {popup:?} covers the cell {r:?}");
+}
