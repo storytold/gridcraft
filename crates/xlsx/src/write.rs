@@ -452,13 +452,15 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     ct.push_str("</Types>");
     let mut zip = ZipOut::new();
     zip.add("[Content_Types].xml", ct.as_bytes())?;
-    // Conventional order: rels, docProps, workbook, the rest.
+    // Excel's order: rels, workbook rels, workbook, the rest, document properties last. libmagic (PHP
+    // `finfo`, `file`) recognises an OOXML package only when an `xl/` entry name appears within the
+    // first few KB, so no user-sized part (document properties, a long description) may precede it.
     let rank = |n: &str| match n {
         "_rels/.rels" => 0,
-        n if n.starts_with("docProps/") => 1,
+        "xl/_rels/workbook.xml.rels" => 1,
         "xl/workbook.xml" => 2,
-        "xl/_rels/workbook.xml.rels" => 3,
-        _ => 4,
+        n if n.starts_with("docProps/") => 4,
+        _ => 3,
     };
     let mut parts = std::mem::take(&mut out.parts);
     parts.sort_by_key(|(n, _)| rank(n));
