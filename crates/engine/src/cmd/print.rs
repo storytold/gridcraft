@@ -11,8 +11,9 @@
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::*;
-use gridcraft_pdf::{Font, Page, PdfDoc, Rgb};
+use gridcraft_pdf::{Font, Page, PdfDoc, Rgb, TextDirection};
 use serde_json::{Value as Json, json};
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::*;
 
@@ -638,6 +639,9 @@ fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<c
     };
     let cfl = cf.as_mut().and_then(|cache| cache.look(wb, si, c));
     if let Some(st) = cfl.as_ref().and_then(|l| l.style.as_ref()) {
+        if st.align.reading_order.is_some() {
+            style.align.reading_order = st.align.reading_order;
+        }
         if st.fill.pattern != PatternType::None {
             style.fill = st.fill;
         }
@@ -764,41 +768,58 @@ fn draw_prims(pg: &mut Page, prims: &[gridcraft_chart::Prim], xf: Xf) {
 
 const PAD_PX: f32 = 2.0;
 
-/// Word-wraps `text` to `width` points.
-fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
+struct TextLine {
+    text: String,
+    direction: TextDirection,
+}
+
+/// Word-wraps paragraphs, keeping their base direction on every continuation line.
+fn wrap_lines(text: &str, font: Font, size: f32, width: f32, direction: TextDirection) -> Vec<TextLine> {
     let mut out = Vec::new();
     for para in text.split('\n') {
+        let direction = direction.resolve(para);
+        let measured = |text: &str| gridcraft_pdf::text_width_with_direction(font, size, text, direction);
         let mut line = String::new();
         for word in para.split(' ') {
             let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            if line.is_empty() || gridcraft_pdf::text_width(font, size, &cand) <= width {
+            if line.is_empty() || measured(&cand) <= width {
                 line = cand;
             } else {
-                out.push(std::mem::take(&mut line));
+                out.push(TextLine { text: std::mem::take(&mut line), direction });
                 line = word.to_string();
             }
-            // Break a single over-long word by characters.
-            while gridcraft_pdf::text_width(font, size, &line) > width && line.chars().count() > 1 {
-                let mut cut = String::new();
-                let mut rest = String::new();
-                for ch in line.chars() {
-                    if rest.is_empty() && gridcraft_pdf::text_width(font, size, &format!("{cut}{ch}")) <= width || cut.is_empty() {
-                        cut.push(ch);
-                    } else {
-                        rest.push(ch);
-                    }
-                }
-                if rest.is_empty() {
+            // Keep marks with their base letter. Binary search avoids shaping every prefix of
+            // a long Arabic word; each emitted prefix is measured in its final joined form.
+            while measured(&line) > width {
+                let boundaries: Vec<usize> = line.grapheme_indices(true).map(|(i, _)| i).chain(std::iter::once(line.len())).collect();
+                let count = boundaries.len().saturating_sub(1);
+                if count <= 1 {
                     break;
                 }
-                out.push(cut);
-                line = rest;
+                let (mut low, mut high, mut split) = (1, count - 1, 1);
+                while low <= high {
+                    let mid = low + (high - low) / 2;
+                    let end = boundaries.get(mid).copied().unwrap_or(line.len());
+                    let prefix = line.get(..end).unwrap_or_default();
+                    if measured(prefix) <= width {
+                        split = mid;
+                        low = mid + 1;
+                    } else {
+                        high = mid - 1;
+                    }
+                }
+                let end = boundaries.get(split).copied().unwrap_or(line.len());
+                out.push(TextLine { text: line.get(..end).unwrap_or_default().to_string(), direction });
+                line = line.get(end..).unwrap_or_default().to_string();
+                if out.len() > 2000 {
+                    return out;
+                }
             }
             if out.len() > 2000 {
                 return out;
             }
         }
-        out.push(line);
+        out.push(TextLine { text: line, direction });
     }
     out
 }
@@ -815,9 +836,20 @@ struct Block<'a> {
     ys: Vec<f32>,
     k: f32,
     scale: f32,
+    mirror_axis: f32,
 }
 
 impl Block<'_> {
+    fn point_x(&self, x: f32) -> f32 {
+        if self.sh.right_to_left { self.mirror_axis - x } else { x }
+    }
+    fn text_x(&self, x: f32, width: f32) -> f32 {
+        if self.sh.right_to_left { self.mirror_axis - x - width } else { x }
+    }
+    fn drawn_rect(&self, r: RangeRef) -> (f32, f32, f32, f32) {
+        let (x, y, w, h) = self.rect(r);
+        (self.text_x(x, w), y, w, h)
+    }
     fn x(&self, col: u32) -> f32 {
         if col >= self.cols.0 && col <= self.cols.1 + 1 {
             return self.xs.get((col - self.cols.0) as usize).copied().unwrap_or(0.0);
@@ -897,15 +929,15 @@ fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::
         set
     };
     pg.save();
-    pg.clip_rect(bx, by, bw, bh);
+    pg.clip_rect(b.text_x(bx, bw), by, bw, bh);
     if gridlines {
         let grey = [0xB0, 0xB0, 0xB0];
         let lw = (0.35 * b.scale).clamp(0.1, 0.5);
         for x in &b.xs {
-            pg.stroke_line(*x, by, *x, by + bh, lw, grey);
+            pg.stroke_line(b.point_x(*x), by, b.point_x(*x), by + bh, lw, grey);
         }
         for y in &b.ys {
-            pg.stroke_line(bx, *y, bx + bw, *y, lw, grey);
+            pg.stroke_line(b.point_x(bx), *y, b.point_x(bx + bw), *y, lw, grey);
         }
     }
     // Cheap pre-filter: blank, unstyled cells outside tables and conditional formats draw nothing.
@@ -947,17 +979,17 @@ fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::
             continue;
         }
         if let Some(f) = l.fill {
-            pg.fill_rect(x, y, w, h, f);
+            pg.fill_rect(b.text_x(x, w), y, w, h, f);
         } else if merged && gridlines {
-            pg.fill_rect(x, y, w, h, [255, 255, 255]);
+            pg.fill_rect(b.text_x(x, w), y, w, h, [255, 255, 255]);
         }
         if merged && gridlines {
-            pg.rect_stroke(x, y, w, h, (0.35 * b.scale).clamp(0.1, 0.5), [0xB0, 0xB0, 0xB0]);
+            pg.rect_stroke(b.text_x(x, w), y, w, h, (0.35 * b.scale).clamp(0.1, 0.5), [0xB0, 0xB0, 0xB0]);
         }
         if let Some((frac, rgb, _)) = l.cf.as_ref().and_then(|cf| cf.bar) {
             let pad = 1.5 * b.k;
             let bwid = ((w - 2.0 * pad) * frac.clamp(0.0, 1.0)).max(0.0);
-            pg.fill_rect(x + pad, y + pad, bwid, (h - 2.0 * pad).max(0.0), rgb);
+            pg.fill_rect(b.text_x(x + pad, bwid), y + pad, bwid, (h - 2.0 * pad).max(0.0), rgb);
         }
     }
     // Borders.
@@ -974,12 +1006,12 @@ fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::
             ),
             None => (bd.right, bd.bottom),
         };
-        draw_border(pg, &bd.top, b.wb, x, y, x + w, y, b.k);
-        draw_border(pg, &bottom, b.wb, x, y + h, x + w, y + h, b.k);
-        draw_border(pg, &bd.left, b.wb, x, y, x, y + h, b.k);
-        draw_border(pg, &right, b.wb, x + w, y, x + w, y + h, b.k);
-        draw_border(pg, &bd.diag_down, b.wb, x, y, x + w, y + h, b.k);
-        draw_border(pg, &bd.diag_up, b.wb, x, y + h, x + w, y, b.k);
+        draw_border(pg, &bd.top, b.wb, b.point_x(x), y, b.point_x(x + w), y, b.k);
+        draw_border(pg, &bottom, b.wb, b.point_x(x), y + h, b.point_x(x + w), y + h, b.k);
+        draw_border(pg, &bd.left, b.wb, b.point_x(x), y, b.point_x(x), y + h, b.k);
+        draw_border(pg, &right, b.wb, b.point_x(x + w), y, b.point_x(x + w), y + h, b.k);
+        draw_border(pg, &bd.diag_down, b.wb, b.point_x(x), y, b.point_x(x + w), y + h, b.k);
+        draw_border(pg, &bd.diag_up, b.wb, b.point_x(x), y + h, b.point_x(x + w), y, b.k);
     }
     // Text.
     for (c, l) in &looks {
@@ -988,7 +1020,7 @@ fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::
             continue;
         }
         if let Some(picture) = sh.cell_pictures.get(c) {
-            draw_cell_picture(pg, &picture.data, (x, y, w, h), b.k);
+            draw_cell_picture(pg, &picture.data, (b.text_x(x, w), y, w, h), b.k);
         } else {
             draw_text(pg, b, *c, l, (x, y, w, h), merged, &merges, (bx, bx + bw));
         }
@@ -1084,15 +1116,21 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     if text.is_empty() {
         return;
     }
-    let mut tw = gridcraft_pdf::text_width(font, size, &text);
+    let direction = match st.align.reading_order.unwrap_or_default() {
+        ReadingOrder::Context => TextDirection::Context,
+        ReadingOrder::LeftToRight => TextDirection::LeftToRight,
+        ReadingOrder::RightToLeft => TextDirection::RightToLeft,
+    }
+    .resolve(&text);
+    let mut tw = gridcraft_pdf::text_width_with_direction(font, size, &text, direction);
     if st.align.shrink && !wrap && tw > avail && tw > 0.0 {
         size = (size * avail / tw).max(1.0);
-        tw = gridcraft_pdf::text_width(font, size, &text);
+        tw = gridcraft_pdf::text_width_with_direction(font, size, &text, direction);
     }
     if is_num && !wrap && tw > avail + 0.01 && !sh.show_formulas {
         let hash = gridcraft_pdf::text_width(font, size, "#").max(0.1);
         text = "#".repeat(((avail / hash).floor().max(1.0) as usize).min(255));
-        tw = gridcraft_pdf::text_width(font, size, &text);
+        tw = gridcraft_pdf::text_width_with_direction(font, size, &text, direction);
     }
     let h_align = match st.align.h {
         HAlign::General => {
@@ -1100,6 +1138,8 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
                 HAlign::Right
             } else if matches!(v, Value::Bool(_) | Value::Error(_)) {
                 HAlign::Center
+            } else if direction == TextDirection::RightToLeft && !sh.right_to_left {
+                HAlign::Right
             } else {
                 HAlign::Left
             }
@@ -1111,18 +1151,31 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     let rot = st.align.rotation;
     let rotated = rot != 0 && rot != 255;
     // Rotated text wraps along its own direction: upright (±90°) text to the row height.
-    let lines: Vec<String> = match (wrap, rotated) {
-        (true, false) => wrap_lines(&text, font, size, avail.max(size)),
-        (true, true) if rot.abs() == 90 => wrap_lines(&text, font, size, (h - 2.0 * pad).max(size)),
-        (true, true) => vec![text.lines().next().unwrap_or_default().to_string()],
-        (false, _) => vec![text],
+    let lines: Vec<TextLine> = match (wrap, rotated) {
+        (true, false) => wrap_lines(&text, font, size, avail.max(size), direction),
+        (true, true) if rot.abs() == 90 => wrap_lines(&text, font, size, (h - 2.0 * pad).max(size), direction),
+        (true, true) => vec![TextLine { text: text.lines().next().unwrap_or_default().to_string(), direction }],
+        (false, _) => vec![TextLine { text, direction }],
     };
-    let line_h = size * 1.2;
+    let extents = lines
+        .iter()
+        .filter_map(|line| pg.text_vertical_extents_with_direction(font, size, &line.text, line.direction))
+        .reduce(|a, b| (a.0.max(b.0), a.1.max(b.1)))
+        .map(|(ascent, descent)| (ascent.max(size * 0.8), descent.max(size * 0.22)));
+    let line_h = extents.map_or(size * 1.2, |(ascent, descent)| (ascent + descent + size * 0.2).max(size * 1.2));
     let n = lines.len().max(1) as f32;
-    let first_baseline = match st.align.v {
-        VAlign::Top => y + pad + size * 0.8,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
-        VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+    let first_baseline = if let Some((ascent, descent)) = extents {
+        match st.align.v {
+            VAlign::Top => y + pad + ascent,
+            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - (n - 1.0) * line_h - ascent - descent) / 2.0 + ascent,
+            VAlign::Bottom => y + h - pad - descent - (n - 1.0) * line_h,
+        }
+    } else {
+        match st.align.v {
+            VAlign::Top => y + pad + size * 0.8,
+            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
+            VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+        }
     };
     // Overflow into empty neighbours (single-line text, not merged).
     // Center Across Selection spans the empty Center Across cells to its right; the text stays within that run.
@@ -1161,7 +1214,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     let clip_l = clip_l.max(limits.0);
     let clip_r = clip_r.min(limits.1);
     pg.save();
-    pg.clip_rect(clip_l, y, (clip_r - clip_l).max(0.0), h);
+    pg.clip_rect(b.text_x(clip_l, clip_r - clip_l), y, (clip_r - clip_l).max(0.0), h);
     if rotated {
         // Rotated text: anchored at the bottom-left (upward) or top-left (downward) of the cell.
         // Wrapped lines stack rightward for upward text and leftward for downward text, so
@@ -1172,23 +1225,27 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         for (i, t) in lines.iter().enumerate() {
             let i = i as f32;
             let (ox, oy) = if deg > 0.0 {
-                (x + pad + size * 0.8 * deg.to_radians().sin() + i * line_h, y + h - pad)
+                (x + pad + extents.map_or(size * 0.8, |e| e.0) * deg.to_radians().sin() + i * line_h, y + h - pad)
             } else {
-                (x + pad + (last - i) * line_h, y + pad + size * 0.8)
+                (x + pad + (last - i) * line_h, y + pad + extents.map_or(size * 0.8, |e| e.0))
             };
-            pg.text_rotated(ox, oy, size, font, color, t, angle);
+            let tw = gridcraft_pdf::text_width_with_direction(font, size, &t.text, t.direction);
+            let (sn, cs) = angle.sin_cos();
+            let (ascent, descent) = extents.unwrap_or((size * 0.8, size * 0.22));
+            let ox = if sh.right_to_left { b.mirror_axis - ox - tw * cs - (ascent - descent) * sn } else { ox };
+            pg.text_rotated_with_direction(ox, oy, size, font, color, &t.text, angle, t.direction);
         }
         pg.restore();
         return;
     }
     if rot == 255 {
         // Vertical stacked text.
-        let chars: Vec<char> = lines.concat().chars().take(500).collect();
-        let mut yy = y + pad + size * 0.8;
+        let stacked: String = lines.iter().map(|line| line.text.as_str()).collect();
+        let chars: Vec<&str> = stacked.graphemes(true).take(500).collect();
+        let mut yy = y + pad + extents.map_or(size * 0.8, |e| e.0);
         for ch in chars {
-            let s = ch.to_string();
-            let cw = gridcraft_pdf::text_width(font, size, &s);
-            pg.text(x + (w - cw) / 2.0, yy, size, font, color, &s);
+            let cw = gridcraft_pdf::text_width(font, size, ch);
+            pg.text_with_direction(b.text_x(x + (w - cw) / 2.0, cw), yy, size, font, color, ch, direction);
             yy += line_h;
             if yy > y + h + line_h {
                 break;
@@ -1198,7 +1255,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         return;
     }
     for (i, line) in lines.iter().enumerate() {
-        let lw = gridcraft_pdf::text_width(font, size, line);
+        let lw = gridcraft_pdf::text_width_with_direction(font, size, &line.text, line.direction);
         let lx = match h_align {
             HAlign::Right => x + w - pad - lw - indent,
             HAlign::Center => x + (w + across - lw) / 2.0,
@@ -1208,7 +1265,8 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         if ly - size > y + h || ly < y - line_h {
             continue;
         }
-        pg.text(lx, ly, size, font, color, line);
+        let lx = b.text_x(lx, lw);
+        pg.text_with_direction(lx, ly, size, font, color, &line.text, line.direction);
         if st.font.underline != Underline::None {
             let uw = (size * 0.06).max(0.2);
             pg.stroke_line(lx, ly + size * 0.12, lx + lw, ly + size * 0.12, uw, color);
@@ -1249,9 +1307,11 @@ fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block) 
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
     let visible = |r: (f64, f64, f64, f64)| r.2 > 0.0 && r.3 > 0.0 && r.0 < sx1 && r.0 + r.2 > sx0 && r.1 < sy1 && r.1 + r.3 > sy0;
-    let place = |r: (f64, f64, f64, f64)| (bx + ((r.0 - sx0) as f32) * b.k, by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k);
+    let place = |r: (f64, f64, f64, f64)| {
+        (b.text_x(bx + ((r.0 - sx0) as f32) * b.k, r.2 as f32 * b.k), by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k)
+    };
     pg.save();
-    pg.clip_rect(bx, by, bw, bh);
+    pg.clip_rect(b.text_x(bx, bw), by, bw, bh);
     for sp in &sh.sparklines {
         if !block.contains(sp.cell) {
             continue;
@@ -1261,9 +1321,20 @@ fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block) 
             v => vec![v.as_f64()],
         };
         let color = rgb_of(sp.color, wb).unwrap_or([0x15, 0x60, 0x82]);
-        let (x, y, w, h) = b.rect(RangeRef::cell(sp.cell));
+        let (x, y, w, h) = b.drawn_rect(RangeRef::cell(sp.cell));
         let (wpx, hpx) = (w / b.k, h / b.k);
-        let prims = gridcraft_chart::render_sparkline(sp.kind, &vals, [color[0], color[1], color[2], 255], sp.markers, wpx, hpx);
+        let mut prims = gridcraft_chart::render_sparkline(sp.kind, &vals, [color[0], color[1], color[2], 255], sp.markers, wpx, hpx);
+        // In-cell drawings reflect with the grid; floating charts move as a whole.
+        if sh.right_to_left {
+            for prim in &mut prims {
+                match prim {
+                    gridcraft_chart::Prim::Rect { x, w, .. } => *x = wpx - *x - *w,
+                    gridcraft_chart::Prim::Line { pts, .. } => pts.iter_mut().for_each(|p| p[0] = wpx - p[0]),
+                    gridcraft_chart::Prim::Circle { cx, .. } => *cx = wpx - *cx,
+                    _ => {}
+                }
+            }
+        }
         draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
     }
     for im in &sh.images {
@@ -1320,7 +1391,7 @@ fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block) 
             let color = fm.text_color.and_then(|c| rgb_of(c, wb)).unwrap_or([0, 0, 0]);
             let align = fm.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
             let anchor = fm.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
-            let lines = wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size));
+            let lines = wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size), TextDirection::Auto);
             let block_h = lines.len().min(500) as f32 * size * 1.2;
             let mut yy = match anchor {
                 ShapeTextAnchor::Top => y + 2.0 * b.k,
@@ -1328,13 +1399,13 @@ fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block) 
                 ShapeTextAnchor::Bottom => y + h - 2.0 * b.k - block_h,
             } + size * 0.8;
             for l in lines.iter().take(500) {
-                let lw = gridcraft_pdf::text_width(font, size, l);
+                let lw = gridcraft_pdf::text_width_with_direction(font, size, &l.text, l.direction);
                 let lx = match align {
                     ShapeTextAlign::Left => x + 2.0 * b.k,
                     ShapeTextAlign::Center => x + (w - lw) / 2.0,
                     ShapeTextAlign::Right => x + w - 2.0 * b.k - lw,
                 };
-                pg.text(lx, yy, size, font, color, l);
+                pg.text_with_direction(lx, yy, size, font, color, &l.text, l.direction);
                 yy += size * 1.2;
             }
         }
@@ -1364,11 +1435,11 @@ fn draw_headings(pg: &mut Page, b: &Block, col_heads: bool, row_heads: bool, at:
             if x1 - x0 <= 0.0 {
                 continue;
             }
-            pg.fill_rect(x0, y, x1 - x0, size.1, fill);
-            pg.rect_stroke(x0, y, x1 - x0, size.1, lw, line);
+            pg.fill_rect(b.text_x(x0, x1 - x0), y, x1 - x0, size.1, fill);
+            pg.rect_stroke(b.text_x(x0, x1 - x0), y, x1 - x0, size.1, lw, line);
             let t = gridcraft_core::col_to_letters(col);
             let tw = gridcraft_pdf::text_width(Font::Helvetica, fsize, &t);
-            pg.text(x0 + (x1 - x0 - tw) / 2.0, y + size.1 / 2.0 + fsize * 0.35, fsize, Font::Helvetica, [0x40, 0x40, 0x40], &t);
+            pg.text(b.text_x(x0 + (x1 - x0 - tw) / 2.0, tw), y + size.1 / 2.0 + fsize * 0.35, fsize, Font::Helvetica, [0x40, 0x40, 0x40], &t);
         }
     }
     if row_heads {
@@ -1378,11 +1449,11 @@ fn draw_headings(pg: &mut Page, b: &Block, col_heads: bool, row_heads: bool, at:
             if y1 - y0 <= 0.0 {
                 continue;
             }
-            pg.fill_rect(x, y0, size.0, y1 - y0, fill);
-            pg.rect_stroke(x, y0, size.0, y1 - y0, lw, line);
+            pg.fill_rect(b.text_x(x, size.0), y0, size.0, y1 - y0, fill);
+            pg.rect_stroke(b.text_x(x, size.0), y0, size.0, y1 - y0, lw, line);
             let t = (row + 1).to_string();
             let tw = gridcraft_pdf::text_width(Font::Helvetica, fsize, &t);
-            pg.text(x + (size.0 - tw) / 2.0, y0 + (y1 - y0) / 2.0 + fsize * 0.35, fsize, Font::Helvetica, [0x40, 0x40, 0x40], &t);
+            pg.text(b.text_x(x + (size.0 - tw) / 2.0, tw), y0 + (y1 - y0) / 2.0 + fsize * 0.35, fsize, Font::Helvetica, [0x40, 0x40, 0x40], &t);
         }
     }
 }
@@ -1435,7 +1506,7 @@ fn make_block<'a>(wb: &'a Workbook, si: usize, sh: &'a Sheet, rows: (u32, u32), 
         acc += sh.row_height(r) * k;
         ys.push(acc);
     }
-    Block { wb, si, sh, rows, cols, xs, ys, k, scale: lay.scale }
+    Block { wb, si, sh, rows, cols, xs, ys, k, scale: lay.scale, mirror_axis: lay.page_w }
 }
 
 /// Segments of a page along one axis: repeated titles (before the band) then the band.
@@ -1455,7 +1526,7 @@ fn seg_size(sh: &Sheet, seg: (u32, u32), rows: bool) -> f32 {
 }
 
 /// Renders laid-out sheets to a PDF.
-pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
+pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> Result<(Vec<u8>, usize)> {
     let mut doc = PdfDoc::new();
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
@@ -1499,6 +1570,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
             }
             if lay.settings.headings {
                 let fill = [0xF2, 0xF2, 0xF2];
+                let ox = if sh.right_to_left { lay.page_w - ox - lay.heading_w * k } else { ox };
                 pg.fill_rect(ox, oy, lay.heading_w * k, lay.heading_h * k, fill);
                 pg.rect_stroke(ox, oy, lay.heading_w * k, lay.heading_h * k, 0.3, [0xA0, 0xA0, 0xA0]);
             }
@@ -1515,7 +1587,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
         }
     }
     let n = doc.page_count();
-    (doc.finish(), n)
+    Ok((doc.finish().map_err(|error| EngineError::Other(error.to_string()))?, n))
 }
 
 // ---------------------------------------------------------------- commands
@@ -1525,7 +1597,7 @@ fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
-    Ok(render_pdf(&d.wb, &lays, &d.display_title(), &path))
+    render_pdf(&d.wb, &lays, &d.display_title(), &path)
 }
 
 pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1757,6 +1829,187 @@ mod tests {
     }
     fn contains(hay: &[u8], needle: &str) -> bool {
         hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+    }
+
+    #[test]
+    fn unrenderable_arabic_does_not_overwrite_the_export_destination() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 😀"})).unwrap();
+        let path = std::env::temp_dir().join(format!("gridcraft-arabic-failed-export-{}.pdf", std::process::id()));
+        std::fs::write(&path, b"previous document").unwrap();
+        let result = s.execute("file.exportPdf", json!({"path": path.to_str().unwrap()}));
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous document");
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Text("مرحبا 😀".into()));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn wrapping_keeps_combining_marks_with_their_letters() {
+        let word = "a\u{301}a\u{301}a\u{301}a\u{301}";
+        let lines = wrap_lines(word, Font::Helvetica, 10.0, 7.0, TextDirection::Auto);
+        assert_eq!(lines.iter().map(|line| line.text.as_str()).collect::<String>(), word);
+        assert!(lines.iter().all(|line| line.text == "a\u{301}"));
+    }
+
+    #[test]
+    fn arabic_cells_headers_and_charts_export_searchable_shaped_text() {
+        if gridcraft_pdf::text_width(Font::Helvetica, 10.0, "مرحبا") == 0.0 && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
+            return; // Optional font input; required-font CI exercises this regression.
+        }
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["مَرْحَبًا 123 (ABC)", "القيمة"], ["تفاح", 3], ["كمثرى", 5], ["العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة", null], ["تقرير ١٢٣ (ABC)", null], ["مرحبا", null]]})).unwrap();
+        s.execute("home.columnWidth", json!({"cols": "A:B", "chars": 32})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "1:6", "height": 50})).unwrap();
+        s.execute("home.fontSize", json!({"range": "A1:B6", "size": 20})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "4:4", "height": 90})).unwrap();
+        s.execute("home.bold", json!({"range": "A2"})).unwrap();
+        s.execute("home.italic", json!({"range": "A3"})).unwrap();
+        s.execute("home.wrapText", json!({"range": "A4"})).unwrap();
+        s.execute("home.orientation", json!({"range": "A6", "angle": 30})).unwrap();
+        s.execute("pageLayout.pageSetup", json!({"header": "&Cتقرير المبيعات 2026", "gridlines": true})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
+        // Keep the chart below the table in this synthetic workbook.
+        {
+            let d = s.doc_mut().unwrap();
+            let wb = std::sync::Arc::make_mut(&mut d.wb);
+            for chart in &mut wb.sheet_mut(0).unwrap().charts {
+                chart.anchor.cell = CellRef::new(8, 0);
+                chart.anchor.width = 500.0;
+                chart.anchor.height = 280.0;
+            }
+        }
+        let (pdf, pages) = pdf_of(&mut s, json!({"fitToPage": true}));
+        assert_eq!(pages, 1);
+        assert!(contains(&pdf, "/Subtype /Type3"));
+        for text in ["مَرْحَبًا 123 (ABC)", "تقرير المبيعات 2026", "القيمة", "تفاح", "كمثرى"] {
+            let utf16 = text.encode_utf16().map(|unit| format!("{unit:04X}")).collect::<String>();
+            assert!(contains(&pdf, &format!("/ActualText <FEFF{utf16}>")), "missing text {text}");
+        }
+        let lines = wrap_lines("العَرَبِيَّةالعَرَبِيَّة", Font::Helvetica, 20.0, 40.0, TextDirection::Auto);
+        assert_eq!(lines.iter().map(|line| line.text.as_str()).collect::<String>(), "العَرَبِيَّةالعَرَبِيَّة");
+        assert!(lines.iter().all(|line| !line.text.starts_with(['َ', 'ِ', 'ُ', 'ّ', 'ْ'])));
+        assert!(lines.iter().all(|line| gridcraft_pdf::text_width_with_direction(Font::Helvetica, 20.0, &line.text, line.direction) <= 40.0));
+        let path = std::env::temp_dir().join(format!("gridcraft-arabic-export-{}.pdf", std::process::id()));
+        std::fs::write(&path, &pdf).unwrap();
+        eprintln!("Arabic PDF artifact: {}", path.display());
+    }
+
+    #[test]
+    fn arabic_reading_order_export_artifact() {
+        if gridcraft_pdf::text_width(Font::Helvetica, 10.0, "مرحبا") == 0.0 && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
+            return;
+        }
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Context", "LeftToRight", "RightToLeft"], ["مرحبا ABC !", "مرحبا ABC !", "مرحبا ABC !"], ["123 مرحبا ABC", "123 مرحبا ABC", "123 مرحبا ABC"], ["(مرحبا) ABC", "(مرحبا) ABC", "(مرحبا) ABC"], ["مرحبا ABC ! DEF ? مرحبا", "مرحبا ABC ! DEF ? مرحبا", "مرحبا ABC ! DEF ? مرحبا"]]})).unwrap();
+        s.execute("home.columnWidth", json!({"cols": "A:C", "chars": 24})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "1:5", "height": 60})).unwrap();
+        s.execute("home.fontSize", json!({"range": "A2:C5", "size": 18})).unwrap();
+        for (range, order) in [("A2:A5", "Context"), ("B2:B5", "LeftToRight"), ("C2:C5", "RightToLeft")] {
+            s.execute("home.formatCells", json!({"range": range, "style": {"align": {"reading_order": order}}})).unwrap();
+        }
+        s.execute("home.wrapText", json!({"range": "A5:C5"})).unwrap();
+        s.execute("pageLayout.pageSetup", json!({"gridlines": true, "header": "&CArabic cell reading order"})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        for text in ["مرحبا ABC !", "123 مرحبا ABC", "(مرحبا) ABC"] {
+            let utf16 = text.encode_utf16().map(|unit| format!("{unit:04X}")).collect::<String>();
+            assert!(contains(&pdf, &format!("/ActualText <FEFF{utf16}>")));
+        }
+        let path = std::env::temp_dir().join(format!("gridcraft-arabic-reading-order-{}.pdf", std::process::id()));
+        std::fs::write(&path, &pdf).unwrap();
+        eprintln!("Arabic reading-order PDF artifact: {}", path.display());
+    }
+
+    #[test]
+    fn wrapped_lines_keep_the_paragraph_direction() {
+        let lines = wrap_lines("مرحبا ABC ! DEF ?\nLatin مرحبا !", Font::Helvetica, 10.0, 30.0, TextDirection::Auto);
+        let split = lines.iter().position(|l| l.text.starts_with("Latin")).unwrap();
+        assert!(split > 0);
+        assert!(lines[..split].iter().all(|l| l.direction == TextDirection::RightToLeft));
+        assert!(lines[split..].iter().all(|l| l.direction == TextDirection::LeftToRight));
+        let lines = wrap_lines("123 مرحبا ABC !", Font::Helvetica, 10.0, 30.0, TextDirection::Context.resolve("123 مرحبا ABC !"));
+        assert!(lines.iter().all(|l| l.direction == TextDirection::LeftToRight));
+    }
+
+    fn exported_text_x(pdf: &[u8], text: &str) -> f32 {
+        let pdf = String::from_utf8_lossy(pdf);
+        let marker = format!("({text}) Tj");
+        let before = &pdf[..pdf.find(&marker).unwrap()];
+        let matrix = before.lines().rev().find(|line| line.ends_with(" Tm")).unwrap();
+        matrix.split_whitespace().nth(4).unwrap().parse().unwrap()
+    }
+
+    #[test]
+    fn cell_reading_order_and_conditional_context_reach_pdf() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "ABC !"})).unwrap();
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": "RightToLeft"}}})).unwrap();
+        let (rtl, _) = pdf_of(&mut s, json!({}));
+        assert!(contains(&rtl, "(! ABC) Tj"));
+        assert!(!contains(&rtl, "/Subtype /Type3"));
+        s.execute("home.conditionalFormat", json!({"range": "A1", "rule": {"type": "noBlanks", "style": {"align": {"reading_order": "Context"}}}}))
+            .unwrap();
+        let (context, _) = pdf_of(&mut s, json!({}));
+        assert!(contains(&context, "(ABC !) Tj"));
+        assert!(!contains(&context, "(! ABC) Tj"));
+        assert!(exported_text_x(&rtl, "! ABC") > exported_text_x(&context, "ABC !"));
+    }
+
+    #[test]
+    fn rtl_sheet_sparkline_reflects_with_cell_geometry() {
+        let mut wb = Workbook::new();
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.set_value(CellRef::new(0, 0), Value::Number(1.0));
+        sh.set_value(CellRef::new(1, 0), Value::Number(3.0));
+        sh.sparklines.push(Sparkline {
+            cell: CellRef::new(0, 1),
+            source: "A1:A2".into(),
+            kind: SparklineKind::Line,
+            color: Color::rgb(255, 0, 0),
+            markers: false,
+        });
+        let options = PrintOptions { range: RangeRef::parse("A1:B2"), ..PrintOptions::default() };
+        let ltr = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().0;
+        wb.sheet_mut(0).unwrap().right_to_left = true;
+        let rtl = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().0;
+        let points = |pdf: &[u8]| {
+            let pdf = String::from_utf8_lossy(pdf);
+            let after = pdf.split("1 0 0 RG\n").nth(1).unwrap();
+            let line = after.lines().nth(1).unwrap();
+            let values: Vec<_> = line.split_whitespace().collect();
+            (values[0].parse::<f32>().unwrap(), values[3].parse::<f32>().unwrap())
+        };
+        let (left0, left1) = points(&ltr);
+        let (right0, right1) = points(&rtl);
+        assert!(left0 < left1 && right0 > right1);
+        assert!((left0 + right0 - 612.0).abs() < 0.001);
+        assert!((left1 + right1 - 612.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn rtl_sheet_pdf_mirrors_cells_merges_headings_and_object_anchors() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["FIRST", "SECOND"], [null, "MERGED"]]})).unwrap();
+        s.execute("home.mergeCenter", json!({"range": "B2:C2"})).unwrap();
+        s.execute("pageLayout.pageSetup", json!({"printArea": "A1:D5", "headings": true, "gridlines": true, "left": 0.8, "right": 0.4})).unwrap();
+        s.execute("insert.shape", json!({"kind": "rectangle", "at": "B4", "width": 128, "height": 30, "text": "OBJECT"})).unwrap();
+        let (ltr, _) = pdf_of(&mut s, json!({}));
+        s.execute("view.rightToLeft", json!({"on": true})).unwrap();
+        let (rtl, _) = pdf_of(&mut s, json!({}));
+        for label in ["FIRST", "SECOND", "MERGED", "A", "B", "C", "D", "1", "2", "OBJECT"] {
+            let left = exported_text_x(&ltr, label);
+            let right = exported_text_x(&rtl, label);
+            let font_size = if ["A", "B", "C", "D", "1", "2"].contains(&label) { 9.0 } else { 11.0 };
+            let width = gridcraft_pdf::text_width(Font::Helvetica, font_size, label);
+            assert!((left + right + width - 612.0).abs() < 0.01, "{label}: {left}, {right}, {width}");
+        }
+        assert!(exported_text_x(&ltr, "FIRST") < exported_text_x(&ltr, "SECOND"));
+        assert!(exported_text_x(&rtl, "FIRST") > exported_text_x(&rtl, "SECOND"));
+        for (name, pdf) in [("ltr", ltr), ("rtl", rtl)] {
+            let path = std::env::temp_dir().join(format!("gridcraft-print-direction-{name}-{}.pdf", std::process::id()));
+            std::fs::write(&path, pdf).unwrap();
+            eprintln!("Print direction PDF artifact: {}", path.display());
+        }
     }
 
     #[test]
@@ -2099,10 +2352,12 @@ mod tests {
         let b = bands(0, 2, |r| if r == 1 { 100.0 } else { 10.0 }, |_| 35.0, &[], 100);
         assert_eq!(b, vec![(0, 0), (1, 1), (2, 2)]);
         assert_eq!(bands(0, 1_000_000, |_| 10.0, |_| 5.0, &[], 3).len(), 3);
-        let w = wrap_lines("the quick brown fox jumps", Font::Helvetica, 10.0, 50.0);
+        let w = wrap_lines("the quick brown fox jumps", Font::Helvetica, 10.0, 50.0, TextDirection::Auto);
         assert!(w.len() >= 2);
-        assert!(w.iter().all(|l| gridcraft_pdf::text_width(Font::Helvetica, 10.0, l) <= 50.0 || !l.contains(' ')));
-        let w = wrap_lines("Supercalifragilistic", Font::Helvetica, 10.0, 20.0);
+        assert!(
+            w.iter().all(|l| gridcraft_pdf::text_width_with_direction(Font::Helvetica, 10.0, &l.text, l.direction) <= 50.0 || !l.text.contains(' '))
+        );
+        let w = wrap_lines("Supercalifragilistic", Font::Helvetica, 10.0, 20.0, TextDirection::Auto);
         assert!(w.len() > 2);
     }
 

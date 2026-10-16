@@ -1,0 +1,513 @@
+//! Arabic shaping and subset Type3 fonts. Outlines use the same variation coordinates as the
+//! shaper; ActualText preserves the logical source independently of visual glyph order.
+use std::{borrow::Cow, collections::BTreeMap, fmt::Write as _, sync::OnceLock};
+
+use harfrust::{Direction, ShaperData, ShaperInstance, UnicodeBuffer};
+use skrifa::{
+    FontRef, MetadataProvider,
+    instance::Size,
+    outline::{DrawSettings, OutlinePen},
+};
+use unicode_bidi::BidiInfo;
+
+use crate::{Error, Font, TextDirection, n, pdf_string, win_ansi};
+
+include!(concat!(env!("OUT_DIR"), "/arabic_fonts.rs"));
+
+const MAX_TEXT_BYTES: usize = 128 * 1024;
+const MAX_OUTLINE_BYTES: usize = 256 * 1024;
+const MAX_SUBSET_BYTES: usize = 64 * 1024 * 1024;
+const MAX_SUBSET_GLYPHS: usize = 16_384;
+
+pub(crate) fn needed(text: &str) -> bool {
+    text.chars().any(|ch| matches!(ch as u32, 0x0600..=0x06ff | 0x0750..=0x077f | 0x0870..=0x089f | 0x08a0..=0x08ff | 0xfb50..=0xfdff | 0xfe70..=0xfefc | 0x10e60..=0x10e7f | 0x1ee00..=0x1eeff))
+}
+
+fn bold(font: Font) -> bool {
+    matches!(
+        font,
+        Font::HelveticaBold | Font::HelveticaBoldOblique | Font::TimesBold | Font::TimesBoldItalic | Font::CourierBold | Font::CourierBoldOblique
+    )
+}
+
+fn italic(font: Font) -> bool {
+    matches!(
+        font,
+        Font::HelveticaOblique
+            | Font::HelveticaBoldOblique
+            | Font::TimesItalic
+            | Font::TimesBoldItalic
+            | Font::CourierOblique
+            | Font::CourierBoldOblique
+    )
+}
+
+struct Face {
+    bytes: Cow<'static, [u8]>,
+    data: ShaperData,
+    instance: ShaperInstance,
+}
+
+impl Face {
+    fn new(bytes: Cow<'static, [u8]>, bold: bool) -> Result<Self, Error> {
+        let font = FontRef::from_index(&bytes, 0).map_err(|e| Error(format!("Invalid Arabic PDF font: {e}")))?;
+        if !"العربية١٢٣".chars().all(|ch| font.charmap().map(ch).is_some()) {
+            return Err(Error("The PDF font lacks Arabic glyphs".into()));
+        }
+        let data = ShaperData::new(&font);
+        let instance = ShaperInstance::from_variations(&font, [("wght", if bold { 700.0 } else { 400.0 })]);
+        Ok(Self { bytes, data, instance })
+    }
+
+    fn font(&self) -> Result<FontRef<'_>, Error> {
+        FontRef::from_index(&self.bytes, 0).map_err(|e| Error(format!("Invalid Arabic PDF font: {e}")))
+    }
+}
+
+fn face(is_bold: bool) -> Result<&'static Face, Error> {
+    static REGULAR: OnceLock<Result<Face, Error>> = OnceLock::new();
+    static BOLD: OnceLock<Result<Face, Error>> = OnceLock::new();
+    let cache = if is_bold { &BOLD } else { &REGULAR };
+    cache.get_or_init(|| load_face(is_bold)).as_ref().map_err(Clone::clone)
+}
+
+fn load_face(is_bold: bool) -> Result<Face, Error> {
+    for (name, bytes) in ARABIC_FONTS {
+        if !is_bold || name.ends_with(":Bold") || has_weight_axis(bytes) {
+            return Face::new(Cow::Borrowed(bytes), is_bold);
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::{io::Read as _, path::PathBuf};
+        // Only the redistributable Noto family is used. Never embed proprietary system fonts.
+        let mut dirs: Vec<PathBuf> = [
+            "/usr/share/fonts/noto",
+            "/usr/share/fonts/truetype/noto",
+            "/usr/share/fonts/TTF",
+            "/usr/local/share/fonts",
+            "/usr/local/share/fonts/noto",
+            "/usr/local/share/fonts/TTF",
+            "/Library/Fonts",
+        ]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            let home = PathBuf::from(home);
+            dirs.extend([home.join(".local/share/fonts"), home.join(".fonts"), home.join("Library/Fonts")]);
+        }
+        if let Some(root) = std::env::var_os("WINDIR") {
+            dirs.push(PathBuf::from(root).join("Fonts"));
+        }
+        if let Some(root) = std::env::var_os("LOCALAPPDATA") {
+            dirs.push(PathBuf::from(root).join("Microsoft/Windows/Fonts"));
+        }
+        let filename = if is_bold { "NotoSansArabic-Bold.ttf" } else { "NotoSansArabic-Regular.ttf" };
+        for dir in dirs {
+            for name in ["NotoSansArabic.ttf", filename] {
+                let path = dir.join(name);
+                let file = match std::fs::File::open(&path) {
+                    Ok(file) => file,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) => return Err(Error(format!("Cannot read Arabic PDF font {}: {e}", path.display()))),
+                };
+                let mut bytes = Vec::new();
+                file.take((64 << 20) + 1).read_to_end(&mut bytes).map_err(|e| Error(format!("Cannot read Arabic PDF font: {e}")))?;
+                if bytes.len() > 64 << 20 {
+                    return Err(Error("Arabic PDF font exceeds 64 MiB".into()));
+                }
+                if is_bold && name == "NotoSansArabic.ttf" && !has_weight_axis(&bytes) {
+                    continue;
+                }
+                return Face::new(Cow::Owned(bytes), is_bold);
+            }
+        }
+    }
+    Err(Error("Arabic PDF export needs Noto Sans Arabic. Install its regular and bold fonts, or build with CRAFT_FONTS_DIR.".into()))
+}
+
+fn has_weight_axis(bytes: &[u8]) -> bool {
+    FontRef::from_index(bytes, 0).is_ok_and(|font| font.axes().iter().any(|axis| axis.tag() == skrifa::raw::types::Tag::new(b"wght")))
+}
+
+#[derive(Debug)]
+pub(crate) enum Item {
+    Glyph { id: u32, x: f32, y: f32, source: String },
+    Latin { text: String, x: f32 },
+}
+
+pub(crate) struct Layout {
+    pub items: Vec<Item>,
+    pub width: f32,
+}
+
+/// Positions are in 1/1000 em, matching the Type3 font matrix.
+pub(crate) fn layout(font: Font, text: &str, direction: TextDirection) -> Result<Layout, Error> {
+    if text.len() > MAX_TEXT_BYTES {
+        return Err(Error("Arabic PDF text exceeds the 128 KiB per-line limit".into()));
+    }
+    let direction = if direction == TextDirection::Context { direction.resolve(text) } else { direction };
+    let face = face(bold(font))?;
+    let raw = face.font()?;
+    let shaper = face.data.shaper(&raw).instance(Some(&face.instance)).build();
+    let units = shaper.units_per_em();
+    if units <= 0 {
+        return Err(Error("Arabic PDF font has invalid units per em".into()));
+    }
+    let scale = 1000.0 / units as f32;
+    let bidi = BidiInfo::new(text, direction.level());
+    let mut layout = Layout { items: Vec::new(), width: 0.0 };
+    for para in &bidi.paragraphs {
+        let (levels, runs) = bidi.visual_runs(para, para.range.clone());
+        for run in runs {
+            let rtl = levels.get(run.start).is_some_and(|level| level.is_rtl());
+            let run_text = text.get(run.clone()).ok_or_else(|| Error("Invalid PDF text boundary".into()))?;
+            // Older Noto Arabic fonts omit Latin. Split only on coverage changes, retaining
+            // Arabic joining context and reversing the span order inside RTL runs.
+            let mut spans = Vec::new();
+            let mut start = 0;
+            let mut embedded = None;
+            for (i, ch) in run_text.char_indices() {
+                let supported = raw.charmap().map(ch).is_some() || is_control(ch);
+                if embedded.is_some_and(|v| v != supported) {
+                    spans.push((start..i, embedded.unwrap_or(false)));
+                    start = i;
+                }
+                embedded = Some(supported);
+            }
+            spans.push((start..run_text.len(), embedded.unwrap_or(false)));
+            if rtl {
+                spans.reverse();
+            }
+            for (span, embedded) in spans {
+                let part = run_text.get(span.clone()).ok_or_else(|| Error("Invalid PDF text boundary".into()))?;
+                if !embedded {
+                    if part.chars().any(|ch| win_ansi(ch) == b'?' && ch != '?') {
+                        return Err(Error("The Arabic PDF font does not cover all characters in this text".into()));
+                    }
+                    let part: String = if rtl { part.chars().rev().map(mirror_ansi).collect() } else { part.to_string() };
+                    let width = part.chars().map(|ch| f32::from(font.char_width(ch))).sum::<f32>();
+                    layout.items.push(Item::Latin { text: part, x: layout.width });
+                    layout.width += width;
+                    continue;
+                }
+                let mut buffer = UnicodeBuffer::new();
+                buffer.push_str(part);
+                buffer.set_pre_context(run_text.get(..span.start).unwrap_or_default());
+                buffer.set_post_context(run_text.get(span.end..).unwrap_or_default());
+                buffer.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
+                buffer.set_flags(harfrust::BufferFlags::REMOVE_DEFAULT_IGNORABLES);
+                if needed(part) {
+                    buffer.set_script(harfrust::script::ARABIC);
+                }
+                buffer.guess_segment_properties();
+                let shaped = shaper.shape(buffer, harfrust::ShapeOptions::new());
+                let mut clusters: Vec<_> = shaped.glyph_infos().iter().map(|g| g.cluster as usize).collect();
+                clusters.push(part.len());
+                clusters.sort_unstable();
+                clusters.dedup();
+                let mut previous_cluster = None;
+                for (info, pos) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
+                    if info.glyph_id == 0 {
+                        return Err(Error("The Arabic PDF font produced a missing glyph".into()));
+                    }
+                    let cluster = info.cluster as usize;
+                    let source = if previous_cluster == Some(cluster) {
+                        String::new()
+                    } else {
+                        let index = clusters.binary_search(&cluster).map_err(|_| Error("Invalid PDF glyph cluster".into()))?;
+                        let end = clusters.get(index + 1).copied().ok_or_else(|| Error("Invalid PDF glyph cluster".into()))?;
+                        part.get(cluster..end).ok_or_else(|| Error("Invalid PDF glyph cluster".into()))?.to_string()
+                    };
+                    previous_cluster = Some(cluster);
+                    layout.items.push(Item::Glyph {
+                        id: info.glyph_id,
+                        x: layout.width + pos.x_offset as f32 * scale,
+                        y: pos.y_offset as f32 * scale,
+                        source,
+                    });
+                    layout.width += pos.x_advance as f32 * scale;
+                }
+            }
+        }
+    }
+    Ok(layout)
+}
+
+pub(crate) fn vertical_extents(font: Font, text: &str, direction: TextDirection) -> Result<(f32, f32), Error> {
+    let layout = layout(font, text, direction)?;
+    let face = face(bold(font))?;
+    let raw = face.font()?;
+    let metrics = raw.glyph_metrics(Size::new(1000.0), skrifa::instance::LocationRef::new(face.instance.coords()));
+    let (mut ascent, mut descent) = (0.0_f32, 0.0_f32);
+    for item in layout.items {
+        match item {
+            Item::Glyph { id, y, .. } => {
+                let (bottom, top) = if let Some(bounds) = metrics.bounds(id.into()) {
+                    (bounds.y_min, bounds.y_max)
+                } else {
+                    // Variable-font spaces have a valid empty outline but no ink bounding box.
+                    let glyph = raw.outline_glyphs().get(id.into()).ok_or_else(|| Error("Missing Arabic PDF glyph outline".into()))?;
+                    let mut pen = Pen::default();
+                    glyph
+                        .draw(DrawSettings::unhinted(Size::new(1000.0), skrifa::instance::LocationRef::new(face.instance.coords())), &mut pen)
+                        .map_err(|e| Error(format!("Cannot measure Arabic PDF glyph: {e}")))?;
+                    if pen.full {
+                        return Err(Error("Arabic PDF glyph exceeds the outline size limit".into()));
+                    }
+                    (pen.bounds[1], pen.bounds[3])
+                };
+                ascent = ascent.max(y + top);
+                descent = descent.max(-y - bottom);
+            }
+            Item::Latin { .. } => {
+                ascent = ascent.max(800.0);
+                descent = descent.max(220.0);
+            }
+        }
+    }
+    Ok((ascent, descent))
+}
+
+/// Bidi reordering for standard-font text requires no optional Arabic font.
+pub(crate) fn latin_visual(text: &str, direction: TextDirection) -> Result<Cow<'_, str>, Error> {
+    if direction != TextDirection::RightToLeft && !text.chars().any(is_control) {
+        return Ok(Cow::Borrowed(text));
+    }
+    if text.len() > MAX_TEXT_BYTES {
+        return Err(Error("Bidirectional PDF text exceeds the 128 KiB per-line limit".into()));
+    }
+    let bidi = BidiInfo::new(text, direction.level());
+    let mut out = String::with_capacity(text.len());
+    for para in &bidi.paragraphs {
+        let (levels, runs) = bidi.visual_runs(para, para.range.clone());
+        for run in runs {
+            let part = text.get(run.clone()).unwrap_or_default();
+            if levels.get(run.start).is_some_and(|level| level.is_rtl()) {
+                out.extend(part.chars().rev().filter(|ch| !is_control(*ch)).map(mirror_ansi));
+            } else {
+                out.extend(part.chars().filter(|ch| !is_control(*ch)));
+            }
+        }
+    }
+    Ok(Cow::Owned(out))
+}
+
+// The mirrored characters representable by WinAnsi. HarfRust handles embedded glyphs.
+fn mirror_ansi(ch: char) -> char {
+    match ch {
+        '(' => ')',
+        ')' => '(',
+        '[' => ']',
+        ']' => '[',
+        '{' => '}',
+        '}' => '{',
+        '<' => '>',
+        '>' => '<',
+        '«' => '»',
+        '»' => '«',
+        '‹' => '›',
+        '›' => '‹',
+        other => other,
+    }
+}
+
+fn is_control(ch: char) -> bool {
+    matches!(ch, '\u{061c}' | '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
+#[derive(Default)]
+pub(crate) struct Subset {
+    keys: BTreeMap<(u32, bool, bool, String), usize>,
+    glyphs: Vec<Glyph>,
+    bytes: usize,
+}
+
+struct Glyph {
+    path: String,
+    width: f32,
+    source: String,
+    bounds: [f32; 4],
+}
+
+impl Subset {
+    fn insert(&mut self, font: Font, id: u32, source: String) -> Result<usize, Error> {
+        let key = (id, bold(font), italic(font), source.clone());
+        if let Some(index) = self.keys.get(&key) {
+            return Ok(*index);
+        }
+        if self.glyphs.len() >= MAX_SUBSET_GLYPHS {
+            return Err(Error("PDF page has too many distinct Arabic glyphs".into()));
+        }
+        let face = face(bold(font))?;
+        let raw = face.font()?;
+        let location = skrifa::instance::LocationRef::new(face.instance.coords());
+        let glyph = raw.outline_glyphs().get(id.into()).ok_or_else(|| Error("Missing Arabic PDF glyph outline".into()))?;
+        let width =
+            raw.glyph_metrics(Size::new(1000.0), location).advance_width(id.into()).ok_or_else(|| Error("Missing Arabic PDF glyph width".into()))?;
+        let mut pen = Pen { shear: if italic(font) { 0.212_556_56 } else { 0.0 }, ..Default::default() };
+        glyph.draw(DrawSettings::unhinted(Size::new(1000.0), location), &mut pen).map_err(|e| Error(format!("Cannot draw Arabic PDF glyph: {e}")))?;
+        if pen.full || self.bytes.saturating_add(pen.path.len()).saturating_add(source.len().saturating_mul(2)) > MAX_SUBSET_BYTES {
+            return Err(Error("Arabic PDF outlines exceed the page size limit".into()));
+        }
+        let index = self.glyphs.len();
+        self.bytes += pen.path.len() + source.len() * 2;
+        self.glyphs.push(Glyph { path: pen.path, width, source, bounds: pen.bounds });
+        self.keys.insert(key, index);
+        Ok(index)
+    }
+
+    pub(crate) fn text(&mut self, font: Font, text: &str, size: f32, direction: TextDirection) -> Result<String, Error> {
+        let layout = layout(font, text, direction)?;
+        let mut out = format!("/Span << /ActualText {} >> BDC\nBT\n", unicode_string(text, true));
+        for item in layout.items {
+            match item {
+                Item::Glyph { id, x, y, source } => {
+                    let index = self.insert(font, id, source)?;
+                    let _ = writeln!(
+                        out,
+                        "/A{} {} Tf 1 0 0 1 {} {} Tm <{:02X}> Tj",
+                        index / 255 + 1,
+                        n(size),
+                        n(x * size / 1000.0),
+                        n(y * size / 1000.0),
+                        index % 255 + 1
+                    );
+                }
+                Item::Latin { text, x } => {
+                    let _ = writeln!(out, "/F{} {} Tf 1 0 0 1 {} 0 Tm {} Tj", font.index() + 1, n(size), n(x * size / 1000.0), pdf_string(&text));
+                }
+            }
+        }
+        out.push_str("ET\nEMC");
+        Ok(out)
+    }
+
+    pub(crate) fn objects(&self, next: &mut u32, objects: &mut Vec<(u32, Vec<u8>)>) -> String {
+        let mut resources = String::new();
+        for (batch, glyphs) in self.glyphs.chunks(255).enumerate() {
+            let id = *next;
+            let cmap_id = id + 1;
+            *next += 2;
+            let mut procs = String::new();
+            let mut names = String::new();
+            let mut widths = String::new();
+            let mut mappings = Vec::new();
+            let mut bounds = [0.0_f32; 4];
+            for (i, glyph) in glyphs.iter().enumerate() {
+                let code = i + 1;
+                let _ = write!(procs, "/g{code} {} 0 R ", *next);
+                let _ = write!(names, "/g{code} ");
+                let _ = write!(widths, "{} ", n(glyph.width));
+                let body = format!("{} 0 d0\n{}f\n", n(glyph.width), glyph.path);
+                objects.push((*next, stream(&body)));
+                *next += 1;
+                bounds[0] = bounds[0].min(glyph.bounds[0]);
+                bounds[1] = bounds[1].min(glyph.bounds[1]);
+                bounds[2] = bounds[2].max(glyph.bounds[2]);
+                bounds[3] = bounds[3].max(glyph.bounds[3]);
+                if !glyph.source.is_empty() {
+                    mappings.push(format!("<{code:02X}> {}\n", unicode_string(&glyph.source, false)));
+                }
+            }
+            let mut cmap = "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /GridCraftArabicUnicode def\n/CMapType 2 def\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n".to_string();
+            for group in mappings.chunks(100) {
+                let _ = writeln!(cmap, "{} beginbfchar", group.len());
+                for mapping in group {
+                    cmap.push_str(mapping);
+                }
+                cmap.push_str("endbfchar\n");
+            }
+            cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+            objects.push((cmap_id, stream(&cmap)));
+            objects.push((id, format!("<< /Type /Font /Subtype /Type3 /Name /GridCraftArabic /FontBBox [{} {} {} {}] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << {procs}>> /Encoding << /Type /Encoding /Differences [1 {names}] >> /FirstChar 1 /LastChar {} /Widths [{widths}] /Resources << >> /ToUnicode {cmap_id} 0 R >>", n(bounds[0]), n(bounds[1]), n(bounds[2]), n(bounds[3]), glyphs.len()).into_bytes()));
+            let _ = write!(resources, "/A{} {id} 0 R ", batch + 1);
+        }
+        resources
+    }
+}
+
+fn stream(body: &str) -> Vec<u8> {
+    format!("<< /Length {} >>\nstream\n{body}endstream", body.len()).into_bytes()
+}
+
+pub(crate) fn unicode_string(text: &str, bom: bool) -> String {
+    let mut out = if bom { "<FEFF".to_string() } else { "<".to_string() };
+    for unit in text.encode_utf16() {
+        let _ = write!(out, "{unit:04X}");
+    }
+    out.push('>');
+    out
+}
+
+#[derive(Default)]
+struct Pen {
+    path: String,
+    point: [f32; 2],
+    bounds: [f32; 4],
+    shear: f32,
+    full: bool,
+}
+
+impl Pen {
+    fn point(&mut self, x: f32, y: f32) -> [f32; 2] {
+        let x = x + self.shear * y;
+        self.bounds[0] = self.bounds[0].min(x);
+        self.bounds[1] = self.bounds[1].min(y);
+        self.bounds[2] = self.bounds[2].max(x);
+        self.bounds[3] = self.bounds[3].max(y);
+        [x, y]
+    }
+    fn op(&mut self, value: &str) {
+        if self.path.len().saturating_add(value.len()) > MAX_OUTLINE_BYTES {
+            self.full = true;
+        }
+        if !self.full {
+            self.path.push_str(value);
+        }
+    }
+}
+
+impl OutlinePen for Pen {
+    fn move_to(&mut self, x: f32, y: f32) {
+        let [px, py] = self.point(x, y);
+        self.op(&format!("{} {} m\n", n(px), n(py)));
+        self.point = [x, y];
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        let [px, py] = self.point(x, y);
+        self.op(&format!("{} {} l\n", n(px), n(py)));
+        self.point = [x, y];
+    }
+    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+        self.curve_to(
+            self.point[0] + (cx - self.point[0]) * 2.0 / 3.0,
+            self.point[1] + (cy - self.point[1]) * 2.0 / 3.0,
+            x + (cx - x) * 2.0 / 3.0,
+            y + (cy - y) * 2.0 / 3.0,
+            x,
+            y,
+        );
+    }
+    fn curve_to(&mut self, cx: f32, cy: f32, dx: f32, dy: f32, x: f32, y: f32) {
+        let [cx, cy] = self.point(cx, cy);
+        let [dx, dy] = self.point(dx, dy);
+        let [px, py] = self.point(x, y);
+        self.op(&format!("{} {} {} {} {} {} c\n", n(cx), n(cy), n(dx), n(dy), n(px), n(py)));
+        self.point = [x, y];
+    }
+    fn close(&mut self) {
+        self.op("h\n");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn fallback_mirrors_only_paired_ansi_punctuation() {
+        let visual: String = "(مرحبا)".chars().rev().map(super::mirror_ansi).collect();
+        assert_eq!(visual, "(ابحرم)");
+        assert_eq!("[(<«‹abc›»>)]".chars().rev().map(super::mirror_ansi).collect::<String>(), "[(<«‹cba›»>)]");
+    }
+}

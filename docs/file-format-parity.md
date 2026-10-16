@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** trivial (formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; previously trivial: XLSX chart sheets are kept on save (#727)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-16 · **Change:** minor (PDF preserves cell direction and RTL sheet geometry; previously minor: Arabic PDF output uses shaped embedded glyphs and logical text) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -10,6 +10,8 @@ Excel's list comes from Microsoft's public "File formats that are supported in E
 documentation (the Office bundle is off limits under this repo's clean-room rule). GridCraft's
 support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and the tests in
 `crates/xlsx/src/tests/` (round-trip, fixtures, malformed input, CSV, ODS, XLSB, XLS, PivotTables).
+
+Arabic PDF output uses harfrust shaping, Unicode bidi and licensed Noto Arabic glyph outlines with ToUnicode and logical ActualText. Cells, headers and chart labels support marks, digits, rotation and style. Bundled builds use the optional `CRAFT_FONTS_DIR` input; unbundled native builds look for Noto Sans Arabic. Unsupported text fails export before writing the destination. Cell Context/LTR/RTL direction is carried through measurement, wrapping and drawing. RTL sheet geometry mirrors while text stays readable. Latin-only RTL text uses bidi ordering without requiring an Arabic font.
 
 ## Workbook formats
 
@@ -56,7 +58,7 @@ and repair-free opening remain unverified.
 
 | Format | Excel | GridCraft | Notes |
 |---|---|---|---|
-| PDF | Save As / Export | yes (own PDF 1.7 writer) | Only the 14 standard PDF fonts, no embedding: **non-Latin text (CJK, Arabic, Devanagari, Thai) does not export**; web build exports without a file prompt (#141) |
+| PDF | Save As / Export | yes (own PDF 1.7 writer) | Standard Latin fonts plus licensed shaped Arabic outlines, logical Unicode mappings, cell reading direction and RTL sheet geometry; CJK/Devanagari/Thai remain unsupported; web build exports without a file prompt (#141) |
 | XPS | Windows | no | Low priority |
 | Print | yes | yes (via PDF, system dialog on desktop; PR #143 for web) | |
 | Images of ranges/charts (Copy as Picture) | yes | chart raster in `crates/chart` | No range-to-image command |
@@ -85,6 +87,8 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | PDF honors cell Context/LTR/RTL, preserves paragraph direction across wrapping, and mirrors RTL sheet geometry without reversing glyphs |
+| 2026-10-16 | minor | Arabic PDF export embeds licensed glyph outlines, joins letters and marks, preserves logical text and reports unsupported glyphs before writing |
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |
