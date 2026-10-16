@@ -267,6 +267,13 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             None => err("no dialog is open"),
         },
         "ui.dialog.cancel" => {
+            // Closing the file-changed prompt means keeping the version in GridCraft, exactly as
+            // its ✕ and Escape do (`dialogs::show`).
+            let path =
+                app.dialog.as_ref().filter(|d| d.name == "fileChanged").and_then(|d| d.values.get("path")).and_then(Json::as_str).map(str::to_string);
+            if let Some(path) = path {
+                app.keep_external_version(&path);
+            }
             app.dialog = None;
             ok(Json::Null)
         }

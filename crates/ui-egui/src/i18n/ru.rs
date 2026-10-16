@@ -410,6 +410,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Вычисления в книге",
         "Enable iterative calculation" => "Включить итеративные вычисления",
         "Calculation settings are saved with the workbook." => "Параметры вычислений сохраняются вместе с книгой.",
+        // A file another program rewrote (File Changed on Disk).
+        "File Changed on Disk" => "Файл изменён на диске",
+        "{name} was changed on disk by another program (a Git checkout, another editor) since GridCraft read it." => {
+            "{name} был изменён другой программой (получение из Git, другой редактор) после того, как GridCraft его прочитал."
+        }
+        "Use the version on disk, or keep the version in GridCraft." => "Использовать версию на диске или сохранить версию в GridCraft.",
+        "Use Disk Version" => "Использовать версию на диске",
+        "Keep Current Version" => "Сохранить текущую версию",
+        "The workbook has unsaved changes: the disk version discards them." => "В книге есть несохранённые изменения: версия на диске отбросит их.",
+        "Closing this prompt keeps the version in GridCraft." => "Закрытие этого запроса сохранит версию в GridCraft.",
         _ => return None,
     })
 }

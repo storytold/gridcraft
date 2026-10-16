@@ -956,6 +956,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Protect\nSheet" => "Proteger\nPlanilha",
         "Watch\nWindow" => "Janela de\nInspeção",
         "Workbook\nStatistics" => "Estatísticas da\nPasta de Trabalho",
+        // A file another program rewrote (File Changed on Disk).
+        "File Changed on Disk" => "Arquivo alterado no disco",
+        "{name} was changed on disk by another program (a Git checkout, another editor) since GridCraft read it." => {
+            "{name} foi alterado por outro programa (um checkout do Git, outro editor) depois que o GridCraft o leu."
+        }
+        "Use the version on disk, or keep the version in GridCraft." => "Use a versão do disco ou mantenha a versão do GridCraft.",
+        "Use Disk Version" => "Usar a versão do disco",
+        "Keep Current Version" => "Manter a versão atual",
+        "The workbook has unsaved changes: the disk version discards them." => {
+            "A pasta de trabalho tem alterações não salvas: a versão do disco as descarta."
+        }
+        "Closing this prompt keeps the version in GridCraft." => "Fechar este aviso mantém a versão do GridCraft.",
         _ => return None,
     })
 }

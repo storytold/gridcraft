@@ -440,6 +440,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Compact" => "Compacto",
         "Outline" => "Esquema",
         "Tabular" => "Tabular",
+        // A file another program rewrote (File Changed on Disk).
+        "File Changed on Disk" => "Archivo modificado en el disco",
+        "{name} was changed on disk by another program (a Git checkout, another editor) since GridCraft read it." => {
+            "{name} fue modificado por otro programa (una actualización de Git, otro editor) después de que GridCraft lo leyera."
+        }
+        "Use the version on disk, or keep the version in GridCraft." => "Usa la versión del disco o conserva la versión de GridCraft.",
+        "Use Disk Version" => "Usar la versión del disco",
+        "Keep Current Version" => "Conservar la versión actual",
+        "The workbook has unsaved changes: the disk version discards them." => {
+            "El libro tiene cambios sin guardar: la versión del disco los descarta."
+        }
+        "Closing this prompt keeps the version in GridCraft." => "Cerrar este aviso conserva la versión de GridCraft.",
         _ => return None,
     })
 }

@@ -399,6 +399,31 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
     Ok(out)
 }
 
+/// What a file on disk looked like when GridCraft read or last wrote it: enough to notice that
+/// another program (a Git checkout, an editor, a script) replaced it. Deliberately not a hash: the
+/// check runs about once a second per open workbook, so it costs one `stat` and no read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileStamp {
+    /// Last modification time, milliseconds since the Unix epoch.
+    pub modified_ms: u128,
+    /// Length in bytes.
+    pub len: u64,
+}
+
+/// The stamp of the file at `path`, or `None` when it can't be read (missing, no permission, a
+/// timestamp before 1970). The browser has no file system, so it is always `None` there.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn file_stamp(path: &str) -> Option<FileStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified_ms = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_millis();
+    Some(FileStamp { modified_ms, len: meta.len() })
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn file_stamp(_path: &str) -> Option<FileStamp> {
+    None
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
     let meta = std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;

@@ -112,6 +112,9 @@ pub struct DocState {
     /// The format `path`'s content was recognised as when its extension doesn't name one (an
     /// XLSX called `budget.dat`): Save writes it back in that format.
     pub content_kind: Option<io::FileKind>,
+    /// What the file at `path` looked like when GridCraft read it or wrote it last. A different
+    /// stamp now means another program changed the file ([`cmd`] `file.externalChanges`).
+    pub file_stamp: Option<io::FileStamp>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -137,6 +140,7 @@ impl DocState {
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
+            file_stamp: None,
         }
     }
     pub fn is_dirty(&self) -> bool {

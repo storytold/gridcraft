@@ -3282,3 +3282,171 @@ fn paste_special_validation_moves_relative_references() {
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
 }
+
+// ------------------------------------------------------ a file another program rewrites
+
+/// A worksheet with `A1` set to `text`, as the bytes of a real `.xlsx`: the file on disk that
+/// another program (a Git checkout, an editor, a script) replaces underneath a running GridCraft.
+#[cfg(not(target_arch = "wasm32"))]
+fn workbook_bytes(text: &str) -> Vec<u8> {
+    let mut w = s();
+    w.execute("cell.set", json!({"cell": "A1", "input": text})).unwrap();
+    crate::io::save_bytes(&w.doc().unwrap().wb, "model.xlsx").unwrap()
+}
+
+/// A private temp folder for one file test.
+#[cfg(not(target_arch = "wasm32"))]
+fn temp_dir(tag: &str) -> std::path::PathBuf {
+    #[allow(clippy::disallowed_methods)] // a native test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-{tag}-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    dir
+}
+
+/// The change a Git checkout makes: reported once, and answered with the file's version.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn an_external_change_is_reported_and_reload_takes_the_disk_version() {
+    let dir = temp_dir("external-change");
+    let path = dir.join("model.xlsx");
+    std::fs::write(&path, workbook_bytes("first")).unwrap();
+    let path = path.to_str().unwrap().to_string();
+    let mut s = s();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::from("first"));
+    // Just opened: the file still holds what we read.
+    assert_eq!(s.execute("file.externalChanges", json!({})).unwrap()["changed"], json!(false));
+
+    // Another program replaces the file.
+    std::fs::write(&path, workbook_bytes("the disk version")).unwrap();
+    let r = s.execute("file.externalChanges", json!({})).unwrap();
+    assert_eq!(r["changed"], json!(true));
+    assert_eq!(r["documents"][0]["title"], json!("model.xlsx"));
+    assert_eq!(r["documents"][0]["path"], json!(path));
+    assert_eq!(r["documents"][0]["dirty"], json!(false));
+
+    // "Use the disk version": the window, its identity and the selection stay.
+    s.execute("selection.set", json!({"range": "C3"})).unwrap();
+    let (uid, revision) = {
+        let d = s.doc().unwrap();
+        (d.uid, d.revision)
+    };
+    let r = s.execute("file.reload", json!({"path": path})).unwrap();
+    assert_eq!(r["reloaded"], json!(true));
+    assert_eq!(v(&s, "A1"), Value::from("the disk version"));
+    let d = s.doc().unwrap();
+    assert!(!d.is_dirty());
+    assert_eq!((d.uid, d.title.as_str()), (uid, "model.xlsx"));
+    assert!(d.revision > revision, "the interface rebinds its view state");
+    assert_eq!(d.selection.active, CellRef::parse("C3").unwrap());
+    // The prompt won't come back for this change.
+    assert_eq!(s.execute("file.externalChanges", json!({})).unwrap()["changed"], json!(false));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// "Keep the version in GridCraft": the workbook stays as it is, and the change is not reported
+/// again until the file changes once more.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn keeping_the_version_in_gridcraft_stops_the_report() {
+    let dir = temp_dir("external-keep");
+    let path = dir.join("model.xlsx");
+    std::fs::write(&path, workbook_bytes("first")).unwrap();
+    let path = path.to_str().unwrap().to_string();
+    let mut s = s();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    std::fs::write(&path, workbook_bytes("the disk version")).unwrap();
+    assert_eq!(s.execute("file.externalChanges", json!({})).unwrap()["changed"], json!(true));
+
+    // A workbook with unsaved changes keeps them, and the answer is remembered.
+    s.execute("cell.set", json!({"cell": "B1", "input": "mine"})).unwrap();
+    s.execute("file.ignoreExternalChange", json!({"path": path})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::from("first"), "the version in GridCraft");
+    assert_eq!(v(&s, "B1"), Value::from("mine"));
+    assert!(s.doc().unwrap().is_dirty());
+    assert_eq!(s.execute("file.externalChanges", json!({})).unwrap()["changed"], json!(false));
+
+    // The next change to the file is reported again.
+    std::fs::write(&path, workbook_bytes("third")).unwrap();
+    assert_eq!(s.execute("file.externalChanges", json!({})).unwrap()["changed"], json!(true));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Taking the disk version is refused while the workbook holds unsaved changes: the interface's
+/// prompt passes `force`, a programmatic caller has to say so on purpose.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn reload_keeps_unsaved_changes_unless_forced() {
+    let dir = temp_dir("external-dirty");
+    let path = dir.join("model.xlsx");
+    std::fs::write(&path, workbook_bytes("first")).unwrap();
+    let path = path.to_str().unwrap().to_string();
+    let mut s = s();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "mine"})).unwrap();
+    std::fs::write(&path, workbook_bytes("the disk version")).unwrap();
+
+    let refused = s.execute("file.reload", json!({"path": path})).unwrap_err().to_string();
+    assert!(refused.contains("unsaved changes"), "{refused}");
+    assert_eq!(v(&s, "A1"), Value::from("first"));
+    assert_eq!(v(&s, "B1"), Value::from("mine"));
+    assert!(s.doc().unwrap().is_dirty(), "a refused reload changes nothing");
+
+    let r = s.execute("file.reload", json!({"path": path, "force": true})).unwrap();
+    assert_eq!(r["reloaded"], json!(true));
+    assert_eq!(v(&s, "A1"), Value::from("the disk version"));
+    assert!(v(&s, "B1").is_empty(), "the unsaved change is gone, as the prompt warned");
+    assert!(!s.doc().unwrap().is_dirty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Saving our own file is not an external change, and a workbook with no file is never reported.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn our_own_save_is_not_an_external_change() {
+    let dir = temp_dir("external-save");
+    let path = dir.join("model.xlsx");
+    std::fs::write(&path, workbook_bytes("first")).unwrap();
+    let path = path.to_str().unwrap().to_string();
+    let mut s = s();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "saved by us"})).unwrap();
+    s.execute("file.save", json!({})).unwrap();
+    assert_eq!(s.execute("file.externalChanges", json!({})).unwrap()["changed"], json!(false));
+    // Reading the file back is what an external reader would see.
+    let back = crate::io::open_bytes("model.xlsx", &std::fs::read(&path).unwrap()).unwrap().0;
+    assert_eq!(back.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), Value::from("saved by us"));
+
+    // A workbook that was never saved has no file to change.
+    let mut t = Session::new();
+    t.new_workbook();
+    assert_eq!(t.execute("file.externalChanges", json!({})).unwrap()["changed"], json!(false));
+    let e = t.execute("file.ignoreExternalChange", json!({})).unwrap_err().to_string();
+    assert!(e.contains("no file"), "{e}");
+    let e = t.execute("file.reload", json!({})).unwrap_err().to_string();
+    assert!(e.contains("no file"), "{e}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The browser's relay reads the file and hands over the bytes: `file.reload` still targets the
+/// open workbook by the name it was opened under, and opens a workbook that isn't open.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn reload_accepts_the_bytes_another_caller_read() {
+    let mut s = s();
+    s.execute("file.open", json!({"name": "model.xlsx", "base64": crate::io::base64_encode(&workbook_bytes("first"))})).unwrap();
+    let r = s.execute("file.reload", json!({"name": "model.xlsx", "base64": crate::io::base64_encode(&workbook_bytes("second"))})).unwrap();
+    assert_eq!(r["reloaded"], json!(true));
+    assert_eq!(v(&s, "A1"), Value::from("second"));
+    assert_eq!(s.documents().len(), 1, "reload replaces, never adds");
+
+    let r = s.execute("file.reload", json!({"name": "other.xlsx", "base64": crate::io::base64_encode(&workbook_bytes("new"))})).unwrap();
+    assert_eq!(r["reloaded"], json!(false), "not open: reloading it opens it");
+    assert_eq!(s.documents().len(), 2);
+    assert_eq!(v(&s, "A1"), Value::from("new"));
+
+    assert!(s.execute("file.reload", json!({})).is_err(), "the active workbook has no file");
+    assert!(s.execute("file.reload", json!({"name": "x.xlsx", "base64": "%%%"})).is_err());
+    assert!(s.execute("file.ignoreExternalChange", json!({"path": "x.xlsx"})).is_err());
+}

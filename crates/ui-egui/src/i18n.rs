@@ -588,6 +588,17 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Workbook calculation", "ブックの計算"),
     ("Enable iterative calculation", "反復計算を行う"),
     ("Calculation settings are saved with the workbook.", "計算の設定はブックと共に保存されます。"),
+    // A file another program rewrote (File Changed on Disk).
+    ("File Changed on Disk", "ファイルがディスク上で変更されました"),
+    (
+        "{name} was changed on disk by another program (a Git checkout, another editor) since GridCraft read it.",
+        "{name} は GridCraft が読み込んだあと、別のプログラム (Git のチェックアウトや別のエディター) によって変更されました。",
+    ),
+    ("Use the version on disk, or keep the version in GridCraft.", "ディスク上の版を使うか、GridCraft の版をそのままにするかを選んでください。"),
+    ("Use Disk Version", "ディスクの版を使う"),
+    ("Keep Current Version", "現在の版を保つ"),
+    ("The workbook has unsaved changes: the disk version discards them.", "ブックに未保存の変更があります。ディスクの版を使うと失われます。"),
+    ("Closing this prompt keeps the version in GridCraft.", "このプロンプトを閉じると GridCraft の版が保たれます。"),
 ];
 
 #[cfg(test)]

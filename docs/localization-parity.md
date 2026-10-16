@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Format Cells dialog looks its labels up in the catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (the File Changed on Disk prompt looks its labels up in the catalog, in all ten shipped languages; shipped-language counts re-measured) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -11,11 +11,13 @@ right-to-left sheets and full complex-script support. Part of
 
 - **A first catalog exists, for the ribbon only.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in
   #31, #104, #82; German added 10-11) adds an interface-language preference that defaults to the
-  system language (closes #20) and a View-tab switcher, with English-keyed lookup tables:
-  Japanese 268 labels, Simplified Chinese, Korean, Russian, Brazilian Portuguese, German and Czech 266
-  each. The tables are used by
+  system language (closes #20) and a View-tab switcher, with English-keyed lookup tables. Entry
+  counts measured from the tables on 2026-10-16: pt-BR 954, cs 529, es 439, de 410, fr 410, ko 409,
+  ru 409, sr 409, ja 405, zh 405. The tables are used by
   the ribbon, sheet tabs and widgets (`ribbon.rs`, `tabs.rs`, `widgets.rs`), the Format Cells
-  dialog, every dialog title and the shared OK/Cancel buttons; the other dialogs, menus,
+  dialog, every dialog title, the shared OK/Cancel buttons and the File Changed on Disk prompt
+  (its two answers, the unsaved-changes warning and its file-name line, which is keyed
+  `{name} …`); the other dialogs, menus,
   context menus, task panes, status messages, command labels and function descriptions are still
   English literals. Untranslated labels fall back to English.
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
@@ -44,19 +46,22 @@ separators, number/date formats, machine translation with agent review, and scri
 | Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Estimate to full |
 |---|---|---|---|---|---|---|---|
 | English | en | ~2,200 / ~2,200 (100%, source) | yes | Latin: yes | yes | full | — |
-| Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
-| Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
+| Simplified Chinese (Mandarin) | zh-Hans | 405 (~18%) | the File Changed on Disk prompt | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus, one dialog | 8–13 h |
+| Spanish | es | 439 (~20%) | the File Changed on Disk prompt | Latin: yes | no | menus, one dialog | 6–10 h |
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
 | Arabic | ar | 0 (0%) | no | **no shaping, no RTL UI**; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
-| French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
-| Portuguese | pt-BR | 923 (~42%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
+| French | fr | 410 (~19%) | the File Changed on Disk prompt | Latin: yes | no | menus, one dialog | 6–10 h |
+| Portuguese | pt-BR | 954 (~43%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
-| Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display | no | menus only | 8–12 h |
-| German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
-| Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
+| Japanese | ja | 405 (~18%) | the File Changed on Disk prompt | CJK system-font fallback; IME unverified; no furigana display | no | menus, one dialog | 8–12 h |
+| German | de | 410 (~19%) | the File Changed on Disk prompt | Latin: yes | no | menus, one dialog | 4–8 h |
+| Korean | ko | 409 (~19%) | the File Changed on Disk prompt | Hangul via the CJK fallback; IME unverified | no | menus, one dialog | 6–10 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 
-Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only.
+Counts re-measured from the `i18n` tables on 2026-10-16 (they had drifted since 2026-10-12).
+
+Other shipped languages: Russian (ru) 409, Czech (cs) 529 and Serbian (sr) 409 labels (~19–24%),
+menus and the File Changed on Disk prompt.
 
 **Total:** catalog work 10–20 h + languages 92–144 h ≈ **100–165 h**. Parallelizes almost fully
 once the catalog covers dialogs and commands. **Needs a human:** native-speaker review of every
@@ -78,6 +83,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | The File Changed on Disk prompt (its two answers, the unsaved-changes warning, the closing note and the `{name} … was changed on disk` line) looks its labels up through `Language::tr`: seven English keys added to the Japanese reference table and to all nine language modules, so all ten shipped languages show it translated. Shipped-language entry counts re-measured (pt-BR 954, cs 529, es 439, de/fr 410, ko/ru/sr 409, ja/zh 405) |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |

@@ -410,6 +410,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Calcul du classeur",
         "Enable iterative calculation" => "Activer le calcul itératif",
         "Calculation settings are saved with the workbook." => "Les paramètres de calcul sont enregistrés avec le classeur.",
+        // A file another program rewrote (File Changed on Disk).
+        "File Changed on Disk" => "Fichier modifié sur le disque",
+        "{name} was changed on disk by another program (a Git checkout, another editor) since GridCraft read it." => {
+            "{name} a été modifié par un autre programme (une extraction Git, un autre éditeur) depuis que GridCraft l'a lu."
+        }
+        "Use the version on disk, or keep the version in GridCraft." => "Utiliser la version du disque ou conserver la version de GridCraft.",
+        "Use Disk Version" => "Utiliser la version du disque",
+        "Keep Current Version" => "Conserver la version actuelle",
+        "The workbook has unsaved changes: the disk version discards them." => {
+            "Le classeur contient des modifications non enregistrées : la version du disque les supprime."
+        }
+        "Closing this prompt keeps the version in GridCraft." => "Fermer cet avertissement conserve la version de GridCraft.",
         _ => return None,
     })
 }

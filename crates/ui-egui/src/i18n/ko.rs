@@ -410,6 +410,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "통합 문서 계산",
         "Enable iterative calculation" => "반복 계산 사용",
         "Calculation settings are saved with the workbook." => "계산 설정은 통합 문서와 함께 저장됩니다.",
+        // A file another program rewrote (File Changed on Disk).
+        "File Changed on Disk" => "디스크에서 파일이 변경됨",
+        "{name} was changed on disk by another program (a Git checkout, another editor) since GridCraft read it." => {
+            "{name} 파일이 GridCraft가 읽은 뒤 다른 프로그램(Git 체크아웃, 다른 편집기)에 의해 변경되었습니다."
+        }
+        "Use the version on disk, or keep the version in GridCraft." => "디스크의 버전을 사용하거나 GridCraft의 버전을 유지하세요.",
+        "Use Disk Version" => "디스크 버전 사용",
+        "Keep Current Version" => "현재 버전 유지",
+        "The workbook has unsaved changes: the disk version discards them." => {
+            "통합 문서에 저장하지 않은 변경 내용이 있습니다. 디스크 버전을 사용하면 사라집니다."
+        }
+        "Closing this prompt keeps the version in GridCraft." => "이 프롬프트를 닫으면 GridCraft의 버전이 유지됩니다.",
         _ => return None,
     })
 }

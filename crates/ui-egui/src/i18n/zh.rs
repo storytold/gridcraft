@@ -402,6 +402,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "工作簿计算",
         "Enable iterative calculation" => "启用迭代计算",
         "Calculation settings are saved with the workbook." => "计算设置随工作簿一起保存。",
+        // A file another program rewrote (File Changed on Disk).
+        "File Changed on Disk" => "文件已在磁盘上更改",
+        "{name} was changed on disk by another program (a Git checkout, another editor) since GridCraft read it." => {
+            "{name} 在 GridCraft 读取之后被其他程序（Git 检出或其他编辑器）改动过。"
+        }
+        "Use the version on disk, or keep the version in GridCraft." => "使用磁盘上的版本，或保留 GridCraft 中的版本。",
+        "Use Disk Version" => "使用磁盘版本",
+        "Keep Current Version" => "保留当前版本",
+        "The workbook has unsaved changes: the disk version discards them." => "工作簿有未保存的修改：使用磁盘版本会丢弃这些修改。",
+        "Closing this prompt keeps the version in GridCraft." => "关闭此提示将保留 GridCraft 中的版本。",
         _ => return None,
     })
 }

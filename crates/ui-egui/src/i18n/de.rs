@@ -411,6 +411,20 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Dunkel",
         "Sheet Options|View" => "Anzeige",
         "Print" => "Drucken",
+        // A file another program rewrote (File Changed on Disk).
+        "File Changed on Disk" => "Datei auf dem Datenträger geändert",
+        "{name} was changed on disk by another program (a Git checkout, another editor) since GridCraft read it." => {
+            "{name} wurde von einem anderen Programm (einem Git-Checkout, einem anderen Editor) geändert, nachdem GridCraft sie gelesen hat."
+        }
+        "Use the version on disk, or keep the version in GridCraft." => {
+            "Die Version auf dem Datenträger verwenden oder die Version in GridCraft behalten."
+        }
+        "Use Disk Version" => "Dateiversion verwenden",
+        "Keep Current Version" => "Aktuelle Version behalten",
+        "The workbook has unsaved changes: the disk version discards them." => {
+            "Die Arbeitsmappe enthält ungespeicherte Änderungen: die Dateiversion verwirft sie."
+        }
+        "Closing this prompt keeps the version in GridCraft." => "Beim Schließen dieses Hinweises bleibt die Version in GridCraft erhalten.",
         _ => return None,
     })
 }
