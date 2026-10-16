@@ -176,6 +176,22 @@ fn every_tool_survives_hostile_arguments() {
 }
 
 #[test]
+fn destructive_hint_matches_capability() {
+    // Overwrite or take back cell data, or replace the workbook / the file on disk.
+    let overwrite = ["execute_command", "write_range", "set_cell", "format_range", "sort_range", "undo", "redo"];
+    let replace = ["open_workbook", "save_workbook", "new_workbook"];
+    for t in tool_definitions() {
+        let name = t["name"].as_str().unwrap();
+        let a = &t["annotations"];
+        let destructive = a["destructiveHint"].as_bool().unwrap();
+        if a["readOnlyHint"].as_bool().unwrap() {
+            assert!(!destructive, "{name} is read-only");
+        }
+        assert_eq!(destructive, overwrite.contains(&name) || replace.contains(&name), "{name}");
+    }
+}
+
+#[test]
 fn resources() {
     let mut s = server();
     let v = rpc(&mut s, 1, "resources/list", json!({}));

@@ -55,13 +55,28 @@ fn obj(props: Value, required: &[&str]) -> Value {
     }
     o
 }
+/// Tools that can overwrite or discard existing data (`destructiveHint`). `execute_command` can reach any command, and
+/// undo/redo can take back an entry or reapply an overwrite, so they are included.
+const DESTRUCTIVE_TOOLS: &[&str] = &[
+    "execute_command",
+    "write_range",
+    "set_cell",
+    "format_range",
+    "sort_range",
+    "open_workbook",
+    "save_workbook",
+    "new_workbook",
+    "undo",
+    "redo",
+];
 fn tool(name: &str, title: &str, desc: &str, schema: Value, read_only: bool) -> Value {
+    let destructive = !read_only && DESTRUCTIVE_TOOLS.contains(&name);
     json!({
         "name": name,
         "title": title,
         "description": desc,
         "inputSchema": schema,
-        "annotations": {"title": title, "readOnlyHint": read_only, "destructiveHint": false, "openWorldHint": false},
+        "annotations": {"title": title, "readOnlyHint": read_only, "destructiveHint": destructive, "openWorldHint": false},
     })
 }
 
