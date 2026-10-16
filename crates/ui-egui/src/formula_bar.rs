@@ -88,14 +88,15 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 ui.add_space(4.0);
                 let editing = app.editor.is_some();
                 let c = if editing { t.text } else { t.text_disabled };
-                let cancel = crate::widgets::icon_button(ui, Icon::Close, c, "Cancel", vec2(22.0, 24.0));
+                let lang = app.ui.language;
+                let cancel = crate::widgets::icon_button(ui, Icon::Close, c, lang.tr("Cancel"), vec2(22.0, 24.0));
                 if cancel.clicked() && editing {
                     app.cancel_edit();
                 }
-                if crate::widgets::icon_button(ui, Icon::Check, c, "Enter", vec2(22.0, 24.0)).clicked() && editing {
+                if crate::widgets::icon_button(ui, Icon::Check, c, lang.tr("Enter"), vec2(22.0, 24.0)).clicked() && editing {
                     app.commit_edit(0, 0, false, false);
                 }
-                let fx = crate::widgets::icon_button(ui, Icon::Fx, t.text, "Insert Function", vec2(26.0, 24.0));
+                let fx = crate::widgets::icon_button(ui, Icon::Fx, t.text, lang.tr("Insert Function"), vec2(26.0, 24.0));
                 if fx.clicked() {
                     app.open_dialog("insertFunction", json!({}));
                 }
@@ -140,7 +141,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 layout.caret = info.caret;
                 ui.allocate_space(vec2(avail, field.height()));
                 let chevron = if app.ui.formula_bar_expanded { Icon::ChevronUp } else { Icon::Chevron };
-                if crate::widgets::icon_button(ui, chevron, t.text_dim, "Expand formula bar", vec2(20.0, 24.0)).clicked() {
+                if crate::widgets::icon_button(ui, chevron, t.text_dim, lang.tr("Expand formula bar"), vec2(20.0, 24.0)).clicked() {
                     app.ui.formula_bar_expanded = !app.ui.formula_bar_expanded;
                 }
             });
