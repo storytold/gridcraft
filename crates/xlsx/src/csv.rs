@@ -193,9 +193,9 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
 ///
 /// The output is capped at [`MAX_CSV_BYTES`]: two cells far apart make the used range, and so the
 /// file, as big as the whole rectangle between them (`A1` and `XFD1048576` are 16 GiB of commas).
-/// An export that would pass the cap is refused before anything is allocated, or as soon as the
-/// text written so far passes it, with [`IoError::TooLarge`]; accepted exports keep every field in
-/// its place.
+/// An export that would pass the cap is refused before anything is allocated, or at the first
+/// field or line end that takes it past the cap (a field is measured before it is written), with
+/// [`IoError::TooLarge`]; accepted exports keep every field in its place.
 pub fn write_csv(sheet: &Sheet, delimiter: u8, cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
     write_csv_limited(sheet, delimiter, MAX_CSV_BYTES, cell_text)
 }
@@ -221,9 +221,21 @@ pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, mut cell_te
                 out.push(delim);
             }
             let t = cell_text(CellRef::new(row, col));
-            if t.contains(delim) || t.contains('"') || t.contains('\n') || t.contains('\r') {
+            let quoted = t.contains(delim) || t.contains('"') || t.contains('\n') || t.contains('\r');
+            // The exact size of the field as written (the delimiter was pushed above), so a row
+            // never grows past the cap unseen and no doubled-quote copy of the text is built.
+            let field_len = if quoted { t.len() + t.matches('"').count() + 2 } else { t.len() };
+            if out.len().saturating_add(field_len) > limit {
+                return Err(too_large(format!("more than {} MiB (stopped at row {})", limit >> 20, row + 1)));
+            }
+            if quoted {
                 out.push('"');
-                out.push_str(&t.replace('"', "\"\""));
+                for ch in t.chars() {
+                    if ch == '"' {
+                        out.push('"');
+                    }
+                    out.push(ch);
+                }
                 out.push('"');
             } else {
                 out.push_str(&t);

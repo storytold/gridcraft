@@ -186,6 +186,25 @@ fn the_cap_counts_the_bytes_the_cells_hold_and_accepted_exports_keep_every_posit
     let err = write_csv_limited(&long, b',', 1000, text_of(&long)).unwrap_err();
     assert!(err.to_string().contains("stopped at row"), "{err}");
     assert!(write_csv_limited(&long, b',', 50 * 102, text_of(&long)).is_ok());
+    // Within one row the cap is checked before each field is written: a wide row of long and
+    // quote-heavy fields is refused at the field that crosses it, without asking for the rest.
+    let mut wide = Sheet::new("W");
+    for c in 0..10u32 {
+        wide.set_value(CellRef::new(0, c), Value::text("\"".repeat(100)));
+    }
+    let mut asked = 0;
+    let err = write_csv_limited(&wide, b',', 500, |c| {
+        asked += 1;
+        text_of(&wide)(c)
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("stopped at row 1"), "{err}");
+    assert_eq!(asked, 3, "each field is 202 bytes; the third passes 500");
+    // Exact boundary: a quoted field of 202 bytes plus CRLF fits in 204 and not in 203.
+    let mut one = Sheet::new("O");
+    one.set_value(CellRef::new(0, 0), Value::text("\"".repeat(100)));
+    assert_eq!(write_csv_limited(&one, b',', 204, text_of(&one)).unwrap().len(), 204);
+    assert!(write_csv_limited(&one, b',', 203, text_of(&one)).is_err());
     // A tab is one byte, like a comma.
     let tabs = write_csv_limited(&s, b'\t', 14, text_of(&s)).unwrap();
     assert_eq!(tabs.len(), 14);
