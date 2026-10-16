@@ -358,6 +358,19 @@ fn table_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
     let on = bool_param(p, "on");
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
+        if which == "totals"
+            && let Some(t) = sh.tables.get(ti)
+            && on.unwrap_or(!t.totals_row)
+            && !t.totals_row
+            && t.range.end.row.saturating_add(1) < MAX_ROWS
+        {
+            let below = RangeRef::new(CellRef::new(t.range.end.row + 1, t.range.start.col), CellRef::new(t.range.end.row + 1, t.range.end.col));
+            let used = (below.start.col..=below.end.col)
+                .any(|c| sh.cell(CellRef::new(below.start.row, c)).is_some_and(|x| x.formula.is_some() || !x.value.is_empty()));
+            if used || sh.tables.iter().enumerate().any(|(i, o)| i != ti && o.range.intersects(&below)) {
+                return Err(EngineError::Other("The row below the table is not empty, so there's no room for the total row.".into()));
+            }
+        }
         let Some(t) = sh.tables.get_mut(ti) else { return Ok(Json::Null) };
         match which {
             "totals" => {
@@ -1552,5 +1565,32 @@ mod tests {
         s.execute("home.manageRules", json!({"delete": 0, "moveDown": 0})).unwrap();
         let rules = s.execute("home.manageRules", json!({})).unwrap();
         assert_eq!(rules["rules"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn total_row_refuses_to_overwrite_occupied_row() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["H1", "H2", "H3"], ["1", "2", "3"], ["4", "5", "6"]]})).unwrap();
+        // Only the middle column below the table is occupied.
+        s.execute("range.setValues", json!({"range": "B4", "values": [["keep"]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:C3", "header": true})).unwrap();
+        s.execute("selection.set", json!({"range": "A2"})).unwrap();
+        assert!(s.execute("table.totalRow", json!({"on": true})).is_err());
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert!(!sh.tables[0].totals_row);
+        assert_eq!(sh.tables[0].range.end.row, 2);
+        assert_eq!(sh.value(CellRef::new(3, 1)).display(), "keep");
+        // A formula below is protected too.
+        s.execute("cell.set", json!({"cell": "B4", "input": ""})).unwrap();
+        s.execute("cell.set", json!({"cell": "C4", "input": "=A2"})).unwrap();
+        assert!(s.execute("table.totalRow", json!({"on": true})).is_err());
+        assert!(s.doc().unwrap().wb.active().unwrap().cell(CellRef::new(3, 2)).is_some_and(|c| c.formula.is_some()));
+        // An empty row below still works.
+        s.execute("cell.set", json!({"cell": "C4", "input": ""})).unwrap();
+        s.execute("table.totalRow", json!({"on": true})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert!(sh.tables[0].totals_row);
+        assert_eq!(sh.value(CellRef::new(3, 0)).display(), "Total");
     }
 }
