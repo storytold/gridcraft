@@ -204,7 +204,10 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     let tx_box = obj.path(&["nvSpPr", "cNvSpPr"]).is_some_and(|c| c.flag("txBox", false));
     let ln = sp.child("ln");
     let arrow = ln.is_some_and(|l| l.child("tailEnd").or_else(|| l.child("headEnd")).is_some_and(|t| t.attr("type").is_some_and(|v| v != "none")));
+    // WordArt: a text body carrying a text warp (`a:bodyPr/a:prstTxWarp`).
+    let word_art = obj.path(&["txBody", "bodyPr", "prstTxWarp"]).is_some();
     let kind = match prst {
+        _ if word_art => ShapeKind::WordArt,
         _ if tx_box => ShapeKind::TextBox,
         "roundRect" => ShapeKind::RoundedRectangle,
         "ellipse" => ShapeKind::Ellipse,
@@ -252,6 +255,7 @@ fn read_text_format(body: Option<&El>) -> ShapeFormat {
         f.italic = r.flag("i", false);
         f.font = r.child("latin").and_then(|l| l.attr("typeface")).filter(|t| !t.is_empty() && !t.starts_with('+')).map(str::to_string);
         f.text_color = r.child("solidFill").and_then(dml_color);
+        f.text_shadow = r.child("effectLst").and_then(|e| e.child("outerShdw")).and_then(dml_color);
         f.text_outline = r.child("ln").and_then(|l| {
             let c = l.child("solidFill").and_then(dml_color)?;
             // Width in EMU (12700 per point); Excel's default hairline is 0.75 pt.
@@ -375,7 +379,7 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     ShapeKind::Ellipse => ("ellipse", false),
                     ShapeKind::Triangle => ("triangle", false),
                     ShapeKind::Line | ShapeKind::Arrow => ("line", false),
-                    ShapeKind::TextBox => ("rect", true),
+                    ShapeKind::TextBox | ShapeKind::WordArt => ("rect", true),
                     ShapeKind::Icon | ShapeKind::Ink => ("rect", false),
                 };
                 let _ = write!(
@@ -414,7 +418,15 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                         None if sh.kind == ShapeKind::TextBox => " anchor=\"t\"",
                         None => "",
                     };
-                    let _ = write!(s, "<xdr:txBody><a:bodyPr wrap=\"square\" rtlCol=\"0\"{anchor}/><a:lstStyle/>");
+                    if sh.kind == ShapeKind::WordArt {
+                        // Our WordArt marker: a (non-warping) text warp, which the reader maps back to WordArt.
+                        let _ = write!(
+                            s,
+                            "<xdr:txBody><a:bodyPr wrap=\"square\" rtlCol=\"0\"{anchor}><a:prstTxWarp prst=\"textNoShape\"><a:avLst/></a:prstTxWarp></a:bodyPr><a:lstStyle/>"
+                        );
+                    } else {
+                        let _ = write!(s, "<xdr:txBody><a:bodyPr wrap=\"square\" rtlCol=\"0\"{anchor}/><a:lstStyle/>");
+                    }
                     let ppr = match f.align {
                         None => "",
                         Some(ShapeTextAlign::Left) => "<a:pPr algn=\"l\"/>",
@@ -466,6 +478,12 @@ fn run_props(f: &ShapeFormat, theme: &Theme) -> (String, String) {
     }
     if let Some(c) = f.text_color.as_ref().and_then(|c| srgb(c, theme)) {
         let _ = write!(body, "<a:solidFill>{c}</a:solidFill>");
+    }
+    if let Some(c) = f.text_shadow.as_ref().and_then(|c| srgb(c, theme)) {
+        let _ = write!(
+            body,
+            "<a:effectLst><a:outerShdw blurRad=\"38100\" dist=\"38100\" dir=\"2700000\" algn=\"tl\" rotWithShape=\"0\">{c}</a:outerShdw></a:effectLst>"
+        );
     }
     if let Some(font) = &f.font {
         let _ = write!(body, "<a:latin typeface=\"{}\"/>", esc(font));

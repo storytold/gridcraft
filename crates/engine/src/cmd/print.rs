@@ -1334,6 +1334,11 @@ fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block) 
                     ShapeTextAlign::Center => x + (w - lw) / 2.0,
                     ShapeTextAlign::Right => x + w - 2.0 * b.k - lw,
                 };
+                // WordArt's drop shadow: the line again, offset, in the shadow colour (under the text).
+                if let Some(sc) = fm.text_shadow.and_then(|c| rgb_of(c, wb)) {
+                    let off = (size * 0.06).max(0.5);
+                    pg.text(lx + off, yy + off, size, font, sc, l);
+                }
                 pg.text(lx, yy, size, font, color, l);
                 yy += size * 1.2;
             }

@@ -103,6 +103,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Shapes" => "도형",
         "Icons" => "아이콘",
         "Text\nBox" => "텍스트\n상자",
+        "Word\nArt" => "워드\n아트",
+        "Insert WordArt" => "워드아트 삽입",
         "Comment" => "댓글",
         "New\nComment" => "새 댓글",
         "New Note" => "새 메모",

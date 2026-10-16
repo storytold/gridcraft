@@ -1556,6 +1556,10 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "insert.textBox", json!({}));
     }
+    let wa = big_button(ui, Icon::WordArt, "Word\nArt", "Insert WordArt", true);
+    anchor_keytip(app, ui, &wa, &["insert.wordArt"]);
+    // Menu invocation shows the style gallery; the command itself never opens a dialog.
+    egui::Popup::menu(&wa).show(|ui| crate::wordart::gallery(app, ui));
     let __k = big_button(ui, Icon::PageLayout, "Header &\nFooter", "Header & Footer", false);
     control_keytip(app, ui, &__k, "dialog:headerFooter");
     if __k.clicked() {

@@ -363,6 +363,7 @@ fn sample() -> Workbook {
             font: Some("Arial".into()),
             text_color: Some(Color::Rgb(0x112233)),
             text_outline: Some((Color::Rgb(0xFF0000), 1.5)),
+            text_shadow: Some(Color::Rgb(0x445566)),
             align: Some(ShapeTextAlign::Right),
             anchor: Some(ShapeTextAnchor::Bottom),
         },

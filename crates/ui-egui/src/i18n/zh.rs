@@ -103,6 +103,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Shapes" => "形状",
         "Icons" => "图标",
         "Text\nBox" => "文本\n框",
+        "Word\nArt" => "艺术字",
+        "Insert WordArt" => "插入艺术字",
         "Comment" => "批注",
         "New\nComment" => "新建\n批注",
         "New Note" => "新建备注",

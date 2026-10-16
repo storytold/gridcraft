@@ -189,7 +189,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("NU", Entry::Finish(Action::Command("insert.symbol"))),    // Excel: Symbols; containment(Symbol)
     ("NZS", Entry::Finish(Action::Command("insert.symbol"))),   // Excel: Excel: Symbol (modern)
     ("NV", Entry::Finish(Action::Command("insert.pivotTable"))), // Excel: PivotTable
-    ("NW", Entry::Finish(Action::Pending("insert.wordArt"))),   // pending; Excel: WordArt; WordArt; reserved until the command lands
+    ("NW", Entry::Finish(Action::Command("insert.wordArt"))),   // Excel: WordArt
     ("NX", Entry::Finish(Action::Command("insert.textBox"))),   // Excel: Text Box
     ("NZK", Entry::Continue),                                   // Excel: Sparklines Menu; group level:
     ("NZKSL", Entry::Finish(Action::Dialog("sparkline"))),      // Excel: Line Sparkline

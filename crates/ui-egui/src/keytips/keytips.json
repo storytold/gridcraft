@@ -1253,9 +1253,7 @@
    "seq": "NW",
    "kind": "command",
    "target": "insert.wordArt",
-   "pending": true,
-   "excel": "WordArt",
-   "note": "WordArt; reserved until the command lands"
+   "excel": "WordArt"
   },
   {
    "seq": "NX",
