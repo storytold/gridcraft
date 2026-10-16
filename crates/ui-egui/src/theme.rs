@@ -163,11 +163,17 @@ pub fn ui_bold(size: f32) -> FontId {
 /// When the name is an installed font whose faces were bound by [`font_definitions`], that family
 /// is used; otherwise the name is bucketed to one of the built-in roles (mono/serif/cell). egui
 /// panics on a family that was never bound, so the installed branch is gated on
-/// [`crate::fonts::is_bound`] and never names a family egui hasn't been given.
-pub fn cell_family(name: &str, bold: bool, italic: bool) -> FontFamily {
+/// [`crate::fonts::is_bound`] and on `ctx`'s own fonts: new definitions only reach egui at the next
+/// pass, and every context (each test harness) has its own, so the registry alone can name a
+/// family this context doesn't have yet.
+pub fn cell_family(ctx: &egui::Context, name: &str, bold: bool, italic: bool) -> FontFamily {
     let role = crate::fonts::role_key(name, bold, italic);
     if crate::fonts::is_bound(&role) {
-        return FontFamily::Name(role.into());
+        let family = FontFamily::Name(role.into());
+        // `fonts` is only valid once a pass has run; until then the built-in roles are used.
+        if ctx.cumulative_pass_nr() > 0 && ctx.fonts(|f| f.definitions().families.contains_key(&family)) {
+            return family;
+        }
     }
     let lower = name.to_ascii_lowercase();
     if lower.contains("courier") || lower.contains("mono") || lower.contains("consolas") {
@@ -722,6 +728,18 @@ mod font_binding_tests {
     use super::*;
 
     /// The families [`font_definitions`] always binds, whatever is installed.
+    /// A context that has run a pass, so it has fonts.
+    fn warm_context() -> egui::Context {
+        let ctx = egui::Context::default();
+        run_pass(&ctx);
+        ctx
+    }
+
+    fn run_pass(ctx: &egui::Context) {
+        let mut out = ctx.run_ui(Default::default(), |_| {});
+        out.textures_delta.clear();
+    }
+
     fn always_bound() -> Vec<String> {
         [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO].iter().map(|s| s.to_string()).collect()
     }
@@ -731,9 +749,10 @@ mod font_binding_tests {
         let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Nothing installed: every name buckets to a role that font_definitions bound.
         crate::fonts::set_bound(always_bound());
+        let ctx = warm_context();
         for name in ["", "Calibri", "Courier New", "Times New Roman", "Grossly Missing Font", "\u{1F600}"] {
             for (b, i) in [(false, false), (true, false), (false, true), (true, true)] {
-                let FontFamily::Name(fam) = cell_family(name, b, i) else { panic!("{name:?} should name a family") };
+                let FontFamily::Name(fam) = cell_family(&ctx, name, b, i) else { panic!("{name:?} should name a family") };
                 assert!(crate::fonts::is_bound(&fam), "{name:?} {b} {i} → unbound {fam:?}");
             }
         }
@@ -744,9 +763,18 @@ mod font_binding_tests {
         let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let role = crate::fonts::role_key("Ubuntu", true, false);
         crate::fonts::set_bound(always_bound().into_iter().chain([role.clone()]));
-        assert!(matches!(cell_family("Ubuntu", true, false), FontFamily::Name(f) if *f == *role));
+        // Bound in the registry but not yet in this context's fonts: not used.
+        let ctx = warm_context();
+        assert!(!matches!(cell_family(&ctx, "Ubuntu", true, false), FontFamily::Name(f) if *f == *role));
+        // Once the context has the family, it is used by name.
+        let mut defs = egui::FontDefinitions::default();
+        let chain = defs.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+        defs.families.insert(FontFamily::Name(role.as_str().into()), chain);
+        ctx.set_fonts(defs);
+        run_pass(&ctx);
+        assert!(matches!(cell_family(&ctx, "Ubuntu", true, false), FontFamily::Name(f) if *f == *role));
         // The same family in a style that wasn't bound falls back to a built-in role that is.
-        let FontFamily::Name(fallback) = cell_family("Ubuntu", false, true) else { panic!("should name a family") };
+        let FontFamily::Name(fallback) = cell_family(&ctx, "Ubuntu", false, true) else { panic!("should name a family") };
         assert!(crate::fonts::is_bound(&fallback), "the fallback is a bound role");
         crate::fonts::set_bound(always_bound());
     }
@@ -756,10 +784,11 @@ mod font_binding_tests {
         let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // A workbook can hold any font name; none may name a family egui has no data for.
         crate::fonts::set_bound(always_bound());
+        let ctx = warm_context();
         for seed in 0..500u32 {
             let name: String =
                 (0..(seed % 40)).map(|k| char::from_u32(0x20 + (seed.wrapping_mul(31).wrapping_add(k) % 0x5F)).unwrap_or('x')).collect();
-            let FontFamily::Name(fam) = cell_family(&name, seed % 2 == 0, seed % 3 == 0) else { continue };
+            let FontFamily::Name(fam) = cell_family(&ctx, &name, seed % 2 == 0, seed % 3 == 0) else { continue };
             assert!(crate::fonts::is_bound(&fam), "{name:?} → unbound {fam:?}");
         }
     }

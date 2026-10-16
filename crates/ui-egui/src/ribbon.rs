@@ -1346,7 +1346,7 @@ fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
                     );
                 }
                 let col = st.font.color.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::BLACK);
-                let fam = theme::cell_family(&st.font.name, st.font.bold, st.font.italic);
+                let fam = theme::cell_family(ui.ctx(), &st.font.name, st.font.bold, st.font.italic);
                 ui.painter().text(
                     r.left_center() + vec2(4.0, 0.0),
                     Align2::LEFT_CENTER,
