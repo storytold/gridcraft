@@ -86,8 +86,11 @@ fn key_of(v: &Value) -> String {
 fn row_key(r: &[Value]) -> String {
     let mut s = String::new();
     for v in r {
-        s.push_str(&key_of(v));
-        s.push('\u{1}');
+        let k = key_of(v);
+        // Length prefix keeps the encoding unambiguous even when a text value contains the separator.
+        s.push_str(&k.len().to_string());
+        s.push(':');
+        s.push_str(&k);
     }
     s
 }
@@ -1100,6 +1103,12 @@ mod tests {
         assert_eq!(rows_of(&r), vec![vec![nv(2.0), nv(1.0)]]);
         is_err(ev("SORTBY", vec![av(col(&[1.0, 2.0, 3.0])), av(col(&[1.0, 2.0]))]), CellError::Value);
         is_err(ev("SORTBY", vec![av(col(&[1.0, 2.0])), av(col(&[1.0, 2.0])), n(0.0)]), CellError::Value);
+    }
+
+    #[test]
+    fn unique_keeps_rows_containing_separator_apart() {
+        let m = arr(vec![vec![tv("a"), tv("b\u{1}tc")], vec![tv("a\u{1}tb"), tv("c")]]);
+        assert_eq!(rows_of(&ev("UNIQUE", vec![av(m)])).len(), 2);
     }
 
     #[test]
