@@ -782,6 +782,22 @@ fn opening_a_macro_workbook_shows_a_notice() {
 }
 
 #[test]
+fn dropped_macro_warning_never_promises_to_keep_macros() {
+    let mut h = harness(blank());
+    for w in [
+        "macros (VBA project) reference a missing part and were dropped",
+        "macros (VBA project) could not be read and were dropped: bad zip",
+    ] {
+        h.state_mut().show_open_warnings(&json!({"warnings": [w]}));
+        let n = h.state().notice.clone().unwrap();
+        assert_eq!(n.kind, gridcraft_ui_egui::NoticeKind::Warning);
+        assert!(n.text.contains("dropped") && !n.text.contains("keeps them"), "{}", n.text);
+    }
+    h.state_mut().show_open_warnings(&json!({"warnings": ["macros (VBA project) were kept but not executed"]}));
+    assert!(h.state().notice.clone().unwrap().text.contains("keeps them when you save as .xlsm"));
+}
+
+#[test]
 fn plain_open_warning_becomes_an_info_notice() {
     let mut h = harness(blank());
     h.state_mut().show_open_warnings(&json!({"warnings": ["links to external workbooks are not supported"]}));
