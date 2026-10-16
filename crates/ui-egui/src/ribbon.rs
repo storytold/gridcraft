@@ -172,23 +172,73 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         .show(ui, |ui| {
             // Tabs row.
             let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
+            let mut tabs: Vec<&str> = TABS.to_vec();
+            let ctx_tabs = contextual_tabs(app);
+            tabs.extend(ctx_tabs.iter());
+
+            // Ribbon tab transition state (smooth fade and slide when switching tabs, like Excel).
+            let animations_enabled = app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
+            let transition_id = egui::Id::new("gridcraft_ribbon_tab_transition");
+            let mut transition = ui.ctx().data_mut(|d| d.get_temp::<RibbonTransition>(transition_id)).unwrap_or_default();
+            let mut tab_just_switched = false;
+            if transition.current_tab.is_empty() {
+                transition.current_tab = app.ui.ribbon_tab.clone();
+                transition.switch_time = 0.0;
+                transition.direction = 1.0;
+                transition.active = false;
+            } else if transition.current_tab != app.ui.ribbon_tab {
+                let old_pos = tabs.iter().position(|t| **t == transition.current_tab);
+                let new_pos = tabs.iter().position(|t| **t == app.ui.ribbon_tab);
+                let direction = match (old_pos, new_pos) {
+                    (Some(o), Some(n)) if n < o => -1.0,
+                    _ => 1.0,
+                };
+                transition.current_tab = app.ui.ribbon_tab.clone();
+                transition.switch_time = ui.ctx().input(|i| i.time);
+                transition.direction = direction;
+                transition.active = true;
+                tab_just_switched = true;
+            }
+
+            let now = ui.ctx().input(|i| i.time);
+            let elapsed = (now - transition.switch_time).max(0.0);
+            let anim_duration = 0.16; // 160ms smooth transition
+            let (content_opacity, slide_offset) = if transition.active && animations_enabled && elapsed < anim_duration {
+                ui.ctx().request_repaint();
+                let t_norm = (elapsed / anim_duration) as f32;
+                let ease = 1.0 - (1.0 - t_norm).powi(3);
+                let opacity = (0.2 + 0.8 * ease).clamp(0.0, 1.0);
+                let offset = transition.direction * (16.0 * (1.0 - ease));
+                (opacity, offset)
+            } else {
+                transition.active = false;
+                (1.0, 0.0)
+            };
+            ui.ctx().data_mut(|d| d.insert_temp(transition_id, transition));
+
+            let mut active_indicator = None;
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     ui.add_space(8.0);
                     file_menu(app, ui);
-                    let mut tabs: Vec<&str> = TABS.to_vec();
-                    let ctx_tabs = contextual_tabs(app);
-                    tabs.extend(ctx_tabs.iter());
-                    for tab in tabs {
+                    for tab in &tabs {
+                        let tab = *tab;
                         let active = app.ui.ribbon_tab == tab;
                         let contextual = ctx_tabs.contains(&tab);
                         let font = theme::ui_font(13.5);
                         let label = app.ui.language.tr(tab);
                         let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
                         let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
-                        if resp.hovered() && !active {
-                            ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
+                        let hover_alpha = if animations_enabled {
+                            ui.ctx().animate_bool_with_time(resp.id, resp.hovered() && !active, 0.1)
+                        } else if resp.hovered() && !active {
+                            1.0
+                        } else {
+                            0.0
+                        };
+                        if hover_alpha > 0.001 {
+                            ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover.gamma_multiply(hover_alpha));
                         }
                         let color = if contextual {
                             t.accent
@@ -199,8 +249,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         };
                         ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
                         if active {
-                            let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
-                            ui.painter().rect_filled(ul, 1.5, t.accent);
+                            let ul_w = tw.clamp(20.0, 40.0);
+                            active_indicator = Some((r.center().x, r.bottom() - 3.0, ul_w));
                         }
                         if resp.clicked() {
                             if active && !collapsed {
@@ -221,6 +271,13 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 });
             });
+            if let Some((target_x, y, target_w)) = active_indicator {
+                let anim_time = if animations_enabled { 0.16 } else { 0.0 };
+                let cur_x = ui.ctx().animate_value_with_time(ui.id().with("tab_indicator_x"), target_x, anim_time);
+                let cur_w = ui.ctx().animate_value_with_time(ui.id().with("tab_indicator_w"), target_w, anim_time);
+                let ul = Rect::from_center_size(pos2(cur_x, y), vec2(cur_w, 3.0));
+                ui.painter().rect_filled(ul, 1.5, t.accent);
+            }
             if collapsed {
                 return;
             }
@@ -229,29 +286,63 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             ui.painter().rect_filled(card, 10.0, t.ribbon);
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));
+            let scroll_id = ui.id().with("gridcraft_ribbon_scroll");
+            if tab_just_switched {
+                let mut state = egui::scroll_area::State::load(ui.ctx(), scroll_id).unwrap_or_default();
+                state.offset.x = 0.0;
+                state.store(ui.ctx(), scroll_id);
+            }
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-                egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                        match app.ui.ribbon_tab.as_str() {
-                            "Home" => home(app, ui),
-                            "Insert" => insert(app, ui),
-                            "Draw" => draw(app, ui),
-                            "Page Layout" => page_layout(app, ui),
-                            "Formulas" => formulas(app, ui),
-                            "Data" => data(app, ui),
-                            "Review" => review(app, ui),
-                            "View" => view(app, ui),
-                            "Automate" => automate(app, ui),
-                            "Table Design" => table_design(app, ui),
-                            "Chart Design" => chart_design(app, ui),
-                            crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
-                            _ => home(app, ui),
+                egui::ScrollArea::horizontal()
+                    .id_salt("gridcraft_ribbon_scroll")
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .show(ui, |ui| {
+                        if content_opacity < 1.0 {
+                            ui.set_opacity(content_opacity);
                         }
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                            if slide_offset.abs() > 0.001 {
+                                let avail = ui.available_rect_before_wrap();
+                                let shifted = avail.translate(vec2(slide_offset, 0.0));
+                                let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(shifted));
+                                child_ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                                render_tab_content(app, &mut child_ui);
+                                let final_rect = child_ui.min_rect().translate(vec2(-slide_offset, 0.0));
+                                ui.advance_cursor_after_rect(final_rect);
+                            } else {
+                                render_tab_content(app, ui);
+                            }
+                        });
                     });
-                });
             });
         });
+}
+
+#[derive(Clone, Debug, Default)]
+struct RibbonTransition {
+    current_tab: String,
+    switch_time: f64,
+    direction: f32,
+    active: bool,
+}
+
+fn render_tab_content(app: &mut SheetApp, ui: &mut Ui) {
+    match app.ui.ribbon_tab.as_str() {
+        "Home" => home(app, ui),
+        "Insert" => insert(app, ui),
+        "Draw" => draw(app, ui),
+        "Page Layout" => page_layout(app, ui),
+        "Formulas" => formulas(app, ui),
+        "Data" => data(app, ui),
+        "Review" => review(app, ui),
+        "View" => view(app, ui),
+        "Automate" => automate(app, ui),
+        "Table Design" => table_design(app, ui),
+        "Chart Design" => chart_design(app, ui),
+        crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
+        _ => home(app, ui),
+    }
 }
 
 /// The File tab opens the Backstage view (New, Open, Info, Save As, Print, Export, Options…), like
@@ -2512,5 +2603,52 @@ mod checkbox_on_tests {
         // Key tip: the bool still holds the current setting, so toggle it.
         assert!(checkbox_on(false, false));
         assert!(!checkbox_on(false, true));
+    }
+}
+
+#[cfg(test)]
+mod ribbon_transition_tests {
+    use super::*;
+
+    #[test]
+    fn ribbon_tab_switch_animation() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let app = SheetApp::new(session, Default::default());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 700.0)).build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+
+        h.ctx.all_styles_mut(|s| s.animation_time = 0.16);
+        h.run_steps(1);
+
+        assert_eq!(h.state().ui.ribbon_tab, "Home");
+
+        // Switch to Insert (to the right).
+        h.state_mut().ui.ribbon_tab = "Insert".to_string();
+        h.run_steps(1);
+
+        let transition = h.ctx.data(|d| d.get_temp::<RibbonTransition>(egui::Id::new("gridcraft_ribbon_tab_transition")));
+        assert!(transition.is_some(), "transition state should be recorded");
+        if let Some(tr) = transition {
+            assert_eq!(tr.current_tab, "Insert");
+            assert_eq!(tr.direction, 1.0, "moving forward/right should have positive direction");
+        }
+
+        // Switch backward to Home (to the left).
+        h.state_mut().ui.ribbon_tab = "Home".to_string();
+        h.run_steps(1);
+
+        let transition = h.ctx.data(|d| d.get_temp::<RibbonTransition>(egui::Id::new("gridcraft_ribbon_tab_transition")));
+        assert!(transition.is_some(), "transition state should be recorded");
+        if let Some(tr) = transition {
+            assert_eq!(tr.current_tab, "Home");
+            assert_eq!(tr.direction, -1.0, "moving backward/left should have negative direction");
+        }
     }
 }
