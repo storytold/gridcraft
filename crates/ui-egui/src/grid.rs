@@ -1048,14 +1048,14 @@ pub(crate) fn paint_quadrant(
             if c <= c1 && sh.col_width(c) == 0.0 {
                 continue;
             }
-            let x = geo.x(sh, c).round() - 0.5;
+            let x = gridline_centre(geo.x(sh, c));
             p.line_segment([pos2(x, top), pos2(x, bottom)], stroke);
         }
         for r in r0..=r1 + 1 {
             if r <= r1 && sh.row_height(r) == 0.0 {
                 continue;
             }
-            let y = geo.y(sh, r).round() - 0.5;
+            let y = gridline_centre(geo.y(sh, r));
             p.line_segment([pos2(left, y), pos2(right, y)], stroke);
         }
     }
@@ -1574,24 +1574,71 @@ fn range_in_pane(r: RangeRef, rows: (u32, u32), cols: (u32, u32)) -> bool {
     r.start.row <= rows.1 && r.end.row >= rows.0 && r.start.col <= cols.1 && r.end.col >= cols.0
 }
 
-/// The four sides of a `width` wide outline centred on `rect`, cut to `clip` (a little beyond it).
+/// The width of the selection's outline, in points.
+const OUTLINE_W: f32 = 2.0;
+
+/// Where the gridline that marks the cell edge at `edge` is centred: it is drawn a point wide,
+/// half a point before the edge rounded to a whole point.
+fn gridline_centre(edge: f32) -> f32 {
+    edge.round() - 0.5
+}
+
+/// The device pixels the gridline at the cell edge `edge` covers: from the near side of its
+/// first to the far side of its last, in points.
 ///
-/// A stroked rectangle that spans a whole column (20 million points tall) loses its precision in
-/// the tessellator and its left and right sides vanish; sides filled from rectangles that stay
-/// near the viewport do not. Sides wholly outside `clip` are left out.
-pub(crate) fn outline_bands(rect: Rect, width: f32, clip: Rect) -> Vec<Rect> {
-    if !rect.is_finite() || !clip.is_finite() {
+/// The renderer moves a line onto device pixels: one an odd number of pixels wide is centred on
+/// a pixel, an even one between two (epaint's `Stroke::round_center_to_pixel`). This repeats
+/// that rule, so that the selection's outline can be laid exactly on the gridline.
+/// `tests/selection_outline.rs` compares the two as the renderer tessellates them, at several
+/// display scales, so a renderer that changes its rule is noticed.
+fn gridline_span(edge: f32, ppp: f32) -> (f32, f32) {
+    let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
+    let width = ppp;
+    let centre = gridline_centre(edge) * ppp;
+    let odd = width <= 1.0 || (width * 0.5 + 0.25).fract() > 0.5;
+    let centre = if odd { (centre - 0.5).round() + 0.5 } else { centre.round() };
+    // The pixels it covers half of or more: a fainter fringe beside them doesn't count.
+    let first = (centre - width / 2.0).round();
+    let past = (centre + width / 2.0).round().max(first + 1.0);
+    (first / ppp, past / ppp)
+}
+
+/// The selection's outline round `cells`: its left, top, right and bottom sides, on a display of
+/// `ppp` pixels to a point.
+///
+/// Each side lies on the gridline that bounds the cells and reaches outward from it, a whole
+/// number of device pixels wide. So the inside of the outline is exactly the inside of the
+/// cells, no gridline shows inside it, and every edge is sharp at any display scale. That is
+/// where Excel puts its outline (measured on a display at 150%: the gridline's own pixel and
+/// the one outside it, on each side).
+pub fn outline_sides(cells: Rect, ppp: f32) -> [Rect; 4] {
+    let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
+    let (left, top) = (gridline_span(cells.left(), ppp), gridline_span(cells.top(), ppp));
+    let (right, bottom) = (gridline_span(cells.right(), ppp), gridline_span(cells.bottom(), ppp));
+    // A whole number of pixels, and never thinner than the gridline it lies on.
+    let w = ((OUTLINE_W * ppp).round().max(1.0) / ppp).max(left.1 - left.0);
+    let inner = Rect::from_min_max(pos2(left.1, top.1), pos2(right.0, bottom.0));
+    let outer = inner.expand(w);
+    [
+        Rect::from_min_max(outer.min, pos2(inner.left(), outer.bottom())),
+        Rect::from_min_max(outer.min, pos2(outer.right(), inner.top())),
+        Rect::from_min_max(pos2(inner.right(), outer.top()), outer.max),
+        Rect::from_min_max(pos2(outer.left(), inner.bottom()), outer.max),
+    ]
+}
+
+/// The selection's outline round `cells` as it is painted: the sides of [`outline_sides`], cut to
+/// `clip` (a little beyond it).
+///
+/// A side that spans a whole column (20 million points tall) loses its precision in the
+/// tessellator and vanishes; sides that stay near the viewport do not. Sides wholly outside
+/// `clip` are left out.
+pub(crate) fn outline_bands(cells: Rect, ppp: f32, clip: Rect) -> Vec<Rect> {
+    if !cells.is_finite() || !clip.is_finite() {
         return Vec::new();
     }
-    let h = width / 2.0;
-    let clip = clip.expand(width * 2.0);
-    let sides = [
-        Rect::from_min_max(pos2(rect.left() - h, rect.top() - h), pos2(rect.left() + h, rect.bottom() + h)),
-        Rect::from_min_max(pos2(rect.right() - h, rect.top() - h), pos2(rect.right() + h, rect.bottom() + h)),
-        Rect::from_min_max(pos2(rect.left() - h, rect.top() - h), pos2(rect.right() + h, rect.top() + h)),
-        Rect::from_min_max(pos2(rect.left() - h, rect.bottom() - h), pos2(rect.right() + h, rect.bottom() + h)),
-    ];
-    sides.into_iter().map(|s| s.intersect(clip)).filter(|s| s.is_finite() && s.width() > 0.0 && s.height() > 0.0).collect()
+    let clip = clip.expand(OUTLINE_W * 2.0);
+    outline_sides(cells, ppp).into_iter().map(|s| s.intersect(clip)).filter(|s| s.is_finite() && s.width() > 0.0 && s.height() > 0.0).collect()
 }
 
 /// `outline` is where the current area's border is drawn this frame (see `selection_glide`).
@@ -1636,7 +1683,7 @@ pub(crate) fn paint_selection(
         }
     }
     if cur_here {
-        for side in outline_bands(outline.expand(0.5), 2.0, p.clip_rect()) {
+        for side in outline_bands(outline, p.ctx().pixels_per_point(), p.clip_rect()) {
             p.rect_filled(side, 0.0, t.sel_border);
         }
     }
@@ -2705,10 +2752,10 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
     let text_w = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size().x;
     let lines = ed.text.lines().count().max(1) as f32 + if ed.text.ends_with('\n') { 1.0 } else { 0.0 };
-    let w = (text_w + 14.0).max(rect.width()).min(geo.cells.right() - rect.left());
-    let h = (size * 1.3 * lines + 4.0).max(rect.height());
+    // The editor is its cell until the text needs more, and then takes whole cells.
+    let grown = editor_size(geo, sh, cell, rect, size, lines, text_w);
     // Grows to the left on a right-to-left sheet.
-    let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
+    let erect = geo.mirror_rect(Rect::from_min_size(rect.min, grown));
     let fill = match st.fill.pattern {
         PatternType::Solid => st.fill.fg.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::WHITE),
         _ => Color32::WHITE,
@@ -2720,12 +2767,130 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     );
     let clip = ui.clip_rect().intersect(quadrant);
     let painter = ui.painter().with_clip_rect(clip);
-    painter.rect_filled(erect, 0.0, fill);
-    painter.rect_stroke(erect.expand(1.0), 0.0, Stroke::new(2.0, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
+    // The highlight is the selection's own outline and stays on the cell, as in Excel: the editor
+    // is laid over the cells its text needs, and leaves out the sides of the highlight it runs over.
+    let ppp = ui.ctx().pixels_per_point();
+    let [left, top, right, bottom] = outline_sides(rect, ppp);
+    let cover = editor_cover(rect, Rect::from_min_size(rect.min, grown), text_w, geo.rtl, ppp);
+    let green = Tokens::get(ui.ctx()).sel_border;
+    let paint = |r: Rect, colour: Color32| {
+        if r.is_finite() && r.is_positive() {
+            painter.rect_filled(geo.mirror_rect(r), 0.0, colour);
+        }
+    };
+    // Everything inside the top and near sides: the cell, and the selection's own far and bottom
+    // sides, which are drawn again below unless the editor runs over them.
+    paint(Rect::from_min_max(pos2(left.right(), top.bottom()), pos2(right.right(), bottom.bottom())), fill);
+    for cells in &cover.cells {
+        paint(*cells, fill);
+    }
+    paint(left, green);
+    paint(top, green);
+    if !cover.over {
+        paint(right, green);
+    }
+    if !cover.tall {
+        paint(bottom, green);
+    }
     let id = egui::Id::new("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
     child.set_clip_rect(clip);
     crate::formula_bar::editor_widget(app, &mut child, id, font, false, erect.width() - 4.0);
+}
+
+/// The room the in-cell editor keeps beside its text: what its text field leaves clear at its
+/// edges, so the editor takes the next cell just before the text would be cut off.
+const EDITOR_ROOM: f32 = 14.0;
+/// Where the text starts inside the in-cell editor, and the width of the caret after it.
+const EDITOR_TEXT_AT: f32 = 2.0;
+const EDITOR_CARET: f32 = 2.0;
+
+/// How tall the in-cell editor needs to be, for `lines` lines of text in a font of `font`
+/// points, in a cell `cell` points tall.
+///
+/// A cell that shows a line of its font has room to edit one: there the editor is exactly as
+/// tall as the cell, so its highlight stays on the gridlines. More lines, or a row squeezed
+/// shorter than its letters, need what the lines themselves take: two lines of the default font
+/// fit two rows of the default height.
+fn editor_height(font: f32, lines: f32, cell: f32) -> f32 {
+    let one_line_fits = lines <= 1.0 && cell >= font + 2.0;
+    if one_line_fits { cell } else { (font * 1.3 * lines).max(cell) }
+}
+
+/// The in-cell editor's size for the cell at `rect`, whose text is `text_w` points wide and
+/// `lines` lines long in a font of `font` points.
+///
+/// While the text fits, the editor is the cell. Text that needs more is given the cells after
+/// it, a whole column or row at a time, so the editor always ends on a gridline: a cell it
+/// covers is covered entirely, and its contents never show beside the text being typed.
+fn editor_size(geo: &Geo, sh: &Sheet, cell: CellRef, rect: Rect, font: f32, lines: f32, text_w: f32) -> egui::Vec2 {
+    let area = sh.merge_at(cell).unwrap_or_else(|| RangeRef::cell(cell));
+    // A frozen pane cuts the editor off at its edge: there is nothing past it to grow over.
+    let last_col = if area.end.col < geo.fc { geo.fc.saturating_sub(1) } else { MAX_COLS - 1 };
+    let last_row = if area.end.row < geo.fr { geo.fr.saturating_sub(1) } else { MAX_ROWS - 1 };
+    let in_view = vec2(geo.cells.right() - rect.left(), geo.cells.bottom() - rect.top());
+    let w = editor_extent(text_w + EDITOR_ROOM, rect.width(), in_view.x, |n| {
+        let col = area.end.col.checked_add(n).filter(|col| *col <= last_col)?;
+        Some(geo.cell_rect(sh, CellRef::new(cell.row, col)).right() - rect.left())
+    });
+    let h = editor_extent(editor_height(font, lines, rect.height()), rect.height(), in_view.y, |n| {
+        let row = area.end.row.checked_add(n).filter(|row| *row <= last_row)?;
+        Some(geo.cell_rect(sh, CellRef::new(row, cell.col)).bottom() - rect.top())
+    });
+    vec2(w.min(in_view.x), h)
+}
+
+/// The in-cell editor's size along one axis: the cell's `own` while `need` fits in it, and
+/// otherwise out to the far edge of the first following column or row that gives it room.
+/// `far_edge(n)` is the far edge of the `n`th one after the cell, `None` when there is none.
+/// Past `in_view` nothing shows, so the search stops there.
+fn editor_extent(need: f32, own: f32, in_view: f32, far_edge: impl Fn(u32) -> Option<f32>) -> f32 {
+    if !need.is_finite() || need <= own {
+        return own;
+    }
+    // Hidden columns and rows have no width: a long run of them is not searched for ever.
+    (1..=2048).map_while(far_edge).find(|edge| *edge >= need || *edge >= in_view).unwrap_or(need)
+}
+
+/// What the in-cell editor does to what is round its cell, in the grid's logical coordinates.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct EditorCover {
+    /// The cells it has grown over, inside the gridlines that bound them.
+    cells: Vec<Rect>,
+    /// Its text has reached the highlight's far side, which is left out.
+    over: bool,
+    /// It is taller than its cell: the highlight's bottom side is left out.
+    tall: bool,
+}
+
+/// What an in-cell editor of the rectangle `editor` covers round its cell at `cell`.
+///
+/// The highlight's far side goes only once the text (`text_w` points wide) has reached it, and
+/// its bottom side whenever the editor is taller than the cell. The top and near sides always
+/// stay. On a right-to-left sheet the text starts at the editor's far edge, so the line it has
+/// to reach is the width of the cells it has grown over away.
+fn editor_cover(cell: Rect, editor: Rect, text_w: f32, rtl: bool, ppp: f32) -> EditorCover {
+    // A rectangle with something in it, or nothing.
+    let solid = |min: Pos2, max: Pos2| {
+        let rect = Rect::from_min_max(min, max);
+        (rect.is_finite() && rect.is_positive()).then_some(rect)
+    };
+    let [left, top, right, bottom] = outline_sides(cell, ppp);
+    // The inside of the cell, between its gridlines.
+    let inner = Rect::from_min_max(pos2(left.right(), top.bottom()), pos2(right.left(), bottom.top()));
+    let wide = editor.right() > cell.right() + 0.5;
+    let tall = editor.bottom() > cell.bottom() + 0.5;
+    // The gridlines that bound the cells it has grown over stay: it stops short of them.
+    let (far, below) = (gridline_span(editor.right(), ppp).0, gridline_span(editor.bottom(), ppp).0);
+    let mut cells = Vec::new();
+    if wide {
+        cells.extend(solid(pos2(inner.right(), inner.top()), pos2(far, below)));
+    }
+    if tall {
+        cells.extend(solid(pos2(inner.left(), inner.bottom()), pos2(inner.right(), below)));
+    }
+    let to_the_line = if rtl { editor.right() - inner.right() } else { inner.right() - cell.left() };
+    EditorCover { cells, over: wide && EDITOR_TEXT_AT + text_w + EDITOR_CARET >= to_the_line, tall }
 }
 
 /// Test the popup itself, not whether the pointer is over any part of the app.
@@ -3621,6 +3786,200 @@ mod pane_tests {
 }
 
 #[cfg(test)]
+mod editor_tests {
+    use super::*;
+    use gridcraft_engine::model::LineInfo;
+
+    const C4: CellRef = CellRef { row: 3, col: 2 };
+
+    /// A new sheet and its geometry, with nothing scrolled.
+    fn sheet(change: impl FnOnce(&mut Sheet)) -> (Sheet, Geo) {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut sh = session.active().unwrap().wb.active().unwrap().clone();
+        change(&mut sh);
+        let geo = Geo::new(&sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 600.0)), egui::Vec2::ZERO);
+        (sh, geo)
+    }
+
+    #[test]
+    fn a_one_line_editor_is_as_tall_as_its_cell() {
+        assert_eq!(editor_height(14.67, 1.0, 20.0), 20.0);
+        assert_eq!(editor_height(14.67, 1.0, 64.0), 64.0, "a tall cell keeps its height");
+        assert_eq!(editor_height(15.0, 1.0, 19.5), 19.5, "a row a shade under the default still holds its line");
+        // More lines than one, or a row too short for its font, need what the lines take.
+        assert!(editor_height(14.67, 2.0, 20.0) > 38.0);
+        assert!(editor_height(24.0, 1.0, 20.0) > 30.0);
+        assert_eq!(editor_height(14.67, 3.0, 200.0), 200.0);
+        // On screen the default is an 11.73-point font in a 16-point row: a row a line.
+        for lines in 2..12 {
+            let need = editor_height(11.73, lines as f32, 16.0);
+            assert!(need > 16.0 * (lines - 1) as f32 && need <= 16.0 * lines as f32, "{lines} lines need {need}");
+        }
+        // Numbers that make no sense give a number.
+        for (font, lines, cell) in
+            [(f32::NAN, 1.0, 20.0), (14.0, f32::NAN, 20.0), (14.0, 1.0, f32::NAN), (-5.0, -1.0, -1.0), (f32::INFINITY, 1.0, 20.0)]
+        {
+            let _ = editor_height(font, lines, cell);
+        }
+    }
+
+    #[test]
+    fn the_editor_is_its_cell_until_the_text_needs_more_and_then_takes_whole_cells() {
+        let (sh, geo) = sheet(|_| {});
+        let at = geo.cell_rect(&sh, C4);
+        let far = |col: u32| geo.cell_rect(&sh, CellRef::new(3, col)).right() - at.left();
+        let size = |text_w: f32, lines: f32| editor_size(&geo, &sh, C4, at, 12.0, lines, text_w);
+        assert_eq!(size(0.0, 1.0), at.size());
+        assert_eq!(size(at.width() - EDITOR_ROOM, 1.0), at.size(), "text that just fits");
+        assert_eq!(size(at.width() - EDITOR_ROOM + 1.0, 1.0), vec2(far(3), at.height()), "a point more takes the whole of D4");
+        assert_eq!(size(far(3) - EDITOR_ROOM, 1.0).x, far(3));
+        assert_eq!(size(far(3), 1.0).x, far(4), "and then the whole of E4");
+        assert_eq!(size(far(5) - 20.0, 1.0).x, far(5));
+        // Downwards too: three lines need more than the row, and get whole rows.
+        let below = |row: u32| geo.cell_rect(&sh, CellRef::new(row, 2)).bottom() - at.top();
+        let tall = size(0.0, 3.0);
+        let need = editor_height(12.0, 3.0, at.height());
+        assert_eq!(tall.x, at.width());
+        let rows = (4..40).find(|row| below(*row) >= need).unwrap();
+        assert_eq!(tall.y, below(rows), "the first gridline that gives the lines room");
+        assert!(below(rows - 1) < need);
+        assert_eq!(rows, 5, "three lines take C4, C5 and C6");
+        // It stops where the grid does.
+        assert_eq!(size(1.0e9, 1.0).x, geo.cells.right() - at.left());
+        // Numbers that make no sense leave the editor a size.
+        for (font, lines, text_w) in [(f32::NAN, 1.0, 10.0), (12.0, f32::NAN, 10.0), (12.0, 1.0, f32::NAN), (12.0, 1.0, f32::INFINITY)] {
+            let size = editor_size(&geo, &sh, C4, at, font, lines, text_w);
+            assert!(size.x.is_finite() && size.y.is_finite(), "{font} {lines} {text_w}: {size:?}");
+        }
+        assert_eq!(size(-50.0, -3.0), at.size());
+    }
+
+    #[test]
+    fn the_editor_grows_past_a_hidden_column_over_a_merged_cell_and_not_out_of_a_frozen_pane() {
+        // D is hidden: the next gridline is E's.
+        let (sh, geo) = sheet(|sh| {
+            sh.cols.insert(3, LineInfo { hidden: true, ..Default::default() });
+        });
+        let at = geo.cell_rect(&sh, C4);
+        let e4 = geo.cell_rect(&sh, CellRef::new(3, 4));
+        assert_eq!(geo.cell_rect(&sh, CellRef::new(3, 3)).width(), 0.0);
+        assert_eq!(editor_size(&geo, &sh, C4, at, 12.0, 1.0, at.width()).x, e4.right() - at.left());
+        // C4:D5 is merged: the editor starts as all of it, and grows from its far edges.
+        let merged = RangeRef::new(C4, CellRef::new(4, 3));
+        let (sh, geo) = sheet(|sh| sh.merges.push(merged));
+        let at = geo.range_rect(&sh, merged);
+        assert_eq!(editor_size(&geo, &sh, C4, at, 12.0, 1.0, 10.0), at.size());
+        let e4 = geo.cell_rect(&sh, CellRef::new(3, 4));
+        assert_eq!(editor_size(&geo, &sh, C4, at, 12.0, 1.0, at.width()).x, e4.right() - at.left());
+        // Columns A to C are frozen: C4 has no cell in its pane to grow over, so its editor is
+        // only as wide as its text needs, and the pane's edge cuts it off.
+        let (sh, geo) = sheet(|sh| sh.freeze = Some((0, 3)));
+        let at = geo.cell_rect(&sh, C4);
+        assert_eq!(editor_size(&geo, &sh, C4, at, 12.0, 1.0, at.width()).x, at.width() + EDITOR_ROOM);
+        // B4, in the same pane, still has C4.
+        let b4 = geo.cell_rect(&sh, CellRef::new(3, 1));
+        assert_eq!(editor_size(&geo, &sh, CellRef::new(3, 1), b4, 12.0, 1.0, b4.width()).x, at.right() - b4.left());
+    }
+
+    #[test]
+    fn the_highlight_loses_only_the_sides_the_editor_runs_over() {
+        let cell = Rect::from_min_max(pos2(100.0, 50.0), pos2(160.0, 66.0));
+        let cover = |editor: Rect, text_w: f32, rtl: bool| editor_cover(cell, editor, text_w, rtl, 1.0);
+        assert_eq!(cover(cell, 30.0, false), EditorCover::default(), "an editor the size of its cell covers nothing else");
+        // Grown over the next column, with the text still short of the line between them.
+        let grown = Rect::from_min_max(cell.min, pos2(220.0, 66.0));
+        let short = cover(grown, 50.0, false);
+        assert_eq!(short.cells, [Rect::from_min_max(pos2(159.0, 50.0), pos2(219.0, 65.0))], "the gridline between them and the next cell");
+        assert!(!short.over && !short.tall, "the line stays until the text reaches it");
+        // The text reaches the line: it goes. The bottom line stays.
+        let over = cover(grown, 56.0, false);
+        assert_eq!(over.cells, short.cells);
+        assert!(over.over && !over.tall);
+        // Taller than the cell: the bottom line goes, and the cells below are covered up to the
+        // gridline at the cell's right, which stays.
+        let down = cover(Rect::from_min_max(cell.min, pos2(160.0, 98.0)), 10.0, false);
+        assert_eq!(down.cells, [Rect::from_min_max(pos2(100.0, 65.0), pos2(159.0, 97.0))]);
+        assert!(down.tall && !down.over);
+        // Both ways: both lines.
+        let both = cover(Rect::from_min_max(cell.min, pos2(220.0, 98.0)), 200.0, false);
+        assert_eq!(both.cells.len(), 2);
+        assert!(both.over && both.tall);
+        // Right to left, the text starts at the editor's far edge: the line is the grown part away.
+        assert!(!cover(grown, 50.0, true).over);
+        assert!(cover(grown, 57.0, true).over);
+        let far = Rect::from_min_max(cell.min, pos2(400.0, 66.0));
+        assert!(!cover(far, 57.0, true).over, "text that starts far off has further to come");
+        assert!(cover(far, 57.0, false).over);
+        // Numbers that make no sense paint nothing.
+        for (editor, text_w) in [
+            (Rect::from_min_max(cell.min, pos2(f32::NAN, f32::NAN)), 60.0),
+            (Rect::from_min_max(cell.min, pos2(f32::INFINITY, f32::INFINITY)), 60.0),
+            (grown, f32::NAN),
+            (Rect::from_min_max(cell.min, pos2(160.6, 66.0)), 600.0),
+        ] {
+            let cover = cover(editor, text_w, false);
+            assert!(cover.cells.iter().all(|r| r.is_finite() && r.is_positive()), "{editor:?}: {cover:?}");
+        }
+    }
+
+    #[test]
+    fn a_gridline_is_found_where_the_renderer_puts_it() {
+        // A pixel to a point: the point before the edge. Two: the same point, two pixels.
+        assert_eq!(gridline_span(100.0, 1.0), (99.0, 100.0));
+        assert_eq!(gridline_span(100.3, 1.0), (99.0, 100.0), "the grid rounds the edge to a whole point first");
+        assert_eq!(gridline_span(100.0, 2.0), (99.0, 100.0));
+        // One and a half: two pixels, wherever the nearest pixel boundary falls.
+        for edge in [100.0, 101.0, 102.0, 103.0] {
+            let (first, past) = gridline_span(edge, 1.5);
+            assert_eq!(((past - first) * 1.5).round(), 2.0, "{edge}");
+            assert!(first <= edge - 0.5 && edge - 0.5 <= past, "{edge}: round the line's own centre");
+            assert!((first * 1.5 - (first * 1.5).round()).abs() < 1e-3, "{edge}: on whole pixels");
+        }
+        // One and a quarter: one pixel, the one its centre falls in.
+        let (first, past) = gridline_span(100.0, 1.25);
+        assert_eq!(((past - first) * 1.25).round(), 1.0);
+        // A scale that makes no sense is read as one.
+        for ppp in [0.0, -2.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(gridline_span(100.0, ppp), (99.0, 100.0), "{ppp}");
+        }
+    }
+
+    #[test]
+    fn the_outline_covers_each_gridline_and_reaches_outward() {
+        let cells = Rect::from_min_max(pos2(100.0, 50.0), pos2(160.0, 66.0));
+        // At a pixel a point: each gridline's own pixel and the one outside it.
+        let [left, top, right, bottom] = outline_sides(cells, 1.0);
+        assert_eq!((left.left(), left.right()), (98.0, 100.0));
+        assert_eq!((top.top(), top.bottom()), (48.0, 50.0));
+        assert_eq!((right.left(), right.right()), (159.0, 161.0));
+        assert_eq!((bottom.top(), bottom.bottom()), (65.0, 67.0));
+        // The sides meet at the corners.
+        assert_eq!((top.left(), top.right()), (98.0, 161.0));
+        assert_eq!((left.top(), left.bottom()), (48.0, 67.0));
+        // A whole number of pixels at every scale, on its gridline, never thinner than it.
+        for ppp in [1.0_f32, 1.25, 1.5, 1.75, 2.0, 3.0] {
+            let [left, top, right, bottom] = outline_sides(cells, ppp);
+            let (px, grid) = (left.width() * ppp, gridline_span(cells.left(), ppp));
+            assert!((px - px.round()).abs() < 1e-3 && px >= 1.0, "{ppp}: {px} pixels");
+            assert!(px + 1e-3 >= (grid.1 - grid.0) * ppp, "{ppp}: covers its gridline");
+            assert_eq!(left.right(), grid.1, "{ppp}: its inner edge is the gridline's");
+            assert_eq!(right.left(), gridline_span(cells.right(), ppp).0, "{ppp}");
+            assert_eq!(top.bottom(), gridline_span(cells.top(), ppp).1, "{ppp}");
+            assert_eq!(bottom.top(), gridline_span(cells.bottom(), ppp).0, "{ppp}");
+            for side in [left, top, right, bottom] {
+                let weight = side.width().min(side.height());
+                assert!((weight - left.width()).abs() < 1e-3, "{ppp}: every side the same weight ({weight})");
+            }
+        }
+        // Numbers that make no sense give no panic, and nothing that would be painted.
+        for (cells, ppp) in [(Rect::NAN, 1.0), (cells, f32::NAN), (Rect::from_min_max(pos2(0.0, 0.0), pos2(f32::INFINITY, 10.0)), 1.5)] {
+            let _ = outline_sides(cells, ppp).map(|side| side.is_finite() && side.is_positive());
+        }
+    }
+}
+
+#[cfg(test)]
 mod outline_band_tests {
     use super::*;
 
@@ -3628,18 +3987,25 @@ mod outline_band_tests {
     fn whole_column_outline_keeps_left_and_right_sides_near_viewport() {
         let clip = Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0));
         let col = Rect::from_min_max(pos2(100.0, 40.0), pos2(180.0, 20_971_540.0));
-        let sides = outline_bands(col, 2.0, clip);
-        // Left, right and top (in view); the bottom is 20 million points away.
-        assert_eq!(sides.len(), 3);
-        assert!(sides.iter().all(|s| s.bottom() <= clip.bottom() + 4.0 + f32::EPSILON));
-        assert!(sides.iter().any(|s| s.left() < 100.0 && s.right() > 100.0 && s.height() > 500.0));
-        assert!(sides.iter().any(|s| s.left() < 180.0 && s.right() > 180.0 && s.height() > 500.0));
+        for ppp in [1.0, 1.25, 1.5, 2.0] {
+            let sides = outline_bands(col, ppp, clip);
+            // Left, right and top (in view); the bottom is 20 million points away.
+            assert_eq!(sides.len(), 3, "{ppp}");
+            assert!(sides.iter().all(|s| s.bottom() <= clip.bottom() + 4.0 + f32::EPSILON), "{ppp}");
+            // Each lies on the gridline at its edge and reaches outward from it.
+            assert!(sides.iter().any(|s| s.right() <= 100.0 && s.left() >= 96.0 && s.height() > 500.0), "{ppp}: the left side");
+            assert!(sides.iter().any(|s| s.left() >= 178.0 && s.right() <= 183.0 && s.height() > 500.0), "{ppp}: the right side");
+        }
     }
 
     #[test]
     fn outline_outside_the_view_and_non_finite_draw_nothing() {
         let clip = Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0));
-        assert!(outline_bands(Rect::from_min_max(pos2(900.0, 0.0), pos2(950.0, 20.0)), 2.0, clip).is_empty());
-        assert!(outline_bands(Rect::from_min_max(pos2(f32::NAN, 0.0), pos2(1.0, 1.0)), 2.0, clip).is_empty());
+        assert!(outline_bands(Rect::from_min_max(pos2(900.0, 0.0), pos2(950.0, 20.0)), 1.0, clip).is_empty());
+        assert!(outline_bands(Rect::from_min_max(pos2(f32::NAN, 0.0), pos2(1.0, 1.0)), 1.0, clip).is_empty());
+        assert!(outline_bands(Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), 1.0, Rect::NAN).is_empty());
+        // In view, it is the four sides of `outline_sides`, as they are.
+        let cells = Rect::from_min_max(pos2(100.0, 40.0), pos2(180.0, 60.0));
+        assert_eq!(outline_bands(cells, 1.5, clip), outline_sides(cells, 1.5).to_vec());
     }
 }
