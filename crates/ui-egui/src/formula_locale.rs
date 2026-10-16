@@ -24,7 +24,7 @@ pub(crate) fn canonical(
     // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text).
     let body = text;
     if body.starts_with('=')
-        || ((body.starts_with('+') || body.starts_with('-')) && body.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
+        || ((body.starts_with('+') || body.starts_with('-')) && body.chars().nth(1).is_some_and(|c| c.is_alphabetic() || c == '('))
     {
         let known = |name: &str| wb.name(name, sheet).is_some() || wb.table(name).is_some();
         // Match the engine's existing convenience for missing closing parentheses.
@@ -177,6 +177,7 @@ pub(crate) fn localize_error(msg: &str, lang: crate::i18n::Language) -> String {
         "too many arguments" => "İşlev için çok fazla bağımsız değişken girildi".into(),
         "invalid 3-D reference" => "Geçersiz 3B (çoklu çalışma sayfası) başvurusu".into(),
         "formula is nested too deeply" => "Formül çok fazla iç içe yerleştirilmiş (derinlik sınırı aşıldı)".into(),
+        "formula is longer than 8192 characters" => "Formül 8192 karakterden uzun olamaz".into(),
         "array constants may only contain constants" => "Dizi sabitleri yalnızca sabit değer içerebilir".into(),
         "array rows must have the same length" => "Dizi satırları aynı sayıda elemana sahip olmalıdır".into(),
         _ => lang.tr(msg).to_string(),
