@@ -581,8 +581,9 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
 /// Draws the modal warning/error message; OK, Enter or Esc clears it and restores editor focus when an edit exists.
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((title, msg)) = app.message.clone() else { return };
-    let title = app.ui.language.tr(&title).to_owned();
-    let msg = app.ui.language.tr_error(&msg);
+    let lang = app.ui.language;
+    let title = lang.tr(&title).to_owned();
+    let msg = lang.tr_error(&msg);
     let mut close = false;
     egui::Modal::new(egui::Id::unique("message_box")).show(ctx, |ui| {
         ui.set_width(380.0);
@@ -592,13 +593,15 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
             ui.painter().circle_filled(r.center(), 16.0, t.warning);
             ui.painter().text(r.center(), Align2::CENTER_CENTER, "!", theme::ui_bold(20.0), t.on_warning);
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new(title).strong());
-                ui.add(egui::Label::new(msg).wrap());
+                ui.label(egui::RichText::new(lang.tr(&title)).strong());
+                ui.add(egui::Label::new(lang.tr(&msg)).wrap());
             });
         });
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("  OK  ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            if ui.button(format!("  {}  ", lang.tr("OK"))).clicked()
+                || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape))
+            {
                 close = true;
             }
         });
