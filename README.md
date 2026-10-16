@@ -53,6 +53,7 @@
   <a href="#why-gridcraft">Why GridCraft</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#for-agents-mcp-cli-and-the-control-channel">For agents</a> ·
+  <a href="#python-integration">Python Integration</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#roadmap">Roadmap</a> ·
   <a href="#the-crafting-apps">The Crafting Apps</a> ·
@@ -174,6 +175,29 @@ The MCP server offers tools such as `read_range`, `write_range`, `set_cell`, `ev
 (which reaches every one of GridCraft's commands). The desktop app's control channel adds real
 pointer and keyboard input, dialogs and screenshots. See [`docs/mcp.md`](docs/mcp.md),
 [`docs/cli.md`](docs/cli.md) and [`docs/control-protocol.md`](docs/control-protocol.md).
+
+## Python Integration
+
+[`libs/mcp-python`](libs/mcp-python) is a Python client for the GridCraft control channel, so
+scripts, notebooks and agents can drive a running workbook from Python.
+
+```sh
+pip install -e libs/mcp-python
+```
+
+```python
+from gridcraft_mcp import GridCraftClient
+
+with GridCraftClient(port=7979) as client:
+    client.new_workbook()
+    client.set_cell("A1", "Product")
+    client.set_cell("B1", 100)
+    print(client.read_range("A1:B1"))
+```
+
+See [`libs/mcp-python/docs/usage_examples.md`](libs/mcp-python/docs/usage_examples.md) for the
+full API, [`libs/mcp-python/docs/testing.md`](libs/mcp-python/docs/testing.md) for the test suite
+and [`libs/mcp-python/docs/development.md`](libs/mcp-python/docs/development.md) for contributing.
 
 ## Architecture
 
