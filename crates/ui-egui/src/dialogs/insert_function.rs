@@ -57,12 +57,12 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
     d.values.insert("category".into(), json!(category));
     let locale = language.formula_locale();
     // The names and descriptions searched are the ones shown, so in the interface language.
-    let q = d.search.trim().to_lowercase();
+    let q = locale.lowercase(d.search.trim());
     let matches = |f: &lib::FnEntry| {
         q.is_empty()
-            || locale.function_name(&f.name).to_lowercase().contains(&q)
+            || locale.lowercase(locale.function_name(&f.name)).contains(&q)
             || f.name.to_lowercase().contains(&q)
-            || language.function_description(&f.description).unwrap_or(&f.description).to_lowercase().contains(&q)
+            || locale.lowercase(language.function_description(&f.description).unwrap_or(&f.description)).contains(&q)
             || f.description.to_lowercase().contains(&q)
     };
     let hits: Vec<&lib::FnEntry> = if category == MOST_RECENTLY_USED {
