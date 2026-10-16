@@ -72,7 +72,12 @@ pub(crate) fn fit_trendline(t: &Trendline, pts: &[(f64, f64)]) -> Option<TrendFi
     let mut aty = vec![0.0f64; m];
     for &(x, y) in &data {
         let u = (x - center) / scale;
-        let pows: Vec<f64> = (first..=d).map(|k| u.powi(k as i32)).collect();
+        // `d` is at most 6, so the powers `first..=d` always fit the array (no allocation per point).
+        let mut buf = [0.0f64; 7];
+        for (slot, k) in buf.iter_mut().zip(first..=d) {
+            *slot = u.powi(k as i32);
+        }
+        let pows = buf.get(..m)?;
         for (i, pi) in pows.iter().enumerate() {
             if let Some(v) = aty.get_mut(i) {
                 *v += pi * (y - b0);
@@ -258,10 +263,41 @@ fn trim_zeros(s: &str) -> String {
 
 /// Moving average of `period` consecutive points in plotted order: point `i` (from
 /// `period - 1`) is `(xᵢ, mean(yᵢ₋ₚ₊₁..=yᵢ))`. Empty when there are fewer points than `period`.
+///
+/// Linear in the number of points: the points are cut into blocks of `period`, and a window is
+/// the tail of one block plus the head of the next, taken from running sums that only ever add
+/// (a running sum that also subtracts would lose small values after a huge one passed through).
 pub(crate) fn moving_average(pts: &[(f64, f64)], period: u32) -> Vec<(f64, f64)> {
     let p = period.clamp(2, 255) as usize;
     let pts: Vec<(f64, f64)> = pts.iter().copied().filter(|(x, y)| x.is_finite() && y.is_finite()).collect();
-    pts.windows(p).filter_map(|w| w.last().map(|(x, _)| (*x, w.iter().map(|q| q.1).sum::<f64>() / p as f64))).collect()
+    let n = pts.len();
+    if n < p {
+        return vec![];
+    }
+    // `head[i]`: sum of the block's points up to and including `i`; `tail[i]`: from `i` to the block's end.
+    let mut head = vec![0.0f64; n];
+    let mut tail = vec![0.0f64; n];
+    for (b, block) in pts.chunks(p).enumerate() {
+        let (mut h, mut t) = (0.0f64, 0.0f64);
+        for k in 0..block.len() {
+            h += block.get(k).map_or(0.0, |q| q.1);
+            if let Some(v) = head.get_mut(b * p + k) {
+                *v = h;
+            }
+            let r = block.len() - 1 - k;
+            t += block.get(r).map_or(0.0, |q| q.1);
+            if let Some(v) = tail.get_mut(b * p + r) {
+                *v = t;
+            }
+        }
+    }
+    (p - 1..n)
+        .filter_map(|i| {
+            let s = i + 1 - p;
+            let sum = tail.get(s)? + if s.is_multiple_of(p) { 0.0 } else { *head.get(i)? };
+            Some((pts.get(i)?.0, sum / p as f64))
+        })
+        .collect()
 }
 
 /// Excel's automatic trendline name for the legend, e.g. `Linear (Sales)`.
@@ -275,4 +311,169 @@ pub(crate) fn auto_name(kind: TrendlineKind, series: &str) -> String {
         TrendlineKind::MovingAverage(p) => format!("{} per. Mov. Avg.", p.clamp(2, 255)),
     };
     format!("{k} ({series})")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// xorshift64 for repeatable pseudo-random data.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn unit(&mut self) -> f64 {
+            (self.next() % 1_000_000) as f64 / 1_000_000.0 - 0.5
+        }
+    }
+
+    /// The window-by-window moving average this module used to compute.
+    fn moving_average_naive(pts: &[(f64, f64)], period: u32) -> Vec<(f64, f64)> {
+        let p = period.clamp(2, 255) as usize;
+        let pts: Vec<(f64, f64)> = pts.iter().copied().filter(|(x, y)| x.is_finite() && y.is_finite()).collect();
+        pts.windows(p).filter_map(|w| w.last().map(|(x, _)| (*x, w.iter().map(|q| q.1).sum::<f64>() / p as f64))).collect()
+    }
+
+    #[test]
+    fn linear_moving_average_matches_the_window_sums() {
+        let mut r = Rng(0x9E37_79B9_7F4A_7C15);
+        for case in 0..60 {
+            let n = (r.next() % 700) as usize;
+            let pts: Vec<(f64, f64)> = (0..n)
+                .map(|i| {
+                    let y = match case % 5 {
+                        0 => r.unit() * 100.0,
+                        1 => 1e9 + r.unit(),
+                        // A huge value passing through must not leave rounding residue behind.
+                        2 => {
+                            if r.next().is_multiple_of(50) {
+                                1e300 * r.unit().signum()
+                            } else {
+                                r.unit()
+                            }
+                        }
+                        3 => {
+                            if i % 2 == 0 {
+                                1e15
+                            } else {
+                                -1e15 + r.unit()
+                            }
+                        }
+                        _ => {
+                            if r.next().is_multiple_of(9) {
+                                f64::NAN
+                            } else {
+                                r.unit() * 1e-3
+                            }
+                        }
+                    };
+                    (i as f64, y)
+                })
+                .collect();
+            for period in [0, 2, 3, 7, 50, 255, 400] {
+                let fast = moving_average(&pts, period);
+                let slow = moving_average_naive(&pts, period);
+                assert_eq!(fast.len(), slow.len(), "case {case} period {period}");
+                let p = period.clamp(2, 255) as usize;
+                let finite: Vec<(f64, f64)> = pts.iter().copied().filter(|(x, y)| x.is_finite() && y.is_finite()).collect();
+                for (i, ((fx, fy), (sx, sy))) in fast.iter().zip(&slow).enumerate() {
+                    assert_eq!(fx, sx);
+                    let mass: f64 = finite.iter().skip(i).take(p).map(|q| q.1.abs()).sum::<f64>() / p as f64;
+                    assert!((fy - sy).abs() <= 1e-12 * mass, "case {case} period {period} point {i}: {fy} vs {sy}");
+                }
+            }
+        }
+    }
+
+    /// The trendline fit as it was written with a `Vec` of powers per data point.
+    fn fit_reference(t: &Trendline, pts: &[(f64, f64)]) -> Option<TrendFit> {
+        let kind = t.kind;
+        let d = degree(kind)?;
+        let data: Vec<(f64, f64)> = pts
+            .iter()
+            .filter(|(x, y)| x.is_finite() && y.is_finite() && (!log_x(kind) || *x > 0.0) && (!log_y(kind) || *y > 0.0))
+            .map(|&(x, y)| (if log_x(kind) { x.ln() } else { x }, if log_y(kind) { y.ln() } else { y }))
+            .collect();
+        if data.len() < 2 || data.len() <= d {
+            return None;
+        }
+        let fixed = match kind {
+            TrendlineKind::Linear | TrendlineKind::Polynomial(_) => t.intercept,
+            TrendlineKind::Exponential => t.intercept.filter(|b| *b > 0.0).map(f64::ln),
+            _ => None,
+        }
+        .filter(|b| b.is_finite());
+        let n = data.len() as f64;
+        let center = if fixed.is_some() { 0.0 } else { data.iter().map(|p| p.0).sum::<f64>() / n };
+        let scale = data.iter().map(|p| (p.0 - center).abs()).fold(0.0f64, f64::max);
+        if !(scale.is_finite() && scale > 0.0) {
+            return None;
+        }
+        let first = usize::from(fixed.is_some());
+        let b0 = fixed.unwrap_or(0.0);
+        let m = d + 1 - first;
+        let mut ata = vec![vec![0.0f64; m]; m];
+        let mut aty = vec![0.0f64; m];
+        for &(x, y) in &data {
+            let u = (x - center) / scale;
+            let pows: Vec<f64> = (first..=d).map(|k| u.powi(k as i32)).collect();
+            for (i, pi) in pows.iter().enumerate() {
+                aty[i] += pi * (y - b0);
+                for (j, pj) in pows.iter().enumerate() {
+                    ata[i][j] += pi * pj;
+                }
+            }
+        }
+        let sol = solve(ata, aty)?;
+        let mut a = vec![b0; d + 1];
+        for (k, v) in sol.into_iter().enumerate() {
+            a[k + first] = v;
+        }
+        let coef = expand(&a, center, scale)?;
+        let fit = TrendFit { kind, coef, center, scale, a, r2: None };
+        let mean = data.iter().map(|p| p.1).sum::<f64>() / n;
+        let (mut ss_res, mut ss_tot) = (0.0f64, 0.0f64);
+        for &(x, y) in &data {
+            ss_res += (y - fit.poly(x)).powi(2);
+            ss_tot += if fixed.is_some() { (y - b0).powi(2) } else { (y - mean).powi(2) };
+        }
+        let r2 = (ss_tot > 0.0 && ss_tot.is_finite() && ss_res.is_finite()).then(|| 1.0 - ss_res / ss_tot);
+        Some(TrendFit { r2, ..fit })
+    }
+
+    #[test]
+    fn fit_without_a_vec_per_point_is_bit_identical() {
+        let mut r = Rng(0x1234_5678_9ABC_DEF1);
+        let kinds = [
+            TrendlineKind::Linear,
+            TrendlineKind::Exponential,
+            TrendlineKind::Logarithmic,
+            TrendlineKind::Power,
+            TrendlineKind::Polynomial(2),
+            TrendlineKind::Polynomial(3),
+            TrendlineKind::Polynomial(6),
+            TrendlineKind::MovingAverage(3),
+        ];
+        for case in 0..40 {
+            let n = 2 + (r.next() % 60) as usize;
+            let pts: Vec<(f64, f64)> = (0..n)
+                .map(|i| {
+                    let x = i as f64 * (1.0 + r.unit()) + 1.0;
+                    let y = if case % 4 == 0 { f64::NAN } else { (r.unit() + 0.6) * 10f64.powi((case % 7) - 2) };
+                    (x, if case % 4 == 0 && i % 3 != 0 { r.unit() + 1.0 } else { y })
+                })
+                .collect();
+            for kind in kinds {
+                for intercept in [None, Some(0.5), Some(-1.0)] {
+                    let t = Trendline { kind, intercept, ..Trendline::default() };
+                    assert_eq!(fit_trendline(&t, &pts), fit_reference(&t, &pts), "case {case} {kind:?} {intercept:?}");
+                }
+            }
+        }
+    }
 }

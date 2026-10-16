@@ -1,12 +1,13 @@
 //! Chart layout: title, legend, axes and every chart kind, drawn into [`Prim`]s.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::f32::consts::{PI, TAU};
 
 use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
-use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
+use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, points_per_series, series_color};
 use crate::trend::{auto_name, fit_trendline, moving_average};
 use crate::{ChartData, HAlign, Measure, Prim, Rgba, SeriesData, VAlign};
 
@@ -30,6 +31,8 @@ const MAX_LINE_PTS: usize = 2000;
 const MAX_MARKERS: usize = 5000;
 /// Data labels are skipped when a series has more points than this.
 const MAX_LABELS: usize = 200;
+/// Columns and bars narrower than this (in pixels) are merged per pixel column into one rectangle.
+const MIN_BAR_PX: f32 = 0.25;
 
 #[derive(Clone, Copy, Debug)]
 struct Bx {
@@ -188,7 +191,7 @@ fn sanitize_vals(v: &[Option<f64>]) -> Vec<Option<f64>> {
     v.iter().take(MAX_POINTS).map(|x| x.filter(|n| n.is_finite()).map(clean)).collect()
 }
 
-fn sanitize(d: &ChartData) -> ChartData {
+pub(crate) fn sanitize(d: &ChartData) -> ChartData {
     ChartData {
         palette: d.palette.iter().take(MAX_POINTS).copied().collect(),
         categories: d.categories.iter().take(MAX_POINTS).cloned().collect(),
@@ -212,6 +215,54 @@ fn sanitize(d: &ChartData) -> ChartData {
     }
 }
 
+/// Whether `v` survives `sanitize_vals` unchanged.
+fn is_clean(v: &Option<f64>) -> bool {
+    v.is_none_or(|n| n.is_finite() && clean(n) == n)
+}
+
+/// Whether [`sanitize`] and [`apply_budget`] would change `d`.
+fn needs_sanitizing(d: &ChartData) -> bool {
+    let cap = points_per_series(d.series.len());
+    let long = |n: usize| n > cap;
+    let mut trendlines = 0usize;
+    d.palette.len() > MAX_POINTS
+        || long(d.categories.len())
+        || d.series.len() > MAX_SERIES
+        || d.series.iter().any(|s| {
+            trendlines += s.trendlines.len();
+            long(s.values.len())
+                || !s.values.iter().all(is_clean)
+                || s.x.as_ref().is_some_and(|x| long(x.len()) || !x.iter().all(is_clean))
+                || s.sizes.as_ref().is_some_and(|x| long(x.len()) || !x.iter().all(is_clean))
+                || s.trendlines.len() > MAX_TRENDLINES
+        })
+        || trendlines > MAX_TRENDLINES
+}
+
+/// Enforces the chart's budget of points (`MAX_TOTAL_POINTS` = series x points: every series and
+/// the category list keep their first `MAX_TOTAL_POINTS / series` points) and of trendlines
+/// (`MAX_TRENDLINES` per chart, in series order).
+fn apply_budget(mut d: ChartData) -> ChartData {
+    let cap = points_per_series(d.series.len());
+    d.categories.truncate(cap);
+    let mut trendlines = MAX_TRENDLINES;
+    for s in &mut d.series {
+        s.values.truncate(cap);
+        for v in [&mut s.x, &mut s.sizes].into_iter().flatten() {
+            v.truncate(cap);
+        }
+        s.trendlines.truncate(trendlines);
+        trendlines = trendlines.saturating_sub(s.trendlines.len());
+    }
+    d
+}
+
+/// The data `render` draws: `d` itself when it is already clean and within budget (the usual
+/// case: no copy), else a cleaned, truncated copy.
+pub(crate) fn sanitized(d: &ChartData) -> Cow<'_, ChartData> {
+    if needs_sanitizing(d) { Cow::Owned(apply_budget(sanitize(d))) } else { Cow::Borrowed(d) }
+}
+
 fn chart_title(chart: &Chart, data: &ChartData) -> Option<String> {
     match &chart.title {
         Some(t) => Some(t.trim().to_string()).filter(|t| !t.is_empty()),
@@ -225,7 +276,7 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
     if !(w.is_finite() && h.is_finite()) || w < 1.0 || h < 1.0 || w > 1e7 || h > 1e7 {
         return vec![];
     }
-    let data = sanitize(data);
+    let data = sanitized(data);
     let mut ctx = Ctx { out: Vec::new(), m };
     ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
@@ -828,6 +879,36 @@ fn is_line(f: Fam) -> bool {
     matches!(f, Fam::Line | Fam::LineStack)
 }
 
+/// Bars that fall into one pixel column, merged: extent along the category axis (`a0..=a1`, the
+/// bars' start positions) and along the value axis (`lo..hi`).
+struct BarRun {
+    bucket: f32,
+    a0: f32,
+    a1: f32,
+    lo: f32,
+    hi: f32,
+}
+
+impl BarRun {
+    fn new(pos: f32, lo: f32, hi: f32) -> Self {
+        BarRun { bucket: pos.floor(), a0: pos, a1: pos, lo, hi }
+    }
+    fn add(&mut self, pos: f32, lo: f32, hi: f32) {
+        self.a0 = self.a0.min(pos);
+        self.a1 = self.a1.max(pos);
+        self.lo = self.lo.min(lo);
+        self.hi = self.hi.max(hi);
+    }
+    fn draw(&self, ctx: &mut Ctx, bw: f32, horizontal: bool, color: Rgba) {
+        let along = self.a1 - self.a0 + bw;
+        if horizontal {
+            ctx.rect(self.lo, self.a0, self.hi - self.lo, along, color, None);
+        } else {
+            ctx.rect(self.a0, self.lo, along, self.hi - self.lo, color, None);
+        }
+    }
+}
+
 fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
     let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
     if ncat == 0 {
@@ -1026,12 +1107,27 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                 }
                 1 => {
                     let k = slot_of.get(i).copied().unwrap_or(0) as f32;
+                    // Hairline bars are merged per pixel column (their envelope is what shows).
+                    let cull = bw < MIN_BAR_PX && !labels_on;
+                    let mut run: Option<BarRun> = None;
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
                         let (pb, pt) = (vpos(*b, &sc), vpos(*t, &sc));
                         let c = center(j);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
+                        if cull {
+                            let pos = if horizontal { c + nslots * bw / 2.0 - (k + 1.0) * bw } else { c - nslots * bw / 2.0 + k * bw };
+                            match &mut run {
+                                Some(m) if m.bucket == pos.floor() => m.add(pos, lo, lo + len),
+                                _ => {
+                                    if let Some(m) = run.replace(BarRun::new(pos, lo, lo + len)) {
+                                        m.draw(ctx, bw, horizontal, s.color);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         if horizontal {
                             let y = c + nslots * bw / 2.0 - (k + 1.0) * bw;
                             ctx.rect(lo, y, len, bw, s.color, None);
@@ -1063,6 +1159,9 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                                 }
                             }
                         }
+                    }
+                    if let Some(m) = run {
+                        m.draw(ctx, bw, horizontal, s.color);
                     }
                 }
                 _ => {
