@@ -67,7 +67,14 @@ fn picture_file_pickers_preserve_placement_and_isolate_canceled_results() {
     let path = std::env::temp_dir().join(format!("gridcraft-cell-picture-ui-{}.png", std::process::id()));
     std::fs::write(&path, &bytes).unwrap();
     let chosen = path.to_string_lossy().to_string();
-    let mut h = harness(Services { pick_picture: Some(Box::new(move || Some(chosen.clone()))), ..Default::default() });
+    let mut h = harness(Services {
+        pick_picture: Some(Box::new(move || {
+            let (answer, picked) = std::sync::mpsc::channel();
+            answer.send(Some(chosen.clone())).unwrap();
+            picked
+        })),
+        ..Default::default()
+    });
     h.state_mut().ui.ribbon_tab = "Insert".into();
     h.run_steps(6);
     h.get_by_label("Pictures").click();

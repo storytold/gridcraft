@@ -14,6 +14,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod editor;
+mod file_dialog;
 pub mod fonts;
 pub mod formula_bar;
 mod formula_locale;
@@ -168,10 +169,12 @@ pub struct Services {
     pub printers: Option<printing::Discover>,
     /// Desktop: submit the PDF with the chosen settings on a worker.
     pub print_native: Option<printing::Submit>,
-    pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
-    pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// Desktop file dialogs. Each starts the system dialog and returns at once; the path (or
+    /// `None` for a cancel) comes back through the channel on a later frame (#901).
+    pub pick_open: Option<Box<dyn Fn() -> Picked>>,
+    pub pick_save: Option<Box<dyn Fn(&str) -> Picked>>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
-    pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
+    pub pick_picture: Option<Box<dyn Fn() -> Picked>>,
     /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot
     /// insert into a subsequent dialog or open the image as a workbook.
     pub pick_picture_async: Option<Box<dyn Fn(Inbox)>>,
@@ -197,6 +200,10 @@ pub struct Services {
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<Box<dyn Fn(&[u8])>>,
 }
+
+/// A file dialog's answer: the chosen path, or `None` when it was cancelled. A dropped sender
+/// reads as a cancel.
+pub type Picked = std::sync::mpsc::Receiver<Option<String>>;
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
@@ -262,6 +269,8 @@ pub struct SheetApp {
     /// text noted for an unpublished cut); `None` after a copy, or once the clipboard is seen
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
+    /// The system file dialog that is open, and what its answer is for.
+    file_dialog: Option<file_dialog::Pending>,
     pub started: f64,
 }
 
@@ -305,6 +314,7 @@ impl SheetApp {
             selected_chart: None,
             clipboard_text_at_copy: None,
             cut_text: None,
+            file_dialog: None,
             started: now_ms(),
         }
     }
@@ -512,25 +522,13 @@ impl SheetApp {
 
     /// Asks for a `.pdf` path with the save picker, then re-runs `file.exportPdf` with it. Other
     /// params (range, sheets, fitToPage) are kept. A cancelled picker does nothing.
-    fn export_pdf_with_picker(&mut self, mut params: Json) {
+    fn export_pdf_with_picker(&mut self, params: Json) {
         if !self.commit_edit(0, 0, false, false) {
             return;
         }
         let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
         let stem = std::path::Path::new(&title).file_stem().and_then(|s| s.to_str()).unwrap_or("Book1").to_string();
-        let Some(pick) = &self.services.pick_save else { return };
-        let Some(path) = pick(&format!("{stem}.pdf")) else { return };
-        // The picker may suggest a workbook extension; the export writes a PDF.
-        let path = std::path::Path::new(&path).with_extension("pdf").to_string_lossy().into_owned();
-        match &mut params {
-            Json::Object(map) => {
-                map.insert("path".into(), Json::String(path));
-            }
-            other => *other = json!({"path": path}),
-        }
-        if let Err(e) = self.run("file.exportPdf", params) {
-            self.alert(e);
-        }
+        self.ask_save(&format!("{stem}.pdf"), file_dialog::Then::ExportPdf(params));
     }
 
     /// Shows a command error: a toast for an unavailable command, else a message box.
@@ -717,19 +715,14 @@ impl SheetApp {
             "open" => {
                 if let Some(start) = &self.services.open_async {
                     start();
-                } else if let Some(pick) = &self.services.pick_open
-                    && let Some(path) = pick()
-                {
-                    self.open_path(&path);
+                } else {
+                    self.ask_open();
                 }
             }
             "saveAs" => {
                 let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-                if let Some(pick) = &self.services.pick_save {
-                    if let Some(path) = pick(&suggested) {
-                        let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
-                        self.run_or_alert("file.save", json!({"path": path}));
-                    }
+                if self.services.pick_save.is_some() {
+                    self.ask_save(&suggested, file_dialog::Then::SaveAs { close: false });
                 } else if self.services.download.is_some()
                     && let Ok(r) = self.run("file.saveBytes", json!({"format": "xlsx"}))
                     && let Some(dl) = &self.services.download
@@ -1056,6 +1049,7 @@ impl SheetApp {
             ctx.request_repaint();
         }
         control::poll(self, ctx);
+        self.poll_file_dialog();
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
             .services

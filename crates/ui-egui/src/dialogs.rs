@@ -1120,13 +1120,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             let inbox = crate::Inbox::default();
                             start(inbox.clone());
                             d.picture_inbox = Some(inbox);
-                        } else if let Some(pick) = &app.services.pick_picture
-                            && let Some(path) = pick()
-                        {
-                            d.values.remove("base64");
-                            let alt = std::path::Path::new(&path).file_name().and_then(|name| name.to_str()).unwrap_or("");
-                            d.values.insert("alt".into(), json!(alt));
-                            d.values.insert("path".into(), json!(path));
+                        } else {
+                            app.ask_picture();
                         }
                     }
                     ui.label("Description (optional):");
@@ -1170,14 +1165,15 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     d.values.insert("path".into(), json!(path.clone()));
                     ok_cancel(ui, &mut confirm, &mut open);
                     if confirm {
-                        let target = if path.is_empty() { app.services.pick_save.as_ref().and_then(|f| f(&format!("Copy.{fmt}"))) } else { Some(path) };
-                        if let Some(t) = target {
-                            let id = match fmt.as_str() {
-                                "csv" => "file.exportCsv",
-                                "html" => "file.exportHtml",
-                                _ => "file.saveAs",
-                            };
-                            app.run_or_alert(id, json!({"path": t}));
+                        let id = match fmt.as_str() {
+                            "csv" => "file.exportCsv",
+                            "html" => "file.exportHtml",
+                            _ => "file.saveAs",
+                        };
+                        if path.is_empty() {
+                            app.ask_save(&format!("Copy.{fmt}"), crate::file_dialog::Then::SaveCopy(id));
+                        } else {
+                            app.run_or_alert(id, json!({"path": path}));
                         }
                     }
                 }
@@ -1196,6 +1192,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             app.run_or_alert("file.save", json!({}));
                             if app.session.active().is_some_and(|x| !x.is_dirty()) {
                                 app.run_or_alert("file.close", json!({"force": true}));
+                            } else {
+                                // A new workbook asked where to save it: it closes once saved.
+                                app.close_after_save_as();
                             }
                             open = false;
                         }

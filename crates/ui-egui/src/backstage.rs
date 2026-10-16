@@ -557,7 +557,7 @@ fn open_page(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outc
     if square_button(ui, Icon::OpenFolder, lang.tr("Browse…")).clicked() {
         let before = app.session.active().map(|d| d.uid);
         app.open_dialog("open", json!({}));
-        // Desktop pickers return at once; the web picker delivers later (see `SheetApp::logic`).
+        // The picked file opens on a later frame (see `SheetApp::logic`), which closes File.
         if app.session.active().map(|d| d.uid) != before {
             out.close = true;
         }
@@ -868,7 +868,8 @@ fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
 }
 
 /// Exports the active workbook as `pdf`, `csv` or `html`: through the save picker on the desktop,
-/// as a browser download on the web. Returns whether a file was written or handed over.
+/// as a browser download on the web. Returns whether a file was handed over; on the desktop it
+/// is written once the save dialog answers.
 pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     if !app.commit_edit(0, 0, false, false) {
         return false;
@@ -881,17 +882,10 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     };
     let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
     let stem = std::path::Path::new(&title).file_stem().and_then(|s| s.to_str()).unwrap_or("Book1").to_string();
-    if let Some(pick) = &app.services.pick_save {
-        let Some(path) = pick(&format!("{stem}.{fmt}")) else { return false };
-        // The picker may suggest a workbook extension; the export writes the chosen format.
-        let path = std::path::Path::new(&path).with_extension(fmt).to_string_lossy().into_owned();
-        return match app.run(id, json!({"path": path})) {
-            Ok(_) => true,
-            Err(e) => {
-                app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
-                false
-            }
-        };
+    if app.services.pick_save.is_some() {
+        // The file is written when the dialog answers, which also closes File (#901).
+        app.ask_save(&format!("{stem}.{fmt}"), crate::file_dialog::Then::Export(id, fmt.to_string()));
+        return false;
     }
     if app.services.download.is_none() {
         app.message = Some(("GridCraft".into(), "Exporting needs a file picker, which this window doesn't have.".into()));

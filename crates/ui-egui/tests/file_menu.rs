@@ -6,6 +6,13 @@ use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::{Session, core::CellRef, core::Value};
 use gridcraft_ui_egui::{Services, SheetApp};
 
+/// A file dialog that has already answered `path`.
+fn answered(path: Option<String>) -> std::sync::mpsc::Receiver<Option<String>> {
+    let (answer, picked) = std::sync::mpsc::channel();
+    answer.send(path).unwrap();
+    picked
+}
+
 fn harness(services: Services) -> egui_kittest::Harness<'static, SheetApp> {
     let mut session = Session::new();
     session.new_workbook();
@@ -46,7 +53,7 @@ fn new_and_open_from_the_file_tab_keep_the_ribbon_as_it_was() {
     let mut h = harness(Services {
         pick_open: Some(Box::new(move || {
             *capture.lock().unwrap() += 1;
-            None
+            answered(None)
         })),
         ..Default::default()
     });
@@ -108,6 +115,72 @@ fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(123.0));
 }
 
+/// #901, #385: the system file dialog doesn't run inside the frame (a modal panel there let winit
+/// re-enter its event handler on macOS, and the app aborted). Export asks for a path and goes on
+/// drawing; the file is written on the frame after the dialog answers.
+#[test]
+fn export_writes_the_file_once_the_save_dialog_answers() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-export-waits-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let reply = Arc::new(Mutex::new(None::<std::sync::mpsc::Sender<Option<String>>>));
+    let keep = reply.clone();
+    let mut h = harness(Services {
+        pick_save: Some(Box::new(move |_| {
+            let (answer, picked) = std::sync::mpsc::channel();
+            *keep.lock().unwrap() = Some(answer);
+            picked
+        })),
+        ..Default::default()
+    });
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    choose(&mut h, "Export");
+    click(&mut h, "CSV (Comma delimited)");
+    let answer = reply.lock().unwrap().take().expect("Export asks the save dialog for a path");
+    let target = dir.join("Report.csv");
+    h.run_steps(3);
+    assert!(!target.exists(), "nothing is written before the dialog answers");
+    assert_eq!(page(&h), Some("export"), "File stays open while the dialog is up");
+    answer.send(Some(target.to_string_lossy().into_owned())).unwrap();
+    h.run_steps(2);
+    assert!(std::fs::read_to_string(&target).unwrap().contains("42"));
+    assert!(h.state().backstage.is_none(), "a written export returns to the sheet");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Close › Save on a workbook that was never saved asks where to save it; the workbook closes once
+/// the save dialog answers and the file is written, and stays open when the dialog is cancelled.
+#[test]
+fn close_then_save_closes_the_workbook_once_the_save_dialog_answers() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-close-save-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (answer, closes) in [(Some(dir.join("Kept.xlsx").to_string_lossy().into_owned()), true), (None, false)] {
+        let reply = Arc::new(Mutex::new(None::<std::sync::mpsc::Sender<Option<String>>>));
+        let keep = reply.clone();
+        let mut h = harness(Services {
+            pick_save: Some(Box::new(move |_| {
+                let (answer, picked) = std::sync::mpsc::channel();
+                *keep.lock().unwrap() = Some(answer);
+                picked
+            })),
+            ..Default::default()
+        });
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+        let uid = h.state().session.active().unwrap().uid;
+        choose(&mut h, "Close");
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+        click(&mut h, "Save");
+        let sender = reply.lock().unwrap().take().expect("Save asks where to save the workbook");
+        h.run_steps(3);
+        assert!(h.state().session.documents().iter().any(|d| d.uid == uid), "the workbook stays open while the dialog is up");
+        sender.send(answer).unwrap();
+        h.run_steps(3);
+        let open = h.state().session.documents().iter().any(|d| d.uid == uid);
+        assert_eq!(open, !closes, "closes once saved; a cancelled dialog keeps it open");
+    }
+    assert!(dir.join("Kept.xlsx").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     let mut h = harness(Services::default());
@@ -156,7 +229,7 @@ fn save_as_offers_pdf_and_leaves_the_workbook_file_alone() {
     let mut h = harness(Services {
         pick_save: Some(Box::new(move |suggested| {
             capture.lock().unwrap().push(suggested.to_string());
-            Some(target.join("Report").to_string_lossy().into_owned())
+            answered(Some(target.join("Report").to_string_lossy().into_owned()))
         })),
         ..Default::default()
     });
@@ -178,7 +251,7 @@ fn pdf_picker_harness(dir: &std::path::Path) -> (Arc<Mutex<Vec<String>>>, egui_k
     let h = harness(Services {
         pick_save: Some(Box::new(move |suggested| {
             capture.lock().unwrap().push(suggested.to_string());
-            Some(target.join("Report.xlsx").to_string_lossy().into_owned())
+            answered(Some(target.join("Report.xlsx").to_string_lossy().into_owned()))
         })),
         ..Default::default()
     });
@@ -193,6 +266,7 @@ fn the_palette_export_as_pdf_asks_where_to_save() {
     h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
     // The palette and menus go through run_or_alert.
     h.state_mut().run_or_alert("file.exportPdf", serde_json::json!({}));
+    h.run_steps(2);
     assert!(asked.lock().unwrap().first().is_some_and(|s| s.ends_with(".pdf")), "the picker is offered a .pdf name");
     assert!(std::fs::read(dir.join("Report.pdf")).unwrap().starts_with(b"%PDF-"), "the PDF is written, whatever extension the picker returned");
     assert!(h.state().message.is_none());
@@ -200,6 +274,7 @@ fn the_palette_export_as_pdf_asks_where_to_save() {
     assert!(d.path.is_none(), "a PDF is a copy, not the workbook's file");
     // Other params survive the round trip through the picker.
     h.state_mut().run_or_alert("file.exportPdf", serde_json::json!({"range": "nope"}));
+    h.run_steps(2);
     assert!(h.state().message.is_some(), "a bad range is reported, not swallowed");
     // A path in the params skips the picker.
     let before = asked.lock().unwrap().len();
@@ -212,8 +287,9 @@ fn the_palette_export_as_pdf_asks_where_to_save() {
 
 #[test]
 fn a_cancelled_export_pdf_picker_writes_nothing() {
-    let mut h = harness(Services { pick_save: Some(Box::new(|_| None)), ..Default::default() });
+    let mut h = harness(Services { pick_save: Some(Box::new(|_| answered(None))), ..Default::default() });
     h.state_mut().run_or_alert("file.exportPdf", serde_json::json!({}));
+    h.run_steps(2);
     assert!(h.state().message.is_none());
     assert!(h.state_mut().session.take_ui_requests().is_empty());
 }

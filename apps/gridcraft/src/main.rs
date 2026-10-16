@@ -11,6 +11,7 @@
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
+mod file_dialogs;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
@@ -25,19 +26,24 @@ use gridcraft_engine::Session;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
-struct App(SheetApp, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+struct App(
+    SheetApp,
+    file_dialogs::Launcher,
+    #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         {
-            if self.1.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
-                self.1 = Some(native_menu::NativeMenu::install(ctx));
+            if self.2.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
+                self.2 = Some(native_menu::NativeMenu::install(ctx));
             }
-            if let Some(m) = &self.1 {
+            if let Some(m) = &self.2 {
                 m.poll(&mut self.0, ctx);
             }
-            apple_events::poll(&self.2, &mut self.0, ctx);
+            apple_events::poll(&self.3, &mut self.0, ctx);
         }
         self.0.logic(ctx);
         self.0.poll_printing(ctx);
@@ -54,8 +60,9 @@ impl eframe::App for App {
             }
         }
     }
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui);
+        self.1.show(ui.ctx(), frame);
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
@@ -147,7 +154,7 @@ fn read_clipboard<T>(
     read(clipboard.as_mut()?).ok()
 }
 
-fn services() -> Services {
+fn services(asker: file_dialogs::Asker) -> Services {
     // Keep the owner alive: X11/Wayland serve clipboard data from this handle.
     let clipboard: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
     let (html_clipboard, text_clipboard) = (clipboard.clone(), clipboard.clone());
@@ -161,37 +168,15 @@ fn services() -> Services {
         })),
         paste_html: Some(Box::new(move || read_clipboard(&html_clipboard, |clipboard| clipboard.get().html()))),
         paste_text: Some(Box::new(move || read_clipboard(&text_clipboard, |clipboard| clipboard.get_text()))),
-        pick_open: Some(Box::new(|| {
-            rfd::FileDialog::new()
-                .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"])
-                .add_filter("Excel Workbook", &["xlsx", "xlsm"])
-                .add_filter("Excel 97-2003 Workbook (import)", &["xls"])
-                .add_filter("Excel Binary Workbook (data import)", &["xlsb"])
-                .add_filter("OpenDocument Spreadsheet (data import)", &["ods"])
-                .add_filter("CSV", &["csv"])
-                .pick_file()
-                .and_then(|p| p.to_str().map(str::to_string))
+        pick_open: Some(Box::new({
+            let asker = asker.clone();
+            move || asker.open()
         })),
-        pick_picture: Some(Box::new(|| {
-            rfd::FileDialog::new()
-                .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])
-                .pick_file()
-                .and_then(|p| p.to_str().map(str::to_string))
+        pick_picture: Some(Box::new({
+            let asker = asker.clone();
+            move || asker.picture()
         })),
-        pick_save: Some(Box::new(|suggested: &str| {
-            let path = std::path::Path::new(suggested);
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Book1").to_string();
-            // The suggested name's type (an export asks for .pdf, .csv or .html) comes first.
-            const TYPES: [(&str, &str); 4] =
-                [("Excel Workbook (.xlsx)", "xlsx"), ("CSV UTF-8 (.csv)", "csv"), ("Web Page (.html)", "html"), ("PDF (.pdf)", "pdf")];
-            let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).filter(|e| TYPES.iter().any(|(_, x)| x == e));
-            let ext = ext.unwrap_or_else(|| "xlsx".to_string());
-            let mut dialog = rfd::FileDialog::new().set_file_name(format!("{stem}.{ext}"));
-            for (label, x) in TYPES.iter().filter(|(_, x)| *x == ext).chain(TYPES.iter().filter(|(_, x)| *x != ext)) {
-                dialog = dialog.add_filter(*label, &[*x]);
-            }
-            dialog.save_file().and_then(|p| p.to_str().map(str::to_string))
-        })),
+        pick_save: Some(Box::new(move |suggested: &str| asker.save(suggested))),
         open_url: Some(Box::new(|url: &str| open_with_system(url))),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
@@ -297,7 +282,8 @@ fn main() -> eframe::Result<()> {
     if session.documents().is_empty() {
         session.new_workbook();
     }
-    let mut app = SheetApp::new(session, services());
+    let (asker, launcher) = file_dialogs::launcher();
+    let mut app = SheetApp::new(session, services(asker));
     app.watch_desktop_theme();
     app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;
@@ -341,13 +327,13 @@ fn main() -> eframe::Result<()> {
     let apple_events = &apple_events;
     // The app waits here until a start gets as far as creating it; a start that fails before
     // (no graphics adapter, device or surface) leaves it here for the next attempt.
-    let pending = std::cell::Cell::new(Some(app));
+    let pending = std::cell::Cell::new(Some((app, launcher)));
     let run = |options: eframe::NativeOptions| {
         eframe::run_native(
             "GridCraft",
             options,
             Box::new(|cc| {
-                let Some(mut app) = pending.take() else {
+                let Some((mut app, launcher)) = pending.take() else {
                     return Err("the app was already created".into());
                 };
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
@@ -359,6 +345,7 @@ fn main() -> eframe::Result<()> {
                 }
                 Ok(Box::new(App(
                     app,
+                    launcher,
                     #[cfg(target_os = "macos")]
                     None,
                     #[cfg(target_os = "macos")]
@@ -372,11 +359,11 @@ fn main() -> eframe::Result<()> {
     // reuses its event loop for the second run). Errors after that, or from winit, are returned.
     #[cfg(target_os = "windows")]
     if let Err(eframe::Error::Wgpu(e)) = &result
-        && let Some(app) = pending.take()
+        && let Some(started) = pending.take()
         && let Some(backends) = graphics::fallback_backends(backend_override, first_backends)
     {
         log::error!("graphics: the renderer didn't start on {first_backends:?} ({e}); trying {backends:?}");
-        pending.set(Some(app));
+        pending.set(Some(started));
         let mut options = retry_options;
         graphics::configure_backends(&mut options, backends);
         return run(options);
