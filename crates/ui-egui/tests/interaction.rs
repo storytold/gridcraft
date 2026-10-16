@@ -892,3 +892,29 @@ fn rotated_wrapped_text_is_drawn_rotated_inside_its_cell() {
         assert!(clip.width() < 70.0, "clip spans one 6-character column, got {clip:?}");
     }
 }
+
+#[test]
+fn merge_and_center_asks_before_discarding_values() {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "B1", "values": [["vB1"]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "A2", "values": [["vA2"]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B2"})).unwrap();
+    let mut h = harness(s);
+    let ask = |h: &mut egui_kittest::Harness<'static, SheetApp>| {
+        h.state_mut().session.execute("selection.set", json!({"range": "A1:B2"})).unwrap();
+        h.state_mut().run_or_alert("home.mergeCenter", json!({}));
+        h.run_steps(2);
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name.clone()).as_deref(), Some("mergeDiscard"));
+        assert!(h.state().message.is_none());
+        assert_eq!(value(h, "A2"), Value::from("vA2"));
+    };
+    ask(&mut h);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "Escape cancels");
+    assert_eq!(value(&h, "A2"), Value::from("vA2"));
+    ask(&mut h);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "OK merges and closes the dialog");
+    assert_eq!(value(&h, "A1"), Value::from("vB1"));
+    assert_eq!(value(&h, "A2"), Value::Empty);
+}

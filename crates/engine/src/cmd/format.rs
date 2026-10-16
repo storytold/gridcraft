@@ -119,9 +119,9 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             orientation
         ),
-        cmd!("home.mergeCenter", "Merge & Center", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| merge(s, p, "center")),
-        cmd!("home.mergeAcross", "Merge Across", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| merge(s, p, "across")),
-        cmd!("home.mergeCells", "Merge Cells", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| merge(s, p, "cells")),
+        cmd!("home.mergeCenter", "Merge & Center", ["Home", "Alignment"], None, "{range?, discard?}", has_doc, |s, p| merge(s, p, "center")),
+        cmd!("home.mergeAcross", "Merge Across", ["Home", "Alignment"], None, "{range?, discard?}", has_doc, |s, p| merge(s, p, "across")),
+        cmd!("home.mergeCells", "Merge Cells", ["Home", "Alignment"], None, "{range?, discard?}", has_doc, |s, p| merge(s, p, "cells")),
         cmd!("home.unmergeCells", "Unmerge Cells", ["Home", "Alignment"], None, "{range?}", has_doc, |s, p| merge(s, p, "unmerge")),
         // Number
         cmd!(
@@ -556,11 +556,59 @@ fn orientation(s: &mut Session, p: &Json) -> Result<Json> {
     apply_style(s, p, |st| st.align.rotation = angle)
 }
 
+/// Cells of `m` holding a value or a formula, in reading order.
+fn filled(sh: &Sheet, m: RangeRef) -> impl Iterator<Item = CellRef> + '_ {
+    sh.cells.iter_range(m).filter(|(_, c)| c.formula.is_some() || !c.value.is_empty()).map(|(c, _)| c)
+}
+
+/// Leaves only the first value of `m` (in reading order) and moves it into the upper-left cell,
+/// as Excel does when that cell is empty. The upper-left cell keeps its own format.
+fn keep_first_value(sh: &mut Sheet, sheet: usize, m: RangeRef, touched: &mut Vec<(usize, CellRef)>) {
+    let first = filled(sh, m).next();
+    if let Some(first) = first
+        && first != m.start
+        && let Some(src) = sh.cells.get(first).cloned()
+    {
+        let picture = sh.cell_pictures.get(&first).cloned();
+        let style = sh.style_id(m.start);
+        sh.set_cell(m.start, Cell { value: src.value, formula: src.formula, style });
+        if let Some(picture) = picture {
+            sh.cell_pictures.insert(m.start, picture);
+        }
+        touched.push((sheet, m.start));
+    }
+    let others: Vec<CellRef> = sh.cells.iter_range(m).map(|(c, _)| c).filter(|c| *c != m.start).collect();
+    for c in others {
+        if let Some(mut cell) = sh.cells.get(c).cloned() {
+            cell.value = gridcraft_core::Value::Empty;
+            cell.formula = None;
+            sh.set_cell(c, cell);
+        }
+        touched.push((sheet, c));
+    }
+}
+
+/// Error of a merge that would discard values: the UI asks, then runs it again with `discard: true`.
+pub const MERGE_DISCARD_ERROR: &str = "Merging cells keeps only the first value and discards the others";
+
 fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
     let how =
         if how == "center" && s.doc()?.wb.sheet(sheet).is_some_and(|sh| ranges.iter().all(|r| sh.merges.contains(r))) { "unmerge" } else { how };
+    let areas = |r: &RangeRef| -> Vec<RangeRef> {
+        match how {
+            "unmerge" => vec![],
+            "across" => (r.start.row..=r.end.row).map(|row| RangeRef::new(CellRef::new(row, r.start.col), CellRef::new(row, r.end.col))).collect(),
+            _ => vec![*r],
+        }
+    };
+    if !bool_param(p, "discard").unwrap_or(false)
+        && let Some(sh) = s.doc()?.wb.sheet(sheet)
+        && ranges.iter().flat_map(areas).any(|m| filled(sh, m).nth(1).is_some())
+    {
+        return Err(EngineError::Other(format!("{MERGE_DISCARD_ERROR}. Pass discard: true to merge anyway.")));
+    }
     edit(s, |cx| {
         let mut touched = Vec::new();
         // Areas whose merging changes: a merged cell blocks a dynamic array's spill.
@@ -576,16 +624,7 @@ fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
                         let m = RangeRef::new(CellRef::new(row, r.start.col), CellRef::new(row, r.end.col));
                         if !m.is_single() {
                             sh.merges.push(m);
-                            // As below: only the first value of each row survives.
-                            let others: Vec<CellRef> = sh.cells.iter_range(m).map(|(c, _)| c).filter(|c| *c != m.start).collect();
-                            for c in others {
-                                if let Some(mut cell) = sh.cells.get(c).cloned() {
-                                    cell.value = gridcraft_core::Value::Empty;
-                                    cell.formula = None;
-                                    sh.set_cell(c, cell);
-                                }
-                                touched.push((sheet, c));
-                            }
+                            keep_first_value(sh, sheet, m, &mut touched);
                         }
                     }
                 }
@@ -593,17 +632,8 @@ fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
                     if !r.is_single() {
                         sh.merges.push(*r);
                     }
-                    // Only the upper-left value survives (Excel warns about this).
                     if r.count() <= 1_000_000 {
-                        let others: Vec<CellRef> = sh.cells.iter_range(*r).map(|(c, _)| c).filter(|c| *c != r.start).collect();
-                        for c in others {
-                            if let Some(mut cell) = sh.cells.get(c).cloned() {
-                                cell.value = gridcraft_core::Value::Empty;
-                                cell.formula = None;
-                                sh.set_cell(c, cell);
-                            }
-                            touched.push((sheet, c));
-                        }
+                        keep_first_value(sh, sheet, *r, &mut touched);
                     }
                 }
             }
@@ -1130,11 +1160,60 @@ mod tests {
         s.new_workbook();
         s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [3, 4]]})).unwrap();
         s.execute("cell.set", json!({"cell": "D1", "input": "=SUM(A1:B2)"})).unwrap();
-        s.execute("home.mergeAcross", json!({"range": "A1:B2"})).unwrap();
+        s.execute("home.mergeAcross", json!({"range": "A1:B2", "discard": true})).unwrap();
         let v = |s: &mut crate::Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["value"].clone();
         assert_eq!(v(&mut s, "B1"), Json::Null);
         assert_eq!(v(&mut s, "B2"), Json::Null);
         assert_eq!(v(&mut s, "D1"), json!(4.0));
+    }
+
+    #[test]
+    fn merge_keeps_the_only_value_even_when_it_is_not_upper_left() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "B2", "input": "vB2"})).unwrap();
+        s.execute("home.mergeCenter", json!({"range": "A1:B2"})).unwrap();
+        let v = |s: &mut crate::Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["value"].clone();
+        assert_eq!(v(&mut s, "A1"), json!("vB2"));
+        assert_eq!(v(&mut s, "B2"), Json::Null);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(v(&mut s, "A1"), Json::Null);
+        assert_eq!(v(&mut s, "B2"), json!("vB2"));
+    }
+
+    #[test]
+    fn merge_refuses_to_discard_values_unless_asked() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "B1", "values": [["vB1"]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "A2", "values": [["vA2"]]})).unwrap();
+        let v = |s: &mut crate::Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["value"].clone();
+        for id in ["home.mergeCenter", "home.mergeCells"] {
+            let e = s.execute(id, json!({"range": "A1:B2"})).unwrap_err().to_string();
+            assert!(e.contains(MERGE_DISCARD_ERROR), "{e}");
+            assert!(s.doc().unwrap().wb.active().unwrap().merges.is_empty());
+            assert_eq!(v(&mut s, "A2"), json!("vA2"));
+        }
+        s.execute("home.mergeCenter", json!({"range": "A1:B2", "discard": true})).unwrap();
+        assert_eq!(v(&mut s, "A1"), json!("vB1"));
+        assert_eq!(v(&mut s, "B1"), Json::Null);
+        assert_eq!(v(&mut s, "A2"), Json::Null);
+    }
+
+    #[test]
+    fn merge_across_asks_only_for_rows_with_several_values() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "B1", "values": [["vB1"]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "A2", "values": [["vA2"]]})).unwrap();
+        s.execute("home.mergeAcross", json!({"range": "A1:B2"})).unwrap();
+        let v = |s: &mut crate::Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["value"].clone();
+        assert_eq!(v(&mut s, "A1"), json!("vB1"));
+        assert_eq!(v(&mut s, "A2"), json!("vA2"));
+        s.execute("edit.undo", json!({})).unwrap();
+        s.execute("range.setValues", json!({"range": "B2", "values": [["vB2"]]})).unwrap();
+        let e = s.execute("home.mergeAcross", json!({"range": "A1:B2"})).unwrap_err().to_string();
+        assert!(e.contains(MERGE_DISCARD_ERROR), "{e}");
     }
 
     #[test]
