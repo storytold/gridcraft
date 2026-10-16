@@ -462,6 +462,9 @@ impl SheetState<'_> {
     fn attach(&mut self, pos: CellRef, p: &Parsed, mode: Mode, array: Option<RangeRef>) {
         match decode(&p.rgce, &p.rgcb, pos, mode, &self.g.links) {
             Ok(e) => {
+                // BIFF formulas predate dynamic arrays: plain ones keep legacy implicit
+                // intersection (issue #1636).
+                let e = if array.is_none() { crate::array_formula::legacy_intersect(e.clone()).unwrap_or(e) } else { e };
                 let text = gridcraft_formula::print(&e);
                 let mut f = Formula::new(&text);
                 if f.expr.is_none() {
