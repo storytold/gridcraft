@@ -162,3 +162,35 @@ fn overflow_leaves_the_worksheet_scrollbar_reachable() {
         assert!(track.left() >= 0.0 && track.right() <= width + 0.5, "{width}: the scrollbar is offscreen: {track:?}");
     }
 }
+
+#[test]
+fn right_clicking_a_tab_activates_its_sheet_so_the_menu_acts_on_it() {
+    let mut h = harness(1200.0, 0);
+    h.state_mut().run("sheet.activate", json!({"sheet":3})).unwrap();
+    h.state_mut().run("review.protectSheet", json!({})).unwrap();
+    h.state_mut().run("sheet.activate", json!({"sheet":0})).unwrap();
+    // Tall enough for the whole tab menu to be painted.
+    h.set_size(vec2(1200.0, 600.0));
+    h.run_steps(20);
+    let (text, _) = tab(&h, "Tab03").unwrap();
+    let at = text.center();
+    h.input_mut().events.extend([
+        Event::PointerMoved(at),
+        Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE },
+    ]);
+    h.step();
+    h.input_mut().events.push(Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(20);
+    assert_eq!(h.state().session.doc().unwrap().wb.active_sheet, 3, "right-clicking Tab03 should activate it");
+    // The menu now offers Unprotect for the protected sheet that was clicked, not Protect for the one that was active.
+    let texts: Vec<String> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Text(t) => Some(t.galley.job.text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|t| t == "Unprotect Sheet…"), "menu should offer Unprotect Sheet…, painted: {texts:?}");
+}

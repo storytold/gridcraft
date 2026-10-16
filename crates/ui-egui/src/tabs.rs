@@ -148,7 +148,9 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                 } else {
                                     ui.painter().text(r.center(), Align2::CENTER_CENTER, &name, font, if active { t.accent } else { t.text });
                                 }
-                                if resp.clicked() {
+                                // A right-click activates the tab too, as in Excel, so the menu's sheet commands (Protect
+                                // Sheet, Select All Sheets) act on the sheet that was clicked rather than the one that was active.
+                                if resp.clicked() || (resp.secondary_clicked() && !active) {
                                     activate_sheet(app, i);
                                 }
                                 if resp.double_clicked() {
