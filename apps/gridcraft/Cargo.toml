@@ -30,6 +30,11 @@ arboard = { workspace = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 arboard = { workspace = true, features = ["wayland-data-control"] }
+# GNOME-styled client-side window decorations on Wayland (#54, #655). eframe's default features
+# are switched off (workspace Cargo.toml, binary size), which also silently dropped winit's
+# `wayland-csd-adwaita` (part of winit's defaults) and left Linux with winit's plain fallback
+# bar. Same winit version eframe pulls in, so nothing is built twice.
+winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Blocks on the start-up DirectX 12 adapter probe (`graphics.rs`); already in the tree via eframe.
