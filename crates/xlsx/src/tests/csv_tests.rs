@@ -1,7 +1,7 @@
-use gridcraft_core::{CellRef, DateSystem, Value};
+use gridcraft_core::{CellRef, DateSystem, MAX_COLS, Value};
 use gridcraft_model::{Sheet, Workbook};
 
-use crate::csv::{decode_text, sniff_delimiter};
+use crate::csv::{decode_text, parse_records, sniff_delimiter};
 use crate::{CsvOptions, Format, IoError, read_csv, sniff, write_csv, write_csv_limited};
 
 fn v(wb: &Workbook, r: u32, c: u32) -> Value {
@@ -189,4 +189,25 @@ fn the_cap_counts_the_bytes_the_cells_hold_and_accepted_exports_keep_every_posit
     // A tab is one byte, like a comma.
     let tabs = write_csv_limited(&s, b'\t', 14, text_of(&s)).unwrap();
     assert_eq!(tabs.len(), 14);
+}
+
+#[test]
+fn parser_stops_collecting_fields_at_max_cols() {
+    let extra = 50;
+    // MAX_COLS + extra fields on the first row (the last one filled), then a short second row.
+    let mut text = ",".repeat((MAX_COLS + extra) as usize - 1);
+    text.push_str("end\nx,y\n");
+    let mut lens = vec![];
+    parse_records(&text, ',', '"', |rec| {
+        lens.push(rec.len());
+        true
+    });
+    assert_eq!(lens, vec![MAX_COLS as usize, 2]);
+    // An unterminated last row is capped the same way.
+    let mut lens = vec![];
+    parse_records(&",".repeat(MAX_COLS as usize + extra as usize), ',', '"', |rec| {
+        lens.push(rec.len());
+        true
+    });
+    assert_eq!(lens, vec![MAX_COLS as usize]);
 }

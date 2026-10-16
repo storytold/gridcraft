@@ -87,8 +87,9 @@ pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
     best.0
 }
 
-/// Splits CSV text into records of fields.
-fn parse_records(text: &str, delim: char, quote: char, mut on_record: impl FnMut(Vec<String>) -> bool) {
+/// Splits CSV text into records of fields. A record keeps at most [`MAX_COLS`] fields; the rest are
+/// dropped as they are read, so a row of endless delimiters cannot allocate a string per field.
+pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record: impl FnMut(Vec<String>) -> bool) {
     let mut field = String::new();
     let mut record: Vec<String> = vec![];
     let mut in_q = false;
@@ -112,13 +113,19 @@ fn parse_records(text: &str, delim: char, quote: char, mut on_record: impl FnMut
             in_q = true;
             field_started_quoted = true;
         } else if c == delim {
-            record.push(std::mem::take(&mut field));
+            let f = std::mem::take(&mut field);
+            if record.len() < MAX_COLS as usize {
+                record.push(f);
+            }
             field_started_quoted = false;
         } else if c == '\r' || c == '\n' {
             if c == '\r' && chars.peek() == Some(&'\n') {
                 chars.next();
             }
-            record.push(std::mem::take(&mut field));
+            let f = std::mem::take(&mut field);
+            if record.len() < MAX_COLS as usize {
+                record.push(f);
+            }
             field_started_quoted = false;
             if !on_record(std::mem::take(&mut record)) {
                 return;
@@ -128,7 +135,9 @@ fn parse_records(text: &str, delim: char, quote: char, mut on_record: impl FnMut
         }
     }
     if !field.is_empty() || !record.is_empty() || field_started_quoted {
-        record.push(field);
+        if record.len() < MAX_COLS as usize {
+            record.push(field);
+        }
         on_record(record);
     }
 }
