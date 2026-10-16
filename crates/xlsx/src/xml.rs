@@ -304,6 +304,20 @@ fn looks_like_escape(chars: &[char], i: usize) -> bool {
     chars.get(i + 1) == Some(&'x') && chars.get(i + 6) == Some(&'_') && (i + 2..i + 6).all(|k| chars.get(k).is_some_and(|c| c.is_ascii_hexdigit()))
 }
 
+fn escape_unit(chars: &[char], i: usize) -> Option<u32> {
+    let hex: String = chars.get(i + 2..i + 6)?.iter().collect();
+    u32::from_str_radix(&hex, 16).ok()
+}
+
+/// The character for a high surrogate escape at `i` (value `high`) followed directly by a low surrogate escape.
+fn surrogate_pair(chars: &[char], i: usize, high: u32) -> Option<char> {
+    if !(0xD800..=0xDBFF).contains(&high) || chars.get(i + 7) != Some(&'_') || !looks_like_escape(chars, i + 7) {
+        return None;
+    }
+    let low = escape_unit(chars, i + 7).filter(|l| (0xDC00..=0xDFFF).contains(l))?;
+    char::from_u32(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00))
+}
+
 /// Inverse of [`encode_xstring`].
 pub fn decode_xstring(s: &str) -> String {
     if !s.contains("_x") {
@@ -314,10 +328,16 @@ pub fn decode_xstring(s: &str) -> String {
     let mut i = 0;
     while i < chars.len() {
         if chars[i] == '_' && looks_like_escape(&chars, i) {
-            let hex: String = chars[i + 2..i + 6].iter().collect();
-            if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+            let unit = escape_unit(&chars, i);
+            if let Some(ch) = unit.and_then(char::from_u32) {
                 o.push(ch);
                 i += 7;
+                continue;
+            }
+            // A high surrogate escape followed by a low surrogate escape is one UTF-16 pair.
+            if let Some(ch) = unit.and_then(|high| surrogate_pair(&chars, i, high)) {
+                o.push(ch);
+                i += 14;
                 continue;
             }
         }
@@ -400,6 +420,19 @@ mod tests {
         assert_eq!(encode_xstring("a\u{1}b"), "a_x0001_b");
         assert_eq!(decode_xstring(&encode_xstring("_x0041_")), "_x0041_");
         assert_eq!(decode_xstring("_x00"), "_x00");
+    }
+
+    #[test]
+    fn xstring_surrogate_pairs() {
+        assert_eq!(decode_xstring("a_xD83D__xDE00_b"), "a\u{1F600}b");
+        assert_eq!(decode_xstring("_xd83d__xde00_"), "\u{1F600}");
+        // Lone surrogates stay as literal escape text.
+        assert_eq!(decode_xstring("_xD83D_"), "_xD83D_");
+        assert_eq!(decode_xstring("_xDE00_"), "_xDE00_");
+        assert_eq!(decode_xstring("_xD83D_x"), "_xD83D_x");
+        assert_eq!(decode_xstring("_xD83D__x0041_"), "_xD83D_A");
+        // A protected literal escape is not a low surrogate.
+        assert_eq!(decode_xstring("_xD83D__x005F_xDE00_"), "_xD83D__xDE00_");
     }
 
     #[test]
