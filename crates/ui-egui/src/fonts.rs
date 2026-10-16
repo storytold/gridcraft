@@ -34,6 +34,13 @@ pub struct Face {
     pub italic: bool,
 }
 
+impl Face {
+    /// Creates a web-discovered face (bytes fetched separately on demand).
+    pub fn new_web(family: String, index: u32, style: &str) -> Self {
+        Self { family, path: PathBuf::new(), index, weight: style_weight(style), italic: style_italic(style) }
+    }
+}
+
 /// The font folders of the platform (the system's and the user's). Empty on wasm.
 pub fn system_font_dirs() -> Vec<PathBuf> {
     #[cfg(target_arch = "wasm32")]
@@ -67,8 +74,7 @@ pub fn system_font_dirs() -> Vec<PathBuf> {
 }
 
 /// Weight implied by a style name (`"Bold"` → 700, `"Light"` → 300).
-#[cfg(not(target_arch = "wasm32"))]
-fn style_weight(style: &str) -> f32 {
+pub fn style_weight(style: &str) -> f32 {
     let s: String = style.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect();
     const TABLE: &[(&str, f32)] = &[
         ("hairline", 100.0),
@@ -89,8 +95,7 @@ fn style_weight(style: &str) -> f32 {
 }
 
 /// Whether a style name reads as italic or oblique.
-#[cfg(not(target_arch = "wasm32"))]
-fn style_italic(style: &str) -> bool {
+pub fn style_italic(style: &str) -> bool {
     let s: String = style.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect();
     s.contains("italic") || s.contains("oblique")
 }
@@ -260,6 +265,29 @@ fn face_key(family: &str, face: &Face) -> String {
     format!("fnt-src:{family}:{file}:{}", face.index)
 }
 
+static IN_MEMORY_FACES: OnceLock<std::sync::RwLock<std::collections::HashMap<String, Vec<u8>>>> = OnceLock::new();
+
+fn in_memory_faces() -> &'static std::sync::RwLock<std::collections::HashMap<String, Vec<u8>>> {
+    IN_MEMORY_FACES.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
+/// Stores font file bytes for an in-memory or web-loaded face.
+pub fn store_face_bytes(family: &str, face: &Face, bytes: Vec<u8>) {
+    let key = face_key(family, face);
+    in_memory_faces().write().unwrap_or_else(|e| e.into_inner()).insert(key, bytes);
+}
+
+/// Whether bytes have already been fetched and cached for this face.
+pub fn has_face_bytes(family: &str, face: &Face) -> bool {
+    let key = face_key(family, face);
+    in_memory_faces().read().unwrap_or_else(|e| e.into_inner()).contains_key(&key)
+}
+
+/// Initializes the installed face catalog (used on wasm after Font Access API query).
+pub fn init_catalog(faces: Vec<Face>) -> bool {
+    CATALOG.set(faces).is_ok()
+}
+
 /// Bind one installed family's faces into `fonts`, one egui family per cell role, and return the
 /// role keys that are now bound. A role with no exact face chains to the family's regular face, so
 /// no role is ever left pointing at missing data (egui panics on that). A family with no faces
@@ -282,7 +310,11 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
             if chain.contains(&key) {
                 continue;
             }
-            let Ok(bytes) = std::fs::read(&face.path) else { continue };
+            let bytes = match std::fs::read(&face.path) {
+                Ok(bytes) => Some(bytes),
+                Err(_) => in_memory_faces().read().unwrap_or_else(|e| e.into_inner()).get(&key).cloned(),
+            };
+            let Some(bytes) = bytes else { continue };
             let mut fd = egui::FontData::from_owned(bytes);
             fd.index = face.index;
             fonts.font_data.entry(key.clone()).or_insert_with(|| std::sync::Arc::new(fd));
@@ -419,5 +451,20 @@ mod tests {
         // A family with no faces binds nothing and never touches the map.
         assert!(bind_faces(&mut fonts, "No Such Font", &[]).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn binding_in_memory_face_binds_roles() {
+        let face = Face::new_web("TestWebFont".into(), 0, "Regular");
+        store_face_bytes("TestWebFont", &face, epaint_default_fonts::UBUNTU_LIGHT.to_vec());
+        assert!(has_face_bytes("TestWebFont", &face));
+
+        let mut fonts = egui::FontDefinitions::default();
+        let bound = bind_faces(&mut fonts, "TestWebFont", std::slice::from_ref(&face));
+        assert_eq!(bound.len(), 4);
+        for key in &bound {
+            let chain = fonts.families.get(&egui::FontFamily::Name(key.as_str().into())).expect("role family");
+            assert!(chain.iter().all(|k| fonts.font_data.contains_key(k)), "every chained key has data");
+        }
     }
 }

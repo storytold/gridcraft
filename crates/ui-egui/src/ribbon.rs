@@ -395,6 +395,18 @@ pub(crate) fn editable_combo(
     items: &[(&str, String)],
     forced: bool,
 ) -> ComboResult {
+    editable_combo_ext(ui, anchor, salt, current_value, items, forced, |_| {})
+}
+
+fn editable_combo_ext(
+    ui: &mut Ui,
+    anchor: &egui::Response,
+    salt: &'static str,
+    current_value: &str,
+    items: &[(&str, String)],
+    forced: bool,
+    mut footer: impl FnMut(&mut Ui),
+) -> ComboResult {
     let popup_id = anchor.id.with("popup");
     let state_id = anchor.id.with(salt).with("__combo_state");
     let mut st = ui.data_mut(|d| d.get_temp::<ComboState>(state_id)).unwrap_or_default();
@@ -470,6 +482,7 @@ pub(crate) fn editable_combo(
                 }
             }
         });
+        footer(ui);
         if !matches!(result, ComboResult::None) {
             ui.close();
         }
@@ -1063,11 +1076,26 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
 
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let name = st.font.name.clone();
-    let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))));
+    let truncated = crate::widgets::truncate_with_ellipsis(ui, &name, 140.0);
+    let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&truncated).font(theme::ui_font(12.5))));
     control_keytip(app, ui, &resp, "home.fontName");
     let forced = invoke(app, "home.fontName");
-    let items: Vec<(&str, String)> = FONTS.iter().map(|f| (*f, f.to_string())).collect();
-    if let ComboResult::Picked(value) = editable_combo(ui, &resp, "font", &name, &items, forced) {
+    let fams = crate::fonts::families();
+    let items: Vec<(&str, String)> = fams.iter().map(|f| (f.as_str(), f.clone())).collect();
+    let load_action = app.services.load_system_fonts.as_ref();
+    let can_load = load_action.is_some() && !crate::fonts::scan_done();
+    let res = editable_combo_ext(ui, &resp, "font", &name, &items, forced, |ui| {
+        if can_load {
+            ui.separator();
+            if ui.button(crate::i18n::current(ui.ctx()).tr("Load System Fonts…")).clicked() {
+                if let Some(load_action) = load_action {
+                    load_action();
+                }
+                ui.close();
+            }
+        }
+    });
+    if let ComboResult::Picked(value) = res {
         act(app, "home.fontName", json!({"name": value}));
     }
 }

@@ -196,6 +196,10 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<Box<dyn Fn(&[u8])>>,
+    /// Web: trigger browser local system fonts query via Font Access API.
+    pub load_system_fonts: Option<Box<dyn Fn()>>,
+    /// Web: request font file bytes for a family on demand.
+    pub fetch_font: Option<Box<dyn Fn(&str)>>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
@@ -1020,6 +1024,11 @@ impl SheetApp {
             let seen = self.session.active().map(|d| (d.uid, d.revision)).unwrap_or((0, 0));
             if seen != self.fonts_seen {
                 let used = self.used_fonts();
+                if let Some(fetch) = &self.services.fetch_font {
+                    for f in &used {
+                        fetch(f);
+                    }
+                }
                 self.fonts_seen = seen;
                 if used != self.fonts_bound {
                     ctx.set_fonts(theme::font_definitions_with(self.ui.language, &used));

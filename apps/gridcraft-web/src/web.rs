@@ -127,9 +127,92 @@ impl eframe::App for WebShell {
     }
 }
 
+static JS_FONT_ARRAY: std::sync::OnceLock<js_sys::Array> = std::sync::OnceLock::new();
+
+fn fetch_family_blobs(family: &str, ctx: &egui::Context) {
+    let Some(arr) = JS_FONT_ARRAY.get() else { return };
+    let faces = gridcraft_ui_egui::fonts::faces_of(family);
+    for face in faces {
+        if gridcraft_ui_egui::fonts::has_face_bytes(family, &face) {
+            continue;
+        }
+        let index = face.index;
+        if index as u32 >= arr.length() {
+            continue;
+        }
+        let item = arr.get(index);
+        let blob_fn: Option<js_sys::Function> = js_sys::Reflect::get(&item, &JsValue::from_str("blob")).ok().and_then(|v| v.dyn_into().ok());
+        let Some(blob_fn) = blob_fn else { continue };
+        let Ok(blob_prom) = blob_fn.call0(&item).and_then(|v| v.dyn_into::<js_sys::Promise>()) else { continue };
+
+        let family = family.to_string();
+        let ctx = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let Ok(blob_val) = wasm_bindgen_futures::JsFuture::from(blob_prom).await else { return };
+            let Ok(blob) = blob_val.dyn_into::<web_sys::Blob>() else { return };
+            let Ok(buf) = wasm_bindgen_futures::JsFuture::from(blob.array_buffer()).await else { return };
+            let bytes = js_sys::Uint8Array::new(&buf).to_vec();
+            gridcraft_ui_egui::fonts::store_face_bytes(&family, &face, bytes);
+            ctx.request_repaint();
+        });
+    }
+}
+
+fn setup_system_fonts(ctx: egui::Context) -> (Option<Box<dyn Fn()>>, Option<Box<dyn Fn(&str)>>) {
+    let window = match web_sys::window() {
+        Some(w) => w,
+        None => return (None, None),
+    };
+    let query_prop = js_sys::Reflect::get(&window, &JsValue::from_str("queryLocalFonts")).ok();
+    if !query_prop.as_ref().is_some_and(|p| p.is_function()) {
+        return (None, None);
+    }
+
+    let fetch_ctx = ctx.clone();
+    let fetch_action: Box<dyn Fn(&str)> = Box::new(move |family: &str| {
+        fetch_family_blobs(family, &fetch_ctx);
+    });
+
+    let load_action: Box<dyn Fn()> = Box::new(move || {
+        let Some(window) = web_sys::window() else { return };
+        let Ok(query_val) = js_sys::Reflect::get(&window, &JsValue::from_str("queryLocalFonts")) else { return };
+        let Ok(query_fn) = query_val.dyn_into::<js_sys::Function>() else { return };
+        let Ok(prom_val) = query_fn.call0(&window) else { return };
+        let Ok(prom) = prom_val.dyn_into::<js_sys::Promise>() else { return };
+
+        let ctx = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let Ok(result) = wasm_bindgen_futures::JsFuture::from(prom).await else {
+                log::info!("queryLocalFonts was not granted");
+                return;
+            };
+            let Ok(arr) = result.dyn_into::<js_sys::Array>() else { return };
+            log::info!("queryLocalFonts granted with {} fonts", arr.length());
+
+            let mut faces: Vec<gridcraft_ui_egui::fonts::Face> = Vec::with_capacity(arr.length() as usize);
+            for i in 0..arr.length() {
+                let item = arr.get(i);
+                let family = js_sys::Reflect::get(&item, &JsValue::from_str("family")).ok().and_then(|v| v.as_string()).unwrap_or_default();
+                if family.is_empty() {
+                    continue;
+                }
+                let style =
+                    js_sys::Reflect::get(&item, &JsValue::from_str("style")).ok().and_then(|v| v.as_string()).unwrap_or_else(|| "Regular".into());
+                faces.push(gridcraft_ui_egui::fonts::Face::new_web(family, i, &style));
+            }
+            let _ = JS_FONT_ARRAY.set(arr);
+            gridcraft_ui_egui::fonts::init_catalog(faces);
+            ctx.request_repaint();
+        });
+    });
+
+    (Some(load_action), Some(fetch_action))
+}
+
 fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     let open_inbox = inbox.clone();
     let picture_ctx = ctx.clone();
+    let (load_system_fonts, fetch_font) = setup_system_fonts(ctx.clone());
     Services {
         copy_html: Some(Box::new(copy_html)),
         open_async: Some(Box::new(move || {
@@ -177,6 +260,8 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             }
         })),
         inbox: Some(inbox),
+        load_system_fonts,
+        fetch_font,
         ..Default::default()
     }
 }
