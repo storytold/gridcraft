@@ -13,6 +13,10 @@ use crate::cell::Cell;
 
 const BAND: u32 = 64;
 
+fn has_value(cell: &Cell) -> bool {
+    !cell.value.is_empty() || cell.formula.is_some()
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct Band {
     /// row → (col → cell)
@@ -118,7 +122,45 @@ impl CellStore {
     }
     /// Last stored row in column `col` at or above `below_or_at` (for Ctrl+arrow navigation).
     pub fn has(&self, c: CellRef) -> bool {
-        self.get(c).is_some_and(|cell| !cell.value.is_empty() || cell.formula.is_some())
+        self.get(c).is_some_and(has_value)
+    }
+    /// Last row (inclusive, capped at `cap`) of the maximal run of contiguous rows at or after
+    /// `from.row` that store a cell in `from.col` with a non-empty *value* in `from.col`. `None`
+    /// when `from` itself doesn't qualify.
+    ///
+    /// Deliberately narrower than `has`/`get` (which also count a formula with no cached value
+    /// yet, for Ctrl+arrow navigation): this matches `Sheet::value_ref`, whose callers test the
+    /// `Value` it returns with `!v.is_empty()` regardless of whether a formula produced it — a
+    /// formula cell with an empty cached value (`=""`, or not yet recalculated) is "empty" to
+    /// them. A stored cell always decides the row on its own either way (`value_ref` never falls
+    /// through to `spill` once a cell is stored there, whether or not its value is empty), so
+    /// `last_contiguous_nonempty` only needs to check `spill` where this returns `None`, i.e.
+    /// no cell is stored at `from.col` for that row at all.
+    ///
+    /// Walks each band's row map with `BTreeMap::range` (one in-order pass per band) instead of
+    /// one `get` per row, so a long, densely-populated run costs roughly one tree-traversal step
+    /// per row rather than one binary search per row.
+    pub fn contiguous_value_run(&self, from: CellRef, cap: u32) -> Option<u32> {
+        let mut last = None;
+        let mut expect = from.row;
+        while expect <= cap {
+            let band_key = expect / BAND;
+            let Some(band) = self.bands.get(&band_key) else { break };
+            let band_hi = ((band_key + 1) * BAND - 1).min(cap);
+            let mut advanced = false;
+            for (r, cols) in band.rows.range(expect..=band_hi) {
+                if *r != expect || cols.get(&from.col).is_none_or(|c| c.value.is_empty()) {
+                    return last;
+                }
+                last = Some(expect);
+                expect += 1;
+                advanced = true;
+            }
+            if !advanced {
+                break;
+            }
+        }
+        last
     }
     /// Positions whose cells differ between `self` and `other` (stored on one side only, or not
     /// equal). Bands both stores share are skipped, so comparing an edited copy with the store
