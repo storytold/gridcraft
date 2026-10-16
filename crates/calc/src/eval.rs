@@ -731,6 +731,7 @@ impl<'h> Evaluator<'h> {
             "INDIRECT" => self.indirect(args),
             "INDEX" => self.index(args),
             "XLOOKUP" => self.xlookup(args),
+            "VLOOKUP" | "HLOOKUP" => self.vh_lookup(name, args),
             "CELL" => self.cell_info(args),
             "TRIMRANGE" => self.trimrange(args),
             "SUBTOTAL" | "AGGREGATE" => self.subtotal(name, args),
@@ -1282,6 +1283,123 @@ impl<'h> Evaluator<'h> {
             }
             Ev::L(_) => err(CellError::Value),
         }
+    }
+
+    /// Read only the search vector and the selected result cells. Materializing the whole
+    /// table can evaluate unrelated formulas that refer back to this lookup, creating a
+    /// false cycle even though none of those cells contributes to its result.
+    fn vh_lookup(&mut self, name: &str, args: &[Expr]) -> Ev {
+        let Some(spec) = gridcraft_functions::lookup(name) else { return err(CellError::Name) };
+        if !spec.accepts(args.len()) {
+            return err(CellError::Value);
+        }
+        let key = self.value(&args[0]);
+        let table = self.eval(&args[1]);
+        let index = self.value(&args[2]);
+        let mode = args.get(3).map(|e| self.value(e)).unwrap_or(Value::Bool(true));
+        let area = match &table {
+            Ev::R(areas) => match areas.as_slice() {
+                [area] => Some(*area),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(area) = area else {
+            let table_value = match table {
+                Ev::R(areas) if areas.len() > 1 => {
+                    let mut values = Vec::new();
+                    for area in &areas {
+                        match self.area_value(area) {
+                            Value::Array(a) => values.extend(a.data.iter().cloned()),
+                            v => values.push(v),
+                        }
+                    }
+                    Value::from(Array::row(values))
+                }
+                ev => self.deref(ev),
+            };
+            let evaluated = [
+                Arg { value: key, from_ref: false },
+                Arg { value: table_value, from_ref: false },
+                Arg { value: index, from_ref: false },
+                Arg { value: mode, from_ref: false },
+            ];
+            let mut ctx = FnCtx { ev: self, criteria: None };
+            return Ev::V(gridcraft_functions::call(spec, &evaluated, &mut ctx));
+        };
+        let vertical = name == "VLOOKUP";
+        let end =
+            if vertical { CellRef::new(area.range.end.row, area.range.start.col) } else { CellRef::new(area.range.start.row, area.range.end.col) };
+        let keys = self.area_value(&Area { sheet: area.sheet, range: RangeRef::new(area.range.start, end) });
+        let Some(search) = gridcraft_functions::lookup("MATCH") else { return err(CellError::Name) };
+        let mut one = |key: Value, index: Value, mode: Value| {
+            if let Value::Error(e) = key {
+                return Value::Error(e);
+            }
+            if let Value::Error(e) = keys {
+                return Value::Error(e);
+            }
+            let index = match index.to_number() {
+                Ok(n) if n >= 1.0 => n.trunc() as u64,
+                Ok(_) => return Value::Error(CellError::Value),
+                Err(e) => return Value::Error(e),
+            };
+            let approximate = match mode.to_bool() {
+                Ok(b) => b,
+                Err(e) => return Value::Error(e),
+            };
+            let limit = if vertical { area.range.width() } else { area.range.height() };
+            if index > u64::from(limit) {
+                return Value::Error(CellError::Ref);
+            }
+            let search_args = [
+                Arg { value: key, from_ref: false },
+                Arg { value: keys.clone(), from_ref: true },
+                Arg { value: Value::Number(if approximate { 1.0 } else { 0.0 }), from_ref: false },
+            ];
+            let mut ctx = FnCtx { ev: self, criteria: None };
+            match gridcraft_functions::call(search, &search_args, &mut ctx) {
+                Value::Number(p) if p >= 1.0 => {
+                    let offset = p as u32 - 1;
+                    let index = index as u32 - 1;
+                    let cell = if vertical {
+                        CellRef::new(area.range.start.row.saturating_add(offset), area.range.start.col.saturating_add(index))
+                    } else {
+                        CellRef::new(area.range.start.row.saturating_add(index), area.range.start.col.saturating_add(offset))
+                    };
+                    match self.host.cell_value(area.sheet, cell) {
+                        Value::Empty => Value::Number(0.0),
+                        v => v,
+                    }
+                }
+                v => v,
+            }
+        };
+        // Scalar arguments lift with the same shape and padding as the function library.
+        let (mut rows, mut cols) = (1usize, 1usize);
+        for v in [&key, &index, &mode] {
+            if let Value::Array(a) = v {
+                rows = rows.max(a.rows);
+                cols = cols.max(a.cols);
+            }
+        }
+        if (rows as u64).saturating_mul(cols as u64) > MAX_CELLS {
+            return err(CellError::Num);
+        }
+        let at = |v: &Value, r, c| match v {
+            Value::Array(a) => a.get_broadcast(r, c).scalar(),
+            v => v.clone(),
+        };
+        if rows == 1 && cols == 1 {
+            return Ev::V(one(at(&key, 0, 0), at(&index, 0, 0), at(&mode, 0, 0)));
+        }
+        let mut data = Vec::with_capacity(rows * cols);
+        for r in 0..rows {
+            for c in 0..cols {
+                data.push(one(at(&key, r, c), at(&index, r, c), at(&mode, r, c)));
+            }
+        }
+        Ev::V(Array::new(rows, cols, data).map(Value::from).unwrap_or(Value::Error(CellError::Value)))
     }
 
     /// XLOOKUP whose result range is a reference returns a reference, as in Excel, so that it can
