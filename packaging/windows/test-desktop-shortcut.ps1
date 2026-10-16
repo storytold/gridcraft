@@ -1,30 +1,41 @@
 <#
 .SYNOPSIS
-  Exercise the actual MSI's desktop-shortcut choices on a disposable GitHub Windows runner.
+  Exercise the actual MSI's folder and desktop-shortcut choices on a disposable Windows runner.
 .DESCRIPTION
   Compiles original no-op GUI/CLI fixtures instead of Rust, uses GridCraft's existing icon,
   and builds adjacent MSI versions. Installs the real package (including its registrations),
   checks default/explicit choices, repair and major upgrades, then uninstalls in finally.
-  Run through the Packaging lint workflow, never on a developer's Windows installation.
+  Run installation tests through Packaging lint, never on a developer's Windows installation.
+  -BuildOnly can build fixture MSIs locally without installing; ARM64 always uses this mode.
 #>
-param([string] $WorkDir)
+param(
+  [string] $WorkDir,
+  [ValidateSet('x64', 'x86', 'arm64')] [string] $Arch = 'x64',
+  [switch] $BuildOnly
+)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
+if ($Arch -eq 'arm64') { $BuildOnly = $true }
+if (-not $BuildOnly -and ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted')) {
   throw 'This install test is restricted to disposable GitHub-hosted Windows runners.'
 }
 if (-not $WorkDir) { $WorkDir = Join-Path $env:RUNNER_TEMP 'gridcraft-shortcut-smoke' }
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$InstallDir = Join-Path $env:ProgramFiles 'GridCraft'
+$ProgramRoot = if ($Arch -eq 'x86') { ${env:ProgramFiles(x86)} } else { $env:ProgramFiles }
+$InstallDir = Join-Path $ProgramRoot 'GridCraft'
+$DefaultInstallDir = $InstallDir
+$CustomInstallDir = Join-Path $WorkDir 'Custom Apps\GridCraft'
 $DesktopLink = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'GridCraft.lnk'
 $StartLink = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'GridCraft.lnk'
-$ChoiceKey = 'HKLM:\Software\GridCraft\Installer'
-$ComponentKey = 'HKLM:\Software\GridCraft\Installer'
-$UninstallRoot = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
+$RegistryRoot = if ($Arch -eq 'x86') { 'HKLM:\Software\WOW6432Node' } else { 'HKLM:\Software' }
+$ChoiceKey = "$RegistryRoot\GridCraft\Installer"
+$ComponentKey = $ChoiceKey
+$UninstallRoot = "$RegistryRoot\Microsoft\Windows\CurrentVersion\Uninstall"
 $Icon = Join-Path $Root 'assets\app-icon\gridcraft.ico'
-if ((Test-Path $InstallDir) -or (Test-Path $DesktopLink) -or (Test-Path $StartLink) -or
-    (Test-Path 'HKLM:\Software\GridCraft') -or (Test-Path 'HKCU:\Software\GridCraft')) {
+if (-not $BuildOnly -and ((Test-Path $InstallDir) -or (Test-Path $CustomInstallDir) -or
+    (Test-Path $DesktopLink) -or (Test-Path $StartLink) -or
+    (Test-Path "$RegistryRoot\GridCraft") -or (Test-Path 'HKCU:\Software\GridCraft'))) {
   throw 'Refusing to run against an existing GridCraft installation or its settings.'
 }
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
@@ -62,6 +73,55 @@ function Get-ProductCode([string] $Msi) {
   }
 }
 
+function Assert-FolderTargets([string] $Msi) {
+  # Ignore installed machine state for costing: safe even with -BuildOnly. Exercise both
+  # command-line properties before costing and UI target changes after costing.
+  $installer = New-Object -ComObject WindowsInstaller.Installer
+  $installer.UILevel = 2
+  try {
+    foreach ($custom in $false, $true) {
+      $session = $installer.OpenPackage($Msi, 1)
+      try {
+        $customPath = Join-Path $WorkDir 'Selected Apps\GridCraft'
+        if ($custom) { $session.Property('INSTALLFOLDER') = $customPath }
+        foreach ($action in 'CostInitialize', 'FileCost', 'CostFinalize') {
+          Assert-That ($session.DoAction($action) -eq 1) "$action failed in read-only MSI session"
+        }
+        $expected = if ($custom) { $customPath } else { $DefaultInstallDir }
+        Assert-That ($session.TargetPath('INSTALLFOLDER').TrimEnd('\') -ieq $expected.TrimEnd('\')) 'MSI resolved the wrong installation folder'
+        $uiPath = Join-Path $WorkDir 'UI Selected Apps\GridCraft'
+        $session.TargetPath('INSTALLFOLDER') = $uiPath
+        Assert-That ($session.TargetPath('INSTALLFOLDER').TrimEnd('\') -ieq $uiPath.TrimEnd('\')) 'MSI did not update the UI target folder'
+      } finally {
+        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($session) | Out-Null
+      }
+    }
+    # Ignore-machine-state sessions prohibit DLL custom actions. In a separate normal
+    # session, invoke ONLY the immediate property-checking action: no install sequence.
+    # ARM64's DLL cannot run on an x64 runner; all architectures still link it at build time.
+    if ($Arch -ne 'arm64') {
+      $session = $installer.OpenPackage($Msi, 0)
+      try {
+        $suffix = if ($Arch -eq 'x86') { 'X86' } else { 'X64' }
+        $validate = "WixUIValidatePath_$suffix"
+        $localPath = Join-Path $WorkDir 'Validated Apps\GridCraft'
+        foreach ($path in $localPath, '\\gridcraft-invalid-host\share\GridCraft', $localPath) {
+          $session.Property('INSTALLFOLDER') = $path
+          Assert-That ($session.DoAction($validate) -eq 1) 'WiX path validation failed'
+          $expectedValid = if ($path.StartsWith('\\')) { '0' } else { '1' }
+          Assert-That ($session.Property('WIXUI_INSTALLDIR_VALID') -eq $expectedValid) 'WiX did not correctly validate the selected path'
+        }
+        Write-Host "ok native WiX local/network/corrected path validation ($Arch)"
+      } finally {
+        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($session) | Out-Null
+      }
+    }
+    Write-Host "ok read-only default/custom folder costing and UI target changes ($Arch)"
+  } finally {
+    [Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer) | Out-Null
+  }
+}
+
 function Invoke-Msi([string] $Name, [string[]] $Arguments) {
   $log = Join-Path $WorkDir "$Name.log"
   # /norestart is unconditional. Each operation and the workflow have time limits.
@@ -89,6 +149,13 @@ function Assert-Package($Package) {
     Assert-That (Test-Path (Join-Path $InstallDir $exe)) "$exe missing after installation"
   }
   Assert-That (Test-Path $StartLink) 'The existing Start Menu shortcut is missing'
+  $savedFolder = Get-ItemPropertyValue -Path $ChoiceKey -Name InstallFolder
+  Assert-That ($savedFolder.TrimEnd('\') -ieq $InstallDir.TrimEnd('\')) 'Installer did not persist the selected folder'
+  # App Paths and file ProgIds are shared between registry views on supported Windows.
+  $appPath = Get-OptionalRegistryValue 'HKLM:\Software\Microsoft\Windows\CurrentVersion\App Paths\gridcraft.exe' ''
+  Assert-That ($appPath -ieq (Join-Path $InstallDir 'gridcraft.exe')) 'App Paths registration targets the wrong folder'
+  $openCommand = Get-OptionalRegistryValue 'HKLM:\Software\Classes\GridCraft.Workbook\shell\open\command' ''
+  Assert-That ($openCommand -eq ('"' + (Join-Path $InstallDir 'gridcraft.exe') + '" "%1"')) 'Open with registration targets the wrong folder'
 }
 
 function Assert-Desktop([bool] $Enabled) {
@@ -123,6 +190,7 @@ function Assert-Removed($Package) {
   Assert-That (-not (Test-Path $DesktopLink)) 'Desktop shortcut remains after uninstall'
   Assert-That (-not (Test-Path $StartLink)) 'Start Menu shortcut remains after uninstall'
   Assert-That ($null -eq (Get-OptionalRegistryValue $ChoiceKey 'DesktopShortcut')) 'Saved choice remains after uninstall'
+  Assert-That ($null -eq (Get-OptionalRegistryValue $ChoiceKey 'InstallFolder')) 'Saved folder remains after uninstall'
   Assert-That ($null -eq (Get-OptionalRegistryValue $ComponentKey 'DesktopShortcutComponent')) 'Shortcut component registration remains after uninstall'
 }
 
@@ -165,18 +233,26 @@ $source = Join-Path $WorkDir 'Stub.cs'
 'public static class Program { public static void Main() { } }' | Set-Content -Path $source -Encoding utf8
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 foreach ($fixture in @(@('gridcraft.exe', 'winexe'), @('gridcraft-cli.exe', 'exe'))) {
-  & $csc /nologo /platform:x64 "/target:$($fixture[1])" "/out:$(Join-Path $Bin $fixture[0])" $source
+  $platform = if ($Arch -eq 'arm64') { 'anycpu' } else { $Arch }
+  & $csc /nologo "/platform:$platform" "/target:$($fixture[1])" "/out:$(Join-Path $Bin $fixture[0])" $source
   if ($LASTEXITCODE -ne 0) { throw 'Could not compile installer fixture' }
 }
 $packages = @()
+$InstallerArt = Join-Path $WorkDir 'installer-art'
+& (Join-Path $PSScriptRoot 'installer-art.ps1') -OutputDir $InstallerArt
 foreach ($version in '90.0.0', '90.0.1', '90.0.2') {
   $msi = Join-Path $WorkDir "gridcraft-$version.msi"
-  & wix build (Join-Path $PSScriptRoot 'gridcraft.wxs') -arch x64 `
-    -d "Version=$version" -d "BinDir=$Bin" -d "IconPath=$Icon" -o $msi | Write-Host
+  & wix build (Join-Path $PSScriptRoot 'gridcraft.wxs') -arch $Arch -wx -ext WixToolset.UI.wixext -culture en-US `
+    -d "Version=$version" -d "BinDir=$Bin" -d "IconPath=$Icon" -d "InstallerArtDir=$InstallerArt" -o $msi | Write-Host
   if ($LASTEXITCODE -ne 0) { throw "WiX failed to build $version" }
   $packages += [pscustomobject]@{ Path = $msi; Code = (Get-ProductCode $msi); Version = $version }
 }
 $first, $second, $third = $packages
+Assert-FolderTargets $first.Path
+if ($BuildOnly) {
+  Write-Host "Fixture MSI builds passed for $Arch. No installation was run."
+  return
+}
 $failure = $null
 try {
   Invoke-Msi 'default-off' @('/i', "`"$($first.Path)`"")
@@ -193,11 +269,14 @@ try {
   Invoke-Msi 'uninstall-off' @('/x', $second.Code)
   Assert-Removed $second
 
-  Invoke-Msi 'explicit-on' @('/i', "`"$($first.Path)`"", 'DESKTOPSHORTCUT=1')
+  $InstallDir = $CustomInstallDir
+  Invoke-Msi 'custom-folder-explicit-on' @('/i', "`"$($first.Path)`"", 'DESKTOPSHORTCUT=1', "INSTALLFOLDER=`"$InstallDir`"")
   Assert-Package $first
+  Assert-That (-not (Test-Path (Join-Path $DefaultInstallDir 'gridcraft.exe'))) 'Custom install also wrote to Program Files'
   Assert-Desktop $true
   Remove-Item -LiteralPath $DesktopLink
   Invoke-Msi 'repair-on' @('/famus', $first.Code)
+  Assert-Package $first
   Assert-Desktop $true
   Invoke-Msi 'upgrade-on' @('/i', "`"$($second.Path)`"")
   Assert-Package $second
@@ -208,10 +287,22 @@ try {
   Assert-That (-not (Test-Path (Join-Path $UninstallRoot $second.Code))) 'Opt-out upgrade left the previous MSI installed'
   Assert-Desktop $false
   Invoke-Msi 'repair-after-opt-out' @('/famus', $third.Code)
+  Assert-Package $third
   Assert-Desktop $false
   Invoke-Msi 'uninstall-after-opt-out' @('/x', $third.Code)
   Assert-Removed $third
 
+  # An explicit folder overrides the saved location on a major upgrade.
+  Invoke-Msi 'custom-folder-before-move' @('/i', "`"$($first.Path)`"", "INSTALLFOLDER=`"$InstallDir`"")
+  Assert-Package $first
+  $InstallDir = Join-Path $WorkDir 'Moved Apps\GridCraft'
+  Invoke-Msi 'upgrade-explicit-folder' @('/i', "`"$($second.Path)`"", "INSTALLFOLDER=`"$InstallDir`"")
+  Assert-Package $second
+  Assert-That (-not (Test-Path (Join-Path $CustomInstallDir 'gridcraft.exe'))) 'Upgrade left the executable in the previous folder'
+  Invoke-Msi 'uninstall-moved-folder' @('/x', $second.Code)
+  Assert-Removed $second
+
+  $InstallDir = $DefaultInstallDir
   Invoke-Msi 'cross-account-install' @('/i', "`"$($first.Path)`"", 'DESKTOPSHORTCUT=1')
   Assert-Desktop $true
   Uninstall-AsSystem $first
@@ -231,4 +322,4 @@ try {
   }
 }
 if ($failure) { throw $failure }
-Write-Host 'Desktop shortcut smoke passed: default off, explicit on/off, repair, upgrade persistence and cross-account uninstall.'
+Write-Host "Installer smoke passed for ${Arch}: default/custom folders, folder override on upgrade, shortcut choices, repair, upgrade persistence and cross-account uninstall."

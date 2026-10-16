@@ -122,12 +122,22 @@ open dist/release/gridcraft-*-macos-*.dmg
 is GUI, `gridcraft-cli.exe` console), signs both executables, builds the MSI with WiX v5, signs
 the MSI, and zips a portable build.
 
-- `gridcraft.wxs`: per-machine install into Program Files, advertised Start Menu shortcut, App
+- `gridcraft.wxs`: per-machine install into a selected folder (Program Files by default), advertised Start Menu shortcut, App
   Paths (Win+R `gridcraft`). File types: ProgIds `GridCraft.Workbook` (`.xlsx`, `.xlsm`) and
   `GridCraft.TextData` (`.csv`, `.tsv`), listed under each extension's `OpenWithProgids` and
   in `Capabilities` + `RegisteredApplications`, so GridCraft appears in *Open with* and
   *Settings › Default apps* but never silently becomes the default. The MSI version is the
   numeric `X.Y.Z`; same-version upgrades let release candidates replace each other.
+- **Installation folder (x86, x64 and ARM64):** full installer UI offers a folder page after
+  the shortcut choice. Users can type a path or use WiX's standard **Browse** dialog, including
+  creating a new folder. Windows Installer re-costs the selected path, then the WiX UI
+  path-validation action rejects network and removable-drive destinations and shows an
+  invalid-folder message when needed before
+  installation proceeds. The browser also runs that validation. Unattended installs can set
+  `msiexec /i gridcraft.msi /qn INSTALLFOLDER="D:\Apps\GridCraft"`. The selected folder is
+  stored per machine and reused for repair and major upgrades; an explicit `INSTALLFOLDER`
+  overrides the saved folder on a new installation or major upgrade. Maintenance UI does
+  not offer relocation. Uninstall removes the saved folder setting along with the package.
 - **Desktop shortcut:** full installer UI offers an unchecked checkbox on a new installation.
   Unattended installs can use `msiexec /i gridcraft.msi /qn DESKTOPSHORTCUT=1` to opt in
   (or `DESKTOPSHORTCUT=0` to opt out). The choice is stored per machine and reused on upgrades;
@@ -140,22 +150,35 @@ the MSI, and zips a portable build.
   a literal `HKLM` key path, MSI registry root -1 also meets ICE43's shortcut rule without
   suppressing validation ([WiX registry roots](https://docs.firegiant.com/wix/schema/wxs/registryvalue/),
   [ICE43](https://learn.microsoft.com/windows/win32/msi/ice43)). Its
-  `packaging/windows/test-desktop-shortcut.ps1` script requires a GitHub-hosted Windows runner.
+  `packaging/windows/test-desktop-shortcut.ps1` script requires a GitHub-hosted Windows runner
+  for installation tests. Packaging lint runs the lifecycle on x64 and x86, including custom
+  folders with spaces, saved paths on repair/upgrade, explicit relocation on major upgrade,
+  registrations and shortcuts. All architectures check default/custom paths and UI target
+  changes in read-only MSI sessions. x64 and x86 also invoke the native WiX validation action
+  without installing, checking local, network and corrected local paths. ARM64 validates
+  MSI builds without installing or executing its native validation DLL on the x64 runner;
+  the separate Windows ARM64 workflow remains the native install/run check. To build fixture
+  MSIs locally without installing, use `-BuildOnly -Arch x64|x86|arm64 -WorkDir PATH`.
 - **Installer review images:** the same Windows job renders the compiled MSI's dialogs through
   Windows Installer's native preview API and uploads PNGs plus install logs in
-  `desktop-shortcut-msi-evidence`, on success or failure. These are native dialog previews;
+  `desktop-shortcut-msi-evidence-<arch>`, on success or failure. These are native dialog previews;
   the separate silent lifecycle test verifies installation behavior. Normal full UI presents
-  the shortcut choice and then completion; cancel/failure and files-in-use dialogs are support
+  the shortcut choice, installation folder and then completion; the folder page opens a browse
+  dialog; invalid-folder, cancel/failure and files-in-use dialogs are support
   paths. To review on a maintainer branch, run **Packaging lint** with that branch selected
   (or `gh workflow run packaging-lint.yml --repo storytold/gridcraft --ref BRANCH`). No release
   environment, signing credentials or Rust build is required. Interactive checkbox behavior
-  still needs a Windows desktop check; previews alone do not establish that behavior.
+  and folder-selection behavior still need a Windows desktop check; previews alone do not
+  establish that behavior.
 - **Signing:** `packaging/windows/sign.ps1` uses `signtool` with SHA-256 and an RFC 3161
   timestamp, from a `.pfx` (`WINDOWS_CERTIFICATE*`) if present, otherwise **Azure Trusted
   Signing** (`AZURE_*`, the storytold setup). With neither it warns and leaves files unsigned.
 
 Locally on Windows: `dotnet tool install -g wix --version 5.0.2`, then
-`pwsh packaging/windows/package.ps1 -Arch x64`.
+`pwsh packaging/windows/package.ps1 -Arch x64`. Packaging installs the pinned
+`WixToolset.UI.wixext/5.0.2` extension and draws original browser artwork into the build
+directory using `installer-art.ps1`. For fixture builds, first run
+`wix extension add -g WixToolset.UI.wixext/5.0.2`.
 
 ### Linux
 

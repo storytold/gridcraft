@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  GridCraft MSI (WiX Toolset v5: `dotnet tool install -g wix`). Built by package.ps1:
+  GridCraft MSI (WiX Toolset v5 with WixToolset.UI.wixext). Built by package.ps1:
 
-    wix build gridcraft.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+    wix build gridcraft.wxs -arch x64 -ext WixToolset.UI.wixext -culture en-US
+      -d Version=1.2.3 -d BinDir=... -d IconPath=... -d InstallerArtDir=... -o out.msi
 
-  Per-machine install into Program Files, a Start Menu shortcut, an optional desktop shortcut,
+  Per-machine install into a user-selected folder (Program Files by default), a Start Menu shortcut, an optional desktop shortcut,
   App Paths (Win+R `gridcraft`),
   and GridCraft offered under "Open with" (and in Settings > Default apps) for .xlsx, .xlsm,
   .csv and .tsv, without taking over the user's default app for them.
@@ -34,6 +35,26 @@
     <Property Id="ARPURLUPDATEINFO" Value="https://getartcraft.com/apps/gridcraft" />
     <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
 
+    <!-- Public and secure so both command-line and full-UI choices reach the elevated
+         execute sequence. Restore the path before costing, including on major upgrades;
+         an explicit INSTALLFOLDER always takes precedence over the saved location. -->
+    <Property Id="INSTALLFOLDER" Secure="yes" />
+    <Property Id="SAVEDINSTALLFOLDER" Secure="yes">
+      <RegistrySearch Id="FindInstallFolder" Root="HKLM"
+          Key="Software\GridCraft\Installer" Name="InstallFolder" Type="raw" />
+    </Property>
+    <SetProperty Id="INSTALLFOLDER" Action="LoadInstallFolder" Value="[SAVEDINSTALLFOLDER]"
+        After="AppSearch" Sequence="first" Condition="NOT INSTALLFOLDER AND SAVEDINSTALLFOLDER" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <UIRef Id="WixUI_Common" />
+    <!-- Use WiX's browser and validation, with original build-generated artwork. -->
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.InstallerArtDir)\banner.bmp" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.InstallerArtDir)\banner.bmp" />
+    <WixVariable Id="WixUIUpIco" Value="$(var.InstallerArtDir)\up.ico" />
+    <WixVariable Id="WixUINewIco" Value="$(var.InstallerArtDir)\new.ico" />
+    <WixVariable Id="WixUIExclamationIco" Value="$(var.InstallerArtDir)\warning.ico" />
+    <WixVariable Id="WixUIInfoIco" Value="$(var.InstallerArtDir)\warning.ico" />
+
     <!-- An explicit command-line value wins. Otherwise retain the previous installation's
          choice, defaulting to off for a fresh install. Run only in the first sequence so the
          execute sequence cannot reload the old choice after the user unchecks the box. -->
@@ -54,15 +75,22 @@
     <Property Id="ErrorDialog" Value="GridcraftErrorDlg" />
     <EnsureTable Id="ListBox" />
     <UI>
+      <DialogRef Id="BrowseDlg" />
+      <DialogRef Id="InvalidDirDlg" />
+      <Publish Dialog="BrowseDlg" Control="OK" Event="DoAction"
+          Value="WixUIValidatePath_$(sys.BUILDARCHSHORT)" Order="3" Condition="NOT WIXUI_DONTVALIDATEPATH" />
+      <Publish Dialog="BrowseDlg" Control="OK" Event="SpawnDialog" Value="InvalidDirDlg" Order="4"
+          Condition="NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID&lt;&gt;&quot;1&quot;" />
       <TextStyle Id="GridcraftUIFont" FaceName="Segoe UI" Size="9" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Segoe UI" Size="9" Bold="yes" />
       <Dialog Id="DesktopShortcutDlg" Width="320" Height="150" Title="GridCraft Setup" NoMinimize="yes">
         <Control Id="Heading" Type="Text" X="15" Y="15" Width="290" Height="20" Text="Install GridCraft" />
         <Control Id="Description" Type="Text" X="15" Y="40" Width="290" Height="28"
             Text="Install GridCraft for everyone who uses this computer." />
         <Control Id="DesktopShortcutCheckbox" Type="CheckBox" X="15" Y="76" Width="290" Height="18"
             Property="DesktopShortcutChoice" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
-        <Control Id="Install" Type="PushButton" X="165" Y="118" Width="65" Height="20"
-            Default="yes" ElevationShield="yes" Text="&amp;Install">
+        <Control Id="Next" Type="PushButton" X="165" Y="118" Width="65" Height="20"
+            Default="yes" Text="&amp;Next">
           <!-- An unchecked checkbox clears its property. Publish an explicit zero so the
                elevated execute sequence receives an unambiguous opt-out. -->
           <Publish Property="DESKTOPSHORTCUT" Value="1" Condition="DesktopShortcutChoice" />
@@ -70,6 +98,32 @@
           <Publish Event="EndDialog" Value="Return" />
         </Control>
         <Control Id="Cancel" Type="PushButton" X="240" Y="118" Width="65" Height="20" Cancel="yes" Text="Cancel">
+          <Publish Event="EndDialog" Value="Exit" />
+        </Control>
+      </Dialog>
+
+      <Dialog Id="InstallFolderDlg" Width="340" Height="185" Title="GridCraft Setup" NoMinimize="yes">
+        <Control Id="Heading" Type="Text" X="15" Y="15" Width="310" Height="20" Text="Choose where to install GridCraft" />
+        <Control Id="Description" Type="Text" X="15" Y="40" Width="310" Height="28"
+            Text="Use the suggested folder, enter a different path, or browse for a folder." />
+        <Control Id="FolderLabel" Type="Text" X="15" Y="78" Width="310" Height="12"
+            Text="Installation &amp;folder:" TabSkip="no" />
+        <Control Id="Folder" Type="PathEdit" X="15" Y="95" Width="230" Height="20" Property="INSTALLFOLDER" />
+        <Control Id="Browse" Type="PushButton" X="255" Y="95" Width="70" Height="20" Text="&amp;Browse...">
+          <Publish Property="_BrowseProperty" Value="[WIXUI_INSTALLDIR]" Order="1" />
+          <Publish Event="SpawnDialog" Value="BrowseDlg" Order="2" />
+        </Control>
+        <Control Id="Install" Type="PushButton" X="185" Y="150" Width="65" Height="20"
+            Default="yes" ElevationShield="yes" Text="&amp;Install">
+          <Publish Event="SetTargetPath" Value="[WIXUI_INSTALLDIR]" Order="1" />
+          <Publish Event="DoAction" Value="WixUIValidatePath_$(sys.BUILDARCHSHORT)" Order="2"
+              Condition="NOT WIXUI_DONTVALIDATEPATH" />
+          <Publish Event="SpawnDialog" Value="InvalidDirDlg" Order="3"
+              Condition="NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID&lt;&gt;&quot;1&quot;" />
+          <Publish Event="EndDialog" Value="Return" Order="4"
+              Condition="WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID=&quot;1&quot;" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="260" Y="150" Width="65" Height="20" Cancel="yes" Text="Cancel">
           <Publish Event="EndDialog" Value="Exit" />
         </Control>
       </Dialog>
@@ -137,6 +191,9 @@
       <!-- Component conditions must see the choice before costing. Do not show the choice
            during basic/silent installs, repair or uninstall. -->
       <Show Dialog="DesktopShortcutDlg" Before="CostInitialize" Condition="NOT Installed AND NOT REMOVE AND UILevel = 5" />
+      <!-- Directory controls need the resolved paths from CostFinalize. The shortcut choice
+           above is already available to component costing; the folder page then re-costs it. -->
+      <Show Dialog="InstallFolderDlg" Before="ExecuteAction" Condition="NOT Installed AND NOT REMOVE AND UILevel = 5" />
       <Show Dialog="SetupCompleteDlg" OnExit="success" Condition="UILevel = 5" />
       <Show Dialog="SetupCanceledDlg" OnExit="cancel" Condition="UILevel = 5" />
       <Show Dialog="SetupFailedDlg" OnExit="error" Condition="UILevel = 5" />
@@ -207,6 +264,10 @@
       <Component Id="DesktopShortcutPreference">
         <RegistryValue Root="HKLM" Key="Software\GridCraft\Installer" Name="DesktopShortcut"
             Value="[DESKTOPSHORTCUT]" Type="string" KeyPath="yes" />
+      </Component>
+      <Component Id="InstallFolderPreference">
+        <RegistryValue Root="HKLM" Key="Software\GridCraft\Installer" Name="InstallFolder"
+            Value="[INSTALLFOLDER]" Type="string" KeyPath="yes" />
       </Component>
       <Component Id="DesktopShortcutComponent" Directory="DesktopFolder" Condition="DESKTOPSHORTCUT = &quot;1&quot;">
         <Shortcut Id="DesktopShortcut" Name="GridCraft" Description="GridCraft spreadsheet"

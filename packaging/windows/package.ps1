@@ -13,6 +13,7 @@
 
   Needs: Rust (MSVC toolchain + the target), the Windows SDK (rc.exe, signtool.exe),
   and WiX v5: dotnet tool install --global wix --version 5.0.2
+  plus: wix extension add -g WixToolset.UI.wixext/5.0.2
 
 .EXAMPLE
   pwsh packaging/windows/package.ps1 -Arch x64
@@ -92,9 +93,13 @@ Copy-Item (Join-Path $Bin 'gridcraft.exe'), (Join-Path $Bin 'gridcraft-cli.exe')
 
 # ---- MSI ---------------------------------------------------------------------------------------
 $Msi = Join-Path $Dist "gridcraft-$Version-windows-$Arch.msi"
+$InstallerArt = Join-Path $Stage 'installer-art'
+& (Join-Path $PSScriptRoot 'installer-art.ps1') -OutputDir $InstallerArt
+Invoke-Native 'WiX UI extension' { wix extension add -g WixToolset.UI.wixext/5.0.2 }
 Invoke-Native 'wix build' {
-  wix build (Join-Path $PSScriptRoot 'gridcraft.wxs') -arch $Arch `
+  wix build (Join-Path $PSScriptRoot 'gridcraft.wxs') -arch $Arch -ext WixToolset.UI.wixext -culture en-US `
     -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\gridcraft.ico')" `
+    -d "InstallerArtDir=$InstallerArt" `
     -o $Msi
 }
 # wix writes its debug symbols (.wixpdb) next to the MSI; keep them out of the release assets.
