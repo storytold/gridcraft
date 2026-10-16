@@ -936,6 +936,10 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let src_wb = clip.wb.clone();
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
     let src_sheet_name = src_sheet.name.clone();
+    if cut_move && at.offset((tiles_r * h).saturating_sub(1) as i64, (tiles_c * w).saturating_sub(1) as i64).is_none() {
+        // Check the whole footprint before the source is emptied, so a move that overflows the grid loses nothing.
+        return Err(EngineError::Other("The cut area doesn't fit at this position; nothing was moved.".into()));
+    }
     edit(s, |cx| {
         // Styles from another workbook must be re-interned.
         let mut style_map = std::collections::HashMap::new();
@@ -1690,6 +1694,28 @@ mod tests {
         assert_eq!(get(&mut s, "D1")["formula"], "=(B3*2)*1");
         assert_eq!(get(&mut s, "D1")["value"], json!(8.0));
         assert_eq!(get(&mut s, "E1")["value"], json!(5.0));
+    }
+
+    #[test]
+    fn cut_paste_that_overflows_the_grid_moves_nothing() {
+        // #997: the source was emptied first and the cells that fell off the grid were skipped.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2]]})).unwrap();
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+        s.execute("edit.cut", json!({"range": "A1:A2"})).unwrap();
+        // Transposed, the 2 rows become 2 columns and the second one is past XFD.
+        assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "XFD1"})).is_err());
+        assert_eq!(get(&mut s, "A1")["value"], json!(1.0));
+        assert_eq!(get(&mut s, "A2")["value"], json!(2.0));
+        // Not transposed, the second row would be past the last row.
+        assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "at": "A1048576"})).is_err());
+        assert_eq!(get(&mut s, "A1")["value"], json!(1.0));
+        assert_eq!(get(&mut s, "A2")["value"], json!(2.0));
+        // Not transposed it still fits in column XFD.
+        s.execute("edit.pasteSpecial", json!({"what": "all", "at": "XFD1"})).unwrap();
+        assert_eq!(get(&mut s, "XFD1")["value"], json!(1.0));
+        assert_eq!(get(&mut s, "XFD2")["value"], json!(2.0));
     }
 
     #[test]
