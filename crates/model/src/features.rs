@@ -48,6 +48,12 @@ pub struct TableColumn {
     pub totals_label: Option<String>,
     /// Calculated column formula.
     pub formula: Option<String>,
+    /// Differential format Excel applies to the column's data cells (new rows pick it up).
+    #[serde(default)]
+    pub data_style: Option<Style>,
+    /// Named cell style of the column's data cells.
+    #[serde(default)]
+    pub data_cell_style: Option<String>,
     /// `uniqueName`: the name XML maps know the column by.
     #[serde(default)]
     pub unique_name: Option<String>,

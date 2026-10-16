@@ -487,6 +487,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             let _ = write!(s, "</{tag}>");
         }
     }
+    s.push_str(&kept.custom_properties());
 
     // Drawing: pictures, charts, shapes.
     if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() {
@@ -569,7 +570,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             out.table_id += 1;
             let n = out.tables;
             let name = table_name(&t.name, &mut used_names, out.table_id);
-            let xml = table_xml(t, cols, &name, out.table_id, out);
+            let xml = table_xml(t, cols, &name, out.table_id, &wb.cell_styles, out);
             out.part(&format!("xl/tables/table{n}.xml"), Some(CT_TABLE), xml.into_bytes());
             let rid = rels.add("table", &format!("../tables/table{n}.xml"));
             let _ = write!(parts, "<tablePart r:id=\"{rid}\"/>");
@@ -1021,7 +1022,8 @@ fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mu
     s
 }
 
-fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> String {
+/// `named`: the workbook's named cell styles; a column's cell style is written only when it exists.
+fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, named: &[(String, Style)], out: &mut Out) -> String {
     let mut s =
         format!("{XML_DECL}<table xmlns=\"{NS_MAIN}\" id=\"{id}\" name=\"{0}\" displayName=\"{0}\" ref=\"{1}\"", esc_attr(name), t.range.a1());
     if !t.header_row {
@@ -1071,6 +1073,12 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
             } else if let Some(l) = col.and_then(|c| c.totals_label.as_ref()) {
                 let _ = write!(s, " totalsRowLabel=\"{}\"", esc_attr(l));
             }
+        }
+        if let Some(st) = col.and_then(|c| c.data_style.as_ref()) {
+            let _ = write!(s, " dataDxfId=\"{}\"", dxf_id(&mut out.dxfs, st));
+        }
+        if let Some(cs) = col.and_then(|c| c.data_cell_style.as_deref()).filter(|n| *n == "Normal" || named.iter().any(|(x, _)| x == n)) {
+            let _ = write!(s, " dataCellStyle=\"{}\"", esc_attr(cs));
         }
         let calc = col.and_then(|c| c.formula.as_ref()).filter(|f| !f.is_empty());
         let custom = if t.totals_row && totals == TotalsFn::Custom { col.and_then(|c| c.totals_label.as_ref()) } else { None };

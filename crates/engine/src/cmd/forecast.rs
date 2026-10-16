@@ -388,7 +388,16 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             totals_row: false,
             columns: headers
                 .iter()
-                .map(|h| TableColumn { name: h.clone(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None })
+                .map(|h| TableColumn {
+                    name: h.clone(),
+                    totals: TotalsFn::None,
+                    totals_label: None,
+                    formula: None,
+                    data_style: None,
+                    data_cell_style: None,
+                    unique_name: None,
+                    xml: None,
+                })
                 .collect(),
             style: "TableStyleMedium2".into(),
             banded_rows: true,

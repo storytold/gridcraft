@@ -553,6 +553,40 @@ fn text_box_formatting_is_read_and_written() {
     assert_eq!(g.text_outline.map(|o| o.1), Some(1.5));
 }
 
+/// #865: a table column's default data format (`dataDxfId`) and cell style (`dataCellStyle`),
+/// which Excel applies to new rows, survive a save.
+#[test]
+fn table_column_data_formats_survive_save() {
+    let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+      <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+      <borders count="1"><border/></borders>
+      <cellStyleXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="4" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+      <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+      <cellStyles count="2"><cellStyle name="Normal" xfId="0" builtinId="0"/><cellStyle name="Money" xfId="1"/></cellStyles>
+      <dxfs count="2"><dxf><font><b/></font></dxf><dxf><numFmt numFmtId="164" formatCode="0.000"/></dxf></dxfs>
+    </styleSheet>"#;
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Item</t></is></c><c r="B1" t="inlineStr"><is><t>Weight</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>a</t></is></c><c r="B2"><v>1.5</v></c></row></sheetData><tableParts count="1"><tablePart r:id="rId1"/></tableParts>"#;
+    let sheet_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/></Relationships>"#;
+    let table = r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="T" displayName="T" ref="A1:B2"><tableColumns count="2"><tableColumn id="1" name="Item"/><tableColumn id="2" name="Weight" dataDxfId="1" dataCellStyle="Money"/></tableColumns><tableStyleInfo name="TableStyleMedium2" showRowStripes="1"/></table>"#;
+    let bytes =
+        minimal(body, &[("xl/styles.xml", styles), ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels), ("xl/tables/table1.xml", table)], rels, "");
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let out = crate::write_xlsx(&wb).unwrap();
+    let mut pkg = crate::package::Package::open(&out).unwrap();
+    let t = pkg.read_xml("xl/tables/table1.xml").unwrap().unwrap();
+    let cols: Vec<_> = t.child("tableColumns").unwrap().kids("tableColumn").collect();
+    assert_eq!((cols[0].attr("dataDxfId"), cols[0].attr("dataCellStyle")), (None, None));
+    assert_eq!(cols[1].attr("dataCellStyle"), Some("Money"));
+    let id: usize = cols[1].attr("dataDxfId").expect("dataDxfId is written").parse().unwrap();
+    let st = pkg.read_xml("xl/styles.xml").unwrap().unwrap();
+    let dxf = st.child("dxfs").unwrap().kids("dxf").nth(id).unwrap();
+    assert_eq!(dxf.child("numFmt").and_then(|n| n.attr("formatCode")), Some("0.000"));
+    assert!(dxf.child("font").is_none(), "the column's own dxf, not another one");
+    assert!(st.child("cellStyles").unwrap().kids("cellStyle").any(|c| c.attr("name") == Some("Money")));
+}
+
 /// `_xludf.` marks a user-defined call even when a built-in has the same name; dropping it turns
 /// the call into the built-in, and `_xludf.EOMONTH()` into a call Excel repairs away (#726).
 #[test]

@@ -762,6 +762,8 @@ fn subtotal_skips_filtered_rows() {
             totals: Default::default(),
             totals_label: None,
             formula: None,
+            data_style: None,
+            data_cell_style: None,
             unique_name: None,
             xml: None,
         }],

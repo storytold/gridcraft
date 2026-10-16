@@ -321,7 +321,16 @@ fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
             totals_row: false,
             columns: names
                 .into_iter()
-                .map(|n| TableColumn { name: n, totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None })
+                .map(|n| TableColumn {
+                    name: n,
+                    totals: TotalsFn::None,
+                    totals_label: None,
+                    formula: None,
+                    data_style: None,
+                    data_cell_style: None,
+                    unique_name: None,
+                    xml: None,
+                })
                 .collect(),
             style,
             banded_rows: true,
