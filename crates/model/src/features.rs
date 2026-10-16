@@ -482,6 +482,18 @@ pub struct Trendline {
     pub dash: Option<LineDash>,
 }
 
+impl Trendline {
+    /// Longest forward / backward forecast kept from a file or a command, in x units. Excel's own
+    /// limit is unconfirmed; the renderer additionally bounds the forecast by the plot's slot budget.
+    pub const MAX_FORECAST: f64 = 100_000.0;
+
+    /// A forecast distance as stored: finite, not negative (NaN and infinity become 0) and at most
+    /// [`Self::MAX_FORECAST`].
+    pub fn clamp_forecast(v: f64) -> f64 {
+        if v.is_finite() && v > 0.0 { v.min(Self::MAX_FORECAST) } else { 0.0 }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Chart {
     pub id: u32,
@@ -1044,5 +1056,21 @@ impl Default for PivotTable {
             values_on_rows: false,
             values_position: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod trendline_forecast_tests {
+    use super::Trendline;
+
+    #[test]
+    fn clamp_forecast_bounds_hostile_values() {
+        assert_eq!(Trendline::clamp_forecast(2.5), 2.5);
+        assert_eq!(Trendline::clamp_forecast(0.0), 0.0);
+        assert_eq!(Trendline::clamp_forecast(-4.0), 0.0);
+        assert_eq!(Trendline::clamp_forecast(f64::NAN), 0.0);
+        assert_eq!(Trendline::clamp_forecast(f64::INFINITY), 0.0);
+        assert_eq!(Trendline::clamp_forecast(f64::NEG_INFINITY), 0.0);
+        assert_eq!(Trendline::clamp_forecast(1e300), Trendline::MAX_FORECAST);
     }
 }

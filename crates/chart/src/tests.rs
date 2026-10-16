@@ -1057,3 +1057,24 @@ fn area_charts_draw_source_value_labels_only_when_enabled() {
         assert!(first_label > last_poly, "{kind:?}: label drawn under a later area");
     }
 }
+
+#[test]
+fn a_huge_trendline_forecast_does_not_collapse_the_columns() {
+    let m = ApproxMeasure;
+    let tc: Rgba = [1, 2, 3, 255];
+    let col: Rgba = [10, 20, 30, 255];
+    let mut s = series("Sales", &[1.0, 3.0, 2.0, 5.0, 4.0], col, ChartKind::ColumnClustered);
+    s.trendlines = vec![TrendlineData { spec: Trendline { forward: 1e6, backward: 1e6, ..Trendline::default() }, color: tc }];
+    let d = ChartData { palette: vec![], categories: ["a", "b", "c", "d", "e"].map(String::from).to_vec(), series: vec![s] };
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.legend = LegendPos::None;
+    let prims = render(&c, &d, 600.0, 400.0, &m);
+    assert_sane(&prims, 600.0, 400.0);
+    let widths: Vec<f32> =
+        prims.iter().filter_map(|p| if let Prim::Rect { w, fill: Some(f), .. } = p { (*f == col).then_some(*w) } else { None }).collect();
+    assert_eq!(widths.len(), 5);
+    assert!(widths.iter().all(|w| *w > 4.0), "columns stay visible: {widths:?}");
+    let trend = lines_of(&prims, tc);
+    assert_eq!(trend.len(), 1);
+    assert!(trend[0].len() >= 20, "the trendline is sampled over the plot, not the forecast: {}", trend[0].len());
+}

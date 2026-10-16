@@ -658,6 +658,13 @@ fn forecast(v: f64) -> f64 {
     if v.is_finite() && v > 0.0 { v.min(1e9) } else { 0.0 }
 }
 
+/// Most empty category slots a forward forecast may add after `ncat` categories: four times the
+/// data (at least 32), and never past `MAX_CATS` in total. A larger forecast would shrink every
+/// column to nothing.
+fn max_forward_slots(ncat: usize) -> f64 {
+    (ncat.saturating_mul(4).max(32)).min(MAX_CATS.saturating_sub(ncat)) as f64
+}
+
 /// Longest forward forecast among `s`'s regression trendlines.
 fn max_forward(s: &SeriesData) -> f64 {
     s.trendlines.iter().filter(|t| !matches!(t.spec.kind, TrendlineKind::MovingAverage(_))).map(|t| forecast(t.spec.forward)).fold(0.0, f64::max)
@@ -748,6 +755,7 @@ fn draw_trendlines(
     frac: &dyn Fn(f64, f64) -> (f64, f64),
     px: &dyn Fn((f64, f64)) -> [f32; 2],
     labels: &mut Vec<String>,
+    window: (f64, f64),
 ) {
     let Some((xlo, xhi)) = value_range(pts.iter().map(|p| p.0)) else { return };
     for t in s.trendlines.iter().take(MAX_TRENDLINES) {
@@ -756,7 +764,8 @@ fn draw_trendlines(
             TrendlineKind::MovingAverage(p) => moving_average(pts, p).into_iter().map(|(x, y)| Some(frac(x, y))).collect(),
             _ => {
                 let Some(fit) = fit_trendline(spec, pts) else { continue };
-                let (lo, hi) = (xlo - forecast(spec.backward), xhi + forecast(spec.forward));
+                // Sample only the part of the forecast that is on the plot.
+                let (lo, hi) = ((xlo - forecast(spec.backward)).max(window.0), (xhi + forecast(spec.forward)).min(window.1));
                 if spec.display_equation {
                     labels.push(fit.equation());
                 }
@@ -936,7 +945,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         .filter(|(i, _)| kinds.get(*i).is_some_and(|k| supports_trendline(*k)))
         .map(|(_, s)| max_forward(s))
         .fold(0.0, f64::max);
-    let ncat_slots = ncat.saturating_add(fwd.ceil() as usize).min(MAX_CATS.max(ncat));
+    let ncat_slots = ncat.saturating_add(fwd.min(max_forward_slots(ncat)).ceil() as usize).min(MAX_CATS.max(ncat));
     let labels: Vec<String> = (0..ncat_slots).map(|j| if j < ncat { cat_label(data, j) } else { String::new() }).collect();
     let plot = frame(ctx, area, CatAxis::Labels(&labels), &y1, y2.as_ref(), horizontal, chart.gridlines);
     if !plot.ok() {
@@ -1102,7 +1111,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                 [plot.x + fx as f32 * plot.w, plot.bottom() - fy as f32 * plot.h]
             }
         };
-        draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels);
+        draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (0.5, ncat_slots as f64 + 0.5));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
 }
@@ -1196,7 +1205,7 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         let pts: Vec<(f64, f64)> = pts.iter().flatten().copied().collect();
         let frac = |x: f64, y: f64| ((x - xs.min) / (xs.max - xs.min), (y - ys.min) / (ys.max - ys.min));
         let px = |(fx, fy): (f64, f64)| [plot.x + fx as f32 * plot.w, plot.bottom() - fy as f32 * plot.h];
-        draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels);
+        draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (xs.min, xs.max));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
 }

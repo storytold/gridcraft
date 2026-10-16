@@ -151,8 +151,8 @@ fn read_trendline(t: &El) -> Option<Trendline> {
     Some(Trendline {
         kind,
         name: t.child("name").map(|n| n.text.clone()),
-        forward: f64_val(t, "forward").unwrap_or(0.0).max(0.0),
-        backward: f64_val(t, "backward").unwrap_or(0.0).max(0.0),
+        forward: Trendline::clamp_forecast(f64_val(t, "forward").unwrap_or(0.0)),
+        backward: Trendline::clamp_forecast(f64_val(t, "backward").unwrap_or(0.0)),
         intercept: f64_val(t, "intercept"),
         display_equation: bool_val(t, "dispEq"),
         display_r_squared: bool_val(t, "dispRSqr"),

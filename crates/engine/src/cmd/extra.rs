@@ -351,7 +351,7 @@ fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
 /// The trendline described by `chart.addElement`'s trendline parameters (Excel's Add Chart
 /// Element ▸ Trendline choices, plus the Format Trendline options).
 fn trendline_param(p: &Json) -> Result<Trendline> {
-    let num = |k: &str| f64_param(p, k).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0);
+    let num = |k: &str| Trendline::clamp_forecast(f64_param(p, k).unwrap_or(0.0));
     let mut t = Trendline {
         forward: num("forward"),
         backward: num("backward"),
