@@ -2939,15 +2939,14 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
 }
 
-/// Used by `EditState` users to keep the active cell visible while pointing.
-pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, extend: bool) {
-    let Some(d) = app.session.active() else { return };
-    let from = ed.point_cell.unwrap_or(ed.cell);
-    let to = from.offset_clamped(dr, dc);
+/// The reference text keyboard pointing writes: the target (or the range from the anchor to it when extending),
+/// qualified with `sheet` when the formula is being edited on a different sheet than the one pointed at.
+fn point_ref_text(pointed: Option<&str>, from: CellRef, to: CellRef, extend: bool, sheet: Option<&str>) -> String {
     let text = if extend {
         // The anchor is the corner opposite the moving end: the written range is normalized, so
         // after extending up or left its first cell is the moving end, not the anchor.
-        let pointed = ed.point.and_then(|(s, e)| ed.text.get(s..e)).and_then(RangeRef::parse);
+        // A qualified range (`Sheet2!A1:B2`) is parsed without its sheet prefix.
+        let pointed = pointed.and_then(|t| RangeRef::parse(t.rsplit_once('!').map_or(t, |(_, r)| r)));
         let anchor = pointed
             .map(|r| {
                 CellRef::new(
@@ -2960,7 +2959,21 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
     } else {
         to.a1()
     };
-    let _ = d;
+    match sheet {
+        Some(n) => format!("{}!{text}", gridcraft_engine::formula::quote_sheet(n)),
+        None => text,
+    }
+}
+
+/// Used by `EditState` users to keep the active cell visible while pointing.
+pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, extend: bool) {
+    let Some(d) = app.session.active() else { return };
+    let from = ed.point_cell.unwrap_or(ed.cell);
+    let to = from.offset_clamped(dr, dc);
+    // Like mouse pointing: qualify with the pointed sheet when it is not the one being edited.
+    let sheet_name = d.wb.active().filter(|_| ed.sheet != d.wb.active_sheet).map(|sh| sh.name.clone());
+    let pointed = ed.point.and_then(|(s, e)| ed.text.get(s..e));
+    let text = point_ref_text(pointed, from, to, extend, sheet_name.as_deref());
     ed.insert_ref(&text);
     ed.point_cell = Some(to);
     app.grid.ensure_visible = true;
@@ -3335,6 +3348,23 @@ mod selection_fill_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyboard_pointing_keeps_the_sheet_qualifier() {
+        let (a1, b2, c3) = (CellRef::new(0, 0), CellRef::new(1, 1), CellRef::new(2, 2));
+        // Same sheet: unqualified, as before.
+        assert_eq!(point_ref_text(None, a1, b2, false, None), "B2");
+        // Another sheet: qualified, quoting names that need it.
+        assert_eq!(point_ref_text(None, a1, b2, false, Some("Sheet2")), "Sheet2!B2");
+        assert_eq!(point_ref_text(None, a1, b2, false, Some("My Data")), "'My Data'!B2");
+        // Extending right/down keeps the anchor of the qualified pointed range.
+        assert_eq!(point_ref_text(Some("Sheet2!A1:B2"), b2, c3, true, Some("Sheet2")), "Sheet2!A1:C3");
+        assert_eq!(point_ref_text(Some("'My Data'!A1:B2"), b2, c3, true, Some("My Data")), "'My Data'!A1:C3");
+        // Extending up/left: the written range is normalized, the anchor is the opposite corner.
+        assert_eq!(point_ref_text(Some("Sheet2!B2:C3"), b2, a1, true, Some("Sheet2")), "Sheet2!A1:C3");
+        // Same-sheet control.
+        assert_eq!(point_ref_text(Some("A1:B2"), b2, c3, true, None), "A1:C3");
+    }
 
     #[test]
     fn wheel_zoom_steps_along_the_ladder_and_stops_at_100() {
