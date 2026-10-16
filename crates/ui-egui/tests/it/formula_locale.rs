@@ -225,10 +225,12 @@ fn turkish_interface_uses_localized_formulas_and_xlsx_roundtrip() {
     assert_eq!(app.ui.language.tr("Data"), "Veri");
     assert_eq!(app.ui.language.tr("Formulas"), "Formüller");
     assert_eq!(app.ui.language.tr("Formula Builder"), "Formül Oluşturucu");
-    assert_eq!(app.ui.language.tr("Insert Function"), "İşlev Ekle");
+    assert_eq!(app.ui.language.tr("Insert Function"), "Fonksiyon Ekle");
+    assert_eq!(app.ui.language.tr("Enter"), "Gir");
     assert_eq!(app.ui.language.tr("Search:"), "Ara:");
     assert_eq!(app.ui.language.tr("e.g. lookup, average, date"), "örn. arama, ortalama, tarih");
     assert_eq!(app.ui.language.tr("MathTrig"), "Matematik ve Trigonometri");
+    assert_eq!(app.ui.language.tr("Financial"), "Finansal");
     assert!(enter(&mut app, "=BAĞ_DEĞ_SAY(A1:A10)"));
     assert_eq!(formula(&app), "COUNT(A1:A10)");
     app.begin_edit(None, true);
@@ -238,6 +240,11 @@ fn turkish_interface_uses_localized_formulas_and_xlsx_roundtrip() {
     assert_eq!(formula(&app), "COUNT(A1:A10)");
     app.begin_edit(None, true);
     assert_eq!(app.editor.as_ref().unwrap().text, "=BAĞ_DEĞ_SAY(A1:A10)");
+    app.cancel_edit();
+    assert!(enter(&mut app, "=DEVRESEL_ÖDEME(0,05/12;60;-10000)"));
+    assert_eq!(formula(&app), "PMT(0.05/12,60,-10000)");
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=DEVRESEL_ÖDEME(0,05/12;60;-10000)");
     app.cancel_edit();
     assert!(enter(&mut app, "=EĞER(DOĞRU;TOPLA(1,5;2,25);0)"));
     assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
