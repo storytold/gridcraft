@@ -22,10 +22,12 @@ fn main() {
     let mut dialog: Option<String> = None;
     let mut language: Option<String> = None;
     let mut hf_edit: Option<String> = None;
+    let mut start_screen = false;
     let mut out = "snapshot.png".to_string();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--start-screen" => start_screen = true,
             "--sample" => {
                 i += 1;
                 sample = args.get(i).cloned();
@@ -123,6 +125,9 @@ fn main() {
                 if let (Some(part), Some((si, sh))) = (&hf_edit, active) {
                     let zone = gridcraft_engine::paper::HfZone { footer: part == "footer", section: 1 };
                     gridcraft_ui_egui::paper_view::begin(&mut app, si, &sh, (0, 0), zone);
+                }
+                if start_screen {
+                    app.start_screen();
                 }
                 app
             },

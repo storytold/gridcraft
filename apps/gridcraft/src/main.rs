@@ -302,6 +302,12 @@ fn main() -> eframe::Result<()> {
     app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;
     load_prefs(&mut app);
+    // Nothing to open (no files, no sample, no control channel driving the editor): start
+    // on File › Home, as Excel does (#766), unless the Start screen option is off. Files
+    // macOS hands over later open on top of it and close it (`apple_events`).
+    if files.is_empty() && sample.is_none() && control_port.is_none() {
+        app.start_screen();
+    }
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open
     // opens them: a password-protected one asks for its password, and errors are shown, not
     // only logged. Each replaces the untouched blank Book1, as a file opened from Finder does.

@@ -60,6 +60,9 @@ pub struct UiState {
     /// Enable AutoComplete for cell values (File ▸ Options ▸ Editing): typed text is completed
     /// from the one matching entry in the same column.
     pub autocomplete: bool,
+    /// File › Options › General: start on File › Home (Blank workbook, templates, Recent) when
+    /// the app opens without a workbook (#766); on, as in Excel. See [`SheetApp::start_screen`].
+    pub start_screen: bool,
     pub recent: Vec<String>,
     /// One-shot keytip request for a ribbon control: set when a keytip action resolves to
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
@@ -103,6 +106,7 @@ impl Default for UiState {
             status_bar: true,
             animations: true,
             autocomplete: true,
+            start_screen: true,
             recent: vec![],
             keytip_invoke: None,
             language: i18n::Language::En,
@@ -216,7 +220,7 @@ pub struct SheetApp {
     pub editor: Option<editor::EditState>,
     pub text_box_editor: Option<text_box::EditState>,
     pub dialog: Option<dialogs::Dialog>,
-    /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
+    /// The File tab's Backstage view, when open (UI-only; replaces the title bar, ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
     pub message: Option<(String, String)>,
     pub toast: Option<(String, f64)>,
@@ -658,6 +662,16 @@ impl SheetApp {
                 }
                 Ok(json!({"page": self.backstage.as_ref().map(|b| b.page.id())}))
             }
+            "ui.startScreen" => {
+                // File › Options › General › Start-up (#766): `value` true or false turns showing
+                // File › Home at start-up on or off; no value reads it.
+                match p.get("value") {
+                    None => {}
+                    Some(Json::Bool(on)) => self.ui.start_screen = *on,
+                    Some(_) => return Some(Err("`value` must be true or false".into())),
+                }
+                Ok(json!({"startScreen": self.ui.start_screen}))
+            }
             "ui.dialog" => {
                 let name = p.get("name").and_then(Json::as_str).unwrap_or("");
                 self.open_dialog(name, p.clone());
@@ -759,6 +773,19 @@ impl SheetApp {
             Some(b) => b.page = page,
             None => self.backstage = Some(backstage::Backstage::new(page)),
         }
+    }
+
+    /// Start-up with no workbook to open (#766): show File › Home (Blank workbook, the templates
+    /// and Recent), as Excel starts, when the Start screen setting is on (the default). Esc or the
+    /// back arrow leaves the empty workbook the app was created with. Hosts call this after
+    /// loading preferences when they have nothing to open; [`SheetApp::new`] never does, so
+    /// tests, `snapshot` and windows opened for a workbook start in the editor. Returns whether
+    /// the Start screen shows.
+    pub fn start_screen(&mut self) -> bool {
+        if self.ui.start_screen {
+            self.backstage = Some(backstage::Backstage::new(backstage::Page::Home));
+        }
+        self.ui.start_screen
     }
 
     pub fn open_path(&mut self, path: &str) {
@@ -1103,14 +1130,12 @@ impl SheetApp {
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
         let t = theme::Tokens::get(&ctx);
-        if self.backstage.is_none() {
-            self.ribbon_keys(&ctx);
-        }
-        ribbon::title_bar(self, ui);
         if self.backstage.is_some() {
-            // File tab: the Backstage view replaces everything below the title bar.
+            // File tab: the Backstage view is full screen, replacing the title bar, ribbon, grid and tabs.
             backstage::show(self, ui);
         } else {
+            self.ribbon_keys(&ctx);
+            ribbon::title_bar(self, ui);
             ribbon::show(self, ui);
             widgets::notice_bar(self, ui);
             if self.session.prefs.formula_bar {

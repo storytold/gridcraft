@@ -185,6 +185,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
                 ("ui.backstage", "File (Backstage view)", "{page?: home|new|open|info|saveAs|print|export|options|close}"),
+                ("ui.startScreen", "Show Start Screen at Start-up", "{value?: bool} → {startScreen}"),
                 (
                     "ui.printSettings",
                     "Print Settings",

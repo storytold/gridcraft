@@ -217,3 +217,75 @@ fn a_cancelled_export_pdf_picker_writes_nothing() {
     assert!(h.state().message.is_none());
     assert!(h.state_mut().session.take_ui_requests().is_empty());
 }
+
+#[test]
+fn start_screen_shows_file_home_and_esc_leaves_a_blank_workbook() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut a = SheetApp::new(session, Services::default());
+    assert!(a.backstage.is_none(), "`new` starts in the editor");
+    assert!(a.start_screen(), "on by default");
+    assert!(matches!(a.backstage.as_ref().map(|b| b.page), Some(gridcraft_ui_egui::backstage::Page::Home)));
+
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.query_by_label("Blank workbook").is_some(), "Home lists Blank workbook and samples");
+    assert!(h.query_by_label("No recent workbooks yet.").is_some(), "shows recent workbooks section");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    assert!(h.state().backstage.is_none(), "Esc leaves the Start screen");
+    assert_eq!(h.state().session.documents().len(), 1, "leaving Start screen shows the blank workbook");
+
+    let mut session2 = Session::new();
+    session2.new_workbook();
+    let mut b = SheetApp::new(session2, Services::default());
+    b.run("ui.startScreen", serde_json::json!({"value": false})).unwrap();
+    assert!(!b.start_screen(), "off: starts in editor");
+    assert!(b.backstage.is_none());
+}
+
+#[test]
+fn start_screen_setting_is_a_ui_command_and_survives_a_restart() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut a = SheetApp::new(session, Services::default());
+    assert_eq!(a.run("ui.startScreen", serde_json::json!({})).unwrap(), serde_json::json!({"startScreen": true}), "on by default; no value reads it");
+    assert_eq!(a.run("ui.startScreen", serde_json::json!({"value": false})).unwrap(), serde_json::json!({"startScreen": false}));
+    for junk in [
+        serde_json::json!({"value": "yes"}),
+        serde_json::json!({"value": 1}),
+        serde_json::json!({"value": null}),
+        serde_json::json!({"value": [true]}),
+    ] {
+        assert!(a.run("ui.startScreen", junk).is_err());
+    }
+    assert!(!a.ui.start_screen, "a rejected value keeps the setting");
+    let saved = serde_json::to_string(&a.ui).unwrap();
+    assert!(saved.contains(r#""startScreen":false"#), "{saved}");
+    let restored: gridcraft_ui_egui::UiState = serde_json::from_str(&saved).unwrap();
+    assert!(!restored.start_screen);
+
+    let old: gridcraft_ui_egui::UiState = serde_json::from_str(r#"{"ribbonTab":"Insert"}"#).unwrap();
+    assert!(old.start_screen, "settings from before the option leave it on");
+}
+
+#[test]
+fn general_options_turns_the_start_screen_off_and_on() {
+    let mut h = harness(Services::default());
+    choose(&mut h, "Options");
+    assert_eq!(page(&h), Some("options"));
+    assert!(h.state().ui.start_screen, "starts on");
+    h.get_by_label("Show the Start screen when this application starts").click();
+    h.run_steps(4);
+    assert!(!h.state().ui.start_screen, "the checkbox turns it off");
+    h.get_by_label("Show the Start screen when this application starts").click();
+    h.run_steps(4);
+    assert!(h.state().ui.start_screen, "and on again");
+}
