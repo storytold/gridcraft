@@ -177,7 +177,8 @@ fn keyboard_navigation_does_not_replay_the_last_pointer_click() {
         (Key::Enter, Modifiers::NONE, "B5"),
         (Key::Enter, Modifiers::SHIFT, "B4"),
         (Key::Tab, Modifiers::NONE, "C4"),
-        (Key::Enter, Modifiers::NONE, "C5"),
+        // #911: Enter after a Tab goes back to the column the Tab started from.
+        (Key::Enter, Modifiers::NONE, "B5"),
     ] {
         key(&mut h, key_code, modifiers);
         let selection = &h.state().session.active().unwrap().selection;
@@ -239,6 +240,50 @@ fn typing_enters_values_and_moves_down() {
     assert_eq!(value(&h, "A2"), Value::Number(84.0));
     let active = h.state().session.active().map(|d| d.selection.active.a1());
     assert_eq!(active.as_deref(), Some("B2"));
+}
+
+#[test]
+fn enter_after_tabs_returns_to_the_column_where_the_tabs_started() {
+    // #911: Excel moves to the next row in the column the run of Tabs started from.
+    let mut h = harness(blank());
+    for t in ["a", "b"] {
+        text(&mut h, t);
+        key(&mut h, Key::Tab, Modifiers::NONE);
+    }
+    text(&mut h, "c");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(value(&h, "C1"), Value::from("c"));
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A2");
+    // The next Enter is an ordinary one again.
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A3");
+}
+
+#[test]
+fn moving_with_an_arrow_ends_the_run_of_tabs() {
+    let mut h = harness(blank());
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "C2");
+}
+
+#[test]
+fn an_arrow_that_commits_typing_ends_the_run_of_tabs() {
+    // Excel 365 from B2: the arrow is an ordinary move, neither one more Tab (Right) nor an Enter
+    // back to the starting column (Down).
+    for (arrow, after_enter) in [(Key::ArrowRight, "D3"), (Key::ArrowDown, "C4")] {
+        let mut s = blank();
+        s.execute("selection.set", json!({"cell": "B2"})).unwrap();
+        let mut h = harness(s);
+        text(&mut h, "a");
+        key(&mut h, Key::Tab, Modifiers::NONE);
+        text(&mut h, "b");
+        key(&mut h, arrow, Modifiers::NONE);
+        assert_eq!(value(&h, "C2"), Value::from("b"), "{arrow:?}");
+        key(&mut h, Key::Enter, Modifiers::NONE);
+        assert_eq!(h.state().session.active().unwrap().selection.active.a1(), after_enter, "{arrow:?}");
+    }
 }
 
 #[test]

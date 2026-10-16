@@ -162,6 +162,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let focused = ui.ctx().memory(|m| m.focused());
     let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none()));
     let mut action: Option<(i64, i64, bool, bool)> = None;
+    let mut arrow = false;
     let mut cancel = false;
     if has_focus && mine {
         let (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, shift) = ui.input_mut(|i| {
@@ -249,6 +250,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
                 crate::grid::point_move(app, &mut ed, dr, dc, ashift);
             } else {
                 action = Some((dr, dc, false, false));
+                arrow = true;
             }
         }
         // F4 cycles $ anchors of the reference before the caret.
@@ -413,7 +415,11 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     if cancel {
         app.cancel_edit();
     } else if let Some((dr, dc, array, fill)) = action {
-        app.commit_edit(dr, dc, array, fill);
+        if arrow {
+            app.commit_edit_arrow(dr, dc);
+        } else {
+            app.commit_edit(dr, dc, array, fill);
+        }
     }
 }
 
