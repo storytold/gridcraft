@@ -69,6 +69,13 @@ fn alignment(h: &Harness) -> HAlign {
     d.wb.styles.get(sh.style_id(CellRef::parse("A1").unwrap())).align.h
 }
 
+fn number_format(h: &Harness) -> String {
+    let d = h.state().session.active().unwrap();
+    let sh = d.wb.active().unwrap();
+    let code = d.wb.styles.get(sh.style_id(CellRef::parse("A1").unwrap())).num_fmt.as_str().to_string();
+    format!("{:?}", gridcraft_engine::display::number_format(&code).kind())
+}
+
 fn copied_row() -> Session {
     let mut s = blank();
     s.execute("cell.set", json!({"cell": "A1", "input": "=20+22"})).unwrap();
@@ -436,13 +443,15 @@ fn pending_sequences_go_live_when_the_command_lands() {
 
 #[test]
 fn control_keytips_open_dropdowns_and_run_handlers() {
-    // HFF routes to the font control: its dropdown opens (popup items queryable).
+    // HFF routes to the font control: it focuses the font box, so typing and Enter apply a font.
     let mut h = harness(blank());
     sequence(&mut h, &[Key::H, Key::F, Key::F], false);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "HFF must not raise an error box");
-    // "Calibri" appears twice: once on the combo button (the current font) and
-    // once inside the opened dropdown — a single node would mean it stayed closed.
-    assert!(h.query_all_by_label("Calibri").count() >= 2, "HFF must open the font dropdown");
+    h.run_steps(3);
+    events(&mut h, [Event::Text("Georgia".into())]);
+    key(&mut h, Key::Enter);
+    h.run_steps(3);
+    assert!(h.get_all_by_role(egui::accesskit::Role::TextInput).any(|n| n.value().as_deref() == Some("Georgia")), "HFF must focus the font box");
 
     // WVF toggles the formula bar: pure UI state, no engine command exists.
     let mut h = harness(blank());
@@ -459,33 +468,32 @@ fn control_keytips_open_dropdowns_and_run_handlers() {
 
 #[test]
 fn editable_combos_filter_by_typing_and_move_by_arrows() {
-    // Open the font dropdown (HFF), type to filter, then Enter to apply.
+    // Open the number format dropdown (HN), type to filter, then Enter to apply.
     let mut h = harness(blank());
-    sequence(&mut h, &[Key::H, Key::F, Key::F], false);
+    sequence(&mut h, &[Key::H, Key::N], false);
     h.run_steps(3); // let the filter field gain focus
-    events(&mut h, [Event::Text("arial".into())]);
+    events(&mut h, [Event::Text("percent".into())]);
     h.run_steps(3);
-    // "arial" matches Arial only — Georgia must be filtered out of the list.
-    assert_eq!(h.query_all_by_label("Georgia").count(), 0, "typing must narrow the list");
-    assert!(h.query_all_by_label("Arial").count() >= 1, "the match must stay visible");
+    // Rows read "<format>   <preview>": "percent" matches Percentage only.
+    assert_eq!(h.query_all_by_label_contains("Currency").count(), 0, "typing must narrow the list");
+    assert_eq!(h.query_all_by_label_contains("Percentage").count(), 1, "the match must stay visible");
     key(&mut h, Key::Enter);
     h.run_steps(3);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "applying must not raise an error");
-    // The popup closed and the combo button now shows the applied font.
-    assert_eq!(h.query_all_by_label("Arial").count(), 1, "Enter must apply Arial and close the popup");
-    assert_eq!(h.query_all_by_label("Georgia").count(), 0);
+    assert_eq!(number_format(&h), "Percentage", "Enter must apply the filtered row");
+    assert_eq!(h.query_all_by_label_contains("Currency").count(), 0, "and close the popup");
 
-    // Arrows alone move through the full list: Calibri -> Cambria -> Candara -> Consolas.
+    // Arrows alone move through the full list: General -> Number -> Currency.
     let mut h = harness(blank());
-    sequence(&mut h, &[Key::H, Key::F, Key::F], false);
+    sequence(&mut h, &[Key::H, Key::N], false);
     h.run_steps(3);
-    for _ in 0..3 {
+    for _ in 0..2 {
         key(&mut h, Key::ArrowDown);
     }
     key(&mut h, Key::Enter);
     h.run_steps(3);
     assert!(h.state().message.is_none() && h.state().toast.is_none());
-    assert_eq!(h.query_all_by_label("Consolas").count(), 1, "Down x3 from Calibri must land on Consolas");
+    assert_eq!(number_format(&h), "Currency", "Down x2 from General must land on Currency");
 
     // Size combo: type a custom size not in the list, Enter applies it.
     let mut h = harness(blank());
@@ -495,30 +503,23 @@ fn editable_combos_filter_by_typing_and_move_by_arrows() {
     key(&mut h, Key::Enter);
     h.run_steps(3);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "custom sizes must apply");
-    assert_eq!(h.query_all_by_label("13.5").count(), 1, "the button must show the custom size");
+    assert!(
+        h.get_all_by_role(egui::accesskit::Role::TextInput).any(|n| n.value().as_deref() == Some("13.5")),
+        "the size box must show the custom size"
+    );
 
     // Closing without applying (Escape) and reopening must reset the filter to the full list.
     let mut h = harness(blank());
-    sequence(&mut h, &[Key::H, Key::F, Key::F], false);
+    sequence(&mut h, &[Key::H, Key::N], false);
     h.run_steps(3);
-    events(&mut h, [Event::Text("arial".into())]);
+    events(&mut h, [Event::Text("percent".into())]);
     h.run_steps(3);
     key(&mut h, Key::Escape);
     h.run_steps(3);
-    sequence(&mut h, &[Key::H, Key::F, Key::F], false);
+    sequence(&mut h, &[Key::H, Key::N], false);
     h.run_steps(4);
-    assert!(h.query_all_by_label("Georgia").count() >= 1, "reopening must show the full, unfiltered list");
-    // Arrows after typing move the highlight, not the text cursor: type a filter,
-    // then Down twice and Enter must apply the second match's neighbour logic.
-    key(&mut h, Key::Escape);
-    h.run_steps(3);
-    sequence(&mut h, &[Key::H, Key::F, Key::F], false);
-    h.run_steps(3);
-    events(&mut h, [Event::Text("candara".into())]);
-    h.run_steps(3);
-    key(&mut h, Key::Enter);
-    h.run_steps(3);
-    assert_eq!(h.query_all_by_label("Candara").count(), 1, "filtered Enter must apply the filtered row");
+    assert_eq!(h.query_all_by_label_contains("Currency").count(), 1, "reopening must show the full, unfiltered list");
+    assert_eq!(number_format(&h), "General", "Escape applied nothing");
 }
 
 #[test]

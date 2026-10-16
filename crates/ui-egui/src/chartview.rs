@@ -208,7 +208,7 @@ fn paint_shape_text(p: &Painter, wb: &Workbook, sp: &gridcraft_engine::model::Sh
     let color = f.text_color.and_then(|c| c.resolve(&wb.theme)).map(theme::color32).unwrap_or(default_color);
     // Default 14 px (as before); a set size is in points.
     let size = f.font_size.map_or(14.0, |pt| pt * 96.0 / 72.0).clamp(1.0, 2000.0) * z;
-    let family = theme::cell_family(f.font.as_deref().unwrap_or(""), f.bold, f.italic);
+    let family = theme::cell_family(p.ctx(), f.font.as_deref().unwrap_or(""), f.bold, f.italic);
     let inset = 4.0;
     let width = (r.width() - 2.0 * inset).max(1.0);
     let mut job = egui::text::LayoutJob::simple(sp.text.clone(), FontId::new(size, family), color, width);

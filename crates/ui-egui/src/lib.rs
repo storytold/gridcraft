@@ -237,8 +237,9 @@ pub struct SheetApp {
     /// The (doc uid, revision) `fonts_bound` was computed for, so the style table is walked only
     /// when the workbook changes.
     fonts_seen: (u64, u64),
-    /// Set while a font-set change is pending activation: skip this frame's paint, like the
-    /// startup `fonts_ready` gate (egui applies new definitions at the next pass).
+    /// Set while a font-set change is pending activation (egui applies new definitions at the next
+    /// pass). The frame still paints: `theme::cell_family` only names families the context already
+    /// has, so a skipped frame would just drop that frame's input (a click or drag release).
     fonts_rebind: bool,
     /// Han face order the installed fonts were built with; a language switch rebuilds the fonts
     /// only when it changes this (see `theme::HanOrder`).
@@ -320,6 +321,10 @@ impl SheetApp {
 
     /// Sets up fonts and visuals for a specific persisted interface language.
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
+        // The desktop and web apps call this directly rather than `setup_context`, so the font scan
+        // starts here too (once; later calls are no-ops). Without it the installed fonts were never
+        // cataloged: the font lists showed only the standard names and cells couldn't use them.
+        fonts::start_scan();
         ctx.set_fonts(theme::font_definitions_for_language(language));
         theme::apply(ctx, dark);
     }
@@ -1015,8 +1020,8 @@ impl SheetApp {
             self.fonts_rebind = false;
         } else if fonts::scan_done() {
             // Bind the workbook's installed fonts once the background scan has finished. Adding
-            // fonts re-applies the font set, which egui activates at the next pass, so skip this
-            // frame's paint (same one-frame cost as startup). Only when the workbook changed.
+            // fonts re-applies the font set, which egui activates at the next pass; until then cells
+            // keep the fonts the context has. Only when the workbook changed.
             let seen = self.session.active().map(|d| (d.uid, d.revision)).unwrap_or((0, 0));
             if seen != self.fonts_seen {
                 let used = self.used_fonts();
@@ -1094,7 +1099,7 @@ impl SheetApp {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll_printing(&ctx);
-        if !self.fonts_ready || self.fonts_rebind {
+        if !self.fonts_ready {
             ctx.request_repaint();
             return;
         }

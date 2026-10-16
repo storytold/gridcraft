@@ -380,8 +380,6 @@ pub(crate) enum ComboResult {
     None,
     /// A row was applied: clicked or Enter on the highlighted row.
     Picked(String),
-    /// Enter with free text that matches no row (e.g. a custom font size).
-    Entered(String),
 }
 
 /// Excel-style dropdown: a filter field (type to narrow the list) plus arrow/Enter selection.
@@ -395,20 +393,47 @@ pub(crate) fn editable_combo(
     items: &[(&str, String)],
     forced: bool,
 ) -> ComboResult {
+    combo_popup(ui, anchor, salt, current_value, items, forced, true, None)
+}
+
+/// The dropdown of [`editable_combo`] without the filter field: the whole list, picked by click or
+/// arrows and Enter. It drops directly below `under` and is as wide as it, like Excel's Font Size
+/// list under its box.
+fn list_combo(ui: &mut Ui, anchor: &egui::Response, under: Rect, salt: &'static str, current_value: &str, items: &[(&str, String)]) -> ComboResult {
+    combo_popup(ui, anchor, salt, current_value, items, false, false, Some(under))
+}
+
+fn combo_popup(
+    ui: &mut Ui,
+    anchor: &egui::Response,
+    salt: &'static str,
+    current_value: &str,
+    items: &[(&str, String)],
+    forced: bool,
+    filter: bool,
+    under: Option<Rect>,
+) -> ComboResult {
     let popup_id = anchor.id.with("popup");
     let state_id = anchor.id.with(salt).with("__combo_state");
     let mut st = ui.data_mut(|d| d.get_temp::<ComboState>(state_id)).unwrap_or_default();
     let open_now = egui::Popup::is_id_open(ui.ctx(), popup_id);
     if open_now && !st.was_open {
         st.text = String::new();
-        st.sel = items.iter().position(|(v, _)| *v == current_value).map(|i| i as i32).unwrap_or(0);
+        // The last row with the current value: the Font list repeats the theme fonts at the top,
+        // and the highlight belongs on the font's own row in the A to Z list (Down = next font).
+        st.sel = items.iter().rposition(|(v, _)| *v == current_value).map(|i| i as i32).unwrap_or(0);
         // The reset lands on the frame AFTER the popup opens, which usually has no input of
         // its own — without a repaint request the stale filtered list stays on screen.
         ui.ctx().request_repaint();
     }
     st.was_open = open_now;
     let mut result = ComboResult::None;
-    egui::Popup::menu(anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| {
+    let mut popup = egui::Popup::menu(anchor).open_memory(popup_command(forced, anchor.clicked()));
+    if let Some(r) = under {
+        popup = popup.anchor(r).align(egui::RectAlign::BOTTOM_START).width(r.width());
+    }
+    let row_w = under.map_or(220.0, |r| r.width() - 12.0);
+    popup.show(|ui| {
         // Arrows and Enter navigate the list, not the filter field's cursor. Capture them and
         // strip them from the input so the TextEdit never sees them.
         let (mut down, mut up, mut enter) = (false, false, false);
@@ -424,15 +449,17 @@ pub(crate) fn editable_combo(
                 });
             });
         }
-        let text_id = anchor.id.with(salt).with("__combo_text");
-        let te = ui.add(egui::TextEdit::singleline(&mut st.text).id(text_id).desired_width(220.0).hint_text("Type to filter…"));
-        if open_now && !te.has_focus() {
-            ui.ctx().memory_mut(|m| m.request_focus(text_id));
-            // Select all once focus lands so typing replaces the filter.
-            if let Some(mut s) = egui::text_edit::TextEditState::load(ui.ctx(), text_id) {
-                let len = st.text.chars().count();
-                s.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(len))));
-                s.store(ui.ctx(), text_id);
+        if filter {
+            let text_id = anchor.id.with(salt).with("__combo_text");
+            let te = ui.add(egui::TextEdit::singleline(&mut st.text).id(text_id).desired_width(220.0).hint_text("Type to filter…"));
+            if open_now && !te.has_focus() {
+                ui.ctx().memory_mut(|m| m.request_focus(text_id));
+                // Select all once focus lands so typing replaces the filter.
+                if let Some(mut s) = egui::text_edit::TextEditState::load(ui.ctx(), text_id) {
+                    let len = st.text.chars().count();
+                    s.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(len))));
+                    s.store(ui.ctx(), text_id);
+                }
             }
         }
         let lower = st.text.to_lowercase();
@@ -446,22 +473,17 @@ pub(crate) fn editable_combo(
                 st.sel = (st.sel - 1).rem_euclid(n);
             }
         }
-        if enter {
-            if filtered.is_empty() {
-                let t = st.text.trim().to_string();
-                if !t.is_empty() {
-                    result = ComboResult::Entered(t);
-                }
-            } else {
-                let idx = filtered[st.sel.clamp(0, filtered.len() as i32 - 1) as usize];
-                result = ComboResult::Picked(items[idx].0.to_string());
-            }
+        if enter && !filtered.is_empty() {
+            let idx = filtered[st.sel.clamp(0, filtered.len() as i32 - 1) as usize];
+            result = ComboResult::Picked(items[idx].0.to_string());
         }
-        ui.separator();
+        if filter {
+            ui.separator();
+        }
         egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
             for i in &filtered {
                 let (value, disp) = &items[*i];
-                let row = ui.add(egui::Button::selectable(*i as i32 == st.sel, egui::RichText::new(disp)).min_size(vec2(220.0, 20.0)));
+                let row = ui.add(egui::Button::selectable(*i as i32 == st.sel, egui::RichText::new(disp)).min_size(vec2(row_w, 20.0)));
                 if row.clicked() {
                     result = ComboResult::Picked(value.to_string());
                 }
@@ -1061,15 +1083,58 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// Excel's font box: Enter applies the name typed, in the list's spelling when it names or begins one
+/// of the fonts (`arial` and `Ari` give Arial), otherwise as typed, since a workbook may carry a font
+/// this machine lacks. Escape or clicking away reverts; the arrow opens the fonts.
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let name = st.font.name.clone();
-    let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))));
-    control_keytip(app, ui, &resp, "home.fontName");
-    let forced = invoke(app, "home.fontName");
-    let items: Vec<(&str, String)> = FONTS.iter().map(|f| (*f, f.to_string())).collect();
-    if let ComboResult::Picked(value) = editable_combo(ui, &resp, "font", &name, &items, forced) {
+    let (arrow, frame, entered) = typed_box(app, ui, "gridcraft.font_name_box", "home.fontName", "Font", &name, 150.0);
+    let fonts = font_list();
+    if let Some(typed) = entered.filter(|t| !t.is_empty()) {
+        act(app, "home.fontName", json!({"name": font_for(&fonts, &typed)}));
+    }
+    // As in Excel: the workbook theme's heading and body fonts first, then every font A to Z.
+    let theme = app.session.active().map(|d| (d.wb.theme.major_font.clone(), d.wb.theme.minor_font.clone()));
+    let mut items: Vec<(&str, String)> = Vec::new();
+    if let Some((major, minor)) = &theme {
+        items.push((major.as_str(), format!("{major}  (Headings)")));
+        items.push((minor.as_str(), format!("{minor}  (Body)")));
+    }
+    items.extend(fonts.iter().map(|f| (f.as_str(), f.clone())));
+    // Wider than the box, as in Excel, so long family names stay on one line.
+    let under = Rect::from_min_size(frame.min, vec2(frame.width().max(280.0), frame.height()));
+    if let ComboResult::Picked(value) = list_combo(ui, &arrow, under, "font", &name, &items) {
         act(app, "home.fontName", json!({"name": value}));
     }
+}
+
+/// Every font the list offers: the standard [`FONTS`] and the fonts installed on this machine
+/// ([`crate::fonts::families`], just the standard ones until the background scan finishes), A to Z.
+/// Built once after the scan, and borrowed from then on (the ribbon draws every frame).
+fn font_list() -> std::borrow::Cow<'static, [String]> {
+    static DONE: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let build = || {
+        let mut fonts = crate::fonts::families();
+        fonts.sort_by_key(|f| f.to_lowercase());
+        fonts.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        fonts
+    };
+    match DONE.get() {
+        Some(done) => std::borrow::Cow::Borrowed(done.as_slice()),
+        None if crate::fonts::scan_done() => std::borrow::Cow::Borrowed(DONE.get_or_init(build).as_slice()),
+        None => std::borrow::Cow::Owned(build()),
+    }
+}
+
+/// The font Enter applies for `typed`: an exact name first, then the first font it begins, never a
+/// font that merely contains it (#932: `Aptos` gave Aptos Narrow); otherwise the name as typed.
+fn font_for(fonts: &[String], typed: &str) -> String {
+    let lower = typed.to_lowercase();
+    fonts
+        .iter()
+        .find(|f| f.to_lowercase() == lower)
+        .or_else(|| fonts.iter().find(|f| f.to_lowercase().starts_with(&lower)))
+        .map_or_else(|| typed.to_string(), |f| f.to_string())
 }
 
 pub const FONTS: &[&str] = &[
@@ -1092,26 +1157,86 @@ pub const FONTS: &[&str] = &[
     "Verdana",
 ];
 
+/// Excel's size box: type a size and press Enter to apply exactly that number (the command refuses
+/// sizes outside 1 to 409), Escape or clicking away reverts; the arrow opens the standard sizes.
 fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let size = st.font.size;
-    let label = if size.fract() == 0.0 { format!("{}", size as i32) } else { format!("{size}") };
-    let resp = ui.add_sized([52.0, 24.0], egui::Button::new(egui::RichText::new(&label).font(theme::ui_font(12.5))));
-    control_keytip(app, ui, &resp, "home.fontSize");
-    let forced = invoke(app, "home.fontSize");
+    let current = if size.fract() == 0.0 { format!("{}", size as i32) } else { format!("{size}") };
+    let (arrow, frame, entered) = typed_box(app, ui, "gridcraft.font_size_box", "home.fontSize", "Font Size", &current, 52.0);
+    if let Some(v) = entered.and_then(|t| t.parse::<f64>().ok()).filter(|v| v.is_finite()) {
+        act(app, "home.fontSize", json!({"size": v}));
+    }
     let sizes = [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 36.0, 48.0, 72.0];
     let labels: Vec<String> = sizes.iter().map(|s| format!("{}", *s as i32)).collect();
     let items: Vec<(&str, String)> = labels.iter().map(|s| (s.as_str(), s.clone())).collect();
-    let current = if size.fract() == 0.0 { format!("{}", size as i32) } else { format!("{size}") };
-    let mut apply = |s: &str| {
-        if let Ok(v) = s.parse::<f32>() {
-            act(app, "home.fontSize", json!({"size": v}));
-        }
-    };
-    match editable_combo(ui, &resp, "size", &current, &items, forced) {
-        ComboResult::Picked(value) => apply(&value),
-        ComboResult::Entered(text) => apply(&text),
-        _ => {}
+    if let ComboResult::Picked(value) = list_combo(ui, &arrow, frame, "size", &current, &items)
+        && let Ok(v) = value.parse::<f32>()
+    {
+        act(app, "home.fontSize", json!({"size": v}));
     }
+}
+
+/// The box shared by Font and Font Size: one frame holding a text field and the dropdown arrow, as in
+/// Excel. Clicking the field or its keytip selects the text so typing replaces it; Enter returns the
+/// trimmed text, and Escape or clicking away reverts to `current`. Returns the arrow (labelled `label`),
+/// the frame the list drops under, and the text entered this frame.
+fn typed_box(
+    app: &mut SheetApp,
+    ui: &mut Ui,
+    id: &str,
+    command: &str,
+    label: &str,
+    current: &str,
+    width: f32,
+) -> (egui::Response, Rect, Option<String>) {
+    let t = Tokens::get(ui.ctx());
+    let field = egui::Id::new(id);
+    let draft = field.with("draft");
+    let mut text = ui.data_mut(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| current.to_string());
+    let (frame, _) = ui.allocate_exact_size(vec2(width, 24.0), egui::Sense::hover());
+    // Painted once the field's focus and hover are known, but beneath the field and the arrow.
+    let bg = ui.painter().add(egui::Shape::Noop);
+    let text_rect = Rect::from_min_max(frame.min, egui::pos2(frame.right() - 16.0, frame.bottom()));
+    let arrow_rect = Rect::from_min_max(egui::pos2(frame.right() - 16.0, frame.top() + 1.0), egui::pos2(frame.right() - 1.0, frame.bottom() - 1.0));
+    let mut field_ui =
+        ui.new_child(egui::UiBuilder::new().max_rect(text_rect.shrink2(vec2(6.0, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    let out = egui::TextEdit::singleline(&mut text)
+        .id(field)
+        .font(theme::ui_font(12.5))
+        .frame(egui::Frame::NONE)
+        .desired_width(text_rect.width() - 12.0)
+        .show(&mut field_ui);
+    let resp = out.response;
+    control_keytip(app, ui, &resp, command);
+    if invoke(app, command) {
+        ui.memory_mut(|m| m.request_focus(field));
+    }
+    if resp.gained_focus() {
+        // Typing replaces the value, as in Excel, whether the box was clicked or reached by keytip.
+        let mut state = out.state;
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()))));
+        state.store(ui.ctx(), field);
+    }
+    let mut entered = None;
+    if resp.lost_focus() {
+        ui.data_mut(|d| d.remove::<String>(draft));
+        // Consume the Enter so the grid behind does not also move the active cell down.
+        if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
+            entered = Some(text.trim().to_string());
+        }
+    } else if resp.has_focus() {
+        ui.data_mut(|d| d.insert_temp(draft, text));
+    } else {
+        ui.data_mut(|d| d.remove::<String>(draft));
+    }
+    let mut arrow_ui = ui.new_child(egui::UiBuilder::new().max_rect(arrow_rect));
+    let arrow = icon_button(&mut arrow_ui, Icon::Chevron, t.text_dim, label, arrow_rect.size());
+    let visuals = ui.style().visuals.clone();
+    let looks = if resp.has_focus() || ui.rect_contains_pointer(frame) { &visuals.widgets.hovered } else { &visuals.widgets.inactive };
+    let stroke = if resp.has_focus() { visuals.selection.stroke } else { looks.bg_stroke };
+    ui.painter().set(bg, egui::epaint::RectShape::new(frame, looks.corner_radius, looks.weak_bg_fill, stroke, egui::StrokeKind::Inside));
+    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    (arrow, frame, entered)
 }
 
 fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
@@ -1346,7 +1471,7 @@ fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
                     );
                 }
                 let col = st.font.color.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::BLACK);
-                let fam = theme::cell_family(&st.font.name, st.font.bold, st.font.italic);
+                let fam = theme::cell_family(ui.ctx(), &st.font.name, st.font.bold, st.font.italic);
                 ui.painter().text(
                     r.left_center() + vec2(4.0, 0.0),
                     Align2::LEFT_CENTER,
