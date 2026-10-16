@@ -9,7 +9,7 @@ fn tr_eq(a: &str, b: &str) -> bool {
         || a.chars().zip(b.chars()).all(|(ca, cb)| match (ca, cb) {
             ('i' | 'İ', 'i' | 'İ') => true,
             ('ı' | 'I', 'ı' | 'I') => true,
-            (x, y) => x.to_ascii_uppercase() == y.to_ascii_uppercase(),
+            (x, y) => x.eq_ignore_ascii_case(&y),
         }) && a.chars().count() == b.chars().count()
 }
 
@@ -75,9 +75,28 @@ fn turkish_input_preserves_reference_and_array_syntax() {
     assert_eq!(print(&parse("TOPLA(1,2)+YANLIŞ").unwrap()), "TOPLA(1,2)+YANLIŞ");
     assert!(parse("SUM(1;2)").is_err());
     assert!(parse("{DOĞRU}").is_err());
-    let long_chain = "YANLIŞ+".repeat(300) + "DOĞRU";
-    assert!(parse_input(&long_chain, FormulaLocale::Tr, |_| false).is_err());
-    assert!(print_input(&parse(&long_chain).unwrap(), FormulaLocale::Tr, |_| false).is_err());
+    // Real nesting past the parser's limit is still refused.
+    let nested = "(".repeat(300) + "1" + &")".repeat(300);
+    assert!(parse_input(&nested, FormulaLocale::Tr, |_| false).is_err());
+    let deep = (0..300).fold(gridcraft_formula::Expr::Number(1.0), |e, _| gridcraft_formula::Expr::Paren(Box::new(e)));
+    assert!(print_input(&deep, FormulaLocale::Tr, |_| false).is_err());
+}
+
+#[test]
+fn turkish_input_accepts_flat_chains_as_long_as_excel() {
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let long_chain = "YANLIŞ+".repeat(1160) + "DOĞRU";
+            let english = "FALSE+".repeat(1160) + "TRUE";
+            assert_eq!(input(&long_chain), english);
+            assert_eq!(print_input(&parse(&english).unwrap(), FormulaLocale::Tr, |_| false).unwrap(), long_chain);
+            let sums = vec!["TOPLA(1;2)"; 700].join("+");
+            assert_eq!(input(&sums), vec!["SUM(1,2)"; 700].join("+"));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]
@@ -139,6 +158,7 @@ fn turkish_error_literals_parse_and_display() {
         ("#AD?", "#NAME?"),
         ("#SAYI!", "#NUM!"),
         ("#YOK", "#N/A"),
+        ("#VERİ_ALINIYOR", "#GETTING_DATA"),
         ("#TAŞMA!", "#SPILL!"),
         ("#HESAP!", "#CALC!"),
         ("#DÖNGÜ!", "#CIRC!"),
@@ -148,8 +168,15 @@ fn turkish_error_literals_parse_and_display() {
         let shown = print_input(&expr, tr, |_| false).unwrap();
         assert_eq!(shown, tr_err);
 
+        // Lowercase Turkish error literals (including ı/i byte-length differences) must parse
+        let lower_err = tr.lowercase(tr_err);
+        let expr_lower = parse_input(&lower_err, tr, |_| false).unwrap();
+        assert_eq!(print(&expr_lower), canonical, "lowercase error literal: {lower_err}");
+
         // Also ensure canonical literals parse in TR locale
         let expr_canon = parse_input(canonical, tr, |_| false).unwrap();
         assert_eq!(print(&expr_canon), canonical);
     }
+    assert_eq!(tr.uppercase("iç_verim_oranı"), "İÇ_VERİM_ORANI");
+    assert_eq!(tr.lowercase("İÇ_VERİM_ORANI"), "iç_verim_oranı");
 }

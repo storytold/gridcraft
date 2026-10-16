@@ -164,8 +164,10 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                         found = Some((*e, canonical.chars().count()));
                         break;
                     }
-                    if rest.len() >= localized.len()
-                        && rest.get(..localized.len()).is_some_and(|p| {
+                    let char_len = localized.chars().count();
+                    let byte_len: usize = rest.chars().take(char_len).map(char::len_utf8).sum();
+                    if rest.chars().take(char_len).count() == char_len
+                        && rest.get(..byte_len).is_some_and(|p| {
                             if locale == crate::FormulaLocale::Tr {
                                 crate::input::tr::turkish_eq_ignore_case(localized, p)
                             } else {
@@ -173,7 +175,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                             }
                         })
                     {
-                        found = Some((*e, localized.chars().count()));
+                        found = Some((*e, char_len));
                         break;
                     }
                 }
