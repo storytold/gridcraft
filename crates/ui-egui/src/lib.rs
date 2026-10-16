@@ -262,6 +262,7 @@ pub struct SheetApp {
     /// text noted for an unpublished cut); `None` after a copy, or once the clipboard is seen
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
+    pub quit_confirmed: bool,
     pub started: f64,
 }
 
@@ -281,6 +282,7 @@ impl SheetApp {
             services,
             printing: Default::default(),
             print_feedback_seen: None,
+            quit_confirmed: false,
             synthetic: Default::default(),
             control_rx: None,
             grid: grid::GridState {
@@ -988,6 +990,33 @@ impl SheetApp {
         }
     }
 
+    /// The window's close button (or the system) asked to quit. Returns true to let the window
+    /// close; with unsaved changes or active edits it asks first and returns false.
+    pub fn close_requested(&mut self) -> bool {
+        if self.printing.busy() {
+            return false;
+        }
+        if self.quit_confirmed {
+            return true;
+        }
+        let _ = self.commit_text_box_edit();
+        let _ = self.commit_edit(0, 0, false, false);
+        if !self.session.documents().iter().any(|d| d.is_dirty()) {
+            return true;
+        }
+        self.backstage = None;
+        if self.dialog.as_ref().is_none_or(|d| d.name() != "saveChanges") {
+            if !self.session.active().is_some_and(|d| d.is_dirty())
+                && let Some(i) = self.session.documents().iter().position(|d| d.is_dirty())
+            {
+                self.session.set_active(i);
+            }
+            let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "this workbook".into());
+            self.open_dialog("saveChanges", json!({"title": title, "closingWindow": true}));
+        }
+        false
+    }
+
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
@@ -1080,7 +1109,18 @@ impl SheetApp {
             self.after_engine();
         }
         if self.session.active().is_none() {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.quit_confirmed = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            #[cfg(target_arch = "wasm32")]
             self.session.new_workbook();
+        }
+        self.poll_printing(ctx);
+        // Closing the window with unsaved changes asks first.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.close_requested() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
     }
 

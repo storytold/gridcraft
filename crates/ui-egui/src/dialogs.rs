@@ -775,7 +775,7 @@ impl Dialog {
             }
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
-            "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title")})),
+            "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title"), "closingWindow": p("closingWindow")})),
             "start" => Dialog::custom("start", "GridCraft", json!({})),
             "comments" => {
                 app.grid.pane = None;
@@ -1182,20 +1182,43 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     }
                 }
                 "saveChanges" => {
+                    let closing_window = d.values.get("closingWindow").and_then(Json::as_bool).unwrap_or(false);
                     ui.label(format!("Do you want to save the changes you made to {}?", d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook")));
                     ui.horizontal(|ui| {
-                        if ui.button("Don't Save").clicked() {
+                        let dont_save = ui.button("Don't Save").clicked();
+                        let cancel = ui.button("Cancel").clicked();
+                        let save = ui.button("Save").clicked();
+                        let enter = ui.input(|i| i.key_pressed(Key::Enter));
+                        if dont_save {
                             app.run_or_alert("file.close", json!({"force": true}));
+                            if closing_window || app.session.documents().is_empty() {
+                                if let Some(i) = app.session.documents().iter().position(|d| d.is_dirty()) {
+                                    app.session.set_active(i);
+                                    let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "this workbook".into());
+                                    app.open_dialog("saveChanges", json!({"title": title, "closingWindow": true}));
+                                } else {
+                                    app.quit_confirmed = true;
+                                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                                }
+                            }
                             open = false;
-                        }
-                        if ui.button("Cancel").clicked() {
+                        } else if cancel {
                             open = false;
-                        }
-                        // File operations must include the cell the user is still editing (as the File > Save menu item already does).
-                        if ui.button("Save").clicked() && app.commit_edit(0, 0, false, false) {
+                        } else if (save || enter) && app.commit_edit(0, 0, false, false) {
+                            let _ = app.commit_text_box_edit();
                             app.run_or_alert("file.save", json!({}));
                             if app.session.active().is_some_and(|x| !x.is_dirty()) {
                                 app.run_or_alert("file.close", json!({"force": true}));
+                                if closing_window || app.session.documents().is_empty() {
+                                    if let Some(i) = app.session.documents().iter().position(|d| d.is_dirty()) {
+                                        app.session.set_active(i);
+                                        let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "this workbook".into());
+                                        app.open_dialog("saveChanges", json!({"title": title, "closingWindow": true}));
+                                    } else {
+                                        app.quit_confirmed = true;
+                                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                                    }
+                                }
                             }
                             open = false;
                         }
