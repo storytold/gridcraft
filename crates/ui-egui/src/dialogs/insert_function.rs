@@ -12,7 +12,7 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
     });
     let locale = language.formula_locale();
     let list = gridcraft_engine::cmd::formulas::function_list();
-    let q = d.search.trim().to_lowercase();
+    let q = locale.lowercase(d.search.trim());
     let hits: Vec<&Json> = list
         .iter()
         .filter(|f| {
@@ -23,9 +23,9 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
             let loc_name = locale.function_name(n);
             let loc_desc = crate::formula_locale::description(n, locale, language).unwrap_or_default();
             let eng_desc = f["description"].as_str().unwrap_or_default();
-            loc_name.to_lowercase().contains(&q)
+            locale.lowercase(loc_name).contains(&q)
                 || n.to_lowercase().contains(&q)
-                || loc_desc.to_lowercase().contains(&q)
+                || locale.lowercase(&loc_desc).contains(&q)
                 || eng_desc.to_lowercase().contains(&q)
         })
         .take(300)
