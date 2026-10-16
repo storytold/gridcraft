@@ -108,10 +108,12 @@ pub struct Backstage {
     pub print_all: bool,
     /// Print: fit each sheet on one page.
     pub fit_to_page: bool,
+    /// Print: orientation (`auto`, `portrait`, `landscape`).
+    pub orientation: String,
     /// Print: the previewed page (0-based).
     preview_page: usize,
-    /// Print: the preview for (document, revision, whole workbook, fit to page).
-    preview: Option<((u64, u64, bool, bool), Json)>,
+    /// Print: the preview for (document, revision, whole workbook, fit to page, orientation).
+    preview: Option<((u64, u64, bool, bool, String), Json)>,
     /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
@@ -130,6 +132,7 @@ impl Backstage {
             props: Default::default(),
             print_all: false,
             fit_to_page: false,
+            orientation: "auto".into(),
             preview_page: 0,
             preview: None,
             save_format: "xlsx",
@@ -699,7 +702,10 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
     if bs.fit_to_page {
         params["fitToPage"] = json!(true);
     }
-    let key = (uid, revision, bs.print_all, bs.fit_to_page);
+    if bs.orientation != "auto" {
+        params["orientation"] = json!(bs.orientation);
+    }
+    let key = (uid, revision, bs.print_all, bs.fit_to_page, bs.orientation.clone());
     if bs.preview.as_ref().is_none_or(|(k, _)| *k != key) {
         let preview = app.session.run("file.printPreview", params.clone()).unwrap_or(Json::Null);
         bs.preview = Some((key, preview));
@@ -715,7 +721,9 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
             if ui.add_enabled_ui(can_print, |ui| square_button(ui, Icon::Print, lang.tr("Print"))).inner.clicked()
                 && app.commit_edit(0, 0, false, false)
             {
-                app.print_now(params.clone());
+                let mut submit_params = params.clone();
+                submit_params["orientation"] = json!(bs.orientation);
+                app.print_now(submit_params);
                 out.close = app.services.print_native.is_none();
             }
             ui.add_space(16.0);
@@ -732,6 +740,20 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
             if ui.checkbox(&mut bs.fit_to_page, lang.tr("Fit Sheet on One Page")).changed() {
                 bs.preview_page = 0;
             }
+            ui.add_space(8.0);
+            let orientation_label = match bs.orientation.as_str() {
+                "portrait" => "Portrait",
+                "landscape" => "Landscape",
+                _ => "Auto orientation",
+            };
+            egui::ComboBox::from_id_salt("backstage_print_orientation").width(230.0).selected_text(lang.tr(orientation_label)).show_ui(ui, |ui| {
+                for (val, label) in [("auto", "Auto orientation"), ("portrait", "Portrait"), ("landscape", "Landscape")] {
+                    if ui.selectable_label(bs.orientation == val, lang.tr(label)).clicked() {
+                        bs.orientation = val.into();
+                        bs.preview_page = 0;
+                    }
+                }
+            });
             ui.add_space(8.0);
             if ui.link(lang.tr("Page Setup…")).clicked() {
                 app.open_dialog("pageSetup", json!({}));

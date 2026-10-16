@@ -13,7 +13,7 @@ fn native_print_uses_selected_settings_and_reports_spool_errors() {
     app.run("cell.set", json!({"cell":"A1", "input":"A sheet to print"})).unwrap();
     let jobs = Rc::new(RefCell::new(Vec::new()));
     let observed = jobs.clone();
-    app.services.print_native = Some(Box::new(move |bytes, settings| {
+    app.services.print_native = Some(Box::new(move |bytes, settings, _| {
         observed.borrow_mut().push((bytes, settings));
         let (sender, receiver) = std::sync::mpsc::channel();
         sender.send(Err("printer is offline".into())).unwrap();
@@ -54,7 +54,7 @@ fn print_settings_are_visible_in_a_narrow_window() {
         sender.send(vec![Printer { name: "Test queue".into(), default: true }]).unwrap();
         receiver
     }));
-    app.services.print_native = Some(Box::new(|_, _| {
+    app.services.print_native = Some(Box::new(|_, _, _| {
         let (sender, receiver) = std::sync::mpsc::channel();
         sender.send(Ok("queued".into())).unwrap();
         receiver
@@ -108,7 +108,7 @@ fn repeated_fast_jobs_each_surface_an_identical_receipt() {
     let mut app = SheetApp::new(session, Services::default());
     app.printing.printers.push(Printer { name: "Queue".into(), default: true });
     app.run("ui.printSettings", json!({"printer":"Queue"})).unwrap();
-    app.services.print_native = Some(Box::new(|_, _| {
+    app.services.print_native = Some(Box::new(|_, _, _| {
         let (sender, receiver) = std::sync::mpsc::channel();
         sender.send(Ok("same receipt".into())).unwrap();
         receiver
@@ -125,3 +125,45 @@ fn repeated_fast_jobs_each_surface_an_identical_receipt() {
         assert!(app.toast.is_none());
     }
 }
+
+#[test]
+fn native_print_passes_orientation_options_to_spooler() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut app = SheetApp::new(session, Services::default());
+    app.run("cell.set", json!({"cell":"A1", "input":"Test orientation"})).unwrap();
+    app.printing.printers.push(Printer { name: "Queue".into(), default: true });
+    app.run("ui.printSettings", json!({"printer":"Queue"})).unwrap();
+    let jobs = Rc::new(RefCell::new(Vec::new()));
+    let observed = jobs.clone();
+    app.services.print_native = Some(Box::new(move |bytes, settings, options| {
+        observed.borrow_mut().push((bytes, settings, options));
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender.send(Ok("queued".into())).unwrap();
+        receiver
+    }));
+
+    // 1. Default sheet (portrait) sends orientation-requested=3
+    app.run("ui.printSubmit", json!({})).unwrap();
+    assert_eq!(jobs.borrow().last().unwrap().2, vec![("orientation-requested".to_owned(), "3".to_owned())]);
+    app.printing.poll(&egui::Context::default());
+    app.poll_printing(&egui::Context::default());
+
+    // 2. Explicit landscape sends orientation-requested=4 and landscape=true
+    app.run("ui.printSubmit", json!({"orientation": "landscape"})).unwrap();
+    assert_eq!(
+        jobs.borrow().last().unwrap().2,
+        vec![("orientation-requested".to_owned(), "4".to_owned()), ("landscape".to_owned(), "true".to_owned())]
+    );
+    app.printing.poll(&egui::Context::default());
+    app.poll_printing(&egui::Context::default());
+
+    // 3. Set sheet orientation to landscape in page setup, auto sends orientation-requested=4 and landscape=true
+    app.run("pageLayout.pageSetup", json!({"orientation": "landscape"})).unwrap();
+    app.run("ui.printSubmit", json!({})).unwrap();
+    assert_eq!(
+        jobs.borrow().last().unwrap().2,
+        vec![("orientation-requested".to_owned(), "4".to_owned()), ("landscape".to_owned(), "true".to_owned())]
+    );
+}
+

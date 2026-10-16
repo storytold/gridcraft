@@ -555,12 +555,28 @@ impl SheetApp {
         if self.services.print_native.is_some() && !self.printing.ready() {
             return Err("Select an available printer in File > Print before submitting.".into());
         }
-        let pdf = self.run("file.print", params)?;
+        let pdf = self.run("file.print", params.clone())?;
         let encoded = pdf.get("base64").and_then(Json::as_str).ok_or("The print command did not produce a PDF.")?;
         let bytes = gridcraft_engine::io::base64_decode(encoded).ok_or("Couldn't decode the generated PDF.")?;
         let len = bytes.len();
         if let Some(submit) = &self.services.print_native {
-            self.printing.begin(submit(bytes, self.printing.settings.clone())).map_err(|_| "A print job is already being submitted.".to_owned())?;
+            let mut print_options = Vec::new();
+            let orientation_param = params.get("orientation").and_then(Json::as_str);
+            let is_landscape = if orientation_param == Some("landscape") {
+                true
+            } else if orientation_param == Some("portrait") {
+                false
+            } else {
+                gridcraft_engine::active_sheet(&self.session)
+                    .map_or(false, |sh| sh.print.orientation == gridcraft_engine::model::Orientation::Landscape)
+            };
+            if is_landscape {
+                print_options.push(("orientation-requested".into(), "4".into()));
+                print_options.push(("landscape".into(), "true".into()));
+            } else {
+                print_options.push(("orientation-requested".into(), "3".into()));
+            }
+            self.printing.begin(submit(bytes, self.printing.settings.clone(), print_options)).map_err(|_| "A print job is already being submitted.".to_owned())?;
             self.print_feedback_seen = None;
         } else if let Some(print) = &self.services.print {
             print(&bytes);

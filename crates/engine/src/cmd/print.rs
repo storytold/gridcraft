@@ -32,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print…",
             ["File"],
             Some("Cmd+P"),
-            "{path?, sheets?: active|all, range?, fitToPage?: bool} → {pages, bytes, base64} — the PDF the UI hands to the system print dialog",
+            "{path?, sheets?: active|all, range?, fitToPage?: bool, orientation?: auto|portrait|landscape} → {pages, bytes, base64} — the PDF the UI hands to the system print dialog",
             has_doc,
             print
         ),
@@ -41,7 +41,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print Preview",
             ["File"],
             None,
-            "{page? (1-based), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, width, height}]}",
+            "{page? (1-based), sheets?: active|all, range?, fitToPage?, orientation?: auto|portrait|landscape} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, width, height}]}",
             has_doc,
             print_preview
         ),
@@ -130,6 +130,7 @@ pub struct PrintOptions {
     pub all_sheets: bool,
     pub range: Option<RangeRef>,
     pub fit_to_page: Option<bool>,
+    pub orientation: Option<Orientation>,
 }
 
 impl PrintOptions {
@@ -143,7 +144,13 @@ impl PrintOptions {
             Some(r) => Some(RangeRef::parse(split_sheet(r).1).ok_or_else(|| bad(cmd, format!("not a range: `{r}`")))?),
             None => None,
         };
-        Ok(PrintOptions { all_sheets, range, fit_to_page: bool_param(p, "fitToPage") })
+        let orientation = match str_param(p, "orientation") {
+            None | Some("auto") => None,
+            Some("portrait") => Some(Orientation::Portrait),
+            Some("landscape") => Some(Orientation::Landscape),
+            Some(other) => return Err(bad(cmd, format!("`orientation` must be auto, portrait or landscape, not `{other}`"))),
+        };
+        Ok(PrintOptions { all_sheets, range, fit_to_page: bool_param(p, "fitToPage"), orientation })
     }
 }
 
@@ -229,7 +236,10 @@ fn title_span(t: Option<(u32, u32)>, max: u32) -> Option<(u32, u32)> {
 /// Paginates one sheet.
 pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_override: Option<RangeRef>) -> Option<SheetLayout> {
     let sh = wb.sheet(si)?;
-    let st = sh.print.clone();
+    let mut st = sh.print.clone();
+    if let Some(o) = opts.orientation {
+        st.orientation = o;
+    }
     let (mut pw, mut ph) = paper_size(&st.paper);
     if st.orientation == Orientation::Landscape {
         std::mem::swap(&mut pw, &mut ph);
@@ -1843,6 +1853,7 @@ mod tests {
         // Landscape: 504pt / 15 = 33 rows per page → 10 pages.
         s.execute("pageLayout.pageSetup", json!({"orientation": "landscape"})).unwrap();
         assert_eq!(pdf_of(&mut s, json!({})).1, 10);
+        assert_eq!(pdf_of(&mut s, json!({"orientation": "portrait"})).1, 7);
         // Fit to one page.
         assert_eq!(pdf_of(&mut s, json!({"fitToPage": true})).1, 1);
         s.execute("pageLayout.pageSetup", json!({"fitWidth": 1, "fitHeight": 2, "orientation": "portrait"})).unwrap();

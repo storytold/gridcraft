@@ -1,6 +1,8 @@
-//! Localized print-page wording around the shared, backend-independent controls.
 use craft_ui::printing::Labels;
-pub use craft_ui::printing::{Discover, Duplex, Feedback, Printer, Settings, State, Submit};
+pub use craft_ui::printing::{Discover, Duplex, Feedback, Printer, Settings, State};
+
+/// Native submission adds spooler options to the shared spooler settings.
+pub type Submit = Box<dyn Fn(Vec<u8>, Settings, Vec<(String, String)>) -> std::sync::mpsc::Receiver<Result<String, String>>>;
 
 pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, translate: impl Fn(&str) -> String) {
     let labels = Labels {
