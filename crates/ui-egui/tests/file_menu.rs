@@ -122,7 +122,7 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
         h.run_steps(2);
         assert_eq!(page(&h), Some(id));
     }
-    assert!(h.state_mut().run("ui.backstage", serde_json::json!({"page": "account"})).is_err());
+    assert!(h.state_mut().run("ui.backstage", serde_json::json!({"page": "feedback"})).is_err());
     h.state_mut().run("ui.backstage", serde_json::json!({"page": "close"})).unwrap();
     assert!(h.state().backstage.is_none());
     // The back arrow returns to the sheet too.
@@ -130,6 +130,20 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     h.run_steps(2);
     click(&mut h, "Back");
     assert!(h.state().backstage.is_none());
+}
+
+#[test]
+fn file_account_shows_the_version_and_opens_about() {
+    let mut h = harness(Services::default());
+    choose(&mut h, "Account");
+    assert_eq!(page(&h), Some("account"));
+    assert!(h.state().dialog.is_none());
+    // The About dialog also shows the version; it must not be open yet.
+    h.get_by_label(env!("CARGO_PKG_VERSION"));
+    h.get_by_label(env!("CARGO_PKG_LICENSE"));
+    click(&mut h, "About GridCraft");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("about"));
+    assert_eq!(page(&h), Some("account"), "About opens over the File view, like Protect Workbook on Info");
 }
 
 #[test]
