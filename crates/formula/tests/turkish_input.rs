@@ -139,6 +139,7 @@ fn turkish_error_literals_parse_and_display() {
         ("#AD?", "#NAME?"),
         ("#SAYI!", "#NUM!"),
         ("#YOK", "#N/A"),
+        ("#VERİ_ALINIYOR", "#GETTING_DATA"),
         ("#TAŞMA!", "#SPILL!"),
         ("#HESAP!", "#CALC!"),
         ("#DÖNGÜ!", "#CIRC!"),
@@ -148,8 +149,15 @@ fn turkish_error_literals_parse_and_display() {
         let shown = print_input(&expr, tr, |_| false).unwrap();
         assert_eq!(shown, tr_err);
 
+        // Lowercase Turkish error literals (including ı/i byte-length differences) must parse
+        let lower_err = tr.lowercase(tr_err);
+        let expr_lower = parse_input(&lower_err, tr, |_| false).unwrap();
+        assert_eq!(print(&expr_lower), canonical, "lowercase error literal: {lower_err}");
+
         // Also ensure canonical literals parse in TR locale
         let expr_canon = parse_input(canonical, tr, |_| false).unwrap();
         assert_eq!(print(&expr_canon), canonical);
     }
+    assert_eq!(tr.uppercase("iç_verim_oranı"), "İÇ_VERİM_ORANI");
+    assert_eq!(tr.lowercase("İÇ_VERİM_ORANI"), "iç_verim_oranı");
 }

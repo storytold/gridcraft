@@ -292,6 +292,25 @@ fn turkish_error_messages_and_error_codes_localized() {
     assert!(enter(&mut app, "=1/0"));
     assert_eq!(formula(&app), "1/0");
 
+    // Lotus-style + formula starting with Turkish character
+    assert!(enter(&mut app, "+İÇ_VERİM_ORANI(A1:A5)"));
+    assert_eq!(formula(&app), "+IRR(A1:A5)");
+
+    // Autocomplete and current_function with Turkish characters (Ç, Ğ, İ, Ö, Ş, Ü)
+    app.begin_edit(Some("=eğer(1;".into()), false);
+    assert_eq!(app.editor.as_ref().unwrap().current_function(), Some(("EĞER".into(), 1)));
+    app.cancel_edit();
+
+    app.begin_edit(Some("=düş".into()), false);
+    {
+        let ed = app.editor.as_mut().unwrap();
+        ed.update_autocomplete(&["DÜŞEYARA".to_string(), "TOPLA".to_string()]);
+        assert_eq!(ed.autocomplete, vec!["DÜŞEYARA".to_string()]);
+        assert!(ed.accept_autocomplete());
+        assert_eq!(ed.text, "=DÜŞEYARA(");
+    }
+    app.cancel_edit();
+
     // Check status bar and common alert translations
     assert_eq!(app.ui.language.tr("OK"), "Tamam");
     assert_eq!(app.ui.language.tr("Circular References"), "Döngüsel Başvurular");

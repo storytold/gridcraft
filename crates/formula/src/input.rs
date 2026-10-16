@@ -87,6 +87,32 @@ impl FormulaLocale {
             Self::En => err.as_str(),
         }
     }
+    pub fn uppercase(self, text: &str) -> String {
+        match self {
+            Self::Tr => text
+                .chars()
+                .flat_map(|c| match c {
+                    'i' => vec!['İ'],
+                    'ı' => vec!['I'],
+                    other => other.to_uppercase().collect(),
+                })
+                .collect(),
+            _ => text.to_uppercase(),
+        }
+    }
+    pub fn lowercase(self, text: &str) -> String {
+        match self {
+            Self::Tr => text
+                .chars()
+                .flat_map(|c| match c {
+                    'İ' => vec!['i'],
+                    'I' => vec!['ı'],
+                    other => other.to_lowercase().collect(),
+                })
+                .collect(),
+            _ => text.to_lowercase(),
+        }
+    }
 }
 
 /// Parses UI input using the selected function table and separators. Existing names and
