@@ -3425,6 +3425,7 @@ mod tests {
             filter: vec![],
             table_type: None,
             connection_id: None,
+            formats: Default::default(),
         };
         let mut sh = Sheet::new("S");
         sh.tables.push(table(1, 0, 2));

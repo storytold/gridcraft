@@ -388,6 +388,7 @@ fn arrays_do_not_spill_in_tables() {
         filter: vec![],
         table_type: None,
         connection_id: None,
+        formats: Default::default(),
     });
     t.set("C4", "=SEQUENCE(2)");
     t.set("E1", "=SEQUENCE(4)");
@@ -762,6 +763,12 @@ fn subtotal_skips_filtered_rows() {
             totals: Default::default(),
             totals_label: None,
             formula: None,
+            data_style: None,
+            data_cell_style: None,
+            header_style: None,
+            totals_style: None,
+            header_cell_style: None,
+            totals_cell_style: None,
             unique_name: None,
             xml: None,
         }],
@@ -774,6 +781,7 @@ fn subtotal_skips_filtered_rows() {
         filter: crit(),
         table_type: None,
         connection_id: None,
+        formats: Default::default(),
     });
     sh.autofilter = Some(AutoFilter { range: gridcraft_core::RangeRef::parse("C1:C7").unwrap(), criteria: crit() });
     // Rows 3 and 5 are filtered out; row 9 (outside both filters) is hidden by hand.

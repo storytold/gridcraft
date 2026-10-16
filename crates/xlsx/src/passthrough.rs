@@ -1,13 +1,14 @@
 //! Pass-through of package content GridCraft does not model, so that open → edit → save keeps it.
 //!
 //! On read, the raw bytes of unmodelled parts are kept with their content type and their
-//! relationship graph, per owner: the package root (custom document properties, ribbon
-//! customisation, add-in task panes), the workbook (custom XML, links to external workbooks with
-//! their `<externalReferences>`, data connections, XML maps) and each sheet (query tables, cells
-//! mapped to XML elements, form controls, ActiveX controls, OLE objects, the sheet background and
-//! printer settings, with the sheet's `<picture>`, `<oleObjects>` and `<controls>` XML, the `r:id`
-//! of `<pageSetup>` and the legacy VML shapes those controls need). The workbook also keeps its
-//! `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the saved values.
+//! relationship graph, per owner: the package root (custom document properties, the sensitivity
+//! label, ribbon customisation, add-in task panes), the workbook (custom XML, links to external
+//! workbooks with their `<externalReferences>`, data connections, XML maps) and each sheet (query
+//! tables, cells mapped to XML elements, form controls, ActiveX controls, OLE objects, the sheet
+//! background, printer settings and custom properties, with the sheet's `<customProperties>`,
+//! `<picture>`, `<oleObjects>` and `<controls>` XML, the `r:id` of `<pageSetup>` and the legacy
+//! VML shapes those controls need). The workbook also keeps its `<fileVersion>` and the
+//! calcFeatures extension, which Excel needs to trust the saved values.
 //!
 //! On write, kept parts get fresh part names where needed and new relationship ids; the `r:id`s in
 //! kept XML are rewritten to match. Kept content is conservative:
@@ -79,20 +80,22 @@ const NS_REL_STRICT: &str = "http://purl.oclc.org/ooxml/officeDocument/relations
 const CT_VML: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
 
 /// Relationship kinds (last segment of the type) kept from the package root.
-const PACKAGE_ROOTS: &[&str] = &["custom-properties", "extensibility", "webextensiontaskpanes"];
+const PACKAGE_ROOTS: &[&str] = &["custom-properties", "classificationlabels", "extensibility", "webextensiontaskpanes"];
 /// Relationship kinds kept from the workbook without a workbook element.
 const WORKBOOK_ROOTS: &[&str] = &["customXml", "connections", "xmlMaps"];
 /// Relationship kinds kept from a sheet without a sheet element.
 const SHEET_ROOTS: &[&str] = &["queryTable", "tableSingleCells"];
 /// Sheet relationship kinds that mean the sheet XML may hold elements worth keeping.
-const SHEET_ELEMENT_KINDS: &[&str] = &["oleObject", "ctrlProp", "control", "image", "package", "printerSettings"];
+const SHEET_ELEMENT_KINDS: &[&str] = &["oleObject", "ctrlProp", "control", "image", "package", "printerSettings", "customProperty"];
 /// Attributes of `<fileVersion>` (CT_FileVersion).
 const FILE_VERSION_ATTRS: &[&str] = &["appName", "lastEdited", "lowestEdited", "rupBuild", "codeName"];
 /// The workbook extension listing the calculation features the saved values were computed with.
 const CALC_FEATURES_URI: &str = "{B58B0392-4F1F-4190-BB64-5DF3571DCE5F}";
 const NS_CALC_FEATURES: &str = "http://schemas.microsoft.com/office/spreadsheetml/2018/calcfeatures";
-/// Kept sheet elements, in schema order (all after `<legacyDrawing>`, before `<tableParts>`).
+/// Kept sheet elements written after `<legacyDrawing>` (before `<tableParts>`), in schema order.
 const SHEET_SLOTS: &[&str] = &["picture", "oleObjects", "controls"];
+/// Kept sheet elements: [`SHEET_SLOTS`] and `<customProperties>` (written after `<colBreaks>`).
+const KEPT_SLOTS: &[&str] = &["customProperties", "picture", "oleObjects", "controls"];
 
 /// Relationship kinds GridCraft reads and rewrites, or that depend on content it rewrites:
 /// kept content whose graph reaches one of them is dropped.
@@ -148,6 +151,7 @@ const CHART_SHEET_GRAPH: &[&str] = &["chartsheet", "drawing", "chart", "chartex"
 const OWN_DIRS: &[&str] = &[
     "customxml/",
     "docprops/custom.xml",
+    "docmetadata/",
     "customui/",
     "xl/externallinks/",
     "xl/connections.xml",
@@ -158,6 +162,7 @@ const OWN_DIRS: &[&str] = &[
     "xl/activex/",
     "xl/webextensions/",
     "xl/printersettings/",
+    "xl/customproperty",
 ];
 
 fn kind(rel_type: &str) -> &str {
@@ -505,7 +510,8 @@ impl KeptReader {
         }
         let mut frags = scan.fragments;
         // Controls and OLE objects are drawn from shapes in the legacy VML drawing.
-        if frags.iter().any(|(slot, _)| slot != "picture") {
+        let drawn = |slot: &str| slot == "oleObjects" || slot == "controls";
+        if frags.iter().any(|(slot, _)| drawn(slot)) {
             match self.vml(cx, rels, scan.legacy_drawing.as_deref(), seen) {
                 Ok((vml, parts)) => {
                     p.parts.extend(parts);
@@ -513,7 +519,7 @@ impl KeptReader {
                 }
                 Err(why) => {
                     cx.warn(format!("sheet \"{name}\": controls and embedded objects were dropped: {why}"));
-                    frags.retain(|(slot, _)| slot == "picture");
+                    frags.retain(|(slot, _)| !drawn(slot));
                 }
             }
         }
@@ -585,7 +591,7 @@ struct SheetScan {
     page_setup: Option<String>,
 }
 
-/// Finds the sheet's `<picture>`, `<oleObjects>`, `<controls>` (also inside
+/// Finds the sheet's `<customProperties>`, `<picture>`, `<oleObjects>`, `<controls>` (also inside
 /// `<mc:AlternateContent>`) and the `<legacyDrawing>` id. `None` when the XML is damaged.
 fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
     let data = xml::to_utf8(bytes);
@@ -618,7 +624,7 @@ fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
                 }
                 reader.read_to_end(e.name()).ok()?;
                 let end = usize::try_from(reader.buffer_position()).ok()?;
-                let wanted = matches!(local.as_slice(), b"picture" | b"oleObjects" | b"controls" | b"AlternateContent");
+                let wanted = matches!(local.as_slice(), b"customProperties" | b"picture" | b"oleObjects" | b"controls" | b"AlternateContent");
                 if wanted && end.saturating_sub(start) <= MAX_FRAGMENT {
                     let frag = text.get(start..end)?;
                     push_fragment(&mut out, frag, &local, &decls);
@@ -667,7 +673,7 @@ fn push_fragment(out: &mut SheetScan, frag: &str, local: &[u8], decls: &[(String
     } else {
         String::from_utf8_lossy(local).into_owned()
     };
-    if SHEET_SLOTS.contains(&slot.as_str()) && !out.fragments.iter().any(|(s, _)| *s == slot) {
+    if KEPT_SLOTS.contains(&slot.as_str()) && !out.fragments.iter().any(|(s, _)| *s == slot) {
         out.fragments.push((slot, frag));
     }
 }
@@ -1149,18 +1155,19 @@ impl<'a> SheetKept<'a> {
         self.ids.get(old).map(String::as_str)
     }
 
-    /// The kept sheet elements, in schema order.
+    /// The kept sheet elements that go after `<legacyDrawing>`, in schema order.
     pub fn elements(&self) -> String {
+        SHEET_SLOTS.iter().map(|slot| self.slot(slot)).collect()
+    }
+
+    /// The kept `<customProperties>` (they go after `<colBreaks>`).
+    pub fn custom_properties(&self) -> String {
+        self.slot("customProperties")
+    }
+
+    fn slot(&self, slot: &str) -> String {
         let Some(p) = self.p else { return String::new() };
-        let mut s = String::new();
-        for slot in SHEET_SLOTS {
-            for e in p.elements.iter().filter(|e| e.slot == *slot) {
-                if let Some(x) = remap(&e.xml, &self.ids) {
-                    s.push_str(&x);
-                }
-            }
-        }
-        s
+        p.elements.iter().filter(|e| e.slot == slot).filter_map(|e| remap(&e.xml, &self.ids)).collect()
     }
 }
 

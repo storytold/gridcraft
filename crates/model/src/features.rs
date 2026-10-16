@@ -48,6 +48,22 @@ pub struct TableColumn {
     pub totals_label: Option<String>,
     /// Calculated column formula.
     pub formula: Option<String>,
+    /// Differential format Excel applies to the column's data cells (new rows pick it up).
+    #[serde(default)]
+    pub data_style: Option<Style>,
+    /// Named cell style of the column's data cells.
+    #[serde(default)]
+    pub data_cell_style: Option<String>,
+    /// Differential format of the column's header cell.
+    #[serde(default)]
+    pub header_style: Option<Style>,
+    /// Differential format of the column's totals cell.
+    #[serde(default)]
+    pub totals_style: Option<Style>,
+    #[serde(default)]
+    pub header_cell_style: Option<String>,
+    #[serde(default)]
+    pub totals_cell_style: Option<String>,
     /// `uniqueName`: the name XML maps know the column by.
     #[serde(default)]
     pub unique_name: Option<String>,
@@ -93,6 +109,25 @@ pub struct Table {
     /// The connection (`xl/connections.xml`) an XML table is bound through.
     #[serde(default)]
     pub connection_id: Option<u32>,
+    /// Formats the table applies to its parts as a whole, under its columns' own.
+    #[serde(default)]
+    pub formats: TableFormats,
+}
+
+/// Differential formats and named cell styles set on a table as a whole (on `<table>`): Excel
+/// applies them to the header row, the body, the totals row and the borders, new rows included.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TableFormats {
+    pub header: Option<Style>,
+    pub data: Option<Style>,
+    pub totals: Option<Style>,
+    pub header_border: Option<Style>,
+    /// The border around the whole table.
+    pub border: Option<Style>,
+    pub totals_border: Option<Style>,
+    pub header_cell_style: Option<String>,
+    pub data_cell_style: Option<String>,
+    pub totals_cell_style: Option<String>,
 }
 
 impl Table {

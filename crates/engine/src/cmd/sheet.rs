@@ -1029,6 +1029,12 @@ fn shift_table_columns(t: &mut gridcraft_model::Table, at: u32, count: u32, inse
                     totals: Default::default(),
                     totals_label: None,
                     formula: None,
+                    data_style: None,
+                    data_cell_style: None,
+                    header_style: None,
+                    totals_style: None,
+                    header_cell_style: None,
+                    totals_cell_style: None,
                     unique_name: None,
                     xml: None,
                 };

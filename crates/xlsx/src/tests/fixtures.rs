@@ -553,6 +553,120 @@ fn text_box_formatting_is_read_and_written() {
     assert_eq!(g.text_outline.map(|o| o.1), Some(1.5));
 }
 
+/// #865: a table column's default data format (`dataDxfId`) and cell style (`dataCellStyle`),
+/// which Excel applies to new rows, survive a save.
+#[test]
+fn table_column_data_formats_survive_save() {
+    let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+      <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+      <borders count="1"><border/></borders>
+      <cellStyleXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="4" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+      <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+      <cellStyles count="2"><cellStyle name="Normal" xfId="0" builtinId="0"/><cellStyle name="Money" xfId="1"/></cellStyles>
+      <dxfs count="2"><dxf><font><b/></font></dxf><dxf><numFmt numFmtId="164" formatCode="0.000"/></dxf></dxfs>
+    </styleSheet>"#;
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Item</t></is></c><c r="B1" t="inlineStr"><is><t>Weight</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>a</t></is></c><c r="B2"><v>1.5</v></c></row></sheetData><tableParts count="1"><tablePart r:id="rId1"/></tableParts>"#;
+    let sheet_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/></Relationships>"#;
+    let table = r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="T" displayName="T" ref="A1:B2"><tableColumns count="2"><tableColumn id="1" name="Item"/><tableColumn id="2" name="Weight" dataDxfId="1" dataCellStyle="Money"/></tableColumns><tableStyleInfo name="TableStyleMedium2" showRowStripes="1"/></table>"#;
+    let bytes =
+        minimal(body, &[("xl/styles.xml", styles), ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels), ("xl/tables/table1.xml", table)], rels, "");
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let out = crate::write_xlsx(&wb).unwrap();
+    let mut pkg = crate::package::Package::open(&out).unwrap();
+    let t = pkg.read_xml("xl/tables/table1.xml").unwrap().unwrap();
+    let cols: Vec<_> = t.child("tableColumns").unwrap().kids("tableColumn").collect();
+    assert_eq!((cols[0].attr("dataDxfId"), cols[0].attr("dataCellStyle")), (None, None));
+    assert_eq!(cols[1].attr("dataCellStyle"), Some("Money"));
+    let id: usize = cols[1].attr("dataDxfId").expect("dataDxfId is written").parse().unwrap();
+    let st = pkg.read_xml("xl/styles.xml").unwrap().unwrap();
+    let dxf = st.child("dxfs").unwrap().kids("dxf").nth(id).unwrap();
+    assert_eq!(dxf.child("numFmt").and_then(|n| n.attr("formatCode")), Some("0.000"));
+    assert!(dxf.child("font").is_none(), "the column's own dxf, not another one");
+    assert!(st.child("cellStyles").unwrap().kids("cellStyle").any(|c| c.attr("name") == Some("Money")));
+}
+
+/// #1209: the formats a table applies to its header row, body, totals row and border (dxf ids and
+/// cell styles on `<table>`) survive a save. The dxfs are renumbered on save (the file lists them
+/// in reverse, and the sheet's conditional format takes the first one), so each id is checked by
+/// the format it points at.
+#[test]
+fn table_level_formats_survive_save() {
+    let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+      <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+      <borders count="1"><border/></borders>
+      <cellStyleXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="4" fontId="0" fillId="0" borderId="0"/><xf numFmtId="3" fontId="0" fillId="0" borderId="0"/><xf numFmtId="2" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+      <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+      <cellStyles count="4"><cellStyle name="Normal" xfId="0" builtinId="0"/><cellStyle name="Head" xfId="1"/><cellStyle name="Body" xfId="2"/><cellStyle name="Foot" xfId="3"/></cellStyles>
+      <dxfs count="7"><dxf><font><i/></font></dxf><dxf><numFmt numFmtId="170" formatCode="0.000000"/></dxf><dxf><numFmt numFmtId="169" formatCode="0.00000"/></dxf><dxf><numFmt numFmtId="168" formatCode="0.0000"/></dxf><dxf><numFmt numFmtId="167" formatCode="0.000"/></dxf><dxf><numFmt numFmtId="166" formatCode="0.00"/></dxf><dxf><numFmt numFmtId="165" formatCode="0.0"/></dxf></dxfs>
+    </styleSheet>"#;
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Item</t></is></c><c r="B1" t="inlineStr"><is><t>Weight</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>a</t></is></c><c r="B2"><v>1.5</v></c></row><row r="3"><c r="A3" t="inlineStr"><is><t>Total</t></is></c><c r="B3"><f>SUBTOTAL(109,[Weight])</f><v>1.5</v></c></row></sheetData><conditionalFormatting sqref="B2"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>1</formula></cfRule></conditionalFormatting><tableParts count="1"><tablePart r:id="rId1"/></tableParts>"#;
+    let sheet_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/></Relationships>"#;
+    let table = r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="T" displayName="T" ref="A1:B3" totalsRowCount="1" headerRowDxfId="6" dataDxfId="5" totalsRowDxfId="4" headerRowBorderDxfId="3" tableBorderDxfId="2" totalsRowBorderDxfId="1" headerRowCellStyle="Head" dataCellStyle="Body" totalsRowCellStyle="Foot"><tableColumns count="2"><tableColumn id="1" name="Item" totalsRowLabel="Total"/><tableColumn id="2" name="Weight" totalsRowFunction="sum"/></tableColumns><tableStyleInfo name="TableStyleMedium2" showRowStripes="1"/></table>"#;
+    let bytes =
+        minimal(body, &[("xl/styles.xml", styles), ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels), ("xl/tables/table1.xml", table)], rels, "");
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let out = crate::write_xlsx(&wb).unwrap();
+    let mut pkg = crate::package::Package::open(&out).unwrap();
+    let t = pkg.read_xml("xl/tables/table1.xml").unwrap().unwrap();
+    let st = pkg.read_xml("xl/styles.xml").unwrap().unwrap();
+    let dxfs: Vec<_> = st.child("dxfs").map(|d| d.kids("dxf").collect()).unwrap_or_default();
+    let format_of = |attr: &str| {
+        let id: usize = t.attr(attr).unwrap_or_else(|| panic!("{attr} is written")).parse().unwrap();
+        dxfs.get(id).and_then(|d| d.child("numFmt")).and_then(|n| n.attr("formatCode")).map(str::to_string)
+    };
+    let written: Vec<_> =
+        ["headerRowDxfId", "dataDxfId", "totalsRowDxfId", "headerRowBorderDxfId", "tableBorderDxfId", "totalsRowBorderDxfId"].map(format_of).to_vec();
+    let expected = ["0.0", "0.00", "0.000", "0.0000", "0.00000", "0.000000"].map(|f| Some(f.to_string())).to_vec();
+    assert_eq!(written, expected);
+    assert_eq!((t.attr("headerRowCellStyle"), t.attr("dataCellStyle"), t.attr("totalsRowCellStyle")), (Some("Head"), Some("Body"), Some("Foot")));
+    let names: Vec<_> = st.child("cellStyles").unwrap().kids("cellStyle").filter_map(|c| c.attr("name")).collect();
+    assert!(["Head", "Body", "Foot"].iter().all(|n| names.contains(n)), "{names:?}");
+}
+
+/// #1209: a table column's own header and totals formats (`headerRowDxfId`, `totalsRowDxfId`,
+/// `headerRowCellStyle`, `totalsRowCellStyle` on `<tableColumn>`) survive a save like its data
+/// ones. The dxfs are renumbered on save, so each id is checked by the format it points at.
+#[test]
+fn table_column_header_and_totals_formats_survive_save() {
+    let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+      <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+      <borders count="1"><border/></borders>
+      <cellStyleXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="4" fontId="0" fillId="0" borderId="0"/><xf numFmtId="3" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+      <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+      <cellStyles count="3"><cellStyle name="Normal" xfId="0" builtinId="0"/><cellStyle name="Head" xfId="1"/><cellStyle name="Foot" xfId="2"/></cellStyles>
+      <dxfs count="4"><dxf><font><i/></font></dxf><dxf><numFmt numFmtId="167" formatCode="0.000"/></dxf><dxf><numFmt numFmtId="166" formatCode="0.00"/></dxf><dxf><numFmt numFmtId="165" formatCode="0.0"/></dxf></dxfs>
+    </styleSheet>"#;
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Item</t></is></c><c r="B1" t="inlineStr"><is><t>Weight</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>a</t></is></c><c r="B2"><v>1.5</v></c></row><row r="3"><c r="A3" t="inlineStr"><is><t>Total</t></is></c><c r="B3"><f>SUBTOTAL(109,[Weight])</f><v>1.5</v></c></row></sheetData><conditionalFormatting sqref="B2"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>1</formula></cfRule></conditionalFormatting><tableParts count="1"><tablePart r:id="rId1"/></tableParts>"#;
+    let sheet_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/></Relationships>"#;
+    let table = r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="T" displayName="T" ref="A1:B3" totalsRowCount="1"><tableColumns count="2"><tableColumn id="1" name="Item" totalsRowLabel="Total"/><tableColumn id="2" name="Weight" totalsRowFunction="sum" headerRowDxfId="3" dataDxfId="2" totalsRowDxfId="1" headerRowCellStyle="Head" totalsRowCellStyle="Foot"/></tableColumns><tableStyleInfo name="TableStyleMedium2" showRowStripes="1"/></table>"#;
+    let bytes =
+        minimal(body, &[("xl/styles.xml", styles), ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels), ("xl/tables/table1.xml", table)], rels, "");
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let out = crate::write_xlsx(&wb).unwrap();
+    let mut pkg = crate::package::Package::open(&out).unwrap();
+    let t = pkg.read_xml("xl/tables/table1.xml").unwrap().unwrap();
+    let st = pkg.read_xml("xl/styles.xml").unwrap().unwrap();
+    let dxfs: Vec<_> = st.child("dxfs").map(|d| d.kids("dxf").collect()).unwrap_or_default();
+    let cols: Vec<_> = t.child("tableColumns").unwrap().kids("tableColumn").collect();
+    let format_of = |attr: &str| {
+        let id: usize = cols[1].attr(attr).unwrap_or_else(|| panic!("{attr} is written")).parse().unwrap();
+        dxfs.get(id).and_then(|d| d.child("numFmt")).and_then(|n| n.attr("formatCode")).map(str::to_string)
+    };
+    let written: Vec<_> = ["headerRowDxfId", "dataDxfId", "totalsRowDxfId"].map(format_of).to_vec();
+    assert_eq!(written, ["0.0", "0.00", "0.000"].map(|f| Some(f.to_string())).to_vec());
+    assert_eq!((cols[1].attr("headerRowCellStyle"), cols[1].attr("totalsRowCellStyle")), (Some("Head"), Some("Foot")));
+    let first = ["headerRowDxfId", "totalsRowDxfId", "headerRowCellStyle", "totalsRowCellStyle"].map(|a| cols[0].attr(a));
+    assert_eq!(first, [None; 4], "the other column's formats stay its own");
+    let names: Vec<_> = st.child("cellStyles").unwrap().kids("cellStyle").filter_map(|c| c.attr("name")).collect();
+    assert!(["Head", "Foot"].iter().all(|n| names.contains(n)), "{names:?}");
+}
+
 /// `_xludf.` marks a user-defined call even when a built-in has the same name; dropping it turns
 /// the call into the built-in, and `_xludf.EOMONTH()` into a call Excel repairs away (#726).
 #[test]

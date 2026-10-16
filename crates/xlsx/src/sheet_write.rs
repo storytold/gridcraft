@@ -487,6 +487,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             let _ = write!(s, "</{tag}>");
         }
     }
+    s.push_str(&kept.custom_properties());
 
     // Drawing: pictures, charts, shapes.
     if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() {
@@ -569,7 +570,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             out.table_id += 1;
             let n = out.tables;
             let name = table_name(&t.name, &mut used_names, out.table_id);
-            let xml = table_xml(t, cols, &name, out.table_id, out);
+            let xml = table_xml(t, cols, &name, out.table_id, &wb.cell_styles, out);
             out.part(&format!("xl/tables/table{n}.xml"), Some(CT_TABLE), xml.into_bytes());
             let rid = rels.add("table", &format!("../tables/table{n}.xml"));
             let _ = write!(parts, "<tablePart r:id=\"{rid}\"/>");
@@ -1021,7 +1022,8 @@ fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mu
     s
 }
 
-fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> String {
+/// `named`: the workbook's named cell styles; a table's or column's cell style is written only when it exists.
+fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, named: &[(String, Style)], out: &mut Out) -> String {
     let mut s =
         format!("{XML_DECL}<table xmlns=\"{NS_MAIN}\" id=\"{id}\" name=\"{0}\" displayName=\"{0}\" ref=\"{1}\"", esc_attr(name), t.range.a1());
     if !t.header_row {
@@ -1034,6 +1036,26 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
     }
     if let Some(ty) = &t.table_type {
         let _ = write!(s, " tableType=\"{}\"", esc_attr(ty));
+    }
+    let f = &t.formats;
+    for (attr, st) in [
+        ("headerRowDxfId", &f.header),
+        ("dataDxfId", &f.data),
+        ("totalsRowDxfId", &f.totals),
+        ("headerRowBorderDxfId", &f.header_border),
+        ("tableBorderDxfId", &f.border),
+        ("totalsRowBorderDxfId", &f.totals_border),
+    ] {
+        if let Some(st) = st {
+            let _ = write!(s, " {attr}=\"{}\"", dxf_id(&mut out.dxfs, st));
+        }
+    }
+    for (attr, cs) in
+        [("headerRowCellStyle", &f.header_cell_style), ("dataCellStyle", &f.data_cell_style), ("totalsRowCellStyle", &f.totals_cell_style)]
+    {
+        if let Some(cs) = cs.as_deref().filter(|n| *n == "Normal" || named.iter().any(|(x, _)| x == n)) {
+            let _ = write!(s, " {attr}=\"{}\"", esc_attr(cs));
+        }
     }
     if let Some(c) = t.connection_id {
         let _ = write!(s, " connectionId=\"{c}\"");
@@ -1070,6 +1092,20 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
                 let _ = write!(s, " totalsRowFunction=\"{f}\"");
             } else if let Some(l) = col.and_then(|c| c.totals_label.as_ref()) {
                 let _ = write!(s, " totalsRowLabel=\"{}\"", esc_attr(l));
+            }
+        }
+        if let Some(c) = col {
+            for (attr, st) in [("headerRowDxfId", &c.header_style), ("dataDxfId", &c.data_style), ("totalsRowDxfId", &c.totals_style)] {
+                if let Some(st) = st {
+                    let _ = write!(s, " {attr}=\"{}\"", dxf_id(&mut out.dxfs, st));
+                }
+            }
+            for (attr, cs) in
+                [("headerRowCellStyle", &c.header_cell_style), ("dataCellStyle", &c.data_cell_style), ("totalsRowCellStyle", &c.totals_cell_style)]
+            {
+                if let Some(cs) = cs.as_deref().filter(|n| *n == "Normal" || named.iter().any(|(x, _)| x == n)) {
+                    let _ = write!(s, " {attr}=\"{}\"", esc_attr(cs));
+                }
             }
         }
         let calc = col.and_then(|c| c.formula.as_ref()).filter(|f| !f.is_empty());
