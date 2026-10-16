@@ -472,7 +472,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "OK" => "Tamam",
         "Apply" => "Uygula",
         // Status bar & alerts
-        "Circular References" => "Döngüsel Başvurular",
         "Macros preserved (not executed)" => "Makrolar korundu (çalıştırılmadı)",
         "This value doesn't match the data validation restrictions defined for this cell." => {
             "Bu değer, bu hücre için tanımlanmış veri doğrulama kısıtlamalarıyla eşleşmiyor."
@@ -481,7 +480,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Reference is not valid." => "Başvuru geçerli değil.",
         "The name you entered is not valid." => "Girdiğiniz ad geçerli değil.",
         "A workbook must contain at least one visible worksheet." => "Bir çalışma kitabı en az bir görünür çalışma sayfası içermelidir.",
-        "Text Box" => "Metin Kutusu",
         "range too large" => "Aralık çok büyük",
         "the report is too large" => "Rapor çok büyük",
         "empty input range" => "Girdi aralığı boş",
