@@ -31,6 +31,16 @@ pub fn start() {
         // workbooks in it and stores what it saves (`host`).
         let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
         let app_bridge = bridge.clone();
+        // Keyed invite: CollabCraft redeemed the link and sent us here with `?invite`.
+        // Ask once before the canvas starts so a dead link is a page, not an empty workbook.
+        let mut invite = match craft_cloud_client::invite::arrive().await {
+            craft_cloud_client::invite::Arrival::Ordinary => None,
+            craft_cloud_client::invite::Arrival::Refused(reason) => {
+                craft_cloud_client::invite::refuse(&reason);
+                return;
+            }
+            craft_cloud_client::invite::Arrival::Invited(invitation) => Some(invitation),
+        };
         let result = eframe::WebRunner::new()
             .start(
                 canvas,
@@ -39,7 +49,7 @@ pub fn start() {
                     let inbox: Inbox = Inbox::default();
                     let mut session = Session::new();
                     // In host mode the parent sends the workbook to edit; no sample meanwhile.
-                    let q = if app_bridge.is_some() { String::new() } else { query() };
+                    let q = if app_bridge.is_some() || invite.is_some() { String::new() } else { query() };
                     if let Some(name) = q.split(['?', '&']).find_map(|kv| kv.strip_prefix("sample=")) {
                         let _ = session.execute("file.new", serde_json::json!({"sample": name}));
                     } else if q.contains("sample") {
@@ -52,9 +62,13 @@ pub fn start() {
                     let mut app = SheetApp::new(session, services);
                     app.cloud.connect(crate::cloud::Service::new(cc.egui_ctx.clone()));
                     if let Some(share) = collabcraft_share::CollabCraft::from_env() {
-                        app.share.connect(share);
+                        app.share.connect(share.for_app("gridcraft"));
                     }
                     cloud::start(&mut app);
+                    let invited = invite.is_some();
+                    if let Some(invitation) = invite.take() {
+                        open_invite(&mut app, invitation);
+                    }
                     app.ui.system_theme = true;
                     // Follow the browser's language, except a CJK one: the web build has no system
                     // CJK fonts (none are bundled), so that interface would render as tofu.
@@ -72,7 +86,7 @@ pub fn start() {
                         }
                         bridge.post_ready();
                     }
-                    let pending_file = query_param("file");
+                    let pending_file = if invited { None } else { query_param("file") };
                     Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, pending_file, opened_file: false }))
                 }),
             )
@@ -87,6 +101,27 @@ pub fn start() {
             }
         }
     });
+}
+
+fn open_invite(app: &mut SheetApp, invitation: craft_cloud_client::invite::Invitation) {
+    let name = invitation.name.clone();
+    match gridcraft_ui_egui::cloud::CloudApp::open_bytes(app, &name, invitation.document.clone()) {
+        Ok(Some(_)) => {
+            let mode = if invitation.read_only() { " (view only)" } else { "" };
+            let who = if invitation.recipient.is_empty() { String::new() } else { format!(" (shared with {})", invitation.recipient) };
+            app.ui.message = Some(("GridCraft".into(), format!("Opened \"{name}\"{mode}{who}")));
+            if let Err(e) = invitation.join() {
+                log::warn!("invite relay join failed: {e}");
+            }
+        }
+        Ok(None) => {
+            app.ui.message = Some(("GridCraft".into(), format!("Shared \"{name}\" needs a choice before it opens")));
+        }
+        Err(e) => {
+            log::error!("invite open failed: {e}");
+            craft_cloud_client::invite::refuse(&format!("The shared workbook could not be opened. {e}"));
+        }
+    }
 }
 
 fn query() -> String {
