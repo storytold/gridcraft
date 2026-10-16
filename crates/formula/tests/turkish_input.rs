@@ -127,3 +127,29 @@ fn turkish_display_round_trips_text_containing_separators() {
     assert_eq!(shown, r#"EĞER(A1="a,b;c";METİNBİRLEŞTİR("1.5";",";";");TOPLA(0,25;A1:A3 B2))"#);
     assert_eq!(print(&parse_input(&shown, tr, |_| false).unwrap()), print(&expr));
 }
+
+#[test]
+fn turkish_error_literals_parse_and_display() {
+    let tr = FormulaLocale::Tr;
+    for (tr_err, canonical) in [
+        ("#BOŞ!", "#NULL!"),
+        ("#SAYI/0!", "#DIV/0!"),
+        ("#DEĞER!", "#VALUE!"),
+        ("#BAŞV!", "#REF!"),
+        ("#AD?", "#NAME?"),
+        ("#SAYI!", "#NUM!"),
+        ("#YOK", "#N/A"),
+        ("#TAŞMA!", "#SPILL!"),
+        ("#HESAP!", "#CALC!"),
+        ("#DÖNGÜ!", "#CIRC!"),
+    ] {
+        let expr = parse_input(tr_err, tr, |_| false).unwrap();
+        assert_eq!(print(&expr), canonical);
+        let shown = print_input(&expr, tr, |_| false).unwrap();
+        assert_eq!(shown, tr_err);
+
+        // Also ensure canonical literals parse in TR locale
+        let expr_canon = parse_input(canonical, tr, |_| false).unwrap();
+        assert_eq!(print(&expr_canon), canonical);
+    }
+}

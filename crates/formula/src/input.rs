@@ -1,4 +1,6 @@
-mod tr;
+pub(crate) mod tr;
+
+use gridcraft_core::CellError;
 
 use crate::{Expr, ParseError, parser};
 
@@ -52,6 +54,37 @@ impl FormulaLocale {
                 .map(|(en, _)| *en)
                 .unwrap_or(localized),
             Self::En => localized,
+        }
+    }
+    pub fn error_name(self, err: CellError) -> &'static str {
+        match self {
+            Self::Tr => match err {
+                CellError::Null => "#BOŞ!",
+                CellError::Div0 => "#SAYI/0!",
+                CellError::Value => "#DEĞER!",
+                CellError::Ref => "#BAŞV!",
+                CellError::Name => "#AD?",
+                CellError::Num => "#SAYI!",
+                CellError::NA => "#YOK",
+                CellError::GettingData => "#VERİ_ALINIYOR",
+                CellError::Spill => "#TAŞMA!",
+                CellError::Calc => "#HESAP!",
+                CellError::Circ => "#DÖNGÜ!",
+            },
+            Self::Es => match err {
+                CellError::Null => "#¡NULO!",
+                CellError::Div0 => "#¡DIV/0!",
+                CellError::Value => "#¡VALOR!",
+                CellError::Ref => "#¡REF!",
+                CellError::Name => "#¿NOMBRE?",
+                CellError::Num => "#¡NUM!",
+                CellError::NA => "#N/D",
+                CellError::GettingData => "#GETTING_DATA",
+                CellError::Spill => "#DESBORDAMIENTO!",
+                CellError::Calc => "#¡CALC!",
+                CellError::Circ => "#CIRC!",
+            },
+            Self::En => err.as_str(),
         }
     }
 }
@@ -114,6 +147,7 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
             }
             Tok::Number(_) => out.push_str(&text.replace('.', &locale.decimal_separator().to_string())),
             Tok::Comma => out.push(if array_depth > 0 { locale.array_column_separator() } else { locale.list_separator() }),
+            Tok::Error(e) => out.push_str(locale.error_name(e)),
             _ => out.push_str(text),
         }
     }

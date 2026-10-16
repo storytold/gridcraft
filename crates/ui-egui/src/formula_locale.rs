@@ -154,3 +154,37 @@ pub(crate) fn display_template(text: &str, locale: FormulaLocale, wb: &Workbook,
     }
     display(text, locale, wb, sheet)
 }
+
+pub(crate) fn localize_error(msg: &str, lang: crate::i18n::Language) -> String {
+    if lang != crate::i18n::Language::Tr {
+        return msg.to_string();
+    }
+    if let Some(c) = msg.strip_prefix("unexpected character `").and_then(|s| s.strip_suffix('`')) {
+        return format!("Beklenmeyen karakter: `{c}`");
+    }
+    if let Some(t) = msg.strip_prefix("unexpected ") {
+        return format!("Beklenmeyen öğe: {t}");
+    }
+    if let Some(rest) = msg.strip_prefix("expected ")
+        && let Some((exp, found)) = rest.split_once(", found ")
+    {
+        let exp_tr = match exp {
+            "`,` or `)`" => "`;` veya `)`",
+            _ => exp,
+        };
+        return format!("{exp_tr} bekleniyordu, {found} bulundu");
+    }
+    match msg {
+        "unterminated text" => "Kapatılmamış metin dizesi (tırnak işareti eksik)".into(),
+        "unterminated sheet name" => "Kapatılmamış sayfa adı (tek tırnak eksik)".into(),
+        "expected ! after sheet name" => "Sayfa adından sonra '!' işareti bekleniyordu".into(),
+        "unbalanced [" => "Kapatılmamış '[' köşeli ayracı".into(),
+        "unknown error literal" => "Bilinmeyen hata sabiti".into(),
+        "too many arguments" => "İşlev için çok fazla bağımsız değişken girildi".into(),
+        "invalid 3-D reference" => "Geçersiz 3B (çoklu çalışma sayfası) başvurusu".into(),
+        "formula is nested too deeply" => "Formül çok fazla iç içe yerleştirilmiş (derinlik sınırı aşıldı)".into(),
+        "array constants may only contain constants" => "Dizi sabitleri yalnızca sabit değer içerebilir".into(),
+        "array rows must have the same length" => "Dizi satırları aynı sayıda elemana sahip olmalıdır".into(),
+        _ => lang.tr(msg).to_string(),
+    }
+}
