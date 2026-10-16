@@ -1,6 +1,9 @@
 //! A small XML tree built on `quick-xml`, with streaming of repeated elements (worksheet rows,
 //! shared strings) so large parts never need a full tree, plus escaping helpers for writing.
 
+use std::fmt::Write as _;
+
+use gridcraft_model::{PhoneticProps, PhoneticRun, PhoneticString};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
@@ -65,7 +68,8 @@ impl El {
 }
 
 /// Text of a SpreadsheetML string item (`<si>`, `<is>`, comment `<text>`): `<t>` and rich text
-/// runs `<r><t>`, phonetic runs ignored. Decodes `_xHHHH_` escapes.
+/// runs `<r><t>`, phonetic runs ignored (read them with [`phonetic_data`] instead — they are hints,
+/// not part of the text). Decodes `_xHHHH_` escapes.
 pub fn rich_text(e: &El) -> String {
     let mut s = String::new();
     for c in &e.children {
@@ -80,6 +84,54 @@ pub fn rich_text(e: &El) -> String {
         }
     }
     decode_xstring(&s)
+}
+
+/// The phonetic (furigana) data of a string item: its `<rPh>` runs in document order, and its
+/// `<phoneticPr>` when present.
+///
+/// `base` is the item's base text ([`rich_text`]); the offsets are validated against it and never
+/// used to index anything. Behaviour reference: ISO/IEC 29500-1 §18.4.6 `rPh` (`sb` and `eb` are
+/// zero-based offsets into the base text with `sb < eb`, both within its length; child `<t>` holds
+/// the reading) and §18.4.7 `phoneticPr` — the `PhoneticRun` and `PhoneticProperties` classes on
+/// Microsoft Learn:
+/// <https://learn.microsoft.com/en-us/previous-versions/office/developer/office-2010/cc820083(v=office.14)>,
+/// <https://learn.microsoft.com/en-us/previous-versions/office/developer/office-2010/cc797016(v=office.14)>.
+/// Damaged runs are dropped rather than repaired: one without both offsets, with `sb >= eb`, wholly
+/// past the end of the base text, or without a reading; the caller reports how many.
+pub fn phonetic_data(e: &El, base: &str) -> (Vec<PhoneticRun>, Option<PhoneticProps>) {
+    // The base text's length in UTF-16 code units: the widest reading of "the total length of the
+    // base text" (§18.4.6), so a run is only dropped when it cannot refer to the text at all.
+    let len = u32::try_from(base.encode_utf16().count()).unwrap_or(u32::MAX);
+    let mut runs = Vec::new();
+    for r in e.kids("rPh") {
+        let (Some(sb), Some(eb)) = (r.attr_u32("sb"), r.attr_u32("eb")) else { continue };
+        let start = sb.min(len);
+        let end = eb.min(len);
+        if start >= end {
+            continue;
+        }
+        let reading = r.child("t").map(|t| decode_xstring(&t.text)).unwrap_or_default();
+        if reading.is_empty() {
+            continue;
+        }
+        runs.push(PhoneticRun { start, end, text: reading });
+    }
+    (runs, e.child("phoneticPr").map(phonetic_props))
+}
+
+/// `<phoneticPr>` attributes (ISO/IEC 29500-1 §18.4.7 `CT_PhoneticPr`: `fontId` is required,
+/// `type`, `alignment`). `type` and `alignment` are kept only when they are values §18.18.57
+/// `ST_PhoneticType` / §18.18.56 `ST_PhoneticAlignment` define, so a damaged file cannot make the
+/// saved file invalid; a missing or unusable `fontId` becomes 0, the Normal style's font, which an
+/// out-of-range index falls back to anyway.
+fn phonetic_props(e: &El) -> PhoneticProps {
+    const KINDS: &[&str] = &["halfwidthKatakana", "fullwidthKatakana", "Hiragana", "noConversion"];
+    const ALIGNMENTS: &[&str] = &["noControl", "left", "center", "distributed"];
+    PhoneticProps {
+        font_id: e.attr_u32("fontId").unwrap_or(0),
+        kind: e.attr("type").map(str::trim).filter(|v| KINDS.contains(v)).map(str::to_string),
+        alignment: e.attr("alignment").map(str::trim).filter(|v| ALIGNMENTS.contains(v)).map(str::to_string),
+    }
 }
 
 /// Converts input bytes to UTF-8 XML text (handles BOMs and UTF-16).
@@ -337,6 +389,29 @@ pub fn t_el(s: &str) -> String {
     }
 }
 
+/// The contents of a shared string item (`<si>`): the base text, then — when the string has
+/// phonetic (furigana) data — its `<rPh sb="…" eb="…"><t>…</t></rPh>` runs in document order and
+/// its `<phoneticPr …/>`. Behaviour reference: ISO/IEC 29500-1 §18.4.8 `si` with §18.4.6 `rPh` and
+/// §18.4.7 `phoneticPr`. A string without phonetic data gives exactly [`t_el`]'s output.
+pub fn si_body(text: &str, phonetic: Option<&PhoneticString>) -> String {
+    let mut s = t_el(text);
+    let Some(p) = phonetic else { return s };
+    for r in &p.runs {
+        let _ = write!(s, "<rPh sb=\"{}\" eb=\"{}\">{}</rPh>", r.start, r.end, t_el(&r.text));
+    }
+    if let Some(pr) = &p.props {
+        let _ = write!(s, "<phoneticPr fontId=\"{}\"", pr.font_id);
+        if let Some(kind) = &pr.kind {
+            let _ = write!(s, " type=\"{}\"", esc_attr(kind));
+        }
+        if let Some(alignment) = &pr.alignment {
+            let _ = write!(s, " alignment=\"{}\"", esc_attr(alignment));
+        }
+        s.push_str("/>");
+    }
+    s
+}
+
 /// Formats a number for an XML attribute/value (shortest round-trip form).
 pub fn num(n: f64) -> String {
     if !n.is_finite() {
@@ -351,6 +426,22 @@ pub fn num(n: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn si_without_phonetics_is_written_exactly_as_before() {
+        for s in ["plain", " leading ", "a & <b>", "line\nbreak", "日本語", "x_x0041_"] {
+            assert_eq!(si_body(s, None), t_el(s));
+        }
+    }
+
+    #[test]
+    fn phonetic_data_validates_offsets() {
+        let x = r#"<si><t>課きく</t><rPh sb="0" eb="1"><t>カ</t></rPh><rPh sb="2" eb="9"><t>ク</t></rPh><rPh sb="2" eb="2"><t>x</t></rPh><rPh sb="1"/></si>"#;
+        let si = parse(x.as_bytes()).unwrap();
+        let (runs, props) = phonetic_data(&si, &rich_text(&si));
+        assert_eq!(runs, vec![PhoneticRun { start: 0, end: 1, text: "カ".into() }, PhoneticRun { start: 2, end: 3, text: "ク".into() }]);
+        assert!(props.is_none());
+    }
 
     #[test]
     fn parse_basic() {

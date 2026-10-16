@@ -85,6 +85,47 @@ pub struct DocProps {
     pub description: String,
 }
 
+/// One phonetic (furigana) run of a string item (`<rPh>`): the reading `text` and the range of the
+/// base text it annotates.
+///
+/// `start` and `end` are zero-based offsets into the base text (`sb` and `eb` in the file) with
+/// `start < end`; reading keeps them within the text's length in UTF-16 code units. Behaviour
+/// reference: ISO/IEC 29500-1 §18.4.6 `rPh` and the Microsoft Learn `PhoneticRun` class.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhoneticRun {
+    pub start: u32,
+    pub end: u32,
+    pub text: String,
+}
+
+/// The `<phoneticPr>` of a string item: how its phonetic runs are displayed. `kind` (`type`) and
+/// `alignment` only ever hold values ISO/IEC 29500-1 §18.18.57 `ST_PhoneticType` / §18.18.56
+/// `ST_PhoneticAlignment` define, so damaged files cannot be written back invalid.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhoneticProps {
+    /// `fontId`: a required attribute, an index into the style sheet's fonts. A file without one
+    /// gets 0 — the Normal style's font, which an out-of-range index falls back to anyway.
+    #[serde(default)]
+    pub font_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<String>,
+}
+
+/// The phonetic (furigana) data of one shared string: its `<rPh>` runs, in document order, and its
+/// `<phoneticPr>` when the file had one.
+///
+/// `text` is the string's base text — the only handle a cell keeps on its shared string — and is
+/// the key the writer uses to re-emit the runs next to the right `<si>`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhoneticString {
+    pub text: String,
+    pub runs: Vec<PhoneticRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub props: Option<PhoneticProps>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Arc<Sheet>>,
@@ -104,6 +145,17 @@ pub struct Workbook {
     pub custom_lists: Vec<Vec<String>>,
     /// Named cell styles (Cell Styles gallery): name → style.
     pub cell_styles: Vec<(String, crate::style::Style)>,
+    /// Phonetic (furigana) data of shared strings (`xl/sharedStrings.xml`), one entry per string
+    /// text, so that an open + save keeps a Japanese workbook's readings. Written back next to the
+    /// `<si>` holding the same text.
+    ///
+    /// Keyed by text because that is all a cell keeps of its shared string: the saved table holds
+    /// each text once (the format's `uniqueCount`), so two `<si>` items that share a base text can
+    /// only keep one reading — the reader keeps the first and warns. Empty for workbooks without
+    /// phonetic data; not present in older JSON. Modelled data (unlike [`Workbook::preserved`],
+    /// which holds unmodelled parts), so it is saved to JSON as well as to XLSX.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phonetics: Vec<PhoneticString>,
     /// VBA project (`xl/vbaProject.bin`) carried through unchanged. GridCraft does not run
     /// macros; the blob is preserved so that saving a macro-enabled workbook never destroys the
     /// macros it arrived with. base64 in JSON. `None` = the workbook has no macros.
@@ -144,6 +196,7 @@ impl Workbook {
             structure_password: None,
             custom_lists: vec![],
             cell_styles: vec![],
+            phonetics: vec![],
             vba_project: None,
             csv_delimiter: None,
             preserved: None,
@@ -295,6 +348,23 @@ fn spell_calls(e: Expr, lambdas: &[String]) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phonetics_are_additive_in_json() {
+        let mut wb = Workbook::new();
+        assert!(wb.phonetics.is_empty(), "new workbooks have no phonetic data");
+        wb.phonetics.push(PhoneticString {
+            text: "東".into(),
+            runs: vec![PhoneticRun { start: 0, end: 1, text: "ヒガシ".into() }],
+            props: Some(PhoneticProps { font_id: 3, kind: Some("Hiragana".into()), alignment: None }),
+        });
+        let json = serde_json::to_string(&wb).expect("serialize");
+        assert_eq!(serde_json::from_str::<Workbook>(&json).expect("deserialize").phonetics, wb.phonetics);
+        // JSON written before the field existed still loads.
+        let mut value: serde_json::Value = serde_json::from_str(&json).expect("value");
+        value.as_object_mut().expect("an object").remove("phonetics");
+        assert!(serde_json::from_value::<Workbook>(value).expect("older JSON").phonetics.is_empty());
+    }
 
     #[test]
     fn sheet_names() {

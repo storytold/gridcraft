@@ -10,6 +10,7 @@ mod literal_category_roundtrip;
 mod malformed;
 mod ods_tests;
 mod passthrough_tests;
+mod phonetic_tests;
 mod pivot_tests;
 mod richdata_tests;
 mod roundtrip;
