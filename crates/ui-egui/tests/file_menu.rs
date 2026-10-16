@@ -217,3 +217,46 @@ fn a_cancelled_export_pdf_picker_writes_nothing() {
     assert!(h.state().message.is_none());
     assert!(h.state_mut().session.take_ui_requests().is_empty());
 }
+
+/// Share › Export as Web Page (and the native File menu's Save as Web Page) asks for a name in its
+/// own dialog. A bare name has no folder: written as typed it lands in the process's working
+/// directory, where nobody looks for it (#1212). The save picker chooses the folder instead.
+#[test]
+fn save_a_copy_with_a_bare_name_asks_where_to_save_it() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-save-copy-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (capture, target) = (asked.clone(), dir.clone());
+    let mut h = harness(Services {
+        pick_save: Some(Box::new(move |suggested| {
+            capture.lock().unwrap().push(suggested.to_string());
+            Some(target.join("Chosen.html").to_string_lossy().into_owned())
+        })),
+        ..Default::default()
+    });
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    let save_copy = |h: &mut egui_kittest::Harness<'static, SheetApp>, path: &str| {
+        h.state_mut().open_dialog("saveCopy", serde_json::json!({"format": "html"}));
+        h.run_steps(3);
+        h.state_mut().dialog.as_mut().unwrap().values.insert("path".into(), serde_json::json!(path));
+        h.run_steps(2);
+        h.get_by_label("   OK   ").click();
+        h.run_steps(3);
+    };
+    let name = format!("gridcraft-save-copy-{}", std::process::id());
+    save_copy(&mut h, &name);
+    let stray = std::path::PathBuf::from(format!("{name}.html"));
+    let written_in_cwd = stray.exists();
+    let _ = std::fs::remove_file(&stray);
+    assert!(!written_in_cwd, "a bare name is not written to the working directory");
+    assert_eq!(*asked.lock().unwrap(), vec![format!("{name}.html")], "the picker is offered the typed name");
+    assert!(std::fs::read_to_string(dir.join("Chosen.html")).unwrap().contains("42"), "the page is written where the picker says");
+    assert!(h.state().message.is_none());
+    // A full path skips the picker; a write that fails is reported, not swallowed.
+    save_copy(&mut h, &dir.join("Named.html").to_string_lossy());
+    assert!(dir.join("Named.html").exists());
+    save_copy(&mut h, &dir.join("missing").join("Lost.html").to_string_lossy());
+    assert!(h.state().message.is_some(), "a failed write is reported");
+    assert_eq!(asked.lock().unwrap().len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

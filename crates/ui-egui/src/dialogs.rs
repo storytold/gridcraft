@@ -1170,7 +1170,17 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     d.values.insert("path".into(), json!(path.clone()));
                     ok_cancel(ui, &mut confirm, &mut open);
                     if confirm {
-                        let target = if path.is_empty() { app.services.pick_save.as_ref().and_then(|f| f(&format!("Copy.{fmt}"))) } else { Some(path) };
+                        // A bare name has no folder: written as typed it would land in the
+                        // process's working directory (`/` from the Finder, the install folder on
+                        // Windows), never where the user looks. The picker chooses the folder.
+                        let pick = app.services.pick_save.as_ref();
+                        let target = if path.is_empty() {
+                            pick.and_then(|f| f(&format!("Copy.{fmt}")))
+                        } else if let Some(f) = pick.filter(|_| std::path::Path::new(&path).is_relative()) {
+                            f(&if path.ends_with(&format!(".{fmt}")) { path } else { format!("{path}.{fmt}") })
+                        } else {
+                            Some(path)
+                        };
                         if let Some(t) = target {
                             let id = match fmt.as_str() {
                                 "csv" => "file.exportCsv",
