@@ -41,7 +41,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 let id = egui::Id::new("gridcraft.formula_bar");
                 let editing_here = app.editor.as_ref().is_some_and(|e| e.from_formula_bar);
                 if app.editor.is_some() {
-                    editor_widget(app, &mut child, id, theme::ui_font(13.0), expanded, field.width() - 12.0);
+                    editor_widget(app, &mut child, id, theme::ui_font(13.0), expanded, field.width() - 12.0, egui::Align::Min);
                 } else {
                     // Show the active cell's content; clicking starts editing in the bar.
                     let text = active_input(app);
@@ -155,7 +155,8 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) {
 }
 
 /// The text editor used in the cell and in the formula bar (they share `app.editor`).
-pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32) {
+/// `align` places the text across `width` (the cell's horizontal alignment; the formula bar is left).
+pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32, align: egui::Align) {
     let Some(mut ed) = app.editor.take() else { return };
     let mine = ed.from_formula_bar == (id == egui::Id::new("gridcraft.formula_bar"));
     // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
@@ -285,6 +286,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         .frame(egui::Frame::NONE)
         .font(font)
         .desired_width(width)
+        .horizontal_align(align)
         .layouter(&mut layouter)
         .lock_focus(true)
         .event_filter(egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
@@ -338,7 +340,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     if let Some(full) = &ed.completion
         && let Some(rest) = crate::editor::completion_rest(full, &ed.text)
     {
-        let pos = resp.rect.left_top() + egui::vec2(output.galley.rect.width(), 0.0);
+        let pos = output.galley_pos + egui::vec2(output.galley.rect.width(), 0.0);
         let g = ui.painter().layout_no_wrap(
             rest.to_string(),
             output.galley.job.sections.first().map(|s| s.format.font_id.clone()).unwrap_or_default(),

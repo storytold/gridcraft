@@ -923,6 +923,19 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     }
 }
 
+/// General alignment follows the value: numbers to the right, logicals and errors centred, text left.
+fn resolved_halign(h: HAlign, v: &Value, numeric: bool) -> HAlign {
+    match h {
+        HAlign::General => match v {
+            Value::Number(_) => HAlign::Right,
+            Value::Bool(_) | Value::Error(_) => HAlign::Center,
+            _ if numeric => HAlign::Right,
+            _ => HAlign::Left,
+        },
+        h => h,
+    }
+}
+
 pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
     let pad_v = 1.5 * z;
     let y_top = rect.top() + pad_v;
@@ -1167,15 +1180,7 @@ pub(crate) fn paint_quadrant(
             continue;
         }
         let color = ncolor.unwrap_or(lk.text_color);
-        let halign = match st.align.h {
-            HAlign::General => match v {
-                Value::Number(_) => HAlign::Right,
-                Value::Bool(_) | Value::Error(_) => HAlign::Center,
-                _ if numeric => HAlign::Right,
-                _ => HAlign::Left,
-            },
-            h => h,
-        };
+        let halign = resolved_halign(st.align.h, &v, numeric);
         let indent = st.align.indent as f32 * 9.0 * z;
         let pad = 2.5 * z;
         let rotated = st.align.rotation != 0 && st.align.rotation != 255;
@@ -2703,12 +2708,32 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let st = wb.styles.get(sh.style_id(cell)).clone();
     let size = st.font.size * 96.0 / 72.0 * geo.z;
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
-    let text_w = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size().x;
+    let text_size = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size();
+    let text_w = text_size.x;
     let lines = ed.text.lines().count().max(1) as f32 + if ed.text.ends_with('\n') { 1.0 } else { 0.0 };
-    let w = (text_w + 14.0).max(rect.width()).min(geo.cells.right() - rect.left());
+    let w = (text_w + 14.0).max(rect.width());
     let h = (size * 1.3 * lines + 4.0).max(rect.height());
-    // Grows to the left on a right-to-left sheet.
-    let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
+    // The text keeps the cell's alignment while editing, and the box grows the way it reads:
+    // centred text both ways, right-aligned text to the left (Excel).
+    let halign = resolved_halign(st.align.h, &sh.value(cell), false);
+    let (x, w, text_x) = match halign {
+        HAlign::Center | HAlign::CenterAcross | HAlign::Distributed => {
+            let w = w.min(geo.cells.width());
+            ((rect.center().x - w / 2.0).min(geo.cells.right() - w).max(geo.cells.left()), w, egui::Align::Center)
+        }
+        HAlign::Right => {
+            let w = w.min(rect.right() - geo.cells.left());
+            (rect.right() - w, w, egui::Align::Max)
+        }
+        _ => (rect.left(), w.min(geo.cells.right() - rect.left()), egui::Align::Min),
+    };
+    // Grows to the left on a right-to-left sheet, where left-aligned text sits at the right.
+    let erect = geo.mirror_rect(Rect::from_min_size(pos2(x, rect.top()), vec2(w, h)));
+    let text_x = match text_x {
+        egui::Align::Min if geo.rtl => egui::Align::Max,
+        egui::Align::Max if geo.rtl => egui::Align::Min,
+        a => a,
+    };
     let fill = match st.fill.pattern {
         PatternType::Solid => st.fill.fg.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::WHITE),
         _ => Color32::WHITE,
@@ -2723,9 +2748,17 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     painter.rect_filled(erect, 0.0, fill);
     painter.rect_stroke(erect.expand(1.0), 0.0, Stroke::new(2.0, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
     let id = egui::Id::new("gridcraft.cell_editor");
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
+    let inner = erect.shrink2(vec2(2.0, 1.0));
+    // Aligned within the cell, not the box: the box can be a little taller than a short row.
+    let spare = (rect.height() - 2.0 - text_size.y).max(0.0);
+    let top = match st.align.v {
+        VAlign::Top => inner.top(),
+        VAlign::Bottom => inner.top() + spare,
+        VAlign::Center | VAlign::Justify | VAlign::Distributed => inner.top() + spare / 2.0,
+    };
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_max(pos2(inner.left(), top), inner.max)));
     child.set_clip_rect(clip);
-    crate::formula_bar::editor_widget(app, &mut child, id, font, false, erect.width() - 4.0);
+    crate::formula_bar::editor_widget(app, &mut child, id, font, false, erect.width() - 4.0, text_x);
 }
 
 /// Test the popup itself, not whether the pointer is over any part of the app.
