@@ -35,6 +35,10 @@ fn activate_sheet(app: &mut SheetApp, i: usize) {
     }
 }
 
+/// Side of the padlock painted on a protected sheet's tab, and the gap between it and the name.
+const LOCK_SIZE: f32 = 12.0;
+const LOCK_GAP: f32 = 4.0;
+
 pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("sheet_tabs").exact_size(32.0).frame(egui::Frame::NONE.fill(t.tab_bar)).show(ui, |ui| {
@@ -61,12 +65,12 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             }
             ui.add_space(8.0);
             let Some(d) = app.session.active() else { return };
-            let sheets: Vec<(usize, String, Option<[u8; 3]>, bool)> =
+            let sheets: Vec<(usize, String, Option<[u8; 3]>, bool, bool)> =
                 d.wb.sheets
                     .iter()
                     .enumerate()
                     .filter(|(_, s)| s.visibility == Visibility::Visible)
-                    .map(|(i, s)| (i, s.name.clone(), s.tab_color.and_then(|c| c.resolve(&d.wb.theme)), i == d.wb.active_sheet))
+                    .map(|(i, s)| (i, s.name.clone(), s.tab_color.and_then(|c| c.resolve(&d.wb.theme)), i == d.wb.active_sheet, s.is_protected()))
                     .collect();
             // Keep worksheet tabs in their own horizontally scrollable viewport. As in Excel, the
             // tabs get 60% of the bar and the grid's horizontal scrollbar the rest.
@@ -102,12 +106,15 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                         }
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 0.0;
-                            for (i, name, color, active) in sheets {
+                            for (i, name, color, active, protected) in sheets {
                                 let renaming = app.grid.renaming_tab == Some(i);
                                 let font = if active { theme::ui_bold(13.0) } else { theme::ui_font(13.0) };
                                 let tw = ui.painter().layout_no_wrap(name.clone(), font.clone(), t.text).size().x;
-                                let w = (tw + 32.0).max(72.0);
+                                // A protected sheet's tab carries a padlock before its name (#1183).
+                                let lock = if protected { LOCK_SIZE + LOCK_GAP } else { 0.0 };
+                                let w = (tw + lock + 32.0).max(72.0);
                                 let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click_and_drag());
+                                let resp = if protected { resp.on_hover_text(app.ui.language.tr("Protected sheet")) } else { resp };
                                 if active && reveal_active {
                                     resp.scroll_to_me(None);
                                 }
@@ -146,7 +153,14 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                         app.grid.renaming_tab = None;
                                     }
                                 } else {
-                                    ui.painter().text(r.center(), Align2::CENTER_CENTER, &name, font, if active { t.accent } else { t.text });
+                                    let fg = if active { t.accent } else { t.text };
+                                    // Centre the padlock and the name together as one group.
+                                    let left = r.center().x - (lock + tw) / 2.0;
+                                    if protected {
+                                        let icon = Rect::from_center_size(pos2(left + LOCK_SIZE / 2.0, r.center().y), vec2(LOCK_SIZE, LOCK_SIZE));
+                                        icons::paint(ui.painter(), icon, Icon::Lock, if active { t.accent } else { t.text_dim });
+                                    }
+                                    ui.painter().text(pos2(left + lock, r.center().y), Align2::LEFT_CENTER, &name, font, fg);
                                 }
                                 if resp.clicked() {
                                     activate_sheet(app, i);

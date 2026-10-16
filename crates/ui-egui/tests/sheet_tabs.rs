@@ -162,3 +162,28 @@ fn overflow_leaves_the_worksheet_scrollbar_reachable() {
         assert!(track.left() >= 0.0 && track.right() <= width + 0.5, "{width}: the scrollbar is offscreen: {track:?}");
     }
 }
+
+#[test]
+fn protected_sheet_tabs_carry_a_padlock_before_the_name() {
+    let mut h = harness(1200.0, 0);
+    let x = |h: &Harness, name: &str| tab(h, name).unwrap().0.left();
+    let (gap_before, next_before) = (x(&h, "Tab02") - x(&h, "Tab01"), x(&h, "Tab03"));
+    // Protect Tab02 (the active sheet), then go back to Tab00 so Tab02 is an ordinary tab again.
+    h.state_mut().run("sheet.activate", json!({"sheet":2})).unwrap();
+    h.state_mut().run("review.protectSheet", json!({})).unwrap();
+    h.state_mut().run("sheet.activate", json!({"sheet":0})).unwrap();
+    h.run_steps(20);
+    assert!(h.state().session.doc().unwrap().wb.sheets[2].is_protected());
+    // The name moves right to make room for the padlock, and the tab grows (the 72 px minimum width can absorb part
+    // of the padlock's 16 px, so the growth is at most that).
+    assert!(x(&h, "Tab02") - x(&h, "Tab01") > gap_before, "the protected tab's name should move right");
+    let grown = x(&h, "Tab03") - next_before;
+    assert!(grown > 0.0 && grown <= 16.0, "the protected tab should grow by up to the padlock's room, grew {grown}");
+    // The padlock is painted just left of the name.
+    let name = tab(&h, "Tab02").unwrap().0;
+    let lock_body = h.output().shapes.iter().any(|s| match &s.shape {
+        Shape::Rect(r) => r.rect.right() <= name.left() && r.rect.left() >= name.left() - 16.0 && r.rect.width() < 12.0,
+        _ => false,
+    });
+    assert!(lock_body, "no padlock painted before the protected tab's name");
+}
