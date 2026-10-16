@@ -128,11 +128,62 @@ fn filter(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     from_rows(out, &Value::Empty)
 }
 
+/// Excel's text order for sorting: case-insensitive; hyphens and apostrophes ignored except to
+/// put the string without them first; punctuation and symbols before digits before letters;
+/// accented Latin letters right after their base letter. Ties keep the input order (stable sort).
+fn collate_text(a: &str, b: &str) -> Ordering {
+    fn ignored(c: &char) -> bool {
+        matches!(c, '-' | '\'')
+    }
+    fn primary(s: &str) -> impl Iterator<Item = (u8, char)> + '_ {
+        let class = |c: char| if c.is_alphabetic() { 2 } else { u8::from(c.is_numeric()) };
+        let marks = '\u{300}'..='\u{36f}';
+        s.chars().flat_map(char::to_lowercase).filter(move |c| !ignored(c) && !marks.contains(c)).flat_map(base_letters).map(move |c| (class(c), c))
+    }
+    fn secondary(s: &str) -> impl Iterator<Item = char> + '_ {
+        s.chars().flat_map(char::to_lowercase).filter(|c| !ignored(c))
+    }
+    primary(a)
+        .cmp(primary(b))
+        .then_with(|| secondary(a).cmp(secondary(b)))
+        .then_with(|| a.chars().filter(ignored).count().cmp(&b.chars().filter(ignored).count()))
+}
+
+/// The base letter(s) of a lowercase Latin letter for the first sort level: `ä` → `a`, `ß` → `ss`.
+fn base_letters(c: char) -> impl Iterator<Item = char> {
+    // Lowercase forms of U+00E0..=U+00FF and U+0100..=U+017F; '.' keeps the character as it is.
+    const LATIN1: &[u8] = b"aaaaaa.ceeeeiiiidnooooo.ouuuuy.y";
+    const EXT_A: &[u8] =
+        b"aaaaaaccccccccddddeeeeeeeeeegggggggghhhhiiiiiiiiii..jjkkkllllllllllnnnnnn.nnoooooo..rrrrrrssssssssttttttuuuuuuuuuuuuwwyyyzzzzzzs";
+    let pair = match c {
+        'æ' => [Some('a'), Some('e')],
+        'œ' => [Some('o'), Some('e')],
+        'ß' => [Some('s'), Some('s')],
+        'ĳ' => [Some('i'), Some('j')],
+        _ => {
+            let (table, start) = match c {
+                '\u{e0}'..='\u{ff}' => (LATIN1, 0xe0),
+                '\u{100}'..='\u{17f}' => (EXT_A, 0x100),
+                _ => (&[][..], 0),
+            };
+            let base = match table.get((c as usize).saturating_sub(start)) {
+                Some(&b) if b != b'.' => char::from(b),
+                _ => c,
+            };
+            [Some(base), None]
+        }
+    };
+    pair.into_iter().flatten()
+}
+
 /// Compares two key vectors with per-key orders (1 ascending, -1 descending).
 fn cmp_keys(a: &[Value], b: &[Value], orders: &[i64]) -> Ordering {
     for (i, ord) in orders.iter().enumerate() {
         let (Some(x), Some(y)) = (a.get(i), b.get(i)) else { continue };
-        let o = sort_compare(x, y);
+        let o = match (x, y) {
+            (Value::Text(p), Value::Text(q)) => collate_text(p, q),
+            _ => sort_compare(x, y),
+        };
         let o = if *ord < 0 {
             // Blanks stay last even when descending.
             match (x, y) {
@@ -1088,6 +1139,19 @@ mod tests {
         let m = arr(vec![vec![nv(1.0), nv(2.0)], vec![nv(1.0), nv(1.0)], vec![nv(0.0), nv(5.0)]]);
         let r = ev("SORT", vec![av(m), av(row(&[1.0, 2.0])), av(row(&[1.0, -1.0]))]);
         assert_eq!(rows_of(&r), vec![vec![nv(0.0), nv(5.0)], vec![nv(1.0), nv(2.0)], vec![nv(1.0), nv(1.0)]]);
+    }
+
+    #[test]
+    fn sort_text_collation() {
+        // Excel 365's order for this list (issue #890): hyphens and apostrophes ignored except as a
+        // tie-break, punctuation before digits before letters, accented letters next to their base.
+        let input = "x-1|x01|JO30-WE-1-|JO30-WE01-EGH|a-b|ab|AB|a c|a-c|ac|Ärger|Zebra|apfel|Apfel|_x|x_|1|10|2";
+        let expected = "_x|1|10|2|a c|ab|AB|a-b|ac|a-c|apfel|Apfel|Ärger|JO30-WE01-EGH|JO30-WE-1-|x_|x01|x-1|Zebra";
+        let v = arr(input.split('|').map(|s| vec![tv(s)]).collect());
+        let firsts = |r: Value| rows_of(&r).iter().map(|l| l[0].clone()).collect::<Vec<_>>();
+        let want: Vec<Value> = expected.split('|').map(tv).collect();
+        assert_eq!(firsts(ev("SORT", vec![av(v.clone())])), want);
+        assert_eq!(firsts(ev("SORTBY", vec![av(v.clone()), av(v)])), want);
     }
 
     #[test]
