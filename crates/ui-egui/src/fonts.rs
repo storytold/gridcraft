@@ -56,14 +56,32 @@ pub fn system_font_dirs() -> Vec<PathBuf> {
                 dirs.push(PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
             }
         } else {
-            dirs.extend(["/usr/share/fonts", "/usr/local/share/fonts", "/usr/share/fonts/TTF"].map(Into::into));
-            if let Some(h) = &home {
-                dirs.push(h.join(".fonts"));
-                dirs.push(h.join(".local/share/fonts"));
-            }
+            let data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
+            dirs.extend(unix_font_dirs(home.as_deref(), data_home.as_deref()));
         }
         dirs
     }
+}
+
+/// The font folders on Linux and the BSDs: the system's, the user's (`$XDG_DATA_HOME/fonts` too,
+/// when that is set to another absolute path than `~/.local/share`), and the folders a Flatpak
+/// sandbox mounts the host's fonts at. Inside the sandbox `/usr/share/fonts` is the runtime's, so
+/// without the `/run/host` folders no font installed on the machine is found (#1069). A folder
+/// that doesn't exist costs the scan nothing.
+#[cfg(not(target_arch = "wasm32"))]
+fn unix_font_dirs(home: Option<&std::path::Path>, data_home: Option<&std::path::Path>) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = ["/usr/share/fonts", "/usr/local/share/fonts", "/usr/share/fonts/TTF"].map(Into::into).to_vec();
+    dirs.extend(["/run/host/fonts", "/run/host/local-fonts", "/run/host/user-fonts"].map(PathBuf::from));
+    if let Some(h) = home {
+        dirs.push(h.join(".fonts"));
+        dirs.push(h.join(".local/share/fonts"));
+    }
+    if let Some(fonts) = data_home.filter(|d| d.is_absolute()).map(|d| d.join("fonts"))
+        && !dirs.contains(&fonts)
+    {
+        dirs.push(fonts);
+    }
+    dirs
 }
 
 /// Weight implied by a style name (`"Bold"` → 700, `"Light"` → 300).
@@ -118,16 +136,52 @@ fn file_faces(data: &[u8]) -> Vec<(u32, String, String)> {
         .collect()
 }
 
+/// What makes two paths the same folder for the scan.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum DirKey {
+    /// Device and inode: one folder bound at several paths, as a Flatpak sandbox does with the
+    /// user's font folder, has three paths that `canonicalize` keeps apart and one inode.
+    #[cfg(unix)]
+    Inode(u64, u64),
+    /// The canonical path, or the path as given when it can't be resolved.
+    Path(PathBuf),
+}
+
+/// The key a folder is read once by: its device and inode on Unix, else its canonical path. A
+/// folder whose metadata can't be read (or that reports inode 0) is known by its path, so two
+/// different folders are never taken for one.
+#[cfg(not(target_arch = "wasm32"))]
+fn dir_key(dir: &std::path::Path) -> DirKey {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Some(key) = inode_key(std::fs::metadata(dir).ok().map(|meta| (meta.dev(), meta.ino()))) {
+            return key;
+        }
+    }
+    DirKey::Path(std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()))
+}
+
+/// The device-and-inode key for a folder's `(device, inode)`, or `None` when the metadata
+/// couldn't be read or reports inode 0.
+#[cfg(unix)]
+fn inode_key(id: Option<(u64, u64)>) -> Option<DirKey> {
+    match id {
+        Some((dev, ino)) if ino != 0 => Some(DirKey::Inode(dev, ino)),
+        _ => None,
+    }
+}
+
 /// Catalog every face under `dirs`, recursing into subfolders. A folder reached twice (through a
-/// symlink) is read once, so a link back to a parent ends the walk.
+/// symlink, or bound at a second path) is read once, so a link back to a parent ends the walk.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<Face> {
     let mut out: Vec<Face> = Vec::new();
     let mut stack: Vec<PathBuf> = dirs.to_vec();
-    let mut seen_dirs: HashSet<PathBuf> = HashSet::new();
+    let mut seen_dirs: HashSet<DirKey> = HashSet::new();
     while let Some(dir) = stack.pop() {
-        let key = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
-        if !seen_dirs.insert(key) {
+        if !seen_dirs.insert(dir_key(&dir)) {
             continue;
         }
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
@@ -371,6 +425,68 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn unix_font_dirs_include_the_flatpak_host_and_xdg_folders() {
+        use std::path::Path;
+        let dirs = unix_font_dirs(Some(Path::new("/home/u")), Some(Path::new("/data")));
+        // Outside a sandbox these are the fonts; inside one, /usr/share/fonts is the runtime's and
+        // the host's fonts are under /run/host (#1069).
+        for wanted in [
+            "/usr/share/fonts",
+            "/usr/local/share/fonts",
+            "/run/host/fonts",
+            "/run/host/local-fonts",
+            "/run/host/user-fonts",
+            "/home/u/.fonts",
+            "/home/u/.local/share/fonts",
+            "/data/fonts",
+        ] {
+            assert!(dirs.contains(&PathBuf::from(wanted)), "{wanted} is scanned: {dirs:?}");
+        }
+        // The default XDG data home is ~/.local/share: listed once.
+        let default = unix_font_dirs(Some(Path::new("/home/u")), Some(Path::new("/home/u/.local/share")));
+        assert_eq!(default.iter().filter(|d| d.as_path() == Path::new("/home/u/.local/share/fonts")).count(), 1);
+        // A relative XDG_DATA_HOME is invalid and ignored; no home and no data home still scans.
+        assert!(!unix_font_dirs(None, Some(Path::new("relative"))).contains(&PathBuf::from("relative/fonts")));
+        assert!(unix_font_dirs(None, None).contains(&PathBuf::from("/run/host/fonts")));
+    }
+
+    #[cfg(not(any(target_arch = "wasm32", target_os = "macos", windows)))]
+    #[test]
+    fn system_font_dirs_lists_the_flatpak_host_folders() {
+        // The scan asks `system_font_dirs`: a folder that is only in `unix_font_dirs` is never read.
+        let dirs = system_font_dirs();
+        for wanted in ["/run/host/fonts", "/run/host/local-fonts", "/run/host/user-fonts"] {
+            assert!(dirs.contains(&PathBuf::from(wanted)), "{wanted} is scanned: {dirs:?}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn system_font_dirs_reads_xdg_data_home() {
+        // The environment can't be changed in-process (no unsafe code), so the test runs itself
+        // again as a child with XDG_DATA_HOME set. The value names the parent's process id: that
+        // is how the child knows it is the child, whatever else the environment holds.
+        const CHECKED: &str = "the child checked $XDG_DATA_HOME/fonts";
+        let as_child = format!("/gridcraft-test-data/{}", std::os::unix::process::parent_id());
+        if std::env::var_os("XDG_DATA_HOME").is_some_and(|d| d == as_child.as_str()) {
+            let dirs = system_font_dirs();
+            assert!(dirs.contains(&PathBuf::from(&as_child).join("fonts")), "$XDG_DATA_HOME/fonts is scanned: {dirs:?}");
+            println!("{CHECKED}");
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args(["--exact", "fonts::tests::system_font_dirs_reads_xdg_data_home", "--nocapture"])
+            .env("XDG_DATA_HOME", format!("/gridcraft-test-data/{}", std::process::id()))
+            .output()
+            .expect("run the test binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // The child's own line, not only exit 0: asked for a test name that no longer exists, the
+        // child would run nothing and still succeed.
+        assert!(out.status.success() && stdout.contains(CHECKED), "child run: {stdout}");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn the_scan_catalogs_fonts_and_reads_each_folder_once() {
         let dir = std::env::temp_dir().join(format!("gridcraft-fonts-scan-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -396,6 +512,59 @@ mod tests {
         std::fs::write(dir.join("Sub/Ubuntu-Light.ttf"), epaint_default_fonts::UBUNTU_LIGHT).expect("write");
         std::os::unix::fs::symlink(&dir, dir.join("Sub/loop")).expect("symlink");
         assert_eq!(scan_dirs(std::slice::from_ref(&dir)).len(), 1, "the loop doesn't multiply faces");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_is_known_by_its_device_and_inode() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = std::env::temp_dir().join(format!("gridcraft-fonts-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Real")).expect("temp dir");
+        std::fs::create_dir_all(dir.join("Other")).expect("temp dir");
+        std::os::unix::fs::symlink(dir.join("Real"), dir.join("Alias")).expect("symlink");
+        let meta = std::fs::metadata(dir.join("Real")).expect("metadata");
+        // A Flatpak sandbox binds one folder at several paths that `canonicalize` keeps apart; the
+        // device and inode are what they share.
+        assert_eq!(dir_key(&dir.join("Real")), DirKey::Inode(meta.dev(), meta.ino()));
+        assert_eq!(dir_key(&dir.join("Alias")), dir_key(&dir.join("Real")), "one folder, one key");
+        assert_ne!(dir_key(&dir.join("Other")), dir_key(&dir.join("Real")), "two folders, two keys");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_folder_without_metadata_is_known_by_its_path() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-fonts-nokey-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Unreadable metadata falls back to the path, so two such folders are never taken for one.
+        assert_eq!(dir_key(&dir.join("a")), DirKey::Path(dir.join("a")));
+        assert_ne!(dir_key(&dir.join("a")), dir_key(&dir.join("b")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_reporting_inode_zero_has_no_inode_key() {
+        // Inode 0 names no folder: two folders reporting it on one device would share a key and
+        // the second would never be read. No real folder can be made to report it, so the device
+        // and inode go in directly.
+        assert_eq!(inode_key(Some((7, 0))), None);
+        assert_eq!(inode_key(None), None);
+        assert_eq!(inode_key(Some((7, 42))), Some(DirKey::Inode(7, 42)));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn two_folders_holding_the_same_font_are_both_read() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-fonts-two-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for sub in ["One", "Two"] {
+            std::fs::create_dir_all(dir.join(sub)).expect("temp dir");
+            std::fs::write(dir.join(sub).join("Ubuntu-Light.ttf"), epaint_default_fonts::UBUNTU_LIGHT).expect("write");
+        }
+        let faces = scan_dirs(&[dir.join("One"), dir.join("Two"), dir.join("Missing")]);
+        assert_eq!(faces.len(), 2, "equal contents are not the same folder: {faces:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
