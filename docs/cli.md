@@ -102,6 +102,16 @@ sheet's rules in priority order, priority numbers aside), `validations`, `charts
 `hyperlinks`, `pivots`. `#SPILL!`/`#CALC!` compare equal to `#VALUE!` and `#CIRC!` to 0, as
 that's what the file format stores.
 
+The `validations` category compares every rule's ranges, kind, operator, formulas, flags and
+input/error messages. Rule and range order are preserved: the first matching rule applies, and
+the first range anchors relative formulas. Each changed, added or removed rule position counts
+as one difference; examples include the sheet, rule position, ranges and before/after values.
+Formula syntax, including trim references written as equivalent `TRIMRANGE` calls, is normalized
+as on save/reopen (quoted list contents stay exact). Blank second
+formulas compare equal to absent ones, and unused operators on Any/List/Custom rules are ignored.
+Ranges are compared without expanding cells. This compares models after import; it cannot detect
+initial-import loss. Comments, hyperlinks and pivots currently compare counts only.
+
 Files that fail to open are reported with GridCraft's error and don't stop the run. Exit code: 0 when every file
 opened with no mismatch and no round-trip difference, 1 otherwise, 2 on a usage error. `--max-report` caps the
 examples listed per file and category (counts are always complete).
