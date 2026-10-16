@@ -685,6 +685,21 @@ fn legacy_array_formulas_fill_their_range() {
 }
 
 #[test]
+fn broadcast_output_is_limited() {
+    let mut t = T::new();
+    // 5000 rows broadcast against 5000 columns would be 25 million cells.
+    t.set("A1", "=SEQUENCE(5000)*SEQUENCE(1,5000)");
+    assert_eq!(t.get("A1"), Value::Error(CellError::Num));
+    t.set("A2", "=IF(SEQUENCE(5000)>0,SEQUENCE(1,5000),0)");
+    assert_eq!(t.get("A2"), Value::Error(CellError::Num));
+    t.set("A4", "=TEXT(SEQUENCE(5000),SEQUENCE(1,5000))");
+    assert_eq!(t.get("A4"), Value::Error(CellError::Num));
+    // A product within the limit still works.
+    t.set("A3", "=SUM(SEQUENCE(3)*SEQUENCE(1,2))");
+    assert_eq!(t.num("A3"), 18.0);
+}
+
+#[test]
 fn text_function() {
     let mut t = T::new();
     t.set("A1", "=TEXT(1234.5,\"#,##0.00\")");

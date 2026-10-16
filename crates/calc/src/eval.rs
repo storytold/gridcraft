@@ -1615,6 +1615,9 @@ pub fn zip2(a: &Value, b: &Value, f: impl Fn(&Value, &Value) -> Value) -> Value 
         (Value::Array(x), Value::Array(y)) => {
             let rows = broadcast_dim(x.rows, y.rows);
             let cols = broadcast_dim(x.cols, y.cols);
+            if (rows as u64).saturating_mul(cols as u64) > MAX_CELLS {
+                return Value::Error(CellError::Num);
+            }
             let mut data = Vec::with_capacity(rows * cols);
             for r in 0..rows {
                 for c in 0..cols {
@@ -1645,6 +1648,9 @@ fn zip3(c: &Array, t: &Value, f: &Value, g: impl Fn(&Value, &Value, &Value) -> V
     let (fr, fc) = dims(f);
     let rows = broadcast_dim(broadcast_dim(c.rows, tr), fr);
     let cols = broadcast_dim(broadcast_dim(c.cols, tc), fc);
+    if (rows as u64).saturating_mul(cols as u64) > MAX_CELLS {
+        return Value::Error(CellError::Num);
+    }
     let get = |v: &Value, r: usize, col: usize| if let Value::Array(a) = v { a.get_broadcast(r, col) } else { v.clone() };
     let mut data = Vec::with_capacity(rows * cols);
     for r in 0..rows {
