@@ -18,6 +18,9 @@ serde_json = { workspace = true }
 log = { workspace = true }
 image = { workspace = true }
 skrifa = { workspace = true }
+# The Arabic labels are handed out in visual order (i18n/bidi.rs): a UAX #9 reordering pass
+# for egui's run-by-run, left-to-right text layout.
+unicode-bidi = "0.3.18"
 
 # Linux only, where winit reports no system theme: the desktop portal's light/dark answer (see
 # `desktop_theme.rs`). Already in the tree, with these features, through egui's own

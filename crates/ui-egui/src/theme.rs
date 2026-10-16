@@ -492,6 +492,7 @@ fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u32)>)> {
         ("sys-cjk-hangul", cjk_hangul()),
         ("sys-thai", thai()),
         ("sys-hebrew", hebrew()),
+        ("sys-arabic", arabic()),
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
     ]
@@ -592,6 +593,38 @@ fn thai() -> Vec<(String, u32)> {
         v.push((format!("{d}/NotoSansThai-Regular.ttf"), 0));
         v.push((format!("{d}/tlwg/Garuda.ttf"), 0));
         v.push((format!("{d}/garuda/Garuda.ttf"), 0));
+    }
+    v
+}
+
+/// Arabic faces. Windows has Segoe UI and Tahoma (both carry Arabic) plus Traditional Arabic and
+/// Arabic Typesetting; macOS has Geeza Pro and Al Nile; Linux usually has Noto Sans Arabic,
+/// DejaVu Sans, Amiri or a KACST face.
+#[cfg(not(target_arch = "wasm32"))]
+fn arabic() -> Vec<(String, u32)> {
+    let mac_sys = "/System/Library/Fonts";
+    let mac_sup = "/System/Library/Fonts/Supplemental";
+    let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
+    let lin = ["/usr/share/fonts/truetype/noto", "/usr/share/fonts/opentype/noto", "/usr/share/fonts/truetype", "/usr/share/fonts"];
+    let mut v: Vec<(String, u32)> = Vec::new();
+    v.push((format!("{win}\\segoeui.ttf"), 0)); // Segoe UI (Arabic since Vista)
+    v.push((format!("{win}\\tahoma.ttf"), 0)); // Tahoma
+    v.push((format!("{win}\\trado.ttf"), 0)); // Traditional Arabic
+    v.push((format!("{win}\\arabtype.ttf"), 0)); // Arabic Typesetting
+    v.push((format!("{win}\\arial.ttf"), 0)); // Arial carries Arabic
+    v.push((format!("{mac_sys}/GeezaPro.ttc"), 0)); // Geeza Pro
+    v.push((format!("{mac_sup}/Al Nile.ttc"), 0));
+    v.push((format!("{mac_sup}/Baghdad.ttf"), 0));
+    v.push((format!("{mac_sup}/Damascus.ttf"), 0));
+    v.push((format!("{mac_sup}/DecoType Naskh.ttf"), 0));
+    for d in lin {
+        v.push((format!("{d}/NotoSansArabic-Regular.ttf"), 0));
+        v.push((format!("{d}/NotoSansArabic[wdth,wght].ttf"), 0));
+        v.push((format!("{d}/noto/NotoNaskhArabic-Regular.ttf"), 0));
+        v.push((format!("{d}/dejavu/DejaVuSans.ttf"), 0));
+        v.push((format!("{d}/amiri/Amiri-Regular.ttf"), 0));
+        v.push((format!("{d}/kacst/KacstOne.ttf"), 0));
+        v.push((format!("{d}/kacst/KacstBook.ttf"), 0));
     }
     v
 }
@@ -815,11 +848,11 @@ mod tests {
         let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
         assert_eq!(
             keys(HanOrder::Japanese),
-            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-arabic", "sys-symbols", "sys-symbols-2"]
         );
         assert_eq!(
             keys(HanOrder::Chinese),
-            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-arabic", "sys-symbols", "sys-symbols-2"]
         );
         assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
         for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs] {

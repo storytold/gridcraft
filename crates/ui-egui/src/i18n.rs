@@ -6,9 +6,15 @@
 //!
 //! CJK fonts stay system-provided: [`crate::theme`] appends available CJK faces to every family so
 //! Japanese, Chinese and Korean labels and workbook text can render without bundling font files.
+//!
+//! العربية (Arabic) is right-to-left: the theme's Arabic fallback faces cover its script on
+//! every platform, and its labels are handed out in visual order (`bidi.rs`) so they read
+//! right to left, while the shell keeps egui's left-to-right layout.
 
 use serde::{Deserialize, Serialize};
 
+mod ar;
+mod bidi;
 mod cs;
 mod de;
 mod es;
@@ -35,10 +41,12 @@ pub enum Language {
     Cs,
     Fr,
     Sr,
+    Ar,
 }
 
 impl Language {
-    pub const ALL: [Self; 11] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr];
+    pub const ALL: [Self; 12] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr, Self::Ar];
+
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
@@ -54,6 +62,8 @@ impl Language {
             Self::Cs => "Čeština",
             Self::Fr => "Français",
             Self::Sr => "Srpski",
+            Self::Ar => "العربية",
+
         }
     }
 
@@ -71,6 +81,8 @@ impl Language {
             Self::Cs => "cs",
             Self::Fr => "fr",
             Self::Sr => "sr",
+            Self::Ar => "ar",
+
         }
     }
 
@@ -91,6 +103,8 @@ impl Language {
             "cs" => Some(Self::Cs),
             "fr" => Some(Self::Fr),
             "sr" => Some(Self::Sr),
+            "ar" => Some(Self::Ar),
+
             _ => None,
         }
     }
@@ -129,6 +143,8 @@ impl Language {
             Self::Cs => cs::translate(text),
             Self::Fr => fr::translate(text),
             Self::Sr => sr::translate(text),
+            Self::Ar => ar::translate(text).map(bidi::visual_cached),
+
         };
         translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
@@ -623,6 +639,12 @@ mod tests {
         assert_eq!(Language::De.tr("Data"), "Daten");
         assert_eq!(Language::De.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::Fr.tr("Data"), "Données");
+        assert_eq!(Language::Ar.tr("Data"), "البيانات");
+        // Arabic's labels come back in visual order (`bidi.rs`): the runs in the order egui
+        // draws them, the letters inside each run in logical order for the shaper.
+        assert_eq!(Language::Ar.tr("Freeze Panes"), "الأجزاء تجميد");
+        assert_eq!(Language::Ar.tr("Merge & Center"), "وتوسيط دمج");
+        assert_eq!(Language::Ar.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::Fr.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::PtBr.tr("Date"), "Data");
         assert_eq!(Language::PtBr.tr("Sheet1!A1"), "Sheet1!A1");
@@ -685,6 +707,10 @@ mod tests {
         assert_eq!(Language::from_tag("sr-Latn-RS"), Some(Language::Sr));
         assert_eq!(Language::from_tag("sr-RS"), Some(Language::Sr));
         assert_eq!(Language::parse("sr"), Some(Language::Sr));
+        assert_eq!(Language::from_tag("ar-SA"), Some(Language::Ar));
+        assert_eq!(Language::from_tag("ar_EG"), Some(Language::Ar));
+        assert_eq!(Language::parse("ar"), Some(Language::Ar));
+
     }
 
     #[test]
@@ -713,5 +739,57 @@ mod tests {
         for l in Language::ALL {
             assert_eq!(Language::parse(l.code()), Some(l));
         }
+    }
+
+    /// Arabic's `{n}` patterns keep their placeholder as one left-to-right unit in the visual
+    /// order, so the `replace` that fills them still finds it — and the filled count reads in
+    /// its place in the sentence.
+    #[test]
+    fn arabic_patterns_fill_their_count_in_place() {
+        assert_eq!(Language::Ar.tr("{n} min ago"), "دقيقة {n} قبل");
+        assert_eq!(Language::Ar.tr("{n} min ago").replace("{n}", "5"), "دقيقة 5 قبل");
+        assert_eq!(Language::Ar.tr("Just now"), "الآن");
+    }
+
+    /// egui lays a label out run by run, left to right, and the bidi pass (`bidi.rs`) orders
+    /// an Arabic label's runs for it. On a real headless layout, with one of the theme's
+    /// Arabic faces installed: after the pass the first word of a sentence sits rightmost,
+    /// and a left-to-right island inside it keeps its own order — the pass and the shaper
+    /// must not reverse each other's work.
+    #[test]
+    fn arabic_labels_lay_out_right_to_left() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions_for_language(Language::Ar));
+        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+        let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), egui::Rect::EVERYTHING);
+        let font = egui::FontId::proportional(13.0);
+        // The theme's sys-arabic fallbacks find a face on Windows, macOS and most Linuxes;
+        // without one the glyph positions would mean nothing.
+        let probe = painter.layout_no_wrap("غ".into(), font.clone(), egui::Color32::WHITE);
+        let missing = painter.layout_no_wrap("\u{fffd}".into(), font.clone(), egui::Color32::WHITE);
+        let probe_uv = probe.rows[0].row.glyphs[0].uv_rect;
+        let missing_uv = missing.rows[0].row.glyphs[0].uv_rect;
+        if probe_uv == missing_uv || probe_uv.is_nothing() {
+            eprintln!("skipped: no Arabic face installed");
+            ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+            return;
+        }
+        for (label, first, second) in [("ورقة جديدة", "ورقة", "جديدة"), ("حفظ كـ PDF…", "حفظ", "PDF")] {
+            let galley = painter.layout_no_wrap(bidi::visual_rtl(label), font.clone(), egui::Color32::WHITE);
+            let glyphs = &galley.rows[0].row.glyphs;
+            // A glyph counts for a side only when its letter belongs to that word alone: Arabic
+            // words share letters (ة ends both words here), and a shared glyph would feed both
+            // sides of the comparison.
+            let x_of = |word: &str, other: &str| {
+                glyphs.iter().filter(|g| word.contains(g.chr) && !other.contains(g.chr)).map(|g| g.pos.x).collect::<Vec<f32>>()
+            };
+            let (a, b) = (x_of(first, second), x_of(second, first));
+            assert!(!a.is_empty() && !b.is_empty(), "{label}: no glyphs for `{first}`/`{second}`");
+            assert!(
+                a.iter().all(|&x| b.iter().all(|&y| x > y)),
+                "`{label}`: `{first}` must sit right of `{second}` after the pass"
+            );
+        }
+        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
     }
 }
