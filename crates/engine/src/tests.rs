@@ -1310,6 +1310,24 @@ fn a_whole_column_table_without_headers_stays_on_the_sheet() {
 }
 
 #[test]
+fn inserting_cells_refuses_to_push_values_off_the_sheet() {
+    for (shift, edge, last_fit, last_ok) in [("right", "XFD1", "XFC1", "XFD1"), ("down", "A1048576", "A1048575", "A1048576")] {
+        let mut sess = s();
+        sess.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+        sess.execute("cell.set", json!({"cell": edge, "input": "2"})).unwrap();
+        let e = sess.execute("home.insertCells", json!({"range": "A1", "shift": shift})).unwrap_err();
+        assert!(e.to_string().contains("loss of data"), "{e}");
+        assert_eq!(v(&sess, "A1"), Value::Number(1.0));
+        assert_eq!(v(&sess, edge), Value::Number(2.0));
+        // A value that still fits moves to the last valid cell.
+        let mut sess = s();
+        sess.execute("cell.set", json!({"cell": last_fit, "input": "2"})).unwrap();
+        sess.execute("home.insertCells", json!({"range": "A1", "shift": shift})).unwrap();
+        assert_eq!(v(&sess, last_ok), Value::Number(2.0));
+    }
+}
+
+#[test]
 fn autosum_over_whole_rows_is_one_undo_step_within_the_data() {
     // Found by the command-sequence fuzzer: AutoSum over rows `3:5` ran one `cell.set` per column
     // (16,384 undo steps, so undo never got back to the start).
