@@ -929,6 +929,15 @@ impl SheetApp {
             }
             self.toast = Some((msg, now_ms()));
         }
+        // Point mode can leave another sheet active; the edit belongs to the sheet it started on.
+        if self.session.active().is_some_and(|d| d.wb.active_sheet != ed.sheet)
+            && let Err(e) = self.session.run("sheet.activate", json!({"sheet": ed.sheet}))
+        {
+            self.message = Some(("GridCraft".into(), clean_error(&e)));
+            self.editor = Some(ed);
+            self.session.mode = gridcraft_engine::Mode::Edit;
+            return false;
+        }
         let r = if fill_selection {
             self.session.run("range.fill", json!({"input": text}))
         } else {

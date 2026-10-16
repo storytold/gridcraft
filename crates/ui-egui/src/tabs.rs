@@ -28,8 +28,8 @@ fn activate_sheet(app: &mut SheetApp, i: usize) {
     if app.editor.as_ref().is_some_and(|e| e.can_point()) {
         let _ = app.session.run("sheet.activate", json!({"sheet": i}));
     } else {
-        if app.editor.is_some() {
-            app.commit_edit(0, 0, false, false);
+        if app.editor.is_some() && !app.commit_edit(0, 0, false, false) {
+            return;
         }
         app.run_or_alert("sheet.activate", json!({"sheet": i}));
     }
@@ -340,8 +340,9 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
 
 #[cfg(test)]
 mod tests {
-    use super::{navigator_items, rename_needs_focus};
+    use super::{activate_sheet, navigator_items, rename_needs_focus};
     use gridcraft_engine::model::{Sheet, Visibility};
+    use serde_json::json;
     use std::sync::Arc;
 
     #[test]
@@ -359,5 +360,25 @@ mod tests {
         very_hidden.visibility = Visibility::VeryHidden;
         let sheets = [Sheet::new("Data"), hidden, very_hidden, Sheet::new("Summary")].map(Arc::new);
         assert_eq!(navigator_items(&sheets), vec![("0".to_string(), "Data".to_string()), ("3".to_string(), "Summary".to_string())]);
+    }
+
+    #[test]
+    fn a_rejected_commit_keeps_the_sheet_and_the_edit() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session.execute("home.insertSheet", json!({})).unwrap();
+        session.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        let rule = json!({"range": "A1", "type": "whole", "operator": "between", "formula1": "1", "formula2": "10"});
+        session.execute("data.validation", rule).unwrap();
+        let mut app = crate::SheetApp::new(session, Default::default());
+        app.begin_edit(Some("99".into()), false);
+        activate_sheet(&mut app, 1);
+        assert_eq!(app.session.active().unwrap().wb.active_sheet, 0, "a value the validation stops must not leave its sheet");
+        assert!(app.editor.is_some(), "the edit stays open to be corrected");
+        app.editor.as_mut().unwrap().text = "7".into();
+        activate_sheet(&mut app, 1);
+        assert_eq!(app.session.active().unwrap().wb.active_sheet, 1, "the corrected value commits and the sheet changes");
+        let a1 = gridcraft_engine::core::CellRef::parse("A1").unwrap();
+        assert!(app.session.active().unwrap().wb.sheet(0).unwrap().cell(a1).is_some(), "the value lands on the first sheet");
     }
 }
