@@ -55,7 +55,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
-| Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
+| Turkish | tr | 382 (~17%) | formulas and descriptions (384 functions) | Latin: yes | yes | menus, formulas | 2–4 h |
 
 Other shipped languages: Russian (ru), German (de), Czech (cs), French (fr) and Turkish (tr), menus only.
 
@@ -79,6 +79,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Turkish formula localization: 384 function aliases, Turkish descriptions and syntax (`;` list separator, `,` decimal comma, `\` array column, `DOĞRU`/`YANLIŞ` boolean constants) |
 | 2026-10-12 | minor | Turkish ribbon catalog (`i18n/tr.rs`, 382 labels); `tr` locale tags (tr-TR, tr_TR…) resolve to Turkish |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |

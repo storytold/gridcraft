@@ -101,6 +101,8 @@ const SPANISH_HELP: &[(&str, &str, &str)] = &[
     ("FALSE", "FALSO()", "Devuelve el valor lógico FALSO."),
 ];
 
+mod tr;
+
 pub(crate) fn signature(name: &str, locale: FormulaLocale) -> Option<String> {
     let canonical = locale.canonical_name(name);
     if locale == FormulaLocale::Es
@@ -108,13 +110,27 @@ pub(crate) fn signature(name: &str, locale: FormulaLocale) -> Option<String> {
     {
         return Some((*signature).into());
     }
-    crate::formula_bar::function_signature(canonical).map(|s| s.replace(',', &locale.list_separator().to_string()))
+    crate::formula_bar::function_signature(canonical).map(|s| {
+        let localized_sig = if locale == FormulaLocale::Tr {
+            // Replace canonical function name at start of signature with localized name
+            let loc_name = locale.function_name(canonical);
+            if let Some(rest) = s.strip_prefix(canonical) { format!("{loc_name}{rest}") } else { s }
+        } else {
+            s
+        };
+        localized_sig.replace(',', &locale.list_separator().to_string())
+    })
 }
 
 pub(crate) fn description(name: &str, locale: FormulaLocale) -> Option<String> {
     let canonical = locale.canonical_name(name);
     if locale == FormulaLocale::Es
         && let Some((_, _, description)) = SPANISH_HELP.iter().find(|(name, ..)| *name == canonical)
+    {
+        return Some((*description).into());
+    }
+    if locale == FormulaLocale::Tr
+        && let Some((_, description)) = tr::TURKISH_DESCRIPTIONS.iter().find(|(name, ..)| *name == canonical)
     {
         return Some((*description).into());
     }
