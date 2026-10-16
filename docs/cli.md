@@ -102,6 +102,14 @@ sheet's rules in priority order, priority numbers aside), `validations`, `charts
 `hyperlinks`, `pivots`. `#SPILL!`/`#CALC!` compare equal to `#VALUE!` and `#CIRC!` to 0, as
 that's what the file format stores.
 
+**Drawing loss.** The `drawings` category compares source and saved DrawingML object counts per
+worksheet, including pictures, charts and shapes inside nested groups. A surviving object on the
+same or another sheet cannot hide a decrease. Shared media and renamed package parts do not
+change the count. Alternative XML representations are counted once; ambiguous or incomplete
+inspection is reported explicitly and prevents a clean check. This checks occurrence loss, not
+geometry, styling or same-count replacement. Chart sheets, VML and non-XLSX input inventories
+are outside this category's coverage.
+
 Files that fail to open are reported with GridCraft's error and don't stop the run. Exit code: 0 when every file
 opened with no mismatch and no round-trip difference, 1 otherwise, 2 on a usage error. `--max-report` caps the
 examples listed per file and category (counts are always complete).

@@ -26,6 +26,8 @@ use serde_json::{Value as Json, json};
 
 use super::{Args, USAGE, number_text, pretty};
 
+mod drawings;
+
 /// Version tag of the `--json` output; bumped when a field changes meaning or disappears.
 pub const SCHEMA: &str = "gridcraft-check/1";
 
@@ -556,6 +558,7 @@ pub fn round_trip(wb: &Workbook, source: &[u8], opts: &Options) -> RoundTrip {
         Err(e) => return RoundTrip { error: Some(format!("reading the written file failed: {e}")), categories: vec![package.done()] },
     };
     let mut categories = diff_workbooks(wb, &back, opts);
+    categories.push(drawings::compare(source, &bytes, opts.max_report));
     categories.push(package.done());
     RoundTrip { error: None, categories }
 }
@@ -1651,6 +1654,7 @@ mod tests {
                 "condFormats",
                 "validations",
                 "charts",
+                "drawings",
                 "comments",
                 "hyperlinks",
                 "pivots",
@@ -1680,3 +1684,6 @@ mod tests {
         assert_eq!(keys(&v["functions"][0]), set(&["name", "checked", "mismatched", "primary"]));
     }
 }
+
+#[cfg(test)]
+mod drawing_tests;
