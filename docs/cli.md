@@ -102,6 +102,14 @@ sheet's rules in priority order, priority numbers aside), `validations`, `charts
 `hyperlinks`, `pivots`. `#SPILL!`/`#CALC!` compare equal to `#VALUE!` and `#CIRC!` to 0, as
 that's what the file format stores.
 
+The `pictures` category compares each sheet's picture occurrences in order, checking exact encoded
+media bytes and alternative text. Each changed, added or removed position counts once; duplicate
+media remains separate occurrences. Examples identify the sheet, picture position and changed
+fields, without dumping binary data. Object IDs, media filenames, MIME aliases and anchor geometry
+are outside this comparison. This is post-import model fidelity across save/reopen, not a check
+of image rendering or content already lost during initial import. `pictures` is an additive category
+under `gridcraft-check/1`; consumers should accept additional category names.
+
 Files that fail to open are reported with GridCraft's error and don't stop the run. Exit code: 0 when every file
 opened with no mismatch and no round-trip difference, 1 otherwise, 2 on a usage error. `--max-report` caps the
 examples listed per file and category (counts are always complete).

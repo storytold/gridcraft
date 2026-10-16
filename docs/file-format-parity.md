@@ -11,6 +11,15 @@ documentation (the Office bundle is off limits under this repo's clean-room rule
 support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and the tests in
 `crates/xlsx/src/tests/` (round-trip, fixtures, malformed input, CSV, ODS, XLSB, XLS, PivotTables).
 
+## Picture fidelity checks
+
+`gridcraft-cli check` reports a `pictures` category for exact media bytes and alternative text,
+comparing ordered picture occurrences per sheet. It detects same-size media replacement as well
+as missing pictures, without comparing regenerated object IDs or media-part filenames. Controls
+cover duplicate media, two XLSX saves, escaped alternative text and report caps. This checks
+post-import model fidelity, not anchor geometry, image decoding, initial-import loss or external
+Excel acceptance. Source-package object inventory and drawing identity remain separate concerns.
+
 ## Workbook formats
 
 Ink created with Draw is written as standard, unfilled DrawingML polylines, without visible point
@@ -86,6 +95,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
+| 2026-10-13 | minor | Picture media and alternative-text comparisons in the CLI fidelity checker |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |
 | 2026-10-12 | minor | `.xls` import reads the calculation settings (CalcMode, CalcIter, CalcCount, CalcDelta, CalcPrecision), so circular models calculate instead of showing `#CIRC!` (#724) |
