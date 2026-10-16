@@ -125,7 +125,7 @@ fn workbook() -> Workbook {
         source: "SalesTbl".into(),
         anchor: at("K4"),
         rows: vec![
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Years, sort: PivotSort::None, collapsed_items: vec!["2024".into()] },
+            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Years, sort: PivotSort::Asc, collapsed_items: vec!["2024".into()] },
             PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, sort: PivotSort::Asc, collapsed_items: vec![] },
         ],
         columns: vec![PivotField { sort: PivotSort::Desc, ..field("Product") }],
@@ -589,4 +589,42 @@ fn data_on_rows_with_one_value_field_reads_without_warning() {
     assert_eq!(pt.values_position, None);
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert!(back.sheet(0).unwrap().pivots[0].values_on_rows);
+}
+
+/// A one-sheet-of-data workbook with a pivot on "Report": `columns` are the source columns
+/// (header, values), `pt` the pivot built on `Data!A1:<last>`.
+fn small_pivot(columns: &[(&str, Vec<Value>)], pt: impl FnOnce(&mut PivotTable)) -> HashMap<String, String> {
+    let mut wb = Workbook::new();
+    let data = wb.sheet_mut(0).unwrap();
+    data.name = "Data".into();
+    let mut rows = 0;
+    for (c, (h, vals)) in columns.iter().enumerate() {
+        data.cells.set(CellRef::new(0, c as u32), Cell::value(Value::text(*h)));
+        for (r, v) in vals.iter().enumerate() {
+            if *v != Value::Empty {
+                data.cells.set(CellRef::new(r as u32 + 1, c as u32), Cell::value(v.clone()));
+            }
+        }
+        rows = rows.max(vals.len());
+    }
+    let last = format!("{}{}", gridcraft_core::col_to_letters(columns.len() as u32 - 1), rows + 1);
+    let mut table = PivotTable { id: 1, name: "PT".into(), source: format!("Data!$A$1:{last}"), anchor: at("A3"), ..PivotTable::default() };
+    pt(&mut table);
+    let mut report = Sheet::new("Report");
+    report.pivots = vec![table];
+    wb.sheets.push(Arc::new(report));
+    unzip(&write_xlsx(&wb).unwrap()).into_iter().map(|(k, v)| (k, String::from_utf8_lossy(&v).into_owned())).collect()
+}
+
+/// #1447: Excel applies `sortType` to a date group's labels as text, so a date group is written
+/// without it and read back ascending.
+#[test]
+fn date_groups_are_written_without_sort_type() {
+    let d = vec![Value::number(date(2023, 1, 15)), Value::number(date(2023, 2, 1)), Value::number(date(2023, 8, 1))];
+    let sales: Vec<Value> = (0..d.len()).map(|i| Value::number(i as f64 + 1.0)).collect();
+    let parts = small_pivot(&[("Date", d), ("Sales", sales)], |p| {
+        p.rows = vec![PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Days, sort: PivotSort::Asc, ..PivotField::default() }];
+        p.values = vec![PivotValue { source_col: "Sales".into(), name: "Sum of Sales".into(), ..PivotValue::default() }];
+    });
+    assert!(!parts["xl/pivotTables/pivotTable1.xml"].contains("sortType="));
 }

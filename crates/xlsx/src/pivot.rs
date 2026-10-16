@@ -897,7 +897,9 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         s.push_str(" showAll=\"0\"");
         if let Some(af) = axis_field(i) {
             match af.sort {
-                PivotSort::Asc => s.push_str(" sortType=\"ascending\""),
+                // A date group is already in date order; Excel would sort its labels as text.
+                PivotSort::Asc if f.group.is_none() => s.push_str(" sortType=\"ascending\""),
+                PivotSort::Asc => {}
                 PivotSort::Desc => s.push_str(" sortType=\"descending\""),
                 PivotSort::None => {}
             }
@@ -1292,6 +1294,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 f.sort = match e.attr("sortType") {
                     Some("ascending") => PivotSort::Asc,
                     Some("descending") => PivotSort::Desc,
+                    _ if group != PivotDateGroup::None => PivotSort::Asc,
                     _ => PivotSort::None,
                 };
                 let items = items_of(e);
