@@ -317,6 +317,25 @@ fn tab_letters_switch_to_their_ribbon_tabs() {
 }
 
 #[test]
+fn f_opens_the_file_view_and_its_letters_still_run() {
+    use gridcraft_ui_egui::backstage::Page;
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::F], false);
+    assert_eq!(h.state().backstage.as_ref().map(|b| b.page), Some(Page::Home), "F opens the File view on Home");
+    assert_eq!(h.state().keytips.prefix(), Some("F"));
+    // Esc backs out one level: the File view closes and the tab letters show again.
+    key(&mut h, Key::Escape);
+    assert!(h.state().backstage.is_none());
+    assert_eq!(h.state().keytips.prefix(), Some(""));
+    letter(&mut h, Key::F, false);
+    assert!(h.state().backstage.is_some());
+    letter(&mut h, Key::N, false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "file.new"), "F, N still runs New");
+    assert!(h.state().backstage.is_none(), "the command runs on the sheet, as before the view opened");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
 fn view_gridlines_sequence_runs_end_to_end() {
     let mut h = harness(blank());
     let gridlines = |h: &Harness| h.state().session.active().unwrap().wb.active().unwrap().show_gridlines;

@@ -60,6 +60,14 @@ fn sequence(h: &mut Harness, seq: &str, text_first: bool) {
 }
 
 #[test]
+fn keytip_f_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "F", false);
+    assert!(h.state().backstage.is_some(), "F must open the File view");
+    assert_eq!(h.state().keytips.prefix(), Some("F"));
+}
+
+#[test]
 fn keytip_h_() {
     let mut h = harness(blank());
     sequence(&mut h, "H", false);
@@ -2741,7 +2749,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 364;
+    const EXPECTED: usize = 365;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 

@@ -10,7 +10,8 @@
 use std::fs;
 use std::path::Path;
 
-const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
+/// "File" is not a ribbon tab: its sequence opens the Backstage view.
+const TABS: &[&str] = &["File", "Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
 /// Commands whose empty-params behaviour depends on the host machine (e.g. the
 /// system dictionary). These are never probed; their tests assert "invoked
@@ -260,6 +261,10 @@ fn render_tests(entries: &[Entry], probe: &Probe) -> String {
     let mut out = String::from(HEADER);
     for e in entries {
         let body = match e.kind.as_str() {
+            "tab" if e.target == "File" => format!(
+                "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().backstage.is_some(), \"{seq} must open the File view\");\n    assert_eq!(h.state().keytips.prefix(), Some({seq:?}));",
+                seq = e.seq,
+            ),
             "tab" => format!(
                 "sequence(&mut h, {seq:?}, false);\n    assert_eq!(h.state().ui.ribbon_tab, {tab:?}, \"{seq} must switch to the {tab} tab\");",
                 seq = e.seq,

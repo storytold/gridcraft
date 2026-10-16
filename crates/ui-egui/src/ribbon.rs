@@ -263,6 +263,11 @@ fn file_menu(app: &mut SheetApp, ui: &mut Ui) {
     if file.clicked() {
         app.open_backstage(crate::backstage::Page::Home);
     }
+    if app.keytips.prefix() == Some("")
+        && let Some(sequence) = keytip_table::tab_sequence("File")
+    {
+        keytip(app, ui, sequence, pos2(file.rect.center().x, file.rect.bottom() - 1.0));
+    }
 }
 
 /// System / Light / Dark, as in the View tab's Display theme box (`view.theme`).

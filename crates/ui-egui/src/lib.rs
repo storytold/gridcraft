@@ -1103,7 +1103,8 @@ impl SheetApp {
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
         let t = theme::Tokens::get(&ctx);
-        if self.backstage.is_none() {
+        // Keytips opened the File view (Alt, F): its letters keep working there.
+        if self.backstage.is_none() || self.keytips.prefix().is_some() {
             self.ribbon_keys(&ctx);
         }
         ribbon::title_bar(self, ui);
@@ -1180,12 +1181,18 @@ impl SheetApp {
             && self.grid.renaming_tab.is_none()
             && (before.is_some() || !egui::Popup::is_any_open(ctx));
         let actions = self.keytips.process(ctx, enabled);
+        // Backing out of F to the tab letters, or finishing an F sequence, closes the File view
+        // that Alt, F opened: the command runs on the sheet, as it did without the view.
+        if self.backstage.is_some() && before.is_some() && (self.keytips.prefix() == Some("") || !actions.is_empty()) {
+            self.backstage = None;
+        }
         if before.is_some() && before.as_deref() != self.keytips.prefix() && !ctx.input(|i| i.pointer.any_pressed()) {
             // Leave pointer cancellation to the popup so clicking a menu item still works.
             egui::Popup::close_all(ctx);
         }
         for action in actions {
             match action {
+                keytips::Action::Tab("File") => self.open_backstage(backstage::Page::Home),
                 keytips::Action::Tab(tab) => {
                     self.run_or_alert("ui.ribbonTab", json!({"tab": tab}));
                     self.ui.ribbon_collapsed = false;

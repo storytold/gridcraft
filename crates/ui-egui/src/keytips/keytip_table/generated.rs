@@ -6,6 +6,7 @@ use super::{Action, Entry};
 /// whenever a pressed letter starts a deeper sequence, so only terminal entries are
 /// listed here. See keytip_table.rs for the helpers that read this table.
 pub const SEQUENCES: &[(&str, Entry)] = &[
+    ("F", Entry::Tab("File")), // Excel: File tab (Backstage view); Opens the File view on Home; its letters below still run their commands.
     ("H", Entry::Tab("Home")),
     ("N", Entry::Tab("Insert")),
     ("JI", Entry::Tab("Draw")), // Two-letter unit. Deeper Draw letters differ between Excel and GridCraft; left blank for future contributors.
