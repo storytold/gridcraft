@@ -288,6 +288,25 @@ fn should_expand_text(filter_space: f32, overflows: bool, across_end: u32, col: 
     filter_space == 0.0 && (overflows || across_end > col) && !in_merge
 }
 
+fn localized_cell_text(text: String, v: &Value, sh: &Sheet, wb: &Workbook, si: usize, c: CellRef, p: &Painter) -> String {
+    let locale = crate::i18n::current(p.ctx()).formula_locale();
+    if sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) {
+        crate::formula_locale::display(&text, locale, wb, si)
+    } else if let Value::Error(e) = v {
+        locale.error_name(*e).to_string()
+    } else if let Value::Bool(b) = v
+        && !text.is_empty()
+    {
+        match locale {
+            gridcraft_engine::formula::FormulaLocale::Tr => if *b { "DOĞRU".into() } else { "YANLIŞ".into() },
+            gridcraft_engine::formula::FormulaLocale::Es => if *b { "VERDADERO".into() } else { "FALSO".into() },
+            _ => text,
+        }
+    } else {
+        text
+    }
+}
+
 fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef]) {
     let (cell, rect, lk, cfl) = painted;
     let c = *cell;
@@ -327,10 +346,8 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
     let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
     let avail_w = rect.right() - text_left;
-    let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / z.max(0.1) * z, char_w);
-    if sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) {
-        text = crate::formula_locale::display(&text, crate::i18n::current(p.ctx()).formula_locale(), wb, si);
-    }
+    let (text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / z.max(0.1) * z, char_w);
+    let text = localized_cell_text(text, &v, sh, wb, si, c, p);
     if text.is_empty() {
         return;
     }
