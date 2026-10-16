@@ -61,7 +61,9 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
     let matches = |f: &lib::FnEntry| {
         q.is_empty()
             || locale.function_name(&f.name).to_lowercase().contains(&q)
+            || f.name.to_lowercase().contains(&q)
             || language.function_description(&f.description).unwrap_or(&f.description).to_lowercase().contains(&q)
+            || f.description.to_lowercase().contains(&q)
     };
     let hits: Vec<&lib::FnEntry> = if category == MOST_RECENTLY_USED {
         lib::recent(app).iter().filter_map(|n| lib::find(n)).filter(|f| matches(f)).collect()
