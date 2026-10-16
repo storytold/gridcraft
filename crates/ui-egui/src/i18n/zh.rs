@@ -402,6 +402,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "工作簿计算",
         "Enable iterative calculation" => "启用迭代计算",
         "Calculation settings are saved with the workbook." => "计算设置随工作簿一起保存。",
+        "Ask Agent" => "询问智能体",
+        "Ask\nAgent" => "询问\n智能体",
+        "Ask agent to…" => "让智能体…",
+        "Waiting for an agent…" => "等待智能体…",
+        "Working…" => "正在处理…",
+        "Keep" => "保留",
+        "Undo" => "撤消",
+        "Follow-up…" => "追问…",
+        "Send" => "发送",
+        "Any" => "任意",
         _ => return None,
     })
 }

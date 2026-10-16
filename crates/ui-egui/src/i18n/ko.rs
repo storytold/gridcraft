@@ -410,6 +410,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "통합 문서 계산",
         "Enable iterative calculation" => "반복 계산 사용",
         "Calculation settings are saved with the workbook." => "계산 설정은 통합 문서와 함께 저장됩니다.",
+        "Ask Agent" => "에이전트에게 요청",
+        "Ask\nAgent" => "에이전트\n에게 요청",
+        "Ask agent to…" => "에이전트에게 요청…",
+        "Waiting for an agent…" => "에이전트 대기 중…",
+        "Working…" => "작업 중…",
+        "Keep" => "유지",
+        "Undo" => "실행 취소",
+        "Follow-up…" => "후속 작업…",
+        "Send" => "보내기",
+        "Any" => "모두",
         _ => return None,
     })
 }

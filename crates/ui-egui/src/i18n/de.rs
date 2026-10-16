@@ -411,6 +411,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Dunkel",
         "Sheet Options|View" => "Anzeige",
         "Print" => "Drucken",
+        "Ask Agent" => "Agenten fragen",
+        "Ask\nAgent" => "Agenten\nfragen",
+        "Ask agent to…" => "Agenten beauftragen…",
+        "Waiting for an agent…" => "Warten auf einen Agenten…",
+        "Working…" => "In Bearbeitung…",
+        "Keep" => "Behalten",
+        "Undo" => "Rückgängig",
+        "Follow-up…" => "Nachfassen…",
+        "Send" => "Senden",
+        "Any" => "Beliebig",
         _ => return None,
     })
 }

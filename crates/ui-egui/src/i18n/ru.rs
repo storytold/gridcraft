@@ -410,6 +410,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Вычисления в книге",
         "Enable iterative calculation" => "Включить итеративные вычисления",
         "Calculation settings are saved with the workbook." => "Параметры вычислений сохраняются вместе с книгой.",
+        "Ask Agent" => "Спросить агента",
+        "Ask\nAgent" => "Спросить\nагента",
+        "Ask agent to…" => "Попросить агента…",
+        "Waiting for an agent…" => "Ожидание агента…",
+        "Working…" => "Работает…",
+        "Keep" => "Сохранить",
+        "Undo" => "Отменить",
+        "Follow-up…" => "Уточнение…",
+        "Send" => "Отправить",
+        "Any" => "Любой",
         _ => return None,
     })
 }

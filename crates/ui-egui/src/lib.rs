@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod ask_agent;
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
@@ -263,6 +264,8 @@ pub struct SheetApp {
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
     pub started: f64,
+    /// Ask Agent: the control channel's request queue, the chip and the bubble.
+    pub ask_agent: ask_agent::AskAgent,
 }
 
 impl SheetApp {
@@ -306,7 +309,15 @@ impl SheetApp {
             clipboard_text_at_copy: None,
             cut_text: None,
             started: now_ms(),
+            ask_agent: Default::default(),
         }
+    }
+
+    /// Ask Agent's queue, shared with the control channel (the desktop app with `--control`).
+    pub fn with_agent_hub(mut self, hub: ask_agent::AgentHub) -> SheetApp {
+        self.ask_agent = Default::default();
+        self.ask_agent.hub = Some(hub);
+        self
     }
 
     /// One-time context setup: start cataloging the machine's fonts, then install the fonts and
@@ -340,6 +351,10 @@ impl SheetApp {
 
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        if let Some(why) = ask_agent::held(self, id) {
+            self.toast = Some((why.clone(), crate::now_ms()));
+            return Err(why);
+        }
         let r = self.run_command(id, params);
         // This copy leaves the system clipboard alone: note what it holds, so Paste can tell
         // that GridCraft's copy is newer while that text is still there.
@@ -575,6 +590,7 @@ impl SheetApp {
         let r = match id {
             "ui.printSettings" => printing::settings(&mut self.printing, p, self.services.printers.as_ref()),
             "ui.printSubmit" => self.submit_print(p.clone()),
+            "ui.askAgent" => ask_agent::command(self, p),
             "ui.ribbonTab" => {
                 self.ui.ribbon_tab = p.get("tab").and_then(Json::as_str).unwrap_or("Home").to_string();
                 Ok(Json::Null)
@@ -1105,6 +1121,7 @@ impl SheetApp {
         let t = theme::Tokens::get(&ctx);
         if self.backstage.is_none() {
             self.ribbon_keys(&ctx);
+            ask_agent::keys(self, &ctx);
         }
         ribbon::title_bar(self, ui);
         if self.backstage.is_some() {
@@ -1127,6 +1144,7 @@ impl SheetApp {
                 grid::show(self, ui);
                 self.perf.grid_ms = now_ms() - g0;
             });
+            ask_agent::show(self, &ctx);
         }
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);

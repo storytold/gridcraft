@@ -6,6 +6,11 @@ Start the desktop app with a control port:
 gridcraft --control 7979            # or GRIDCRAFT_CONTROL_PORT=7979
 ```
 
+The first line must authenticate with the token the app generated or chose via `GRIDCRAFT_CONTROL_TOKEN`:
+```json
+{"id": 0, "method": "auth", "params": {"token": "..."}}
+```
+
 Then send newline-delimited JSON to `127.0.0.1:7979`. Every request line gets one reply line:
 
 ```json
@@ -37,6 +42,8 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
 | `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?}` | Files and lifetime. `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog) |
+| `agent.listen` | `{timeoutMs?, agent?}` | Wait for an Ask Agent request (`{id, instruction, selection, ...}`) |
+| `agent.reply` | `{id, text, done?, error?}` | Progress note or final answer for an Ask Agent request |
 
 Any other method name that is a command id (e.g. `home.bold`) runs that command.
 
@@ -80,3 +87,11 @@ rejected without changing earlier settings. `ui.printSubmit` explicitly submits 
 print-ready PDF without opening a dialog; inspect `ui.printSettings` until `busy` becomes false
 and check `status`/`detail`. The browser keeps its own print hook. PDF export remains separate.
 GridCraft accepts the existing `file.print` sheet/pagination params on `ui.printSubmit`; the engine `file.print` command returns the PDF without spooling.
+
+## Ask Agent
+
+Desktop Ask Agent hands selected cells and an instruction to an external agent over authenticated control.
+- `agent.listen {timeoutMs?, agent?}` claims the oldest waiting request or returns `{"none": true}`.
+- `agent.reply {id, text, done?, error?}` sends progress notes (`done: false`) or a final answer (`done: true`).
+- The agent edits with standard commands tagged with `request`. All edits form ONE undo group in the app.
+- Only the connection that claimed the request may edit while it is open (`NOT_OWNER`).

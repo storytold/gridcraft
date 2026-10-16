@@ -440,6 +440,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Compact" => "Compacto",
         "Outline" => "Esquema",
         "Tabular" => "Tabular",
+        "Ask Agent" => "Preguntar al agente",
+        "Ask\nAgent" => "Preguntar\nal agente",
+        "Ask agent to…" => "Pedir al agente que…",
+        "Waiting for an agent…" => "Esperando a un agente…",
+        "Working…" => "Trabajando…",
+        "Keep" => "Mantener",
+        "Undo" => "Deshacer",
+        "Follow-up…" => "Seguimiento…",
+        "Send" => "Enviar",
+        "Any" => "Cualquiera",
         _ => return None,
     })
 }

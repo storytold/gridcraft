@@ -21,6 +21,7 @@ This page is the summary. The detail is in:
 
 | Number | Value | Kind |
 |---|---|---|
+| 2026-10-13 | minor | Ask Agent: selection chip, scoped instruction bubble, authenticated agent.listen / agent.reply and MCP tools; one undo step per request, no in-app model |
 | **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 274 / 290 (94.5%), worksheet functions 513 / 523 (98.1%; 504 working, 96.4%) |
 | **Ready for real work** | **~50%** | estimated from written weights (51.6); [target-app-parity.md](docs/target-app-parity.md) |
 | **Mainstream practitioner** | **~50%** | estimated: typical analyst/finance user, weekly features, × 0.90 interaction × 0.92 stability × 0.88 file exchange; [method](docs/target-app-parity.md#mainstream-practitioner) |
@@ -30,6 +31,7 @@ This page is the summary. The detail is in:
 
 | Audience | Ready % | Opus 5.5 agent wall-clock hours to ~95% | Work that dominates |
 |---|---|---|---|
+| 2026-10-13 | minor | Ask Agent: selection chip, scoped instruction bubble, authenticated agent.listen / agent.reply and MCP tools; one undo step per request, no in-app model |
 | Full target (ready for real work) | ~50% | ~650–1,050 | Get & Transform and the data model, localization (twelve languages), charts depth, file fidelity (`.xls`, corpus, pass-through), PivotTables, collaboration, mobile |
 | Mainstream practitioner | ~50% | ~200–310 | File exchange with Excel users (corpus and Excel verification, pass-through, large files, `.xls`, encryption: 63–97 h), common-chart depth (30–45 h), PivotTables (20–30 h), keyboard and interaction (18–28 h), calc correctness and functions (20–33 h) |
 | Essentials user | ~63% | ~60–100 | Opening files people send (`.xls` import and saving with a password 24–36 h; macOS Finder open 2–4 h), launch stability (6–10 h), basic chart resize and polish (6–10 h), print and Page Layout (8–12 h), small editing and UI fixes (10–16 h) |
@@ -57,6 +59,7 @@ collaboration, mobile, AI).
 
 | Dimension | Ready for real work | Hours to parity | Doc |
 |---|---|---|---|
+| 2026-10-13 | minor | Ask Agent: selection chip, scoped instruction bubble, authenticated agent.listen / agent.reply and MCP tools; one undo step per request, no in-app model |
 | Features (13 areas, table below) | ~59% (breadth ~75%) | 300–485 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
 | UI/UX fidelity | ~55% | 50–80 | [ui-parity.md](docs/ui-parity.md) |
 | File formats | ~50% | 80–120 | [file-format-parity.md](docs/file-format-parity.md) |
@@ -73,6 +76,7 @@ collaboration, mobile, AI).
 
 | Area | Breadth | Ready | Hours | Doc |
 |---|---|---|---|---|
+| 2026-10-13 | minor | Ask Agent: selection chip, scoped instruction bubble, authenticated agent.listen / agent.reply and MCP tools; one undo step per request, no in-app model |
 | Formula language and calculation | ~92% | ~72% | 20–30 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
 | Worksheet functions | 96.6% measured | ~82% | 16–26 | [function-parity.md](docs/function-parity.md) |
 | Editing, navigation, clipboard, fill | ~90% | ~70% | 15–25 | [ui-parity.md](docs/ui-parity.md) |
@@ -98,6 +102,7 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 
 | Language | Code | Status | UI strings |
 |---|---|---|---|
+| 2026-10-13 | minor | Ask Agent: selection chip, scoped instruction bubble, authenticated agent.listen / agent.reply and MCP tools; one undo step per request, no in-app model |
 | English | en | full (source language) | 100% |
 | Simplified Chinese | zh-Hans | menus only | ~12% |
 | Spanish | es | none | 0% |
@@ -193,6 +198,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Ask Agent: selection chip, scoped instruction bubble, authenticated agent.listen / agent.reply and MCP tools; one undo step per request, no in-app model |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
 | 2026-10-12 | minor | Progress log: multi-area row/column delete (#758) |
 | 2026-10-12 | trivial | Progress log: XLSX chart sheets kept on save (#727) |

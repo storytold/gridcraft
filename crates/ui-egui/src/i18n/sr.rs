@@ -408,6 +408,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bottom Margin" => "Donja margina",
         "Header Margin" => "Margina zaglavlja",
         "Footer Margin" => "Margina podnožja",
+        "Ask Agent" => "Pitaj agenta",
+        "Ask\nAgent" => "Pitaj\nagenta",
+        "Ask agent to…" => "Zatraži od agenta…",
+        "Waiting for an agent…" => "Čekanje agenta…",
+        "Working…" => "Obrada…",
+        "Keep" => "Zadrži",
+        "Undo" => "Opozovi",
+        "Follow-up…" => "Nastavak…",
+        "Send" => "Pošalji",
+        "Any" => "Bilo koji",
         _ => return None,
     })
 }

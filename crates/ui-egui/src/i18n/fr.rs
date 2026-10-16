@@ -410,6 +410,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Calcul du classeur",
         "Enable iterative calculation" => "Activer le calcul itératif",
         "Calculation settings are saved with the workbook." => "Les paramètres de calcul sont enregistrés avec le classeur.",
+        "Ask Agent" => "Demander à l’agent",
+        "Ask\nAgent" => "Demander\nà l’agent",
+        "Ask agent to…" => "Demander à l’agent de…",
+        "Waiting for an agent…" => "En attente d’un agent…",
+        "Working…" => "Travail en cours…",
+        "Keep" => "Conserver",
+        "Undo" => "Annuler",
+        "Follow-up…" => "Suivi…",
+        "Send" => "Envoyer",
+        "Any" => "Tous",
         _ => return None,
     })
 }
