@@ -71,6 +71,16 @@ fn wrap(r: Result<Json, String>) -> Outcome {
     }
 }
 
+/// Runs a command for an agent. Commands that move the selection scroll the active cell into
+/// view, as the Go To dialog, the Name Box and the arrow keys do.
+fn run(app: &mut SheetApp, id: &str, params: Json) -> Result<Json, String> {
+    let r = app.run(id, params);
+    if r.is_ok() && matches!(id, "edit.goTo" | "edit.goToSpecial" | "selection.set" | "selection.move") {
+        app.grid.ensure_visible = true;
+    }
+    r
+}
+
 pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
     let r = ctx.content_rect();
     let v = app.view();
@@ -171,7 +181,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         "engine.execute" | "command" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
-            wrap(app.run(id, if params.is_null() { json!({}) } else { params }))
+            wrap(run(app, id, if params.is_null() { json!({}) } else { params }))
         }
         "engine.commands" => {
             let mut v: Vec<Json> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
@@ -381,7 +391,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             ok(Json::Null)
         }
         // Anything else that names a command runs it.
-        other if gridcraft_engine::find_command(other).is_some() => wrap(app.run(other, p.clone())),
+        other if gridcraft_engine::find_command(other).is_some() => wrap(run(app, other, p.clone())),
         other => err(format!("unknown method `{other}`")),
     };
     ctx.request_repaint();
