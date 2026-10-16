@@ -833,11 +833,15 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
                 None => split_delimited(&text, &delims, consecutive, quote),
             };
             for (j, part) in parts.into_iter().enumerate() {
-                out.push((CellRef::new(dest.row + i as u32, dest.col + j as u32), part));
+                let at = dest
+                    .offset(i as i64, j as i64)
+                    .ok_or_else(|| EngineError::Other("The result doesn't fit on the sheet below and right of the destination.".into()))?;
+                out.push((at, part));
             }
         }
         for (c, t) in out {
-            let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb).unwrap_or(None);
+            // A field that isn't a valid formula fails the whole split; the edit is discarded, not turned into a deletion.
+            let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb)?;
             let shm = cx.sheet_mut(sheet)?;
             match cell {
                 Some(x) => shm.set_cell(c, x),

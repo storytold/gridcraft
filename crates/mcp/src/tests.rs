@@ -522,6 +522,29 @@ fn text_to_columns_destination_follows_its_sheet() {
 }
 
 #[test]
+fn text_to_columns_rejects_bad_fields_and_overflow_without_changes() {
+    let mut s = server();
+    // A field that cannot parse as a formula must fail the command, not clear the destination.
+    ok(&mut s, "set_cell", json!({"cell": "A2", "input": "a,=1+*"}));
+    ok(&mut s, "set_cell", json!({"cell": "D2", "input": "old"}));
+    ok(&mut s, "set_cell", json!({"cell": "E2", "input": "old2"}));
+    cmd_fails(&mut s, "data.textToColumns", json!({"range": "A2", "delimiters": [","], "destination": "D2"}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "D2"}))["text"], json!("old"));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "E2"}))["text"], json!("old2"));
+    // Output that would run past the last column or row is refused, and nothing is written.
+    ok(&mut s, "set_cell", json!({"cell": "A3", "input": "p,q"}));
+    ok(&mut s, "set_cell", json!({"cell": "A4", "input": "r,s"}));
+    cmd_fails(&mut s, "data.textToColumns", json!({"range": "A3", "delimiters": [","], "destination": "XFD1"}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "XFD1"}))["type"], json!("empty"));
+    cmd_fails(&mut s, "data.textToColumns", json!({"range": "A3:A4", "delimiters": [","], "destination": "D1048576"}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "D1048576"}))["type"], json!("empty"));
+    // A plain split still works.
+    ok(&mut s, "execute_command", json!({"command": "data.textToColumns", "params": {"range": "A3", "delimiters": [","], "destination": "G3"}}));
+    let r = ok(&mut s, "read_range", json!({"range": "G3:H3"}));
+    assert!(r.to_string().contains('p') && r.to_string().contains('q'), "{r}");
+}
+
+#[test]
 fn invalid_borders_are_invalid_params() {
     let mut s = server();
     let bad = |s: &mut Server, id: u64, borders: Value| {
