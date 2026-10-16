@@ -193,8 +193,11 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     for (gi, (g, k)) in groups.iter().enumerate() {
         for s in g.kids("ser") {
             let mut ser = read_series(s);
-            if gi > 0 {
+            if groups.len() > 1 {
+                // Every series of a combo chart keeps its own group's kind, the first group's included.
                 ser.kind = Some(*k);
+            }
+            if gi > 0 {
                 ser.secondary = axis_ids(g) != first_axes;
             }
             series.push(ser);
