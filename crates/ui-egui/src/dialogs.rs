@@ -484,18 +484,25 @@ impl Dialog {
                 d
             }
             "solver" => {
-                // Starts from the sheet's saved model, else the active cell as objective.
+                // Starts from the sheet's saved model, else the active cell as objective; fields
+                // given when opening it go over either.
                 let saved = app.session.active().and_then(|doc| gridcraft_engine::cmd::solver::saved_model(&doc.wb, doc.wb.active_sheet));
                 let mut values = json!({"objective": active, "goal": "max", "value": "0", "variables": "", "constraints": [], "nonNegative": true, "method": "grg"});
-                if let (Some(m), Some(v)) = (saved.as_ref().and_then(Json::as_object), values.as_object_mut()) {
-                    for (k, x) in m {
-                        v.insert(k.clone(), if k == "value" { json!(x.to_string()) } else { x.clone() });
+                for m in [saved.as_ref(), Some(&params)].into_iter().flatten().filter_map(Json::as_object) {
+                    if let Some(v) = values.as_object_mut() {
+                        for (k, x) in m {
+                            v.insert(
+                                k.clone(),
+                                if k == "value" { json!(x.as_str().map_or_else(|| x.to_string(), str::to_string)) } else { x.clone() },
+                            );
+                        }
                     }
                 }
                 if let Some(v) = values.as_object_mut() {
                     v.insert("newOp".into(), json!("<="));
                 }
-                let mut d = Dialog::custom("solver", "Solver Parameters", values);
+                let options = values.get("optionsView").and_then(Json::as_bool) == Some(true);
+                let mut d = Dialog::custom("solver", if options { "Solver Options" } else { "Solver Parameters" }, values);
                 d.command = Some("data.solver");
                 d
             }
@@ -1059,7 +1066,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
-                "solver" => solver(ui, &mut d, &mut confirm, &mut open),
+                "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {
@@ -2445,9 +2452,22 @@ fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confi
     ok_cancel(ui, confirm, open);
 }
 
+/// The Solver Options fields: (key, label, default).
+const SOLVER_OPTIONS: [(&str, &str, &str); 7] = [
+    ("maxEvaluations", "Max Evaluations:", "20000"),
+    ("integerOptimality", "Integer Optimality (%):", "0"),
+    ("convergence", "Convergence:", "0.0001"),
+    ("mutationRate", "Mutation Rate:", "0.075"),
+    ("populationSize", "Population Size:", "100"),
+    ("randomSeed", "Random Seed:", "0"),
+    ("generationsWithoutImprovement", "Maximum Generations without Improvement:", "50"),
+];
+
 /// Data › Solver: the Solver Parameters form. Solve runs `data.solver` through the dialog's
-/// command; the result opens Solver Results.
-fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+/// command; the result opens Solver Results. Reset All clears the form and the sheet's model;
+/// Load/Save reads or writes the model on cells of the sheet; Options shows the Solver Options
+/// in the same window.
+fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     let text = |d: &Dialog, k: &str| d.values.get(k).map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).unwrap_or_default();
     let edit = |ui: &mut egui::Ui, d: &mut Dialog, k: &str, width: f32| {
         let mut t = text(d, k);
@@ -2455,6 +2475,45 @@ fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool
             d.values.insert(k.into(), json!(t));
         }
     };
+    if d.values.get("optionsView").and_then(Json::as_bool) == Some(true) {
+        let mut done = false;
+        egui::Grid::new("solverOptions").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+            for (title, keys) in [("All Methods", &SOLVER_OPTIONS[..2]), ("Evolutionary", &SOLVER_OPTIONS[2..])] {
+                ui.label(egui::RichText::new(title).strong());
+                ui.end_row();
+                for (key, label, _) in keys {
+                    ui.label(*label);
+                    edit(ui, d, key, 100.0);
+                    ui.end_row();
+                }
+            }
+        });
+        let mut bounds = d.values.get("requireBounds").and_then(Json::as_bool).unwrap_or(true);
+        if ui.checkbox(&mut bounds, "Require Bounds on Variables").changed() {
+            d.values.insert("requireBounds".into(), json!(bounds));
+        }
+        ui.add_space(8.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button(" Cancel ").clicked() {
+                // Back to the parameters with the options as they were.
+                if let Some(old) = d.values.get("optionsBackup").and_then(Json::as_object).cloned() {
+                    for (k, v) in old {
+                        d.values.insert(k, v);
+                    }
+                }
+                done = true;
+            }
+            if ui.button("  OK  ").clicked() {
+                done = true;
+            }
+        });
+        if done {
+            d.values.insert("optionsView".into(), json!(false));
+            d.values.remove("optionsBackup");
+            d.title = "Solver Parameters".into();
+        }
+        return;
+    }
     ui.horizontal(|ui| {
         ui.label("Set Objective:");
         edit(ui, d, "objective", 200.0);
@@ -2548,6 +2607,80 @@ fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool
         })
         .small(),
     );
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        if ui.button("Reset All").clicked() {
+            match app.run("data.solverReset", json!({})) {
+                Ok(_) => {
+                    for (k, v) in [
+                        ("objective", json!("")),
+                        ("goal", json!("max")),
+                        ("value", json!("0")),
+                        ("variables", json!("")),
+                        ("constraints", json!([])),
+                        ("nonNegative", json!(true)),
+                        ("method", json!("grg")),
+                    ] {
+                        d.values.insert(k.into(), v);
+                    }
+                    d.values.remove("modelNote");
+                }
+                Err(e) => {
+                    d.values.insert("modelNote".into(), json!(crate::clean_error(&e)));
+                }
+            }
+        }
+        let shown = d.values.get("modelArea").and_then(Json::as_bool).unwrap_or(false);
+        if ui.selectable_label(shown, "Load/Save").clicked() {
+            d.values.insert("modelArea".into(), json!(!shown));
+        }
+        if ui.button("Options").clicked() {
+            let mut backup = serde_json::Map::new();
+            for (key, _, default) in SOLVER_OPTIONS {
+                let v = d.values.get(key).cloned().unwrap_or_else(|| json!(default));
+                backup.insert(key.into(), v.clone());
+                d.values.insert(key.into(), v);
+            }
+            backup.insert("requireBounds".into(), d.values.get("requireBounds").cloned().unwrap_or(json!(true)));
+            d.values.insert("optionsBackup".into(), Json::Object(backup));
+            d.values.insert("optionsView".into(), json!(true));
+            d.title = "Solver Options".into();
+        }
+    });
+    if d.values.get("modelArea").and_then(Json::as_bool) == Some(true) {
+        ui.horizontal(|ui| {
+            ui.label("Model Range:");
+            edit(ui, d, "modelRange", 140.0);
+            let range = text(d, "modelRange");
+            let ready = !range.trim().is_empty();
+            if ui.add_enabled(ready, egui::Button::new("Load")).clicked() {
+                match app.run("data.solverLoadModel", json!({"from": range.trim()})) {
+                    Ok(r) => {
+                        if let Some(m) = r.get("model").and_then(Json::as_object) {
+                            for (k, x) in m {
+                                d.values.insert(k.clone(), if k == "value" { json!(x.to_string()) } else { x.clone() });
+                            }
+                        }
+                        d.values.insert("modelNote".into(), json!("The model was loaded."));
+                    }
+                    Err(e) => {
+                        d.values.insert("modelNote".into(), json!(crate::clean_error(&e)));
+                    }
+                }
+            }
+            if ui.add_enabled(ready, egui::Button::new("Save")).clicked() {
+                let note = match app.run("data.solverSaveModel", json!({"to": range.trim(), "model": build_params(d)})) {
+                    Ok(r) => format!("The model was saved to {}.", r.get("range").and_then(Json::as_str).unwrap_or("")),
+                    Err(e) => crate::clean_error(&e),
+                };
+                d.values.insert("modelNote".into(), json!(note));
+            }
+        });
+    }
+    let note = text(d, "modelNote");
+    if !note.is_empty() {
+        ui.label(egui::RichText::new(note).small());
+    }
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let solve =
@@ -2581,7 +2714,7 @@ fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &
     if solved {
         ui.add_space(4.0);
         ui.label("Reports:");
-        for (key, label) in [("answerReport", "Answer"), ("limitsReport", "Limits")] {
+        for (key, label) in [("answerReport", "Answer"), ("sensitivityReport", "Sensitivity"), ("limitsReport", "Limits")] {
             let mut on = d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
             if ui.checkbox(&mut on, label).changed() {
                 d.values.insert(key.into(), json!(on));
@@ -2595,7 +2728,7 @@ fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &
         if changed && restore {
             app.run_or_alert("edit.undo", json!({}));
         }
-        let reports: Vec<&str> = [("answerReport", "answer"), ("limitsReport", "limits")]
+        let reports: Vec<&str> = [("answerReport", "answer"), ("sensitivityReport", "sensitivity"), ("limitsReport", "limits")]
             .into_iter()
             .filter(|(key, _)| d.values.get(*key).and_then(Json::as_bool) == Some(true))
             .map(|(_, kind)| kind)

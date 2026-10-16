@@ -33,6 +33,8 @@ use super::*;
 
 const CMD: &str = "data.solver";
 const REPORT_CMD: &str = "data.solverReport";
+const SAVE_CMD: &str = "data.solverSaveModel";
+const LOAD_CMD: &str = "data.solverLoadModel";
 /// Excel's limit on decision variables.
 const MAX_VARS: usize = 200;
 /// Most scalar constraints (after expanding ranges).
@@ -57,7 +59,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Solver…",
             ["Data", "Analysis"],
             None,
-            "{objective: \"B10\" (formula cell), goal?: max|min|value (default max), value?: number (for goal value), variables: \"B2:B4,D1\" (≤200 constant cells, same sheet), constraints?: [\"B5 <= 10\", \"B2:B4 >= C2:C4\", \"B2 int\", \"B3 bin\", {lhs: \"B6\", op: \"=\", rhs: 3 | \"C6\"}], nonNegative?: bool (default true: variables without a lower bound get 0), method?: grg|simplex|evolutionary (default grg), populationSize?: 100, mutationRate?: 0.075, randomSeed?: 0 (a fixed seed, so runs repeat), convergence?: 0.0001, generationsWithoutImprovement?: 50, requireBounds?: bool (default true: every variable needs both bounds; false searches within ±100 of the start) (Evolutionary options), keep?: bool (default true; false restores the original values), saveModel?: bool (default true: hidden solver_* names), maxEvaluations?: 20000, integerOptimality?: percent (default 0), saved?: bool (solve the sheet's saved model; other params override), reports?: [answer|limits] (written on new sheets when a solution is found)} → {status: optimal|converged|cannotImprove|iterationLimit|infeasible|unbounded|notLinear, message, objective, values: {cell: value}, original: {cell: value}, model: the model as params, evaluations, changed, reports?: [sheet names]}. No `objective` → {model: the saved model} (the menu opens the dialog).",
+            "{objective: \"B10\" (formula cell), goal?: max|min|value (default max), value?: number (for goal value), variables: \"B2:B4,D1\" (≤200 constant cells, same sheet), constraints?: [\"B5 <= 10\", \"B2:B4 >= C2:C4\", \"B2 int\", \"B3 bin\", {lhs: \"B6\", op: \"=\", rhs: 3 | \"C6\"}], nonNegative?: bool (default true: variables without a lower bound get 0), method?: grg|simplex|evolutionary (default grg), populationSize?: 100, mutationRate?: 0.075, randomSeed?: 0 (a fixed seed, so runs repeat), convergence?: 0.0001, generationsWithoutImprovement?: 50, requireBounds?: bool (default true: every variable needs both bounds; false searches within ±100 of the start) (Evolutionary options), keep?: bool (default true; false restores the original values), saveModel?: bool (default true: hidden solver_* names, with the options), maxEvaluations?: 20000 (at most 200000), integerOptimality?: percent (default 0), saved?: bool (solve the sheet's saved model; other params override), reports?: [answer|sensitivity|limits] (written on new sheets when a solution is found)} → {status: optimal|converged|cannotImprove|iterationLimit|infeasible|unbounded|notLinear, message, objective, values: {cell: value}, original: {cell: value}, model: the model as params, evaluations, changed, reports?: [sheet names]}. No `objective` → {model: the saved model} (the menu opens the dialog).",
             has_doc,
             run
         ),
@@ -66,10 +68,29 @@ pub fn specs() -> Vec<CommandSpec> {
             "Solver Reports",
             [],
             None,
-            "{reports: [answer|limits], values?: {cell: number} (the solution; default the variable cells' current values), original?: {cell: number} (the values before solving; default `values`), message?: text (the result line), model?: data.solver params (default the sheet's saved model, with any data.solver params given here over it)} → {sheets: [names]}. Writes Answer and Limits reports on new sheets before the model's sheet; Limits needs Simplex LP or GRG Nonlinear and no integer constraints. data.solver's result can be passed as is.",
+            "{reports: [answer|sensitivity|limits], values?: {cell: number} (the solution; default the variable cells' current values), original?: {cell: number} (the values before solving; default `values`), message?: text (the result line), model?: data.solver params (default the sheet's saved model, with any data.solver params given here over it)} → {sheets: [names]}. Writes Answer, Sensitivity and Limits reports on new sheets before the model's sheet; Sensitivity and Limits need Simplex LP or GRG Nonlinear and no integer constraints, and Sensitivity a Max or Min objective. data.solver's result can be passed as is.",
             has_doc,
             report
         ),
+        cmd!(
+            "data.solverSaveModel",
+            "Save Model",
+            [],
+            None,
+            "{to: \"H1\" (the first cell, on the model's sheet), model?: data.solver params (default the sheet's saved model)} → {range}. Writes the model down a column as formulas: =MAX(objective), =MIN(objective) or =objective=value; =COUNT(variables); one =AND(relation) per constraint (=AND(x=INT(x)) for integer, =AND((x=0)+(x=1)) for binary), which shows TRUE while it holds; and the options as an array constant {method (1 GRG Nonlinear, 2 Simplex LP, 3 Evolutionary), non-negative (1 yes, 2 no), population size, mutation rate, random seed, require bounds (1 yes, 2 no), convergence, generations without improvement, maximum evaluations, integer optimality %}.",
+            has_doc,
+            save_model_cells
+        ),
+        cmd!(
+            "data.solverLoadModel",
+            "Load Model",
+            [],
+            None,
+            "{from: \"H1:H6\" (a range on the active sheet; one cell reads down to the first cell without a formula)} → {model}. Reads a model written by Save Model and makes it the sheet's Solver model.",
+            has_doc,
+            load_model_cells
+        ),
+        cmd!("data.solverReset", "Reset All", [], None, "{} → {removed}. Removes the active sheet's Solver model.", has_doc, reset_model),
     ]
 }
 
@@ -198,6 +219,10 @@ struct Model {
     non_negative: bool,
     method: Method,
     evo: EvoOptions,
+    /// The evaluation limit (in place of Excel's iterations and time limits).
+    max_evals: u64,
+    /// Integer Optimality, as a fraction.
+    gap: f64,
 }
 
 /// Cells of `"B2:B4,D1"` on one sheet (row-major per area, in order), at most `cap`.
@@ -358,13 +383,17 @@ fn parse_model(s: &Session, p: &Json) -> Result<Model> {
         "evolutionary" | "evo" | "genetic" => Method::Evolutionary,
         m => return Err(bad(CMD, format!("unknown method `{m}` (grg, simplex or evolutionary)"))),
     };
-    Ok(Model { sheet, objective, goal, vars, vars_text, cons, non_negative, method, evo: evo_options(p) })
+    let num = |k: &str| p.get(k).and_then(Json::as_f64).or_else(|| str_param(p, k).and_then(num_text)).filter(|v| v.is_finite());
+    let max_evals = num("maxEvaluations").filter(|v| *v >= 1.0).map_or(DEFAULT_EVALS, |v| (v as u64).min(MAX_EVALS));
+    let gap = num("integerOptimality").map_or(0.0, |v| v.clamp(0.0, 100.0) / 100.0);
+    Ok(Model { sheet, objective, goal, vars, vars_text, cons, non_negative, method, evo: evo_options(p), max_evals, gap })
 }
 
 // ---------------------------------------------------------------- saved model
 
-fn ref_text(sheet_name: &str, cells: &str) -> String {
-    let q = crate::pivot::quote_sheet(sheet_name);
+/// `"B2:B4,D1"` as absolute references, each qualified by `sheet_name` when given.
+fn abs_text(sheet_name: Option<&str>, cells: &str) -> String {
+    let q = sheet_name.map(|n| format!("{}!", crate::pivot::quote_sheet(n))).unwrap_or_default();
     cells
         .split(',')
         .map(str::trim)
@@ -372,10 +401,14 @@ fn ref_text(sheet_name: &str, cells: &str) -> String {
         .filter_map(|part| {
             let r = RangeRef::parse(split_sheet(part).1.trim())?;
             let abs = |c: CellRef| format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row as u64 + 1);
-            Some(if r.is_single() { format!("{q}!{}", abs(r.start)) } else { format!("{q}!{}:{}", abs(r.start), abs(r.end)) })
+            Some(if r.is_single() { format!("{q}{}", abs(r.start)) } else { format!("{q}{}:{}", abs(r.start), abs(r.end)) })
         })
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn ref_text(sheet_name: &str, cells: &str) -> String {
+    abs_text(Some(sheet_name), cells)
 }
 
 /// The model as hidden names scoped to its sheet (replacing any saved before).
@@ -419,11 +452,17 @@ fn save_model(wb: &mut Workbook, m: &Model) {
         Method::Evolutionary => "3",
     };
     put("solver_eng".into(), eng.into());
+    // The evaluation limit stands in for the iteration limit, and generations for the time
+    // without improvement.
+    put("solver_itr".into(), m.max_evals.to_string());
+    put("solver_tol".into(), m.gap.to_string());
     if m.method == Method::Evolutionary {
         put("solver_ssz".into(), m.evo.population.to_string());
         put("solver_mrt".into(), m.evo.mutation.to_string());
         put("solver_rsd".into(), m.evo.seed.to_string());
         put("solver_rbv".into(), if m.evo.require_bounds { "1" } else { "2" }.into());
+        put("solver_cvg".into(), m.evo.convergence.to_string());
+        put("solver_mni".into(), m.evo.stall.to_string());
     }
     put("solver_ver".into(), "3".into());
 }
@@ -477,10 +516,20 @@ pub fn saved_model(wb: &Workbook, sheet: usize) -> Option<Json> {
         "nonNegative": get("solver_neg").as_deref().map(str::trim) != Some("2"),
         "method": method,
     });
-    for (name, key) in [("solver_ssz", "populationSize"), ("solver_mrt", "mutationRate"), ("solver_rsd", "randomSeed")] {
+    for (name, key) in [
+        ("solver_ssz", "populationSize"),
+        ("solver_mrt", "mutationRate"),
+        ("solver_rsd", "randomSeed"),
+        ("solver_cvg", "convergence"),
+        ("solver_mni", "generationsWithoutImprovement"),
+        ("solver_itr", "maxEvaluations"),
+    ] {
         if let Some(v) = get(name).and_then(|v| num_text(&v)) {
             model[key] = json!(v);
         }
+    }
+    if let Some(v) = get("solver_tol").and_then(|v| num_text(&v)) {
+        model["integerOptimality"] = json!(v * 100.0);
     }
     if let Some(v) = get("solver_rbv") {
         model["requireBounds"] = json!(v.trim() != "2");
@@ -518,6 +567,8 @@ fn model_params(wb: &Workbook, m: &Model) -> Json {
         "constraints": constraints,
         "nonNegative": m.non_negative,
         "method": method,
+        "maxEvaluations": m.max_evals,
+        "integerOptimality": m.gap * 100.0,
     });
     if m.method == Method::Evolutionary {
         let e = &m.evo;
@@ -529,6 +580,230 @@ fn model_params(wb: &Workbook, m: &Model) -> Json {
         out["requireBounds"] = json!(e.require_bounds);
     }
     out
+}
+
+// ---------------------------------------------------------------- model on cells
+
+/// The cells Save Model writes, top to bottom, as formula text.
+fn model_formulas(m: &Model) -> Result<Vec<String>> {
+    let one_area = |t: &str| !t.contains(',');
+    let mut rows = Vec::with_capacity(m.cons.len() + 3);
+    let obj = abs_ref(m.objective);
+    rows.push(match m.goal {
+        Goal::Max => format!("=MAX({obj})"),
+        Goal::Min => format!("=MIN({obj})"),
+        Goal::Value(v) => format!("={obj}={}", gridcraft_core::number_to_text(v)),
+    });
+    rows.push(format!("=COUNT({})", abs_text(None, &m.vars_text)));
+    for c in &m.cons {
+        if !one_area(&c.lhs_text) || !one_area(&c.rhs_text) {
+            return Err(EngineError::Other("Save Model needs each side of a constraint to be one range.".into()));
+        }
+        let lhs = abs_text(None, &c.lhs_text);
+        rows.push(match (c.rel, &c.rhs) {
+            (Rel::Int, _) => format!("=AND({lhs}=INT({lhs}))"),
+            (Rel::Bin, _) => format!("=AND(({lhs}=0)+({lhs}=1))"),
+            (rel, Rhs::Cells(_)) => format!("=AND({lhs}{}{})", rel.text(), abs_text(None, &c.rhs_text)),
+            (rel, Rhs::Const(v)) => format!("=AND({lhs}{}{})", rel.text(), gridcraft_core::number_to_text(*v)),
+            (rel, Rhs::None) => format!("=AND({lhs}{}0)", rel.text()),
+        });
+    }
+    let e = &m.evo;
+    let n = gridcraft_core::number_to_text;
+    let eng = match m.method {
+        Method::Grg => 1,
+        Method::Simplex => 2,
+        Method::Evolutionary => 3,
+    };
+    let yes = |b: bool| if b { 1 } else { 2 };
+    rows.push(format!(
+        "={{{eng},{},{},{},{},{},{},{},{},{}}}",
+        yes(m.non_negative),
+        e.population,
+        n(e.mutation),
+        e.seed,
+        yes(e.require_bounds),
+        n(e.convergence),
+        e.stall,
+        m.max_evals,
+        n(m.gap * 100.0)
+    ));
+    Ok(rows)
+}
+
+/// Reads formula text written by Save Model back into `data.solver` params.
+fn parse_model_formulas(rows: &[String]) -> Result<Json> {
+    let not_a_model = || EngineError::Other("The range doesn't hold a Solver model saved with Save Model.".into());
+    let body = |t: &str| t.trim().trim_start_matches('=').replace(' ', "");
+    let local = |t: &str| t.split(',').map(|p| split_sheet(p.trim()).1.replace('$', "")).collect::<Vec<_>>().join(",");
+    // `NAME(inner)` → inner, ignoring case.
+    let call = |t: &str, name: &str| -> Option<String> {
+        let head = t.get(..name.len() + 1)?;
+        (head.eq_ignore_ascii_case(&format!("{name}(")) && t.ends_with(')')).then(|| t.get(name.len() + 1..t.len() - 1).map(str::to_string))?
+    };
+    let first = body(rows.first().ok_or_else(not_a_model)?);
+    let (goal, objective, value) = if let Some(o) = call(&first, "MAX") {
+        ("max", o, 0.0)
+    } else if let Some(o) = call(&first, "MIN") {
+        ("min", o, 0.0)
+    } else {
+        let (o, v) = first.split_once('=').ok_or_else(not_a_model)?;
+        ("value", o.to_string(), num_text(v).ok_or_else(not_a_model)?)
+    };
+    let variables = call(&body(rows.get(1).ok_or_else(not_a_model)?), "COUNT").ok_or_else(not_a_model)?;
+    let mut model = json!({"objective": local(&objective), "goal": goal, "value": value, "variables": local(&variables)});
+    let mut constraints = Vec::new();
+    let rest = rows.get(2..).unwrap_or(&[]);
+    for (i, row) in rest.iter().enumerate() {
+        let t = body(row);
+        if let Some(list) = t.strip_prefix('{').and_then(|x| x.strip_suffix('}')) {
+            // The options: the last row.
+            if i + 1 != rest.len() {
+                return Err(not_a_model());
+            }
+            let v: Vec<Option<f64>> = list.split([',', ';']).take(16).map(num_text).collect();
+            let get = |k: usize| v.get(k).copied().flatten();
+            model["method"] = json!(match get(0).map(|x| x as i64) {
+                Some(2) => "simplex",
+                Some(3) => "evolutionary",
+                _ => "grg",
+            });
+            model["nonNegative"] = json!(get(1) != Some(2.0));
+            for (k, key) in [
+                (2, "populationSize"),
+                (3, "mutationRate"),
+                (4, "randomSeed"),
+                (6, "convergence"),
+                (7, "generationsWithoutImprovement"),
+                (8, "maxEvaluations"),
+                (9, "integerOptimality"),
+            ] {
+                if let Some(x) = get(k) {
+                    model[key] = json!(x);
+                }
+            }
+            model["requireBounds"] = json!(get(5) != Some(2.0));
+            break;
+        }
+        let t = call(&t, "AND").unwrap_or(t);
+        let c = if let Some((x, y)) = t.split_once("=INT(").or_else(|| t.split_once("=int(")) {
+            if y.strip_suffix(')') != Some(x) {
+                return Err(not_a_model());
+            }
+            format!("{} int", local(x))
+        } else if let Some(x) = t.strip_prefix('(').and_then(|x| x.strip_suffix("=1)")).and_then(|x| x.split_once("=0)+(")).filter(|(a, b)| a == b) {
+            format!("{} bin", local(x.0))
+        } else {
+            let (l, rel, r) = split_constraint(&t).ok_or_else(not_a_model)?;
+            let r = r.trim_matches('"');
+            match r.to_ascii_lowercase().as_str() {
+                "integer" => format!("{} int", local(&l)),
+                "binary" => format!("{} bin", local(&l)),
+                _ if num_text(r).is_some() => format!("{} {} {r}", local(&l), rel.text()),
+                _ => format!("{} {} {}", local(&l), rel.text(), local(r)),
+            }
+        };
+        constraints.push(json!(c));
+    }
+    model["constraints"] = json!(constraints);
+    Ok(model)
+}
+
+/// `data.solverSaveModel`: writes the model on cells of its sheet, in one step.
+fn save_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
+    let d = s.doc()?;
+    let params = match p.get("model") {
+        Some(m @ Json::Object(_)) => m.clone(),
+        Some(Json::Null) | None => {
+            saved_model(&d.wb, d.wb.active_sheet).ok_or_else(|| EngineError::Other("This sheet has no saved Solver model.".into()))?
+        }
+        Some(_) => return Err(bad(SAVE_CMD, "`model` must be data.solver params")),
+    };
+    let model = parse_model(s, &params)?;
+    let to = cell_param_on(s, p, "to", model.sheet)?.ok_or_else(|| bad(SAVE_CMD, "missing `to` (the first cell of the saved model)"))?;
+    let rows = model_formulas(&model)?;
+    let count = u32::try_from(rows.len()).unwrap_or(u32::MAX);
+    let last = to
+        .row
+        .checked_add(count.saturating_sub(1))
+        .filter(|r| *r < gridcraft_core::MAX_ROWS)
+        .ok_or_else(|| EngineError::Other("The saved model doesn't fit below that cell.".into()))?;
+    let range = RangeRef::new(to, CellRef::new(last, to.col));
+    // The model's own cells are never overwritten.
+    let mut used = vec![model.objective];
+    used.extend(&model.vars);
+    for c in &model.cons {
+        used.extend(&c.lhs);
+        if let Rhs::Cells(r) = &c.rhs {
+            used.extend(r);
+        }
+    }
+    if used.iter().any(|c| range.contains(*c)) {
+        return Err(EngineError::Other(format!("{} overlaps the model's cells; choose another place to save it.", range.a1())));
+    }
+    let sheet = model.sheet;
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(sheet)?;
+        let cells: Vec<CellRef> = range.iter().collect();
+        for (c, f) in cells.iter().zip(&rows) {
+            let mut cell = Cell::formula(gridcraft_model::Formula::new(f));
+            cell.style = sh.style_id(*c);
+            sh.set_cell(*c, cell);
+        }
+        for c in cells {
+            cx.touch(sheet, c);
+        }
+        Ok(())
+    })?;
+    Ok(json!({"range": range.a1()}))
+}
+
+/// `data.solverLoadModel`: makes a model written by Save Model the active sheet's model.
+fn load_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
+    let d = s.doc()?;
+    let active = d.wb.active_sheet;
+    let text = str_param(p, "from").ok_or_else(|| bad(LOAD_CMD, "missing `from` (the saved model's range)"))?;
+    let (sh, body) = split_sheet(text);
+    if sh.is_some_and(|n| d.wb.sheet_index(&n) != Some(active)) {
+        return Err(EngineError::Other("Load Model reads a model saved on the active sheet.".into()));
+    }
+    let r = RangeRef::parse(body.trim()).ok_or_else(|| bad(LOAD_CMD, format!("not a range: `{text}`")))?;
+    let cap = MAX_CONSTRAINTS + 3;
+    let sheet = d.wb.sheet(active).ok_or(EngineError::NoDocument)?;
+    let formula = |c: CellRef| sheet.cell(c).and_then(|x| x.formula.as_ref()).map(|f| f.text.clone());
+    let rows: Vec<String> = if r.is_single() {
+        (0..cap as u32).map_while(|k| r.start.row.checked_add(k).and_then(|row| formula(CellRef::new(row, r.start.col)))).collect()
+    } else {
+        if r.count() > cap as u64 {
+            return Err(EngineError::Other(format!("The range is too large for a saved model (at most {cap} cells).")));
+        }
+        r.iter().filter_map(formula).collect()
+    };
+    let params = parse_model_formulas(&rows)?;
+    let model = parse_model(s, &params)?;
+    if model.sheet != active {
+        return Err(EngineError::Other("Load Model reads a model of the active sheet.".into()));
+    }
+    edit(s, |cx| {
+        save_model(&mut cx.wb, &model);
+        Ok(())
+    })?;
+    Ok(json!({"model": saved_model(&s.doc()?.wb, active)}))
+}
+
+/// `data.solverReset`: Reset All removes the active sheet's model.
+fn reset_model(s: &mut Session, _p: &Json) -> Result<Json> {
+    let d = s.doc()?;
+    let active = d.wb.active_sheet;
+    let is_model = |n: &DefinedName| n.scope == Some(active) && n.name.to_ascii_lowercase().starts_with("solver_");
+    let removed = d.wb.names.iter().filter(|n| is_model(n)).count();
+    if removed > 0 {
+        edit(s, |cx| {
+            cx.wb.names.retain(|n| !(n.scope == Some(active) && n.name.to_ascii_lowercase().starts_with("solver_")));
+            Ok(())
+        })?;
+    }
+    Ok(json!({"removed": removed}))
 }
 
 // ---------------------------------------------------------------- evaluation
@@ -870,17 +1145,40 @@ fn simplex(t: &mut [Vec<f64>], basis: &mut [usize], obj: &mut [f64], allowed: &[
     }
 }
 
+/// A column of the simplex tableau standing for a variable: `x_var = offset + Σ sign·y`.
+struct Map {
+    var: usize,
+    sign: f64,
+}
+
+/// The final tableau of an LP, for the Sensitivity report.
+struct Tableau {
+    /// Rows `B⁻¹A | B⁻¹b`, the basis, and the phase-2 reduced costs.
+    t: Vec<Vec<f64>>,
+    basis: Vec<usize>,
+    obj: Vec<f64>,
+    width: usize,
+    /// The first artificial column.
+    first_art: usize,
+    cols: Vec<Map>,
+    /// Per input row: the column that started as its unit column, and whether the row was
+    /// negated to make its right side non-negative.
+    ident: Vec<usize>,
+    flipped: Vec<bool>,
+}
+
 /// Minimises `c·x` subject to `rows` (coefficients, sense, rhs) and `lo ≤ x ≤ hi`.
 fn solve_lp(c: &[f64], rows: &[(Vec<f64>, Sense, f64)], lo: &[f64], hi: &[f64], budget: &mut u64) -> Outcome {
+    solve_lp_tableau(c, rows, lo, hi, budget).0
+}
+
+/// [`solve_lp`], with the final tableau when it is optimal.
+fn solve_lp_tableau(c: &[f64], rows: &[(Vec<f64>, Sense, f64)], lo: &[f64], hi: &[f64], budget: &mut u64) -> (Outcome, Option<Tableau>) {
     let n = c.len();
     if lo.iter().zip(hi).any(|(l, h)| l > h) {
-        return Outcome::Infeasible;
+        return (Outcome::Infeasible, None);
     }
     // x_j = offset + Σ sign·y_k with y ≥ 0.
-    struct Map {
-        var: usize,
-        sign: f64,
-    }
     let mut cols: Vec<Map> = Vec::new();
     let mut offset = vec![0.0; n];
     let mut extra: Vec<(Vec<(usize, f64)>, Sense, f64)> = Vec::new();
@@ -928,6 +1226,7 @@ fn solve_lp(c: &[f64], rows: &[(Vec<f64>, Sense, f64)], lo: &[f64], hi: &[f64], 
     }
     let m = yrows.len();
     let n_slack = yrows.iter().filter(|r| r.1 != Sense::Eq).count();
+    let flipped: Vec<bool> = yrows.iter().map(|r| r.2 < 0.0).collect();
     // Rows with b < 0 are negated so every right side is ≥ 0.
     let normalized: Vec<(Vec<f64>, Sense, f64)> = yrows
         .into_iter()
@@ -948,12 +1247,14 @@ fn solve_lp(c: &[f64], rows: &[(Vec<f64>, Sense, f64)], lo: &[f64], hi: &[f64], 
     let width = ny + n_slack + n_art;
     let mut t: Vec<Vec<f64>> = Vec::with_capacity(m);
     let mut basis = vec![0usize; m];
+    let mut ident = Vec::with_capacity(m);
     let (mut si, mut ai) = (ny, ny + n_slack);
     for (i, (a, s, b)) in normalized.iter().enumerate() {
         let mut row = vec![0.0; width + 1];
         for (v, x) in row.iter_mut().zip(a) {
             *v = *x;
         }
+        ident.push(if *s == Sense::Le { si } else { ai });
         match s {
             Sense::Le => {
                 if let Some(v) = row.get_mut(si) {
@@ -1010,12 +1311,12 @@ fn solve_lp(c: &[f64], rows: &[(Vec<f64>, Sense, f64)], lo: &[f64], hi: &[f64], 
     let all: Vec<bool> = vec![true; width];
     if n_art > 0 {
         match simplex(&mut t, &mut basis, &mut obj, &all, budget) {
-            Step::Limit => return Outcome::Limit,
+            Step::Limit => return (Outcome::Limit, None),
             Step::Unbounded | Step::Optimal => {}
         }
         let scale = normalized.iter().map(|r| r.2.abs()).fold(1.0f64, f64::max);
         if -obj.get(width).copied().unwrap_or(0.0) > 1e-7 * scale {
-            return Outcome::Infeasible;
+            return (Outcome::Infeasible, None);
         }
         // Drive zero-valued artificials out of the basis where possible.
         for i in 0..m {
@@ -1049,8 +1350,8 @@ fn solve_lp(c: &[f64], rows: &[(Vec<f64>, Sense, f64)], lo: &[f64], hi: &[f64], 
     }
     let allowed: Vec<bool> = (0..width).map(|j| !is_art(j)).collect();
     match simplex(&mut t, &mut basis, &mut obj, &allowed, budget) {
-        Step::Limit => return Outcome::Limit,
-        Step::Unbounded => return Outcome::Unbounded,
+        Step::Limit => return (Outcome::Limit, None),
+        Step::Unbounded => return (Outcome::Unbounded, None),
         Step::Optimal => {}
     }
     let mut y = vec![0.0; width];
@@ -1068,7 +1369,8 @@ fn solve_lp(c: &[f64], rows: &[(Vec<f64>, Sense, f64)], lo: &[f64], hi: &[f64], 
         }
     }
     let val: f64 = c.iter().zip(&x).map(|(a, b)| a * b).sum();
-    Outcome::Solved(x, val, true)
+    let tableau = Tableau { t, basis, obj, width, first_art: ny + n_slack, cols, ident, flipped };
+    (Outcome::Solved(x, val, true), Some(tableau))
 }
 
 /// Linearises the model at `x0` (n + 1 evaluations) and checks it at one more point. Returns the
@@ -1552,6 +1854,22 @@ fn evolutionary(ev: &mut Evaluator, x0: &[f64], lo: &[f64], hi: &[f64], integer:
     }
 }
 
+/// The LP to minimise for `goal`, from the linearised model: the costs, and the rows
+/// (coefficients, sense, right side) in the order of `model_rows`.
+#[allow(clippy::type_complexity)]
+fn linear_program(goal: Goal, cf: &[f64], f_const: f64, lin: &[(Vec<f64>, f64)], model_rows: &[Row]) -> (Vec<f64>, Vec<(Vec<f64>, Sense, f64)>) {
+    let mut rows: Vec<(Vec<f64>, Sense, f64)> = lin.iter().zip(model_rows).map(|((a, k), r)| (a.clone(), r.sense, -k)).collect();
+    let c = match goal {
+        Goal::Max => cf.iter().map(|v| -v).collect(),
+        Goal::Min => cf.to_vec(),
+        Goal::Value(v) => {
+            rows.push((cf.to_vec(), Sense::Eq, v - f_const));
+            vec![0.0; cf.len()]
+        }
+    };
+    (c, rows)
+}
+
 /// What a solve ended with, and why Simplex LP or Evolutionary stopped.
 struct Solve {
     outcome: Outcome,
@@ -1576,15 +1894,7 @@ fn optimise(ev: &mut Evaluator, m: &Model, goal: Goal, x0: &[f64], lo: &[f64], h
                 }
                 Err(_) => Outcome::Limit,
                 Ok(((cf, f_const), lin)) => {
-                    let mut rows: Vec<(Vec<f64>, Sense, f64)> = lin.iter().zip(&ev.rows).map(|((a, k), r)| (a.clone(), r.sense, -k)).collect();
-                    let c: Vec<f64> = match goal {
-                        Goal::Max => cf.iter().map(|v| -v).collect(),
-                        Goal::Min => cf.clone(),
-                        Goal::Value(v) => {
-                            rows.push((cf.clone(), Sense::Eq, v - f_const));
-                            vec![0.0; cf.len()]
-                        }
-                    };
+                    let (c, rows) = linear_program(goal, &cf, f_const, &lin, &ev.rows);
                     let size = (rows.len() as u64 + 2 * x0.len() as u64 + 1) * (4 * x0.len() as u64 + 2 * rows.len() as u64 + 1);
                     let mut work = LP_WORK.max(size);
                     let mut relax = |l: &[f64], h: &[f64]| solve_lp(&c, &rows, l, h, &mut work);
@@ -1618,6 +1928,7 @@ fn optimise(ev: &mut Evaluator, m: &Model, goal: Goal, x0: &[f64], lo: &[f64], h
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum ReportKind {
     Answer,
+    Sensitivity,
     Limits,
 }
 
@@ -1625,6 +1936,7 @@ impl ReportKind {
     fn title(self) -> &'static str {
         match self {
             ReportKind::Answer => "Answer",
+            ReportKind::Sensitivity => "Sensitivity",
             ReportKind::Limits => "Limits",
         }
     }
@@ -1633,13 +1945,14 @@ impl ReportKind {
 /// The `reports` list (`None` when absent).
 fn report_kinds(cmd: &'static str, p: &Json) -> Result<Option<Vec<ReportKind>>> {
     let Some(list) = p.get("reports") else { return Ok(None) };
-    let list = list.as_array().ok_or_else(|| bad(cmd, "`reports` must be an array of answer and limits"))?;
+    let list = list.as_array().ok_or_else(|| bad(cmd, "`reports` must be an array of answer, sensitivity and limits"))?;
     let mut kinds = Vec::new();
     for k in list {
         let kind = match k.as_str().map(|t| t.trim().to_ascii_lowercase()).as_deref() {
             Some("answer") => ReportKind::Answer,
+            Some("sensitivity") => ReportKind::Sensitivity,
             Some("limits") => ReportKind::Limits,
-            _ => return Err(bad(cmd, format!("unknown report {k} (answer or limits)"))),
+            _ => return Err(bad(cmd, format!("unknown report {k} (answer, sensitivity or limits)"))),
         };
         if !kinds.contains(&kind) {
             kinds.push(kind);
@@ -1863,6 +2176,319 @@ fn limits_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Result<Lines> {
     Ok(out)
 }
 
+/// Excel prints an unlimited allowable change as 1E+30.
+const NO_LIMIT: f64 = 1e30;
+
+/// A sensitivity figure: tiny values (rounding noise) print as 0, unlimited ones as 1E+30.
+fn sens_num(v: f64, scale: f64) -> Value {
+    if !v.is_finite() || v >= NO_LIMIT {
+        Value::number(NO_LIMIT)
+    } else if v.abs() <= 1e-9 * scale.max(1.0) {
+        Value::number(0.0)
+    } else {
+        Value::number(v)
+    }
+}
+
+/// The smallest ratio `num / den` over the `den` above zero (the step to the first bound).
+fn min_ratio(pairs: impl Iterator<Item = (f64, f64)>) -> f64 {
+    pairs.filter(|(_, den)| *den > EPS).map(|(num, den)| num.max(0.0) / den).fold(f64::INFINITY, f64::min)
+}
+
+/// Solves the square system `a·x = b` by Gaussian elimination with partial pivoting; unknowns
+/// of a singular system that have no pivot are 0.
+fn solve_dense(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {
+    let n = b.len();
+    let scale = a.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs())).max(f64::MIN_POSITIVE);
+    let mut pivots: Vec<Option<usize>> = vec![None; n];
+    let mut row = 0;
+    for col in 0..n {
+        let Some(p) = (row..n).max_by(|i, k| {
+            let v = |r: &usize| a.get(*r).and_then(|x| x.get(col)).map_or(0.0, |v| v.abs());
+            v(i).total_cmp(&v(k))
+        }) else {
+            break;
+        };
+        if a.get(p).and_then(|x| x.get(col)).is_none_or(|v| v.abs() <= 1e-12 * scale) {
+            continue;
+        }
+        a.swap(row, p);
+        b.swap(row, p);
+        let (Some(prow), Some(pb)) = (a.get(row).cloned(), b.get(row).copied()) else { break };
+        let pv = prow.get(col).copied().unwrap_or(1.0);
+        for (i, (r, bi)) in a.iter_mut().zip(b.iter_mut()).enumerate() {
+            if i == row {
+                continue;
+            }
+            let f = r.get(col).copied().unwrap_or(0.0) / pv;
+            if f != 0.0 {
+                for (v, p) in r.iter_mut().zip(&prow) {
+                    *v -= f * p;
+                }
+                *bi -= f * pb;
+            }
+        }
+        if let Some(e) = pivots.get_mut(col) {
+            *e = Some(row);
+        }
+        row += 1;
+    }
+    pivots
+        .iter()
+        .enumerate()
+        .map(|(col, p)| match p {
+            Some(r) => b.get(*r).copied().unwrap_or(0.0) / a.get(*r).and_then(|x| x.get(col)).copied().unwrap_or(1.0),
+            None => 0.0,
+        })
+        .collect()
+}
+
+/// The Sensitivity report. Simplex LP: each variable's reduced cost and the range of its
+/// objective coefficient over which the basis stays optimal, and each constraint's shadow price
+/// and the range of its right side over which the shadow price holds, from the final tableau of
+/// the LP linearised at the solution. GRG Nonlinear: the reduced gradients and the Lagrange
+/// multipliers of the binding constraints at the solution, from difference gradients.
+fn sensitivity_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Result<Lines> {
+    let m = inp.model;
+    if inp.prob.integer.iter().any(|b| *b) {
+        return Err(EngineError::Other("The Sensitivity report doesn't apply to models with integer or binary constraints.".into()));
+    }
+    if m.method == Method::Evolutionary {
+        return Err(EngineError::Other("The Sensitivity report is available for Simplex LP and GRG Nonlinear.".into()));
+    }
+    if matches!(m.goal, Goal::Value(_)) {
+        return Err(EngineError::Other("The Sensitivity report needs an objective to maximise or minimise.".into()));
+    }
+    let n = m.vars.len();
+    let x = &inp.solution;
+    let mut ev = Evaluator {
+        trial: Trial::new(d),
+        sheet: m.sheet,
+        vars: m.vars.clone(),
+        objective: m.objective,
+        rows: inp.prob.rows.clone(),
+        evals: 0,
+        budget: inp.budget.max(2 * n as u64 + 2),
+        target: None,
+    };
+    let at = ev.eval(x).ok_or_else(|| EngineError::Other("Solver ran out of evaluations.".into()))?;
+    // The rows' final values and right sides at the solution.
+    let mut cells = Vec::new();
+    for r in &inp.prob.rows {
+        cells.push(r.lhs);
+        cells.extend(r.rhs);
+    }
+    let mut trial = Trial::new(d);
+    let sets: Vec<(usize, CellRef, Value)> = m.vars.iter().zip(x).map(|(c, v)| (m.sheet, *c, Value::number(*v))).collect();
+    let reads: Vec<(usize, CellRef)> = cells.iter().map(|c| (m.sheet, *c)).collect();
+    let mut vals = trial.run(&sets, &reads).into_iter().map(|v| as_num(&v));
+    let finals: Vec<(f64, f64)> = inp
+        .prob
+        .rows
+        .iter()
+        .map(|r| {
+            let l = vals.next().unwrap_or(f64::NAN);
+            (l, if r.rhs.is_some() { vals.next().unwrap_or(f64::NAN) } else { r.rhs_const })
+        })
+        .collect();
+    let num = |v: f64| if v.is_finite() { Value::number(v) } else { Value::Error(gridcraft_core::CellError::Value) };
+    let var_head = |j: usize, c: &CellRef| vec![Value::text(abs_ref(*c)), Value::text(cell_name(sh, *c)), num(x.get(j).copied().unwrap_or(f64::NAN))];
+    let row_head = |i: usize, r: &Row| {
+        let fin = finals.get(i).map_or(f64::NAN, |f| f.0);
+        vec![Value::text(abs_ref(r.lhs)), Value::text(cell_name(sh, r.lhs)), num(fin)]
+    };
+    let scale = at.f.abs().max(1.0);
+    let (var_rows, con_rows, var_headers, con_headers): (Vec<Vec<Value>>, Vec<Vec<Value>>, Vec<&str>, Vec<&str>) = if m.method == Method::Simplex {
+        let ((cf, f_const), lin) = linearize(&mut ev, x).map_err(|e| {
+            EngineError::Other(if e == "budget" {
+                "Solver ran out of evaluations.".into()
+            } else {
+                "The model isn't linear in the variable cells, so Simplex LP can't report its sensitivity.".into()
+            })
+        })?;
+        let (c, rows) = linear_program(m.goal, &cf, f_const, &lin, &ev.rows);
+        let mut work = LP_WORK;
+        let (_, tab) = solve_lp_tableau(&c, &rows, &inp.prob.lo, &inp.prob.hi, &mut work);
+        let tab = tab.ok_or_else(|| EngineError::Other("Solver could not find an optimal basis for the Sensitivity report.".into()))?;
+        // Minimising `sign · objective`.
+        let sign = if m.goal == Goal::Max { -1.0 } else { 1.0 };
+        let entry = |r: usize, col: usize| tab.t.get(r).and_then(|row| row.get(col)).copied().unwrap_or(0.0);
+        let rhs = |r: usize| entry(r, tab.width);
+        let real_basic = |r: usize| tab.basis.get(r).is_some_and(|b| *b < tab.first_art);
+        // Shadow prices: the duals of the minimisation, in the objective's direction.
+        let shadow: Vec<f64> = (0..rows.len())
+            .map(|i| {
+                let col = tab.ident.get(i).copied().unwrap_or(usize::MAX);
+                let flip = if tab.flipped.get(i).copied().unwrap_or(false) { -1.0 } else { 1.0 };
+                sign * flip * -tab.obj.get(col).copied().unwrap_or(0.0)
+            })
+            .collect();
+        let con_rows = ev
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                // The basic values move along the row's unit column as its right side changes.
+                let col = tab.ident.get(i).copied().unwrap_or(usize::MAX);
+                let flip = if tab.flipped.get(i).copied().unwrap_or(false) { -1.0 } else { 1.0 };
+                let dir: Vec<(f64, f64)> = (0..tab.t.len()).filter(|r| real_basic(*r)).map(|r| (rhs(r), flip * entry(r, col))).collect();
+                let increase = min_ratio(dir.iter().map(|(v, d)| (*v, -d)));
+                let decrease = min_ratio(dir.iter().map(|(v, d)| (*v, *d)));
+                let b = finals.get(i).map_or(f64::NAN, |f| f.1);
+                let mut row = row_head(i, r);
+                row.extend([sens_num(shadow.get(i).copied().unwrap_or(0.0), scale), num(b), sens_num(increase, 1.0), sens_num(decrease, 1.0)]);
+                row
+            })
+            .collect();
+        let nonbasic: Vec<usize> = (0..tab.first_art).filter(|l| !tab.basis.contains(l)).collect();
+        let var_rows = m
+            .vars
+            .iter()
+            .enumerate()
+            .map(|(j, c)| {
+                let coef = cf.get(j).copied().unwrap_or(0.0);
+                let used: f64 = rows.iter().zip(&shadow).map(|((a, _, _), p)| a.get(j).copied().unwrap_or(0.0) * p).sum();
+                // A change Δ in the coefficient changes each nonbasic reduced cost by Δ·e.
+                let own = |col: usize| tab.cols.get(col).filter(|mp| mp.var == j).map_or(0.0, |mp| mp.sign);
+                let moves: Vec<(f64, f64)> = nonbasic
+                    .iter()
+                    .map(|&l| {
+                        let through_basis: f64 = (0..tab.t.len()).map(|r| tab.basis.get(r).map_or(0.0, |b| own(*b)) * entry(r, l)).sum();
+                        (tab.obj.get(l).copied().unwrap_or(0.0), sign * (own(l) - through_basis))
+                    })
+                    .collect();
+                let increase = min_ratio(moves.iter().map(|(d, e)| (*d, -e)));
+                let decrease = min_ratio(moves.iter().map(|(d, e)| (*d, *e)));
+                let mut row = var_head(j, c);
+                row.extend([sens_num(coef - used, scale), num(coef), sens_num(increase, 1.0), sens_num(decrease, 1.0)]);
+                row
+            })
+            .collect();
+        (
+            var_rows,
+            con_rows,
+            vec!["Cell", "Name", "Final Value", "Reduced Cost", "Objective Coefficient", "Allowable Increase", "Allowable Decrease"],
+            vec!["Cell", "Name", "Final Value", "Shadow Price", "Constraint R.H. Side", "Allowable Increase", "Allowable Decrease"],
+        )
+    } else {
+        // Gradients of the objective and of each row's `lhs − rhs`, inside the bounds.
+        let mut df = vec![0.0; n];
+        let mut dg = vec![vec![0.0; n]; ev.rows.len()];
+        for j in 0..n {
+            let xj = x.get(j).copied().unwrap_or(0.0);
+            let (l, u) = (inp.prob.lo.get(j).copied().unwrap_or(f64::NEG_INFINITY), inp.prob.hi.get(j).copied().unwrap_or(f64::INFINITY));
+            let h = 1e-6 * xj.abs().max(1.0);
+            let (a, b) = ((xj - h).max(l), (xj + h).min(u));
+            if b <= a {
+                continue;
+            }
+            let point = |ev: &mut Evaluator, v: f64| {
+                let mut p = x.clone();
+                if let Some(e) = p.get_mut(j) {
+                    *e = v;
+                }
+                ev.eval(&p).ok_or_else(|| EngineError::Other("Solver ran out of evaluations.".into()))
+            };
+            let (pa, pb) = (point(&mut ev, a)?, point(&mut ev, b)?);
+            if let Some(e) = df.get_mut(j) {
+                *e = (pb.f - pa.f) / (b - a);
+            }
+            for (row, (ga, gb)) in dg.iter_mut().zip(pa.g.iter().zip(&pb.g)) {
+                if let Some(e) = row.get_mut(j) {
+                    *e = (gb - ga) / (b - a);
+                }
+            }
+        }
+        // Binding rows (within the nonlinear method's accuracy) and the variables strictly
+        // inside their bounds.
+        let mut active: Vec<usize> = ev
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| {
+                let (g, b) = (at.g.get(*i).copied().unwrap_or(f64::NAN), finals.get(*i).map_or(0.0, |f| f.1));
+                r.sense == Sense::Eq || g.abs() <= 1e-4 * (1.0 + b.abs())
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let free: Vec<usize> = (0..n)
+            .filter(|&j| {
+                let v = x.get(j).copied().unwrap_or(0.0);
+                let tol = 1e-6 * v.abs().max(1.0);
+                v > inp.prob.lo.get(j).copied().unwrap_or(f64::NEG_INFINITY) + tol && v < inp.prob.hi.get(j).copied().unwrap_or(f64::INFINITY) - tol
+            })
+            .collect();
+        // Least squares on the free variables: ∇f = Σ λᵢ ∇gᵢ. An inequality's multiplier has the
+        // sign that tightening it costs (λ ≥ 0 for `lhs ≤ rhs` when maximising); a row whose
+        // multiplier has the other sign isn't binding, so it leaves and the rest are solved again.
+        let grad = |i: usize, j: usize| dg.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
+        let goal_sign = if m.goal == Goal::Max { 1.0 } else { -1.0 };
+        let mut lambda = vec![0.0; ev.rows.len()];
+        while !active.is_empty() {
+            let normal: Vec<Vec<f64>> =
+                active.iter().map(|&i| active.iter().map(|&k| free.iter().map(|&j| grad(i, j) * grad(k, j)).sum()).collect()).collect();
+            let rhs: Vec<f64> = active.iter().map(|&i| free.iter().map(|&j| grad(i, j) * df.get(j).copied().unwrap_or(0.0)).sum()).collect();
+            let solved = solve_dense(normal, rhs);
+            let wrong = active
+                .iter()
+                .zip(&solved)
+                .enumerate()
+                .filter_map(|(k, (&i, l))| {
+                    let sense = ev.rows.get(i).map_or(Sense::Eq, |r| r.sense);
+                    let want = match sense {
+                        Sense::Le => goal_sign,
+                        Sense::Ge => -goal_sign,
+                        Sense::Eq => return None,
+                    };
+                    (want * l < -1e-6 * scale).then_some((k, want * l))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            match wrong {
+                Some((k, _)) => {
+                    active.remove(k);
+                }
+                None => {
+                    for (i, l) in active.iter().zip(solved) {
+                        if let Some(e) = lambda.get_mut(*i) {
+                            *e = l;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        let var_rows = m
+            .vars
+            .iter()
+            .enumerate()
+            .map(|(j, c)| {
+                let used: f64 = lambda.iter().enumerate().map(|(i, l)| l * grad(i, j)).sum();
+                let mut row = var_head(j, c);
+                row.push(sens_num(df.get(j).copied().unwrap_or(0.0) - used, scale * 1e3));
+                row
+            })
+            .collect();
+        let con_rows = ev
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let mut row = row_head(i, r);
+                row.push(sens_num(lambda.get(i).copied().unwrap_or(0.0), scale * 1e3));
+                row
+            })
+            .collect();
+        (var_rows, con_rows, vec!["Cell", "Name", "Final Value", "Reduced Gradient"], vec!["Cell", "Name", "Final Value", "Lagrange Multiplier"])
+    };
+    let mut out = Lines::new();
+    let r = title(&mut out, ReportKind::Sensitivity, &sh.name);
+    out.push((r, 0, Value::text("Variable Cells"), true));
+    let r = table(&mut out, r + 1, &var_headers, var_rows);
+    out.push((r, 0, Value::text("Constraints"), true));
+    table(&mut out, r + 1, &con_headers, con_rows);
+    Ok(out)
+}
+
 /// Writes the reports on new sheets ("Answer Report 1"…) before the model's sheet, in one step;
 /// the model's sheet stays active. Returns the new sheets' names.
 fn write_reports(s: &mut Session, kinds: &[ReportKind], inp: &ReportInput) -> Result<Vec<String>> {
@@ -1878,6 +2504,7 @@ fn write_reports(s: &mut Session, kinds: &[ReportKind], inp: &ReportInput) -> Re
     for k in kinds {
         let lines = match k {
             ReportKind::Answer => answer_report(d, sh, inp),
+            ReportKind::Sensitivity => sensitivity_report(d, sh, inp)?,
             ReportKind::Limits => limits_report(d, sh, inp)?,
         };
         let name = (1..=10_000u32)
@@ -1897,7 +2524,7 @@ fn write_reports(s: &mut Session, kinds: &[ReportKind], inp: &ReportInput) -> Re
                 let style = if b { bold } else { gridcraft_model::StyleId::DEFAULT };
                 sheet.set_cell(CellRef::new(r, c), Cell { value: v, formula: None, style });
             }
-            for (c, w) in [(0u32, 14.0f32), (1, 110.0), (2, 140.0), (3, 120.0), (4, 120.0), (5, 120.0), (6, 120.0), (7, 120.0)] {
+            for (c, w) in [(0u32, 14.0f32), (1, 110.0), (2, 140.0), (3, 120.0), (4, 120.0), (5, 155.0), (6, 140.0), (7, 140.0)] {
                 sheet.cols.insert(c, gridcraft_model::LineInfo { size: Some(w), ..Default::default() });
             }
             cx.wb.sheets.insert(at + i, std::sync::Arc::new(sheet));
@@ -1925,9 +2552,9 @@ fn write_reports(s: &mut Session, kinds: &[ReportKind], inp: &ReportInput) -> Re
 
 /// `data.solverReport`: reports for a solution of the sheet's saved model.
 fn report(s: &mut Session, p: &Json) -> Result<Json> {
-    let kinds = report_kinds(REPORT_CMD, p)?.ok_or_else(|| bad(REPORT_CMD, "missing `reports` (answer, limits)"))?;
+    let kinds = report_kinds(REPORT_CMD, p)?.ok_or_else(|| bad(REPORT_CMD, "missing `reports` (answer, sensitivity, limits)"))?;
     if kinds.is_empty() {
-        return Err(bad(REPORT_CMD, "`reports` is empty (answer, limits)"));
+        return Err(bad(REPORT_CMD, "`reports` is empty (answer, sensitivity, limits)"));
     }
     let d = s.doc()?;
     // The given model as is, else the saved model with any params given here over it.
@@ -1966,11 +2593,7 @@ fn report(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let solution = point("values")?;
     let original = if p.get("original").is_some() { point("original")? } else { solution.clone() };
-    let budget = params
-        .get("maxEvaluations")
-        .and_then(Json::as_f64)
-        .filter(|v| v.is_finite() && *v >= 1.0)
-        .map_or(DEFAULT_EVALS, |v| (v as u64).min(MAX_EVALS));
+    let budget = model.max_evals;
     let message = str_param(p, "message").unwrap_or("").chars().take(500).collect();
     let inp = ReportInput { model: &model, prob: &prob, original, solution, message, budget };
     let sheets = write_reports(s, &kinds, &inp)?;
@@ -2000,12 +2623,7 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
         return Ok(json!({"model": model}));
     }
     let model = parse_model(s, &params)?;
-    let budget = params
-        .get("maxEvaluations")
-        .and_then(Json::as_f64)
-        .filter(|v| v.is_finite() && *v >= 1.0)
-        .map_or(DEFAULT_EVALS, |v| (v as u64).min(MAX_EVALS));
-    let gap = params.get("integerOptimality").and_then(Json::as_f64).filter(|v| v.is_finite()).map_or(0.0, |v| v.clamp(0.0, 100.0) / 100.0);
+    let (budget, gap) = (model.max_evals, model.gap);
     let keep = bool_param(&params, "keep").unwrap_or(true);
     let save = bool_param(&params, "saveModel").unwrap_or(true);
     let reports = report_kinds(CMD, &params)?;
@@ -2388,6 +3006,212 @@ mod tests {
         assert_eq!(s.execute("data.solverReport", p).unwrap()["sheets"], json!(["Answer Report 1"]));
         let r = row_of(&s, "Answer Report 1", "$B$2") + 1;
         assert_eq!(at(&s, "Answer Report 1", &format!("E{r}")), Value::number(2.0));
+    }
+
+    /// The numbers from column D on in the row below the one holding `text` on report `name`.
+    fn report_row(s: &Session, name: &str, text: &str, cols: &[&str]) -> Vec<f64> {
+        let r = row_of(s, name, text) + 1;
+        cols.iter().map(|c| at(s, name, &format!("{c}{r}")).as_f64().unwrap()).collect()
+    }
+
+    fn close(got: &[f64], want: &[f64], tol: f64) -> bool {
+        got.len() == want.len() && got.iter().zip(want).all(|(g, w)| (g - w).abs() <= tol * (1.0 + w.abs()))
+    }
+
+    #[test]
+    fn sensitivity_report_gives_the_wyndor_glass_shadow_prices_and_ranges() {
+        // Hillier & Lieberman's Wyndor Glass sensitivity analysis: shadow prices 0, 1.5 and 1
+        // for the three plants; plant 1's hours may fall by 2 and rise without limit, plants 2's
+        // and 3's by 6 either way; the doors' profit 3 may range over 0..7.5, the windows' 5 over
+        // 2 and up.
+        let mut s = s();
+        s.execute(
+            "range.setValues",
+            json!({"range": "A1", "values": [[null, "Doors", "Windows", "Used", "Available"], ["Batches", 0, 0, null, null], ["Plant 1", 1, 0, null, 4], ["Plant 2", 0, 2, null, 12], ["Plant 3", 3, 2, null, 18], ["Profit", 3, 5, null, null]]}),
+        )
+        .unwrap();
+        for r in 3..=6 {
+            set(&mut s, &[(&format!("D{r}"), &format!("=SUMPRODUCT(B{r}:C{r},$B$2:$C$2)"))]);
+        }
+        let solved = s
+            .execute(
+                "data.solver",
+                json!({"objective": "D6", "variables": "B2:C2", "constraints": ["D3:D5 <= E3:E5"], "method": "simplex", "reports": ["sensitivity"]}),
+            )
+            .unwrap();
+        assert_eq!(solved["reports"], json!(["Sensitivity Report 1"]), "{solved}");
+        let rep = "Sensitivity Report 1";
+        assert_eq!(at(&s, rep, "A1"), Value::text("GridCraft Sensitivity Report"));
+        let r = row_of(&s, rep, "Reduced Cost");
+        assert_eq!(at(&s, rep, &format!("F{}", r + 1)), Value::text("Objective Coefficient"));
+        let cols = ["D", "E", "F", "G", "H"];
+        // Final value, reduced cost, objective coefficient, allowable increase and decrease.
+        assert!(close(&report_row(&s, rep, "$B$2", &cols)[1..], &[0.0, 3.0, 4.5, 3.0], 1e-9));
+        assert!(close(&report_row(&s, rep, "$C$2", &cols), &[6.0, 0.0, 5.0, 1e30, 3.0], 1e-9));
+        // Final value, shadow price, right side, allowable increase and decrease.
+        assert!(close(&report_row(&s, rep, "$D$3", &cols), &[2.0, 0.0, 4.0, 1e30, 2.0], 1e-9));
+        assert!(close(&report_row(&s, rep, "$D$4", &cols), &[12.0, 1.5, 12.0, 6.0, 6.0], 1e-9));
+        assert!(close(&report_row(&s, rep, "$D$5", &cols), &[18.0, 1.0, 18.0, 6.0, 6.0], 1e-9));
+        // A minimisation with `>=` rows: min 2x + 3y, x + y ≥ 4, x + 3y ≥ 6 → (3, 1), cost 9.
+        // The duals 1.5 and 0.5 solve u + v = 2, u + 3v = 3; the basis holds for 2 ≤ b₁ ≤ 6,
+        // 4 ≤ b₂ ≤ 12, 1 ≤ c₁ ≤ 3 and 2 ≤ c₂ ≤ 6.
+        set(&mut s, &[("H1", "0"), ("H2", "0"), ("I1", "=2*H1+3*H2"), ("I2", "=H1+H2"), ("I3", "=H1+3*H2")]);
+        let r = s
+            .execute(
+                "data.solver",
+                json!({"objective": "I1", "goal": "min", "variables": "H1:H2", "constraints": ["I2 >= 4", "I3 >= 6"], "method": "simplex", "reports": ["sensitivity"]}),
+            )
+            .unwrap();
+        let rep = r["reports"][0].as_str().unwrap().to_string();
+        assert!(close(&report_row(&s, &rep, "$H$1", &cols), &[3.0, 0.0, 2.0, 1.0, 1.0], 1e-9), "{r}");
+        assert!(close(&report_row(&s, &rep, "$H$2", &cols), &[1.0, 0.0, 3.0, 3.0, 1.0], 1e-9));
+        assert!(close(&report_row(&s, &rep, "$I$2", &cols), &[4.0, 1.5, 4.0, 2.0, 2.0], 1e-9));
+        assert!(close(&report_row(&s, &rep, "$I$3", &cols), &[6.0, 0.5, 6.0, 6.0, 2.0], 1e-9));
+        // A variable held at zero has a reduced cost: min 2x + 3y with x + y ≥ 4 alone uses
+        // only x; y would add 3 − 2 = 1 per unit.
+        let r = s
+            .execute(
+                "data.solver",
+                json!({"objective": "I1", "goal": "min", "variables": "H1:H2", "constraints": ["I2 >= 4"], "method": "simplex", "reports": ["sensitivity"]}),
+            )
+            .unwrap();
+        let rep = r["reports"][0].as_str().unwrap().to_string();
+        assert!(close(&report_row(&s, &rep, "$H$2", &cols), &[0.0, 1.0, 3.0, 1e30, 1.0], 1e-9), "{r}");
+        // Integer models, the Evolutionary method and Value Of goals have no Sensitivity report.
+        s.execute("data.solver", json!({"objective": "D6", "variables": "B2:C2", "constraints": ["D3:D5 <= E3:E5"], "method": "simplex"})).unwrap();
+        for p in [
+            json!({"reports": ["sensitivity"], "constraints": ["D3:D5 <= E3:E5", "B2:C2 int"]}),
+            json!({"reports": ["sensitivity"], "method": "evolutionary", "constraints": ["D3:D5 <= E3:E5", "B2:C2 <= 10"]}),
+            json!({"reports": ["sensitivity"], "goal": "value", "value": 30}),
+        ] {
+            assert!(s.execute("data.solverReport", p.clone()).is_err(), "{p}");
+        }
+    }
+
+    #[test]
+    fn sensitivity_report_of_a_nonlinear_model_gives_lagrange_multipliers() {
+        // The largest rectangle with perimeter at most 20: the area (P/4)² grows by P/8 = 2.5 per
+        // unit of perimeter, and both reduced gradients are 0.
+        let mut s = s();
+        set(&mut s, &[("A1", "1"), ("A2", "1"), ("B1", "=A1*A2"), ("B2", "=2*A1+2*A2")]);
+        let r = s
+            .execute("data.solver", json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 20"], "reports": ["sensitivity"]}))
+            .unwrap();
+        let rep = "Sensitivity Report 1";
+        assert_eq!(r["reports"], json!([rep]), "{r}");
+        assert_eq!(at(&s, rep, &format!("E{}", row_of(&s, rep, "$A$1"))), Value::text("Reduced Gradient"));
+        assert!(close(&report_row(&s, rep, "$A$1", &["D", "E"]), &[5.0, 0.0], 1e-4));
+        assert!(close(&report_row(&s, rep, "$B$2", &["D", "E"]), &[20.0, 2.5], 1e-4));
+        // min (x + 1)² + (y − 2)² with x + y ≤ 1 and x, y ≥ 0: (0, 1). The constraint's
+        // multiplier is −2; x sits at its bound, where raising it costs 2(x + 1) + 2 = 4.
+        set(&mut s, &[("C1", "0.5"), ("C2", "0.5"), ("D1", "=(C1+1)^2+(C2-2)^2"), ("D2", "=C1+C2")]);
+        let r = s
+            .execute(
+                "data.solver",
+                json!({"objective": "D1", "goal": "min", "variables": "C1:C2", "constraints": ["D2 <= 1"], "reports": ["sensitivity"]}),
+            )
+            .unwrap();
+        let rep = r["reports"][0].as_str().unwrap().to_string();
+        assert!(close(&report_row(&s, &rep, "$C$1", &["D", "E"]), &[0.0, 4.0], 1e-4), "{r}");
+        assert!(close(&report_row(&s, &rep, "$C$2", &["D", "E"]), &[1.0, 0.0], 1e-4));
+        assert!(close(&report_row(&s, &rep, "$D$2", &["D", "E"]), &[1.0, -2.0], 1e-4));
+    }
+
+    fn formula(s: &Session, a1: &str) -> String {
+        let d = s.doc().unwrap();
+        d.wb.active().unwrap().cell(CellRef::parse(a1).unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap_or_default()
+    }
+
+    #[test]
+    fn save_and_load_model_round_trip_through_cells() {
+        let mut s = s();
+        set(&mut s, &[("B1", "=5*A1+4*A2"), ("B2", "=6*A1+4*A2"), ("B3", "=A1+2*A2"), ("C2", "24")]);
+        let model = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= C2", "B3 <= 6", "A1:A2 int", "A2 bin", "A1 >= 1"], "method": "simplex"});
+        s.execute("data.solver", model.clone()).unwrap();
+        let out = s.execute("data.solverSaveModel", json!({"to": "H1"})).unwrap();
+        assert_eq!(out["range"], "H1:H8");
+        let rows: Vec<String> = (1..=8).map(|r| formula(&s, &format!("H{r}"))).collect();
+        assert_eq!(
+            rows,
+            [
+                "MAX($B$1)",
+                "COUNT($A$1:$A$2)",
+                "AND($B$2<=$C$2)",
+                "AND($B$3<=6)",
+                "AND($A$1:$A$2=INT($A$1:$A$2))",
+                "AND(($A$2=0)+($A$2=1))",
+                "AND($A$1>=1)",
+                "{2,1,100,0.075,0,1,0.0001,50,20000,0}",
+            ]
+        );
+        // The constraint cells show whether each constraint holds at the solution (4, 0).
+        assert_eq!(at(&s, "Sheet1", "H3"), Value::Bool(true));
+        assert_eq!(at(&s, "Sheet1", "H2"), Value::number(2.0));
+        // Reset All removes the model; Load Model restores it from the range or its first cell.
+        assert_eq!(s.execute("data.solverReset", json!({})).unwrap()["removed"].as_u64().map(|n| n > 0), Some(true));
+        assert!(s.execute("data.solver", json!({})).unwrap()["model"].is_null());
+        assert_eq!(s.execute("data.solverReset", json!({})).unwrap()["removed"], 0);
+        for from in ["H1:H8", "H1"] {
+            let loaded = s.execute("data.solverLoadModel", json!({"from": from})).unwrap();
+            assert_eq!(loaded["model"]["objective"], "B1", "{loaded}");
+            assert_eq!(loaded["model"]["constraints"], json!(["B2 <= C2", "B3 <= 6", "A1:A2 int", "A2 bin", "A1 >= 1"]));
+            assert_eq!(loaded["model"]["method"], "simplex");
+        }
+        set(&mut s, &[("A1", "0"), ("A2", "0")]);
+        let r = s.execute("data.solver", json!({"saved": true})).unwrap();
+        assert_eq!((r["status"].as_str(), n(&s, "A1"), n(&s, "A2")), (Some("optimal"), 4.0, 0.0), "{r}");
+        // A Value Of goal and the Evolutionary options survive too; an explicit model is saved
+        // as given.
+        let evo = json!({"objective": "B1", "goal": "value", "value": -2.5, "variables": "A1:A2", "constraints": ["A1:A2 <= 10"], "nonNegative": false, "method": "evolutionary", "populationSize": 40, "randomSeed": 3, "requireBounds": false});
+        assert_eq!(s.execute("data.solverSaveModel", json!({"to": "J5", "model": evo})).unwrap()["range"], "J5:J8");
+        assert_eq!(formula(&s, "J5"), "$B$1=-2.5");
+        let m = s.execute("data.solverLoadModel", json!({"from": "J5:J8"})).unwrap()["model"].clone();
+        assert_eq!((m["goal"].as_str(), m["value"].as_f64(), m["nonNegative"].as_bool()), (Some("value"), Some(-2.5), Some(false)), "{m}");
+        assert_eq!((m["method"].as_str(), m["populationSize"].as_f64(), m["randomSeed"].as_f64()), (Some("evolutionary"), Some(40.0), Some(3.0)));
+        assert_eq!(m["requireBounds"], false);
+        // Each command is one undo step.
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.execute("data.solver", json!({})).unwrap()["model"]["method"], "simplex");
+        // Refused: no model or no target, overlapping the model, off the sheet, ranges that
+        // hold no model, other sheets and oversized ranges.
+        set(&mut s, &[("L1", "=1+1"), ("L2", "=SUM(A1:A2)")]);
+        for (cmd, p) in [
+            ("data.solverSaveModel", json!({})),
+            ("data.solverSaveModel", json!({"to": "A1"})),
+            ("data.solverSaveModel", json!({"to": "B3"})),
+            ("data.solverSaveModel", json!({"to": "A1048575"})),
+            ("data.solverSaveModel", json!({"to": "H1", "model": {"objective": "B1", "variables": "A1,A2", "constraints": ["A1,A2 <= 3"]}})),
+            ("data.solverSaveModel", json!({"to": "H1", "model": "B1"})),
+            ("data.solverLoadModel", json!({})),
+            ("data.solverLoadModel", json!({"from": "L1:L2"})),
+            ("data.solverLoadModel", json!({"from": "Z1"})),
+            ("data.solverLoadModel", json!({"from": "H2:H8"})),
+            ("data.solverLoadModel", json!({"from": "H1:H1048576"})),
+            ("data.solverLoadModel", json!({"from": "Nope!H1"})),
+        ] {
+            assert!(s.execute(cmd, p.clone()).is_err(), "{cmd} {p}");
+        }
+        s.execute("data.solverReset", json!({})).unwrap();
+        assert!(s.execute("data.solverSaveModel", json!({"to": "H1"})).is_err(), "no model to save");
+    }
+
+    #[test]
+    fn solver_options_are_saved_with_the_model() {
+        let mut s = s();
+        set(&mut s, &[("B1", "=10*A1+13*A2"), ("B2", "=5*A1+6*A2")]);
+        let p = json!({"objective": "B1", "variables": "A1:A2", "constraints": ["B2 <= 10", "A1:A2 bin"], "method": "evolutionary", "maxEvaluations": "3000", "integerOptimality": 5, "convergence": 0.001, "generationsWithoutImprovement": 20, "mutationRate": "0.1"});
+        let r = s.execute("data.solver", p).unwrap();
+        assert!(r["evaluations"].as_u64().unwrap() <= 3001, "{r}");
+        // The options survive XLSX in the hidden names, as given or as text.
+        let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": "o.xlsx", "base64": b64})).unwrap();
+        let m = s.execute("data.solver", json!({})).unwrap()["model"].clone();
+        let f = |k: &str| m[k].as_f64();
+        assert_eq!((f("maxEvaluations"), f("integerOptimality"), f("convergence")), (Some(3000.0), Some(5.0), Some(0.001)), "{m}");
+        assert_eq!((f("generationsWithoutImprovement"), f("mutationRate")), (Some(20.0), Some(0.1)));
+        // Out-of-range options are clamped, not refused.
+        let r = s.execute("data.solver", json!({"saved": true, "maxEvaluations": "1e300", "integerOptimality": -4})).unwrap();
+        assert_eq!((r["model"]["maxEvaluations"].as_f64(), r["model"]["integerOptimality"].as_f64()), (Some(200_000.0), Some(0.0)));
     }
 
     #[test]
