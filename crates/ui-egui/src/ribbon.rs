@@ -166,7 +166,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let collapsed = app.ui.ribbon_collapsed;
     let h = if collapsed { 34.0 } else { 34.0 + 92.0 };
-    egui::Panel::top("ribbon")
+    let ribbon = egui::Panel::top("ribbon")
         .exact_size(h)
         .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: 6 }))
         .show(ui, |ui| {
@@ -252,6 +252,105 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 });
             });
         });
+    wheel_switches_tab(app, ui, ribbon.response.rect);
+}
+
+/// The mouse wheel over the tab row or the ribbon card switches tabs, as in Excel (#897): down for
+/// the next tab, up for the previous one, stopping at the ends. It runs after the ribbon has drawn,
+/// so a scroll area inside it (the overflow scroll on a narrow window) that took the wheel keeps it.
+/// A notched wheel moves one tab per notch, whatever the size of its delta: macOS scales a notch by
+/// how fast the wheel turns, from a tenth of a line to several. Trackpad deltas add up until half a
+/// notch, and the switch then spends a whole one, so a long swipe doesn't race through the tabs.
+fn wheel_switches_tab(app: &mut SheetApp, ui: &mut Ui, ribbon: Rect) {
+    let acc_id = egui::Id::new("ribbon_wheel_tabs");
+    let notched_id = acc_id.with("notched");
+    let gesture_id = acc_id.with("gesture");
+    let over = ui.rect_contains_pointer(ribbon) && !egui::Popup::is_any_open(ui.ctx());
+    // A trackpad gesture is followed wherever the pointer is, so one that began elsewhere is known.
+    let mut in_gesture = ui.data(|d| d.get_temp::<bool>(gesture_id)).unwrap_or(false);
+    let (delta, scrolling, wheel) = ui.input(|i| (i.smooth_scroll_delta, i.is_scrolling(), wheel_events(i, &mut in_gesture)));
+    ui.data_mut(|d| d.insert_temp(gesture_id, in_gesture));
+    let notch = ui.ctx().options(|o| o.input_options.line_scroll_speed).max(1.0);
+    if !over || !scrolling || delta.x.abs() > delta.y.abs() {
+        ui.data_mut(|d| {
+            d.remove::<f32>(acc_id);
+            d.remove::<bool>(notched_id);
+        });
+        return;
+    }
+    // The smoothed tail of a notch arrives over the next frames; it belongs to the notch that was
+    // already counted.
+    let notched = match wheel {
+        Wheel::Notches(_) => true,
+        Wheel::Swipe => false,
+        Wheel::None => ui.data(|d| d.get_temp::<bool>(notched_id)).unwrap_or(false),
+    };
+    ui.data_mut(|d| d.insert_temp(notched_id, notched));
+    ui.input_mut(|i| i.smooth_scroll_delta.y = 0.0);
+    let step = if notched {
+        ui.data_mut(|d| d.remove::<f32>(acc_id));
+        if let Wheel::Notches(n) = wheel { n } else { 0 }
+    } else {
+        let acc = ui.data(|d| d.get_temp::<f32>(acc_id)).unwrap_or(0.0) + delta.y;
+        let step = if acc < -notch / 2.0 {
+            1
+        } else if acc > notch / 2.0 {
+            -1
+        } else {
+            0
+        };
+        ui.data_mut(|d| d.insert_temp(acc_id, acc + step as f32 * notch));
+        step
+    };
+    if step == 0 {
+        return;
+    }
+    let mut tabs: Vec<&str> = TABS.to_vec();
+    tabs.extend(contextual_tabs(app));
+    let Some(at) = tabs.iter().position(|t| *t == app.ui.ribbon_tab) else { return };
+    let to = at.saturating_add_signed(step).min(tabs.len().saturating_sub(1));
+    if let Some(next) = tabs.get(to) {
+        app.ui.ribbon_tab = next.to_string();
+    }
+}
+
+/// This frame's vertical wheel events.
+enum Wheel {
+    None,
+    /// Tabs to move for the notches of a wheel: positive is down, towards the next tab.
+    Notches(isize),
+    /// Trackpad deltas only.
+    Swipe,
+}
+
+/// Sorts this frame's wheel events into notches and trackpad swipes. A wheel that reports lines or
+/// pages is notched. One that reports points is a trackpad when its events come inside a gesture
+/// (a start phase, then moves, then an end; the momentum after it is a gesture of its own), and a
+/// notched wheel when they come bare: a mouse on macOS reports points, one event per notch, never
+/// with a start. The browser reports no phases, so points there always count as a swipe.
+fn wheel_events(input: &egui::InputState, in_gesture: &mut bool) -> Wheel {
+    let mut wheel = Wheel::None;
+    for event in &input.events {
+        let egui::Event::MouseWheel { unit, delta, phase, modifiers } = event else { continue };
+        let phased = *in_gesture || *phase != egui::TouchPhase::Move;
+        match phase {
+            egui::TouchPhase::Start => *in_gesture = true,
+            egui::TouchPhase::End | egui::TouchPhase::Cancel => *in_gesture = false,
+            egui::TouchPhase::Move => {}
+        }
+        if modifiers.any() || delta.y == 0.0 || delta.x.abs() > delta.y.abs() {
+            continue;
+        }
+        let swipe = *unit == egui::MouseWheelUnit::Point && (phased || cfg!(target_arch = "wasm32"));
+        let down = if delta.y < 0.0 { 1 } else { -1 };
+        wheel = match (swipe, wheel) {
+            (true, Wheel::None) => Wheel::Swipe,
+            (true, seen) => seen,
+            (false, Wheel::Notches(n)) => Wheel::Notches(n.saturating_add(down)),
+            (false, _) => Wheel::Notches(down),
+        };
+    }
+    wheel
 }
 
 /// The File tab opens the Backstage view (New, Open, Info, Save As, Print, Export, Options…), like
