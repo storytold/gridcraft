@@ -1388,19 +1388,31 @@ pub(crate) fn paint_quadrant(
             continue;
         }
         let r = filter_button_rect(geo, sh, c);
-        p.rect_filled(r, 2.0, Color32::from_gray(250));
-        p.rect_stroke(r, 2.0, Stroke::new(1.0, Color32::from_gray(170)), StrokeKind::Inside);
-        crate::icons::paint(p, r.shrink(1.5), if active { crate::icons::Icon::Filter } else { crate::icons::Icon::Chevron }, Color32::from_gray(70));
+        p.rect_filled(r, 0.0, Color32::WHITE);
+        p.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_rgb(166, 172, 179)), StrokeKind::Inside);
+        if active {
+            crate::icons::paint(p, r.shrink(1.5), crate::icons::Icon::Filter, Color32::from_gray(70));
+        } else {
+            // Excel's arrow: a filled triangle about a third of the button wide, centred.
+            let (c, w, h) = (r.center(), r.width() * 0.35 / 2.0, r.height() * 0.19);
+            let tri = vec![pos2(c.x - w, c.y - h / 2.0), pos2(c.x + w, c.y - h / 2.0), pos2(c.x, c.y + h / 2.0)];
+            p.add(egui::Shape::convex_polygon(tri, Color32::from_rgb(91, 92, 94), Stroke::NONE));
+        }
     }
 }
 
 pub fn filter_button_rect(geo: &Geo, sh: &Sheet, c: CellRef) -> Rect {
     let rect = geo.cell_rect(sh, c);
-    // Keep the button within the same header slot that AutoFit reserves.
-    let pad = 2.0 * geo.z;
-    let s = (rect.height() - 4.0).clamp(10.0, 18.0).min((sh.filter_button_space(c) * geo.z - pad).max(0.0));
+    // Excel draws the button 17 px square, 1 px in from the cell's bottom and right edges, and
+    // keeps that size at every zoom; only a row or column too small for it shrinks it.
+    let unit = geo.z / (sh.zoom as f32 / 100.0).max(0.1);
+    let pad = unit;
+    let s = (FILTER_BUTTON_PX * unit).min(rect.height() - 2.0 * pad).min(rect.width() - 2.0 * pad).max(0.0);
     Rect::from_min_size(pos2(rect.right() - s - pad, rect.bottom() - s - pad), vec2(s, s))
 }
+
+/// The AutoFilter button's side in sheet pixels at 100% zoom, as Excel draws it (measured).
+const FILTER_BUTTON_PX: f32 = 17.0;
 
 /// The outline segments of merged area `m` drawn at `rect`: the top and left edges come from the
 /// first row's and first column's cells, the bottom and right edges from the last row's and last
