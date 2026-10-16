@@ -230,6 +230,21 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     {
         return Err(EngineError::Other(m));
     }
+    // Re-entering what a plain value cell already holds changes nothing: keep the workbook, its
+    // clean state and the undo/redo history as they are (like `shape.setText` with the same text).
+    if !array {
+        let mut probe = (*d.wb).clone();
+        let cell = input_to_cell(&input, sheet, at, &mut probe)?;
+        let same = match (&cell, d.wb.sheet(sheet).and_then(|sh| sh.cell(at))) {
+            (Some(new), Some(old)) => new.formula.is_none() && old.formula.is_none() && new == old,
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            let v = d.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
+            return Ok(json!({"cell": at.a1(), "value": v.display()}));
+        }
+    }
     let active_sheet = s.doc()?.wb.active_sheet;
     edit(s, |cx| {
         if array {

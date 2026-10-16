@@ -254,6 +254,25 @@ fn undo_redo() {
 }
 
 #[test]
+fn identical_cell_entry_keeps_history_and_redo() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    let undo_len = s.doc().unwrap().undo.len();
+    let revision = s.doc().unwrap().revision;
+    let wb = s.doc().unwrap().wb.clone();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    // The workbook is the same `Arc`, so a saved workbook stays clean (`is_dirty` compares pointers).
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &wb));
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+    assert_eq!(s.doc().unwrap().redo.len(), 1);
+    assert_eq!(s.doc().unwrap().revision, revision);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(2.0));
+}
+
+#[test]
 fn shape_text_edit_undo_redo_and_noop() {
     let mut s = s();
     let id = s.execute("insert.textBox", json!({"at": "C4", "width": 210, "height": 90, "text": "Original"})).unwrap()["shape"].clone();
