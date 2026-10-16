@@ -68,7 +68,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             if __k.clicked() {
                 app.open_dialog("start", json!({}));
             }
-            if icon_button(ui, Icon::Save, t.text_dim, "Save (⌘S)", vec2(26.0, ch)).clicked()
+            if icon_button(ui, Icon::Save, t.text_dim, "Save", vec2(26.0, ch)).clicked()
                 // File operations must include the cell the user is still editing (as the File > Save menu item already does).
                 && app.commit_edit(0, 0, false, false)
             {
@@ -76,7 +76,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             }
             let can_undo = app.session.active().is_some_and(|d| !d.undo.is_empty());
             let can_redo = app.session.active().is_some_and(|d| !d.redo.is_empty());
-            if icon_button(ui, Icon::Undo, if can_undo { t.text_dim } else { t.text_disabled }, "Undo (⌘Z)", vec2(26.0, ch)).clicked() && can_undo {
+            if icon_button(ui, Icon::Undo, if can_undo { t.text_dim } else { t.text_disabled }, "Undo", vec2(26.0, ch)).clicked() && can_undo {
                 app.run_or_alert("edit.undo", json!({}));
             }
             let undo_list = icon_button(ui, Icon::Chevron, t.text_dim, "Undo list", vec2(14.0, ch));
@@ -92,7 +92,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 }
             });
-            if icon_button(ui, Icon::Redo, if can_redo { t.text_dim } else { t.text_disabled }, "Redo (⌘Y)", vec2(26.0, ch)).clicked() && can_redo {
+            if icon_button(ui, Icon::Redo, if can_redo { t.text_dim } else { t.text_disabled }, "Redo", vec2(26.0, ch)).clicked() && can_redo {
                 app.run_or_alert("edit.redo", json!({}));
             }
             let more = icon_button(ui, Icon::More, t.text_dim, "More commands", vec2(26.0, ch));
@@ -124,7 +124,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
-                let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, ch));
+                let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands", vec2(28.0, ch));
                 control_keytip(app, ui, &__k, "commandSearch");
                 if __k.clicked() {
                     app.open_dialog("commandSearch", json!({}));
@@ -505,7 +505,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let st = active_style(app);
     // Clipboard
-    let paste = big_button(ui, Icon::Paste, "Paste", "Paste (⌘V)", true);
+    let paste = big_button(ui, Icon::Paste, "Paste", "Paste", true);
     paste.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Paste"));
     for sequence in
         keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["edit.paste", "edit.pasteSpecial", "dialog:pasteSpecial"])
@@ -557,12 +557,12 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
         );
     });
     ui.vertical(|ui| {
-        let __k = icon_button(ui, Icon::Cut, t.text, "Cut (⌘X)", vec2(26.0, 23.0));
+        let __k = icon_button(ui, Icon::Cut, t.text, "Cut", vec2(26.0, 23.0));
         control_keytip(app, ui, &__k, "edit.cut");
         if __k.clicked() {
             app.copy_to_clipboard(ui.ctx(), "edit.cut");
         }
-        let __k = icon_button(ui, Icon::Copy, t.text, "Copy (⌘C)", vec2(26.0, 23.0));
+        let __k = icon_button(ui, Icon::Copy, t.text, "Copy", vec2(26.0, 23.0));
         control_keytip(app, ui, &__k, "edit.copy");
         if __k.clicked() {
             app.copy_to_clipboard(ui.ctx(), "edit.copy");
@@ -598,17 +598,17 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
         ui.horizontal(|ui| {
-            let __k = toggle_button(ui, Icon::Bold, st.font.bold, "Bold (⌘B)");
+            let __k = toggle_button(ui, Icon::Bold, st.font.bold, "Bold");
             control_keytip(app, ui, &__k, "home.bold");
             if __k.clicked() {
                 act(app, "home.bold", json!({}));
             }
-            let __k = toggle_button(ui, Icon::Italic, st.font.italic, "Italic (⌘I)");
+            let __k = toggle_button(ui, Icon::Italic, st.font.italic, "Italic");
             control_keytip(app, ui, &__k, "home.italic");
             if __k.clicked() {
                 act(app, "home.italic", json!({}));
             }
-            let (u, ua) = split_button(ui, Icon::Underline, None, "Underline (⌘U)");
+            let (u, ua) = split_button(ui, Icon::Underline, None, "Underline");
             control_keytip(app, ui, &ua, "home.underline");
             if u {
                 act(app, "home.underline", json!({}));
@@ -953,7 +953,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
     // Editing
     ui.vertical(|ui| {
         ui.horizontal(|ui| {
-            let (s, sa) = split_button(ui, Icon::Sum, None, "AutoSum (⌘⇧T)");
+            let (s, sa) = split_button(ui, Icon::Sum, None, "AutoSum");
             control_keytip(app, ui, &sa, "formulas.autoSum");
             if s {
                 act(app, "formulas.autoSum", json!({}));
@@ -1375,7 +1375,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "insert.pivotTable", json!({}));
     }
-    let __k = big_button(ui, Icon::Table, "Table", "Table (⌘T)", false);
+    let __k = big_button(ui, Icon::Table, "Table", "Table", false);
     control_keytip(app, ui, &__k, "insert.table");
     if __k.clicked() {
         act(app, "insert.table", json!({}));
@@ -1540,7 +1540,7 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "insert.checkbox", json!({}));
     }
     sep(ui);
-    let __k = big_button(ui, Icon::Link, "Link", "Insert Link (⌘K)", false);
+    let __k = big_button(ui, Icon::Link, "Link", "Insert Link", false);
     control_keytip(app, ui, &__k, "dialog:insertLink");
     if __k.clicked() {
         app.open_dialog("insertLink", json!({}));
@@ -1909,7 +1909,7 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("sort", json!({}));
     }
-    let __k = big_button(ui, Icon::Filter, "Filter", "Filter (⌘⇧F)", false);
+    let __k = big_button(ui, Icon::Filter, "Filter", "Filter", false);
     control_keytip(app, ui, &__k, "data.filter");
     if __k.clicked() {
         act(app, "data.filter", json!({}));
@@ -1932,7 +1932,7 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("textToColumns", json!({}));
     }
-    let __k = big_button(ui, Icon::FillDown, "Flash\nFill", "Flash Fill (⌘E)", false);
+    let __k = big_button(ui, Icon::FillDown, "Flash\nFill", "Flash Fill", false);
     control_keytip(app, ui, &__k, "edit.flashFill");
     if __k.clicked() {
         act(app, "edit.flashFill", json!({}));

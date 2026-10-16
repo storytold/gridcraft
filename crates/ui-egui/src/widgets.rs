@@ -14,6 +14,41 @@ fn tr<'a>(ui: &Ui, text: &'a str) -> &'a str {
     i18n::current(ui.ctx()).tr(text)
 }
 
+/// Keyboard shortcuts shown after a ribbon tooltip's command name: Excel for Mac's on macOS,
+/// Excel for Windows' elsewhere (each one GridCraft binds). Only the name is translated.
+const TOOLTIP_SHORTCUTS: &[(&str, &str, &str)] = &[
+    ("Save", "⌘S", "Ctrl+S"),
+    ("Undo", "⌘Z", "Ctrl+Z"),
+    ("Redo", "⌘Y", "Ctrl+Y"),
+    ("Paste", "⌘V", "Ctrl+V"),
+    ("Cut", "⌘X", "Ctrl+X"),
+    ("Copy", "⌘C", "Ctrl+C"),
+    ("Bold", "⌘B", "Ctrl+B"),
+    ("Italic", "⌘I", "Ctrl+I"),
+    ("Underline", "⌘U", "Ctrl+U"),
+    ("AutoSum", "⌘⇧T", "Alt+="),
+    ("Table", "⌘T", "Ctrl+T"),
+    ("Insert Link", "⌘K", "Ctrl+K"),
+    ("Filter", "⌘⇧F", "Ctrl+Shift+L"),
+    ("Flash Fill", "⌘E", "Ctrl+E"),
+];
+
+/// The shortcut a ribbon tooltip shows after `tip`, for this platform (`mac`).
+pub fn tooltip_shortcut(tip: &str, mac: bool) -> Option<&'static str> {
+    TOOLTIP_SHORTCUTS.iter().find(|(name, _, _)| *name == tip).map(|(_, m, other)| if mac { *m } else { *other })
+}
+
+/// A ribbon tooltip: the translated command name, then its shortcut for this platform, as Excel
+/// shows them ("Bold (Ctrl+B)" on Windows, "Bold (⌘B)" on macOS).
+fn tip_text(ui: &Ui, tip: &str) -> String {
+    // A name shared with a two-line ribbon label (Czech "Automatický\nsoučet") reads as one line.
+    let name = tr(ui, tip).replace('\n', " ");
+    match tooltip_shortcut(tip, cfg!(target_os = "macos")) {
+        Some(keys) => format!("{name} ({keys})"),
+        None => name.to_string(),
+    }
+}
+
 /// A flat square icon button with hover highlight and tooltip.
 pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egui::Vec2) -> Response {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -24,7 +59,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egu
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, color);
-    resp.on_hover_text(tr(ui, tip))
+    resp.on_hover_text(tip_text(ui, tip))
 }
 
 /// A toggle-able small button (e.g. Bold) showing a checked state.
@@ -38,7 +73,7 @@ pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, t.text);
-    resp.on_hover_text(tr(ui, tip))
+    resp.on_hover_text(tip_text(ui, tip))
 }
 
 /// Large ribbon button: 32px icon over a one- or two-line label.
@@ -73,7 +108,7 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
             );
         }
     }
-    resp.on_hover_text(tr(ui, tip))
+    resp.on_hover_text(tip_text(ui, tip))
 }
 
 /// Small ribbon button: 16px icon with optional label to the right.
@@ -101,7 +136,7 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
             t.text_dim,
         );
     }
-    resp.on_hover_text(tr(ui, tip))
+    resp.on_hover_text(tip_text(ui, tip))
 }
 
 /// A split button: main part runs the default action, the arrow opens a menu.
@@ -122,7 +157,7 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
         ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 4.0, main.bottom() - 5.0), vec2(17.0, 3.0)), 0.0, c);
     }
     icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
-    (m.on_hover_text(tr(ui, tip)).clicked(), a)
+    (m.on_hover_text(tip_text(ui, tip)).clicked(), a)
 }
 
 /// A one-line text field for a value stored in the workbook, which callers reload every frame. The text being typed is
@@ -360,5 +395,26 @@ pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
     }
     if dismiss {
         app.notice = None;
+    }
+}
+
+#[cfg(test)]
+mod tooltip_shortcut_tests {
+    use super::tooltip_shortcut;
+
+    #[test]
+    fn tooltips_show_each_platforms_own_shortcut() {
+        // #1191: Windows and Linux show Excel for Windows' shortcuts, never the Mac ⌘ ones.
+        assert_eq!(tooltip_shortcut("Bold", false), Some("Ctrl+B"));
+        assert_eq!(tooltip_shortcut("AutoSum", false), Some("Alt+="));
+        assert_eq!(tooltip_shortcut("Filter", false), Some("Ctrl+Shift+L"));
+        assert_eq!(tooltip_shortcut("Bold", true), Some("⌘B"));
+        assert_eq!(tooltip_shortcut("Filter", true), Some("⌘⇧F"));
+        // Search commands has no shortcut of its own (Ctrl+Shift+Space selects all).
+        assert_eq!(tooltip_shortcut("Search commands", false), None);
+        for (name, mac, other) in super::TOOLTIP_SHORTCUTS {
+            assert!(!other.contains(['⌘', '⇧', '⌥']), "{name}: {other}");
+            assert!(mac.starts_with('⌘'), "{name}: {mac}");
+        }
     }
 }
