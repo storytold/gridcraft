@@ -2613,7 +2613,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
                     continue;
                 }
-                let cmd = m.command;
+                let cmd = m.command || m.ctrl;
                 let shift = m.shift;
                 let mv = |app: &mut SheetApp, dr: i64, dc: i64| {
                     let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": shift, "jump": cmd}));
@@ -2940,10 +2940,11 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
 }
 
 /// Used by `EditState` users to keep the active cell visible while pointing.
-pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, extend: bool) {
+pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, extend: bool, jump: bool) {
     let Some(d) = app.session.active() else { return };
+    let Some(sh) = d.wb.sheet(ed.sheet) else { return };
     let from = ed.point_cell.unwrap_or(ed.cell);
-    let to = from.offset_clamped(dr, dc);
+    let to = if jump { gridcraft_engine::selection::jump(sh, from, dr.signum(), dc.signum()) } else { from.offset_clamped(dr, dc) };
     let text = if extend {
         // The anchor is the corner opposite the moving end: the written range is normalized, so
         // after extending up or left its first cell is the moving end, not the anchor.
@@ -2960,7 +2961,6 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
     } else {
         to.a1()
     };
-    let _ = d;
     ed.insert_ref(&text);
     ed.point_cell = Some(to);
     app.grid.ensure_visible = true;
