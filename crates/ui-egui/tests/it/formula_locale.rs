@@ -257,3 +257,43 @@ fn turkish_interface_uses_localized_formulas_and_xlsx_roundtrip() {
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Tr);
 }
+
+#[test]
+fn turkish_error_messages_and_error_codes_localized() {
+    let mut app = app();
+    app.run("app.language.set", json!({"code":"tr-TR"})).unwrap();
+    assert_eq!(app.ui.language, Language::Tr);
+
+    // Syntax error in formula shows localized error message in alert box
+    app.begin_edit(Some("=TOPLA(1 2)".into()), false);
+    assert!(!app.commit_edit(0, 0, false, false));
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.0, "GridCraft");
+    assert!(msg.1.contains("bekleniyordu"), "Message should be Turkish: {}", msg.1);
+
+    // Unterminated string syntax error
+    app.begin_edit(Some("=\"merhaba".into()), false);
+    assert!(!app.commit_edit(0, 0, false, false));
+    let msg = app.message.as_ref().unwrap();
+    assert_eq!(msg.1, "Kapatılmamış metin dizesi (tırnak işareti eksik)");
+
+    // Cell error literal in formula
+    app.cancel_edit();
+    assert!(enter(&mut app, "=#BAŞV!"));
+    assert_eq!(formula(&app), "#REF!");
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=#BAŞV!");
+    app.cancel_edit();
+
+    // Division by zero evaluated cell error displays #SAYI/0!
+    assert!(enter(&mut app, "=1/0"));
+    assert_eq!(formula(&app), "1/0");
+
+    // Check status bar and common alert translations
+    assert_eq!(app.ui.language.tr("OK"), "Tamam");
+    assert_eq!(app.ui.language.tr("Circular References"), "Döngüsel Başvurular");
+    assert_eq!(app.ui.language.tr("Macros preserved (not executed)"), "Makrolar korundu (çalıştırılmadı)");
+    assert_eq!(app.ui.language.tr("Spill range is not empty"), "Taşma aralığı boş değil, formülün yayılacağı hücreleri temizleyin.");
+    assert_eq!(app.ui.language.tr("The name you entered is not valid."), "Girdiğiniz ad geçerli değil.");
+    assert_eq!(app.ui.language.tr("Reference is not valid."), "Başvuru geçerli değil.");
+}

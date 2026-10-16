@@ -96,7 +96,20 @@ fn active_input(app: &SheetApp) -> String {
             // A legacy array formula shows in braces (`{=A1:A2*2}`), as `Cell::bar_text` does.
             if f.array.is_some() { format!("{{{shown}}}") } else { shown }
         } else {
-            gridcraft_engine::display::edit_text(&d.wb, sh, a)
+            let locale = app.ui.language.formula_locale();
+            if let gridcraft_engine::core::Value::Error(e) = &c.value {
+                locale.error_name(*e).to_string()
+            } else if let gridcraft_engine::core::Value::Bool(b) = &c.value {
+                if locale == gridcraft_engine::formula::FormulaLocale::Tr {
+                    if *b { "DOĞRU".into() } else { "YANLIŞ".into() }
+                } else if locale == gridcraft_engine::formula::FormulaLocale::Es {
+                    if *b { "VERDADERO".into() } else { "FALSO".into() }
+                } else {
+                    gridcraft_engine::display::edit_text(&d.wb, sh, a)
+                }
+            } else {
+                gridcraft_engine::display::edit_text(&d.wb, sh, a)
+            }
         };
     }
     String::new()
