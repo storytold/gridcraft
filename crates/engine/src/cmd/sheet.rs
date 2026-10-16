@@ -767,6 +767,9 @@ fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
+    if s.doc()?.wb.protected_structure {
+        return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
+    }
     let i = target_sheet(s, p)?;
     let Some(name) = str_param(p, "name").map(|n| n.trim().to_string()) else { return Err(bad("sheet.rename", "missing `name`")) };
     s.doc()?.wb.check_sheet_name(&name, Some(i)).map_err(EngineError::Other)?;
@@ -818,6 +821,9 @@ fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
+    if s.doc()?.wb.protected_structure {
+        return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
+    }
     let i = target_sheet(s, p)?;
     let copy = bool_param(p, "copy").unwrap_or(false);
     let to = p.get("to").and_then(Json::as_u64).map(|v| v as usize).ok_or_else(|| bad("sheet.move", "missing `to`"))?;
@@ -895,6 +901,9 @@ fn tab_color(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn hide_sheet(s: &mut Session, p: &Json) -> Result<Json> {
+    if s.doc()?.wb.protected_structure {
+        return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
+    }
     let i = target_sheet(s, p)?;
     if s.doc()?.wb.sheets.iter().filter(|s| s.visibility == Visibility::Visible).count() <= 1 {
         return Err(EngineError::Other("A workbook must contain at least one visible worksheet.".into()));
@@ -909,6 +918,9 @@ fn hide_sheet(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn unhide_sheet(s: &mut Session, p: &Json) -> Result<Json> {
+    if s.doc()?.wb.protected_structure {
+        return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
+    }
     if p.get("sheet").is_none() {
         let hidden: Vec<String> = s.doc()?.wb.sheets.iter().filter(|s| s.visibility != Visibility::Visible).map(|s| s.name.clone()).collect();
         if hidden.is_empty() {

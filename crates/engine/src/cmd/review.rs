@@ -427,6 +427,32 @@ mod tests {
     }
 
     #[test]
+    fn protected_structure_blocks_rename_move_copy_hide_and_unhide_sheet() {
+        let mut s = book();
+        let names = |s: &Session| s.doc().unwrap().wb.sheets.iter().map(|x| x.name.clone()).collect::<Vec<_>>();
+        let before = names(&s);
+        s.execute("review.protectWorkbook", json!({})).unwrap();
+        assert!(s.execute("sheet.rename", json!({"sheet": 0, "name": "Renamed"})).is_err());
+        assert!(s.execute("sheet.move", json!({"sheet": 0, "to": 1})).is_err());
+        assert!(s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).is_err());
+        assert!(s.execute("sheet.hide", json!({"sheet": 1})).is_err());
+        assert_eq!(names(&s), before);
+        assert!(s.doc().unwrap().wb.sheets.iter().all(|x| x.visibility == Visibility::Visible));
+        s.execute("review.protectWorkbook", json!({})).unwrap();
+        s.execute("sheet.rename", json!({"sheet": 0, "name": "Renamed"})).unwrap();
+        s.execute("sheet.move", json!({"sheet": 0, "to": 1})).unwrap();
+        s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.sheets.len(), 3);
+        s.execute("sheet.hide", json!({"sheet": 1})).unwrap();
+        s.execute("review.protectWorkbook", json!({})).unwrap();
+        assert!(s.execute("sheet.unhide", json!({"sheet": 1})).is_err());
+        assert!(s.execute("sheet.unhide", json!({})).is_err());
+        assert_eq!(s.doc().unwrap().wb.sheets[1].visibility, Visibility::Hidden);
+        s.execute("review.protectWorkbook", json!({})).unwrap();
+        s.execute("sheet.unhide", json!({"sheet": 1})).unwrap();
+    }
+
+    #[test]
     fn protect_workbook_with_a_password_really_verifies() {
         let mut s = book();
         s.execute("review.protectWorkbook", json!({"password": "pa55"})).unwrap();
