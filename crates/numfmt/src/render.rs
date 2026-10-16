@@ -58,6 +58,69 @@ pub(crate) fn render_general(sec: &Section, v: f64, width: usize) -> Out {
     out
 }
 
+/// A Japanese era (元号) and its day-accurate boundaries, as Excel and Windows use them.
+///
+/// The boundaries and the `g`/`e` token meanings follow Excel's documented behaviour: Microsoft
+/// Q&A "日本の年号変更と元年"
+/// <https://learn.microsoft.com/ja-jp/answers/questions/5029923/question-5029923> and the era
+/// table at <https://web.reogrid.net/articles/japanese-era-dates-in-javascript-spreadsheet/>.
+/// (`g`/`e` only mean this inside a section tagged `[$-411]`, `[$-ja]` or `[$-ja-JP]`.)
+struct Era {
+    /// Latin initial shown by `g`.
+    initial: char,
+    /// One-kanji name shown by `gg`.
+    kanji: char,
+    /// Full name shown by `ggg` and longer runs.
+    name: &'static str,
+    /// First day, inclusive.
+    start: (i32, u32, u32),
+    /// Last day, inclusive; `None` for the open-ended current era.
+    end: Option<(i32, u32, u32)>,
+}
+
+const ERAS: [Era; 5] = [
+    Era { initial: 'M', kanji: '明', name: "明治", start: (1868, 1, 25), end: Some((1912, 7, 29)) },
+    Era { initial: 'T', kanji: '大', name: "大正", start: (1912, 7, 30), end: Some((1926, 12, 24)) },
+    Era { initial: 'S', kanji: '昭', name: "昭和", start: (1926, 12, 25), end: Some((1989, 1, 7)) },
+    Era { initial: 'H', kanji: '平', name: "平成", start: (1989, 1, 8), end: Some((2019, 4, 30)) },
+    Era { initial: 'R', kanji: '令', name: "令和", start: (2019, 5, 1), end: None },
+];
+
+/// The era a civil date falls in; `None` before 明治 (1868-01-25), which has no era.
+fn era_at(year: i32, month: u32, day: u32) -> Option<&'static Era> {
+    let date = (year, month, day);
+    ERAS.iter().find(|e| date >= e.start && e.end.is_none_or(|end| date <= end))
+}
+
+/// Text of an era token in `sec` for a civil date: `g`/`gg`/`ggg` name the era (Latin initial,
+/// one kanji, full name), `e`/`ee` are its year, unpadded or two digits, and `元` for year 1 when
+/// the section carries the gannen tag. A date with no era renders nothing, so only the section's
+/// literals survive; so does any non-era token.
+pub(crate) fn era_token_text(sec: &Section, part: DatePart, year: i32, month: u32, day: u32) -> String {
+    if !sec.japanese {
+        return String::new();
+    }
+    let Some(era) = era_at(year, month, day) else { return String::new() };
+    match part {
+        DatePart::EraYear(n) => {
+            let y = year.saturating_sub(era.start.0).saturating_add(1);
+            if sec.gannen && y == 1 {
+                "元".into()
+            } else if n <= 1 {
+                y.to_string()
+            } else {
+                format!("{y:02}")
+            }
+        }
+        DatePart::EraName(n) => match n {
+            0 | 1 => era.initial.to_string(),
+            2 => era.kanji.to_string(),
+            _ => era.name.to_string(),
+        },
+        _ => String::new(),
+    }
+}
+
 /// Renders a date/time. `None` when the serial is outside the supported range.
 pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out> {
     if !v.is_finite() || !(0.0..max_serial(sys) as f64 + 1.0).contains(&v) {
@@ -129,6 +192,7 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
                     DatePart::ElapsedS(n) => pad(total_ms / 1000, n),
                     DatePart::AmPm => (if hour >= 12 { "PM" } else { "AM" }).to_string(),
                     DatePart::AP(a, p) => (if hour >= 12 { p } else { a }).to_string(),
+                    DatePart::EraName(_) | DatePart::EraYear(_) => era_token_text(sec, *d, dt.year, dt.month, dt.day),
                 };
                 out.push(&s);
             }

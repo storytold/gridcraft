@@ -284,6 +284,129 @@ fn dates_and_times() {
     assert!(!NumberFormat::parse("0.00").is_date());
 }
 
+// ---- Japanese era (和暦) date formats: `[$-411]`, era tokens and gannen ----
+// Behaviour reference: Microsoft Q&A "日本の年号変更と元年" and the era/gannen token table at
+// <https://web.reogrid.net/articles/japanese-era-dates-in-javascript-spreadsheet/>.
+
+/// Serial for a civil date in `sys`, through the crate's own date conversion.
+fn d(y: i64, m: i64, day: i64, sys: DateSystem) -> f64 {
+    gridcraft_core::date::serial_from_ymd(sys, y, m, day).expect("valid date")
+}
+
+#[test]
+fn wareki_era_boundaries_are_day_accurate() {
+    // The last day of an era is still that era; the next day starts the new one at year 1.
+    let cases: &[((i64, i64, i64), &str, &str)] = &[
+        ((1912, 7, 29), "明治45年7月29日", "M45.7.29"),
+        ((1912, 7, 30), "大正1年7月30日", "T1.7.30"),
+        ((1926, 12, 24), "大正15年12月24日", "T15.12.24"),
+        ((1926, 12, 25), "昭和1年12月25日", "S1.12.25"),
+        ((1989, 1, 7), "昭和64年1月7日", "S64.1.7"),
+        ((1989, 1, 8), "平成1年1月8日", "H1.1.8"),
+        ((2019, 4, 30), "平成31年4月30日", "H31.4.30"),
+        ((2019, 5, 1), "令和1年5月1日", "R1.5.1"),
+        ((2020, 5, 1), "令和2年5月1日", "R2.5.1"),
+    ];
+    for &((y, m, day), want, short) in cases {
+        let s = d(y, m, day, S);
+        assert_eq!(f("[$-411]ggge\"年\"m\"月\"d\"日\"", s), want, "{y}-{m}-{day}");
+        assert_eq!(f("[$-ja-JP]ge.m.d", s), short, "{y}-{m}-{day}");
+    }
+}
+
+#[test]
+fn wareki_tokens_and_locale_tags() {
+    let s = d(2026, 10, 17, S);
+    // `[$-411]` (the ja-JP LCID), `[$-ja]` and `[$-ja-JP]`, case-insensitively.
+    assert_eq!(f("[$-411]ggge\"年\"m\"月\"d\"日\"", s), "令和8年10月17日");
+    assert_eq!(f("[$-ja-JP]ggge\"年\"m\"月\"d\"日\"", s), "令和8年10月17日");
+    assert_eq!(f("[$-ja]ggge\"年\"m\"月\"d\"日\"", s), "令和8年10月17日");
+    assert_eq!(f("[$-JA-JP]GGGE\"年\"M\"月\"D\"日\"", s), "令和8年10月17日");
+    // `g`, `gg`, `ggg`: Latin initial, one kanji, full name.
+    assert_eq!(f("[$-411]g", s), "R");
+    assert_eq!(f("[$-411]gg", s), "令");
+    assert_eq!(f("[$-411]ggg", s), "令和");
+    assert_eq!(f("[$-411]ggg\"年度\"", s), "令和年度");
+    assert_eq!(f("[$-411]ge.m.d", s), "R8.10.17");
+    // `e` is unpadded, `ee` is zero-padded to two digits.
+    assert_eq!(f("[$-411]e\"年\"", s), "8年");
+    assert_eq!(f("[$-411]ee\"年\"", s), "08年");
+    assert_eq!(f("[$-411]gggee\"年\"mm\"月\"dd\"日\"", s), "令和08年10月17日");
+    // The tag is read from the whole section, wherever it sits.
+    assert_eq!(f("ggge\"年\"[$-411]", s), "令和8年");
+    assert!(NumberFormat::parse("[$-411]ggge\"年\"").is_date());
+    assert_eq!(NumberFormat::parse("[$-411]ggge\"年\"").kind(), FormatKind::Date);
+}
+
+#[test]
+fn wareki_gannen_renders_moto_for_year_one_only() {
+    let first = d(2019, 5, 1, S);
+    assert_eq!(f("[$-ja-JP-x-gannen]ggge\"年\"m\"月\"d\"日\"", first), "令和元年5月1日");
+    assert_eq!(f("[$-x-gannen411]ggge\"年\"m\"月\"d\"日\"", first), "令和元年5月1日");
+    // 元 replaces the number for `e` and `ee` alike: it is not a number and cannot be padded.
+    assert_eq!(f("[$-ja-JP-x-gannen]gee\"年\"", first), "R元年");
+    // Year 2 and later are plain numbers again.
+    assert_eq!(f("[$-ja-JP-x-gannen]ggge\"年\"m\"月\"d\"日\"", d(2020, 5, 1, S)), "令和2年5月1日");
+    // Any era's first year, not just 令和.
+    assert_eq!(f("[$-ja-JP-x-gannen]ggge\"年\"m\"月\"d\"日\"", d(1989, 1, 8, S)), "平成元年1月8日");
+    assert_eq!(f("[$-ja-JP-x-gannen]ggge\"年\"m\"月\"d\"日\"", d(1989, 1, 7, S)), "昭和64年1月7日");
+}
+
+#[test]
+fn wareki_before_meiji_has_no_era() {
+    use crate::parse::DatePart;
+    // No serial is before 明治 (both date systems start in 1900 and 1904), so the pre-明治 rule
+    // is checked where it lives: the lookup finds no era there and every era token renders
+    // nothing, leaving only the section's literals.
+    let sec = &parse::parse_sections("[$-411]ggge\"年\"m\"月\"d\"日\"")[0];
+    assert!(sec.japanese);
+    assert!(!sec.gannen);
+    for part in [DatePart::EraName(1), DatePart::EraName(2), DatePart::EraName(3), DatePart::EraYear(1), DatePart::EraYear(2)] {
+        assert_eq!(render::era_token_text(sec, part, 1868, 1, 24), "", "{part:?}");
+    }
+    assert_eq!(render::era_token_text(sec, DatePart::EraName(3), 1868, 1, 25), "明治");
+    for lit in ["年", "月", "日"] {
+        assert!(sec.toks.contains(&Tok::Lit(lit.into())), "{lit}");
+    }
+}
+
+#[test]
+fn wareki_honours_the_1904_date_system() {
+    let s = d(1989, 1, 7, DateSystem::D1904);
+    let fmt = NumberFormat::parse("[$-411]ggge\"年\"m\"月\"d\"日\"");
+    assert_eq!(format_value(&Value::Number(s), &fmt, DateSystem::D1904).text, "昭和64年1月7日");
+    // The same serial read in the other system is a different date (1462 days earlier).
+    assert_eq!(format_value(&Value::Number(s), &fmt, DateSystem::D1900).text, "昭和60年1月6日");
+}
+
+#[test]
+fn wareki_without_the_tag_keeps_its_old_meaning() {
+    let s = d(2026, 10, 17, S);
+    // Outside a Japanese-calendar section `g` stays literal (case included) and `e` is a year.
+    assert_eq!(f("e", s), "2026");
+    assert_eq!(f("ee", s), "2026");
+    assert_eq!(f("eeee", s), "2026");
+    assert_eq!(f("ggg", s), "ggg");
+    assert_eq!(f("GGG", s), "GGG");
+    assert_eq!(f("yyyy\"g\"", s), "2026g");
+    assert_eq!(f("0g", 5.0), "5g");
+    assert_eq!(f("0G", 5.0), "5G");
+    // Other locale tags stay ignored exactly as before, inside a date section too.
+    assert_eq!(f("[$-409]m/d/yyyy", s), "10/17/2026");
+    assert_eq!(f("[$-409]e", s), "2026");
+    assert_eq!(f("[$-409]ggg", s), "ggg");
+    assert_eq!(f("[DBNum1]ggge\"年\"m\"月\"d\"日\"", s), "ggg2026年10月17日");
+}
+
+#[test]
+fn text_function_wareki() {
+    assert_eq!(text_function(&Value::Number(d(2026, 10, 17, S)), "[$-411]ggge\"年\"m\"月\"d\"日\"", S), Ok("令和8年10月17日".into()));
+    assert_eq!(text_function(&Value::Number(d(2026, 10, 17, S)), "[$-ja-JP]ge.m.d", S), Ok("R8.10.17".into()));
+    assert_eq!(text_function(&Value::Number(d(2019, 5, 1, S)), "[$-ja-JP-x-gannen]ggge\"年\"m\"月\"d\"日\"", S), Ok("令和元年5月1日".into()));
+    // A negative serial is out of range, as for every other date format.
+    assert_eq!(text_function(&Value::Number(-1.0), "[$-411]ggge\"年\"", S), Err(CellError::Value));
+}
+
 #[test]
 fn text_and_other_values() {
     assert_eq!(t("@", "hello"), "hello");
@@ -468,6 +591,8 @@ fn fuzz_no_panic() {
         "[",
         "[>",
         "[=",
+        "[$-411]",
+        "[$-ja-JP-x-gannen]",
         "\"abc",
         "*",
         "_",
@@ -686,6 +811,8 @@ const CACHE_CODES: &[&str] = &[
     "0.00_);(0.00)",
     "#,,\"M\"",
     "yyyy",
+    "[$-411]ggge\"年\"m\"月\"d\"日\"",
+    "[$-ja-JP-x-gannen]ge.m.d",
     "",
 ];
 
