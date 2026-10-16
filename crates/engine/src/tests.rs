@@ -3282,3 +3282,38 @@ fn paste_special_validation_moves_relative_references() {
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
 }
+
+#[test]
+fn journal_is_capped_by_serialized_size() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    // Large entries (like a `file.open` with its base64): the oldest go once the cap is passed.
+    let pad = "x".repeat(crate::JOURNAL_MAX_BYTES / 8);
+    for i in 0..12 {
+        s.execute("selection.set", json!({"range": "B2", "pad": pad, "n": i})).unwrap();
+    }
+    let bytes: usize = s.journal.iter().map(|e| serde_json::to_vec(e).unwrap().len()).sum();
+    assert!(bytes <= crate::JOURNAL_MAX_BYTES, "{bytes}");
+    assert!(s.journal.len() < 12, "{}", s.journal.len());
+    assert_eq!(s.journal.last().unwrap().1["n"], 11, "the newest entries stay");
+    // Small entries are kept as they were.
+    s.execute("cell.set", json!({"cell": "A2", "input": "=SUM(A1)"})).unwrap();
+    assert_eq!(s.journal.last().unwrap(), &("cell.set".to_string(), json!({"cell": "A2", "input": "=SUM(A1)"})));
+}
+
+#[test]
+fn recording_keeps_its_steps_when_the_journal_is_trimmed() {
+    let mut s = s();
+    for _ in 0..9_990 {
+        s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    }
+    s.execute("automate.recordActions", json!({})).unwrap();
+    // The 10th entry past the start overflows the 10,000-entry cap and drops the oldest half.
+    for i in 0..20 {
+        s.execute("cell.set", json!({"cell": "B1", "input": format!("step{i}")})).unwrap();
+    }
+    let r = s.execute("automate.recordActions", json!({"stop": true, "name": "Steps"})).unwrap();
+    assert_eq!(r["steps"], 20, "{r}");
+    let script = s.doc().unwrap().wb.names.iter().find(|n| n.name == "_sc_scripts").map(|n| n.formula.clone()).unwrap();
+    assert!(script.contains("step0") && script.contains("step19") && !script.contains("selection.set"), "{script}");
+}

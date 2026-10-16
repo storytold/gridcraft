@@ -116,6 +116,13 @@ pub struct DocState {
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 const UNDO_LIMIT: usize = 100;
+/// Past this many entries the journal drops its oldest half.
+const JOURNAL_MAX_ENTRIES: usize = 10_000;
+/// Past this many bytes (entries serialized as JSON) the journal drops its oldest entries until
+/// it is under half. Entries keep their full params so they replay (recorded scripts,
+/// `engine.journal`), and a `file.open` holds the whole file as base64: without a size cap a
+/// few opens of a large workbook keep tens of MB alive.
+pub(crate) const JOURNAL_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 impl DocState {
     pub fn new(mut wb: Workbook, path: Option<String>, title: String) -> DocState {
@@ -236,6 +243,9 @@ pub struct Session {
     pub mode: Mode,
     /// Commands run so far, without their passwords ([`cmd::journal_params`]).
     pub journal: Vec<(String, Json)>,
+    /// Serialized size of each journal entry, measured once when it is pushed, and their sum.
+    journal_sizes: Vec<usize>,
+    journal_bytes: usize,
     pub ui_requests: Vec<UiRequest>,
     /// Format painter source style (sticky when double-clicked).
     pub format_painter: Option<(Arc<Workbook>, usize, RangeRef, bool)>,
@@ -309,6 +319,38 @@ impl Session {
         self.add_document(DocState::new(wb, None, format!("Book{n}")))
     }
 
+    /// Journals a command, then trims the oldest entries past either cap. A recording in progress
+    /// keeps pointing at the same entry (the steps the trim dropped are lost).
+    fn push_journal(&mut self, id: &str, params: Json) {
+        let size = |e: &(String, Json)| serde_json::to_vec(e).map_or(0, |v| v.len());
+        // `journal` is public: if it was changed from outside, measure it again.
+        if self.journal_sizes.len() != self.journal.len() {
+            self.journal_sizes = self.journal.iter().map(size).collect();
+            self.journal_bytes = self.journal_sizes.iter().sum();
+        }
+        let entry = (id.to_string(), params);
+        let entry_size = size(&entry);
+        self.journal.push(entry);
+        self.journal_sizes.push(entry_size);
+        self.journal_bytes = self.journal_bytes.saturating_add(entry_size);
+        let len = self.journal.len();
+        let mut n = if len > JOURNAL_MAX_ENTRIES { len - JOURNAL_MAX_ENTRIES / 2 } else { 0 };
+        let mut kept = self.journal_bytes.saturating_sub(self.journal_sizes.iter().take(n).sum());
+        if self.journal_bytes > JOURNAL_MAX_BYTES {
+            // The newest entry stays even when it is larger than the cap on its own.
+            while kept > JOURNAL_MAX_BYTES / 2 && n + 1 < len {
+                kept = kept.saturating_sub(self.journal_sizes.get(n).copied().unwrap_or(0));
+                n += 1;
+            }
+        }
+        if n > 0 {
+            self.journal.drain(..n);
+            self.journal_sizes.drain(..n);
+            self.journal_bytes = kept;
+            self.recording = self.recording.map(|r| r.saturating_sub(n));
+        }
+    }
+
     pub fn commands(&self) -> Vec<CommandInfo> {
         command_specs().iter().map(|c| c.info(self)).collect()
     }
@@ -340,10 +382,7 @@ impl Session {
             }
         };
         if spec.journal && result.is_ok() {
-            self.journal.push((id.to_string(), cmd::journal_params(&params)));
-            if self.journal.len() > 10_000 {
-                self.journal.drain(..5_000);
-            }
+            self.push_journal(id, cmd::journal_params(&params));
         }
         if spec.undoable
             && let Some((uid, wb, sel)) = before
