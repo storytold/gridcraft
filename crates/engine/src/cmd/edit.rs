@@ -1574,6 +1574,63 @@ fn format_painter(s: &mut Session, p: &Json) -> Result<Json> {
             let Some(src_sheet) = wb.sheet(sheet) else { return Ok(()) };
             let (h, w) = (src.height(), src.width());
             let dest = if dest.is_single() { RangeRef::new(dest.start, dest.start.offset_clamped(h as i64 - 1, w as i64 - 1)) } else { dest };
+            // Whole rows or columns take a line format, as the ribbon's formatting commands give
+            // them, instead of a style on each of their cells (a column alone has a million). The
+            // line format comes from the first cell of the source pattern across the line; cells
+            // already stored follow the pattern. Row heights and column widths stay as they are.
+            let rows = dest.is_full_rows() && !dest.is_full_cols();
+            let cols = dest.is_full_cols() && !dest.is_full_rows();
+            let src_full = (rows && src.is_full_rows()) || (cols && src.is_full_cols());
+            if rows || cols {
+                let (first, src_first, n) = if rows { (dest.start.row, src.start.row, h) } else { (dest.start.col, src.start.col, w) };
+                let lines = if rows { dest.start.row..=dest.end.row } else { dest.start.col..=dest.end.col };
+                for line in lines {
+                    let sl = src_first + (line - first) % n;
+                    // The source cell for position `k` along the line.
+                    let at = |k: u32| if rows { CellRef::new(sl, src.start.col + k % w) } else { CellRef::new(src.start.row + k % h, sl) };
+                    let line_style = if src_full {
+                        if rows { src_sheet.rows.get(&sl) } else { src_sheet.cols.get(&sl) }.and_then(|i| i.style)
+                    } else {
+                        Some(src_sheet.style_id(at(0)))
+                    };
+                    let line_style = line_style.map(|st| if same { st } else { cx.wb.styles.intern(wb.styles.get(st).clone()) });
+                    let (dest_line, src_line) = if rows {
+                        (RangeRef::rows(line, line), RangeRef::rows(sl, sl))
+                    } else {
+                        (RangeRef::cols(line, line), RangeRef::cols(sl, sl))
+                    };
+                    let mut cells: Vec<CellRef> =
+                        cx.wb.sheet(dest_sheet).map(|sh| sh.cells.iter_range(dest_line).map(|(c, _)| c).collect()).unwrap_or_default();
+                    if src_full {
+                        cells.extend(
+                            src_sheet
+                                .cells
+                                .iter_range(src_line)
+                                .map(|(c, _)| if rows { CellRef::new(line, c.col) } else { CellRef::new(c.row, line) }),
+                        );
+                    }
+                    if cols {
+                        // A row format outranks a column format: the column's cells in formatted
+                        // rows need a style of their own.
+                        cells.extend(
+                            cx.wb
+                                .sheet(dest_sheet)
+                                .into_iter()
+                                .flat_map(|sh| sh.rows.iter().filter(|(_, i)| i.style.is_some()).map(|(r, _)| CellRef::new(*r, line))),
+                        );
+                    }
+                    let sh = cx.sheet_mut(dest_sheet)?;
+                    (if rows { &mut sh.rows } else { &mut sh.cols }).entry(line).or_default().style = line_style;
+                    for c in cells {
+                        let st = src_sheet.style_id(at(if rows { c.col } else { c.row }));
+                        let st = if same { st } else { cx.wb.styles.intern(wb.styles.get(st).clone()) };
+                        cx.sheet_mut(dest_sheet)?.set_style(c, st);
+                        cx.touch(dest_sheet, c);
+                    }
+                }
+                *cx.sel = crate::Selection::range(dest);
+                return Ok(());
+            }
             for c in dest.iter().take(2_000_000) {
                 let sc = CellRef::new(src.start.row + (c.row - dest.start.row) % h, src.start.col + (c.col - dest.start.col) % w);
                 let st = src_sheet.style_id(sc);

@@ -2019,8 +2019,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             if point_header(app, wb, sh, RangeRef::cols(c, c)) {
                 return;
             }
+            // An armed Format Painter paints the columns dragged over instead of moving them.
             if resp.drag_started()
                 && !mods.any()
+                && app.session.format_painter.is_none()
                 && sel.ranges.len() == 1
                 && sel.current().is_full_cols()
                 && sel.current().contains(CellRef::new(0, c))
@@ -2258,11 +2260,16 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     // Release.
     if resp.drag_stopped() || (!pointer.any_down() && app.grid.drag != Drag::None && !resp.dragged()) {
         match std::mem::take(&mut app.grid.drag) {
-            Drag::Select if resp.drag_stopped() => {
-                if let Some(p) = pos {
+            Drag::Select => {
+                if resp.drag_stopped()
+                    && let Some(p) = pos
+                {
                     select_to_pointer(app, geo, sh, wb, p);
                 }
+                format_painter_apply(app);
             }
+            // Whole rows or columns clicked or dragged over by their headers.
+            Drag::Rows(_) | Drag::Cols(_) => format_painter_apply(app),
             Drag::Fill { target: Some(t) } => {
                 let src = sel.current();
                 if t != src {
@@ -2328,6 +2335,19 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         resp.request_focus();
     }
     keyboard(app, &ctx, resp, geo, sh);
+}
+
+/// An armed Format Painter pastes onto the cells just clicked or dragged over (not while
+/// pointing a formula reference, which also drags a Select).
+fn format_painter_apply(app: &mut SheetApp) {
+    if app.session.format_painter.is_some() && !app.editor.as_ref().is_some_and(|ed| ed.can_point()) {
+        let dest = app.session.active().map(|d| d.selection.current().a1());
+        if let Some(dest) = dest
+            && let Err(e) = app.run("edit.formatPainter", json!({"apply": dest}))
+        {
+            app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+        }
+    }
 }
 
 /// Point mode on a header: inserts the whole-column or whole-row reference instead of selecting.
