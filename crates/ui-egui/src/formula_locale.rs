@@ -79,6 +79,8 @@ fn hide_udf_prefix(text: &str, locale: FormulaLocale) -> String {
     out
 }
 
+mod tr;
+
 /// A function's argument hint. The name and separators follow the formula syntax; the argument
 /// names follow the interface language, all of them or none, so a hint never mixes two languages.
 pub(crate) fn signature(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
@@ -94,7 +96,13 @@ pub(crate) fn signature(name: &str, locale: FormulaLocale, language: Language) -
 
 /// A function's description in the interface language (English while untranslated).
 pub(crate) fn description(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
-    let english = crate::formula_bar::function_description(locale.canonical_name(name))?;
+    let canonical = locale.canonical_name(name);
+    if language == Language::Tr
+        && let Some((_, description)) = tr::TURKISH_DESCRIPTIONS.iter().find(|(name, ..)| *name == canonical)
+    {
+        return Some((*description).into());
+    }
+    let english = crate::formula_bar::function_description(canonical)?;
     Some(language.function_description(&english).map_or(english, str::to_string))
 }
 
