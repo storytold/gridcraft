@@ -3,7 +3,7 @@
 
 use std::fmt::Write as _;
 
-use gridcraft_core::Value;
+use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
 use gridcraft_model::{Chart, ChartKind, Color, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
 
@@ -281,8 +281,8 @@ fn group_for(k: ChartKind) -> G {
 
 const MAX_CACHE: u64 = 100_000;
 
-/// Values of a same-workbook reference (`Sheet1!$B$2:$B$9`), row-major.
-pub(crate) fn ref_values(wb: &Workbook, sheet_idx: usize, f: &str) -> Option<Vec<Value>> {
+/// The sheet and range a same-workbook reference (`Sheet1!$B$2:$B$9`) names.
+fn ref_target(wb: &Workbook, sheet_idx: usize, f: &str) -> Option<(usize, RangeRef)> {
     let e = gridcraft_formula::parse(f).ok()?;
     let Expr::Ref(r) = e else { return None };
     let si = match &r.sheet {
@@ -290,8 +290,13 @@ pub(crate) fn ref_values(wb: &Workbook, sheet_idx: usize, f: &str) -> Option<Vec
         SheetSel::Named(n) => wb.sheet_index(n)?,
         SheetSel::Span(..) => return None,
     };
+    Some((si, r.range()))
+}
+
+/// Values of a same-workbook reference (`Sheet1!$B$2:$B$9`), row-major.
+pub(crate) fn ref_values(wb: &Workbook, sheet_idx: usize, f: &str) -> Option<Vec<Value>> {
+    let (si, mut range) = ref_target(wb, sheet_idx, f)?;
     let sheet = wb.sheet(si)?;
-    let mut range = r.range();
     // Whole columns/rows: limit to the used range.
     if let Some(u) = sheet.used_range() {
         range = range.intersection(&u)?;
@@ -397,6 +402,47 @@ fn str_data(tag: &str, f: &str, wb: &Workbook, si: usize) -> String {
     s
 }
 
+/// `<c:cat>` of a series: a string reference, or a multi-level one (`multiLvlStrRef`) when the
+/// category range has more columns than a column of values (or more rows than a row of values:
+/// year beside month). Its cache lists the innermost level first, then each outer level with
+/// only the cells that start a group, as Excel writes it.
+fn cat_data(f: &str, values: &str, wb: &Workbook, si: usize) -> String {
+    multi_level_cat(f.trim(), values, wb, si).unwrap_or_else(|| str_data("cat", f, wb, si))
+}
+
+fn multi_level_cat(f: &str, values: &str, wb: &Workbook, si: usize) -> Option<String> {
+    let (sheet, range) = ref_target(wb, si, f)?;
+    let value_range = ref_target(wb, si, values).map(|(_, r)| r);
+    let levels = category_levels(&range, value_range.as_ref())?;
+    if range.count() > MAX_CACHE {
+        return None;
+    }
+    let sheet = wb.sheet(sheet)?;
+    let (w, h) = (range.width() as usize, range.height() as usize);
+    let text = |row: usize, col: usize| -> String {
+        let v = range.start.offset(row as i64, col as i64).map(|c| sheet.value(c));
+        v.filter(|v| !v.is_empty()).map(|v| v.display()).unwrap_or_default()
+    };
+    // The innermost level (nearest the values), then the outer ones.
+    let (n, lvls): (usize, Vec<Vec<String>>) = if levels.by_columns {
+        (h, (0..=levels.outer as usize).filter_map(|k| (w - 1).checked_sub(k)).map(|c| (0..h).map(|r| text(r, c)).collect()).collect())
+    } else {
+        (w, (0..=levels.outer as usize).filter_map(|k| (h - 1).checked_sub(k)).map(|r| (0..w).map(|c| text(r, c)).collect()).collect())
+    };
+    let mut s = format!("<c:cat><c:multiLvlStrRef><c:f>{}</c:f><c:multiLvlStrCache><c:ptCount val=\"{n}\"/>", esc(&crate::fmla::text_to_file(f)));
+    for lvl in &lvls {
+        s.push_str("<c:lvl>");
+        for (i, v) in lvl.iter().enumerate() {
+            if !v.is_empty() {
+                let _ = write!(s, "<c:pt idx=\"{i}\"><c:v>{}</c:v></c:pt>", esc(v));
+            }
+        }
+        s.push_str("</c:lvl>");
+    }
+    s.push_str("</c:multiLvlStrCache></c:multiLvlStrRef></c:cat>");
+    Some(s)
+}
+
 fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String {
     let mut x = format!("<c:ser><c:idx val=\"{idx}\"/><c:order val=\"{idx}\"/>");
     if let Some(n) = &s.name {
@@ -453,7 +499,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
         }
         _ => {
             if let Some(c) = &s.categories {
-                x.push_str(&str_data("cat", c, wb, si));
+                x.push_str(&cat_data(c, &s.values, wb, si));
             }
             x.push_str(&num_data("val", Some(&s.values), wb, si));
             if matches!(g, G::Line { .. }) {

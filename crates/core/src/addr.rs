@@ -293,3 +293,52 @@ mod tests {
         assert_eq!(CellRef::new(0, 0).offset_clamped(-5, 3), CellRef::new(0, 3));
     }
 }
+
+/// The shape of a chart's category range beside its values: a plain list, or a multi-level
+/// axis (Excel: a category range two or more columns wide beside a column of values is a
+/// two-level axis, year beside month; one two or more rows tall above a row of values likewise).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CategoryLevels {
+    /// The levels are columns and the points run down the rows (else the levels are rows and the
+    /// points run along the columns).
+    pub by_columns: bool,
+    /// Outer levels beyond the innermost labels (the column or row nearest the values): 1 for a
+    /// two-level axis. At most 3 are kept.
+    pub outer: u32,
+}
+
+/// How `categories` lays its labels out beside `values` (`None` when the values aren't a
+/// reference: the categories' own shape decides). `None` for a plain list of labels.
+pub fn category_levels(categories: &RangeRef, values: Option<&RangeRef>) -> Option<CategoryLevels> {
+    if categories.is_full_rows() || categories.is_full_cols() {
+        return None;
+    }
+    let (w, h) = (categories.width(), categories.height());
+    let vertical = match values {
+        Some(v) => v.height() >= v.width(),
+        None => h >= w,
+    };
+    let outer = if vertical { w.saturating_sub(1) } else { h.saturating_sub(1) };
+    (outer > 0).then_some(CategoryLevels { by_columns: vertical, outer: outer.min(3) })
+}
+
+#[cfg(test)]
+mod category_level_tests {
+    use super::*;
+
+    #[test]
+    fn a_wide_range_beside_a_column_of_values_is_a_multi_level_axis() {
+        let r = |s: &str| RangeRef::parse(s).unwrap();
+        assert_eq!(category_levels(&r("A4:B39"), Some(&r("C4:C39"))), Some(CategoryLevels { by_columns: true, outer: 1 }));
+        assert_eq!(category_levels(&r("A4:D39"), Some(&r("C4:C39"))), Some(CategoryLevels { by_columns: true, outer: 3 }));
+        assert_eq!(category_levels(&r("A4:F39"), Some(&r("C4:C39"))).map(|l| l.outer), Some(3), "capped");
+        assert_eq!(category_levels(&r("A4:A39"), Some(&r("C4:C39"))), None, "one column: a plain list");
+        // A row of values: levels are rows.
+        assert_eq!(category_levels(&r("B2:M3"), Some(&r("B4:M4"))), Some(CategoryLevels { by_columns: false, outer: 1 }));
+        assert_eq!(category_levels(&r("B3:M3"), Some(&r("B4:M4"))), None);
+        // Literal values: the categories' own shape decides.
+        assert_eq!(category_levels(&r("A1:B6"), None), Some(CategoryLevels { by_columns: true, outer: 1 }));
+        assert_eq!(category_levels(&r("A1:F2"), None), Some(CategoryLevels { by_columns: false, outer: 1 }));
+        assert_eq!(category_levels(&r("A:B"), Some(&r("C:C"))), None, "whole columns");
+    }
+}

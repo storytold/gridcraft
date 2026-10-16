@@ -1,7 +1,7 @@
 //! Pulls chart data (names, categories, values, formats, colours) out of a workbook.
 
 use gridcraft_calc::evaluate;
-use gridcraft_core::{CellRef, RangeRef, Value, number_to_text};
+use gridcraft_core::{CellRef, RangeRef, Value, category_levels, number_to_text};
 use gridcraft_model::{Chart, ChartKind, Theme, Workbook, style::apply_tint};
 use gridcraft_numfmt::{NumberFormat, format_value};
 
@@ -133,12 +133,16 @@ fn value_text(v: &Value) -> String {
     }
 }
 
-/// Category labels, formatted with each source cell's number format (dates, currency…).
-fn category_texts(wb: &Workbook, sheet: usize, formula: &str) -> Vec<String> {
+/// Category labels, formatted with each source cell's number format (dates, currency…), and
+/// the outer levels of a multi-level axis: a category range wider than a column of values (or
+/// taller than a row of values) groups its innermost labels, year beside month. Each outer level
+/// has one entry per category, non-empty where a group starts, as the cells are.
+fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str) -> (Vec<String>, Vec<Vec<String>>) {
     let vals = eval_list(wb, sheet, formula);
     let cells: Option<(usize, RangeRef)> = parse_ref(wb, sheet, formula);
     let src = cells.and_then(|(sh, r)| wb.sheet(sh).map(|s| (s, r)));
-    vals.iter()
+    let texts: Vec<String> = vals
+        .iter()
         .enumerate()
         .map(|(i, v)| {
             if let (Some((s, r)), Value::Number(_)) = (src, v) {
@@ -153,7 +157,23 @@ fn category_texts(wb: &Workbook, sheet: usize, formula: &str) -> Vec<String> {
             }
             value_text(v)
         })
-        .collect()
+        .collect();
+    let Some((_, r)) = src else { return (texts, vec![]) };
+    let value_range = parse_ref(wb, sheet, values).map(|(_, r)| r);
+    let Some(levels) = category_levels(&r, value_range.as_ref()) else { return (texts, vec![]) };
+    let (w, h) = (r.width().max(1) as usize, r.height().max(1) as usize);
+    if texts.len() != w.saturating_mul(h) {
+        return (texts, vec![]); // truncated or not a plain block: a flat list
+    }
+    let at = |row: usize, col: usize| texts.get(row * w + col).cloned().unwrap_or_default();
+    let column = |c: usize| (0..h).map(|row| at(row, c)).collect::<Vec<String>>();
+    let row = |rr: usize| (0..w).map(|c| at(rr, c)).collect::<Vec<String>>();
+    let outer = levels.outer as usize;
+    if levels.by_columns {
+        (column(w - 1), (1..=outer).filter_map(|k| (w - 1).checked_sub(k)).map(column).collect())
+    } else {
+        (row(h - 1), (1..=outer).filter_map(|k| (h - 1).checked_sub(k)).map(row).collect())
+    }
 }
 
 /// A series name: a reference/formula is evaluated, a quoted or bare literal is used as is.
@@ -197,6 +217,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let numeric_x = matches!(chart.kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
     let mut series = Vec::new();
     let mut categories: Option<Vec<String>> = None;
+    let mut category_levels = Vec::new();
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
         let values = nums(wb, sheet, &s.values);
         let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Series{}", i + 1));
@@ -211,9 +232,10 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
         if categories.is_none()
             && let Some(f) = &s.categories
         {
-            let c = category_texts(wb, sheet, f);
+            let (c, outer) = category_table(wb, sheet, f, &s.values);
             if !c.is_empty() {
                 categories = Some(c);
+                category_levels = outer;
             }
         }
         let sizes = s.bubble_sizes.as_deref().map(|f| nums(wb, sheet, f));
@@ -242,5 +264,5 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());
     let palette = default_palette(&wb.theme, n.min(PALETTE_CYCLE));
-    ChartData { categories, series, palette }
+    ChartData { categories, category_levels, series, palette }
 }
