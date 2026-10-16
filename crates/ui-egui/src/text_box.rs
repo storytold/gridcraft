@@ -27,7 +27,7 @@ impl SheetApp {
             return false;
         }
         if let Err(e) = self.commit_text_box_edit() {
-            self.message = Some(("Text Box".into(), crate::clean_error(&e)));
+            self.report_error("Text Box", &e);
             return false;
         }
         let Some(d) = self.session.active() else { return false };
@@ -37,7 +37,7 @@ impl SheetApp {
         };
         // shape.setText refuses edits on a protected sheet; don't open an editor that can't commit.
         if sh.is_protected() {
-            self.message = Some(("Text Box".into(), "The cell or chart you're trying to change is on a protected sheet.".into()));
+            self.report_error("Text Box", "The cell or chart you're trying to change is on a protected sheet.");
             return false;
         }
         self.text_box_editor = Some(EditState {
@@ -101,7 +101,7 @@ pub(crate) fn before_ui(app: &mut SheetApp, ctx: &egui::Context) {
     if outside {
         match app.commit_text_box_edit() {
             Ok(()) => ctx.memory_mut(|m| m.surrender_focus(editor_id())),
-            Err(e) => app.message = Some(("Text Box".into(), crate::clean_error(&e))),
+            Err(e) => app.report_error("Text Box", &e),
         }
     }
 }

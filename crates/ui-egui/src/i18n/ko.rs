@@ -2,6 +2,9 @@
 
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "We looked at all the data next to your selection and didn't see a pattern for filling in values for you." => {
+            "선택 영역 옆의 모든 데이터를 살펴봤지만 값을 채울 패턴을 찾지 못했습니다."
+        }
         "Paste" => "붙여넣기",
         "Paste Values" => "값 붙여넣기",
         "Paste Formulas" => "수식 붙여넣기",

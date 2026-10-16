@@ -51,11 +51,12 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
 }
 
 fn comments(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
     let Some(d) = app.session.active() else { return };
     let Some(sh) = d.wb.active() else { return };
     let list: Vec<(String, gridcraft_engine::model::Comment)> = sh.comments.iter().map(|(c, m)| (c.a1(), m.clone())).collect();
     if list.is_empty() {
-        ui.label(egui::RichText::new("No comments on this sheet yet. Select a cell and choose New Comment.").italics());
+        ui.label(egui::RichText::new(lang.tr("No comments on this sheet yet. Select a cell and choose New Comment.")).italics());
     }
     for (cell, c) in list {
         egui::Frame::NONE

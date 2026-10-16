@@ -2,6 +2,9 @@
 
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "We looked at all the data next to your selection and didn't see a pattern for filling in values for you." => {
+            "Pregledali smo sve podatke pored vašeg izbora, ali nismo pronašli obrazac za popunjavanje vrednosti."
+        }
         "Paste" => "Nalepi",
         "Paste Values" => "Nalepi vrednosti",
         "Paste Formulas" => "Nalepi formule",

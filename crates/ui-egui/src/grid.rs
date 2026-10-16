@@ -1877,7 +1877,9 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             if resp.drag_stopped() && app.grid.ink.len() >= 2 {
                 let pts: Vec<[f32; 2]> = std::mem::take(&mut app.grid.ink);
-                let _ = app.run("draw.stroke", json!({"points": pts}));
+                if let Err(e) = app.run("draw.stroke", json!({"points": pts})) {
+                    app.alert(e);
+                }
             }
             return;
         }
@@ -1886,7 +1888,9 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 && let Some(("shape", id, _)) = crate::chartview::hit(app, geo, sh, p)
                 && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::Ink)
             {
-                let _ = app.run("object.delete", json!({"kind": "shape", "id": id}));
+                if let Err(e) = app.run("object.delete", json!({"kind": "shape", "id": id})) {
+                    app.alert(e);
+                }
             }
             return;
         }
@@ -2269,7 +2273,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                     // Ctrl (Cmd on macOS) swaps copying and extending, as in Excel.
                     let mode = if mods.command { "alternate" } else { "series" };
                     if let Err(e) = app.run("edit.autoFill", json!({"source": src.a1(), "target": t.a1(), "mode": mode})) {
-                        app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+                        app.report_error("GridCraft", &e);
                     }
                 }
             }
@@ -2290,7 +2294,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             Drag::MoveCols { source, before: Some(before) } => {
                 if let Err(e) = app.run("sheet.moveColumns", json!({"cols": source.a1(), "before": before})) {
-                    app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+                    app.report_error("GridCraft", &e);
                 }
             }
             _ => {}
@@ -2535,7 +2539,7 @@ pub fn follow_link(app: &mut SheetApp, target: &str) {
             app.grid.ensure_visible = true;
         }
         LinkKind::External(url) => app.open_dialog("openLink", json!({"url": url})),
-        LinkKind::Refused(why) => app.message = Some(("Hyperlink".into(), why)),
+        LinkKind::Refused(why) => app.report_error("Hyperlink", why),
     }
 }
 

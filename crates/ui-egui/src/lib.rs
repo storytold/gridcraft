@@ -266,6 +266,11 @@ pub struct SheetApp {
 }
 
 impl SheetApp {
+    pub(crate) fn report_error(&mut self, title: impl Into<String>, error: impl std::fmt::Display) {
+        let error = error.to_string();
+        self.message = Some((title.into(), clean_error_for(self.ui.language, &error)));
+    }
+
     pub fn new(session: Session, services: Services) -> SheetApp {
         SheetApp {
             session,
@@ -538,7 +543,7 @@ impl SheetApp {
         if e.contains("is not available right now") {
             self.toast = Some((e, now_ms()));
         } else {
-            self.message = Some(("GridCraft".into(), clean_error(&e)));
+            self.report_error("GridCraft", &e);
         }
     }
 
@@ -710,7 +715,7 @@ impl SheetApp {
 
     pub fn open_dialog(&mut self, name: &str, params: Json) {
         if let Err(e) = self.commit_text_box_edit() {
-            self.message = Some(("Text Box".into(), clean_error(&e)));
+            self.report_error("Text Box", &e);
             return;
         }
         match name {
@@ -766,7 +771,7 @@ impl SheetApp {
             Ok(r) => self.after_open(Some(path), &r),
             // A password-protected workbook: ask for the password; the dialog opens it.
             Err(e) if e.contains(gridcraft_engine::io::PASSWORD_REQUIRED) => self.open_dialog("openPassword", json!({"path": path})),
-            Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
+            Err(e) => self.report_error("GridCraft", &e),
         }
         self.after_engine();
     }
@@ -864,7 +869,7 @@ impl SheetApp {
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
         if let Err(e) = self.commit_text_box_edit() {
-            self.message = Some(("Text Box".into(), clean_error(&e)));
+            self.report_error("Text Box", &e);
             return;
         }
         let Some(d) = self.session.active() else { return };
@@ -909,7 +914,7 @@ impl SheetApp {
         let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)) {
             Some(Ok(text)) => text,
             Some(Err(error)) => {
-                self.message = Some(("GridCraft".into(), error.to_string()));
+                self.report_error("GridCraft", error);
                 self.editor = Some(ed);
                 self.session.mode = gridcraft_engine::Mode::Edit;
                 return false;
@@ -922,7 +927,7 @@ impl SheetApp {
         {
             if dv.error_style == gridcraft_engine::model::ErrorStyle::Stop {
                 let title = if dv.error_title.is_empty() { "GridCraft".to_string() } else { dv.error_title.clone() };
-                self.message = Some((title, msg));
+                self.report_error(title, msg);
                 self.editor = Some(ed);
                 self.session.mode = gridcraft_engine::Mode::Edit;
                 return false;
@@ -943,7 +948,7 @@ impl SheetApp {
                 true
             }
             Err(e) => {
-                self.message = Some(("GridCraft".into(), clean_error(&e)));
+                self.report_error("GridCraft", &e);
                 self.editor = Some(ed);
                 self.session.mode = gridcraft_engine::Mode::Edit;
                 false
@@ -1075,7 +1080,7 @@ impl SheetApp {
                     self.backstage = None;
                     self.open_dialog("openPassword", json!({"name": name, "base64": b64}));
                 }
-                Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
+                Err(e) => self.report_error("GridCraft", &e),
             }
             self.after_engine();
         }
@@ -1241,6 +1246,11 @@ pub fn clean_error(e: &str) -> String {
         return rest.to_string();
     }
     e.to_string()
+}
+
+/// Cleans an engine error and translates its message for the current interface language.
+pub fn clean_error_for(language: i18n::Language, e: &str) -> String {
+    language.tr(&clean_error(e)).to_string()
 }
 
 #[allow(clippy::disallowed_methods)] // the clock is read only off wasm

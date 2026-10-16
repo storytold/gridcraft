@@ -2,6 +2,9 @@
 
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "We looked at all the data next to your selection and didn't see a pattern for filling in values for you." => {
+            "Nous avons examiné toutes les données à côté de votre sélection, mais n’avons trouvé aucun motif pour remplir les valeurs."
+        }
         "Different First Page" => "Première page différente",
         "Different Odd & Even Pages" => "Pages paires et impaires différentes",
         "Paste" => "Coller",

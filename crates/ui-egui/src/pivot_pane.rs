@@ -45,7 +45,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         app.run("pivot.removeField", json!({"pivot": name, "field": fname}))
                     };
                     if let Err(e) = res {
-                        app.message = Some(("PivotTable".into(), crate::clean_error(&e)));
+                        app.report_error("PivotTable", &e);
                     }
                 }
                 let samples: Vec<String> =

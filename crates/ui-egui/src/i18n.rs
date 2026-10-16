@@ -176,6 +176,10 @@ pub fn set_current(ctx: &egui::Context, language: Language) {
 /// English label → Japanese. Keys are the exact interface strings (command ids, file names and
 /// document text are never translated); anything absent falls back to English.
 const JAPANESE: &[(&str, &str)] = &[
+    (
+        "We looked at all the data next to your selection and didn't see a pattern for filling in values for you.",
+        "選択範囲の隣にあるすべてのデータを確認しましたが、値を入力するためのパターンが見つかりませんでした。",
+    ),
     ("Paste", "貼り付け"),
     ("Paste Values", "値の貼り付け"),
     ("Paste Formulas", "数式の貼り付け"),
