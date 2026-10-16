@@ -75,3 +75,10 @@ opt-level = 3
 lto = "thin"
 codegen-units = 16
 debug = 0
+
+[patch.crates-io]
+egui = { git = "https://github.com/Mouhand-Kaddo/egui", rev = "fb94971f4ffb192f36c4a1aee868fc36fdd29caa" }
+epaint = { git = "https://github.com/Mouhand-Kaddo/egui", rev = "fb94971f4ffb192f36c4a1aee868fc36fdd29caa" }
+emath = { git = "https://github.com/Mouhand-Kaddo/egui", rev = "fb94971f4ffb192f36c4a1aee868fc36fdd29caa" }
+ecolor = { git = "https://github.com/Mouhand-Kaddo/egui", rev = "fb94971f4ffb192f36c4a1aee868fc36fdd29caa" }
+epaint_default_fonts = { git = "https://github.com/Mouhand-Kaddo/egui", rev = "fb94971f4ffb192f36c4a1aee868fc36fdd29caa" }
