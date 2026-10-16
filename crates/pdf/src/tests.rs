@@ -1,5 +1,8 @@
 use super::*;
 
+mod reference;
+use reference::{OldPage, interpret};
+
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
@@ -158,6 +161,533 @@ fn hostile_inputs_never_panic() {
     check_xref(&pdf);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Writer cleanup: equivalence with the previous content writer, structure, and one test per
+// behaviour change.
+// ---------------------------------------------------------------------------------------------
+
+/// Offsets of the in-use objects, by id, from the xref table.
+fn xref_offsets(pdf: &[u8]) -> Vec<usize> {
+    let sx = rfind(pdf, b"startxref\n").unwrap();
+    let rest = std::str::from_utf8(&pdf[sx + 10..]).unwrap();
+    let off: usize = rest.lines().next().unwrap().trim().parse().unwrap();
+    let table = std::str::from_utf8(&pdf[off..sx]).unwrap();
+    table.lines().skip(2).take_while(|l| l.len() == 18 || l.len() == 19).map(|e| e[..10].parse().unwrap()).collect()
+}
+
+struct Obj {
+    dict: String,
+    stream: Option<Vec<u8>>,
+}
+
+/// Parses every object of a document written by this crate, checking that each stream's
+/// `/Length` matches its data and is followed by `endstream`/`endobj`.
+fn parse_objects(pdf: &[u8]) -> Vec<Obj> {
+    let offsets = xref_offsets(pdf);
+    let mut objs = Vec::new();
+    for (id, off) in offsets.iter().enumerate() {
+        if id == 0 {
+            objs.push(Obj { dict: String::new(), stream: None });
+            continue;
+        }
+        let tail = &pdf[*off..];
+        let head = format!("{id} 0 obj\n");
+        assert!(tail.starts_with(head.as_bytes()), "object {id}");
+        let body = &tail[head.len()..];
+        let end = find(body, b"\nendobj\n").unwrap();
+        match find(body, b"\nstream\n").filter(|s| *s < end) {
+            Some(s) => {
+                let dict = String::from_utf8(body[..s].to_vec()).unwrap();
+                let l = dict.find("/Length ").unwrap() + 8;
+                let len: usize = dict[l..].split(' ').next().unwrap().parse().unwrap();
+                let data = &body[s + 8..];
+                assert!(data[len..].starts_with(b"\nendstream\nendobj\n"), "object {id}: /Length {len} is wrong");
+                objs.push(Obj { dict, stream: Some(data[..len].to_vec()) });
+            }
+            None => objs.push(Obj { dict: String::from_utf8(body[..end].to_vec()).unwrap(), stream: None }),
+        }
+    }
+    objs
+}
+
+fn ref_of(dict: &str, key: &str) -> Option<usize> {
+    let i = dict.find(key)? + key.len();
+    dict[i..].trim_start().split(' ').next()?.parse().ok()
+}
+
+struct ParsedPage {
+    media: String,
+    content: String,
+    /// `(Im name, object id)`.
+    xobjects: Vec<(String, usize)>,
+}
+
+fn parse_pages(pdf: &[u8]) -> (Vec<Obj>, Vec<ParsedPage>) {
+    let objs = parse_objects(pdf);
+    let mut pages = Vec::new();
+    for o in &objs {
+        if !o.dict.contains("/Type /Page ") {
+            continue;
+        }
+        let m = o.dict.find("/MediaBox [").unwrap() + 10;
+        let media = o.dict[m..m + o.dict[m..].find(']').unwrap() + 1].to_string();
+        let content_id = ref_of(&o.dict, "/Contents").unwrap();
+        let content = String::from_utf8(objs[content_id].stream.clone().unwrap()).unwrap();
+        let mut xobjects = Vec::new();
+        if let Some(x) = o.dict.find("/XObject << ") {
+            let rest = &o.dict[x + 11..];
+            let rest = &rest[..rest.find(">>").unwrap()];
+            let toks: Vec<&str> = rest.split_whitespace().collect();
+            for c in toks.chunks(4) {
+                xobjects.push((c[0].to_string(), c[1].parse().unwrap()));
+            }
+        }
+        pages.push(ParsedPage { media, content, xobjects });
+    }
+    (objs, pages)
+}
+
+fn rle_decode(d: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < d.len() {
+        let l = d[i];
+        i += 1;
+        if l == 128 {
+            break;
+        } else if l < 128 {
+            out.extend_from_slice(&d[i..i + l as usize + 1]);
+            i += l as usize + 1;
+        } else {
+            out.extend(std::iter::repeat_n(d[i], 257 - l as usize));
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Decodes an image XObject: `(width, height, rgb, alpha)`.
+fn decode_image(objs: &[Obj], id: usize) -> (u32, u32, Vec<u8>, Option<Vec<u8>>) {
+    let o = &objs[id];
+    let w = ref_of(&o.dict, "/Width").unwrap() as u32;
+    let h = ref_of(&o.dict, "/Height").unwrap() as u32;
+    let rgb = rle_decode(o.stream.as_ref().unwrap());
+    let alpha = ref_of(&o.dict, "/SMask").map(|m| rle_decode(objs[m].stream.as_ref().unwrap()));
+    (w, h, rgb, alpha)
+}
+
+/// Deterministic pseudo-random numbers for the corpus.
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 >> 33
+    }
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+    fn f(&mut self) -> f32 {
+        self.below(600) as f32 + self.below(4) as f32 * 0.25
+    }
+}
+
+const PALETTE: [Rgb; 4] = [[0, 0, 0], [255, 0, 0], [12, 200, 99], [255, 255, 255]];
+const WIDTHS: [f32; 3] = [0.5, 1.0, 2.5];
+const DASHES: [&[f32]; 3] = [&[], &[3.0, 2.0], &[1.0]];
+
+/// A picture used by the corpus: `(rgba, w, h)`.
+fn pictures() -> Vec<(Vec<u8>, u32, u32)> {
+    let mut with_alpha = Vec::new();
+    for i in 0..16u8 {
+        with_alpha.extend_from_slice(&[i * 10, 0, 7, if i < 8 { 255 } else { 128 }]);
+    }
+    let opaque: Vec<u8> = (0..4 * 9).map(|i| if i % 4 == 3 { 255 } else { (i * 7) as u8 }).collect();
+    let mut last_px = vec![200u8; 4 * 6];
+    for px in last_px.chunks_mut(4) {
+        px[3] = 255;
+    }
+    last_px[4 * 5 + 3] = 3; // only the very last pixel is translucent
+    vec![(with_alpha, 4, 4), (opaque, 3, 3), (last_px, 3, 2)]
+}
+
+/// Applies a random operation to both writers.
+fn random_op(rng: &mut Lcg, new: &mut Page, old: &mut OldPage, pics: &[(Vec<u8>, u32, u32)], depth: &mut usize) {
+    let color = PALETTE[rng.below(4) as usize];
+    let width = WIDTHS[rng.below(3) as usize];
+    let dash = DASHES[rng.below(3) as usize];
+    let (x, y, w, h) = (rng.f(), rng.f(), rng.f() / 4.0 + 1.0, rng.f() / 4.0 + 1.0);
+    let pts = [[x, y], [x + w, y], [x + w, y + h]];
+    let stroke = if rng.below(2) == 0 { Some((PALETTE[rng.below(4) as usize], WIDTHS[rng.below(3) as usize])) } else { None };
+    let fill = if rng.below(2) == 0 { Some(color) } else { None };
+    match rng.below(14) {
+        0 | 1 => {
+            new.fill_rect(x, y, w, h, color);
+            old.fill_rect(x, y, w, h, color);
+        }
+        2 => {
+            new.rect_stroke(x, y, w, h, width, color);
+            old.rect_stroke(x, y, w, h, width, color);
+        }
+        3 => {
+            new.stroke_line_dashed(x, y, x + w, y + h, width, color, dash);
+            old.stroke_line_dashed(x, y, x + w, y + h, width, color, dash);
+        }
+        4 => {
+            new.polyline(&pts, width, color, dash);
+            old.polyline(&pts, width, color, dash);
+        }
+        5 => {
+            new.polygon(&pts, fill, stroke);
+            old.polygon(&pts, fill, stroke);
+        }
+        6 => {
+            new.circle(x, y, w, fill, stroke);
+            old.circle(x, y, w, fill, stroke);
+        }
+        7 | 8 => {
+            let font = Font::ALL[rng.below(12) as usize];
+            let angle = if rng.below(3) == 0 { 0.5 } else { 0.0 };
+            new.text_rotated(x, y, 10.0, font, color, "Hi (there)", angle);
+            old.text_rotated(x, y, 10.0, font, color, "Hi (there)", angle);
+        }
+        9 => {
+            new.clip_rect(x, y, w, h);
+            old.clip_rect(x, y, w, h);
+        }
+        10 if *depth < 20 => {
+            new.save();
+            old.save();
+            *depth += 1;
+        }
+        11 if *depth > 0 => {
+            new.restore();
+            old.restore();
+            *depth -= 1;
+        }
+        12 => {
+            let (px, pw, ph) = &pics[rng.below(3) as usize];
+            new.image_rgba(x, y, w, h, px, *pw, *ph);
+            old.image(x, y, w, h);
+        }
+        _ => {
+            new.text(x, y, 9.0, Font::Helvetica, color, "Plain");
+            old.text_rotated(x, y, 9.0, Font::Helvetica, color, "Plain", 0.0);
+        }
+    }
+}
+
+/// Builds the same random multi-page document with the new writer and the old content writer.
+fn corpus_doc(seed: u64) -> (Vec<u8>, Vec<String>) {
+    let mut rng = Lcg(seed);
+    let pics = pictures();
+    let mut doc = PdfDoc::new();
+    let mut old_pages = Vec::new();
+    for _ in 0..(1 + rng.below(4)) {
+        let mut old = OldPage::new(792.0);
+        let mut depth = 0usize;
+        let page = doc.add_page(612.0, 792.0);
+        for _ in 0..120 {
+            random_op(&mut rng, page, &mut old, &pics, &mut depth);
+        }
+        while depth > 0 {
+            page.restore();
+            old.restore();
+            depth -= 1;
+        }
+        old_pages.push(old.content);
+    }
+    (doc.finish(), old_pages)
+}
+
+#[test]
+fn new_writer_is_equivalent_to_the_old_one() {
+    let mut style_new = 0;
+    let mut style_old = 0;
+    for seed in 1..=40u64 {
+        let (pdf, old_pages) = corpus_doc(seed);
+        check_xref(&pdf);
+        let (_, pages) = parse_pages(&pdf);
+        assert_eq!(pages.len(), old_pages.len());
+        for (p, old) in pages.iter().zip(&old_pages) {
+            assert_eq!(p.media, "[0 0 612 792]");
+            let new = interpret(&p.content);
+            let old = interpret(old);
+            assert!(new.balanced && old.balanced, "q/Q balanced (seed {seed})");
+            assert_eq!(new.paints.len(), old.paints.len(), "seed {seed}");
+            for (i, (a, b)) in new.paints.iter().zip(&old.paints).enumerate() {
+                // Round joins leaking from polylines into later rectangles is the old bug (B7),
+                // compared separately in `join_does_not_leak_from_polylines`.
+                let mut a = a.clone();
+                let mut b = b.clone();
+                a.join.clear();
+                b.join.clear();
+                assert_eq!(a, b, "seed {seed}, painting op {i}");
+            }
+            style_new += new.style_ops;
+            style_old += old.style_ops;
+        }
+    }
+    // Sanity: the corpus really contains style changes, and the new writer emits fewer.
+    assert!(style_old > 1000, "corpus too small: {style_old}");
+    assert!(style_new < style_old, "{style_new} vs {style_old}");
+}
+
+#[test]
+fn structure_is_valid_for_all_documents() {
+    for seed in 1..=40u64 {
+        let (pdf, _) = corpus_doc(seed);
+        check_xref(&pdf);
+        parse_objects(&pdf); // every /Length matches its data
+    }
+    let empty = PdfDoc::new().finish();
+    check_xref(&empty);
+    parse_objects(&empty);
+}
+
+#[test]
+fn images_decode_to_their_pixels() {
+    let pics = pictures();
+    let mut d = PdfDoc::new();
+    for _ in 0..2 {
+        let p = d.add_page(300.0, 300.0);
+        for (px, w, h) in &pics {
+            p.image_rgba(1.0, 1.0, 20.0, 20.0, px, *w, *h);
+        }
+    }
+    let pdf = d.finish();
+    let (objs, pages) = parse_pages(&pdf);
+    assert_eq!(pages.len(), 2);
+    for page in &pages {
+        assert_eq!(page.xobjects.len(), 3);
+        for ((px, w, h), (_, id)) in pics.iter().zip(&page.xobjects) {
+            let (dw, dh, rgb, alpha) = decode_image(&objs, *id);
+            assert_eq!((dw, dh), (*w, *h));
+            let want_rgb: Vec<u8> = px.chunks(4).flat_map(|c| [c[0], c[1], c[2]]).collect();
+            assert_eq!(rgb, want_rgb);
+            let want_alpha: Vec<u8> = px.chunks(4).map(|c| c[3]).collect();
+            match alpha {
+                Some(a) => assert_eq!(a, want_alpha),
+                None => assert!(want_alpha.iter().all(|a| *a == 255)),
+            }
+        }
+    }
+}
+
+/// O6: no alpha plane (and no SMask object) for an opaque image; a single translucent pixel
+/// anywhere (first, middle, last) produces the full plane.
+#[test]
+fn opaque_images_have_no_soft_mask() {
+    let mut d = PdfDoc::new();
+    let p = d.add_page(100.0, 100.0);
+    p.image_rgba(0.0, 0.0, 10.0, 10.0, &[255; 4 * 12], 4, 3);
+    assert!(p.images[0].alpha.is_none());
+    let pdf = d.finish();
+    assert!(find(&pdf, b"/SMask").is_none());
+    assert_eq!(pdf.windows(15).filter(|w| *w == b"/Subtype /Image").count(), 1);
+
+    for translucent in [0usize, 5, 11] {
+        let mut px = vec![255u8; 4 * 12];
+        px[translucent * 4 + 3] = 7;
+        let mut d = PdfDoc::new();
+        d.add_page(100.0, 100.0).image_rgba(0.0, 0.0, 10.0, 10.0, &px, 4, 3);
+        let (objs, pages) = parse_pages(&d.finish());
+        let (_, _, _, alpha) = decode_image(&objs, pages[0].xobjects[0].1);
+        let mut want = vec![255u8; 12];
+        want[translucent] = 7;
+        assert_eq!(alpha, Some(want));
+    }
+}
+
+/// O4: the same picture on five pages is stored once (image + mask), by every page.
+#[test]
+fn identical_images_are_stored_once() {
+    let pics = pictures();
+    let (px, w, h) = &pics[0]; // has alpha: image object + mask object
+    let mut d = PdfDoc::new();
+    for _ in 0..5 {
+        let p = d.add_page(200.0, 200.0);
+        p.image_rgba(1.0, 1.0, 20.0, 20.0, px, *w, *h);
+        p.image_rgba(30.0, 1.0, 20.0, 20.0, px, *w, *h); // twice on one page
+    }
+    let pdf = d.finish();
+    check_xref(&pdf);
+    assert_eq!(pdf.windows(15).filter(|w| *w == b"/Subtype /Image").count(), 2, "one image + one soft mask");
+    let (_, pages) = parse_pages(&pdf);
+    let ids: Vec<usize> = pages.iter().flat_map(|p| p.xobjects.iter().map(|x| x.1)).collect();
+    assert_eq!(ids.len(), 5, "one XObject entry per page");
+    assert!(ids.iter().all(|i| *i == ids[0]));
+    for p in &pages {
+        assert_eq!(p.content.matches(" Do").count(), 2);
+    }
+}
+
+/// O4: a picture that differs in one byte, or only in size, is not merged.
+#[test]
+fn different_images_are_not_merged() {
+    let a = vec![50u8; 4 * 4];
+    let mut b = a.clone();
+    b[5] = 51;
+    let mut d = PdfDoc::new();
+    let p = d.add_page(100.0, 100.0);
+    p.image_rgba(0.0, 0.0, 5.0, 5.0, &a, 4, 1);
+    p.image_rgba(0.0, 0.0, 5.0, 5.0, &b, 4, 1);
+    p.image_rgba(0.0, 0.0, 5.0, 5.0, &a, 2, 2);
+    d.add_page(100.0, 100.0).image_rgba(0.0, 0.0, 5.0, 5.0, &a, 4, 1);
+    let pdf = d.finish();
+    assert_eq!(pdf.windows(15).filter(|w| *w == b"/Subtype /Image").count(), 6, "three distinct pictures, each with a soft mask (alpha 50)");
+}
+
+/// O4: equal hashes alone never merge images; the pixels are compared.
+#[test]
+fn hash_collisions_do_not_merge_images() {
+    let mut d = PdfDoc::new();
+    for v in [10u8, 20] {
+        d.add_page(100.0, 100.0).image_rgba(0.0, 0.0, 5.0, 5.0, &[v; 16], 2, 2);
+    }
+    for p in 0..2 {
+        d.page_mut(p).unwrap().images[0].hash = 42; // forced collision
+    }
+    let (objs, pages) = parse_pages(&d.finish());
+    let ids: Vec<usize> = pages.iter().map(|p| p.xobjects[0].1).collect();
+    assert_ne!(ids[0], ids[1]);
+    assert_eq!(decode_image(&objs, ids[0]).2, vec![10; 12]);
+    assert_eq!(decode_image(&objs, ids[1]).2, vec![20; 12]);
+}
+
+/// S5: the colour component table equals the old float formatting for every byte.
+#[test]
+fn colour_components_match_the_float_formatting() {
+    for v in 0..=255u8 {
+        let mut s = String::new();
+        push_unit(&mut s, v);
+        assert_eq!(s, n(v as f32 / 255.0), "byte {v}");
+    }
+    let mut s = String::new();
+    push_rgb(&mut s, [255, 128, 0], true);
+    assert_eq!(s, "1 0.502 0 RG");
+}
+
+/// S3: the obsolete /ProcSet entry is gone.
+#[test]
+fn no_procset() {
+    let (pdf, _) = corpus_doc(3);
+    assert!(find(&pdf, b"/ProcSet").is_none());
+}
+
+/// O3: a style that is already in effect is not emitted again.
+#[test]
+fn unchanged_style_is_emitted_once() {
+    let mut d = PdfDoc::new();
+    let p = d.add_page(200.0, 200.0);
+    for i in 0..50 {
+        p.rect_stroke(i as f32, 0.0, 5.0, 5.0, 1.5, [10, 20, 30]);
+    }
+    for i in 0..50 {
+        p.stroke_line_dashed(0.0, i as f32, 9.0, 9.0, 1.5, [10, 20, 30], &[2.0, 1.0]);
+    }
+    for _ in 0..50 {
+        p.fill_rect(0.0, 0.0, 4.0, 4.0, [1, 2, 3]);
+        p.text(5.0, 5.0, 9.0, Font::Helvetica, [1, 2, 3], "x");
+    }
+    let s = interpret(&p.content);
+    assert_eq!(p.content.matches(" RG\n").count(), 1);
+    assert_eq!(p.content.matches(" rg\n").count(), 1);
+    assert_eq!(p.content.matches(" w\n").count(), 1);
+    assert_eq!(p.content.matches(" d\n").count(), 2, "solid, then [2 1]");
+    assert_eq!(s.style_ops, 5);
+    assert_eq!(s.paints.len(), 50 * 4);
+}
+
+/// O3: the tracked style follows q/Q, and a new page starts from scratch.
+#[test]
+fn style_tracking_follows_save_restore_and_pages() {
+    let red = [255, 0, 0];
+    let blue = [0, 0, 255];
+    let mut d = PdfDoc::new();
+    let p = d.add_page(100.0, 100.0);
+    p.fill_rect(0.0, 0.0, 5.0, 5.0, red);
+    p.save();
+    p.fill_rect(0.0, 0.0, 5.0, 5.0, red); // still red inside: nothing to emit
+    p.fill_rect(0.0, 0.0, 5.0, 5.0, blue);
+    p.restore();
+    p.fill_rect(0.0, 0.0, 5.0, 5.0, red); // red again after Q without a new operator
+    p.fill_rect(0.0, 0.0, 5.0, 5.0, blue); // but blue must be re-emitted
+    let fills: Vec<String> = interpret(&p.content).paints.iter().map(|p| p.fill.clone()).collect();
+    assert_eq!(fills, ["1 0 0", "1 0 0", "0 0 1", "1 0 0", "0 0 1"]);
+    assert_eq!(p.content.matches(" rg\n").count(), 3, "red once, blue twice");
+    let p2 = d.add_page(100.0, 100.0);
+    p2.fill_rect(0.0, 0.0, 5.0, 5.0, red);
+    assert_eq!(p2.content.matches(" rg\n").count(), 1, "a new page re-emits the colour");
+}
+
+/// B6: only 28 nested saves are written, the matching extra restores are no-ops.
+#[test]
+fn save_nesting_is_limited_to_28() {
+    let mut d = PdfDoc::new();
+    let p = d.add_page(100.0, 100.0);
+    for _ in 0..40 {
+        p.save();
+    }
+    p.fill_rect(0.0, 0.0, 5.0, 5.0, [1, 1, 1]);
+    assert_eq!(p.content.matches("q\n").count(), 28);
+    // The 12 restores that match refused saves do nothing...
+    for _ in 0..12 {
+        p.restore();
+    }
+    assert_eq!(p.content.matches("Q\n").count(), 0);
+    assert_eq!(interpret(&p.content).max_depth, 28);
+    // ...the next 28 undo the accepted ones, and further restores are ignored.
+    for _ in 0..40 {
+        p.restore();
+    }
+    assert_eq!(p.content.matches("Q\n").count(), 28);
+    let i = interpret(&p.content);
+    assert!(i.balanced);
+    // An image needs its own q: dropped at the limit, drawn otherwise.
+    for _ in 0..28 {
+        p.save();
+    }
+    p.image_rgba(0.0, 0.0, 5.0, 5.0, &[9; 16], 2, 2);
+    assert!(!p.content.contains(" Do"));
+    p.restore();
+    p.image_rgba(0.0, 0.0, 5.0, 5.0, &[9; 16], 2, 2);
+    assert!(p.content.contains(" Do"));
+    let pdf = d.finish();
+    check_xref(&pdf);
+}
+
+/// B6: `finish()` closes what is still open, without exceeding the limit.
+#[test]
+fn finish_closes_open_saves() {
+    let mut d = PdfDoc::new();
+    let p = d.add_page(100.0, 100.0);
+    for _ in 0..33 {
+        p.save();
+    }
+    let (_, pages) = parse_pages(&d.finish());
+    let i = interpret(&pages[0].content);
+    assert!(i.balanced);
+    assert_eq!(i.qs, 28);
+}
+
+/// B7: round joins set for a polyline do not leak into later rectangles, lines and circles.
+#[test]
+fn join_does_not_leak_from_polylines() {
+    let mut d = PdfDoc::new();
+    let p = d.add_page(200.0, 200.0);
+    let pts = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]];
+    p.rect_stroke(0.0, 0.0, 5.0, 5.0, 1.0, [0, 0, 0]);
+    p.polyline(&pts, 1.0, [0, 0, 0], &[]);
+    p.polyline(&pts, 1.0, [0, 0, 0], &[]);
+    p.rect_stroke(0.0, 0.0, 5.0, 5.0, 1.0, [0, 0, 0]);
+    p.stroke_line(0.0, 0.0, 9.0, 9.0, 1.0, [0, 0, 0]);
+    p.polygon(&pts, None, Some(([0, 0, 0], 1.0)));
+    p.circle(50.0, 50.0, 5.0, None, Some(([0, 0, 0], 1.0)));
+    let joins: Vec<String> = interpret(&p.content).paints.iter().map(|p| p.join.clone()).collect();
+    assert_eq!(joins, ["0", "1", "1", "0", "0", "1", "0"]);
+    assert_eq!(p.content.matches(" j\n").count(), 4, "1, 0, 1, 0: only on change");
+}
+
 fn page_content(d: &PdfDoc) -> &str {
     &d.pages[0].content
 }
@@ -179,7 +709,10 @@ fn all_zero_dash_is_drawn_solid() {
     p.polyline(&[[0.0, 0.0], [5.0, 5.0]], 1.0, [0, 0, 0], &[0.0, 0.0001, f32::NAN]);
     p.stroke_line_dashed(0.0, 0.0, 50.0, 0.0, 1.0, [0, 0, 0], &[3.0, 2.0]);
     let c = page_content(&d);
-    assert_eq!(c.matches("[] 0 d").count(), 2);
+    // The writer emits style operators only on change: the two solid lines share one `[] 0 d`.
+    let dashes: Vec<String> = interpret(c).paints.iter().map(|p| p.dash.clone()).collect();
+    assert_eq!(dashes, ["", "", "3 2"]);
+    assert_eq!(c.matches("[] 0 d").count(), 1);
     assert!(!c.contains("[0 0]"));
     assert!(c.contains("[3 2] 0 d"));
 }
@@ -193,7 +726,9 @@ fn negative_and_nan_stroke_widths_become_zero() {
     p.polygon(&[[0.0, 0.0], [5.0, 0.0], [5.0, 5.0]], None, Some(([0, 0, 0], -1.0)));
     p.circle(20.0, 20.0, 5.0, None, Some(([0, 0, 0], f32::NEG_INFINITY)));
     let c = page_content(&d);
-    assert_eq!(c.matches("\n0 w ").count(), 4);
+    // Style operators are emitted only on change, so judge the width in effect for each stroke.
+    let widths: Vec<String> = interpret(c).paints.iter().map(|p| p.width.clone()).collect();
+    assert_eq!(widths, ["0", "0", "0", "0"]);
     assert!(!c.contains("-1 w") && !c.contains("-3 w"));
 }
 
