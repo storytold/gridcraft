@@ -339,6 +339,27 @@ pub struct Style {
     /// Number format code; "General" by default.
     pub num_fmt: NumFmt,
     pub protection: Protection,
+    /// Differential formats only.
+    #[serde(default)]
+    pub dxf_stated: DxfStated,
+}
+
+/// The parts a differential format states at a value its `Style` can't tell from unset: a dxf's
+/// default parts are unset, so a bold turned off, a face, a size or a protection that matches the
+/// defaults would otherwise read as nothing. The values are the style's own; this records that
+/// the format states them, and only where they match the defaults, so a format built in the app
+/// and the same format read back from a file stay equal.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DxfStated {
+    pub bold: bool,
+    pub italic: bool,
+    pub strike: bool,
+    pub underline: bool,
+    pub size: bool,
+    pub name: bool,
+    /// `<scheme val>`: the theme font the face follows (`major`, `minor` or `none`).
+    pub scheme: Option<String>,
+    pub protection: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use gridcraft_model::style::Protection;
+use gridcraft_model::style::{DxfStated, Protection};
 use gridcraft_model::{
     Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, Style, Underline, VAlign, VertAlign, Workbook,
 };
@@ -348,10 +348,23 @@ pub fn read_styles(root: &El, checkboxes: &[bool]) -> StylesIn {
             d.kids("dxf")
                 .map(|x| {
                     let mut s = Style::default();
-                    if let Some(f) = x.child("font") {
-                        let f = read_font(f, &palette);
-                        // Differential fonts rarely name a face; keep the default face and size.
-                        s.font = Font { name: s.font.name.clone(), size: s.font.size, ..f };
+                    if let Some(e) = x.child("font") {
+                        let f = read_font(e, &palette);
+                        // Differential fonts rarely name a face; unless stated, keep the default face and size.
+                        let has_size = e.child("sz").and_then(|n| n.attr_f64("val")).is_some();
+                        let has_name = e.child("name").and_then(|n| n.attr("val")).is_some();
+                        let name = if has_name { f.name.clone() } else { s.font.name.clone() };
+                        let size = if has_size { f.size } else { s.font.size };
+                        let def = Font::default();
+                        let st = &mut s.dxf_stated;
+                        st.bold = e.child("b").is_some() && !f.bold;
+                        st.italic = e.child("i").is_some() && !f.italic;
+                        st.strike = e.child("strike").is_some() && !f.strike;
+                        st.underline = e.child("u").is_some() && f.underline == Underline::None;
+                        st.size = has_size && size == def.size;
+                        st.name = has_name && name == def.name;
+                        st.scheme = e.child_val("scheme").map(str::to_string);
+                        s.font = Font { name, size, ..f };
                     }
                     if let Some(n) = x.child("numFmt") {
                         if let Some(code) = n.attr("formatCode") {
@@ -371,6 +384,7 @@ pub fn read_styles(root: &El, checkboxes: &[bool]) -> StylesIn {
                     }
                     if let Some(p) = x.child("protection") {
                         s.protection = read_protection(p);
+                        s.dxf_stated.protection = s.protection == Protection::default();
                     }
                     s
                 })
@@ -396,19 +410,20 @@ pub fn color_attrs(c: &Color) -> String {
     }
 }
 
-/// `minor`: the font follows the theme's body font (`<scheme val="minor"/>`).
-fn font_xml(f: &Font, dxf: bool, minor: bool) -> String {
+/// `minor`: the font follows the theme's body font (`<scheme val="minor"/>`). `dxf`: a
+/// differential format's font, which writes only what it states.
+fn font_xml(f: &Font, dxf: Option<&DxfStated>, minor: bool) -> String {
+    let stated = dxf.cloned().unwrap_or_default();
     let mut s = String::from("<font>");
-    if f.bold {
-        s.push_str("<b/>");
-    }
-    if f.italic {
-        s.push_str("<i/>");
-    }
-    if f.strike {
-        s.push_str("<strike/>");
+    for (on, said, tag) in [(f.bold, stated.bold, "b"), (f.italic, stated.italic, "i"), (f.strike, stated.strike, "strike")] {
+        if on {
+            let _ = write!(s, "<{tag}/>");
+        } else if said {
+            let _ = write!(s, "<{tag} val=\"0\"/>");
+        }
     }
     match f.underline {
+        Underline::None if stated.underline => s.push_str("<u val=\"none\"/>"),
         Underline::None => {}
         Underline::Single => s.push_str("<u/>"),
         Underline::Double => s.push_str("<u val=\"double\"/>"),
@@ -420,18 +435,26 @@ fn font_xml(f: &Font, dxf: bool, minor: bool) -> String {
         VertAlign::Superscript => s.push_str("<vertAlign val=\"superscript\"/>"),
         VertAlign::Subscript => s.push_str("<vertAlign val=\"subscript\"/>"),
     }
-    if !dxf {
+    let def = Font::default();
+    if dxf.is_none() || stated.size || f.size != def.size {
         let _ = write!(s, "<sz val=\"{}\"/>", num(f.size as f64));
     }
     if f.color != Color::Auto {
         let _ = write!(s, "<color {}/>", color_attrs(&f.color));
-    } else if !dxf {
+    } else if dxf.is_none() {
         s.push_str("<color theme=\"1\"/>");
     }
-    if !dxf {
+    if dxf.is_none() {
         let _ = write!(s, "<name val=\"{}\"/><family val=\"2\"/>", esc_attr(&f.name));
         if minor {
             s.push_str("<scheme val=\"minor\"/>");
+        }
+    } else {
+        if stated.name || f.name != def.name {
+            let _ = write!(s, "<name val=\"{}\"/>", esc_attr(&f.name));
+        }
+        if let Some(sc) = &stated.scheme {
+            let _ = write!(s, "<scheme val=\"{}\"/>", esc_attr(sc));
         }
     }
     s.push_str("</font>");
@@ -664,14 +687,24 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
     for d in dxfs {
         dx.push_str("<dxf>");
         let def = Style::default();
+        let st = &d.dxf_stated;
         if d.font.bold
             || d.font.italic
             || d.font.strike
             || d.font.underline != Underline::None
             || d.font.color != Color::Auto
             || d.font.vert != VertAlign::Baseline
+            || d.font.size != def.font.size
+            || d.font.name != def.font.name
+            || st.bold
+            || st.italic
+            || st.strike
+            || st.underline
+            || st.size
+            || st.name
+            || st.scheme.is_some()
         {
-            dx.push_str(&font_xml(&d.font, true, false));
+            dx.push_str(&font_xml(&d.font, Some(st), false));
         }
         if d.num_fmt != def.num_fmt {
             let id = nf.id(d.num_fmt.as_str());
@@ -682,6 +715,9 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
         }
         if let Some(a) = alignment_xml(&d.align) {
             dx.push_str(&a);
+        }
+        if st.protection || d.protection != def.protection {
+            let _ = write!(dx, "<protection locked=\"{}\" hidden=\"{}\"/>", d.protection.locked as u8, d.protection.hidden as u8);
         }
         if d.borders != def.borders {
             dx.push_str(&border_xml(&d.borders));
@@ -705,7 +741,7 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
     let _ = write!(s, "<fonts count=\"{}\">", fonts.len());
     for (i, f) in fonts.iter().enumerate() {
         // A Normal font in the theme's body face follows the theme, as Excel writes it (#805).
-        s.push_str(&font_xml(f, false, i == 0 && f.name == wb.theme.minor_font));
+        s.push_str(&font_xml(f, None, i == 0 && f.name == wb.theme.minor_font));
     }
     let _ = write!(s, "</fonts><fills count=\"{}\">", fills.len());
     for f in &fills {

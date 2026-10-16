@@ -189,6 +189,41 @@ fn styles_theme_and_sizes() {
     assert_eq!(s.print.fit_to, Some((1, 0)));
 }
 
+/// A differential format's face, size and scheme survive a save, and so do the parts it states at
+/// their default value: a bold, italic or underline turned off, a protection (#1209). Read as
+/// unset, a header dxf that turns bold off lost it and the table style made the header bold again.
+#[test]
+fn dxf_font_and_parts_stated_at_their_defaults_survive_save() {
+    let dxfs = concat!(
+        r#"<dxf><font><b val="0"/><i val="0"/><strike val="0"/><u val="none"/><sz val="11"/><name val="Calibri"/><scheme val="minor"/></font></dxf>"#,
+        r#"<dxf><protection locked="1" hidden="0"/></dxf>"#,
+        r#"<dxf><font><b/></font><protection locked="0" hidden="1"/></dxf>"#,
+        r#"<dxf><font><sz val="9"/><name val="Arial"/></font></dxf>"#,
+    );
+    let styles = format!(
+        r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+      <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+      <borders count="1"><border/></borders>
+      <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
+      <dxfs count="4">{dxfs}</dxfs>
+    </styleSheet>"#
+    );
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <conditionalFormatting sqref="A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>
+      <conditionalFormatting sqref="A2"><cfRule type="cellIs" dxfId="1" priority="2" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>
+      <conditionalFormatting sqref="A3"><cfRule type="cellIs" dxfId="2" priority="3" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>
+      <conditionalFormatting sqref="A4"><cfRule type="cellIs" dxfId="3" priority="4" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>"#;
+    let bytes = minimal(body, &[("xl/styles.xml", &styles)], rels, "");
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let out = crate::write_xlsx(&wb).unwrap();
+    let st = crate::package::Package::open(&out).unwrap().read("xl/styles.xml").unwrap().unwrap();
+    let st = String::from_utf8(st).unwrap();
+    let written = st.split_once("<dxfs").and_then(|(_, r)| r.split_once("</dxfs>")).map(|(d, _)| d);
+    assert_eq!(written, Some(format!(r#" count="4">{dxfs}"#).as_str()));
+}
+
 #[test]
 fn strict_namespace_and_shared_strings() {
     let ct = super::CT;
