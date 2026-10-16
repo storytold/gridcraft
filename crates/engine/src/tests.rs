@@ -2898,6 +2898,33 @@ fn fill_series_year_clamps_leap_day() {
 }
 
 #[test]
+fn autofill_month_pattern_uses_workbook_date_system() {
+    use std::sync::Arc;
+
+    use gridcraft_core::date::serial_from_ymd;
+    use gridcraft_core::{DateSystem, RangeRef};
+
+    for sys in [DateSystem::D1900, DateSystem::D1904] {
+        for (source, target, seeds, expected) in [
+            ("A1:A2", "A1:A6", ["2026-01-31", "2026-03-31"], ["2026-01-31", "2026-03-31", "2026-05-31", "2026-07-31", "2026-09-30", "2026-11-30"]),
+            ("A5:A6", "A1:A6", ["2026-09-30", "2026-11-30"], ["2026-01-30", "2026-03-30", "2026-05-30", "2026-07-30", "2026-09-30", "2026-11-30"]),
+        ] {
+            let mut s = s();
+            Arc::make_mut(&mut s.doc_mut().unwrap().wb).date_system = sys;
+            let start = RangeRef::parse(source).unwrap().start.a1();
+            s.execute("range.setValues", json!({"range": start, "values": [[seeds[0]], [seeds[1]]]})).unwrap();
+            s.execute("edit.autoFill", json!({"source": source, "target": target})).unwrap();
+            for (row, date) in expected.iter().enumerate() {
+                let parts: Vec<i64> = date.split('-').map(|p| p.parse().unwrap()).collect();
+                let expected = Value::Number(serial_from_ymd(sys, parts[0], parts[1], parts[2]).unwrap());
+                let cell = CellRef::new(row as u32, 0).a1();
+                assert_eq!(v(&s, &cell), expected, "{sys:?} {source} -> {target}, {cell}: {date}");
+            }
+        }
+    }
+}
+
+#[test]
 fn autofill_month_pattern_clamps_to_month_end() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["2026-01-31"], ["2026-03-31"]]})).unwrap();

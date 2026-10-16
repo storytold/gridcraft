@@ -165,6 +165,7 @@ enum Pattern {
         last: f64,
         first: f64,
         months: i64,
+        sys: gridcraft_core::DateSystem,
     },
 }
 
@@ -199,7 +200,7 @@ impl Pattern {
                     && (a.month != b.month || a.year != b.year)
                 {
                     let months = (b.year as i64 - a.year as i64) * 12 + b.month as i64 - a.month as i64;
-                    return Pattern::Months { last, first, months };
+                    return Pattern::Months { last, first, months, sys };
                 }
             }
             // Least-squares step for 2+ values (Excel uses a linear trend).
@@ -297,9 +298,9 @@ impl Pattern {
                     s
                 }))
             }
-            Pattern::Months { last, first, months } => {
+            Pattern::Months { last, first, months, sys } => {
                 let base = if forward { *last } else { *first };
-                let s = add_months_clamped(gridcraft_core::DateSystem::D1900, base, months.checked_mul(k * sign)?)?;
+                let s = add_months_clamped(*sys, base, months.checked_mul(k * sign)?)?;
                 Some(Value::number(s))
             }
         }
