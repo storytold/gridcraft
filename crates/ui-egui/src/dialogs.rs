@@ -393,7 +393,11 @@ impl Dialog {
                     Text { key: "header", label: "Header (&L left, &C center, &R right; &P page, &N pages, &D date, &A sheet):" },
                     Text { key: "footer", label: "Footer:" },
                 ],
-                json!({"header": "", "footer": "&CPage &P of &N"}),
+                {
+                    let sheet = app.session.active().and_then(|d| d.wb.active());
+                    let (header, footer) = sheet.map(|s| (s.print.header.clone(), s.print.footer.clone())).unwrap_or_default();
+                    json!({"header": header, "footer": footer})
+                },
             ),
             "pageSetup" => {
                 // Opens on the active sheet's saved margins, so OK without edits rewrites them unchanged.
