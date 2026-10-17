@@ -276,26 +276,29 @@ pub fn file_function_name(name: &str) -> Option<String> {
 
 // ---------------------------------------------------------------- units
 
-/// Column width as stored in a file (characters including padding) → model width (px).
-pub fn col_width_to_px(w: f64) -> f32 {
+/// Column width as stored in a file (characters of the digit width `dw`, including padding) →
+/// model width (px). `dw` is the workbook's [`gridcraft_model::Workbook::digit_width`].
+pub fn col_width_to_px(w: f64, dw: f64) -> f32 {
     if !w.is_finite() || w <= 0.0 {
         return 0.0;
     }
+    let dw = if dw.is_finite() && dw >= 1.0 { dw } else { gridcraft_model::DEFAULT_DIGIT_WIDTH };
     let w = w.min(255.0);
-    (((256.0 * w + (128.0f64 / 7.0).trunc()) / 256.0) * 7.0).trunc() as f32
+    (((256.0 * w + (128.0 / dw).trunc()) / 256.0) * dw).trunc() as f32
 }
 
-/// Model width (px) → stored column width.
-pub fn px_to_col_width(px: f32) -> f64 {
+/// Model width (px) → stored column width, in characters of the digit width `dw`.
+pub fn px_to_col_width(px: f32, dw: f64) -> f64 {
+    let dw = if dw.is_finite() && dw >= 1.0 { dw } else { gridcraft_model::DEFAULT_DIGIT_WIDTH };
     let px = (px.max(0.0) as f64).round().min(1790.0);
-    let back = |w: f64| col_width_to_px(w) as f64;
-    let chars = if px > 12.0 { ((px - 5.0) / 7.0 * 100.0 + 0.5).trunc() / 100.0 } else { px / 12.0 };
-    let w = ((chars * 7.0 + 5.0) / 7.0 * 256.0).trunc() / 256.0;
+    let back = |w: f64| col_width_to_px(w, dw) as f64;
+    let chars = if px > dw + 5.0 { ((px - 5.0) / dw * 100.0 + 0.5).trunc() / 100.0 } else { px / (dw + 5.0) };
+    let w = ((chars * dw + 5.0) / dw * 256.0).trunc() / 256.0;
     if back(w) == px {
         return w;
     }
     // Smallest stored width that reads back as `px`.
-    let s = (px * 256.0 / 7.0 - 18.0).ceil().max(0.0);
+    let s = (px * 256.0 / dw - (128.0 / dw).trunc()).ceil().max(0.0);
     s / 256.0
 }
 
@@ -317,11 +320,19 @@ mod tests {
 
     #[test]
     fn widths() {
-        assert_eq!(col_width_to_px(9.140625), 64.0);
-        assert_eq!(px_to_col_width(64.0), 9.140625);
-        for px in 0..400 {
-            assert_eq!(col_width_to_px(px_to_col_width(px as f32)), px as f32, "px {px}");
+        assert_eq!(col_width_to_px(9.140625, 7.0), 64.0);
+        assert_eq!(px_to_col_width(64.0, 7.0), 9.140625);
+        // Calibri 12 workbooks measure in 8 px digits: 9.71 characters are 78 px, not 68.
+        assert_eq!(col_width_to_px(9.7109375, 7.0), 68.0);
+        assert_eq!(col_width_to_px(9.7109375, 8.0), 78.0);
+        for dw in [6.0, 7.0, 8.0, 9.0, 12.0] {
+            for px in 0..400 {
+                assert_eq!(col_width_to_px(px_to_col_width(px as f32, dw), dw), px as f32, "px {px} at {dw} px digits");
+            }
         }
+        // A broken digit width falls back to 7 px instead of dividing by zero.
+        assert_eq!(col_width_to_px(9.140625, 0.0), 64.0);
+        assert_eq!(col_width_to_px(9.140625, f64::NAN), 64.0);
         assert_eq!(pt_to_px(15.0), 20.0);
         assert_eq!(px_to_pt(20.0), 15.0);
     }

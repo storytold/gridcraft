@@ -577,3 +577,32 @@ fn user_defined_function_prefix_round_trips() {
         assert_eq!(cell.child("f").unwrap().text, f, "written {a}");
     }
 }
+
+/// Column widths count digits of the Normal font, as in Excel: a Calibri 12 workbook measures in
+/// 8 px digits, so 9.71 characters are 78 px (68 with Calibri 11's 7 px), and a sheet without a
+/// default width gets 8 digits plus padding, 72 px. Widths read back unchanged after a save.
+#[test]
+fn column_widths_follow_the_normal_font() {
+    let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="12"/><name val="Calibri"/></font></fonts>
+      <fills count="1"><fill><patternFill patternType="none"/></fill></fills>
+      <borders count="1"><border/></borders>
+      <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
+    </styleSheet>"#;
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<cols><col min="10" max="10" width="9.7109375" customWidth="1"/></cols><sheetData/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles)], rels, "")).unwrap();
+    assert_eq!(wb.digit_width(), 8.0);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.col_width(9), 78.0);
+    assert_eq!(s.default_col_width, 72.0);
+    let (back, _) = read_xlsx(&crate::write_xlsx(&wb).unwrap()).unwrap();
+    let b = back.sheet(0).unwrap();
+    assert_eq!((b.col_width(9), b.default_col_width), (78.0, 72.0));
+
+    // The same file with Calibri 11 keeps the usual 7 px digits.
+    let styles11 = styles.replace(r#"<sz val="12"/>"#, r#"<sz val="11"/>"#);
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", &styles11)], rels, "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.col_width(9), s.default_col_width), (68.0, 64.0));
+}

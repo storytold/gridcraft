@@ -973,7 +973,7 @@ fn row_height(s: &mut Session, p: &Json) -> Result<Json> {
 fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
     let w = match (f64_param(p, "width"), f64_param(p, "chars")) {
         (Some(w), _) => w,
-        (None, Some(c)) => chars_to_points(c),
+        (None, Some(c)) => chars_to_points(c, s.doc()?.wb.digit_width()),
         _ => return Err(bad("home.columnWidth", "missing `width`")),
     };
     if !(0.0..=1800.0).contains(&w) {
@@ -994,18 +994,7 @@ fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Excel column width in characters (of the default font's digit width, 7 px) → points.
-pub fn chars_to_points(c: f64) -> f64 {
-    if c <= 0.0 {
-        0.0
-    } else if c < 1.0 {
-        (c * 12.0).round()
-    } else {
-        (c * 7.0 + 5.0).round()
-    }
-}
-
-pub use gridcraft_model::points_to_chars;
+pub use gridcraft_model::{chars_to_points, points_to_chars};
 
 /// Approximate text width in points for autofit (no font metrics in the engine: average glyph
 /// widths for the default font; the UI refines with real measurement when it autofits).
@@ -1151,7 +1140,10 @@ mod tests {
 
     #[test]
     fn width_units() {
-        assert_eq!(chars_to_points(8.43), 64.0);
-        assert!((points_to_chars(64.0) - 8.43).abs() < 0.01);
+        assert_eq!(chars_to_points(8.43, 7.0), 64.0);
+        assert!((points_to_chars(64.0, 7.0) - 8.43).abs() < 0.01);
+        // A Calibri 12 workbook counts 8 px digits.
+        assert_eq!(chars_to_points(8.43, 8.0), 72.0);
+        assert!((points_to_chars(72.0, 8.0) - 8.38).abs() < 0.01);
     }
 }
