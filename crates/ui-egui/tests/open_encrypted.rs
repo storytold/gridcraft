@@ -170,3 +170,66 @@ fn app_open_over_the_control_channel_never_opens_a_dialog() {
     assert_eq!(h.state().ui.recent.first(), Some(&p));
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
+
+#[test]
+fn app_open_over_the_control_channel_takes_the_workbook_bytes() {
+    use gridcraft_ui_egui::backstage::{Backstage, Page};
+    use gridcraft_ui_egui::control::{Outcome, handle};
+    let mut h = harness(Services::default());
+    let ctx = h.ctx.clone();
+    let reply = |o: Outcome| match o {
+        Outcome::Done(v) => v,
+        Outcome::Screenshot { .. } => json!(null),
+    };
+    // A page embedding the web build has no file system to name: it sends the bytes.
+    let secret = gridcraft_engine::io::base64_encode(&encrypted_bytes());
+    let r = reply(handle(h.state_mut(), &ctx, "app.open", &json!({"name": "Secret.xlsx", "base64": secret})));
+    assert_eq!(r["ok"], json!(false), "{r}");
+    assert!(r["error"].as_str().unwrap_or_default().contains(gridcraft_engine::io::PASSWORD_REQUIRED), "{r}");
+    assert_eq!(dialog(&h), None, "programmatic calls never open dialogs");
+    // With the password it opens like File › Open: the sheet shows, with the open notice; there is
+    // no file, so nothing joins Recent.
+    h.state_mut().backstage = Some(Backstage::new(Page::Open));
+    let r = reply(handle(h.state_mut(), &ctx, "app.open", &json!({"name": "Secret.xlsx", "base64": secret, "password": PW})));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert_eq!(r["result"]["title"], json!("Secret.xlsx"));
+    assert_eq!(a1(&h), Value::Number(42.0));
+    assert!(h.state().backstage.is_none(), "the opened workbook shows, not the Backstage");
+    assert!(h.state().notice.as_ref().is_some_and(|n| n.text.contains("password-protected")));
+    assert!(h.state().ui.recent.is_empty());
+    assert_eq!(h.state().session.active().unwrap().path, None);
+    // A plain workbook needs no name; a blank one reads as Book.xlsx.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.run("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    let plain = gridcraft_engine::io::base64_encode(&gridcraft_engine::io::save_bytes(&s.active().unwrap().wb, "book.xlsx").unwrap());
+    let r = reply(handle(h.state_mut(), &ctx, "app.open", &json!({"name": " ", "base64": plain})));
+    assert_eq!(r["result"]["title"], json!("Book.xlsx"), "{r}");
+    assert_eq!(a1(&h), Value::Number(7.0));
+    // Neither a path nor bytes, or bytes that aren't base64: an error, and nothing opens.
+    let open = h.state().session.documents().len();
+    for params in [json!({}), json!({"name": "x.xlsx", "base64": "not base64!"}), json!({"base64": 42})] {
+        let r = reply(handle(h.state_mut(), &ctx, "app.open", &params));
+        assert_eq!(r["ok"], json!(false), "{params}: {r}");
+    }
+    assert_eq!(h.state().session.documents().len(), open);
+    assert_eq!(dialog(&h), None);
+}
+
+#[test]
+fn workbook_bytes_from_a_host_open_like_a_picked_file() {
+    let mut h = harness(Services::default());
+    h.state_mut().backstage = Some(gridcraft_ui_egui::backstage::Backstage::new(gridcraft_ui_egui::backstage::Page::Open));
+    h.state_mut().open_bytes("Secret.xlsx", &encrypted_bytes());
+    assert_eq!(dialog(&h).as_deref(), Some("openPassword"), "the user is asked for the password");
+    assert!(h.state().backstage.is_none(), "the sheet shows, not the Backstage");
+    h.state_mut().dialog = None;
+    let mut s = Session::new();
+    s.new_workbook();
+    s.run("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    let plain = gridcraft_engine::io::save_bytes(&s.active().unwrap().wb, "book.xlsx").unwrap();
+    h.state_mut().open_bytes("Plain.xlsx", &plain);
+    assert_eq!(h.state().session.active().unwrap().display_title(), "Plain.xlsx");
+    assert_eq!(a1(&h), Value::Number(7.0));
+    assert!(h.state().message.is_none() && h.state().dialog.is_none());
+}

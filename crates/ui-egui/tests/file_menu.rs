@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::{Session, core::CellRef, core::Value};
+use gridcraft_ui_egui::control::{self, Outcome};
 use gridcraft_ui_egui::{Services, SheetApp};
 
 fn harness(services: Services) -> egui_kittest::Harness<'static, SheetApp> {
@@ -77,7 +78,10 @@ fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
     let downloads = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
     let capture = downloads.clone();
     let mut h = harness(Services {
-        download: Some(Box::new(move |name, bytes| capture.lock().unwrap().push((name.to_string(), bytes.to_vec())))),
+        download: Some(Box::new(move |name, bytes| {
+            capture.lock().unwrap().push((name.to_string(), bytes.to_vec()));
+            false
+        })),
         ..Default::default()
     });
     h.input_mut().events.push(egui::Event::Text("123".into()));
@@ -132,17 +136,87 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     assert!(h.state().backstage.is_none());
 }
 
-#[test]
-fn export_as_pdf_is_delivered_as_a_download() {
+/// Web services that capture what is handed over: a browser download (`keeps` false), or a host
+/// page that keeps it as the workbook's own copy (`keeps` true).
+fn download_harness(keeps: bool) -> (Arc<Mutex<Vec<(String, Vec<u8>)>>>, egui_kittest::Harness<'static, SheetApp>) {
     let files = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
     let capture = files.clone();
-    let mut h = harness(Services {
-        download: Some(Box::new(move |name, bytes| capture.lock().unwrap().push((name.to_string(), bytes.to_vec())))),
+    let h = harness(Services {
+        download: Some(Box::new(move |name, bytes| {
+            capture.lock().unwrap().push((name.to_string(), bytes.to_vec()));
+            keeps
+        })),
         ..Default::default()
     });
-    h.state_mut().run("file.exportPdf", serde_json::json!({})).unwrap();
+    (files, h)
+}
+
+#[test]
+fn export_as_pdf_from_a_menu_is_a_download_and_the_command_returns_the_pdf() {
+    let (files, mut h) = download_harness(false);
+    // The command (control channel, MCP) returns the PDF; nothing is handed to the browser.
+    let r = h.state_mut().run("file.exportPdf", serde_json::json!({})).unwrap();
+    let pdf = gridcraft_engine::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    assert!(pdf.starts_with(b"%PDF-"));
+    let ctx = h.ctx.clone();
+    let Outcome::Done(reply) = control::handle(h.state_mut(), &ctx, "engine.execute", &serde_json::json!({"command": "file.exportPdf"})) else {
+        panic!("a command replies at once");
+    };
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(reply["result"]["base64"].as_str().is_some_and(|b| b.len() > 100), "the PDF comes back in the reply");
+    assert!(files.lock().unwrap().is_empty(), "a command's PDF is its result, not a download");
+    // Share › Export as PDF…, the command palette and key tips hand it to the browser.
+    h.state_mut().run_or_alert("file.exportPdf", serde_json::json!({}));
     let got = files.lock().unwrap();
     assert_eq!(got.len(), 1, "Export as PDF hands a file to the browser");
+    assert!(got[0].0.ends_with(".pdf"));
+    assert!(got[0].1.starts_with(b"%PDF-"));
+}
+
+#[test]
+fn app_save_over_the_control_channel_hands_the_workbook_over_as_save_does() {
+    let (files, mut h) = download_harness(false);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "123"})).unwrap();
+    let ctx = h.ctx.clone();
+    let Outcome::Done(reply) = control::handle(h.state_mut(), &ctx, "app.save", &serde_json::json!({})) else {
+        panic!("a command replies at once");
+    };
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(h.state().dialog.is_none(), "no dialog opens");
+    let got = files.lock().unwrap();
+    assert_eq!(got.len(), 1, "the web build hands the workbook to the page, as the Save button does");
+    assert!(got[0].0.ends_with(".xlsx"));
+    let (wb, _) = gridcraft_engine::io::open_bytes("saved.xlsx", &got[0].1).unwrap();
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(123.0));
+    assert!(h.state().session.active().unwrap().is_dirty(), "a browser download is the user's copy: the workbook stays unsaved");
+}
+
+#[test]
+fn a_save_the_page_keeps_counts_as_saved_at_once() {
+    let (files, mut h) = download_harness(true);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+    let ctx = h.ctx.clone();
+    let Outcome::Done(reply) = control::handle(h.state_mut(), &ctx, "app.save", &serde_json::json!({})) else {
+        panic!("a command replies at once");
+    };
+    assert_eq!(reply["ok"], true, "{reply}");
+    let d = h.state().session.active().unwrap();
+    assert!(!d.is_dirty(), "the page keeps the workbook: it counts as saved");
+    assert_eq!(d.display_title(), "Book1.xlsx", "under the name it was handed over as");
+    // An edit made right after, before another frame, isn't in what the page got.
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "2"})).unwrap();
+    assert!(h.state().session.active().unwrap().is_dirty(), "the later edit is unsaved");
+    assert_eq!(files.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn file_export_create_pdf_downloads_on_the_web() {
+    let (files, mut h) = download_harness(false);
+    choose(&mut h, "Export");
+    click(&mut h, "Create PDF");
+    assert!(h.state().backstage.is_none());
+    let got = files.lock().unwrap();
+    assert_eq!(got.len(), 1, "File › Export › Create PDF hands a file to the browser");
     assert!(got[0].0.ends_with(".pdf"));
     assert!(got[0].1.starts_with(b"%PDF-"));
 }

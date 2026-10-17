@@ -187,8 +187,11 @@ pub struct Services {
     /// gets it from egui's `Event::Paste`). `None` from the host, or no service (web), pastes
     /// GridCraft's own clipboard.
     pub paste_text: Option<Box<dyn FnMut() -> Option<String>>>,
-    /// Web: deliver a file to the user (name, bytes).
-    pub download: Option<Box<dyn Fn(&str, &[u8])>>,
+    /// Web: deliver a file to the user (name, bytes). Returns true when the host keeps it as the
+    /// workbook's own copy (a page embedding GridCraft that stores what it saves): a workbook
+    /// saved that way counts as saved, as after Save on the desktop. A plain download returns
+    /// false.
+    pub download: Option<Box<dyn Fn(&str, &[u8]) -> bool>>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
     pub open_async: Option<Box<dyn Fn()>>,
     /// Files delivered asynchronously (name, bytes), opened on the next frame.
@@ -389,11 +392,6 @@ impl SheetApp {
         {
             self.selected_chart = Some(chart);
         }
-        if id == "file.exportPdf"
-            && let Ok(r) = &r
-        {
-            self.deliver_pdf(r);
-        }
         r
     }
 
@@ -471,8 +469,9 @@ impl SheetApp {
         }
     }
 
-    /// Web: `file.exportPdf` without a path returns the PDF as base64; hand it to the browser as a download.
-    fn deliver_pdf(&self, result: &Json) {
+    /// Web: `file.exportPdf` without a path returns the PDF as base64; a menu's export hands it
+    /// to the browser as a download. A programmatic one (control channel, MCP) only returns it.
+    pub(crate) fn deliver_pdf(&self, result: &Json) {
         if result.get("path").is_some() {
             return;
         }
@@ -480,7 +479,7 @@ impl SheetApp {
             && let Some(b) = result.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode)
         {
             let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-            dl(&std::path::Path::new(&title).with_extension("pdf").to_string_lossy(), &b);
+            let _ = dl(&std::path::Path::new(&title).with_extension("pdf").to_string_lossy(), &b);
         }
     }
 
@@ -505,8 +504,10 @@ impl SheetApp {
         if id == "file.exportPdf" && self.services.pick_save.is_some() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
             return self.export_pdf_with_picker(params);
         }
-        if let Err(e) = self.run(id, params) {
-            self.alert(e);
+        match self.run(id, params) {
+            Ok(r) if id == "file.exportPdf" => self.deliver_pdf(&r),
+            Ok(_) => {}
+            Err(e) => self.alert(e),
         }
     }
 
@@ -736,7 +737,16 @@ impl SheetApp {
                     && let Some(b) = r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode)
                 {
                     let name = r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx").to_string();
-                    dl(&name, &b);
+                    // A host that keeps the file has the workbook as it is now: it counts as saved
+                    // under that name, and only later edits make it dirty again.
+                    if dl(&name, &b)
+                        && let Some(doc) = self.session.active_mut()
+                    {
+                        doc.saved = doc.wb.clone();
+                        if doc.path.is_none() {
+                            doc.title = name;
+                        }
+                    }
                 }
             }
             // File › Options (`file.options`) and the File tab itself open the Backstage view.
@@ -766,6 +776,26 @@ impl SheetApp {
             Ok(r) => self.after_open(Some(path), &r),
             // A password-protected workbook: ask for the password; the dialog opens it.
             Err(e) if e.contains(gridcraft_engine::io::PASSWORD_REQUIRED) => self.open_dialog("openPassword", json!({"path": path})),
+            Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
+        }
+        self.after_engine();
+    }
+
+    /// Opens a workbook's bytes as File › Open does with a picked file: the workbook shows (not
+    /// the Backstage), a password-protected one asks for its password, and an error is shown in
+    /// a message box. Files picked or dropped in the browser and workbooks a host page sends
+    /// arrive here.
+    pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) {
+        let b64 = gridcraft_engine::io::base64_encode(bytes);
+        match self.run("file.open", json!({"name": name, "base64": &b64})) {
+            Ok(r) => {
+                self.backstage = None;
+                self.show_open_warnings(&r);
+            }
+            Err(e) if e.contains(gridcraft_engine::io::PASSWORD_REQUIRED) => {
+                self.backstage = None;
+                self.open_dialog("openPassword", json!({"name": name, "base64": b64}));
+            }
             Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
         }
         self.after_engine();
@@ -1064,20 +1094,7 @@ impl SheetApp {
             .map(|i| std::mem::take(&mut *i.lock().unwrap_or_else(std::sync::PoisonError::into_inner)))
             .unwrap_or_default();
         for (name, bytes) in arrived {
-            let b64 = gridcraft_engine::io::base64_encode(&bytes);
-            match self.run("file.open", json!({"name": &name, "base64": &b64})) {
-                // A file picked from File › Open (web) arrives here: show it, not the Backstage.
-                Ok(r) => {
-                    self.backstage = None;
-                    self.show_open_warnings(&r);
-                }
-                Err(e) if e.contains(gridcraft_engine::io::PASSWORD_REQUIRED) => {
-                    self.backstage = None;
-                    self.open_dialog("openPassword", json!({"name": name, "base64": b64}));
-                }
-                Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
-            }
-            self.after_engine();
+            self.open_bytes(&name, &bytes);
         }
         if self.session.active().is_none() {
             self.session.new_workbook();

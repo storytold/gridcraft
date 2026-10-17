@@ -898,9 +898,12 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
         return false;
     }
     if fmt == "pdf" {
-        // Without a path the PDF comes back as bytes, which `SheetApp::run` hands to the browser.
+        // Without a path the PDF comes back as bytes, for the browser.
         return match app.run(id, json!({})) {
-            Ok(_) => true,
+            Ok(r) => {
+                app.deliver_pdf(&r);
+                true
+            }
             Err(e) => {
                 app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
                 false
@@ -914,7 +917,7 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
             let name = r.get("name").and_then(Json::as_str).map_or_else(|| format!("{stem}.{fmt}"), str::to_string);
             match (bytes, &app.services.download) {
                 (Some(b), Some(dl)) => {
-                    dl(&name, &b);
+                    let _ = dl(&name, &b);
                     true
                 }
                 _ => false,

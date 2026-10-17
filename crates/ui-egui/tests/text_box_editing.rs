@@ -194,7 +194,10 @@ fn saving_and_switching_context_commit_to_the_original_text_box() {
     // Save and Save As must work while the editor still owns keyboard focus.
     let downloaded = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = downloaded.clone();
-    h.state_mut().services.download = Some(Box::new(move |_, bytes| *sink.lock().unwrap() = bytes.to_vec()));
+    h.state_mut().services.download = Some(Box::new(move |_, bytes| {
+        *sink.lock().unwrap() = bytes.to_vec();
+        false
+    }));
     for modifiers in [Modifiers::COMMAND, Modifiers::COMMAND | Modifiers::SHIFT] {
         edit_box(&mut h, id);
         replace(&mut h, "Saved from the text editor");

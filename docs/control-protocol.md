@@ -40,7 +40,7 @@ connection; nothing sent after it runs. Blank lines are skipped.
 | `ui.screenshot` | `{path?}` | PNG of the window (base64 when no path). Animations are settled first: the picture shows the final state |
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
-| `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?}` | Files and lifetime. `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog) |
+| `app.open` / `app.save` / `app.quit` | `{path, password?}` or `{name?, base64, password?}` / `{path?}` | Files and lifetime. `app.open` opens a file, or a workbook's bytes (base64; `name`, default `Book.xlsx`, gives its title and format). `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog) |
 
 Any other method name that is a command id (e.g. `home.bold`) runs that command.
 
@@ -84,3 +84,59 @@ rejected without changing earlier settings. `ui.printSubmit` explicitly submits 
 print-ready PDF without opening a dialog; inspect `ui.printSettings` until `busy` becomes false
 and check `status`/`detail`. The browser keeps its own print hook. PDF export remains separate.
 GridCraft accepts the existing `file.print` sheet/pagination params on `ui.printSubmit`; the engine `file.print` command returns the PDF without spooling.
+
+## Web
+
+The browser build has no port to listen on. Opened in an `<iframe>` with `?host=parent`, it takes
+the same methods from the page that embeds it, as `postMessage` messages. Its
+`gridcraft:ready` message (see `apps/gridcraft-web/src/host.rs` for the other messages) lists
+`"control"` in `capabilities`; send requests after it, to the frame's window with your own origin
+as the target origin:
+
+```json
+{"type": "gridcraft:control", "id": 1, "method": "engine.execute", "params": {"command": "cell.set", "params": {"cell": "B2", "input": "=SUM(A1:A9)"}}}
+```
+
+GridCraft runs the requests at its next frame, in the order they arrived, together with the
+workbooks sent as `gridcraft:open`: a request sent after a workbook works on that workbook. Each
+request is answered in that frame, on the parent window:
+
+```json
+{"type": "gridcraft:reply", "id": 1, "ok": true, "result": {"cell": "B2", "value": "45"}}
+{"type": "gridcraft:reply", "id": 1, "ok": false, "error": "…"}
+```
+
+- `id` (a number or a string) is required and comes back in the reply; match replies by it.
+  `params` is an object and may be left out. A message GridCraft can't read (no `id`, `method`
+  not a string, `params` not an object, not representable as JSON) is answered with an error
+  under its `id`, or `id: null` when it has no usable one.
+- A control message holds at most 16 MiB of JSON text (UTF-8 bytes; one over 16 Mi UTF-16 code
+  units is refused before GridCraft reads it). Binary values (an `ArrayBuffer` or typed array)
+  are refused: send bytes as base64 strings. Send a workbook as `gridcraft:open` rather than
+  `app.open {base64}`: its bytes don't count against the limit.
+- While the page is visible, the next frame is the next display refresh. While it is hidden,
+  browsers wake it with timers instead: about once a second, and in Chrome as rarely as once a
+  minute after five minutes hidden, so answers take that long.
+- Input methods (`ui.click`, `ui.key`, `ui.text`, `ui.drag`…) answer `ok` at once; their effect
+  lands over the following frames (a drag takes several), so read the outcome with a later
+  request.
+- Only the parent window is heard, and only when its messages come from the origin of
+  GridCraft's own URL (`location.origin`); replies are posted to that origin only. When that
+  URL has no origin (`location.origin` is `"null"`: a scheme the browser gives no origin, a
+  `data:` URL), the parent can't be checked, so host mode stays off and GridCraft posts
+  `gridcraft:failed` saying why (a fixed text, posted to any origin). A custom scheme the web
+  view gives an origin works (WKWebView gives `tauri://localhost` the origin `tauri://localhost`).
+- In a frame sandboxed without `allow-same-origin`, GridCraft's document has an opaque origin
+  while `location.origin` stays its URL's: the parent's messages only reach it when posted with
+  the target origin `"*"`, and its messages reach the parent with `event.origin` `"null"`, so
+  the parent has to recognise them by `event.source`.
+- The channel gives the parent nothing it doesn't have: a same-origin parent can already reach
+  into the frame (`iframe.contentWindow`) and run any code there. Other origins are never heard.
+- There is no file system. `app.open` takes the workbook's bytes (`{name?, base64, password?}`);
+  `file.saveBytes {format?}` returns `{name, base64, bytes}`; `app.save` hands the workbook over
+  as `gridcraft:save`, as the Save button does, and from that moment it counts as saved (an edit
+  after it makes it unsaved again); `file.exportPdf` without a `path` returns
+  `{pages, bytes, base64}`: a requested PDF is in the reply, not also handed over as
+  `gridcraft:save` (as it is when the user exports from a menu).
+- `ui.screenshot` isn't available (it is answered with an error); `ui.resize`, `ui.focus` and
+  `app.quit` do nothing in a browser tab.

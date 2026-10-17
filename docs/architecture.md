@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (the control channel over `postMessage` in the web build) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -48,6 +48,8 @@ including tests, 2026-10-10.
 - Desktop control channel: `gridcraft --control 7979`, JSON lines on localhost
   (`engine.execute`, `ui.screenshot`, pointer and keyboard input…), see
   [`control-protocol.md`](control-protocol.md).
+- Web control channel: the same methods over `postMessage`, from a same-origin page that embeds
+  the browser build (`?host=parent`), see [`control-protocol.md`](control-protocol.md#web).
 - MCP: `gridcraft-cli mcp`, headless or `--connect` to a running app, see [`mcp.md`](mcp.md).
 - CLI: [`cli.md`](cli.md).
 
@@ -68,4 +70,5 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Agent control: the web build's control channel over `postMessage` |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |
