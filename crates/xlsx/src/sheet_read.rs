@@ -38,6 +38,7 @@ struct RowState {
 }
 
 const MAX_HYPERLINK_CELLS: u64 = 10_000;
+const MAX_COLUMN_ASSIGNMENTS: u64 = 1_000_000;
 
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
@@ -61,6 +62,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     drop(bytes);
 
     let mut fit_to_page = false;
+    let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
     cx.cf_ext_ids.clear();
     for e in &root.children {
         match e.name.as_str() {
@@ -88,7 +90,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                     sheet.default_col_width = px as f32;
                 }
             }
-            "cols" => read_cols(cx, e, &mut sheet),
+            "cols" => read_cols(cx, e, &mut sheet, &mut column_assignments_left)?,
             "mergeCells" => {
                 for m in e.kids("mergeCell") {
                     if let Some(r) = m.attr("ref").and_then(RangeRef::parse)
@@ -300,7 +302,7 @@ fn read_views(e: &El, sheet: &mut Sheet) {
     }
 }
 
-fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet) {
+fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Result<(), IoError> {
     for c in e.kids("col") {
         let (Some(min), Some(max)) = (c.attr_u32("min"), c.attr_u32("max")) else { continue };
         if min == 0 || min > MAX_COLS || max < min {
@@ -328,10 +330,16 @@ fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet) {
         if info == LineInfo::default() || (info.size == Some(sheet.default_col_width) && LineInfo { size: None, ..info } == LineInfo::default()) {
             continue;
         }
+        // Overlapping declarations repeat work even when the final map stays small.
+        // Charge the clipped span before expansion, sharing the budget across <cols> blocks.
+        *remaining = remaining
+            .checked_sub(u64::from(max - min + 1))
+            .ok_or_else(|| IoError::TooLarge(format!("sheet \"{}\": more than {MAX_COLUMN_ASSIGNMENTS} expanded column assignments", sheet.name)))?;
         for col in (min - 1)..max {
             sheet.cols.insert(col, info);
         }
     }
+    Ok(())
 }
 
 fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {

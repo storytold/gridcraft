@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** trivial (formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; previously trivial: XLSX chart sheets are kept on save (#727)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-16 · **Change:** minor (XLSX column declarations share a per-sheet expansion-work limit, #1022) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -12,6 +12,12 @@ support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and
 `crates/xlsx/src/tests/` (round-trip, fixtures, malformed input, CSV, ODS, XLSB, XLS, PivotTables).
 
 ## Workbook formats
+
+XLSX column declarations are limited to 1,000,000 expanded column assignments per worksheet,
+including repeated overlaps across `<cols>` blocks. Spans are clipped to the grid and records
+that would be skipped as defaults are excluded before charging the limit. Excess work returns
+the existing file-too-large error; accepted overlaps retain their existing last-wins behavior
+(#1022).
 
 Ink created with Draw is written as standard, unfilled DrawingML polylines, without visible point
 captions or private metadata. Supported numeric polylines reopen as editable ink, retaining points,
@@ -85,6 +91,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | XLSX column imports refuse more than 1,000,000 cumulative expanded assignments per sheet before expanding the next span; repeated overlaps cannot bypass the work limit (#1022) |
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |
