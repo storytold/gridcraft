@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, Value};
-use gridcraft_model::{Anchor, Chart, ChartKind, Color, LegendPos, Series, SparklineKind, Style, Workbook};
+use gridcraft_model::{Anchor, AxisScale, Chart, ChartKind, Color, LegendPos, Series, SparklineKind, Style, Workbook};
 
 use crate::*;
 
@@ -49,6 +49,9 @@ fn chart(kind: ChartKind) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        y2_title: None,
+        y_axis: AxisScale::default(),
+        y2_axis: AxisScale::default(),
     }
 }
 
@@ -1056,4 +1059,60 @@ fn area_charts_draw_source_value_labels_only_when_enabled() {
         let first_label = on.iter().position(|p| matches!(p, Prim::Text { text, .. } if text == "$12,000"));
         assert!(first_label > last_poly, "{kind:?}: label drawn under a later area");
     }
+}
+
+#[test]
+fn fixed_axis_bounds_and_unit_replace_the_automatic_scale() {
+    use crate::apply_fixed;
+    let auto = nice_scale(6.4, 8.6, false);
+    let fixed = apply_fixed(auto, &AxisScale { min: Some(6.0), max: Some(10.0), major_unit: None });
+    assert_eq!((fixed.min, fixed.max, fixed.step), (6.0, 10.0, 0.5));
+    assert_eq!(fixed.ticks().first().copied(), Some(6.0));
+    assert_eq!(fixed.ticks().last().copied(), Some(10.0));
+    let unit = apply_fixed(auto, &AxisScale { min: Some(6.0), max: Some(10.0), major_unit: Some(2.0) });
+    assert_eq!(unit.ticks(), [6.0, 8.0, 10.0]);
+    // One fixed end keeps the other automatic (Excel); a unit alone keeps the automatic bounds.
+    let lo = apply_fixed(auto, &AxisScale { min: Some(0.0), max: None, major_unit: None });
+    assert_eq!((lo.min, lo.max), (0.0, auto.max));
+    let only_unit = apply_fixed(auto, &AxisScale { min: None, max: None, major_unit: Some(0.25) });
+    assert_eq!((only_unit.min, only_unit.max, only_unit.step), (auto.min, auto.max, 0.25));
+    // Ticks stay inside bounds that are not a whole number of steps.
+    let odd = apply_fixed(auto, &AxisScale { min: Some(0.0), max: Some(10.0), major_unit: Some(3.0) });
+    assert_eq!(odd.ticks(), [0.0, 3.0, 6.0, 9.0]);
+    // Nonsense is ignored: reversed bounds, a unit that would draw a thousand gridlines.
+    assert_eq!(apply_fixed(auto, &AxisScale { min: Some(10.0), max: Some(6.0), major_unit: None }), auto);
+    assert_eq!(apply_fixed(auto, &AxisScale { min: Some(0.0), max: Some(3000.0), major_unit: Some(0.001) }).step, 500.0);
+    assert_eq!(apply_fixed(auto, &AxisScale::default()), auto);
+}
+
+#[test]
+fn combo_chart_draws_fixed_bounds_and_the_secondary_axis_title() {
+    let mut c = chart(ChartKind::Combo);
+    c.y2_title = Some("pH".into());
+    c.y_axis = AxisScale { min: Some(0.0), max: Some(80000.0), major_unit: Some(20000.0) };
+    c.y2_axis = AxisScale { min: Some(0.0), max: Some(100000.0), major_unit: Some(25000.0) };
+    let prims = render(&c, &sample(ChartKind::Combo), 640.0, 400.0, &ApproxMeasure);
+    assert_sane(&prims, 640.0, 400.0);
+    let t = texts(&prims);
+    assert!(t.contains(&"pH"), "{t:?}");
+    assert!(t.contains(&"Revenue"), "{t:?}");
+    for label in ["$0", "$20,000", "$80,000", "$25,000", "$100,000"] {
+        assert!(t.contains(&label), "missing {label}: {t:?}");
+    }
+    assert!(!t.contains(&"$120,000"), "the automatic maximum is gone: {t:?}");
+    // The secondary title reads top to bottom on the right edge.
+    let right = prims.iter().find_map(|p| match p {
+        Prim::Text { text, x, rotation, .. } if text == "pH" => Some((*x, *rotation)),
+        _ => None,
+    });
+    let (x, rot) = right.unwrap();
+    assert!(x > 600.0 && rot > 0.0, "{x} {rot}");
+    // Without a secondary series the title is not drawn.
+    let mut single = sample(ChartKind::Combo);
+    for s in &mut single.series {
+        s.secondary = false;
+    }
+    let mut c1 = c.clone();
+    c1.kind = ChartKind::ColumnClustered;
+    assert!(!texts(&render(&c1, &single, 640.0, 400.0, &ApproxMeasure)).contains(&"pH"));
 }

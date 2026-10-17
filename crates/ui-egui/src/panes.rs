@@ -5,6 +5,7 @@ use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
 use crate::theme::{self, Tokens};
+use gridcraft_engine::model::ChartKind;
 
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     // The Comments pane is engine state (`review.showComments`, so agents can drive it); the other
@@ -229,6 +230,45 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
+    let has_secondary = chart.series.iter().any(|s| s.secondary);
+    ui.collapsing("Axes", |ui| {
+        // Excel's Format Axis ▸ Axis Options: Bounds and Units, blank = Auto.
+        for (secondary, label) in [(false, "Vertical axis"), (true, "Secondary vertical axis")] {
+            if secondary && !has_secondary {
+                continue;
+            }
+            let ax = if secondary { chart.y2_axis } else { chart.y_axis };
+            let prefix = if secondary { "y2" } else { "y" };
+            ui.label(egui::RichText::new(label).strong());
+            for (key, text, cur) in [("Min", "Minimum:", ax.min), ("Max", "Maximum:", ax.max), ("Unit", "Major unit:", ax.major_unit)] {
+                let key = format!("{prefix}{key}");
+                ui.horizontal(|ui| {
+                    ui.label(text);
+                    let field = egui::Id::new(("gridcraft.chart_axis", id, key.clone()));
+                    let shown = cur.map(|v| gridcraft_chart::format_number(v, "General", None)).unwrap_or_default();
+                    if let Some(typed) = crate::widgets::committed_text(ui, field, &shown, Some(80.0)) {
+                        let t = typed.trim().replace(',', "");
+                        if t.is_empty() {
+                            app.run_or_alert("chart.set", json!({"chart": id, key.as_str(): Json::Null}));
+                        } else if let Ok(v) = t.parse::<f64>() {
+                            app.run_or_alert("chart.set", json!({"chart": id, key.as_str(): v}));
+                        } else {
+                            app.message = Some(("Format Axis".into(), format!("'{typed}' is not a number. Leave the box empty for Auto.")));
+                        }
+                    }
+                });
+            }
+            if secondary {
+                ui.horizontal(|ui| {
+                    ui.label("Axis title:");
+                    let field = egui::Id::new(("gridcraft.chart_y2_title", id));
+                    if let Some(t) = crate::widgets::committed_text(ui, field, chart.y2_title.as_deref().unwrap_or(""), None) {
+                        app.run_or_alert("chart.set", json!({"chart": id, "y2Title": if t.is_empty() { Json::Null } else { json!(t) }}));
+                    }
+                });
+            }
+        }
+    });
     ui.collapsing("Series", |ui| {
         let data = app.session.active().map(|d| gridcraft_chart::resolve(&d.wb, d.wb.active_sheet, &chart));
         for (i, s) in chart.series.iter().enumerate() {
@@ -240,6 +280,24 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
                 ui.painter().rect_filled(r, 2.0, col);
                 ui.label(&name);
                 ui.label(egui::RichText::new(&s.values).small().color(Color32::from_gray(110)));
+                // Excel's Change Chart Type ▸ Combo: a chart type and axis per series.
+                if combo_capable(chart.kind) {
+                    let kind = gridcraft_chart::series_plot_kind(&chart, i);
+                    let kinds =
+                        [("Column", "column", ChartKind::ColumnClustered), ("Line", "line", ChartKind::Line), ("Area", "area", ChartKind::Area)];
+                    let shown = kinds.iter().find(|(_, _, k)| *k == kind).map(|(l, _, _)| *l).unwrap_or("Column");
+                    egui::ComboBox::from_id_salt(("gridcraft.chart_series_kind", id, i)).selected_text(shown).width(80.0).show_ui(ui, |ui| {
+                        for (l, v, k) in kinds {
+                            if ui.selectable_label(k == kind, l).clicked() && k != kind {
+                                app.run_or_alert("chart.formatSelection", json!({"chart": id, "series": i, "type": v}));
+                            }
+                        }
+                    });
+                    let mut sec = s.secondary;
+                    if ui.checkbox(&mut sec, "Secondary axis").changed() {
+                        app.run_or_alert("chart.formatSelection", json!({"chart": id, "series": i, "secondary": sec}));
+                    }
+                }
                 ui.menu_button("Fill…", |ui| {
                     if let Some(c) = crate::widgets::color_palette(ui, &theme.colors, "Automatic") {
                         app.run_or_alert(
@@ -285,4 +343,10 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
             ui.data_mut(|d| d.remove::<(f32, f32)>(draft));
         }
     });
+}
+
+/// Chart kinds whose series can take their own type or the secondary axis (Excel's combo charts).
+fn combo_capable(k: ChartKind) -> bool {
+    use ChartKind::*;
+    matches!(k, ColumnClustered | ColumnStacked | ColumnStacked100 | Line | LineMarkers | LineStacked | Area | AreaStacked | Combo)
 }

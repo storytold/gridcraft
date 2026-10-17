@@ -40,8 +40,8 @@ open PRs #158, #161, and issue #190.
 | Legend | position, overlay, formatting, per-entry delete | position only |
 | Data labels | value, category, series, percentage, from cells, callouts, position | one on/off flag |
 | Gridlines | major/minor per axis, formatting | one on/off flag |
-| Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | **missing** (auto only) |
-| Secondary axis | any series | line series in combo charts |
+| Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | Minimum, Maximum and Major unit of the vertical value axes (Format pane ▸ Axes; `chart.set` `yMin`/`yMax`/`yUnit`, `y2Min`/`y2Max`/`y2Unit`, `y2Title`), read and written; the rest missing |
+| Secondary axis | any series | any column, line or area series (Format pane ▸ Series ▸ Secondary axis, `chart.formatSelection {secondary}`), with its own bounds and title |
 | Trendlines | linear, exponential, logarithmic, polynomial, power, moving average, equation and R² | all six types, several per series, name, forward/backward forecast, set intercept, equation and R² label, line colour/width/dash; read, written and drawn on 2-D column, bar, line, area, scatter and bubble series; `chart.addElement` `trendline` adds/removes them. No Format Trendline pane, label position/number format not kept |
 | Error bars | fixed, %, standard deviation/error, custom | **missing** |
 | Up/down bars, high-low lines, drop lines, series lines | yes | **missing** |

@@ -4,7 +4,7 @@ use std::io::Read;
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, Value};
-use gridcraft_model::{Anchor, Chart, ChartKind, Color, LegendPos, LineDash, Series, Sheet, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{Anchor, AxisScale, Chart, ChartKind, Color, LegendPos, LineDash, Series, Sheet, Trendline, TrendlineKind, Workbook};
 
 use crate::{read_xlsx, write_xlsx};
 
@@ -59,6 +59,9 @@ fn chart(id: u32, kind: ChartKind, trendlines: Vec<Trendline>) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        y2_title: None,
+        y_axis: AxisScale::default(),
+        y2_axis: AxisScale::default(),
     }
 }
 

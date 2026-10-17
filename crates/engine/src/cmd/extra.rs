@@ -54,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Format Selection",
             ["Format", "Current Selection"],
             None,
-            "{chart?, series?: index, color?: hex}",
+            "{chart?, series?: index, color?: hex, secondary?: bool (plot the series on the secondary axis), type?: column|line|area|scatter (its own chart type, making a combo chart)}",
             has_doc,
             format_series
         ),
@@ -310,6 +310,9 @@ fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
             "axisTitles" => {
                 c.x_title = on.then(|| c.x_title.clone().unwrap_or_else(|| "Axis Title".into()));
                 c.y_title = on.then(|| c.y_title.clone().unwrap_or_else(|| "Axis Title".into()));
+                if c.series.iter().any(|s| s.secondary) {
+                    c.y2_title = on.then(|| c.y2_title.clone().unwrap_or_else(|| "Axis Title".into()));
+                }
             }
             "smooth" => {
                 for s in &mut c.series {
@@ -515,13 +518,60 @@ fn move_chart(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn format_series(s: &mut Session, p: &Json) -> Result<Json> {
     let idx = u32_param(p, "series").unwrap_or(0) as usize;
-    let color = str_param(p, "color").and_then(Color::from_hex);
+    let color = p.get("color").map(|c| c.as_str().and_then(Color::from_hex));
+    let secondary = bool_param(p, "secondary");
+    let kind = match str_param(p, "type") {
+        None => None,
+        Some(t) => Some(series_kind(t).ok_or_else(|| bad("chart.formatSelection", format!("unknown series type `{t}`")))?),
+    };
     with_chart(s, p, |c| {
-        if let Some(se) = c.series.get_mut(idx) {
-            se.color = color;
+        if idx >= c.series.len() {
+            return Err(bad("chart.formatSelection", "no such series"));
+        }
+        // A colour alone (the Format pane's Fill) is the old call: it clears when absent.
+        if let Some(color) = color.or((secondary.is_none() && kind.is_none()).then_some(None)) {
+            c.series[idx].color = color;
+        }
+        if secondary.is_some() || kind.is_some() {
+            if !matches!(c.kind, ChartKind::Combo) {
+                if !cartesian_kind(c.kind) {
+                    return Err(bad("chart.formatSelection", "only column, line and area charts can mix series types or use a secondary axis"));
+                }
+                // Becoming a combo chart: every series keeps the type it had, so nothing else moves.
+                let was = c.kind;
+                for se in &mut c.series {
+                    se.kind.get_or_insert(was);
+                }
+                c.kind = ChartKind::Combo;
+            }
+            if let Some(on) = secondary {
+                c.series[idx].secondary = on;
+            }
+            if let Some(k) = kind {
+                c.series[idx].kind = Some(k);
+            }
         }
         Ok(())
     })
+}
+
+/// A series' own chart type in a combo chart.
+fn series_kind(t: &str) -> Option<ChartKind> {
+    Some(match t {
+        "column" | "clustered" => ChartKind::ColumnClustered,
+        "columnStacked" | "stacked" => ChartKind::ColumnStacked,
+        "line" => ChartKind::Line,
+        "lineMarkers" | "markers" => ChartKind::LineMarkers,
+        "area" => ChartKind::Area,
+        "scatter" => ChartKind::Scatter,
+        _ => return None,
+    })
+}
+
+/// Chart kinds whose series can mix types and axes (Excel's combo charts).
+fn cartesian_kind(k: ChartKind) -> bool {
+    use ChartKind::*;
+    matches!(k, ColumnClustered | ColumnStacked | ColumnStacked100 | Line | LineMarkers | LineStacked | Area | AreaStacked | Combo)
 }
 
 fn shape_fill(s: &mut Session, p: &Json) -> Result<Json> {

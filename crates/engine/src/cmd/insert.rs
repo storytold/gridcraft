@@ -90,7 +90,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart Properties",
             ["Chart Design"],
             None,
-            "{chart?: id, type?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
+            "{chart?: id, type?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, style?, xTitle?, yTitle?, y2Title?, yMin?, yMax?, yUnit?, y2Min?, y2Max?, y2Unit? (vertical axis bounds and major unit; null = Auto), at?, width?, height?, dx?, dy?}",
             has_doc,
             chart_set
         ),
@@ -761,6 +761,9 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         source: Some(format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), r.a1())),
         by_rows,
         pivot: None,
+        y2_title: None,
+        y_axis: AxisScale::default(),
+        y2_axis: AxisScale::default(),
     };
     Ok((sheet, chart))
 }
@@ -821,6 +824,25 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(t) = p.get("yTitle") {
             c.y_title = t.as_str().map(str::to_string);
         }
+        if let Some(t) = p.get("y2Title") {
+            c.y2_title = t.as_str().map(str::to_string).filter(|t| !t.is_empty());
+        }
+        // Format Axis ▸ Bounds and Units for the two vertical value axes; `null` restores Auto.
+        for (prefix, ax) in [("y", &mut c.y_axis), ("y2", &mut c.y2_axis)] {
+            for (key, field) in [("Min", &mut ax.min), ("Max", &mut ax.max), ("Unit", &mut ax.major_unit)] {
+                if let Some(v) = axis_param(p, &format!("{prefix}{key}"))? {
+                    *field = v;
+                }
+            }
+            if ax.major_unit.is_some_and(|u| u <= 0.0) {
+                return Err(bad("chart.set", format!("`{prefix}Unit` must be positive")));
+            }
+            if let (Some(lo), Some(hi)) = (ax.min, ax.max)
+                && lo >= hi
+            {
+                return Err(bad("chart.set", format!("`{prefix}Min` must be below `{prefix}Max`")));
+            }
+        }
         if let Some(at) = at {
             c.anchor.cell = at;
         }
@@ -838,6 +860,18 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         }
         Ok(Json::Null)
     })
+}
+
+/// An axis bound or unit parameter: absent = unchanged, `null` = Auto, else a finite number.
+fn axis_param(p: &Json, key: &str) -> Result<Option<Option<f64>>> {
+    match p.get(key) {
+        None => Ok(None),
+        Some(Json::Null) => Ok(Some(None)),
+        Some(v) => match v.as_f64().filter(|n| n.is_finite()) {
+            Some(n) => Ok(Some(Some(n))),
+            None => Err(bad("chart.set", format!("`{key}` must be a number or null"))),
+        },
+    }
 }
 
 fn chart_switch(s: &mut Session, p: &Json) -> Result<Json> {

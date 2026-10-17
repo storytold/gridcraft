@@ -392,6 +392,9 @@ fn sample() -> Workbook {
         source: None,
         by_rows: false,
         pivot: None,
+        y2_title: None,
+        y_axis: AxisScale::default(),
+        y2_axis: AxisScale::default(),
     };
     for kind in [
         ChartKind::ColumnClustered,

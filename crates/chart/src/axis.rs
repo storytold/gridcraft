@@ -21,7 +21,8 @@ impl Scale {
         if !(span.is_finite() && self.step.is_finite() && self.step > 0.0 && span > 0.0) {
             return vec![self.min];
         }
-        let n = ((span / self.step).round() as i64).clamp(1, 50);
+        // Fixed bounds need not be a whole number of steps: the last tick stays inside the axis.
+        let n = ((span / self.step + 1e-9).floor() as i64).clamp(1, 50);
         (0..=n)
             .map(|i| {
                 let v = self.min + i as f64 * self.step;
@@ -109,6 +110,45 @@ pub fn nice_scale(lo: f64, hi: f64, force_zero: bool) -> Scale {
 
 /// Exact fixed scale (100% stacked axes).
 pub(crate) fn fixed_scale(min: f64, max: f64, step: f64) -> Scale {
+    Scale { min, max, step }
+}
+
+/// A "nice" step (1, 2 or 5 × 10ⁿ) giving at most 8 intervals over `span`.
+fn nice_step(span: f64) -> f64 {
+    if !(span.is_finite() && span > 0.0) {
+        return 1.0;
+    }
+    let e = (span / 8.0).log10().floor();
+    for k in [e - 1.0, e, e + 1.0, e + 2.0] {
+        let p = 10f64.powf(k);
+        for m in [1.0, 2.0, 5.0] {
+            let s = m * p;
+            if s.is_finite() && s > 0.0 && span / s <= 8.0 + 1e-9 {
+                return s;
+            }
+        }
+    }
+    span
+}
+
+/// Applies Excel's fixed axis options to an automatic scale: a fixed Minimum or Maximum
+/// replaces the automatic bound (the other end stays automatic, as in Excel) and a fixed Major
+/// unit replaces the step. Settings that would give an empty or absurd axis are ignored.
+pub fn apply_fixed(auto: Scale, fixed: &gridcraft_model::AxisScale) -> Scale {
+    if fixed.is_auto() {
+        return auto;
+    }
+    let min = fixed.min.filter(|v| v.is_finite()).unwrap_or(auto.min);
+    let max = fixed.max.filter(|v| v.is_finite()).unwrap_or(auto.max);
+    if max <= min {
+        return auto;
+    }
+    let span = max - min;
+    let step = match fixed.major_unit.filter(|u| u.is_finite() && *u > 0.0 && span / *u <= 1000.0) {
+        Some(u) => u,
+        None if fixed.min.is_some() || fixed.max.is_some() => nice_step(span),
+        None => auto.step,
+    };
     Scale { min, max, step }
 }
 

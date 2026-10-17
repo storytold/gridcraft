@@ -5,7 +5,7 @@ use std::f32::consts::{PI, TAU};
 
 use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, Theme, TrendlineKind};
 
-use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
+use crate::axis::{Fmt, Scale, apply_fixed, clean, fixed_scale, nice_scale};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
 use crate::trend::{auto_name, fit_trendline, moving_average};
 use crate::{ChartData, HAlign, Measure, Prim, Rgba, SeriesData, VAlign};
@@ -258,7 +258,7 @@ fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         Funnel => funnel(ctx, chart, data, area),
         Radar => radar(ctx, chart, data, area),
         _ => {
-            let area = axis_titles(ctx, chart, area);
+            let area = axis_titles(ctx, chart, data, area);
             if !area.ok() {
                 return;
             }
@@ -275,7 +275,7 @@ fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     }
 }
 
-fn axis_titles(ctx: &mut Ctx, chart: &Chart, mut area: Bx) -> Bx {
+fn axis_titles(ctx: &mut Ctx, chart: &Chart, data: &ChartData, mut area: Bx) -> Bx {
     let lh = AXIS_TITLE_SIZE * 1.4 + 2.0;
     if let Some(t) = chart.x_title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
         let t = ctx.fit(t, AXIS_TITLE_SIZE, area.w);
@@ -300,7 +300,35 @@ fn axis_titles(ctx: &mut Ctx, chart: &Chart, mut area: Bx) -> Bx {
         area.x += lh;
         area.w -= lh;
     }
+    // The secondary axis title stands on the right, reading top to bottom as in Excel.
+    if let Some(t) = chart.y2_title.as_deref().map(str::trim).filter(|t| !t.is_empty())
+        && has_secondary_axis(chart, data)
+    {
+        let t = ctx.fit(t, AXIS_TITLE_SIZE, area.h);
+        if !t.is_empty() {
+            ctx.out.push(Prim::Text {
+                x: area.right(),
+                y: area.cy(),
+                text: t,
+                size: AXIS_TITLE_SIZE,
+                color: TEXT,
+                bold: false,
+                align: HAlign::Center,
+                valign: VAlign::Top,
+                rotation: PI / 2.0,
+            });
+        }
+        area.w -= lh;
+    }
     area
+}
+
+/// Whether the chart draws a secondary value axis: a vertical cartesian chart with a series on
+/// it and another on the primary axis (the same rule as `cartesian`).
+fn has_secondary_axis(chart: &Chart, data: &ChartData) -> bool {
+    use ChartKind::*;
+    let vertical = !matches!(chart.kind, BarClustered | BarStacked | BarStacked100 | Pie | Doughnut | Scatter | ScatterLines | Bubble | Radar);
+    vertical && data.series.iter().any(|s| s.secondary) && data.series.iter().any(|s| !s.secondary)
 }
 
 // ---------------------------------------------------------------- legend
@@ -918,7 +946,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
             (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new("0%"))
         } else {
             let code = members.first().and_then(|i| data.series.get(*i)).map(|s| s.number_format.as_str()).unwrap_or("General");
-            (nice_scale(lo, hi, force_zero), Fmt::new(code))
+            (apply_fixed(nice_scale(lo, hi, force_zero), if axis { &chart.y2_axis } else { &chart.y_axis }), Fmt::new(code))
         };
         axes.push((scale, fmt));
         if !axis && sec.iter().all(|s| !s) {
@@ -1137,7 +1165,7 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     }
     let Some((ylo, yhi)) = value_range(all.iter().flatten().flatten().map(|p| p.1)) else { return };
     let xs = nice_scale(xlo, xhi, false);
-    let ys = nice_scale(ylo, yhi, false);
+    let ys = apply_fixed(nice_scale(ylo, yhi, false), &chart.y_axis);
     let fx = Fmt::new("General");
     let fy = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
     let plot = frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy }, None, false, chart.gridlines);

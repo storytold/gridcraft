@@ -1,6 +1,6 @@
 //! Literal chart categories that contain a comma, a semicolon or a quote stay one category on save.
 
-use gridcraft_model::{Anchor, Chart, ChartKind, LegendPos, Series, Sheet, Workbook};
+use gridcraft_model::{Anchor, AxisScale, Chart, ChartKind, LegendPos, Series, Sheet, Workbook};
 use std::sync::Arc;
 
 use crate::{read_xlsx, write_xlsx};
@@ -47,6 +47,9 @@ fn literal_category_with_separators_survives_save() {
         source: None,
         by_rows: false,
         pivot: None,
+        y2_title: None,
+        y_axis: AxisScale::default(),
+        y2_axis: AxisScale::default(),
     });
     wb.sheets = vec![Arc::new(s)];
     let bytes = write_xlsx(&wb).unwrap();

@@ -502,6 +502,33 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+    /// Title of the secondary (right-hand) value axis, drawn when a series is on it.
+    #[serde(default)]
+    pub y2_title: Option<String>,
+    /// Fixed bounds and unit of the primary value axis (Excel's Format Axis ▸ Bounds / Units).
+    #[serde(default)]
+    pub y_axis: AxisScale,
+    /// Fixed bounds and unit of the secondary value axis.
+    #[serde(default)]
+    pub y2_axis: AxisScale,
+}
+
+/// Fixed settings of a value axis; `None` is Excel's Auto.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AxisScale {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    /// Distance between major gridlines and labels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub major_unit: Option<f64>,
+}
+
+impl AxisScale {
+    pub fn is_auto(&self) -> bool {
+        *self == AxisScale::default()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

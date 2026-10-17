@@ -1,6 +1,6 @@
 //! Test that XLSX smooth line settings round-trip correctly.
 
-use gridcraft_model::{Anchor, Chart, ChartKind, Color, LegendPos, Series, Sheet, Workbook};
+use gridcraft_model::{Anchor, AxisScale, Chart, ChartKind, Color, LegendPos, Series, Sheet, Workbook};
 use std::sync::Arc;
 
 use crate::{read_xlsx, write_xlsx};
@@ -35,6 +35,9 @@ fn smooth_line_setting_round_trips() {
         source: None,
         by_rows: false,
         pivot: None,
+        y2_title: None,
+        y_axis: AxisScale::default(),
+        y2_axis: AxisScale::default(),
     });
     let mut smooth_series = base_series.clone();
     smooth_series.smooth = true;
@@ -53,6 +56,9 @@ fn smooth_line_setting_round_trips() {
         source: None,
         by_rows: false,
         pivot: None,
+        y2_title: None,
+        y_axis: AxisScale::default(),
+        y2_axis: AxisScale::default(),
     });
     wb.sheets = vec![Arc::new(s)];
     let bytes = write_xlsx(&wb).unwrap();

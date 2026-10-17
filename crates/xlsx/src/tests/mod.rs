@@ -1,6 +1,7 @@
 //! Integration-style tests: round trips, hand-written fixtures, hostile input and CSV.
 
 mod array_export;
+mod axis_roundtrip;
 mod chart_bool_default;
 mod csv_tests;
 mod encrypted_tests;

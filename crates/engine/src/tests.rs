@@ -3282,3 +3282,57 @@ fn paste_special_validation_moves_relative_references() {
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
 }
+
+#[test]
+fn a_series_moves_to_the_secondary_axis_and_the_chart_becomes_a_combo_that_keeps_its_types() {
+    use gridcraft_model::{AxisScale, ChartKind};
+    let mut s = s();
+    chart_data(&mut s);
+    s.execute("insert.chart", json!({"type": "column", "range": "A1:E7"})).unwrap();
+    let chart = |s: &Session| s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    // Excel: a secondary axis on a column chart makes a combo; the other series stay columns.
+    s.execute("chart.formatSelection", json!({"series": 3, "secondary": true})).unwrap();
+    let c = chart(&s);
+    assert_eq!(c.kind, ChartKind::Combo);
+    assert_eq!(c.series.iter().map(|x| x.secondary).collect::<Vec<_>>(), [false, false, false, true]);
+    assert!(c.series.iter().all(|x| x.kind == Some(ChartKind::ColumnClustered)), "{:?}", c.series.iter().map(|x| x.kind).collect::<Vec<_>>());
+    assert!(c.series.iter().all(|x| x.color.is_none()), "changing the axis leaves the fill alone");
+    s.execute("chart.formatSelection", json!({"series": 3, "type": "line"})).unwrap();
+    assert_eq!(chart(&s).series[3].kind, Some(ChartKind::Line));
+    assert_eq!(gridcraft_chart::series_plot_kind(&chart(&s), 3), ChartKind::Line);
+    assert_eq!(gridcraft_chart::series_plot_kind(&chart(&s), 0), ChartKind::ColumnClustered);
+    // The old call shape (colour only, or Automatic) still sets and clears the fill.
+    s.execute("chart.formatSelection", json!({"series": 3, "color": "#C00000"})).unwrap();
+    assert!(chart(&s).series[3].color.is_some());
+    s.execute("chart.formatSelection", json!({"series": 3})).unwrap();
+    assert!(chart(&s).series[3].color.is_none());
+    assert!(s.execute("chart.formatSelection", json!({"series": 9, "secondary": true})).is_err());
+    assert!(s.execute("chart.formatSelection", json!({"series": 1, "type": "pie"})).is_err());
+    // Axis options: bounds, unit and the secondary title; null restores Auto.
+    s.execute("chart.set", json!({"y2Min": 6, "y2Max": 10, "y2Unit": 0.5, "y2Title": "pH"})).unwrap();
+    s.execute("chart.set", json!({"yMin": 0, "yMax": 3000})).unwrap();
+    let c = chart(&s);
+    assert_eq!(c.y2_axis, AxisScale { min: Some(6.0), max: Some(10.0), major_unit: Some(0.5) });
+    assert_eq!(c.y_axis, AxisScale { min: Some(0.0), max: Some(3000.0), major_unit: None });
+    assert_eq!(c.y2_title.as_deref(), Some("pH"));
+    assert!(s.execute("chart.set", json!({"y2Min": 12})).is_err(), "minimum above the maximum");
+    assert!(s.execute("chart.set", json!({"yUnit": -1})).is_err());
+    assert!(s.execute("chart.set", json!({"yMin": "six"})).is_err());
+    assert_eq!(chart(&s).y_axis, AxisScale { min: Some(0.0), max: Some(3000.0), major_unit: None }, "refused settings change nothing");
+    reopen(&mut s);
+    let after = chart(&s);
+    assert_eq!((after.kind, after.y_axis, after.y2_axis, after.y2_title.clone()), (c.kind, c.y_axis, c.y2_axis, c.y2_title.clone()));
+    assert_eq!(
+        after.series.iter().map(|x| (x.secondary, x.kind)).collect::<Vec<_>>(),
+        c.series.iter().map(|x| (x.secondary, x.kind)).collect::<Vec<_>>()
+    );
+    s.execute("chart.set", json!({"y2Min": null, "y2Unit": null, "y2Title": null})).unwrap();
+    let c = chart(&s);
+    assert_eq!(c.y2_axis, AxisScale { min: None, max: Some(10.0), major_unit: None });
+    assert_eq!(c.y2_title, None);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(chart(&s).y2_title.as_deref(), Some("pH"));
+    // Pie charts have no value axis to share.
+    s.execute("insert.chart", json!({"type": "pie", "range": "A1:B7"})).unwrap();
+    assert!(s.execute("chart.formatSelection", json!({"series": 0, "secondary": true})).is_err());
+}
