@@ -1551,17 +1551,28 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
         app.open_dialog("comment", json!({"threaded": true}));
     }
     sep(ui);
-    let __k = big_button(ui, Icon::TextBox, "Text\nBox", "Text Box", false);
-    control_keytip(app, ui, &__k, "insert.textBox");
-    if __k.clicked() {
-        act(app, "insert.textBox", json!({}));
+    // Excel folds Text Box and Header & Footer into one Text drop-down.
+    let text_menu = big_button(ui, Icon::TextBox, "Text", "Text Box and Header & Footer", true);
+    for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["insert.textBox", "dialog:headerFooter"]) {
+        keytip(app, ui, sequence, text_menu.rect.center_bottom());
     }
-    let __k = big_button(ui, Icon::PageLayout, "Header &\nFooter", "Header & Footer", false);
-    control_keytip(app, ui, &__k, "dialog:headerFooter");
-    if __k.clicked() {
-        // As in Excel: Page Layout view, editing the header in place (the dialog is under Page Setup).
-        crate::paper_view::start_editing(app);
-    }
+    egui::Popup::menu(&text_menu).show(|ui| {
+        for (label, id) in [("Text Box", "insert.textBox"), ("Header & Footer", "dialog:headerFooter")] {
+            let response = ui.add(egui::Button::new(app.ui.language.tr(label)).frame(false).min_size(vec2(220.0, 22.0)));
+            if let Some(sequence) = keytip_table::item_letter(app.keytips.prefix().unwrap_or_default(), id) {
+                keytip(app, ui, sequence, pos2(response.rect.right() - 10.0, response.rect.center().y));
+            }
+            if response.clicked() {
+                if id == "insert.textBox" {
+                    act(app, id, json!({}));
+                } else {
+                    // As in Excel: Page Layout view, editing the header in place (the dialog is under Page Setup).
+                    crate::paper_view::start_editing(app);
+                }
+                ui.close();
+            }
+        }
+    });
     let sym = big_button(ui, Icon::Symbol, "Symbol", "Symbol", true);
     control_keytip(app, ui, &sym, "insert.symbol");
     egui::Popup::menu(&sym).show(|ui| {
