@@ -240,7 +240,9 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);
-                        ui.label(egui::RichText::new("Macros preserved (not executed)").font(theme::ui_font(12.5)).color(t.danger));
+                        ui.label(
+                            egui::RichText::new(app.ui.language.tr("Macros preserved (not executed)")).font(theme::ui_font(12.5)).color(t.danger),
+                        );
                     }
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);
@@ -250,7 +252,11 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                         ui.add_space(12.0);
                         let (si, c) = d.calc.circular[0];
                         let name = d.wb.sheet(si).map(|s| s.name.clone()).unwrap_or_default();
-                        ui.label(egui::RichText::new(format!("Circular References: {name}!{}", c.a1())).font(theme::ui_font(12.5)).color(t.danger));
+                        ui.label(
+                            egui::RichText::new(format!("{}: {name}!{}", app.ui.language.tr("Circular References"), c.a1()))
+                                .font(theme::ui_font(12.5))
+                                .color(t.danger),
+                        );
                     }
                     if app.session.clipboard.is_some() && app.editor.is_none() {
                         ui.add_space(12.0);

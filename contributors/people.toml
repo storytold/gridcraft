@@ -60,8 +60,11 @@ sync_github_name = true
 [people.jsymes21-byte]
 real_name = "James Symes"
 sync_github_name = true
-
-
 [people.Silvertree2010]
 display_name = "Netter"
 sync_github_name = false
+
+[people.yeniufuklar-com]
+real_name = "Ufuk Efe"
+display_name = "Ufuk Efe"
+sync_github_name = true

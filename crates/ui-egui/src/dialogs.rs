@@ -1746,30 +1746,38 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
 }
 
 fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+    let lang = app.ui.language;
     ui.horizontal(|ui| {
-        ui.label("Search:");
-        let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text("e.g. lookup, average, date"));
+        ui.label(lang.tr("Search:"));
+        let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(300.0).hint_text(lang.tr("e.g. lookup, average, date")));
         r.request_focus();
     });
     let locale = app.ui.language.formula_locale();
     let list = gridcraft_engine::cmd::formulas::function_list();
-    let q = d.search.to_ascii_lowercase();
+    let q = locale.lowercase(d.search.trim());
     let hits: Vec<&Json> = list
         .iter()
         .filter(|f| {
-            q.is_empty()
-                || f["name"].as_str().is_some_and(|n| locale.function_name(n).to_ascii_lowercase().contains(&q))
-                || f["description"].as_str().is_some_and(|n| n.to_ascii_lowercase().contains(&q))
+            if q.is_empty() {
+                return true;
+            }
+            let Some(n) = f["name"].as_str() else { return false };
+            let loc_name = locale.function_name(n);
+            let loc_desc = crate::formula_locale::description(n, locale).unwrap_or_default();
+            let eng_desc = f["description"].as_str().unwrap_or_default();
+            locale.lowercase(loc_name).contains(&q)
+                || n.to_lowercase().contains(&q)
+                || locale.lowercase(&loc_desc).contains(&q)
+                || eng_desc.to_lowercase().contains(&q)
         })
         .take(300)
         .collect();
     egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
         for (i, f) in hits.iter().enumerate() {
             let name = locale.function_name(f["name"].as_str().unwrap_or(""));
-            let r = ui.add(
-                egui::Button::selectable(i == d.list_index, format!("{name:<18} {}", f["category"].as_str().unwrap_or("")))
-                    .min_size(vec2(480.0, 20.0)),
-            );
+            let cat = f["category"].as_str().unwrap_or("");
+            let cat_label = lang.tr(cat);
+            let r = ui.add(egui::Button::selectable(i == d.list_index, format!("{name:<18} {cat_label}")).min_size(vec2(480.0, 20.0)));
             if r.clicked() {
                 d.list_index = i;
             }
