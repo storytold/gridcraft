@@ -3282,3 +3282,24 @@ fn paste_special_validation_moves_relative_references() {
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
 }
+
+#[test]
+fn rotate_rejects_flip_param_instead_of_swapping_size() {
+    let mut s = s();
+    let id = s.execute("insert.shape", json!({"kind": "rectangle"})).unwrap()["shape"].clone();
+    let size = |s: &Session| {
+        let a = &s.doc().unwrap().wb.active().unwrap().shapes[0].anchor;
+        (a.width, a.height)
+    };
+    let (w, h) = size(&s);
+    assert_ne!(w, h);
+    let before = s.doc().unwrap().wb.clone();
+    for flip in ["horizontal", "vertical", "sideways"] {
+        let r = s.execute("arrange.rotate", json!({"kind": "shape", "id": id, "flip": flip}));
+        assert!(matches!(r, Err(crate::EngineError::BadParams { .. })), "flip {flip}: {r:?}");
+        assert_eq!(size(&s), (w, h));
+        assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+    }
+    s.execute("arrange.rotate", json!({"kind": "shape", "id": id})).unwrap();
+    assert_eq!(size(&s), (h, w));
+}

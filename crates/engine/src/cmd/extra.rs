@@ -111,7 +111,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Rotate",
             ["Page Layout", "Arrange"],
             None,
-            "{kind: shape, id, flip?: horizontal|vertical} (swaps width/height for 90° turns)",
+            "{kind: shape, id} (swaps width/height for a 90° turn; `flip` is rejected: shapes have no flip state)",
             has_doc,
             rotate
         ),
@@ -662,6 +662,9 @@ fn align(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn rotate(s: &mut Session, p: &Json) -> Result<Json> {
+    if p.get("flip").is_some_and(|f| !f.is_null()) {
+        return Err(bad("arrange.rotate", "`flip` is not supported: shapes have no flip state"));
+    }
     with_shape(s, p, |sh| std::mem::swap(&mut sh.anchor.width, &mut sh.anchor.height))
 }
 
