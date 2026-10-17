@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
+mod ar;
 mod cs;
 mod de;
 mod es;
@@ -24,6 +25,7 @@ mod zh;
 pub enum Language {
     #[default]
     En,
+    Ar,
     Es,
     Zh,
     Ja,
@@ -38,12 +40,14 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Self; 11] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr];
+    pub const ALL: [Self; 12] =
+        [Self::En, Self::Ar, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
+            Self::Ar => "العربية",
             Self::Es => "Español",
             Self::Zh => "简体中文",
             Self::Ja => "日本語",
@@ -61,6 +65,7 @@ impl Language {
     pub const fn code(self) -> &'static str {
         match self {
             Self::En => "en",
+            Self::Ar => "ar",
             Self::Es => "es",
             Self::Zh => "zh",
             Self::Ja => "ja",
@@ -81,6 +86,7 @@ impl Language {
     fn from_tag(tag: &str) -> Option<Self> {
         match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
             "en" => Some(Self::En),
+            "ar" => Some(Self::Ar),
             "es" => Some(Self::Es),
             "zh" => Some(Self::Zh),
             "ja" => Some(Self::Ja),
@@ -119,6 +125,7 @@ impl Language {
     pub fn tr(self, text: &str) -> &str {
         let translated = match self {
             Self::En => None,
+            Self::Ar => ar::translate(text),
             Self::Es => es::translate(text),
             Self::Ja => JAPANESE.iter().find(|(english, _)| *english == text).map(|(_, translated)| *translated),
             Self::Zh => zh::translate(text),
