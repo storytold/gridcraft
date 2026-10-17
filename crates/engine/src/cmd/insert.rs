@@ -471,6 +471,7 @@ fn table_style(s: &mut Session, p: &Json) -> Result<Json> {
 fn valid_table_name(name: &str) -> bool {
     name.starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '\\')
         && CellRef::parse(name).is_none()
+        && !super::formulas::is_r1c1(name)
         && name.chars().enumerate().all(|(i, c)| c.is_alphanumeric() || c == '_' || c == '.' || (i == 0 && c == '\\'))
 }
 
@@ -480,7 +481,8 @@ fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
     if !valid_table_name(&name) {
         return Err(EngineError::Other("The name that you entered is not valid.".into()));
     }
-    if s.doc()?.wb.table(&name).is_some_and(|x| x != (si, ti)) {
+    let wb = &s.doc()?.wb;
+    if wb.table(&name).is_some_and(|x| x != (si, ti)) || wb.names.iter().any(|n| n.name.eq_ignore_ascii_case(&name)) {
         return Err(EngineError::Other("The name entered already exists. Enter a unique name.".into()));
     }
     edit(s, |cx| {
@@ -1552,5 +1554,26 @@ mod tests {
         s.execute("home.manageRules", json!({"delete": 0, "moveDown": 0})).unwrap();
         let rules = s.execute("home.manageRules", json!({})).unwrap();
         assert_eq!(rules["rules"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn table_names_refuse_defined_names_and_r1c1() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1:A2", "values": [["h"], ["1"]]})).unwrap();
+        s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=0.2"})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:A2"})).unwrap();
+        let e = s.execute("table.rename", json!({"table": "Table1", "name": "Rate"})).unwrap_err();
+        assert!(e.to_string().contains("already exists"), "{e}");
+        let e = s.execute("table.rename", json!({"table": "Table1", "name": "rate"})).unwrap_err();
+        assert!(e.to_string().contains("already exists"), "{e}");
+        for n in ["R2C3", "c", "r", "RC", "C5"] {
+            let e = s.execute("table.rename", json!({"table": "Table1", "name": n})).unwrap_err();
+            assert!(e.to_string().contains("not valid"), "{n}: {e}");
+            let e = s.execute("insert.table", json!({"range": "C1:C2", "name": n})).unwrap_err();
+            assert!(e.to_string().contains("not valid"), "{n}: {e}");
+        }
+        s.execute("table.rename", json!({"table": "Table1", "name": "Table1"})).unwrap();
+        s.execute("table.rename", json!({"table": "Table1", "name": "Rates"})).unwrap();
     }
 }

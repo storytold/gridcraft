@@ -237,7 +237,7 @@ fn valid_name(n: &str) -> bool {
 
 /// Looks like an R1C1 reference (`R`, `C`, `RC`, `R2`, `C3`, `R1C1`), which Excel doesn't
 /// accept as a name.
-fn is_r1c1(n: &str) -> bool {
+pub(crate) fn is_r1c1(n: &str) -> bool {
     let digits = |s: &str| s.bytes().take_while(u8::is_ascii_digit).count();
     let mut rest = n;
     if let Some(r) = rest.strip_prefix(['R', 'r']) {
