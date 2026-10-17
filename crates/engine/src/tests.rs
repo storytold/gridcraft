@@ -3038,6 +3038,58 @@ fn icon_set_thresholds_from_files_pick_the_icon() {
     assert_eq!([icon(&s, "A1"), icon(&s, "A2"), icon(&s, "A3"), icon(&s, "A4")], [Some(0), Some(1), Some(1), Some(2)]);
 }
 
+/// A sheet of `rows` numbers in A with one `>0` conditional format over all of them.
+fn cf_rule_over_rows(rows: u32) -> Session {
+    let mut s = s();
+    let vals: Vec<Vec<serde_json::Value>> = (1..=rows).map(|i| vec![json!(i)]).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": vals})).unwrap();
+    let rule = json!({"type": "cellIs", "operator": "greaterThan", "value": "0", "preset": "lightRedFill"});
+    s.execute("home.conditionalFormat", json!({"range": format!("A1:A{rows}"), "rule": rule})).unwrap();
+    s
+}
+
+/// Time `lookups` conditional-format lookups against a rule covering `rows` cells, with the
+/// per-rule statistics already built (as they are on every frame after the first lookup).
+#[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
+fn cf_lookups(rows: u32, lookups: u32) -> std::time::Duration {
+    let s = cf_rule_over_rows(rows);
+    let wb = &s.doc().unwrap().wb;
+    let mut cache = crate::cf::CfCache::new();
+    assert!(cache.look(wb, 0, CellRef::new(0, 0)).is_some(), "the rule applies to A1");
+    let t = std::time::Instant::now();
+    for row in 0..lookups {
+        cache.look(wb, 0, CellRef::new(row, 0));
+    }
+    t.elapsed()
+}
+
+#[test]
+fn cf_lookup_applies_the_rule_inside_its_range_only() {
+    // The correctness behind the timing test below, checked on every run.
+    let s = cf_rule_over_rows(1_000);
+    let wb = &s.doc().unwrap().wb;
+    let mut cache = crate::cf::CfCache::new();
+    assert!(cache.look(wb, 0, CellRef::new(0, 0)).and_then(|l| l.style).is_some(), "A1 is > 0");
+    assert!(cache.look(wb, 0, CellRef::new(999, 0)).and_then(|l| l.style).is_some(), "A1000 is > 0");
+    assert!(cache.look(wb, 0, CellRef::new(1_000, 0)).is_none(), "A1001 is outside the rule's range");
+    assert!(cache.look(wb, 0, CellRef::new(0, 1)).is_none(), "B1 is outside the rule's range");
+}
+
+#[test]
+#[ignore = "timing-sensitive; run with --ignored in release"]
+#[allow(clippy::disallowed_methods)]
+fn cf_lookup_does_not_cost_the_size_of_the_rule_range() {
+    // Painting asks for one cell's conditional look at a time. The per-rule statistics (the
+    // sorted numbers and the duplicate counts) are built once, but used to be copied out of the
+    // cache on every lookup, so each lookup cost the whole range: a 22k-cell rule spent ~170 ms
+    // a frame, about 6 FPS. A lookup must not grow with the range; 20x the rows is 1x the time,
+    // allow 4x.
+    let best = |rows| (0..3).map(|_| cf_lookups(rows, 500)).min().unwrap_or_default();
+    let small = best(1_000);
+    let large = best(20_000);
+    assert!(large < small * 4 + std::time::Duration::from_millis(50), "1k-cell rule {small:?}, 20k-cell rule {large:?}");
+}
+
 #[test]
 fn row_height_and_column_width_take_a_list_of_areas() {
     // Issue #341: header drags on a multi-area selection size every selected line in one step.

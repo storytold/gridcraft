@@ -2,6 +2,7 @@
 //! gets.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use gridcraft_core::{CellRef, RangeRef, Value, compare};
 use gridcraft_model::*;
@@ -23,7 +24,7 @@ pub struct CfLook {
 /// Precomputed statistics per rule (min/max/percentiles/top-N thresholds/duplicates).
 #[derive(Default)]
 pub struct CfCache {
-    stats: HashMap<usize, RuleStats>,
+    stats: HashMap<usize, Arc<RuleStats>>,
 }
 
 #[derive(Default, Clone)]
@@ -119,7 +120,7 @@ impl CfCache {
                     let n = sorted.len().max(1) as f64;
                     let avg = sorted.iter().sum::<f64>() / n;
                     let std = (sorted.iter().map(|x| (x - avg).powi(2)).sum::<f64>() / n).sqrt();
-                    RuleStats { sorted, avg, std, counts }
+                    Arc::new(RuleStats { sorted, avg, std, counts })
                 })
                 .clone();
             let text = v.display();
