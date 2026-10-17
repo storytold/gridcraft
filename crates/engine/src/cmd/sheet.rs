@@ -226,6 +226,8 @@ fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit) {
             }
         };
         for ch in sh.charts.iter_mut() {
+            // The source block moves with its cells; one that was deleted is dropped.
+            ch.source = ch.source.as_deref().map(fix).filter(|s| !s.contains("#REF!"));
             for se in ch.series.iter_mut() {
                 se.values = fix(&se.values);
                 se.categories = se.categories.as_deref().map(fix);

@@ -2371,6 +2371,28 @@ fn switch_row_column_with_whole_column_refs_is_bounded() {
 }
 
 #[test]
+fn switch_row_column_follows_inserted_and_deleted_lines() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["", "Q1", "Q2"], ["North", 1, 2], ["South", 3, 4]]})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:C3", "type": "column", "at": "F1"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().charts[0].source.as_deref(), Some("Sheet1!A2:C4"));
+    s.execute("chart.switchRowColumn", json!({})).unwrap();
+    let c = s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    let values: Vec<&str> = c.series.iter().map(|x| x.values.as_str()).collect();
+    assert_eq!(values, ["Sheet1!$B$3:$C$3", "Sheet1!$B$4:$C$4"]);
+    let names: Vec<Option<&str>> = c.series.iter().map(|x| x.name.as_deref()).collect();
+    assert_eq!(names, [Some("Sheet1!$A$3"), Some("Sheet1!$A$4")]);
+    assert_eq!(c.series[0].categories.as_deref(), Some("Sheet1!$B$2:$C$2"));
+    // Columns shift the source too.
+    s.execute("home.insertColumns", json!({"cols": "A:A"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().charts[0].source.as_deref(), Some("Sheet1!B2:D4"));
+    // Deleting the whole block leaves no stale source behind.
+    s.execute("home.deleteRows", json!({"rows": "2:4"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().charts[0].source, None);
+}
+
+#[test]
 fn ink_strokes_and_ink_to_shape() {
     let mut s = s();
     // A rough closed box.
