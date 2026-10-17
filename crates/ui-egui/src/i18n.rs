@@ -13,6 +13,7 @@ mod cs;
 mod de;
 mod es;
 mod fr;
+mod it;
 mod ko;
 mod pt;
 mod ru;
@@ -34,11 +35,13 @@ pub enum Language {
     De,
     Cs,
     Fr,
+    It,
     Sr,
 }
 
 impl Language {
-    pub const ALL: [Self; 11] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr];
+    pub const ALL: [Self; 12] =
+        [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::It, Self::Sr];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
@@ -53,6 +56,7 @@ impl Language {
             Self::De => "Deutsch",
             Self::Cs => "Čeština",
             Self::Fr => "Français",
+            Self::It => "Italiano",
             Self::Sr => "Srpski",
         }
     }
@@ -70,6 +74,7 @@ impl Language {
             Self::De => "de",
             Self::Cs => "cs",
             Self::Fr => "fr",
+            Self::It => "it",
             Self::Sr => "sr",
         }
     }
@@ -90,6 +95,7 @@ impl Language {
             "de" => Some(Self::De),
             "cs" => Some(Self::Cs),
             "fr" => Some(Self::Fr),
+            "it" => Some(Self::It),
             "sr" => Some(Self::Sr),
             _ => None,
         }
@@ -128,6 +134,7 @@ impl Language {
             Self::De => de::translate(text),
             Self::Cs => cs::translate(text),
             Self::Fr => fr::translate(text),
+            Self::It => it::translate(text),
             Self::Sr => sr::translate(text),
         };
         translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
@@ -644,6 +651,8 @@ mod tests {
         assert_eq!(Language::Sr.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::Sr.tr("Page Layout|Orientation"), "Orijentacija");
         assert_eq!(Language::Sr.tr("Orientation"), "Orijentacija");
+        assert_eq!(Language::It.tr("Data"), "Dati");
+        assert_eq!(Language::It.tr("Page Layout|Orientation"), "Orientamento");
         assert_eq!(Language::parse("xx"), None);
     }
 
@@ -685,6 +694,8 @@ mod tests {
         assert_eq!(Language::from_tag("sr-Latn-RS"), Some(Language::Sr));
         assert_eq!(Language::from_tag("sr-RS"), Some(Language::Sr));
         assert_eq!(Language::parse("sr"), Some(Language::Sr));
+        assert_eq!(Language::from_tag("it_IT.UTF-8"), Some(Language::It));
+        assert_eq!(Language::from_tag("it-CH"), Some(Language::It));
     }
 
     #[test]
