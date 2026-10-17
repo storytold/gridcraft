@@ -2308,4 +2308,53 @@ mod tests {
         // 64 Sub items under the collapsed "g" show as one column group: (1 + grand total) x 256 columns fit.
         s.execute("pivot.addField", json!({"field": "Sub", "area": "columns"})).unwrap();
     }
+
+    #[test]
+    fn inserting_or_deleting_lines_moves_the_pivot_with_its_cells() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"source": "Sheet1!A1:E13", "destination": "Sheet1!H10", "rows": ["Region"], "values": ["Sales"]}))
+            .unwrap();
+        assert_eq!(pt(&s).last_range.unwrap().a1(), "H10:I14");
+        // Rows above the report (and below the source) move the report only.
+        s.execute("home.insertRows", json!({"rows": "16:17"})).unwrap();
+        s.execute("home.insertRows", json!({"rows": "6:7"})).unwrap();
+        assert_eq!(text(&s, "H12"), "Row Labels");
+        let l = s.execute("pivot.list", json!({})).unwrap();
+        assert_eq!(l[0]["anchor"], "H12");
+        assert_eq!(l[0]["range"], "H12:I16");
+        assert_eq!(l[0]["source"], "Sheet1!A1:E15");
+        // A row above the source moves both.
+        s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+        let p = pt(&s);
+        assert_eq!(p.source, "Sheet1!A2:E16");
+        assert_eq!(p.anchor.a1(), "H13");
+        s.execute("pivot.refresh", json!({})).unwrap();
+        assert_eq!(pt(&s).last_range.unwrap().a1(), "H13:I17");
+        assert_eq!(text(&s, "H13"), "Row Labels");
+        assert_eq!(val(&s, "I17"), Value::Number(TOTAL));
+        // Deleting a column left of the report moves it left.
+        s.execute("home.deleteColumns", json!({"cols": "F:F"})).unwrap();
+        let p = pt(&s);
+        assert_eq!(p.anchor.a1(), "G13");
+        assert_eq!(p.last_range.unwrap().a1(), "G13:H17");
+        // Deleting rows above moves it up.
+        s.execute("home.deleteRows", json!({"rows": "1:1"})).unwrap();
+        assert_eq!(pt(&s).source, "Sheet1!A1:E15");
+        assert_eq!(pt(&s).anchor.a1(), "G12");
+        s.execute("pivot.refresh", json!({})).unwrap();
+        assert_eq!(text(&s, "G12"), "Row Labels");
+        assert_eq!(val(&s, "H16"), Value::Number(TOTAL));
+    }
+
+    #[test]
+    fn inserting_rows_on_the_source_sheet_moves_another_sheets_pivot_source() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"source": "Sheet1!A1:E13", "rows": ["Region"], "values": ["Sales"]})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        s.execute("home.insertRows", json!({"rows": "1:2"})).unwrap();
+        let l = s.execute("pivot.list", json!({})).unwrap();
+        assert_eq!(l[0]["source"], "Sheet1!A3:E15");
+        assert_eq!(l[0]["anchor"], "A3");
+        s.execute("pivot.refresh", json!({"pivot": "PivotTable1"})).unwrap();
+    }
 }
