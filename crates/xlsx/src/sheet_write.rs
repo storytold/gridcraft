@@ -3,10 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 
-use gridcraft_core::{CellError, CellRef, RangeRef, Value};
+use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
-    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, Orientation, Sheet, SparklineKind, Style, Table,
-    TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
+    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, Sheet,
+    SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
@@ -1260,6 +1260,24 @@ fn protected_ranges_xml(sheet: &Sheet) -> String {
     if s.is_empty() { s } else { format!("<protectedRanges>{s}</protectedRanges>") }
 }
 
+/// The box a note made here gets: two columns right of its cell, four rows tall, 108 x 59.25 pt.
+/// A box read from a file that equals it is kept as `None`, so a note's model survives a save.
+pub(crate) const DEFAULT_NOTE_BOX: NoteBox = NoteBox {
+    from: NoteCorner { col: 1, col_px: 15, row: 0, row_px: 2 },
+    to: NoteCorner { col: 3, col_px: 15, row: 4, row_px: 16 },
+    size_pt: Some(DEFAULT_NOTE_SIZE_PT),
+};
+const DEFAULT_NOTE_SIZE_PT: (f64, f64) = (108.0, 59.25);
+
+/// A note box's `<x:Anchor>` text and its width and height in points: the box read from the file
+/// or [`DEFAULT_NOTE_BOX`], its corners moved with the note's `cell` and kept on the sheet.
+fn note_anchor(cell: CellRef, b: Option<&NoteBox>) -> (String, (f64, f64)) {
+    let b = b.unwrap_or(&DEFAULT_NOTE_BOX);
+    let at = |base: u32, d: i64, max: u32| (i64::from(base) + d).clamp(0, i64::from(max) - 1);
+    let corner = |k: &NoteCorner| format!("{}, {}, {}, {}", at(cell.col, k.col, MAX_COLS), k.col_px, at(cell.row, k.row, MAX_ROWS), k.row_px);
+    (format!("{}, {}", corner(&b.from), corner(&b.to)), b.size_pt.unwrap_or(DEFAULT_NOTE_SIZE_PT))
+}
+
 /// Legacy VML shapes Excel uses to display notes.
 fn vml_xml(sheet: &Sheet, n: u32) -> String {
     let mut s = format!(
@@ -1268,14 +1286,13 @@ fn vml_xml(sheet: &Sheet, n: u32) -> String {
     for (i, (cell, c)) in sheet.comments.iter().enumerate() {
         let id = n as u64 * 1024 + 1 + i as u64;
         let vis = if c.visible { "visible" } else { "hidden" };
+        let (anchor, (w, h)) = note_anchor(*cell, c.note_box.as_ref());
         let _ = write!(
             s,
-            "<v:shape id=\"_x0000_s{id}\" type=\"#_x0000_t202\" style=\"position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:108pt;height:59.25pt;z-index:{};visibility:{vis}\" fillcolor=\"#ffffe1\" o:insetmode=\"auto\"><v:fill color2=\"#ffffe1\"/><v:shadow on=\"t\" color=\"black\" obscured=\"t\"/><v:path o:connecttype=\"none\"/><v:textbox style=\"mso-direction-alt:auto\"><div style=\"text-align:left\"></div></v:textbox><x:ClientData ObjectType=\"Note\"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{}, 15, {}, 2, {}, 15, {}, 16</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>{}</x:Row><x:Column>{}</x:Column>{}</x:ClientData></v:shape>",
+            "<v:shape id=\"_x0000_s{id}\" type=\"#_x0000_t202\" style=\"position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:{}pt;height:{}pt;z-index:{};visibility:{vis}\" fillcolor=\"#ffffe1\" o:insetmode=\"auto\"><v:fill color2=\"#ffffe1\"/><v:shadow on=\"t\" color=\"black\" obscured=\"t\"/><v:path o:connecttype=\"none\"/><v:textbox style=\"mso-direction-alt:auto\"><div style=\"text-align:left\"></div></v:textbox><x:ClientData ObjectType=\"Note\"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{anchor}</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>{}</x:Row><x:Column>{}</x:Column>{}</x:ClientData></v:shape>",
+            num(w),
+            num(h),
             i + 1,
-            cell.col + 1,
-            cell.row,
-            cell.col + 3,
-            cell.row + 4,
             cell.row,
             cell.col,
             if c.visible { "<x:Visible/>" } else { "" }

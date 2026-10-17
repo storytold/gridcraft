@@ -130,7 +130,16 @@ fn hostile_threaded_comments_persons_and_note_vml() {
     use gridcraft_model::{Comment, Workbook};
     let mut wb = Workbook::new();
     let s = std::sync::Arc::make_mut(&mut wb.sheets[0]);
-    let c = |threaded| Comment { author: "A".into(), text: "t".into(), replies: vec![], threaded, resolved: false, visible: false, dates: vec![] };
+    let c = |threaded| Comment {
+        author: "A".into(),
+        text: "t".into(),
+        replies: vec![],
+        threaded,
+        resolved: false,
+        visible: false,
+        dates: vec![],
+        note_box: None,
+    };
     s.comments.insert(CellRef::new(0, 0), c(true));
     s.comments.insert(CellRef::new(1, 1), c(false));
     let good = write_xlsx(&wb).unwrap();

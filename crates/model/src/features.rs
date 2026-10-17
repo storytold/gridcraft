@@ -323,6 +323,34 @@ pub struct Comment {
     /// read from the file (`dT`); empty when unknown, e.g. for comments made here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dates: Vec<String>,
+    /// Where the note's box sits and how big it is, as read from the file; `None` (a note made
+    /// here, or a file without the shape) writes the default box next to the cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_box: Option<NoteBox>,
+}
+
+/// A note box's place and size, from the note's VML shape: Excel's `<x:Anchor>` with its corners
+/// stored relative to the note's cell, so the box moves with the note when rows or columns are
+/// inserted or deleted, and the shape's width and height.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NoteBox {
+    /// Top-left corner: columns and rows from the note's cell (negative = left of or above it),
+    /// then the pixel offset into that column and row.
+    pub from: NoteCorner,
+    /// Bottom-right corner, the same way.
+    pub to: NoteCorner,
+    /// The shape's width and height in points (the VML style's `width`/`height`), when given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_pt: Option<(f64, f64)>,
+}
+
+/// One corner of a [`NoteBox`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteCorner {
+    pub col: i64,
+    pub col_px: u32,
+    pub row: i64,
+    pub row_px: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

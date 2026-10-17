@@ -1249,7 +1249,16 @@ fn comment(s: &mut Session, p: &Json, threaded: bool) -> Result<Json> {
     edit(s, |cx| {
         cx.sheet_mut(sheet)?.comments.insert(
             at,
-            Comment { author: author.clone(), text: text.clone(), replies: vec![], threaded, resolved: false, visible: false, dates: vec![] },
+            Comment {
+                author: author.clone(),
+                text: text.clone(),
+                replies: vec![],
+                threaded,
+                resolved: false,
+                visible: false,
+                dates: vec![],
+                note_box: None,
+            },
         );
         Ok(json!({"cell": at.a1()}))
     })
