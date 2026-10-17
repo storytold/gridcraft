@@ -332,9 +332,10 @@ fn new_tiles(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
             app.run_or_alert("file.new", json!({}));
             out.close = true;
         }
-        for (i, (name, title)) in gridcraft_engine::sample::SAMPLES.iter().enumerate() {
-            if tile(ui, title, Some(i)).clicked() {
-                app.run_or_alert("file.new", json!({"sample": name}));
+        for (i, (name, _)) in gridcraft_engine::sample::SAMPLES.iter().enumerate() {
+            // Samples are written in the interface language where one exists (Georgian).
+            if tile(ui, &gridcraft_engine::sample::title_in(name, lang.code()), Some(i)).clicked() {
+                app.run_or_alert("file.new", json!({"sample": name, "language": lang.code()}));
                 out.close = true;
             }
         }

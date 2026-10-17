@@ -164,7 +164,12 @@ impl Workbook {
     }
     /// A fresh sheet name `SheetN` not in use.
     pub fn next_sheet_name(&self) -> String {
-        (1..).map(|n| format!("Sheet{n}")).find(|n| self.sheet_index(n).is_none()).unwrap_or_else(|| "Sheet".into())
+        self.next_sheet_name_in("Sheet")
+    }
+    /// A fresh sheet name `{base}N` not in use (`base` is the interface language's word for
+    /// "Sheet", as Excel names new sheets in its own language).
+    pub fn next_sheet_name_in(&self, base: &str) -> String {
+        (1..).map(|n| format!("{base}{n}")).find(|n| self.sheet_index(n).is_none()).unwrap_or_else(|| base.into())
     }
     /// Validates a sheet name like Excel: 1–31 chars, none of `: \ / ? * [ ]`, not starting or
     /// ending with `'`, unique (case-insensitive) unless it is `except`'s own name.

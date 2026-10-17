@@ -1068,7 +1068,7 @@ fn write_report(s: &mut Session, p: &Json, tool: &str, g: Grid) -> Result<Json> 
             }
             let name = match p.get("newSheet") {
                 Some(Json::String(n)) if !n.trim().is_empty() => n.trim().to_string(),
-                _ => d.wb.next_sheet_name(),
+                _ => d.wb.next_sheet_name_in(&s.default_names().1),
             };
             d.wb.check_sheet_name(&name, None).map_err(EngineError::Other)?;
             (d.wb.sheets.len(), CellRef::new(0, 0), Some(name))

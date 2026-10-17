@@ -648,7 +648,7 @@ fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let name = match str_param(p, "name") {
         Some(n) => n.to_string(),
-        None => s.doc()?.wb.next_sheet_name(),
+        None => s.next_sheet_name()?,
     };
     s.doc()?.wb.check_sheet_name(&name, None).map_err(EngineError::Other)?;
     let d = s.doc_mut()?;

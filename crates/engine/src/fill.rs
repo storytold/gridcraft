@@ -506,7 +506,7 @@ fn apply_case(s: &str, c: Case) -> String {
         Case::Proper => {
             let mut out = String::new();
             for (i, ch) in s.chars().enumerate() {
-                if i == 0 {
+                if i == 0 && gridcraft_core::capitalizes(ch) {
                     out.extend(ch.to_uppercase());
                 } else {
                     out.extend(ch.to_lowercase());
@@ -601,6 +601,14 @@ fn synthesize(src: &str, dst: &str) -> Vec<Program> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn proper_case_leaves_georgian_lower_case() {
+        // Georgian has no word capitals; English still gets them, and UPPER still gives Mtavruli.
+        assert_eq!(super::apply_case("გამარჯობა", super::Case::Proper), "გამარჯობა");
+        assert_eq!(super::apply_case("hello", super::Case::Proper), "Hello");
+        assert_eq!(super::apply_case("გამარჯობა", super::Case::Upper), "ᲒᲐᲛᲐᲠᲯᲝᲑᲐ");
+    }
+
     use super::*;
 
     #[test]

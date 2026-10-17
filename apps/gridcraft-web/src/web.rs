@@ -38,10 +38,12 @@ pub fn start() {
                     let mut session = Session::new();
                     // In host mode the parent sends the workbook to edit; no sample meanwhile.
                     let q = if app_bridge.is_some() { String::new() } else { query() };
+                    // Samples are written in the browser's language (Georgian for `ka`).
+                    let language = gridcraft_ui_egui::i18n::Language::system().code();
                     if let Some(name) = q.split(['?', '&']).find_map(|kv| kv.strip_prefix("sample=")) {
-                        let _ = session.execute("file.new", serde_json::json!({"sample": name}));
+                        let _ = session.execute("file.new", serde_json::json!({"sample": name, "language": language}));
                     } else if q.contains("sample") {
-                        let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
+                        let _ = session.execute("file.new", serde_json::json!({"sample": "sales", "language": language}));
                     }
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone());
                     if let Some(bridge) = &app_bridge {

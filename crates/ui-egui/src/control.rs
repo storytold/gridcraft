@@ -195,7 +195,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                     "Submit Print Job",
                     "existing file.print sheet/pagination params → {printing,bytes,pending}; submits without opening a dialog",
                 ),
-                ("app.language.set", "Interface Language", "{language: \"en\"|\"zh\"|\"ja\"|\"ko\"|\"ru\"|\"pt\"|\"de\"|\"cs\"} (alias: code)"),
+                (
+                    "app.language.set",
+                    "Interface Language",
+                    "{language: \"en\"|\"zh\"|\"ja\"|\"ko\"|\"ru\"|\"pt\"|\"de\"|\"cs\"|\"fr\"|\"sr\"|\"ka\"} (alias: code)",
+                ),
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),
             ] {

@@ -125,7 +125,7 @@ fn proper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut prev_letter = false;
     for ch in s.chars() {
         if ch.is_alphabetic() {
-            if prev_letter {
+            if prev_letter || !gridcraft_core::capitalizes(ch) {
                 out.extend(ch.to_lowercase());
             } else {
                 out.extend(ch.to_uppercase());
@@ -1004,6 +1004,10 @@ mod tests {
         is_text(ev("LOWER", vec![t("ABC")]), "abc");
         is_text(ev("PROPER", vec![t("this is a TITLE")]), "This Is A Title");
         is_text(ev("PROPER", vec![t("2-way street's")]), "2-Way Street'S");
+        // Georgian has no word capitals: PROPER leaves Mkhedruli as it is and lowers Mtavruli.
+        is_text(ev("PROPER", vec![t("გამარჯობა მსოფლიო")]), "გამარჯობა მსოფლიო");
+        is_text(ev("PROPER", vec![t("ᲒᲐᲛᲐᲠᲯᲝᲑᲐ")]), "გამარჯობა");
+        is_text(ev("UPPER", vec![t("გამარჯობა")]), "ᲒᲐᲛᲐᲠᲯᲝᲑᲐ");
         is_text(ev("TRIM", vec![t("  a   b  c ")]), "a b c");
         is_text(ev("CLEAN", vec![t("a\u{7}b\nc")]), "abc");
     }
