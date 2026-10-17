@@ -271,9 +271,8 @@ the publisher.
 
 ## Icons
 
-`assets/app-icon/gridcraft.svg` is a **placeholder** (an original ledger-page drawing on
-GridCraft green) until the owner makes GridCraft's engraved creature portrait (craftrules
-`standards/icon-design.md`). `packaging/icons.sh` regenerates the 1024 px PNG, the macOS 512 px
+`assets/app-icon/gridcraft.svg` holds the owner-supplied green "G" mark (an embedded PNG).
+`packaging/icons.sh` regenerates the 1024 px PNG, the macOS 512 px
 PNG, the `.icns` (iconutil), the `.ico` (`cargo xtask ico`) and the hicolor PNGs from it; it
 needs `resvg`. The outputs are committed, so packaging never needs those tools. Every file has a
 row in `ATTRIBUTION.md` (`cargo xtask assets`).

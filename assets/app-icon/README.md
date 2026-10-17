@@ -1,34 +1,14 @@
-# GridCraft app icon (PLACEHOLDER)
+# GridCraft app icon
 
-**This icon is temporary.** Every Crafting App's icon is an engraved creature portrait that the
-product owner makes (craftrules `standards/icon-design.md`); GridCraft's hasn't been made yet.
-Until it is, this placeholder stands in: a simple ledger page with a header row, a row-number
-column, a selected cell with its fill handle and a double rule under a total, on a full-bleed
-GridCraft-green tile. It is original geometry written by hand for this repository, deliberately
-not modelled on any vendor's spreadsheet logo (no letters, no "X", no overlapping panels).
-
-When the owner's art arrives, replace `gridcraft.svg`, run `packaging/icons.sh`, update this
-README (provenance, creature) and the rows in `ATTRIBUTION.md`, and drop the word placeholder.
-
-## Palette
-
-Exactly three colours:
-
-| Colour | Hex | Used for |
-|---|---|---|
-| Ink | `#0b0b0c` | Line work and contour |
-| Paper | `#efe9dc` | The page |
-| GridCraft green (app colour, **proposed**) | `#1f9d55` | The full-bleed field and the header cells |
-
-The app colour is a proposal pending the owner's approval: GridCraft green `#1f9d55`, with ink
-(darker) variant `#147a40` for text and accents on light backgrounds. It differs from
-DesignCraft's `#7bb51c`.
+The icon is the owner-supplied green "G" mark (a folded ribbon on a transparent background; no
+tile). `gridcraft.svg` embeds a 512 px PNG of it inside the 512 × 512 viewBox, so
+`packaging/icons.sh` (which widens the viewBox for the macOS grid) keeps working.
 
 ## Geometry
 
-A 512 × 512 viewBox, clipped to a rounded square with `rx=112`. Windows and Linux use the full
-tile. The macOS icons (`.icns`, `gridcraft-macos-512.png`) sit on Apple's grid: an 824/1024
-body with a transparent margin.
+A 512 × 512 viewBox. The mark fills 88% of the canvas on Windows and Linux. The macOS icons
+(`.icns`, `gridcraft-macos-512.png`) sit on Apple's grid: an 824/1024 body with a transparent
+margin.
 
 ## Files
 
@@ -48,5 +28,5 @@ ID and `packaging/linux/ai.storyteller.gridcraft.desktop`.
 
 ## Regenerate
 
-Edit `gridcraft.svg`, then run `packaging/icons.sh`. It needs `resvg`, and `iconutil` for the
-`.icns` (macOS only). It packs the `.ico` with `cargo xtask ico`.
+Replace the PNG embedded in `gridcraft.svg`, then run `packaging/icons.sh`. It needs `resvg`, and
+`iconutil` for the `.icns` (macOS only). It packs the `.ico` with `cargo xtask ico`.
