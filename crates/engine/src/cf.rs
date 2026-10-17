@@ -147,10 +147,18 @@ impl CfCache {
                 CfRule::Expression { formula, style } => {
                     gridcraft_calc::evaluate(wb, sheet, c, &relative(formula, first, c)).to_bool().unwrap_or(false).then_some(style.as_ref())
                 }
-                CfRule::ContainsText { text: t, style } => text.to_lowercase().contains(&t.to_lowercase()).then_some(style.as_ref()),
-                CfRule::NotContainsText { text: t, style } => (!text.to_lowercase().contains(&t.to_lowercase())).then_some(style.as_ref()),
-                CfRule::BeginsWith { text: t, style } => text.to_lowercase().starts_with(&t.to_lowercase()).then_some(style.as_ref()),
-                CfRule::EndsWith { text: t, style } => text.to_lowercase().ends_with(&t.to_lowercase()).then_some(style.as_ref()),
+                // As in Excel, an error value never contains, begins or ends with anything (its rule
+                // formulas SEARCH/LEFT/RIGHT fail on it), so it always "does not contain" (#1162).
+                CfRule::ContainsText { text: t, style } => {
+                    (!v.is_error() && text.to_lowercase().contains(&t.to_lowercase())).then_some(style.as_ref())
+                }
+                CfRule::NotContainsText { text: t, style } => {
+                    (v.is_error() || !text.to_lowercase().contains(&t.to_lowercase())).then_some(style.as_ref())
+                }
+                CfRule::BeginsWith { text: t, style } => {
+                    (!v.is_error() && text.to_lowercase().starts_with(&t.to_lowercase())).then_some(style.as_ref())
+                }
+                CfRule::EndsWith { text: t, style } => (!v.is_error() && text.to_lowercase().ends_with(&t.to_lowercase())).then_some(style.as_ref()),
                 CfRule::Blanks { style } => (v.is_empty() || text.trim().is_empty()).then_some(style.as_ref()),
                 CfRule::NoBlanks { style } => (!v.is_empty() && !text.trim().is_empty()).then_some(style.as_ref()),
                 CfRule::Errors { style } => v.is_error().then_some(style.as_ref()),
@@ -409,5 +417,29 @@ mod tests {
         let mut cache = CfCache::new();
         let mut look = |a: &str| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.style).is_some();
         assert_eq!([look("A1"), look("A2")], [true, false]);
+    }
+
+    #[test]
+    fn text_rules_skip_error_values() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let values = json!([["=NA()", "=NA()", "=1/0", "=NA()"], ["abc", "#x", "x!", "abc"], ["xyz", "y", "y", "xyz"]]);
+        s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+        let rule = |range: &str, kind: &str, text: &str| json!({"range": range, "rule": {"type": kind, "text": text, "preset": "lightRedFill"}});
+        s.execute("home.conditionalFormat", rule("A1:A3", "containsText", "a")).unwrap();
+        s.execute("home.conditionalFormat", rule("B1:B3", "beginsWith", "#")).unwrap();
+        s.execute("home.conditionalFormat", rule("C1:C3", "endsWith", "!")).unwrap();
+        s.execute("home.conditionalFormat", rule("D1:D3", "notContainsText", "a")).unwrap();
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::new();
+        let mut look = |a: &str| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.style).is_some();
+        // Contains "a": abc, never #N/A although its text holds an "a".
+        assert_eq!([look("A1"), look("A2"), look("A3")], [false, true, false]);
+        // Begins with "#": #x, never #N/A.
+        assert_eq!([look("B1"), look("B2"), look("B3")], [false, true, false]);
+        // Ends with "!": x!, never #DIV/0!.
+        assert_eq!([look("C1"), look("C2"), look("C3")], [false, true, false]);
+        // Does not contain "a": #N/A and xyz, not abc.
+        assert_eq!([look("D1"), look("D2"), look("D3")], [true, false, true]);
     }
 }
