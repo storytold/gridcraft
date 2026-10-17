@@ -14,6 +14,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod editor;
+mod floating_pictures;
 pub mod fonts;
 pub mod formula_bar;
 mod formula_locale;
@@ -993,6 +994,9 @@ impl SheetApp {
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
         self.ui.keytip_invoke = None;
+        // Floating pictures' textures go with their workbook, even when no sheet is painted.
+        let open: Vec<u64> = self.session.documents().iter().map(|d| d.uid).collect();
+        floating_pictures::forget_closed(ctx, &open);
         if self.fonts_han.is_some_and(|han| han != theme::HanOrder::of(self.ui.language)) {
             self.fonts_ready = false;
             self.fonts_set = false;

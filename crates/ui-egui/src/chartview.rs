@@ -1,9 +1,6 @@
 //! Floating objects on the sheet: charts (rendered by `gridcraft-chart` into primitives that
 //! we paint with egui), pictures and shapes.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
@@ -249,8 +246,6 @@ pub(crate) fn anchor_rect(geo: &Geo, sh: &Sheet, a: &Anchor) -> Rect {
     Rect::from_min_size(pos2(x, y), vec2(a.width * geo.z, a.height.max(1.0) * geo.z))
 }
 
-static TEXTURES: std::sync::LazyLock<Mutex<HashMap<(u32, usize), egui::TextureHandle>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-
 /// The shapes one floating object painted (indices into the painter's layer) and its logical
 /// rectangle, so a right-to-left sheet can move it as a whole instead of mirroring it.
 pub(crate) struct PaintedObject {
@@ -261,6 +256,8 @@ pub(crate) struct PaintedObject {
 pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
     let mut painted = Vec::new();
     let mut done = |start: egui::layers::ShapeIdx, rect: Rect| painted.push(PaintedObject { shapes: start.0..p.add(egui::Shape::Noop).0, rect });
+    // The grid paints the active workbook: its pictures are cached under it.
+    let doc = app.session.active().map_or(0, |d| d.uid);
     for sp in &sh.shapes {
         let r = anchor_rect(geo, sh, &sp.anchor);
         if !r.intersects(p.clip_rect()) {
@@ -332,18 +329,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             continue;
         }
         let start = p.add(egui::Shape::Noop);
-        let key = (im.id, im.data.len());
-        let mut cache = TEXTURES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !cache.contains_key(&key)
-            && let Ok(img) = image::load_from_memory(&im.data)
-        {
-            let rgba = img.to_rgba8();
-            let size = [rgba.width() as usize, rgba.height() as usize];
-            let ci = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-            let tex = p.ctx().load_texture(format!("img{}", im.id), ci, egui::TextureOptions::LINEAR);
-            cache.insert(key, tex);
-        }
-        if let Some(tex) = cache.get(&key) {
+        if let Some(tex) = crate::floating_pictures::texture(p.ctx(), doc, im, r) {
             p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         } else {
             p.rect_filled(r, 0.0, Color32::from_gray(230));
