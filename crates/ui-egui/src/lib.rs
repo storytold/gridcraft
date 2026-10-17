@@ -1050,6 +1050,12 @@ impl SheetApp {
         if ctx.options(|o| o.zoom_with_keyboard) {
             ctx.options_mut(|o| o.zoom_with_keyboard = false);
         }
+        // egui closes the window on Ctrl+Q (and with Shift or Alt held too) without asking to save
+        // (#1443). Excel for Windows has no such key (Ctrl+Q is Quick Analysis); macOS keeps Cmd+Q,
+        // the app's Quit there.
+        if ctx.os() != egui::os::OperatingSystem::Mac && ctx.options(|o| !o.quit_shortcuts.is_empty()) {
+            ctx.options_mut(|o| o.quit_shortcuts.clear());
+        }
         let zoom = self.ui.zoom_factor();
         if (ctx.zoom_factor() - zoom).abs() > 0.001 {
             ctx.set_zoom_factor(zoom);

@@ -214,3 +214,37 @@ fn alt_down_only_opens_enabled_table_filter_buttons() {
         assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "B1");
     }
 }
+
+/// #1443: Ctrl+Q (also with Shift or Alt, which is what AltGr+Q reports on Windows) must not
+/// close the window and lose unsaved input; macOS keeps Cmd+Q as the app's Quit.
+#[test]
+fn ctrl_q_does_not_close_the_window_outside_macos() {
+    let closes = |h: &mut Harness, k: Key, m: Modifiers| -> bool {
+        h.input_mut().events.push(Event::Key { key: k, physical_key: Some(k), pressed: true, repeat: false, modifiers: m });
+        h.input_mut().events.push(Event::Key { key: k, physical_key: Some(k), pressed: false, repeat: false, modifiers: m });
+        let mut closed = false;
+        for _ in 0..3 {
+            h.step();
+            closed |= h.output().viewport_output.values().any(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)));
+        }
+        closed
+    };
+    let ctrl_alt = Modifiers { alt: true, ..CTRL };
+    for os in [egui::os::OperatingSystem::Windows, egui::os::OperatingSystem::Nix] {
+        let mut h = harness(book("A1"));
+        h.ctx.set_os(os);
+        h.run_steps(2);
+        for (name, m) in [("Ctrl+Q", CTRL), ("Ctrl+Shift+Q", CTRL_SHIFT), ("Ctrl+Alt+Q", ctrl_alt)] {
+            assert!(!closes(&mut h, Key::Q, m), "{os:?}: {name} closed the window");
+        }
+        assert!(h.ctx.options(|o| o.quit_shortcuts.is_empty()), "{os:?}: no quit shortcut left");
+    }
+    // macOS: Cmd+Q stays the app's Quit.
+    let mut h = harness(book("A1"));
+    // The harness's first frame already ran as the host OS; restore egui's default, as a real
+    // macOS launch would have it.
+    h.ctx.options_mut(|o| o.quit_shortcuts = vec![egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::Q)]);
+    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    h.run_steps(2);
+    assert!(h.ctx.options(|o| !o.quit_shortcuts.is_empty()), "Cmd+Q is still egui's quit shortcut on macOS");
+}
