@@ -951,6 +951,9 @@ fn validation(s: &mut Session, p: &Json) -> Result<Json> {
         "custom" => ValidationKind::Custom,
         _ => ValidationKind::Any,
     };
+    if kind == ValidationKind::List && str_param(p, "formula1").is_none_or(|f| f.trim().trim_start_matches('=').is_empty()) {
+        return Err(bad("data.validation", "a list validation needs `formula1`"));
+    }
     let dv = Validation {
         ranges: ranges.clone(),
         kind,
@@ -1343,6 +1346,17 @@ mod tests {
             assert!(sh.is_row_hidden(2), "{sel}");
             assert_eq!(sh.value(CellRef::new(2, 0)).display(), "b", "{sel}");
         }
+    }
+
+    #[test]
+    fn list_validation_without_formula1_is_an_error() {
+        let mut s = Session::new();
+        s.new_workbook();
+        assert!(s.execute("data.validation", json!({"range": "A1:A3", "type": "list", "source": "\"a,b,c\""})).is_err());
+        assert!(s.execute("data.validation", json!({"range": "A1:A3", "type": "list"})).is_err());
+        assert!(s.doc().unwrap().wb.active().unwrap().validations.is_empty());
+        s.execute("data.validation", json!({"range": "A1:A3", "type": "list", "formula1": "\"a,b,c\""})).unwrap();
+        assert_eq!(s.execute("data.validate", json!({"cell": "A1", "input": "a"})).unwrap()["ok"], json!(true));
     }
 
     #[test]
