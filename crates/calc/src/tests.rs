@@ -369,6 +369,25 @@ fn spill_into_the_old_area_of_a_blocked_neighbour() {
 }
 
 #[test]
+fn formulas_reading_an_array_that_loses_a_spill_conflict_read_spill_errors() {
+    // Two arrays of one recalculation want the same empty cell: the one laid out second is
+    // #SPILL!, and the formulas that read it in that pass (at its anchor, through `A2#`, or over
+    // the cells it would have spilled into) kept its values.
+    let mut t = T::new();
+    t.set("B1", "=SEQUENCE(3)");
+    t.set("A2", "=SEQUENCE(1,3)");
+    t.set("D2", "=A2*10");
+    t.set("E2", "=C2");
+    t.set("F2", "=SUM(A2#)");
+    t.set("G2", "=SUM(C2:C3)");
+    // Both arrays recalculated together: B1 is laid out first and takes B2.
+    t.calc.recalc_all(&mut t.wb);
+    let spill = Value::Error(CellError::Spill);
+    assert_eq!((t.num("B2"), t.get("A2"), t.get("D2")), (2.0, spill.clone(), spill));
+    assert_eq!((t.get("C2"), t.num("E2"), t.get("F2"), t.num("G2")), (Value::Empty, 0.0, Value::Error(CellError::Ref), 0.0));
+}
+
+#[test]
 fn arrays_do_not_spill_in_tables() {
     // Excel: spilled array formulas aren't supported in tables.
     let mut t = T::new();
