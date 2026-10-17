@@ -277,3 +277,48 @@ fn info_strings_are_capped() {
     let pdf = doc.finish();
     assert_eq!(utf16_entry(&pdf, "/Title").chars().count(), MAX_INFO_CHARS);
 }
+
+/// Every `r g b rg` / `r g b RG` colour operator in the (uncompressed) page content.
+fn colour_ops(pdf: &[u8]) -> Vec<[String; 3]> {
+    let text = String::from_utf8_lossy(pdf);
+    let words: Vec<&str> = text.split_whitespace().collect();
+    words.windows(4).filter(|w| w[3] == "rg" || w[3] == "RG").map(|w| [w[0].to_owned(), w[1].to_owned(), w[2].to_owned()]).collect()
+}
+
+fn coloured_page(gray: bool, pixel: [u8; 3]) -> Vec<u8> {
+    let mut doc = PdfDoc::new();
+    doc.grayscale = gray;
+    let pg = doc.add_page(200.0, 200.0);
+    pg.fill_rect(10.0, 10.0, 50.0, 50.0, [220, 30, 40]);
+    pg.rect_stroke(10.0, 10.0, 50.0, 50.0, 1.0, [0, 0, 255]);
+    pg.stroke_line(0.0, 0.0, 90.0, 90.0, 1.0, [0, 160, 0]);
+    pg.polygon(&[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], Some([255, 200, 0]), Some(([128, 0, 128], 1.0)));
+    pg.circle(100.0, 100.0, 20.0, Some([0, 255, 255]), None);
+    pg.text(20.0, 100.0, 12.0, Font::Helvetica, [200, 0, 0], "Red");
+    pg.image_rgba(100.0, 10.0, 20.0, 20.0, &[pixel[0], pixel[1], pixel[2], 255].repeat(4), 2, 2);
+    doc.finish()
+}
+
+#[test]
+fn rec709_gray_keeps_white_black_and_grays() {
+    assert_eq!(gray_of(255, 255, 255), 255);
+    assert_eq!(gray_of(0, 0, 0), 0);
+    assert_eq!(gray_of(90, 90, 90), 90);
+    // Rec. 709 of (220, 30, 40) is 0.2126*220 + 0.7152*30 + 0.0722*40 = 71.
+    assert_eq!(gray_of(220, 30, 40), 71);
+    assert!(gray_of(0, 255, 0) > gray_of(255, 0, 0) && gray_of(255, 0, 0) > gray_of(0, 0, 255));
+}
+
+#[test]
+fn a_grayscale_document_draws_only_gray() {
+    let colour = coloured_page(false, [220, 30, 40]);
+    assert!(colour_ops(&colour).iter().any(|c| c[0] != c[1] || c[1] != c[2]), "the colour page has colour");
+    let gray = coloured_page(true, [220, 30, 40]);
+    let ops = colour_ops(&gray);
+    assert!(ops.len() >= 7, "{ops:?}");
+    assert!(ops.iter().all(|c| c[0] == c[1] && c[1] == c[2]), "{ops:?}");
+    // The image is the gray of its pixels: the same bytes as a document that drew that gray.
+    let y = gray_of(220, 30, 40);
+    assert_eq!(gray, coloured_page(true, [y, y, y]));
+    assert_ne!(gray, colour);
+}

@@ -10,6 +10,12 @@ description = "GridCraft desktop app"
 [lints]
 workspace = true
 
+[features]
+# Network printing (WS-Print and IPP over plain HTTP to numeric local addresses). Nothing connects until the
+# person enters a printer address, queries it and confirms a job.
+default = ["network-print"]
+network-print = ["craft-print/wsd", "craft-print/ipp"]
+
 [dependencies]
 gridcraft-engine = { workspace = true }
 gridcraft-ui-egui = { workspace = true }
@@ -19,12 +25,18 @@ serde_json = { workspace = true }
 log = { workspace = true }
 image = { workspace = true }
 
+[dev-dependencies]
+# In-memory fake printers for the network-print glue tests; never in a shipped binary.
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "refs/pull/116/head", default-features = false, features = ["testing"] }
+
 [build-dependencies]
 # Icon + VERSIONINFO for gridcraft.exe; build.rs only uses it when the target is Windows.
 winresource = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d" }
+# The print backends and registry (storytold/craft-libs#116: WS-Print, IPP, tracked jobs); the
+# `network-print` feature turns on the network backends, so a build without it has the system spooler only.
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "refs/pull/116/head", default-features = false }
 rfd = { workspace = true }
 arboard = { workspace = true }
 

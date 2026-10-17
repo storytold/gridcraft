@@ -224,6 +224,10 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         out.close = true;
     }
     if let Some(page) = out.page {
+        // Arriving on Print clears the network destination's confirmation: it covers one print.
+        if page == Page::Print && bs.page != Page::Print {
+            app.network.state.dialog_opened();
+        }
         bs.page = page;
     }
     // A command run from a page may itself have opened (or replaced) the view; keep that.
@@ -708,15 +712,27 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.set_width(250.0);
+            // One Printer list: the system's queues, then "Network printer…" where the host offers it.
             if let Some(discover) = &app.services.printers {
-                crate::printing::show(&mut app.printing, ui, discover, |label| lang.tr(label).to_owned());
+                let running = app.network.state.draft.running();
+                let has_network = app.services.network_print.is_some();
+                let network = has_network.then_some(&mut app.network.selected);
+                crate::printing::show(&mut app.printing, ui, discover, network, running, |label| lang.tr(label).to_owned());
+            } else if app.services.network_print.is_some() {
+                // No local queues here: the network printer is the only listed destination.
+                app.network.selected = true;
             }
-            let can_print = app.services.print_native.is_none() || app.printing.ready();
-            if ui.add_enabled_ui(can_print, |ui| square_button(ui, Icon::Print, lang.tr("Print"))).inner.clicked()
-                && app.commit_edit(0, 0, false, false)
-            {
-                app.print_now(params.clone());
-                out.close = app.services.print_native.is_none();
+            ui.add_space(8.0);
+            if app.network_selected() {
+                network_destination(app, ui, &params, pages.len(), page_media(&pages), lang);
+            } else {
+                let can_print = app.services.print_native.is_none() || app.printing.ready();
+                if ui.add_enabled_ui(can_print, |ui| square_button(ui, Icon::Print, lang.tr("Print"))).inner.clicked()
+                    && app.commit_edit(0, 0, false, false)
+                {
+                    app.print_now(params.clone());
+                    out.close = app.services.print_native.is_none();
+                }
             }
             ui.add_space(16.0);
             let scope = if bs.print_all { "Print Entire Workbook" } else { "Print Active Sheets" };
@@ -755,8 +771,9 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
             p.rect_filled(rect.translate(vec2(2.0, 3.0)), 2.0, t.shadow);
             p.rect_filled(rect, 2.0, t.grid_bg);
             p.rect_stroke(rect, 2.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
+            let gray = app.print_grayscale();
             if let Some(d) = app.session.active() {
-                paint_page(p, rect, w, page, &d.wb, &t);
+                paint_page(p, rect, w, page, &d.wb, &t, gray);
             }
             let sheet = page.get("sheet").and_then(Json::as_str).unwrap_or("");
             let range = page.get("range").and_then(Json::as_str).unwrap_or("");
@@ -780,13 +797,51 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
     });
 }
 
+/// The media size of the first previewed page (points), as a size name printers list.
+fn page_media(pages: &[Json]) -> Option<&'static str> {
+    let first = pages.first()?;
+    let size = |key: &str| first.get(key).and_then(Json::as_f64);
+    crate::printing::media_for_points(size("width")?, size("height")?)
+}
+
+/// The network-printer destination of the Print page: craft-ui's section (address, query, the
+/// printer's three-state options, the confirmation, the job's status) and the Print button.
+fn network_destination(app: &mut SheetApp, ui: &mut Ui, params: &Json, sheets: usize, media: Option<&'static str>, lang: crate::i18n::Language) {
+    let Some(net) = &app.services.network_print else { return };
+    let host = crate::printing::net::Host { validate: net.validate.as_ref(), query: &net.query, sheets_ok: sheets > 0, formats: net.formats };
+    let labels = crate::printing::network_labels(lang);
+    let response = ui.scope(|ui| {
+        ui.set_min_width(330.0);
+        app.network.state.show(ui, egui::Id::new("gridcraft_network_printer"), &host, &labels)
+    });
+    let response = response.inner;
+    ui.add_space(8.0);
+    let can_print = response.block.is_none();
+    if ui.add_enabled_ui(can_print, |ui| square_button(ui, Icon::Print, lang.tr("Print"))).inner.clicked() && app.commit_edit(0, 0, false, false) {
+        let pages = u32::try_from(sheets).ok();
+        if let Err(error) = app.print_network(params.clone(), pages, media) {
+            app.alert_text(error);
+        }
+    }
+}
+
 /// Most rows and columns one preview page draws (a page holds far fewer at any readable scale).
 const PREVIEW_ROWS: u32 = 200;
 const PREVIEW_COLS: u32 = 60;
 
+/// A preview colour as it will print: unchanged, or its Rec. 709 gray (the weights the grayscale PDF
+/// uses, so the preview and the page agree).
+fn preview_colour(c: Color32, gray: bool) -> Color32 {
+    if !gray {
+        return c;
+    }
+    let y = gridcraft_engine::gray_of(c.r(), c.g(), c.b());
+    Color32::from_rgba_unmultiplied(y, y, y, c.a())
+}
+
 /// Draws one printed page in miniature: the cells' displayed text at the page's print scale,
 /// inside the sheet's margins. `paper_w` is the page width in points.
-fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, wb: &gridcraft_engine::model::Workbook, t: &Tokens) {
+fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, wb: &gridcraft_engine::model::Workbook, t: &Tokens, gray: bool) {
     let Some(range) = page.get("range").and_then(Json::as_str).and_then(gridcraft_engine::core::RangeRef::parse) else { return };
     let Some(sh) = page.get("sheet").and_then(Json::as_str).and_then(|n| wb.sheet_index(n)).and_then(|i| wb.sheets.get(i)) else { return };
     // Preview pixels per point, and per sheet pixel (sheet geometry is 96 dpi: 0.75 pt per pixel).
@@ -825,8 +880,17 @@ fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, wb: &gri
                 break;
             }
             let cell = gridcraft_engine::core::CellRef::new(row, col);
+            let style = wb.styles.get(sh.style_id(cell));
+            if style.fill.pattern == gridcraft_engine::model::PatternType::Solid
+                && let Some(rgb) = style.fill.fg.resolve(&wb.theme)
+            {
+                let fill = preview_colour(Color32::from_rgb(rgb[0], rgb[1], rgb[2]), gray);
+                p.rect_filled(Rect::from_min_size(pos2(x, y), vec2(w, h)).intersect(body), 0.0, fill);
+            }
             let text = gridcraft_engine::display::cell_text(wb, sh, cell);
             if !text.is_empty() {
+                let ink = style.font.color.resolve(&wb.theme).map_or(t.cell_text, |rgb| Color32::from_rgb(rgb[0], rgb[1], rgb[2]));
+                let ink = preview_colour(ink, gray);
                 let numeric = sh.value(cell).as_f64().is_some();
                 // Text runs on over empty neighbours, as on the sheet; numbers stay in their cell.
                 let mut span = w;
@@ -840,7 +904,7 @@ fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, wb: &gri
                 let clip = Rect::from_min_size(pos2(x, y), vec2(span, h)).intersect(body);
                 let (anchor, at) =
                     if numeric { (Align2::RIGHT_CENTER, pos2(x + w - 1.0, y + h / 2.0)) } else { (Align2::LEFT_CENTER, pos2(x + 1.0, y + h / 2.0)) };
-                p.with_clip_rect(clip).text(at, anchor, text, font.clone(), t.cell_text);
+                p.with_clip_rect(clip).text(at, anchor, text, font.clone(), ink);
             }
             x += w;
         }
@@ -1084,5 +1148,15 @@ mod tests {
     fn recent_paths_split_without_touching_the_disk() {
         assert_eq!(split_path("/home/me/Budget.xlsx"), ("Budget.xlsx".into(), "/home/me".into()));
         assert_eq!(split_path("Budget.xlsx"), ("Budget.xlsx".into(), "".into()));
+    }
+
+    #[test]
+    fn the_print_preview_colours_are_gray_exactly_when_grayscale_is_chosen() {
+        let red = Color32::from_rgb(220, 30, 40);
+        assert_eq!(preview_colour(red, false), red);
+        let gray = preview_colour(red, true);
+        assert_eq!((gray.r(), gray.g(), gray.b()), (71, 71, 71), "Rec. 709, the weights the PDF uses");
+        assert_eq!(preview_colour(Color32::WHITE, true), Color32::WHITE);
+        assert_eq!(preview_colour(Color32::BLACK, true), Color32::BLACK);
     }
 }

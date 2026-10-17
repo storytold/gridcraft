@@ -9,7 +9,8 @@ description = "GridCraft egui frontend (Excel-style UI); swappable — nothing b
 workspace = true
 
 [dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d" }
+# The network-printer destination (`printing::network`) is storytold/craft-libs#112; pinned to that ref until it merges, then an immutable revision.
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "refs/pull/112/head" }
 gridcraft-engine = { workspace = true }
 gridcraft-chart = { workspace = true }
 egui = { workspace = true }
