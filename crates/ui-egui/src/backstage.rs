@@ -120,8 +120,13 @@ pub struct Backstage {
 
 /// Save As file types: (extension, label). The first is the workbook itself; the others are
 /// exports that leave the workbook's own file and unsaved state alone.
-pub const SAVE_TYPES: [(&str, &str); 4] =
-    [("xlsx", "Excel Workbook (*.xlsx)"), ("csv", "CSV UTF-8 (Comma delimited) (*.csv)"), ("html", "Web Page (*.html)"), ("pdf", "PDF (*.pdf)")];
+pub const SAVE_TYPES: [(&str, &str); 5] = [
+    ("xlsx", "Excel Workbook (*.xlsx)"),
+    ("csv", "CSV UTF-8 (Comma delimited) (*.csv)"),
+    ("dbf", "dBASE III table (*.dbf)"),
+    ("html", "Web Page (*.html)"),
+    ("pdf", "PDF (*.pdf)"),
+];
 
 impl Backstage {
     pub fn new(page: Page) -> Backstage {
@@ -685,7 +690,12 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
         }
     }
     ui.add_space(18.0);
-    dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
+    if fmt == "dbf" {
+        dim(ui, lang.tr("Exports the active sheet as a new dBASE table. The first used row supplies field names (up to 10 characters)."));
+        dim(ui, lang.tr("The workbook keeps its own file and unsaved changes. Database schema and companion files are not preserved."));
+    } else {
+        dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
+    }
 }
 
 fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
@@ -867,7 +877,7 @@ fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
     }
 }
 
-/// Exports the active workbook as `pdf`, `csv` or `html`: through the save picker on the desktop,
+/// Exports the active workbook as `pdf`, `csv`, `dbf` or `html`: through the save picker on the desktop,
 /// as a browser download on the web. Returns whether a file was written or handed over.
 pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     if !app.commit_edit(0, 0, false, false) {
@@ -876,6 +886,7 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     let id = match fmt {
         "pdf" => "file.exportPdf",
         "csv" => "file.exportCsv",
+        "dbf" => "file.exportDbf",
         "html" => "file.exportHtml",
         _ => return false,
     };

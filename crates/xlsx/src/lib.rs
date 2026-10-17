@@ -17,6 +17,8 @@ mod chart;
 mod chartex;
 mod crypto;
 mod csv;
+mod dbf;
+mod dbf_write;
 mod drawing;
 mod feature_bags;
 mod fmla;
@@ -46,6 +48,8 @@ use gridcraft_model::Workbook;
 
 pub use crypto::{DecryptError, check_encryption, decrypt};
 pub use csv::{MAX_CSV_BYTES, read_csv, write_csv, write_csv_limited};
+pub use dbf::read_dbf;
+pub use dbf_write::{DbfNumberFormat, write_dbf};
 pub use ods::read_ods;
 pub use passthrough::rebase_links;
 pub use xls::read_xls;

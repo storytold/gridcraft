@@ -40,6 +40,73 @@ fn page(h: &egui_kittest::Harness<'static, SheetApp>) -> Option<&'static str> {
 }
 
 #[test]
+fn save_as_dbf_exports_on_desktop_and_web_in_both_themes() {
+    for (dark, web) in [(false, false), (true, false), (false, true)] {
+        let dir = std::env::temp_dir().join(format!("gridcraft-dbf-ui-{}-{dark}-{web}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let captured = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+        let mut services = Services::default();
+        if web {
+            let captured = captured.clone();
+            services.download = Some(Box::new(move |name, bytes| captured.lock().unwrap().push((name.into(), bytes.to_vec()))));
+        } else {
+            let dir = dir.clone();
+            services.pick_save = Some(Box::new(move |suggested| {
+                assert!(suggested.ends_with(".dbf"));
+                Some(dir.join("Export.xlsx").to_string_lossy().into_owned())
+            }));
+        }
+        let screenshots = std::env::var_os("GRIDCRAFT_DBF_SCREENSHOTS").map(std::path::PathBuf::from);
+        let builder = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0));
+        let builder = if screenshots.is_some() { builder.wgpu() } else { builder };
+        let mut s = Session::new();
+        s.new_workbook();
+        let mut h = builder.build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            SheetApp::new(s, services),
+        );
+        h.state_mut().ui.dark = dark;
+        h.run_steps(4);
+        for (cell, input) in [("A1", "Name"), ("B1", "Amount"), ("A2", "Ada"), ("B2", "=21*2")] {
+            h.state_mut().run("cell.set", serde_json::json!({"cell":cell, "input":input})).unwrap();
+        }
+        choose(&mut h, "Save As");
+        h.get_by_value("Excel Workbook (*.xlsx)").click();
+        h.run_steps(2);
+        h.get_by_label("dBASE III table (*.dbf)").click();
+        h.run_steps(3);
+        assert_eq!(h.state().backstage.as_ref().unwrap().save_format, "dbf");
+        if let Some(screenshots) = &screenshots {
+            std::fs::create_dir_all(screenshots).unwrap();
+            h.render().unwrap().save(screenshots.join(format!("save-as-dbf-{dark}-{web}.png"))).unwrap();
+        }
+        click(&mut h, if web { "Download (.dbf)" } else { "Browse…" });
+        let bytes = if web {
+            let captured = captured.lock().unwrap();
+            assert!(captured[0].0.ends_with(".dbf"));
+            captured[0].1.clone()
+        } else {
+            std::fs::read(dir.join("Export.dbf")).unwrap()
+        };
+        let (wb, _) = gridcraft_engine::io::open_bytes("Export.dbf", &bytes).unwrap();
+        if let Some(screenshots) = &screenshots {
+            std::fs::write(screenshots.join(format!("exported-{dark}-{web}.dbf")), &bytes).unwrap();
+        }
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(1, 1)), Value::Number(42.0));
+        let doc = h.state().session.active().unwrap();
+        assert!(doc.path.is_none() && doc.is_dirty());
+        if !web {
+            std::fs::remove_file(dir.join("Export.dbf")).unwrap();
+        }
+        std::fs::remove_dir(dir).unwrap();
+    }
+}
+
+#[test]
 fn new_and_open_from_the_file_tab_keep_the_ribbon_as_it_was() {
     let opened = Arc::new(Mutex::new(0));
     let capture = opened.clone();
