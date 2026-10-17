@@ -21,7 +21,7 @@ impl Shape {
 }
 
 pub(crate) fn needs_array(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula) -> bool {
-    let Some(expr) = formula.expr_arc() else { return false };
+    let Some(expr) = formula.expr_arc().filter(|_| !crate::external::saved_as_read(formula)) else { return false };
     let mut scan = Scan { wb, at, remaining: 4096, locals: Vec::new() };
     let shape = scan.expr(&expr, sheet, false, 0);
     // An explicit `@` is written as `_xlfn.SINGLE`, which only dynamic-array formulas carry.

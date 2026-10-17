@@ -91,16 +91,18 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             }
         }
     }
-    // Dynamic-array spills: anchor → range, and the spilled values to cache.
+    // Dynamic-array spills: anchor → range, and the spilled values to cache. A legacy formula
+    // over a linked workbook is saved as read, without its spill (`external::saved_as_read`).
+    let as_read = |a: &CellRef| sheet.cells.get(*a).and_then(|c| c.formula.as_ref()).is_some_and(|f| crate::external::saved_as_read(f));
     let dynamic: BTreeMap<CellRef, RangeRef> = sheet
         .spill_ranges
         .iter()
-        .filter(|(a, r)| !r.is_single() && sheet.cells.get(**a).is_some_and(|c| c.formula.as_ref().is_some_and(|f| f.array.is_none())))
+        .filter(|(a, r)| !r.is_single() && sheet.cells.get(**a).is_some_and(|c| c.formula.as_ref().is_some_and(|f| f.array.is_none())) && !as_read(a))
         .map(|(a, r)| (*a, *r))
         .collect();
     let mut extra: BTreeMap<CellRef, Value> = BTreeMap::new();
     // Values inside spills and legacy array ranges.
-    for (a, r) in sheet.spill_ranges.iter().filter(|(_, r)| !r.is_single()) {
+    for (a, r) in sheet.spill_ranges.iter().filter(|(a, r)| !r.is_single() && !as_read(a)) {
         for c in r.iter().take(1_000_000) {
             if c != *a
                 && let Some(v) = sheet.spill.get(&c)

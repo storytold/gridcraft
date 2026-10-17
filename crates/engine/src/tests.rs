@@ -242,6 +242,308 @@ fn formulas_with_the_wrong_argument_count_are_refused_on_entry() {
 }
 
 #[test]
+fn typed_references_to_workbooks_that_are_not_linked_are_refused_on_entry() {
+    // A file saved with `[2]Sheet1!A1` and only one external link (or `[1]…` and none) can't be
+    // opened by Excel 365, which refuses such an index on entry.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "kept"})).unwrap();
+    let refused = |s: &mut Session, input: &str| {
+        let e = s.execute("cell.set", json!({"cell": "A1", "input": input})).unwrap_err().to_string();
+        assert!(e.contains("There's a problem with this formula"), "{input}: {e}");
+        assert_eq!(v(s, "A1"), Value::text("kept"), "{input} must not replace the cell");
+    };
+    for input in [
+        "=[1]Sheet1!A1",
+        "='[1]My Sheet'!A1:B2",
+        "=SUM([1]Jan:Dec!A1)",
+        "=[1]!Rates",
+        "=[99999999999999999999]Sheet1!A1",
+        // Either end of a sheet range, and bracketed prefixes that aren't an index.
+        "='Sheet1:[5]Dec'!A1",
+        "='[-1]Sheet1'!A1",
+        "='[ 1]Sheet1'!A1",
+        "='[Book2.xlsx]Sheet1'!A1",
+    ] {
+        refused(&mut s, input);
+    }
+    assert!(s.execute("formulas.defineName", json!({"name": "Linked", "refersTo": "=[1]Sheet1!A1"})).is_err());
+    // Conditional formats and data validation can't refer to other workbooks.
+    let cf = |f: &str| json!({"range": "A1:A3", "rule": {"type": "expression", "formula": f}});
+    assert!(s.execute("home.conditionalFormat", cf("=[3]Sheet1!A1>0")).is_err());
+    assert!(s.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "=[3]Sheet1!A1:A3"})).is_err());
+    assert!(s.execute("data.validation", json!({"range": "A1", "type": "custom", "formula1": "=[3]Sheet1!A1>0"})).is_err());
+    assert!(s.doc().unwrap().wb.active().unwrap().validations.is_empty() && s.doc().unwrap().wb.active().unwrap().cond_formats.is_empty());
+    // One link: `[1]` enters, `[2]` doesn't.
+    let link = gridcraft_model::ExternalBook {
+        sheets: vec![gridcraft_model::ExternalSheet {
+            name: "S".into(),
+            cells: vec![(CellRef::parse("A1").unwrap(), Value::Number(5.0))],
+            refresh_error: false,
+        }],
+        ..Default::default()
+    };
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    wb.external_books = vec![link.clone()].into();
+    refused(&mut s, "=[2]Sheet1!A1");
+    refused(&mut s, "='[1]Jan:[1]Dec'!A1");
+    // Only a defined name can follow a bare `[n]!`: a cell reference there would be to a sheet
+    // called `[1]`.
+    for input in ["=[1]!A1", "=[1]!$B$2", "=SUM([1]!A1:B2)", "=[0]!A1", "=[1]!#REF!"] {
+        refused(&mut s, input);
+    }
+    assert!(s.execute("formulas.defineName", json!({"name": "BookOnly", "refersTo": "=[1]!A1"})).is_err());
+    assert!(s.execute("data.validation", json!({"range": "A1", "type": "custom", "formula1": "=[0]!A1>0"})).is_err());
+    // A data bar's formula thresholds are conditional-format formulas too.
+    let bar = |f: &str| json!({"range": "A1:A3", "rule": {"type": "dataBar", "min": {"type": "formula", "value": f}}});
+    assert!(s.execute("home.conditionalFormat", bar("[2]Sheet1!A1")).is_err());
+    assert!(s.execute("home.conditionalFormat", bar("[1]S!A1")).is_err());
+    assert!(s.doc().unwrap().wb.active().unwrap().cond_formats.is_empty());
+    s.execute("home.conditionalFormat", bar("MIN(A1:A3)")).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=[1]S!$A$1"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(5.0));
+    // JSON doesn't carry the link parts, so it doesn't carry their values either: reopened, the
+    // workbook has no link, and a typed `[1]` is refused rather than saved without one.
+    let json_bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "book.json").unwrap();
+    let (back, _) = crate::io::open_bytes("book.json", &json_bytes).unwrap();
+    assert!(back.external_books.is_empty());
+    s.execute("formulas.defineName", json!({"name": "Linked", "refersTo": "=[1]Sheet1!A1"})).unwrap();
+    // `[0]` is this workbook: entered as the plain reference, showing the local value.
+    s.execute("cell.set", json!({"cell": "C1", "input": "7"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Seven", "refersTo": "=Sheet1!$C$1"})).unwrap();
+    for (cell, input, text) in
+        [("D1", "=[0]Sheet1!C1*2", "Sheet1!C1*2"), ("D2", "=SUM([0]Sheet1:Sheet1!C1)", "SUM(Sheet1:Sheet1!C1)"), ("D3", "=[0]!Seven*2", "Seven*2")]
+    {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        let d = s.doc().unwrap();
+        let f = d.wb.active().unwrap().cell(CellRef::parse(cell).unwrap()).and_then(|c| c.formula.clone()).unwrap();
+        assert_eq!(f.text, text, "{input}");
+    }
+    assert_eq!((v(&s, "D1"), v(&s, "D2"), v(&s, "D3")), (Value::Number(14.0), Value::Number(7.0), Value::Number(14.0)));
+    // A `[0]` name is stored as the local reference, so it follows a sheet rename.
+    s.execute("formulas.defineName", json!({"name": "Zero", "refersTo": "=[0]Sheet1!$C$1"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.names.iter().find(|n| n.name == "Zero").unwrap().formula, "Sheet1!$C$1");
+    s.execute("cell.set", json!({"cell": "D4", "input": "=Zero"})).unwrap();
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "Data"})).unwrap();
+    assert_eq!(v(&s, "D4"), Value::Number(7.0));
+    // Pasted into a New Window of the same workbook, `[1]` is the same link.
+    s.execute("edit.copy", json!({"range": "B1"})).unwrap();
+    s.execute("view.newWindow", json!({})).unwrap();
+    s.execute("edit.paste", json!({"at": "E1"})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell": "E1"})).unwrap()["formula"], "=[1]S!$A$1");
+    assert_eq!(v(&s, "E1"), Value::Number(5.0));
+    // In another workbook it's kept only where that workbook holds the same link at that index;
+    // otherwise `[1]` there would be a link it doesn't have (or a different workbook): `#REF!`.
+    let other = gridcraft_model::ExternalBook {
+        sheets: vec![gridcraft_model::ExternalSheet { name: "T".into(), ..Default::default() }],
+        ..Default::default()
+    };
+    for (books, formula) in [(vec![], "=#REF!"), (vec![other], "=#REF!"), (vec![link], "=[1]S!$A$1")] {
+        s.new_workbook();
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).external_books = books.into();
+        s.execute("edit.paste", json!({"at": "E1"})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "E1"})).unwrap()["formula"], formula);
+    }
+}
+
+#[test]
+fn kept_values_of_uncalculable_linked_names_move_with_their_cells() {
+    // As read from a file: `[1]!Broken` is defined as #REF! in the link, and the cell shows the 20
+    // Excel saved for it.
+    let mut s = s();
+    let names = vec![gridcraft_model::ExternalName { name: "Broken".into(), sheet: None, refers_to: "#REF!".into() }];
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    wb.external_books = vec![gridcraft_model::ExternalBook { names, ..Default::default() }].into();
+    let mut cell = gridcraft_model::Cell::formula(gridcraft_model::Formula::new("=[1]!Broken"));
+    cell.value = Value::Number(20.0);
+    wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("H11").unwrap(), cell);
+    wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("G11").unwrap(), gridcraft_model::Cell::value(Value::Number(2.0)));
+    wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("G12").unwrap(), gridcraft_model::Cell::value(Value::Number(1.0)));
+    // Moved by cut and paste.
+    s.execute("edit.cut", json!({"range": "H11"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H15"})).unwrap();
+    assert_eq!(v(&s, "H15"), Value::Number(20.0));
+    // Moved by a sort, and by inserting rows above it.
+    s.execute("edit.cut", json!({"range": "H15"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H11"})).unwrap();
+    s.execute("data.sort", json!({"range": "G11:H12", "header": false, "keys": [{"column": "G"}]})).unwrap();
+    assert_eq!(v(&s, "H12"), Value::Number(20.0));
+    s.execute("home.insertRows", json!({"rows": "1:2"})).unwrap();
+    assert_eq!(v(&s, "H14"), Value::Number(20.0));
+}
+
+#[test]
+fn kept_values_of_uncalculable_linked_names_survive_edits_they_do_not_read() {
+    // As read from a file: H11 `=[1]!Broken+G11`, where the link saved `Broken` as #REF!, shows
+    // the 22 Excel saved for it.
+    let mut s = s();
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    let names = vec![gridcraft_model::ExternalName { name: "Broken".into(), sheet: None, refers_to: "#REF!".into() }];
+    wb.external_books = vec![gridcraft_model::ExternalBook { names, ..Default::default() }].into();
+    let mut cell = gridcraft_model::Cell::formula(gridcraft_model::Formula::new("=[1]!Broken+G11"));
+    cell.value = Value::Number(22.0);
+    wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("H11").unwrap(), cell);
+    wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("G11").unwrap(), gridcraft_model::Cell::value(Value::Number(2.0)));
+    // Edits that change nothing the formula reads keep its value.
+    s.execute("cell.set", json!({"cell": "K5", "input": "1"})).unwrap();
+    assert_eq!(v(&s, "H11"), Value::Number(22.0));
+    s.execute("home.rowHeight", json!({"rows": "30:30", "height": 30})).unwrap();
+    assert_eq!(v(&s, "H11"), Value::Number(22.0));
+    s.execute("formulas.defineName", json!({"name": "Other", "refersTo": "=1"})).unwrap();
+    assert_eq!(v(&s, "H11"), Value::Number(22.0));
+    // Changing what it reads calculates it, with the uncalculable name as #REF!.
+    s.execute("cell.set", json!({"cell": "G11", "input": "3"})).unwrap();
+    assert_eq!(v(&s, "H11"), Value::Error(gridcraft_core::CellError::Ref));
+}
+
+#[test]
+fn kept_values_give_way_when_a_table_resize_changes_what_they_read() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["Name", "Qty"], ["a", 1], ["b", 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    wb.external_books = vec![gridcraft_model::ExternalBook {
+        names: vec![gridcraft_model::ExternalName { name: "Broken".into(), sheet: None, refers_to: "#REF!".into() }],
+        ..Default::default()
+    }]
+    .into();
+    let mut linked = gridcraft_model::Cell::formula(gridcraft_model::Formula::new("=[1]!Broken+SUM(Table1[Qty])"));
+    linked.value = Value::Number(99.0);
+    wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("D1").unwrap(), linked);
+    let mut unrelated = gridcraft_model::Cell::formula(gridcraft_model::Formula::new("=[1]!Broken+A10"));
+    unrelated.value = Value::Number(77.0);
+    wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("E1").unwrap(), unrelated);
+    let d = s.doc_mut().unwrap();
+    let mut wb = (*d.wb).clone();
+    d.calc.recalc_all(&mut wb);
+    d.wb = std::sync::Arc::new(wb);
+
+    assert_eq!((v(&s, "D1"), v(&s, "E1")), (Value::Number(99.0), Value::Number(77.0)));
+    s.execute("table.resize", json!({"table": "Table1", "range": "A1:B4"})).unwrap();
+    assert_eq!(v(&s, "D1"), Value::Error(gridcraft_core::CellError::Ref));
+    assert_eq!(v(&s, "E1"), Value::Number(77.0));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!((v(&s, "D1"), v(&s, "E1")), (Value::Number(99.0), Value::Number(77.0)));
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!((v(&s, "D1"), v(&s, "E1")), (Value::Error(gridcraft_core::CellError::Ref), Value::Number(77.0)));
+}
+
+#[test]
+fn kept_values_of_uncalculable_linked_names_give_way_when_a_structural_edit_changes_what_they_read() {
+    // As read from a file, over a name the link saved as #REF!: H11 `=[1]!Broken+SUM(G10:G12)`
+    // shows 22 and K11 `=[1]!Broken+J11` shows 7, as Excel saved them.
+    let mut s = s();
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    let names = vec![gridcraft_model::ExternalName { name: "Broken".into(), sheet: None, refers_to: "#REF!".into() }];
+    wb.external_books = vec![gridcraft_model::ExternalBook { names, ..Default::default() }].into();
+    for (at, text, saved) in [("H11", "=[1]!Broken+SUM(G10:G12)", 22.0), ("K11", "=[1]!Broken+J11", 7.0)] {
+        let mut cell = gridcraft_model::Cell::formula(gridcraft_model::Formula::new(text));
+        cell.value = Value::Number(saved);
+        wb.sheet_mut(0).unwrap().cells.set(CellRef::parse(at).unwrap(), cell);
+    }
+    for (at, n) in [("G11", 2.0), ("J11", 1.0)] {
+        wb.sheet_mut(0).unwrap().cells.set(CellRef::parse(at).unwrap(), gridcraft_model::Cell::value(Value::Number(n)));
+    }
+    // Moving the cells it reads changes nothing it reads: the values stay.
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    assert_eq!((v(&s, "H12"), v(&s, "K12")), (Value::Number(22.0), Value::Number(7.0)));
+    // A deleted row inside its range, or a deleted cell it reads, calculates it again.
+    s.execute("home.deleteRows", json!({"rows": "13:13"})).unwrap();
+    assert_eq!((v(&s, "H12"), v(&s, "K12")), (Value::Error(gridcraft_core::CellError::Ref), Value::Number(7.0)));
+    s.execute("home.deleteColumns", json!({"cols": "J:J"})).unwrap();
+    assert_eq!(v(&s, "J12"), Value::Error(gridcraft_core::CellError::Ref));
+}
+
+/// A session as read from a file whose link saved the name `Broken` as #REF!: `cells` are
+/// (cell, input, saved value of a formula), `names` (name, refers to).
+fn kept_value_session(cells: &[(&str, &str, f64)], names: &[(&str, &str)]) -> Session {
+    let mut s = s();
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    let linked = vec![gridcraft_model::ExternalName { name: "Broken".into(), sheet: None, refers_to: "#REF!".into() }];
+    wb.external_books = vec![gridcraft_model::ExternalBook { names: linked, ..Default::default() }].into();
+    for (name, refers_to) in names {
+        let formula = refers_to.to_string();
+        wb.names.push(gridcraft_model::DefinedName { name: name.to_string(), scope: None, formula, comment: String::new(), hidden: false });
+    }
+    for (at, input, saved) in cells {
+        let cell = if let Some(f) = input.strip_prefix('=') {
+            let mut cell = gridcraft_model::Cell::formula(gridcraft_model::Formula::new(f));
+            cell.value = Value::Number(*saved);
+            cell
+        } else {
+            gridcraft_model::Cell::value(Value::Number(input.parse().unwrap()))
+        };
+        wb.sheet_mut(0).unwrap().cells.set(CellRef::parse(at).unwrap(), cell);
+    }
+    // Calculated as on loading: the formulas over `Broken` keep their saved values.
+    let d = s.doc_mut().unwrap();
+    let mut wb = (*d.wb).clone();
+    d.calc.recalc_all(&mut wb);
+    d.wb = std::sync::Arc::new(wb);
+    s
+}
+
+#[test]
+fn kept_values_give_way_when_a_name_indirect_or_a_chain_through_a_name_reads_the_changed_cell() {
+    let mut s = kept_value_session(
+        &[
+            ("A20", "5", 0.0),
+            ("D22", "=[1]!Broken+X", 25.0),
+            ("D23", "=[1]!Broken+INDIRECT(\"A20\")", 25.0),
+            ("B26", "=X", 5.0),
+            ("D26", "=[1]!Broken+B26", 25.0),
+            ("D27", "=[1]!Broken+Y", 9.0),
+        ],
+        &[("X", "Sheet1!$A$20"), ("Y", "Sheet1!$A$40")],
+    );
+    s.execute("cell.set", json!({"cell": "A20", "input": "-1"})).unwrap();
+    let r = Value::Error(gridcraft_core::CellError::Ref);
+    assert_eq!([v(&s, "D22"), v(&s, "D23"), v(&s, "B26"), v(&s, "D26")], [r.clone(), r.clone(), Value::Number(-1.0), r]);
+    // Y reads A40, which didn't change.
+    assert_eq!(v(&s, "D27"), Value::Number(9.0));
+}
+
+#[test]
+fn kept_values_over_indirect_give_way_on_a_structural_edit_as_on_any_edit() {
+    // What INDIRECT reads isn't known before it runs: any edit calculates it, an inserted row too.
+    let mut s = kept_value_session(&[("A20", "5", 0.0), ("D23", "=[1]!Broken+INDIRECT(\"A20\")", 25.0), ("D24", "=[1]!Broken+A20", 25.0)], &[]);
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    assert_eq!((v(&s, "D24"), v(&s, "D25")), (Value::Error(gridcraft_core::CellError::Ref), Value::Number(25.0)));
+}
+
+#[test]
+fn kept_values_give_way_when_a_name_they_use_is_redefined() {
+    let mut s =
+        kept_value_session(&[("A20", "5", 0.0), ("D22", "=[1]!Broken+X", 25.0), ("D23", "=[1]!Broken+Y", 9.0)], &[("X", "Sheet1!$A$20"), ("Y", "7")]);
+    s.execute("formulas.defineName", json!({"name": "X", "refersTo": "=7", "oldName": "X"})).unwrap();
+    assert_eq!((v(&s, "D22"), v(&s, "D23")), (Value::Error(gridcraft_core::CellError::Ref), Value::Number(9.0)));
+}
+
+#[test]
+fn kept_values_give_way_when_a_deleted_row_changes_a_formula_or_a_name_they_read() {
+    let r = Value::Error(gridcraft_core::CellError::Ref);
+    // A deleted row turns B25 `=A20` into `=#REF!`: D24 reads it. Then one turns `Z` into #REF!.
+    let mut s = kept_value_session(
+        &[
+            ("A20", "5", 0.0),
+            ("B25", "=A20", 5.0),
+            ("D25", "=[1]!Broken+B25", 25.0),
+            ("A50", "1", 0.0),
+            ("D30", "=[1]!Broken+Z", 9.0),
+            ("D31", "=[1]!Broken+B32", 4.0),
+        ],
+        &[("Z", "Sheet1!$A$50")],
+    );
+    s.execute("home.deleteRows", json!({"rows": "20:20"})).unwrap();
+    assert_eq!(v(&s, "D24"), r.clone());
+    // D30 (now D29) `=[1]!Broken+Z` reads A49 now: moved, not changed.
+    assert_eq!(v(&s, "D29"), Value::Number(9.0));
+    s.execute("home.deleteRows", json!({"rows": "49:49"})).unwrap();
+    assert_eq!(v(&s, "D29"), r);
+    // D30 `=[1]!Broken+B31` read nothing that changed.
+    assert_eq!(v(&s, "D30"), Value::Number(4.0));
+}
+
+#[test]
 fn undo_redo() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
@@ -1612,6 +1914,161 @@ fn deleting_a_3d_span_end_sheet_keeps_the_rest() {
         assert_eq!(v(&s, "A1"), Value::Number(total), "deleting {deleted}");
         assert_eq!(v(&s, "B1"), direct, "deleting {deleted}");
     }
+}
+#[test]
+fn kept_values_give_way_when_a_middle_3d_sheet_is_deleted_or_moved() {
+    let setup = || {
+        let mut s = s();
+        for name in ["Sheet2", "Sheet3", "Results"] {
+            s.execute("home.insertSheet", json!({"name": name})).unwrap();
+        }
+        for (sheet, n) in [("Sheet1", 3), ("Sheet2", 5), ("Sheet3", 1)] {
+            s.execute("sheet.activate", json!({"sheet": sheet})).unwrap();
+            s.execute("cell.set", json!({"cell": "B1", "input": n.to_string()})).unwrap();
+        }
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.external_books = vec![gridcraft_model::ExternalBook {
+            names: vec![gridcraft_model::ExternalName { name: "Broken".into(), sheet: None, refers_to: "#REF!".into() }],
+            ..Default::default()
+        }]
+        .into();
+        let mut cell = gridcraft_model::Cell::formula(gridcraft_model::Formula::new("=[1]!Broken+SUM(Sheet1:Sheet3!B1)"));
+        cell.value = Value::Number(25.0);
+        wb.sheet_mut(3).unwrap().cells.set(CellRef::parse("D40").unwrap(), cell);
+        let d = s.doc_mut().unwrap();
+        let mut wb = (*d.wb).clone();
+        d.calc.recalc_all(&mut wb);
+        d.wb = std::sync::Arc::new(wb);
+        s.execute("sheet.activate", json!({"sheet": "Results"})).unwrap();
+        s
+    };
+
+    let mut deleted = setup();
+    deleted.execute("home.deleteSheet", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(v(&deleted, "D40"), Value::Error(gridcraft_core::CellError::Ref));
+
+    let mut moved = setup();
+    moved.execute("sheet.move", json!({"sheet": "Sheet2", "to": 3})).unwrap();
+    moved.execute("sheet.activate", json!({"sheet": "Results"})).unwrap();
+    assert_eq!(v(&moved, "D40"), Value::Error(gridcraft_core::CellError::Ref));
+}
+#[test]
+fn kept_values_give_way_when_a_named_middle_3d_sheet_is_deleted_or_moved() {
+    let setup = || {
+        let mut s = s();
+        for name in ["Sheet2", "Sheet3", "Results"] {
+            s.execute("home.insertSheet", json!({"name": name})).unwrap();
+        }
+        for (sheet, n) in [("Sheet1", 3), ("Sheet2", 5), ("Sheet3", 1)] {
+            s.execute("sheet.activate", json!({"sheet": sheet})).unwrap();
+            s.execute("cell.set", json!({"cell": "B1", "input": n.to_string()})).unwrap();
+        }
+        s.execute("formulas.defineName", json!({"name": "W", "refersTo": "=Sheet1:Sheet3!$B$1"})).unwrap();
+        s.execute("formulas.defineName", json!({"name": "WW", "refersTo": "=W"})).unwrap();
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.external_books = vec![gridcraft_model::ExternalBook {
+            names: vec![gridcraft_model::ExternalName { name: "Broken".into(), sheet: None, refers_to: "#REF!".into() }],
+            ..Default::default()
+        }]
+        .into();
+        let mut direct = gridcraft_model::Cell::formula(gridcraft_model::Formula::new("=[1]!Broken+SUM(W)"));
+        direct.value = Value::Number(25.0);
+        wb.sheet_mut(3).unwrap().cells.set(CellRef::parse("D42").unwrap(), direct);
+        let mut chained = gridcraft_model::Cell::formula(gridcraft_model::Formula::new("=[1]!Broken+SUM(WW)"));
+        chained.value = Value::Number(25.0);
+        wb.sheet_mut(3).unwrap().cells.set(CellRef::parse("E42").unwrap(), chained);
+        let d = s.doc_mut().unwrap();
+        let mut wb = (*d.wb).clone();
+        d.calc.recalc_all(&mut wb);
+        d.wb = std::sync::Arc::new(wb);
+        s.execute("sheet.activate", json!({"sheet": "Results"})).unwrap();
+        s
+    };
+
+    let mut deleted = setup();
+    deleted.execute("home.deleteSheet", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(
+        (v(&deleted, "D42"), v(&deleted, "E42")),
+        (Value::Error(gridcraft_core::CellError::Ref), Value::Error(gridcraft_core::CellError::Ref))
+    );
+    deleted.execute("edit.undo", json!({})).unwrap();
+    assert_eq!((v(&deleted, "D42"), v(&deleted, "E42")), (Value::Number(25.0), Value::Number(25.0)));
+    deleted.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(
+        (v(&deleted, "D42"), v(&deleted, "E42")),
+        (Value::Error(gridcraft_core::CellError::Ref), Value::Error(gridcraft_core::CellError::Ref))
+    );
+
+    let mut moved = setup();
+    moved.execute("sheet.move", json!({"sheet": "Sheet2", "to": 3})).unwrap();
+    moved.execute("sheet.activate", json!({"sheet": "Results"})).unwrap();
+    assert_eq!((v(&moved, "D42"), v(&moved, "E42")), (Value::Error(gridcraft_core::CellError::Ref), Value::Error(gridcraft_core::CellError::Ref)));
+    moved.execute("edit.undo", json!({})).unwrap();
+    assert_eq!((v(&moved, "D42"), v(&moved, "E42")), (Value::Number(25.0), Value::Number(25.0)));
+    moved.execute("edit.redo", json!({})).unwrap();
+    assert_eq!((v(&moved, "D42"), v(&moved, "E42")), (Value::Error(gridcraft_core::CellError::Ref), Value::Error(gridcraft_core::CellError::Ref)));
+}
+
+#[test]
+fn kept_values_follow_multi_area_structural_rewrites() {
+    let linked = || {
+        let mut s = s();
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.external_books = vec![gridcraft_model::ExternalBook {
+            names: vec![gridcraft_model::ExternalName { name: "Broken".into(), sheet: None, refers_to: "#REF!".into() }],
+            ..Default::default()
+        }]
+        .into();
+        s
+    };
+    let mut named = linked();
+    named.execute("range.setValues", json!({"range": "A50:A52", "values": [[1], [1], [1]]})).unwrap();
+    named.execute("formulas.defineName", json!({"name": "W", "refersTo": "=Sheet1!$A$50:$A$52"})).unwrap();
+    let wb = std::sync::Arc::make_mut(&mut named.doc_mut().unwrap().wb);
+    let mut formula = gridcraft_model::Cell::formula(gridcraft_model::Formula::new("=[1]!Broken+SUM(W)"));
+    formula.value = Value::Number(25.0);
+    wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("D42").unwrap(), formula);
+    let d = named.doc_mut().unwrap();
+    let mut wb = (*d.wb).clone();
+    d.calc.recalc_all(&mut wb);
+    d.wb = std::sync::Arc::new(wb);
+    named.execute("home.deleteRows", json!({"rows": "10:10,51:51"})).unwrap();
+    assert_eq!(v(&named, "D41"), Value::Error(gridcraft_core::CellError::Ref));
+
+    let mut chain = linked();
+    chain.execute("cell.set", json!({"cell": "A61", "input": "1"})).unwrap();
+    let wb = std::sync::Arc::make_mut(&mut chain.doc_mut().unwrap().wb);
+    for (at, text, saved) in [("D45", "=[1]!Broken+SUM(A60:A62)", 25.0), ("E45", "=[1]!Broken+D45", 50.0)] {
+        let mut cell = gridcraft_model::Cell::formula(gridcraft_model::Formula::new(text));
+        cell.value = Value::Number(saved);
+        wb.sheet_mut(0).unwrap().cells.set(CellRef::parse(at).unwrap(), cell);
+    }
+    let d = chain.doc_mut().unwrap();
+    let mut wb = (*d.wb).clone();
+    d.calc.recalc_all(&mut wb);
+    d.wb = std::sync::Arc::new(wb);
+    chain.execute("home.deleteRows", json!({"rows": "61:61,5:5"})).unwrap();
+    assert_eq!((v(&chain, "D44"), v(&chain, "E44")), (Value::Error(gridcraft_core::CellError::Ref), Value::Error(gridcraft_core::CellError::Ref)));
+}
+
+#[test]
+fn kept_values_give_way_for_volatile_functions_after_unrelated_edits() {
+    let mut s = s();
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    wb.external_books = vec![gridcraft_model::ExternalBook {
+        names: vec![gridcraft_model::ExternalName { name: "Broken".into(), sheet: None, refers_to: "#REF!".into() }],
+        ..Default::default()
+    }]
+    .into();
+    let mut cell = gridcraft_model::Cell::formula(gridcraft_model::Formula::new("=[1]!Broken+NOW()*0"));
+    cell.value = Value::Number(25.0);
+    wb.sheet_mut(0).unwrap().cells.set(CellRef::parse("D46").unwrap(), cell);
+    let d = s.doc_mut().unwrap();
+    let mut wb = (*d.wb).clone();
+    d.calc.recalc_all(&mut wb);
+    d.wb = std::sync::Arc::new(wb);
+    s.execute("cell.set", json!({"cell": "Z1", "input": "1"})).unwrap();
+    assert_eq!(v(&s, "D46"), Value::Error(gridcraft_core::CellError::Ref));
 }
 
 #[test]

@@ -17,6 +17,11 @@ pub struct Formula {
     /// Legacy array formula (Ctrl+Shift+Enter) covering this range; the formula lives in the
     /// top-left cell.
     pub array: Option<RangeRef>,
+    /// Read from a file as a legacy formula (an XLSX `<f>` without dynamic-array metadata), which
+    /// Excel reads with implicit intersection. Saving keeps a range into a linked workbook in it
+    /// from turning it into a dynamic array. Kept when the formula is moved, copied or adjusted.
+    #[serde(skip)]
+    pub legacy: bool,
 }
 
 impl Formula {
@@ -25,12 +30,17 @@ impl Formula {
     pub fn new(text: &str) -> Formula {
         let body = text.strip_prefix('=').unwrap_or(text);
         match gridcraft_formula::parse(body) {
-            Ok(e) => Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None },
-            Err(_) => Formula { text: body.to_string(), expr: None, array: None },
+            Ok(e) => Formula::from_expr(e),
+            Err(_) => Formula { text: body.to_string(), expr: None, array: None, legacy: false },
         }
     }
     pub fn from_expr(e: Expr) -> Formula {
-        Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None }
+        Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, legacy: false }
+    }
+    /// This formula with `e` as its expression (moved, copied or adjusted). It stays legacy if it
+    /// was; `array` is the caller's to set.
+    pub fn rewritten(&self, e: Expr) -> Formula {
+        Formula { legacy: self.legacy, ..Formula::from_expr(e) }
     }
     /// The parsed expression, re-parsing after deserialization.
     pub fn expr(&self) -> Option<Expr> {

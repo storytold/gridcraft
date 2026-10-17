@@ -294,13 +294,24 @@ impl Parser {
                 Ok(Expr::Call(name, args))
             }
             Tok::Sheet(a, b) => {
+                // `[0]` is this workbook (MS-XLSX): `[0]Sheet1!A1` is `Sheet1!A1`, so structural
+                // edits and evaluation see the same sheet.
+                let a = match book_prefix(&a) {
+                    Some((0, rest)) if !rest.is_empty() => rest.to_string(),
+                    _ => a,
+                };
                 let sheet = match b {
                     Some(b) => SheetSel::Span(a, b),
                     None => SheetSel::Named(a),
                 };
                 match self.next() {
                     Tok::Word(w) => self.reference_from_word(sheet, &w),
-                    Tok::Error(CellError::Ref) => Ok(Expr::Error(CellError::Ref)),
+                    // A reference Excel found deleted in a linked workbook keeps the link
+                    // (`[1]Data!#REF!`), so it prints back as written.
+                    Tok::Error(CellError::Ref) => Ok(match &sheet {
+                        SheetSel::Named(s) | SheetSel::Span(s, _) if book_prefix(s).is_some_and(|(n, _)| n > 0) => Expr::LinkedRefError(sheet),
+                        _ => Expr::Error(CellError::Ref),
+                    }),
                     t => Err(self.err(format!("expected a reference after the sheet name, found {}", describe(&t)))),
                 }
             }
@@ -374,6 +385,10 @@ impl Parser {
         if sheet != SheetSel::Current {
             // Sheet-scoped name `Sheet1!MyName`.
             if let SheetSel::Named(s) = sheet {
+                // `[0]!Rates`: this workbook's `Rates`.
+                if book_prefix(&s) == Some((0, "")) {
+                    return Ok(Expr::Name(w.to_string()));
+                }
                 return Ok(Expr::Name(format!("{s}!{w}")));
             }
             return Err(self.err("invalid 3-D reference"));

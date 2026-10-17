@@ -307,7 +307,7 @@ fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_co
                     && let Some(e) = f.expr()
                 {
                     let shifted = gridcraft_formula::adjust::shift_relative(e, dst.row as i64 - src.row as i64, dst.col as i64 - src.col as i64);
-                    c.formula = Some(Arc::new(Formula::from_expr(shifted)));
+                    c.formula = Some(Arc::new(f.rewritten(shifted)));
                 }
                 if let Some(picture) = sh.cell_pictures.get(&src) {
                     pictures.push((dst, picture.clone()));
@@ -951,6 +951,9 @@ fn validation(s: &mut Session, p: &Json) -> Result<Json> {
         "custom" => ValidationKind::Custom,
         _ => ValidationKind::Any,
     };
+    for f in [str_param(p, "formula1"), str_param(p, "formula2")].into_iter().flatten() {
+        super::edit::refuse_linked_books(f)?;
+    }
     let dv = Validation {
         ranges: ranges.clone(),
         kind,

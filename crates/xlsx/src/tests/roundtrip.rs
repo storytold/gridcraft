@@ -882,6 +882,37 @@ fn implicit_intersection_is_written_as_single() {
     assert_eq!(sh.cell(at("D3")).and_then(|c| c.formula.as_ref()).and_then(|f| f.array), None);
 }
 
+/// Formulas into linked workbooks, read from a file, save back as Excel wrote them: legacy cells
+/// stay legacy, a deleted reference keeps its link, `[1]!A1` gains no quotes, and `[0]` (this
+/// workbook) reads as the local reference.
+#[test]
+fn formulas_into_linked_workbooks_save_back_as_written() {
+    let cell = |r: &str, f: &str| format!(r#"<c r="{r}"><f>{f}</f><v>0</v></c>"#);
+    let body = format!(
+        "<sheetData><row r=\"1\">{}{}{}{}{}{}</row></sheetData>",
+        cell("A1", "[1]Data!$B:$B"),
+        cell("B1", "[1]Data!$B$2:$B$4*2"),
+        cell("C1", "[1]Data!#REF!+1"),
+        cell("D1", "[1]!A1"),
+        cell("E1", "[0]Data!B2"),
+        cell("F1", "SUM('[1]My Data'!B2:B4)"),
+    );
+    let (wb, _) = read_xlsx(&super::minimal(&body, &[], "", "")).unwrap();
+    let text = |a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap();
+    assert_eq!(text("E1"), "Data!B2");
+    let (xml, _) = sheet1_xml(&write_xlsx(&wb).unwrap());
+    for (r, f) in [
+        ("A1", "[1]Data!$B:$B"),
+        ("B1", "[1]Data!$B$2:$B$4*2"),
+        ("C1", "[1]Data!#REF!+1"),
+        ("D1", "[1]!A1"),
+        ("E1", "Data!B2"),
+        ("F1", "SUM('[1]My Data'!B2:B4)"),
+    ] {
+        assert!(xml.contains(&format!("<c r=\"{r}\"><f>{f}</f>")) || xml.contains(&format!("<c r=\"{r}\" t=\"e\"><f>{f}</f>")), "{r}: {xml}");
+    }
+}
+
 #[test]
 fn threaded_comments_write_persons_and_linked_legacy_notes() {
     let wb = sample();

@@ -39,6 +39,16 @@ pub enum SheetSel {
     Span(String, String),
 }
 
+/// `[2]Prices` (a sheet in linked workbook 2) → `(2, "Prices")`; `[2]` alone (before a linked
+/// workbook's name) → `(2, "")`. `None` when the name has no workbook index.
+pub(crate) fn book_prefix(sheet: &str) -> Option<(usize, &str)> {
+    let (book, rest) = sheet.strip_prefix('[')?.split_once(']')?;
+    if book.is_empty() || !book.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((book.parse().ok()?, rest))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Reference {
     pub sheet: SheetSel,
@@ -202,6 +212,9 @@ pub enum Expr {
     Invoke(Box<Expr>, Vec<Expr>),
     /// An omitted argument `F(1,,3)`.
     Missing,
+    /// A reference Excel found deleted in a linked workbook, kept with its link
+    /// (`[1]Data!#REF!`, `[1]Jan:Dec!#REF!`): `#REF!`, written back with the sheet it was in.
+    LinkedRefError(SheetSel),
     Paren(Box<Expr>),
 }
 
