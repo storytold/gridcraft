@@ -101,7 +101,15 @@ pub fn specs() -> Vec<CommandSpec> {
             value_settings
         ),
         cmd!("pivot.filter", "Filter Items", [], None, "{pivot?, field, selected: [\"East\", ..] | null (all), replace?}", has_doc, filter),
-        cmd!("pivot.sort", "Sort Field", [], None, "{pivot?, field, order: asc|desc|none, replace?}", has_doc, sort),
+        cmd!(
+            "pivot.sort",
+            "Sort Field",
+            [],
+            None,
+            "{pivot?, field, order: asc|desc|none, by?: \"Sum of Sales\" (sort by a value field), replace?}",
+            has_doc,
+            sort
+        ),
         cmd!(
             "pivot.group",
             "Group Field",
@@ -736,6 +744,18 @@ fn summarize_table(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- queries
 
+fn field_json(f: &PivotField) -> Json {
+    json!({
+        "field": f.source_col,
+        "caption": f.caption,
+        "sort": sort_name(f.sort),
+        "sortBy": f.sort_by,
+        "group": group_name(f.date_group),
+        "numberFormat": f.number_format,
+        "collapsed": f.collapsed_items,
+    })
+}
+
 fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
     json!({
         "id": pt.id,
@@ -744,8 +764,8 @@ fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
         "anchor": pt.anchor.a1(),
         "range": pt.last_range.map(|r| r.a1()),
         "source": pt.source,
-        "rows": pt.rows.iter().map(|f| json!({"field": f.source_col, "sort": sort_name(f.sort), "group": group_name(f.date_group), "collapsed": f.collapsed_items})).collect::<Vec<_>>(),
-        "columns": pt.columns.iter().map(|f| json!({"field": f.source_col, "sort": sort_name(f.sort), "group": group_name(f.date_group), "collapsed": f.collapsed_items})).collect::<Vec<_>>(),
+        "rows": pt.rows.iter().map(field_json).collect::<Vec<_>>(),
+        "columns": pt.columns.iter().map(field_json).collect::<Vec<_>>(),
         "values": pt.values.iter().map(|v| json!({"field": v.source_col, "func": func_name(v.func), "name": v.name, "showAs": show_as_name(v.show_as), "numberFormat": v.number_format})).collect::<Vec<_>>(),
         "filters": pt.filters.iter().map(|f| json!({"field": f.source_col, "selected": f.selected, "report": !in_axes(pt, &f.source_col)})).collect::<Vec<_>>(),
         "layout": layout_name(pt.layout),
@@ -1074,6 +1094,12 @@ fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
             None => {}
         }
         let name = v.name.clone();
+        // Fields sorted by this value field follow its new caption.
+        for f in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
+            if f.sort_by.as_deref().is_some_and(|b| b.eq_ignore_ascii_case(&cur.name)) {
+                f.sort_by = Some(name.clone());
+            }
+        }
         if let Some(slot) = pt.values.get_mut(i) {
             *slot = v;
         }
@@ -1146,8 +1172,24 @@ fn sort(s: &mut Session, p: &Json) -> Result<Json> {
         "none" | "manual" | "source" => PivotSort::None,
         o => return Err(bad(C, format!("unknown order `{o}` (asc|desc|none)"))),
     };
+    // Sort by a value field (its caption or source field) instead of by the item labels.
+    let by = str_param(p, "by").map(str::to_string);
     update(s, p, |pt, _, _| {
-        axis_field(C, pt, &field)?.sort = order;
+        let by = match by {
+            Some(b) => Some(
+                pt.values
+                    .iter()
+                    .find(|v| v.name.eq_ignore_ascii_case(&b))
+                    .or_else(|| pt.values.iter().find(|v| v.source_col.eq_ignore_ascii_case(&b)))
+                    .map(|v| v.name.clone())
+                    .ok_or_else(|| bad(C, format!("`{b}` isn't in the values area")))?,
+            ),
+            None => None,
+        };
+        let f = axis_field(C, pt, &field)?;
+        f.sort = order;
+        f.sort_by = by;
+        f.sort_scope.clear();
         Ok(json!({}))
     })
 }
@@ -1250,7 +1292,11 @@ fn layout(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         if let Some((on, top)) = subtotals {
+            // Design › Subtotals applies to every field, replacing per-field settings.
             pt.subtotals = on;
+            for f in pt.rows.iter_mut().chain(pt.columns.iter_mut()) {
+                f.subtotal = None;
+            }
             if let Some(t) = top {
                 pt.subtotals_top = t;
             }
@@ -1552,6 +1598,7 @@ fn recommended(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use gridcraft_core::{CellError, CellRef, Value};
+    use gridcraft_model::{PivotLayout, PivotSort};
     use serde_json::{Value as Json, json};
 
     use crate::Session;
@@ -1982,6 +2029,234 @@ mod tests {
         s.execute("pivot.refresh", json!({"pivot": "PivotTable1"})).unwrap();
     }
 
+    /// Edits the active sheet's last PivotTable in the model (settings only a file sets) and
+    /// refreshes it.
+    fn edit_pt(s: &mut Session, f: impl FnOnce(&mut gridcraft_model::PivotTable)) {
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let si = wb.active_sheet;
+        f(wb.sheet_mut(si).unwrap().pivots.last_mut().unwrap());
+        s.execute("pivot.refresh", json!({})).unwrap();
+    }
+
+    #[test]
+    fn sort_by_value_within_each_parent() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        // East 415, West 285, North 135.
+        s.execute("pivot.sort", json!({"field": "Region", "order": "desc", "by": "Sum of Sales"})).unwrap();
+        assert_eq!(pt(&s).rows[0].sort_by.as_deref(), Some("Sum of Sales"));
+        assert_eq!([text(&s, "A4"), text(&s, "A5"), text(&s, "A6")], ["East", "West", "North"]);
+        s.execute("pivot.sort", json!({"field": "Region", "order": "asc", "by": "Sales"})).unwrap();
+        assert_eq!([text(&s, "A4"), text(&s, "A5"), text(&s, "A6")], ["North", "West", "East"]);
+        assert!(s.execute("pivot.sort", json!({"field": "Region", "order": "asc", "by": "Nope"})).is_err());
+        // The sort follows a renamed value field; sorting without `by` sorts by label again.
+        s.execute("pivot.valueSettings", json!({"field": "Sum of Sales", "name": "Revenue"})).unwrap();
+        assert_eq!(pt(&s).rows[0].sort_by.as_deref(), Some("Revenue"));
+        assert_eq!(text(&s, "A4"), "North");
+        s.execute("pivot.sort", json!({"field": "Region", "order": "desc"})).unwrap();
+        assert_eq!(pt(&s).rows[0].sort_by, None);
+        assert_eq!(text(&s, "A4"), "West");
+        // Inner items sort within their parent; subtotals stay with their group.
+        s.execute("pivot.addField", json!({"field": "Product", "area": "rows"})).unwrap();
+        s.execute("pivot.layout", json!({"layout": "tabular"})).unwrap();
+        s.execute("pivot.sort", json!({"field": "Region", "order": "desc", "by": "Revenue"})).unwrap();
+        s.execute("pivot.sort", json!({"field": "Product", "order": "desc", "by": "Revenue"})).unwrap();
+        // East: Pears 195, Apples 160, Plums 60.
+        assert_eq!(
+            [text(&s, "A4"), text(&s, "B4"), text(&s, "B5"), text(&s, "B6"), text(&s, "A7")],
+            ["East", "Pears", "Apples", "Plums", "East Total"]
+        );
+        assert_eq!(val(&s, "C4"), Value::Number(195.0));
+        // West: Apples 170, Plums 70, Pears 45.
+        assert_eq!([text(&s, "A8"), text(&s, "B8"), text(&s, "B9"), text(&s, "B10")], ["West", "Apples", "Plums", "Pears"]);
+        // Columns sort by their row totals.
+        s.execute("pivot.moveField", json!({"field": "Region", "from": "rows", "to": "columns"})).unwrap();
+        assert_eq!([text(&s, "B4"), text(&s, "C4"), text(&s, "D4")], ["East", "West", "North"]);
+    }
+
+    #[test]
+    fn captions_renamed_items_and_manual_order() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+        edit_pt(&mut s, |p| {
+            p.row_header_caption = Some("Area".into());
+            p.col_header_caption = Some("Fruit".into());
+            p.grand_total_caption = Some("Everything".into());
+            p.rows[0].item_captions = vec![("East".into(), "Eastern".into())];
+            p.columns[0].sort = PivotSort::None;
+            p.columns[0].item_order = vec!["Plums".into(), "Pears".into()];
+        });
+        assert_eq!(text(&s, "A4"), "Area");
+        assert_eq!(text(&s, "B3"), "Fruit");
+        // Listed items first, the rest after.
+        assert_eq!([text(&s, "B4"), text(&s, "C4"), text(&s, "D4"), text(&s, "E4")], ["Plums", "Pears", "Apples", "Everything"]);
+        assert_eq!(text(&s, "A5"), "Eastern");
+        assert_eq!(text(&s, "A8"), "Everything");
+        // A renamed item sorts by its label still, and a filter still names it by its label.
+        s.execute("pivot.filter", json!({"field": "Region", "selected": ["East"]})).unwrap();
+        assert_eq!(text(&s, "A5"), "Eastern");
+        assert_eq!(val(&s, "E5"), Value::Number(415.0));
+        // Outline layout: the field's custom name heads its column.
+        edit_pt(&mut s, |p| {
+            p.layout = PivotLayout::Outline;
+            p.rows[0].caption = Some("Sales area".into());
+            p.columns[0].caption = Some("Kind".into());
+        });
+        assert_eq!(text(&s, "A4"), "Sales area");
+        assert_eq!(text(&s, "B3"), "Kind");
+    }
+
+    #[test]
+    fn field_subtotals_repeat_labels_and_values_row() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Sales"]})).unwrap();
+        s.execute("pivot.layout", json!({"layout": "tabular"})).unwrap();
+        assert_eq!(text(&s, "A7"), "East Total");
+        // Region without subtotals although the table has them; labels repeated on every row.
+        edit_pt(&mut s, |p| {
+            p.rows[0].subtotal = Some(false);
+            p.rows[0].repeat_labels = true;
+        });
+        assert_eq!(pt(&s).last_range.unwrap().height(), 1 + 9 + 1);
+        assert_eq!([text(&s, "A4"), text(&s, "A5"), text(&s, "A6"), text(&s, "A7")], ["East", "East", "East", "North"]);
+        assert_eq!(text(&s, "B7"), "Apples");
+        // Outline repeats the labels too.
+        s.execute("pivot.layout", json!({"layout": "outline"})).unwrap();
+        assert_eq!([text(&s, "A4"), text(&s, "B4"), text(&s, "A5"), text(&s, "B5")], ["East", "", "East", "Apples"]);
+        // Two values without a column field: the Values row (Outline/Tabular) holds the caption.
+        s.execute("pivot.removeField", json!({"field": "Product"})).unwrap();
+        s.execute("pivot.addField", json!({"field": "Units", "area": "values"})).unwrap();
+        assert_eq!(text(&s, "B3"), "Values");
+        assert_eq!([text(&s, "A4"), text(&s, "B4"), text(&s, "C4")], ["Region", "Sum of Sales", "Sum of Units"]);
+        edit_pt(&mut s, |p| p.data_caption = Some("Data".into()));
+        assert_eq!(text(&s, "B3"), "Data");
+        edit_pt(&mut s, |p| p.show_values_row = false);
+        assert_eq!([text(&s, "A3"), text(&s, "B3")], ["Region", "Sum of Sales"]);
+        // Compact layout never shows it.
+        edit_pt(&mut s, |p| {
+            p.show_values_row = true;
+            p.layout = PivotLayout::Compact;
+        });
+        assert_eq!([text(&s, "A3"), text(&s, "B3")], ["Row Labels", "Sum of Sales"]);
+    }
+
+    #[test]
+    fn empty_cell_caption_classic_layout_and_date_order() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Units"], "values": ["Sales"]})).unwrap();
+        // East has no record with 1 unit: blank, or the "For empty cells show" caption.
+        assert_eq!([text(&s, "A5"), text(&s, "B4"), text(&s, "B5")], ["East", "1", ""]);
+        edit_pt(&mut s, |p| p.empty_caption = Some("0".into()));
+        assert_eq!(text(&s, "B5"), "0");
+        // Classic layout, one value and no column field: the value caption above the row
+        // headers and a "Total" column.
+        s.execute("pivot.removeField", json!({"field": "Units"})).unwrap();
+        edit_pt(&mut s, |p| {
+            p.layout = PivotLayout::Tabular;
+            p.classic_layout = true;
+        });
+        assert_eq!([text(&s, "A3"), text(&s, "A4"), text(&s, "B4"), text(&s, "A5")], ["Sum of Sales", "Region", "Total", "East"]);
+        assert_eq!(pt(&s).last_range.unwrap().height(), 2 + 3 + 1);
+        // A field number format applies to the item labels; date items sort after text, as in
+        // Excel.
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        s.execute("cell.set", json!({"cell": "C13", "input": "NA"})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+        s.execute("pivot.removeField", json!({"field": "Region"})).unwrap();
+        s.execute("pivot.addField", json!({"field": "Date", "area": "rows"})).unwrap();
+        edit_pt(&mut s, |p| p.rows[0].number_format = Some("m/d/yyyy".into()));
+        assert_eq!(text(&s, "A5"), "NA");
+    }
+
+    #[test]
+    fn only_date_formatted_cells_sort_as_dates() {
+        // The two mixed columns of ClosedXML's VariousDataTypesInTableColumns, in source order.
+        // Excel caches each date-formatted cell as `<d>` and each General one as `<n>`, and its
+        // saved items list numbers first and dates after errors, whatever the first cell is.
+        let mixed = ["", "TRUE", "14.5", "10", "ABC", "=1/0", "8/10/2020", "16:30"];
+        // 1 and 1.52… are 12/31/1899 and 12/31/1899 12:30, which typed input reads as text.
+        let with_num = ["1", "1.5208333333333333", "12/24/2020", "16:30", "0.1", "45000", ""];
+        let order = |inputs: &[&str], dates: Option<&str>| -> Vec<String> {
+            let mut s = Session::new();
+            s.new_workbook();
+            s.execute("cell.set", json!({"cell": "A1", "input": "K"})).unwrap();
+            s.execute("cell.set", json!({"cell": "B1", "input": "V"})).unwrap();
+            for (i, input) in inputs.iter().enumerate() {
+                s.execute("cell.set", json!({"cell": format!("A{}", i + 2), "input": input})).unwrap();
+                s.execute("cell.set", json!({"cell": format!("B{}", i + 2), "input": "1"})).unwrap();
+            }
+            if let Some(range) = dates {
+                s.execute("home.formatCells", json!({"range": range, "style": {"num_fmt": "m/d/yyyy h:mm"}})).unwrap();
+            }
+            s.execute("selection.set", json!({"range": "A1"})).unwrap();
+            s.execute("insert.pivotTable", json!({"rows": ["K"], "values": ["V"]})).unwrap();
+            edit_pt(&mut s, |p| p.rows[0].sort = PivotSort::Asc);
+            let wb = &s.doc().unwrap().wb;
+            let si = wb.active_sheet;
+            let out = crate::pivot::compute(wb, wb.sheet(si).unwrap().pivots.last().unwrap(), si).unwrap();
+            out.grid.iter().skip(1).filter_map(|r| r.first().map(|c| c.value.display())).filter(|l| l != "Grand Total").collect()
+        };
+        // Excel's saved <items> order for each field.
+        let excel_mixed = ["10", "14.5", "ABC", "TRUE", "#DIV/0!", "0.6875", "44053", "(blank)"];
+        let excel_with_num = ["0.1", "45000", "0.6875", "1", "1.52083333333333", "44189", "(blank)"];
+        assert_eq!(order(&mixed, None), excel_mixed);
+        assert_eq!(order(&with_num, Some("A2:A3")), excel_with_num);
+        // One number in a date cell and in a General cell is one item, which sorts as a number
+        // whichever cell comes first.
+        let number = ["5", "44053", "ABC"];
+        assert_eq!(order(&["5", "8/10/2020", "44053", "ABC"], None), number);
+        assert_eq!(order(&["5", "44053", "8/10/2020", "ABC"], None), number);
+    }
+
+    #[test]
+    fn a_general_cell_filtered_out_still_makes_its_number_sort_as_a_number() {
+        // 3/15/2023 is 45000: the General 45000 in row 3 makes that item a number, as in Excel's
+        // cache, even when the report filter leaves only the date cell.
+        let order = |filter: bool| -> Vec<String> {
+            let mut s = Session::new();
+            s.new_workbook();
+            for (cell, input) in [("A1", "K"), ("B1", "V"), ("C1", "R"), ("A2", "3/15/2023"), ("A3", "45000"), ("A4", "ABC")] {
+                s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+            }
+            for (row, r) in [(2, "a"), (3, "b"), (4, "a")] {
+                s.execute("cell.set", json!({"cell": format!("B{row}"), "input": "1"})).unwrap();
+                s.execute("cell.set", json!({"cell": format!("C{row}"), "input": r})).unwrap();
+            }
+            s.execute("selection.set", json!({"range": "A1"})).unwrap();
+            s.execute("insert.pivotTable", json!({"rows": ["K"], "values": ["V"], "filters": ["R"]})).unwrap();
+            s.execute("pivot.sort", json!({"field": "K", "order": "asc"})).unwrap();
+            if filter {
+                s.execute("pivot.filter", json!({"field": "R", "selected": ["a"]})).unwrap();
+            }
+            let wb = &s.doc().unwrap().wb;
+            let si = wb.active_sheet;
+            let out = crate::pivot::compute(wb, wb.sheet(si).unwrap().pivots.last().unwrap(), si).unwrap();
+            out.grid.iter().filter_map(|r| r.first().map(|c| c.value.display())).filter(|l| l == "45000" || l == "ABC").collect()
+        };
+        assert_eq!(order(false), ["45000", "ABC"]);
+        assert_eq!(order(true), ["45000", "ABC"]);
+    }
+
+    #[test]
+    fn dates_sort_after_logicals_and_errors() {
+        // Excel's ascending item order: numbers, text, logicals, errors, dates, blanks.
+        let mut s = sales();
+        s.execute("cell.set", json!({"cell": "C11", "input": "TRUE"})).unwrap();
+        s.execute("cell.set", json!({"cell": "C12", "input": "=1/0"})).unwrap();
+        s.execute("cell.set", json!({"cell": "C13", "input": "NA"})).unwrap();
+        s.execute("insert.pivotTable", json!({"rows": ["Date"], "values": ["Sales"]})).unwrap();
+        edit_pt(&mut s, |p| {
+            p.rows[0].number_format = None;
+            p.rows[0].sort = PivotSort::Asc;
+        });
+        let p = pt(&s);
+        let r = p.last_range.unwrap();
+        let labels: Vec<String> = (r.start.row + 1..=r.end.row).map(|row| text(&s, &CellRef::new(row, r.start.col).a1())).collect();
+        // 46037 is 1/15/2026, the first date.
+        assert_eq!(labels[..4], ["NA", "TRUE", "#DIV/0!", "46037"]);
+    }
+
     fn pivot_chart(s: &Session) -> gridcraft_model::Chart {
         s.doc().unwrap().wb.active().unwrap().charts.last().unwrap().clone()
     }
@@ -2307,5 +2582,284 @@ mod tests {
         s.execute("pivot.collapse", json!({"field": "Grp"})).unwrap();
         // 64 Sub items under the collapsed "g" show as one column group: (1 + grand total) x 256 columns fit.
         s.execute("pivot.addField", json!({"field": "Sub", "area": "columns"})).unwrap();
+    }
+
+    #[test]
+    fn design_subtotals_replace_field_settings() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Sales"]})).unwrap();
+        s.execute("pivot.layout", json!({"layout": "tabular"})).unwrap();
+        // A file's field can override the table default (`defaultSubtotal`).
+        edit_pt(&mut s, |p| {
+            p.subtotals = false;
+            p.rows[0].subtotal = Some(true);
+        });
+        assert!(find_row(&s, "East Total").is_some());
+        // Design › Subtotals › Do Not Show Subtotals applies to every field.
+        s.execute("pivot.subtotals", json!({"mode": "none"})).unwrap();
+        assert!(pt(&s).rows.iter().all(|f| f.subtotal.is_none()));
+        assert_eq!(find_row(&s, "East Total"), None);
+        edit_pt(&mut s, |p| p.rows[0].subtotal = Some(false));
+        s.execute("pivot.subtotals", json!({"mode": "bottom"})).unwrap();
+        assert!(find_row(&s, "East Total").is_some());
+    }
+
+    #[test]
+    fn numeric_empty_cell_caption_is_a_number() {
+        let mut s = sales();
+        s.execute("range.setValues", json!({"range": "A14", "values": [["South", "Kiwis", "1/1/2026", 1, 10]]})).unwrap();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+        // South has no Apples: the cell shows the caption, a number as Excel stores it.
+        edit_pt(&mut s, |p| p.empty_caption = Some("0".into()));
+        let south = find_row(&s, "South").unwrap();
+        let apples = CellRef::new(south, 1);
+        assert_eq!(text(&s, &CellRef::new(south - 3, 1).a1()), "Apples");
+        assert_eq!(val(&s, &apples.a1()), Value::Number(0.0));
+        edit_pt(&mut s, |p| p.empty_caption = Some("n/a".into()));
+        assert_eq!(val(&s, &apples.a1()), Value::text("n/a"));
+    }
+
+    /// Saves the active workbook, applies `patch` to the first PivotTable part and reopens it.
+    fn reopen_patched(s: &Session, patch: impl Fn(&str) -> String) -> (gridcraft_model::Workbook, Vec<String>) {
+        reopen_patched_part(s, "xl/pivotTables/pivotTable1.xml", patch)
+    }
+    /// Saves the active workbook, applies `patch` to `part` and reopens it.
+    fn reopen_patched_part(s: &Session, part: &str, patch: impl Fn(&str) -> String) -> (gridcraft_model::Workbook, Vec<String>) {
+        use std::io::{Read, Write};
+        let bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "t.xlsx").unwrap();
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..z.len() {
+            let mut f = z.by_index(i).unwrap();
+            let name = f.name().to_string();
+            let mut b = Vec::new();
+            f.read_to_end(&mut b).unwrap();
+            if name == part {
+                b = patch(&String::from_utf8(b).unwrap()).into_bytes();
+            }
+            out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            out.write_all(&b).unwrap();
+        }
+        let bytes = out.finish().unwrap().into_inner();
+        crate::io::open_bytes("t.xlsx", &bytes).unwrap()
+    }
+
+    #[test]
+    fn sort_by_value_in_a_column_keeps_its_scope() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+        s.execute("pivot.sort", json!({"field": "Region", "order": "desc", "by": "Sum of Sales"})).unwrap();
+        // Excel's "sort by the values in the Apples column": the scope also names Product's
+        // item 0 (Apples). Apples: East 160, West 170, North 90; totals East 415, West 285.
+        let one = "<references count=\"1\"><reference field=\"4294967294\" count=\"1\" selected=\"0\"><x v=\"0\"/></reference>";
+        let values_ref = "<reference field=\"4294967294\" count=\"1\" selected=\"0\"><x v=\"0\"/></reference>";
+        let two = format!("<references count=\"2\">{values_ref}<reference field=\"1\" count=\"1\" selected=\"0\"><x v=\"0\"/></reference>");
+        let (wb, _) = reopen_patched(&s, |x| {
+            assert!(x.contains(one), "{x}");
+            x.replace(one, &two)
+        });
+        let si = wb.active_sheet;
+        let p = wb.sheet(si).unwrap().pivots.last().unwrap();
+        let apples = gridcraft_model::PivotScopeItem { source_col: "Product".into(), item: "Apples".into(), ..Default::default() };
+        assert_eq!(p.rows[0].sort_scope, vec![apples]);
+        let out = crate::pivot::compute(&wb, p, si).unwrap();
+        let labels: Vec<String> = out.grid.iter().filter_map(|r| r.first()).map(|c| c.value.display()).collect();
+        let order: Vec<&str> = labels.iter().map(String::as_str).filter(|l| ["East", "West", "North"].contains(l)).collect();
+        assert_eq!(order, ["West", "East", "North"]);
+        // Saving writes the scope back.
+        let again = crate::io::save_bytes(&wb, "t.xlsx").unwrap();
+        let (back, _) = crate::io::open_bytes("t.xlsx", &again).unwrap();
+        assert_eq!(back.sheet(si).unwrap().pivots.last().unwrap().rows[0].sort_scope, p.rows[0].sort_scope);
+        // A scope GridCraft can't represent (two Product items) loads as a sort by label, with
+        // a warning, instead of as a sort by the grand total.
+        let bad =
+            format!("<references count=\"2\">{values_ref}<reference field=\"1\" count=\"2\" selected=\"0\"><x v=\"0\"/><x v=\"1\"/></reference>");
+        let (wb2, warnings) = reopen_patched(&s, |x| x.replace(one, &bad));
+        let p2 = wb2.sheet(wb2.active_sheet).unwrap().pivots.last().unwrap();
+        assert_eq!(p2.rows[0].sort_by, None);
+        assert!(p2.rows[0].sort_scope.is_empty());
+        assert!(warnings.iter().any(|w| w.contains("scope")), "{warnings:?}");
+    }
+
+    /// Saves and reopens a workbook.
+    fn reopen(wb: &gridcraft_model::Workbook) -> gridcraft_model::Workbook {
+        let bytes = crate::io::save_bytes(wb, "t.xlsx").unwrap();
+        crate::io::open_bytes("t.xlsx", &bytes).unwrap().0
+    }
+    /// The labels in the report's first column, as computed from `wb`, keeping only `keep`.
+    fn first_col(wb: &gridcraft_model::Workbook, keep: &[&str]) -> Vec<String> {
+        let si = wb.active_sheet;
+        let p = wb.sheet(si).unwrap().pivots.last().unwrap();
+        let out = crate::pivot::compute(wb, p, si).unwrap();
+        out.grid.iter().filter_map(|r| r.first()).map(|c| c.value.display()).filter(|l| keep.contains(&l.as_str())).collect()
+    }
+    const VALUES_REF: &str = "<reference field=\"4294967294\" count=\"1\" selected=\"0\"><x v=\"0\"/></reference>";
+    /// The Values-only sort scope the writer emits, as a `<references>` opening.
+    fn values_only() -> String {
+        format!("<references count=\"1\">{VALUES_REF}")
+    }
+
+    #[test]
+    fn sort_scope_tells_date_levels_of_one_column_apart() {
+        use gridcraft_model::{PivotDateGroup, PivotField};
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Date"], "values": ["Sales"]})).unwrap();
+        edit_pt(&mut s, |p| {
+            let date = p.columns[0].clone();
+            p.columns =
+                vec![PivotField { date_group: PivotDateGroup::Years, ..date.clone() }, PivotField { date_group: PivotDateGroup::Quarters, ..date }];
+        });
+        s.execute("pivot.sort", json!({"field": "Region", "order": "desc", "by": "Sum of Sales"})).unwrap();
+        // Sort by the values in the 2026 › Qtr2 column: Years is cache field 5 (item 1 = 2026,
+        // after "<1/15/2026"), Quarters the Date field 2 (item 2 = Qtr2). Qtr2 holds West 70,
+        // East 60, North 30; the totals are East 415, West 285, North 135.
+        let refs = format!(
+            "<references count=\"3\">{VALUES_REF}<reference field=\"5\" count=\"1\" selected=\"0\"><x v=\"1\"/></reference><reference field=\"2\" count=\"1\" selected=\"0\"><x v=\"2\"/></reference>"
+        );
+        let (wb, _) = reopen_patched(&s, |x| {
+            assert!(x.contains(&values_only()), "{x}");
+            x.replace(&values_only(), &refs)
+        });
+        let regions = ["East", "West", "North"];
+        assert_eq!(first_col(&wb, &regions), ["West", "East", "North"]);
+        // Saving writes both references back.
+        let back = reopen(&wb);
+        let scope = |wb: &gridcraft_model::Workbook| wb.sheet(wb.active_sheet).unwrap().pivots.last().unwrap().rows[0].sort_scope.clone();
+        assert_eq!(scope(&back).len(), 2);
+        assert_eq!(scope(&back), scope(&wb));
+        assert_eq!(first_col(&back, &regions), ["West", "East", "North"]);
+    }
+
+    #[test]
+    fn custom_subtotal_functions_keep_the_subtotal_rows() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Units"]})).unwrap();
+        s.execute("pivot.layout", json!({"layout": "tabular"})).unwrap();
+        // Field Settings › Subtotals › Custom (Sum and Count) on Product, as Excel stores it.
+        let (wb, warnings) = reopen_patched(&s, |x| {
+            let start = x.match_indices("<pivotField ").nth(1).unwrap().0;
+            let end = start + x[start..].find("</pivotField>").unwrap();
+            let field = x[start..end]
+                .replacen("<pivotField ", "<pivotField defaultSubtotal=\"0\" sumSubtotal=\"1\" countSubtotal=\"1\" ", 1)
+                .replace("<item t=\"default\"/>", "<item t=\"sum\"/><item t=\"count\"/>");
+            assert!(field.contains("t=\"sum\""), "{field}");
+            format!("{}{field}{}", &x[..start], &x[end..])
+        });
+        let p = wb.sheet(wb.active_sheet).unwrap().pivots.last().unwrap();
+        assert_ne!(p.rows[1].subtotal, Some(false));
+        // Shown with the automatic subtotal, with a warning.
+        let plain = reopen(&s.doc().unwrap().wb);
+        let all = |wb: &gridcraft_model::Workbook| {
+            let si = wb.active_sheet;
+            let out = crate::pivot::compute(wb, wb.sheet(si).unwrap().pivots.last().unwrap(), si).unwrap();
+            out.grid.iter().map(|r| r.iter().map(|c| c.value.display()).collect::<Vec<_>>()).collect::<Vec<_>>()
+        };
+        assert_eq!(all(&wb), all(&plain));
+        assert!(warnings.iter().any(|w| w.contains("subtotal")), "{warnings:?}");
+    }
+
+    #[test]
+    fn custom_subtotals_on_the_first_field_keep_the_table_default() {
+        use std::io::Read;
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Units"]})).unwrap();
+        s.execute("pivot.layout", json!({"layout": "tabular"})).unwrap();
+        // Custom Sum subtotal on Region (cache field 0, the first axis field), no xpdl extension.
+        let (wb, _) = reopen_patched(&s, |x| {
+            assert!(!x.contains("pivotTableDefinition16"), "{x}");
+            let start = x.find("<pivotField ").unwrap();
+            let end = start + x[start..].find("</pivotField>").unwrap();
+            let field = x[start..end]
+                .replacen("<pivotField ", "<pivotField defaultSubtotal=\"0\" sumSubtotal=\"1\" ", 1)
+                .replace("<item t=\"default\"/>", "<item t=\"sum\"/>");
+            assert!(field.contains("t=\"sum\""), "{field}");
+            format!("{}{field}{}", &x[..start], &x[end..])
+        });
+        let p = wb.sheet(wb.active_sheet).unwrap().pivots.last().unwrap();
+        assert!(p.subtotals);
+        assert_eq!([p.rows[0].subtotal, p.rows[1].subtotal], [None, None]);
+        // Saving doesn't add a table default of "off" the file never had.
+        let bytes = crate::io::save_bytes(&wb, "t.xlsx").unwrap();
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        z.by_name("xl/pivotTables/pivotTable1.xml").unwrap().read_to_string(&mut xml).unwrap();
+        assert!(!xml.contains("EnabledSubtotalsDefault=\"0\""), "{xml}");
+    }
+
+    #[test]
+    fn sort_scope_on_a_vanished_item_sorts_as_after_saving() {
+        let mut s = sales();
+        s.execute("range.setValues", json!({"range": "A14", "values": [["South", "Kiwis", "1/1/2026", 1, 10]]})).unwrap();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+        s.execute("pivot.sort", json!({"field": "Region", "order": "desc", "by": "Sum of Sales"})).unwrap();
+        // Sorted by the values in the Kiwis column (Product item 3)…
+        let refs = format!("<references count=\"2\">{VALUES_REF}<reference field=\"1\" count=\"1\" selected=\"0\"><x v=\"3\"/></reference>");
+        let (mut wb, _) = reopen_patched(&s, |x| x.replace(&values_only(), &refs));
+        assert_eq!(wb.sheet(wb.active_sheet).unwrap().pivots.last().unwrap().rows[0].sort_scope.len(), 1);
+        // …then Kiwis leaves the source: the rows sort by the grand total, before and after saving.
+        let src = wb.sheets.iter().position(|sh| sh.name == "Sheet1").unwrap();
+        wb.sheet_mut(src).unwrap().set_value(CellRef::parse("B14").unwrap(), Value::text("Apples"));
+        let regions = ["East", "West", "North", "South"];
+        let total_order = ["East", "West", "North", "South"];
+        assert_eq!(first_col(&wb, &regions), total_order);
+        assert_eq!(first_col(&reopen(&wb), &regions), total_order);
+    }
+
+    #[test]
+    fn date_groups_not_sorted_are_in_date_order() {
+        let mut s = sales();
+        // The first record is in Qtr4.
+        s.execute("cell.set", json!({"cell": "C2", "input": "12/1/2026"})).unwrap();
+        s.execute("insert.pivotTable", json!({"rows": ["Date"], "values": ["Sales"]})).unwrap();
+        s.execute("pivot.group", json!({"field": "Date", "by": "quarters"})).unwrap();
+        s.execute("pivot.sort", json!({"field": "Date", "order": "none"})).unwrap();
+        let quarters = ["Qtr1", "Qtr2", "Qtr3", "Qtr4"];
+        assert_eq!(first_col(&s.doc().unwrap().wb, &quarters), quarters);
+        let back = reopen(&s.doc().unwrap().wb);
+        assert_eq!(first_col(&back, &quarters), quarters);
+        // A reordered list still wins; items it doesn't name follow in date order.
+        let mut wb = back;
+        let si = wb.active_sheet;
+        wb.sheet_mut(si).unwrap().pivots.last_mut().unwrap().rows[0].item_order = vec!["Qtr3".into()];
+        assert_eq!(first_col(&wb, &quarters), ["Qtr3", "Qtr1", "Qtr2", "Qtr4"]);
+        assert_eq!(first_col(&reopen(&wb), &quarters), ["Qtr3", "Qtr1", "Qtr2", "Qtr4"]);
+    }
+
+    #[test]
+    fn manual_order_of_time_items_from_an_excel_cache() {
+        // Excel caches times as `<d v="1899-12-30T08:00:00"/>`: those items must name the
+        // report's 8:00 and 9:30, or a refresh puts the blank ahead of them.
+        let mut s = Session::new();
+        s.new_workbook();
+        for (cell, input) in [("A1", "Shift"), ("B1", "Sales"), ("A2", "8:00"), ("B2", "10"), ("A3", "9:30"), ("B3", "20"), ("B4", "5")] {
+            s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        s.execute("selection.set", json!({"range": "A1"})).unwrap();
+        s.execute("insert.pivotTable", json!({"rows": ["Shift"], "values": ["Sales"]})).unwrap();
+        s.execute("pivot.sort", json!({"field": "Shift", "order": "none"})).unwrap();
+        // The report's first column: times as minutes, and the blank item.
+        let shifts = |wb: &gridcraft_model::Workbook| -> Vec<String> {
+            let si = wb.active_sheet;
+            let out = crate::pivot::compute(wb, wb.sheet(si).unwrap().pivots.last().unwrap(), si).unwrap();
+            out.grid
+                .iter()
+                .filter_map(|r| match &r.first()?.value {
+                    Value::Number(n) => Some(format!("{}", (n * 1440.0).round())),
+                    v if v.display() == "(blank)" => Some(v.display()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let order = ["480", "570", "(blank)"];
+        assert_eq!(shifts(&s.doc().unwrap().wb), order);
+        let excel_items = "<d v=\"1899-12-30T08:00:00\"/><d v=\"1899-12-30T09:30:00\"/><m/>";
+        let (back, _) = reopen_patched_part(&s, "xl/pivotCache/pivotCacheDefinition1.xml", |x| {
+            let ours = "<n v=\"0.3333333333333333\"/><n v=\"0.3958333333333333\"/><m/>";
+            assert!(x.contains(ours), "{x}");
+            x.replace(ours, excel_items)
+        });
+        assert_eq!(shifts(&back), order);
+        // Saving writes that order back.
+        assert_eq!(shifts(&reopen(&back)), order);
     }
 }

@@ -895,7 +895,8 @@ pub enum PivotSort {
     #[default]
     Asc,
     Desc,
-    /// Source order (first appearance).
+    /// Manual order: the field's `item_order`, then source order (first appearance); date
+    /// groups in date order.
     None,
 }
 
@@ -910,6 +911,25 @@ pub enum PivotDateGroup {
     Days,
 }
 
+/// An item of a field on the other axis that a sort by value takes its values from (e.g. the
+/// "Apples" column). The field is named by source column and date grouping, so two levels
+/// grouped from one date column (Years and Quarters) stay apart.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PivotScopeItem {
+    pub source_col: String,
+    pub date_group: PivotDateGroup,
+    /// The item's label.
+    pub item: String,
+}
+
+impl PivotScopeItem {
+    /// Whether this names an item of `f`.
+    pub fn is_of(&self, f: &PivotField) -> bool {
+        self.date_group == f.date_group && self.source_col.eq_ignore_ascii_case(&f.source_col)
+    }
+}
+
 /// A field placed in the Rows or Columns area.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -920,6 +940,35 @@ pub struct PivotField {
     pub date_group: PivotDateGroup,
     /// Item labels whose detail is hidden (collapsed).
     pub collapsed_items: Vec<String>,
+    /// Custom name shown in the field's header (Field Settings > Custom Name); `None` = the
+    /// source column name.
+    pub caption: Option<String>,
+    /// Sort the items by this value field (its caption) instead of by their labels, in the
+    /// `sort` direction (Sort > More Sort Options > by value). Ignored when `sort` is `None`.
+    pub sort_by: Option<String>,
+    /// Where `sort_by` takes its values: an item of each field on the other axis, outer field
+    /// first, up to the first field it doesn't name (e.g. sort the rows by the "Apples" column).
+    /// Empty, or naming an item that isn't there, = the grand total.
+    pub sort_scope: Vec<PivotScopeItem>,
+    /// Manual item order (item labels), used when `sort` is `None`; unlisted items follow in
+    /// source order (date groups in date order).
+    pub item_order: Vec<String>,
+    /// Renamed items: (item label, caption shown instead).
+    pub item_captions: Vec<(String, String)>,
+    /// Subtotals of this field; `None` = the table's `subtotals`.
+    pub subtotal: Option<bool>,
+    /// Repeat the item labels on every row (Outline/Tabular, Repeat Item Labels).
+    pub repeat_labels: bool,
+    /// Number format of the item labels (Field Settings > Number Format); `None` = the source
+    /// column's format.
+    pub number_format: Option<String>,
+}
+
+impl PivotField {
+    /// The header text: the custom name, else the source column name.
+    pub fn header(&self) -> &str {
+        self.caption.as_deref().unwrap_or(&self.source_col)
+    }
 }
 
 /// Summarize-values-by function.
@@ -1001,6 +1050,22 @@ pub struct PivotTable {
     pub show_headers: bool,
     /// Area written by the last refresh.
     pub last_range: Option<RangeRef>,
+    /// Header of the row labels in Compact layout; `None` = "Row Labels".
+    pub row_header_caption: Option<String>,
+    /// Header of the column labels in Compact layout; `None` = "Column Labels".
+    pub col_header_caption: Option<String>,
+    /// Caption of the Values field; `None` = "Values".
+    pub data_caption: Option<String>,
+    /// Caption of the grand totals; `None` = "Grand Total".
+    pub grand_total_caption: Option<String>,
+    /// Shown in value cells that summarize no records (For empty cells show); `None` = blank.
+    pub empty_caption: Option<String>,
+    /// Show the Values row: a header row with `data_caption` above the value captions
+    /// (Outline/Tabular, several values and no column field). Excel's default is on.
+    pub show_values_row: bool,
+    /// Classic PivotTable layout (fields dragged in the grid): with one value field and no
+    /// column field, the value caption sits above the row headers and the column reads "Total".
+    pub classic_layout: bool,
     /// Calculated fields, usable in the Values area by name.
     pub calculated_fields: Vec<PivotCalcField>,
     /// The Σ Values pseudo-field (it exists with two or more value fields) sits in Rows rather
@@ -1040,6 +1105,13 @@ impl Default for PivotTable {
             style: "PivotStyleLight16".into(),
             show_headers: true,
             last_range: None,
+            row_header_caption: None,
+            col_header_caption: None,
+            data_caption: None,
+            grand_total_caption: None,
+            empty_caption: None,
+            show_values_row: true,
+            classic_layout: false,
             calculated_fields: vec![],
             values_on_rows: false,
             values_position: None,
