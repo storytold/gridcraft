@@ -314,7 +314,15 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     }
 
     let mut w = format!("{XML_DECL}<workbook xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">");
-    w.push_str(&crate::passthrough::workbook_elements(wb, "fileVersion"));
+    {
+        let fv = crate::passthrough::workbook_elements(wb, "fileVersion");
+        if fv.is_empty() {
+            // New workbook: identify GridCraft as the creating application.
+            w.push_str("<fileVersion appName=\"gridcraft\"/>");
+        } else {
+            w.push_str(&fv);
+        }
+    }
     w.push_str(if wb.date_system == gridcraft_core::DateSystem::D1904 { "<workbookPr date1904=\"1\"/>" } else { "<workbookPr/>" });
     if wb.protected_structure {
         let pw = wb.structure_password.as_ref().map(|h| crate::sheet_write::password_attrs(h, "workbook")).unwrap_or_default();
