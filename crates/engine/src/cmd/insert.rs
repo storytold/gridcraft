@@ -188,7 +188,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conditional Formatting",
             ["Home", "Styles"],
             None,
-            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font..fill..}|preset: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}}",
+            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font?: {bold?, italic?, color?}, fill?: \"#FFC7CE\" | {pattern?, fg?, bg?}, borders?, num_fmt?} (colours \"#RRGGBB\") | preset?: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}; a text `value` is matched as text, or kept when already a quoted literal}",
             has_doc,
             add_cf
         ),
@@ -1334,6 +1334,67 @@ fn preset_style(name: &str) -> Style {
     s
 }
 
+/// Whether `v` is one formula string literal: `"…"` with every inner quote doubled.
+fn is_string_literal(v: &str) -> bool {
+    v.len() >= 2 && v.starts_with('"') && v.ends_with('"') && v.get(1..v.len() - 1).is_some_and(|inner| !inner.replace("\"\"", "").contains('"'))
+}
+
+/// A conditional format's `style` as the model's `Style` JSON (`font`, `fill`, `borders`, `align`,
+/// `num_fmt`, `protection`, merged over the default by the caller), where a colour may also be
+/// written as `format_range` takes it (`"#RRGGBB"`, `{theme, tint}`, `"auto"`) and `fill` may be a
+/// colour alone (a solid fill) or `"none"` (no fill). An unknown key is an error rather than
+/// dropped: dropped, it left a rule with an empty format that matches and shows nothing.
+fn cf_style_json(st: &Json) -> Result<Json> {
+    const KEYS: [&str; 6] = ["font", "fill", "borders", "align", "num_fmt", "protection"];
+    let err = |m: String| bad("home.conditionalFormat", m);
+    let Some(obj) = st.as_object() else { return Err(err("`style` must be an object, e.g. {\"fill\": \"#FFC7CE\"}".into())) };
+    let mut st = obj.clone();
+    if let Some(k) = st.keys().find(|k| !KEYS.contains(&k.as_str())) {
+        let hint = if k == "preset" { "; a preset goes in `rule.preset`" } else { "" };
+        return Err(err(format!("unknown key `{k}` in `style` (known: {}){hint}", KEYS.join(", "))));
+    }
+    // A colour written the way the other formatting commands take it, as the model stores it.
+    let color = |v: &mut Json, what: &str| -> Result<()> {
+        if v.is_string() || v.get("theme").is_some() {
+            let c = super::format::color_param(Some(v)).ok_or_else(|| err(format!("invalid colour {v} for `{what}`")))?;
+            *v = serde_json::to_value(c).map_err(|e| EngineError::Other(e.to_string()))?;
+        }
+        Ok(())
+    };
+    if let Some(f) = st.get_mut("font").and_then(Json::as_object_mut)
+        && let Some(c) = f.get_mut("color")
+    {
+        color(c, "font.color")?;
+    }
+    if let Some(fill) = st.get_mut("fill") {
+        // `"none"` (or `"auto"`) is no fill, as `home.fillColor` reads it, not a solid automatic one.
+        if fill.is_string() && super::format::color_param(Some(fill)) == Some(Color::Auto) {
+            *fill = serde_json::to_value(Fill::default()).map_err(|e| EngineError::Other(e.to_string()))?;
+        } else if fill.is_string() || fill.get("theme").is_some() {
+            *fill = json!({"pattern": "Solid", "fg": fill.clone()});
+        }
+        if let Some(f) = fill.as_object_mut() {
+            for k in ["fg", "bg"] {
+                if let Some(c) = f.get_mut(k) {
+                    color(c, &format!("fill.{k}"))?;
+                }
+            }
+            // A colour with no pattern is a solid fill, not an invisible one.
+            if f.contains_key("fg") && !f.contains_key("pattern") {
+                f.insert("pattern".into(), json!("Solid"));
+            }
+        }
+    }
+    if let Some(b) = st.get_mut("borders").and_then(Json::as_object_mut) {
+        for (side, line) in b.iter_mut() {
+            if let Some(c) = line.get_mut("color") {
+                color(c, &format!("borders.{side}.color"))?;
+            }
+        }
+    }
+    Ok(Json::Object(st))
+}
+
 fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
     let ranges = target_ranges(s, p)?;
     let sheet = target_sheet(s, p)?;
@@ -1343,9 +1404,10 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let g = |k: &str| rule.get(k).and_then(Json::as_str).map(str::to_string);
     let style = Box::new(match rule.get("style") {
-        Some(st) if st.is_object() => {
+        Some(st) if !st.is_null() => {
+            let st = cf_style_json(st)?;
             let base = serde_json::to_value(Style::default()).map_err(|e| EngineError::Other(e.to_string()))?;
-            serde_json::from_value(super::format::merge_json(base, st)).map_err(|e| bad("home.conditionalFormat", e.to_string()))?
+            serde_json::from_value(super::format::merge_json(base, &st)).map_err(|e| bad("home.conditionalFormat", e.to_string()))?
         }
         _ => preset_style(g("preset").as_deref().unwrap_or("lightRedFillDarkRedText")),
     });
@@ -1384,8 +1446,12 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
             let a = rule.get("value").map(super::edit::json_to_input).unwrap_or_default();
             let b = rule.get("value2").map(super::edit::json_to_input);
             let quote = |v: String| {
+                // A number, a formula, or text already written as a string literal (`"Closed"`, as
+                // in the file and in openpyxl's `CellIsRule`) is kept; other text is quoted.
                 if gridcraft_core::parse::parse_number_text(&v).is_some() || v.starts_with('=') {
                     v.trim_start_matches('=').to_string()
+                } else if is_string_literal(&v) {
+                    v
                 } else {
                     format!("\"{}\"", v.replace('"', "\"\""))
                 }

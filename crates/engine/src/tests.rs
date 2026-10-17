@@ -3038,6 +3038,72 @@ fn icon_set_thresholds_from_files_pick_the_icon() {
     assert_eq!([icon(&s, "A1"), icon(&s, "A2"), icon(&s, "A3"), icon(&s, "A4")], [Some(0), Some(1), Some(1), Some(2)]);
 }
 
+/// `home.conditionalFormat` styles take colours the way the other formatting commands do, refuse
+/// keys they would drop, and keep a text criterion already written as a string literal.
+#[test]
+fn conditional_format_styles_take_hex_colours_and_quoted_values() {
+    use gridcraft_model::{CfRule, Color, Fill, PatternType};
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Open"], ["Closed"], ["Blocked"]]})).unwrap();
+    let rule = |s: &Session, i: usize| s.doc().unwrap().wb.active().unwrap().cond_formats[i].rule.clone();
+    let style = |r: &CfRule| match r {
+        CfRule::Expression { style, .. } | CfRule::CellIs { style, .. } => (**style).clone(),
+        other => panic!("{other:?}"),
+    };
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "=A1=\"Open\"", "style": {"fill": "#FFF2CC", "font": {"bold": true, "color": "#9C0006"}}}}),
+    )
+    .unwrap();
+    let st = style(&rule(&s, 0));
+    assert_eq!(st.fill, Fill::solid(Color::Rgb(0xFFF2CC)));
+    assert_eq!((st.font.bold, st.font.color), (true, Color::Rgb(0x9C0006)));
+    // A fill colour without a pattern is solid; the model's own shape still works.
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "A1", "rule": {"type": "expression", "formula": "=TRUE", "style": {"fill": {"fg": "C6EFCE"}}}}),
+    )
+    .unwrap();
+    assert_eq!(style(&rule(&s, 0)).fill, Fill { pattern: PatternType::Solid, fg: Color::Rgb(0xC6EFCE), bg: Color::Auto });
+    let internal = json!({"fill": {"pattern": "Solid", "fg": {"Rgb": 16773836}}, "borders": {"left": {"style": "Thin", "color": "#C00000"}}});
+    s.execute("home.conditionalFormat", json!({"range": "A1", "rule": {"type": "expression", "formula": "=TRUE", "style": internal}})).unwrap();
+    let st = style(&rule(&s, 0));
+    assert_eq!((st.fill.fg, st.borders.left.color), (Color::Rgb(0xFFF2CC), Color::Rgb(0xC00000)));
+    // `"none"` is no fill (the format only sets the font), as `home.fillColor` reads it.
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "A1", "rule": {"type": "expression", "formula": "=TRUE", "style": {"fill": "none", "font": {"bold": true}}}}),
+    )
+    .unwrap();
+    let st = style(&rule(&s, 0));
+    assert_eq!((st.fill, st.font.bold), (Fill::default(), true));
+    // Keys that would be dropped, leaving a rule that shows nothing, are refused.
+    let n = s.doc().unwrap().wb.active().unwrap().cond_formats.len();
+    for bad in [json!({"preset": "greenFill"}), json!({"fillColor": "#FFF2CC"}), json!({"fill": "#nothex"}), json!("bold")] {
+        let e = s.execute("home.conditionalFormat", json!({"range": "A1", "rule": {"type": "expression", "formula": "=TRUE", "style": bad}}));
+        assert!(e.is_err(), "{bad} should be refused");
+    }
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().cond_formats.len(), n);
+
+    // `"Closed"` (a string literal, as in the file) and `Closed` both match the text Closed.
+    for value in ["\"Closed\"", "Closed"] {
+        s.execute(
+            "home.conditionalFormat",
+            json!({"range": "A1:A3", "rule": {"type": "cellIs", "operator": "equal", "value": value, "preset": "greenFill"}}),
+        )
+        .unwrap();
+        assert!(matches!(rule(&s, 0), CfRule::CellIs { ref a, .. } if a == "\"Closed\""), "{value}");
+        let wb = s.doc().unwrap().wb.clone();
+        let mut cache = crate::cf::CfCache::new();
+        let mut fill = |c: &str| cache.look(&wb, 0, CellRef::parse(c).unwrap()).and_then(|l| l.style).map(|st| st.fill.fg);
+        assert_eq!(fill("A2"), Some(Color::Rgb(0xC6EFCE)), "{value}");
+        s.execute("edit.undo", json!({})).unwrap();
+    }
+    // Text with quotes inside that isn't one literal is still quoted as text.
+    s.execute("home.conditionalFormat", json!({"range": "A1", "rule": {"type": "cellIs", "operator": "equal", "value": "say \"hi\""}})).unwrap();
+    assert!(matches!(rule(&s, 0), CfRule::CellIs { ref a, .. } if a == "\"say \"\"hi\"\"\""));
+}
+
 #[test]
 fn row_height_and_column_width_take_a_list_of_areas() {
     // Issue #341: header drags on a multi-area selection size every selected line in one step.
