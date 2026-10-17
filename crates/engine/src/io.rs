@@ -415,14 +415,41 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
-    // Write to a temporary file, then rename: a crash never leaves a half-written workbook.
-    let tmp = format!("{path}.sctmp");
-    std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| {
+    use std::io::Write as _;
+    // Write to a private temporary file, then rename: a crash never leaves a half-written
+    // workbook, and two saves of the same workbook never share a temporary file.
+    let tmp = temporary_sibling(path);
+    let put = || -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        // A save keeps the permissions the workbook already had; a new file takes the defaults.
+        #[cfg(unix)]
+        if let Ok(meta) = std::fs::metadata(path) {
+            use std::os::unix::fs::PermissionsExt as _;
+            file.set_permissions(std::fs::Permissions::from_mode(meta.permissions().mode() & 0o7777))?;
+        }
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)
+    };
+    put().map_err(|e| {
         // A write or rename that fails (full disk, the workbook locked by another app) leaves
         // no temporary file beside the user's workbook.
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })
+}
+
+/// A sibling path private to this save: concurrent saves never collide on it, an existing
+/// `<name>.sctmp` file or symlink is never followed or removed, and a leftover temporary file
+/// from a crashed save is never mistaken for this one's.
+#[cfg(not(target_arch = "wasm32"))]
+fn temporary_sibling(path: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let ms = gridcraft_core::date::unix_now_ms().unwrap_or(0.0) as u64;
+    format!("{path}.sctmp-{}-{ms}-{seq}", std::process::id())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -558,6 +585,59 @@ mod tests {
         write_file(ok.to_str().unwrap(), b"workbook").unwrap();
         assert_eq!(std::fs::read(&ok).unwrap(), b"workbook");
         assert!(!dir.join("Book2.xlsx.sctmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A save never writes through a sibling `<name>.sctmp` symlink: the predictable shared path
+    /// used to let anything that could plant one redirect the save over another file.
+    #[cfg(unix)]
+    #[test]
+    fn save_does_not_follow_a_temporary_file_symlink() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-write-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, b"keep me").unwrap();
+        let book = dir.join("Book3.xlsx");
+        std::os::unix::fs::symlink(&victim, dir.join("Book3.xlsx.sctmp")).unwrap();
+        write_file(book.to_str().unwrap(), b"workbook").unwrap();
+        assert_eq!(std::fs::read(&book).unwrap(), b"workbook");
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me", "the save didn't write through the sibling symlink");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A save keeps the permissions the workbook already had; replacing it used to recreate it
+    /// with the umask defaults, silently relaxing a restrictive workbook.
+    #[cfg(unix)]
+    #[test]
+    fn save_keeps_the_workbook_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("gridcraft-write-perm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let book = dir.join("Book4.xlsx");
+        std::fs::write(&book, b"old").unwrap();
+        std::fs::set_permissions(&book, std::fs::Permissions::from_mode(0o640)).unwrap();
+        write_file(book.to_str().unwrap(), b"workbook").unwrap();
+        assert_eq!(std::fs::read(&book).unwrap(), b"workbook");
+        let mode = std::fs::metadata(&book).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640, "the save kept the workbook's permissions");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A failed save cleans up only its own temporary file: the old shared `<name>.sctmp` path
+    /// meant one save could truncate or delete another save's in-flight temporary file.
+    #[test]
+    fn failed_save_cleans_up_only_its_own_temporary_file() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-write-sibling-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sibling = dir.join("Book5.xlsx.sctmp");
+        std::fs::write(&sibling, b"another save's data").unwrap();
+        let blocked = dir.join("Book5.xlsx");
+        std::fs::create_dir(&blocked).unwrap();
+        assert!(write_file(blocked.to_str().unwrap(), b"workbook").is_err());
+        assert_eq!(std::fs::read(&sibling).unwrap(), b"another save's data", "the sibling temporary file is left alone");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
