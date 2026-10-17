@@ -320,7 +320,19 @@ fn main() -> eframe::Result<()> {
     if let Some(i) = icon() {
         viewport = viewport.with_icon(i);
     }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    #[allow(unused_mut)]
+    let mut options = eframe::NativeOptions { viewport, ..Default::default() };
+    // GNOME's Wayland compositor draws no window frame, so winit's stand-in frame showed instead:
+    // a black border and bare title-bar buttons. winit also has no file drag-and-drop on Wayland.
+    // Run through XWayland when it's there, where the desktop draws its own frame (as WordCraft
+    // does); GRIDCRAFT_WAYLAND=1 keeps the native Wayland backend.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("GRIDCRAFT_WAYLAND").is_none() {
+        options.event_loop_builder = Some(Box::new(|b| {
+            use winit::platform::x11::EventLoopBuilderExtX11;
+            b.with_x11();
+        }));
+    }
     // Before eframe creates the wgpu instance: Windows starts on DirectX 12, or OpenGL when
     // DirectX 12 has no GPU driver, and never touches Vulkan unless asked (see graphics.rs).
     #[cfg(target_os = "windows")]
