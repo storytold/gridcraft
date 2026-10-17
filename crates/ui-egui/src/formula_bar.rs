@@ -319,6 +319,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             ed.completion = crate::editor::column_completion(sh, ed.cell, &ed.text);
         }
         ed.point = None;
+        ed.point_anchor = None;
         let names: Vec<String> = function_names()
             .iter()
             .map(|name| {

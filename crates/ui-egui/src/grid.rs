@@ -2067,14 +2067,26 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         if let Some(ed) = app.editor.as_mut()
             && ed.can_point()
         {
+            let anchor = if mods.shift && ed.point_at_caret() {
+                ed.point_anchor.filter(|(sheet, _)| *sheet == wb.active_sheet).map(|(_, cell)| cell).unwrap_or(c)
+            } else {
+                c
+            };
+            let range = RangeRef::new(anchor, c);
+            let text = if range.is_single() { c.a1() } else { range.a1() };
             let sheet_name = (ed.sheet != wb.active_sheet).then(|| sh.name.clone());
             let r = match sheet_name {
-                Some(n) => format!("{}!{}", gridcraft_engine::formula::quote_sheet(&n), c.a1()),
-                None => c.a1(),
+                Some(n) => format!("{}!{text}", gridcraft_engine::formula::quote_sheet(&n)),
+                None => text,
             };
-            ed.insert_ref(&r);
+            if mods.command && !mods.shift {
+                ed.append_ref(&r);
+            } else {
+                ed.insert_ref(&r);
+            }
             ed.request_focus = true;
             ed.point_cell = Some(c);
+            ed.point_anchor = Some((wb.active_sheet, anchor));
             app.grid.drag = Drag::Select;
             app.grid.drag_select = true;
             if resp.drag_started()
@@ -2336,6 +2348,7 @@ fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef) 
     let r = range.a1();
     let r = if ed.sheet != wb.active_sheet { format!("{}!{r}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { r };
     ed.insert_ref(&r);
+    ed.point_anchor = None;
     ed.request_focus = true;
     true
 }
@@ -2348,12 +2361,13 @@ fn select_to_pointer(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, p
     if let Some(ed) = app.editor.as_mut()
         && ed.point.is_some()
     {
-        if let Some(start) = ed.point_cell {
+        if let Some(start) = ed.point_anchor.filter(|(sheet, _)| *sheet == wb.active_sheet).map(|(_, cell)| cell).or(ed.point_cell) {
             let range = RangeRef::new(start, cell);
             let text = if range.is_single() { range.start.a1() } else { range.a1() };
             let text = if ed.sheet != wb.active_sheet { format!("{}!{text}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { text };
             ed.insert_ref(&text);
-            ed.point_cell = Some(start);
+            ed.point_cell = Some(cell);
+            ed.point_anchor = Some((wb.active_sheet, start));
         }
     } else if let Some(d) = app.session.active() {
         // Read the current anchor: starting a drag may have just replaced the selection.
@@ -2944,11 +2958,11 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
     let Some(d) = app.session.active() else { return };
     let from = ed.point_cell.unwrap_or(ed.cell);
     let to = from.offset_clamped(dr, dc);
-    let text = if extend {
+    let anchor = if extend {
         // The anchor is the corner opposite the moving end: the written range is normalized, so
         // after extending up or left its first cell is the moving end, not the anchor.
         let pointed = ed.point.and_then(|(s, e)| ed.text.get(s..e)).and_then(RangeRef::parse);
-        let anchor = pointed
+        let inferred_anchor = pointed
             .map(|r| {
                 CellRef::new(
                     if from.row == r.start.row { r.end.row } else { r.start.row },
@@ -2956,13 +2970,15 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
                 )
             })
             .unwrap_or(from);
-        RangeRef::new(anchor, to).a1()
+        ed.point_anchor.filter(|(sheet, _)| *sheet == d.wb.active_sheet).map(|(_, cell)| cell).unwrap_or(inferred_anchor)
     } else {
-        to.a1()
+        to
     };
-    let _ = d;
+    let text = if extend { RangeRef::new(anchor, to).a1() } else { to.a1() };
+    let sheet = d.wb.active_sheet;
     ed.insert_ref(&text);
     ed.point_cell = Some(to);
+    ed.point_anchor = Some((sheet, anchor));
     app.grid.ensure_visible = true;
 }
 

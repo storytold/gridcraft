@@ -32,6 +32,8 @@ pub struct EditState {
     pub point: Option<(usize, usize)>,
     /// Where point mode's keyboard cursor is.
     pub point_cell: Option<CellRef>,
+    /// The fixed range anchor and its sheet while pointing with the mouse or keyboard.
+    pub point_anchor: Option<(usize, CellRef)>,
     pub autocomplete: Vec<String>,
     pub ac_index: usize,
     pub request_focus: bool,
@@ -56,6 +58,7 @@ impl EditState {
             caret,
             point: None,
             point_cell: None,
+            point_anchor: None,
             autocomplete: vec![],
             ac_index: 0,
             request_focus: true,
@@ -81,14 +84,16 @@ impl EditState {
         if !self.is_formula() {
             return false;
         }
-        if let Some((_, e)) = self.point
-            && e == self.byte_caret()
-        {
+        if self.point_at_caret() {
             return true;
         }
         let before = self.text.get(..self.byte_caret()).unwrap_or("");
         let last = before.trim_end().chars().last();
         matches!(last, Some('=' | '(' | ',' | '+' | '-' | '*' | '/' | '^' | '&' | '<' | '>' | ':' | ';' | '{'))
+    }
+
+    pub fn point_at_caret(&self) -> bool {
+        self.point.is_some_and(|(start, end)| end == self.byte_caret() && self.text.get(start..end).is_some())
     }
 
     /// Inserts (or replaces the last pointed) reference text at the caret.
@@ -105,6 +110,17 @@ impl EditState {
         self.caret = self.text.get(..new_end).map(|s| s.chars().count()).unwrap_or(0);
         self.caret_to_end = false;
         self.sync_caret = true;
+    }
+
+    /// Add another argument after the current pointed reference. Keep only the new reference
+    /// replaceable, so a subsequent plain click does not remove earlier arguments or the separator.
+    pub fn append_ref(&mut self, r: &str) {
+        let separator = if self.point_at_caret() { self.locale.list_separator().to_string() } else { String::new() };
+        self.point = None;
+        self.insert_ref(&format!("{separator}{r}"));
+        if let Some((start, end)) = self.point {
+            self.point = Some((start + separator.len(), end));
+        }
     }
 
     /// Updates function autocomplete for the word before the caret.
