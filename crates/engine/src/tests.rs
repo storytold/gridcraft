@@ -2268,6 +2268,21 @@ fn whole_sheet_selection_stays_within_the_data() {
 }
 
 #[test]
+fn whole_columns_and_rows_ignore_merges_but_cell_ranges_take_them_whole() {
+    // As in Excel: a merged A2:C2 doesn't widen a click on column B's header to A:C, nor a
+    // merged B2:B4 a click on row 3's header to rows 2:4; a cell range still takes them whole.
+    let mut s = s();
+    s.execute("home.mergeCenter", json!({"range": "A2:C2"})).unwrap();
+    s.execute("home.mergeCenter", json!({"range": "E2:E4"})).unwrap();
+    let sel = |s: &mut Session, range: &str| s.execute("selection.set", json!({"range": range})).unwrap()["selection"].clone();
+    assert_eq!(sel(&mut s, "B:B"), "B:B");
+    assert_eq!(sel(&mut s, "A:B"), "A:B");
+    assert_eq!(sel(&mut s, "3:3"), "3:3");
+    assert_eq!(sel(&mut s, "B1:B3"), "A1:C3");
+    assert_eq!(sel(&mut s, "E3"), "E2:E4");
+}
+
+#[test]
 fn parity_counts() {
     let (done, total) = crate::catalog::parity();
     assert!(total > 250);

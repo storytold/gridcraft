@@ -63,9 +63,13 @@ impl Selection {
     pub fn a1(&self) -> String {
         self.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",")
     }
-    /// Expands areas so merged cells are included whole.
+    /// Expands areas so merged cells are included whole. Whole columns and whole rows stay as
+    /// they are: clicking column B's header selects just B even when B1:C1 is merged, as in Excel.
     pub fn expand_merges(&mut self, sheet: &Sheet) {
         for r in self.ranges.iter_mut() {
+            if r.is_full_cols() || r.is_full_rows() {
+                continue;
+            }
             let mut cur = *r;
             loop {
                 let mut grown = cur;
