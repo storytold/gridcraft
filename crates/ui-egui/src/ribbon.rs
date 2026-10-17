@@ -2282,6 +2282,11 @@ fn table_design(app: &mut SheetApp, ui: &mut Ui) {
             act(app, "table.rename", json!({"table": tname, "name": name}));
         }
     });
+    let __k = big_button(ui, Icon::Table, "Resize\nTable", "Resize Table", false);
+    control_keytip(app, ui, &__k, "dialog:tableResize");
+    if __k.clicked() {
+        app.open_dialog("tableResize", json!({}));
+    }
     sep(ui);
     let __k = big_button(ui, Icon::Duplicates, "Remove\nDuplicates", "Remove Duplicates", false);
     control_keytip(app, ui, &__k, "data.removeDuplicates");

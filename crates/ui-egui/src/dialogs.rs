@@ -562,6 +562,24 @@ impl Dialog {
                     defaults,
                 )
             }
+            "tableResize" => {
+                let (table, range) = app
+                    .session
+                    .active()
+                    .and_then(|d| {
+                        let sh = d.wb.active()?;
+                        let t = sh.table_at(d.selection.active)?;
+                        Some((t.name.clone(), t.range.a1()))
+                    })
+                    .unwrap_or_default();
+                Dialog::form(
+                    "tableResize",
+                    "Resize Table",
+                    "table.resize",
+                    vec![Text { key: "range", label: "New range for the table:" }],
+                    json!({"table": table, "range": range}),
+                )
+            }
             "dataValidation" => Dialog::form(
                 "dataValidation",
                 "Data Validation",
