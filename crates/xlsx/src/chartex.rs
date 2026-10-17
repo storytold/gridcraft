@@ -48,15 +48,13 @@ fn kind_of(layout: &str) -> Option<ChartKind> {
 
 fn formula(dim: &El) -> Option<String> {
     let f = dim.child("f")?;
-    let t = f.text.trim();
-    Some(crate::fmla::from_file(t.strip_prefix('=').unwrap_or(t)))
+    Some(crate::fmla::from_file(&crate::chart::chart_ref_from_file(&f.text)))
 }
 
 fn text(tx: &El) -> Option<String> {
     if let Some(d) = tx.child("txData") {
         if let Some(f) = d.child("f") {
-            let t = f.text.trim();
-            return Some(t.strip_prefix('=').unwrap_or(t).to_string());
+            return Some(crate::chart::chart_ref_from_file(&f.text));
         }
         return d.child("v").map(|v| v.text.clone());
     }

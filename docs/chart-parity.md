@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** trivial (chart sheets are kept on save, still not editable (#727); previously minor: trendlines: model, XLSX round-trip, drawing, Add Chart Element) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-16 · **Change:** trivial (series that refer to workbook-scoped defined names (`[0]!Name` in the file) plot their data instead of `#NAME?` (#1686); previously trivial: chart sheets are kept on save, still not editable (#727)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -66,6 +66,13 @@ extensions) is lost when GridCraft saves a workbook it opened. That is the main 
 **~30% ready**: a user who opens an Excel workbook with charts and saves it gets simpler charts
 back.
 
+Series data, categories and names may refer to defined names, as dynamic (OFFSET) ranges do:
+Excel writes a workbook-scoped name as `[0]!Name` in `<c:f>`. GridCraft reads it as the bare
+name and writes it back with `[0]!`; a sheet-scoped name is written `Sheet!Name`. Excel needs the
+qualifier: with a bare name in `<c:f>` it draws the whole chart blank, without a repair prompt
+(observed in Excel for Windows, Microsoft 365). External books (`[1]Sheet1!…`) are kept as they
+are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
+
 ## Work (40–60 h)
 
 1. Kinds survive XLSX round-trip (merge PRs #158, #161): 2–4 h. Chart resizing (#190): 1–2 h.
@@ -80,6 +87,7 @@ back.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
 | 2026-10-12 | trivial | chart sheets are kept on save, still not editable (#727) |
 | 2026-10-11 | minor | Trendlines: all six types modelled, round-tripped through `c:trendline`, drawn with forecast and equation/R² labels; `chart.addElement` `trendline` |
 | 2026-10-11 | minor | PivotCharts (`insert.pivotChart`) |

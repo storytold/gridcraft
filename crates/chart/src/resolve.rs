@@ -156,13 +156,23 @@ fn category_texts(wb: &Workbook, sheet: usize, formula: &str) -> Vec<String> {
         .collect()
 }
 
-/// A series name: a reference/formula is evaluated, a quoted or bare literal is used as is.
+/// Whether `t` names a defined name seen from `sheet` (`Name`, or `Sheet1!Name` looked up on
+/// that sheet), the way the evaluator looks names up.
+fn is_defined_name(wb: &Workbook, sheet: usize, t: &str) -> bool {
+    match t.split_once('!') {
+        Some((s, bare)) => wb.sheet_index(s.trim_matches('\'')).is_some_and(|i| wb.name(bare, i).is_some()),
+        None => wb.name(t, sheet).is_some(),
+    }
+}
+
+/// A series name: a reference/formula or a defined name (`[0]!Title` in a file) is evaluated,
+/// a quoted or other bare literal is used as is.
 fn series_name(wb: &Workbook, sheet: usize, name: &str) -> String {
     let t = name.trim();
     if let Some(q) = t.strip_prefix('"').and_then(|q| q.strip_suffix('"')) {
         return q.replace("\"\"", "\"");
     }
-    if t.starts_with('=') || parse_ref(wb, sheet, t).is_some() && t.contains('!') {
+    if t.starts_with('=') || parse_ref(wb, sheet, t).is_some() && t.contains('!') || is_defined_name(wb, sheet, t) {
         let vals = eval_list(wb, sheet, t);
         let parts: Vec<String> = vals.iter().map(value_text).filter(|s| !s.is_empty()).take(8).collect();
         return parts.join(" ");

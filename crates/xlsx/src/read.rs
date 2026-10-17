@@ -265,7 +265,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
                 continue;
             }
             if lname.starts_with("_xlchart.") {
-                chart_names.push((lname, crate::fmla::from_file(text)));
+                chart_names.push((lname, crate::fmla::from_file(&crate::chart::chart_ref_from_file(text))));
                 continue;
             }
             if lname == "_xlnm.print_area" || lname == "_xlnm.print_titles" {
