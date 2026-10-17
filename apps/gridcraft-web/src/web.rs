@@ -2,11 +2,18 @@
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
+use std::cell::RefCell;
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
+use wasm_bindgen::closure::Closure;
 
 const CANVAS_ID: &str = "gridcraft_canvas";
 const LOADING_ID: &str = "gridcraft_loading";
+
+thread_local! {
+    static PENDING_COPY: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
+    static COPY_LISTENER: RefCell<Option<Closure<dyn FnMut(web_sys::ClipboardEvent)>>> = const { RefCell::new(None) };
+}
 
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
@@ -71,6 +78,9 @@ pub fn start() {
             .await;
         if let (Err(e), Some(bridge)) = (&result, &bridge) {
             bridge.post_failed(&format!("{e:?}"));
+        }
+        if result.is_ok() {
+            install_copy_listener(&document);
         }
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
@@ -183,6 +193,10 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
 
 /// Start inside the copy gesture; deferring `write` can lose browser user activation.
 fn copy_html(html: &str, text: &str) -> Result<(), String> {
+    PENDING_COPY.with(|pending| *pending.borrow_mut() = Some((html.to_owned(), text.to_owned())));
+    wasm_bindgen_futures::spawn_local(async {
+        PENDING_COPY.with(|pending| pending.borrow_mut().take());
+    });
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let window = web_sys::window().ok_or("no window")?;
     let clipboard = window.navigator().clipboard();
@@ -212,6 +226,28 @@ fn copy_html(html: &str, text: &str) -> Result<(), String> {
         }
     });
     Ok(())
+}
+
+fn install_copy_listener(document: &web_sys::Document) {
+    let listener = Closure::new(|event: web_sys::ClipboardEvent| {
+        let payload = PENDING_COPY.with(|pending| pending.borrow_mut().take());
+        let Some((html, text)) = payload else { return };
+        let Some(data) = event.clipboard_data() else { return };
+        if data.set_data("text/plain", &text).is_ok() {
+            let _ = data.set_data("text/html", &html);
+            event.prevent_default();
+        }
+    });
+    COPY_LISTENER.with(|stored| *stored.borrow_mut() = Some(listener));
+    COPY_LISTENER.with(|stored| {
+        let stored = stored.borrow();
+        let Some(listener) = stored.as_ref() else { return };
+        for event in ["copy", "cut"] {
+            if let Err(error) = document.add_event_listener_with_callback(event, listener.as_ref().unchecked_ref()) {
+                log::warn!("couldn't install {event} clipboard fallback: {error:?}");
+            }
+        }
+    });
 }
 
 /// Opens `bytes` (a PDF) as an object URL in a hidden iframe and calls the iframe's own
