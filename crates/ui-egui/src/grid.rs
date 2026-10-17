@@ -563,7 +563,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     } else {
         Rect::from_min_max(available.min, pos2(available.right() - bar, available.bottom()))
     };
-    let resp = ui.allocate_rect(rect, Sense::click_and_drag());
+    let sense = if app.dialog.as_ref().is_some_and(|d| d.name == "sort") { Sense::hover() } else { Sense::click_and_drag() };
+    let resp = ui.allocate_rect(rect, sense);
     app.grid.rect = Some(rect);
     let Some(d) = app.session.active() else { return };
     let wb: Arc<Workbook> = d.wb.clone();
