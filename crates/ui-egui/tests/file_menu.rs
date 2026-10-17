@@ -7,9 +7,13 @@ use gridcraft_engine::{Session, core::CellRef, core::Value};
 use gridcraft_ui_egui::{Services, SheetApp};
 
 fn harness(services: Services) -> egui_kittest::Harness<'static, SheetApp> {
+    harness_with_step_dt(services, 0.25)
+}
+
+fn harness_with_step_dt(services: Services, step_dt: f32) -> egui_kittest::Harness<'static, SheetApp> {
     let mut session = Session::new();
     session.new_workbook();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = egui_kittest::Harness::builder().with_step_dt(step_dt).with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -37,6 +41,55 @@ fn click(h: &mut egui_kittest::Harness<'static, SheetApp>, label: &str) {
 
 fn page(h: &egui_kittest::Harness<'static, SheetApp>) -> Option<&'static str> {
     h.state().backstage.as_ref().map(|b| b.page.id())
+}
+
+#[test]
+fn back_button_finishes_its_transition_and_respects_disabled_animations() {
+    let mut h = harness_with_step_dt(Services::default(), 1.0 / 60.0);
+    // Kittest disables egui animation by default; exercise the real transition here.
+    h.ctx.all_styles_mut(|style| style.animation_time = 0.26);
+    h.state_mut().ui.ribbon_tab = "Data".into();
+    h.state_mut().open_backstage(gridcraft_ui_egui::backstage::Page::Home);
+    h.run_steps(30);
+    click(&mut h, "Back");
+    assert!(h.state().backstage.is_some(), "Back keeps the view alive while it animates out");
+    h.run_steps(30);
+    assert!(h.state().backstage.is_none(), "the exit animation returns to the sheet");
+    assert_eq!(h.state().ui.ribbon_tab, "Data");
+
+    h.state_mut().ui.animations = false;
+    h.state_mut().open_backstage(gridcraft_ui_egui::backstage::Page::Home);
+    h.run_steps(3);
+    click(&mut h, "Back");
+    assert!(h.state().backstage.is_none(), "disabled animations return immediately");
+}
+
+#[test]
+fn close_animation_preserves_document_closing_and_the_unsaved_prompt() {
+    for animations in [true, false] {
+        for dirty in [true, false] {
+            let mut h = harness_with_step_dt(Services::default(), 1.0 / 60.0);
+            h.ctx.all_styles_mut(|style| style.animation_time = 0.26);
+            h.state_mut().ui.animations = animations;
+            h.state_mut().session.new_workbook();
+            if dirty {
+                h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "123"})).unwrap();
+            }
+            h.state_mut().open_backstage(gridcraft_ui_egui::backstage::Page::Home);
+            h.run_steps(30);
+            click(&mut h, "Close");
+            assert_eq!(h.state().backstage.is_some(), animations, "only the view's departure is delayed");
+            assert_eq!(h.state().session.documents().len(), if dirty { 2 } else { 1 });
+            assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), if dirty { Some("saveChanges") } else { None });
+            h.run_steps(30);
+            assert!(h.state().backstage.is_none());
+            assert_eq!(h.state().session.documents().len(), if dirty { 2 } else { 1 }, "Close executes exactly once");
+            assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), if dirty { Some("saveChanges") } else { None });
+            if dirty {
+                assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(123.0));
+            }
+        }
+    }
 }
 
 #[test]

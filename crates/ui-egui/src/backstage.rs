@@ -24,6 +24,9 @@ use crate::theme::{self, Tokens};
 const NAV_W: f32 = 196.0;
 /// Width of the content column (pages are left-aligned like a document, not stretched).
 const CONTENT_W: f32 = 760.0;
+/// A slightly slower transition makes the File view's motion easy to follow.
+const TRANSITION_SECONDS: f64 = 0.26;
+const TRANSITION_DISTANCE: f32 = 56.0;
 
 /// A Backstage page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,6 +105,10 @@ const PROPERTIES: [(&str, &str); 6] = [
 #[derive(Clone, Debug)]
 pub struct Backstage {
     pub page: Page,
+    /// Opening transition starts on the first rendered frame, not when a command is queued.
+    opened_at: Option<f64>,
+    /// Back/Close departure: start time and visibility at the instant it was clicked.
+    closing: Option<(f64, f32)>,
     /// Info: property drafts while a field is being edited (committed when it loses focus).
     props: [String; 6],
     /// Print: the whole workbook rather than the active sheet.
@@ -127,6 +134,8 @@ impl Backstage {
     pub fn new(page: Page) -> Backstage {
         Backstage {
             page,
+            opened_at: None,
+            closing: None,
             props: Default::default(),
             print_all: false,
             fit_to_page: false,
@@ -142,6 +151,7 @@ impl Backstage {
 #[derive(Default)]
 struct Outcome {
     close: bool,
+    animate_exit: bool,
     page: Option<Page>,
 }
 
@@ -152,6 +162,32 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     // Esc inside a text field leaves the field; it closes the view only from outside one.
     let typing = ctx.text_edit_focused();
     let t = Tokens::get(&ctx);
+    let now = ctx.input(|i| i.time);
+    let opened_at = *bs.opened_at.get_or_insert(now);
+    let animate = app.ui.animations && ctx.global_style().animation_time > 0.0 && !app.shots.in_flight();
+    let start = bs.closing.map_or(opened_at, |(start, _)| start);
+    let progress = if animate { ((now - start) / TRANSITION_SECONDS).clamp(0.0, 1.0) as f32 } else { 1.0 };
+    if bs.closing.is_some() && progress >= 1.0 {
+        ctx.request_repaint();
+        return;
+    }
+    // Ease out into place: the page travels quickly at first and settles without a bounce.
+    // Keep the title bar stationary and clip the moving page to the space below it.
+    let eased = bs.closing.map_or_else(|| 1.0 - (1.0 - progress).powi(3), |(_, visibility)| visibility * (1.0 - progress.powi(3)));
+    if progress < 1.0 {
+        ctx.request_repaint();
+    }
+    let viewport = ui.available_rect_before_wrap();
+    ui.painter().rect_filled(viewport, 0.0, t.ribbon);
+    let mut page_ui = ui.new_child(
+        egui::UiBuilder::new().id_salt("backstage_transition").max_rect(viewport.translate(vec2(-TRANSITION_DISTANCE * (1.0 - eased), 0.0))),
+    );
+    page_ui.set_clip_rect(viewport.intersect(ui.clip_rect()));
+    page_ui.multiply_opacity(eased);
+    if bs.closing.is_some() {
+        page_ui.disable();
+    }
+    let ui = &mut page_ui;
     let lang = app.ui.language;
     let mut out = Outcome::default();
     let (nav_bg, nav_text, nav_sel) =
@@ -163,7 +199,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             if nav_item(ui, Icon::Back, lang.tr("Back"), false, nav_text, nav_sel).clicked() {
-                out.close = true;
+                out.animate_exit = true;
             }
             ui.add_space(10.0);
             for page in [Page::Home, Page::New, Page::Open] {
@@ -187,7 +223,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 // A cell still being edited is part of the workbook; Close keeps the unsaved prompt.
                 if app.commit_edit(0, 0, false, false) {
                     app.run_or_alert("file.close", json!({}));
-                    out.close = true;
+                    out.animate_exit = true;
                 }
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
@@ -225,6 +261,14 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     }
     if let Some(page) = out.page {
         bs.page = page;
+    }
+    if out.animate_exit {
+        if animate {
+            bs.closing = Some((now, eased));
+            ctx.request_repaint();
+        } else {
+            out.close = true;
+        }
     }
     // A command run from a page may itself have opened (or replaced) the view; keep that.
     if out.close {
