@@ -138,6 +138,7 @@ pub fn specs() -> Vec<CommandSpec> {
         )),
         cmd!("shape.setText", "Edit Text Box", [], None, "{id: textBox id, text: string}", has_doc, shape_set_text),
         cmd!("object.delete", "Delete Object", [], None, "{kind: chart|image|shape, id}", has_doc, delete_object),
+        cmd!("object.duplicate", "Duplicate Object", [], None, "{kind: chart|image|shape, id, dx?: 12, dy?: 12}", has_doc, duplicate_object),
         cmd!("object.move", "Move Object", [], None, "{kind: chart|image|shape, id, at?: \"C3\", dx?, dy?, width?, height?}", has_doc, move_object),
         cmd!(
             "object.setAnchorMode",
@@ -1102,6 +1103,53 @@ fn delete_object(s: &mut Session, p: &Json) -> Result<Json> {
             _ => sh.shapes.retain(|c| c.id != id),
         }
         Ok(Json::Null)
+    })
+}
+
+/// How far `object.duplicate` moves the copy right and down from the original (points), so it
+/// shows beside it.
+pub const DUPLICATE_OFFSET: f32 = 12.0;
+
+/// Copies a chart, picture or shape on the active sheet (Cmd/Ctrl+D, or Paste after copying the
+/// selected object): a new id, the same data and formatting, offset by `dx`/`dy` points. The copy
+/// goes on top of the other objects and is returned as `{kind, id}`.
+fn duplicate_object(s: &mut Session, p: &Json) -> Result<Json> {
+    let id = u32_param(p, "id").ok_or_else(|| bad("object.duplicate", "missing `id`"))?;
+    let kind = str_param(p, "kind").unwrap_or("").to_string();
+    let offset = |key| f64_param(p, key).map_or(DUPLICATE_OFFSET, |v| v.clamp(-10000.0, 10000.0) as f32);
+    let (dx, dy) = (offset("dx"), offset("dy"));
+    let d = s.doc()?;
+    let sheet = d.wb.active_sheet;
+    let new_id = d.wb.next_object_id();
+    let missing = || bad("object.duplicate", "no such object");
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(sheet)?;
+        let place = |a: &mut Anchor| {
+            a.dx += dx;
+            a.dy += dy;
+        };
+        match kind.as_str() {
+            "chart" => {
+                let mut c = sh.charts.iter().find(|c| c.id == id).cloned().ok_or_else(missing)?;
+                c.id = new_id;
+                place(&mut c.anchor);
+                sh.charts.push(c);
+            }
+            "image" => {
+                let mut c = sh.images.iter().find(|c| c.id == id).cloned().ok_or_else(missing)?;
+                c.id = new_id;
+                place(&mut c.anchor);
+                sh.images.push(c);
+            }
+            "shape" => {
+                let mut c = sh.shapes.iter().find(|c| c.id == id).cloned().ok_or_else(missing)?;
+                c.id = new_id;
+                place(&mut c.anchor);
+                sh.shapes.push(c);
+            }
+            _ => return Err(bad("object.duplicate", "kind must be chart, image or shape")),
+        }
+        Ok(json!({"kind": kind, "id": new_id}))
     })
 }
 

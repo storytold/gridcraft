@@ -2607,6 +2607,42 @@ fn move_only_objects_follow_but_do_not_resize() {
     assert_eq!((a.width, a.height), (40.0, 40.0));
 }
 
+/// #1563: `object.duplicate` copies an object with a new id, the same content and an offset, as
+/// one undoable step.
+#[test]
+fn duplicate_object_copies_with_a_new_id_beside_the_original() {
+    use gridcraft_model::AnchorMode;
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["x", "y"], ["a", 1], ["b", 2]]})).unwrap();
+    let chart = s.execute("insert.chart", json!({"range": "A1:B3", "at": "D2"})).unwrap()["chart"].as_u64().unwrap() as u32;
+    let r = s.execute("object.duplicate", json!({"kind": "chart", "id": chart})).unwrap();
+    assert_eq!(r["kind"], "chart");
+    let copy = r["id"].as_u64().unwrap() as u32;
+    let charts = s.doc().unwrap().wb.active().unwrap().charts.clone();
+    assert_eq!(charts.len(), 2);
+    let (a, b) = (&charts[0], &charts[1]);
+    assert_eq!((a.id, b.id), (chart, copy));
+    assert_ne!(copy, chart);
+    assert_eq!(b.series, a.series);
+    assert_eq!(b.anchor.cell, a.anchor.cell);
+    assert_eq!((b.anchor.dx - a.anchor.dx, b.anchor.dy - a.anchor.dy), (12.0, 12.0));
+
+    let image = add_image(&mut s, "A6", AnchorMode::MoveAndSize);
+    let r = s.execute("object.duplicate", json!({"kind": "image", "id": image, "dx": 0, "dy": 30})).unwrap();
+    let images = s.doc().unwrap().wb.active().unwrap().images.clone();
+    assert_eq!(images.len(), 2);
+    assert_eq!(images[1].id as u64, r["id"].as_u64().unwrap());
+    assert_ne!(images[1].id, copy, "ids stay unique across kinds");
+    assert_eq!((images[1].anchor.dx, images[1].anchor.dy), (0.0, 30.0));
+    assert_eq!(images[1].data, images[0].data);
+
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().images.len(), 1);
+    assert!(s.execute("object.duplicate", json!({"kind": "chart", "id": 999})).is_err());
+    assert!(s.execute("object.duplicate", json!({"kind": "slicer", "id": chart})).is_err());
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().charts.len(), 2);
+}
+
 /// `object.setAnchorMode` changes how an object follows its cells.
 #[test]
 fn set_anchor_mode_changes_following() {

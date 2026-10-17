@@ -482,3 +482,133 @@ fn the_cut_text_pastes_again_once_the_clipboard_has_held_other_text() {
     h.run_steps(2);
     assert_eq!(value_at(&h, "H1"), Some(Value::from("Name")), "the same text copied afresh pastes");
 }
+
+#[test]
+fn copy_paste_and_cmd_d_duplicate_the_selected_chart() {
+    // #1563: with a chart selected, Cmd/Ctrl+C copied the cells under the selection and Cmd/Ctrl+V
+    // pasted the clipboard's text into them, so no copy of the chart ever appeared.
+    let (clipboard, services) = system_clipboard("stale text from earlier");
+    let mut h = harness(services);
+    let id = h.state_mut().run("insert.chart", json!({"range": "A1:B2", "at": "D2"})).unwrap()["chart"].as_u64().unwrap() as u32;
+    h.run_steps(2);
+    assert_eq!(h.state().selected_chart, Some(id));
+    let charts = |h: &Harness| h.state().session.active().unwrap().wb.active().unwrap().charts.clone();
+
+    h.input_mut().events.push(Event::Copy);
+    h.step();
+    assert!(!h.output().platform_output.commands.iter().any(|c| matches!(c, OutputCommand::CopyText(_))), "the cells are not copied");
+    assert!(h.state().session.clipboard.is_none());
+    h.input_mut().events.push(Event::Paste("stale text from earlier".into()));
+    h.run_steps(2);
+    let after = charts(&h);
+    assert_eq!(after.len(), 2, "Paste adds a copy of the chart");
+    let (original, pasted) = (&after[0], &after[1]);
+    assert_ne!(pasted.id, original.id);
+    assert_eq!((pasted.kind, &pasted.series, pasted.style), (original.kind, &original.series, original.style), "same chart, same data");
+    assert!(pasted.anchor.dx > original.anchor.dx && pasted.anchor.dy > original.anchor.dy, "the copy is offset from the original");
+    assert_eq!((pasted.anchor.width, pasted.anchor.height), (original.anchor.width, original.anchor.height));
+    assert_eq!(h.state().selected_chart, Some(pasted.id), "the copy is selected");
+    assert_eq!(value_at(&h, "A1"), Some(Value::from("Name")), "the clipboard's text is not pasted into the cells");
+
+    // Cmd/Ctrl+D duplicates the selected chart instead of filling the cells down.
+    h.input_mut().events.push(Event::Key { key: egui::Key::D, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+    h.run_steps(2);
+    assert_eq!(charts(&h).len(), 3);
+    assert_eq!(value_at(&h, "A2"), Some(Value::from("Ada")));
+
+    // Text copied in another app afterwards pastes into the cells, as before.
+    clipboard.borrow_mut().0 = "copied elsewhere".into();
+    h.input_mut().events.push(Event::Paste("copied elsewhere".into()));
+    h.run_steps(2);
+    assert_eq!(charts(&h).len(), 3);
+    assert_eq!(value_at(&h, "A1"), Some(Value::from("copied elsewhere")));
+}
+
+/// A harness with the sample data and a chart over it, selected as after Insert › Chart.
+fn harness_with_chart(services: Services) -> (Harness, u32) {
+    let mut h = harness(services);
+    let id = h.state_mut().run("insert.chart", json!({"range": "A1:B2", "at": "D2"})).unwrap()["chart"].as_u64().unwrap() as u32;
+    h.run_steps(2);
+    (h, id)
+}
+
+fn chart_count(h: &Harness) -> usize {
+    h.state().session.active().unwrap().wb.active().unwrap().charts.len()
+}
+
+fn cmd_key(h: &mut Harness, key: egui::Key, pressed: bool) {
+    h.input_mut().events.push(Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::COMMAND });
+    h.run_steps(2);
+}
+
+#[test]
+fn a_copied_chart_pastes_where_the_system_clipboard_cannot_be_read() {
+    // The web build can't read the clipboard on request, so nothing is known about it at the copy:
+    // the first paste's text is taken as the copy's, and only other text afterwards wins.
+    let (mut h, _) = harness_with_chart(Services::default());
+    h.input_mut().events.push(Event::Copy);
+    h.step();
+    for _ in 0..2 {
+        h.input_mut().events.push(Event::Paste("older text".into()));
+        h.run_steps(2);
+    }
+    assert_eq!(chart_count(&h), 3);
+    assert_eq!(value_at(&h, "A1"), Some(Value::from("Name")));
+    h.input_mut().events.push(Event::Paste("copied elsewhere".into()));
+    h.run_steps(2);
+    assert_eq!(chart_count(&h), 3);
+    assert_eq!(value_at(&h, "A1"), Some(Value::from("copied elsewhere")));
+}
+
+#[test]
+fn a_copied_chart_pastes_when_the_system_clipboard_holds_no_text() {
+    // With no text on the clipboard egui-winit sends no Paste event for Cmd/Ctrl+V, and the key
+    // press itself is swallowed: only the key's release arrives.
+    let (clipboard, services) = system_clipboard("");
+    let (mut h, _) = harness_with_chart(services);
+    h.input_mut().events.push(Event::Copy);
+    h.step();
+    cmd_key(&mut h, egui::Key::V, false);
+    assert_eq!(chart_count(&h), 2);
+
+    // When a Paste event came with the key, its release doesn't paste a second time.
+    clipboard.borrow_mut().0 = "older text".into();
+    h.input_mut().events.push(Event::Copy);
+    h.step();
+    h.input_mut().events.push(Event::Paste("older text".into()));
+    h.run_steps(2);
+    cmd_key(&mut h, egui::Key::V, false);
+    assert_eq!(chart_count(&h), 3);
+}
+
+#[test]
+fn moving_in_the_grid_deselects_the_chart_so_copy_and_fill_down_act_on_cells() {
+    let (mut h, id) = harness_with_chart(Services::default());
+    assert_eq!(h.state().selected_chart, Some(id));
+    h.input_mut().events.push(Event::Key { key: egui::Key::ArrowDown, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(h.state().selected_chart, None, "the arrow moved the cell cursor");
+    h.state_mut().run("selection.set", json!({"range": "A1:A2"})).unwrap();
+    cmd_key(&mut h, egui::Key::D, true);
+    assert_eq!(chart_count(&h), 1);
+    assert_eq!(value_at(&h, "A2"), Some(Value::from("Name")), "Cmd/Ctrl+D fills down");
+
+    // Typing into a cell deselects it too.
+    h.state_mut().selected_chart = Some(id);
+    h.input_mut().events.push(Event::Text("7".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().selected_chart, None);
+}
+
+#[test]
+fn pasting_a_copied_chart_that_was_deleted_pastes_the_text_instead() {
+    let (mut h, id) = harness_with_chart(Services::default());
+    h.input_mut().events.push(Event::Copy);
+    h.step();
+    h.state_mut().run("object.delete", json!({"kind": "chart", "id": id})).unwrap();
+    h.input_mut().events.push(Event::Paste("older text".into()));
+    h.run_steps(2);
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    assert_eq!(chart_count(&h), 0);
+    assert_eq!(value_at(&h, "A1"), Some(Value::from("older text")));
+}

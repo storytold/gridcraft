@@ -262,7 +262,25 @@ pub struct SheetApp {
     /// text noted for an unpublished cut); `None` after a copy, or once the clipboard is seen
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
+    /// The chart, picture or shape last copied with Cmd/Ctrl+C (see [`SheetApp::paste_copied_object`]).
+    copied_object: Option<CopiedObject>,
+    /// A Paste event arrived since Cmd/Ctrl+V was last released (see [`SheetApp::paste_key_released`]).
+    pub(crate) paste_seen: bool,
     pub started: f64,
+}
+
+/// A floating object copied with Cmd/Ctrl+C. GridCraft has no picture of it to publish, so the
+/// system clipboard is left alone and its text at the copy is noted: while it still holds that
+/// text, Paste pastes the object.
+struct CopiedObject {
+    doc: usize,
+    sheet: usize,
+    kind: &'static str,
+    id: u32,
+    /// The system clipboard's text at the copy (`None`: no text). Unknown (outer `None`) where
+    /// the clipboard can't be read on request (web): the first paste's text is taken as it.
+    clipboard_text: Option<Option<String>>,
+    pastes: u32,
 }
 
 impl SheetApp {
@@ -305,6 +323,8 @@ impl SheetApp {
             selected_chart: None,
             clipboard_text_at_copy: None,
             cut_text: None,
+            copied_object: None,
+            paste_seen: false,
             started: now_ms(),
         }
     }
@@ -406,6 +426,7 @@ impl SheetApp {
             Err(e) => return self.alert(e),
         };
         let Some(text) = result.get("text").and_then(Json::as_str) else { return };
+        self.copied_object = None;
         // The system clipboard gets this copy, so its text decides what Paste pastes.
         self.clipboard_text_at_copy = None;
         self.cut_text = (command == "edit.cut").then(|| text.replace("\r\n", "\n"));
@@ -418,6 +439,70 @@ impl SheetApp {
             }
         }
         ctx.copy_text(text.to_string());
+    }
+
+    /// Cmd/Ctrl+C with a chart, picture or shape selected copies the object, not the cells, and
+    /// ends the cells' copy mode, as in Excel.
+    pub(crate) fn copy_object(&mut self, kind: &'static str, id: u32) {
+        let Some(sheet) = self.session.active().map(|d| d.wb.active_sheet) else { return };
+        self.session.clipboard = None;
+        let clipboard_text = self.services.paste_text.is_some().then(|| self.system_clipboard_text());
+        self.copied_object = Some(CopiedObject { doc: self.session.active_index(), sheet, kind, id, clipboard_text, pastes: 0 });
+    }
+
+    /// Paste after [`SheetApp::copy_object`]: while the system clipboard still holds `text` (its
+    /// text at the copy), the object is duplicated on its sheet, each paste a step further from
+    /// the original, and the copy is selected. `false` when there is nothing to paste this way:
+    /// other text was copied since (the object copy is then forgotten), or another sheet is active.
+    pub(crate) fn paste_copied_object(&mut self, text: Option<&str>) -> bool {
+        let Some(copied) = &mut self.copied_object else { return false };
+        if copied.clipboard_text.is_none()
+            && let Some(text) = text
+        {
+            copied.clipboard_text = Some(Some(text.to_string()));
+        }
+        let same_text = match &copied.clipboard_text {
+            None => true,
+            Some(None) => text.is_none(),
+            Some(Some(at_copy)) => Self::same_clipboard_text(text, Some(at_copy)),
+        };
+        if !same_text {
+            self.copied_object = None;
+            return false;
+        }
+        let here = self.session.active().map(|d| (self.session.active_index(), d.wb.active_sheet));
+        if here != Some((copied.doc, copied.sheet)) {
+            return false;
+        }
+        let step = gridcraft_engine::cmd::insert::DUPLICATE_OFFSET * copied.pastes.saturating_add(1) as f32;
+        let params = json!({"kind": copied.kind, "id": copied.id, "dx": step, "dy": step});
+        // The object is gone (deleted, or undone): forget it and let the text paste.
+        let Ok(id) = self.duplicate_object(params) else {
+            self.copied_object = None;
+            return false;
+        };
+        self.selected_chart = Some(id);
+        if let Some(copied) = &mut self.copied_object {
+            copied.pastes = copied.pastes.saturating_add(1);
+        }
+        true
+    }
+
+    /// Runs `object.duplicate` and selects the copy.
+    pub(crate) fn duplicate_object(&mut self, params: Json) -> Result<u32, String> {
+        let r = self.run("object.duplicate", params)?;
+        let id = r.get("id").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok()).ok_or_else(|| "no copy was made".to_string())?;
+        self.selected_chart = Some(id);
+        Ok(id)
+    }
+
+    /// The release of Cmd/Ctrl+V. With no text on the system clipboard egui-winit sends neither a
+    /// Paste event nor the key press, so a release that no Paste event came before is the only
+    /// sign of that paste: a copied object is pasted then.
+    pub(crate) fn paste_key_released(&mut self) {
+        if !std::mem::take(&mut self.paste_seen) {
+            self.paste_copied_object(None);
+        }
     }
 
     /// Paste text that came from the system clipboard (Cmd/Ctrl+V, or the ribbon and menu Paste),
@@ -447,7 +532,11 @@ impl SheetApp {
     /// text there, no host clipboard (web), or the text that was there when GridCraft last copied
     /// without publishing, GridCraft's own clipboard is pasted.
     pub fn paste_from_clipboard(&mut self) {
-        match self.system_clipboard_text() {
+        let text = self.system_clipboard_text();
+        if self.paste_copied_object(text.as_deref()) {
+            return;
+        }
+        match text {
             Some(text) if self.session.clipboard.is_none() || self.clipboard_text_at_copy.as_ref() != Some(&text) => self.paste_external(text),
             _ => self.run_or_alert("edit.paste", json!({})),
         }
@@ -534,7 +623,7 @@ impl SheetApp {
     }
 
     /// Shows a command error: a toast for an unavailable command, else a message box.
-    fn alert(&mut self, e: String) {
+    pub(crate) fn alert(&mut self, e: String) {
         if e.contains("is not available right now") {
             self.toast = Some((e, now_ms()));
         } else {
@@ -867,6 +956,7 @@ impl SheetApp {
             self.message = Some(("Text Box".into(), clean_error(&e)));
             return;
         }
+        self.selected_chart = None;
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);

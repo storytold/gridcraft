@@ -2508,8 +2508,9 @@ fn object_anchor(sh: &Sheet, kind: &str, id: u32) -> Option<gridcraft_engine::mo
     }
 }
 
-fn delete_selected_object(app: &mut SheetApp, sh: &Sheet) -> bool {
-    let Some(id) = app.selected_chart else { return false };
+/// The selected chart, picture or shape, by kind and id, while it is still on the sheet.
+fn selected_object(app: &SheetApp, sh: &Sheet) -> Option<(&'static str, u32)> {
+    let id = app.selected_chart?;
     let kind = if sh.charts.iter().any(|object| object.id == id) {
         "chart"
     } else if sh.images.iter().any(|object| object.id == id) {
@@ -2517,8 +2518,13 @@ fn delete_selected_object(app: &mut SheetApp, sh: &Sheet) -> bool {
     } else if sh.shapes.iter().any(|object| object.id == id) {
         "shape"
     } else {
-        return false;
+        return None;
     };
+    Some((kind, id))
+}
+
+fn delete_selected_object(app: &mut SheetApp, sh: &Sheet) -> bool {
+    let Some((kind, id)) = selected_object(app, sh) else { return false };
     app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
     app.selected_chart = None;
     true
@@ -2591,15 +2597,22 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
             if !m.alt && (m.ctrl || m.command || (m.shift && *key == egui::Key::Space)))
     });
     let page = ((geo.cells.height() / geo.z) / sh.default_row_height).floor().max(1.0) as i64;
+    let selection_before = app.session.active().map(|d| d.selection.clone());
     for ev in events {
         match ev {
-            egui::Event::Copy => {
-                app.copy_to_clipboard(ctx, "edit.copy");
-            }
+            egui::Event::Copy => match selected_object(app, sh) {
+                Some((kind, id)) => app.copy_object(kind, id),
+                None => app.copy_to_clipboard(ctx, "edit.copy"),
+            },
             egui::Event::Cut => {
                 app.copy_to_clipboard(ctx, "edit.cut");
             }
-            egui::Event::Paste(text) => app.paste_external(text),
+            egui::Event::Paste(text) => {
+                app.paste_seen = true;
+                if !app.paste_copied_object(Some(&text)) {
+                    app.paste_external(text);
+                }
+            }
             egui::Event::Text(_) if shortcut_pressed => {}
             egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
                 app.begin_edit(Some(text), false);
@@ -2610,6 +2623,17 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
+                // Excel: Cmd/Ctrl+D duplicates the selected object instead of filling down.
+                if key == Key::D
+                    && m.command
+                    && !m.shift
+                    && let Some((kind, id)) = selected_object(app, sh)
+                {
+                    if let Err(e) = app.duplicate_object(json!({"kind": kind, "id": id})) {
+                        app.alert(e);
+                    }
+                    continue;
+                }
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
                     continue;
                 }
@@ -2685,8 +2709,13 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                     _ => {}
                 }
             }
+            egui::Event::Key { key: egui::Key::V, pressed: false, modifiers: m, .. } if m.command => app.paste_key_released(),
             _ => {}
         }
+    }
+    // Moving the cell cursor by keyboard leaves the object: Copy and Cmd/Ctrl+D act on cells again.
+    if app.session.active().map(|d| &d.selection) != selection_before.as_ref() {
+        app.selected_chart = None;
     }
 }
 
