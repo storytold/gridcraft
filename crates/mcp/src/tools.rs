@@ -17,8 +17,10 @@ impl ToolResult {
     pub fn text(t: impl Into<String>) -> Self {
         Self { content: vec![json!({"type": "text", "text": t.into()})], is_error: false }
     }
+    /// A JSON result as compact text: indenting put every cell of a `read_range` on its own line
+    /// and about doubled the size of a reply an agent has to read.
     pub fn json(v: &Value) -> Self {
-        Self::text(serde_json::to_string_pretty(v).unwrap_or_default())
+        Self::text(serde_json::to_string(v).unwrap_or_default())
     }
     pub fn error(t: impl Into<String>) -> Self {
         Self { content: vec![json!({"type": "text", "text": t.into()})], is_error: true }
@@ -27,6 +29,10 @@ impl ToolResult {
         json!({"content": self.content, "isError": self.is_error})
     }
 }
+
+/// Cells `read_range` returns per call unless asked otherwise: whole rows, so that a long export
+/// comes in pages an agent can hold rather than one reply of megabytes.
+const READ_RANGE_MAX_CELLS: u32 = 5_000;
 
 // ---------- schemas ----------
 
@@ -147,13 +153,16 @@ pub fn tool_definitions() -> Vec<Value> {
             "Read range",
             "Read cell values from a range as rows (2-D array). Numbers/booleans/strings are returned as JSON values, empty cells as \
              null, errors as {\"error\":\"#DIV/0!\"}. Without `range`, reads the sheet's used range. formulas:true returns formula \
-             text (\"=SUM(B2:B4)\") for formula cells; formatted:true returns the displayed text (\"$1,234.00\", \"12%\").",
+             text (\"=SUM(B2:B4)\") for formula cells; formatted:true returns the displayed text (\"$1,234.00\", \"12%\"). \
+             One call returns whole rows up to maxCells cells (default 5000): a longer range comes back with \"truncated\": true, \
+             \"totalRows\" and \"next\", the range of the remaining rows, to pass as `range` in the next call.",
             obj(
                 json!({
                     "range": string(RANGE),
                     "sheet": string("Sheet name (default: the active sheet)"),
                     "formulas": boolean("Return formulas instead of computed values for formula cells"),
                     "formatted": boolean("Return display text with number formats applied"),
+                    "maxCells": {"type": "integer", "minimum": 1, "description": "Most cells per call, a positive integer, in whole rows (default 5000)"},
                 }),
                 &[],
             ),
@@ -608,7 +617,13 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<Value, String> 
         }
         "list_commands" => b.call("engine.commands", pick(a, &["search"])),
         "inspect_workbook" => b.call("document.inspect", json!({})),
-        "read_range" => b.call("sheet.read", pick(a, &["range", "sheet", "formulas", "formatted"])),
+        "read_range" => {
+            let mut p = pick(a, &["range", "sheet", "formulas", "formatted", "maxCells"]);
+            if let Some(o) = p.as_object_mut() {
+                o.entry("maxCells").or_insert(json!(READ_RANGE_MAX_CELLS));
+            }
+            b.call("sheet.read", p)
+        }
         "write_range" => exec(b, "range.setValues", pick(a, &["range", "values"])),
         "set_cell" => exec(b, "cell.set", pick(a, &["cell", "input"])),
         "get_cell" => exec(b, "cell.get", pick(a, &["cell"])),

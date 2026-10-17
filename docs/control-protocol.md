@@ -27,7 +27,7 @@ connection; nothing sent after it runs. Blank lines are skipped.
 | `engine.commands` | `{search?}` | Every command: id, label, ribbon path, shortcut, params doc, enabled; `search` keeps those whose id, label or ribbon path contains it (case-insensitive) |
 | `engine.journal` | | Commands run so far (replayable). Passwords (`password`, `…Password` params) are left out, so a replayed Protect Sheet has no password |
 | `document.inspect` | | Workbook summary: sheets, used ranges, tables, charts, names, selection, undo labels |
-| `sheet.read` | `{range?, sheet?, formulas?, formatted?}` | Values (or formulas / displayed text) of a range |
+| `sheet.read` | `{range?, sheet?, formulas?, formatted?, maxCells?}` | Values (or formulas / displayed text) of a range; with a positive integer `maxCells` (zero, negative and non-integer values are rejected), whole rows up to that many cells, plus `truncated`, `totalRows` and `next` when the range is longer |
 | `cell.get` | `{cell?}` | One cell: value, formula, displayed text, style, merge, comment, link |
 | `ui.inspect` | | UI state: ribbon tab, editor, open dialog, Backstage page, message, grid rect, scroll, perf |
 | `ui.click` / `ui.drag` / `ui.move` | `{x, y, toX?, toY?, button?, count?, shift?, cmd?, alt?}` | Real pointer input in window points |

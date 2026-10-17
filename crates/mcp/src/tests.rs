@@ -219,6 +219,55 @@ fn basic_tools() {
     assert!(info["sheets"][0]["cells"].as_u64().unwrap() > 10, "{info}");
 }
 
+/// A long range comes back in pages of whole rows (5,000 cells unless `maxCells` says otherwise),
+/// each saying where the next one starts, instead of one reply of megabytes.
+#[test]
+fn read_range_pages_long_ranges() {
+    let mut s = server();
+    let rows: Vec<Value> = (1..=2000).map(|i| json!([i, i * 2, "x"])).collect();
+    ok(&mut s, "write_range", json!({"range": "A1", "values": rows}));
+    let page = ok(&mut s, "read_range", json!({}));
+    assert_eq!((page["range"].clone(), page["truncated"].clone(), page["totalRows"].clone()), (json!("A1:C1666"), json!(true), json!(2000)));
+    assert_eq!(page["values"].as_array().map(Vec::len), Some(1666));
+    assert_eq!(page["next"], "Sheet1!A1667:C2000");
+    let rest = ok(&mut s, "read_range", json!({"range": page["next"]}));
+    assert_eq!((rest["range"].clone(), rest.get("truncated")), (json!("A1667:C2000"), None));
+    assert_eq!(rest["values"][333], json!([2000.0, 4000.0, "x"]));
+    let all = ok(&mut s, "read_range", json!({"maxCells": 6000}));
+    assert_eq!((all["range"].clone(), all.get("next")), (json!("A1:C2000"), None));
+}
+
+#[test]
+fn read_range_rejects_invalid_max_cells() {
+    let mut s = server();
+    let rows: Vec<Value> = (1..=2000).map(|i| json!([i, i * 2, "x"])).collect();
+    ok(&mut s, "write_range", json!({"range": "A1", "values": rows}));
+    let page = ok(&mut s, "read_range", json!({}));
+    assert_eq!(page["values"].as_array().map(Vec::len), Some(1666));
+    assert_eq!(page["truncated"], true);
+    for value in [json!(-1), json!(0), json!(-10)] {
+        let error = fails(&mut s, "read_range", json!({"maxCells": value}));
+        assert!(error.contains("maxCells must be a positive integer"), "{value}: {error}");
+    }
+    for value in [json!(1.5), json!("5000"), json!(null), json!(true)] {
+        let reply = rpc(&mut s, 99, "tools/call", json!({"name": "read_range", "arguments": {"maxCells": value}}));
+        assert_eq!(err_code(&reply), -32602, "{value}: {reply}");
+    }
+    let page = ok(&mut s, "read_range", json!({"maxCells": 1}));
+    assert_eq!(page["range"], "A1:C1");
+    assert_eq!(page["truncated"], true);
+}
+
+/// Tool results are compact JSON: indented, every cell of a range read took a line of its own.
+#[test]
+fn tool_results_are_compact_json() {
+    let mut s = server();
+    ok(&mut s, "write_range", json!({"range": "A1", "values": [[1, "a"], [2, "b"]]}));
+    let text = text_of(&call(&mut s, "read_range", json!({"range": "A1:B2"})));
+    assert!(!text.contains('\n'), "{text}");
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["values"], json!([[1.0, "a"], [2.0, "b"]]));
+}
+
 #[test]
 fn sort_and_filter() {
     let mut s = server();
