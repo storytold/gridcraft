@@ -185,9 +185,10 @@ impl From<Array> for Value {
 }
 
 impl Value {
-    /// A number, or `#NUM!` when it is NaN or infinite (Excel never stores those).
+    /// A number, or `#NUM!` when it is NaN or infinite (Excel never stores those). A subnormal
+    /// (below 2.2250738585072014e-308 in size) is 0, as Excel holds it (suite R3: `2^-1074` is 0).
     pub fn number(v: f64) -> Value {
-        if v.is_finite() { Value::Number(if v == 0.0 { 0.0 } else { v }) } else { Value::Error(CellError::Num) }
+        if v.is_finite() { Value::Number(if v.abs() < f64::MIN_POSITIVE { 0.0 } else { v }) } else { Value::Error(CellError::Num) }
     }
     pub fn text(s: impl Into<Arc<str>>) -> Value {
         Value::Text(s.into())

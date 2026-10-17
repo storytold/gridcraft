@@ -52,8 +52,10 @@ fn clean(x: f64) -> f64 {
     to_sig_digits(x, 15)
 }
 
+/// A digits argument: rounded to 15 significant digits, then truncated toward 0, so
+/// 2.9999999999999996 is 3 (suite R3), while 1.5 is 1 and -1.5 is -1.
 fn digits_arg(a: &[Arg], i: usize) -> R<i32> {
-    let d = opt_num(a, i, 0.0)?.trunc();
+    let d = clean(opt_num(a, i, 0.0)?).trunc();
     Ok(d.clamp(-400.0, 400.0) as i32)
 }
 
@@ -345,7 +347,16 @@ fn sqrtpi(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     unary(a, |x| if x < 0.0 { Err(CellError::Num) } else { Ok((x * PI).sqrt()) })
 }
 
-fn power_of(x: f64, y: f64) -> R<f64> {
+/// `x^y` as Excel computes it, for both `^` and `POWER` (EXCEL-BEHAVIOUR.md of the Spreadsheet
+/// Accuracy Suite, "Powers", R3 to R5):
+/// - an integer exponent: right-to-left repeated squaring, and `x^-n` is `1/x^n`;
+/// - a positive base to a fractional exponent: `exp(y·ln x)`, `sqrt` at 0.5, `1/exp(-y·ln x)` for y < 0;
+/// - a negative base: a value only when `1/y` is an odd integer (the odd root), else `#NUM!`;
+/// - `0^0` is `#NUM!`, `0^-y` is `#DIV/0!`, and a result past the double range is `#NUM!`.
+pub fn power_of(x: f64, y: f64) -> Result<f64, CellError> {
+    if x.is_nan() || y.is_nan() {
+        return Err(CellError::Num);
+    }
     if x == 0.0 {
         if y == 0.0 {
             return Err(CellError::Num);
@@ -355,11 +366,53 @@ fn power_of(x: f64, y: f64) -> R<f64> {
         }
         return Ok(0.0);
     }
-    if x < 0.0 && y.fract() != 0.0 {
-        return Err(CellError::Num);
-    }
-    let r = x.powf(y);
+    let r = if y.fract() == 0.0 {
+        if y.abs() <= 9_007_199_254_740_992.0 {
+            // |y| is at most 2^53, so it converts to u64 exactly.
+            let up = squaring(x, y.abs() as u64);
+            if y < 0.0 { 1.0 / up } else { up }
+        } else {
+            // Past 2^53 every result overflows or underflows; powf keeps an even power's sign.
+            x.powf(y)
+        }
+    } else if x > 0.0 {
+        fractional_power(x, y)
+    } else {
+        let root = 1.0 / y;
+        if root.fract() != 0.0 || root.abs() > 9_007_199_254_740_992.0 || (root.abs() as u64).is_multiple_of(2) {
+            return Err(CellError::Num);
+        }
+        -fractional_power(-x, y)
+    };
     if r.is_finite() { Ok(r) } else { Err(CellError::Num) }
+}
+
+/// `x^n` by right-to-left binary exponentiation: Excel's integer power, bit for bit.
+fn squaring(x: f64, mut n: u64) -> f64 {
+    let (mut result, mut base) = (1.0, x);
+    while n > 0 {
+        if n & 1 == 1 {
+            result *= base;
+        }
+        n >>= 1;
+        if n > 0 {
+            base *= base;
+        }
+    }
+    result
+}
+
+/// `x^y` for x > 0 and a fractional y, as Excel forms it.
+fn fractional_power(x: f64, y: f64) -> f64 {
+    if y == 0.5 {
+        x.sqrt()
+    } else if y == -0.5 {
+        1.0 / x.sqrt()
+    } else if y < 0.0 {
+        1.0 / (-y * x.ln()).exp()
+    } else {
+        (y * x.ln()).exp()
+    }
 }
 fn power(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(power_of(num(a, 0)?, num(a, 1)?)?)
@@ -1464,7 +1517,10 @@ mod tests {
         close(ev2("POWER", -2.0, 3.0), -8.0);
         is_err(ev2("POWER", 0.0, 0.0), Num);
         is_err(ev2("POWER", 0.0, -1.0), Div0);
-        is_err(ev2("POWER", -8.0, 1.0 / 3.0), Num);
+        // An odd root of a negative base has a value; an even root does not (Windows Excel 16.0.20430).
+        close(ev2("POWER", -8.0, 1.0 / 3.0), -2.0);
+        is_err(ev2("POWER", -8.0, 0.5), Num);
+        close(ev2("POWER", -0.5, 1e17), 0.0);
         is_err(ev2("POWER", 10.0, 400.0), Num);
         close(ev1("EXP", 1.0), std::f64::consts::E);
         close(ev2("LOG", 8.0, 2.0), 3.0);

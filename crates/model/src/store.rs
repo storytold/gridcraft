@@ -46,8 +46,15 @@ impl CellStore {
         }
         Arc::make_mut(band).rows.get_mut(&c.row)?.get_mut(&c.col)
     }
-    /// Stores a cell; a default (empty, unstyled) cell is removed instead.
-    pub fn set(&mut self, c: CellRef, cell: Cell) {
+    /// Stores a cell; a default (empty, unstyled) cell is removed instead. A subnormal number is
+    /// stored as 0: Excel reads one from a file, or takes one typed, as 0 (suite R3).
+    pub fn set(&mut self, c: CellRef, mut cell: Cell) {
+        if let gridcraft_core::Value::Number(n) = cell.value
+            && n != 0.0
+            && n.abs() < f64::MIN_POSITIVE
+        {
+            cell.value = gridcraft_core::Value::Number(0.0);
+        }
         if cell.is_blank() {
             self.remove(c);
             return;

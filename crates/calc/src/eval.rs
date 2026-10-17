@@ -1601,7 +1601,8 @@ fn map_unary(v: &Value, f: &dyn Fn(f64) -> Value, plus: bool, sys: gridcraft_cor
     match v {
         Value::Array(a) => Value::from(Array { rows: a.rows, cols: a.cols, data: a.data.iter().map(|x| map_unary(x, f, plus, sys)).collect() }),
         Value::Error(e) => Value::Error(*e),
-        Value::Text(_) if plus => v.clone(),
+        // Unary plus changes nothing: `=+"abc"` is text and `=+TRUE` stays a logical (suite R3).
+        Value::Text(_) | Value::Bool(_) if plus => v.clone(),
         other => match other.to_number_in(sys) {
             Ok(n) => f(n),
             Err(e) => Value::Error(e),
@@ -1676,14 +1677,9 @@ fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSyste
         BinOp::Sub => num(|x, y| Value::number(x - y)),
         BinOp::Mul => num(|x, y| Value::number(x * y)),
         BinOp::Div => num(|x, y| if y == 0.0 { Value::Error(CellError::Div0) } else { Value::number(x / y) }),
-        BinOp::Pow => num(|x, y| {
-            if x == 0.0 && y == 0.0 {
-                Value::Error(CellError::Num)
-            } else if x == 0.0 && y < 0.0 {
-                Value::Error(CellError::Div0)
-            } else {
-                Value::number(x.powf(y))
-            }
+        BinOp::Pow => num(|x, y| match gridcraft_functions::power_of(x, y) {
+            Ok(r) => Value::number(r),
+            Err(e) => Value::Error(e),
         }),
         BinOp::Concat => match (a.to_text(), b.to_text()) {
             (Ok(x), Ok(y)) => {

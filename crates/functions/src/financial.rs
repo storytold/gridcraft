@@ -17,8 +17,11 @@ fn pmt_calc(rate: f64, nper: f64, pv: f64, fv: f64, typ: f64) -> f64 {
     if rate == 0.0 {
         return -(pv + fv) / nper;
     }
-    let p = (1.0 + rate).powf(nper);
-    -(rate * (fv + pv * p)) / ((1.0 + rate * typ) * (p - 1.0))
+    // (1+rate)^nper and (1+rate)^nper - 1 through ln_1p and exp_m1: forming 1+rate first loses a
+    // tiny rate's digits (rate 1e-9 is only 7 digits right), and Excel's PMT keeps them
+    // (suite pmt.00051 to 00060: PMT(1E-9,360,100000) is -277.7778279166697).
+    let l = nper * rate.ln_1p();
+    -(rate * (fv + pv * l.exp())) / ((1.0 + rate * typ) * l.exp_m1())
 }
 
 fn fv_calc(rate: f64, nper: f64, pmt: f64, pv: f64, typ: f64) -> f64 {

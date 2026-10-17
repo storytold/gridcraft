@@ -1266,3 +1266,98 @@ fn offset_extreme_arguments_return_ref() {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
     }
 }
+
+// ---- Excel's arithmetic edge cases (Spreadsheet Accuracy Suite, formula golden; Excel-observed values) ----
+
+#[test]
+fn integer_powers_use_repeated_squaring() {
+    // power-squaring.00001: pow() gives -0.006220264508449702, 3.6e-12 away.
+    let mut t = T::new();
+    t.set("A1", "-5.183701543715069e-06");
+    t.set("B1", "=((1+A1)^12-1)*100");
+    t.set("B2", "=(POWER(1+A1,12)-1)*100");
+    assert_eq!(t.get("B1"), Value::Number(-0.006220264508471907));
+    assert_eq!(t.get("B2"), Value::Number(-0.006220264508471907));
+}
+
+#[test]
+fn fractional_powers_follow_excel_forms() {
+    let mut t = T::new();
+    // A negative base has a value only for an odd root (excel-probe.00144, 00152); an even root is #NUM!.
+    t.set("A1", "-8");
+    t.set("A2", "0.3333333333333333");
+    t.set("A3", "-32");
+    t.set("A4", "0.2");
+    t.set("B1", "=A1^A2");
+    t.set("B2", "=A3^A4");
+    t.set("B3", "=A1^0.5");
+    t.set("B4", "=A1^0.25");
+    assert_eq!(t.get("B1"), Value::Number(-1.9999999999999998));
+    assert_eq!(t.get("B2"), Value::Number(-2.0));
+    assert_eq!(t.get("B3"), Value::Error(CellError::Num));
+    assert_eq!(t.get("B4"), Value::Error(CellError::Num));
+    // A positive base: x^-0.5 is 1/sqrt(x) (excel-probe-4.00012).
+    t.set("B5", "=3^-0.5");
+    assert_eq!(t.get("B5"), Value::Number(0.5773502691896258));
+    // 0^0 and 0^-1 keep their errors.
+    t.set("B6", "=0^0");
+    t.set("B7", "=0^-1");
+    assert_eq!(t.get("B6"), Value::Error(CellError::Num));
+    assert_eq!(t.get("B7"), Value::Error(CellError::Div0));
+}
+
+#[test]
+fn a_subnormal_number_is_zero() {
+    // out-of-range.00001 to 00009, power.00021: Excel holds no number below 2.2250738585072014e-308.
+    let mut t = T::new();
+    t.set("A1", "1e-310");
+    t.set("A2", "2.2250738585072e-308");
+    t.set("B1", "=IF(A1>0,1,2)");
+    t.set("B2", "=IF(A2>0,1,2)");
+    t.set("B3", "=SUM(A1:A2)*2");
+    t.set("B4", "=2^-1074");
+    assert_eq!(t.get("A1"), Value::Number(0.0));
+    assert_eq!(t.num("B1"), 2.0);
+    assert_eq!(t.num("B2"), 2.0);
+    assert_eq!(t.get("B3"), Value::Number(0.0));
+    assert_eq!(t.get("B4"), Value::Number(0.0));
+}
+
+#[test]
+fn unary_plus_keeps_a_logical() {
+    // logical.00008, logical-cell.00005 and 00021: =+TRUE is TRUE, not 1; unary minus still converts.
+    let mut t = T::new();
+    t.set("A1", "TRUE");
+    t.set("B1", "=+TRUE");
+    t.set("B2", "=+A1");
+    t.set("B3", "=-A1");
+    assert_eq!(t.get("B1"), Value::Bool(true));
+    assert_eq!(t.get("B2"), Value::Bool(true));
+    assert_eq!(t.get("B3"), Value::Number(-1.0));
+}
+
+#[test]
+fn round_digits_are_rounded_to_fifteen_digits_before_truncating() {
+    // excel-probe.00286 and 00292: 2.9999999999999996 digits is 3 digits, not 2.
+    let mut t = T::new();
+    t.set("A1", "2.9999999999999996");
+    t.set("B1", "=ROUND(1234.5678,A1)");
+    t.set("B2", "=ROUND(0.125,A1)");
+    t.set("B3", "=ROUND(1234.5678,1.5)");
+    assert_eq!(t.get("B1"), Value::Number(1234.568));
+    assert_eq!(t.get("B2"), Value::Number(0.125));
+    assert_eq!(t.get("B3"), Value::Number(1234.6));
+}
+
+#[test]
+fn pmt_keeps_a_tiny_rate_s_digits() {
+    // pmt.00051 and 00052: forming 1+rate first gives -277.7778049371228.
+    let mut t = T::new();
+    t.set("B1", "=PMT(1E-9,360,100000)");
+    t.set("B2", "=PMT(1E-9,360,-100000)");
+    assert_eq!(t.get("B1"), Value::Number(-277.7778279166697));
+    assert_eq!(t.get("B2"), Value::Number(277.7778279166697));
+    // A zero rate is still the plain division.
+    t.set("B3", "=PMT(0,10,1000)");
+    assert_eq!(t.get("B3"), Value::Number(-100.0));
+}
