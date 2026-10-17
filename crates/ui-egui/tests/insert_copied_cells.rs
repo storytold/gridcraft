@@ -58,3 +58,34 @@ fn row_header_menu_inserts_copied_rows() {
     assert_eq!(value(&h, "A4"), Value::Number(3.0));
     assert_eq!(value(&h, "A5"), Value::Number(4.0));
 }
+
+fn right_click_col_header(h: &mut Harness, cell: &str) {
+    let app = h.state();
+    let sh = app.session.active().unwrap().wb.active().unwrap();
+    let geo = grid::Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
+    let x = geo.cell_rect(sh, CellRef::parse(cell).unwrap()).center().x;
+    let pos = pos2(x, (geo.rect.top() + geo.cells.top()) / 2.0);
+    h.input_mut().events.push(Event::PointerMoved(pos));
+    h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+/// As in Excel, the row and column header menus offer Format Cells… for the selected lines.
+#[test]
+fn header_menus_open_format_cells() {
+    for rows in [true, false] {
+        let mut h = harness();
+        if rows {
+            right_click_row_header(&mut h, "A3");
+        } else {
+            right_click_col_header(&mut h, "B1");
+        }
+        h.get_by_label("Format Cells…").click();
+        h.run_steps(2);
+        let app = h.state();
+        assert_eq!(app.dialog.as_ref().map(|d| d.name()), Some("formatCells"), "rows: {rows}");
+        let sel = app.session.active().unwrap().selection.a1();
+        assert_eq!(sel, if rows { "3:3" } else { "B:B" });
+    }
+}
