@@ -590,3 +590,55 @@ fn data_on_rows_with_one_value_field_reads_without_warning() {
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert!(back.sheet(0).unwrap().pivots[0].values_on_rows);
 }
+
+/// A one-sheet-of-data workbook with a pivot on "Report": `columns` are the source columns
+/// (header, values), `pt` the pivot built on `Data!A1:<last>`.
+fn small_pivot(columns: &[(&str, Vec<Value>)], pt: impl FnOnce(&mut PivotTable)) -> HashMap<String, String> {
+    let mut wb = Workbook::new();
+    let data = wb.sheet_mut(0).unwrap();
+    data.name = "Data".into();
+    let mut rows = 0;
+    for (c, (h, vals)) in columns.iter().enumerate() {
+        data.cells.set(CellRef::new(0, c as u32), Cell::value(Value::text(*h)));
+        for (r, v) in vals.iter().enumerate() {
+            if *v != Value::Empty {
+                data.cells.set(CellRef::new(r as u32 + 1, c as u32), Cell::value(v.clone()));
+            }
+        }
+        rows = rows.max(vals.len());
+    }
+    let last = format!("{}{}", gridcraft_core::col_to_letters(columns.len() as u32 - 1), rows + 1);
+    let mut table = PivotTable { id: 1, name: "PT".into(), source: format!("Data!$A$1:{last}"), anchor: at("A3"), ..PivotTable::default() };
+    pt(&mut table);
+    let mut report = Sheet::new("Report");
+    report.pivots = vec![table];
+    wb.sheets.push(Arc::new(report));
+    unzip(&write_xlsx(&wb).unwrap()).into_iter().map(|(k, v)| (k, String::from_utf8_lossy(&v).into_owned())).collect()
+}
+
+fn shared_items_tag(cache: &str, field: &str) -> String {
+    let start = cache.find(&format!("<cacheField name=\"{field}\"")).unwrap();
+    let rest = &cache[start..];
+    let s = rest.find("<sharedItems").unwrap();
+    rest[s..s + rest[s..].find('>').unwrap() + 1].to_string()
+}
+
+/// #1447: a date group with a blank date keeps `containsSemiMixedTypes` off the flags.
+#[test]
+fn date_group_flags_with_and_without_a_blank() {
+    for blank in [false, true] {
+        let mut d = vec![Value::number(date(2023, 1, 15)), Value::number(date(2023, 2, 1)), Value::number(date(2023, 8, 1))];
+        if blank {
+            d.push(Value::Empty);
+        }
+        let sales: Vec<Value> = (0..d.len()).map(|i| Value::number(i as f64 + 1.0)).collect();
+        let parts = small_pivot(&[("Date", d), ("Sales", sales)], |p| {
+            p.rows = vec![PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Days, ..PivotField::default() }];
+            p.values = vec![PivotValue { source_col: "Sales".into(), name: "Sum of Sales".into(), ..PivotValue::default() }];
+        });
+        let tag = shared_items_tag(&parts["xl/pivotCache/pivotCacheDefinition1.xml"], "Date");
+        assert_eq!(tag.contains("containsSemiMixedTypes=\"0\""), !blank, "{tag}");
+        assert!(tag.contains("containsNonDate=\"0\" containsDate=\"1\" containsString=\"0\""), "{tag}");
+        assert_eq!(tag.contains("containsBlank=\"1\""), blank, "{tag}");
+    }
+}
