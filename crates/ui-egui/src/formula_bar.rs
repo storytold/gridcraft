@@ -291,22 +291,28 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         .show(ui);
     let resp = output.response.clone();
     let synced = mine && (ed.request_focus || ed.sync_caret);
+    let typed_on_entry = mine && ed.request_focus && resp.changed();
     if synced {
-        if ed.request_focus {
+        if ed.request_focus && !resp.has_focus() {
             resp.request_focus();
         }
         ed.request_focus = false;
         ed.sync_caret = false;
-        let cursor = egui::text::CCursor::new(ed.caret);
-        output.state.cursor.set_char_range(Some(egui::text::CCursorRange::one(cursor)));
-        output.state.store(ui.ctx(), id);
+        // Preserve the first event's caret/composition range when the grid already owned focus.
+        if !typed_on_entry {
+            let cursor = egui::text::CCursor::new(ed.caret);
+            output.state.cursor.set_char_range(Some(egui::text::CCursorRange::one(cursor)));
+            output.state.store(ui.ctx(), id);
+        }
     } else if resp.clicked() || resp.gained_focus() {
         // Clicking into the other editor moves editing there.
         ed.from_formula_bar = id == egui::Id::new("gridcraft.formula_bar");
         ed.enter_mode = false;
         app.session.mode = gridcraft_engine::Mode::Edit;
     }
-    if !synced && let Some(r) = output.cursor_range {
+    if (!synced || typed_on_entry)
+        && let Some(r) = output.cursor_range
+    {
         ed.caret = r.primary.index.into();
     }
     if resp.changed() {
