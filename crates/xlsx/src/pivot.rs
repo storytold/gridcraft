@@ -1314,7 +1314,9 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         let Some((name, _)) = field_ref(cx, cache, i) else { continue };
         let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
         let selected = if let Some(k) = p.attr_u32("item") {
-            labels.get(k as usize).map(|l| vec![l.clone()])
+            // `item` indexes the pivot field's <items>, whose `x` is the shared item.
+            let shared = pf(i).and_then(|e| items_of(e).get(k as usize).and_then(|it| it.attr_u32("x"))).unwrap_or(k);
+            labels.get(shared as usize).map(|l| vec![l.clone()])
         } else {
             pf(i).and_then(|e| {
                 let items = items_of(e);

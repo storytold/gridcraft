@@ -590,3 +590,14 @@ fn data_on_rows_with_one_value_field_reads_without_warning() {
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert!(back.sheet(0).unwrap().pivots[0].values_on_rows);
 }
+
+/// #1447: `pageField@item` indexes the pivot field's `<items>`, whose `x` is the shared item.
+#[test]
+fn single_item_report_filter_is_read_through_the_field_items() {
+    let cache = r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:C5"/></cacheSource><cacheFields count="3"><cacheField name="Region"><sharedItems count="3"><s v="North"/><s v="East"/><s v="West"/></sharedItems></cacheField><cacheField name="Sales"><sharedItems/></cacheField><cacheField name="Qty"><sharedItems containsSemiMixedTypes="0" containsString="0" containsNumber="1" containsInteger="1" minValue="1" maxValue="3" count="3"><n v="3"/><n v="1"/><n v="2"/></sharedItems></cacheField></cacheFields></pivotCacheDefinition>"#;
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="A3:B6" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="1" colPageCount="1"/><pivotFields count="3"><pivotField axis="axisRow" showAll="0"><items count="4"><item x="0"/><item x="1"/><item x="2"/><item t="default"/></items></pivotField><pivotField dataField="1" showAll="0"/><pivotField axis="axisPage" showAll="0"><items count="4"><item x="1"/><item x="2"/><item x="0"/><item t="default"/></items></pivotField></pivotFields><rowFields count="1"><field x="0"/></rowFields><pageFields count="1"><pageField fld="2" item="2"/></pageFields><dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields></pivotTableDefinition>"#;
+    let (wb, _) = read_xlsx(&with_pivot(table, Some(cache))).unwrap();
+    let pt = &wb.sheet(0).unwrap().pivots[0];
+    let filter = pt.filters.iter().find(|f| f.source_col == "Qty").expect("Qty report filter");
+    assert_eq!(filter.selected.as_deref(), Some(&["3".to_string()][..]), "item 2 of the field's items is shared item 0, the value 3");
+}
