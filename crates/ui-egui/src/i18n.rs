@@ -13,6 +13,7 @@ mod cs;
 mod de;
 mod es;
 mod fr;
+mod ja;
 mod ko;
 mod pt;
 mod ru;
@@ -120,7 +121,7 @@ impl Language {
         let translated = match self {
             Self::En => None,
             Self::Es => es::translate(text),
-            Self::Ja => JAPANESE.iter().find(|(english, _)| *english == text).map(|(_, translated)| *translated),
+            Self::Ja => ja::translate(text).or_else(|| JAPANESE.iter().find(|(english, _)| *english == text).map(|(_, translated)| *translated)),
             Self::Zh => zh::translate(text),
             Self::Ko => ko::translate(text),
             Self::Ru => ru::translate(text),
@@ -130,7 +131,15 @@ impl Language {
             Self::Fr => fr::translate(text),
             Self::Sr => sr::translate(text),
         };
-        translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+        translated.unwrap_or_else(|| {
+            // Keep the existing Outline wording until each language adds these context keys.
+            // Both aliases end at the plain key, so this fallback is bounded to one extra lookup.
+            if matches!(text, "Format Cells|Outline" | "PivotTable Fields|Outline") {
+                self.tr("Outline")
+            } else {
+                text.rsplit_once('|').map_or(text, |(_, label)| label)
+            }
+        })
     }
 }
 
@@ -645,6 +654,23 @@ mod tests {
         assert_eq!(Language::Sr.tr("Page Layout|Orientation"), "Orijentacija");
         assert_eq!(Language::Sr.tr("Orientation"), "Orijentacija");
         assert_eq!(Language::parse("xx"), None);
+    }
+
+    #[test]
+    fn outline_labels_preserve_context_and_existing_languages() {
+        for language in Language::ALL {
+            let border = language.tr("Format Cells|Outline");
+            let report = language.tr("PivotTable Fields|Outline");
+            if language == Language::Ja {
+                assert_eq!(border, "外枠");
+                assert_eq!(report, "アウトライン形式");
+            } else {
+                assert_eq!(border, language.tr("Outline"));
+                assert_eq!(report, language.tr("Outline"));
+            }
+        }
+        assert_eq!(Language::En.tr("Format Cells|Outline"), "Outline");
+        assert_eq!(Language::En.tr("PivotTable Fields|Outline"), "Outline");
     }
 
     #[test]
