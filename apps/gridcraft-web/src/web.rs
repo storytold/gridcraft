@@ -58,14 +58,20 @@ pub fn start() {
                     ) {
                         app.ui.language = browser;
                     }
+                    // Preferences from an earlier visit (#1562), as the desktop app reads `ui.json`
+                    // and `prefs.json`; a saved language replaces the browser's.
+                    let (stored_ui, stored_prefs) = (stored(crate::prefs::UI_KEY), stored(crate::prefs::PREFS_KEY));
+                    crate::prefs::restore(&mut app, stored_ui.as_deref(), stored_prefs.as_deref());
+                    let mut prefs = crate::prefs::PrefsSync::new(stored_ui, stored_prefs);
                     SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
                     if let Some(bridge) = &app_bridge {
+                        prefs.keep_user_name(app.session.prefs.user_name.clone());
                         if let Some(author) = query_param("author") {
                             crate::host::Bridge::set_author(&mut app, &author);
                         }
                         bridge.post_ready();
                     }
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge }))
+                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, prefs }))
                 }),
             )
             .await;
@@ -93,6 +99,16 @@ struct WebShell {
     app: SheetApp,
     inbox: Inbox,
     bridge: Option<crate::host::Bridge>,
+    prefs: crate::prefs::PrefsSync,
+}
+
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok()?
+}
+
+/// A value stored on an earlier visit, if the browser allows storage.
+fn stored(key: &str) -> Option<String> {
+    local_storage()?.get_item(key).ok()?
 }
 
 impl eframe::App for WebShell {
@@ -113,6 +129,20 @@ impl eframe::App for WebShell {
             });
         }
         self.app.logic(ctx);
+        // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
+        let changed = self.prefs.changed(&self.app);
+        if !changed.is_empty() {
+            match local_storage() {
+                Some(store) => {
+                    for (key, json) in changed {
+                        if let Err(e) = store.set_item(key, &json) {
+                            log::warn!("preferences: cannot save {key}: {e:?}");
+                        }
+                    }
+                }
+                None => log::warn!("preferences: browser storage is unavailable"),
+            }
+        }
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
