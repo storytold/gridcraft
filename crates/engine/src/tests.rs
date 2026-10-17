@@ -2909,6 +2909,38 @@ fn autofill_month_pattern_clamps_to_month_end() {
 }
 
 #[test]
+fn json_import_rebuilds_cell_store_bands_and_counts() {
+    // #1008: the JSON reader trusted serialized band keys and the cached length. A file written
+    // with a cell in the wrong band lost it from lookup, and a forged count underflowed on the
+    // next removal.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A5", "input": "keep"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let mut v: serde_json::Value = serde_json::to_value(&**wb).unwrap();
+    {
+        let cells = v["sheets"][0]["cells"].as_object_mut().unwrap();
+        let bands = cells["bands"].as_object_mut().unwrap();
+        let band = bands.remove("0").expect("the cell is in band 0");
+        let cell = band["rows"]["4"]["0"].clone();
+        // Off-grid rows never belong in a sheet, whatever band holds them.
+        bands.insert("1".into(), band);
+        bands.insert("16384".into(), json!({"rows": {"1048576": {"0": cell}}}));
+        cells.insert("len".into(), json!(0));
+    }
+    let bytes = serde_json::to_vec(&v).unwrap();
+    let (back, warnings) = crate::io::open_bytes("book.json", &bytes).unwrap();
+    let sh = back.active().unwrap();
+    let cell = sh.cell(CellRef::parse("A5").unwrap());
+    assert_eq!(cell.map(|c| c.value.clone()), Some(Value::text("keep")), "the cell is found where its row says");
+    assert_eq!(sh.cells.len(), 1, "the count is rebuilt from the cells");
+    assert!(warnings.iter().any(|w| w.contains("outside the 1,048,576")), "{warnings:?}");
+    // Removal stays consistent: the forged count used to underflow.
+    let mut cells = sh.cells.clone();
+    cells.remove(CellRef::parse("A5").unwrap());
+    assert_eq!(cells.len(), 0);
+}
+
+#[test]
 fn notes_comments_and_links_survive_a_json_save() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();

@@ -57,6 +57,28 @@ impl CellStore {
             self.len += 1;
         }
     }
+    /// Puts every cell in the band its row says and recounts the length — serialized band keys
+    /// and the cached count are derived state, and the ones a file carries are not trusted. Cells
+    /// outside the sheet grid are dropped; returns how many (#1008).
+    pub fn rebuild(&mut self) -> usize {
+        let mut out = CellStore::new();
+        let mut dropped = 0;
+        for (_, band) in std::mem::take(&mut self.bands) {
+            for (row, cols) in band.rows.iter() {
+                for (col, cell) in cols.iter() {
+                    let at = CellRef::new(*row, *col);
+                    if at.is_valid() {
+                        out.set(at, cell.clone());
+                    } else {
+                        dropped += 1;
+                    }
+                }
+            }
+        }
+        *self = out;
+        dropped
+    }
+
     pub fn remove(&mut self, c: CellRef) -> Option<Cell> {
         let key = c.row / BAND;
         let band = self.bands.get_mut(&key)?;

@@ -150,7 +150,14 @@ fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
             if wb.sheets.is_empty() {
                 wb = Workbook::new();
             }
-            Ok((wb, vec![]))
+            // The file's band placement and cell count are derived state: rebuild them from the
+            // cells themselves, dropping what is outside the sheet grid (#1008).
+            let dropped: usize = wb.sheets.iter_mut().map(|sh| std::sync::Arc::make_mut(sh).cells.rebuild()).sum();
+            let mut warnings = Vec::new();
+            if dropped > 0 {
+                warnings.push(format!("{name}: {dropped} cells outside the 1,048,576 × 16,384 grid were dropped"));
+            }
+            Ok((wb, warnings))
         }
         Some(FileKind::Tsv) => {
             let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', ..Default::default() };
