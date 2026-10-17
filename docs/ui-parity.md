@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (AutoFilter value counts, #1409) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (AutoFilter value counts and Only button, #1409) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -43,7 +43,7 @@ this logic, with one undo step.
 
 | Behaviour | Status |
 |---|---|
-| AutoFilter value counts | Each checkbox, including (Blanks), has a dimmed, right-aligned row count (#1409). Counts cover all data rows in the dropdown's filter range, including rows hidden by filters on this or other columns; search only narrows the displayed values. |
+| AutoFilter value counts | Each checkbox, including (Blanks), has a dimmed, right-aligned row count (#1409). Counts cover all data rows in the dropdown's filter range, including rows hidden by filters on this or other columns; search only narrows the displayed values. Beyond Excel (as in WPS): the hovered value shows an Only button that filters the column to that value alone in one click, through `data.filterBy`. |
 | Click/drag/Shift/Ctrl selection, multi-area selection | rectangular drag works in one direction only in some cases (#28) |
 | Selection outline glides to a new selection (Excel: "Provide feedback with animation") | done (10-11): 0.12 s, decelerating, with the fill and fill handle; View ▸ Animations (`view.animations`) turns it off. The timing is an estimate, not yet measured against Excel; the system's reduced-motion setting isn't followed yet |
 | Fill handle: drag to fill series, double-click to fill down, right-drag menu | fill done (Ctrl+drag swaps copy and series); right-drag menu missing |
@@ -162,6 +162,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | AutoFilter dropdown: an Only button on the hovered value filters the column to just that value (#1409) |
 | 2026-10-16 | minor | AutoFilter dropdown shows row counts beside values and (Blanks), including filtered-out rows (#1409) |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |

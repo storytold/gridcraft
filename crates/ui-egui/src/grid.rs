@@ -2811,12 +2811,19 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             }
             // Full width: shrunk to the longest value, the scroll bar sat mid-menu and the wheel only
             // worked over the values themselves (#432).
+            // "Only" filters to one value in a click (as in WPS), without unticking (Select All) first.
+            // It shows on the hovered row and keeps its space on the others, so labels don't reflow.
+            let mut only = None;
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
                 for (v, on, count) in checks.iter_mut().filter(|(v, _, _)| matches(v)) {
                     ui.allocate_ui_with_layout(
                         vec2(ui.available_width(), ui.spacing().interact_size.y),
                         egui::Layout::right_to_left(egui::Align::Center),
                         |ui| {
+                            let hovered = ui.rect_contains_pointer(ui.max_rect());
+                            if ui.add_visible(hovered, egui::Button::new("Only").small()).clicked() {
+                                only = Some(v.clone());
+                            }
                             ui.label(egui::RichText::new(count.to_string()).color(Tokens::get(ui.ctx()).text_dim));
                             ui.allocate_ui_with_layout(
                                 vec2(ui.available_width(), ui.spacing().interact_size.y),
@@ -2830,6 +2837,15 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
                     );
                 }
             });
+            if let Some(v) = only {
+                let p = if v == "(Blanks)" {
+                    json!({"column": col_to_letters(col), "values": [], "blanks": true})
+                } else {
+                    json!({"column": col_to_letters(col), "values": [v], "blanks": false})
+                };
+                let _ = app.run("data.filterBy", p);
+                close = true;
+            }
             ui.ctx().data_mut(|d| {
                 d.insert_temp(key, checks.clone());
                 d.insert_temp(search_key, search.clone());
