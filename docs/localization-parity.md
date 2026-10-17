@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Format Cells dialog looks its labels up in the catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (French native macOS menus and quick-access menu) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -21,10 +21,12 @@ right-to-left sheets and full complex-script support. Part of
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so each shipped language covers **~12%** (measured
   count / estimated total).
-- **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
-  separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
-  localized function names and `;` separators (#45). German with localized numbers and formulas
-  is in PR #163 (open).
+- **Localized formulas at the UI boundary.** French covers all 514 registered function names
+  (including unchanged spellings and evaluator special forms), with decimal commas, `;` arguments
+  and `\` array columns. Spanish has a smaller alias table. Entry, display, autocomplete and
+  ribbon insertion use the existing interface-language preference. Files and engine/API calls
+  keep canonical English syntax. Function help, advanced dialogs and clipboard exchange retain
+  their existing fallback; number/date display formats are not changed by this work.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). There is no complex-text shaping: Arabic and
   Devanagari don't join or reorder, and there is no bidirectional layout. **Sheet Right-to-Left**
@@ -34,6 +36,12 @@ right-to-left sheets and full complex-script support. Part of
   (no bidi), and the sheet tabs, horizontal scrollbar and printing/PDF are not mirrored yet. IME input goes
   through egui/winit and is unverified for Chinese, Japanese and Korean.
 - **PDF export** uses only the 14 standard PDF fonts: non-Latin text cannot export.
+
+The native macOS menu bar now uses the shared language catalog, including application,
+File/Edit/View menus and theme choices. Changing the interface language updates the existing
+menu items without reinstalling the menu or changing command ids/shortcuts. The quick-access
+More commands menu also uses the catalog. French includes all native menu labels; macOS-owned
+window-management items continue to follow the system language.
 
 ## Languages
 
@@ -48,7 +56,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
 | Arabic | ar | 0 (0%) | no | **no shaping, no RTL UI**; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
-| French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
+| French | fr | existing interface catalog | help incomplete | Latin: yes | pending | all 514 formula names; French separators | UI/help work remains |
 | Portuguese | pt-BR | 923 (~42%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display | no | menus only | 8–12 h |
@@ -78,6 +86,8 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Native macOS menus follow the selected UI language at startup and on changes; 69 French labels added, quick-access menu translated; AppKit integration test checks French and English titles |
+| 2026-10-16 | minor | French formula table covers all 514 registered names; existing locale boundary handles entry, display, autocomplete, templates and canonical XLSX round trips |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |

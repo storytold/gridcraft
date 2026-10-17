@@ -32,9 +32,9 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         {
             if self.1.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
-                self.1 = Some(native_menu::NativeMenu::install(ctx));
+                self.1 = Some(native_menu::NativeMenu::install(ctx, self.0.ui.language));
             }
-            if let Some(m) = &self.1 {
+            if let Some(m) = &mut self.1 {
                 m.poll(&mut self.0, ctx);
             }
             apple_events::poll(&self.2, &mut self.0, ctx);

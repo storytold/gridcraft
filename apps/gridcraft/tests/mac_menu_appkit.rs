@@ -20,12 +20,24 @@ fn main() {
     nsapp.finishLaunching();
 
     let ctx = egui::Context::default();
-    let _menu = native_menu::NativeMenu::install(&ctx);
+    let mut menu = native_menu::NativeMenu::install(&ctx, gridcraft_ui_egui::i18n::Language::En);
 
     let bar = nsapp.mainMenu().expect("a main menu");
     let tops: Vec<String> = (0..bar.numberOfItems()).filter_map(|i| bar.itemAtIndex(i)?.submenu()).map(|m| m.title().to_string()).collect();
     assert_eq!(tops, ["GridCraft", "File", "Edit", "View", "Insert", "Format", "Tools", "Data", "Window", "Help"]);
     assert_eq!(nsapp.windowsMenu().map(|m| m.title().to_string()).as_deref(), Some("Window"), "AppKit knows the Window menu");
+
+    let mut app = gridcraft_ui_egui::SheetApp::new(gridcraft_engine::Session::new(), Default::default());
+    app.ui.language = gridcraft_ui_egui::i18n::Language::Fr;
+    menu.poll(&mut app, &ctx);
+    let tops: Vec<String> = (0..bar.numberOfItems()).filter_map(|i| bar.itemAtIndex(i)?.submenu()).map(|m| m.title().to_string()).collect();
+    assert_eq!(tops, ["GridCraft", "Fichier", "Modifier", "Affichage", "Insertion", "Format", "Outils", "Données", "Fenêtre", "Aide"]);
+    let file = bar.itemAtIndex(1).and_then(|item| item.submenu()).expect("File menu");
+    assert_eq!(file.itemAtIndex(0).map(|item| item.title().to_string()).as_deref(), Some("Nouveau classeur"));
+    assert_eq!(nsapp.windowsMenu().map(|m| m.title().to_string()).as_deref(), Some("Fenêtre"));
+    app.ui.language = gridcraft_ui_egui::i18n::Language::En;
+    menu.poll(&mut app, &ctx);
+    assert_eq!(file.itemAtIndex(0).map(|item| item.title().to_string()).as_deref(), Some("New Workbook"));
 
     println!("mac_menu_appkit: ok");
 }

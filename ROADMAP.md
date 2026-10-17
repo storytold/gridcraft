@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-16 · **Change:** minor (French native menus) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -62,7 +62,7 @@ collaboration, mobile, AI).
 | File formats | ~50% | 80–120 | [file-format-parity.md](docs/file-format-parity.md) |
 | Performance | ~35% | 35–55 | [target-app-parity.md](docs/target-app-parity.md#performance) |
 | Stability | ~60% | 15–25 | [gaps.md](docs/gaps.md) |
-| Localization | ~10% (ribbon in 6 languages) | 100–165 | [localization-parity.md](docs/localization-parity.md) |
+| Localization | ~10% (partial UI catalogs; French formulas) | 100–165 | [localization-parity.md](docs/localization-parity.md) |
 | Hardware (multi-core calc, GPU, pen, multi-window) | ~40% | 25–40 | [hardware-parity.md](docs/hardware-parity.md) |
 | Platforms | ~80% (no iOS/Android; ahead on Linux, BSD, RISC-V) | 30–60 | [target-app-parity.md](docs/target-app-parity.md#platforms) |
 | Ecosystem / add-ins | ~10% (VBA out of scope; own scripts, MCP, CLI) | 25–40 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
@@ -93,7 +93,8 @@ The ribbon is translated into Japanese, Simplified Chinese, Korean, Brazilian Po
 and German (266–268 labels each, ~12% of ~2,200 strings; merged 10-10 in #31, #104, #82, German
 added 10-11), the
 interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
-(#38). Dialogs, menus and messages are English; formulas and number formats are en-US only.
+(#38). UI translations remain partial. French formulas cover all 514 registered names with French
+separators; Spanish has a smaller alias table. Stored formulas remain canonical English.
 Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |
@@ -103,7 +104,7 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 | Spanish | es | none | 0% |
 | Hindi | hi | none | 0% |
 | Arabic | ar | none (no RTL layout, no shaping) | 0% |
-| French | fr | none | 0% |
+| French | fr | partial UI; all formula names | not remeasured |
 | Portuguese | pt-BR | menus only | ~12% |
 | Indonesian | id | none | 0% |
 | Japanese | ja | menus only | ~12% |
@@ -132,6 +133,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-16 | Native macOS menus and the quick-access menu use the interface language; French labels added, live language changes preserve commands and shortcuts. |
+| 2026-10-16 | French formula names cover all 514 registered names; French entry/display/autocomplete use existing locale support; XLSX remains canonical English. |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |
 | 2026-10-12 | Number formats: a fraction denominator with 65,536 zeros no longer crashes; format codes are capped at 255 characters like Excel (longer codes display as General, `TEXT` gives `#VALUE!`) (#807) |

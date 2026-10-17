@@ -1,8 +1,17 @@
 # Formula language
 
 View → Interface language is the existing, persisted language preference. Choose **Español**
-for Spanish formula entry and display. On first run the preference follows the system language.
+for Spanish formula entry and display, or **Français** for French formulas. On first run the preference follows the system language.
 English and the other interface languages currently use the English formula table and separators.
+
+French covers all 514 registered function names (including evaluator special forms and names
+that Excel leaves unchanged). The table lives in `crates/formula/src/input/french.rs`.
+For example, `=SI(VRAI;SOMME(1,5;2,25);0)` evaluates to 3.75. Function names follow Excel
+French spellings, including `RECHERCHEX`, `NB.SI.ENS`, `ECARTYPE.PEARSON` and `AUJOURDHUI`.
+French uses the same separators as Spanish below. Function descriptions and parameter names
+keep their existing English fallback; this change translates function names and formula syntax.
+
+Last updated: 2026-10-16 (French function names, entry, display and autocomplete).
 
 | Spanish | Canonical English |
 | --- | --- |
