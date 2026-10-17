@@ -405,6 +405,10 @@ impl crate::DocState {
             self.saved = self.wb.clone();
         }
         self.selection = self.sheet_selections.get(i).cloned().unwrap_or_default();
+        // A sheet's first visit starts at A1, which may be part of a merged cell: take it whole.
+        if let Some(sh) = self.wb.sheets.get(i) {
+            self.selection.expand_merges(sh);
+        }
     }
 }
 
