@@ -227,6 +227,13 @@ pub enum UiRequest {
     OpenUrl(String),
 }
 
+/// Width in points of one line of text drawn in a cell font, measured by a front end that has
+/// the font the grid draws with. With `exact` false the front end may answer with a cheaper
+/// measure that is never narrower (AutoFit asks for it on columns with many distinct values).
+/// Commands call it while they run, so a front end must not run commands while holding a lock
+/// the measure takes (egui's: see `theme::cell_text_width` in the UI crate).
+pub type TextWidth = Arc<dyn Fn(&str, &model::Font, bool) -> f32 + Send + Sync>;
+
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
@@ -256,6 +263,9 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
+    /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
+    /// [`cmd::format::approx_text_width`].
+    pub text_width: Option<TextWidth>,
 }
 
 impl Session {

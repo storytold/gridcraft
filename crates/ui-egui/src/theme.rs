@@ -192,6 +192,30 @@ pub fn cell_family(name: &str, bold: bool, italic: bool) -> FontFamily {
     )
 }
 
+/// Width in points, at 100% zoom, of one line of cell text drawn as the grid draws it: in the
+/// face [`cell_family`] picks, which on a machine without the named font is a wider or narrower
+/// substitute (#1316). A family the active font set doesn't have yet (bound fonts apply from the
+/// next frame) falls back to the engine's estimate rather than letting egui panic on it.
+///
+/// `exact` lays the text out (a galley kept until the end of the frame); otherwise the glyph
+/// advances are summed without kerning, which is cheap and never narrower. This takes the
+/// Context lock (`fonts_mut`): never call it, or run a command, while an egui lock is held.
+pub fn cell_text_width(ctx: &egui::Context, text: &str, font: &gridcraft_engine::model::Font, exact: bool) -> f32 {
+    let family = cell_family(&font.name, font.bold, font.italic);
+    let id = FontId::new(font.size * 96.0 / 72.0, family);
+    ctx.fonts_mut(|f| {
+        f.families().contains(&id.family).then(|| {
+            if exact {
+                f.layout_no_wrap(text.to_owned(), id, Color32::PLACEHOLDER).size().x
+            } else {
+                // Half a point covers the galley's rounding of its width up to the pixel grid.
+                text.chars().map(|c| f.glyph_width(&id, c)).sum::<f32>() + 0.5
+            }
+        })
+    })
+    .unwrap_or_else(|| gridcraft_engine::cmd::format::approx_text_width(text, font.size, font.bold))
+}
+
 /// Whether epaint can open face `index` of this font file and it maps characters to glyphs.
 /// epaint panics (in `Context::set_fonts`, i.e. on startup) on a face it can't open, so every font
 /// file we did not ship is checked first with the same parser and the same call epaint makes

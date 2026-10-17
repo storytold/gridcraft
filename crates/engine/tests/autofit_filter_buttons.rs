@@ -100,3 +100,26 @@ fn autofit_filter_width_is_undoable_without_changing_selection() {
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(s.doc().unwrap().wb.active().unwrap().col_width(0), 80.0);
 }
+
+#[test]
+fn autofit_measures_each_distinct_text_once_and_quickly_past_the_limit() {
+    use std::sync::{Arc, Mutex};
+    let mut s = Session::new();
+    s.new_workbook();
+    // 2,500 distinct texts, each in two cells.
+    let values: Vec<_> = (0..5000).map(|i| json!([format!("v{}", i % 2500)])).collect();
+    s.execute("range.setValues", json!({"range":"A1", "values": values})).unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let seen = calls.clone();
+    s.text_width = Some(Arc::new(move |text: &str, _: &gridcraft_engine::model::Font, exact: bool| {
+        seen.lock().unwrap().push((text.to_owned(), exact));
+        if text == "v2499" { 300.0 } else { 10.0 }
+    }));
+    s.execute("home.autofitColumnWidth", json!({"cols":"A:A"})).unwrap();
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 2500, "one measure per distinct text");
+    assert_eq!(calls.iter().filter(|(_, exact)| *exact).count(), 2000);
+    assert!(calls.iter().skip(2000).all(|(_, exact)| !exact));
+    // The quick measures still size the column.
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().col_width(0), 306.0);
+}
