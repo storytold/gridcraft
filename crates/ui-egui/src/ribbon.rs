@@ -1581,12 +1581,20 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
 
 fn draw(app: &mut SheetApp, ui: &mut Ui) {
     let tool = app.session.draw_tool.clone();
-    let __k = big_button(ui, Icon::Shapes, "Select\nObjects", "Select and move ink and shapes", false);
+    // Excel's Draw tab order: Select and Eraser first, then the pen set; Ink to Shape trails.
+    let __k = big_button(ui, Icon::Shapes, "Select", "Select objects including ink, shapes and text areas", false);
     control_keytip(app, ui, &__k, "draw.lasso");
     if __k.clicked() {
         act(app, "draw.lasso", json!({}));
     }
     sep(ui);
+    let er = big_button(ui, Icon::Eraser, "Eraser", "Erase ink strokes", false);
+    if tool == "eraser" {
+        ui.painter().rect_stroke(er.rect, 5.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Inside);
+    }
+    if er.clicked() {
+        act(app, "draw.eraser", json!({}));
+    }
     for (label, color) in [("Pen\nBlue", "#1F5FC9"), ("Pen\nBlack", "#000000"), ("Pen\nRed", "#D13B2F"), ("Highlighter", "#F2E33A")] {
         let on = tool == "pen" && app.session.draw_color.eq_ignore_ascii_case(color);
         let r = big_button(ui, Icon::Pen, label, "Draw with ink", false);
@@ -1597,13 +1605,6 @@ fn draw(app: &mut SheetApp, ui: &mut Ui) {
             let width = if label == "Highlighter" { 12.0 } else { 2.0 };
             act(app, "draw.pen", json!({"on": !on, "color": color, "width": width}));
         }
-    }
-    let er = big_button(ui, Icon::Eraser, "Eraser", "Erase ink strokes", false);
-    if tool == "eraser" {
-        ui.painter().rect_stroke(er.rect, 5.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Inside);
-    }
-    if er.clicked() {
-        act(app, "draw.eraser", json!({}));
     }
     sep(ui);
     let __k = big_button(ui, Icon::Shapes, "Ink to\nShape", "Convert the last ink stroke to a shape", false);
