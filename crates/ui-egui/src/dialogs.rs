@@ -40,6 +40,8 @@ pub struct Dialog {
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
+    /// The first text field takes keyboard focus (with its text selected) on the next frame.
+    focus_pending: bool,
 }
 
 impl Dialog {
@@ -73,6 +75,7 @@ impl Dialog {
             picture_inbox: None,
             picture_target: None,
             back: None,
+            focus_pending: false,
         }
     }
 
@@ -91,6 +94,7 @@ impl Dialog {
             picture_inbox: None,
             picture_target: None,
             back: None,
+            focus_pending: false,
         }
     }
 
@@ -632,8 +636,26 @@ impl Dialog {
             }
             "insertFunction" => Dialog::custom("insertFunction", "Formula Builder", json!({"category": "Most Recently Used"})),
             "find" => {
-                let mut d = Dialog::custom("find", "Find and Replace", json!({"what": "", "with": "", "within": "sheet", "lookIn": "formulas"}));
+                // Like Excel, the dialog comes back with the last search (selected, so typing replaces it).
+                let mut d = match app.dialog.take() {
+                    Some(open) if open.name == "find" => open,
+                    other => {
+                        app.dialog = other;
+                        let last = app.session.last_find.clone().unwrap_or(Json::Null);
+                        let mut values = json!({"what": "", "with": "", "within": "sheet", "lookIn": "formulas", "matchCase": false, "wholeCell": false, "byColumns": false});
+                        for key in ["what", "within", "lookIn", "matchCase", "wholeCell", "byColumns"] {
+                            if let Some(v) = last.get(key).filter(|v| !v.is_null()) {
+                                values[key] = v.clone();
+                            }
+                        }
+                        Dialog::custom("find", "Find and Replace", values)
+                    }
+                };
                 d.tab = if p("replace").as_bool() == Some(true) { "Replace".into() } else { "Find".into() };
+                if p("options").as_bool() == Some(true) {
+                    d.values.insert("options".into(), json!(true));
+                }
+                d.focus_pending = true;
                 d
             }
             "goTo" => Dialog::custom("goTo", "Go To", json!({"reference": ""})),
@@ -1033,6 +1055,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "find" => 480.0,
         _ => 380.0,
     };
     let window = egui::Window::new(app.ui.language.tr(&d.title))
@@ -1049,7 +1072,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
                 "insertFunction" => insert_function(app, ui, &mut d, &mut confirm),
-                "find" => find(app, ui, &mut d),
+                "find" => find(app, ui, &mut d, &mut open),
                 "goTo" => go_to(app, ui, &mut d, &mut confirm),
                 "sort" => sort(app, ui, &mut d, &mut confirm),
                 "nameManager" => name_manager(app, ui, &mut d, &mut open),
@@ -1800,92 +1823,200 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     }
 }
 
-fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
+/// Find and Replace: a Find/Replace tab strip, aligned fields, Excel's collapsible Options
+/// (Within, Search, Look in, Match case, Match entire cell contents) and a right-aligned button
+/// row with Find Next as the default. "Find what" takes keyboard focus whenever the dialog opens
+/// (Ctrl+F, Ctrl+H, the ribbon) or switches tab, so the search can be typed straight away.
+fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bool) {
+    let lang = app.ui.language;
+    let accent = crate::theme::Tokens::get(ui.ctx()).accent;
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 14.0;
         for tab in ["Find", "Replace"] {
-            if ui.selectable_label(d.tab == tab, tab).clicked() {
+            let selected = d.tab == tab;
+            let text = egui::RichText::new(lang.tr(tab));
+            let r = ui.add(egui::Button::new(if selected { text.strong() } else { text }).frame(false).min_size(vec2(0.0, 24.0)));
+            if selected {
+                let line =
+                    egui::Rect::from_min_max(egui::pos2(r.rect.left(), r.rect.bottom() - 1.0), egui::pos2(r.rect.right(), r.rect.bottom() + 1.0));
+                ui.painter().rect_filled(line, 1.0, accent);
+            }
+            if r.clicked() && !selected {
                 d.tab = tab.into();
+                d.focus_pending = true;
             }
         }
     });
-    let mut what = d.values.get("what").and_then(Json::as_str).unwrap_or("").to_string();
-    let mut with = d.values.get("with").and_then(Json::as_str).unwrap_or("").to_string();
-    ui.horizontal(|ui| {
-        ui.label("Find what:");
-        ui.add(egui::TextEdit::singleline(&mut what).desired_width(260.0));
+    ui.separator();
+    ui.add_space(4.0);
+
+    let replace = d.tab == "Replace";
+    let text = |d: &Dialog, k: &str| d.values.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    let flag = |d: &Dialog, k: &str| d.values.get(k).and_then(Json::as_bool).unwrap_or(false);
+    let mut what = text(d, "what");
+    let mut with = text(d, "with");
+    let enter = ui.input(|i| i.key_pressed(Key::Enter));
+    // The label column is as wide on both tabs, so "Find what" doesn't jump when switching.
+    let label_w = ["Find what:", "Replace with:"]
+        .map(|t| egui::WidgetText::from(lang.tr(t)).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body).size().x)
+        .into_iter()
+        .fold(0.0, f32::max);
+    egui::Grid::new("find_fields").num_columns(2).spacing([10.0, 8.0]).min_col_width(label_w).show(ui, |ui| {
+        ui.label(lang.tr("Find what:"));
+        let r = ui.add(egui::TextEdit::singleline(&mut what).desired_width(ui.available_width()));
+        if std::mem::take(&mut d.focus_pending) {
+            r.request_focus();
+            if let Some(mut s) = egui::text_edit::TextEditState::load(ui.ctx(), r.id) {
+                let len = what.chars().count();
+                s.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(len))));
+                s.store(ui.ctx(), r.id);
+            }
+        }
+        // Enter runs Find Next; the caret stays in the field, as in Excel.
+        if r.lost_focus() && enter {
+            r.request_focus();
+        }
+        ui.end_row();
+        if replace {
+            ui.label(lang.tr("Replace with:"));
+            let r = ui.add(egui::TextEdit::singleline(&mut with).desired_width(ui.available_width()));
+            if r.lost_focus() && enter {
+                r.request_focus();
+            }
+            ui.end_row();
+        }
     });
-    if d.tab == "Replace" {
-        ui.horizontal(|ui| {
-            ui.label("Replace with:");
-            ui.add(egui::TextEdit::singleline(&mut with).desired_width(244.0));
+
+    let mut case = flag(d, "matchCase");
+    let mut whole = flag(d, "wholeCell");
+    let mut by_cols = flag(d, "byColumns");
+    let mut within = text(d, "within");
+    let mut look_in = text(d, "lookIn");
+    let mut options = flag(d, "options");
+    if options {
+        ui.add_space(8.0);
+        ui.horizontal_top(|ui| {
+            egui::Grid::new("find_options").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                let combo = |ui: &mut egui::Ui, label: &str, value: &mut String, choices: &[(&str, &str)], enabled: bool| {
+                    ui.label(lang.tr(label));
+                    let shown = choices.iter().find(|(v, _)| v == value).or(choices.first()).map_or("", |(_, t)| *t);
+                    ui.add_enabled_ui(enabled, |ui| {
+                        egui::ComboBox::from_id_salt(("find", label)).width(110.0).selected_text(lang.tr(shown)).show_ui(ui, |ui| {
+                            for (v, t) in choices {
+                                if ui.selectable_label(value == v, lang.tr(t)).clicked() {
+                                    *value = (*v).to_string();
+                                }
+                            }
+                        });
+                    });
+                    ui.end_row();
+                };
+                combo(ui, "Within:", &mut within, &[("sheet", "Sheet"), ("workbook", "Workbook")], true);
+                let mut by = if by_cols { "columns".to_string() } else { "rows".to_string() };
+                combo(ui, "Search:", &mut by, &[("rows", "By Rows"), ("columns", "By Columns")], true);
+                by_cols = by == "columns";
+                // Replace always looks in formulas (Excel offers only Formulas on that tab).
+                let mut shown_look_in = if replace { "formulas".to_string() } else { look_in.clone() };
+                combo(ui, "Look in:", &mut shown_look_in, &[("formulas", "Formulas"), ("values", "Values")], !replace);
+                if !replace {
+                    look_in = shown_look_in;
+                }
+            });
+            ui.add_space(16.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                ui.checkbox(&mut case, lang.tr("Match case"));
+                ui.checkbox(&mut whole, lang.tr("Match entire cell contents"));
+            });
         });
     }
-    let mut case = d.values.get("matchCase").and_then(Json::as_bool).unwrap_or(false);
-    let mut whole = d.values.get("wholeCell").and_then(Json::as_bool).unwrap_or(false);
-    let mut wb = d.values.get("within").and_then(Json::as_str) == Some("workbook");
+
+    let within = if within == "workbook" { "workbook" } else { "sheet" };
+    let look_in = if look_in == "values" { "values" } else { "formulas" };
+    let base = json!({"what": what, "matchCase": case, "wholeCell": whole, "within": within, "lookIn": if replace { "formulas" } else { look_in }, "byColumns": by_cols});
+    ui.add_space(10.0);
     ui.horizontal(|ui| {
-        ui.checkbox(&mut case, "Match case");
-        ui.checkbox(&mut whole, "Match entire cell contents");
-        ui.checkbox(&mut wb, "Within workbook");
+        let label = if options { "Options <<" } else { "Options >>" };
+        if ui.button(lang.tr(label)).clicked() {
+            options = !options;
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button(format!(" {} ", lang.tr("Close"))).clicked() {
+                *open = false;
+            }
+            let next = ui.add(egui::Button::new(egui::RichText::new(lang.tr("Find Next")).color(Color32::WHITE)).fill(accent));
+            if next.clicked() || enter {
+                if let Err(e) = app.run("edit.find", base.clone()) {
+                    app.message = Some(("Find and Replace".into(), crate::clean_error(&e)));
+                }
+                app.grid.ensure_visible = true;
+            }
+            if ui.button(lang.tr("Find All")).clicked() {
+                let mut p = base.clone();
+                p["all"] = json!(true);
+                match app.run("edit.find", p) {
+                    Ok(r) => d.result = Some(r),
+                    Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
+                }
+            }
+            if replace {
+                if ui.button(lang.tr("Replace")).clicked() {
+                    let mut p = base.clone();
+                    p["with"] = json!(with);
+                    p["all"] = json!(false);
+                    let _ = app.run("edit.replace", p);
+                    let _ = app.run("edit.find", base.clone());
+                    app.grid.ensure_visible = true;
+                }
+                if ui.button(lang.tr("Replace All")).clicked() {
+                    let mut p = base.clone();
+                    p["with"] = json!(with);
+                    p["all"] = json!(true);
+                    match app.run("edit.replace", p) {
+                        Ok(r) => app.toast = Some((format!("All done. We made {} replacements.", r["replaced"]), crate::now_ms())),
+                        Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
+                    }
+                }
+            }
+        });
     });
     d.values.insert("what".into(), json!(what));
     d.values.insert("with".into(), json!(with));
     d.values.insert("matchCase".into(), json!(case));
     d.values.insert("wholeCell".into(), json!(whole));
-    d.values.insert("within".into(), json!(if wb { "workbook" } else { "sheet" }));
-    let base = json!({"what": what, "matchCase": case, "wholeCell": whole, "within": if wb { "workbook" } else { "sheet" }});
-    ui.horizontal(|ui| {
-        if d.tab == "Replace" {
-            if ui.button("Replace All").clicked() {
-                let mut p = base.clone();
-                p["with"] = json!(with);
-                p["all"] = json!(true);
-                match app.run("edit.replace", p) {
-                    Ok(r) => app.toast = Some((format!("All done. We made {} replacements.", r["replaced"]), crate::now_ms())),
-                    Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
-                }
-            }
-            if ui.button("Replace").clicked() {
-                let mut p = base.clone();
-                p["with"] = json!(with);
-                p["all"] = json!(false);
-                let _ = app.run("edit.replace", p);
-                let _ = app.run("edit.find", base.clone());
-            }
-        }
-        if ui.button("Find All").clicked() {
-            let mut p = base.clone();
-            p["all"] = json!(true);
-            d.result = app.run("edit.find", p).ok();
-        }
-        if ui.button("Find Next").clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
-            if let Err(e) = app.run("edit.find", base.clone()) {
-                app.message = Some(("Find and Replace".into(), crate::clean_error(&e)));
-            }
-            app.grid.ensure_visible = true;
-        }
-    });
+    d.values.insert("byColumns".into(), json!(by_cols));
+    d.values.insert("within".into(), json!(within));
+    d.values.insert("lookIn".into(), json!(look_in));
+    d.values.insert("options".into(), json!(options));
+
     if let Some(r) = &d.result
         && let Some(list) = r["results"].as_array()
     {
+        ui.add_space(8.0);
         ui.separator();
-        ui.label(format!("{} cell(s) found", list.len()));
-        egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
-            for item in list {
-                let label = format!(
-                    "{}  {}  {}",
-                    item["sheet"].as_str().unwrap_or(""),
-                    item["cell"].as_str().unwrap_or(""),
-                    item["value"].as_str().unwrap_or("")
-                );
-                if ui.selectable_label(false, label).clicked() {
-                    if let Some(s) = item["sheet"].as_str() {
-                        let _ = app.run("sheet.activate", json!({"sheet": s}));
-                    }
-                    let _ = app.run("selection.set", json!({"cell": item["cell"]}));
-                    app.grid.ensure_visible = true;
+        ui.label(egui::RichText::new(format!("{} cell(s) found", list.len())).small());
+        egui::ScrollArea::vertical().max_height(180.0).auto_shrink([false, true]).show(ui, |ui| {
+            egui::Grid::new("find_results").num_columns(3).striped(true).spacing([16.0, 4.0]).show(ui, |ui| {
+                for h in ["Sheet", "Cell", "Value"] {
+                    ui.label(egui::RichText::new(lang.tr(h)).strong());
                 }
-            }
+                ui.end_row();
+                for item in list {
+                    let cells = [&item["sheet"], &item["cell"], &item["value"]].map(|v| v.as_str().unwrap_or("").to_string());
+                    let mut clicked = false;
+                    for c in cells {
+                        clicked |= ui.selectable_label(false, c).clicked();
+                    }
+                    ui.end_row();
+                    if clicked {
+                        if let Some(s) = item["sheet"].as_str() {
+                            let _ = app.run("sheet.activate", json!({"sheet": s}));
+                        }
+                        let _ = app.run("selection.set", json!({"cell": item["cell"]}));
+                        app.grid.ensure_visible = true;
+                    }
+                }
+            });
         });
     }
 }
