@@ -724,7 +724,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let quads = if geo.paper.is_some() {
         crate::paper_view::paint_pages(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
     } else {
-        paint_panes(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
+        paint_panes(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t, cell_editor_cell(app, &wb))
     };
     // Objects above cells.
     let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
@@ -782,6 +782,7 @@ fn paint_panes(
     outline: Rect,
     cf: &mut CfCache,
     t: &Tokens,
+    editor: Option<CellRef>,
 ) -> Vec<((u32, u32), (u32, u32), Rect)> {
     // Quadrants: (rows, cols, clip).
     let (sr0, sr1) = geo.scroll_rows(sh);
@@ -804,8 +805,8 @@ fn paint_panes(
             continue;
         }
         let p = painter.with_clip_rect(*clip);
-        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t);
-        paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols);
+        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t, editor);
+        paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols, editor);
     }
     // Freeze lines.
     if geo.fr > 0 {
@@ -1030,6 +1031,7 @@ pub(crate) fn paint_quadrant(
     cols: (u32, u32),
     cf: &mut CfCache,
     t: &Tokens,
+    ed_cell: Option<CellRef>,
 ) {
     let z = geo.z;
     let (r0, r1) = rows;
@@ -1146,6 +1148,11 @@ pub(crate) fn paint_quadrant(
             continue;
         }
         if cfl.as_ref().is_some_and(|l| l.hide_value) || v.is_empty() {
+            continue;
+        }
+        // The in-cell editor shows the text being typed; hide the committed value (and its
+        // spill into neighbours) while it is open, like Excel.
+        if ed_cell == Some(c) {
             continue;
         }
         // Align and clip header text inside the content area, away from the dropdown.
@@ -1594,7 +1601,46 @@ pub(crate) fn outline_bands(rect: Rect, width: f32, clip: Rect) -> Vec<Rect> {
     sides.into_iter().map(|s| s.intersect(clip)).filter(|s| s.is_finite() && s.width() > 0.0 && s.height() > 0.0).collect()
 }
 
+/// Snap to whole *device* pixels, not logical ones. The window can render at a fractional
+/// scale (e.g. 1.25 from the OS text-scaling factor), where integer logical edges still land
+/// between device pixels — and, with 51.2 px columns, the leftover phase repeats every five
+/// columns. Snapped, the bands sit on exact device pixels: no excess, in any column.
+fn device_ppp(ppp: f32) -> f32 {
+    if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 }
+}
+
+fn snap_pos(p: Pos2, ppp: f32) -> Pos2 {
+    let ppp = device_ppp(ppp);
+    pos2((p.x * ppp).round() / ppp, (p.y * ppp).round() / ppp)
+}
+
+fn snap_rect(r: Rect, ppp: f32) -> Rect {
+    Rect::from_min_max(snap_pos(r.min, ppp), snap_pos(r.max, ppp))
+}
+
+/// The active-cell border, painted the same for a focused cell and an open editor (so the two
+/// look pixel-identical). Every edge sits on a whole device pixel: at integer scales the
+/// familiar thin 1.5-wide band; at fractional scales a 2-device-pixel ring tucked fully inside
+/// the edge, so nothing spills onto the neighbour in any column (a straddling ring would leave
+/// a phase-dependent excess every few columns).
+fn paint_active_border(p: &Painter, rect: Rect, clip: Rect, color: Color32, ppp: f32) {
+    let ppp = device_ppp(ppp);
+    let (w, x) = if (ppp - ppp.round()).abs() < 1e-6 { (1.5, 0.25) } else { (2.0 / ppp, -1.0 / ppp) };
+    for side in outline_bands(snap_rect(rect, ppp).expand(x), w, clip) {
+        p.rect_filled(side, 0.0, color);
+    }
+}
+
+/// The cell being edited in place, if the in-cell editor paints over `wb`'s active sheet
+/// (mirroring `in_cell_editor`'s own guard). While it is open it owns the active-cell border
+/// (the selection outline yields) and its committed text stays hidden (the editor shows it).
+pub(crate) fn cell_editor_cell(app: &SheetApp, wb: &Workbook) -> Option<CellRef> {
+    app.editor.as_ref().filter(|e| !e.from_formula_bar && e.sheet == wb.active_sheet).map(|e| e.cell)
+}
+
 /// `outline` is where the current area's border is drawn this frame (see `selection_glide`).
+/// `editor` is the cell being edited in place: it draws this same border itself, so the
+/// outline stays out and there is exactly one border.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_selection(
     p: &Painter,
@@ -1606,6 +1652,7 @@ pub(crate) fn paint_selection(
     app: &SheetApp,
     rows: (u32, u32),
     cols: (u32, u32),
+    editor: Option<CellRef>,
 ) {
     // Fill all areas except the active cell.
     for rect in selection_fill_where(geo, sh, sel, outline, |r| range_in_pane(*r, rows, cols)) {
@@ -1635,17 +1682,20 @@ pub(crate) fn paint_selection(
             }
         }
     }
-    if cur_here {
-        for side in outline_bands(outline.expand(0.5), 2.0, p.clip_rect()) {
-            p.rect_filled(side, 0.0, t.sel_border);
-        }
+    if cur_here && editor.is_none() {
+        paint_active_border(p, outline, p.clip_rect(), t.sel_border, p.ctx().pixels_per_point());
     }
     if active_here && sel.ranges.len() > 1 {
         p.rect_stroke(active, 0.0, Stroke::new(1.0, t.sel_border), StrokeKind::Inside);
     }
-    // Fill handle (bottom-right of the current area).
+    // Fill handle (bottom-right of the current area), centred on the gridline crossing —
+    // what the eye reads as the corner — rounded like the gridlines themselves, then snapped
+    // so the mark stays crisp. Centring on the fractional cell corner instead can sit a full
+    // pixel off, leaning into the next cell.
     if app.editor.is_none() && range_in_pane(RangeRef::cell(sel.current().end), rows, cols) {
-        let h = Rect::from_center_size(outline.right_bottom(), vec2(6.0, 6.0));
+        let corner = outline.right_bottom();
+        let cross = pos2(corner.x.round() - 0.5, corner.y.round() - 0.5);
+        let h = Rect::from_center_size(snap_pos(cross, p.ctx().pixels_per_point()), vec2(4.0, 4.0));
         p.rect_filled(h.expand(1.0), 0.0, Color32::WHITE);
         p.rect_filled(h, 0.0, t.sel_border);
     }
@@ -2703,10 +2753,30 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let st = wb.styles.get(sh.style_id(cell)).clone();
     let size = st.font.size * 96.0 / 72.0 * geo.z;
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
-    let text_w = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size().x;
-    let lines = ed.text.lines().count().max(1) as f32 + if ed.text.ends_with('\n') { 1.0 } else { 0.0 };
-    let w = (text_w + 14.0).max(rect.width()).min(geo.cells.right() - rect.left());
-    let h = (size * 1.3 * lines + 4.0).max(rect.height());
+    let text_size = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size();
+    // Sized from both the text being typed and the committed value it overrides: starting a
+    // short replacement over a long value keeps the old footprint (like Excel), and the box
+    // then grows along whichever gets longer.
+    let old = gridcraft_engine::display::edit_text(wb, sh, cell);
+    let old_size = ui.painter().layout_no_wrap(old.clone(), font.clone(), Color32::BLACK).size();
+    let count = |s: &str| s.lines().count().max(1) as f32 + if s.ends_with('\n') { 1.0 } else { 0.0 };
+    let text_w = text_size.x.max(old_size.x);
+    let lines = count(&ed.text).max(count(&old));
+    // The box stretches over every cell the text spills into (like Excel): with overflow the
+    // indicator reads A1:B1, ending on a cell boundary instead of mid-cell. Single-line height
+    // stays exactly row height — unless the text itself is taller (short row, big font), when
+    // the box grows down until it is fully visible, like Excel.
+    let multi = lines > 1.0;
+    let max_w = geo.cells.right() - rect.left();
+    let need = (text_w + 14.0).max(rect.width()).min(max_w);
+    let end_col = geo.col_at(sh, rect.left() + need - 0.5).min(MAX_COLS - 1);
+    let w = (geo.x(sh, end_col + 1) - rect.left()).max(rect.width()).min(max_w);
+    // ... and like the width, the height ends on a row boundary: with overflow the indicator
+    // reads A1:A2 instead of ending mid-row.
+    let max_h = geo.cells.bottom() - rect.top();
+    let need_h = (if multi { size * 1.3 * lines + 4.0 } else { text_size.y + 2.0 }).max(rect.height()).min(max_h);
+    let end_row = geo.row_at(sh, rect.top() + need_h - 0.5).min(MAX_ROWS - 1);
+    let h = (geo.y(sh, end_row + 1) - rect.top()).max(rect.height()).min(max_h);
     // Grows to the left on a right-to-left sheet.
     let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
     let fill = match st.fill.pattern {
@@ -2720,8 +2790,15 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     );
     let clip = ui.clip_rect().intersect(quadrant);
     let painter = ui.painter().with_clip_rect(clip);
-    painter.rect_filled(erect, 0.0, fill);
-    painter.rect_stroke(erect.expand(1.0), 0.0, Stroke::new(2.0, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
+    // Only the active cell itself gets an opaque backdrop (hiding neighbours' spill into it);
+    // the overflow stays transparent like Excel, so gridlines and neighbours show through
+    // instead of being whited out. The border below still marks the grown box.
+    painter.rect_filled(geo.mirror_rect(rect), 0.0, fill);
+    // The editor owns the active-cell border while it is open (the selection outline yields,
+    // see `paint_selection`), drawn exactly like the outline bands: typing and focused look
+    // pixel-identical, like Excel.
+    let sel_border = Tokens::get(ui.ctx()).sel_border;
+    paint_active_border(&painter, erect, clip, sel_border, ui.ctx().pixels_per_point());
     let id = egui::Id::new("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
     child.set_clip_rect(clip);

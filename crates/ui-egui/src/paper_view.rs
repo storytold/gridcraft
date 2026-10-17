@@ -134,6 +134,7 @@ pub(crate) fn paint_pages(
     t: &Tokens,
 ) -> Vec<((u32, u32), (u32, u32), Rect)> {
     let mut quads = Vec::new();
+    let editor = grid::cell_editor_cell(app, wb);
     let Some(pg) = geo.paper.clone() else { return quads };
     p.rect_filled(geo.cells, 0.0, t.desk);
     let cells = p.with_clip_rect(geo.cells);
@@ -161,7 +162,7 @@ pub(crate) fn paint_pages(
         }
         painted += 1;
         let pc = p.with_clip_rect(clip);
-        grid::paint_quadrant(&pc, geo, wb, si, sh, rows, cols, cf, t);
+        grid::paint_quadrant(&pc, geo, wb, si, sh, rows, cols, cf, t, editor);
         if !pg.is_data_page(i, j) {
             // "Click to add data" pages: faded until something is typed there.
             pc.rect_filled(clip, 0.0, t.grid_bg.gamma_multiply(0.75));
@@ -170,7 +171,7 @@ pub(crate) fn paint_pages(
         }
         // The selection outline may straddle the margin edge (as at A1 in Normal view).
         let sel_clip = clip.expand(3.0).intersect(page).intersect(geo.cells);
-        grid::paint_selection(&p.with_clip_rect(sel_clip), geo, sh, sel, outline, t, app, rows, cols);
+        grid::paint_selection(&p.with_clip_rect(sel_clip), geo, sh, sel, outline, t, app, rows, cols, editor);
     }
     quads
 }
