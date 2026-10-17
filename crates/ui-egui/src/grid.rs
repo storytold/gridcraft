@@ -701,8 +701,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         *v = view;
     }
     app.grid.cells_rect = Some(geo.mirror_rect(geo.cells));
-    // The selection outline glides to a new selection. It stays on its cells when Animations is
-    // off, when egui's animations are (the headless harness), and while a screenshot is on its way.
+    // The selection outline glides onto a new selection, including while the pointer is dragging.
+    // It stays on its cells when Animations is off, when egui's animations are (the headless
+    // harness), and while a screenshot is on its way.
     let outline = app.grid.glide.frame(crate::selection_glide::Frame {
         place,
         range: sel.current(),

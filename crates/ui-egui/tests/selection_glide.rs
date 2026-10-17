@@ -1,9 +1,9 @@
 //! The selection outline glides to a new selection, and View ▸ Animations turns that off.
 
-use egui::Rect;
+use egui::{Event, Modifiers, PointerButton, Rect};
 use egui_kittest::kittest::Queryable;
 use gridcraft_engine::Session;
-use gridcraft_engine::core::CellRef;
+use gridcraft_engine::core::{CellRef, RangeRef};
 use gridcraft_ui_egui::control::{self, Outcome};
 use gridcraft_ui_egui::{ControlRequest, SheetApp, UiState, grid::Geo};
 use serde_json::{Value, json};
@@ -56,6 +56,18 @@ fn gliding(h: &Harness) -> bool {
     h.state().grid.glide.is_gliding()
 }
 
+fn range_rect(h: &Harness, start: &str, end: &str) -> Rect {
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let range = RangeRef::new(CellRef::parse(start).unwrap(), CellRef::parse(end).unwrap());
+    Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll).range_rect(sheet, range)
+}
+
+fn pointer(h: &mut Harness, event: Event) {
+    h.input_mut().events.push(event);
+    h.step();
+}
+
 fn select(h: &mut Harness, a1: &str) {
     h.state_mut().run("selection.set", json!({"cell": a1})).unwrap();
 }
@@ -102,6 +114,29 @@ fn an_arrow_key_glides_the_outline_to_the_next_cell() {
     }
     assert_ne!(outline(&h), b1);
     assert_eq!(outline(&h), cell_rect(&h, "B1"));
+}
+
+#[test]
+fn a_pointer_drag_glides_the_outline_with_the_cursor() {
+    let mut h = animated();
+    let origin = cell_rect(&h, "A1").center();
+    pointer(&mut h, Event::PointerMoved(origin));
+    pointer(&mut h, Event::PointerButton { pos: origin, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    let start = cell_rect(&h, "A1");
+    assert_eq!(outline(&h), start);
+    let to = cell_rect(&h, "F7").center();
+    pointer(&mut h, Event::PointerMoved(to));
+    h.step();
+    let drawn = outline(&h);
+    let target = range_rect(&h, "A1", "F7");
+    assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "A1:F7");
+    assert!(drawn.max.x > start.max.x && drawn.max.y > start.max.y, "the border has started moving: {drawn:?}");
+    assert!(drawn.max.x < target.max.x && drawn.max.y < target.max.y, "it is still in flight, not snapped onto the grid: {drawn:?} vs {target:?}");
+    assert!(gliding(&h));
+    steps(&mut h, 40);
+    assert_eq!(outline(&h), target, "then it settles on the cells");
+    assert!(!gliding(&h));
 }
 
 #[test]

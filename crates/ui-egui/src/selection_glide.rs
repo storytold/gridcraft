@@ -1,6 +1,8 @@
-//! The selection outline glides to a new selection instead of jumping there, like Excel's cell
-//! cursor: press an arrow key or click a cell and the border slides over in about a tenth of a
-//! second; extend the selection and it grows edge by edge. View ▸ Animations turns it off.
+//! The selection outline glides to a new selection instead of jumping there: press an arrow key,
+//! click a cell, or drag a range and the border slides over in about a tenth of a second,
+//! decelerating onto the cells. A drag keeps that motion going on the frame the range changes,
+//! so the border follows the cursor instead of sitting still until the pointer pauses.
+//! View ▸ Animations turns the glide off.
 //!
 //! The behaviour comes from using Excel as a user; the duration and the easing curve are an
 //! estimate ([`GLIDE_SECS`]), not yet measured against Excel.
@@ -8,7 +10,7 @@
 //! What glides and what doesn't:
 //! - the selection changed (arrows, Enter, Tab, a click, a drag, Shift+arrows, the Name Box, any
 //!   command): the outline of the current area, its fill and its fill handle glide from wherever
-//!   they are drawn right now, so a held arrow key reads as one continuous motion;
+//!   they are drawn right now, so a held arrow key or a drag reads as one continuous motion;
 //! - the same cells moved on screen (scrolling, zoom, a resized column or window): the outline
 //!   stays glued to its cells;
 //! - another sheet or workbook, an outline that wasn't drawn the frame before, a move that starts
@@ -61,14 +63,18 @@ pub struct SelectionGlide {
     drawn: Rect,
     /// Each edge's distance from the target when the glide set off: left, top, right, bottom.
     offset: [f32; 4],
+    /// When this glide set off. A new destination keeps the time already elapsed this frame,
+    /// so the border moves on the frame the selection changes instead of waiting for the next one.
     started: f64,
+    /// Clock at the previous frame, for that elapsed time.
+    seen: f64,
     gliding: bool,
     frame_nr: u64,
 }
 
 impl Default for SelectionGlide {
     fn default() -> Self {
-        SelectionGlide { last: None, drawn: Rect::ZERO, offset: [0.0; 4], started: 0.0, gliding: false, frame_nr: 0 }
+        SelectionGlide { last: None, drawn: Rect::ZERO, offset: [0.0; 4], started: 0.0, seen: 0.0, gliding: false, frame_nr: 0 }
     }
 }
 
@@ -76,20 +82,28 @@ impl SelectionGlide {
     /// Advance to this frame; returns where to draw the outline.
     pub fn frame(&mut self, f: Frame) -> Rect {
         let fresh = f.frame_nr.wrapping_sub(self.frame_nr) <= 1;
+        let elapsed = f.now - self.seen;
+        let dt = if fresh && elapsed.is_finite() && elapsed > 0.0 { elapsed } else { 0.0 };
         self.frame_nr = f.frame_nr;
+        if f.now.is_finite() {
+            self.seen = f.now;
+        }
         let key = Some((f.place, f.range));
         if self.last != key {
             // A new destination: set off from where the outline is drawn now (mid-glide or at rest).
             let same_sheet = self.last.is_some_and(|(place, _)| place == f.place);
             self.offset = if same_sheet && fresh { offset_between(self.drawn, f.target, f.view) } else { [0.0; 4] };
-            self.started = f.now;
+            // Count this frame. Resetting the clock to `now` would draw the old rectangle until
+            // the next frame, so a drag that reaches a new cell every frame would never move.
+            self.started = f.now - dt;
             self.last = key;
         }
         if !f.animate {
             self.offset = [0.0; 4];
         }
-        // Arrived when the time is up (or the clock went backwards).
+        // Arrived when the time is up, or the clock went backwards or otherwise isn't usable.
         let progress = (f.now - self.started) / GLIDE_SECS;
+        let progress = if progress.is_finite() { progress } else { 1.0 };
         self.gliding = self.offset != [0.0; 4] && (0.0..1.0).contains(&progress);
         let left = if self.gliding { 1.0 - ease_out(progress as f32) } else { 0.0 };
         let [l, t, r, b] = self.offset.map(|o| o * left);
@@ -214,8 +228,9 @@ mod tests {
         let (a, b) = (at(0.0, 0.0), at(64.0, 32.0));
         let mut r = Rig::new(cell(0, 0), a);
         r.select(cell(2, 1), b);
+        assert_eq!(r.step(0.0), a, "a new destination doesn't jump ahead of the clock");
         let drawn = r.settle(DT);
-        assert_eq!(drawn.first(), Some(&a), "it sets off from where it was");
+        assert!(drawn.first().is_some_and(|d| d.min.x > a.min.x && d.min.x < b.min.x), "the first moment already sets off: {:?}", drawn.first());
         assert_eq!(drawn.last(), Some(&b), "and lands exactly on the cells");
         assert!(drawn.len() > 20, "over about {GLIDE_SECS} s, not in one frame: {} frames", drawn.len());
         for w in drawn.windows(2) {
@@ -266,6 +281,23 @@ mod tests {
         let next = r.step(0.0);
         assert!(near(next, mid), "no jump when the destination changes: {next:?} vs {mid:?}");
         assert_eq!(r.settle(DT).last(), Some(&at(128.0, 0.0)));
+    }
+
+    #[test]
+    fn a_drag_moves_the_outline_on_every_new_cell() {
+        // One cell wider every frame, the way a pointer drag crosses cells.
+        let mut r = Rig::new(cell(0, 0), at(0.0, 0.0));
+        let mut prev = at(0.0, 0.0).max.x;
+        for col in 1..8 {
+            let target = Rect::from_min_size(pos2(0.0, 0.0), vec2(64.0 * (col + 1) as f32, 16.0));
+            r.select(RangeRef::new(CellRef::new(0, 0), CellRef::new(0, col)), target);
+            let drawn = r.step(1.0 / 60.0);
+            assert!(drawn.max.x > prev, "frame {col} stayed put at {drawn:?}");
+            assert!(drawn.max.x < target.max.x, "frame {col} snapped to the cell: {drawn:?}");
+            prev = drawn.max.x;
+        }
+        // And it is with the cursor, not back at the cell where the drag began.
+        assert!(prev > 64.0 * 4.0, "still near the start: {prev}");
     }
 
     #[test]
@@ -323,13 +355,13 @@ mod tests {
         let column = Rect::from_min_max(pos2(0.0, 0.0), pos2(64.0, 16_000_000.0));
         let mut r = Rig::new(RangeRef::cols(0, 0), column);
         r.select(cell(3, 0), at(0.0, 48.0));
-        let first = r.step(DT);
+        let first = r.step(0.0);
         assert_eq!(first.min, column.min);
         assert_eq!(first.max.y, 64.0 + VIEW.height(), "from the window's height below, not from row 1,048,576");
         assert_eq!(r.settle(DT).last(), Some(&at(0.0, 48.0)));
         // And back: the far edge leaves the same way.
         r.select(RangeRef::cols(0, 0), column);
-        assert_eq!(r.step(DT).max.y, 16_000_000.0 - VIEW.height());
+        assert_eq!(r.step(0.0).max.y, 16_000_000.0 - VIEW.height());
         assert_eq!(r.settle(DT).last(), Some(&column));
     }
 
