@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
-use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Workbook};
+use gridcraft_engine::model::{Anchor, DrawingRef, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
@@ -386,6 +386,13 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             }
         }
     }
+    // A selected group is framed as a whole, like Excel.
+    if let Some(a) = app.selected_chart.and_then(|id| sh.group_anchor(id)) {
+        let r = anchor_rect(geo, sh, &a);
+        let start = p.add(egui::Shape::Noop);
+        selection_frame(p, r);
+        done(start, r);
+    }
     paint_slicers(app, p, geo, wb, si, sh);
     painted
 }
@@ -504,9 +511,25 @@ fn selection_frame(p: &Painter, r: Rect) {
     let _ = Align2::CENTER_CENTER;
 }
 
-/// The topmost object under `p`: (kind, id, rect).
+/// The topmost object under `p`: (kind, id, rect). A grouped object is hit as its outermost
+/// group (`"group"`, the group's id and box), as clicking one selects the group in Excel.
 pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
     let _ = app;
+    let (kind, id, r) = hit_object(geo, sh, p)?;
+    let member = match kind {
+        "chart" => DrawingRef::Chart(id),
+        "image" => DrawingRef::Image(id),
+        "shape" => DrawingRef::Shape(id),
+        _ => return Some((kind, id, r)),
+    };
+    match sh.outer_group(member).and_then(|g| Some((g, sh.group_anchor(g)?))) {
+        Some((g, a)) => Some(("group", g, anchor_rect(geo, sh, &a))),
+        None => Some((kind, id, r)),
+    }
+}
+
+/// The topmost object under `p`, a grouped one as itself: (kind, id, rect).
+pub fn hit_object(geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
     for sl in sh.slicers.iter().rev() {
         let r = anchor_rect(geo, sh, &sl.anchor);
         if r.contains(p) && geo.cells.contains(p) {

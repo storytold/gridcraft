@@ -1882,11 +1882,12 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             return;
         }
         if app.session.draw_tool == "eraser" && (primary_clicked || resp.dragged()) {
+            // The eraser rubs out the stroke itself, grouped or not; the rest of a group stays.
             if let Some(p) = pos
-                && let Some(("shape", id, _)) = crate::chartview::hit(app, geo, sh, p)
+                && let Some(("shape", id, _)) = crate::chartview::hit_object(geo, sh, p)
                 && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::Ink)
             {
-                let _ = app.run("object.delete", json!({"kind": "shape", "id": id}));
+                let _ = app.run("object.delete", json!({"kind": "shape", "id": id, "member": true}));
             }
             return;
         }
@@ -2504,6 +2505,7 @@ fn object_anchor(sh: &Sheet, kind: &str, id: u32) -> Option<gridcraft_engine::mo
         "chart" => sh.charts.iter().find(|c| c.id == id).map(|c| c.anchor),
         "image" => sh.images.iter().find(|c| c.id == id).map(|c| c.anchor),
         "slicer" => sh.slicers.iter().find(|c| c.id == id).map(|c| c.anchor),
+        "group" => sh.group_anchor(id),
         _ => sh.shapes.iter().find(|c| c.id == id).map(|c| c.anchor),
     }
 }
@@ -2516,6 +2518,8 @@ fn delete_selected_object(app: &mut SheetApp, sh: &Sheet) -> bool {
         "image"
     } else if sh.shapes.iter().any(|object| object.id == id) {
         "shape"
+    } else if sh.drawing_group(id).is_some() {
+        "group"
     } else {
         return false;
     };

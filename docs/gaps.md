@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-13 · **Change:** minor (§17: drawing groups kept from files) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -134,7 +134,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - Ink strokes now survive XLSX save/reopen as editable polylines. Inserted icons still lose their
   identity/artwork on save (#551); native Office InkML import is not implemented.
 - SmartArt, WordArt, equations, signature line, objects, 3-D models, screenshot; 8 shape kinds vs
-  ~170; pictures in cells (#61, PR #105). **Estimate:** 25–40 h.
+  ~170; pictures in cells (#61, PR #105); Group / Ungroup commands (groups opened from a file are
+  kept, select, move and delete as one, but can't be made or broken up here). **Estimate:** 25–40 h.
 
 ### 18. Accessibility (U)
 - AccessKit on, but no accessible grid/ribbon tree, no high contrast, no checker. **Estimate:** 12–18 h.
@@ -168,6 +169,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | §17: drawing groups (`grpSp`) opened from a file are kept on save and move or delete as one; Group / Ungroup commands remain |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
 | 2026-10-12 | minor | Page Layout view: dragging margins on the rulers (#792) removed from the §14 remainder |
 | 2026-10-12 | minor | §13: Forecast Sheet Forecast Start (hindcast) landed (#785) |

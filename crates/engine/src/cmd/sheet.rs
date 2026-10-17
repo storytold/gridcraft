@@ -133,13 +133,15 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
         }
     };
     // Floating objects: snapshot their bottom-right corners against the pre-shift geometry, so a
-    // re-fit after the shift measures against the grid the object actually lands on.
+    // re-fit after the shift measures against the grid the object actually lands on. Groups'
+    // own boxes follow too (a rotated group is saved with its box).
     let obj_corners: Vec<(u32, u32, f32, f32)> = sh
         .charts
         .iter()
         .map(|o| &o.anchor)
         .chain(sh.images.iter().map(|o| &o.anchor))
         .chain(sh.shapes.iter().map(|o| &o.anchor))
+        .chain(sh.groups.iter().map(|g| &g.anchor))
         .map(|a| anchor_corner(sh, a))
         .collect();
     // Line info.
@@ -187,13 +189,15 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     sh.comments = std::mem::take(&mut sh.comments).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     sh.hyperlinks = std::mem::take(&mut sh.hyperlinks).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     // Floating objects follow their anchor lines per their [`AnchorMode`]. Corners were snapshotted
-    // as charts ++ images ++ shapes, matching the three slices below. New anchors are computed
-    // against the post-shift grid first (the re-fit needs its sizes), then written back.
+    // as charts ++ images ++ shapes ++ groups, matching the four slices below. New anchors are
+    // computed against the post-shift grid first (the re-fit needs its sizes), then written back.
     let anchored = |ui: usize, a: Anchor| -> Anchor { obj_corners.get(ui).map_or(a, |&corner| shift_anchor(sh, a, corner, axis, at, &map_line)) };
     let new_charts: Vec<Anchor> = sh.charts.iter().enumerate().map(|(i, o)| anchored(i, o.anchor)).collect();
     let new_images: Vec<Anchor> = sh.images.iter().enumerate().map(|(i, o)| anchored(new_charts.len() + i, o.anchor)).collect();
     let base = new_charts.len() + new_images.len();
     let new_shapes: Vec<Anchor> = sh.shapes.iter().enumerate().map(|(i, o)| anchored(base + i, o.anchor)).collect();
+    let base = base + new_shapes.len();
+    let new_groups: Vec<Anchor> = sh.groups.iter().enumerate().map(|(i, g)| anchored(base + i, g.anchor)).collect();
     for (o, a) in sh.charts.iter_mut().zip(new_charts) {
         o.anchor = a;
     }
@@ -202,6 +206,9 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     }
     for (o, a) in sh.shapes.iter_mut().zip(new_shapes) {
         o.anchor = a;
+    }
+    for (g, a) in sh.groups.iter_mut().zip(new_groups) {
+        g.anchor = a;
     }
     for sp in sh.sparklines.iter_mut() {
         if let Some(c) = map_cell(sp.cell) {
@@ -416,6 +423,7 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
                 .map(|o| &mut o.anchor)
                 .chain(sh.images.iter_mut().map(|o| &mut o.anchor))
                 .chain(sh.shapes.iter_mut().map(|o| &mut o.anchor))
+                .chain(sh.groups.iter_mut().map(|g| &mut g.anchor))
             {
                 if object.mode != AnchorMode::Absolute && (moved_from..moved_from + count).contains(&object.cell.col) {
                     object.cell.col = destination + (object.cell.col - moved_from);
