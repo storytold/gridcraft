@@ -456,6 +456,20 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
         || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c) && spilled_over(*c))
 }
 
+/// Whether `arr`, anchored at `anchor`, would spill exactly what the sheet already holds over
+/// `range`: the same area, nothing new in the way, and the same values.
+fn spills_as_before(sheet: &gridcraft_model::Sheet, anchor: CellRef, range: RangeRef, arr: &Array) -> bool {
+    let end =
+        CellRef::new(anchor.row.saturating_add((arr.rows as u32).saturating_sub(1)), anchor.col.saturating_add((arr.cols as u32).saturating_sub(1)));
+    RangeRef::new(anchor, end) == range
+        && !sheet.merges.iter().any(|m| m.intersects(&range))
+        && !sheet.tables.iter().any(|t| t.range.contains(anchor))
+        && range
+            .iter()
+            .enumerate()
+            .all(|(i, c)| c == anchor || (!sheet.cells.has(c) && sheet.spill.get(&c) == Some(arr.data.get(i).unwrap_or(&Value::Empty))))
+}
+
 impl PassHost<'_> {
     fn compute(&mut self, k: Key) -> Value {
         if let Some(v) = self.results.get(&k) {
@@ -950,6 +964,7 @@ impl Calc {
     /// Evaluates the dirty set and writes results (and spills) back.
     fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
+        self.last_recalc_cells = 0;
         for _round in 0..8 {
             if dirty.is_empty() {
                 break;
@@ -984,7 +999,7 @@ impl Calc {
                 eprintln!("  eval {} formulas {:.1} ms", results.len(), prof_now() - tp);
             }
             let tw = prof_now();
-            self.last_recalc_cells = results.len();
+            self.last_recalc_cells += results.len();
             self.circular = cycles;
             // Write back.
             let mut spill_changes: Vec<Key> = Vec::new();
@@ -1002,6 +1017,14 @@ impl Calc {
                 let Some(sheet) = wb.sheet_mut(k.0) else { continue };
                 let old = sheet.spill_ranges.get(&k.1).copied();
                 if old.is_none() && new.is_none() {
+                    continue;
+                }
+                // An array that spills exactly as before changes nothing its dependents read, so
+                // they aren't queued again. Otherwise two arrays that read each other's spill areas
+                // queue each other in every round, up to the round limit.
+                if let (Some(r), Some(arr)) = (old, new)
+                    && spills_as_before(sheet, k.1, r, arr)
+                {
                     continue;
                 }
                 if let Some(r) = old {

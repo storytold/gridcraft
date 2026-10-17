@@ -68,6 +68,25 @@ fn spill_range_operator() {
 }
 
 #[test]
+fn arrays_that_spill_as_before_do_not_requeue_their_dependents() {
+    // Two arrays that each read the other's spill area, and a formula reading both spills.
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(2)+0*B2");
+    t.set("B1", "=SEQUENCE(2)+0*A2");
+    t.set("C1", "=SUM(A1#)+SUM(B1#)");
+    // An edit that spills the same values again: one round, not one per round up to the limit.
+    t.set("A1", "=SEQUENCE(2)+0*B2+0");
+    assert_eq!((t.num("A2"), t.num("B2"), t.num("C1")), (2.0, 2.0, 6.0));
+    assert!(t.calc.last_recalc_cells <= 3, "{} formulas evaluated for one edit", t.calc.last_recalc_cells);
+    // Only the anchor's value changes: formulas reading the whole spill still see it.
+    t.set("A1", "={7;2}+0*B2");
+    assert_eq!((t.num("A1"), t.num("C1")), (7.0, 12.0));
+    // A spill that does change still reaches its dependents.
+    t.set("A1", "=SEQUENCE(2)*10+0*B2");
+    assert_eq!((t.num("A2"), t.num("C1")), (20.0, 33.0));
+}
+
+#[test]
 fn arithmetic_and_dependencies() {
     let mut t = T::new();
     t.set("A1", "2");
