@@ -1710,6 +1710,8 @@ pub(crate) fn paint_headers(
     let full_col = |c: u32| sel.ranges.iter().any(|x| x.is_full_cols() && c >= x.start.col && c <= x.end.col);
     let full_row = |rr: u32| sel.ranges.iter().any(|x| x.is_full_rows() && rr >= x.start.row && rr <= x.end.row);
     let _ = bounds;
+    // Hidden columns and rows leave a double divider where they sit, as in Excel.
+    let hidden_mark = Stroke::new(1.0, t.header_text.gamma_multiply(0.6));
     let mut done_cols = std::collections::HashSet::new();
     let mut done_rows = std::collections::HashSet::new();
     for (rows, cols, clip) in quads {
@@ -1730,6 +1732,12 @@ pub(crate) fn paint_headers(
                     pc.line_segment([pos2(cr.left(), cr.bottom() - 1.0), pos2(cr.right(), cr.bottom() - 1.0)], Stroke::new(2.0, t.accent));
                 }
                 pc.line_segment([pos2(cr.right() - 0.5, cr.top() + 3.0), pos2(cr.right() - 0.5, cr.bottom())], Stroke::new(1.0, t.header_line));
+                let (before, after) = hidden_around(c, |i| sh.col_width(i));
+                for x in [before.then_some(cr.left()), after.then_some(cr.right())].into_iter().flatten() {
+                    for dx in [-1.5, 1.5] {
+                        pc.line_segment([pos2(x + dx, cr.top() + 3.0), pos2(x + dx, cr.bottom())], hidden_mark);
+                    }
+                }
                 let color = if col_sel(c) { t.header_sel_text } else { t.header_text };
                 pc.text(cr.center(), Align2::CENTER_CENTER, col_to_letters(c), font.clone(), color);
             }
@@ -1751,6 +1759,12 @@ pub(crate) fn paint_headers(
                     pr.line_segment([pos2(cr.right() - 1.0, cr.top()), pos2(cr.right() - 1.0, cr.bottom())], Stroke::new(2.0, t.accent));
                 }
                 pr.line_segment([pos2(cr.left() + 3.0, cr.bottom() - 0.5), pos2(cr.right(), cr.bottom() - 0.5)], Stroke::new(1.0, t.header_line));
+                let (before, after) = hidden_around(rr, |i| sh.row_height(i));
+                for y in [before.then_some(cr.top()), after.then_some(cr.bottom())].into_iter().flatten() {
+                    for dy in [-1.5, 1.5] {
+                        pr.line_segment([pos2(cr.left() + 3.0, y + dy), pos2(cr.right(), y + dy)], hidden_mark);
+                    }
+                }
                 let color = if row_sel(rr) { t.header_sel_text } else { t.header_text };
                 pr.text(cr.center(), Align2::CENTER_CENTER, (rr as u64 + 1).to_string(), font.clone(), color);
             }
@@ -1767,6 +1781,12 @@ pub(crate) fn paint_headers(
     p.add(egui::Shape::convex_polygon(tri, Color32::from_gray(190), Stroke::NONE));
     p.line_segment([pos2(r.left(), geo.cells.top() - 0.5), pos2(r.right(), geo.cells.top() - 0.5)], Stroke::new(1.0, t.header_line));
     p.line_segment([pos2(geo.cells.left() - 0.5, r.top()), pos2(geo.cells.left() - 0.5, r.bottom())], Stroke::new(1.0, t.header_line));
+}
+
+/// Whether the line before / after visible line `i` is hidden (zero size), so its header edges
+/// get the hidden marker. Line 0 has nothing before it.
+fn hidden_around(i: u32, size: impl Fn(u32) -> f32) -> (bool, bool) {
+    (i > 0 && size(i - 1) <= 0.0, i < u32::MAX && size(i + 1) <= 0.0)
 }
 
 // ------------------------------------------------------------------ interaction
@@ -1825,10 +1845,15 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         let near_object_corner = app.grid.drag == Drag::None && near_corner;
         if near_object_corner || matches!(app.grid.drag, Drag::Object { resize: true, .. }) {
             ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
-        } else if near_col_edge {
-            ctx.set_cursor_icon(CursorIcon::ResizeColumn);
-        } else if near_row_edge {
-            ctx.set_cursor_icon(CursorIcon::ResizeRow);
+        } else if near_col_edge || near_row_edge {
+            // Just past a hidden column or row, Excel shows a split cursor: dragging or
+            // double-clicking there unhides it.
+            let hidden = app.grid.drag == Drag::None
+                && if near_col_edge { hidden_col_edge(geo, sh, p.x).is_some() } else { hidden_row_edge(geo, sh, p.y).is_some() };
+            match pointer.hover_pos() {
+                Some(at) if hidden => paint_split_cursor(&ctx, at, near_col_edge),
+                _ => ctx.set_cursor_icon(if near_col_edge { CursorIcon::ResizeColumn } else { CursorIcon::ResizeRow }),
+            }
         } else if on_handle(p) && app.editor.is_none() {
             ctx.set_cursor_icon(CursorIcon::Crosshair);
             if app.grid.drag == Drag::None && !pointer.any_down() {
@@ -1944,7 +1969,16 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     if resp.double_clicked()
         && let Some(p) = pos
     {
-        let autofit = if in_col_header {
+        let unhide = if in_col_header {
+            hidden_col_edge(geo, sh, p.x).map(|col| ("home.unhideColumns", json!({"cols": RangeRef::cols(col, col).a1()})))
+        } else if in_row_header {
+            hidden_row_edge(geo, sh, p.y).map(|row| ("home.unhideRows", json!({"rows": RangeRef::rows(row, row).a1()})))
+        } else {
+            None
+        };
+        let autofit = if unhide.is_some() {
+            unhide
+        } else if in_col_header {
             col_edge(geo, sh, p.x).map(|(col, _)| {
                 let selected = sel.ranges.iter().any(|r| r.is_full_cols() && col >= r.start.col && col <= r.end.col);
                 ("home.autofitColumnWidth", if selected { json!({}) } else { json!({"cols": RangeRef::cols(col, col).a1()}) })
@@ -2492,6 +2526,36 @@ fn row_edge(geo: &Geo, sh: &Sheet, y: f32) -> Option<(u32, f32)> {
         }
     }
     None
+}
+
+/// The hidden column whose (zero-width) edge is at `x`: only just right of the boundary, as the
+/// edge just left of it belongs to the visible column there.
+fn hidden_col_edge(geo: &Geo, sh: &Sheet, x: f32) -> Option<u32> {
+    col_edge(geo, sh, x).map(|(c, _)| c).filter(|&c| sh.col_width(c) <= 0.0)
+}
+
+fn hidden_row_edge(geo: &Geo, sh: &Sheet, y: f32) -> Option<u32> {
+    row_edge(geo, sh, y).map(|(r, _)| r).filter(|&r| sh.row_height(r) <= 0.0)
+}
+
+/// A split cursor (two bars with arrows either side) painted in place of the OS cursor, which
+/// has no such shape. Black on a white outline, like the system cursors.
+fn paint_split_cursor(ctx: &egui::Context, at: Pos2, cols: bool) {
+    ctx.set_cursor_icon(CursorIcon::None);
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("gridcraft.split_cursor")));
+    // Drawn for columns (bars vertical); rows swap the axes.
+    let pt = |x: f32, y: f32| if cols { pos2(at.x + x, at.y + y) } else { pos2(at.x + y, at.y + x) };
+    let arrow = |dir: f32| vec![pt(dir * 10.0, 0.0), pt(dir * 6.0, -4.0), pt(dir * 6.0, 4.0)];
+    for (width, color) in [(3.0, Color32::WHITE), (1.0, Color32::BLACK)] {
+        let stroke = Stroke::new(width, color);
+        for bx in [-1.5, 1.5] {
+            p.line_segment([pt(bx, -8.0), pt(bx, 8.0)], stroke);
+        }
+        p.line_segment([pt(-7.0, 0.0), pt(7.0, 0.0)], stroke);
+        for dir in [-1.0, 1.0] {
+            p.add(egui::Shape::convex_polygon(arrow(dir), color, Stroke::new(width - 1.0, color)));
+        }
+    }
 }
 
 fn is_filter_button(sh: &Sheet, geo: &Geo, p: Pos2) -> bool {
@@ -3590,6 +3654,38 @@ mod pane_tests {
         sh.freeze = Some((2, 2));
         let scroll = vec2(3.0 * sh.default_col_width + 8.0, 0.0);
         Geo::new(sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0)), scroll)
+    }
+
+    #[test]
+    fn the_edge_just_past_a_hidden_line_unhides_it() {
+        let mut sh = Sheet::new("S");
+        sh.cols.entry(11).or_default().hidden = true; // L
+        sh.rows.entry(26).or_default().hidden = true; // 27
+        let geo = Geo::new(&sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(2000.0, 1200.0)), vec2(0.0, 0.0));
+        let x = geo.x(&sh, 12); // between K and M
+        assert_eq!(hidden_col_edge(&geo, &sh, x + 2.0), Some(11));
+        assert_eq!(hidden_col_edge(&geo, &sh, x - 2.0), None); // K's own edge
+        assert_eq!(hidden_col_edge(&geo, &sh, geo.x(&sh, 5)), None);
+        let y = geo.y(&sh, 27); // between 26 and 28
+        assert_eq!(hidden_row_edge(&geo, &sh, y + 2.0), Some(26));
+        assert_eq!(hidden_row_edge(&geo, &sh, y - 2.0), None);
+    }
+
+    #[test]
+    fn headers_mark_the_edges_next_to_hidden_lines() {
+        let mut sh = Sheet::new("S");
+        sh.cols.entry(0).or_default().hidden = true; // A
+        sh.cols.entry(11).or_default().hidden = true; // L
+        sh.rows.entry(26).or_default().hidden = true; // 27
+        let col = |c| hidden_around(c, |i| sh.col_width(i));
+        assert_eq!(col(1), (true, false)); // B, after hidden A
+        assert_eq!(col(10), (false, true)); // K
+        assert_eq!(col(12), (true, false)); // M
+        assert_eq!(col(5), (false, false));
+        let row = |r| hidden_around(r, |i| sh.row_height(i));
+        assert_eq!(row(25), (false, true));
+        assert_eq!(row(27), (true, false));
+        assert_eq!(row(0), (false, false));
     }
 
     #[test]
