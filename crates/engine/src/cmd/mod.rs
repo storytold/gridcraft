@@ -246,6 +246,11 @@ pub(crate) fn target_ranges(s: &Session, p: &Json) -> Result<Vec<RangeRef>> {
     Ok(s.doc()?.selection.ranges.clone())
 }
 
+/// A `rows`/`cols` parameter: `3:5` and `B:C`, or a single `3` or `B`.
+pub(crate) fn parse_lines(t: &str) -> Option<RangeRef> {
+    RangeRef::parse(t).or_else(|| if t.contains(':') { None } else { RangeRef::parse(&format!("{t}:{t}")) })
+}
+
 pub(crate) fn target_range(s: &Session, p: &Json) -> Result<RangeRef> {
     Ok(target_ranges(s, p)?.first().copied().unwrap_or_default())
 }

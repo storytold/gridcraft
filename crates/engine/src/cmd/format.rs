@@ -940,7 +940,7 @@ fn line_targets(s: &Session, p: &Json, rows: bool) -> Result<Vec<(u32, u32)>> {
         return t
             .split(',')
             .map(|part| {
-                let r = RangeRef::parse(part).ok_or_else(|| bad(key, format!("not a range: {part}")))?;
+                let r = parse_lines(part).ok_or_else(|| bad(key, format!("not a range: {part}")))?;
                 Ok(if rows { (r.start.row, r.end.row) } else { (r.start.col, r.end.col) })
             })
             .collect();

@@ -1127,10 +1127,10 @@ fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
 // ---------------------------------------------------------------- outline
 
 fn outline_lines(s: &Session, p: &Json) -> Result<(bool, u32, u32)> {
-    if let Some(r) = str_param(p, "rows").and_then(RangeRef::parse) {
+    if let Some(r) = str_param(p, "rows").and_then(parse_lines) {
         return Ok((true, r.start.row, r.end.row));
     }
-    if let Some(r) = str_param(p, "cols").and_then(RangeRef::parse) {
+    if let Some(r) = str_param(p, "cols").and_then(parse_lines) {
         return Ok((false, r.start.col, r.end.col));
     }
     let r = s.doc()?.selection.current();
@@ -1491,6 +1491,20 @@ mod tests {
             let err = s.execute("data.sort", params).unwrap_err();
             assert!(matches!(err, EngineError::BadParams { .. }), "row {row}: {err:?}");
         }
+    }
+
+    #[test]
+    fn single_row_and_column_parameters() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [3, 4]]})).unwrap();
+        s.execute("home.insertRows", json!({"rows": "2"})).unwrap();
+        s.execute("home.insertColumns", json!({"cols": "B"})).unwrap();
+        let v = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["value"].clone();
+        assert_eq!(v(&mut s, "C3"), json!(4.0));
+        s.execute("home.hideRows", json!({"rows": "1"})).unwrap();
+        s.execute("data.group", json!({"cols": "C"})).unwrap();
+        assert!(s.execute("home.deleteRows", json!({"rows": "0"})).is_err());
     }
 
     #[test]
