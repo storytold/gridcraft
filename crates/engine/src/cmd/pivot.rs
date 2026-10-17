@@ -1355,26 +1355,37 @@ fn change_source(s: &mut Session, p: &Json) -> Result<Json> {
 fn delete(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     edit(s, |cx| {
-        // Its PivotCharts become ordinary charts.
-        let link = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi).map(|pt| (sh.name.clone(), pt.name.clone())));
-        if let Some((sheet, name)) = link {
-            for i in 0..cx.wb.sheets.len() {
-                let linked = |c: &Chart| c.pivot.as_deref().is_some_and(|l| pv::links_to(l, &sheet, &name));
-                if cx.wb.sheet(i).is_some_and(|sh| sh.charts.iter().any(linked)) {
-                    for c in cx.sheet_mut(i)?.charts.iter_mut().filter(|c| linked(c)) {
-                        c.pivot = None;
-                    }
+        delete_pivot_in_sheet(cx, si, pi)?;
+        Ok(json!({}))
+    })
+}
+
+pub(crate) fn delete_pivot_in_sheet(cx: &mut Ctx, si: usize, pi: usize) -> Result<()> {
+    // Its PivotCharts become ordinary charts.
+    let link = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi).map(|pt| (sh.name.clone(), pt.name.clone())));
+    if let Some((sheet, name)) = link {
+        for i in 0..cx.wb.sheets.len() {
+            let linked = |c: &Chart| c.pivot.as_deref().is_some_and(|l| pv::links_to(l, &sheet, &name));
+            if cx.wb.sheet(i).is_some_and(|sh| sh.charts.iter().any(linked)) {
+                for c in cx.sheet_mut(i)?.charts.iter_mut().filter(|c| linked(c)) {
+                    c.pivot = None;
                 }
             }
         }
-        pv::clear_output(&mut cx.wb, si, pi);
-        let sh = cx.sheet_mut(si)?;
-        if pi < sh.pivots.len() {
-            sh.pivots.remove(pi);
+    }
+    let pt_range = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).and_then(|pt| pt.last_range);
+    pv::clear_output(&mut cx.wb, si, pi);
+    let sh = cx.sheet_mut(si)?;
+    if pi < sh.pivots.len() {
+        sh.pivots.remove(pi);
+    }
+    if let Some(r) = pt_range {
+        for row in r.start.row..=r.end.row {
+            cx.fit_rows.push((si, row));
         }
-        cx.structural = true;
-        Ok(json!({}))
-    })
+    }
+    cx.structural = true;
+    Ok(())
 }
 
 // ---------------------------------------------------------------- PivotChart
@@ -2307,5 +2318,98 @@ mod tests {
         s.execute("pivot.collapse", json!({"field": "Grp"})).unwrap();
         // 64 Sub items under the collapsed "g" show as one column group: (1 + grand total) x 256 columns fit.
         s.execute("pivot.addField", json!({"field": "Sub", "area": "columns"})).unwrap();
+    }
+
+    #[test]
+    fn clear_contents_on_entire_pivot_table_deletes_it() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        let pt_range = pt(&s).last_range.unwrap().a1();
+        assert_eq!(pt_range, "A3:B7");
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots.len(), 1);
+        assert!(!val(&s, "A4").is_empty());
+
+        // Deleting the entire pivot range completely deletes the PivotTable object and clears cells.
+        s.execute("edit.clearContents", json!({"range": &pt_range})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots.len(), 0);
+        assert!(val(&s, "A4").is_empty());
+        assert!(val(&s, "B4").is_empty());
+
+        // Undo restores the PivotTable and report cells.
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots.len(), 1);
+        assert_eq!(text(&s, "A4"), "East");
+
+        // Redo re-deletes it.
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots.len(), 0);
+        assert!(val(&s, "A4").is_empty());
+    }
+
+    #[test]
+    fn clear_contents_on_partial_pivot_table_is_refused() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        assert_eq!(text(&s, "A4"), "East");
+
+        // Clearing a single label cell or subset is refused.
+        let err = s.execute("edit.clearContents", json!({"range": "A4"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+        assert_eq!(text(&s, "A4"), "East");
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots.len(), 1);
+
+        // Clearing a partial range is refused.
+        let err = s.execute("edit.clearContents", json!({"range": "A3:A5"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+        assert_eq!(text(&s, "A4"), "East");
+    }
+
+    #[test]
+    fn clear_all_on_pivot_table() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        let pt_range = pt(&s).last_range.unwrap().a1();
+
+        // Partial clearAll is refused.
+        let err = s.execute("edit.clearAll", json!({"range": "A4:B5"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+
+        // Full clearAll deletes the pivot table.
+        s.execute("edit.clearAll", json!({"range": pt_range})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots.len(), 0);
+        assert!(val(&s, "A4").is_empty());
+    }
+
+    #[test]
+    fn clear_formats_on_partial_pivot_is_refused() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+
+        // Partial clearFormats is refused.
+        let err = s.execute("edit.clearFormats", json!({"range": "A4"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+    }
+
+    #[test]
+    fn line_and_cell_deletions_respect_pivot_boundaries() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        assert_eq!(pt(&s).last_range.unwrap().a1(), "A3:B7");
+
+        // Deleting a row cutting through the report (e.g. Row 5) is refused.
+        let err = s.execute("home.deleteRows", json!({"rows": "5:5"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+
+        // Deleting cells shifting within the report is refused.
+        let err = s.execute("home.deleteCells", json!({"range": "A4:B4", "shift": "up"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+
+        // Inserting cells shifting within the report is refused.
+        let err = s.execute("home.insertCells", json!({"range": "A4:B4", "shift": "down"})).unwrap_err().to_string();
+        assert_eq!(err, "Cannot change part of a PivotTable report.");
+
+        // Deleting whole rows encompassing the entire pivot table (rows 3 to 7) deletes the pivot table.
+        s.execute("home.deleteRows", json!({"rows": "3:7"})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().pivots.len(), 0);
     }
 }

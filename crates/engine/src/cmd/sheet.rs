@@ -331,7 +331,35 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
         check_lines_protection(s, p, axis, at, count, false)?;
     }
     let sheet = target_sheet(s, p)?;
+    let pivots_to_delete = {
+        let d = s.doc()?;
+        let sh = d.wb.sheet(sheet).ok_or_else(|| bad("sheet", "no such sheet"))?;
+        let mut to_delete = Vec::new();
+        for (pi, pt) in sh.pivots.iter().enumerate() {
+            let pt_range = pt.last_range.unwrap_or_else(|| RangeRef::cell(pt.anchor));
+            for &(at, count) in &areas {
+                let deleted = match axis {
+                    Axis::Rows => RangeRef::rows(at, at.saturating_add(count.saturating_sub(1))),
+                    Axis::Cols => RangeRef::cols(at, at.saturating_add(count.saturating_sub(1))),
+                };
+                if deleted.intersects(&pt_range) {
+                    if deleted.contains_range(&pt_range) {
+                        to_delete.push(pi);
+                    } else {
+                        return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+                    }
+                }
+            }
+        }
+        to_delete.dedup();
+        to_delete
+    };
     let out = edit(s, |cx| {
+        let mut to_delete = pivots_to_delete;
+        to_delete.sort_unstable_by(|a, b| b.cmp(a));
+        for pi in to_delete {
+            super::pivot::delete_pivot_in_sheet(cx, sheet, pi)?;
+        }
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
         cx.protection_checked = true;
         // Last area first, so the earlier ones keep their positions.
@@ -469,6 +497,12 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     if let Some(sh) = s.doc()?.wb.sheet(sheet) {
         check_table_shift(sh, &e)?;
+        for pt in &sh.pivots {
+            let pt_range = pt.last_range.unwrap_or_else(|| RangeRef::cell(pt.anchor));
+            if r.intersects(&pt_range) {
+                return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+            }
+        }
     }
     let right = shift == "right";
     let out = edit(s, |cx| {
@@ -500,6 +534,12 @@ fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     if let Some(sh) = s.doc()?.wb.sheet(sheet) {
         check_table_shift(sh, &e)?;
+        for pt in &sh.pivots {
+            let pt_range = pt.last_range.unwrap_or_else(|| RangeRef::cell(pt.anchor));
+            if r.intersects(&pt_range) {
+                return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+            }
+        }
     }
     let left = shift == "left";
     let out = edit(s, |cx| {

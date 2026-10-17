@@ -1220,9 +1220,36 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
 
 // ---------------------------------------------------------------- clear
 
+fn check_pivots_for_clear(sh: &gridcraft_model::Sheet, ranges: &[RangeRef], what: &str) -> Result<Vec<usize>> {
+    let mut to_delete = Vec::new();
+    if !matches!(what, "contents" | "all" | "formats") || sh.pivots.is_empty() {
+        return Ok(to_delete);
+    }
+    for (pi, pt) in sh.pivots.iter().enumerate() {
+        let pt_range = pt.last_range.unwrap_or_else(|| RangeRef::cell(pt.anchor));
+        if !ranges.iter().any(|r| r.intersects(&pt_range)) {
+            continue;
+        }
+        let fully_covered = ranges.iter().any(|r| r.contains_range(&pt_range))
+            || (pt_range.count() <= 100_000 && pt_range.iter().all(|c| ranges.iter().any(|r| r.contains(c))));
+        if !fully_covered {
+            return Err(EngineError::Other("Cannot change part of a PivotTable report.".into()));
+        }
+        if matches!(what, "contents" | "all") {
+            to_delete.push(pi);
+        }
+    }
+    Ok(to_delete)
+}
+
 fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
+    let pivots_to_delete = {
+        let d = s.doc()?;
+        let sh = d.wb.sheet(sheet).ok_or_else(|| bad("sheet", "no such sheet"))?;
+        check_pivots_for_clear(sh, &ranges, what)?
+    };
     // Delete on checkboxes works in two passes (as in Excel): checked boxes are unchecked first,
     // and only when every box in the selection is unchecked are the boxes removed.
     let uncheck_only = what == "contents" && {
@@ -1236,6 +1263,11 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
         })
     };
     edit(s, |cx| {
+        let mut to_delete = pivots_to_delete;
+        to_delete.sort_unstable_by(|a, b| b.cmp(a));
+        for pi in to_delete {
+            super::pivot::delete_pivot_in_sheet(cx, sheet, pi)?;
+        }
         for r in &ranges {
             let r = match cx.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
                 Some(u) => match r.intersection(&u) {
