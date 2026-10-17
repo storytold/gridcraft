@@ -612,6 +612,36 @@ fn functions_given_by_name() {
 }
 
 #[test]
+fn groupby_and_pivotby_take_a_lambda() {
+    let mut t = T::new();
+    for (i, (k, c, v)) in [("a", "x", 1), ("b", "x", 2), ("a", "y", 3)].iter().enumerate() {
+        t.set(&format!("A{}", i + 1), k);
+        t.set(&format!("B{}", i + 1), c);
+        t.set(&format!("C{}", i + 1), &v.to_string());
+    }
+    t.set("E1", "=GROUPBY(A1:A3,C1:C3,LAMBDA(x,SUM(x)))");
+    assert_eq!(t.get("E1"), Value::from("a"));
+    assert_eq!(t.num("F1"), 4.0);
+    assert_eq!(t.get("E2"), Value::from("b"));
+    assert_eq!(t.num("F2"), 2.0);
+    assert_eq!(t.get("E3"), Value::from("Total"));
+    assert_eq!(t.num("F3"), 6.0);
+    // A LET-bound lambda, called once per group with that group's values.
+    t.set("H1", "=LET(f,LAMBDA(v,ROWS(v)*10),GROUPBY(A1:A3,C1:C3,f))");
+    assert_eq!(t.num("I1"), 20.0);
+    assert_eq!(t.num("I3"), 30.0);
+    // PIVOTBY: rows a, b, Total; columns x, y, Total.
+    t.set("K1", "=PIVOTBY(A1:A3,B1:B3,C1:C3,LAMBDA(x,SUM(x)))");
+    assert_eq!(t.get("L1"), Value::from("x"));
+    assert_eq!(t.num("L2"), 1.0);
+    assert_eq!(t.num("M2"), 3.0);
+    assert_eq!(t.num("N4"), 6.0);
+    // Neither a function nor a lambda.
+    t.set("P1", "=GROUPBY(A1:A3,C1:C3,TRUE)");
+    assert_eq!(t.get("P1"), Value::Error(CellError::Value));
+}
+
+#[test]
 fn lambda_argument_count() {
     let mut t = T::new();
     t.wb.names.push(gridcraft_model::DefinedName {

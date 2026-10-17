@@ -90,6 +90,8 @@ struct FnCtx<'a, 'h> {
     ev: &'a mut Evaluator<'h>,
     /// The criteria argument of a database function, when it is a reference.
     criteria: Option<Area>,
+    /// The LAMBDA given as the function argument of GROUPBY/PIVOTBY.
+    lambda: Option<Arc<Lambda>>,
 }
 
 impl Ctx for FnCtx<'_, '_> {
@@ -123,6 +125,19 @@ impl Ctx for FnCtx<'_, '_> {
             .collect();
         let mut ev = Evaluator { host: &mut *self.ev.host, sheet: area.sheet, at, env, depth: self.ev.depth };
         Some(matches!(ev.value(&shifted).scalar().to_bool(), Ok(true)))
+    }
+    fn has_lambda(&self) -> bool {
+        self.lambda.is_some()
+    }
+    /// A LAMBDA must give one value per group; an array result is #CALC!.
+    fn call_lambda(&mut self, arg: Value) -> Option<Value> {
+        let l = self.lambda.clone()?;
+        let [p] = l.params.as_slice() else { return Some(Value::Error(CellError::Value)) };
+        let r = self.ev.call_lambda_values(&l, vec![(p.clone(), Ev::V(arg))]);
+        Some(match self.ev.deref(r) {
+            Value::Array(a) if a.data.len() != 1 => Value::Error(CellError::Calc),
+            v => v.scalar(),
+        })
     }
 }
 
@@ -618,7 +633,7 @@ impl<'h> Evaluator<'h> {
                         let value = self.value(a);
                         evaluated.push(Arg { value, from_ref: false });
                     }
-                    let mut ctx = FnCtx { ev: self, criteria: None };
+                    let mut ctx = FnCtx { ev: self, criteria: None, lambda: None };
                     return gridcraft_functions::call(spec, &evaluated, &mut ctx).pipe(Ev::V);
                 }
                 let i = match index.to_number() {
@@ -817,8 +832,21 @@ impl<'h> Evaluator<'h> {
         let mut criteria_shape = None;
         // Database functions: the criteria range (argument 2), whose formulas are computed criteria.
         let mut criteria = None;
+        // GROUPBY/PIVOTBY: the LAMBDA given as their function.
+        let mut lambda = None;
+        let lambda_at = match name {
+            "GROUPBY" => Some(2),
+            "PIVOTBY" => Some(3),
+            _ => None,
+        };
         for (i, a) in args.iter().enumerate() {
             let mut ev = self.eval(a);
+            if lambda_at == Some(i)
+                && let Ev::L(l) = &ev
+            {
+                lambda = Some(l.clone());
+                ev = Ev::V(Value::Empty);
+            }
             if spec.category == gridcraft_functions::Category::Database
                 && i == 2
                 && let Ev::R(areas) = &ev
@@ -853,7 +881,7 @@ impl<'h> Evaluator<'h> {
             };
             evaluated.push(Arg { value, from_ref });
         }
-        let mut ctx = FnCtx { ev: self, criteria };
+        let mut ctx = FnCtx { ev: self, criteria, lambda };
         gridcraft_functions::call(spec, &evaluated, &mut ctx).pipe(Ev::V)
     }
 
@@ -907,13 +935,13 @@ impl<'h> Evaluator<'h> {
         };
         let args = [Arg { value, from_ref }];
         if kind != Agg::Count {
-            match gridcraft_functions::call(sum, &args, &mut FnCtx { ev: self, criteria: None }) {
+            match gridcraft_functions::call(sum, &args, &mut FnCtx { ev: self, criteria: None, lambda: None }) {
                 Value::Number(n) => acc.sum += n,
                 other => return Err(Ev::V(other)),
             }
         }
         if kind != Agg::Sum {
-            match gridcraft_functions::call(count, &args, &mut FnCtx { ev: self, criteria: None }) {
+            match gridcraft_functions::call(count, &args, &mut FnCtx { ev: self, criteria: None, lambda: None }) {
                 Value::Number(n) => acc.count = acc.count.saturating_add(n as u64),
                 other => return Err(Ev::V(other)),
             }
@@ -1318,7 +1346,7 @@ impl<'h> Evaluator<'h> {
                         }
                     }
                 }
-                let mut ctx = FnCtx { ev: self, criteria: None };
+                let mut ctx = FnCtx { ev: self, criteria: None, lambda: None };
                 return match gridcraft_functions::call(spec, &xargs, &mut ctx) {
                     Value::Number(p) if p >= 1.0 => {
                         let k = p as u32 - 1;
