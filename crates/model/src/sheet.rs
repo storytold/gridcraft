@@ -170,6 +170,12 @@ impl Sheet {
     pub fn cell(&self, c: CellRef) -> Option<&Cell> {
         self.cells.get(c)
     }
+    /// The source of a non-anchor dynamic-array spill cell, from the current calc state.
+    /// Anchors, ordinary cells and cells outside successfully generated spills return `None`.
+    pub fn spill_anchor(&self, c: CellRef) -> Option<CellRef> {
+        self.spill_ranges.iter().find(|(anchor, range)| **anchor != c && range.contains(c)).map(|(anchor, _)| *anchor)
+    }
+
     /// Displayed value of a cell: its own value, or a spilled value.
     pub fn value(&self, c: CellRef) -> Value {
         match self.cells.get(c) {

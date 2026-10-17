@@ -39,20 +39,20 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 ui.painter().rect_stroke(field, 4.0, Stroke::new(1.0, t.input_border), StrokeKind::Inside);
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field.shrink2(vec2(6.0, 3.0))));
                 let id = egui::Id::new("gridcraft.formula_bar");
-                let editing_here = app.editor.as_ref().is_some_and(|e| e.from_formula_bar);
+                let read_only = active_spill_anchor(app).is_some();
                 if app.editor.is_some() {
                     editor_widget(app, &mut child, id, theme::ui_font(13.0), expanded, field.width() - 12.0);
                 } else {
                     // Show the active cell's content; clicking starts editing in the bar.
                     let text = active_input(app);
+                    let color = if read_only { t.text_disabled } else { t.text };
                     let resp = child
-                        .add(egui::Label::new(egui::RichText::new(text).font(theme::ui_font(13.0)).color(t.text)).truncate().sense(Sense::click()));
+                        .add(egui::Label::new(egui::RichText::new(text).font(theme::ui_font(13.0)).color(color)).truncate().sense(Sense::click()));
                     let click = child.interact(field, id.with("click"), Sense::click());
-                    if resp.clicked() || click.clicked() {
+                    if !read_only && (resp.clicked() || click.clicked()) {
                         app.begin_edit(None, true);
                     }
                 }
-                let _ = editing_here;
                 ui.allocate_space(vec2(avail, h - 6.0));
                 let chevron = if expanded { Icon::ChevronUp } else { Icon::Chevron };
                 if crate::widgets::icon_button(ui, chevron, t.text_dim, "Expand formula bar", vec2(20.0, 22.0)).clicked() {
@@ -62,12 +62,29 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         });
 }
 
+/// Resolve ownership on every frame; never cache a spill range in presentation state.
+pub(crate) fn active_spill_anchor(app: &SheetApp) -> Option<gridcraft_engine::core::CellRef> {
+    let d = app.session.active()?;
+    let sh = d.wb.active()?;
+    let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
+    sh.spill_anchor(at)
+}
+
 fn active_input(app: &SheetApp) -> String {
     let Some(d) = app.session.active() else { return String::new() };
     let Some(sh) = d.wb.active() else { return String::new() };
     let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
     if let Some(picture) = sh.cell_pictures.get(&a) {
         return if picture.alt.is_empty() { "Picture in cell".into() } else { format!("Picture: {}", picture.alt) };
+    }
+    if let Some(anchor) = sh.spill_anchor(a) {
+        if gridcraft_engine::display::formula_hidden(&d.wb, sh, anchor) {
+            return String::new();
+        }
+        return sh
+            .cell(anchor)
+            .map(|c| crate::formula_locale::display(&c.input_text(), app.ui.language.formula_locale(), &d.wb, d.wb.active_sheet))
+            .unwrap_or_default();
     }
     if let Some(c) = sh.cell(a) {
         if c.formula.is_some() && d.wb.styles.get(c.style).protection.hidden && sh.is_protected() {
@@ -80,17 +97,6 @@ fn active_input(app: &SheetApp) -> String {
         } else {
             gridcraft_engine::display::edit_text(&d.wb, sh, a)
         };
-    }
-    // A spilled cell shows the anchor's formula greyed out in Excel; we show it plainly.
-    for (anchor, r) in &sh.spill_ranges {
-        if r.contains(a)
-            && let Some(f) = sh.cell(*anchor).and_then(|c| c.formula.as_ref())
-        {
-            if gridcraft_engine::display::formula_hidden(&d.wb, sh, *anchor) {
-                return String::new();
-            }
-            return crate::formula_locale::display(&format!("={}", f.text), app.ui.language.formula_locale(), &d.wb, d.wb.active_sheet);
-        }
     }
     String::new()
 }
@@ -473,4 +479,132 @@ pub fn function_signature(name: &str) -> Option<String> {
 
 pub fn function_description(name: &str) -> Option<String> {
     function_info(name).and_then(|f| f["description"].as_str().map(str::to_string))
+}
+
+#[cfg(test)]
+mod spill_tests {
+    use super::*;
+    use gridcraft_engine::Session;
+
+    fn app() -> SheetApp {
+        let mut s = Session::new();
+        s.new_workbook();
+        SheetApp::new(s, Default::default())
+    }
+
+    fn set(app: &mut SheetApp, cell: &str, input: &str) {
+        app.run("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+
+    fn select(app: &mut SheetApp, cell: &str) {
+        app.cancel_edit();
+        app.run("selection.set", json!({"cell": cell})).unwrap();
+    }
+
+    fn check(app: &mut SheetApp, cell: &str, text: &str, read_only: bool) {
+        select(app, cell);
+        assert_eq!(active_input(app), text);
+        assert_eq!(active_spill_anchor(app).is_some(), read_only);
+        app.begin_edit(None, true);
+        assert_eq!(app.editor.is_none(), read_only);
+        app.cancel_edit();
+        if read_only {
+            app.begin_edit(Some("=SUM(1,2)".into()), true);
+            assert!(app.editor.is_none());
+        }
+    }
+
+    #[test]
+    fn selection_restores_editing_and_keeps_spill_formulas_only_at_anchor() {
+        let mut app = app();
+        set(&mut app, "A1", "=SEQUENCE(5,1,10,10)");
+        set(&mut app, "D1", "=SUM(1,2)");
+        set(&mut app, "D2", "hello");
+        for cell in ["A2", "A3", "A4", "A5"] {
+            check(&mut app, cell, "=SEQUENCE(5,1,10,10)", true);
+        }
+        check(&mut app, "A1", "=SEQUENCE(5,1,10,10)", false);
+        check(&mut app, "D1", "=SUM(1,2)", false);
+        check(&mut app, "D2", "hello", false);
+        check(&mut app, "E1", "", false);
+        let sh = app.session.active().unwrap().wb.active().unwrap();
+        assert!(sh.cell(gridcraft_engine::core::CellRef::parse("A2").unwrap()).and_then(|c| c.formula.as_ref()).is_none());
+        // Intentional grid replacement retains the existing entry behavior.
+        select(&mut app, "A2");
+        app.begin_edit(Some("replacement".into()), false);
+        assert!(app.editor.is_some());
+    }
+
+    #[test]
+    fn spill_ownership_follows_recalculation_and_obstructions() {
+        let mut app = app();
+        set(&mut app, "D1", "2");
+        set(&mut app, "A1", "=SEQUENCE(D1,2)");
+        check(&mut app, "B2", "=SEQUENCE(D1,2)", true);
+        set(&mut app, "D1", "4");
+        check(&mut app, "B4", "=SEQUENCE(D1,2)", true);
+        set(&mut app, "D1", "1");
+        check(&mut app, "B4", "", false);
+        check(&mut app, "B1", "=SEQUENCE(D1,2)", true);
+        set(&mut app, "A1", "");
+        check(&mut app, "B1", "", false);
+        set(&mut app, "B2", "blocked");
+        set(&mut app, "A1", "=SEQUENCE(3,2)");
+        check(&mut app, "A2", "", false);
+        check(&mut app, "B2", "blocked", false);
+        set(&mut app, "B2", "");
+        check(&mut app, "B2", "=SEQUENCE(3,2)", true);
+    }
+
+    #[test]
+    fn formatted_children_and_other_dynamic_array_functions() {
+        let mut app = app();
+        app.run("home.bold", json!({"range": "A2"})).unwrap();
+        set(&mut app, "D1", "3");
+        set(&mut app, "D2", "1");
+        set(&mut app, "D3", "3");
+        for formula in ["=SORT(D1:D3)", "=UNIQUE(D1:D3)", "=FILTER(D1:D3,D1:D3>0)"] {
+            set(&mut app, "A1", formula);
+            check(&mut app, "A2", formula, true);
+        }
+        app.run("home.insertSheet", json!({"name": "Other"})).unwrap();
+        set(&mut app, "A1", "=SORT(Sheet1!D1:D3)");
+        check(&mut app, "A2", "=SORT(Sheet1!D1:D3)", true);
+        app.run("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        check(&mut app, "A2", "=FILTER(D1:D3,D1:D3>0)", true);
+    }
+    #[test]
+    fn formula_bar_click_and_theme_presentation() {
+        use egui_kittest::kittest::Queryable as _;
+        for dark in [false, true] {
+            let mut app = app();
+            set(&mut app, "A1", "=SEQUENCE(3)");
+            select(&mut app, "A2");
+            let mut fonts_ready = false;
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 100.0)).build_ui_state(
+                move |ui, app: &mut SheetApp| {
+                    if !fonts_ready {
+                        ui.ctx().set_fonts(theme::font_definitions());
+                        fonts_ready = true;
+                        return;
+                    }
+                    ui.ctx().set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+                    show(app, ui);
+                },
+                app,
+            );
+            h.run_steps(3);
+            let disabled = Tokens::get(&h.ctx).text_disabled;
+            assert!(h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t)
+                if t.galley.job.text == "=SEQUENCE(3)" && t.galley.job.sections.iter().all(|section| section.format.color == disabled))));
+            h.get_by_label("=SEQUENCE(3)").click();
+            h.run_steps(3);
+            assert!(h.state().editor.is_none());
+            select(h.state_mut(), "A1");
+            h.run_steps(3);
+            h.get_by_label("=SEQUENCE(3)").click();
+            h.run_steps(3);
+            assert!(h.state().editor.as_ref().is_some_and(|e| e.from_formula_bar));
+        }
+    }
 }

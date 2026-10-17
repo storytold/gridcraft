@@ -863,6 +863,11 @@ impl SheetApp {
 
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
+        // The source formula is display-only on spill children. Grid replacement keeps its
+        // existing behavior, but no formula-bar entry path may edit that displayed formula.
+        if from_formula_bar && formula_bar::active_spill_anchor(self).is_some() {
+            return;
+        }
         if let Err(e) = self.commit_text_box_edit() {
             self.message = Some(("Text Box".into(), clean_error(&e)));
             return;
