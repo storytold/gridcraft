@@ -184,6 +184,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Protect\nWorkbook" => "Zamknout\nsešit",
         "Unprotect\nSheet" => "Odemknout\nlist",
         "Protect Sheet…" => "Zamknout list…",
+        "Unprotect Sheet…" => "Odemknout list…",
         "Comments" => "Komentáře",
         "Notes" => "Poznámky",
         "Page Break\nPreview" => "Náhled\nkonců stránek",

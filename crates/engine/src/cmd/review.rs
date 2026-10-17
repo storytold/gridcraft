@@ -139,11 +139,15 @@ fn protect_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("The sheet is protected with a password. Unprotect it first (Review › Unprotect Sheet).".into()));
     }
     let b = |k: &str| bool_param(p, k).unwrap_or(false);
+    // Selection rights default to what the sheet has now (a file may forbid selecting locked cells).
+    let current = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.protection.clone());
+    let select_locked = bool_param(p, "selectLockedCells").unwrap_or_else(|| current.as_ref().is_none_or(|c| c.select_locked));
+    let select_unlocked = bool_param(p, "selectUnlockedCells").unwrap_or_else(|| current.as_ref().is_none_or(|c| c.select_unlocked));
     let prot = SheetProtection {
         password: None,
         legacy_password_hash: None,
-        select_locked: true,
-        select_unlocked: true,
+        select_locked,
+        select_unlocked,
         format_cells: b("formatCells"),
         format_columns: b("formatColumns"),
         format_rows: b("formatRows"),
@@ -397,6 +401,26 @@ mod tests {
         assert!(s.execute("review.nextComment", json!({})).is_err());
         assert!(s.execute("review.previousComment", json!({})).is_err());
         assert_eq!(at(&s), (0, "A1".to_string()));
+    }
+
+    #[test]
+    fn protection_that_forbids_selecting_locked_cells_is_enforced_and_kept() {
+        let mut s = book();
+        s.execute("home.lockCell", json!({"range": "B2", "on": false})).unwrap();
+        s.execute("review.protectSheet", json!({"selectLockedCells": false})).unwrap();
+        // Locked cells can't be selected; unlocked ones can.
+        assert!(s.execute("selection.set", json!({"cell": "A1"})).is_err());
+        s.execute("selection.set", json!({"cell": "B2"})).unwrap();
+        // Arrow keys skip locked cells, and stay put when nothing selectable is left.
+        s.execute("selection.move", json!({"dr": 0, "dc": 1})).unwrap();
+        assert_eq!(s.doc().unwrap().selection.active.a1(), "B2");
+        // Re-protecting without the flag keeps the sheet's selection rights.
+        s.execute("review.unprotectSheet", json!({})).unwrap();
+        s.execute("review.protectSheet", json!({"selectLockedCells": false})).unwrap();
+        s.execute("review.protectSheet", json!({"sort": true})).unwrap();
+        assert!(!s.doc().unwrap().wb.active().unwrap().protection.clone().unwrap().select_locked);
+        s.execute("review.unprotectSheet", json!({})).unwrap();
+        s.execute("selection.set", json!({"cell": "A1"})).unwrap();
     }
 
     #[test]

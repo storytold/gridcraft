@@ -362,6 +362,12 @@ fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- selection
 
+/// Whether the cell may be selected: a protected sheet can forbid selecting locked and/or unlocked cells.
+fn cell_selectable(wb: &gridcraft_model::Workbook, sheet: &gridcraft_model::Sheet, c: CellRef) -> bool {
+    let Some(p) = sheet.protection.as_ref() else { return true };
+    if wb.styles.get(sheet.style_id(c)).protection.locked { p.select_locked } else { p.select_unlocked }
+}
+
 fn selection_set(s: &mut Session, p: &Json) -> Result<Json> {
     if p.get("sheet").is_some() {
         let i = target_sheet(s, p)?;
@@ -379,6 +385,9 @@ fn selection_set(s: &mut Session, p: &Json) -> Result<Json> {
     let mut sel = crate::Selection { active, anchor: ranges.last().map(|r| r.start).unwrap_or(active), ranges };
     if let Some(sh) = d.wb.active() {
         sel.expand_merges(sh);
+        if !cell_selectable(&d.wb, sh, sel.active) {
+            return Err(EngineError::Other("The cell you are trying to change is on a protected sheet that does not allow selecting it.".into()));
+        }
     }
     d.selection = sel;
     Ok(json!({"selection": d.selection.a1(), "active": d.selection.active.a1()}))
@@ -446,6 +455,29 @@ fn selection_move(s: &mut Session, p: &Json) -> Result<Json> {
         && !extend
     {
         to = m.start;
+    }
+    if !extend && !cell_selectable(&d.wb, sheet, to) {
+        // Step on to the next selectable cell in the same direction; stay put if there is none.
+        let (sr, sc) = (dr.signum(), dc.signum());
+        let mut t = to;
+        let mut found = false;
+        if !jmp && (sr, sc) != (0, 0) {
+            for _ in 0..10_000 {
+                let n = t.offset_clamped(sr, sc);
+                if n == t {
+                    break;
+                }
+                t = n;
+                if !sheet.is_row_hidden(t.row) && !sheet.is_col_hidden(t.col) && cell_selectable(&d.wb, sheet, t) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if !found {
+            return Ok(json!({"selection": sel.a1(), "active": sel.active.a1()}));
+        }
+        to = t;
     }
     if extend {
         sel.extend_to(to);

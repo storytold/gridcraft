@@ -198,6 +198,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Allow Edit Ranges" => "Dozvoli uređivanje opsega",
         "Unprotect\nSheet" => "Ukloni zaštitu\nlista",
         "Protect Sheet…" => "Zaštiti list…",
+        "Unprotect Sheet…" => "Ukloni zaštitu lista…",
         "Comments" => "Komentari",
         "Notes" => "Beleške",
         "Page Break\nPreview" => "Pregled preloma\nstranica",

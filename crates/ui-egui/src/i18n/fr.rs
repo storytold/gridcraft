@@ -206,6 +206,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Allow Edit Ranges" => "Autoriser la modification des plages",
         "Unprotect\nSheet" => "Ôter la protection\nde la feuille",
         "Protect Sheet…" => "Protéger la feuille…",
+        "Unprotect Sheet…" => "Ôter la protection de la feuille…",
         "Comments" => "Commentaires",
         "Notes" => "Notes",
         "Page Break\nPreview" => "Aperçu des sauts\nde page",

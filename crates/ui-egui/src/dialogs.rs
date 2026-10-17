@@ -182,15 +182,19 @@ impl Dialog {
                 vec![
                     Password { key: "password", label: "Password (optional):" },
                     Note("Allow all users of this sheet to:".into()),
+                    Check { key: "selectLockedCells", label: "Select locked cells" },
+                    Check { key: "selectUnlockedCells", label: "Select unlocked cells" },
                     Check { key: "formatCells", label: "Format cells" },
                     Check { key: "formatColumns", label: "Format columns" },
                     Check { key: "formatRows", label: "Format rows" },
+                    Check { key: "insertColumns", label: "Insert columns" },
                     Check { key: "insertRows", label: "Insert rows" },
+                    Check { key: "deleteColumns", label: "Delete columns" },
                     Check { key: "deleteRows", label: "Delete rows" },
                     Check { key: "sort", label: "Sort" },
                     Check { key: "autofilter", label: "Use AutoFilter" },
                 ],
-                json!({}),
+                json!({"selectLockedCells": true, "selectUnlockedCells": true}),
             ),
             "allowEditRanges" => {
                 let list = app.session.run("review.allowEditRanges", json!({})).unwrap_or(Json::Null);

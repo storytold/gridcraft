@@ -203,6 +203,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Allow Edit Ranges" => "Разрешить изменение диапазонов",
         "Unprotect\nSheet" => "Снять защиту\nлиста",
         "Protect Sheet…" => "Защитить лист…",
+        "Unprotect Sheet…" => "Снять защиту листа…",
         "Comments" => "Комментарии",
         "Notes" => "Заметки",
         "Page Break\nPreview" => "Предварительный просмотр\nразрывов страниц",

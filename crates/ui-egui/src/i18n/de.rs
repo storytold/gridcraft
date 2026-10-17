@@ -184,6 +184,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Protect\nWorkbook" => "Arbeitsmappe\nschützen",
         "Unprotect\nSheet" => "Blattschutz\naufheben",
         "Protect Sheet…" => "Blatt schützen…",
+        "Unprotect Sheet…" => "Blattschutz aufheben…",
         "Comments" => "Kommentare",
         "Notes" => "Notizen",
         "Page Break\nPreview" => "Seitenumbruch-\nvorschau",

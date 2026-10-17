@@ -203,6 +203,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Allow Edit Ranges" => "允许编辑区域",
         "Unprotect\nSheet" => "撤销\n工作表保护",
         "Protect Sheet…" => "保护工作表…",
+        "Unprotect Sheet…" => "撤销工作表保护…",
         "Comments" => "批注",
         "Notes" => "备注",
         "Page Break\nPreview" => "分页符\n预览",

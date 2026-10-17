@@ -921,6 +921,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
         if format_keys {
             format_popup = format_popup.open_memory(egui::SetOpenCommand::Bool(true));
         }
+        let protect_label = if app.active_sheet_protected() { "Unprotect Sheet…" } else { "Protect Sheet…" };
         format_popup.show(|ui| {
             menu_items(
                 app,
@@ -942,7 +943,7 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
                     ("Rename Sheet", "dialog:renameSheet", json!({})),
                     ("Move or Copy Sheet…", "dialog:moveSheet", json!({})),
                     ("-", "", json!(null)),
-                    ("Protect Sheet…", "dialog:protectSheet", json!({})),
+                    (protect_label, "dialog:protectSheet", json!({})),
                     ("Lock Cell", "home.lockCell", json!({})),
                     ("Format Cells…", "dialog:formatCells", json!({})),
                 ],
@@ -2082,11 +2083,7 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
     let __k = big_button(ui, Icon::Lock, if protected { "Unprotect\nSheet" } else { "Protect\nSheet" }, "Protect Sheet", false);
     control_keytip(app, ui, &__k, "dialog:protectSheet");
     if __k.clicked() {
-        if protected {
-            app.open_dialog("unprotectSheet", json!({}));
-        } else {
-            app.open_dialog("protectSheet", json!({}));
-        }
+        app.open_dialog("protectSheet", json!({}));
     }
     let __k = big_button(ui, Icon::Book, "Protect\nWorkbook", "Protect Workbook structure", false);
     control_keytip(app, ui, &__k, "review.protectWorkbook");

@@ -204,6 +204,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Allow Edit Ranges" => "Permitir Edição de Intervalos",
         "Unprotect\nSheet" => "Desproteger\nPlanilha",
         "Protect Sheet…" => "Proteger Planilha…",
+        "Unprotect Sheet…" => "Desproteger Planilha…",
         "Comments" => "Comentários",
         "Notes" => "Notas",
         "Page Break\nPreview" => "Visualização\nde Quebras de Página",

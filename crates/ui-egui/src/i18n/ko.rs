@@ -203,6 +203,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Allow Edit Ranges" => "범위 편집 허용",
         "Unprotect\nSheet" => "시트 보호\n해제",
         "Protect Sheet…" => "시트 보호…",
+        "Unprotect Sheet…" => "시트 보호 해제…",
         "Comments" => "댓글",
         "Notes" => "메모",
         "Page Break\nPreview" => "페이지 나누기\n미리 보기",

@@ -708,9 +708,29 @@ impl SheetApp {
         }
     }
 
+    /// Whether the active sheet of the active document is protected (drives the Protect/Unprotect
+    /// Sheet labels and actions).
+    pub fn active_sheet_protected(&self) -> bool {
+        self.session.active().and_then(|d| d.wb.active().map(|s| s.is_protected())).unwrap_or(false)
+    }
+
     pub fn open_dialog(&mut self, name: &str, params: Json) {
         if let Err(e) = self.commit_text_box_edit() {
             self.message = Some(("Text Box".into(), clean_error(&e)));
+            return;
+        }
+        // Every Protect Sheet entry point (ribbon menus, keytips, tab menu) becomes Unprotect Sheet
+        // on a protected sheet. A sheet without a password is unprotected straight away.
+        let name = if name == "protectSheet" && self.active_sheet_protected() { "unprotectSheet" } else { name };
+        if name == "unprotectSheet"
+            && self
+                .session
+                .active()
+                .and_then(|d| d.wb.active())
+                .and_then(|s| s.protection.as_ref())
+                .is_some_and(|p| p.password.is_none() && p.legacy_password_hash.is_none())
+        {
+            self.run_or_alert("review.unprotectSheet", json!({}));
             return;
         }
         match name {

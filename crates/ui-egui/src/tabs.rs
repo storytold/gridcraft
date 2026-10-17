@@ -199,9 +199,9 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                         app.run_or_alert("sheet.unhide", json!({}));
                                     }
                                     ui.separator();
-                                    let protected = app.session.active().and_then(|d| d.wb.active().map(|s| s.is_protected())).unwrap_or(false);
+                                    let protected = app.active_sheet_protected();
                                     if ui.button(if protected { "Unprotect Sheet…" } else { "Protect Sheet…" }).clicked() {
-                                        app.open_dialog(if protected { "unprotectSheet" } else { "protectSheet" }, json!({}));
+                                        app.open_dialog("protectSheet", json!({}));
                                     }
                                     if ui.button("Select All Sheets").clicked() {
                                         ui.close();
