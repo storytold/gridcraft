@@ -371,7 +371,10 @@ fn popup_command(forced: bool, clicked: bool) -> Option<egui::SetOpenCommand> {
 #[derive(Clone, Default)]
 struct ComboState {
     text: String,
+    /// Highlighted row: a position in the filtered list (not an index into all items).
     sel: i32,
+    /// The filter `sel` was set for; typing resets the highlight to the first match.
+    sel_filter: String,
     was_open: bool,
 }
 
@@ -401,6 +404,8 @@ pub(crate) fn editable_combo(
     let open_now = egui::Popup::is_id_open(ui.ctx(), popup_id);
     if open_now && !st.was_open {
         st.text = String::new();
+        st.sel_filter = String::new();
+        // With no filter every item is listed, so the current value's index is its row.
         st.sel = items.iter().position(|(v, _)| *v == current_value).map(|i| i as i32).unwrap_or(0);
         // The reset lands on the frame AFTER the popup opens, which usually has no input of
         // its own — without a repaint request the stale filtered list stays on screen.
@@ -437,6 +442,10 @@ pub(crate) fn editable_combo(
         }
         let lower = st.text.to_lowercase();
         let filtered: Vec<usize> = items.iter().enumerate().filter(|(_, (_, d))| d.to_lowercase().contains(&lower)).map(|(i, _)| i).collect();
+        if st.text != st.sel_filter {
+            st.sel_filter = st.text.clone();
+            st.sel = 0;
+        }
         if !filtered.is_empty() {
             let n = filtered.len() as i32;
             if down {
@@ -459,14 +468,14 @@ pub(crate) fn editable_combo(
         }
         ui.separator();
         egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
-            for i in &filtered {
+            for (pos, i) in filtered.iter().enumerate() {
                 let (value, disp) = &items[*i];
-                let row = ui.add(egui::Button::selectable(*i as i32 == st.sel, egui::RichText::new(disp)).min_size(vec2(220.0, 20.0)));
+                let row = ui.add(egui::Button::selectable(pos as i32 == st.sel, egui::RichText::new(disp)).min_size(vec2(220.0, 20.0)));
                 if row.clicked() {
                     result = ComboResult::Picked(value.to_string());
                 }
                 if row.hovered() {
-                    st.sel = *i as i32;
+                    st.sel = pos as i32;
                 }
             }
         });
@@ -1066,7 +1075,7 @@ fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))));
     control_keytip(app, ui, &resp, "home.fontName");
     let forced = invoke(app, "home.fontName");
-    let items: Vec<(&str, String)> = FONTS.iter().map(|f| (*f, f.to_string())).collect();
+    let items: Vec<(&str, String)> = crate::fonts::families().iter().map(|f| (f.as_str(), f.clone())).collect();
     if let ComboResult::Picked(value) = editable_combo(ui, &resp, "font", &name, &items, forced) {
         act(app, "home.fontName", json!({"name": value}));
     }

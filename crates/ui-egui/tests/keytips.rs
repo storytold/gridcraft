@@ -475,6 +475,18 @@ fn editable_combos_filter_by_typing_and_move_by_arrows() {
     assert_eq!(h.query_all_by_label("Arial").count(), 1, "Enter must apply Arial and close the popup");
     assert_eq!(h.query_all_by_label("Georgia").count(), 0);
 
+    // Typing moves the highlight to the first match, whatever row was highlighted before: "a"
+    // matches many fonts, and Enter must apply the first (Aptos), not the row at the current
+    // font's index in the unfiltered list (Calibri's).
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::H, Key::F, Key::F], false);
+    h.run_steps(3);
+    events(&mut h, [Event::Text("a".into())]);
+    h.run_steps(3);
+    key(&mut h, Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Aptos").count(), 1, "Enter after typing must apply the first match");
+
     // Arrows alone move through the full list: Calibri -> Cambria -> Candara -> Consolas.
     let mut h = harness(blank());
     sequence(&mut h, &[Key::H, Key::F, Key::F], false);

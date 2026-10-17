@@ -171,8 +171,7 @@ fn catalog_now() -> Option<&'static [Face]> {
 /// Start cataloging the installed fonts on a background thread, so the first frame doesn't wait for
 /// it. A no-op on wasm and after the scan has started.
 pub fn start_scan() {
-    static STARTED: OnceLock<()> = OnceLock::new();
-    STARTED.get_or_init(|| {
+    SCAN_STARTED.get_or_init(|| {
         #[cfg(not(target_arch = "wasm32"))]
         if CATALOG.get().is_none() {
             // A failed spawn leaves the scan to the first blocking lookup.
@@ -181,6 +180,13 @@ pub fn start_scan() {
             });
         }
     });
+}
+
+static SCAN_STARTED: OnceLock<()> = OnceLock::new();
+
+/// Whether [`start_scan`] has run in this process.
+pub fn scan_started() -> bool {
+    SCAN_STARTED.get().is_some()
 }
 
 /// Whether the background scan has finished.
@@ -216,12 +222,23 @@ pub fn installed_among(names: &[String]) -> Vec<String> {
 
 /// The font list a combo box shows: the standard [`crate::ribbon::FONTS`] names first (what Excel
 /// offers, and what we substitute), then every other installed family A–Z. Never blocks: until the
-/// background scan finishes it returns just the standard names.
-pub fn families() -> Vec<String> {
+/// background scan finishes it returns just the standard names. Built once per state, since the
+/// ribbon asks every frame.
+pub fn families() -> &'static [String] {
+    static STANDARD: OnceLock<Vec<String>> = OnceLock::new();
+    static ALL: OnceLock<Vec<String>> = OnceLock::new();
+    match catalog_now() {
+        Some(cat) => ALL.get_or_init(|| list_families(cat)),
+        None => STANDARD.get_or_init(|| list_families(&[])),
+    }
+}
+
+/// [`families`] for a given catalog. Hidden system faces (macOS names them with a leading dot, e.g.
+/// `.ThonburiUI`) are left out: they are not meant to be picked.
+fn list_families(cat: &[Face]) -> Vec<String> {
     let mut out: Vec<String> = crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect();
-    let Some(cat) = catalog_now() else { return out };
     let mut seen: HashSet<String> = out.iter().map(|s| s.to_lowercase()).collect();
-    let mut installed: Vec<String> = cat.iter().map(|f| f.family.clone()).collect();
+    let mut installed: Vec<String> = cat.iter().filter(|f| !f.family.starts_with('.')).map(|f| f.family.clone()).collect();
     installed.sort_by_key(|a| a.to_lowercase());
     installed.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
     for f in installed {
@@ -317,6 +334,11 @@ pub fn set_bound(keys: impl IntoIterator<Item = String>) {
     *bound().write().unwrap_or_else(|e| e.into_inner()) = keys.into_iter().collect();
 }
 
+/// The role families currently recorded as bound.
+pub fn bound_keys() -> Vec<String> {
+    bound().read().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect()
+}
+
 /// Is this exact role family bound to font data?
 pub fn is_bound(role: &str) -> bool {
     bound().read().unwrap_or_else(|e| e.into_inner()).contains(role)
@@ -360,6 +382,18 @@ mod tests {
         assert!(is_bound(&k));
         set_bound([]);
         assert!(!is_bound(&k));
+    }
+
+    #[test]
+    fn the_font_list_puts_standard_names_first_and_hides_system_faces() {
+        let face = |family: &str| Face { family: family.into(), path: PathBuf::new(), index: 0, weight: 400.0, italic: false };
+        let cat = [face("TH Sarabun New"), face(".ThonburiUI"), face("Arial"), face("Thonburi"), face("th sarabun new")];
+        let list = list_families(&cat);
+        let standard = crate::ribbon::FONTS.len();
+        assert_eq!(list.get(..standard).map(|s| s.len()), Some(standard));
+        assert!(list.iter().take(standard).zip(crate::ribbon::FONTS).all(|(a, b)| a == b), "standard names first, in order");
+        assert_eq!(list.get(standard..), Some(&["TH Sarabun New".to_string(), "Thonburi".to_string()][..]), "installed A–Z, deduped");
+        assert_eq!(list_families(&[]).len(), standard);
     }
 
     #[test]

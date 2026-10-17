@@ -578,7 +578,6 @@ fn cjk_hangul() -> Vec<(String, u32)> {
 /// macOS has Thonburi; Linux usually has Noto Sans Thai or Garuda.
 #[cfg(not(target_arch = "wasm32"))]
 fn thai() -> Vec<(String, u32)> {
-    let mac_sys = "/System/Library/Fonts";
     let mac_sup = "/System/Library/Fonts/Supplemental";
     let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
     let lin = ["/usr/share/fonts/truetype/noto", "/usr/share/fonts/opentype/noto", "/usr/share/fonts/truetype", "/usr/share/fonts"];
@@ -587,7 +586,7 @@ fn thai() -> Vec<(String, u32)> {
     v.push((format!("{win}\\tahoma.ttf"), 0)); // Tahoma
     v.push((format!("{win}\\micross.ttf"), 0)); // Microsoft Sans Serif
     v.push((format!("{mac_sup}/Thonburi.ttc"), 0));
-    v.push((format!("{mac_sys}/SukhumvitSet.ttc"), 0));
+    v.push((format!("{mac_sup}/SukhumvitSet.ttc"), 0));
     for d in lin {
         v.push((format!("{d}/NotoSansThai-Regular.ttf"), 0));
         v.push((format!("{d}/tlwg/Garuda.ttf"), 0));

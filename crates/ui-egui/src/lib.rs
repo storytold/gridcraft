@@ -237,9 +237,10 @@ pub struct SheetApp {
     /// The (doc uid, revision) `fonts_bound` was computed for, so the style table is walked only
     /// when the workbook changes.
     fonts_seen: (u64, u64),
-    /// Set while a font-set change is pending activation: skip this frame's paint, like the
-    /// startup `fonts_ready` gate (egui applies new definitions at the next pass).
-    fonts_rebind: bool,
+    /// Role families of a font-set change pending activation. egui applies new definitions at the
+    /// next pass, so the frame that makes the change keeps painting with the active families and
+    /// the next one switches to these (no skipped frame, so no input is dropped).
+    fonts_pending: Option<Vec<String>>,
     /// Han face order the installed fonts were built with; a language switch rebuilds the fonts
     /// only when it changes this (see `theme::HanOrder`).
     fonts_han: Option<theme::HanOrder>,
@@ -294,7 +295,7 @@ impl SheetApp {
             fonts_set: false,
             fonts_bound: Vec::new(),
             fonts_seen: (0, 0),
-            fonts_rebind: false,
+            fonts_pending: None,
             fonts_han: None,
             effective_dark: false,
             desktop_theme: desktop_theme::DesktopTheme::default(),
@@ -314,12 +315,13 @@ impl SheetApp {
     ///
     /// [`logic`]: SheetApp::logic
     pub fn setup_context(ctx: &egui::Context, dark: bool) {
-        fonts::start_scan();
         Self::setup_context_for_language(ctx, dark, i18n::Language::En);
     }
 
-    /// Sets up fonts and visuals for a specific persisted interface language.
+    /// Sets up fonts and visuals for a specific persisted interface language. Also starts the
+    /// installed-font scan (once per process): the font lists and workbook font binding wait on it.
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
+        fonts::start_scan();
         ctx.set_fonts(theme::font_definitions_for_language(language));
         theme::apply(ctx, dark);
     }
@@ -1006,25 +1008,29 @@ impl SheetApp {
                 self.fonts_set = true;
                 // The rebuilt set has no workbook fonts yet: bind them again once it is active.
                 self.fonts_bound.clear();
+                self.fonts_pending = None;
                 self.fonts_seen = (0, 0);
                 self.fonts_han = Some(theme::HanOrder::of(self.ui.language));
                 ctx.request_repaint();
             }
-        } else if self.fonts_rebind {
-            // A font-set change made last frame is active now.
-            self.fonts_rebind = false;
+        } else if let Some(keys) = self.fonts_pending.take() {
+            // The font set changed last frame is active now: cells may name its families.
+            fonts::set_bound(keys);
         } else if fonts::scan_done() {
-            // Bind the workbook's installed fonts once the background scan has finished. Adding
-            // fonts re-applies the font set, which egui activates at the next pass, so skip this
-            // frame's paint (same one-frame cost as startup). Only when the workbook changed.
+            // Bind the workbook's installed fonts once the background scan has finished. egui
+            // activates the new set at the next pass, so this frame keeps the active families
+            // bound and the next one switches (see `fonts_pending`). Only when the workbook changed.
             let seen = self.session.active().map(|d| (d.uid, d.revision)).unwrap_or((0, 0));
             if seen != self.fonts_seen {
                 let used = self.used_fonts();
                 self.fonts_seen = seen;
                 if used != self.fonts_bound {
-                    ctx.set_fonts(theme::font_definitions_with(self.ui.language, &used));
+                    let active = fonts::bound_keys();
+                    let defs = theme::font_definitions_with(self.ui.language, &used);
+                    self.fonts_pending = Some(fonts::bound_keys());
+                    fonts::set_bound(active);
+                    ctx.set_fonts(defs);
                     self.fonts_bound = used;
-                    self.fonts_rebind = true;
                     ctx.request_repaint();
                 }
             }
@@ -1094,7 +1100,7 @@ impl SheetApp {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll_printing(&ctx);
-        if !self.fonts_ready || self.fonts_rebind {
+        if !self.fonts_ready {
             ctx.request_repaint();
             return;
         }
