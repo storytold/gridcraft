@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** trivial (chart sheets are kept on save, still not editable (#727); previously minor: trendlines: model, XLSX round-trip, drawing, Add Chart Element) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-13 · **Change:** minor (PivotCharts from files plot their cached points; deleted automatic titles stay off) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -55,7 +55,7 @@ open PRs #158, #161, and issue #190.
 | Recommended Charts | yes | partial (Insert ▸ Recommended) |
 | Switch Row/Column, Select Data | yes | yes (Switch on charts read from files landed in #116); Select Data dialog: data range, remove series, Horizontal (Category) Axis Labels (#287). No series add/edit or hidden/empty cell options |
 | Sparklines (line, column, win/loss, markers, axis) | yes | line, column, win/loss |
-| PivotCharts | yes | Insert ▸ PivotChart (`insert.pivotChart`): bound to a PivotTable's report, rebuilt on refresh and layout changes, `c:pivotSource` round trip; no field buttons, innermost category level only |
+| PivotCharts | yes | Insert ▸ PivotChart (`insert.pivotChart`): bound to a PivotTable's report, rebuilt on refresh and layout changes, `c:pivotSource` round trip; no field buttons, innermost category level only. Opened from a file, a series whose referenced cells don't hold its cached points (Excel often points them at the PivotTable's corner cell, or takes in the grand total row) plots the cached points until the PivotTable is refreshed. A multi-level category block is compared by its innermost column (or row): when that holds the cache, the reference is kept and only the innermost level is drawn, one label per point; otherwise the innermost level is plotted from the cache; data labels and the value axis use the cache's number format, which is kept through a save |
 | Animation on data change | yes (Windows) | no |
 
 ## XLSX round-trip
@@ -80,6 +80,7 @@ back.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | XLSX: PivotChart series whose referenced cells don't hold their cached points plot the cached points (they drew empty or with the grand total), in the cache's number format, and multi-level category blocks draw only their innermost level, one label per point (they drew every level's cells); `autoTitleDeleted` keeps a deleted automatic title off; array-constant series keep quoted text, gaps and their number format through a save, and literal series names keep their quotes |
 | 2026-10-12 | trivial | chart sheets are kept on save, still not editable (#727) |
 | 2026-10-11 | minor | Trendlines: all six types modelled, round-tripped through `c:trendline`, drawn with forecast and equation/R² labels; `chart.addElement` `trendline` |
 | 2026-10-11 | minor | PivotCharts (`insert.pivotChart`) |

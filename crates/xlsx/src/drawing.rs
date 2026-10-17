@@ -166,10 +166,18 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                         let target = rel.target.clone();
                         if let Some(cx_xml) = cx.optional_xml(&target)? {
                             let chartex = uri.contains("chartex");
-                            match if chartex { crate::chartex::read_chartex(&cx_xml) } else { crate::chart::read_chart(&cx_xml) } {
-                                Some(mut ch) => {
+                            let read = if chartex {
+                                crate::chartex::read_chartex(&cx_xml).map(|c| (c, Vec::new()))
+                            } else {
+                                crate::chart::read_chart(&cx_xml)
+                            };
+                            match read {
+                                Some((mut ch, caches)) => {
                                     ch.id = cx.next_object_id();
                                     ch.anchor = anchor;
+                                    if !caches.is_empty() {
+                                        cx.pivot_charts.push((ch.id, caches));
+                                    }
                                     sheet.charts.push(ch);
                                 }
                                 None => cx.warn(format!("chart {target} has no supported plot and was skipped")),

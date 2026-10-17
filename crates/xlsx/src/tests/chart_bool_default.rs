@@ -13,7 +13,7 @@ fn flags(ser: &str, group: &str) -> (bool, bool) {
          </c:plotArea></c:chart></c:chartSpace>"
     );
     let root = parse(xml.as_bytes()).unwrap();
-    let ch = read_chart(&root).unwrap();
+    let (ch, _) = read_chart(&root).unwrap();
     (ch.series[0].smooth, ch.data_labels)
 }
 

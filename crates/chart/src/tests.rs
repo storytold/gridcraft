@@ -229,6 +229,9 @@ fn resolve_from_workbook() {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            // References use their cells' format, whatever the series says.
+            number_format: Some("0%".into()),
+            innermost_categories: false,
         },
         Series {
             name: None,
@@ -240,6 +243,8 @@ fn resolve_from_workbook() {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         },
         Series {
             name: Some("Literal".into()),
@@ -251,6 +256,8 @@ fn resolve_from_workbook() {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            number_format: Some("0.0%".into()),
+            innermost_categories: false,
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -270,6 +277,7 @@ fn resolve_from_workbook() {
     assert!(s1.secondary);
     assert_eq!(d.series[2].name, "Literal");
     assert_eq!(d.series[2].values.len(), 4);
+    assert_eq!(d.series[2].number_format, "0.0%");
 
     // Default categories.
     c.series.remove(0);
@@ -289,6 +297,8 @@ fn resolve_from_workbook() {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         },
         Series {
             name: None,
@@ -300,6 +310,8 @@ fn resolve_from_workbook() {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -316,6 +328,8 @@ fn resolve_from_workbook() {
         kind: None,
         smooth: false,
         trendlines: Vec::new(),
+        number_format: None,
+        innermost_categories: false,
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series[0].x.as_ref().map(|x| x.len()), Some(3));
@@ -333,6 +347,8 @@ fn resolve_from_workbook() {
         kind: None,
         smooth: false,
         trendlines: Vec::new(),
+        number_format: None,
+        innermost_categories: false,
     }];
     let d = resolve(&wb, 7, &c);
     assert_eq!(d.series.len(), 1);
@@ -1003,6 +1019,8 @@ fn pie_points_follow_workbook_theme() {
         kind: None,
         smooth: false,
         trendlines: Vec::new(),
+        number_format: None,
+        innermost_categories: false,
     }];
     let d = resolve(&wb, 0, &c);
     let expected = vec![series_color(&wb.theme, 0), series_color(&wb.theme, 1)];
@@ -1056,4 +1074,39 @@ fn area_charts_draw_source_value_labels_only_when_enabled() {
         let first_label = on.iter().position(|p| matches!(p, Prim::Text { text, .. } if text == "$12,000"));
         assert!(first_label > last_poly, "{kind:?}: label drawn under a later area");
     }
+}
+
+#[test]
+fn a_multi_level_category_block_draws_its_innermost_level() {
+    // A PivotChart's two levels of row labels in A1:B4, the outer one (country) on the left:
+    // one label per point, from the innermost column.
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        s.name = "Graph".into();
+        for (r, (outer, inner)) in [("Canada", "Ottawa"), ("", "Toronto"), ("USA", "Boston"), ("", "NYC")].iter().enumerate() {
+            if !outer.is_empty() {
+                s.set_value(CellRef::new(r as u32, 0), Value::from(*outer));
+            }
+            s.set_value(CellRef::new(r as u32, 1), Value::from(*inner));
+            s.set_value(CellRef::new(r as u32, 2), Value::Number(r as f64 + 1.0));
+            s.set_value(CellRef::new(5, r as u32), Value::from(*inner));
+            s.set_value(CellRef::new(6, r as u32), Value::from(*outer));
+        }
+    }
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![Series {
+        categories: Some("Graph!$A$1:$B$4".into()),
+        values: "Graph!$C$1:$C$4".into(),
+        innermost_categories: true,
+        ..Series::default()
+    }];
+    assert_eq!(resolve(&wb, 0, &c).categories, vec!["Ottawa", "Toronto", "Boston", "NYC"]);
+    // A block with a column per point: its last row is the innermost level.
+    c.series[0].categories = Some("Graph!$A$6:$D$7".into());
+    assert_eq!(resolve(&wb, 0, &c).categories, vec!["Canada", "", "USA", ""]);
+    // Without the flag, every cell is a label, as for any other chart.
+    c.series[0].categories = Some("Graph!$A$1:$B$4".into());
+    c.series[0].innermost_categories = false;
+    assert_eq!(resolve(&wb, 0, &c).categories.len(), 8);
 }

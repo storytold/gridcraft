@@ -133,13 +133,21 @@ fn value_text(v: &Value) -> String {
     }
 }
 
-/// Category labels, formatted with each source cell's number format (dates, currency…).
-fn category_texts(wb: &Workbook, sheet: usize, formula: &str) -> Vec<String> {
+/// Category labels, formatted with each source cell's number format (dates, currency…). With
+/// `innermost` (the point count of a multi-level block), only the block's last column (a row
+/// per point) or last row (a column per point) is read: its innermost level.
+fn category_texts(wb: &Workbook, sheet: usize, formula: &str, innermost: Option<usize>) -> Vec<String> {
     let vals = eval_list(wb, sheet, formula);
     let cells: Option<(usize, RangeRef)> = parse_ref(wb, sheet, formula);
     let src = cells.and_then(|(sh, r)| wb.sheet(sh).map(|s| (s, r)));
+    let keep = |i: usize| match (innermost, cells) {
+        (Some(n), Some((_, r))) if r.width() > 1 && r.height() as usize == n => i % r.width() as usize == r.width() as usize - 1,
+        (Some(n), Some((_, r))) if r.height() > 1 && r.width() as usize == n => i / r.width() as usize == r.height() as usize - 1,
+        _ => true,
+    };
     vals.iter()
         .enumerate()
+        .filter(|(i, _)| keep(*i))
         .map(|(i, v)| {
             if let (Some((s, r)), Value::Number(_)) = (src, v) {
                 let w = r.width().max(1) as usize;
@@ -211,7 +219,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
         if categories.is_none()
             && let Some(f) = &s.categories
         {
-            let c = category_texts(wb, sheet, f);
+            let c = category_texts(wb, sheet, f, s.innermost_categories.then_some(values.len()));
             if !c.is_empty() {
                 categories = Some(c);
             }
@@ -236,7 +244,10 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             secondary: s.secondary,
             smooth: s.smooth,
             trendlines,
-            number_format: ref_format(wb, sheet, &s.values),
+            number_format: match &s.number_format {
+                Some(code) if s.values.trim_start().starts_with('{') => code.clone(),
+                _ => ref_format(wb, sheet, &s.values),
+            },
         });
     }
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
