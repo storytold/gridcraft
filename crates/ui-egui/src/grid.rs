@@ -926,7 +926,9 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
 pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
     let pad_v = 1.5 * z;
     let y_top = rect.top() + pad_v;
-    let y_bottom = (rect.bottom() - gh - pad_v).max(y_top);
+    // Not clamped to `y_top`: text taller than the row overflows upward (Bottom) or both ways
+    // (Center), and the cell's clip rect trims it, so Middle and Bottom stay distinct from Top.
+    let y_bottom = rect.bottom() - gh - pad_v;
     match valign {
         VAlign::Top => y_top,
         VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
@@ -3470,10 +3472,24 @@ mod tests {
         assert!(y_top < y_center);
         assert!(y_center < y_bottom);
 
-        // Overflow case: gh exceeds rect height
+        // Overflow case: gh exceeds rect height; Top still starts inside the cell.
         let gh_overflow = 60.0;
-        let y_bottom_ovf = wrapped_cell_text_y(VAlign::Bottom, rect, gh_overflow, z);
-        assert!(y_bottom_ovf >= rect.top());
+        let y_top_ovf = wrapped_cell_text_y(VAlign::Top, rect, gh_overflow, z);
+        assert!(y_top_ovf >= rect.top());
+    }
+
+    #[test]
+    fn wrapped_cell_text_y_keeps_vertical_alignment_when_text_is_taller_than_the_row() {
+        // A default-height row holding three wrapped lines.
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 20.0));
+        let (gh, z) = (60.0, 1.0);
+        let y_top = wrapped_cell_text_y(VAlign::Top, rect, gh, z);
+        let y_center = wrapped_cell_text_y(VAlign::Center, rect, gh, z);
+        let y_bottom = wrapped_cell_text_y(VAlign::Bottom, rect, gh, z);
+        // Taller text overflows upward for Bottom and both ways for Center (the cell clips it).
+        assert!((y_top - 1.5).abs() < 0.01, "Top starts at the top edge, got {y_top}");
+        assert!((y_center + gh / 2.0 - rect.center().y).abs() < 0.01, "Center is centred, got {y_center}");
+        assert!((y_bottom + gh - (rect.bottom() - 1.5)).abs() < 0.01, "Bottom ends at the bottom edge, got {y_bottom}");
     }
 
     /// The screen box of a galley of `size` drawn at `pos` turned by `angle` about `pos`, as egui
