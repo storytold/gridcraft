@@ -351,6 +351,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     // Autocomplete list and argument hint under the editor.
     if mine && ui.is_rect_visible(resp.rect) && (!ed.autocomplete.is_empty() || ed.current_function().is_some()) {
         let below = resp.rect.left_bottom() + vec2(0.0, 4.0);
+        let language = app.ui.language;
         // Areas have their own clip rect: keep cell helpers inside the worksheet.
         let bounds = if ed.from_formula_bar { ui.ctx().content_rect() } else { ui.clip_rect() };
         egui::Area::new(id.with("ac")).fixed_pos(below).constrain_to(bounds).order(egui::Order::Tooltip).show(ui.ctx(), |ui| {
@@ -366,11 +367,11 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
                         if r.clicked() {
                             pick = Some(i);
                         }
-                        if sel && let Some(desc) = crate::formula_locale::description(n, ed.locale) {
+                        if sel && let Some(desc) = crate::formula_locale::description(n, ed.locale, language) {
                             r.on_hover_text(desc);
                         }
                     }
-                    if let Some(desc) = ed.autocomplete.get(ed.ac_index).and_then(|n| crate::formula_locale::description(n, ed.locale)) {
+                    if let Some(desc) = ed.autocomplete.get(ed.ac_index).and_then(|n| crate::formula_locale::description(n, ed.locale, language)) {
                         ui.separator();
                         ui.add(egui::Label::new(egui::RichText::new(desc).small()).wrap());
                     }
@@ -380,12 +381,12 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
                         ed.request_focus = true;
                     }
                 } else if let Some((name, arg)) = ed.current_function()
-                    && let Some(sig) = crate::formula_locale::signature(&name, ed.locale)
+                    && let Some(sig) = crate::formula_locale::signature(&name, ed.locale, language)
                 {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         let (head, rest) = sig.split_once('(').unwrap_or((&sig, ""));
-                        ui.label(egui::RichText::new(format!("{}(", ed.locale.function_name(head))).font(theme::ui_font(12.0)));
+                        ui.label(egui::RichText::new(format!("{head}(")).font(theme::ui_font(12.0)));
                         let inner = rest.trim_end_matches(')');
                         let parts: Vec<&str> = inner.split(&format!("{} ", ed.locale.list_separator())).collect();
                         for (i, part) in parts.iter().enumerate() {
@@ -400,7 +401,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
                     });
                     // The description too, so values an argument takes (DATEDIF's units, #363) show
                     // while it's typed; wrapped to the hint's width.
-                    if let Some(desc) = crate::formula_locale::description(&name, ed.locale) {
+                    if let Some(desc) = crate::formula_locale::description(&name, ed.locale, language) {
                         ui.set_max_width(ui.min_rect().width().max(220.0));
                         ui.separator();
                         ui.add(egui::Label::new(egui::RichText::new(desc).small()).wrap());

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 mod cs;
 mod de;
 mod es;
+mod es_functions;
 mod fr;
 mod ko;
 mod pt;
@@ -132,6 +133,34 @@ impl Language {
         };
         translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
+
+    /// A worksheet function's description in this language, looked up by the English text of the
+    /// function catalog; `None` when untranslated, and the help shows the English.
+    pub fn function_description(self, english: &str) -> Option<&'static str> {
+        lookup(self.function_help()?.0, english)
+    }
+
+    /// A function argument name in this language, given as the catalog spells it without
+    /// brackets or index (`number`, `logical_test`).
+    pub fn function_argument(self, english: &str) -> Option<&'static str> {
+        lookup(self.function_help()?.1, english)
+    }
+
+    /// The function help tables (descriptions, argument names) of the languages that have them.
+    fn function_help(self) -> Option<(HelpTable, HelpTable)> {
+        match self {
+            Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            _ => None,
+        }
+    }
+}
+
+/// English text and its translation, sorted by the English.
+type HelpTable = &'static [(&'static str, &'static str)];
+
+fn lookup(table: HelpTable, english: &str) -> Option<&'static str> {
+    let i = table.binary_search_by(|(key, _)| (*key).cmp(english)).ok()?;
+    table.get(i).map(|(_, translated)| *translated)
 }
 
 /// Deserializes a saved language leniently: an unknown or malformed value (a language removed in a
@@ -593,6 +622,26 @@ const JAPANESE: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn function_help_is_sorted_and_keyed_by_current_catalog_text() {
+        // Lookups binary-search the tables. A key that no longer matches the catalog (an English
+        // description reworded, an argument renamed) would quietly show English again.
+        let catalog = gridcraft_engine::cmd::formulas::function_list();
+        let descriptions: std::collections::HashSet<&str> = catalog.iter().filter_map(|f| f["description"].as_str()).collect();
+        let arguments: std::collections::HashSet<&str> =
+            catalog.iter().filter_map(|f| f["signature"].as_str()).flat_map(crate::formula_locale::argument_names).collect();
+        for language in Language::ALL {
+            let Some((description_table, argument_table)) = language.function_help() else { continue };
+            for (table, catalog_text) in [(description_table, &descriptions), (argument_table, &arguments)] {
+                assert!(table.windows(2).all(|pair| pair[0].0 < pair[1].0), "{language:?} function help is not sorted and unique");
+                for (english, translated) in table {
+                    assert!(catalog_text.contains(english), "{language:?} translates {english:?}, which the function catalog doesn't use");
+                    assert!(!translated.is_empty(), "{language:?}: empty translation of {english:?}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn translations_are_unique_and_preserve_unknown_text() {

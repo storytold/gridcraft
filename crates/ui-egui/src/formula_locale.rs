@@ -1,4 +1,5 @@
 //! UI formula syntax boundary. Engine commands, control/API callers and XLSX keep English.
+use crate::i18n::Language;
 use gridcraft_engine::formula::{self, FormulaLocale, ParseError};
 use gridcraft_engine::model::Workbook;
 
@@ -86,39 +87,55 @@ fn hide_udf_prefix(text: &str, locale: FormulaLocale) -> String {
     out
 }
 
-// Descriptions/signatures for the supported Spanish function table; untranslated functions
-// retain their English help. Parameter punctuation follows the same locale as entry.
-const SPANISH_HELP: &[(&str, &str, &str)] = &[
-    ("SUM", "SUMA(número1; [número2]; ...)", "Suma los números."),
-    ("AVERAGE", "PROMEDIO(número1; [número2]; ...)", "Devuelve el promedio de los números."),
-    ("IF", "SI(prueba_lógica; valor_si_verdadero; [valor_si_falso])", "Devuelve un valor según una condición."),
-    ("COUNT", "CONTAR(valor1; [valor2]; ...)", "Cuenta las celdas que contienen números."),
-    ("SUMIF", "SUMAR.SI(rango; criterio; [rango_suma])", "Suma las celdas que cumplen un criterio."),
-    ("COUNTIF", "CONTAR.SI(rango; criterio)", "Cuenta las celdas que cumplen un criterio."),
-    ("VLOOKUP", "BUSCARV(valor_buscado; matriz; indicador_columnas; [ordenado])", "Busca un valor en la primera columna de una tabla."),
-    ("TODAY", "HOY()", "Devuelve la fecha actual."),
-    ("TRUE", "VERDADERO()", "Devuelve el valor lógico VERDADERO."),
-    ("FALSE", "FALSO()", "Devuelve el valor lógico FALSO."),
-];
-
-pub(crate) fn signature(name: &str, locale: FormulaLocale) -> Option<String> {
-    let canonical = locale.canonical_name(name);
-    if locale == FormulaLocale::Es
-        && let Some((_, signature, _)) = SPANISH_HELP.iter().find(|(name, ..)| *name == canonical)
-    {
-        return Some((*signature).into());
-    }
-    crate::formula_bar::function_signature(canonical).map(|s| s.replace(',', &locale.list_separator().to_string()))
+/// A function's argument hint. The name and separators follow the formula syntax; the argument
+/// names follow the interface language, all of them or none, so a hint never mixes two languages.
+pub(crate) fn signature(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
+    let english = crate::formula_bar::function_signature(locale.canonical_name(name))?;
+    let Some((head, args)) = split_signature(&english) else { return Some(english) };
+    let separator = format!("{} ", locale.list_separator());
+    let args = match args.iter().map(|arg| translate_argument(arg, language)).collect::<Option<Vec<_>>>() {
+        Some(translated) => translated.join(&separator),
+        None => args.join(&separator),
+    };
+    Some(format!("{}({args})", locale.function_name(head)))
 }
 
-pub(crate) fn description(name: &str, locale: FormulaLocale) -> Option<String> {
-    let canonical = locale.canonical_name(name);
-    if locale == FormulaLocale::Es
-        && let Some((_, _, description)) = SPANISH_HELP.iter().find(|(name, ..)| *name == canonical)
-    {
-        return Some((*description).into());
+/// A function's description in the interface language (English while untranslated).
+pub(crate) fn description(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
+    let english = crate::formula_bar::function_description(locale.canonical_name(name))?;
+    Some(language.function_description(&english).map_or(english, str::to_string))
+}
+
+/// `SUM(number1, [number2], ...)` -> `SUM` and its arguments as written.
+fn split_signature(signature: &str) -> Option<(&str, Vec<&str>)> {
+    let (head, rest) = signature.split_once('(')?;
+    let inner = rest.strip_suffix(')')?;
+    Some((head, if inner.is_empty() { Vec::new() } else { inner.split(", ").collect() }))
+}
+
+/// The catalog names of a signature's arguments (`number` for `[number2]`), without `...`; the
+/// function help tables are checked against them.
+#[cfg(test)]
+pub(crate) fn argument_names(signature: &str) -> Vec<&str> {
+    split_signature(signature).map(|(_, args)| args.into_iter().map(argument_name).filter(|name| *name != "...").collect()).unwrap_or_default()
+}
+
+/// `[number2]` -> `number`. A bracket can open or close on its own (SWITCH's
+/// `[default_or_value2, result2]`, LAMBDA's `[parameter1, ...]`).
+fn argument_name(arg: &str) -> &str {
+    let arg = arg.strip_prefix('[').unwrap_or(arg);
+    let arg = arg.strip_suffix(']').unwrap_or(arg);
+    arg.trim_end_matches(|c: char| c.is_ascii_digit())
+}
+
+/// `[number2]` -> `[número2]`: brackets, index and `...` stay.
+fn translate_argument(arg: &str, language: Language) -> Option<String> {
+    let name = argument_name(arg);
+    if name == "..." {
+        return Some(arg.to_string());
     }
-    crate::formula_bar::function_description(canonical)
+    // `arg` is `[`? + `name` + index + `]`?, so the first match is the name itself.
+    Some(arg.replacen(name, language.function_argument(name)?, 1))
 }
 
 /// Avoid suggesting an alias that would call a workbook/table name instead of the function.
@@ -137,4 +154,32 @@ pub(crate) fn display_template(text: &str, locale: FormulaLocale, wb: &Workbook,
         return format!("={}(", completion_name(name, locale, wb, sheet));
     }
     display(text, locale, wb, sheet)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sig(name: &str, locale: FormulaLocale, language: Language) -> String {
+        signature(name, locale, language).unwrap_or_default()
+    }
+
+    #[test]
+    fn function_help_follows_the_interface_language_and_the_formula_syntax() {
+        use FormulaLocale::{En, Es};
+        // Spanish help over English formulas: the name and `,` stay as typed; brackets, indexes
+        // and `...` survive.
+        assert_eq!(sig("IF", En, Language::Es), "IF(prueba_lógica, [valor_si_verdadero], [valor_si_falso])");
+        assert_eq!(sig("SUM", En, Language::Es), "SUM(número1, [número2], ...)");
+        assert_eq!(description("IF", En, Language::Es).as_deref(), Some("Devuelve un valor según una condición."));
+        // Spanish names and separators, from a localized name.
+        assert_eq!(sig("suma", Es, Language::Es), "SUMA(número1; [número2]; ...)");
+        assert_eq!(description("SUMA", Es, Language::Es).as_deref(), Some("Suma los números."));
+        // An argument list Spanish covers only in part stays English instead of mixing (the name
+        // is whatever the Spanish formula table calls SUMIFS).
+        let sumifs = sig("SUMIFS", Es, Language::Es);
+        assert!(sumifs.ends_with("(sum_range; criteria_range1; criteria1; ...)"), "{sumifs}");
+        assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Some("Adds the cells that meet every condition."));
+        assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
+    }
 }
