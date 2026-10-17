@@ -235,18 +235,28 @@ fn valid_name(n: &str) -> bool {
     n.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '\\' | '?'))
 }
 
-/// Looks like an R1C1 reference (`R`, `C`, `RC`, `R2`, `C3`, `R1C1`), which Excel doesn't
-/// accept as a name.
+/// Begins like an R1C1 reference, which Excel doesn't accept as a name (#1663): `R` and a row
+/// number, or `C` or `RC` and a column number, the number being the whole run of digits and
+/// within the sheet, so `R0C0` and `R1048577C1` are names. Only a `.` may follow a row number
+/// (`R1.x` is a name). `R`, `C` and `RC` alone are refused too.
 fn is_r1c1(n: &str) -> bool {
-    let digits = |s: &str| s.bytes().take_while(u8::is_ascii_digit).count();
-    let mut rest = n;
-    if let Some(r) = rest.strip_prefix(['R', 'r']) {
-        rest = r.get(digits(r)..).unwrap_or("");
+    fn number(s: &str, max: u32) -> Option<&str> {
+        let d = s.bytes().take_while(u8::is_ascii_digit).count();
+        s.get(..d)?.parse::<u32>().ok().filter(|v| (1..=max).contains(v))?;
+        s.get(d..)
     }
-    if let Some(c) = rest.strip_prefix(['C', 'c']) {
-        rest = c.get(digits(c)..).unwrap_or("");
+    if ["R", "C", "RC"].iter().any(|x| n.eq_ignore_ascii_case(x)) {
+        return true;
     }
-    rest.is_empty() && !n.is_empty()
+    if let Some(r) = n.strip_prefix(['R', 'r']) {
+        if let Some(rest) = number(r, 1_048_576) {
+            return !rest.starts_with('.');
+        }
+        if r.strip_prefix(['C', 'c']).and_then(|c| number(c, 16_384)).is_some() {
+            return true;
+        }
+    }
+    n.strip_prefix(['C', 'c']).and_then(|c| number(c, 16_384)).is_some()
 }
 
 fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
@@ -254,7 +264,9 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Dialog("defineName".into(), json!({})));
         return ok();
     };
-    if !valid_name(&name) {
+    // An edit that keeps the name doesn't judge it again: a file may hold a name this check now
+    // refuses (earlier versions wrote `R1_Total`), and Name Manager must still reach it.
+    if !valid_name(&name) && str_param(p, "oldName") != Some(name.as_str()) {
         return Err(EngineError::Other("The name that you entered is not valid.".into()));
     }
     let d = s.doc()?;

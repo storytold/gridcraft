@@ -1505,12 +1505,58 @@ fn create_names_from_selection() {
 #[test]
 fn names_that_look_like_references_are_refused() {
     let mut s = s();
-    for bad in ["R1C1", "r2", "C3", "RC", "R", "c", "rc12", "A1", "XFD1048576", "1st"] {
+    for bad in ["R1C1", "R1C1X", "r2", "C3", "RC", "R", "c", "rc12", "A1", "XFD1048576", "1st"] {
         assert!(s.execute("formulas.defineName", json!({"name": bad, "refersTo": "=1"})).is_err(), "{bad}");
     }
-    for good in ["R1C1X", "Rate", "RCx", "Rx", "_R1", "Cost"] {
+    for good in ["Rate", "RCx", "Rx", "_R1", "Cost"] {
         s.execute("formulas.defineName", json!({"name": good, "refersTo": "=1"})).unwrap();
     }
+}
+
+#[test]
+fn names_that_begin_like_r1c1_references_are_refused() {
+    // Excel 365's answers, measured in #1663.
+    let mut s = s();
+    let refused = "R1C1Name r1c1name R1C1x R1C1_ R1C1. R1C1.5 R1C1C1 RC1x R1Cx R1Name R1x R1_ C1Name C1x C1_ R2D2 r2c3x R1C16385x C1R1 C1R1x R1r R C r c RC R1C R1C1 R1C16385";
+    for bad in refused.split(' ') {
+        let e = s.execute("formulas.defineName", json!({"name": bad, "refersTo": "=Sheet1!$A$1"})).unwrap_err();
+        assert!(e.to_string().contains("not valid"), "{bad}: {e}");
+    }
+    let accepted = "R1.x RCx R0x R99999999C1x A1Name Rate RCName RC_ Rx RName R_ C_ Cx Rr C0x A1x XFD1x XFE1 Name1 Cost R0C0 R1048577C1";
+    for good in accepted.split(' ') {
+        s.execute("formulas.defineName", json!({"name": good, "refersTo": "=Sheet1!$A$1"})).map_err(|e| format!("{good}: {e}")).unwrap();
+    }
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["R1 Total", 1], ["C2 cost", 2], ["Q1 sales", 3]]})).unwrap();
+    let r = s.execute("formulas.createFromSelection", json!({"range": "A1:B3", "top": false, "left": true})).unwrap();
+    assert_eq!(r["created"], 3);
+    for n in ["_R1_Total", "_C2_cost", "Q1_sales"] {
+        assert!(s.doc().unwrap().wb.names.iter().any(|x| x.name == n), "{n}");
+    }
+}
+
+#[test]
+fn a_saved_name_excel_refuses_is_kept_and_can_be_edited() {
+    // Earlier versions saved names such as `R1_Total`: opening the file keeps them, and Name
+    // Manager can still change what they refer to (or rename them to a valid name).
+    let mut s = s();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).names.push(gridcraft_model::DefinedName {
+        name: "R1_Total".into(),
+        scope: None,
+        formula: "Sheet1!$A$1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+    s.execute("file.open", json!({"name": "x.xlsx", "base64": b64})).unwrap();
+    let formula = |s: &Session, n: &str| s.doc().unwrap().wb.names.iter().find(|x| x.name == n).map(|x| x.formula.clone());
+    assert_eq!(formula(&s, "R1_Total").as_deref(), Some("Sheet1!$A$1"));
+    s.execute("formulas.defineName", json!({"name": "R1_Total", "oldName": "R1_Total", "refersTo": "=Sheet1!$B$2"})).unwrap();
+    assert_eq!(formula(&s, "R1_Total").as_deref(), Some("Sheet1!$B$2"));
+    let e = s.execute("formulas.defineName", json!({"name": "R2_Total", "oldName": "R1_Total", "refersTo": "=Sheet1!$B$2"})).unwrap_err();
+    assert!(e.to_string().contains("not valid"), "{e}");
+    s.execute("formulas.defineName", json!({"name": "Total", "oldName": "R1_Total", "refersTo": "=Sheet1!$B$2"})).unwrap();
+    assert_eq!(formula(&s, "Total").as_deref(), Some("Sheet1!$B$2"));
+    assert_eq!(formula(&s, "R1_Total"), None);
 }
 
 #[test]
