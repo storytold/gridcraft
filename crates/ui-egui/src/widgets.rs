@@ -1,7 +1,7 @@
 //! Ribbon-style widgets: icon buttons, large buttons, split buttons, colour palettes, and the
 //! message box / toast overlays.
 
-use egui::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align2, Color32, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
 
 use crate::SheetApp;
 use crate::i18n;
@@ -123,6 +123,34 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
     }
     icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
     (m.on_hover_text(tr(ui, tip)).clicked(), a)
+}
+
+/// The gap between a menu row's left edge and its label.
+const MENU_ROW_INDENT: f32 = 8.0;
+
+/// A menu or dropdown row: a frameless button that paints its own hover highlight.
+///
+/// `egui::Button::frame(false)` also drops the frame that carries `weak_bg_fill`, the fill egui uses
+/// for hover and press. An unframed row therefore gives no feedback under the pointer. Painting the
+/// row behind the label keeps the compact menu geometry and restores the highlight.
+///
+/// The same flag also zeroes `style.spacing.button_padding`, so the label would sit flush against
+/// the row edge. A fixed spacer atom puts the indent back without a frame.
+pub fn menu_row(ui: &mut Ui, label: &str, width: f32, height: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let backdrop = ui.painter().add(Shape::Noop);
+    let indent = egui::Atom::custom(ui.next_auto_id(), vec2(MENU_ROW_INDENT, 0.0));
+    let resp = ui.add(egui::Button::new((indent, label)).frame(false).min_size(vec2(width, height)));
+    let fill = if resp.is_pointer_button_down_on() {
+        t.pressed
+    } else if resp.hovered() {
+        t.hover
+    } else {
+        // Leave the reserved slot empty: an unhovered menu must paint exactly as it did before.
+        return resp;
+    };
+    ui.painter().set(backdrop, Shape::rect_filled(resp.rect, 4.0, fill));
+    resp
 }
 
 /// A one-line text field for a value stored in the workbook, which callers reload every frame. The text being typed is

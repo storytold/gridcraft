@@ -14,6 +14,7 @@ use serde_json::json;
 use crate::SheetApp;
 use crate::editor::{EditState, REF_COLORS};
 use crate::theme::{self, Tokens};
+use crate::widgets::menu_row;
 
 pub const COL_HEADER_H: f32 = 21.0;
 /// Sheet units are 96-dpi pixels (as in XLSX); on screen one unit is drawn at this many points,
@@ -2861,7 +2862,10 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let mut close = false;
     let resp = egui::Area::new(egui::Id::new("cell_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.set_min_width(200.0);
+            // One width for the popup and every row: a narrower row leaves the hover highlight
+            // short of the menu's right edge.
+            let row_w = 200.0;
+            ui.set_min_width(row_w);
             let insert_copied = insert_copied_item(app);
             let mut items: Vec<(&str, &str)> = vec![
                 ("Cut", "edit.cut"),
@@ -2894,7 +2898,7 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                     ui.separator();
                     continue;
                 }
-                if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(190.0, 20.0))).clicked() {
+                if menu_row(ui, lang.tr(label), row_w, 20.0).clicked() {
                     close = true;
                     match id {
                         "ui:pasteSpecial" => app.open_dialog("pasteSpecial", json!({})),
@@ -3103,7 +3107,7 @@ fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             ui.set_min_width(r.width().max(100.0));
             egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
                 for it in &items {
-                    if ui.add(egui::Button::new(it.as_str()).frame(false).min_size(vec2(r.width().max(100.0), 18.0))).clicked() {
+                    if menu_row(ui, it.as_str(), r.width().max(100.0), 18.0).clicked() {
                         app.run_or_alert("cell.set", json!({"cell": c.a1(), "input": it}));
                         close = true;
                     }
@@ -3121,7 +3125,8 @@ fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
     let mut close = false;
     let response = egui::Area::new(egui::Id::new("header_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.set_min_width(190.0);
+            let row_w = 190.0;
+            ui.set_min_width(row_w);
             let insert_copied = insert_copied_item(app);
             let mut items: Vec<(&str, &str)> = if rows {
                 vec![
@@ -3166,7 +3171,7 @@ fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
                     ui.separator();
                     continue;
                 }
-                if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
+                if menu_row(ui, lang.tr(label), row_w, 20.0).clicked() {
                     close = true;
                     match id {
                         "ui:insertPaste" => app.open_dialog("insertPaste", json!({})),
