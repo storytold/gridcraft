@@ -1,5 +1,7 @@
 # GridCraft MCP server
 
+Last updated: 2026-10-16.
+
 `gridcraft-cli mcp` exposes GridCraft to AI agents over the [Model Context Protocol](https://modelcontextprotocol.io):
 newline-delimited JSON-RPC 2.0 on stdin/stdout (protocol `2025-06-18`; `2025-03-26` and `2024-11-05` clients are
 answered in their own version). Logs go to stderr.
@@ -57,6 +59,10 @@ with a file open.
 | `screenshot` | `path` | PNG of the window (Remote only). |
 | `list_functions` | `search?`, `category?` | Worksheet functions with signatures. |
 
+`new_workbook` creates an empty workbook when `sample` is omitted or is `"blank"`.
+Use `"budget"`, `"sales"` or `"grades"` for a built-in sample. Empty strings, null sample values
+and unknown sample names are rejected without changing the active workbook.
+
 Results are one text block holding pretty JSON; failures set `isError: true` with a readable message. Unknown tools,
 missing required arguments and wrong argument types are JSON-RPC `-32602` errors; malformed JSON is `-32700`; unknown
 methods `-32601`.
@@ -85,3 +91,9 @@ methods `-32601`.
 `Server::new(Box::new(Remote::connect(&control_addr("7979"))?))`, then `Server::serve(stdin, stdout)` or
 `Server::handle_line(line) -> Option<String>`. Implement the `Backend` trait (`call(method, params)`) to drive another
 host.
+
+## Revision history
+
+| Date | Change |
+|---|---|
+| 2026-10-16 | Document explicit `sample: "blank"`, existing omission defaults and invalid sample rejection (#1616). |

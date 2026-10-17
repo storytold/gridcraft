@@ -220,6 +220,64 @@ fn basic_tools() {
 }
 
 #[test]
+fn new_workbook_accepts_explicit_blank() {
+    let mut s = server();
+    ok(&mut s, "new_workbook", json!({"sample": "sales"}));
+    ok(&mut s, "new_workbook", json!({"sample": "blank"}));
+    let info = ok(&mut s, "inspect_workbook", json!({}));
+    assert_eq!(info["sheets"].as_array().unwrap().len(), 1);
+    assert_eq!(info["sheets"][0]["cells"], 0);
+    let defs = rpc(&mut s, 1, "tools/list", json!({}));
+    let new = defs["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "new_workbook").unwrap();
+    assert!(new["inputSchema"]["properties"]["sample"]["enum"].as_array().unwrap().contains(&json!("blank")));
+}
+
+#[test]
+fn new_workbook_defaults_samples_and_invalid_arguments() {
+    let mut s = server();
+    for sample in ["budget", "sales", "grades"] {
+        ok(&mut s, "new_workbook", json!({"sample": sample}));
+        let before = ok(&mut s, "inspect_workbook", json!({}));
+        assert!(before["sheets"][0]["cells"].as_u64().unwrap() > 0, "{sample}: {before}");
+        for invalid in [json!(""), json!("unknown"), Value::Null, json!(false)] {
+            let response = rpc(&mut s, 2, "tools/call", json!({"name": "new_workbook", "arguments": {"sample": invalid}}));
+            assert_eq!(err_code(&response), -32602);
+            assert_eq!(ok(&mut s, "inspect_workbook", json!({})), before);
+        }
+    }
+    for params in
+        [json!({"name": "new_workbook"}), json!({"name": "new_workbook", "arguments": {}}), json!({"name": "new_workbook", "arguments": null})]
+    {
+        ok(&mut s, "set_cell", json!({"cell": "A1", "input": "keep in previous workbook"}));
+        let response = rpc(&mut s, 3, "tools/call", params);
+        assert!(response.get("error").is_none(), "{response}");
+        assert_eq!(response["result"]["isError"], false);
+        assert_eq!(ok(&mut s, "inspect_workbook", json!({}))["sheets"][0]["cells"], 0);
+    }
+}
+
+#[test]
+fn new_workbook_blank_forwards_empty_params_over_tcp() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let mut s = Server::new(Box::new(Remote::connect(&addr).unwrap()));
+    let handle = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).unwrap();
+        let request: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["method"], "engine.execute");
+        let reply = json!({"id": request["id"], "ok": true, "result": request["params"]});
+        writeln!(writer, "{reply}").unwrap();
+    });
+    let response = ok(&mut s, "new_workbook", json!({"sample": "blank"}));
+    assert_eq!(response, json!({"command": "file.new", "params": {}}));
+    handle.join().unwrap();
+}
+
+#[test]
 fn sort_and_filter() {
     let mut s = server();
     ok(&mut s, "write_range", json!({"range": "A1", "values": [["Name", "Score"], ["b", 2], ["c", 3], ["a", 1]]}));

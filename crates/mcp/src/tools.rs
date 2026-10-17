@@ -344,8 +344,8 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "new_workbook",
             "New workbook",
-            "Create a new workbook and make it active: blank, or a built-in sample (\"budget\", \"sales\", \"grades\").",
-            obj(json!({"sample": enumeration("Sample workbook", &["budget", "sales", "grades"])}), &[]),
+            "Create a new workbook and make it active: omit sample or use \"blank\" for an empty workbook, or choose \"budget\", \"sales\" or \"grades\".",
+            obj(json!({"sample": enumeration("Sample workbook (default: blank)", &["blank", "budget", "sales", "grades"])}), &[]),
             false,
         ),
         tool(
@@ -628,6 +628,7 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<Value, String> 
         "filter" => filter(b, a),
         "open_workbook" => exec(b, "file.open", pick(a, &["path"])),
         "save_workbook" => save_workbook(b, a),
+        "new_workbook" if a.get("sample").and_then(Value::as_str) == Some("blank") => exec(b, "file.new", json!({})),
         "new_workbook" => exec(b, "file.new", pick(a, &["sample"])),
         "undo" => exec(b, "edit.undo", pick(a, &["steps"])),
         "redo" => exec(b, "edit.redo", pick(a, &["steps"])),
