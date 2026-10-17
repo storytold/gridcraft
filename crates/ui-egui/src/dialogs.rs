@@ -1040,7 +1040,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         .collapsible(false)
         .resizable(false)
         .default_width(width)
-        .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -40.0))
+        // A default position, not an anchor: egui anchors can't be dragged, and dialogs move by their title bar.
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center() + vec2(0.0, -40.0))
         .open(&mut win_open);
     let window = if d.name == "insertPicture" { window.default_height(240.0) } else { window };
     window.show(ctx, |ui| {
