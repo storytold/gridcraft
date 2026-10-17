@@ -139,6 +139,42 @@ fn long_chain() {
     assert_eq!(t.num("A3000"), 3009.0);
 }
 
+/// A chain where each formula reads the row below it, entered in one edit (#555): row order
+/// reaches the end of the chain last, so evaluation has to follow it from the other end.
+#[test]
+fn long_reverse_chain_entered_at_once() {
+    const N: u32 = 50_000;
+    let mut t = T::new();
+    let mut keys = Vec::new();
+    {
+        let sh = t.wb.sheet_mut(0).unwrap();
+        for r in 1..=N {
+            sh.cells.set(c(&format!("A{r}")), Cell::formula(Formula::new(&format!("=A{}+1", r + 1))));
+            keys.push((0, c(&format!("A{r}"))));
+        }
+        sh.cells.set(c(&format!("A{}", N + 1)), Cell::value(Value::Number(1.0)));
+        keys.push((0, c(&format!("A{}", N + 1))));
+    }
+    t.calc.cells_changed(&mut t.wb, &keys);
+    assert_eq!(t.num("A1"), f64::from(N + 1));
+    assert_eq!(t.num(&format!("A{N}")), 2.0);
+    assert!(t.calc.circular.is_empty());
+    t.set(&format!("A{}", N + 1), "10");
+    assert_eq!(t.num("A1"), f64::from(N + 10));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1"), f64::from(N + 10));
+    assert!(t.calc.circular.is_empty());
+
+    // A real loop still is one, and so is everything that reads it, however far down the chain.
+    t.set(&format!("A{}", N + 1), &format!("=A{}+1", N + 2));
+    t.set(&format!("A{}", N + 2), &format!("=A{}+1", N + 1));
+    assert_eq!(t.get("A1"), Value::Error(CellError::Circ));
+    assert_eq!(t.get(&format!("A{}", N + 2)), Value::Error(CellError::Circ));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Circ));
+    assert!(!t.calc.circular.is_empty());
+}
+
 #[test]
 fn index_with_arrays_of_positions() {
     let mut t = T::new();

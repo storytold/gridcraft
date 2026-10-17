@@ -10,7 +10,7 @@
 //! and the formulas that read one are evaluated again until the loop settles
 //! (`PassHost::iterate_loops`).
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::hash::{BuildHasherDefault, Hasher};
 
 /// A fast, non-cryptographic hasher for cell keys (FxHash-style multiply-rotate).
@@ -359,6 +359,98 @@ impl Graph {
     pub fn precedents_of(&self, k: Key) -> Vec<Area> {
         self.nodes.get(&k).map(|n| n.areas.clone()).unwrap_or_default()
     }
+
+    /// The order to evaluate `dirty` (sorted in row-major order, without duplicates): each formula
+    /// after the formulas of `dirty` it reads, so its precedents are already calculated when it
+    /// runs. On-demand evaluation recurses once per link it follows, so a long chain met from the
+    /// wrong end (each formula reading the row below, entered in one edit: #555) ran out of depth
+    /// and showed `#CIRC!`, or out of stack.
+    ///
+    /// Tarjan's algorithm with an explicit stack over the static precedents: each strongly
+    /// connected component comes after the components it reads. A component of several formulas
+    /// is a circular reference: its formulas keep row-major order, and evaluating the first one
+    /// follows the loop on demand, which reports `#CIRC!` (or iterates). Formulas that don't read
+    /// each other keep row-major order.
+    fn evaluation_order(&self, dirty: &[Key]) -> Vec<Key> {
+        const UNSEEN: usize = usize::MAX;
+        // Position in `dirty` by (sheet, column, row): a precedent range is a run of keys per column.
+        let at: BTreeMap<(usize, u32, u32), usize> = dirty.iter().enumerate().map(|(i, (s, c))| ((*s, c.col, c.row), i)).collect();
+        let precedents = |i: usize| -> Vec<usize> {
+            let mut out = Vec::new();
+            let Some(node) = dirty.get(i).and_then(|k| self.nodes.get(k)) else { return out };
+            for a in &node.areas {
+                let (r0, r1, c1) = (a.range.start.row, a.range.end.row, a.range.end.col);
+                let mut col = a.range.start.col;
+                // Each column of the area holding a dirty formula at or after its first row.
+                while let Some((&(s, c, _), _)) = at.range((a.sheet, col, r0)..).next() {
+                    if s != a.sheet || c > c1 {
+                        break;
+                    }
+                    out.extend(at.range((s, c, r0)..=(s, c, r1)).map(|(_, &j)| j));
+                    match c.checked_add(1) {
+                        Some(next) => col = next,
+                        None => break,
+                    }
+                }
+            }
+            out
+        };
+        let n = dirty.len();
+        let (mut index, mut low, mut on_stack) = (vec![UNSEEN; n], vec![0usize; n], vec![false; n]);
+        let mut counter = 0usize;
+        // Formulas visited whose component isn't finished yet.
+        let mut open: Vec<usize> = Vec::new();
+        // The depth-first path: a formula, its precedents, and how many of them have been followed.
+        let mut path: Vec<(usize, Vec<usize>, usize)> = Vec::new();
+        let mut order = Vec::with_capacity(n);
+        for root in 0..n {
+            if index.get(root) != Some(&UNSEEN) {
+                continue;
+            }
+            let mut visit = Some(root);
+            loop {
+                if let Some(v) = visit.take() {
+                    if let (Some(iv), Some(lv), Some(ov)) = (index.get_mut(v), low.get_mut(v), on_stack.get_mut(v)) {
+                        (*iv, *lv, *ov) = (counter, counter, true);
+                    }
+                    counter += 1;
+                    open.push(v);
+                    path.push((v, precedents(v), 0));
+                }
+                let Some((v, preds, followed)) = path.last_mut() else { break };
+                let v = *v;
+                if let Some(&w) = preds.get(*followed) {
+                    *followed += 1;
+                    match index.get(w) {
+                        Some(&UNSEEN) => visit = Some(w),
+                        Some(&iw) if on_stack.get(w) == Some(&true) => {
+                            if let Some(lv) = low.get_mut(v) {
+                                *lv = (*lv).min(iw);
+                            }
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+                path.pop();
+                let lv = low.get(v).copied().unwrap_or(0);
+                if let Some(lp) = path.last().and_then(|(p, _, _)| low.get_mut(*p)) {
+                    *lp = (*lp).min(lv);
+                }
+                if index.get(v) == Some(&lv) {
+                    let mut component = open.split_off(open.iter().rposition(|&w| w == v).unwrap_or(0));
+                    for &w in &component {
+                        if let Some(o) = on_stack.get_mut(w) {
+                            *o = false;
+                        }
+                    }
+                    component.sort_unstable();
+                    order.extend(component.into_iter().filter_map(|i| dirty.get(i).copied()));
+                }
+            }
+        }
+        order
+    }
 }
 
 /// Calculation state kept beside a workbook.
@@ -468,6 +560,8 @@ impl PassHost<'_> {
         let Some(expr) = self.exprs.get(&k) else {
             return self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
         };
+        // The depth cap bounds the recursion of on-demand evaluation (a pass evaluates static
+        // precedents first, so only dynamic references and loops get deep).
         if self.in_progress.contains(&k) || self.depth > 2000 {
             self.cycle = true;
             if self.iterate {
@@ -954,8 +1048,11 @@ impl Calc {
             if dirty.is_empty() {
                 break;
             }
-            // Row-major order is a good topological guess; on-demand evaluation fixes the rest.
             dirty.sort_by_key(|(s, c)| (*s, c.row, c.col));
+            dirty.dedup();
+            // Precedents first; on-demand evaluation covers references only known while evaluating
+            // (INDIRECT, OFFSET, spill ranges) and circular references.
+            let order = self.graph.evaluation_order(&dirty);
             let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
             for k in &dirty {
                 if let Some(e) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc()) {
@@ -968,11 +1065,11 @@ impl Calc {
             let (results, spills, cycles) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now);
                 host.iterate = wb.calc.iterative;
-                for k in &dirty {
+                for k in &order {
                     host.compute(*k);
                 }
                 if host.iterate && !host.members.is_empty() {
-                    let passes = host.iterate_loops(&dirty, wb.calc.max_iterations, wb.calc.max_change);
+                    let passes = host.iterate_loops(&order, wb.calc.max_iterations, wb.calc.max_change);
                     if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
                         eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
                     }
