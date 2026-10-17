@@ -325,6 +325,8 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
                 add(format!("{d}/crosextra/{carlito}"), 0);
                 add(format!("{d}/carlito/{carlito}"), 0);
             }
+            // Fedora keeps each family in its own package folder, as for the UI fonts (#54).
+            add(format!("/usr/share/fonts/google-carlito-fonts/{carlito}"), 0);
             add(home_fonts(carlito), 0);
             add(format!("{mac_sup}/{arial_mac}"), 0);
             add(format!("{win}\\{arial_win}"), 0);
@@ -332,6 +334,8 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
                 add(format!("{d}/liberation/{lib}"), 0);
                 add(format!("{d}/dejavu/{dejavu}"), 0);
             }
+            add(format!("/usr/share/fonts/liberation-sans-fonts/{lib}"), 0);
+            add(format!("/usr/share/fonts/dejavu-sans-fonts/{dejavu}"), 0);
         }
         "serif" => {
             add(format!("{mac_sup}/Times New Roman.ttf"), 0);
@@ -340,6 +344,8 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
                 add(format!("{d}/liberation/LiberationSerif-Regular.ttf"), 0);
                 add(format!("{d}/dejavu/DejaVuSerif.ttf"), 0);
             }
+            add("/usr/share/fonts/liberation-serif-fonts/LiberationSerif-Regular.ttf".into(), 0);
+            add("/usr/share/fonts/dejavu-serif-fonts/DejaVuSerif.ttf".into(), 0);
         }
         "mono" => {
             add(format!("{mac_sys}/SFNSMono.ttf"), 0);
@@ -348,6 +354,14 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
             for d in lin {
                 add(format!("{d}/dejavu/DejaVuSansMono.ttf"), 0);
             }
+            add("/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf".into(), 0);
+            // Fedora installs DejaVu Sans Mono only on request. Liberation Mono comes with LibreOffice
+            // (in Workstation and KDE by default), Noto Sans Mono (variable, Regular by default) always.
+            for d in lin {
+                add(format!("{d}/liberation/LiberationMono-Regular.ttf"), 0);
+            }
+            add("/usr/share/fonts/liberation-mono-fonts/LiberationMono-Regular.ttf".into(), 0);
+            add("/usr/share/fonts/google-noto-vf/NotoSansMono[wght].ttf".into(), 0);
         }
         _ => {}
     }
@@ -593,6 +607,8 @@ fn thai() -> Vec<(String, u32)> {
         v.push((format!("{d}/tlwg/Garuda.ttf"), 0));
         v.push((format!("{d}/garuda/Garuda.ttf"), 0));
     }
+    // Fedora ships the variable Noto Sans Thai; its default instance is Regular.
+    v.push(("/usr/share/fonts/google-noto-vf/NotoSansThai[wght].ttf".into(), 0));
     v
 }
 
@@ -619,6 +635,7 @@ fn hebrew() -> Vec<(String, u32)> {
         v.push((format!("{d}/dejavu/DejaVuSans.ttf"), 0));
         v.push((format!("{d}/freefont/FreeSans.ttf"), 0));
     }
+    v.push(("/usr/share/fonts/google-noto-vf/NotoSansHebrew[wght].ttf".into(), 0));
     v
 }
 
@@ -933,5 +950,39 @@ mod tests {
         let loaded = try_load(&[(bad_s.as_str(), 0), (good_s.as_str(), 0)]);
         assert_eq!(loaded.map(|fd| fd.font.len()), Some(real.len()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fedora_package_folders_are_searched_after_the_other_linux_layouts() {
+        // #1694: Fedora keeps each font family in its own package folder, so without these entries
+        // no cell face is found there and bold and italic cells draw as regular text. Each comes
+        // after the existing Linux folders for the same font, so wherever one of those matched,
+        // nothing changes.
+        let paths = |cands: Vec<(String, u32)>| cands.into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+        let cases: [(&str, Vec<String>, &str, &str); 9] = [
+            (CELL, paths(candidates(CELL)), "google-carlito-fonts/Carlito-Regular.ttf", "/carlito/Carlito-Regular.ttf"),
+            (CELL_BOLD, paths(candidates(CELL_BOLD)), "google-carlito-fonts/Carlito-Bold.ttf", "/carlito/Carlito-Bold.ttf"),
+            (CELL_ITALIC, paths(candidates(CELL_ITALIC)), "google-carlito-fonts/Carlito-Italic.ttf", "/carlito/Carlito-Italic.ttf"),
+            (CELL_BOLD_ITALIC, paths(candidates(CELL_BOLD_ITALIC)), "google-carlito-fonts/Carlito-BoldItalic.ttf", "/carlito/Carlito-BoldItalic.ttf"),
+            (CELL_BOLD, paths(candidates(CELL_BOLD)), "liberation-sans-fonts/LiberationSans-Bold.ttf", "/liberation/LiberationSans-Bold.ttf"),
+            (SERIF, paths(candidates(SERIF)), "liberation-serif-fonts/LiberationSerif-Regular.ttf", "/liberation/LiberationSerif-Regular.ttf"),
+            (MONO, paths(candidates(MONO)), "liberation-mono-fonts/LiberationMono-Regular.ttf", "/dejavu/DejaVuSansMono.ttf"),
+            ("thai", paths(thai()), "google-noto-vf/NotoSansThai[wght].ttf", "/NotoSansThai-Regular.ttf"),
+            ("hebrew", paths(hebrew()), "google-noto-vf/NotoSansHebrew[wght].ttf", "/NotoSansHebrew-Regular.ttf"),
+        ];
+        for (role, list, fedora_file, earlier) in &cases {
+            let at = list.iter().position(|p| *p == format!("/usr/share/fonts/{fedora_file}"));
+            let last_earlier = list.iter().rposition(|p| p.ends_with(earlier));
+            assert!(at.is_some(), "{role}: Fedora's {fedora_file} is not a candidate");
+            assert!(last_earlier.is_some(), "{role}: no existing {earlier} candidate to compare with");
+            assert!(at > last_earlier, "{role}: {fedora_file} must come after every existing {earlier}");
+        }
+        // Liberation Mono only stands in for DejaVu Sans Mono, wherever that is installed.
+        let mono = paths(candidates(MONO));
+        let first_liberation = mono.iter().position(|p| p.ends_with("LiberationMono-Regular.ttf"));
+        let last_dejavu = mono.iter().rposition(|p| p.ends_with("DejaVuSansMono.ttf"));
+        assert!(first_liberation.is_some() && first_liberation > last_dejavu, "Liberation Mono must follow DejaVu Sans Mono: {mono:?}");
+        let noto = mono.iter().position(|p| p == "/usr/share/fonts/google-noto-vf/NotoSansMono[wght].ttf");
+        assert!(noto.is_some() && noto.unwrap_or(0) + 1 == mono.len(), "Fedora's default Noto Sans Mono must be the last resort: {mono:?}");
     }
 }
