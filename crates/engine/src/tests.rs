@@ -242,6 +242,24 @@ fn formulas_with_the_wrong_argument_count_are_refused_on_entry() {
 }
 
 #[test]
+fn evaluate_refuses_what_entry_refuses_and_says_why() {
+    // `formulas.evaluate` (the CLI's `eval`, MCP's evaluate_formula) gave #NAME? for any formula
+    // that didn't parse, which hid the cause: `=SUM(1;2)`, with the `;` a French or German Excel
+    // uses, looked like an unknown function.
+    let mut s = s();
+    let eval = |s: &mut Session, f: &str| s.execute("formulas.evaluate", json!({"formula": f}));
+    let e = eval(&mut s, "=SUM(1;2)").unwrap_err().to_string();
+    assert!(e.contains("There's a problem with this formula") && e.contains("expected `,`"), "{e}");
+    let e = eval(&mut s, "=DATEDIF(1,2)").unwrap_err().to_string();
+    assert!(e.contains("too few arguments"), "{e}");
+    // What entry accepts evaluates: an unknown function is #NAME?, as in Excel, missing closing
+    // parentheses are added, and the `=` is optional.
+    assert_eq!(eval(&mut s, "=SOMME(1,2)").unwrap(), json!({"error": "#NAME?"}));
+    assert_eq!(eval(&mut s, "=SUM(1,2").unwrap(), json!(3.0));
+    assert_eq!(eval(&mut s, "1/4").unwrap(), json!(0.25));
+}
+
+#[test]
 fn undo_redo() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();

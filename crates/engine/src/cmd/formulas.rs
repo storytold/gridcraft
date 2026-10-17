@@ -53,7 +53,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("formulas.showFormulas", "Show Formulas", ["Formulas", "Formula Auditing"], Some("Ctrl+`"), "{on?}", has_doc, show_formulas),
         cmd!(query "formulas.errorChecking", "Error Checking", ["Formulas", "Formula Auditing"], None, "{} → cells with errors", has_doc, error_checking),
         cmd!(query "formulas.evaluateFormula", "Evaluate Formula", ["Formulas", "Formula Auditing"], None, "{cell?, formula?} → steps", has_doc, evaluate_formula),
-        cmd!(query "formulas.evaluate", "Evaluate", [], None, "{formula: \"=SUM(A1:A3)\", cell?} → value without changing the sheet", has_doc, evaluate),
+        cmd!(query "formulas.evaluate", "Evaluate", [], None, "{formula: \"=SUM(A1:A3)\", cell?} → value without changing the sheet; a formula that couldn't be entered in a cell is an error", has_doc, evaluate),
         cmd!(noundo "formulas.calculateNow", "Calculate Now", ["Formulas", "Calculation"], Some("F9"), "{}", has_doc, calc_now),
         cmd!(noundo "formulas.calculateSheet", "Calculate Sheet", ["Formulas", "Calculation"], Some("Shift+F9"), "{}", has_doc, calc_now),
         cmd!(
@@ -540,11 +540,16 @@ fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"formula": format!("={text}"), "steps": steps, "result": crate::cmd::inspect::value_json(&result)}))
 }
 
+/// Evaluates what typing `formula` into a cell would show. A formula `cell.set` would refuse (it
+/// doesn't parse, or calls a function with the wrong number of arguments) is an error that says
+/// why, not `#NAME?`; an unknown function name still evaluates to `#NAME?`, as in Excel.
 fn evaluate(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let f = str_param(p, "formula").ok_or_else(|| bad("formulas.evaluate", "missing `formula`"))?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
-    let v = gridcraft_calc::evaluate(&d.wb, d.wb.active_sheet, at, f);
+    let expr = crate::cmd::edit::parse_typed_formula(f.strip_prefix('=').unwrap_or(f))?;
+    crate::cmd::edit::check_arg_counts(&expr)?;
+    let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, d.wb.active_sheet, at, &expr);
     Ok(crate::cmd::inspect::value_json(&v))
 }
 
