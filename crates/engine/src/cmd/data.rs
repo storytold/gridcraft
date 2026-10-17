@@ -748,6 +748,12 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         .and_then(Json::as_array)
         .map(|a| a.iter().filter_map(|c| col_param(Some(c), r.start.col)).collect())
         .unwrap_or_else(|| (r.start.col..=r.end.col).collect());
+    // With no column to compare, every row key is empty: the first row would survive and every
+    // other row would be deleted as a duplicate. A column outside the range compares data the
+    // user didn't select. Excel refuses both.
+    if cols.is_empty() || cols.iter().any(|c| !(r.start.col..=r.end.col).contains(c)) {
+        return Err(bad("data.removeDuplicates", "`columns` must name at least one column of the range"));
+    }
     let sheet = d.wb.active_sheet;
     let start = r.start.row + header as u32;
     let mut removed = 0;
@@ -1498,5 +1504,21 @@ mod tests {
         assert_eq!(split_delimited("a,b,,c", &[','], false, '"'), ["a", "b", "", "c"]);
         assert_eq!(split_delimited("a,b,,c", &[','], true, '"'), ["a", "b", "c"]);
         assert_eq!(split_delimited("\"x,y\",z", &[','], false, '"'), ["x,y", "z"]);
+    }
+
+    #[test]
+    fn remove_duplicates_without_a_valid_column_is_refused() {
+        // `columns: []` (or only unusable names) used to compare nothing and delete every row
+        // but the first.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["a"], ["b"], ["c"]]})).unwrap();
+        for columns in [json!([]), json!(["ZZZ"])] {
+            let err = s.execute("data.removeDuplicates", json!({"range": "A1:A3", "columns": columns})).unwrap_err();
+            assert!(err.to_string().contains("columns"), "{err}");
+        }
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert_eq!(sh.value(CellRef::new(0, 0)), Value::text("a"));
+        assert_eq!(sh.value(CellRef::new(2, 0)), Value::text("c"));
     }
 }
