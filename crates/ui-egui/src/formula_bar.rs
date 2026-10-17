@@ -255,6 +255,22 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F4)) {
             cycle_anchor(&mut ed);
         }
+        // Ctrl+Shift+A (Control+Shift+A on a Mac) inserts the argument names. Consumed anywhere,
+        // as in Excel, so it never falls through to the text's select-all.
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::A)) {
+            let (text, caret) = (ed.text.clone(), ed.caret);
+            if ed.insert_argument_names()
+                && let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id)
+            {
+                // The text edit records an undo point only once typing pauses: mark the text
+                // before the shortcut so one Undo takes back just the inserted names.
+                let mut undoer = state.undoer();
+                let cursor = state.cursor.char_range().unwrap_or(egui::text::CCursorRange::one(egui::text::CCursor::new(caret)));
+                undoer.add_undo(&(cursor, text));
+                state.set_undoer(undoer);
+                state.store(ui.ctx(), id);
+            }
+        }
     }
     // The text widget.
     let refs = formula_refs(&ed.text);

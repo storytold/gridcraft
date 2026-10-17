@@ -144,6 +144,44 @@ impl EditState {
         true
     }
 
+    /// Ctrl+Shift+A, as in Excel: right after a function name, or after its `(`, inserts the
+    /// argument names (optional ones without their brackets) and the closing parenthesis, and
+    /// the `(` too when missing. Anywhere else nothing changes and it returns false.
+    pub fn insert_argument_names(&mut self) -> bool {
+        if !self.is_formula() {
+            return false;
+        }
+        let caret_b = self.byte_caret();
+        let (Some(before), Some(after)) = (self.text.get(..caret_b), self.text.get(caret_b..)) else { return false };
+        // An odd number of quotes before the caret: it is inside a text literal.
+        if before.matches('"').count() % 2 == 1 {
+            return false;
+        }
+        let open = before.ends_with('(');
+        if !open && after.starts_with('(') {
+            return false;
+        }
+        let head = before.strip_suffix('(').unwrap_or(before);
+        let name: String =
+            head.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+        if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
+            return false;
+        }
+        let Some(signature) = crate::formula_locale::signature(&name, self.locale) else { return false };
+        let sep = self.locale.list_separator();
+        let inner = signature.split_once('(').map(|(_, rest)| rest.trim_end().trim_end_matches(')')).unwrap_or("");
+        let args: Vec<&str> = inner.split(sep).map(|a| a.trim().trim_start_matches('[').trim_end_matches(']')).filter(|a| !a.is_empty()).collect();
+        let close = if open && after.starts_with(')') { "" } else { ")" };
+        let inserted = format!("{}{}{close}", if open { "" } else { "(" }, args.join(&sep.to_string()));
+        self.text = format!("{before}{inserted}{after}");
+        self.caret += inserted.chars().count();
+        self.autocomplete.clear();
+        self.completion = None;
+        self.caret_to_end = false;
+        self.sync_caret = true;
+        true
+    }
+
     /// The function call the caret is inside and the argument index (for the hint tooltip).
     pub fn current_function(&self) -> Option<(String, usize)> {
         if !self.is_formula() {
