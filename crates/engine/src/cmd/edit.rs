@@ -1546,10 +1546,24 @@ fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"replaced": n}))
 }
 
+/// Whether case-folding `s` maps every char to exactly one char of the same UTF-8 length, so
+/// byte positions in the folded text still line up with the original's character boundaries.
+fn folds_in_place(s: &str) -> bool {
+    s.chars().all(|c| {
+        let mut folded = c.to_lowercase();
+        let first = folded.next();
+        folded.next().is_none() && first.is_some_and(|l| l.len_utf8() == c.len_utf8())
+    })
+}
+
 fn replace_ci(text: &str, what: &str, with: &str) -> String {
     let lower = text.to_lowercase();
     let w = what.to_lowercase();
-    if lower.len() != text.len() || w.is_empty() {
+    // Slicing `text` at positions found in `lower` is only sound when folding kept every byte
+    // boundary: a length check alone misses foldings that keep the total length while shifting
+    // boundaries (U+212A KELVIN SIGN shrinks 3→1 bytes, U+0130 grows 2→3), where the tail used
+    // to be dropped. Those fall back to the case-sensitive replace, as length changes already do.
+    if lower.len() != text.len() || w.is_empty() || !folds_in_place(text) || !folds_in_place(what) {
         return text.replace(what, with);
     }
     let mut out = String::new();
@@ -1695,5 +1709,19 @@ mod tests {
     #[test]
     fn replace_case_insensitive() {
         assert_eq!(replace_ci("Apple apple APPLE", "apple", "pear"), "pear pear pear");
+    }
+
+    #[test]
+    fn replace_case_insensitive_keeps_text_when_folding_moves_boundaries() {
+        // U+212A KELVIN SIGN folds to `k` (3→1 bytes) while U+0130 folds to `i` plus a
+        // combining dot (2→3 bytes): the folded text is the same length but its byte positions
+        // no longer line up with the original, and the old slicing dropped the tail.
+        let mut s = Session::new();
+        s.new_workbook();
+        let text = "\u{212A}\u{0130}\u{0130}";
+        s.execute("cell.set", json!({"cell": "A1", "input": text})).unwrap();
+        s.execute("edit.replace", json!({"what": "k", "with": "x"})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert_eq!(sh.value(CellRef::new(0, 0)), Value::text(text));
     }
 }
