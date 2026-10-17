@@ -147,7 +147,7 @@ fn category_texts(wb: &Workbook, sheet: usize, formula: &str) -> Vec<String> {
                 if let Some(c) = at {
                     let code = &wb.styles.get(s.style_id(c)).num_fmt.0;
                     if !code.eq_ignore_ascii_case("general") {
-                        return format_value(v, &NumberFormat::parse_cached(code), wb.date_system).text;
+                        return format_value(v, &NumberFormat::parse_cached(code), wb.date_system, wb.locale).text;
                     }
                 }
             }
@@ -242,5 +242,6 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());
     let palette = default_palette(&wb.theme, n.min(PALETTE_CYCLE));
-    ChartData { categories, series, palette }
+    // The workbook's display conventions ride along, so chart labels are painted like the grid.
+    ChartData { categories, series, palette, locale: wb.locale }
 }

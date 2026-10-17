@@ -2,7 +2,7 @@
 //! `test-data/spreadsheet/NumberFormatApproxTests.xlsx` (sheet `Tests`: B = format, C = value,
 //! A = `=TEXT(C, B)`). The workbook is not committed; its rows are copied here as data.
 
-use gridcraft_core::{DateSystem, Value};
+use gridcraft_core::{DateSystem, Locale, Value};
 use gridcraft_numfmt::text_function;
 
 /// (format, value, Excel's result).
@@ -264,7 +264,7 @@ fn poi_number_format_approx_tests() {
     let wrong: Vec<String> = CASES
         .iter()
         .filter_map(|&(code, v, want)| {
-            let got = text_function(&Value::Number(v), code, DateSystem::D1900);
+            let got = text_function(&Value::Number(v), code, DateSystem::D1900, Locale::En);
             (got.as_deref() != Ok(want)).then(|| format!("TEXT({v}, {code:?}) = {got:?}, Excel {want:?}"))
         })
         .collect();

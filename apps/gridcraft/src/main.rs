@@ -119,6 +119,9 @@ fn load_prefs(app: &mut SheetApp) {
     {
         app.session.prefs = p;
     }
+    // The numbers and dates follow that language: German shows German separators and month names
+    // (View ▸ Interface language does the same while the app runs).
+    app.sync_locale();
 }
 
 fn save_prefs(app: &SheetApp) {

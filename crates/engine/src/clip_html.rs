@@ -263,7 +263,16 @@ pub(crate) fn format_for(shown: &str, n: f64) -> Option<String> {
         code.push_str(&"0".repeat(decimals.min(30)));
     }
     code.push_str(&quote(suffix));
-    let rendered = gridcraft_numfmt::text_function(&gridcraft_core::Value::number(n), &code, gridcraft_core::date::DateSystem::D1900).ok()?;
+    // The inferred code is en-US by construction (`,` thousands, `.` decimals), so it is checked
+    // by rendering with the en-US locale: this reads numbers out of other apps' HTML, it does not
+    // follow the workbook's locale.
+    let rendered = gridcraft_numfmt::text_function(
+        &gridcraft_core::Value::number(n),
+        &code,
+        gridcraft_core::date::DateSystem::D1900,
+        gridcraft_core::Locale::En,
+    )
+    .ok()?;
     (normalized(&rendered) == shown).then_some(code)
 }
 

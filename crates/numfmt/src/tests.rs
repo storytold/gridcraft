@@ -2,6 +2,20 @@ use super::*;
 
 const S: DateSystem = DateSystem::D1900;
 
+/// The tests below are en-US. These three shims keep their call sites as they were while the
+/// public API takes a locale; the German tests call `super::` with [`Locale::De`].
+fn format_value(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted {
+    super::format_value(v, fmt, sys, Locale::En)
+}
+
+fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellError> {
+    super::text_function(v, code, sys, Locale::En)
+}
+
+fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
+    super::format_general_fit(n, max_chars, Locale::En)
+}
+
 fn f(code: &str, n: f64) -> String {
     format_value(&Value::Number(n), &NumberFormat::parse(code), S).text
 }
@@ -637,7 +651,7 @@ fn text_uncached(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellE
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    let (f, overflow) = fmt.format_number(n, sys, Locale::En);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 
@@ -863,4 +877,71 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(parse::parse_sections("[unknown;x]0;0").len(), 2);
     assert_eq!(f("0\\[0", 5.0), "0[5");
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
+}
+
+/// Output in German: the same en-US format codes, German separators and month and weekday
+/// names. German *format codes* are not supported yet (PR #163), so nothing here parses `;` or
+/// a comma as a decimal point.
+mod german {
+    use gridcraft_core::date::DateSystem;
+    use gridcraft_core::{CellError, Locale, Value};
+
+    use crate::{NumberFormat, format_value, text_function};
+
+    const S: DateSystem = DateSystem::D1900;
+    const DE: Locale = Locale::De;
+
+    fn f(code: &str, n: f64) -> String {
+        format_value(&Value::Number(n), &NumberFormat::parse(code), S, DE).text
+    }
+
+    #[test]
+    fn separators_follow_the_locale() {
+        assert_eq!(f("#,##0.00", 1234.56), "1.234,56");
+        assert_eq!(f("0.00", 1.5), "1,50");
+        assert_eq!(f("#,##0", 1234567.0), "1.234.567");
+        assert_eq!(f("#,##0.00", -1234.56), "-1.234,56");
+        assert_eq!(f("0.00", 0.0), "0,00");
+        // The English locale still writes the English conventions for the same code.
+        assert_eq!(format_value(&Value::Number(1234.56), &NumberFormat::parse("#,##0.00"), S, Locale::En).text, "1,234.56");
+    }
+
+    #[test]
+    fn general_uses_the_german_decimal_separator() {
+        // General only changes its decimal separator: like Excel, it never groups thousands.
+        assert_eq!(f("General", 1234.5), "1234,5");
+        assert_eq!(format_value(&Value::Number(1234.5), &NumberFormat::general(), S, DE).text, "1234,5");
+        assert_eq!(f("General", 0.3), "0,3");
+    }
+
+    #[test]
+    fn dates_name_months_and_weekdays_in_german() {
+        // 2026-10-15 is a Thursday (serial 46310). The code's own order decides where the day
+        // goes: only the names and the separators in it change.
+        assert_eq!(text_function(&Value::Number(46310.0), "dddd, mmmm d, yyyy", S, DE), Ok("Donnerstag, Oktober 15, 2026".into()));
+        assert_eq!(text_function(&Value::Number(46310.0), "d. mmmm yyyy", S, DE), Ok("15. Oktober 2026".into()));
+        assert_eq!(text_function(&Value::Number(46310.0), "ddd, mmm d", S, DE), Ok("Don, Okt 15".into()));
+        // March, whose short German name is `Mär`.
+        assert_eq!(text_function(&Value::Number(46302.0), "mmmm mmm", S, DE), Ok("Oktober Okt".into()));
+        assert_eq!(text_function(&Value::Number(46096.0), "mmmm", S, DE), Ok("März".into()));
+        // The English locale is unchanged.
+        assert_eq!(text_function(&Value::Number(46310.0), "dddd, mmmm d, yyyy", S, Locale::En), Ok("Thursday, October 15, 2026".into()));
+    }
+
+    #[test]
+    fn text_function_writes_german_numbers() {
+        assert_eq!(text_function(&Value::Number(1234.5), "#,##0.00", S, DE), Ok("1.234,50".into()));
+        assert_eq!(text_function(&Value::Number(0.5), "0%", S, DE), Ok("50%".into()));
+        assert_eq!(text_function(&Value::from("5"), "0.00", S, DE), Ok("5,00".into()));
+        assert_eq!(text_function(&Value::from("abc"), "0.00", S, DE), Ok("abc".into()));
+        assert_eq!(text_function(&Value::Error(CellError::NA), "0", S, DE), Err(CellError::NA));
+    }
+
+    #[test]
+    fn fractions_and_scientific_follow_the_locale() {
+        // A fraction separator stays a space, and the whole part's thousands separator changes.
+        assert_eq!(f("# ?/?", 0.5), " 1/2");
+        assert_eq!(f("#,##0 ?/?", 1234.5), "1.234 1/2");
+        assert_eq!(f("0.00E+00", 12345.0), "1,23E+04");
+    }
 }

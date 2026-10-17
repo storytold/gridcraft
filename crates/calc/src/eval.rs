@@ -740,7 +740,11 @@ impl<'h> Evaluator<'h> {
                 }
                 let v = self.arg_val(args, 0).unwrap_or_default();
                 let f = self.arg_val(args, 1).unwrap_or_default();
-                let sys = self.host.workbook().date_system;
+                // The workbook's own conventions (date system and display locale), so `TEXT()` in a
+                // German workbook returns German separators and month names.
+                let wb = self.host.workbook();
+                let sys = wb.date_system;
+                let loc = wb.locale;
                 let one = |v: &Value, f: &Value| -> Value {
                     if let Value::Error(e) = v {
                         return Value::Error(*e);
@@ -749,7 +753,7 @@ impl<'h> Evaluator<'h> {
                         Ok(c) => c,
                         Err(e) => return Value::Error(e),
                     };
-                    match gridcraft_numfmt::text_function(v, &code, sys) {
+                    match gridcraft_numfmt::text_function(v, &code, sys, loc) {
                         Ok(s) => Value::text(s),
                         Err(e) => Value::Error(e),
                     }

@@ -1,6 +1,6 @@
 //! Value-axis scaling ("nice numbers") and label formatting.
 
-use gridcraft_core::{DateSystem, Value, number_to_text};
+use gridcraft_core::{DateSystem, Locale, Value, number_to_text};
 use gridcraft_numfmt::{NumberFormat, format_value};
 
 /// Largest magnitude we plot; bigger values are clamped so ranges stay finite.
@@ -116,13 +116,15 @@ pub(crate) fn fixed_scale(min: f64, max: f64, step: f64) -> Scale {
 pub(crate) struct Fmt {
     general: bool,
     fmt: NumberFormat,
+    /// The workbook's display locale: labels are painted like the grid.
+    loc: Locale,
 }
 
 impl Fmt {
-    pub fn new(code: &str) -> Fmt {
+    pub fn new(code: &str, loc: Locale) -> Fmt {
         let t = code.trim();
         let general = t.is_empty() || t.eq_ignore_ascii_case("general");
-        Fmt { general, fmt: NumberFormat::parse_cached(if general { "General" } else { t }) }
+        Fmt { general, fmt: NumberFormat::parse_cached(if general { "General" } else { t }), loc }
     }
     /// Formats `v`; `step` (axis labels) fixes the decimals for General.
     pub fn format(&self, v: f64, step: Option<f64>) -> String {
@@ -134,9 +136,9 @@ impl Fmt {
             v = 0.0;
         }
         if self.general {
-            return general_text(v, step);
+            return general_text(v, step, self.loc);
         }
-        let mut t = format_value(&Value::Number(v), &self.fmt, DateSystem::D1900).text;
+        let mut t = format_value(&Value::Number(v), &self.fmt, DateSystem::D1900, self.loc).text;
         if t.chars().count() > 40 {
             t = t.chars().take(40).collect();
         }
@@ -144,21 +146,22 @@ impl Fmt {
     }
 }
 
-fn general_text(v: f64, step: Option<f64>) -> String {
+fn general_text(v: f64, step: Option<f64>, loc: Locale) -> String {
     if v == 0.0 {
         return "0".into();
     }
     match step {
         Some(s) if s.is_finite() && s > 0.0 && v.abs() < 1e11 && v.abs() >= 1e-9 => {
             let d = (-s.log10().floor()).clamp(0.0, 10.0) as usize;
-            let t = format!("{:.*}", d, v);
-            if t.trim_start_matches('-').chars().all(|c| c == '0' || c == '.') { "0".into() } else { t }
+            let t = format!("{:.*}", d, v).replace('.', &loc.decimal().to_string());
+            if t.trim_start_matches('-').chars().all(|c| c == '0' || c == loc.decimal()) { "0".into() } else { t }
         }
         _ => number_to_text(v),
     }
 }
 
-/// Formats a number with a format code (General shows up to the precision implied by `step`).
-pub fn format_number(v: f64, code: &str, step: Option<f64>) -> String {
-    Fmt::new(code).format(v, step)
+/// Formats a number with a format code (General shows up to the precision implied by `step`),
+/// in `loc`'s conventions.
+pub fn format_number(v: f64, code: &str, step: Option<f64>, loc: Locale) -> String {
+    Fmt::new(code, loc).format(v, step)
 }

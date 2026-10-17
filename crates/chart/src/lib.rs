@@ -20,6 +20,7 @@ mod trend;
 #[cfg(test)]
 mod tests;
 
+pub use gridcraft_core::Locale;
 pub use gridcraft_model::{Chart, ChartKind, LegendPos, SparklineKind, Trendline, TrendlineKind};
 use serde::{Deserialize, Serialize};
 
@@ -127,6 +128,10 @@ pub struct ChartData {
     /// Workbook-theme colours for the points of pie-like charts, repeating (point `j` uses entry `j % len`); empty uses the default theme.
     #[serde(default)]
     pub palette: Vec<Rgba>,
+    /// The workbook's display locale, so axis and data labels are painted like the grid
+    /// (`1.234,56` in German). Not part of a chart's own settings.
+    #[serde(default)]
+    pub locale: Locale,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

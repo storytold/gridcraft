@@ -338,6 +338,15 @@ impl SheetApp {
         names
     }
 
+    /// The number and date conventions that go with the interface language: German shows German
+    /// separators and month names, every other language keeps en-US. Runs `app.locale.set`, so
+    /// choosing a language in View ▸ Interface language (and the saved `ui.json` language at
+    /// start-up) also switches how numbers and dates are written.
+    pub fn sync_locale(&mut self) {
+        let tag = if self.ui.language == i18n::Language::De { "de" } else { "en" };
+        let _ = self.session.run("app.locale.set", json!({"locale": tag}));
+    }
+
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
         let r = self.run_command(id, params);
@@ -629,6 +638,7 @@ impl SheetApp {
                 match i18n::Language::parse(code) {
                     Some(l) => {
                         self.ui.language = l;
+                        self.sync_locale();
                         Ok(json!({"language": l}))
                     }
                     None => Err(format!("unknown language {code:?} (use \"en\", \"es\", \"zh\", \"ja\", \"ko\", \"ru\", \"pt\" or \"cs\")")),
@@ -636,10 +646,12 @@ impl SheetApp {
             }
             "app.language.english" => {
                 self.ui.language = i18n::Language::En;
+                self.sync_locale();
                 Ok(json!({"language": i18n::Language::En}))
             }
             "app.language.japanese" => {
                 self.ui.language = i18n::Language::Ja;
+                self.sync_locale();
                 Ok(json!({"language": i18n::Language::Ja}))
             }
             "ui.backstage" => {

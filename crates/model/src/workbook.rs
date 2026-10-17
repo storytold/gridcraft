@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use gridcraft_core::DateSystem;
+use gridcraft_core::{DateSystem, Locale};
 use gridcraft_formula::Expr;
 use serde::{Deserialize, Serialize};
 
@@ -113,6 +113,11 @@ pub struct Workbook {
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv_delimiter: Option<u8>,
+    /// The conventions the grid paints numbers and dates with (decimal and thousands separators,
+    /// month and weekday names); set by the interface language (View ▸ Interface language),
+    /// `app.locale.set`. Not part of the file: opening a workbook never changes it.
+    #[serde(skip)]
+    pub locale: Locale,
     /// Unmodelled file content kept for saving (package root and workbook level). Not in JSON.
     #[serde(skip)]
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
@@ -146,6 +151,7 @@ impl Workbook {
             cell_styles: vec![],
             vba_project: None,
             csv_delimiter: None,
+            locale: Locale::En,
             preserved: None,
             source_dir: None,
         }
@@ -305,5 +311,25 @@ mod tests {
         assert!(wb.check_sheet_name("a/b", None).is_err());
         assert!(wb.check_sheet_name(&"x".repeat(32), None).is_err());
         assert!(wb.check_sheet_name("Budget 2026", None).is_ok());
+    }
+
+    /// The display locale is a session setting, not workbook content: it defaults to en-US and is
+    /// not part of the JSON a workbook is described by.
+    #[test]
+    fn locale_is_a_session_setting() {
+        assert_eq!(Workbook::default().locale, Locale::En);
+        let wb = Workbook::new();
+        let json = serde_json::to_string(&wb);
+        assert!(json.is_ok());
+        let json = json.unwrap_or_default();
+        assert!(!json.contains("locale"), "{json}");
+        let back: Result<Workbook, _> = serde_json::from_str(&json);
+        assert!(back.is_ok());
+        assert_eq!(back.map(|w| w.locale).unwrap_or(Locale::De), Locale::En);
+        // A JSON payload that does name one (an older or hand-written description) still reads.
+        let named = json.trim_end_matches('}').to_string() + ",\"locale\":\"de\"}";
+        let named: Result<Workbook, _> = serde_json::from_str(&named);
+        assert!(named.is_ok());
+        assert_eq!(named.map(|w| w.locale).unwrap_or(Locale::De), Locale::En);
     }
 }

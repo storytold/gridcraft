@@ -60,6 +60,15 @@ the View ▸ Animations checkbox, saved with the other UI preferences and on by 
 document text. The choice is saved in `ui.json`; with nothing saved the desktop app follows the
 system language.
 
+Picking German there (or `app.language.set {language: "de"}`) also switches the conventions
+numbers and dates are *written* with: German separators (`1.234,56`) and German month and weekday
+names (`15. Oktober 2026`, `Donnerstag`) in the grid, the clipboard, printing, chart labels
+and `TEXT()`. Format codes, function names and typed input stay en-US. The locale is a session
+setting, not workbook content; `{command: "app.locale.set", params: {locale: "en"|"de"}}` sets it
+directly (a locale tag such as `de-AT` also works, anything but German means en-US) and never makes
+the workbook look unsaved. A change recalculates the workbook, so cached `TEXT()` results are
+rewritten in the new conventions.
+
 `{command: "file.open", params: {path: "Secret.xlsx", password: "…"}}` opens a password-protected
 workbook (Agile or Standard encryption). Without `password` it returns an error containing
 "is password-protected. Enter its password to open it." and never opens a dialog; a wrong

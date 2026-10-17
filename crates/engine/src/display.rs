@@ -28,9 +28,9 @@ pub fn number_format(code: &str) -> NumberFormat {
     parsed(code)
 }
 
-/// Formats a value with a format code.
+/// Formats a value with a format code, in the workbook's display locale.
 pub fn format(v: &Value, code: &str, wb: &Workbook) -> Formatted {
-    format_value(v, &parsed(code), wb.date_system)
+    format_value(v, &parsed(code), wb.date_system, wb.locale)
 }
 
 /// What the cell editor and the formula bar start from. Same as `Cell::input_text`, except that a

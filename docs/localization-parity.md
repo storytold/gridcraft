@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Format Cells dialog looks its labels up in the catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (numbers and dates are written in the interface language's conventions) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -21,10 +21,20 @@ right-to-left sheets and full complex-script support. Part of
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so each shipped language covers **~12%** (measured
   count / estimated total).
-- **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
-  separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
-  localized function names and `;` separators (#45). German with localized numbers and formulas
-  is in PR #163 (open).
+- **Localized number and date output, German.** The interface language picks the conventions
+  numbers and dates are *written* with (`crates/core/src/locale.rs`, `Workbook::locale`,
+  `app.locale.set`): German separators (`1.234,56`) and German month and weekday names
+  (`15. Oktober 2026`, `Donnerstag`) instead of `1,234.56` and `October 15, 2026`, in the grid,
+  the clipboard and CSV, printing/PDF, chart axis and data
+  labels and `TEXT()`. German is the only other locale; every other interface language keeps
+  en-US. Format codes (`#,##0.00`, `m/d/yyyy`), function names, the `,` argument separator and
+  typed input are still en-US: reading German formats and swapping `;` for `,` is the rest of
+  PR #163, and localized function names (#45) are still missing. Numbers read from a clipboard
+  HTML table are still recognised in en-US only.
+- **en-US formulas only.** Function names, the `,` argument separator and locale *entry* of
+  numbers and dates are en-US. Users ask for localized function names and `;` separators (#45).
+  German with localized numbers, formats and formulas is in PR #163 (open); the output half of
+  that work is what landed here.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). There is no complex-text shaping: Arabic and
   Devanagari don't join or reorder, and there is no bidirectional layout. **Sheet Right-to-Left**
@@ -68,8 +78,9 @@ language (none so far) and of localized function names.
    status and error messages, command labels, function descriptions), with a missing-key check
    in `cargo xtask ci`. Language switching and the system-language default already exist (#31).
 2. Locale-aware formulas: localized function-name tables and separators at the formula-bar
-   boundary only (files keep en-US invariant names), locale number and date formats, list
-   separators in CSV.
+   boundary only (files keep en-US invariant names), list separators in CSV. Numbers and dates
+   are already *written* in the locale's conventions (German; `crates/core/src/locale.rs`), but
+   their localized *entry* — reading `1.234,56`, German format codes and `;` separators — is not.
 3. Text shaping and fallback: a shaping engine for grid, editor and PDF text (Arabic, Devanagari,
    Thai), system font fallback for CJK, bidirectional runs, right-to-left sheet tabs and printing;
    embedded subset fonts in PDF.
@@ -78,6 +89,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Numbers and dates are written in the interface language's conventions: a `Locale` in `crates/core` (`en`/`de`) reaches `crates/numfmt` (`format_value`, `text_function`, General), `Workbook::locale` and the new `app.locale.set`; picking German in View ▸ Interface language (or a saved `ui.json`) switches the grid, clipboard, CSV, printing, chart labels and `TEXT()` to `1.234,56` / `15. Oktober 2026`. Format codes, function names, the `,` separator and typed input stay en-US (PR #163) |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |

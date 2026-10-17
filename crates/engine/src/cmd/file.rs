@@ -1,5 +1,6 @@
 //! File menu: new, open, save, close, export, properties, options.
 
+use gridcraft_core::Locale;
 use serde_json::{Value as Json, json};
 
 use super::*;
@@ -24,6 +25,17 @@ pub fn specs() -> Vec<CommandSpec> {
             "{} → {calculation: {mode, iterative, maxIterations, maxChange}} for the active workbook (the interface opens File › Options; change settings with their own commands, e.g. formulas.calculationOptions, view.theme, app.language.set)",
             always,
             options
+        ),
+        // The conventions numbers and dates are painted with. The interface language sets it
+        // (View ▸ Interface language); this is the programmatic way in.
+        cmd!(
+            noundo "app.locale.set",
+            "Display Locale",
+            [],
+            None,
+            "{locale: \"en\"|\"de\" (a locale tag such as \"de-AT\" also works)} → {locale}; the decimal and thousands separators and the month and weekday names numbers and dates are shown with, as the interface language sets them. A change recalculates the workbook, so TEXT() results are rewritten too",
+            has_doc,
+            set_locale
         ),
         cmd!(noundo "window.activate", "Switch Window", ["Window"], None, "{index}", has_doc, activate_window),
     ]
@@ -211,4 +223,77 @@ fn activate_window(s: &mut Session, p: &Json) -> Result<Json> {
     }
     s.set_active(i);
     ok()
+}
+
+/// Sets `Workbook::locale`. Not workbook content: it is the session's display convention, so it is
+/// not an undo step and does not make the workbook look unsaved. `TEXT()` writes numbers and dates
+/// with the locale, so the workbook is recalculated when it actually changes.
+fn set_locale(s: &mut Session, p: &Json) -> Result<Json> {
+    let tag = str_param(p, "locale").ok_or_else(|| bad("app.locale.set", "missing `locale` (\"en\" or \"de\")"))?;
+    let loc = Locale::from_tag(tag).ok_or_else(|| bad("app.locale.set", format!("unknown locale {tag:?} (use \"en\" or \"de\")")))?;
+    let d = s.doc_mut()?;
+    if d.wb.locale != loc {
+        // As `DocState::store_view`: a convention the interface sets never dirties the workbook.
+        let dirty = d.is_dirty();
+        let mut wb = (*d.wb).clone();
+        wb.locale = loc;
+        // Cached `TEXT()` results are written in the locale the workbook had; rewrite them.
+        d.calc.recalc_all(&mut wb);
+        d.wb = std::sync::Arc::new(wb);
+        if !dirty {
+            d.saved = d.wb.clone();
+        }
+    }
+    Ok(json!({"locale": loc.tag()}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cell's text as the grid paints it.
+    fn shown(s: &Session, row: u32, col: u32) -> String {
+        let d = s.doc().unwrap();
+        crate::display::value_text(&d.wb, d.wb.active().unwrap(), CellRef::new(row, col))
+    }
+
+    #[test]
+    fn locale_command_switches_number_and_date_output() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1:B1", "values": [[1234.56, 46310.0]]})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "A1", "code": "#,##0.00"})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "B1", "code": "dddd, d. mmmm yyyy"})).unwrap();
+        // A workbook-scoped `TEXT()` too: it writes its result with the locale.
+        s.execute("cell.set", json!({"cell": "C1", "input": "=TEXT(1234.5,\"#,##0.00\")"})).unwrap();
+        assert_eq!(shown(&s, 0, 0), "1,234.56");
+        assert_eq!(shown(&s, 0, 1), "Thursday, 15. October 2026");
+        assert_eq!(shown(&s, 0, 2), "1,234.50");
+        assert_eq!(s.execute("app.locale.set", json!({"locale": "de"})).unwrap()["locale"], "de");
+        assert_eq!(shown(&s, 0, 0), "1.234,56");
+        assert_eq!(shown(&s, 0, 1), "Donnerstag, 15. Oktober 2026");
+        assert_eq!(shown(&s, 0, 2), "1.234,50", "a locale change recalculates TEXT()");
+        // A locale tag with a region is accepted; switching back restores en-US.
+        assert_eq!(s.execute("app.locale.set", json!({"locale": "de-AT"})).unwrap()["locale"], "de");
+        assert_eq!(s.execute("app.locale.set", json!({"locale": "en"})).unwrap()["locale"], "en");
+        assert_eq!(shown(&s, 0, 0), "1,234.56");
+        assert_eq!(shown(&s, 0, 1), "Thursday, 15. October 2026");
+        assert_eq!(shown(&s, 0, 2), "1,234.50");
+    }
+
+    #[test]
+    fn locale_is_a_session_setting_not_workbook_content() {
+        let mut s = Session::new();
+        s.new_workbook();
+        assert_eq!(s.doc().unwrap().wb.locale, Locale::En);
+        assert!(!s.doc().unwrap().is_dirty());
+        s.execute("app.locale.set", json!({"locale": "de"})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.locale, Locale::De);
+        // Like the saved view state, it never makes the workbook look unsaved.
+        assert!(!s.doc().unwrap().is_dirty());
+        // A locale the engine doesn't write, or none at all, is a parameter error.
+        assert!(s.execute("app.locale.set", json!({"locale": "fr"})).is_err());
+        assert!(s.execute("app.locale.set", json!({})).is_err());
+        assert_eq!(s.doc().unwrap().wb.locale, Locale::De);
+    }
 }
