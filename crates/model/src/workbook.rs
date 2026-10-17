@@ -18,6 +18,17 @@ pub enum CalcMode {
     Manual,
 }
 
+/// Options › Advanced › "For objects, show" (`<workbookPr showObjects>`, ECMA-376 `ST_Objects`):
+/// whether charts, pictures, shapes and slicers are drawn. Ctrl+6 switches between `All` and
+/// `None`; `Placeholders` only comes from files and is kept as it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShowObjects {
+    #[default]
+    All,
+    Placeholders,
+    None,
+}
+
 /// File › Options › Formulas › Calculation options, stored per workbook (`<calcPr>`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CalcSettings {
@@ -93,6 +104,8 @@ pub struct Workbook {
     pub theme: Theme,
     pub date_system: DateSystem,
     pub calc: CalcSettings,
+    #[serde(default, skip_serializing_if = "is_all")]
+    pub show_objects: ShowObjects,
     pub active_sheet: usize,
     pub props: DocProps,
     /// Workbook structure protection.
@@ -122,6 +135,10 @@ pub struct Workbook {
     pub source_dir: Option<std::path::PathBuf>,
 }
 
+fn is_all(s: &ShowObjects) -> bool {
+    *s == ShowObjects::All
+}
+
 impl Default for Workbook {
     fn default() -> Self {
         Workbook::new()
@@ -138,6 +155,7 @@ impl Workbook {
             theme: Theme::default(),
             date_system: DateSystem::D1900,
             calc: CalcSettings::default(),
+            show_objects: ShowObjects::All,
             active_sheet: 0,
             props: DocProps::default(),
             protected_structure: false,

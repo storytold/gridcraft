@@ -680,6 +680,51 @@ fn iterative_calculation_settings_roundtrip() {
 }
 
 #[test]
+fn show_objects_roundtrip() {
+    let saved = |wb: &Workbook| {
+        let bytes = write_xlsx(wb).unwrap();
+        let mut pkg = Package::open(&bytes).unwrap();
+        let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+        let attr = book.child("workbookPr").and_then(|p| p.attr("showObjects")).map(str::to_string);
+        (attr, read_xlsx(&bytes).unwrap().0.show_objects)
+    };
+    // Default: nothing written, All read back.
+    let mut wb = Workbook::new();
+    assert_eq!(saved(&wb), (None, ShowObjects::All));
+    // Beside date1904, which shares the element.
+    wb.date_system = DateSystem::D1904;
+    for (show, attr) in [(ShowObjects::None, "none"), (ShowObjects::Placeholders, "placeholders")] {
+        wb.show_objects = show;
+        assert_eq!(saved(&wb), (Some(attr.to_string()), show));
+        assert_eq!(read_xlsx(&write_xlsx(&wb).unwrap()).unwrap().0.date_system, DateSystem::D1904);
+    }
+    // A file written elsewhere: the attribute among the others Excel writes, or absent.
+    let book = |pr: &str| {
+        let wbx = format!(
+            r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">{pr}<sheets><sheet name="A" sheetId="1" r:id="rId1"/></sheets></workbook>"#
+        );
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+        let ws = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
+        let bytes = super::make_zip(&[
+            ("[Content_Types].xml", super::CT.as_bytes()),
+            ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+            ("xl/workbook.xml", wbx.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+            ("xl/worksheets/sheet1.xml", ws.as_bytes()),
+        ]);
+        read_xlsx(&bytes).unwrap().0
+    };
+    let hidden = book(r#"<workbookPr showObjects="none" defaultThemeVersion="166925"/>"#);
+    assert_eq!(hidden.show_objects, ShowObjects::None);
+    assert_eq!(saved(&hidden).0.as_deref(), Some("none"));
+    for pr in [r#"<workbookPr defaultThemeVersion="166925"/>"#, "", r#"<workbookPr showObjects="bogus"/>"#] {
+        let wb = book(pr);
+        assert_eq!(wb.show_objects, ShowObjects::All, "{pr}");
+        assert_eq!(saved(&wb).0, None, "{pr}: a file without the attribute stays without it");
+    }
+}
+
+#[test]
 fn empty_workbook_roundtrip() {
     let wb = Workbook::new();
     let bytes = write_xlsx(&wb).unwrap();

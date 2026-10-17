@@ -258,8 +258,17 @@ pub(crate) struct PaintedObject {
     pub rect: Rect,
 }
 
+/// Ctrl+6 (Options › Advanced › "For objects, show: Nothing"): objects are neither drawn nor
+/// clickable. Placeholders, which Excel no longer offers, show the objects.
+pub(crate) fn objects_hidden(wb: &Workbook) -> bool {
+    wb.show_objects == gridcraft_engine::model::ShowObjects::None
+}
+
 pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
     let mut painted = Vec::new();
+    if objects_hidden(wb) {
+        return painted;
+    }
     let mut done = |start: egui::layers::ShapeIdx, rect: Rect| painted.push(PaintedObject { shapes: start.0..p.add(egui::Shape::Noop).0, rect });
     for sp in &sh.shapes {
         let r = anchor_rect(geo, sh, &sp.anchor);
@@ -472,7 +481,7 @@ pub enum SlicerAction {
 /// A click on a slicer's value tile or clear button, if any. A click elsewhere in a slicer returns
 /// `None` so the caller can treat it as a select/drag on the object.
 pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) -> Option<(u32, SlicerAction)> {
-    if !geo.cells.contains(p) {
+    if !geo.cells.contains(p) || objects_hidden(wb) {
         return None;
     }
     for sl in sh.slicers.iter().rev() {
@@ -506,7 +515,9 @@ fn selection_frame(p: &Painter, r: Rect) {
 
 /// The topmost object under `p`: (kind, id, rect).
 pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
-    let _ = app;
+    if app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+        return None;
+    }
     for sl in sh.slicers.iter().rev() {
         let r = anchor_rect(geo, sh, &sl.anchor);
         if r.contains(p) && geo.cells.contains(p) {

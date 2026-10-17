@@ -214,3 +214,17 @@ fn alt_down_only_opens_enabled_table_filter_buttons() {
         assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "B1");
     }
 }
+
+#[test]
+fn ctrl_6_is_show_objects_and_nothing_else() {
+    let show = Some(Shortcut::Run("view.showObjects", json!({})));
+    let mac_control = Modifiers::CTRL;
+    assert_eq!(lookup(Key::Num6, Some(Key::Num6), CTRL, false), show);
+    assert_eq!(lookup(Key::Num6, Some(Key::Num6), mac_control, true), show);
+    // Its neighbours keep theirs: Ctrl+Shift+6 (Ctrl+^) is Scientific, Cmd+6 on a Mac is free.
+    assert_eq!(lookup(Key::Num6, Some(Key::Num6), CTRL_SHIFT, false), Some(Shortcut::Run("home.numberFormat", json!({"code": "0.00E+00"}))));
+    assert_eq!(lookup(Key::Num6, Some(Key::Num6), Modifiers::MAC_CMD, true), None);
+    // No other command claims Ctrl+6.
+    let claims: Vec<&str> = Session::new().commands().iter().filter(|c| c.shortcut == Some("Ctrl+6")).map(|c| c.id).collect();
+    assert_eq!(claims, ["view.showObjects"]);
+}

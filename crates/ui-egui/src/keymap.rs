@@ -92,6 +92,8 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         Num3 if ctrl && !mac => run("home.italic"),
         Num4 if ctrl && !mac => run("home.underline"),
         Num5 if ctrl && !mac => run("home.strikethrough"),
+        // Ctrl+6 hides and shows objects (Windows, and Control+6 in Excel for Mac).
+        Num6 if ctrl && !s => run("view.showObjects"),
         // Letters that differ between Windows and Mac.
         L if (cmd || ctrl) && s => run("data.filter"),
         L if cmd && mac => run("home.alignLeft"),

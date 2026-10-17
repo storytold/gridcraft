@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
-use gridcraft_model::{CalcMode, CellPicture, DefinedName, Sheet, Style, StyleId, StyleTable, Visibility, Workbook};
+use gridcraft_model::{CalcMode, CellPicture, DefinedName, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook};
 
 use crate::package::{Package, Rel};
 use crate::styles::{StylesIn, read_styles};
@@ -169,10 +169,15 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
 
     // Workbook properties.
-    if let Some(p) = wb_xml.child("workbookPr")
-        && p.flag("date1904", false)
-    {
-        cx.date_system = DateSystem::D1904;
+    if let Some(p) = wb_xml.child("workbookPr") {
+        if p.flag("date1904", false) {
+            cx.date_system = DateSystem::D1904;
+        }
+        wb.show_objects = match p.attr("showObjects") {
+            Some("none") => ShowObjects::None,
+            Some("placeholders") => ShowObjects::Placeholders,
+            _ => ShowObjects::All,
+        };
     }
     wb.date_system = cx.date_system;
     if let Some(c) = wb_xml.child("calcPr") {

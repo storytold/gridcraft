@@ -726,7 +726,11 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     } else {
         paint_panes(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
     };
-    // Objects above cells.
+    // Objects above cells. A hidden object can't stay selected: Delete or the Format pane would act
+    // on something the user can't see.
+    if crate::chartview::objects_hidden(&wb) {
+        app.selected_chart = None;
+    }
     let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
     paint_overlays(app, ui, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh, &sel);
     if sh.view == gridcraft_engine::model::SheetViewMode::PageBreakPreview {

@@ -26,6 +26,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("view.gridlines", "Gridlines", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "gridlines")),
         cmd!("view.headings", "Headings", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "headings")),
         cmd!("view.showZeros", "Show Zeros", [], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "zeros")),
+        cmd!("view.showObjects", "Show Objects", [], Some("Ctrl+6"), "{on?}", has_doc, show_objects),
         cmd!("view.rightToLeft", "Sheet Right-to-Left", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "rtl")),
         cmd!("view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
         cmd!("view.zoom100", "100%", ["View", "Zoom"], None, "{}", has_doc, |s, _| zoom(s, &json!({"percent": 100}))),
@@ -149,6 +150,16 @@ fn sheet_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
         };
         *slot = bool_param(p, "on").unwrap_or(!*slot);
         Ok(json!({"on": *slot}))
+    })
+}
+
+/// Ctrl+6: hides every object, or shows them again. Placeholders (from a file) count as shown.
+fn show_objects(s: &mut Session, p: &Json) -> Result<Json> {
+    use gridcraft_model::ShowObjects;
+    edit(s, |cx| {
+        let on = bool_param(p, "on").unwrap_or(cx.wb.show_objects == ShowObjects::None);
+        cx.wb.show_objects = if on { ShowObjects::All } else { ShowObjects::None };
+        Ok(json!({"on": on}))
     })
 }
 
