@@ -750,7 +750,7 @@ fn column_autocomplete_can_be_turned_off() {
 /// An .xlsm carrying a VBA project, saved to bytes.
 fn macro_workbook_bytes() -> Vec<u8> {
     let mut wb = gridcraft_engine::model::Workbook::new();
-    wb.vba_project = Some(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 fake OLE2 vbaProject".to_vec());
+    wb.vba_project = Some(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 fake OLE2 vbaProject".to_vec().into());
     gridcraft_engine::io::save_bytes(&wb, "macros.xlsm").unwrap()
 }
 
@@ -798,7 +798,7 @@ fn plain_open_warning_becomes_an_info_notice() {
 fn macros_dialog_lists_vba_and_scripts() {
     let mut s = blank();
     let mut wb = gridcraft_engine::model::Workbook::new();
-    wb.vba_project = Some(vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    wb.vba_project = Some(vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1].into());
     s.active_mut().unwrap().wb = std::sync::Arc::new(wb);
     let mut h = harness(s);
     h.state_mut().open_dialog("macros", json!({}));
@@ -814,7 +814,7 @@ fn macros_dialog_lists_vba_and_scripts() {
 fn status_bar_shows_macro_badge() {
     let mut s = blank();
     let mut wb = gridcraft_engine::model::Workbook::new();
-    wb.vba_project = Some(vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    wb.vba_project = Some(vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1].into());
     s.active_mut().unwrap().wb = std::sync::Arc::new(wb);
     // Rendering the status bar must not panic with a VBA project present.
     let mut h = harness(s);

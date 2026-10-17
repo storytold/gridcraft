@@ -517,7 +517,7 @@ mod tests {
     #[test]
     fn macros_are_saved_only_into_xlsm() {
         let mut wb = Workbook::new();
-        wb.vba_project = Some(b"vba".to_vec());
+        wb.vba_project = Some(b"vba".to_vec().into());
         let has_macros = |path: &str| {
             let bytes = save_bytes(&wb, path).unwrap();
             gridcraft_xlsx::read_xlsx(&bytes).unwrap().0.vba_project.is_some()

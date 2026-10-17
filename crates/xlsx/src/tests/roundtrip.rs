@@ -326,7 +326,7 @@ fn sample() -> Workbook {
         id: 10,
         // A non-default anchor mode, to prove it survives an xlsx round-trip.
         anchor: Anchor { cell: at("C10"), dx: 5.0, dy: 4.0, width: 120.0, height: 80.0, mode: AnchorMode::MoveOnly },
-        data: png,
+        data: png.into(),
         mime: "image/png".into(),
         alt: "Logo \"x\"".into(),
     });
@@ -737,7 +737,7 @@ fn vba_project_roundtrip() {
     // carries the macro-enabled content type plus the vbaProject relationship.
     let vba = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 fake OLE2 vbaProject".to_vec();
     let mut wb = Workbook::new();
-    wb.vba_project = Some(vba.clone());
+    wb.vba_project = Some(vba.clone().into());
     let bytes = write_xlsx(&wb).unwrap();
     assert_eq!(write_xlsx(&wb).unwrap(), bytes, "output is deterministic");
 
@@ -756,7 +756,7 @@ fn vba_project_roundtrip() {
     assert!(rels.contains("relationships/vbaProject"), "vbaProject relationship: {rels}");
 
     let (back, rep) = read_xlsx(&bytes).unwrap();
-    assert_eq!(back.vba_project.as_deref(), Some(vba.as_slice()), "vbaProject survives the read");
+    assert_eq!(back.vba_project.as_deref(), Some(&vba), "vbaProject survives the read");
     assert!(rep.warnings.iter().any(|w| w.contains("not executed")), "{:?}", rep.warnings);
 
     // A workbook without macros stays macro-free and free of VBA warnings.

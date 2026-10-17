@@ -2549,7 +2549,7 @@ fn add_image(s: &mut Session, cell: &str, mode: gridcraft_model::AnchorMode) -> 
     wb.sheet_mut(0).unwrap().images.push(gridcraft_model::Image {
         id,
         anchor: gridcraft_model::Anchor { cell: CellRef::parse(cell).unwrap(), dx: 0.0, dy: 0.0, width: 40.0, height: 40.0, mode },
-        data: tiny_png(),
+        data: tiny_png().into(),
         mime: "image/png".into(),
         alt: String::new(),
     });
@@ -2558,6 +2558,35 @@ fn add_image(s: &mut Session, cell: &str, mode: gridcraft_model::AnchorMode) -> 
 
 fn image_cell(s: &Session, id: u32) -> Option<CellRef> {
     s.doc().unwrap().wb.active().unwrap().images.iter().find(|i| i.id == id).map(|i| i.anchor.cell)
+}
+
+/// Every undo step holds a copy of the workbook. A picture's bytes and the VBA project are shared
+/// between those copies instead of copied into each: a 20 MB picture used to cost another 20 MB
+/// for every cell typed on its sheet, up to 100 steps (2 GB).
+#[test]
+fn undo_steps_share_picture_and_macro_bytes() {
+    let mut s = s();
+    s.execute("insert.picture", json!({"base64": crate::io::base64_encode(&tiny_png()), "at": "C3"})).unwrap();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).vba_project = Some(b"vba".to_vec().into());
+    for i in 1..=3 {
+        s.execute("cell.set", json!({"cell": format!("A{i}"), "input": i.to_string()})).unwrap();
+    }
+    let d = s.doc().unwrap();
+    let live = &d.wb.active().unwrap().images[0].data;
+    let vba = d.wb.vba_project.as_ref().unwrap();
+    assert_eq!(**live, tiny_png());
+    assert!(d.undo.len() >= 3);
+    for step in d.undo.iter().filter(|h| !h.wb.active().unwrap().images.is_empty()) {
+        assert!(std::sync::Arc::ptr_eq(&step.wb.active().unwrap().images[0].data, live), "{}", step.label);
+    }
+    for step in d.undo.iter().rev().take(3) {
+        assert!(std::sync::Arc::ptr_eq(step.wb.vba_project.as_ref().unwrap(), vba), "{}", step.label);
+    }
+    // Undo and redo still give the picture back as it was.
+    s.execute("edit.undo", json!({"steps": 3})).unwrap();
+    assert_eq!(*s.doc().unwrap().wb.active().unwrap().images[0].data, tiny_png());
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(*s.doc().unwrap().wb.active().unwrap().images[0].data, tiny_png());
 }
 
 /// Issue #5: images anchored in cells follow their row when the sheet is sorted.

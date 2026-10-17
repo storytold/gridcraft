@@ -404,7 +404,7 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     // A macro-free package can't hold a VBA project (Excel refuses such a file).
     if let Some(data) = wb.vba_project.as_ref().filter(|_| kind.is_macro_enabled()) {
         wb_rels.add("vbaProject", "vbaProject.bin");
-        out.part("xl/vbaProject.bin", Some(CT_VBA), data.clone());
+        out.part("xl/vbaProject.bin", Some(CT_VBA), data.to_vec());
     }
     out.part("xl/_rels/workbook.xml.rels", None, wb_rels.xml().into_bytes());
 

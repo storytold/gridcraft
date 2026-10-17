@@ -106,9 +106,10 @@ pub struct Workbook {
     pub cell_styles: Vec<(String, crate::style::Style)>,
     /// VBA project (`xl/vbaProject.bin`) carried through unchanged. GridCraft does not run
     /// macros; the blob is preserved so that saving a macro-enabled workbook never destroys the
-    /// macros it arrived with. base64 in JSON. `None` = the workbook has no macros.
+    /// macros it arrived with. base64 in JSON. `None` = the workbook has no macros. Shared, so a
+    /// copy of the workbook (every edit's undo step) doesn't copy it.
     #[serde(default, with = "crate::b64::opt")]
-    pub vba_project: Option<Vec<u8>>,
+    pub vba_project: Option<Arc<Vec<u8>>>,
     /// Field separator of the CSV this workbook was read from, so saving it as CSV writes the same
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -502,7 +502,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             let ext = image_ext(&img.mime, &img.data);
             let name = format!("xl/media/image{}.{ext}", out.images);
             out.default_type(ext, image_content_type(ext));
-            out.part(&name, None, img.data.clone());
+            out.part(&name, None, img.data.to_vec());
             let rid = drels.add("image", &format!("../media/image{}.{ext}", out.images));
             objs.push(Obj::Image(img, rid));
         }

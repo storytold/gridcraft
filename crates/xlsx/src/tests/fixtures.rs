@@ -381,7 +381,7 @@ fn drawing_with_picture_and_chart() {
     let (wb, _) = read_xlsx(&bytes).unwrap();
     let s = wb.sheet(0).unwrap();
     let img = &s.images[0];
-    assert_eq!(img.data, png);
+    assert_eq!(*img.data, png);
     assert_eq!(img.mime, "image/png");
     assert_eq!(img.alt, "logo");
     assert_eq!(img.anchor.cell, at("B3"));

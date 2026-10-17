@@ -508,9 +508,10 @@ pub struct Chart {
 pub struct Image {
     pub id: u32,
     pub anchor: Anchor,
-    /// Encoded bytes (PNG/JPEG), base64 in JSON.
-    #[serde(with = "crate::b64")]
-    pub data: Vec<u8>,
+    /// Encoded bytes (PNG/JPEG), base64 in JSON. Shared, so a copy of the sheet (an undo step)
+    /// doesn't copy the picture.
+    #[serde(with = "crate::b64::shared")]
+    pub data: std::sync::Arc<Vec<u8>>,
     pub mime: String,
     pub alt: String,
 }

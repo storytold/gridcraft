@@ -977,7 +977,7 @@ fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
             // Excel inserts pictures as "Move but don't size with cells" (`editAs="oneCell"`).
             mode: anchor_mode_param(p).unwrap_or(gridcraft_model::AnchorMode::MoveOnly),
         },
-        data,
+        data: data.into(),
         mime,
         alt: str_param(p, "alt").unwrap_or("").into(),
     };
