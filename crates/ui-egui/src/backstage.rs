@@ -1034,6 +1034,7 @@ mod tests {
         assert_eq!(age(Language::Ja, 3.0 * DAY), "3 日前");
         assert_eq!(age(Language::De, 3.0 * DAY), "vor 3 Tagen");
         assert_eq!(age(Language::Fr, 90.0), "il y a 1 min");
+        assert_eq!(age(Language::It, 3.0 * DAY), "3 giorni fa");
         for lang in Language::ALL {
             for seconds in [10.0, 600.0, 7200.0, 1.5 * DAY, 5.0 * DAY, 30.0 * DAY, 200.0 * DAY, 2000.0 * DAY] {
                 let words = age(lang, seconds);
