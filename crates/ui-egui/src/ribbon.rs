@@ -478,6 +478,21 @@ pub(crate) fn editable_combo(
     result
 }
 
+/// The Accounting Number Format dropdown: label and the code Excel applies for that symbol.
+const ACCOUNTING_SYMBOLS: &[(&str, &str)] = &[
+    ("$ English (United States)", "_(\"$\"* #,##0.00_);_(\"$\"* \\(#,##0.00\\);_(\"$\"* \"-\"??_);_(@_)"),
+    ("£ English (United Kingdom)", "_-[$£-809]* #,##0.00_-;-[$£-809]* #,##0.00_-;_-[$£-809]* \"-\"??_-;_-@_-"),
+    ("€ Euro", "_-[$€-x-euro2] * #,##0.00_-;-[$€-x-euro2] * #,##0.00_-;_-[$€-x-euro2] * \"-\"??_-;_-@_-"),
+    ("¥ Japanese", "_-[$¥-411]* #,##0_-;-[$¥-411]* #,##0_-;_-[$¥-411]* \"-\"_-;_-@_-"),
+    ("¥ Chinese (PRC)", "_-[$¥-804]* #,##0.00_-;-[$¥-804]* #,##0.00_-;_-[$¥-804]* \"-\"??_-;_-@_-"),
+    ("₹ English (India)", "_-[$₹-4009]* #,##0.00_-;-[$₹-4009]* #,##0.00_-;_-[$₹-4009]* \"-\"??_-;_-@_-"),
+    ("CHF German (Switzerland)", "_-[$CHF-807]* #,##0.00_-;-[$CHF-807]* #,##0.00_-;_-[$CHF-807]* \"-\"??_-;_-@_-"),
+    ("Rp Indonesian", "_-[$Rp-421]* #,##0.00_-;-[$Rp-421]* #,##0.00_-;_-[$Rp-421]* \"-\"??_-;_-@_-"),
+    ("₩ Korean", "_-[$₩-412]* #,##0_-;-[$₩-412]* #,##0_-;_-[$₩-412]* \"-\"_-;_-@_-"),
+    ("R$ Portuguese (Brazil)", "_-[$R$-416]* #,##0.00_-;-[$R$-416]* #,##0.00_-;_-[$R$-416]* \"-\"??_-;_-@_-"),
+    ("₽ Russian", "_-[$₽-419]* #,##0.00_-;-[$₽-419]* #,##0.00_-;_-[$₽-419]* \"-\"??_-;_-@_-"),
+];
+
 fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, serde_json::Value)]) {
     for (label, id, p) in items {
         if *label == "-" {
@@ -793,30 +808,10 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
                 act(app, "home.accounting", json!({}));
             }
             egui::Popup::menu(&ca).show(|ui| {
-                menu_items(
-                    app,
-                    ui,
-                    &[
-                        (
-                            "$ English (United States)",
-                            "home.numberFormat",
-                            json!({"code": "_(\"$\"* #,##0.00_);_(\"$\"* \\(#,##0.00\\);_(\"$\"* \"-\"??_);_(@_)"}),
-                        ),
-                        (
-                            "£ English (United Kingdom)",
-                            "home.numberFormat",
-                            json!({"code": "_-[$£-809]* #,##0.00_-;-[$£-809]* #,##0.00_-;_-[$£-809]* \"-\"??_-;_-@_-"}),
-                        ),
-                        (
-                            "€ Euro",
-                            "home.numberFormat",
-                            json!({"code": "_-[$€-x-euro2] * #,##0.00_-;-[$€-x-euro2] * #,##0.00_-;_-[$€-x-euro2] * \"-\"??_-;_-@_-"}),
-                        ),
-                        ("¥ Japanese", "home.numberFormat", json!({"code": "_-[$¥-411]* #,##0_-;-[$¥-411]* #,##0_-;_-[$¥-411]* \"-\"_-;_-@_-"})),
-                        ("-", "", json!(null)),
-                        ("More Accounting Formats…", "dialog:formatCells", json!({"tab": "Number"})),
-                    ],
-                );
+                let mut items: Vec<_> = ACCOUNTING_SYMBOLS.iter().map(|(label, code)| (*label, "home.numberFormat", json!({"code": code}))).collect();
+                items.push(("-", "", json!(null)));
+                items.push(("More Accounting Formats…", "dialog:formatCells", json!({"tab": "Number"})));
+                menu_items(app, ui, &items);
             });
             let __k = icon_button(ui, Icon::Percent, t.text, "Percent Style", vec2(24.0, 23.0));
             control_keytip(app, ui, &__k, "home.percent");
@@ -2512,5 +2507,33 @@ mod checkbox_on_tests {
         // Key tip: the bool still holds the current setting, so toggle it.
         assert!(checkbox_on(false, false));
         assert!(!checkbox_on(false, true));
+    }
+}
+
+#[cfg(test)]
+mod accounting_symbol_tests {
+    use super::*;
+    use gridcraft_engine::core::{DateSystem, Value};
+    use gridcraft_engine::numfmt::{NumberFormat, format_value};
+
+    #[test]
+    fn accounting_dropdown_offers_the_issue_currencies_with_excel_codes() {
+        // #1063: label, Excel's [$symbol-LCID] tag, and 1234.5 as Excel shows it (fill and the
+        // `_-` padding aside). The yen and won have no minor unit, so their codes show no decimals.
+        for (label, tag, shown) in [
+            ("Rp Indonesian", "[$Rp-421]", "Rp1,234.50"),
+            ("₹ English (India)", "[$₹-4009]", "₹1,234.50"),
+            ("₩ Korean", "[$₩-412]", "₩1,235"),
+            ("¥ Chinese (PRC)", "[$¥-804]", "¥1,234.50"),
+            ("¥ Japanese", "[$¥-411]", "¥1,235"),
+        ] {
+            let code = ACCOUNTING_SYMBOLS.iter().find(|(l, _)| *l == label).map(|(_, c)| *c);
+            let Some(code) = code else { panic!("{label} is not in the Accounting dropdown") };
+            assert!(code.split(';').take(3).all(|section| section.contains(tag)), "{label}: {code}");
+            let out = format_value(&Value::Number(1234.5), &NumberFormat::parse(code), DateSystem::D1900);
+            assert_eq!(out.text.trim(), shown, "{label}");
+            let symbol = tag.trim_start_matches("[$").split('-').next().unwrap_or_default();
+            assert_eq!(out.fill.map(|(c, at)| (c, out.text[..at].trim_start())), Some((' ', symbol)), "{label}");
+        }
     }
 }
