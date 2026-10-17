@@ -819,7 +819,16 @@ fn file_version_and_calc_features_survive_a_save() {
         assert!(text.contains(&format!("<extLst>{calc_features}</extLst>")), "{text}");
     }
 
-    // A workbook that had neither gets neither.
-    let plain = Unpacked::new(&write_xlsx(&gridcraft_model::Workbook::new()).unwrap()).text("xl/workbook.xml");
-    assert!(!plain.contains("fileVersion") && !plain.contains("extLst"), "{plain}");
+    // A workbook that had neither gets a <fileVersion> naming GridCraft (#1699), kept on the next
+    // save, and no calcFeatures: Excel recalculates it on open.
+    let new = write_xlsx(&gridcraft_model::Workbook::new()).unwrap();
+    let (reread, _) = read_xlsx(&new).unwrap();
+    for saved in [new, write_xlsx(&reread).unwrap()] {
+        let u = Unpacked::new(&saved);
+        u.assert_valid();
+        let plain = u.text("xl/workbook.xml");
+        let root = xml::parse(plain.as_bytes()).unwrap();
+        assert_eq!(root.children.first().map(|e| e.name.as_str()), Some("fileVersion"), "{plain}");
+        assert!(plain.contains(r#"<fileVersion appName="gridcraft"/>"#) && !plain.contains("extLst"), "{plain}");
+    }
 }
