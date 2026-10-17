@@ -2725,6 +2725,9 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let id = egui::Id::new("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
     child.set_clip_rect(clip);
+    // The theme's caret is meant for the UI chrome and vanishes on some fills (and, in the dark
+    // theme, on the white paper): pick black or white against the fill, like Excel.
+    child.visuals_mut().text_cursor.stroke.color = ink_on(fill);
     crate::formula_bar::editor_widget(app, &mut child, id, font, false, erect.width() - 4.0);
 }
 
@@ -2732,6 +2735,12 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
 /// A trigger can sit outside its popup, so its opening click must be ignored.
 fn popup_dismissed(response: &egui::Response, was_open: bool) -> bool {
     response.ctx.input(|i| !i.focused || i.key_pressed(egui::Key::Escape)) || (was_open && response.clicked_elsewhere())
+}
+
+/// Black or white, whichever reads on `fill` (the threshold chart labels use).
+fn ink_on(fill: Color32) -> Color32 {
+    let l = 0.299 * fill.r() as f32 + 0.587 * fill.g() as f32 + 0.114 * fill.b() as f32;
+    if l < 150.0 { Color32::WHITE } else { Color32::BLACK }
 }
 
 /// The table whose header cell (`row`, `col`) was clicked, not just the first table in the column.
