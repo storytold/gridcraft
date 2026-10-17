@@ -383,6 +383,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "atoi"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7a8bbe9949e43a1edaa043038c68703b04774156afdfb62ba2cef5bf93d67be"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1545,6 +1554,7 @@ version = "0.7.0"
 dependencies = [
  "gridcraft-engine",
  "gridcraft-mcp",
+ "gridcraft-odbc",
  "log",
  "quick-xml",
  "serde_json",
@@ -1565,6 +1575,7 @@ dependencies = [
 name = "gridcraft-engine"
 version = "0.7.0"
 dependencies = [
+ "getrandom 0.4.3",
  "gridcraft-calc",
  "gridcraft-chart",
  "gridcraft-core",
@@ -1572,6 +1583,7 @@ dependencies = [
  "gridcraft-functions",
  "gridcraft-model",
  "gridcraft-numfmt",
+ "gridcraft-odbc",
  "gridcraft-pdf",
  "gridcraft-xlsx",
  "image",
@@ -1628,6 +1640,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gridcraft-odbc"
+version = "0.6.1"
+dependencies = [
+ "gridcraft-core",
+ "odbc-api",
+ "serde",
+ "serde_json",
+ "sqlparser",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "gridcraft-pdf"
 version = "0.7.0"
 
@@ -1641,6 +1665,7 @@ dependencies = [
  "epaint_default_fonts",
  "gridcraft-chart",
  "gridcraft-engine",
+ "gridcraft-odbc",
  "gridcraft-xlsx",
  "image",
  "log",
@@ -2543,6 +2568,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "odbc-api"
+version = "29.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8532ca21ccfef7f60246ce4f4d25d4a46d2aa501832dfaab17e2a27e621fb52"
+dependencies = [
+ "atoi",
+ "log",
+ "odbc-sys",
+ "thiserror 2.0.21",
+ "widestring",
+]
+
+[[package]]
+name = "odbc-sys"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "245cb4fe8236df4fd352ba96075d754233c6509d654d9f1c1482158b7d6c083d"
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3355,6 +3399,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlparser"
+version = "0.63.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3679862809bd1f92e563cf6fd820e28f39135303668001c10331d5027183e8b4"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4082,6 +4135,12 @@ dependencies = [
  "static_assertions",
  "web-sys",
 ]
+
+[[package]]
+name = "widestring"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
 
 [[package]]
 name = "winapi-util"

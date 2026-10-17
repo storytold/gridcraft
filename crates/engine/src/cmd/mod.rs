@@ -12,6 +12,7 @@ pub mod format;
 pub mod formulas;
 pub mod insert;
 pub mod inspect;
+pub mod odbc;
 pub mod pivot;
 pub mod print;
 pub mod review;
@@ -73,19 +74,32 @@ impl CommandSpec {
     }
 }
 
-/// Params that hold a secret: `password`, or a name ending in `Password`.
+/// Params that hold credentials or a whole ODBC connection string.
 pub fn is_secret_param(key: &str) -> bool {
-    key == "password" || key.ends_with("Password")
+    key.eq_ignore_ascii_case("pwd")
+        || key.eq_ignore_ascii_case("passwd")
+        || key.to_ascii_lowercase().ends_with("password")
+        || key.eq_ignore_ascii_case("connectionString")
+        || key.eq_ignore_ascii_case("connection_string")
 }
 
 /// The params as the journal records them: secret params are left out, so a password never
 /// reaches the journal dialog, `engine.journal` or a recorded script (saved in the workbook).
 /// Replaying such an entry runs the command without that param.
 pub fn journal_params(params: &Json) -> Json {
-    match params {
-        Json::Object(o) => Json::Object(o.iter().filter(|(k, _)| !is_secret_param(k)).map(|(k, v)| (k.clone(), v.clone())).collect()),
-        other => other.clone(),
+    fn scrub(value: &Json, depth: u8) -> Json {
+        if depth >= 64 {
+            return Json::Null;
+        }
+        match value {
+            Json::Object(object) => Json::Object(
+                object.iter().filter(|(key, _)| !is_secret_param(key)).map(|(key, value)| (key.clone(), scrub(value, depth + 1))).collect(),
+            ),
+            Json::Array(values) => Json::Array(values.iter().map(|v| scrub(v, depth + 1)).collect()),
+            other => other.clone(),
+        }
     }
+    scrub(params, 0)
 }
 
 pub fn always(_: &Session) -> std::result::Result<(), String> {
@@ -135,6 +149,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(view::specs());
         v.extend(inspect::specs());
         v.extend(extra::specs());
+        v.extend(odbc::specs());
         v.extend(draw::specs());
         v.extend(spelling::specs());
         v.extend(solver::specs());

@@ -1099,13 +1099,32 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
     let style = if t.style.is_empty() { "TableStyleMedium2" } else { &t.style };
     let _ = write!(
         s,
-        "<tableStyleInfo name=\"{}\" showFirstColumn=\"{}\" showLastColumn=\"{}\" showRowStripes=\"{}\" showColumnStripes=\"{}\"/></table>",
+        "<tableStyleInfo name=\"{}\" showFirstColumn=\"{}\" showLastColumn=\"{}\" showRowStripes=\"{}\" showColumnStripes=\"{}\"/>",
         esc_attr(style),
         t.first_col as u8,
         t.last_col as u8,
         t.banded_rows as u8,
         t.banded_cols as u8
     );
+    if let Some(query) = &t.query
+        && query.valid()
+    {
+        s.push_str("<extLst><ext uri=\"{6CCD98E4-6E9C-4F4A-9C93-B1DA490DC66F}\" xmlns:gc=\"urn:gridcraft:odbc:1\"><gc:query");
+        if let Some(dsn) = &query.dsn {
+            let _ = write!(s, " dsn=\"{}\"", esc_attr(dsn));
+        }
+        let _ = write!(
+            s,
+            " connectionRef=\"{}\" sql=\"{}\" maxRows=\"{}\" fingerprint=\"{}\" columnTypes=\"{}\"/>",
+            esc_attr(&query.connection_ref),
+            esc_attr(&query.sql),
+            query.max_rows,
+            esc_attr(&query.fingerprint),
+            esc_attr(&query.column_types.join(","))
+        );
+        s.push_str("</ext></extLst>");
+    }
+    s.push_str("</table>");
     s
 }
 

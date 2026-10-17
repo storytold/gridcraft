@@ -1891,6 +1891,19 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
     if gd.clicked() {
         app.open_dialog("open", json!({}));
     }
+    ui.vertical(|ui| {
+        if small_button(ui, Icon::Folder, "From ODBC", "From ODBC (PostgreSQL)", false).clicked() {
+            app.open_dialog("odbc", json!({}));
+        }
+        if small_button(ui, Icon::Table, "Connections", "Queries & Connections", false).clicked() {
+            app.open_dialog("queriesConnections", json!({}));
+        }
+        if small_button(ui, Icon::Redo, "Refresh All", "Refresh All", false).clicked()
+            && let Err(error) = crate::odbc::start(app, "data.refreshAll", json!({}))
+        {
+            app.alert(error);
+        }
+    });
     sep(ui);
     ui.vertical(|ui| {
         let __k = small_button(ui, Icon::SortAsc, "", "Sort A to Z", false);

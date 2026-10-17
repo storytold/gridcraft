@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-16 · **Change:** minor (native ODBC validation and connection fixes) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -21,7 +21,7 @@ This page is the summary. The detail is in:
 
 | Number | Value | Kind |
 |---|---|---|
-| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 274 / 290 (94.5%), worksheet functions 513 / 523 (98.1%; 504 working, 96.4%) |
+| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 275 / 291 (94.5%), worksheet functions 513 / 523 (98.1%; 504 working, 96.4%) |
 | **Ready for real work** | **~50%** | estimated from written weights (51.6); [target-app-parity.md](docs/target-app-parity.md) |
 | **Mainstream practitioner** | **~50%** | estimated: typical analyst/finance user, weekly features, × 0.90 interaction × 0.92 stability × 0.88 file exchange; [method](docs/target-app-parity.md#mainstream-practitioner) |
 | **Essentials user** | **~63%** | estimated: core features only, × 0.92 launch/stability × 0.95 clarity × 0.90 opening sent files; [method](docs/target-app-parity.md#essentials-user) |
@@ -130,6 +130,10 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 ## Progress log
 
+- 2026-10-16: Six local ODBC driver integrations passed; fixed Oracle transaction startup alongside PostgreSQL connection/read-only behavior and SQLite extension options ([validation](docs/odbc.md#local-windows-validation--2026-10-16)).
+
+- 2026-10-14: Windows PostgreSQL ODBC preview/load/manual refresh, engine/CLI jobs and cached XLSX source definitions ([guide](docs/odbc.md)); registered-driver integration verification pending.
+
 | Date | What landed |
 |---|---|
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
@@ -193,6 +197,10 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Validate Oracle Instant Client ODBC against Oracle Free; avoid conflicting driver transaction mode and preserve server-side read-only enforcement |
+| 2026-10-16 | minor | Validate installed PostgreSQL, SQL Server, MySQL, MariaDB and SQLite drivers against synthetic local databases; fix PostgreSQL connection attributes/read-only startup and SQLite extension options; Oracle live validation remains pending |
+| 2026-10-15 | minor | Add ODBC adapters for SQL Server/Azure SQL, MySQL, MariaDB, Oracle and SQLite3; isolate driver options and read transactions; driver integration checks remain opt-in |
+| 2026-10-14 | minor | Windows PostgreSQL ODBC preview/load/manual refresh; bounded jobs, literal data, volatile credentials and GridCraft XLSX source metadata |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
 | 2026-10-12 | minor | Progress log: multi-area row/column delete (#758) |
 | 2026-10-12 | trivial | Progress log: XLSX chart sheets kept on save (#727) |

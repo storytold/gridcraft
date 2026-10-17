@@ -166,7 +166,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Refresh All",
             ["Data", "Queries & Connections"],
             Some("Cmd+Alt+F5"),
-            "{replace?} refreshes every PivotTable → {refreshed, errors}",
+            "{replace?, dsn? | connectionString?, user?, password?} → {jobId} with query tables; otherwise {refreshed, errors} for PivotTables",
             has_doc,
             refresh_all
         ),
@@ -1295,23 +1295,28 @@ fn refresh(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn refresh_all(s: &mut Session, p: &Json) -> Result<Json> {
+    if s.doc()?.wb.sheets.iter().flat_map(|sh| &sh.tables).any(|t| t.query.is_some()) {
+        return super::odbc::refresh_all(s, p);
+    }
     let replace = bool_param(p, "replace").unwrap_or(false);
-    edit(s, |cx| {
-        let mut n = 0;
-        let mut errors = vec![];
-        for si in 0..cx.wb.sheets.len() {
-            let count = cx.wb.sheet(si).map(|sh| sh.pivots.len()).unwrap_or(0);
-            for pi in 0..count {
-                let name = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).map(|p| p.name.clone()).unwrap_or_default();
-                match pv::refresh(&mut cx.wb, si, pi, replace) {
-                    Ok(_) => n += 1,
-                    Err(e) => errors.push(json!({"pivot": name, "error": e})),
-                }
+    edit(s, |cx| Ok(refresh_pivots(cx, replace)))
+}
+
+pub(crate) fn refresh_pivots(cx: &mut Ctx<'_>, replace: bool) -> Json {
+    let mut n = 0;
+    let mut errors = vec![];
+    for si in 0..cx.wb.sheets.len() {
+        let count = cx.wb.sheet(si).map(|sh| sh.pivots.len()).unwrap_or(0);
+        for pi in 0..count {
+            let name = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).map(|p| p.name.clone()).unwrap_or_default();
+            match pv::refresh(&mut cx.wb, si, pi, replace) {
+                Ok(_) => n += 1,
+                Err(e) => errors.push(json!({"pivot": name, "error": e})),
             }
         }
-        cx.structural = n > 0;
-        Ok(json!({"refreshed": n, "errors": errors}))
-    })
+    }
+    cx.structural |= n > 0;
+    json!({"refreshed": n, "errors": errors})
 }
 
 fn change_source(s: &mut Session, p: &Json) -> Result<Json> {

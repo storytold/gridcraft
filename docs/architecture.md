@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (ODBC adapters for six database families) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -20,6 +20,7 @@ including tests, 2026-10-10.
 | L2 | `calc` | ~2.9k | Evaluator (references, names, tables, LET/LAMBDA, special forms like OFFSET/INDIRECT/SUBTOTAL) and dependency-graph recalculation with dynamic arrays, spills and cycle detection; single-threaded |
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
 | L2 | `pdf` | ~1k | Small PDF 1.7 writer (14 standard fonts, vectors, images) for print and export |
+| L2 | `odbc` | ~1.1k | Safe Windows multi-database ODBC discovery and bounded typed queries; portable data types, no native driver dependency on WASM |
 | L3 | `chart` | ~2.9k | Toolkit-free chart layout to drawing primitives, a rasterizer, sparklines |
 | L5 | `engine` | ~17.7k | `Session`: open workbooks, selection, history (COW snapshots), clipboard, fill, sort, filter, PivotTables, what-if, print, file I/O (`io.rs`), and the command registry (`cmd/*`, 313 commands) with the Excel ribbon catalog (`catalog.rs`) |
 | L6 | `ui-egui` | ~11.6k | Excel-style UI (title bar, QAT, ribbon, formula bar, virtualised grid, editor, tabs, status bar, dialogs, task panes, chart view) and the control channel |
@@ -45,6 +46,9 @@ including tests, 2026-10-10.
 
 ## Agent control
 
+ODBC workers return bounded data to the engine; `data.odbcApply` performs the undoable edit.
+Credentials remain session-local. See [odbc.md](odbc.md).
+
 - Desktop control channel: `gridcraft --control 7979`, JSON lines on localhost
   (`engine.execute`, `ui.screenshot`, pointer and keyboard input…), see
   [`control-protocol.md`](control-protocol.md).
@@ -68,4 +72,6 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Add ODBC adapters for SQL Server/Azure SQL, MySQL, MariaDB, Oracle and SQLite3; isolate driver options and read transactions; driver integration checks remain opt-in |
+| 2026-10-14 | minor | Windows PostgreSQL ODBC preview/load/manual refresh; bounded jobs, literal data, volatile credentials and GridCraft XLSX source metadata |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

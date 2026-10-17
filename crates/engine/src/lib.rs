@@ -14,6 +14,7 @@ pub mod display;
 pub mod fill;
 pub mod io;
 pub mod links;
+pub mod odbc;
 pub mod outline;
 pub mod paper;
 pub mod pivot;
@@ -253,6 +254,8 @@ pub struct Session {
     pub draw_width: f32,
     /// Review › Show Comments: the Comments pane is open.
     pub comments_pane: bool,
+    /// Session-only ODBC jobs and credentials; never serialized with workbook data.
+    pub odbc: odbc::OdbcManager,
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
@@ -292,6 +295,7 @@ impl Session {
     }
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {
+            self.odbc.discard_document(self.docs[i].uid);
             self.docs.remove(i);
             if self.active >= self.docs.len() {
                 self.active = self.docs.len().saturating_sub(1);

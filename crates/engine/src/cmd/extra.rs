@@ -936,7 +936,7 @@ fn queries(s: &mut Session, _: &Json) -> Result<Json> {
             .flat_map(|sh| {
                 sh.tables
                     .iter()
-                    .map(move |t| json!({"name": t.name, "sheet": sh.name, "range": t.range.a1(), "rows": t.range.height().saturating_sub(1)}))
+                    .map(move |t| json!({"name": t.name, "sheet": sh.name, "range": t.range.a1(), "rows": t.range.height().saturating_sub(1), "query": t.query}))
             })
             .collect(),
     ))

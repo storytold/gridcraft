@@ -8,8 +8,8 @@ use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRe
 use gridcraft_formula::Expr;
 use gridcraft_model::{
     AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
-    Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation, ValidationKind,
-    XmlColumnPr,
+    Orientation, PasswordHash, QuerySource, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation,
+    ValidationKind, XmlColumnPr,
 };
 
 use crate::IoError;
@@ -847,6 +847,38 @@ pub fn read_table(cx: &mut Ctx<'_>, x: &El) -> Option<Table> {
         })
         .unwrap_or_default();
     let si = x.child("tableStyleInfo");
+    let query = x
+        .child("extLst")
+        .into_iter()
+        .flat_map(|list| list.kids("ext"))
+        .find(|ext| ext.attr("uri") == Some(QuerySource::EXTENSION_URI))
+        .and_then(|ext| ext.child("query"))
+        .and_then(|q| {
+            let sql = q.attr("sql")?;
+            let connection_ref = q.attr("connectionRef")?;
+            let max_rows = q.attr_u32("maxRows")?;
+            let fingerprint = q.attr("fingerprint").unwrap_or("");
+            let column_types = q.attr("columnTypes").unwrap_or("");
+            if sql.len() > 1_048_576
+                || connection_ref.len() > 128
+                || fingerprint.len() > 32
+                || q.attr("dsn").is_some_and(|dsn| dsn.len() > 128)
+                || column_types.len() > 4096
+            {
+                return None;
+            }
+            let dsn = q.attr("dsn").map(str::to_string);
+            let column_types = column_types.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
+            let source = QuerySource {
+                dsn,
+                connection_ref: connection_ref.to_string(),
+                sql: sql.to_string(),
+                max_rows,
+                fingerprint: fingerprint.to_string(),
+                column_types,
+            };
+            source.valid().then_some(source)
+        });
     // Only XML tables are kept as such: a query table's definition hangs off the table part, which
     // is rewritten, so it would lose it.
     let xml_table = x.attr("tableType") == Some("xml");
@@ -866,6 +898,7 @@ pub fn read_table(cx: &mut Ctx<'_>, x: &El) -> Option<Table> {
         filter: x.child("autoFilter").and_then(|e| read_autofilter(cx, e)).map(|af| af.criteria).unwrap_or_default(),
         table_type: xml_table.then(|| "xml".to_string()),
         connection_id: x.attr_u32("connectionId").filter(|_| xml_table),
+        query,
     })
 }
 

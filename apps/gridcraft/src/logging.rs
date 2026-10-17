@@ -70,6 +70,10 @@ impl Filter {
 
     /// The level that applies to `target` (the most specific matching directive wins).
     pub fn level_for(&self, target: &str) -> LevelFilter {
+        // Driver diagnostics can contain SQL or credentials, even at warning level.
+        if matches("odbc_api", target) || matches("odbc_sys", target) {
+            return LevelFilter::Off;
+        }
         self.directives.iter().filter(|(name, _)| matches(name, target)).max_by_key(|(name, _)| name.len()).map_or(self.default, |(_, level)| *level)
     }
 
@@ -320,6 +324,15 @@ mod tests {
         assert_eq!(f.level_for("wgpu_core::device"), LevelFilter::Warn);
         assert_eq!(f.level_for("naga"), LevelFilter::Warn);
         assert_eq!(f.max(), LevelFilter::Info);
+    }
+
+    #[test]
+    fn odbc_driver_diagnostics_are_never_written_even_with_trace_enabled() {
+        let filter = Filter::parse("trace,odbc_api=trace,odbc_sys=trace");
+        assert_eq!(filter.level_for("odbc_api"), LevelFilter::Off);
+        assert_eq!(filter.level_for("odbc_api::connection"), LevelFilter::Off);
+        assert_eq!(filter.level_for("odbc_sys"), LevelFilter::Off);
+        assert_eq!(filter.level_for("gridcraft_engine"), LevelFilter::Trace);
     }
 
     #[test]

@@ -22,6 +22,7 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+mod odbc;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -263,6 +264,7 @@ pub struct SheetApp {
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
     pub started: f64,
+    pub(crate) odbc: odbc::State,
 }
 
 impl SheetApp {
@@ -306,6 +308,7 @@ impl SheetApp {
             clipboard_text_at_copy: None,
             cut_text: None,
             started: now_ms(),
+            odbc: Default::default(),
         }
     }
 
@@ -990,6 +993,7 @@ impl SheetApp {
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        odbc::poll(self, ctx);
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
         self.ui.keytip_invoke = None;
