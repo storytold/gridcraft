@@ -1443,6 +1443,16 @@ fn merged_edges(
     out
 }
 
+/// `#RRGGBB` (the Draw tools' ink colour) as a painter colour; the default pen blue on bad input.
+fn ink_color(hex: &str) -> Color32 {
+    let h = hex.trim_start_matches('#');
+    let byte = |i: usize| h.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok());
+    match (byte(0), byte(2), byte(4)) {
+        (Some(r), Some(g), Some(b)) => Color32::from_rgb(r, g, b),
+        _ => Color32::from_rgb(0x1F, 0x5F, 0xC9),
+    }
+}
+
 /// The smaller font that makes `text` fit in `room` points of width (Shrink to fit), or `None`
 /// when it already fits at its own size.
 fn shrink_font(p: &Painter, text: &str, font: &FontId, room: f32) -> Option<FontId> {
@@ -1873,7 +1883,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                         ))
                     })
                     .collect();
-                ui.painter().add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(2.0 * geo.z, Color32::from_rgb(0x1F, 0x5F, 0xC9))));
+                // Preview with the pen's own colour and thickness, so the line under the pointer
+                // is the ink that will be committed.
+                let width = if app.session.draw_width > 0.0 { app.session.draw_width } else { 2.0 };
+                ui.painter()
+                    .add(egui::epaint::PathShape::line(pts, egui::epaint::PathStroke::new(width * geo.z, ink_color(&app.session.draw_color))));
             }
             if resp.drag_stopped() && app.grid.ink.len() >= 2 {
                 let pts: Vec<[f32; 2]> = std::mem::take(&mut app.grid.ink);
