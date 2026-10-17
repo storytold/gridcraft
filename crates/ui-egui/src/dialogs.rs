@@ -1069,7 +1069,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     ui.add_space(4.0);
                     ui.label(format!("{} engine commands are available. See docs/mcp.md and docs/control-protocol.md.", gridcraft_engine::command_specs().len()));
                 }
-                "about" => about(ui, &mut d),
+                "about" => about(app, ui, &mut d),
                 "journal" => {
                     egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                         for (id, p) in app.session.journal.iter().rev().take(500) {
@@ -1470,7 +1470,7 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
 
 /// Help ▸ About GridCraft: the app, its contributors and the AI models that helped. The credits
 /// are compiled in (`crate::credits`, docs/contributors.md).
-fn about(ui: &mut egui::Ui, d: &mut Dialog) {
+fn about(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     ui.horizontal(|ui| {
         for tab in ["About", "Contributors", "Models"] {
             if ui.selectable_label(d.tab == tab, tab).clicked() {
@@ -1485,11 +1485,62 @@ fn about(ui: &mut egui::Ui, d: &mut Dialog) {
         _ => {
             ui.heading("GridCraft");
             ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            if let Some(commit) = crate::updates::COMMIT.filter(|c| !c.is_empty()) {
+                ui.weak(format!("{} {}", app.ui.language.tr("Build"), crate::updates::short(commit)));
+            }
             ui.add_space(4.0);
             ui.label("A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft.");
             ui.hyperlink_to("getartcraft.com/apps/gridcraft", "https://getartcraft.com/apps/gridcraft");
             ui.hyperlink_to("Join the ArtCraft Discord", "https://discord.gg/artcraft");
+            ui.add_space(8.0);
+            ui.separator();
+            updates_section(app, ui);
         }
+    }
+}
+
+/// About ▸ the update check: a button, the answer, and the start-up preference. It only tells;
+/// the links go to GitHub, and a source install updates with `cargo xtask update`.
+fn updates_section(app: &mut SheetApp, ui: &mut egui::Ui) {
+    use crate::updates::Status;
+    let lang = app.ui.language;
+    let available = app.services.fetch.is_some();
+    let checking = app.updates.is_checking();
+    ui.horizontal(|ui| {
+        if ui.add_enabled(available && !checking, egui::Button::new(lang.tr("Check for Updates"))).clicked() {
+            app.run_or_alert("help.checkForUpdates", json!({}));
+        }
+        if checking {
+            ui.spinner();
+            ui.weak(lang.tr("Checking…"));
+        }
+    });
+    if !available {
+        ui.weak(lang.tr("Update checks are unavailable here."));
+    }
+    match &app.updates.result {
+        Some(Ok(status)) => {
+            let text = status.text();
+            ui.label(lang.tr(&text).to_string());
+            if let Some(url) = status.url() {
+                let label = match status {
+                    Status::Release { .. } => "Open the release page",
+                    _ => "See the new commits",
+                };
+                ui.hyperlink_to(lang.tr(label), url);
+            }
+            if matches!(status, Status::Commits { .. }) {
+                ui.weak(lang.tr("A source install updates with `cargo xtask update`."));
+            }
+        }
+        Some(Err(e)) => {
+            ui.weak(format!("{} {e}", lang.tr("Couldn't check for updates:")));
+        }
+        None => {}
+    }
+    let mut on = app.ui.check_updates;
+    if ui.add_enabled(available, egui::Checkbox::new(&mut on, lang.tr("Check for updates when GridCraft starts"))).changed() {
+        app.run_or_alert("options.checkForUpdatesOnStartup", json!({"on": on}));
     }
 }
 

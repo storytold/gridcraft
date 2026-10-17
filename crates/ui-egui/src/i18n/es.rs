@@ -440,6 +440,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Compact" => "Compacto",
         "Outline" => "Esquema",
         "Tabular" => "Tabular",
+        "Build" => "Compilación",
+        "Check for Updates" => "Buscar actualizaciones",
+        "Checking…" => "Comprobando…",
+        "Update checks are unavailable here." => "La comprobación de actualizaciones no está disponible aquí.",
+        "GridCraft is up to date." => "GridCraft está actualizado.",
+        "Open the release page" => "Abrir la página de la versión",
+        "See the new commits" => "Ver los commits nuevos",
+        "A source install updates with `cargo xtask update`." => "Una instalación desde el código fuente se actualiza con `cargo xtask update`.",
+        "Couldn't check for updates:" => "No se pudieron comprobar las actualizaciones:",
+        "Check for updates when GridCraft starts" => "Buscar actualizaciones al iniciar GridCraft",
         _ => return None,
     })
 }

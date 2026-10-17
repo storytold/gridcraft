@@ -182,6 +182,21 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),
+                (
+                    "help.checkForUpdates",
+                    "Check for Updates",
+                    "{} asks GitHub for a newer release (and, when the build knows its commit, how far main has moved on) off the UI thread → {checking, version, commit}; the answer arrives in ui.updates",
+                ),
+                (
+                    "ui.updates",
+                    "Update Check State",
+                    "→ {checking, version, commit, result?: {status: release|commits|upToDate, version?, behind?, url?}, error?}",
+                ),
+                (
+                    "options.checkForUpdatesOnStartup",
+                    "Check for updates when GridCraft starts",
+                    "{on?: bool} (toggles without it) → {on}; off by default",
+                ),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
                 ("ui.backstage", "File (Backstage view)", "{page?: home|new|open|info|saveAs|print|export|options|close}"),

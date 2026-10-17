@@ -32,6 +32,7 @@ pub mod selection_glide;
 pub mod tabs;
 pub mod text_box;
 pub mod theme;
+pub mod updates;
 pub mod widgets;
 
 use std::collections::HashMap;
@@ -76,6 +77,9 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
+    /// Ask GitHub for a newer release when GridCraft starts (Help ▸ About ▸ Check for updates).
+    /// Off by default: nothing talks to the network unless the user turned it on.
+    pub check_updates: bool,
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
@@ -107,6 +111,7 @@ impl Default for UiState {
             keytip_invoke: None,
             language: i18n::Language::En,
             interface_scale: 100,
+            check_updates: false,
         }
     }
 }
@@ -196,6 +201,9 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<Box<dyn Fn(&[u8])>>,
+    /// Desktop: GET a URL off the UI thread for the update check (see [`updates`]). `None` (web,
+    /// headless runs) makes `help.checkForUpdates` say that checks are unavailable here.
+    pub fetch: Option<updates::Fetch>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
@@ -263,6 +271,8 @@ pub struct SheetApp {
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
     pub started: f64,
+    /// Help ▸ About ▸ Check for updates: the check in flight, or its last answer.
+    pub updates: updates::Check,
 }
 
 impl SheetApp {
@@ -306,6 +316,7 @@ impl SheetApp {
             clipboard_text_at_copy: None,
             cut_text: None,
             started: now_ms(),
+            updates: updates::Check::default(),
         }
     }
 
@@ -658,6 +669,19 @@ impl SheetApp {
                 }
                 Ok(json!({"page": self.backstage.as_ref().map(|b| b.page.id())}))
             }
+            "help.checkForUpdates" => match &self.services.fetch {
+                // The answer arrives later (`poll_updates`); `ui.updates` reads it.
+                Some(fetch) => {
+                    self.updates.start(fetch);
+                    Ok(self.updates.json())
+                }
+                None => Err("Update checks are unavailable here.".into()),
+            },
+            "ui.updates" => Ok(self.updates.json()),
+            "options.checkForUpdatesOnStartup" => {
+                self.ui.check_updates = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.check_updates);
+                Ok(json!({"on": self.ui.check_updates}))
+            }
             "ui.dialog" => {
                 let name = p.get("name").and_then(Json::as_str).unwrap_or("");
                 self.open_dialog(name, p.clone());
@@ -988,6 +1012,30 @@ impl SheetApp {
         }
     }
 
+    /// The start-up update check (once a session, only if the user turned it on) and the answer
+    /// to any check in flight. Something new is announced in the notice bar under the ribbon;
+    /// "up to date" and errors show only in About, where the check was asked for.
+    pub fn poll_updates(&mut self, ctx: &egui::Context) {
+        if self.ui.check_updates && !self.updates.startup_done {
+            self.updates.startup_done = true;
+            if let Some(fetch) = &self.services.fetch {
+                self.updates.start(fetch);
+            }
+        }
+        if !self.updates.is_checking() {
+            return;
+        }
+        match self.updates.poll(self.services.fetch.as_ref(), now_ms()) {
+            // Nothing arrived yet: keep looking even while the user does nothing.
+            None => ctx.request_repaint_after(std::time::Duration::from_millis(200)),
+            Some(Ok(status)) if status.url().is_some() => {
+                self.notice = Some(Notice { text: status.text(), kind: NoticeKind::Info, action: Some(("Details".into(), "about".into())) });
+                ctx.request_repaint();
+            }
+            Some(_) => ctx.request_repaint(),
+        }
+    }
+
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
@@ -1032,6 +1080,7 @@ impl SheetApp {
         if let Some(answer) = self.desktop_theme.take_change() {
             self.desktop_dark = Some(answer);
         }
+        self.poll_updates(ctx);
         let preference = match (
             self.ui.system_theme,
             ctx.system_theme().or_else(|| self.desktop_dark.map(|d| if d { egui::Theme::Dark } else { egui::Theme::Light })),

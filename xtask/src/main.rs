@@ -12,6 +12,7 @@ mod layers;
 #[cfg_attr(not(feature = "engine"), allow(dead_code))]
 mod parity;
 mod stats;
+mod update;
 mod version;
 
 use std::path::{Path, PathBuf};
@@ -32,6 +33,9 @@ commands:
                   regenerate crates/ui-egui/src/keytips/generated.rs from keytips.json (--check: fail if stale)
   version [set X.Y.Z[-pre]]
                   print or set the workspace version ([workspace.package] in Cargo.toml)
+  update [--check] [--force] [--remote NAME] [--branch NAME] [--launch [ARG...]]
+                  source install: fetch, fast-forward if behind (clean tree only), reinstall
+                  gridcraft + gridcraft-cli with cargo install; --launch then opens the app
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
@@ -50,6 +54,7 @@ fn main() -> ExitCode {
         Some("keytips") => keytips::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
+        Some("update") => update::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())

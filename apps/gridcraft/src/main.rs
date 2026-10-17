@@ -195,8 +195,42 @@ fn services() -> Services {
         open_url: Some(Box::new(|url: &str| open_with_system(url))),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
+        fetch: Some(Box::new(fetch_text)),
         ..Default::default()
     }
+}
+
+/// GET for the update check (`gridcraft_ui_egui::updates`), on a worker thread: the body, or the
+/// error, comes back on the channel. Only https, with the User-Agent GitHub asks for, a timeout,
+/// and a body cap; an HTTP error status still delivers its body (GitHub explains itself in JSON).
+fn fetch_text(url: &str) -> std::sync::mpsc::Receiver<Result<String, String>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let url = url.to_string();
+    let spawned = std::thread::Builder::new().name("gridcraft-fetch".into()).spawn(move || {
+        let _ = tx.send(http_get(&url));
+    });
+    if let Err(e) = spawned {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = tx.send(Err(format!("couldn't start a worker thread: {e}")));
+        return rx;
+    }
+    rx
+}
+
+fn http_get(url: &str) -> Result<String, String> {
+    if !url.starts_with("https://") {
+        return Err("only https URLs are fetched".into());
+    }
+    let config = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(15))).http_status_as_error(false).build();
+    let agent = ureq::Agent::new_with_config(config);
+    let mut response = agent
+        .get(url)
+        .header("User-Agent", &format!("GridCraft/{}", env!("CARGO_PKG_VERSION")))
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| e.to_string())?;
+    let limit = u64::try_from(gridcraft_ui_egui::updates::MAX_BODY).unwrap_or(u64::MAX).saturating_add(1);
+    response.body_mut().with_config().limit(limit).read_to_string().map_err(|e| e.to_string())
 }
 
 /// Opens a URL or file with the system's default application.

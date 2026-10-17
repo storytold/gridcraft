@@ -54,6 +54,15 @@ The saved choice remains System; new users still start in Light. The legacy
 outline then jumps to a new selection instead of gliding there); without `on` it toggles. It is
 the View ▸ Animations checkbox, saved with the other UI preferences and on by default.
 
+`{command: "help.checkForUpdates"}` asks GitHub whether a newer GridCraft exists, off the UI thread,
+and returns `{checking, version, commit}`; the answer arrives in `ui.updates` as
+`{result: {status: "release" | "commits" | "upToDate", version?, behind?, url?}}` or `{error}`. A
+newer release is announced in the notice bar; a build that knows its commit also learns how far
+`main` has moved on (what a source install updates with `cargo xtask update`). Nothing is downloaded
+or installed. `options.checkForUpdatesOnStartup {on?: bool}` is the About window's "Check for updates
+when GridCraft starts" checkbox: off by default, so no build talks to the network unasked. Hosts
+without a `fetch` service (web, headless) report that checks are unavailable.
+
 `{command: "app.language.set", params: {language: "ja"}}` switches the interface language
 (`code` is accepted as an alias for `language`); `app.language.english` and
 `app.language.japanese` are shortcuts. Only interface chrome is translated, never command ids or

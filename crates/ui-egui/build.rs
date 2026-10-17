@@ -24,6 +24,41 @@ fn main() {
     if let Err(e) = std::fs::write(&out, generate(&json, &people)) {
         println!("cargo::warning=writing {}: {e}", out.display());
     }
+    commit();
+}
+
+/// The checkout's commit, for About and the update check (`updates::COMMIT`). Packaging may pass
+/// it as `GRIDCRAFT_BUILD_COMMIT` (a source tarball has no git); otherwise git is asked. Neither
+/// being available is not an error: the build then knows no commit and the check stops at the
+/// release comparison.
+fn commit() {
+    println!("cargo::rerun-if-env-changed=GRIDCRAFT_BUILD_COMMIT");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let git = |args: &[&str]| -> Option<String> {
+        let out = std::process::Command::new("git").arg("-C").arg(dir).args(args).output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (out.status.success() && !text.is_empty()).then_some(text)
+    };
+    // Rebuild when HEAD moves: the HEAD file, the branch it names, and the packed refs.
+    let head_ref = git(&["symbolic-ref", "-q", "HEAD"]);
+    for name in ["HEAD", "packed-refs"].into_iter().chain(head_ref.as_deref()) {
+        if let Some(path) = git(&["rev-parse", "--git-path", name]) {
+            let path = std::path::Path::new(&path);
+            let path = if path.is_absolute() { path.to_path_buf() } else { dir.join(path) };
+            if path.exists() {
+                println!("cargo::rerun-if-changed={}", path.display());
+            }
+        }
+    }
+    let commit = std::env::var("GRIDCRAFT_BUILD_COMMIT").ok().filter(|c| is_hash(c)).or_else(|| git(&["rev-parse", "HEAD"]).filter(|c| is_hash(c)));
+    if let Some(commit) = commit {
+        println!("cargo::rustc-env=GRIDCRAFT_BUILD_COMMIT={commit}");
+    }
+}
+
+/// A git object hash: 7 to 64 hex digits.
+fn is_hash(s: &str) -> bool {
+    (7..=64).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 fn read<T>(path: &std::path::Path, fallback: &str, parse: impl Fn(&str) -> Result<T, String>) -> Option<T> {

@@ -956,6 +956,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Protect\nSheet" => "Proteger\nPlanilha",
         "Watch\nWindow" => "Janela de\nInspeção",
         "Workbook\nStatistics" => "Estatísticas da\nPasta de Trabalho",
+        "Build" => "Build",
+        "Check for Updates" => "Verificar Atualizações",
+        "Checking…" => "Verificando…",
+        "Update checks are unavailable here." => "A verificação de atualizações não está disponível aqui.",
+        "GridCraft is up to date." => "O GridCraft está atualizado.",
+        "Open the release page" => "Abrir a página da versão",
+        "See the new commits" => "Ver os novos commits",
+        "A source install updates with `cargo xtask update`." => "Uma instalação a partir do código-fonte é atualizada com `cargo xtask update`.",
+        "Couldn't check for updates:" => "Não foi possível verificar atualizações:",
+        "Check for updates when GridCraft starts" => "Verificar atualizações ao iniciar o GridCraft",
         _ => return None,
     })
 }
