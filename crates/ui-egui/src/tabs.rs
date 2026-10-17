@@ -37,20 +37,21 @@ fn activate_sheet(app: &mut SheetApp, i: usize) {
 
 pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    let lang = app.ui.language;
     egui::Panel::bottom("sheet_tabs").exact_size(32.0).frame(egui::Frame::NONE.fill(t.tab_bar)).show(ui, |ui| {
         let rect = ui.max_rect();
         ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(1.0, t.ribbon_border));
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.add_space(8.0);
-            if crate::widgets::icon_button(ui, Icon::Left, t.text_dim, "Previous sheet", vec2(24.0, 24.0)).clicked() {
+            if crate::widgets::icon_button(ui, Icon::Left, t.text_dim, lang.tr("Previous sheet"), vec2(24.0, 24.0)).clicked() {
                 app.run_or_alert("sheet.previous", json!({}));
             }
-            if crate::widgets::icon_button(ui, Icon::Right, t.text_dim, "Next sheet", vec2(24.0, 24.0)).clicked() {
+            if crate::widgets::icon_button(ui, Icon::Right, t.text_dim, lang.tr("Next sheet"), vec2(24.0, 24.0)).clicked() {
                 app.run_or_alert("sheet.next", json!({}));
             }
-            let all = crate::widgets::icon_button(ui, Icon::SheetList, t.text_dim, "All sheets", vec2(24.0, 24.0));
-            all.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "All sheets"));
+            let all = crate::widgets::icon_button(ui, Icon::SheetList, t.text_dim, lang.tr("All sheets"), vec2(24.0, 24.0));
+            all.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, lang.tr("All sheets")));
             let items = app.session.active().map(|d| navigator_items(&d.wb.sheets)).unwrap_or_default();
             let active = app.session.active().map(|d| d.wb.active_sheet.to_string()).unwrap_or_default();
             let rows: Vec<(&str, String)> = items.iter().map(|(i, name)| (i.as_str(), name.clone())).collect();
@@ -168,42 +169,42 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                 }
                                 resp.context_menu(|ui| {
                                     ui.set_min_width(180.0);
-                                    if ui.button("Insert Sheet").clicked() {
+                                    if ui.button(lang.tr("Insert Sheet")).clicked() {
                                         app.run_or_alert("home.insertSheet", json!({"before": i}));
                                     }
-                                    if ui.button("Delete").clicked() {
+                                    if ui.button(lang.tr("Delete")).clicked() {
                                         app.run_or_alert("home.deleteSheet", json!({"sheet": i}));
                                     }
-                                    if ui.button("Rename").clicked() {
+                                    if ui.button(lang.tr("Rename")).clicked() {
                                         app.grid.renaming_tab = Some(i);
                                         app.grid.rename_text = name.clone();
                                     }
-                                    if ui.button("Move or Copy…").clicked() {
+                                    if ui.button(lang.tr("Move or Copy…")).clicked() {
                                         app.open_dialog("moveSheet", json!({"sheet": i}));
                                     }
-                                    if ui.button("Duplicate").clicked() {
+                                    if ui.button(lang.tr("Duplicate")).clicked() {
                                         app.run_or_alert("sheet.move", json!({"sheet": i, "to": i + 1, "copy": true}));
                                     }
-                                    ui.menu_button("Tab Color", |ui| {
+                                    ui.menu_button(lang.tr("Tab Color"), |ui| {
                                         let colors = app.session.active().map(|d| d.wb.theme.colors).unwrap_or_default();
-                                        if let Some(c) = crate::widgets::color_palette(ui, &colors, "No Color") {
+                                        if let Some(c) = crate::widgets::color_palette(ui, &colors, lang.tr("No Color")) {
                                             app.run_or_alert("sheet.tabColor", json!({"sheet": i, "color": c}));
                                             ui.close();
                                         }
                                     });
                                     ui.separator();
-                                    if ui.button("Hide").clicked() {
+                                    if ui.button(lang.tr("Hide")).clicked() {
                                         app.run_or_alert("sheet.hide", json!({"sheet": i}));
                                     }
-                                    if ui.button("Unhide…").clicked() {
+                                    if ui.button(lang.tr("Unhide…")).clicked() {
                                         app.run_or_alert("sheet.unhide", json!({}));
                                     }
                                     ui.separator();
                                     let protected = app.session.active().and_then(|d| d.wb.active().map(|s| s.is_protected())).unwrap_or(false);
-                                    if ui.button(if protected { "Unprotect Sheet…" } else { "Protect Sheet…" }).clicked() {
+                                    if ui.button(lang.tr(if protected { "Unprotect Sheet…" } else { "Protect Sheet…" })).clicked() {
                                         app.open_dialog(if protected { "unprotectSheet" } else { "protectSheet" }, json!({}));
                                     }
-                                    if ui.button("Select All Sheets").clicked() {
+                                    if ui.button(lang.tr("Select All Sheets")).clicked() {
                                         ui.close();
                                     }
                                 });
@@ -212,7 +213,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                     });
             });
             ui.add_space(6.0);
-            if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, "New sheet (⇧F11)", vec2(26.0, 26.0)).clicked() {
+            if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, lang.tr("New sheet (⇧F11)"), vec2(26.0, 26.0)).clicked() {
                 app.run_or_alert("home.insertSheet", json!({}));
             }
             // The track ends where the grid does, so it stops under the vertical scrollbar.

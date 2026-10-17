@@ -4,6 +4,24 @@
 
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "AutoSave" => "Autoguardado",
+        "AutoSave: save after every change (workbooks saved to a file)" => {
+            "Autoguardado: guardar después de cada cambio (libros guardados en un archivo)"
+        }
+        "Previous sheet" => "Hoja anterior",
+        "Next sheet" => "Hoja siguiente",
+        "All sheets" => "Todas las hojas",
+        "New sheet (⇧F11)" => "Nueva hoja (⇧F11)",
+        "Insert Sheet" => "Insertar hoja",
+        "Rename" => "Cambiar nombre",
+        "Move or Copy…" => "Mover o copiar…",
+        "Duplicate" => "Duplicar",
+        "Tab Color" => "Color de etiqueta",
+        "No Color" => "Sin color",
+        "Hide" => "Ocultar",
+        "Unhide…" => "Mostrar…",
+        "Unprotect Sheet…" => "Desproteger hoja…",
+        "Select All Sheets" => "Seleccionar todas las hojas",
         "Paste" => "Pegar",
         "Paste Values" => "Pegar valores",
         "Paste Formulas" => "Pegar fórmulas",
