@@ -214,3 +214,36 @@ fn alt_down_only_opens_enabled_table_filter_buttons() {
         assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "B1");
     }
 }
+
+/// Alt+= as Windows and Linux report it: the key press, then the `=` the OS types with it.
+fn alt_equals(h: &mut Harness) {
+    h.input_mut().events.push(Event::Key {
+        key: Key::Equals,
+        physical_key: Some(Key::Equals),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::ALT,
+    });
+    h.input_mut().events.push(Event::Text("=".into()));
+    h.run_steps(2);
+}
+
+#[test]
+fn alt_equals_autosum_does_not_also_type_the_equals_sign() {
+    let input = |h: &Harness, a1: &str| h.state().session.active().unwrap().wb.active().unwrap().input_text(CellRef::parse(a1).unwrap());
+    // Column above, row to the left, and a block (totals below each column).
+    for (selected, cell, formula) in [("A4", "A4", "=SUM(A1:A3)"), ("C3", "C3", "=SUM(A3:B3)"), ("A1:B3", "B4", "=SUM(B1:B3)")] {
+        let mut h = harness(book(selected));
+        alt_equals(&mut h);
+        assert_eq!(input(&h, cell), formula, "Alt+= on {selected}");
+        assert!(h.state().editor.is_none(), "Alt+= on {selected} started an edit");
+        // Enter moves on: there is no stray `=` edit to commit.
+        key(&mut h, Key::Enter, Modifiers::NONE);
+        assert!(h.state().message.is_none(), "Alt+= on {selected}: {:?}", h.state().message);
+        assert_eq!(input(&h, cell), formula);
+    }
+    // Nothing to sum: AutoSum's own edit, `=SUM()`, not `=`.
+    let mut h = harness(book("E10"));
+    alt_equals(&mut h);
+    assert_eq!(h.state().editor.as_ref().map(|e| e.text.clone()).as_deref(), Some("=SUM()"));
+}
