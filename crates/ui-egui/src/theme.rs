@@ -209,17 +209,37 @@ pub(crate) fn font_parses(bytes: &[u8], index: u32) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 fn try_load(paths: &[(&str, u32)]) -> Option<FontData> {
     for (p, index) in paths {
-        if let Ok(bytes) = std::fs::read(p) {
-            if !font_parses(&bytes, *index) {
-                log::warn!("skipping font {p} (face {index}): not a font file egui can read");
-                continue;
-            }
-            let mut fd = FontData::from_owned(bytes);
+        if let Some(bytes) = font_file(p, *index) {
+            let mut fd = FontData::from_static(bytes);
             fd.index = *index;
             return Some(fd);
         }
     }
     None
+}
+
+/// The interface and script fallback font files, each read once per run and kept for the rest of
+/// it. egui copies an owned font's bytes into its text engine and keeps the original too
+/// (`epaint`'s `blob_from_font_data`), so every one of these files was in memory twice, about
+/// 100 MB on a Mac; bytes it borrows for `'static` it shares instead. These faces are loaded by
+/// every font rebuild for as long as the app runs, so keeping them costs nothing, and rebuilds no
+/// longer read them from disk again. Only a file that parses is kept: a missing or broken one is
+/// looked for again next time.
+#[cfg(not(target_arch = "wasm32"))]
+fn font_file(path: &str, index: u32) -> Option<&'static [u8]> {
+    static FILES: std::sync::Mutex<std::collections::BTreeMap<String, &'static [u8]>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+    let mut files = FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(&bytes) = files.get(path) {
+        return font_parses(bytes, index).then_some(bytes);
+    }
+    let bytes = std::fs::read(path).ok()?;
+    if !font_parses(&bytes, index) {
+        log::warn!("skipping font {path} (face {index}): not a font file egui can read");
+        return None;
+    }
+    let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+    files.insert(path.to_string(), bytes);
+    Some(bytes)
 }
 
 /// Last line of defence before [`FontDefinitions`] reach egui: drops every face epaint could not
@@ -933,5 +953,24 @@ mod tests {
         let loaded = try_load(&[(bad_s.as_str(), 0), (good_s.as_str(), 0)]);
         assert_eq!(loaded.map(|fd| fd.font.len()), Some(real.len()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn interface_fonts_are_read_once_and_shared_with_egui() {
+        // egui copies owned font bytes into its text engine and keeps the original too; borrowed
+        // bytes it shares. A rebuild of the font set reuses the file read the first time.
+        let path = std::env::temp_dir().join(format!("gridcraft-font-shared-{}.ttf", std::process::id()));
+        std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT).unwrap();
+        let p = path.to_string_lossy().into_owned();
+        let first = try_load(&[(p.as_str(), 0)]).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let second = try_load(&[(p.as_str(), 0)]).expect("kept from the first read");
+        let (std::borrow::Cow::Borrowed(a), std::borrow::Cow::Borrowed(b)) = (&first.font, &second.font) else {
+            panic!("interface font bytes must be borrowed, so egui shares them instead of copying");
+        };
+        assert!(std::ptr::eq(*a, *b));
+        assert_eq!(*a, epaint_default_fonts::UBUNTU_LIGHT);
+        assert!(try_load(&[(p.as_str(), 3)]).is_none(), "a face the kept file doesn't have is still refused");
     }
 }
