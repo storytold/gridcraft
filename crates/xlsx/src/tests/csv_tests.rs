@@ -110,14 +110,15 @@ fn writing() {
         Value::Array(_) => String::new(),
     };
     let out = String::from_utf8(write_csv(sh, b',', raw).unwrap()).unwrap();
-    assert_eq!(out, "\"a,b\",\"q\"\"t\",\r\n0.1,FALSE,\r\n#DIV/0!,,\"x\ny\"\r\n");
+    // The first cell is B2: the file starts at A1, so the leading empty row and column stay.
+    assert_eq!(out, ",,,\r\n,\"a,b\",\"q\"\"t\",\r\n,0.1,FALSE,\r\n,#DIV/0!,,\"x\ny\"\r\n");
     let semi = String::from_utf8(write_csv(sh, b';', raw).unwrap()).unwrap();
-    assert!(semi.starts_with("a,b;"));
+    assert!(semi.starts_with(";;;\r\n;a,b;"));
     assert!(write_csv(&Sheet::new("E"), b',', raw).unwrap().is_empty());
     // Round trip.
     let back = read_csv(out.as_bytes(), &CsvOptions::default()).unwrap();
-    assert_eq!(v(&back, 0, 0), Value::text("a,b"));
-    assert_eq!(v(&back, 2, 2), Value::text("x\ny"));
+    assert_eq!(v(&back, 1, 1), Value::text("a,b"));
+    assert_eq!(v(&back, 3, 3), Value::text("x\ny"));
 }
 
 #[test]

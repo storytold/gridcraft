@@ -3282,3 +3282,10 @@ fn paste_special_validation_moves_relative_references() {
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
 }
+
+#[test]
+fn saving_csv_keeps_leading_empty_columns_and_rows() {
+    let wb = gridcraft_xlsx::read_csv(b",x\r\n\r\n,,y\r\n", &gridcraft_xlsx::CsvOptions::default()).unwrap();
+    let out = crate::io::save_bytes(&wb, "a.csv").unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), ",x,\r\n,,\r\n,,y\r\n");
+}
