@@ -591,6 +591,32 @@ fn let_lambda() {
 }
 
 #[test]
+fn a_recursive_lambda_recurses_deep_then_answers_num_instead_of_overflowing() {
+    // The nesting budget guards the native stack, and a self-recursive LAMBDA nests afresh on
+    // every call, so a two-parameter one used to stop after 131 calls and answer #CALC!. Excel
+    // answers #NUM! once its own operand stack is spent. On a bounded stack: the depths below
+    // must compute, and a runaway recursion must come back as a value rather than an abort.
+    let handle = std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let mut t = T::new();
+            let countdown = |n: u32| format!("=LET(F,LAMBDA(me,n,IF(n<=0,0,1+me(me,n-1))),F(F,{n}))");
+            t.set("A1", &countdown(132));
+            t.set("A2", &countdown(160));
+            t.set("A3", &countdown(100_000));
+            // Recursing through MAP interleaves frames the depth counter never sees.
+            t.set("A4", "=LET(F,LAMBDA(me,n,IF(n<=0,0,1+SUM(MAP({1},LAMBDA(v,me(me,n-1)))))),F(F,100000))");
+            (t.get("A1"), t.get("A2"), t.get("A3"), t.get("A4"))
+        })
+        .expect("spawn");
+    let (deep, deeper, runaway, through_map) = handle.join().expect("deep recursion must not overflow the stack");
+    assert_eq!(deep.as_f64(), Some(132.0));
+    assert_eq!(deeper.as_f64(), Some(160.0));
+    assert_eq!(runaway, Value::Error(CellError::Num));
+    assert_eq!(through_map, Value::Error(CellError::Num));
+}
+
+#[test]
 fn functions_given_by_name() {
     let mut t = T::new();
     for (i, (k, v)) in [("a", 1), ("b", -2), ("a", 3)].iter().enumerate() {

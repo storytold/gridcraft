@@ -17,7 +17,16 @@ pub const MAX_CELLS: u64 = 16_000_000;
 /// reserved for data to come such as `$A$2:$A$50000`) stop at the sheet's used range, so that
 /// formulas over them stay fast.
 const FULL_SIZE_CELLS: u64 = 16_384;
-const MAX_DEPTH: usize = 400;
+/// Deepest expression nesting one formula may evaluate. The evaluator recurses, so this is what
+/// keeps a formula off the end of the native stack; Excel answers `#NUM!` when its own ceiling
+/// (an operand stack of 1,024 entries) is spent, and so do we.
+///
+/// The parser already caps a parsed tree at 256 levels, so in practice this only binds on a
+/// self-recursive LAMBDA, which nests afresh on every call. The ceiling on the value is the
+/// smallest stack GridCraft runs on: `wasm32-unknown-unknown` gets LLVM's default 1 MiB, shared
+/// with the UI frames the evaluator is called from. Measured on this path, a level of nesting
+/// costs a little under 1 KiB, so 512 asks for roughly 475 KiB at full depth.
+const MAX_DEPTH: usize = 512;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Area {
@@ -208,7 +217,7 @@ impl<'h> Evaluator<'h> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
             self.depth -= 1;
-            return err(CellError::Calc);
+            return err(CellError::Num);
         }
         let r = self.eval_inner(e);
         self.depth -= 1;
@@ -492,7 +501,7 @@ impl<'h> Evaluator<'h> {
             }
             _ => {
                 // A long chain such as A1+A2+…+A500 nests to the left: fold it in a loop instead
-                // of one level of recursion per operator (past the depth limit it was #CALC!).
+                // of one level of recursion per operator (past the depth limit it was an error).
                 let mut rest = vec![(op, b)];
                 let mut left = a;
                 while let Expr::Binary(o, l, r) = left
