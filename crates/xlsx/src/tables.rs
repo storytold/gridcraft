@@ -1,8 +1,8 @@
 //! Fixed lookup tables: built-in number formats, the legacy indexed colour palette, paper sizes,
 //! functions that need the `_xlfn.` prefix in files, and unit conversions.
 
-/// Built-in number format codes (en-US) by id. Ids not listed (23–36 are East Asian
-/// locale formats) read as General.
+/// Built-in number format codes (en-US) by id. The locale-specific ids read as the one Excel shows
+/// them as ([`LOCALE_FORMATS`]); any other id not listed (23–26, 82 and up) reads as General.
 const BUILTIN_FORMATS: [(u32, &str); 36] = [
     (0, "General"),
     (1, "0"),
@@ -42,7 +42,61 @@ const BUILTIN_FORMATS: [(u32, &str); 36] = [
     (49, "@"),
 ];
 
+/// Locale-specific built-in ids and the en-US built-in each one shows as. ECMA-376 §18.8.30 only
+/// defines 27–36 and 50–81 for the East Asian and Thai locales, and files from other locales use
+/// them too (an `es-MX` workbook stored its dates as 58). Observed black-box in Excel for Mac with
+/// the es-MX region on a synthetic workbook, one cell per id: the dates show as the short date
+/// (14), the times as `h:mm:ss` (21), and 59–81 as the matching number, percent, fraction, date
+/// and time formats. Without this they read as General and dates showed as serial numbers.
+const LOCALE_FORMATS: [(u32, u32); 42] = [
+    (27, 14),
+    (28, 14),
+    (29, 14),
+    (30, 14),
+    (31, 14),
+    (32, 21),
+    (33, 21),
+    (34, 21),
+    (35, 21),
+    (36, 14),
+    (50, 14),
+    (51, 14),
+    (52, 14),
+    (53, 14),
+    (54, 14),
+    (55, 14),
+    (56, 14),
+    (57, 14),
+    (58, 14),
+    (59, 1),
+    (60, 2),
+    (61, 3),
+    (62, 4),
+    (63, 5),
+    (64, 6),
+    (65, 7),
+    (66, 8),
+    (67, 9),
+    (68, 10),
+    (69, 12),
+    (70, 13),
+    (71, 14),
+    (72, 14),
+    (73, 15),
+    (74, 16),
+    (75, 17),
+    (76, 20),
+    (77, 21),
+    (78, 22),
+    (79, 45),
+    (80, 46),
+    (81, 47),
+];
+
+/// Format code for a built-in id, reading a locale-specific id as the en-US built-in Excel shows it
+/// as. Saving writes that en-US id ([`builtin_id`]), which Excel shows the same way.
 pub fn builtin_format(id: u32) -> Option<&'static str> {
+    let id = LOCALE_FORMATS.iter().find(|(l, _)| *l == id).map_or(id, |(_, en)| *en);
     BUILTIN_FORMATS.iter().find(|(i, _)| *i == id).map(|(_, c)| *c)
 }
 
@@ -339,5 +393,30 @@ mod tests {
         assert_eq!(builtin_id(builtin_format(5).unwrap()), None);
         assert_eq!(paper_name(9), Some("A4"));
         assert_eq!(paper_id("a4"), Some(9));
+    }
+
+    #[test]
+    fn locale_builtin_ids_read_as_excel_shows_them() {
+        // Dates stored as the East Asian ids show as the short date, and save as it.
+        for id in [27, 30, 31, 36, 50, 57, 58, 71, 72] {
+            assert_eq!(builtin_format(id), Some("m/d/yyyy"), "id {id}");
+        }
+        assert_eq!(builtin_id(builtin_format(58).unwrap()), Some(14));
+        for id in [32, 35, 77] {
+            assert_eq!(builtin_format(id), Some("h:mm:ss"), "id {id}");
+        }
+        // The Thai ids repeat the en-US numbers, currencies, percents, fractions, dates and times.
+        for (thai, en) in [(59, 1), (62, 4), (63, 5), (66, 8), (67, 9), (70, 13), (73, 15), (78, 22), (81, 47)] {
+            assert_eq!(builtin_format(thai), builtin_format(en), "id {thai}");
+            assert!(builtin_format(thai).is_some(), "id {thai}");
+        }
+        // Ids Excel shows as General, and ids past the table.
+        for id in [23, 26, 82, 164, u32::MAX] {
+            assert_eq!(builtin_format(id), None, "id {id}");
+        }
+        // The en-US built-ins are untouched.
+        for (id, code) in BUILTIN_FORMATS {
+            assert_eq!(builtin_format(id), Some(code), "id {id}");
+        }
     }
 }

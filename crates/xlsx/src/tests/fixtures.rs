@@ -151,7 +151,8 @@ fn styles_theme_and_sizes() {
     assert_eq!(st3.num_fmt.as_str(), "0.00%");
     assert_eq!(st3.fill.pattern, PatternType::DarkGrid);
     assert_eq!(st3.fill.fg, Color::Theme(5, 0));
-    assert_eq!(wb.styles.get(s.cell(at("D1")).unwrap().style).num_fmt.as_str(), "General");
+    // Built-in 30 is an East Asian date format; Excel elsewhere shows it as the short date.
+    assert_eq!(wb.styles.get(s.cell(at("D1")).unwrap().style).num_fmt.as_str(), "m/d/yyyy");
     // Theme: file order dk1, lt1… maps to lt1, dk1… in the model.
     assert_eq!(wb.theme.colors[0], 0xFFFFFF);
     assert_eq!(wb.theme.colors[1], 0x000000);
@@ -187,6 +188,26 @@ fn styles_theme_and_sizes() {
     }
     assert_eq!(s.print.paper, "A4");
     assert_eq!(s.print.fit_to, Some((1, 0)));
+}
+
+#[test]
+fn locale_date_format_reads_as_a_date_and_saves_as_one() {
+    // Built-in 58 is an East Asian date format that workbooks from other locales use for their
+    // dates too; Excel outside those locales shows it as the short date. It read as General, so
+    // the dates showed as serial numbers (46307) and saving dropped their format.
+    let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+      <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+      <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+      <cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="58" fontId="0" fillId="0" borderId="0" applyNumberFormat="1"/></cellXfs>
+    </styleSheet>"#;
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1" s="1"><v>46307</v></c></row></sheetData>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles)], rels, "")).unwrap();
+    let fmt = |wb: &gridcraft_model::Workbook| wb.styles.get(wb.sheet(0).unwrap().cell(at("A1")).unwrap().style).num_fmt.as_str().to_string();
+    assert_eq!(fmt(&wb), "m/d/yyyy");
+    let (again, _) = read_xlsx(&crate::write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(fmt(&again), "m/d/yyyy");
 }
 
 #[test]
