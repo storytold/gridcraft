@@ -42,6 +42,7 @@ mod xml;
 mod tests;
 
 use gridcraft_core::DateSystem;
+use gridcraft_core::parse::DataConversion;
 use gridcraft_model::Workbook;
 
 pub use crypto::{DecryptError, check_encryption, decrypt};
@@ -147,11 +148,14 @@ pub struct CsvOptions {
     pub date_system: DateSystem,
     /// Interpret fields like typed input (numbers, dates, booleans…); otherwise keep text.
     pub parse_values: bool,
+    /// Which number-like fields become numbers when `parse_values` is on (Excel's Automatic Data
+    /// Conversion options; the default converts everything).
+    pub conversion: DataConversion,
 }
 
 impl Default for CsvOptions {
     fn default() -> Self {
-        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true }
+        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true, conversion: DataConversion::default() }
     }
 }
 

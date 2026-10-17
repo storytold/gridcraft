@@ -199,6 +199,9 @@ pub struct Prefs {
     pub user_dictionary: Vec<String>,
     /// View › Show › Formula Bar (an application option in Excel, not saved in the file).
     pub formula_bar: bool,
+    /// File › Options › Data › Automatic Data Conversion (`app.dataConversion`): applies to typed
+    /// and pasted input and to opening CSV/text files. An application option, as in Excel.
+    pub data_conversion: gridcraft_core::parse::DataConversion,
 }
 
 impl Default for Prefs {
@@ -213,6 +216,7 @@ impl Default for Prefs {
             r1c1: false,
             user_dictionary: vec![],
             formula_bar: true,
+            data_conversion: gridcraft_core::parse::DataConversion::default(),
         }
     }
 }

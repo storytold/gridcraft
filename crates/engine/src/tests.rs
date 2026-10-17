@@ -2118,8 +2118,10 @@ fn checkboxes_survive_xlsx_as_cell_controls() {
 #[test]
 fn file_options_reports_settings_and_asks_for_the_options_page() {
     let mut s = Session::new();
-    // No workbook: nothing to report, but still no error.
-    assert_eq!(s.execute("file.options", json!({})).unwrap(), json!({"calculation": null}));
+    // No workbook: no workbook settings to report (the application's still are), and no error.
+    let r = s.execute("file.options", json!({})).unwrap();
+    assert_eq!(r["calculation"], json!(null));
+    assert_eq!(r["dataConversion"]["all"], json!(true));
     s.take_ui_requests();
     s.new_workbook();
     s.execute("formulas.calculationOptions", json!({"mode": "manual", "iterative": true})).unwrap();
@@ -3220,6 +3222,146 @@ fn a_decrypted_workbook_never_overwrites_its_encrypted_original() {
     assert!(s.take_ui_requests().iter().any(|r| matches!(r, crate::UiRequest::Dialog(name, _) if name == "saveAs")));
     assert_eq!(std::fs::read(&path).unwrap(), bytes, "the encrypted original is untouched");
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn data_conversion_command_sets_reports_and_validates() {
+    let mut s = s();
+    let report = |s: &mut Session| s.execute("app.dataConversion", json!({})).unwrap();
+    let defaults = json!({"all": true, "removeLeadingZeros": true, "keepFirst15Digits": true, "longNumberDigits": 11, "digitsAroundE": true});
+    assert_eq!(report(&mut s), defaults);
+    // Unchecking the long-number box uses 11 (what General shows without scientific notation)
+    // until a limit is given; giving one unchecks it.
+    let r = s.execute("app.dataConversion", json!({"keepFirst15Digits": false})).unwrap();
+    assert_eq!(r, json!({"all": false, "removeLeadingZeros": true, "keepFirst15Digits": false, "longNumberDigits": 11, "digitsAroundE": true}));
+    s.execute("app.dataConversion", json!({"keepFirst15Digits": true})).unwrap();
+    let r = s.execute("app.dataConversion", json!({"longNumberDigits": 13, "digitsAroundE": false})).unwrap();
+    assert_eq!(r, json!({"all": false, "removeLeadingZeros": true, "keepFirst15Digits": false, "longNumberDigits": 13, "digitsAroundE": false}));
+    // The limit is remembered through the checkbox and through "all".
+    s.execute("app.dataConversion", json!({"keepFirst15Digits": true})).unwrap();
+    assert_eq!(s.execute("app.dataConversion", json!({"keepFirst15Digits": false})).unwrap()["longNumberDigits"], 13);
+    let r = s.execute("app.dataConversion", json!({"all": false})).unwrap();
+    assert_eq!(r, json!({"all": false, "removeLeadingZeros": false, "keepFirst15Digits": false, "longNumberDigits": 13, "digitsAroundE": false}));
+    let r = s.execute("app.dataConversion", json!({"all": true})).unwrap();
+    assert_eq!(r, json!({"all": true, "removeLeadingZeros": true, "keepFirst15Digits": true, "longNumberDigits": 13, "digitsAroundE": true}));
+    // A limit can be set while the box stays on.
+    let r = s.execute("app.dataConversion", json!({"keepFirst15Digits": true, "longNumberDigits": 11})).unwrap();
+    assert_eq!(r, defaults);
+    // Bad values are refused and change nothing, even next to good ones.
+    for bad in [
+        json!({"longNumberDigits": 0}),
+        json!({"longNumberDigits": 16}),
+        json!({"longNumberDigits": -1}),
+        json!({"longNumberDigits": 11.5}),
+        json!({"longNumberDigits": "11"}),
+        json!({"digitsAroundE": "no"}),
+        json!({"all": false, "removeLeadingZeros": 1}),
+    ] {
+        assert!(s.execute("app.dataConversion", bad.clone()).is_err(), "{bad}");
+    }
+    assert_eq!(report(&mut s), defaults);
+    // File › Options reports them too.
+    assert_eq!(s.execute("file.options", json!({})).unwrap()["dataConversion"], defaults);
+}
+
+#[test]
+fn data_conversion_applies_to_typing_pasting_and_set_values() {
+    let mut s = s();
+    let typed = |s: &mut Session, input: &str| {
+        s.execute("cell.set", json!({"cell": "A1", "input": input})).unwrap();
+        v(s, "A1")
+    };
+    // Defaults: converted as before.
+    assert_eq!(typed(&mut s, "0123"), Value::Number(123.0));
+    assert_eq!(typed(&mut s, "1244121406E6"), Value::Number(1.244121406e15));
+    assert_eq!(typed(&mut s, "124412140710"), Value::Number(124412140710.0));
+    s.execute("app.dataConversion", json!({"all": false, "longNumberDigits": 11})).unwrap();
+    assert_eq!(typed(&mut s, "0123"), Value::text("0123"));
+    assert_eq!(typed(&mut s, "1244121406E6"), Value::text("1244121406E6"));
+    assert_eq!(typed(&mut s, "124412140710"), Value::text("124412140710"));
+    assert_eq!(typed(&mut s, "720.0"), Value::Number(720.0));
+    assert_eq!(typed(&mut s, "=1E3+1"), Value::Number(1001.0), "formulas are not data entry");
+    // Pasted text from another program.
+    s.execute("edit.paste", json!({"at": "B1", "text": "124412140710\t0042\r\n1144121408E7\t5\r\n"})).unwrap();
+    assert_eq!((v(&s, "B1"), v(&s, "C1")), (Value::text("124412140710"), Value::text("0042")));
+    assert_eq!((v(&s, "B2"), v(&s, "C2")), (Value::text("1144121408E7"), Value::Number(5.0)));
+    // range.setValues strings parse like typing; JSON numbers stay numbers.
+    s.execute("range.setValues", json!({"range": "D1", "values": [["114412140641", 114412140641u64]]})).unwrap();
+    assert_eq!((v(&s, "D1"), v(&s, "E1")), (Value::text("114412140641"), Value::Number(114412140641.0)));
+}
+
+/// The clipboard's HTML (`x:num`, `sdval`) doesn't override the options: a field they keep as text
+/// stays text, even where the source recorded a number (which may have lost digits, as here). Text
+/// the options don't cover, like pasted currency (#257), still takes the number from the HTML.
+#[test]
+fn data_conversion_also_holds_for_pasted_clipboard_html() {
+    let mut s = s();
+    s.execute("app.dataConversion", json!({"all": false, "longNumberDigits": 15})).unwrap();
+    let text = "990000000000000019\t0042\t1244121406E6\tRp10,000.00\n";
+    let html = r#"<table><tr><td x:num="990000000000000000">990000000000000019</td><td x:num="42">0042</td>
+        <td sdval="1244121406000000">1244121406E6</td><td x:num="10000">Rp10,000.00</td></tr></table>"#;
+    s.execute("edit.paste", json!({"at": "A1", "text": text, "html": html})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("990000000000000019"));
+    assert_eq!(v(&s, "B1"), Value::text("0042"));
+    assert_eq!(v(&s, "C1"), Value::text("1244121406E6"));
+    assert_eq!(v(&s, "D1"), Value::number(10000.0));
+    // With every conversion on, the same paste gives numbers, as before the options existed.
+    s.execute("app.dataConversion", json!({"all": true})).unwrap();
+    s.execute("edit.paste", json!({"at": "A2", "text": text, "html": html})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::number(9.9e17));
+    assert_eq!(v(&s, "B2"), Value::number(42.0));
+    assert_eq!(v(&s, "C2"), Value::number(1.244121406e15));
+    assert_eq!(v(&s, "D2"), Value::number(10000.0));
+}
+
+/// The acceptance case: a CAD/CAM cut list (`;`, 12-character part codes in columns 11 and 12 that
+/// are hex, all digits, or digits-E-digits). With "Keep first 15 digits" and E conversion off,
+/// every code comes back exactly as written; only `720.0` becomes `720`.
+#[test]
+fn cut_list_codes_survive_with_conversions_off() {
+    const CUT_LIST: &str = "1;720.0;579.0;K1_led_1;HDF_BIJELI;3.0;;;;;;\r\n\
+        1;511.0;184.0;P3_L1_led;2162PE;16.0;1MM_2162PE;1MM_2162PE;;;1244121406FB;\r\n\
+        1;511.0;83.0;P3_L2_led;2162PE;16.0;1MM_2162PE;1MM_2162PE;;;124412140710;\r\n\
+        1;716.0;596.0;K1_FR_1_Fronta;2162PE;19.0;1MM_2162PE;1MM_2162PE;1MM_2162PE;1MM_2162PE;114412140641;\r\n\
+        1;996.0;596.0;K1_FR_2_Fronta;2162PE;19.0;1MM_2162PE;1MM_2162PE;1MM_2162PE;1MM_2162PE;11441214064B;\r\n\
+        1;562.0;510.0;P3_pod;2162PE;19.0;1MM_2162PE;;;;1244121406E6;\r\n\
+        1;782.0;312.0;V3_polFix;2162PE;19.0;1MM_2162PE;;;;2244121408DD;2144121408DD\r\n\
+        1;672.0;291.0;V3_pre_2;2162PE;19.0;1MM_2162PE;;;;1144121408E7;\r\n";
+    let open = |s: &mut Session| {
+        s.execute("file.open", json!({"name": "cut list.csv", "base64": crate::io::base64_encode(CUT_LIST.as_bytes())})).unwrap();
+        // Saved as CSV the way File › Save does it: the separator it was read with, displayed values.
+        String::from_utf8(crate::io::save_bytes(&s.doc().unwrap().wb, "cut list.csv").unwrap()).unwrap()
+    };
+    // Today's default: the E codes become numbers in scientific notation, the codes are gone.
+    let mut s = s();
+    let out = open(&mut s);
+    assert!(!out.contains(";1244121406E6;") && !out.contains(";1144121408E7;"), "{out}");
+    assert!(v(&s, "K6").is_number());
+    // Just the two checkboxes off: the default limit keeps the 12-digit codes as text.
+    let mut s = self::s();
+    s.execute("app.dataConversion", json!({"keepFirst15Digits": false, "digitsAroundE": false})).unwrap();
+    let out = open(&mut s);
+    assert_eq!(out, CUT_LIST.replace(".0;", ";"));
+    for (cell, code) in [("K3", "124412140710"), ("K4", "114412140641"), ("K6", "1244121406E6"), ("K8", "1144121408E7")] {
+        assert_eq!(v(&s, cell), Value::text(code), "{cell}");
+    }
+    assert_eq!(v(&s, "B1"), Value::Number(720.0));
+}
+
+#[test]
+fn data_conversion_is_a_saved_preference() {
+    // prefs.json from before the options keeps Excel's defaults; the options round-trip.
+    let old: crate::Prefs = serde_json::from_str(r#"{"userName": "Ann", "formulaBar": false}"#).unwrap();
+    assert_eq!(old.data_conversion, gridcraft_core::parse::DataConversion::default());
+    let mut s = s();
+    s.execute("app.dataConversion", json!({"digitsAroundE": false, "longNumberDigits": 11})).unwrap();
+    let saved = serde_json::to_value(&s.prefs).unwrap();
+    assert_eq!(
+        saved["dataConversion"],
+        json!({"removeLeadingZeros": true, "keepFirst15Digits": false, "longNumberDigits": 11, "digitsAroundE": false})
+    );
+    let back: crate::Prefs = serde_json::from_value(saved).unwrap();
+    assert_eq!(back.data_conversion, s.prefs.data_conversion);
 }
 
 #[test]

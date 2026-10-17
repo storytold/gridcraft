@@ -48,6 +48,33 @@ new images show the existing placeholder until capacity is available; header-bas
 avoids repeatedly decoding overflow images. More than 128 small visible pictures now keep stable
 texture handles instead of cycling through the cache every frame.
 
+## Automatic Data Conversion: off means nothing is cut short or turned scientific
+
+File › Options › Data copies Excel's Automatic Data Conversion list (enable all, remove leading
+zeros, keep first 15 digits of long numbers, convert digits around "E"; Excel's fourth option,
+continuous letters and numbers to a date, has no counterpart because GridCraft never makes that
+conversion). The options apply to typing, pasting and opening CSV/text files, as in Excel, and are
+an application preference (`Prefs::data_conversion`, `app.dataConversion`), not workbook state.
+All default on, so nothing changes until someone opts out.
+
+One deliberate difference: with "Keep first 15 digits of long numbers and display in scientific
+notation" unchecked, Excel still converts 12–15 digit strings, which General format then shows as
+`1.24412E+11`, and a CSV saved from Excel writes that text, so the digits are gone. In GridCraft,
+unchecked means no number is cut short or shown in scientific notation: a number converts only if
+General shows every digit of it as written (at most 11 characters, not below 1E-4); anything else
+stays text exactly as written. A digit limit (default 11, up to 15) lets someone allow scientific
+display for longer numbers; even at 15 no digit is lost. Core restates General's rule
+(`general_shows_exactly`) because core can't depend on numfmt; a numfmt test checks the two agree.
+The case that prompted it: CAD/CAM cut lists whose 12-character part codes are hex, all digits
+(`124412140710`) or digits-E-digits (`1244121406E6`).
+
+Paste also reads the clipboard's HTML, where a spreadsheet records the number behind a cell
+(`x:num`, `sdval`; #257). That number doesn't override the options: a field they keep as text
+(`0042`, `990000000000000019`) stays text even when the source recorded it as a number, which for
+a long code may already have lost digits. The HTML still supplies the number for text the options
+don't cover, like pasted currency (`Rp10,000.00`). JSON numbers in `range.setValues` are different:
+they're numbers the caller typed, not text, so the options don't apply to them.
+
 ## Ctrl+wheel zoom steps along its own ladder, not Excel's 15-point steps
 
 A Ctrl+wheel notch moves the zoom to the next step on `grid::WHEEL_ZOOM_LADDER`: 10, 12, 15, 18,

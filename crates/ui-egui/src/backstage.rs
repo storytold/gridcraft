@@ -973,6 +973,8 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
         app.grid.toggle_autosave();
     }
+    ui.add_space(18.0);
+    data_conversion_options(app, ui);
     let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
     ui.add_space(18.0);
     section(ui, lang, "Formulas");
@@ -994,6 +996,65 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     }
     ui.add_space(6.0);
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
+}
+
+/// Data › Automatic Data Conversion: Excel's list, plus a digit limit for long numbers. Every
+/// change runs `app.dataConversion`.
+fn data_conversion_options(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
+    section(ui, lang, "Options|Data");
+    ui.label(lang.tr("Automatic data conversion"));
+    ui.add_space(4.0);
+    let c = app.session.prefs.data_conversion;
+    let mut all = c.all();
+    if ui.checkbox(&mut all, lang.tr("Enable all default data conversions below when entering, pasting, or opening text files")).changed() {
+        app.run_or_alert("app.dataConversion", json!({"all": all}));
+    }
+    ui.indent("data_conversion", |ui| {
+        let mut zeros = c.remove_leading_zeros;
+        if ui
+            .checkbox(&mut zeros, lang.tr("Remove leading zeros and convert to a number"))
+            .on_hover_text(lang.tr("Off: 0123 stays text, leading zeros included."))
+            .changed()
+        {
+            app.run_or_alert("app.dataConversion", json!({"removeLeadingZeros": zeros}));
+        }
+        let mut keep15 = c.keep_first_15_digits;
+        if ui
+            .checkbox(&mut keep15, lang.tr("Keep first 15 digits of long numbers and display in scientific notation"))
+            .on_hover_text(lang.tr("Off: no number is cut short or turned into scientific notation. What General format can't show as written stays text."))
+            .changed()
+        {
+            app.run_or_alert("app.dataConversion", json!({"keepFirst15Digits": keep15}));
+        }
+        if !c.keep_first_15_digits {
+            let limit = c.long_number_digits;
+            ui.indent("long_number_digits", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(lang.tr("Keep numbers with more than"));
+                    let mut n = limit;
+                    let hint = lang.tr("11 (default): only numbers General format shows exactly as written convert, so 12-digit codes and barcodes stay text. 12 to 15 allows scientific display, like 1.24412E+11, for numbers up to that many digits; no digit is ever lost.");
+                    if ui.add(egui::DragValue::new(&mut n).range(1..=15)).on_hover_text(hint).changed() && n != limit {
+                        app.run_or_alert("app.dataConversion", json!({"longNumberDigits": n}));
+                    }
+                    ui.label(lang.tr("digits as text"));
+                });
+            });
+        }
+        let mut e = c.digits_around_e;
+        if ui
+            .checkbox(&mut e, lang.tr("Convert digits surrounding the letter \"E\" to a number in scientific notation"))
+            .on_hover_text(lang.tr("Off: 1244121406E6 stays text instead of becoming 1.24412E+15."))
+            .changed()
+        {
+            app.run_or_alert("app.dataConversion", json!({"digitsAroundE": e}));
+        }
+        // Excel's fourth option has nothing to switch off: GridCraft never makes this conversion.
+        ui.add_enabled(false, egui::Checkbox::new(&mut false, lang.tr("Convert continuous letters and numbers to a date")))
+            .on_disabled_hover_text(lang.tr("GridCraft never makes this conversion: 12JAN2026 stays text."));
+    });
+    ui.add_space(6.0);
+    dim(ui, lang.tr("Data conversion settings apply to every workbook; they are not saved in the file."));
 }
 
 #[cfg(test)]

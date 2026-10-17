@@ -114,10 +114,20 @@ fn load_prefs(app: &mut SheetApp) {
         app.ui = ui;
         app.ui.language = language;
     }
+}
+
+/// The engine's preferences (`prefs.json`). Loaded before files given on the command line are
+/// opened (a double-clicked CSV), so they open under the saved options, such as Automatic Data
+/// Conversion, like a file opened from the running app.
+fn load_engine_prefs(session: &mut Session) {
+    if !prefs_enabled() {
+        return;
+    }
+    let Some(dir) = config_dir() else { return };
     if let Ok(b) = std::fs::read(dir.join("prefs.json"))
         && let Ok(p) = serde_json::from_slice(&b)
     {
-        app.session.prefs = p;
+        session.prefs = p;
     }
 }
 
@@ -289,6 +299,7 @@ fn main() -> eframe::Result<()> {
         }
     }
     let mut session = Session::new();
+    load_engine_prefs(&mut session);
     if let Some(s) = &sample
         && let Err(e) = session.execute("file.new", json!({"sample": s}))
     {
