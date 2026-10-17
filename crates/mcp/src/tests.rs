@@ -546,3 +546,62 @@ fn invalid_sort_keys_are_invalid_params() {
     }
     ok(&mut s, "sort_range", json!({"range": "A1:A3", "keys": ["A", {"column": "A", "order": "desc"}]}));
 }
+
+#[test]
+fn remote_failures_are_not_replayed_and_next_call_reconnects() {
+    remote_failure_cases(&[""], "operation may have completed; inspect state before retrying");
+}
+
+#[test]
+fn remote_invalid_frames_are_discarded() {
+    remote_failure_cases(
+        &[
+            r#"{"id":1,"ok":true,"result":"incomplete"}"#,
+            "invalid JSON\n",
+            "{\"id\":99,\"ok\":true,\"result\":\"stale\"}\n",
+            "{\"ok\":true,\"result\":\"missing id\"}\n",
+            "{\"id\":1,\"ok\":\"true\",\"result\":null}\n",
+            "{\"id\":1,\"ok\":false,\"error\":7}\n",
+        ],
+        "operation may have completed; inspect state before retrying",
+    );
+}
+
+#[test]
+fn remote_idless_refusal_is_preserved_and_connection_discarded() {
+    remote_failure_cases(&["{\"ok\":false,\"error\":\"request too large\"}\n"], "refused `engine.execute`: request too large; nothing was run");
+}
+
+fn remote_failure_cases(replies: &[&'static str], expected_error: &str) {
+    for &reply in replies {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "engine.execute");
+            stream.write_all(reply.as_bytes()).unwrap();
+            stream.shutdown(std::net::Shutdown::Write).unwrap();
+            line.clear();
+            assert_eq!(reader.read_line(&mut line).unwrap(), 0, "failed connection must be discarded");
+            let (mut fresh, _) = listener.accept().unwrap();
+            fresh.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+            let mut reader = BufReader::new(fresh.try_clone().unwrap());
+            reader.read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "document.inspect", "mutation must not be replayed");
+            assert_eq!(request["id"], 2);
+            writeln!(fresh, "{}", json!({"id":request["id"],"ok":true,"result":"fresh"})).unwrap();
+        });
+        let mut remote = Remote::connect(&addr).unwrap();
+        let error = remote.call("engine.execute", json!({"command":"home.bold"})).unwrap_err();
+        assert!(error.contains(expected_error), "{reply:?}: {error}");
+        assert_eq!(remote.call("document.inspect", json!({})).unwrap(), json!("fresh"));
+        drop(remote);
+        handle.join().unwrap();
+    }
+}

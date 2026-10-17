@@ -11,6 +11,12 @@ Two backends:
 | Headless (default) | `gridcraft-cli mcp [--in book.xlsx \| --sample budget]` | An in-process engine session — no window. |
 | Remote | `gridcraft-cli mcp --connect 7979` | A running app started with `gridcraft --control 7979` (TCP JSON lines on `127.0.0.1`). |
 
+Remote calls reconnect before sending when a closed or stale connection is detected. Once sending starts,
+a transport failure or an invalid reply is **not retried**: the operation may have completed. Inspect the
+workbook before retrying a mutation. Replies must be newline-terminated, at most 256 MiB excluding the
+newline, and carry the matching request ID and a boolean `ok`. A failed stream is discarded; the next
+call connects afresh. The app's id-less request refusals retain their error and report that nothing ran.
+
 ## Claude Code
 
 ```sh
