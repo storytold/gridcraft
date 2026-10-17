@@ -1207,6 +1207,35 @@ fn table_rename_keeps_a_defined_name_with_the_same_name() {
 }
 
 #[test]
+fn slicer_finds_a_named_table_on_another_sheet() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Qty"], ["East", 2], ["West", 5]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3", "name": "Sales"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Report"})).unwrap();
+    let report = s.doc().unwrap().wb.sheet_index("Report").unwrap();
+    assert_eq!(s.doc().unwrap().wb.active_sheet, report);
+
+    // With another sheet active, `table` still names the table, and the slicer goes on the table's sheet.
+    let r = s.execute("insert.slicer", json!({"table": "Sales", "column": "Region", "at": "D2"})).unwrap();
+    let id = r["slicer"].as_u64().unwrap();
+    let home = s.doc().unwrap().wb.sheet_index("Sheet1").unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheet(home).unwrap().slicers.len(), 1);
+    assert!(s.doc().unwrap().wb.sheet(report).unwrap().slicers.is_empty());
+    // It filters the table: "East" leaves the East row.
+    s.execute("selection.set", json!({"range": "Sheet1!A1"})).unwrap();
+    s.execute("slicer.toggle", json!({"slicer": id, "value": "East"})).unwrap();
+    let sh = s.doc().unwrap().wb.sheet(home).unwrap();
+    assert!(!sh.is_row_hidden(1) && sh.is_row_hidden(2));
+
+    // `at` may name the table's sheet, and a table that isn't there is named in the error.
+    s.execute("home.insertSheet", json!({"name": "Notes"})).unwrap();
+    s.execute("table.insertSlicer", json!({"table": "sales", "column": "Qty", "at": "Sheet1!G2"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheet(home).unwrap().slicers.len(), 2);
+    let e = s.execute("insert.slicer", json!({"table": "Missing", "column": "Region"})).unwrap_err();
+    assert!(e.to_string().contains("Missing"), "{e}");
+}
+
+#[test]
 fn slicer_filters_table() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Qty"], ["East", 2], ["West", 5], ["East", 3], ["North", 1]]})).unwrap();

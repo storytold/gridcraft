@@ -97,11 +97,21 @@ fn reapply_slicer(wb: &mut Workbook, sheet: usize, id: u32) {
 }
 
 fn insert_slicer(s: &mut Session, p: &Json) -> Result<Json> {
-    let sheet = target_sheet(s, p)?;
+    // A table named by `table` is found on any sheet, as the other table commands find it, and the slicer goes on that
+    // table's sheet. Looked up on the active sheet only, a named table on another sheet gave "Select a cell inside a
+    // table first, or pass `table`" although `table` was passed.
+    let named = match str_param(p, "table") {
+        Some(name) => Some(s.doc()?.wb.table(name).ok_or_else(|| bad("insert.slicer", format!("no table named `{name}`")))?),
+        None => None,
+    };
+    let sheet = match named {
+        Some((si, _)) => si,
+        None => target_sheet(s, p)?,
+    };
     let d = s.doc()?;
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
-    let t = match str_param(p, "table") {
-        Some(name) => sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(name)),
+    let t = match named {
+        Some((_, ti)) => sh.tables.get(ti),
         None => sh.table_at(d.selection.active),
     }
     .ok_or_else(|| EngineError::Other("Select a cell inside a table first, or pass `table`.".into()))?;
@@ -119,7 +129,7 @@ fn insert_slicer(s: &mut Session, p: &Json) -> Result<Json> {
         }
     };
     let table = t.name.clone();
-    let at = cell_param(s, p, "at")?
+    let at = cell_param_on(s, p, "at", sheet)?
         .unwrap_or_else(|| CellRef::new(t.range.start.row, t.range.end.col.saturating_add(2).min(gridcraft_core::MAX_COLS - 1)));
     let columns = u32_param(p, "columns").unwrap_or(1).clamp(1, 10);
     let width = f64_param(p, "width").unwrap_or(168.0).clamp(60.0, 10000.0) as f32;
