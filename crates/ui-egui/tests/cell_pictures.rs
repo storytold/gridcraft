@@ -154,3 +154,35 @@ fn pictures_fit_current_geometry_and_selection_cannot_erase_them() {
     assert_eq!(sheet.value(CellRef::new(0, 0)), Value::from("replacement"));
     assert!(!sheet.cell_pictures.contains_key(&CellRef::new(0, 0)));
 }
+
+#[test]
+fn floating_pictures_slide_under_the_frozen_top_row() {
+    let mut h = harness(Default::default());
+    let base64 = gridcraft_engine::io::base64_encode(&png());
+    h.state_mut().run("view.freezeTopRow", json!({})).unwrap();
+    h.state_mut().run("insert.picture", json!({"base64": base64, "at": "B5", "width": 120, "height": 60})).unwrap();
+    let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+    let (frozen_h, scroll) = (sheet.row_height(0), (sheet.row_top(4) - sheet.row_top(1)) as f32 + 10.0);
+    // Scrolled so the picture's top 10 points are under the frozen row and the rest below it.
+    h.state_mut().view_mut().unwrap().scroll.y = scroll;
+    h.run_steps(6);
+    let cells = h.state().grid.cells_rect.unwrap();
+    let split = cells.top() + frozen_h * gridcraft_ui_egui::grid::DISPLAY_SCALE;
+    let meshes = image_meshes(&h);
+    assert_eq!(meshes.len(), 1);
+    assert!(meshes[0].0.top() < split, "the picture must reach under the frozen row: {:?}", meshes[0].0);
+    assert!(meshes[0].1.top() >= split, "the picture must be clipped below the frozen row: {:?}", meshes[0].1);
+    // A click on the frozen row over the hidden part reaches the cell, not the picture.
+    let (app, geo) = (h.state(), h.state().grid.geo.clone().unwrap());
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let x = meshes[0].0.center().x;
+    assert!(gridcraft_ui_egui::chartview::hit(app, &geo, sheet, egui::pos2(x, split - 3.0)).is_none());
+    assert!(gridcraft_ui_egui::chartview::hit(app, &geo, sheet, egui::pos2(x, split + 3.0)).is_some());
+
+    // A picture anchored in the frozen row stays whole, also where it reaches below the freeze line.
+    h.state_mut().run("insert.picture", json!({"base64": base64, "at": "D1", "width": 120, "height": 60})).unwrap();
+    h.run_steps(6);
+    let frozen = image_meshes(&h).into_iter().find(|(r, _)| r.left() > meshes[0].0.right()).expect("frozen picture painted");
+    assert_eq!(frozen.0.top(), cells.top());
+    assert!(frozen.0.bottom() > split && frozen.1.contains_rect(frozen.0), "{:?}", frozen);
+}

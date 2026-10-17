@@ -412,6 +412,14 @@ impl Geo {
         }
         ys.iter().flat_map(|&(y0, y1)| xs.iter().map(move |&(x0, x1)| Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)))).collect()
     }
+    /// Screen area a floating object anchored at `cell` may be drawn in. As in Excel, an object in the
+    /// scrolling pane slides under the frozen rows and columns; one anchored in them is not cut at the
+    /// freeze line, so it keeps the part that reaches into the scrolling pane.
+    pub fn object_area(&self, cell: CellRef) -> Rect {
+        let x = if cell.col < self.fc { self.cells.left() } else { self.cells.left() + self.frozen_w };
+        let y = if cell.row < self.fr { self.cells.top() } else { self.cells.top() + self.frozen_h };
+        Rect::from_min_max(pos2(x, y), self.cells.max)
+    }
     /// True when cell `c` is in the scrolling pane but scrolled entirely under the frozen rows or columns.
     pub fn hidden_under_frozen(&self, sh: &Sheet, c: CellRef) -> bool {
         let r = self.cell_rect(sh, c);
