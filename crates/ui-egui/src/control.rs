@@ -196,6 +196,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                     "existing file.print sheet/pagination params → {printing,bytes,pending}; submits without opening a dialog",
                 ),
                 ("app.language.set", "Interface Language", "{language: \"en\"|\"zh\"|\"ja\"|\"ko\"|\"ru\"|\"pt\"|\"de\"|\"cs\"} (alias: code)"),
+                (
+                    "app.font.add",
+                    "Add Font",
+                    "{name, base64: a TrueType/OpenType file, index?: face in a collection} → {name, covers: {hangul, han, kana}}; every family falls back on it (until the app quits)",
+                ),
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),
             ] {

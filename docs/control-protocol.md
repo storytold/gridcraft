@@ -60,6 +60,24 @@ the View ▸ Animations checkbox, saved with the other UI preferences and on by 
 document text. The choice is saved in `ui.json`; with nothing saved the desktop app follows the
 system language.
 
+`{command: "app.font.add", params: {name: "Noto Sans KR", base64: "…", index: 0}}` adds a font
+(a TrueType or OpenType file, not WOFF or WOFF2; `index`, default 0, picks the face in a
+collection) to the end of every font family, after the system's fallback faces and any font added
+before it (the first one added wins where two cover the same character), so text in a script the
+other fonts lack draws with it. It returns `{name, added, covers: {hangul, han, kana}}`: `added` is
+false when a font of that name was already added, which is then left as it was; `covers` is a hint
+from a few sample characters of each script in the font's character map, not a check of every
+character. A file egui can't read, one it can't draw from (no glyph outlines, as in a file cut off
+in transfer after its character map, or no units per em), one over 64 MiB, or a font past 32
+(256 MiB in all) is refused, with an error that says which; over the desktop channel the base64
+text has to fit a 64 MiB line, so about 48 MiB of font is the practical limit there. Added fonts
+stay, one copy each, until the app quits. The web build has no system fonts, so a page that
+embeds it (`?host=parent`) sends its CJK fonts as `gridcraft:font`
+messages (`{name, bytes, index?}`, bytes an `ArrayBuffer` or `Uint8Array`; see
+`apps/gridcraft-web/src/host.rs`), each answered with `gridcraft:fontResult`, in this order:
+`gridcraft:ready` (from GridCraft, with `"font"` in `capabilities`), then `gridcraft:font`, then
+`gridcraft:open`, so the workbook's first frame already has the glyphs.
+
 `{command: "file.open", params: {path: "Secret.xlsx", password: "…"}}` opens a password-protected
 workbook (Agile or Standard encryption). Without `password` it returns an error containing
 "is password-protected. Enter its password to open it." and never opens a dialog; a wrong

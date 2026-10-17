@@ -243,6 +243,9 @@ pub struct SheetApp {
     /// Han face order the installed fonts were built with; a language switch rebuilds the fonts
     /// only when it changes this (see `theme::HanOrder`).
     fonts_han: Option<theme::HanOrder>,
+    /// How many host-added fonts (`theme::add_font`) the installed fonts carry; another one
+    /// rebuilds them.
+    fonts_extra: usize,
     effective_dark: bool,
     /// The desktop's light/dark choice, watched while the app runs (Linux has no winit answer).
     desktop_theme: desktop_theme::DesktopTheme,
@@ -296,6 +299,7 @@ impl SheetApp {
             fonts_seen: (0, 0),
             fonts_rebind: false,
             fonts_han: None,
+            fonts_extra: 0,
             effective_dark: false,
             desktop_theme: desktop_theme::DesktopTheme::default(),
             desktop_dark: None,
@@ -634,6 +638,7 @@ impl SheetApp {
                     None => Err(format!("unknown language {code:?} (use \"en\", \"es\", \"zh\", \"ja\", \"ko\", \"ru\", \"pt\" or \"cs\")")),
                 }
             }
+            "app.font.add" => add_font_command(p),
             "app.language.english" => {
                 self.ui.language = i18n::Language::En;
                 Ok(json!({"language": i18n::Language::En}))
@@ -988,20 +993,27 @@ impl SheetApp {
         }
     }
 
+    /// Rebuilds the fonts at the next frame (painting waits for them, as at startup). A font the
+    /// host adds with [`theme::add_font`] is picked up without this.
+    pub fn reload_fonts(&mut self) {
+        self.fonts_ready = false;
+        self.fonts_set = false;
+    }
+
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
         self.ui.keytip_invoke = None;
-        if self.fonts_han.is_some_and(|han| han != theme::HanOrder::of(self.ui.language)) {
-            self.fonts_ready = false;
-            self.fonts_set = false;
+        if self.fonts_han.is_some_and(|han| han != theme::HanOrder::of(self.ui.language)) || self.fonts_extra != theme::extra_font_count() {
+            self.reload_fonts();
         }
         if !self.fonts_ready {
             // New fonts apply from the next frame on: paint nothing until then.
             if self.fonts_set {
                 self.fonts_ready = true;
             } else {
+                self.fonts_extra = theme::extra_font_count();
                 SheetApp::setup_context_for_language(ctx, self.ui.dark, self.ui.language);
                 self.fonts_set = true;
                 // The rebuilt set has no workbook fonts yet: bind them again once it is active.
@@ -1233,6 +1245,22 @@ impl SheetApp {
         }
         sel.active.a1()
     }
+}
+
+/// `app.font.add {name, base64, index?}`: a font every family falls back on (see
+/// [`theme::add_font`]) → `{name, added, covers: {hangul, han, kana}}`. Checked in the order the
+/// web host's `gridcraft:font` is: the face number, the bytes, then everything `add_font` checks
+/// before reading a font, so a name already added or a file too large is never decoded.
+fn add_font_command(p: &Json) -> Result<Json, String> {
+    let name = p.get("name").and_then(Json::as_str).unwrap_or("");
+    let index = theme::face_index(p.get("index"))?;
+    let base64 = p.get("base64").and_then(Json::as_str).ok_or("missing `base64` (the font file)")?;
+    // Four base64 characters carry three bytes.
+    let added = match theme::check_new_font(name, base64.len() / 4 * 3)? {
+        Some(known) => known,
+        None => theme::add_font(name, gridcraft_engine::io::base64_decode(base64).ok_or("invalid base64")?, index)?,
+    };
+    Ok(added.to_json(name))
 }
 
 /// Strips the engine's error prefixes for message boxes.

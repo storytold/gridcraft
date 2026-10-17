@@ -354,6 +354,182 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
     v
 }
 
+/// What a font added with [`add_font`] can draw: a hint from a few sample characters of each
+/// script looked up in the font's character map (`가한힣`, `中日本字`, `あんアン`), not a check of
+/// every character.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Coverage {
+    pub hangul: bool,
+    pub han: bool,
+    pub kana: bool,
+}
+
+/// What [`add_font`] did with a font.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FontAdded {
+    /// False when a font of that name was already added: this one was ignored.
+    pub added: bool,
+    /// What the font under that name can draw.
+    pub covers: Coverage,
+}
+
+impl FontAdded {
+    /// `{name, added, covers: {hangul, han, kana}}`, as `app.font.add` returns it.
+    pub fn to_json(&self, name: &str) -> serde_json::Value {
+        let Coverage { hangul, han, kana } = self.covers;
+        serde_json::json!({"name": name.trim(), "added": self.added, "covers": {"hangul": hangul, "han": han, "kana": kana}})
+    }
+}
+
+/// A font the host added while the app runs ([`add_font`]).
+#[derive(Clone)]
+struct ExtraFont {
+    name: String,
+    data: Arc<FontData>,
+    covers: Coverage,
+}
+
+/// The largest font [`add_font`] takes: the font scan's limit (`fonts::MAX_FONT_FILE`).
+pub const MAX_EXTRA_FONT: usize = 64 << 20;
+/// At most this many fonts are added, and at most `MAX_EXTRA_BYTES` in all: each one stays in
+/// memory for the life of the app.
+const MAX_EXTRA_FONTS: usize = 32;
+const MAX_EXTRA_BYTES: usize = 256 << 20;
+/// The longest font name taken, in characters.
+const MAX_EXTRA_NAME: usize = 200;
+
+/// The fonts added so far, shared by every font set the process builds.
+static EXTRA_FONTS: std::sync::Mutex<Vec<ExtraFont>> = std::sync::Mutex::new(Vec::new());
+/// How many fonts [`EXTRA_FONTS`] holds, read every frame without the lock.
+static EXTRA_FONT_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Adds a font for every family to fall back on, after the system's fallback faces and the fonts
+/// added before it: the web build has no system fonts, so this is how its host gives it CJK
+/// glyphs (`app.font.add`, the web host's `gridcraft:font`). `index` picks the face in a
+/// collection; TrueType and OpenType files only (not WOFF). The checks run in this order: the
+/// name, a name already added (ignored: its first font stays, `added` is false), the size, how
+/// many fonts there are, then the face itself: one egui can't read (it would panic) is refused,
+/// and so is one it can't draw from (no glyph outlines, as in a file cut off after its character
+/// map, or no units per em). The bytes are kept once, for the life of the app. Font sets built
+/// from now on carry the font; the app rebuilds its own at the next frame.
+pub fn add_font(name: &str, bytes: Vec<u8>, index: u32) -> Result<FontAdded, String> {
+    let mut fonts = EXTRA_FONTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let added = add_extra(&mut fonts, name, bytes, index)?;
+    EXTRA_FONT_COUNT.store(fonts.len(), std::sync::atomic::Ordering::Release);
+    Ok(added)
+}
+
+/// The checks [`add_font`] makes before it reads a font of `len` bytes: an error, the answer for
+/// a name already added, or `None` to go on and read it. Callers holding a large file elsewhere
+/// (base64 text, a browser buffer) ask this before copying it.
+pub fn check_new_font(name: &str, len: usize) -> Result<Option<FontAdded>, String> {
+    precheck(&EXTRA_FONTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner), name, len)
+}
+
+/// A face number for [`add_font`] from a request: none (or null) is 0; otherwise a whole number
+/// from 0 to `u32::MAX`.
+pub fn face_index(index: Option<&serde_json::Value>) -> Result<u32, String> {
+    match index {
+        None | Some(serde_json::Value::Null) => Ok(0),
+        Some(v) => v
+            .as_u64()
+            .or_else(|| v.as_f64().filter(|f| f.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(f)).map(|f| f as u64))
+            .and_then(|i| u32::try_from(i).ok())
+            .ok_or_else(|| "`index` must be a face number (0 for a single font)".to_string()),
+    }
+}
+
+/// How many fonts [`add_font`] has added: a font set built when there were fewer is out of date.
+pub fn extra_font_count() -> usize {
+    EXTRA_FONT_COUNT.load(std::sync::atomic::Ordering::Acquire)
+}
+
+fn extra_fonts() -> Vec<ExtraFont> {
+    EXTRA_FONTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+}
+
+fn precheck(fonts: &[ExtraFont], name: &str, len: usize) -> Result<Option<FontAdded>, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("missing `name` for the font".into());
+    }
+    if name.chars().count() > MAX_EXTRA_NAME {
+        return Err(format!("the font name is longer than {MAX_EXTRA_NAME} characters"));
+    }
+    if let Some(font) = fonts.iter().find(|f| f.name == name) {
+        return Ok(Some(FontAdded { added: false, covers: font.covers }));
+    }
+    if len > MAX_EXTRA_FONT {
+        return Err(format!("font {name:?} is larger than 64 MiB"));
+    }
+    let total = fonts.iter().map(|f| f.data.font.len()).sum::<usize>().saturating_add(len);
+    if fonts.len() >= MAX_EXTRA_FONTS || total > MAX_EXTRA_BYTES {
+        return Err(format!("too many fonts added (at most {MAX_EXTRA_FONTS}, 256 MiB in all)"));
+    }
+    Ok(None)
+}
+
+fn add_extra(fonts: &mut Vec<ExtraFont>, name: &str, bytes: Vec<u8>, index: u32) -> Result<FontAdded, String> {
+    if let Some(known) = precheck(fonts, name, bytes.len())? {
+        return Ok(known);
+    }
+    let name = name.trim();
+    if let Some(why) = cannot_draw(&bytes, index) {
+        return Err(format!("font {name:?} (face {index}) {why}"));
+    }
+    let covers = coverage(&bytes, index);
+    // Kept for the life of the app (fonts are never removed): as static bytes, which epaint shares
+    // when it builds its fonts, where owned bytes would be copied each time.
+    let mut data = FontData::from_static(Box::leak(bytes.into_boxed_slice()));
+    data.index = index;
+    fonts.push(ExtraFont { name: name.to_string(), data: Arc::new(data), covers });
+    Ok(FontAdded { added: true, covers })
+}
+
+/// Why face `index` of a font the host hands over can't be added, or `None` when it can. Past
+/// [`font_parses`], the face has to be one epaint can draw: epaint picks the face for a character
+/// from its character map alone, so a face with no glyph outlines (a file cut off after its
+/// character map, a bitmap-only font) would take characters from the faces after it and draw them
+/// blank, and one with no units per em (no `head` table) scales every glyph by infinity, which
+/// trips a debug assertion in epaint and leaves sizes infinite or NaN in a release build. Checked
+/// with the calls epaint makes when it loads a face.
+fn cannot_draw(bytes: &[u8], index: u32) -> Option<&'static str> {
+    use skrifa::MetadataProvider;
+    let font = match skrifa::FontRef::from_index(bytes, index) {
+        Ok(font) if font_parses(bytes, index) => font,
+        _ => return Some("isn't a font file egui can read"),
+    };
+    if font.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default()).units_per_em == 0 {
+        return Some("has no units per em (a missing or broken head table)");
+    }
+    if font.outline_glyphs().format().is_none() {
+        return Some("has no glyph outlines egui can draw");
+    }
+    None
+}
+
+/// Which CJK scripts face `index` of `bytes` maps: every sample character must have a glyph.
+fn coverage(bytes: &[u8], index: u32) -> Coverage {
+    use skrifa::MetadataProvider;
+    let Ok(font) = skrifa::FontRef::from_index(bytes, index) else { return Coverage::default() };
+    let charmap = font.charmap();
+    let maps = |sample: &str| sample.chars().all(|c| charmap.map(c).is_some());
+    Coverage { hangul: maps("가한힣"), han: maps("中日本字"), kana: maps("あんアン") }
+}
+
+/// Puts the added fonts at the end of every family in `fonts`, after its own and fallback faces.
+fn append_extra_fonts(fonts: &mut FontDefinitions, extra: &[ExtraFont]) {
+    for font in extra {
+        let key = format!("extra:{}", font.name);
+        fonts.font_data.insert(key.clone(), font.data.clone());
+        for chain in fonts.families.values_mut() {
+            if !chain.contains(&key) {
+                chain.push(key.clone());
+            }
+        }
+    }
+}
+
 /// Builds the font set from system fonts (with egui's defaults as fallback), with the default
 /// (non-Japanese) Han order. Never reads the host locale, so tests and snapshots are stable.
 pub fn font_definitions() -> FontDefinitions {
@@ -385,7 +561,12 @@ pub fn font_definitions_for_language(language: crate::i18n::Language) -> FontDef
 /// [`font_definitions_for_language`] that also binds the workbook fonts in `used` that are
 /// installed, so cells set in them render with them; the rest fall back to the roles. The bound
 /// families are recorded in [`crate::fonts`] so [`cell_family`] only names a family egui has.
+/// Every family ends with the fonts the host added ([`add_font`]).
 pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -> FontDefinitions {
+    font_definitions_from(language, used, &extra_fonts())
+}
+
+fn font_definitions_from(language: crate::i18n::Language, used: &[String], extra: &[ExtraFont]) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let base_prop: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let base_mono: Vec<String> = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
@@ -434,6 +615,7 @@ pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -
     if let Some(ui) = fonts.families.get(&FontFamily::Name(UI.into())).cloned() {
         fonts.families.insert(FontFamily::Proportional, ui);
     }
+    append_extra_fonts(&mut fonts, extra);
     drop_unparseable_fonts(&mut fonts);
     // Only families egui still has data for count as bound (a dropped face can empty a chain).
     bound.retain(|f| fonts.families.get(&FontFamily::Name(f.as_str().into())).is_some_and(|c| !c.is_empty()));
@@ -933,5 +1115,284 @@ mod tests {
         let loaded = try_load(&[(bad_s.as_str(), 0), (good_s.as_str(), 0)]);
         assert_eq!(loaded.map(|fd| fd.font.len()), Some(real.len()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod extra_font_tests {
+    use super::*;
+    use crate::i18n::Language;
+
+    const ADDED: &str = "extra:Ubuntu Light";
+
+    fn ubuntu() -> Vec<u8> {
+        epaint_default_fonts::UBUNTU_LIGHT.to_vec()
+    }
+
+    fn added(covers: Coverage) -> Result<FontAdded, String> {
+        Ok(FontAdded { added: true, covers })
+    }
+
+    /// Where table record `i` of a font's table directory starts.
+    fn record(i: usize) -> usize {
+        12 + 16 * i
+    }
+
+    fn table_count(font: &[u8]) -> usize {
+        u16::from_be_bytes([font[4], font[5]]) as usize
+    }
+
+    /// Ubuntu Light with table `from` renamed to `to` in its table directory: every byte is still
+    /// there, but nothing finds the table any more.
+    fn ubuntu_renaming(from: &[u8; 4], to: &[u8; 4]) -> Vec<u8> {
+        let mut font = ubuntu();
+        for i in 0..table_count(&font) {
+            let at = record(i);
+            if &font[at..at + 4] == from {
+                font[at..at + 4].copy_from_slice(to);
+            }
+        }
+        font
+    }
+
+    /// `font` rewritten with its outlines (`glyf`) last, the order most fonts are laid out in
+    /// (character map and metrics first), and where `glyf` now starts: cut there, a file keeps
+    /// everything but its outlines, like a font whose transfer broke off.
+    fn outlines_last(font: &[u8]) -> (Vec<u8>, usize) {
+        let tables = table_count(font);
+        let mut order: Vec<usize> = (0..tables).collect();
+        order.sort_by_key(|&i| &font[record(i)..record(i) + 4] == b"glyf");
+        let mut out = font[..record(tables)].to_vec();
+        let mut glyf = 0;
+        for i in order {
+            let at = record(i);
+            let offset = u32::from_be_bytes([font[at + 8], font[at + 9], font[at + 10], font[at + 11]]) as usize;
+            let len = u32::from_be_bytes([font[at + 12], font[at + 13], font[at + 14], font[at + 15]]) as usize;
+            out.resize(out.len().next_multiple_of(4), 0);
+            if &font[at..at + 4] == b"glyf" {
+                glyf = out.len();
+            }
+            let moved = u32::try_from(out.len()).unwrap().to_be_bytes();
+            out[at + 8..at + 12].copy_from_slice(&moved);
+            out.extend_from_slice(&font[offset..offset + len]);
+        }
+        (out, glyf)
+    }
+
+    /// A Korean face installed on this machine, if any (a minimal machine has none: the checks
+    /// that need one are skipped there).
+    fn korean_face() -> Option<(Vec<u8>, u32)> {
+        #[cfg(not(target_arch = "wasm32"))]
+        for (path, index) in cjk_hangul() {
+            if let Ok(bytes) = std::fs::read(&path)
+                && bytes.len() <= MAX_EXTRA_FONT
+                && font_parses(&bytes, index)
+            {
+                return Some((bytes, index));
+            }
+        }
+        None
+    }
+
+    /// Whether `font` alone draws `text` with real glyphs (not the replacement box), without
+    /// panicking on the way.
+    fn draws(font: Arc<FontData>, text: &str) -> bool {
+        let mut fonts = FontDefinitions::default();
+        fonts.font_data.insert("probe".into(), font);
+        fonts.families.insert(FontFamily::Name("probe".into()), vec!["probe".into()]);
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        out.textures_delta.clear(); // nothing consumes the atlas in a headless test
+        let font = FontId::new(14.0, FontFamily::Name("probe".into()));
+        let galley = ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font, Color32::BLACK));
+        galley.rows.iter().flat_map(|r| r.glyphs.iter()).any(|g| g.uv_rect.size.x > 0.0)
+    }
+
+    #[test]
+    fn an_added_font_ends_every_family() {
+        let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut extra = Vec::new();
+        assert_eq!(add_extra(&mut extra, "Ubuntu Light", ubuntu(), 0), added(Coverage::default()));
+        for language in [Language::En, Language::Ja] {
+            let fonts = font_definitions_from(language, &[], &extra);
+            assert!(fonts.font_data.contains_key(ADDED));
+            for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
+                assert!(fonts.families.contains_key(&FontFamily::Name(role.into())), "{role} is still bound");
+            }
+            for (family, chain) in &fonts.families {
+                assert_eq!(chain.last().map(String::as_str), Some(ADDED), "{family:?} must end with the added font: {chain:?}");
+                assert_eq!(chain.iter().filter(|k| *k == ADDED).count(), 1, "{family:?} carries it once");
+            }
+        }
+        let plain = font_definitions_from(Language::En, &[], &[]);
+        assert!(plain.families.values().all(|chain| !chain.iter().any(|k| k.starts_with("extra:"))), "nothing added, nothing appended");
+    }
+
+    #[test]
+    fn fonts_added_earlier_come_first() {
+        let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut extra = Vec::new();
+        assert!(add_extra(&mut extra, "First", ubuntu(), 0).is_ok());
+        assert!(add_extra(&mut extra, "Second", ubuntu(), 0).is_ok());
+        let fonts = font_definitions_from(Language::En, &[], &extra);
+        for chain in fonts.families.values() {
+            let tail: Vec<&str> = chain.iter().rev().take(2).rev().map(String::as_str).collect();
+            assert_eq!(tail, ["extra:First", "extra:Second"]);
+        }
+    }
+
+    #[test]
+    fn a_bad_or_oversized_font_is_refused_without_a_panic() {
+        let mut extra = Vec::new();
+        let real = ubuntu();
+        for (bytes, index) in [(Vec::new(), 0), (vec![0xAB; 64], 0), (real.get(..20).unwrap_or_default().to_vec(), 0), (real.clone(), 3)] {
+            assert!(add_extra(&mut extra, "Broken", bytes, index).is_err(), "index {index}");
+        }
+        let huge = add_extra(&mut extra, "Huge", vec![0; MAX_EXTRA_FONT + 1], 0);
+        assert!(huge.as_ref().is_err_and(|e| e.contains("64 MiB")), "{huge:?}");
+        assert!(add_extra(&mut extra, "  ", real.clone(), 0).is_err(), "a font needs a name");
+        assert!(add_extra(&mut extra, &"x".repeat(1_000), real, 0).is_err(), "a name is short");
+        assert!(extra.is_empty(), "nothing was added");
+    }
+
+    #[test]
+    fn a_font_that_cannot_draw_is_refused() {
+        // epaint picks the face for a character from its character map alone: a face with no
+        // outlines would take characters from the faces after it and draw them blank, and one with
+        // no units per em (no `head`) scales every glyph by infinity, a debug assertion panic
+        // ("Bad px_scale_factor: inf").
+        let mut extra = Vec::new();
+        let no_outlines = add_extra(&mut extra, "No Outlines", ubuntu_renaming(b"glyf", b"gly_"), 0);
+        assert!(no_outlines.as_ref().is_err_and(|e| e.contains("glyph outlines")), "{no_outlines:?}");
+        let no_head = add_extra(&mut extra, "No Head", ubuntu_renaming(b"head", b"hea_"), 0);
+        assert!(no_head.as_ref().is_err_and(|e| e.contains("units per em")), "{no_head:?}");
+        // A real font whose transfer broke off inside its outlines: its character map, head and
+        // metrics all arrived.
+        let (whole, glyf) = outlines_last(&ubuntu());
+        let cut = add_extra(&mut extra, "Cut Off", whole.get(..glyf + 1_000).unwrap_or_default().to_vec(), 0);
+        assert!(cut.as_ref().is_err_and(|e| e.contains("glyph outlines")), "{cut:?}");
+        assert!(extra.is_empty(), "nothing was added");
+        // Laid out that way but whole, it is a font like any other.
+        assert!(add_extra(&mut extra, "Outlines Last", whole, 0).is_ok());
+        assert!(extra.first().is_some_and(|f| draws(f.data.clone(), "Hello")));
+    }
+
+    #[test]
+    fn a_name_added_twice_keeps_its_first_font() {
+        let mut extra = Vec::new();
+        assert_eq!(add_extra(&mut extra, "Body", ubuntu(), 0), added(Coverage::default()));
+        // The second time is ignored, whatever it carries, and says so.
+        assert_eq!(add_extra(&mut extra, " Body ", vec![0xAB; 64], 0), Ok(FontAdded { added: false, covers: Coverage::default() }));
+        assert_eq!(extra.len(), 1);
+        assert_eq!(extra.first().map(|f| f.data.font.len()), Some(epaint_default_fonts::UBUNTU_LIGHT.len()));
+    }
+
+    #[test]
+    fn a_name_added_before_or_a_size_over_the_limit_is_known_before_the_bytes_are_read() {
+        let mut extra = Vec::new();
+        assert!(add_extra(&mut extra, "Body", ubuntu(), 0).is_ok());
+        assert_eq!(precheck(&extra, " Body ", usize::MAX), Ok(Some(FontAdded { added: false, covers: Coverage::default() })));
+        assert_eq!(precheck(&extra, "Other", 1_000), Ok(None), "a new font goes on to be read");
+        assert!(precheck(&extra, "Other", MAX_EXTRA_FONT + 1).is_err_and(|e| e.contains("64 MiB")));
+        assert!(precheck(&extra, "", 10).is_err(), "a font needs a name");
+    }
+
+    #[test]
+    fn at_most_32_fonts_are_added() {
+        let mut extra = Vec::new();
+        for i in 0..MAX_EXTRA_FONTS {
+            assert!(add_extra(&mut extra, &format!("Font {i}"), ubuntu(), 0).is_ok(), "font {i}");
+        }
+        let one_more = add_extra(&mut extra, "One more", ubuntu(), 0);
+        assert!(one_more.as_ref().is_err_and(|e| e.contains("too many")), "{one_more:?}");
+        assert!(precheck(&extra, "One more", 10).is_err(), "known before the bytes are read");
+        assert_eq!(extra.len(), MAX_EXTRA_FONTS);
+    }
+
+    #[test]
+    fn face_numbers_are_whole_and_in_range() {
+        use serde_json::json;
+        assert_eq!(face_index(None), Ok(0));
+        assert_eq!(face_index(Some(&json!(null))), Ok(0));
+        assert_eq!(face_index(Some(&json!(2))), Ok(2));
+        assert_eq!(face_index(Some(&json!(2.0))), Ok(2), "a whole number written with a point");
+        assert_eq!(face_index(Some(&json!(4_294_967_295_u64))), Ok(u32::MAX));
+        for bad in [json!(-1), json!(1.5), json!(4_294_967_296_u64), json!("1"), json!(true), json!([0])] {
+            assert!(face_index(Some(&bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_added_font_is_kept_once_not_copied_for_each_font_set() {
+        let mut extra = Vec::new();
+        assert!(add_extra(&mut extra, "Shared", ubuntu(), 0).is_ok());
+        // epaint copies owned font bytes every time it builds its fonts; borrowed ones it shares.
+        assert!(extra.first().is_some_and(|f| matches!(f.data.font, std::borrow::Cow::Borrowed(_))));
+    }
+
+    #[test]
+    fn damaged_fonts_are_refused_or_drawn_without_a_panic() {
+        let real = ubuntu();
+        let mut damaged: Vec<Vec<u8>> = Vec::new();
+        for i in 0..48_usize {
+            let mut bytes = real.clone();
+            let at = i.wrapping_mul(7_919).wrapping_mul(13) % bytes.len();
+            if let Some(b) = bytes.get_mut(at) {
+                *b ^= 1 << (i % 8);
+            }
+            damaged.push(bytes);
+        }
+        for cut in [1, 12, 100, 1_000, real.len() / 3, real.len() / 2, real.len() - 1] {
+            damaged.push(real.get(..cut).unwrap_or_default().to_vec());
+        }
+        let mut accepted = 0;
+        for (i, bytes) in damaged.into_iter().enumerate() {
+            let mut extra = Vec::new();
+            if add_extra(&mut extra, &format!("Damaged {i}"), bytes, 0).is_ok()
+                && let Some(font) = extra.first()
+            {
+                accepted += 1;
+                let _ = draws(font.data.clone(), "Hello, 한글 漢字 カナ ÀÉÎ 123");
+            }
+        }
+        assert!(accepted > 0, "some single-bit damage still parses, and it draws without a panic");
+    }
+
+    #[test]
+    fn coverage_comes_from_the_character_map() {
+        assert_eq!(coverage(&ubuntu(), 0), Coverage { hangul: false, han: false, kana: false }, "Ubuntu has no Hangul, Han or kana");
+        assert_eq!(coverage(b"not a font", 0), Coverage::default());
+        if let Some((bytes, index)) = korean_face() {
+            assert!(coverage(&bytes, index).hangul, "a Korean face covers Hangul");
+        }
+    }
+
+    #[test]
+    fn an_added_korean_face_draws_hangul_with_no_system_fonts() {
+        let Some((bytes, index)) = korean_face() else {
+            return; // no Korean face on this machine; nothing to draw with
+        };
+        // The web build has no system fonts: its families hold egui's own, which have no Hangul.
+        let draws_hangul = |fonts: FontDefinitions| {
+            let ctx = egui::Context::default();
+            ctx.set_fonts(fonts);
+            let mut out = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+            out.textures_delta.clear(); // nothing consumes the atlas in a headless test
+            let font = FontId::new(14.0, FontFamily::Proportional);
+            let glyphs = |text: &str| {
+                let galley = ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font.clone(), Color32::BLACK));
+                galley.rows.iter().flat_map(|r| r.glyphs.iter().map(|g| g.uv_rect)).collect::<Vec<_>>()
+            };
+            let tofu = glyphs("\u{25FB}");
+            let drawn = glyphs("한글");
+            !drawn.is_empty() && drawn.iter().all(|g| !tofu.contains(g))
+        };
+        let mut web = FontDefinitions::default();
+        assert!(!draws_hangul(web.clone()), "egui's own fonts have no Hangul");
+        let mut extra = Vec::new();
+        assert!(add_extra(&mut extra, "Korean", bytes, index).is_ok_and(|a| a.added && a.covers.hangul));
+        append_extra_fonts(&mut web, &extra);
+        assert!(draws_hangul(web), "the added face draws Hangul");
     }
 }

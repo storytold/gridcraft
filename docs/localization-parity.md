@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Format Cells dialog looks its labels up in the catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (a host adds fonts at runtime: CJK on the web build) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -26,7 +26,10 @@ right-to-left sheets and full complex-script support. Part of
   localized function names and `;` separators (#45). German with localized numbers and formulas
   is in PR #163 (open).
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
-  #142 is still open pending confirmation). There is no complex-text shaping: Arabic and
+  #142 is still open pending confirmation). The web build has no system fonts; a host adds fonts
+  while the app runs (`app.font.add`, or `gridcraft:font` from a page embedding the web build),
+  and every family falls back on them, so CJK text can render there once the page sends a face.
+  The web build still won't switch to a CJK interface language by itself. There is no complex-text shaping: Arabic and
   Devanagari don't join or reorder, and there is no bidirectional layout. **Sheet Right-to-Left**
   (`view.rightToLeft`, Page Layout › Sheet Options, XLSX `rightToLeft`) mirrors the grid (#146):
   column A and the row headers on the right, the vertical scrollbar on the left; hit-testing,
@@ -78,6 +81,8 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | trivial | A font a host adds that egui can't draw from is refused: no glyph outlines (a file cut off in transfer after its character map would take characters and draw them blank) or no units per em (infinite glyph scale) |
+| 2026-10-15 | minor | A host adds fonts while the app runs (`app.font.add`, the web host's `gridcraft:font`); every family falls back on them, so the web build can draw CJK text |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |
