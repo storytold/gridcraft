@@ -73,7 +73,21 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             // worked over the values themselves (#432).
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
                 for c in checks.iter_mut().filter(|c| matches(&c.label)) {
-                    ui.checkbox(&mut c.checked, c.label.as_str());
+                    ui.allocate_ui_with_layout(
+                        vec2(ui.available_width(), ui.spacing().interact_size.y),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            ui.label(egui::RichText::new(c.count.to_string()).color(Tokens::get(ui.ctx()).text_dim));
+                            ui.allocate_ui_with_layout(
+                                vec2(ui.available_width(), ui.spacing().interact_size.y),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                                    ui.checkbox(&mut c.checked, c.label.as_str());
+                                },
+                            );
+                        },
+                    );
                 }
             });
             app.grid.filter_checks = Some(checks.clone());

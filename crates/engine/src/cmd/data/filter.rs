@@ -750,14 +750,15 @@ pub(super) fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
 }
 
 /// One entry in a column's AutoFilter value checklist: its distinct display `label`, the raw
-/// criterion `value` (`None` for the `(Blanks)` toggle), its canonical checklist `identity`, and
-/// whether it is `checked`.
+/// criterion `value` (`None` for the `(Blanks)` toggle), its canonical checklist `identity`,
+/// whether it is `checked`, and the `count` of rows it stands for among the rows the list was built from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FilterChoice {
     pub label: String,
     pub value: Option<String>,
     pub identity: Option<String>,
     pub checked: bool,
+    pub count: u32,
 }
 
 /// Builds the `data.filterBy` parameters from the AutoFilter dropdown's `(choice, checked)` state.
@@ -794,8 +795,8 @@ fn escape_reserved_blanks_label(trimmed: &str) -> String {
     if inner.eq_ignore_ascii_case("(Blanks)") { format!("'{trimmed}'") } else { trimmed.to_string() }
 }
 
-/// Distinct checklist entries from rows matching the other columns' criteria.
-/// The current criterion only determines checkboxes, so its unchecked alternatives stay available.
+/// Distinct checklist entries from rows matching the other columns' criteria, each with the count of those rows.
+/// The current criterion only determines checkboxes, so its unchecked alternatives stay available and keep their counts.
 pub fn filter_choices(wb: &Workbook, sheet: usize, col: u32) -> Vec<FilterChoice> {
     column_filter_choices(wb, sheet, col, true)
 }
@@ -858,11 +859,13 @@ fn column_filter_choices(wb: &Workbook, sheet: usize, col: u32, eligible_only: b
         let t = if blank { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
         let on = selected.is_none_or(|(i, (crit_off, crit))| prepared.criterion_matches(wb, sh, row, i, *crit_off, crit, false, false));
         if blank {
-            seen.entry(None).and_modify(|(_, entry, _)| entry.checked |= on).or_insert((
+            let (_, entry, _) = seen.entry(None).or_insert((
                 sort_key(&Value::Empty),
-                FilterChoice { label: t, value: None, identity: None, checked: on },
+                FilterChoice { label: t, value: None, identity: None, checked: false, count: 0 },
                 (String::new(), ""),
             ));
+            entry.checked |= on;
+            entry.count = entry.count.saturating_add(1);
             continue;
         }
         let base = cell_base_token(wb, sh, c, &v);
@@ -895,11 +898,13 @@ fn column_filter_choices(wb: &Workbook, sheet: usize, col: u32, eligible_only: b
         } else {
             kind_label.to_string()
         };
-        seen.entry(Some(id.clone())).and_modify(|(_, entry, _)| entry.checked |= on).or_insert((
+        let (_, entry, _) = seen.entry(Some(id.clone())).or_insert((
             sort,
-            FilterChoice { label: base_label, value: raw_value, identity: Some(id), checked: on },
+            FilterChoice { label: base_label, value: raw_value, identity: Some(id), checked: false, count: 0 },
             (qualifier, kind_label),
         ));
+        entry.checked |= on;
+        entry.count = entry.count.saturating_add(1);
     }
     let mut values: Vec<_> = seen.into_iter().collect();
     values.sort_by(|(id_a, (sort_a, choice_a, _)), (id_b, (sort_b, choice_b, _))| {
