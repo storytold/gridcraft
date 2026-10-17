@@ -1035,6 +1035,11 @@ mod tests {
         close(ev("SEARCH", vec![t("c*"), t("abcd")]), 3.0);
         close(ev("SEARCH", vec![t("?d"), t("abcd")]), 3.0);
         close(ev("SEARCH", vec![t("~*"), t("a*b")]), 2.0);
+        // A trailing `~` is dropped (#1455), but a needle that is only `~` stays a literal `~`
+        // (not measured in Excel).
+        close(ev("SEARCH", vec![t("x~"), t("axb")]), 2.0);
+        close(ev("SEARCH", vec![t("~"), t("a~b")]), 2.0);
+        is_err(ev("SEARCH", vec![t("~"), t("abc")]), CellError::Value);
         is_err(ev("SEARCH", vec![t("z"), t("abc")]), CellError::Value);
         is_err(ev("SEARCH", vec![t("a"), t("abc"), n(5.0)]), CellError::Value);
         close(ev("SEARCH", vec![t("b"), t("\u{130}b")]), 2.0);

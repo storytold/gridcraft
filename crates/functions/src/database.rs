@@ -59,7 +59,14 @@ fn cell_criterion(v: &Value) -> Option<Criterion> {
                 && !s.eq_ignore_ascii_case("TRUE")
                 && !s.eq_ignore_ascii_case("FALSE")
                 && CellError::parse(s).is_none();
-            if plain_text && !s.ends_with('*') { Some(Criterion::parse(&Value::from(format!("{s}*")))) } else { Some(Criterion::parse(v)) }
+            if plain_text && !s.ends_with('*') {
+                // Text without `*` or `?` is compared as it is, tildes included (#1455), so its
+                // tildes are escaped before it becomes a begins-with pattern.
+                let s = if s.contains(['*', '?']) { s.to_string() } else { s.replace('~', "~~") };
+                Some(Criterion::parse(&Value::from(format!("{s}*"))))
+            } else {
+                Some(Criterion::parse(v))
+            }
         }
         other => Some(Criterion::parse(other)),
     }
@@ -362,6 +369,21 @@ mod tests {
         close(ev("DCOUNTA", vec![rf(db()), t("tree"), rf(arr(vec![vec![tv("Tree")]]))]), 6.0);
         // Unknown criteria label never matches.
         close(ev("DCOUNT", vec![rf(db()), t("Age"), rf(arr(vec![vec![tv("Color")], vec![tv("red")]]))]), 0.0);
+    }
+
+    #[test]
+    fn plain_criteria_keep_tildes() {
+        // #1455: text without `*` or `?` is compared as it is, tildes included; plain text is
+        // still a begins-with match.
+        let db = arr(vec![vec![tv("Tree")], vec![tv("a~b")], vec![tv("ab")], vec![tv("a~bc")], vec![tv("a*b")]]);
+        let count = |crit: &str| ev("DCOUNTA", vec![rf(db.clone()), t("Tree"), rf(arr(vec![vec![tv("Tree")], vec![tv(crit)]]))]);
+        close(count("a~b"), 2.0);
+        close(count("a~"), 2.0);
+        close(count("=a~b"), 1.0);
+        // With a wildcard the text stays a (begins-with) pattern, where `~` escapes the next
+        // character: `a?b` also takes `a~bc`.
+        close(count("a~**"), 1.0);
+        close(count("a?b"), 3.0);
     }
 
     #[test]
