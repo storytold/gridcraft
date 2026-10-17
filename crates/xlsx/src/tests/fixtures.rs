@@ -577,3 +577,25 @@ fn user_defined_function_prefix_round_trips() {
         assert_eq!(cell.child("f").unwrap().text, f, "written {a}");
     }
 }
+
+/// `customWidth="1"` pins a column even when its width rounds to the default: Standard Width does not
+/// move it, and a save must keep its `<col>` (openpyxl writes 9.08 for Excel's 8.43, #1607).
+#[test]
+fn custom_widths_equal_to_the_default_round_trip() {
+    let body = r#"<sheetFormatPr baseColWidth="8" defaultRowHeight="15"/>
+      <cols><col min="4" max="5" width="9.08" customWidth="1"/><col min="6" max="6" width="9.140625" customWidth="1"/><col min="7" max="7" width="9.2" customWidth="1"/><col min="8" max="8" width="9.140625"/></cols>
+      <sheetData/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.default_col_width, 64.0);
+    for c in 3..=6 {
+        assert_eq!(s.cols.get(&c).and_then(|i| i.size), Some(64.0), "read col {c}");
+    }
+    assert_eq!(s.cols.get(&7), None, "a width without customWidth equal to the default stays the default");
+    let bytes = crate::write_xlsx(&wb).unwrap();
+    let mut pkg = crate::package::Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    let cols: Vec<_> =
+        sheet.child("cols").unwrap().kids("col").map(|c| (c.attr_u32("min"), c.attr_u32("max"), c.flag("customWidth", false))).collect();
+    assert_eq!(cols, [(Some(4), Some(7), true)]);
+}

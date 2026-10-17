@@ -324,8 +324,8 @@ fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet) {
                 info.style = Some(id);
             }
         }
-        // A width equal to the default with nothing else set is noise.
-        if info == LineInfo::default() || (info.size == Some(sheet.default_col_width) && LineInfo { size: None, ..info } == LineInfo::default()) {
+        // A custom width equal to the default still pins the column (Standard Width leaves it alone).
+        if info == LineInfo::default() {
             continue;
         }
         for col in (min - 1)..max {
