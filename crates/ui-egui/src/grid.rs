@@ -1198,7 +1198,10 @@ pub(crate) fn paint_quadrant(
             p.with_clip_rect(rect.intersect(p.clip_rect())).galley(pos2(x, y), galley, color);
             continue;
         }
-        let first_line = text.lines().next().unwrap_or("").to_string();
+        // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
+        let first_line: String = text.chars().filter(|&ch| ch != '\n' && ch != '\r').collect();
+        // The fill position indexes `text`; move it back by the breaks removed before it.
+        let fill_char = fill_char.map(|(ch, pos)| (ch, pos.saturating_sub(text.get(..pos).map_or(0, |s| s.matches(['\n', '\r']).count()))));
         // Shrink to fit: too-wide content is drawn in a smaller font so it fits the cell (or the
         // merged area): it neither spills, nor is clipped, nor turns into ####.
         let small = (st.align.shrink && !rotated && st.align.h != HAlign::Fill && fill_char.is_none())
