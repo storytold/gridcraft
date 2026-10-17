@@ -401,11 +401,37 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
-    let meta = std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if meta.len() > 2 * 1024 * 1024 * 1024 {
-        return Err(EngineError::Other("files larger than 2 GB aren't supported".into()));
+    let io_err = |e: std::io::Error| EngineError::Other(format!("{path}: {e}"));
+    let not_regular = || EngineError::Other(format!("{path}: not a regular file"));
+    let too_large = || EngineError::Other("files larger than 2 GB aren't supported".into());
+    // Reject special files before opening: opening a FIFO without a writer blocks forever.
+    if !std::fs::metadata(path).map_err(io_err)?.is_file() {
+        return Err(not_regular());
     }
-    std::fs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+    // Inspect the opened handle too, in case the path was swapped since the check above.
+    let file = std::fs::File::open(path).map_err(io_err)?;
+    let meta = file.metadata().map_err(io_err)?;
+    if !meta.is_file() {
+        return Err(not_regular());
+    }
+    if meta.len() > MAX_FILE_BYTES {
+        return Err(too_large());
+    }
+    // The reported size can be stale (a growing file), so the read itself is bounded too.
+    read_bounded(file, MAX_FILE_BYTES).map_err(io_err)?.ok_or_else(too_large)
+}
+
+/// Largest file `read_file` accepts.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Reads at most `limit` bytes; `None` when the reader supplies more than that.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_bounded(reader: impl std::io::Read, limit: u64) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read as _;
+    let mut out = Vec::new();
+    reader.take(limit.saturating_add(1)).read_to_end(&mut out)?;
+    Ok((out.len() as u64 <= limit).then_some(out))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -499,6 +525,15 @@ pub fn image_size(data: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn read_bounded_enforces_the_limit_while_reading() {
+        assert_eq!(read_bounded(&[1u8; 15][..], 16).unwrap().map(|b| b.len()), Some(15));
+        assert_eq!(read_bounded(&[1u8; 16][..], 16).unwrap().map(|b| b.len()), Some(16));
+        assert_eq!(read_bounded(&[1u8; 17][..], 16).unwrap(), None);
+        assert_eq!(read_bounded(std::io::repeat(1), 16).unwrap(), None);
+    }
 
     #[test]
     fn html_export_fails_instead_of_dropping_cells_past_the_row_limit() {
