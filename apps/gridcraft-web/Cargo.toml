@@ -16,9 +16,9 @@ path = "src/main.rs"
 [dependencies]
 gridcraft-engine = { workspace = true }
 gridcraft-ui-egui = { workspace = true }
-craft-cloud = { git = "https://github.com/wdunn001/craft-libs", rev = "183056e" }
-craft-cloud-client = { git = "https://github.com/wdunn001/collabcraft", rev = "700d9b9" }
-collabcraft-share = { git = "https://github.com/wdunn001/collabcraft", rev = "700d9b9" }
+craft-cloud = { git = "https://github.com/wdunn001/craft-libs", rev = "3aa7841deee2f9919a4dcca55487db5063293654" }
+craft-cloud-client = { git = "https://github.com/wdunn001/collab-craft", rev = "82c339c" }
+collabcraft-share = { git = "https://github.com/wdunn001/collab-craft", rev = "82c339c" }
 egui = { workspace = true }
 log = { workspace = true }
 serde_json = { workspace = true }

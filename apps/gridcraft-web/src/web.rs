@@ -109,13 +109,13 @@ fn open_invite(app: &mut SheetApp, invitation: craft_cloud_client::invite::Invit
         Ok(Some(_)) => {
             let mode = if invitation.read_only() { " (view only)" } else { "" };
             let who = if invitation.recipient.is_empty() { String::new() } else { format!(" (shared with {})", invitation.recipient) };
-            app.ui.message = Some(("GridCraft".into(), format!("Opened \"{name}\"{mode}{who}")));
+            app.message = Some(("GridCraft".into(), format!("Opened \"{name}\"{mode}{who}")));
             if let Err(e) = invitation.join() {
                 log::warn!("invite relay join failed: {e}");
             }
         }
         Ok(None) => {
-            app.ui.message = Some(("GridCraft".into(), format!("Shared \"{name}\" needs a choice before it opens")));
+            app.message = Some(("GridCraft".into(), format!("Shared \"{name}\" needs a choice before it opens")));
         }
         Err(e) => {
             log::error!("invite open failed: {e}");

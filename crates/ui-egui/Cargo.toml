@@ -14,14 +14,14 @@ workspace = true
 # craft-print and craft-ui. The interface half opens no socket, so this
 # builds for the web. The host application supplies the backend that
 # reaches the service, as it already supplies `Services::cloud`.
-craft-ui = { git = "https://github.com/wdunn001/craft-libs", rev = "183056e", features = ["cloud"] }
+craft-ui = { git = "https://github.com/wdunn001/craft-libs", rev = "3aa7841deee2f9919a4dcca55487db5063293654", features = ["cloud"] }
 gridcraft-engine = { workspace = true }
 gridcraft-chart = { workspace = true }
 # The vendor-neutral cloud types (a file entry, a capability). Types and
 # contracts only: the crate opens no socket and names no provider, so this
 # builds for the web too. The service is reached through `Services::cloud`,
 # which the host application supplies (see `cloud`).
-craft-cloud = { git = "https://github.com/wdunn001/craft-libs", rev = "183056e" }
+craft-cloud = { git = "https://github.com/wdunn001/craft-libs", rev = "3aa7841deee2f9919a4dcca55487db5063293654" }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
