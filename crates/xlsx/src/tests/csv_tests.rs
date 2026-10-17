@@ -1,8 +1,12 @@
 use gridcraft_core::{CellRef, DateSystem, Value};
-use gridcraft_model::{Sheet, Workbook};
+use gridcraft_model::{LineEnd, Sheet, TextEncoding, TextFormat, Workbook};
 
-use crate::csv::{decode_text, sniff_delimiter};
-use crate::{CsvOptions, Format, IoError, read_csv, sniff, write_csv, write_csv_limited};
+use crate::csv::sniff_delimiter;
+use crate::{CsvOptions, Format, IoError, MAX_CSV_BYTES, decode_text_as, encode_text, read_csv, sniff, write_csv, write_csv_limited, write_csv_text};
+
+fn decode_text(bytes: &[u8]) -> String {
+    decode_text_as(bytes).0
+}
 
 fn v(wb: &Workbook, r: u32, c: u32) -> Value {
     wb.sheet(0).unwrap().value(CellRef::new(r, c))
@@ -66,6 +70,62 @@ fn encodings() {
     let wb = read_csv(&le, &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
     assert_eq!(v(&wb, 0, 0), Value::text("ü"));
     assert_eq!(v(&wb, 0, 1), Value::Number(1.0));
+}
+
+/// Every encoding and line end read comes back byte for byte when the sheet is written as text and
+/// encoded in the format the file was read with.
+#[test]
+fn text_files_round_trip_their_encoding_and_line_ends() {
+    let utf16 = |text: &str, le: bool| {
+        let mut b = if le { vec![0xFF, 0xFE] } else { vec![0xFE, 0xFF] };
+        for u in text.encode_utf16() {
+            b.extend_from_slice(&if le { u.to_le_bytes() } else { u.to_be_bytes() });
+        }
+        b
+    };
+    let bom = |text: &str| [&[0xEF, 0xBB, 0xBF][..], text.as_bytes()].concat();
+    for (bytes, encoding, line_end) in [
+        (b"a;1\r\nb;2\r\n".to_vec(), TextEncoding::Utf8, LineEnd::CrLf),
+        ("č;1\nž;2\n".as_bytes().to_vec(), TextEncoding::Utf8, LineEnd::Lf),
+        (bom("é;1\r\nx;2\r\n"), TextEncoding::Utf8Bom, LineEnd::CrLf),
+        (utf16("ü;1\nß;2\n", true), TextEncoding::Utf16Le, LineEnd::Lf),
+        (utf16("ü;1\r\nß;2\r\n", false), TextEncoding::Utf16Be, LineEnd::CrLf),
+        (b"Caf\xe9;\x80\rNa\xefve;6\r".to_vec(), TextEncoding::Windows1252, LineEnd::Cr),
+        (b"one,record".to_vec(), TextEncoding::Utf8, LineEnd::CrLf),
+    ] {
+        let wb = read_csv(&bytes, &CsvOptions { delimiter: 0, parse_values: false, ..Default::default() }).unwrap();
+        assert_eq!(wb.csv_format, Some(TextFormat { encoding, line_end }), "{bytes:?}");
+        let sh = wb.sheet(0).unwrap();
+        let text = write_csv_text(sh, wb.csv_delimiter.unwrap(), line_end, MAX_CSV_BYTES, |c| sh.value(c).display()).unwrap();
+        let back = encode_text(&text, encoding, false).unwrap();
+        // A file without a final line end gets one, as every record does.
+        let expected = if bytes.ends_with(b"record") { b"one,record\r\n".to_vec() } else { bytes.clone() };
+        assert_eq!(back, expected, "{encoding:?}");
+    }
+    // A line break inside a quoted field isn't the record's line end.
+    let wb = read_csv(b"\"two\nlines\",x\r\ny,z\r\n", &CsvOptions::default()).unwrap();
+    assert_eq!(wb.csv_format.map(|f| f.line_end), Some(LineEnd::CrLf));
+    assert_eq!(Workbook::new().csv_format, None);
+}
+
+#[test]
+fn windows_1252_lists_the_characters_it_cannot_hold() {
+    // Each of the 256 bytes decodes to a character that encodes back to it.
+    let all: Vec<u8> = (0..=255).collect();
+    let (text, encoding) = decode_text_as(&all);
+    assert_eq!(encoding, TextEncoding::Windows1252);
+    assert_eq!(encode_text(&text, TextEncoding::Windows1252, false), Ok(all));
+    // Others are listed once each, in order; nothing is encoded unless replacing them with `?`.
+    assert_eq!(encode_text("čaj, ćevap, čaša €5", TextEncoding::Windows1252, false), Err(vec!['č', 'ć']));
+    assert_eq!(encode_text("čaj €5", TextEncoding::Windows1252, true), Ok(b"?aj \x805".to_vec()));
+    assert_eq!(encode_text("😀", TextEncoding::Windows1252, false), Err(vec!['😀']));
+    // The Unicode encodings hold everything.
+    for e in [TextEncoding::Utf8, TextEncoding::Utf8Bom, TextEncoding::Utf16Le, TextEncoding::Utf16Be] {
+        let bytes = encode_text("čaj 😀", e, false).unwrap();
+        assert_eq!(decode_text_as(&bytes), ("čaj 😀".to_string(), e));
+    }
+    assert_eq!(TextEncoding::from_id("UTF-16LE"), Some(TextEncoding::Utf16Le));
+    assert_eq!(TextEncoding::from_id("latin-2"), None);
 }
 
 #[test]

@@ -85,6 +85,93 @@ pub struct DocProps {
     pub description: String,
 }
 
+/// How a text file (CSV, tab-separated) was written: its character encoding and its line ends, so
+/// saving it writes them back the same way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextFormat {
+    pub encoding: TextEncoding,
+    pub line_end: LineEnd,
+}
+
+/// The character encodings GridCraft reads text files in and writes them back with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TextEncoding {
+    /// UTF-8 without a byte order mark (GridCraft's default for new files).
+    #[default]
+    #[serde(rename = "utf-8")]
+    Utf8,
+    /// UTF-8 starting with the byte order mark `EF BB BF` (Excel's "CSV UTF-8").
+    #[serde(rename = "utf-8-bom")]
+    Utf8Bom,
+    /// UTF-16 little-endian with its byte order mark (Excel's "Unicode Text").
+    #[serde(rename = "utf-16le")]
+    Utf16Le,
+    /// UTF-16 big-endian with its byte order mark.
+    #[serde(rename = "utf-16be")]
+    Utf16Be,
+    /// Windows-1252 (ANSI, Western European): one byte per character, no byte order mark.
+    #[serde(rename = "windows-1252")]
+    Windows1252,
+}
+
+impl TextEncoding {
+    pub const ALL: [TextEncoding; 5] =
+        [TextEncoding::Utf8, TextEncoding::Utf8Bom, TextEncoding::Utf16Le, TextEncoding::Utf16Be, TextEncoding::Windows1252];
+
+    /// The id commands use (`utf-8`, `utf-8-bom`, `utf-16le`, `utf-16be`, `windows-1252`).
+    pub fn id(self) -> &'static str {
+        match self {
+            TextEncoding::Utf8 => "utf-8",
+            TextEncoding::Utf8Bom => "utf-8-bom",
+            TextEncoding::Utf16Le => "utf-16le",
+            TextEncoding::Utf16Be => "utf-16be",
+            TextEncoding::Windows1252 => "windows-1252",
+        }
+    }
+
+    /// The encoding with this id, ignoring case.
+    pub fn from_id(id: &str) -> Option<TextEncoding> {
+        TextEncoding::ALL.into_iter().find(|e| e.id().eq_ignore_ascii_case(id.trim()))
+    }
+
+    /// The name shown to people.
+    pub fn name(self) -> &'static str {
+        match self {
+            TextEncoding::Utf8 => "UTF-8",
+            TextEncoding::Utf8Bom => "UTF-8 with BOM",
+            TextEncoding::Utf16Le => "UTF-16 LE (Unicode)",
+            TextEncoding::Utf16Be => "UTF-16 BE",
+            TextEncoding::Windows1252 => "Windows-1252 (ANSI)",
+        }
+    }
+}
+
+/// The line end written after each record of a text file.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LineEnd {
+    /// `\r\n` (Windows, and what Excel writes).
+    #[default]
+    #[serde(rename = "crlf")]
+    CrLf,
+    /// `\n` (Linux, macOS).
+    #[serde(rename = "lf")]
+    Lf,
+    /// `\r` (classic Mac OS).
+    #[serde(rename = "cr")]
+    Cr,
+}
+
+impl LineEnd {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LineEnd::CrLf => "\r\n",
+            LineEnd::Lf => "\n",
+            LineEnd::Cr => "\r",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Arc<Sheet>>,
@@ -113,6 +200,11 @@ pub struct Workbook {
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv_delimiter: Option<u8>,
+    /// Encoding and line ends of the text file (CSV, tab-separated) this workbook was read from, so
+    /// saving it as text writes them back the same (a UTF-16 file stays UTF-16, an LF file stays
+    /// LF). `None` = not read from text: text saves use UTF-8 without a BOM and CRLF.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub csv_format: Option<TextFormat>,
     /// Unmodelled file content kept for saving (package root and workbook level). Not in JSON.
     #[serde(skip)]
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
@@ -146,6 +238,7 @@ impl Workbook {
             cell_styles: vec![],
             vba_project: None,
             csv_delimiter: None,
+            csv_format: None,
             preserved: None,
             source_dir: None,
         }

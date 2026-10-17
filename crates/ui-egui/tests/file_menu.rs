@@ -132,6 +132,41 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     assert!(h.state().backstage.is_none());
 }
 
+/// Saving a character a Windows-1252 file can't hold opens Save in Another Encoding? with UTF-8
+/// picked; OK saves the file in it. Picking Windows-1252 instead writes `?`.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn saving_what_an_ansi_file_cannot_hold_asks_for_an_encoding() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-ui-encoding-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let path = dir.join("ansi.csv");
+    std::fs::write(&path, b"Caf\xe9\r\n").unwrap();
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.open", serde_json::json!({"path": path})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A2", "input": "čaj"})).unwrap();
+    let save = |h: &mut egui_kittest::Harness<'static, SheetApp>| {
+        h.state_mut().run("file.save", serde_json::json!({})).unwrap();
+        h.run_steps(3);
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("textEncoding"));
+    };
+    save(&mut h);
+    assert_eq!(std::fs::read(&path).unwrap(), b"Caf\xe9\r\n", "nothing is written before choosing");
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Windows-1252 (ANSI): č become ?").click();
+    h.run_steps(2);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(std::fs::read(&path).unwrap(), b"Caf\xe9\r\n?aj\r\n");
+    // Windows-1252 isn't remembered: the next save asks again, and UTF-8 is suggested.
+    save(&mut h);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "Café\r\nčaj\r\n");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn export_as_pdf_is_delivered_as_a_download() {
     let files = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));

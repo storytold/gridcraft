@@ -25,7 +25,7 @@ pub use style::{
     Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, Style, StyleId, StyleTable, Theme, Underline,
     VAlign, VertAlign,
 };
-pub use workbook::{CalcMode, CalcSettings, DefinedName, DocProps, Workbook};
+pub use workbook::{CalcMode, CalcSettings, DefinedName, DocProps, LineEnd, TextEncoding, TextFormat, Workbook};
 
 /// Font used for new workbooks. Only a name: renderers substitute an available open font
 /// (e.g. the metric-compatible Carlito) when it isn't installed.

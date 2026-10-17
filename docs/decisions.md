@@ -71,3 +71,24 @@ relative steps keep each notch feeling the same, and the doublings land on 25, 5
 400%. The status bar's Zoom In / Zoom Out buttons and Ctrl+Alt+= / Ctrl+Alt+- keep their 10%
 steps, so the wheel and the buttons now step differently. Whether they should share one ladder
 (this one, Excel's, or another) is left to the maintainers.
+
+## Text files save back in the encoding and line ends they were opened with
+
+A CSV or tab-separated file is read in the encoding its bytes show (a UTF-8 or UTF-16 byte order
+mark, else UTF-8, else Windows-1252), and the workbook remembers it with the line end of the first
+record (`Workbook::csv_format`, next to the separator in `csv_delimiter`). Saving or exporting it as
+text writes the same encoding, byte order mark and line ends back, so a file another program wrote
+comes back as that program expects: before, every text file was written as UTF-8 without a BOM with
+CRLF, which turned an ANSI file's `é` into two bytes and a UTF-16 file into UTF-8. A workbook not
+read from text still gets UTF-8 without a BOM and CRLF.
+
+Windows-1252 holds 256 characters. When the text has others (`č`, `ć`, an emoji), nothing is
+written: `file.save` and `file.exportCsv` answer `{saved: false, encoding, unencodable, suggested}`
+and the interface asks which encoding to use, suggesting UTF-8, which holds every character. Excel
+writes `?` for them; here that happens only when someone picks Windows-1252 in that dialog (or
+passes `encoding`). An encoding chosen there that holds everything becomes the file's, so the next
+save doesn't ask; keeping Windows-1252 asks again next time. Paths that can't ask (`save_bytes`,
+the CLI) fail with the characters named instead of writing `?`.
+
+Save As has no encoding choice yet (Excel offers it as file types: CSV UTF-8, CSV, Unicode Text).
+Whether to add one, as a type or a separate list, is left to the maintainers.

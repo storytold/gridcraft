@@ -1723,6 +1723,98 @@ fn saving_an_opened_semicolon_csv_keeps_semicolons() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A text file saves back in the encoding and line ends it was read with: here UTF-16 LE (Excel's
+/// "Unicode Text") with LF line ends, which used to come back as UTF-8 with CRLF.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn saving_an_opened_text_file_keeps_its_encoding_and_line_ends() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-encoding-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let utf16 = |text: &str| [0xFF, 0xFE].into_iter().chain(text.encode_utf16().flat_map(u16::to_le_bytes)).collect::<Vec<u8>>();
+    let path = dir.join("parts.csv");
+    std::fs::write(&path, utf16("šifra;opis\nA1;čelik\n")).unwrap();
+    let mut s = s();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    assert_eq!(v(&s, "B2"), Value::text("čelik"));
+    s.execute("cell.set", json!({"cell": "B2", "input": "žica"})).unwrap();
+    s.execute("file.save", json!({})).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), utf16("šifra;opis\nA1;žica\n"));
+    // Export as CSV and tab-separated keep it too; a new workbook's CSV is UTF-8 with CRLF.
+    let exported = dir.join("export.csv");
+    s.execute("file.exportCsv", json!({"path": exported})).unwrap();
+    assert_eq!(std::fs::read(&exported).unwrap(), utf16("šifra;opis\nA1;žica\n"));
+    s.execute("file.save", json!({"path": dir.join("parts.txt")})).unwrap();
+    assert_eq!(std::fs::read(dir.join("parts.txt")).unwrap(), utf16("šifra\topis\nA1\tžica\n"));
+    s.execute("file.new", json!({})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "čaj"})).unwrap();
+    s.execute("file.save", json!({"path": dir.join("new.csv")})).unwrap();
+    assert_eq!(std::fs::read(dir.join("new.csv")).unwrap(), "čaj\r\n".as_bytes());
+    std::fs::remove_dir_all(dir).unwrap();
+    // In a GridCraft JSON workbook the format is named; workbooks from before it read as None.
+    let format = gridcraft_model::TextFormat { encoding: gridcraft_model::TextEncoding::Utf16Le, line_end: gridcraft_model::LineEnd::Lf };
+    assert_eq!(serde_json::to_value(format).unwrap(), json!({"encoding": "utf-16le", "lineEnd": "lf"}));
+    let old: gridcraft_model::Workbook = serde_json::from_value(serde_json::to_value(gridcraft_model::Workbook::new()).unwrap()).unwrap();
+    assert_eq!(old.csv_format, None);
+}
+
+/// A Windows-1252 (ANSI) file can't hold `č`: saving writes nothing and asks which encoding to use,
+/// suggesting UTF-8. The chosen encoding is then the file's, so the next save doesn't ask; keeping
+/// Windows-1252 writes `?` (as Excel does) and asks again next time.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn saving_characters_the_file_encoding_cannot_hold_asks_first() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-ansi-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let path = dir.join("cjenik.csv");
+    let ansi = b"Caf\xe9;5\r\nNa\xefve;6\r\n";
+    std::fs::write(&path, ansi).unwrap();
+    let mut s = s();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("Café"));
+    // What the encoding holds saves without asking, byte for byte.
+    s.execute("file.save", json!({})).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), ansi);
+    s.execute("cell.set", json!({"cell": "A3", "input": "Ćevapčići"})).unwrap();
+    s.ui_requests.clear();
+    let r = s.execute("file.save", json!({})).unwrap();
+    assert_eq!(
+        (r["saved"].clone(), r["encoding"].clone(), r["unencodable"].clone(), r["suggested"].clone()),
+        (json!(false), json!("windows-1252"), json!("Ćčć"), json!("utf-8"))
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), ansi, "nothing is written before the person chooses");
+    assert!(matches!(s.ui_requests.as_slice(), [crate::UiRequest::Dialog(name, _)] if name == "textEncoding"));
+    // Encoding without asking (CLI, save_bytes) is an error naming the characters, never a silent `?`.
+    let err = crate::io::save_bytes(&s.doc().unwrap().wb, "x.csv").unwrap_err().to_string();
+    assert!(err.contains("Windows-1252 (ANSI)") && err.contains("Ć, č, ć"), "{err}");
+    // Keeping Windows-1252 writes `?` and doesn't become the file's choice: the next save asks again.
+    s.execute("file.save", json!({"encoding": "windows-1252"})).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"Caf\xe9;5\r\nNa\xefve;6\r\n?evap?i?i;\r\n");
+    assert_eq!(s.execute("file.save", json!({})).unwrap()["saved"], false);
+    // The suggested UTF-8 holds everything and is the file's encoding from then on.
+    s.execute("file.save", json!({"encoding": "utf-8"})).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "Café;5\r\nNaïve;6\r\nĆevapčići;\r\n");
+    s.execute("cell.set", json!({"cell": "B3", "input": "7"})).unwrap();
+    let r = s.execute("file.save", json!({})).unwrap();
+    assert!(r.get("saved").is_none(), "{r}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "Café;5\r\nNaïve;6\r\nĆevapčići;7\r\n");
+    // Export as CSV asks the same way; an unknown encoding is refused.
+    let mut s = self::s();
+    s.execute("file.open", json!({"name": "ansi.csv", "base64": crate::io::base64_encode(b"Caf\xe9\r\n")})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "č"})).unwrap();
+    let exported = dir.join("export.csv");
+    let r = s.execute("file.exportCsv", json!({"path": exported})).unwrap();
+    assert_eq!((r["saved"].clone(), r["command"].clone()), (json!(false), json!("file.exportCsv")));
+    assert!(!exported.exists());
+    s.execute("file.exportCsv", json!({"path": exported, "encoding": "utf-8-bom"})).unwrap();
+    assert_eq!(std::fs::read(&exported).unwrap(), "\u{feff}Café\r\nč\r\n".as_bytes());
+    assert!(s.execute("file.save", json!({"path": dir.join("x.csv"), "encoding": "latin-2"})).is_err());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A workbook whose B1 is `=[1]Sheet1!A1`, linked to `link` (an external relationship target).
 fn linked_workbook(link: &str) -> Vec<u8> {
     use std::io::{Cursor, Write};
