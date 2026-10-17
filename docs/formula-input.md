@@ -1,8 +1,16 @@
 # Formula language
 
 View → Interface language is the existing, persisted language preference. Choose **Español**
-for Spanish formula entry and display. On first run the preference follows the system language.
-English and the other interface languages currently use the English formula table and separators.
+for Spanish or **Italiano** for Italian formula entry and display. On first run the preference
+follows the system language. English and the other interface languages currently use the English
+formula table and separators.
+
+Italian uses the same separators as Spanish (decimal comma, semicolon arguments, backslash array
+columns) and Excel's Italian names for about fifty common functions: `SOMMA`, `MEDIA`, `SE`,
+`CONTA.NUMERI`, `CONTA.VALORI`, `SOMMA.SE`, `SOMMA.PIÙ.SE`, `CONTA.SE`, `SE.ERRORE`, `E`, `O`,
+`NON`, `CERCA.VERT`, `CERCA.X`, `INDICE`, `CONFRONTA`, `ARROTONDA`, `OGGI`, `ADESSO`, `VERO`,
+`FALSO` and more (the full table is `ITALIAN` in `crates/formula/src/input.rs`). For example,
+`=SE(VERO;SOMMA(1,5;2,25);0)` evaluates to 3.75. The Spanish table below is unchanged.
 
 | Spanish | Canonical English |
 | --- | --- |
