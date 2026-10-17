@@ -135,6 +135,20 @@ impl Out {
         }
         self.parts.push((name.to_string(), data));
     }
+    /// The `xl/media` file name (`imageN.ext`) holding `data`. A picture used on several sheets,
+    /// or twice on one, is written once and every drawing points to that part, as in Excel.
+    pub fn image_part(&mut self, ext: &str, data: &[u8]) -> String {
+        let existing = self.parts.iter().find(|(name, bytes)| {
+            name.strip_prefix("xl/media/image").is_some_and(|rest| rest.ends_with(&format!(".{ext}"))) && bytes.as_slice() == data
+        });
+        if let Some((name, _)) = existing {
+            return name.trim_start_matches("xl/media/").to_string();
+        }
+        self.images += 1;
+        let file = format!("image{}.{ext}", self.images);
+        self.part(&format!("xl/media/{file}"), None, data.to_vec());
+        file
+    }
     pub fn default_type(&mut self, ext: &str, ct: &str) {
         self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string());
     }

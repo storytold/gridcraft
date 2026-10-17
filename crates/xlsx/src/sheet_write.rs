@@ -498,12 +498,10 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             if img.data.is_empty() {
                 continue;
             }
-            out.images += 1;
             let ext = image_ext(&img.mime, &img.data);
-            let name = format!("xl/media/image{}.{ext}", out.images);
             out.default_type(ext, image_content_type(ext));
-            out.part(&name, None, img.data.clone());
-            let rid = drels.add("image", &format!("../media/image{}.{ext}", out.images));
+            let file = out.image_part(ext, &img.data);
+            let rid = drels.add("image", &format!("../media/{file}"));
             objs.push(Obj::Image(img, rid));
         }
         for ch in &sheet.charts {
