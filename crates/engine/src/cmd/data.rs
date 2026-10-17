@@ -232,6 +232,9 @@ fn sort(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_cols: bool, case: bool) -> Result<Json> {
+    // Protect Sheet ▸ Sort. Both Sort… and the A-to-Z buttons come through here.
+    let sheet = s.doc()?.wb.active_sheet;
+    super::refuse_unless_allowed(s, sheet, "Sorting", |p| p.sort)?;
     let body = if by_cols {
         if header && r.width() > 1 { RangeRef::new(CellRef::new(r.start.row, r.start.col + 1), r.end) } else { r }
     } else if header && r.height() > 1 {
@@ -438,6 +441,7 @@ fn sorted_anchor(sh: &Sheet, a: Anchor, bottom: (u32, u32, f32, f32), by_cols: b
 
 fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = s.doc()?.wb.active_sheet;
+    super::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
     let has = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.autofilter.is_some());
     let in_table =
         s.doc()?.wb.sheet(sheet).and_then(|sh| sh.table_at(s.doc().map(|d| d.selection.active).unwrap_or_default()).map(|t| t.name.clone()));
@@ -492,6 +496,7 @@ fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = s.doc()?.wb.active_sheet;
+    super::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
     let Some(sh) = s.doc()?.wb.sheet(sheet) else { return Err(EngineError::NoDocument) };
     let af = match &sh.autofilter {
         Some(a) => a.clone(),

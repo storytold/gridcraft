@@ -3282,3 +3282,88 @@ fn paste_special_validation_moves_relative_references() {
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
 }
+
+/// Protect Sheet's Sort and Use AutoFilter tick boxes are obeyed. They were read from the file and
+/// written back but never consulted, so a protected sheet could still be sorted and filtered.
+///
+/// Sorting locked cells stays refused whichever way the box is set, which is Excel's rule too
+/// ("users cannot sort ranges that contain locked cells on a protected worksheet"), so the box
+/// decides for a range that has been unlocked. An AutoFilter changes no cell's contents, so there
+/// the box is the only thing that decides.
+#[test]
+fn a_protected_sheet_allows_sorting_and_filtering_only_when_it_says_so() {
+    let allow = |s: &mut Session, f: fn(&mut gridcraft_model::SheetProtection)| {
+        let d = s.doc_mut().unwrap();
+        let mut wb = (*d.wb).clone();
+        if let Some(p) = wb.sheet_mut(0).and_then(|sh| sh.protection.as_mut()) {
+            f(p);
+        }
+        d.wb = std::sync::Arc::new(wb);
+    };
+    // Three rows under a header, and the cells unlocked so that the tick box is what decides.
+    let book = || {
+        let mut s = s();
+        for (c, v) in [("A1", "Head"), ("A2", "2"), ("A3", "1")] {
+            s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+        }
+        s.execute("home.lockCell", json!({"range": "A1:A3", "on": false})).unwrap();
+        s
+    };
+    let order = |s: &Session| (v(s, "A2"), v(s, "A3"));
+
+    // Unprotected: both work, so the guard has not made the ordinary case stricter.
+    let mut s = book();
+    s.execute("data.sortAscending", json!({})).unwrap();
+    assert_eq!(order(&s), (Value::Number(1.0), Value::Number(2.0)));
+    s.execute("data.filter", json!({})).unwrap();
+
+    // Protected with nothing ticked, which is what Excel's dialog opens with: both refused.
+    let mut s = book();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    for (cmd, args) in [
+        ("data.sortAscending", json!({})),
+        ("data.sortDescending", json!({})),
+        // Sort… needs a key to be a sort at all: with none it does nothing either way.
+        ("data.sort", json!({"keys": [{"column": "A", "order": "asc"}]})),
+        ("data.filter", json!({})),
+        ("data.filterBy", json!({})),
+    ] {
+        let e = s.execute(cmd, args).expect_err(cmd).to_string();
+        assert!(e.contains("protected sheet"), "{cmd}: {e}");
+    }
+    // Refused, not half-applied: the rows are where they were.
+    assert_eq!(order(&s), (Value::Number(2.0), Value::Number(1.0)));
+    assert!(s.doc().unwrap().wb.sheet(0).unwrap().autofilter.is_none());
+
+    // Sort ticked: sorting works on the unlocked range; filtering is still refused.
+    let mut s = book();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    allow(&mut s, |p| p.sort = true);
+    s.execute("data.sortAscending", json!({})).unwrap();
+    assert_eq!(order(&s), (Value::Number(1.0), Value::Number(2.0)), "sorted under the header");
+    assert!(s.execute("data.filter", json!({})).is_err(), "Use AutoFilter is still off");
+
+    // Use AutoFilter ticked: the filter goes on, and sorting is refused.
+    let mut s = book();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    allow(&mut s, |p| p.autofilter = true);
+    s.execute("data.filter", json!({})).unwrap();
+    assert!(s.doc().unwrap().wb.sheet(0).unwrap().autofilter.is_some(), "the AutoFilter is on");
+    assert!(s.execute("data.sortAscending", json!({})).is_err(), "Sort is still off");
+    // Unprotecting gives sorting back.
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("data.sortAscending", json!({})).unwrap();
+
+    // Locked cells: ticking Sort does not let them be reordered, as in Excel.
+    let mut s = {
+        let mut t = super::tests::s();
+        for (c, v) in [("A1", "Head"), ("A2", "2"), ("A3", "1")] {
+            t.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+        }
+        t
+    };
+    s.execute("review.protectSheet", json!({})).unwrap();
+    allow(&mut s, |p| p.sort = true);
+    assert!(s.execute("data.sortAscending", json!({})).is_err(), "locked cells cannot be sorted");
+    assert_eq!(order(&s), (Value::Number(2.0), Value::Number(1.0)));
+}

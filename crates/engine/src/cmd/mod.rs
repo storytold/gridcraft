@@ -394,6 +394,18 @@ fn check_protection(old: &Workbook, new: &Workbook, unlocked: &[(String, String)
     Ok(())
 }
 
+/// Refuses an action a protected sheet does not allow, by the tick box for it in Review ▸ Protect
+/// Sheet. `what` names the action in the message. An unprotected sheet allows everything.
+///
+/// Cell edits are guarded separately, by whether the cell is locked (`locked_cell_error`): these
+/// permissions are the ones that are not about one cell's contents.
+pub(crate) fn refuse_unless_allowed(s: &Session, sheet: usize, what: &str, pick: fn(&gridcraft_model::SheetProtection) -> bool) -> Result<()> {
+    if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.protection.as_ref().is_some_and(|pr| !pick(pr))) {
+        return Err(EngineError::Other(format!("{what} isn't allowed on this protected sheet (Review › Unprotect Sheet).")));
+    }
+    Ok(())
+}
+
 /// Whether a locked cell on a protected sheet stays locked: `None` when it's in an Allow Edit
 /// Range without a password or one unlocked in this session, else the message to show.
 pub(crate) fn locked_cell_error(sh: &gridcraft_model::Sheet, c: CellRef, unlocked: &[(String, String)]) -> Option<String> {
