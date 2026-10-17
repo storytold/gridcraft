@@ -95,7 +95,13 @@ pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
 /// and no General narrowing (Save As CSV/Text writes this). Formulas give their result.
 pub fn value_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let style = wb.styles.get(sheet.style_id(c));
-    let f = format(&sheet.value(c), style.num_fmt.as_str(), wb);
+    value_text_as(wb, &sheet.value(c), style.num_fmt.as_str())
+}
+
+/// [`value_text`] for a value and a format code given apart from a cell (print takes the code
+/// from the cell's effective look, which a conditional format can override).
+pub fn value_text_as(wb: &Workbook, v: &Value, code: &str) -> String {
+    let f = format(v, code, wb);
     match f.fill {
         Some((_, pos)) => {
             let mut t = f.text;
