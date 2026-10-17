@@ -211,6 +211,61 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     if let Some(pa) = sh.print.print_area {
         sh.print.print_area = map_range(pa);
     }
+    let limit = if axis == Axis::Rows { MAX_ROWS } else { MAX_COLS };
+    let (titles, breaks) =
+        if axis == Axis::Rows { (&mut sh.print.title_rows, &mut sh.print.row_breaks) } else { (&mut sh.print.title_cols, &mut sh.print.col_breaks) };
+    *titles = titles.and_then(|t| shift_line_span(t, at, count, insert, limit));
+    shift_page_breaks(breaks, at, count, insert, limit);
+}
+
+/// Where a span of repeated title lines goes after an insert/delete (`None` = every line deleted).
+fn shift_line_span((first, last): (u32, u32), at: u32, count: u32, insert: bool, limit: u32) -> Option<(u32, u32)> {
+    let max = limit.saturating_sub(1);
+    if insert {
+        let up = |v: u32| if v >= at { v.saturating_add(count) } else { v };
+        let first = up(first);
+        // Titles pushed entirely off the sheet are dropped; a span reaching the edge is cut there.
+        return (first <= max).then(|| (first, up(last).min(max)));
+    }
+    let end = at.saturating_add(count);
+    if first >= at && last < end {
+        return None;
+    }
+    let first = if first < at {
+        first
+    } else if first >= end {
+        first - count
+    } else {
+        at
+    };
+    let last = if last < at {
+        last
+    } else if last >= end {
+        last - count
+    } else {
+        at.saturating_sub(1)
+    };
+    Some((first, last))
+}
+
+/// Moves manual page breaks (each sits above its line) with their lines. A deleted line's break
+/// falls onto the line that takes its place; breaks pushed off the sheet are dropped.
+fn shift_page_breaks(breaks: &mut Vec<u32>, at: u32, count: u32, insert: bool, limit: u32) {
+    let end = at.saturating_add(count);
+    let moved = std::mem::take(breaks).into_iter().filter_map(|b| {
+        if insert {
+            if b >= at { b.checked_add(count) } else { Some(b) }
+        } else if b < at {
+            Some(b)
+        } else if b >= end {
+            Some(b - count)
+        } else {
+            Some(at)
+        }
+    });
+    breaks.extend(moved.filter(|b| *b >= 1 && *b < limit));
+    breaks.sort_unstable();
+    breaks.dedup();
 }
 
 /// Rewrites every formula reference (and chart series) for a structural edit on `target`.
