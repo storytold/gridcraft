@@ -5,6 +5,7 @@ use std::sync::Arc;
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{Cell, DefinedName, Formula, Sheet, Table, TableColumn, TotalsFn, Workbook};
 
+use super::minimal;
 use crate::package::Package;
 use crate::xml::El;
 use crate::{read_xlsx, write_xlsx};
@@ -408,4 +409,26 @@ fn implicit_intersection_metadata_distinguishes_table_rows_and_columns() {
         0,
         &[("Data[@Input]*2", false), ("SUM(Data[Input])", false), ("SUM(Data[Input]*2)", true), ("SQRT(Data[Input])", true)],
     );
+}
+
+/// Legacy implicit intersection on read (issue #1636): a plain whole-column reference in a
+/// scalar position gains an explicit `@`, so it meets the formula's row instead of spilling.
+/// `G5` blocks the spill, so without the rewrite this formula reads `#SPILL!`.
+#[test]
+fn legacy_plain_formulas_gain_implicit_intersection_on_read() {
+    let body = r#"<sheetData>
+      <row r="4"><c r="B4" t="inlineStr"><is><t>Thierry</t></is></c><c r="C4"><v>7</v></c><c r="G4"><f>IF(ISBLANK(B:B),0,IF(B4="Thierry",C4,0))</f><v>0</v></c></row>
+      <row r="5"><c r="G5"><v>1</v></c></row>
+    </sheetData>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.value(at("B4")), Value::text("Thierry"));
+    let f = sh.cell(at("G4")).unwrap().formula.as_ref().unwrap();
+    assert_eq!(f.text, "IF(ISBLANK(@B:B),0,IF(B4=\"Thierry\",C4,0))");
+    assert_eq!(f.array, None, "intersection is not a legacy CSE array");
+    // The rewritten formula still exports as the modern explicit intersection.
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    assert_eq!(cell(&sheet, "G4").child("f").unwrap().text, "IF(ISBLANK(_xlfn.SINGLE(B:B)),0,IF(B4=\"Thierry\",C4,0))");
 }

@@ -1150,6 +1150,41 @@ fn open_leaves_plain_workbooks_untouched() {
     assert!(sh.rows.values().all(|i| i.size.is_none()), "no row gains a height entry");
 }
 
+/// Fixture for legacy implicit intersection (issue #1636): a minimal workbook whose plain
+/// `G4` formula tests the whole column `B:B` in scalar position, with `G5` blocking the
+/// spill. Built as raw XML so the formula stays plain, the way an older Excel file holds it.
+fn legacy_intersection_workbook() -> Vec<u8> {
+    use std::io::Write;
+    const CT: &str = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/></Types>"#;
+    const ROOT_RELS: &str = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
+    const WB: &str = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
+    const WB_RELS: &str = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+    let sheet = r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+      <row r="4"><c r="B4" t="inlineStr"><is><t>Thierry</t></is></c><c r="C4"><v>7</v></c><c r="G4"><f>IF(ISBLANK(B:B),0,IF(B4="Thierry",C4,0))</f><v>0</v></c></row>
+      <row r="5"><c r="G5"><v>1</v></c></row>
+    </sheetData></worksheet>"#;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, data) in [
+        ("[Content_Types].xml", CT),
+        ("_rels/.rels", ROOT_RELS),
+        ("xl/workbook.xml", WB),
+        ("xl/_rels/workbook.xml.rels", WB_RELS),
+        ("xl/worksheets/sheet1.xml", sheet),
+    ] {
+        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(data.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+fn open_keeps_legacy_implicit_intersection() {
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "legacy.xlsx", "base64": crate::io::base64_encode(&legacy_intersection_workbook())})).unwrap();
+    assert_eq!(v(&s, "G4"), Value::Number(7.0), "B:B meets row 4 instead of spilling");
+    assert_eq!(v(&s, "G5"), Value::Number(1.0), "no spill leaks below the anchor");
+}
+
 #[test]
 fn tables_and_structured_refs() {
     let mut s = s();
