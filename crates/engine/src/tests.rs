@@ -126,6 +126,31 @@ fn chart_recommendations_follow_the_data_shape() {
 }
 
 #[test]
+fn chart_uses_text_first_area_as_categories_for_later_areas() {
+    let mut s = s();
+    s.execute(
+        "range.setValues",
+        json!({"range": "A1", "values": [["Mes", "x", "y", "z", "Ventas"], ["Ene", 1, 1, 1, 10], ["Feb", 1, 1, 1, 20], ["Mar", 1, 1, 1, 30], ["Abr", 1, 1, 1, 40]]}),
+    )
+    .unwrap();
+
+    s.execute("insert.chart", json!({"range": "A1:A5,E1:E5", "type": "pie", "at": "G2"})).unwrap();
+    let multi = s.doc().unwrap().wb.active().unwrap().charts.last().unwrap().clone();
+    assert_eq!(multi.series.len(), 1);
+    assert_eq!(multi.series[0].name.as_deref(), Some("Sheet1!$E$1"));
+    assert_eq!(multi.series[0].categories.as_deref(), Some("Sheet1!$A$2:$A$5"));
+    assert_eq!(multi.series[0].values, "Sheet1!$E$2:$E$5");
+
+    s.execute("insert.chart", json!({"range": "D1:E5", "type": "pie", "at": "G20"})).unwrap();
+    let contiguous = s.doc().unwrap().wb.active().unwrap().charts.last().unwrap().clone();
+    assert_eq!(contiguous.series.len(), 2);
+    assert_eq!(contiguous.series[0].name.as_deref(), Some("Sheet1!$D$1"));
+    assert_eq!(contiguous.series[0].values, "Sheet1!$D$2:$D$5");
+    assert_eq!(contiguous.series[1].name.as_deref(), Some("Sheet1!$E$1"));
+    assert_eq!(contiguous.series[1].values, "Sheet1!$E$2:$E$5");
+}
+
+#[test]
 fn chart_category_axis_from_blank_corner_and_select_data() {
     // #287: numeric X values must be the category axis, not a series of their own.
     let mut s = s();

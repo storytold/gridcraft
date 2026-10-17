@@ -224,6 +224,17 @@ fn block(s: &Session, p: &Json) -> Result<RangeRef> {
     Ok(current_region(sh, d.selection.active))
 }
 
+fn chart_areas(s: &Session, p: &Json) -> Result<Vec<RangeRef>> {
+    if p.get("range").is_some() {
+        return target_ranges(s, p);
+    }
+    let d = s.doc()?;
+    if d.selection.ranges.len() > 1 {
+        return Ok(d.selection.ranges.clone());
+    }
+    Ok(vec![block(s, p)?])
+}
+
 // ---------------------------------------------------------------- tables
 
 fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
@@ -626,6 +637,36 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
     out
 }
 
+fn series_from_areas(sh: &Sheet, areas: &[RangeRef]) -> Result<(RangeRef, bool, Vec<Series>)> {
+    let Some(first) = areas.first().copied() else { return Err(EngineError::Other("Select data for the chart first.".into())) };
+    let bounds = areas.iter().skip(1).fold(first, |r, area| r.union(area));
+    if areas.len() == 1 {
+        let by_rows = first.width() > first.height() + 1;
+        return Ok((bounds, by_rows, series_from_range(sh, first, by_rows)));
+    }
+    let valid_shape = first.width() == 1
+        && first.height() > 1
+        && areas.iter().skip(1).all(|area| area.width() == 1 && area.height() == first.height())
+        && first.iter().all(|cell| sh.value(cell).is_text() || sh.value(cell).is_empty());
+    if !valid_shape {
+        return Err(bad("insert.chart", "multi-area charts require a text category column followed by equal-height series columns"));
+    }
+    let category = series_from_range(sh, first, false).into_iter().next().map(|series| series.values);
+    let mut series = Vec::with_capacity(areas.len() - 1);
+    for area in &areas[1..] {
+        let mut area_series = series_from_range(sh, *area, false);
+        let Some(mut item) = area_series.pop() else {
+            return Err(EngineError::Other("Select data for the chart first.".into()));
+        };
+        if item.name.is_none() {
+            return Err(bad("insert.chart", "multi-area series columns require headers"));
+        }
+        item.categories = category.clone();
+        series.push(item);
+    }
+    Ok((bounds, false, series))
+}
+
 /// A scatter plot of a block without category labels takes its first column (or row) as the X
 /// values of the others, as Excel does: two plain columns make one series of points, not two (#428).
 pub fn scatter_x_from_first(kind: ChartKind, series: &mut Vec<Series>) {
@@ -646,15 +687,14 @@ const MAX_CHART_CELLS: u64 = 1_000_000;
 /// without labels → scatter; one short series → column, pie, bar; long series → line; several
 /// series → clustered and stacked columns and bars, line.
 pub fn recommend_charts(s: &Session, p: &Json) -> Result<Vec<(&'static str, &'static str, &'static str)>> {
-    let r = block(s, p)?;
-    if r.count() > MAX_CHART_CELLS {
+    let areas = chart_areas(s, p)?;
+    if areas.iter().fold(0_u64, |count, area| count.saturating_add(area.count())) > MAX_CHART_CELLS {
         return Err(bad("insert.chart", "range too large for a chart"));
     }
     let sheet = target_sheet(s, p)?;
     let d = s.doc()?;
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
-    let by_rows = r.width() > r.height() + 1;
-    let series = series_from_range(sh, r, by_rows);
+    let (_, by_rows, series) = series_from_areas(sh, &areas)?;
     let ranges: Vec<RangeRef> = series
         .iter()
         .filter_map(|x| match gridcraft_formula::parse(&x.values) {
@@ -706,8 +746,8 @@ pub fn recommend_charts(s: &Session, p: &Json) -> Result<Vec<(&'static str, &'st
 /// The chart `insert.chart` would insert for these params, without inserting it: the sheet it
 /// goes on and the chart (previews in the Recommended Charts dialog).
 pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
-    let r = block(s, p)?;
-    if r.count() > MAX_CHART_CELLS {
+    let areas = chart_areas(s, p)?;
+    if areas.iter().fold(0_u64, |count, area| count.saturating_add(area.count())) > MAX_CHART_CELLS {
         return Err(bad("insert.chart", "range too large for a chart"));
     }
     let mut t = str_param(p, "type").unwrap_or("column").to_string();
@@ -720,18 +760,14 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
     let sheet = target_sheet(s, p)?;
     let d = s.doc()?;
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
-    // Excel plots series by the longer dimension (more rows → series in columns).
-    let data_h = r.height();
-    let data_w = r.width();
-    let by_rows = data_w > data_h + 1;
     let kind = chart_kind(&t, &sub);
-    let mut series = series_from_range(sh, r, by_rows);
+    let (bounds, by_rows, mut series) = series_from_areas(sh, &areas)?;
     if series.is_empty() {
         return Err(EngineError::Other("Select data for the chart first.".into()));
     }
     scatter_x_from_first(kind, &mut series);
     let id = d.wb.next_object_id();
-    let at = cell_param_on(s, p, "at", sheet)?.unwrap_or_else(|| CellRef::new(r.start.row, r.end.col + 2));
+    let at = cell_param_on(s, p, "at", sheet)?.unwrap_or_else(|| CellRef::new(bounds.start.row, bounds.end.col + 2));
     let title = str_param(p, "title").map(str::to_string).or_else(|| {
         if series.len() == 1 {
             series[0].name.as_ref().map(|n| gridcraft_calc::evaluate(&d.wb, sheet, at, n).display())
@@ -758,7 +794,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         style: 1,
         x_title: None,
         y_title: None,
-        source: Some(format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), r.a1())),
+        source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
         by_rows,
         pivot: None,
     };
