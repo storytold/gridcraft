@@ -397,7 +397,12 @@ pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -
         let paths = candidates(role);
         let refs: Vec<(&str, u32)> = paths.iter().map(|(p, i)| (p.as_str(), *i)).collect();
         let mut chain: Vec<String> = Vec::new();
-        if let Some(fd) = try_load(&refs) {
+        if let Some(mut fd) = try_load(&refs) {
+            // Helvetica Neue Bold's own TrueType hints close Cyrillic е into ө at 13 pt on a Retina
+            // screen (#1184). Core Text never runs them, so this draws it the way macOS does.
+            if cfg!(target_os = "macos") && role == UI_BOLD {
+                fd.tweak.hinting = Some(false);
+            }
             let key = format!("sys-{role}");
             fonts.font_data.insert(key.clone(), Arc::new(fd));
             chain.push(key);
@@ -933,5 +938,20 @@ mod tests {
         let loaded = try_load(&[(bad_s.as_str(), 0), (good_s.as_str(), 0)]);
         assert_eq!(loaded.map(|fd| fd.font.len()), Some(real.len()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn macos_bold_interface_face_is_drawn_unhinted() {
+        // #1184: Helvetica Neue Bold's own TrueType hints close Cyrillic е into ө at 13 pt on a
+        // Retina screen. Core Text never runs them, so on macOS the face goes unhinted like every
+        // other app draws it; the regular face and the other platforms keep egui's default.
+        let fonts = font_definitions_for_language(Language::En);
+        let hinting = |key: &str| fonts.font_data.get(key).map(|fd| fd.tweak.hinting);
+        if let Some(bold) = hinting(&format!("sys-{UI_BOLD}")) {
+            assert_eq!(bold, if cfg!(target_os = "macos") { Some(false) } else { None });
+        }
+        if let Some(regular) = hinting(&format!("sys-{UI}")) {
+            assert_eq!(regular, None, "only the bold face is affected");
+        }
     }
 }
