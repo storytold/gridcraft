@@ -359,7 +359,8 @@ fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_co
             let row = body.start.row + i as u32;
             match h {
                 Some(info) => {
-                    shm.rows.insert(row, LineInfo { hidden: shm.rows.get(&row).is_some_and(|x| x.hidden), ..info });
+                    let hidden = shm.rows.get(&row).is_some_and(|x| x.hidden);
+                    shm.rows.insert(row, LineInfo { hidden, ..info });
                 }
                 None => {
                     if let Some(e) = shm.rows.get_mut(&row) {

@@ -1182,7 +1182,8 @@ fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
     let tooltip = str_param(p, "tooltip").map(str::to_string);
     let external = links_outside(&s.doc()?.wb, sheet, &target);
     edit(s, |cx| {
-        let link_style = cx.wb.styles.derive(cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default(), |st| {
+        let base = cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
+        let link_style = cx.wb.styles.derive(base, |st| {
             st.font.color = Color::Theme(10, 0);
             st.font.underline = Underline::Single;
         });

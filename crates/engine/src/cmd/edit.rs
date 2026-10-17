@@ -704,9 +704,16 @@ fn slide_together(wb: &gridcraft_model::Workbook, sheet: usize, areas: &[RangeRe
     let mut out = wb.clone();
     let dst = out.sheet_mut(sheet)?;
     dst.take_cells(block);
-    dst.spill.retain(|c, _| !block.contains(*c));
-    dst.spill_ranges.retain(|c, _| !block.contains(*c));
-    dst.comments.retain(|c, _| !block.contains(*c));
+    // Only when there is a spill to clear: a write gives the sheet a spill map of its own.
+    if dst.spill.range(block.start..=block.end).any(|(c, _)| block.contains(*c)) {
+        dst.spill.retain(|c, _| !block.contains(*c));
+    }
+    if dst.spill_ranges.range(block.start..=block.end).any(|(c, _)| block.contains(*c)) {
+        dst.spill_ranges.retain(|c, _| !block.contains(*c));
+    }
+    if dst.comments.range(block.start..=block.end).any(|(c, _)| block.contains(*c)) {
+        dst.comments.retain(|c, _| !block.contains(*c));
+    }
     dst.merges.retain(|m| !m.intersects(&block));
     if across {
         dst.cols.retain(|c, _| !(block.start.col..=block.end.col).contains(c));
