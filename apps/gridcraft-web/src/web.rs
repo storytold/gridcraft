@@ -137,7 +137,7 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             let ctx = ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let Some(file) = rfd::AsyncFileDialog::new()
-                    .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"])
+                    .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json", "parquet"])
                     .pick_file()
                     .await
                 else {
@@ -298,6 +298,7 @@ fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
             "xlsb" => "Excel Binary Workbook (*.xlsb)",
             "ods" => "OpenDocument Spreadsheet (*.ods)",
             "csv" => "CSV (Comma delimited) (*.csv)",
+            "parquet" => "Parquet table (*.parquet)",
             "tsv" => "Tab Delimited Text (*.tsv)",
             "txt" => "Plain Text (*.txt)",
             "pdf" => "PDF Document (*.pdf)",

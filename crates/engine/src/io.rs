@@ -15,6 +15,7 @@ pub enum FileKind {
     Xls,
     Xlsb,
     Ods,
+    Parquet,
     Csv,
     Tsv,
     Json,
@@ -29,6 +30,7 @@ impl FileKind {
             "xls" | "xlt" => FileKind::Xls,
             "xlsb" => FileKind::Xlsb,
             "ods" => FileKind::Ods,
+            "parquet" => FileKind::Parquet,
             "csv" => FileKind::Csv,
             "tsv" | "tab" | "txt" => FileKind::Tsv,
             "json" | "scjson" => FileKind::Json,
@@ -52,12 +54,25 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     open_bytes_with_password(name, bytes, None)
 }
 
+/// Opens an owned input buffer. Parquet transfers the allocation directly to its decoder;
+/// other formats retain the same parsing, password and row-fitting behavior as borrowed input.
+pub fn open_owned_bytes_with_password(name: &str, bytes: Vec<u8>, password: Option<&str>) -> Result<(Workbook, Vec<String>)> {
+    if gridcraft_parquet::is_parquet(&bytes) {
+        let (mut wb, report) = gridcraft_parquet::read_owned(bytes).map_err(|e| EngineError::Other(format!("We can't import '{name}': {e}")))?;
+        rename_first_sheet(&mut wb, name);
+        return Ok((wb, report.warnings));
+    }
+    open_bytes_with_password(name, &bytes, password)
+}
+
 /// [`open_bytes`], first decrypting a password-protected workbook with `password`. Errors never
 /// quote the password.
 pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>) -> Result<(Workbook, Vec<String>)> {
     if gridcraft_xlsx::sniff(bytes) != gridcraft_xlsx::Format::Encrypted {
         let (mut wb, warnings) = open_plain(name, bytes)?;
-        fit_imported_rows(&mut wb);
+        if !gridcraft_parquet::is_parquet(bytes) {
+            fit_imported_rows(&mut wb);
+        }
         return Ok((wb, warnings));
     }
     // A scheme no password opens is said straight away, rather than after asking for one.
@@ -115,6 +130,13 @@ fn decrypt_message(name: &str, e: gridcraft_xlsx::DecryptError) -> String {
 fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
+    if gridcraft_parquet::is_parquet(bytes)
+        || (kind == Some(FileKind::Parquet) && matches!(sniffed, gridcraft_xlsx::Format::Csv | gridcraft_xlsx::Format::Unknown))
+    {
+        let (mut wb, report) = gridcraft_parquet::read(bytes).map_err(|e| EngineError::Other(format!("We can't import '{name}': {e}")))?;
+        rename_first_sheet(&mut wb, name);
+        return Ok((wb, report.warnings));
+    }
     if sniffed == gridcraft_xlsx::Format::Xls {
         let (wb, report) = gridcraft_xlsx::read_xls(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
         return Ok((wb, report.warnings));
@@ -189,7 +211,7 @@ pub fn save_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
     // a typo like `.cvs` would otherwise produce a file no other app recognises.
     let Some(kind) = FileKind::from_path(path) else {
         let name = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path);
-        return Err(EngineError::Other(format!("{name}: unknown file format. Save as .xlsx, .csv, .tsv, .json or .html.")));
+        return Err(EngineError::Other(format!("{name}: unknown file format. Save as .xlsx, .csv, .tsv, .json, .parquet or .html.")));
     };
     save_bytes_as(wb, path, kind)
 }
@@ -209,6 +231,10 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
         // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
         FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','))).transpose().map(Option::unwrap_or_default),
         FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t')).transpose().map(Option::unwrap_or_default),
+        FileKind::Parquet => wb
+            .sheet(sheet)
+            .ok_or_else(|| EngineError::Other("No active sheet to export".into()))
+            .and_then(|sh| gridcraft_parquet::write(sh).map_err(|e| EngineError::Other(e.to_string()))),
         FileKind::Json => serde_json::to_vec_pretty(wb).map_err(|e| EngineError::Other(e.to_string())),
         FileKind::Html => to_html(wb, sheet).map(String::into_bytes),
     }

@@ -1175,6 +1175,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             let id = match fmt.as_str() {
                                 "csv" => "file.exportCsv",
                                 "html" => "file.exportHtml",
+                                "parquet" => "file.exportParquet",
                                 _ => "file.saveAs",
                             };
                             app.run_or_alert(id, json!({"path": t}));

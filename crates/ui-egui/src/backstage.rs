@@ -120,8 +120,13 @@ pub struct Backstage {
 
 /// Save As file types: (extension, label). The first is the workbook itself; the others are
 /// exports that leave the workbook's own file and unsaved state alone.
-pub const SAVE_TYPES: [(&str, &str); 4] =
-    [("xlsx", "Excel Workbook (*.xlsx)"), ("csv", "CSV UTF-8 (Comma delimited) (*.csv)"), ("html", "Web Page (*.html)"), ("pdf", "PDF (*.pdf)")];
+pub const SAVE_TYPES: [(&str, &str); 5] = [
+    ("xlsx", "Excel Workbook (*.xlsx)"),
+    ("csv", "CSV UTF-8 (Comma delimited) (*.csv)"),
+    ("html", "Web Page (*.html)"),
+    ("pdf", "PDF (*.pdf)"),
+    ("parquet", "Parquet table (*.parquet)"),
+];
 
 impl Backstage {
     pub fn new(page: Page) -> Backstage {
@@ -685,7 +690,15 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
         }
     }
     ui.add_space(18.0);
-    dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
+    dim(ui, lang.tr("A CSV file, Parquet table, web page or PDF is a copy: the workbook keeps its own file."));
+    if fmt == "parquet" {
+        dim(
+            ui,
+            lang.tr(
+                "Parquet uses the first used row as unique text headers. Each column needs one data type; formulas and formatting are not saved.",
+            ),
+        );
+    }
 }
 
 fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
@@ -860,6 +873,7 @@ fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
     for (fmt, icon, title, detail) in [
         ("csv", Icon::TextColumns, "CSV (Comma delimited)", "Save the active sheet as comma-separated text."),
         ("html", Icon::Link, "Web Page (.html)", "Save the workbook as a web page."),
+        ("parquet", Icon::TextColumns, "Parquet table (.parquet)", "Save active sheet values; the first used row supplies unique text headers."),
     ] {
         if action_row(ui, icon, lang.tr(title), lang.tr(detail)).clicked() && export_as(app, fmt) {
             out.close = true;
@@ -867,7 +881,7 @@ fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
     }
 }
 
-/// Exports the active workbook as `pdf`, `csv` or `html`: through the save picker on the desktop,
+/// Exports the active workbook as `pdf`, `csv`, `parquet` or `html`: through the save picker on the desktop,
 /// as a browser download on the web. Returns whether a file was written or handed over.
 pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     if !app.commit_edit(0, 0, false, false) {
@@ -877,6 +891,7 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
         "pdf" => "file.exportPdf",
         "csv" => "file.exportCsv",
         "html" => "file.exportHtml",
+        "parquet" => "file.exportParquet",
         _ => return false,
     };
     let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());

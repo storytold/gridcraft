@@ -19,6 +19,7 @@ gridcraft-functions = { path = "crates/functions" }
 gridcraft-model = { path = "crates/model" }
 gridcraft-calc = { path = "crates/calc" }
 gridcraft-xlsx = { path = "crates/xlsx" }
+gridcraft-parquet = { path = "crates/parquet" }
 gridcraft-chart = { path = "crates/chart" }
 gridcraft-engine = { path = "crates/engine" }
 gridcraft-ui-egui = { path = "crates/ui-egui" }

@@ -217,3 +217,29 @@ fn a_cancelled_export_pdf_picker_writes_nothing() {
     assert!(h.state().message.is_none());
     assert!(h.state_mut().session.take_ui_requests().is_empty());
 }
+
+#[test]
+fn parquet_export_downloads_typed_table_in_light_and_dark_themes() {
+    for dark in [false, true] {
+        let downloads = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+        let capture = downloads.clone();
+        let mut h = harness(Services {
+            download: Some(Box::new(move |name, bytes| capture.lock().unwrap().push((name.into(), bytes.to_vec())))),
+            ..Default::default()
+        });
+        h.state_mut().ui.dark = dark;
+        for (cell, input) in [("A1", "Amount"), ("A2", "42")] {
+            h.state_mut().run("cell.set", serde_json::json!({"cell":cell,"input":input})).unwrap();
+        }
+        choose(&mut h, "Export");
+        click(&mut h, "Parquet table (.parquet)");
+        assert!(h.state().backstage.is_none());
+        let saved = downloads.lock().unwrap();
+        assert_eq!(saved.len(), 1);
+        assert!(saved[0].0.ends_with(".parquet"));
+        assert!(saved[0].1.starts_with(b"PAR1"));
+        let (wb, _) = gridcraft_engine::io::open_bytes(&saved[0].0, &saved[0].1).unwrap();
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(1, 0)), Value::Number(42.0));
+        assert!(h.state().session.active().unwrap().path.is_none());
+    }
+}

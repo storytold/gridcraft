@@ -1,0 +1,20 @@
+[package]
+name = "gridcraft-parquet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "GridCraft flat Parquet data import and export"
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-core = { workspace = true }
+gridcraft-model = { workspace = true }
+thiserror = { workspace = true }
+bytes = "1"
+parquet = { version = "60", default-features = false, features = ["snap", "brotli", "flate2-rust_backend", "lz4"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+parquet = { version = "60", default-features = false, features = ["zstd"] }

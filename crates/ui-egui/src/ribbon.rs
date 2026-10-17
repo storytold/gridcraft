@@ -134,9 +134,12 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     if ui.button("Export as PDF…").clicked() {
                         app.run_or_alert("file.exportPdf", json!({}));
                     }
-                    for (label, fmt) in
-                        [("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"), ("Export as CSV…", "csv"), ("Export as Web Page (.html)…", "html")]
-                    {
+                    for (label, fmt) in [
+                        ("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"),
+                        ("Export as CSV…", "csv"),
+                        ("Export as Web Page (.html)…", "html"),
+                        ("Export as Parquet…", "parquet"),
+                    ] {
                         if ui.button(label).clicked() {
                             app.open_dialog("saveCopy", json!({"format": fmt}));
                         }
