@@ -1484,7 +1484,7 @@ pub(crate) fn paint_border(p: &Painter, pts: [Pos2; 2], style: BorderStyle, col:
     }
 }
 
-fn paint_cf_icon(p: &Painter, r: Rect, set: &str, idx: usize) {
+pub(crate) fn paint_cf_icon(p: &Painter, r: Rect, set: &str, idx: usize) {
     let n = gridcraft_engine::cf::icon_count(set);
     let palette3 = [Color32::from_rgb(0xD1, 0x3B, 0x2F), Color32::from_rgb(0xF2, 0xB8, 0x2E), Color32::from_rgb(0x2E, 0x9E, 0x4F)];
     let col = if n <= 3 {
@@ -1499,24 +1499,62 @@ fn paint_cf_icon(p: &Painter, r: Rect, set: &str, idx: usize) {
     };
     let lower = set.to_ascii_lowercase();
     if lower.contains("arrow") {
-        let c = r.center();
-        let s = r.width() / 2.0;
-        let pts = if idx + 1 == n {
-            vec![pos2(c.x, c.y - s), pos2(c.x + s, c.y + 0.1 * s), pos2(c.x - s, c.y + 0.1 * s)]
+        // Excel's block arrows: a head on a stem, turning from down (lowest) through right to up
+        // (highest); green at the top, red at the bottom, yellow between (grey sets stay grey).
+        let t = idx as f32 / (n - 1).max(1) as f32;
+        let angle = (90.0 - 180.0 * t).to_radians();
+        let col = if lower.contains("gray") {
+            Color32::from_rgb(0x80, 0x80, 0x80)
+        } else if idx + 1 == n {
+            Color32::from_rgb(0x00, 0xA6, 0x50)
         } else if idx == 0 {
-            vec![pos2(c.x, c.y + s), pos2(c.x - s, c.y - 0.1 * s), pos2(c.x + s, c.y - 0.1 * s)]
+            Color32::from_rgb(0xE0, 0x30, 0x20)
         } else {
-            vec![pos2(c.x + s, c.y), pos2(c.x - 0.1 * s, c.y - s), pos2(c.x - 0.1 * s, c.y + s)]
+            Color32::from_rgb(0xF5, 0xB4, 0x00)
         };
-        p.add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
-    } else if lower.contains("rating") || lower.contains("quarter") {
-        p.circle_stroke(r.center(), r.width() / 2.0 - 0.5, Stroke::new(1.0, Color32::GRAY));
+        let (c, s) = (r.center(), r.width() / 2.0);
+        let (dx, dy) = (angle.cos(), angle.sin());
+        let at = |along: f32, across: f32| pos2(c.x + s * (along * dx - across * dy), c.y + s * (along * dy + across * dx));
+        p.add(egui::Shape::convex_polygon(vec![at(1.0, 0.0), at(0.05, 0.9), at(0.05, -0.9)], col, Stroke::NONE));
+        p.add(egui::Shape::convex_polygon(vec![at(0.1, 0.38), at(-1.0, 0.38), at(-1.0, -0.38), at(0.1, -0.38)], col, Stroke::NONE));
+    } else if lower.contains("rating") {
+        // Excel's signal bars: four rising bars, filled blue up to the level.
+        let filled = if n == 4 { idx + 1 } else { idx };
+        let w = r.width() / 4.0;
+        for i in 0..4 {
+            let h = r.height() * (0.25 + 0.25 * i as f32);
+            let bar = Rect::from_min_max(pos2(r.left() + i as f32 * w + 0.5, r.bottom() - h), pos2(r.left() + (i + 1) as f32 * w - 0.5, r.bottom()));
+            let c = if i < filled { Color32::from_rgb(0x2E, 0x75, 0xB6) } else { Color32::from_rgb(0xC8, 0xD3, 0xE0) };
+            p.rect_filled(bar, 0.0, c);
+        }
+    } else if lower.contains("quarter") {
+        // Harvey balls: empty at the bottom, full at the top, filled clockwise from 12 o'clock.
+        let (c, rad) = (r.center(), r.width() / 2.0 - 0.5);
+        let dark = Color32::from_rgb(0x40, 0x40, 0x40);
+        p.circle_filled(c, rad, Color32::WHITE);
         let frac = idx as f32 / (n - 1).max(1) as f32;
-        p.rect_filled(
-            Rect::from_min_size(pos2(r.left() + 2.0, r.bottom() - 2.0 - (r.height() - 4.0) * frac), vec2(r.width() - 4.0, (r.height() - 4.0) * frac)),
-            1.0,
-            Color32::from_rgb(0x2B, 0x7C, 0xD3),
-        );
+        if frac >= 1.0 {
+            p.circle_filled(c, rad, dark);
+        } else if frac > 0.0 {
+            let steps = 24;
+            let mut pts = vec![c];
+            for k in 0..=steps {
+                let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * frac * k as f32 / steps as f32;
+                pts.push(pos2(c.x + rad * a.cos(), c.y + rad * a.sin()));
+            }
+            // A quarter or half wedge is convex; three quarters is drawn as half plus a quarter.
+            if frac <= 0.5 {
+                p.add(egui::Shape::convex_polygon(pts, dark, Stroke::NONE));
+            } else {
+                let half = pts.len() / 2 + 1;
+                let first: Vec<Pos2> = pts[..=half.min(pts.len() - 1)].to_vec();
+                let mut second = vec![c];
+                second.extend_from_slice(&pts[half.min(pts.len() - 1)..]);
+                p.add(egui::Shape::convex_polygon(first, dark, Stroke::NONE));
+                p.add(egui::Shape::convex_polygon(second, dark, Stroke::NONE));
+            }
+        }
+        p.circle_stroke(c, rad, Stroke::new(1.0, dark));
     } else {
         p.circle_filled(r.center(), r.width() / 2.0 - 0.5, col);
     }

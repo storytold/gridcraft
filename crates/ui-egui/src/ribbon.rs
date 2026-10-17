@@ -5,6 +5,7 @@ use gridcraft_engine::model::{HAlign, Style, VAlign};
 use serde_json::json;
 
 use crate::SheetApp;
+use crate::cf_glyphs::{self, CfGlyph};
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Tokens};
@@ -1141,47 +1142,89 @@ fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     }
 }
 
+/// `room` px at the start of a menu button for its picture, painted once the button is laid out.
+fn cf_atoms(room: f32, label: &str) -> (egui::Atom<'_>, &str) {
+    (egui::Atom::custom(egui::Id::new("cf_glyph"), vec2(room, 18.0)), label)
+}
+
+fn paint_cf_atom(ui: &Ui, response: &egui::Response, glyph: CfGlyph) {
+    let left = response.rect.left() + ui.spacing().button_padding.x;
+    let r = Rect::from_min_size(pos2(left, response.rect.center().y - 9.0), vec2(cf_glyphs::width(glyph), 18.0));
+    cf_glyphs::paint(ui.painter(), r, glyph, Tokens::get(ui.ctx()).text);
+}
+
+/// A Conditional Formatting menu item with its picture, as in Excel.
+fn cf_button(app: &SheetApp, ui: &mut Ui, glyph: CfGlyph, label: &str) -> egui::Response {
+    cf_button_in(app, ui, glyph, cf_glyphs::width(glyph), label)
+}
+
+/// `cf_button` with `room` for the picture, so labels line up beside pictures of different widths.
+fn cf_button_in(app: &SheetApp, ui: &mut Ui, glyph: CfGlyph, room: f32, label: &str) -> egui::Response {
+    let text = app.ui.language.tr(label);
+    let response = ui.add(egui::Button::new(cf_atoms(room, text)).min_size(vec2(0.0, 24.0)));
+    paint_cf_atom(ui, &response, glyph);
+    response
+}
+
+/// A Conditional Formatting submenu with its picture.
+fn cf_submenu(app: &SheetApp, ui: &mut Ui, glyph: CfGlyph, label: &str, content: impl FnOnce(&mut Ui)) {
+    let text = app.ui.language.tr(label);
+    let button = egui::Button::new(cf_atoms(cf_glyphs::width(glyph), text))
+        .min_size(vec2(0.0, 24.0))
+        .right_text(egui::containers::menu::SubMenuButton::RIGHT_ARROW);
+    let (response, _) = egui::containers::menu::SubMenuButton::from_button(button).ui(ui, content);
+    paint_cf_atom(ui, &response, glyph);
+}
+
+fn hex(c: &str) -> Color32 {
+    Color32::from_hex(c).unwrap_or(Color32::GRAY)
+}
+
 fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
-    ui.menu_button("Highlight Cells Rules", |ui| {
-        for (label, op) in [("Greater Than…", "greater"), ("Less Than…", "less"), ("Between…", "between"), ("Equal To…", "equal")] {
-            if ui.button(label).clicked() {
-                app.open_dialog("cfQuick", json!({"type": "cellIs", "operator": op, "title": label}));
+    let mut open: Option<(&str, serde_json::Value)> = None;
+    let mut rule: Option<serde_json::Value> = None;
+    cf_submenu(app, ui, CfGlyph::HighlightCells, "Highlight Cells Rules", |ui| {
+        for (glyph, label, op) in
+            [(">", "Greater Than…", "greater"), ("<", "Less Than…", "less"), ("1-9", "Between…", "between"), ("=", "Equal To…", "equal")]
+        {
+            if cf_button(app, ui, CfGlyph::Cell(glyph), label).clicked() {
+                open = Some(("cfQuick", json!({"type": "cellIs", "operator": op, "title": label})));
             }
         }
-        if ui.button("Text that Contains…").clicked() {
-            app.open_dialog("cfQuick", json!({"type": "containsText", "title": "Text that Contains"}));
+        if cf_button(app, ui, CfGlyph::Cell("ab"), "Text that Contains…").clicked() {
+            open = Some(("cfQuick", json!({"type": "containsText", "title": "Text that Contains"})));
         }
-        if ui.button("A Date Occurring…").clicked() {
-            app.open_dialog("cfQuick", json!({"type": "timePeriod", "title": "A Date Occurring"}));
+        if cf_button(app, ui, CfGlyph::Cell("31"), "A Date Occurring…").clicked() {
+            open = Some(("cfQuick", json!({"type": "timePeriod", "title": "A Date Occurring"})));
         }
-        if ui.button("Duplicate Values…").clicked() {
-            act(app, "home.conditionalFormat", json!({"rule": {"type": "duplicate"}}));
+        if cf_button(app, ui, CfGlyph::Cell("2x"), "Duplicate Values…").clicked() {
+            rule = Some(json!({"type": "duplicate"}));
         }
     });
-    ui.menu_button("Top/Bottom Rules", |ui| {
-        menu_items(
-            app,
-            ui,
-            &[
-                ("Top 10 Items", "home.conditionalFormat", json!({"rule": {"type": "top10", "rank": 10}})),
-                ("Top 10%", "home.conditionalFormat", json!({"rule": {"type": "top10", "rank": 10, "percent": true}})),
-                ("Bottom 10 Items", "home.conditionalFormat", json!({"rule": {"type": "top10", "rank": 10, "bottom": true}})),
-                ("Bottom 10%", "home.conditionalFormat", json!({"rule": {"type": "top10", "rank": 10, "bottom": true, "percent": true}})),
-                ("Above Average", "home.conditionalFormat", json!({"rule": {"type": "aboveAverage"}})),
-                ("Below Average", "home.conditionalFormat", json!({"rule": {"type": "aboveAverage", "below": true}})),
-            ],
-        );
+    cf_submenu(app, ui, CfGlyph::TopBottom, "Top/Bottom Rules", |ui| {
+        for (glyph, label, r) in [
+            (CfGlyph::Rank { top: true, percent: false }, "Top 10 Items", json!({"type": "top10", "rank": 10})),
+            (CfGlyph::Rank { top: true, percent: true }, "Top 10%", json!({"type": "top10", "rank": 10, "percent": true})),
+            (CfGlyph::Rank { top: false, percent: false }, "Bottom 10 Items", json!({"type": "top10", "rank": 10, "bottom": true})),
+            (CfGlyph::Rank { top: false, percent: true }, "Bottom 10%", json!({"type": "top10", "rank": 10, "bottom": true, "percent": true})),
+            (CfGlyph::Average { above: true }, "Above Average", json!({"type": "aboveAverage"})),
+            (CfGlyph::Average { above: false }, "Below Average", json!({"type": "aboveAverage", "below": true})),
+        ] {
+            if cf_button(app, ui, glyph, label).clicked() {
+                rule = Some(r);
+            }
+        }
     });
-    ui.menu_button("Data Bars", |ui| {
+    cf_submenu(app, ui, CfGlyph::DataBars, "Data Bars", |ui| {
         for (label, c) in
             [("Blue", "#638EC6"), ("Green", "#63BE7B"), ("Red", "#F8696B"), ("Orange", "#FFB628"), ("Light Blue", "#008AEF"), ("Purple", "#D6007B")]
         {
-            if ui.button(label).clicked() {
-                act(app, "home.conditionalFormat", json!({"rule": {"type": "dataBar", "color": c}}));
+            if cf_button(app, ui, CfGlyph::DataBar(hex(c)), label).clicked() {
+                rule = Some(json!({"type": "dataBar", "color": c}));
             }
         }
     });
-    ui.menu_button("Color Scales", |ui| {
+    cf_submenu(app, ui, CfGlyph::ColorScales, "Color Scales", |ui| {
         for (label, cols) in [
             ("Green - Yellow - Red", vec!["#63BE7B", "#FFEB84", "#F8696B"]),
             ("Red - Yellow - Green", vec!["#F8696B", "#FFEB84", "#63BE7B"]),
@@ -1190,12 +1233,13 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ("White - Green", vec!["#FCFCFF", "#63BE7B"]),
             ("White - Red", vec!["#FCFCFF", "#F8696B"]),
         ] {
-            if ui.button(label).clicked() {
-                act(app, "home.conditionalFormat", json!({"rule": {"type": "colorScale", "colors": cols}}));
+            let swatch: Vec<Color32> = cols.iter().map(|c| hex(c)).collect();
+            if cf_button(app, ui, CfGlyph::ColorScale(&swatch), label).clicked() {
+                rule = Some(json!({"type": "colorScale", "colors": cols}));
             }
         }
     });
-    ui.menu_button("Icon Sets", |ui| {
+    cf_submenu(app, ui, CfGlyph::IconSets, "Icon Sets", |ui| {
         for (label, set) in [
             ("3 Arrows", "3Arrows"),
             ("3 Traffic Lights", "3TrafficLights1"),
@@ -1204,27 +1248,34 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ("5 Arrows", "5Arrows"),
             ("5 Quarters", "5Quarters"),
         ] {
-            if ui.button(label).clicked() {
-                act(app, "home.conditionalFormat", json!({"rule": {"type": "iconSet", "set": set}}));
+            if cf_button_in(app, ui, CfGlyph::IconSet(set), cf_glyphs::width(CfGlyph::IconSet("5Arrows")), label).clicked() {
+                rule = Some(json!({"type": "iconSet", "set": set}));
             }
         }
     });
     ui.separator();
-    if ui.button("New Rule…").clicked() {
-        app.open_dialog("cfQuick", json!({"type": "expression", "title": "New Formatting Rule"}));
+    if cf_button(app, ui, CfGlyph::NewRule, "New Rule…").clicked() {
+        open = Some(("cfQuick", json!({"type": "expression", "title": "New Formatting Rule"})));
     }
-    ui.menu_button("Clear Rules", |ui| {
-        menu_items(
-            app,
-            ui,
-            &[
-                ("Clear Rules from Selected Cells", "home.clearRules", json!({})),
-                ("Clear Rules from Entire Sheet", "home.clearRules", json!({"sheet": true})),
-            ],
-        );
+    let mut clear: Option<serde_json::Value> = None;
+    cf_submenu(app, ui, CfGlyph::ClearRules, "Clear Rules", |ui| {
+        for (label, p) in [("Clear Rules from Selected Cells", json!({})), ("Clear Rules from Entire Sheet", json!({"sheet": true}))] {
+            if ui.add(egui::Button::new(app.ui.language.tr(label)).frame(false).min_size(vec2(220.0, 22.0))).clicked() {
+                clear = Some(p);
+            }
+        }
     });
-    if ui.button("Manage Rules…").clicked() {
-        app.open_dialog("manageRules", json!({}));
+    if cf_button(app, ui, CfGlyph::ManageRules, "Manage Rules…").clicked() {
+        open = Some(("manageRules", json!({})));
+    }
+    if let Some((dialog, params)) = open {
+        app.open_dialog(dialog, params);
+    }
+    if let Some(r) = rule {
+        act(app, "home.conditionalFormat", json!({"rule": r}));
+    }
+    if let Some(p) = clear {
+        act(app, "home.clearRules", p);
     }
 }
 
