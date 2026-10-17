@@ -11,6 +11,11 @@ for display. API, clipboard and XLSX syntax remain stable. Existing names overri
 The revision is based directly on main after #31/#104 and Portuguese interface support (#82)
 merged. Those locales retain their existing formula fallback; this change adds only Spanish.
 
+Each formula language is data (`crates/formula/src/input/<language>.rs`: names, booleans,
+errors, table specifiers, separators) behind one `Dialect` table, so a language is added by a
+data file and one `FormulaLocale` variant, without new parsing code. Every entry carries its
+source; Microsoft's localized pages are machine-translated, so names need two agreeing signals.
+
 ## Preserve array evaluation when exporting formulas (#64)
 
 GridCraft evaluates ordinary formulas with array semantics even when the final result occupies one cell. XLSX export marks actual spills and formulas whose results may differ under legacy implicit intersection as dynamic, using the spill range or a single-cell array reference. Legacy CSE array ranges keep their existing representation.

@@ -256,7 +256,7 @@ impl<'h> Evaluator<'h> {
     }
 
     fn name(&mut self, n: &str) -> Ev {
-        if let Some((_, v)) = self.env.iter().rev().find(|(k, _)| k.eq_ignore_ascii_case(n)) {
+        if let Some((_, v)) = self.env.iter().rev().find(|(k, _)| same_name(k, n)) {
             return v.clone();
         }
         let wb = self.host.workbook();
@@ -772,7 +772,7 @@ impl<'h> Evaluator<'h> {
                 Ev::L(Arc::new(Lambda { params, body: body.clone(), env: self.env.clone() }))
             }
             "ISOMITTED" => {
-                let r = matches!(args.first(), Some(Expr::Name(n)) if self.env.iter().rev().find(|(k, _)| k.eq_ignore_ascii_case(n)).is_some_and(|(_, v)| matches!(v, Ev::V(Value::Empty))));
+                let r = matches!(args.first(), Some(Expr::Name(n)) if self.env.iter().rev().find(|(k, _)| same_name(k, n)).is_some_and(|(_, v)| matches!(v, Ev::V(Value::Empty))));
                 Ev::V(Value::Bool(r))
             }
             "MAP" | "REDUCE" | "SCAN" | "BYROW" | "BYCOL" | "MAKEARRAY" => self.higher_order(name, args),
@@ -975,7 +975,7 @@ impl<'h> Evaluator<'h> {
     /// that name.
     fn function_by_name(&self, e: &Expr) -> Option<String> {
         let Expr::Name(n) = e else { return None };
-        if self.env.iter().any(|(k, _)| k.eq_ignore_ascii_case(n)) || self.host.workbook().name(n, self.sheet).is_some() {
+        if self.env.iter().any(|(k, _)| same_name(k, n)) || self.host.workbook().name(n, self.sheet).is_some() {
             return None;
         }
         let u = n.to_ascii_uppercase();
@@ -1866,6 +1866,15 @@ pub const SPECIAL_FUNCTIONS: &[&str] = &[
 
 pub fn is_known_function(n: &str) -> bool {
     is_special(&n.to_ascii_uppercase()) || gridcraft_functions::lookup(n).is_some()
+}
+
+/// LET/LAMBDA variable names ignore case in any script, as in Excel (`zählenwenn` is
+/// `ZÄHLENWENN`); the formula editor resolves shadowing with the same rule.
+fn same_name(a: &str, b: &str) -> bool {
+    if a.is_ascii() && b.is_ascii() {
+        return a.eq_ignore_ascii_case(b);
+    }
+    a.chars().flat_map(char::to_uppercase).eq(b.chars().flat_map(char::to_uppercase))
 }
 
 #[allow(dead_code)]

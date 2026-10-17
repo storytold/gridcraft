@@ -86,8 +86,8 @@ fn hide_udf_prefix(text: &str, locale: FormulaLocale) -> String {
     out
 }
 
-// Descriptions/signatures for the supported Spanish function table; untranslated functions
-// retain their English help. Parameter punctuation follows the same locale as entry.
+// Descriptions/signatures for common Spanish functions; other functions keep their English help
+// under their local name. Parameter punctuation follows the same locale as entry.
 const SPANISH_HELP: &[(&str, &str, &str)] = &[
     ("SUM", "SUMA(número1; [número2]; ...)", "Suma los números."),
     ("AVERAGE", "PROMEDIO(número1; [número2]; ...)", "Devuelve el promedio de los números."),
@@ -108,7 +108,11 @@ pub(crate) fn signature(name: &str, locale: FormulaLocale) -> Option<String> {
     {
         return Some((*signature).into());
     }
-    crate::formula_bar::function_signature(canonical).map(|s| s.replace(',', &locale.list_separator().to_string()))
+    let signature = crate::formula_bar::function_signature(canonical)?.replace(',', &locale.list_separator().to_string());
+    Some(match signature.strip_prefix(canonical) {
+        Some(params) if locale != FormulaLocale::En => format!("{}{params}", locale.function_name(canonical)),
+        _ => signature,
+    })
 }
 
 pub(crate) fn description(name: &str, locale: FormulaLocale) -> Option<String> {

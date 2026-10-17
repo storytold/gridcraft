@@ -160,12 +160,17 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 for e in CellError::ALL {
                     let t = e.as_str();
                     if rest.len() >= t.len() && rest.get(..t.len()).is_some_and(|p| p.eq_ignore_ascii_case(t)) {
-                        found = Some(e);
+                        found = Some((e, t.chars().count()));
                         break;
                     }
                 }
-                let Some(e) = found else { return Err(LexError { msg: "unknown error literal".into(), pos: start }) };
-                let len = e.as_str().chars().count();
+                // The language's own spelling (`#NV`, `#Н/Д`); the longer match wins.
+                if let Some((e, len)) = locale.error_prefix(rest)
+                    && found.is_none_or(|(_, english)| len > english)
+                {
+                    found = Some((e, len));
+                }
+                let Some((e, len)) = found else { return Err(LexError { msg: "unknown error literal".into(), pos: start }) };
                 // `#REF!A1` style is not valid; `#REF!` is an error literal.
                 push(&mut out, Tok::Error(e), i + len);
                 i += len;
@@ -192,7 +197,8 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                         Some(_) => j += 1,
                     }
                 }
-                let inner = src.get(pos_of(i + 1)..pos_of(j.saturating_sub(1))).unwrap_or("").to_string();
+                let inner = src.get(pos_of(i + 1)..pos_of(j.saturating_sub(1))).unwrap_or("");
+                let inner = if locale == crate::FormulaLocale::En { inner.to_string() } else { locale.struct_to_canonical(inner) };
                 push(&mut out, Tok::Struct(inner), j);
                 i = j;
             }
