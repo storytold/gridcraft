@@ -217,3 +217,26 @@ fn a_cancelled_export_pdf_picker_writes_nothing() {
     assert!(h.state().message.is_none());
     assert!(h.state_mut().session.take_ui_requests().is_empty());
 }
+
+#[test]
+fn closing_the_last_workbook_quits_and_close_with_none_open_quits() {
+    let mut h = harness(Services::default());
+    assert_eq!(h.state().session.documents().len(), 1);
+    h.state_mut().run("file.close", serde_json::json!({})).unwrap();
+    assert!(h.state().session.documents().is_empty());
+    assert!(h.state().quit_requested, "closing the last workbook quits");
+    h.run_steps(2);
+    assert!(!h.state().quit_requested, "the request is consumed once, so it cannot loop");
+    // Cmd+W with nothing open (the command itself is disabled) also quits.
+    h.state_mut().run("file.close", serde_json::json!({})).unwrap();
+    assert!(h.state().quit_requested);
+}
+
+#[test]
+fn closing_one_of_two_workbooks_does_not_quit() {
+    let mut h = harness(Services::default());
+    h.state_mut().session.new_workbook();
+    h.state_mut().run("file.close", serde_json::json!({})).unwrap();
+    assert_eq!(h.state().session.documents().len(), 1);
+    assert!(!h.state().quit_requested);
+}

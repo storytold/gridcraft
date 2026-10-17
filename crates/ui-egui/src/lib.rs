@@ -219,6 +219,9 @@ pub struct SheetApp {
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
     pub message: Option<(String, String)>,
+    /// Set when the last workbook was closed (or Close was pressed with none open): `logic` then
+    /// closes the window once, so the app quits like closing its last window.
+    pub quit_requested: bool,
     pub toast: Option<(String, f64)>,
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
@@ -276,6 +279,7 @@ impl SheetApp {
             dialog: None,
             backstage: None,
             message: None,
+            quit_requested: false,
             toast: None,
             notice: None,
             services,
@@ -380,8 +384,17 @@ impl SheetApp {
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
+        // Close with nothing open quits (the command itself is disabled without a workbook).
+        if id == "file.close" && self.session.documents().is_empty() {
+            self.quit_requested = true;
+            return Ok(json!({"closed": true, "quit": true}));
+        }
         let r = self.session.run(id, params);
         self.after_engine();
+        // Closing the last workbook (the unsaved-changes prompt already resolved) quits.
+        if id == "file.close" && self.session.documents().is_empty() && r.as_ref().is_ok_and(|r| r.get("closed") == Some(&json!(true))) {
+            self.quit_requested = true;
+        }
         // The new chart is selected, as after inserting any object, so Delete removes it, not its data.
         if id == "insert.chart"
             && let Ok(r) = &r
@@ -990,6 +1003,9 @@ impl SheetApp {
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.quit_requested) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
         self.ui.keytip_invoke = None;

@@ -107,6 +107,8 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         K if cmd && s && mac => run("data.group"),
         J if cmd && s && mac => run("data.ungroup"),
         P if cmd && !s => run("file.print"),
+        // Control+W on the Mac closes like Command+W (the last workbook closing quits the app).
+        W if mac && ctrl && !cmd && !s => run("file.close"),
         Period if cmd && s => run("home.increaseFontSize"),
         Comma if cmd && s => run("home.decreaseFontSize"),
         Space if cmd && s => run("edit.selectAll"),
@@ -250,4 +252,21 @@ fn extend(app: &mut SheetApp, anchor: CellRef, active: CellRef, to: CellRef) {
     }
     app.grid.ensure_visible = true;
     app.grid.reveal_moving_end = true;
+}
+
+#[cfg(test)]
+mod close_tests {
+    use super::*;
+
+    fn is_close(s: Option<Shortcut>) -> bool {
+        matches!(s, Some(Shortcut::Run("file.close", _)))
+    }
+
+    #[test]
+    fn control_w_on_the_mac_closes_like_command_w() {
+        let ctrl = Modifiers { ctrl: true, ..Modifiers::NONE };
+        assert!(is_close(lookup(Key::W, Some(Key::W), ctrl, true)), "Ctrl+W on macOS");
+        let shifted = Modifiers { ctrl: true, shift: true, ..Modifiers::NONE };
+        assert!(!is_close(lookup(Key::W, Some(Key::W), shifted, true)));
+    }
 }
