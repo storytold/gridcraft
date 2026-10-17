@@ -499,9 +499,22 @@ fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u32)>)> {
 
 /// Linux directories that hold CJK fonts across distributions: Debian/Ubuntu (`opentype/noto`,
 /// `truetype/wqy`), Fedora (`google-noto-cjk`), Arch (`noto-cjk`, `wenquanyi`), plus local and
-/// flat layouts.
+/// flat layouts. Flatpak exposes the same host layouts through read-only font mounts.
 #[cfg(not(target_arch = "wasm32"))]
-const LINUX_CJK_DIRS: [&str; 10] = [
+const LINUX_CJK_DIRS: [&str; 21] = [
+    // Flatpak mounts host fonts here without a broad filesystem permission. Keep the same
+    // distribution layouts as below; /usr/share/fonts inside the sandbox belongs to the runtime.
+    "/run/host/fonts/opentype/noto",
+    "/run/host/fonts/google-noto-cjk",
+    "/run/host/fonts/noto-cjk",
+    "/run/host/fonts/truetype/noto",
+    "/run/host/fonts/noto",
+    "/run/host/fonts/truetype",
+    "/run/host/fonts/TTF",
+    "/run/host/fonts",
+    "/run/host/local-fonts",
+    "/run/host/local-fonts/noto-cjk",
+    "/run/host/user-fonts",
     "/usr/share/fonts/opentype/noto",
     "/usr/share/fonts/google-noto-cjk",
     "/usr/share/fonts/noto-cjk",
@@ -828,6 +841,33 @@ mod tests {
     }
 
     #[test]
+    fn cjk_fallback_probes_flatpak_fonts_with_the_correct_locale_faces() {
+        // Exercise the candidates the fallback loader actually consumes, not just the directory
+        // constant. This must work on CI without an installed CJK font or a Flatpak runtime.
+        for (candidates, face) in [(cjk_han_japanese(), 0), (cjk_han_simplified(), 2), (cjk_hangul(), 1)] {
+            for directory in [
+                "/run/host/fonts/opentype/noto",
+                "/run/host/fonts/google-noto-cjk",
+                "/run/host/fonts/noto-cjk",
+                "/run/host/fonts/truetype/noto",
+                "/run/host/fonts/noto",
+                "/run/host/fonts/truetype",
+                "/run/host/fonts/TTF",
+                "/run/host/fonts",
+                "/run/host/local-fonts",
+                "/run/host/local-fonts/noto-cjk",
+                "/run/host/user-fonts",
+            ] {
+                let path = format!("{directory}/NotoSansCJK-Regular.ttc");
+                assert!(candidates.contains(&(path.clone(), face)), "missing Flatpak CJK candidate {path}, face {face}");
+            }
+        }
+        let chinese = cjk_han_simplified();
+        assert!(chinese.contains(&("/run/host/fonts/truetype/wqy/wqy-microhei.ttc".into(), 0)));
+        assert!(chinese.contains(&("/run/host/fonts/wenquanyi/wqy-microhei.ttc".into(), 0)));
+    }
+
+    #[test]
     fn fallback_faces_load_each_file_once() {
         // The region-merged Noto Sans CJK .ttc serves Japanese, Chinese and Hangul; it must be loaded
         // once, not once per script (tens of MB each).
@@ -850,7 +890,7 @@ mod tests {
         // whose face is absent (a minimal machine) and fails if a face is present but not wired in.
         let cases: [(&str, Vec<(String, u32)>, &str); 7] = [
             ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
-            ("sys-cjk-han-zh", cjk_han_simplified(), "页面布局 客户端配置"),
+            ("sys-cjk-han-zh", cjk_han_simplified(), "页面布局 客户端配置 繁體中文 儲存與重新開啟 中文標點 ，。！？"),
             ("sys-cjk-hangul", cjk_hangul(), "한글"),
             ("sys-thai", thai(), "ทดสอบ"),
             ("sys-hebrew", hebrew(), "עברית"),
