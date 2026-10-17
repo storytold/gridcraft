@@ -466,7 +466,6 @@ fn other_sheet_prefix_is_error() {
     ok(&mut s, "execute_command", json!({"command": "sheet.activate", "params": {"sheet": 0}}));
     fails(&mut s, "set_cell", json!({"cell": "Nope!B2", "input": "x"}));
     // A command that cannot honour a sheet prefix must not drop it and use the active sheet.
-    cmd_fails(&mut s, "view.freezePanes", json!({"cell": "Other!B2"}));
     cmd_fails(&mut s, "formulas.tracePrecedents", json!({"cell": "Other!B2"}));
     ok(&mut s, "set_cell", json!({"cell": "Sheet1!B2", "input": "here"}));
     assert_eq!(ok(&mut s, "get_cell", json!({"cell": "B2"}))["text"], "here");
@@ -498,7 +497,10 @@ fn cross_sheet_cell_refs_resolve() {
     // The active sheet may be a quoted name with spaces.
     ok(&mut s, "execute_command", json!({"command": "sheet.activate", "params": {"sheet": "My Sheet"}}));
     ok(&mut s, "execute_command", json!({"command": "view.freezePanes", "params": {"cell": "'My Sheet'!B2"}}));
-    cmd_fails(&mut s, "view.freezePanes", json!({"cell": "Other!B2"}));
+    // Freeze Panes honours another sheet's prefix (or `sheet`) and leaves the active sheet alone.
+    ok(&mut s, "execute_command", json!({"command": "view.freezePanes", "params": {"cell": "Other!C4"}}));
+    let sheets = ok(&mut s, "inspect_workbook", json!({}))["sheets"].clone();
+    assert_eq!((sheets[1]["freeze"].clone(), sheets[2]["freeze"].clone()), (json!([3, 2]), json!([1, 1])), "{sheets}");
     // A prefix naming a different sheet than the `sheet` argument is an error, not resolved in favour of either.
     cmd_fails(&mut s, "cell.get", json!({"cell": "Other!B3", "sheet": "Sheet1"}));
 }

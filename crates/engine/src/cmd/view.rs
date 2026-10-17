@@ -13,16 +13,25 @@ pub fn specs() -> Vec<CommandSpec> {
             "Freeze Panes",
             ["View", "Window", "Freeze Panes"],
             None,
-            "{cell?: \"B2\" (rows above and columns left of it freeze)}",
+            "{sheet?, cell?: \"B2\" (rows above and columns left of it freeze); without `cell`, unfreezes a frozen sheet}",
             has_doc,
             freeze_panes
         ),
-        cmd!("view.freezeTopRow", "Freeze Top Row", ["View", "Window", "Freeze Panes"], None, "{}", has_doc, |s, _| set_freeze(s, Some((1, 0)))),
-        cmd!("view.freezeFirstColumn", "Freeze First Column", ["View", "Window", "Freeze Panes"], None, "{}", has_doc, |s, _| set_freeze(
+        cmd!("view.freezeTopRow", "Freeze Top Row", ["View", "Window", "Freeze Panes"], None, "{sheet?}", has_doc, |s, p| set_freeze(
             s,
+            target_sheet(s, p)?,
+            Some((1, 0))
+        )),
+        cmd!("view.freezeFirstColumn", "Freeze First Column", ["View", "Window", "Freeze Panes"], None, "{sheet?}", has_doc, |s, p| set_freeze(
+            s,
+            target_sheet(s, p)?,
             Some((0, 1))
         )),
-        cmd!("view.unfreezePanes", "Unfreeze Panes", ["View", "Window", "Freeze Panes"], None, "{}", has_doc, |s, _| set_freeze(s, None)),
+        cmd!("view.unfreezePanes", "Unfreeze Panes", ["View", "Window", "Freeze Panes"], None, "{sheet?}", has_doc, |s, p| set_freeze(
+            s,
+            target_sheet(s, p)?,
+            None
+        )),
         cmd!("view.gridlines", "Gridlines", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "gridlines")),
         cmd!("view.headings", "Headings", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "headings")),
         cmd!("view.showZeros", "Show Zeros", [], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "zeros")),
@@ -113,23 +122,28 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn freeze_panes(s: &mut Session, p: &Json) -> Result<Json> {
+    let si = target_sheet(s, p)?;
     let d = s.doc()?;
-    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
     if sh.freeze.is_some() && p.get("cell").is_none() {
-        return set_freeze(s, None);
+        return set_freeze(s, si, None);
     }
-    let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
+    let at = match cell_param_on(s, p, "cell", si)? {
+        Some(c) => c,
+        None if si == d.wb.active_sheet => d.selection.active,
+        // The selection belongs to the active sheet.
+        None => return Err(bad("view.freezePanes", "missing `cell`: the selection is on the active sheet")),
+    };
     let top = sh.view_top_left;
     let rows = at.row.saturating_sub(top.row);
     let cols = at.col.saturating_sub(top.col);
     let _ = (rows, cols);
     let (rows, cols) = (at.row, at.col);
-    set_freeze(s, if rows == 0 && cols == 0 { None } else { Some((rows, cols)) })
+    set_freeze(s, si, if rows == 0 && cols == 0 { None } else { Some((rows, cols)) })
 }
 
-fn set_freeze(s: &mut Session, f: Option<(u32, u32)>) -> Result<Json> {
+fn set_freeze(s: &mut Session, si: usize, f: Option<(u32, u32)>) -> Result<Json> {
     edit(s, |cx| {
-        let si = cx.sheet_index();
         cx.sheet_mut(si)?.freeze = f;
         Ok(json!({"freeze": f}))
     })

@@ -3062,6 +3062,49 @@ fn row_height_and_column_width_take_a_list_of_areas() {
     assert_eq!(s.doc().unwrap().wb.active().unwrap().col_width(1), 120.0, "a bad list changes nothing");
 }
 
+/// Programmatic callers lay out a sheet that isn't the active one: `sheet` (or a `Sheet!` prefix on
+/// `rows`, `cols` or `cell`) picks it, instead of being ignored in favour of the active sheet.
+#[test]
+fn line_sizes_and_freeze_panes_take_a_sheet() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    let sheet = |s: &Session, i: usize| s.doc().unwrap().wb.sheets[i].clone();
+    let before = sheet(&s, 0);
+
+    s.execute("view.freezePanes", json!({"sheet": "Data", "cell": "A2"})).unwrap();
+    s.execute("home.columnWidth", json!({"sheet": "Data", "cols": "A:A", "width": 150})).unwrap();
+    s.execute("home.columnWidth", json!({"cols": "Data!B:B,D:D", "chars": 20})).unwrap();
+    // A null `sheet` is no `sheet`, as everywhere else: the prefix decides.
+    s.execute("home.columnWidth", json!({"sheet": null, "cols": "Data!C:C", "chars": 20})).unwrap();
+    s.execute("home.rowHeight", json!({"sheet": 1, "rows": "1:1", "height": 40})).unwrap();
+    s.execute("home.hideColumns", json!({"sheet": "Data", "cols": "E:E"})).unwrap();
+    s.execute("home.defaultWidth", json!({"sheet": "Data", "width": 80})).unwrap();
+    let data = sheet(&s, 1);
+    assert_eq!(data.freeze, Some((1, 0)));
+    assert_eq!((data.col_width(0), data.col_width(1), data.col_width(2), data.col_width(3)), (150.0, 145.0, 145.0, 145.0));
+    assert_eq!(data.row_height(0), 40.0);
+    assert!(data.cols.get(&4).is_some_and(|c| c.hidden));
+    assert_eq!(data.default_col_width, 80.0);
+    assert_eq!(sheet(&s, 0), before, "the active sheet is untouched");
+    assert_eq!(s.doc().unwrap().wb.active_sheet, 0);
+
+    s.execute("view.freezePanes", json!({"cell": "Data!B3"})).unwrap();
+    assert_eq!(sheet(&s, 1).freeze, Some((2, 1)));
+    s.execute("view.unfreezePanes", json!({"sheet": "Data"})).unwrap();
+    s.execute("view.freezeTopRow", json!({"sheet": "Data"})).unwrap();
+    assert_eq!(sheet(&s, 1).freeze, Some((1, 0)));
+
+    // The selection belongs to the active sheet: another sheet needs explicit lines or a cell, and
+    // a prefix can't contradict `sheet`.
+    assert!(s.execute("home.columnWidth", json!({"sheet": "Data", "width": 10})).is_err());
+    s.execute("view.unfreezePanes", json!({"sheet": "Data"})).unwrap();
+    assert!(s.execute("view.freezePanes", json!({"sheet": "Data"})).is_err());
+    assert!(s.execute("home.columnWidth", json!({"sheet": "Sheet1", "cols": "Data!B:B", "width": 10})).is_err());
+    assert!(s.execute("home.rowHeight", json!({"rows": "Nope!1:1", "height": 10})).is_err());
+    assert_eq!(sheet(&s, 0), before);
+}
+
 #[test]
 fn copying_areas_that_share_rows_or_columns_pastes_them_as_one_block() {
     // Issue #348: Excel slides lined-up areas together; formulas travel as their values.

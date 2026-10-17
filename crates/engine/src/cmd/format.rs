@@ -156,7 +156,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Row Height…",
             ["Home", "Cells", "Format"],
             None,
-            "{rows?: \"2:5\" | \"2:2,4:5\", height: 20 (points on screen)}",
+            "{sheet?, rows?: \"2:5\" | \"2:2,4:5\" | \"Sheet2!2:5\", height: 20 (points on screen)}",
             has_doc,
             row_height
         ),
@@ -165,28 +165,34 @@ pub fn specs() -> Vec<CommandSpec> {
             "Column Width…",
             ["Home", "Cells", "Format"],
             None,
-            "{cols?: \"B:D\" | \"B:B,D:F\", width: 64 (points) | chars: 8.43}",
+            "{sheet?, cols?: \"B:D\" | \"B:B,D:F\" | \"Sheet2!B:D\", width: 64 (points) | chars: 8.43}",
             has_doc,
             col_width
         ),
-        cmd!("home.autofitRowHeight", "AutoFit Row Height", ["Home", "Cells", "Format"], None, "{rows?}", has_doc, autofit_rows),
-        cmd!("home.autofitColumnWidth", "AutoFit Column Width", ["Home", "Cells", "Format"], None, "{cols?}", has_doc, autofit_cols),
-        cmd!("home.defaultWidth", "Default Width…", ["Home", "Cells", "Format"], None, "{width: 64}", has_doc, default_width),
-        cmd!("home.hideRows", "Hide Rows", ["Home", "Cells", "Format", "Hide & Unhide"], Some("Cmd+9"), "{rows?}", has_doc, |s, p| hide(
+        cmd!("home.autofitRowHeight", "AutoFit Row Height", ["Home", "Cells", "Format"], None, "{sheet?, rows?}", has_doc, autofit_rows),
+        cmd!("home.autofitColumnWidth", "AutoFit Column Width", ["Home", "Cells", "Format"], None, "{sheet?, cols?}", has_doc, autofit_cols),
+        cmd!("home.defaultWidth", "Default Width…", ["Home", "Cells", "Format"], None, "{sheet?, width: 64}", has_doc, default_width),
+        cmd!("home.hideRows", "Hide Rows", ["Home", "Cells", "Format", "Hide & Unhide"], Some("Cmd+9"), "{sheet?, rows?}", has_doc, |s, p| hide(
             s, p, true, true
         )),
-        cmd!("home.hideColumns", "Hide Columns", ["Home", "Cells", "Format", "Hide & Unhide"], Some("Cmd+0"), "{cols?}", has_doc, |s, p| hide(
-            s, p, false, true
-        )),
-        cmd!("home.unhideRows", "Unhide Rows", ["Home", "Cells", "Format", "Hide & Unhide"], Some("Cmd+Shift+9"), "{rows?}", has_doc, |s, p| hide(
-            s, p, true, false
-        )),
+        cmd!("home.hideColumns", "Hide Columns", ["Home", "Cells", "Format", "Hide & Unhide"], Some("Cmd+0"), "{sheet?, cols?}", has_doc, |s, p| {
+            hide(s, p, false, true)
+        }),
+        cmd!(
+            "home.unhideRows",
+            "Unhide Rows",
+            ["Home", "Cells", "Format", "Hide & Unhide"],
+            Some("Cmd+Shift+9"),
+            "{sheet?, rows?}",
+            has_doc,
+            |s, p| hide(s, p, true, false)
+        ),
         cmd!(
             "home.unhideColumns",
             "Unhide Columns",
             ["Home", "Cells", "Format", "Hide & Unhide"],
             Some("Cmd+Shift+0"),
-            "{cols?}",
+            "{sheet?, cols?}",
             has_doc,
             |s, p| hide(s, p, false, false)
         ),
@@ -933,19 +939,37 @@ fn cell_style(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- sizes
 
-fn line_targets(s: &Session, p: &Json, rows: bool) -> Result<Vec<(u32, u32)>> {
+/// The sheet and the row (or column) spans a size or visibility command works on. The lines are
+/// `rows`/`cols` (`"2:5"`, `"B:B,D:F"`, optionally `Sheet!`-prefixed), else the selection's; the
+/// sheet is `sheet`, else the prefix, else the active one. The selection belongs to the active
+/// sheet, so another sheet needs explicit lines.
+fn line_targets(s: &Session, p: &Json, rows: bool) -> Result<(usize, Vec<(u32, u32)>)> {
     let key = if rows { "rows" } else { "cols" };
+    let mut sheet = target_sheet(s, p)?;
     if let Some(t) = str_param(p, key) {
+        let (prefix, body) = split_sheet(t);
+        if let Some(name) = prefix {
+            let named = s.doc()?.wb.sheet_index(&name).ok_or_else(|| bad(key, format!("no sheet named `{name}`")))?;
+            if p.get("sheet").is_some_and(|v| !v.is_null()) && named != sheet {
+                return Err(bad(key, format!("`{t}` names a sheet other than `sheet`")));
+            }
+            sheet = named;
+        }
         // A comma-separated list ("B:B,D:F") targets several areas, like a multi-area selection.
-        return t
+        let lines = body
             .split(',')
             .map(|part| {
                 let r = RangeRef::parse(part).ok_or_else(|| bad(key, format!("not a range: {part}")))?;
                 Ok(if rows { (r.start.row, r.end.row) } else { (r.start.col, r.end.col) })
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
+        return Ok((sheet, lines));
     }
-    Ok(s.doc()?.selection.ranges.iter().map(|r| if rows { (r.start.row, r.end.row) } else { (r.start.col, r.end.col) }).collect())
+    let d = s.doc()?;
+    if sheet != d.wb.active_sheet {
+        return Err(bad(key, format!("missing `{key}`: the selection is on the active sheet")));
+    }
+    Ok((sheet, d.selection.ranges.iter().map(|r| if rows { (r.start.row, r.end.row) } else { (r.start.col, r.end.col) }).collect()))
 }
 
 fn row_height(s: &mut Session, p: &Json) -> Result<Json> {
@@ -953,9 +977,8 @@ fn row_height(s: &mut Session, p: &Json) -> Result<Json> {
     if !(0.0..=546.0).contains(&h) {
         return Err(EngineError::Other("Row height must be between 0 and 409 points.".into()));
     }
-    let lines = line_targets(s, p, true)?;
+    let (si, lines) = line_targets(s, p, true)?;
     edit(s, |cx| {
-        let si = cx.sheet_index();
         let sh = cx.sheet_mut(si)?;
         for (a, b) in lines {
             for r in a..=b.min(a.saturating_add(1_048_575)) {
@@ -979,9 +1002,8 @@ fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
     if !(0.0..=1800.0).contains(&w) {
         return Err(EngineError::Other("Column width must be between 0 and 255 characters.".into()));
     }
-    let lines = line_targets(s, p, false)?;
+    let (si, lines) = line_targets(s, p, false)?;
     edit(s, |cx| {
-        let si = cx.sheet_index();
         let sh = cx.sheet_mut(si)?;
         for (a, b) in lines {
             for c in a..=b {
@@ -1026,9 +1048,8 @@ pub fn approx_text_width(text: &str, size: f32, bold: bool) -> f32 {
 }
 
 fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
-    let lines = line_targets(s, p, false)?;
+    let (si, lines) = line_targets(s, p, false)?;
     edit(s, |cx| {
-        let si = cx.sheet_index();
         let Some(sh) = cx.wb.sheet(si) else { return Ok(Json::Null) };
         let mut widths = Vec::new();
         let used = sh.used_range();
@@ -1065,9 +1086,8 @@ fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn autofit_rows(s: &mut Session, p: &Json) -> Result<Json> {
-    let lines = line_targets(s, p, true)?;
+    let (si, lines) = line_targets(s, p, true)?;
     edit(s, |cx| {
-        let si = cx.sheet_index();
         for (a, b) in lines {
             let b = b.min(a + 100_000);
             if let Some(sh) = cx.wb.sheet_mut(si) {
@@ -1087,17 +1107,16 @@ fn autofit_rows(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn default_width(s: &mut Session, p: &Json) -> Result<Json> {
     let w = f64_param(p, "width").ok_or_else(|| bad("home.defaultWidth", "missing `width`"))?;
+    let si = target_sheet(s, p)?;
     edit(s, |cx| {
-        let si = cx.sheet_index();
         cx.sheet_mut(si)?.default_col_width = w.clamp(0.0, 1800.0) as f32;
         Ok(Json::Null)
     })
 }
 
 fn hide(s: &mut Session, p: &Json, rows: bool, on: bool) -> Result<Json> {
-    let lines = line_targets(s, p, rows)?;
+    let (si, lines) = line_targets(s, p, rows)?;
     edit(s, |cx| {
-        let si = cx.sheet_index();
         let sh = cx.sheet_mut(si)?;
         for (a, b) in lines {
             // Unhiding a single selected line also reveals hidden neighbours (Excel needs the
