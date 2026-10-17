@@ -55,17 +55,7 @@ fn split_sheet(r: &str) -> (Option<String>, &str) {
     }
 }
 
-/// Quotes a sheet name for a reference when needed.
-pub fn quote_sheet(name: &str) -> String {
-    if !name.is_empty()
-        && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')
-        && !name.chars().next().is_some_and(|c| c.is_ascii_digit())
-    {
-        name.to_string()
-    } else {
-        format!("'{}'", name.replace('\'', "''"))
-    }
-}
+pub use gridcraft_core::quote_sheet;
 
 /// Absolute reference text for a range on a sheet: `Sheet1!$A$1:$E$20`.
 pub fn range_text(sheet_name: &str, r: RangeRef) -> String {

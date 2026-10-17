@@ -5,7 +5,7 @@
 
 use std::cmp::Ordering;
 
-use gridcraft_core::{Array, CellError, Value, col_to_letters, compare};
+use gridcraft_core::{Array, CellError, Value, col_to_letters, compare, sheet_needs_quotes};
 
 use crate::criteria::{has_wildcards, lookup_equal};
 use crate::util::{R, arg, array_val, as_array, has, int, num, opt_bool, opt_int, opt_num, text, text_val};
@@ -415,10 +415,11 @@ fn transpose(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 /// Sheet text for ADDRESS, quoted when it needs to be. A `[Book]Sheet` prefix is judged by its
 /// parts (Microsoft's ADDRESS examples: `"[Book1]Sheet1"` stays bare, `"EXCEL SHEET"` becomes
-/// `'EXCEL SHEET'`).
+/// `'EXCEL SHEET'`). The sheet follows the formula rule, except that Excel's ADDRESS leaves
+/// `TRUE` / `FALSE` bare.
 fn quote_sheet(s: &str) -> String {
     let word = |p: &str| p.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.');
-    let bare_sheet = |p: &str| !p.is_empty() && word(p) && !p.chars().next().is_some_and(|c| c.is_ascii_digit());
+    let bare_sheet = |p: &str| !sheet_needs_quotes(p) || p.eq_ignore_ascii_case("TRUE") || p.eq_ignore_ascii_case("FALSE");
     let plain = match s.strip_prefix('[').and_then(|r| r.split_once(']')) {
         Some((book, sheet)) => !book.is_empty() && word(book) && bare_sheet(sheet),
         None => bare_sheet(s),
@@ -790,6 +791,13 @@ mod tests {
         ];
         for (r, c, abs, a1, sheet, want) in cases {
             is_text(ev("ADDRESS", vec![n(r), n(c), n(abs), b(a1), t(sheet)]), want);
+        }
+        // Excel quotes sheet names that read as A1 cells or R1C1 references, or start with `.`;
+        // unlike formulas, ADDRESS leaves TRUE / FALSE bare (#1458).
+        for (sheet, want) in
+            [("A1", "'A1'!$A$1"), ("R1C1", "'R1C1'!$A$1"), ("RC", "'RC'!$A$1"), (".x", "'.x'!$A$1"), ("XFE1", "XFE1!$A$1"), ("TRUE", "TRUE!$A$1")]
+        {
+            is_text(ev("ADDRESS", vec![n(1.0), n(1.0), n(1.0), b(true), t(sheet)]), want);
         }
         is_text(ev("ADDRESS", vec![n(1048576.0), n(16384.0)]), "$XFD$1048576");
         is_err(ev("ADDRESS", vec![n(0.0), n(1.0)]), CellError::Value);

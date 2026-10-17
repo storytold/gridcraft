@@ -13,6 +13,18 @@ fn quoted_sheet_qualified_name_keeps_quotes() {
 }
 
 #[test]
+fn sheet_names_excel_quotes_stay_quoted() {
+    // Excel quotes R1C1-looking names, a leading `.`, cells within the sheet and booleans (#1458).
+    for name in ["R", "C", "RC", "R1C", "RC1", "R1C1", "r2c3", "R1", "C1", "A1", "XFD1", "AB1048576", ".x", "TRUE", "false"] {
+        assert_eq!(rt(&format!("'{name}'!A1")), format!("'{name}'!A1"), "{name}");
+    }
+    // Names Excel leaves bare.
+    for name in ["XFE1", "AB1048577", "Sheet.1", "_x", "A1A", "\u{3a3}"] {
+        assert_eq!(rt(&format!("'{name}'!A1")), format!("{name}!A1"), "{name}");
+    }
+}
+
+#[test]
 fn intersection_with_deleted_operand_reparses() {
     // Deleting the columns of an intersection operand prints `A1:B2 #REF!`; that text must parse back.
     assert_eq!(rt("A1:B2 #REF!"), "A1:B2 #REF!");

@@ -56,6 +56,39 @@ impl fmt::Display for CellRef {
     }
 }
 
+/// Whether a sheet name must be quoted in a reference (`'My Sheet'!A1`). Excel quotes a name that is
+/// empty, starts with a digit or `.`, holds anything other than letters (any script), digits, `_`
+/// and `.`, reads as a cell on the sheet (`A1`, `XFD1`) or as an R1C1 reference (`R`, `C1`, `R1C1`,
+/// in any case), or is `TRUE` / `FALSE`.
+pub fn sheet_needs_quotes(name: &str) -> bool {
+    let Some(first) = name.chars().next() else {
+        return true;
+    };
+    if first.is_ascii_digit() || first == '.' || name.chars().any(|c| !(c.is_alphanumeric() || c == '_' || c == '.')) {
+        return true;
+    }
+    CellRef::parse(name).is_some() || is_r1c1_reference(name) || name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE")
+}
+
+/// `name` as written before `!` in a reference: quoted when [`sheet_needs_quotes`], with `'` doubled.
+pub fn quote_sheet(name: &str) -> String {
+    if sheet_needs_quotes(name) { format!("'{}'", name.replace('\'', "''")) } else { name.to_string() }
+}
+
+/// An optional `R` and digits, then an optional `C` and digits, with at least one of the letters
+/// (`R`, `C`, `RC`, `R1`, `C1`, `R1C`, `RC1`, `R1C1`), in any case.
+fn is_r1c1_reference(name: &str) -> bool {
+    let mut rest = name;
+    let mut letters = 0;
+    for letter in ['R', 'C'] {
+        if let Some(after) = rest.strip_prefix(|c: char| c.eq_ignore_ascii_case(&letter)) {
+            letters += 1;
+            rest = after.trim_start_matches(|c: char| c.is_ascii_digit());
+        }
+    }
+    letters > 0 && rest.is_empty()
+}
+
 /// Parses an A1 reference at the start of `s`: `(col, row, col_abs, row_abs, rest)`.
 pub fn parse_a1_prefix(s: &str) -> Option<(u32, u32, bool, bool, &str)> {
     let b = s.as_bytes();
@@ -243,6 +276,25 @@ mod tests {
         assert_eq!(letters_to_col("XFE"), None);
         assert_eq!(letters_to_col(""), None);
         assert_eq!(letters_to_col("A1"), None);
+    }
+
+    #[test]
+    fn sheet_names_are_quoted_like_excel() {
+        // The names measured in Excel 365 in #1458 (typing `='name'!A1` and reading the formula
+        // back), plus one example of each of its other rules (leading digit, space, apostrophe).
+        for name in
+            ["A1", "XFD1", "AB1048576", "R1", "C1", "RC1", "R", "C", "RC", "R1C", "R1C1", "r2c3", ".x", "TRUE", "false", "1x", "My Sheet", "Bob's"]
+        {
+            assert!(sheet_needs_quotes(name), "{name} needs quotes");
+        }
+        for name in ["XFE1", "AB1048577", "\u{c4}rger", "\u{65e5}\u{672c}", "\u{3a3}", "Sheet.1", "_x", "A1A", "Sheet1"] {
+            assert!(!sheet_needs_quotes(name), "{name} stays bare");
+        }
+        // Not a name Excel allows; guarded so a blank name never prints as a bare `!A1`.
+        assert!(sheet_needs_quotes(""));
+        assert_eq!(quote_sheet("Bob's"), "'Bob''s'");
+        assert_eq!(quote_sheet("R1C1"), "'R1C1'");
+        assert_eq!(quote_sheet("Data"), "Data");
     }
 
     #[test]
