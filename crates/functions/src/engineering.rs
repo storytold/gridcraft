@@ -1283,6 +1283,11 @@ mod tests {
         cx(ev("IMCSC", vec![t("4+3i")]), -0.075_489_832_915_863_7, 0.064_877_471_370_635_5);
         is_text(ev("IMSECH", vec![t("0")]), "1");
         is_err(ev("IMCSCH", vec![t("0")]), CellError::Num);
+        // Excel-cached results (Excel for Mac, `formulas` project test.xlsx, ENGINEERING sheet): a
+        // part needing more than 21 characters as a decimal is written in scientific notation.
+        is_text(ev("IMCSCH", vec![t("13+5j")]), "1.28233995888454E-06+4.33496947416312E-06j");
+        is_text(ev("IMEXP", vec![t("-13+25j")]), "2.24044486393732E-06-2.99158552811404E-07j");
+        is_text(ev("IMSECH", vec![t("7+25j")]), "0.00180771853884451+0.000241377759972715j");
         // sech z · cosh z = 1
         let Value::Text(c) = ev("IMCOSH", vec![t("4+3i")]) else { panic!() };
         let Value::Text(sc) = ev("IMSECH", vec![t("4+3i")]) else { panic!() };

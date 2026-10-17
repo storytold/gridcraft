@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{Sheet, Workbook};
-use gridcraft_numfmt::{Formatted, NumberFormat, format_value};
+use gridcraft_numfmt::{Formatted, NumberFormat, format_value, format_value_full};
 
 /// Parsed number formats are cached by code.
 fn parsed(code: &str) -> NumberFormat {
@@ -80,7 +80,8 @@ pub fn formula_hidden(wb: &Workbook, sheet: &Sheet, c: CellRef) -> bool {
     wb.styles.get(sheet.style_id(at)).protection.hidden
 }
 
-/// The text a cell shows (full precision General; the grid narrows General to fit the column).
+/// The text a cell shows (General up to the 11-character cell width; the grid narrows General
+/// further to fit the column).
 pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     if sheet.show_formulas
         && let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref())
@@ -88,14 +89,28 @@ pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     {
         return format!("={}", f.text);
     }
-    value_text(wb, sheet, c)
+    shown_text(wb, sheet, c)
 }
 
 /// A cell's value with its number format applied, independent of column width: no `#####`
-/// and no General narrowing (Save As CSV/Text writes this). Formulas give their result.
+/// and no General narrowing (Save As CSV/Text writes this). Formulas give their result. A number
+/// shown as General (also through a coloured or sectioned General, or a Text format) is written
+/// as [`format_value_full`] writes it, never with an exponent: `&`'s 15 significant digits below
+/// 1E+15 (`124412140710`, not `1.24412E+11`), the shortest round-trip digits from 1E+15 (every
+/// integer below 1e16 exactly). Excel writes the cell display.
 pub fn value_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let style = wb.styles.get(sheet.style_id(c));
-    let f = format(&sheet.value(c), style.num_fmt.as_str(), wb);
+    with_fill_space(format_value_full(&sheet.value(c), &parsed(style.num_fmt.as_str()), wb.date_system))
+}
+
+/// A cell's value through its number format, General at the 11-character cell width.
+fn shown_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
+    let style = wb.styles.get(sheet.style_id(c));
+    with_fill_space(format(&sheet.value(c), style.num_fmt.as_str(), wb))
+}
+
+/// The formatted text with a single space where a `*x` repeat fill would expand.
+fn with_fill_space(f: Formatted) -> String {
     match f.fill {
         Some((_, pos)) => {
             let mut t = f.text;

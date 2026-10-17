@@ -637,7 +637,7 @@ fn text_uncached(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellE
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    let (f, overflow) = fmt.format_number(n, sys, false);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 
