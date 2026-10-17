@@ -191,6 +191,39 @@ impl Criterion {
     }
 }
 
+/// Array criteria with more elements than this are not parsed one by one: the filter selects
+/// every cell, which only means reading more cells than needed.
+const MAX_FILTER_CRITERIA: usize = 256;
+
+/// The cells one criteria argument of SUMIF, SUMIFS, COUNTIFS and their relatives can select,
+/// so the evaluator reads only those cells, as Excel does (reading the others could meet a
+/// circular reference Excel doesn't see). An array criterion is lifted element by element, so a
+/// cell is kept when any element selects it. Never misses a cell the function itself selects;
+/// a criterion the function rejects (`#VALUE!`) selects nothing.
+#[derive(Clone, Debug)]
+pub struct CriteriaFilter {
+    criteria: Vec<Criterion>,
+    all: bool,
+}
+
+impl CriteriaFilter {
+    /// `single_pair`: the function has one (range, criteria) pair, where text over 255 UTF-16
+    /// units is `#VALUE!`; with more pairs it is cut to 255 units.
+    pub fn new(criteria: &Value, single_pair: bool) -> CriteriaFilter {
+        let parse = |v: &Value| if single_pair { Criterion::parse_arg(v).ok() } else { Some(Criterion::parse_arg_truncated(v)) };
+        match criteria {
+            Value::Array(a) if a.data.len() > MAX_FILTER_CRITERIA => CriteriaFilter { criteria: Vec::new(), all: true },
+            Value::Array(a) => CriteriaFilter { criteria: a.data.iter().filter_map(parse).collect(), all: false },
+            v => CriteriaFilter { criteria: parse(v).into_iter().collect(), all: false },
+        }
+    }
+
+    /// Whether the criteria can select a cell holding `v`.
+    pub fn selects(&self, v: &Value) -> bool {
+        self.all || self.criteria.iter().any(|c| c.matches(v))
+    }
+}
+
 /// Splits a leading comparison operator (`=` when there is none) off a text criterion.
 fn split_op(t: &str) -> (Op, &str) {
     if let Some(r) = t.strip_prefix(">=") {
@@ -338,6 +371,21 @@ mod tests {
 
     fn m(c: &str, v: Value) -> bool {
         Criterion::parse(&Value::from(c)).matches(&v)
+    }
+
+    #[test]
+    fn criteria_filter_selects_what_any_element_selects() {
+        let one = CriteriaFilter::new(&Value::from(">5"), true);
+        assert!(one.selects(&Value::Number(6.0)) && !one.selects(&Value::Number(5.0)));
+        let any = CriteriaFilter::new(&Value::from(gridcraft_core::Array::row(vec![Value::from("a*"), Value::Number(3.0)])), false);
+        assert!(any.selects(&Value::from("apple")) && any.selects(&Value::Number(3.0)) && !any.selects(&Value::from("pear")));
+        // A criterion the function rejects selects nothing; with several pairs it is cut instead.
+        let long = Value::from("a".repeat(300));
+        assert!(!CriteriaFilter::new(&long, true).selects(&Value::from("a".repeat(300))));
+        assert!(CriteriaFilter::new(&long, false).selects(&Value::from("a".repeat(255))));
+        // Very large array criteria select everything.
+        let many = Value::from(gridcraft_core::Array::row(vec![Value::Number(1.0); MAX_FILTER_CRITERIA + 1]));
+        assert!(CriteriaFilter::new(&many, false).selects(&Value::Number(2.0)));
     }
 
     #[test]

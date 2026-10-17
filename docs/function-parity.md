@@ -110,6 +110,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-13 | minor | Clear reports changed stored cells sparsely, including those beyond the first million coordinates; dependent formulas and removed spills update, while clearing empty merges still unblocks spills (#1032) |
+| 2026-10-14 | minor | SUMIF, SUMIFS, COUNTIFS, AVERAGEIF(S), MAXIFS and MINIFS over references read the first criteria range in full, later criteria ranges only where earlier pairs matched, and the target range only where every pair matched, as Excel does (observed with synthetic workbooks). A formula in an unselected cell that refers back to the function is no longer a false `#CIRC!`; selected cells that lead back are still circular. COUNTIF, and SUMIF/AVERAGEIF without a sum range, read their whole range as before |
 | 2026-10-12 | minor | USDOLLAR added as a Compatibility function (not on Microsoft's list, so the counts don't change); MIRR with no positive flow is -1, COUNTIF's bare `"<="` / `">="` skip empty strings, INDIRECT with `a1` = FALSE gives `#REF!` for A1-style text (#738) |
 | 2026-10-11 | minor | TEXT / number formats fixed against Excel-cached results: fraction literals and zero fractions, `0` denominators zero padded, `?` pads the thousands separator, booleans use the text section (226 mismatches → 0 in 352 TEXT cells) |
 | 2026-10-11 | minor | Iterative calculation: circular references iterate up to Maximum Iterations / Maximum Change when enabled |

@@ -1266,3 +1266,181 @@ fn offset_extreme_arguments_return_ref() {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
     }
 }
+
+/// Fills a sheet, calculates everything, and gives A1's value and whether a circular reference
+/// was found.
+fn calc_cells(cells: &[(&str, &str)]) -> (Value, bool) {
+    let mut t = T::new();
+    for (at, input) in cells {
+        t.set(at, input);
+    }
+    t.calc.recalc_all(&mut t.wb);
+    (t.get("A1"), !t.calc.circular.is_empty())
+}
+
+/// Criteria functions read a target cell only when the criteria select it, and a later criteria
+/// range only where the pairs before it matched, as Excel does: a formula in an unselected cell
+/// that refers back to the function is no circular reference (each case observed in Excel).
+#[test]
+fn criteria_functions_read_only_selected_cells() {
+    let base = [("B1", "5"), ("B2", "x"), ("C2", "y"), ("C1", "=A1*2")];
+    for (formula, expected) in [
+        ("=SUMIFS(B1:C1,B2:C2,\"x\")", 5.0),
+        ("=SUMIF(B2:C2,\"x\",B1:C1)", 5.0),
+        // The sum range takes the criteria range's size.
+        ("=SUMIF(B2:C2,\"x\",B1)", 5.0),
+        ("=AVERAGEIF(B2:C2,\"x\",B1:C1)", 5.0),
+        ("=AVERAGEIFS(B1:C1,B2:C2,\"x\")", 5.0),
+        ("=MAXIFS(B1:C1,B2:C2,\"x\")", 5.0),
+        ("=MINIFS(B1:C1,B2:C2,\"x\")", 5.0),
+        ("=SUMIFS(B1:C1,B2:C2,\"x\",B1:C1,\">0\")", 5.0),
+        ("=COUNTIFS(B2:C2,\"x\",B1:C1,\">0\")", 1.0),
+        ("=SUM(SUMIFS(B1:C1,B2:C2,{\"x\",\"z\"}))", 5.0),
+    ] {
+        let mut cells = base.to_vec();
+        cells.push(("A1", formula));
+        let (value, circular) = calc_cells(&cells);
+        assert_eq!(value, Value::Number(expected), "{formula}");
+        assert!(!circular, "{formula}");
+    }
+    for (cells, expected) in [
+        // A later criteria range is read where the first pair matched only.
+        (vec![("B1", "5"), ("B2", "x"), ("C2", "y"), ("B3", "1"), ("C3", "=A1*2"), ("A1", "=SUMIFS(B1:C1,B2:C2,\"x\",B3:C3,\">0\")")], 5.0),
+        // The formula's own cell, unselected, in its sum and criteria ranges.
+        (vec![("B1", "5"), ("A2", "y"), ("B2", "x"), ("A1", "=SUMIFS(A1:B1,A2:B2,\"x\")")], 5.0),
+        (vec![("B1", "5"), ("C1", "6"), ("B2", "y"), ("C2", "x"), ("A1", "=SUMIFS(B1:C1,B2:C2,\"x\",A1:B1,\">0\")")], 6.0),
+        // Whole columns.
+        (vec![("B1", "x"), ("C1", "5"), ("B3", "y"), ("C3", "=A1*2"), ("A1", "=SUMIFS(C:C,B:B,\"x\")")], 5.0),
+        (vec![("B1", "x"), ("C1", "5"), ("B3", "y"), ("C3", "=A1*2"), ("A1", "=SUMIF(B:B,\"x\",C:C)")], 5.0),
+        // An array criterion reads what any of its elements selects.
+        (
+            vec![("B1", "5"), ("C1", "7"), ("B2", "x"), ("C2", "z"), ("D2", "y"), ("D1", "=A1*2"), ("A1", "=SUM(SUMIFS(B1:D1,B2:D2,{\"x\",\"z\"}))")],
+            12.0,
+        ),
+    ] {
+        let (value, circular) = calc_cells(&cells);
+        assert_eq!(value, Value::Number(expected), "{cells:?}");
+        assert!(!circular, "{cells:?}");
+    }
+    // Ranges of different sizes are #VALUE! without reading the sum range.
+    let (value, circular) = calc_cells(&[("B1", "5"), ("B2", "x"), ("C2", "y"), ("D1", "=A1*2"), ("A1", "=SUMIFS(B1:D1,B2:C2,\"x\")")]);
+    assert_eq!(value, Value::Error(CellError::Value));
+    assert!(!circular);
+}
+
+/// Cells the criteria select (or ranges read in full) that lead back to the formula are still
+/// circular references, as in Excel.
+#[test]
+fn criteria_functions_selecting_their_dependents_are_circular() {
+    for cells in [
+        vec![("B1", "5"), ("B2", "x"), ("C2", "x"), ("C1", "=A1*2"), ("A1", "=SUMIFS(B1:C1,B2:C2,\"x\")")],
+        vec![("B1", "5"), ("B2", "x"), ("C2", "x"), ("C1", "=A1*2"), ("A1", "=AVERAGEIFS(B1:C1,B2:C2,\"x\")")],
+        vec![("B1", "5"), ("B2", "x"), ("C2", "x"), ("C1", "=A1*2"), ("A1", "=SUMIF(B2:C2,\"x\",B1:C1)")],
+        // The first criteria range is read in full.
+        vec![("B1", "5"), ("B2", "x"), ("C2", "y"), ("B3", "1"), ("C3", "=A1*2"), ("A1", "=SUMIFS(B1:C1,B3:C3,\">0\",B2:C2,\"x\")")],
+        vec![("B1", "5"), ("B2", "x"), ("C2", "y"), ("C1", "=A1*2"), ("A1", "=COUNTIFS(B1:C1,\">0\",B2:C2,\"x\")")],
+        vec![("B1", "5"), ("C1", "=A1*2"), ("A1", "=COUNTIF(B1:C1,\">0\")")],
+        // Without a sum range the criteria range is the sum range.
+        vec![("B1", "5"), ("C1", "=A1*2"), ("A1", "=SUMIF(B1:C1,\">100\")")],
+        vec![("B1", "5"), ("C1", "7"), ("B2", "x"), ("C2", "z"), ("D2", "z"), ("D1", "=A1*2"), ("A1", "=SUM(SUMIFS(B1:D1,B2:D2,{\"x\",\"z\"}))")],
+    ] {
+        let (_, circular) = calc_cells(&cells);
+        assert!(circular, "{cells:?}");
+    }
+}
+
+/// Reading only the selected cells doesn't change results: references give what the same values
+/// as array constants give (the usual path), errors in unselected cells included.
+#[test]
+fn criteria_functions_over_references_match_array_arguments() {
+    let mut t = T::new();
+    let names = ["apple", "pear", "apple", "fig"];
+    let qty = ["10", "=NA()", "30", "=1/0"];
+    let flag = ["1", "0", "1", "1"];
+    for r in 0..4 {
+        t.set(&format!("A{}", r + 1), names[r]);
+        t.set(&format!("B{}", r + 1), qty[r]);
+        t.set(&format!("C{}", r + 1), flag[r]);
+    }
+    t.calc.recalc_all(&mut t.wb);
+    let long = "a".repeat(300);
+    let arrays = [
+        ("A1:A4", "{\"apple\";\"pear\";\"apple\";\"fig\"}"),
+        ("B1:B4", "{10;#N/A;30;#DIV/0!}"),
+        ("C1:C4", "{1;0;1;1}"),
+        ("A1:A3", "{\"apple\";\"pear\";\"apple\"}"),
+    ];
+    for formula in [
+        "SUMIFS(B1:B4,A1:A4,\"apple\")",
+        "SUMIFS(B1:B4,A1:A4,\"a*\",C1:C4,1)",
+        "SUMIFS(B1:B4,A1:A4,\"pear\")",
+        "SUMIFS(B1:B4,A1:A4,\"<>pear\")",
+        "SUMIFS(B1:B4,A1:A3,\"apple\")",
+        "SUMIFS(B1:B4,A1:A4,{\"apple\",\"fig\"})",
+        "SUMIFS(B1:B4,A1:A4,#N/A)",
+        "SUMIF(A1:A4,\"apple\",B1:B4)",
+        "SUMIF(A1:A4,\"fig\",B1:B4)",
+        "AVERAGEIF(A1:A4,\"apple\",B1:B4)",
+        "AVERAGEIF(A1:A4,\"zzz\",B1:B4)",
+        "AVERAGEIFS(B1:B4,A1:A4,\"apple\",C1:C4,\">0\")",
+        "MAXIFS(B1:B4,A1:A4,\"apple\")",
+        "MINIFS(B1:B4,C1:C4,0)",
+        "MINIFS(B1:B4,A1:A4,\"zzz\")",
+        "COUNTIFS(A1:A4,\"apple\",C1:C4,1)",
+        "COUNTIFS(A1:A4,\"apple\",B1:B4,\">10\")",
+        "COUNTIFS(C1:C4,1,A1:A4,\"?ig\")",
+        "COUNTIFS(A1:A4,\"apple\",C1:C4)",
+        "SUMIFS(B1:B4,A1:A4,\"LONG\")",
+        "SUMIFS(B1:B4,A1:A4,\"LONG\",C1:C4,1)",
+    ] {
+        let formula = formula.replace("LONG", &long);
+        let mut literal = formula.clone();
+        for (reference, array) in arrays {
+            literal = literal.replace(reference, array);
+        }
+        let reference = crate::evaluate(&t.wb, 0, c("E1"), &format!("={formula}"));
+        let array = crate::evaluate(&t.wb, 0, c("E1"), &format!("={literal}"));
+        assert_eq!(reference, array, "{formula}");
+    }
+    assert_eq!(crate::evaluate(&t.wb, 0, c("E1"), "=SUMIFS(B1:B4,A1:A4,\"apple\")"), Value::Number(40.0));
+}
+
+/// Edits to cells the criteria don't select still recalculate the function, and an edit that
+/// makes such a cell selected turns the loop into a circular reference.
+#[test]
+fn criteria_functions_recalculate_after_edits() {
+    let mut t = T::new();
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
+    for (at, input) in [("A1", "x"), ("A2", "y"), ("B1", "5"), ("B2", "=Sheet1!A1*2")] {
+        let cell = if input.starts_with('=') {
+            Cell::formula(Formula::new(input))
+        } else {
+            Cell::value(gridcraft_core::parse::parse_input(input, t.wb.date_system).value)
+        };
+        t.wb.sheet_mut(1).unwrap().cells.set(c(at), cell);
+    }
+    t.set("A1", "=SUMIFS(Data!B:B,Data!A:A,\"x\")");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1"), 5.0);
+    assert_eq!(t.wb.sheet(1).unwrap().value(c("B2")), Value::Number(10.0));
+    assert!(t.calc.circular.is_empty());
+    t.wb.sheet_mut(1).unwrap().cells.set(c("B1"), Cell::value(Value::Number(6.0)));
+    t.calc.cells_changed(&mut t.wb, &[(1, c("B1"))]);
+    assert_eq!(t.num("A1"), 6.0);
+    assert_eq!(t.wb.sheet(1).unwrap().value(c("B2")), Value::Number(12.0));
+    t.wb.sheet_mut(1).unwrap().cells.set(c("A2"), Cell::value(Value::from("x")));
+    t.calc.cells_changed(&mut t.wb, &[(1, c("A2"))]);
+    assert!(!t.calc.circular.is_empty());
+}
+
+/// With iterative calculation, a loop through a selected cell iterates like any other loop.
+#[test]
+fn criteria_function_loops_iterate() {
+    let mut t = T::iterative(100, 0.000_001);
+    for (at, input) in [("B1", "5"), ("B2", "x"), ("C2", "x"), ("C1", "=A1/2"), ("A1", "=SUMIFS(B1:C1,B2:C2,\"x\")")] {
+        t.set(at, input);
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert!((t.num("A1") - 10.0).abs() < 1e-4, "{}", t.num("A1"));
+    assert!(t.calc.circular.is_empty());
+}
