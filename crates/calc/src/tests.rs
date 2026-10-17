@@ -1266,3 +1266,51 @@ fn offset_extreme_arguments_return_ref() {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
     }
 }
+
+#[test]
+fn large_bounded_references_keep_their_shape() {
+    // D3:AZ400 is 19,502 cells, past the size where a block used to be cut to the used range
+    // (which ends at column F here). Sliced that way it no longer lined up with the full-size
+    // operands next to it. Expected values observed in Excel 365 on the same layout.
+    let mut t = T::new();
+    for (at, v) in [
+        ("D1", "1"),
+        ("E1", "2"),
+        ("F1", "3"),
+        ("A3", "1"),
+        ("A4", "2"),
+        ("A5", "1"),
+        ("B3", "2"),
+        ("B4", "3"),
+        ("B5", "4"),
+        ("D3", "10"),
+        ("E3", "20"),
+        ("F3", "30"),
+        ("D4", "40"),
+        ("E4", "50"),
+        ("F4", "60"),
+        ("D5", "70"),
+        ("E5", "80"),
+        ("F5", "90"),
+    ] {
+        t.set(at, v);
+    }
+    let cases = [
+        ("=SUMPRODUCT(D3:AZ400*B3:B400,(A3:A400=1)*(D1:AZ1=2))", Value::Number(360.0)),
+        ("=ROWS(D3:AZ400*1)", Value::Number(398.0)),
+        ("=COLUMNS(D3:AZ400*1)", Value::Number(49.0)),
+        ("=SUMPRODUCT(D3:AZ400,(A3:A400=1)*(D1:AZ1=2))", Value::Number(100.0)),
+        ("=SUMPRODUCT(D3:AZ400+0,D3:AZ401)", Value::Error(CellError::Value)),
+        ("=COUNTBLANK(D3:AZ400)", Value::Number(19493.0)),
+        ("=SUMPRODUCT(--(D3:AZ400=\"\"))", Value::Number(19493.0)),
+        ("=SUM(D3:AZ400*B3:B400)", Value::Number(1530.0)),
+        ("=COLUMNS(TRANSPOSE(D3:AZ400))", Value::Number(398.0)),
+        // Whole columns are still read up to the used range.
+        ("=SUMPRODUCT((A:A=1)*B:B)", Value::Number(6.0)),
+    ];
+    for (i, (formula, want)) in cases.iter().enumerate() {
+        let at = format!("C{}", 1001 + i);
+        t.set(&at, formula);
+        assert_eq!(&t.get(&at), want, "{formula}");
+    }
+}
