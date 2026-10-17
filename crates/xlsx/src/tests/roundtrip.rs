@@ -625,6 +625,18 @@ fn package_structure() {
     assert!(texts["xl/workbook.xml"].contains("fullCalcOnLoad"));
 }
 
+/// New workbooks must set appName="gridcraft" in the fileVersion element so the
+/// creating application is correctly identified in xl/workbook.xml.
+#[test]
+fn new_workbook_has_gridcraft_app_name() {
+    let wb = Workbook::new();
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut s = String::new();
+    z.by_name("xl/workbook.xml").unwrap().read_to_string(&mut s).unwrap();
+    assert!(s.contains("appName=\"gridcraft\""), "fileVersion should carry appName=gridcraft; got: {s}");
+}
+
 #[test]
 fn iterative_calculation_settings_roundtrip() {
     let calc_pr = |wb: &Workbook| {

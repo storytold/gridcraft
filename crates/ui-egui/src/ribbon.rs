@@ -112,16 +112,22 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     app.print_now(json!({}));
                 }
             });
-            // Centered title.
+            // Centered title — truncated with "…" so it never overlaps the side controls.
             let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
             let dirty = app.session.active().is_some_and(|d| d.is_dirty());
-            ui.painter().text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                format!("{title}{}", if dirty { " •" } else { "" }),
+            let title_str = format!("{title}{}", if dirty { " •" } else { "" });
+            // Reserve ~300 px on each side for the toolbar controls (a comfortable heuristic;
+            // the exact widths vary with window size).
+            let max_title_w = (rect.width() - 600.0).max(80.0);
+            let mut job = egui::text::LayoutJob::simple_singleline(
+                title_str,
                 theme::ui_bold(13.0),
                 t.text,
             );
+            job.wrap.max_width = max_title_w;
+            job.wrap.overflow_character = Some('…');
+            let galley = ui.fonts_mut(|f| f.layout_job(job));
+            ui.painter().galley(rect.center() - vec2(galley.size().x * 0.5, galley.size().y * 0.5), galley, t.text);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
                 let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, ch));
