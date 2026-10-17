@@ -772,6 +772,15 @@ pub fn filter_choices_params(col: &str, active_checks: &[(&FilterChoice, bool)])
     json!({"column": col, "values": vals, "identities": ids, "blanks": blanks})
 }
 
+/// Builds the `data.filterBy` parameters that leave `col` filtered to `choice` alone (the dropdown's Only button).
+pub fn filter_only_params(col: &str, choice: &FilterChoice) -> Json {
+    let Some(value) = &choice.value else {
+        return json!({"column": col, "values": [], "blanks": true});
+    };
+    let ids: Vec<&String> = choice.identity.iter().collect();
+    json!({"column": col, "values": [value], "identities": ids, "blanks": false})
+}
+
 /// Builds the `data.filterBy` parameters for filtering `col` by the selected cell `c` ("Filter by Selected Cell's Value").
 pub fn filter_by_cell_params(wb: &Workbook, sh: &Sheet, c: CellRef, col: &str) -> Json {
     let v = sh.value(c);
