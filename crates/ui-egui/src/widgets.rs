@@ -43,6 +43,12 @@ pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
 
 /// Large ribbon button: 32px icon over a one- or two-line label.
 pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
+    big_button_tinted(ui, icon, label, tip, dropdown, None)
+}
+
+/// A large ribbon button whose icon is painted in `tint` when given — the Draw tab's pens show
+/// their ink colour this way.
+pub fn big_button_tinted(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool, tint: Option<Color32>) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = theme::ui_font(11.5);
     let label = tr(ui, label);
@@ -57,7 +63,7 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
     } else if resp.hovered() {
         ui.painter().rect_filled(rect, 5.0, t.hover);
     }
-    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, tint.unwrap_or(t.text));
     for (i, line) in lines.iter().enumerate() {
         let has_arrow = dropdown && i + 1 == lines.len();
         let line_w = line.size().x + if has_arrow { arrow_space } else { 0.0 };

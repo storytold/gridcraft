@@ -8,7 +8,7 @@ use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Tokens};
-use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::widgets::{big_button, big_button_tinted, color_palette, icon_button, small_button, split_button, toggle_button};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -1579,6 +1579,21 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// A pen's width with Excel's label spelling: whole values without a decimal, halves with one.
+fn pt_label(width: f32) -> String {
+    if (width - width.round()).abs() < 0.05 { format!("{}", width.round() as i32) } else { format!("{width:.1}") }
+}
+
+/// `#RRGGBB` as a painter colour for the pen icons; pen blue on bad input.
+fn pen_color(hex: &str) -> Color32 {
+    let h = hex.trim_start_matches('#');
+    let byte = |i: usize| h.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok());
+    match (byte(0), byte(2), byte(4)) {
+        (Some(r), Some(g), Some(b)) => Color32::from_rgb(r, g, b),
+        _ => Color32::from_rgb(0x1F, 0x5F, 0xC9),
+    }
+}
+
 fn draw(app: &mut SheetApp, ui: &mut Ui) {
     let tool = app.session.draw_tool.clone();
     let __k = big_button(ui, Icon::Shapes, "Select\nObjects", "Select and move ink and shapes", false);
@@ -1587,14 +1602,23 @@ fn draw(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "draw.lasso", json!({}));
     }
     sep(ui);
-    for (label, color) in [("Pen\nBlue", "#1F5FC9"), ("Pen\nBlack", "#000000"), ("Pen\nRed", "#D13B2F"), ("Highlighter", "#F2E33A")] {
+    for (kind, name, color, default_width) in [
+        ("Pen", "Blue", "#1F5FC9", 2.0_f32),
+        ("Pen", "Black", "#000000", 2.0),
+        ("Pen", "Red", "#D13B2F", 2.0),
+        ("Highlighter", "Yellow", "#F2E33A", 12.0),
+    ] {
         let on = tool == "pen" && app.session.draw_color.eq_ignore_ascii_case(color);
-        let r = big_button(ui, Icon::Pen, label, "Draw with ink", false);
+        let width = if on { app.session.draw_width } else { default_width };
+        // Excel's pens read like `Pen: Black, 0.35 mm`: kind, colour, current thickness.
+        let label = format!("{}: {name}, {} pt", app.ui.language.tr(kind), pt_label(width));
+        // The icon is the pen's shape and its ink colour, so the button shows what it draws.
+        let icon = if kind == "Highlighter" { Icon::Highlighter } else { Icon::Pen };
+        let r = big_button_tinted(ui, icon, &label, "Draw with ink", false, Some(pen_color(color)));
         if on {
             ui.painter().rect_stroke(r.rect, 5.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Inside);
         }
         if r.clicked() {
-            let width = if label == "Highlighter" { 12.0 } else { 2.0 };
             act(app, "draw.pen", json!({"on": !on, "color": color, "width": width}));
         }
     }

@@ -107,6 +107,7 @@ pub enum Icon {
     PrintArea,
     Script,
     Pen,
+    Highlighter,
     Share,
     Search,
     Settings,
@@ -622,8 +623,15 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.stroke(&[(8.0, 10.5), (11.5, 10.5)], c);
         }
         Icon::Pen => {
-            g.poly(&[(3.0, 13.0), (4.0, 10.0), (11.0, 3.0), (13.0, 5.0), (6.0, 12.0)], BLUE);
+            // A pen in the ink colour: the Draw tab tints this with each pen's colour.
+            g.poly(&[(3.0, 13.0), (4.0, 10.0), (11.0, 3.0), (13.0, 5.0), (6.0, 12.0)], c);
             g.stroke(&[(3.0, 13.0), (4.0, 10.0)], c);
+        }
+        Icon::Highlighter => {
+            // A broad marker with a chisel nib, so a highlighter reads differently from a pen.
+            g.rect(5.0, 1.5, 6.0, 8.5, Some(c), None);
+            g.poly(&[(5.0, 10.0), (11.0, 10.0), (12.5, 14.5), (3.5, 14.5)], c);
+            g.line(&[(5.0, 4.5), (11.0, 4.5)], Color32::from_gray(235), 1.0);
         }
         Icon::Share => {
             g.line(&[(4.0, 7.0), (4.0, 13.0), (12.0, 13.0), (12.0, 7.0)], c, 1.2);
