@@ -535,6 +535,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom Out" => "Oddálit",
         // widgets.rs (alphabetical keys).
         "Dismiss" => "Zavřít",
+        "Rename" => "Přejmenovat",
+        "Move or Copy…" => "Přesunout nebo kopírovat…",
+        "Duplicate" => "Duplikovat",
+        "Tab Color" => "Barva záložky",
+        "No Color" => "Bez barvy",
+        "Unhide…" => "Zobrazit…",
+        "Unprotect Sheet…" => "Zrušit ochranu listu…",
+        "Select All Sheets" => "Vybrat všechny listy",
+        "AutoSave" => "Automatické ukládání",
+        "AutoSave: save after every change (workbooks saved to a file)" => "Automatické ukládání: ukládat po každé změně (sešity uložené do souboru)",
+        "All sheets" => "Všechny listy",
         _ => return None,
     })
 }
