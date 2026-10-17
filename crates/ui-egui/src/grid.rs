@@ -114,6 +114,8 @@ pub struct GridState {
     /// Column and row of the clicked header cell, and where to open the menu.
     pub filter_menu: Option<(u32, u32, Pos2)>,
     pub context_menu: Option<Pos2>,
+    /// The frame a right-click opened `context_menu` in: that click's own press doesn't close it.
+    pub context_menu_frame: u64,
     pub marching_phase: f32,
     /// The selection outline on its way to a new selection.
     pub glide: crate::selection_glide::SelectionGlide,
@@ -2321,6 +2323,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             app.grid.header_menu = Some((geo.mirror_pos(p), rows));
         } else {
             app.grid.context_menu = Some(geo.mirror_pos(p));
+            app.grid.context_menu_frame = ui.ctx().cumulative_frame_nr();
         }
     }
 
@@ -2928,9 +2931,14 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
             }
         });
     });
+    // A quick right-click presses and releases in one frame, and the menu's corner snaps to the
+    // nearest physical pixel, which can put the pointer just outside it: that press opened the
+    // menu, so it doesn't count as a click elsewhere.
+    let opened_now = app.grid.context_menu_frame == ui.ctx().cumulative_frame_nr();
     if close
         || ui.input(|i| i.key_pressed(egui::Key::Escape))
-        || (ui.input(|i| i.pointer.any_pressed())
+        || (!opened_now
+            && ui.input(|i| i.pointer.any_pressed())
             && !resp.response.contains_pointer()
             && !resp.response.hovered()
             && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| !resp.response.rect.contains(p)))
