@@ -747,6 +747,22 @@ fn column_autocomplete_can_be_turned_off() {
     assert_eq!(h.state_mut().run("options.autoComplete", json!({})), Ok(json!({"on": true})), "no parameters: it toggles");
 }
 
+#[test]
+fn autosave_switch_is_saved_in_ui_json_and_restored() {
+    let old: gridcraft_ui_egui::UiState = serde_json::from_str(r#"{"dark": true}"#).unwrap();
+    assert!(!old.autosave, "a ui.json written before the setting existed keeps AutoSave off");
+
+    let mut app = SheetApp::new(blank(), Default::default());
+    assert!(!app.ui_to_save().autosave);
+    app.grid.toggle_autosave();
+    let saved = serde_json::to_string(&app.ui_to_save()).unwrap();
+    let mut next = SheetApp::new(blank(), Default::default());
+    next.ui = serde_json::from_str(&saved).unwrap();
+    assert!(!next.grid.autosave(), "nothing restored yet");
+    next.restore_autosave();
+    assert!(next.grid.autosave(), "AutoSave is on again after a relaunch");
+}
+
 /// An .xlsm carrying a VBA project, saved to bytes.
 fn macro_workbook_bytes() -> Vec<u8> {
     let mut wb = gridcraft_engine::model::Workbook::new();

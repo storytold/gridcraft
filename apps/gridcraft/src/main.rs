@@ -113,6 +113,7 @@ fn load_prefs(app: &mut SheetApp) {
         let language = saved.unwrap_or(app.ui.language);
         app.ui = ui;
         app.ui.language = language;
+        app.restore_autosave();
     }
     if let Ok(b) = std::fs::read(dir.join("prefs.json"))
         && let Ok(p) = serde_json::from_slice(&b)
@@ -127,7 +128,7 @@ fn save_prefs(app: &SheetApp) {
     }
     let Some(dir) = config_dir() else { return };
     let _ = std::fs::create_dir_all(&dir);
-    if let Ok(b) = serde_json::to_vec_pretty(&app.ui) {
+    if let Ok(b) = serde_json::to_vec_pretty(&app.ui_to_save()) {
         let _ = std::fs::write(dir.join("ui.json"), b);
     }
     if let Ok(b) = serde_json::to_vec_pretty(&app.session.prefs) {

@@ -60,6 +60,9 @@ pub struct UiState {
     /// Enable AutoComplete for cell values (File ▸ Options ▸ Editing): typed text is completed
     /// from the one matching entry in the same column.
     pub autocomplete: bool,
+    /// AutoSave (File > Options > Save, ribbon toggle). The live flag is `grid.autosave`; it is
+    /// copied here by [`SheetApp::ui_to_save`] and restored by [`SheetApp::restore_autosave`].
+    pub autosave: bool,
     pub recent: Vec<String>,
     /// One-shot keytip request for a ribbon control: set when a keytip action resolves to
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
@@ -103,6 +106,7 @@ impl Default for UiState {
             status_bar: true,
             animations: true,
             autocomplete: true,
+            autosave: false,
             recent: vec![],
             keytip_invoke: None,
             language: i18n::Language::En,
@@ -266,6 +270,16 @@ pub struct SheetApp {
 }
 
 impl SheetApp {
+    /// The preferences to write to `ui.json`, with the current AutoSave switch included.
+    pub fn ui_to_save(&self) -> UiState {
+        UiState { autosave: self.grid.autosave, ..self.ui.clone() }
+    }
+
+    /// Apply the saved AutoSave switch after `ui.json` was loaded into `ui`.
+    pub fn restore_autosave(&mut self) {
+        self.grid.autosave = self.ui.autosave;
+    }
+
     pub fn new(session: Session, services: Services) -> SheetApp {
         SheetApp {
             session,
