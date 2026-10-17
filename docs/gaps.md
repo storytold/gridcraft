@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-17 · **Change:** minor (§6's five reports have all landed) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -59,12 +59,14 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
 
 ### 6. Calculation correctness bugs (F)
-- **Missing:** 15-significant-digit equality; spill updates after structural edits and cleared
-  blockers; 3-D span deletion; qualified names after sheet rename.
-- **Evidence:** #57, #133, #139, #140, #134; PRs #148, #155, #156, #157. Iterative calculation
-  for circular references landed (no Options dialog yet).
-- **Impact:** wrong numbers are worse than missing features.
-- **Estimate:** 10–15 h. [function-parity.md](function-parity.md#formula-language)
+- **Missing:** nothing known. The four this entry tracked have landed: 15-significant-digit
+  equality (#57, so `=0.1+0.2=0.3` is TRUE and MATCH and COUNTIF agree), spill updates after
+  structural edits and cleared blockers (#133, #139; PRs #148, #157), 3-D span deletion (#140),
+  and qualified names after a sheet rename (#134). Iterative calculation for circular references
+  landed too (no Options dialog yet, which is §13's).
+- **Impact:** wrong numbers are worse than missing features, so this entry is kept until the
+  oracle suite of §15 can say the category is clear rather than only these five reports being so.
+- **Estimate:** — [function-parity.md](function-parity.md#formula-language)
 
 ### 7. Legacy `.xls` only partly read; encrypted workbooks can't be saved with a password (FF)
 - **Evidence:** #121: Excel 97-2003 (BIFF8) `.xls` files now open (values, formulas, number
@@ -168,6 +170,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
 | 2026-10-12 | minor | Page Layout view: dragging margins on the rulers (#792) removed from the §14 remainder |
 | 2026-10-12 | minor | §13: Forecast Sheet Forecast Start (hindcast) landed (#785) |

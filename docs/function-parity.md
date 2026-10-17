@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-13 · **Change:** minor (clearing large sparse ranges recalculates every changed cell's dependents, #1032) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-17 · **Change:** minor (15-significant-digit comparison done; three resolved caveats cleared) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -72,16 +72,16 @@ PIVOTBY, REGEXTEST…) are all present.
 | Feature | Status |
 |---|---|
 | A1 and R1C1 references, absolute/relative/mixed, F4 cycling | done |
-| 3-D references (`Sheet1:Sheet3!A1`) | done; endpoint-deletion bug (#140) |
+| 3-D references (`Sheet1:Sheet3!A1`) | done; deleting a span's end sheet keeps the rest (#140) |
 | Structured references (`Table1[Col]`, `[#Totals]`, `@`; the unbracketed `[[#This Row],Col]` some writers emit) | done |
 | Defined names (workbook and sheet scope), Create from Selection | done |
-| Dynamic arrays, spill, `#SPILL!`, spill operator `A1#` | done; stale-spill bugs (#133, #139; PRs #148, #157) |
+| Dynamic arrays, spill, `#SPILL!`, spill operator `A1#` | done; stale spills after a structural edit or a cleared blocker fixed (#133, #139; PRs #148, #157) |
 | Recalculation after clearing large sparse ranges | every stored cell changed by Clear is reported to recalculation, without a million-coordinate cutoff; removed formula spills are cleared, and removing empty merges still unblocks spills (#1032) |
-| Implicit intersection `@`, legacy CSE array formulas | done; legacy array range fill (PR #156) |
+| Implicit intersection `@`, legacy CSE array formulas | done, the entered range filled (PR #156) |
 | Trim references `A1:.E10` (trailing), `A1.:E10` (leading), `A1.:.E10` (both), also on whole rows/columns (`A:.A`) | done; evaluated as `TRIMRANGE(range, code, code)`, adjusted on insert/delete; files store `_xlfn.TRIMRANGE(range,code,code)` (Excel's own file spelling unconfirmed in public docs), `_xlfn._TRO_ALL/_TRO_LEADING/_TRO_TRAILING(...)` read too |
 | LET, LAMBDA, named LAMBDAs, ISOMITTED, MAP/REDUCE/SCAN/BYROW/BYCOL/MAKEARRAY | done |
 | Iterative calculation for circular references | done: with Enable Iterative Calculation on (`formulas.calculationOptions` `{iterative, maxIterations, maxChange}`, saved as `<calcPr iterate iterateCount iterateDelta>`), loops are evaluated again from their previous values (blank = 0) until no cell on a loop changes by Maximum Change or Maximum Iterations is reached; off, cycles give `#CIRC!`. Differences: no Options dialog yet (command only); GridCraft recalculates on open, so a loop that never settles (`=A1+1`) advances again each time the file is opened |
-| 15-significant-digit comparison semantics | **missing** (#57: `=0.1+0.2=0.3` is FALSE) |
+| 15-significant-digit comparison semantics | done (#57): `=0.1+0.2=0.3` is TRUE, and MATCH and COUNTIF compare the same way. Arithmetic keeps full precision, as Excel does — `=(0.1+0.2)-0.3` is 5.55E-17 |
 | External workbook references (`[Book.xlsx]Sheet1!A1`) | parsed; links dropped on open, no update |
 | Localized function names and `;` separators | **missing** (#45); en-US only |
 | Error values | the seven classic errors plus `#SPILL!`, `#CALC!`, `#GETTING_DATA` done; `#FIELD!`, `#BLOCKED!`, `#CONNECT!`, `#BUSY!`, `#UNKNOWN!`, `#PYTHON!` missing (minor: they come from data types, cloud and Python features) |
@@ -109,6 +109,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | 15-significant-digit comparison moved from missing to done (#57), and the resolved caveats on the 3-D reference, dynamic-array and legacy-array rows cleared (#140, #133, #139, #156) |
 | 2026-10-13 | minor | Clear reports changed stored cells sparsely, including those beyond the first million coordinates; dependent formulas and removed spills update, while clearing empty merges still unblocks spills (#1032) |
 | 2026-10-12 | minor | USDOLLAR added as a Compatibility function (not on Microsoft's list, so the counts don't change); MIRR with no positive flow is -1, COUNTIF's bare `"<="` / `">="` skip empty strings, INDIRECT with `a1` = FALSE gives `#REF!` for A1-style text (#738) |
 | 2026-10-11 | minor | TEXT / number formats fixed against Excel-cached results: fraction literals and zero fractions, `0` denominators zero padded, `?` pads the thousands separator, booleans use the text section (226 mismatches → 0 in 352 TEXT cells) |
