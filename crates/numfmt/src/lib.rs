@@ -15,7 +15,7 @@ use gridcraft_core::{CellError, DateSystem, Value};
 pub use builtin::{builtin_format, builtin_id};
 pub use decimal::format_general_fit;
 
-use parse::{SecKind, Section, Tok};
+use parse::{DatePart, SecKind, Section, Tok};
 use render::Out;
 
 /// Width (in characters) of General output in a cell.
@@ -54,6 +54,18 @@ pub enum FormatKind {
     /// Zip codes, phone numbers, social security numbers.
     Special,
     Custom,
+}
+
+/// What the worksheet function `CELL` reports about a number format.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct CellFormatInfo {
+    /// `CELL("format")`: `G`, `F2`, `,0`, `C2-`, `P0`, `S2`, `D1`…`D9`, with `-` for a coloured
+    /// negative section and `()` for parentheses.
+    pub code: String,
+    /// `CELL("color")`: the second section has a colour.
+    pub color: bool,
+    /// `CELL("parentheses")`: the first section has an unquoted, unescaped `(`.
+    pub parentheses: bool,
 }
 
 /// A formatted value ready to paint.
@@ -223,6 +235,24 @@ impl NumberFormat {
         }
     }
 
+    /// What `CELL("format")`, `CELL("color")` and `CELL("parentheses")` report for this code.
+    pub fn cell_info(&self) -> CellFormatInfo {
+        let first = self.inner.sections.first();
+        let color = self.inner.sections.get(1).is_some_and(|s| s.color.is_some());
+        let parentheses = first.is_some_and(|s| s.paren);
+        let mut code = match first {
+            Some(s) if !self.is_general() && !self.is_text() => section_cell_code(s),
+            _ => "G".to_string(),
+        };
+        if color {
+            code.push('-');
+        }
+        if parentheses {
+            code.push_str("()");
+        }
+        CellFormatInfo { code, color, parentheses }
+    }
+
     /// Picks the number section for `v`. Returns the section and whether the minus sign is
     /// dropped (the default negative section shows the absolute value). `None` = General.
     fn select(&self, v: f64) -> Option<(&Section, bool)> {
@@ -301,6 +331,79 @@ impl NumberFormat {
             }
             None => Formatted { text: t.to_string(), color: None, fill: None, numeric: false },
         }
+    }
+}
+
+/// The `CELL("format")` letter and digit for a format's first section.
+fn section_cell_code(s: &Section) -> String {
+    match s.kind {
+        SecKind::General | SecKind::Text => "G".into(),
+        SecKind::Date => date_cell_code(s).into(),
+        SecKind::Number if s.fraction => "G".into(),
+        SecKind::Number => {
+            let decimals = s
+                .toks
+                .iter()
+                .skip_while(|t| !matches!(t, Tok::Point))
+                .take_while(|t| !matches!(t, Tok::Exp { .. }))
+                .filter(|t| matches!(t, Tok::Digit(_)))
+                .count();
+            let dollar = s.toks.iter().any(|t| matches!(t, Tok::Lit(l) if l.contains('$')));
+            let letter = if s.percent > 0 {
+                "P"
+            } else if s.exp {
+                "S"
+            } else if dollar {
+                "C"
+            } else if s.thousands {
+                ","
+            } else {
+                "F"
+            };
+            format!("{letter}{decimals}")
+        }
+    }
+}
+
+/// `D1`…`D9` (or `G`) for a date or time section: dates go by the order of their day, month and
+/// year parts, times without date parts by their hours, minutes, seconds and AM/PM.
+fn date_cell_code(s: &Section) -> &'static str {
+    let parts = || {
+        s.toks.iter().filter_map(|t| match t {
+            Tok::Date(d) => Some(*d),
+            _ => None,
+        })
+    };
+    let mut order = parts().filter_map(|d| match d {
+        DatePart::Day(_) => Some('d'),
+        DatePart::Month(_) => Some('m'),
+        DatePart::Year(_) => Some('y'),
+        _ => None,
+    });
+    let (a, b, c) = (order.next(), order.next(), order.next());
+    if a.is_some() {
+        return match (a, b, c) {
+            (Some('d'), Some('m'), Some('y')) => "D1",
+            (Some('m'), Some('d'), Some('y')) => "D4",
+            (Some('d'), Some('m'), _) => "D2",
+            (Some('m'), Some('y'), _) => "D3",
+            (Some('m'), Some('d'), _) => "D5",
+            _ => "G",
+        };
+    }
+    if parts().any(|d| matches!(d, DatePart::ElapsedH(_) | DatePart::ElapsedM(_) | DatePart::ElapsedS(_))) {
+        return "G";
+    }
+    let hour = parts().any(|d| matches!(d, DatePart::Hour(_)));
+    let minute = parts().any(|d| matches!(d, DatePart::Minute(_)));
+    let second = parts().any(|d| matches!(d, DatePart::Second(_)));
+    let ampm = parts().any(|d| matches!(d, DatePart::AmPm | DatePart::AP(..)));
+    match (hour && minute, second, ampm) {
+        (false, _, _) => "G",
+        (true, true, true) => "D6",
+        (true, false, true) => "D7",
+        (true, true, false) => "D8",
+        (true, false, false) => "D9",
     }
 }
 

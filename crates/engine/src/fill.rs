@@ -179,12 +179,13 @@ impl Pattern {
             let nums: Vec<f64> = vals.iter().filter_map(Value::as_f64).collect();
             let first = nums.first().copied().unwrap_or(0.0);
             let last = nums.last().copied().unwrap_or(0.0);
-            let is_date = fmt.contains('d') || fmt.contains('y') || (fmt.contains('m') && !fmt.contains('h'));
+            let kind = NumberFormat::parse(fmt).kind();
+            let is_date = kind == FormatKind::Date;
             if nums.len() == 1 {
                 // A single number copies; a single date increments by a day, a single time by an hour.
                 return if is_date {
                     Pattern::Linear { last, first, step: 1.0 }
-                } else if NumberFormat::parse(fmt).kind() == FormatKind::Time {
+                } else if kind == FormatKind::Time {
                     Pattern::Linear { last, first, step: 1.0 / 24.0 }
                 } else {
                     Pattern::Copy
@@ -639,6 +640,29 @@ mod tests {
             fill(serde_json::json!([["Product 1"], ["On backorder"]]), "E1:E2", "E1:E6"),
             ["Product 1", "On backorder", "Product 2", "On backorder", "Product 3", "On backorder"]
         );
+    }
+
+    #[test]
+    fn single_number_fill_reads_the_parsed_format() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let mut fill = |values: serde_json::Value, code: &str, source: &str, target: &str| {
+            s.execute("range.setValues", serde_json::json!({"range": source, "values": values})).unwrap();
+            s.execute("home.numberFormat", serde_json::json!({"range": source, "code": code})).unwrap();
+            s.execute("edit.autoFill", serde_json::json!({"source": source, "target": target})).unwrap();
+            let d = s.doc().unwrap();
+            let sh = d.wb.active().unwrap();
+            let r = RangeRef::parse(target).unwrap();
+            r.iter().map(|c| sh.cell(c).map(|c| c.value.clone()).unwrap_or_default()).collect::<Vec<_>>()
+        };
+        let n = |v: &[f64]| v.iter().map(|x| Value::Number(*x)).collect::<Vec<_>>();
+        // A colour tag is not a date: a single number copies.
+        assert_eq!(fill(serde_json::json!([[5]]), "[Red]0", "A1", "A1:A3"), n(&[5.0, 5.0, 5.0]));
+        assert_eq!(fill(serde_json::json!([[5]]), "[Cyan]0", "B1", "B1:B3"), n(&[5.0, 5.0, 5.0]));
+        // Two numbers formatted [Red]0 follow a linear trend, not month steps.
+        assert_eq!(fill(serde_json::json!([[1], [32]]), "[Red]0", "C1:C2", "C1:C4"), n(&[1.0, 32.0, 63.0, 94.0]));
+        // An upper-case date code steps a single date by a day.
+        assert_eq!(fill(serde_json::json!([[45000]]), "DD.MM.YYYY", "D1", "D1:D3"), n(&[45000.0, 45001.0, 45002.0]));
     }
 
     #[test]

@@ -864,3 +864,36 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(f("0\\[0", 5.0), "0[5");
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
 }
+
+#[test]
+fn cell_info_codes() {
+    let c = |code: &str| NumberFormat::parse(code).cell_info().code;
+    for (code, want) in [
+        ("0.###", "F3"),
+        ("000", "F0"),
+        ("#,##0.000", ",3"),
+        ("$0.00", "C2"),
+        ("$#,##0.00_);[Red]($#,##0.00)", "C2-"),
+        ("##0.0E+0", "S1"),
+        ("?/8", "G"),
+        ("m/d/yy h:mm", "D4"),
+        ("dd.mm.yyyy", "D1"),
+        ("DD.MM.YYYY", "D1"),
+        ("d/m/yy", "D1"),
+        ("dd/mm", "D2"),
+        ("ddd", "G"),
+        ("mmmm", "G"),
+        ("yyyy", "G"),
+        ("h:mm:ss.0", "D8"),
+        ("h AM/PM", "G"),
+        ("\\(0", "F0"),
+        ("\"(\"0", "F0"),
+        ("0;0;[Red]0", "F0"),
+    ] {
+        assert_eq!(c(code), want, "{code}");
+    }
+    let i = NumberFormat::parse("0_);[Red](0)").cell_info();
+    assert!(i.color && !i.parentheses);
+    let i = NumberFormat::parse("(0)").cell_info();
+    assert!(!i.color && i.parentheses);
+}

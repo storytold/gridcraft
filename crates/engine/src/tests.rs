@@ -3282,3 +3282,54 @@ fn paste_special_validation_moves_relative_references() {
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
 }
+
+#[test]
+fn cell_format_color_and_parentheses_follow_the_parsed_code() {
+    let mut s = s();
+    let cases = [
+        ("General", "G", 0.0, 0.0),
+        ("[Red]General", "G", 0.0, 0.0),
+        ("@", "G", 0.0, 0.0),
+        ("0.0#", "F2", 0.0, 0.0),
+        ("#.##", "F2", 0.0, 0.0),
+        ("#,##0.0#", ",2", 0.0, 0.0),
+        ("$#,##0_);($#,##0)", "C0", 0.0, 0.0),
+        ("$#,##0_);[Red]($#,##0)", "C0-", 1.0, 0.0),
+        ("#,##0.00 \"€\"", ",2", 0.0, 0.0),
+        ("0.00%", "P2", 0.0, 0.0),
+        ("0.00E+00", "S2", 0.0, 0.0),
+        ("# ?/?", "G", 0.0, 0.0),
+        ("m/d/yy", "D4", 0.0, 0.0),
+        ("mmm d, yyyy", "D4", 0.0, 0.0),
+        ("d-mmm-yy", "D1", 0.0, 0.0),
+        ("d-mmm", "D2", 0.0, 0.0),
+        ("mmm-yy", "D3", 0.0, 0.0),
+        ("mm/dd", "D5", 0.0, 0.0),
+        ("yyyy-mm-dd", "G", 0.0, 0.0),
+        ("h:mm:ss AM/PM", "D6", 0.0, 0.0),
+        ("h:mm AM/PM", "D7", 0.0, 0.0),
+        ("h:mm:ss", "D8", 0.0, 0.0),
+        ("h:mm", "D9", 0.0, 0.0),
+        ("[h]:mm:ss", "G", 0.0, 0.0),
+        ("mm:ss", "G", 0.0, 0.0),
+        ("[Red]0", "F0", 0.0, 0.0),
+        ("[Blue]0.00", "F2", 0.0, 0.0),
+        ("0;[Red]0", "F0-", 1.0, 0.0),
+        ("0_);[Red](0)", "F0-", 1.0, 0.0),
+        ("(0)", "F0()", 0.0, 1.0),
+        ("#,##0.00;[Red]#,##0.00", ",2-", 1.0, 0.0),
+        ("\"x\"0", "F0", 0.0, 0.0),
+        ("0 \"days\"", "F0", 0.0, 0.0),
+    ];
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=CELL(\"format\",A1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "=CELL(\"color\",A1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=CELL(\"parentheses\",A1)"})).unwrap();
+    for (code, format, color, parens) in cases {
+        s.execute("home.numberFormat", json!({"range": "A1", "code": code})).unwrap();
+        s.execute("formulas.calculateNow", json!({})).unwrap();
+        assert_eq!(v(&s, "B1"), Value::text(format), "CELL(\"format\") of {code}");
+        assert_eq!(v(&s, "C1"), Value::Number(color), "CELL(\"color\") of {code}");
+        assert_eq!(v(&s, "D1"), Value::Number(parens), "CELL(\"parentheses\") of {code}");
+    }
+}
