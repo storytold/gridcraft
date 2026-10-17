@@ -491,6 +491,7 @@ fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u32)>)> {
         second,
         ("sys-cjk-hangul", cjk_hangul()),
         ("sys-thai", thai()),
+        ("sys-lao", lao()),
         ("sys-hebrew", hebrew()),
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
@@ -592,6 +593,26 @@ fn thai() -> Vec<(String, u32)> {
         v.push((format!("{d}/NotoSansThai-Regular.ttf"), 0));
         v.push((format!("{d}/tlwg/Garuda.ttf"), 0));
         v.push((format!("{d}/garuda/Garuda.ttf"), 0));
+    }
+    v
+}
+
+/// Lao faces. Windows ships Leelawadee UI (and DokChampa on older versions); macOS has Lao Sangam
+/// MN and Lao MN; Linux usually has Noto Sans Lao or Phetsarath OT.
+#[cfg(not(target_arch = "wasm32"))]
+fn lao() -> Vec<(String, u32)> {
+    let mac_sup = "/System/Library/Fonts/Supplemental";
+    let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
+    let lin = ["/usr/share/fonts/truetype/noto", "/usr/share/fonts/opentype/noto", "/usr/share/fonts/truetype", "/usr/share/fonts"];
+    let mut v: Vec<(String, u32)> = Vec::new();
+    v.push((format!("{win}\\LeelawUI.ttf"), 0)); // Leelawadee UI
+    v.push((format!("{win}\\dokchamp.ttf"), 0)); // DokChampa
+    v.push((format!("{mac_sup}/Lao Sangam MN.ttf"), 0));
+    v.push((format!("{mac_sup}/Lao MN.ttc"), 0));
+    for d in lin {
+        v.push((format!("{d}/NotoSansLao-Regular.ttf"), 0));
+        v.push((format!("{d}/lao/Phetsarath_OT.ttf"), 0));
+        v.push((format!("{d}/Phetsarath_OT.ttf"), 0));
     }
     v
 }
@@ -815,11 +836,11 @@ mod tests {
         let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
         assert_eq!(
             keys(HanOrder::Japanese),
-            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
         );
         assert_eq!(
             keys(HanOrder::Chinese),
-            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
         );
         assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
         for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs] {
@@ -848,11 +869,12 @@ mod tests {
         // Real render check, per script: the proportional family (what cells and the UI use) must
         // resolve a sample string to a real glyph, not the tofu replacement char. Skips a script
         // whose face is absent (a minimal machine) and fails if a face is present but not wired in.
-        let cases: [(&str, Vec<(String, u32)>, &str); 7] = [
+        let cases: [(&str, Vec<(String, u32)>, &str); 8] = [
             ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
             ("sys-cjk-han-zh", cjk_han_simplified(), "页面布局 客户端配置"),
             ("sys-cjk-hangul", cjk_hangul(), "한글"),
             ("sys-thai", thai(), "ทดสอบ"),
+            ("sys-lao", lao(), "ພາສາລາວ"),
             ("sys-hebrew", hebrew(), "עברית"),
             ("ui", candidates(UI), "Русский"),
             // Czech interface labels: every Czech accented letter, in both cases.
