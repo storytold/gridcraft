@@ -1175,6 +1175,7 @@ impl SheetApp {
             && !ctx.text_edit_focused()
             && self.grid.context_menu.is_none()
             && self.grid.header_menu.is_none()
+            && self.grid.fill_menu.is_none()
             && self.grid.filter_menu.is_none()
             && self.grid.list_picker.is_none()
             && self.grid.renaming_tab.is_none()

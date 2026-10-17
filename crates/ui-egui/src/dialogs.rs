@@ -332,7 +332,7 @@ impl Dialog {
                     Number { key: "step", label: "Step value:" },
                     Text { key: "stop", label: "Stop value:" },
                 ],
-                json!({"direction": "columns", "type": "linear", "dateUnit": "day", "step": 1}),
+                json!({"direction": if p("direction") == "rows" { "rows" } else { "columns" }, "type": "linear", "dateUnit": "day", "step": 1}),
             ),
             "comment" => {
                 let threaded = p("threaded").as_bool().unwrap_or(true);

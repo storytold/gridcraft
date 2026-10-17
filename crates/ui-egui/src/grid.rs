@@ -78,8 +78,10 @@ pub enum Drag {
         start: f32,
         orig: f32,
     },
+    /// Dragging the fill handle; `menu` when the right button drags it (the fill menu opens on release).
     Fill {
         target: Option<RangeRef>,
+        menu: bool,
     },
     /// Dragging a freeze handle: `cols` for the column bar, `to` the line count it would freeze.
     Freeze {
@@ -114,6 +116,8 @@ pub struct GridState {
     /// Column and row of the clicked header cell, and where to open the menu.
     pub filter_menu: Option<(u32, u32, Pos2)>,
     pub context_menu: Option<Pos2>,
+    /// After a right-drag of the fill handle: the source, the dragged range and where to open the menu.
+    pub fill_menu: Option<(RangeRef, RangeRef, Pos2)>,
     pub marching_phase: f32,
     /// The selection outline on its way to a new selection.
     pub glide: crate::selection_glide::SelectionGlide,
@@ -749,7 +753,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
     }
     // Interaction.
-    let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu);
+    let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu);
     crate::paper_view::interact(app, ui, &resp, &geo, sh, &wb);
     interact(app, ui, &resp, &geo, sh, &wb);
     crate::text_box::show(app, ui, &geo, sh);
@@ -760,6 +764,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     list_picker(app, ui, &geo, previous_popups.1 == app.grid.list_picker);
     header_menu(app, ui, previous_popups.2 == app.grid.header_menu);
     context_menu(app, ui);
+    fill_menu(app, ui, previous_popups.3 == app.grid.fill_menu);
     let track_x = if rtl { (available.left(), rect.left()) } else { (rect.right(), available.right()) };
     vertical_scrollbar(app, ui, sh, &geo, track_x, max_y, &t);
     if app.session.clipboard.is_some() {
@@ -1650,7 +1655,7 @@ pub(crate) fn paint_selection(
         p.rect_filled(h, 0.0, t.sel_border);
     }
     // Fill-handle drag preview.
-    if let crate::grid::Drag::Fill { target: Some(tr) } = &app.grid.drag
+    if let crate::grid::Drag::Fill { target: Some(tr), .. } = &app.grid.drag
         && range_in_pane(*tr, rows, cols)
     {
         let rr = geo.range_rect(sh, *tr);
@@ -2088,7 +2093,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             return;
         }
         if on_handle(p) {
-            app.grid.drag = Drag::Fill { target: None };
+            app.grid.drag = Drag::Fill { target: None, menu: resp.drag_started_by(egui::PointerButton::Secondary) };
             return;
         }
         if on_cur_border(p) && resp.drag_started() {
@@ -2223,10 +2228,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             Drag::Freeze { cols, .. } => {
                 app.grid.drag = Drag::Freeze { cols, to: Some(freeze_boundary(geo, sh, p, cols)) };
             }
-            Drag::Fill { .. } => {
+            Drag::Fill { menu, .. } => {
                 let src = sel.current();
                 let target = fill_target(src, pc);
-                app.grid.drag = Drag::Fill { target: Some(target) };
+                app.grid.drag = Drag::Fill { target: Some(target), menu };
                 scroll_by(app, auto);
             }
             Drag::Move { grab, .. } => {
@@ -2263,7 +2268,17 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                     select_to_pointer(app, geo, sh, wb, p);
                 }
             }
-            Drag::Fill { target: Some(t) } => {
+            // Esc mid-drag lands here too (egui ends the drag on Esc): no menu, and the key is
+            // spent on the drag so the grid's Esc doesn't also drop the copy.
+            Drag::Fill { target: Some(t), menu: true } => {
+                if let Some(p) = pos
+                    && t != sel.current()
+                    && !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                {
+                    app.grid.fill_menu = Some((sel.current(), t, geo.mirror_pos(p)));
+                }
+            }
+            Drag::Fill { target: Some(t), menu: false } => {
                 let src = sel.current();
                 if t != src {
                     // Ctrl (Cmd on macOS) swaps copying and extending, as in Excel.
@@ -2574,7 +2589,16 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     }
     let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
     // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
-    if editing || app.dialog.is_some() || other_focus || app.message.is_some() || app.grid.filter_menu.is_some() {
+    // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
+    // arrow key would move the selection the menu fills from).
+    if editing
+        || app.dialog.is_some()
+        || other_focus
+        || app.message.is_some()
+        || app.grid.filter_menu.is_some()
+        || app.grid.fill_menu.is_some()
+        || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
+    {
         return;
     }
     if ctx.memory(|m| m.focused()).is_none() {
@@ -2936,6 +2960,45 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
             && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| !resp.response.rect.contains(p)))
     {
         app.grid.context_menu = None;
+    }
+}
+
+/// The menu a right-drag of the fill handle opens on release, as in Excel.
+fn fill_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
+    let Some((src, target, at)) = app.grid.fill_menu else { return };
+    let mut close = false;
+    let response = egui::Area::new(egui::Id::new("fill_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            ui.set_min_width(190.0);
+            let items = [
+                ("Copy Cells", "copy"),
+                ("Fill Series", "extend"),
+                ("Fill Formatting Only", "formats"),
+                ("Fill Without Formatting", "values"),
+                ("-", ""),
+                ("Series…", "ui:series"),
+            ];
+            let lang = crate::i18n::current(ui.ctx());
+            for (label, mode) in items {
+                if label == "-" {
+                    ui.separator();
+                    continue;
+                }
+                if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
+                    close = true;
+                    if mode == "ui:series" {
+                        let _ = app.session.run("selection.set", json!({"range": target.union(&src).a1(), "active": src.start.a1()}));
+                        let direction = if target.width() != src.width() { "rows" } else { "columns" };
+                        app.open_dialog("series", json!({"direction": direction}));
+                    } else if let Err(e) = app.run("edit.autoFill", json!({"source": src.a1(), "target": target.a1(), "mode": mode})) {
+                        app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+                    }
+                }
+            }
+        });
+    });
+    if close || popup_dismissed(&response.response, was_open) {
+        app.grid.fill_menu = None;
     }
 }
 

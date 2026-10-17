@@ -79,7 +79,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "AutoFill",
             [],
             None,
-            "{source: \"A1:A2\", target: \"A1:A10\", mode?: series|alternate|copy|formats|values}: the fill-handle drag (alternate = Ctrl+drag: a lone number counts up, any other series copies)",
+            "{source: \"A1:A2\", target: \"A1:A10\", mode?: series|alternate|copy|formats|values|extend}: the fill-handle drag (alternate = Ctrl+drag: a lone number counts up, any other series copies; values = Fill Without Formatting: the series, targets keep their formats; extend = Fill Series: the series, and a lone number counts up)",
             has_doc,
             auto_fill
         ),
@@ -1357,6 +1357,7 @@ fn auto_fill(s: &mut Session, p: &Json) -> Result<Json> {
         "alternate" => crate::fill::FillMode::Alternate,
         "formats" => crate::fill::FillMode::Formats,
         "values" => crate::fill::FillMode::ValuesOnly,
+        "extend" => crate::fill::FillMode::Extend,
         _ => crate::fill::FillMode::Series,
     };
     if target.count() > 5_000_000 || src.count() > 5_000_000 {

@@ -768,6 +768,43 @@ fn ctrl_drag_fill_swaps_copy_and_series() {
 }
 
 #[test]
+fn fill_series_from_the_right_drag_menu_counts_a_lone_number() {
+    // Excel's right-drag Fill Series: a lone number counts up, everything else extends as a plain drag.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "A1", "target": "A1:A3", "mode": "extend"})).unwrap();
+    assert_eq!([v(&s, "A2"), v(&s, "A3")], [Value::Number(8.0), Value::Number(9.0)]);
+    s.execute("range.setValues", json!({"range": "B1", "values": [[1], [3]]})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "B1:B2", "target": "B1:B4", "mode": "extend"})).unwrap();
+    assert_eq!([v(&s, "B3"), v(&s, "B4")], [Value::Number(5.0), Value::Number(7.0)]);
+    s.execute("cell.set", json!({"cell": "C1", "input": "Item 9"})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "C1", "target": "C1:C2", "mode": "extend"})).unwrap();
+    assert_eq!(v(&s, "C2"), Value::from("Item 10"));
+    // A source with no common pattern continues each cell's own series, as a plain drag does.
+    s.execute("range.setValues", json!({"range": "D1", "values": [["Product 1"], ["On backorder"]]})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "D1:D2", "target": "D1:D4", "mode": "extend"})).unwrap();
+    assert_eq!([v(&s, "D3"), v(&s, "D4")], [Value::from("Product 2"), Value::from("On backorder")]);
+}
+
+#[test]
+fn fill_without_formatting_extends_the_series_and_keeps_the_target_formats() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [null], [9]]})).unwrap();
+    s.execute("home.bold", json!({"range": "A1:A2", "on": true})).unwrap();
+    s.execute("home.italic", json!({"range": "A4", "on": true})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "A1:A2", "target": "A1:A4", "mode": "values"})).unwrap();
+    assert_eq!([v(&s, "A3"), v(&s, "A4")], [Value::Number(3.0), Value::Number(4.0)]);
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let a4 = d.wb.styles.get(sh.style_id(CellRef::parse("A4").unwrap()));
+    assert!(a4.font.italic && !a4.font.bold, "A4 keeps its own formats");
+    assert!(!d.wb.styles.get(sh.style_id(CellRef::parse("A3").unwrap())).font.bold);
+    s.execute("range.setValues", json!({"range": "B1", "values": [["Product 1"], ["On backorder"]]})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "B1:B2", "target": "B1:B4", "mode": "values"})).unwrap();
+    assert_eq!([v(&s, "B3"), v(&s, "B4")], [Value::from("Product 2"), Value::from("On backorder")]);
+}
+
+#[test]
 fn insert_delete_cells_adjust() {
     let formula = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["formula"].clone();
     let mut s = s();

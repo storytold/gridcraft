@@ -19,7 +19,17 @@ pub enum FillMode {
     Alternate,
     Copy,
     Formats,
+    /// Fill Without Formatting: extends like a plain drag, the targets keep their formats.
     ValuesOnly,
+    /// Fill Series from the right-drag menu: extends like a plain drag, and a lone number counts up.
+    Extend,
+}
+
+impl FillMode {
+    /// The modes that continue the source's series rather than copy it.
+    fn extends_series(self) -> bool {
+        matches!(self, FillMode::Series | FillMode::Extend | FillMode::ValuesOnly)
+    }
 }
 
 /// Built-in custom lists.
@@ -67,15 +77,18 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
             cols.into_iter().map(|c| CellRef::new(lane, c)).collect()
         };
         let fmt = |c: &(CellRef, Option<Cell>)| cx.wb.styles.get(c.1.as_ref().map(|c| c.style).unwrap_or_default()).num_fmt.as_str();
-        let pattern = if matches!(mode, FillMode::Series | FillMode::Alternate) {
+        let pattern = if mode.extends_series() || mode == FillMode::Alternate {
             let detected = Pattern::detect(&src_cells, &custom, cx.wb.date_system, src_cells.first().map(fmt).unwrap_or_default());
-            if mode == FillMode::Alternate { detected.alternate(&src_cells) } else { detected }
+            match (mode, detected) {
+                (FillMode::Alternate, p) | (FillMode::Extend, p @ Pattern::Copy) => p.alternate(&src_cells),
+                (_, p) => p,
+            }
         } else {
             Pattern::Copy
         };
         // A source with no common pattern (`Product 1`, `On backorder`): each cell continues its
         // own series, one step per repeat of the source.
-        let per_cell: Vec<Pattern> = if mode == FillMode::Series && matches!(pattern, Pattern::Copy) && src_cells.len() > 1 {
+        let per_cell: Vec<Pattern> = if mode.extends_series() && matches!(pattern, Pattern::Copy) && src_cells.len() > 1 {
             src_cells.iter().map(|c| Pattern::detect(std::slice::from_ref(c), &custom, cx.wb.date_system, fmt(c))).collect()
         } else {
             Vec::new()
@@ -93,7 +106,7 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                     writes.push((*t, Some(existing)));
                     continue;
                 }
-                FillMode::ValuesOnly | FillMode::Series | FillMode::Alternate | FillMode::Copy => {
+                FillMode::ValuesOnly | FillMode::Series | FillMode::Alternate | FillMode::Copy | FillMode::Extend => {
                     let style = if mode == FillMode::ValuesOnly { sh.cell(*t).map(|c| c.style).unwrap_or_default() } else { cell.style };
                     if let Some(f) = &cell.formula {
                         if let Some(e) = f.expr() {
