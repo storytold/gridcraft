@@ -262,7 +262,7 @@ impl<'h> Evaluator<'h> {
         let wb = self.host.workbook();
         // Sheet-qualified `Sheet1!Name`.
         let (scope_sheet, bare) = match n.split_once('!') {
-            Some((s, b)) => match wb.sheet_index(s.trim_matches('\'')) {
+            Some((s, b)) => match wb.sheet_index(&gridcraft_core::unquote_sheet(s)) {
                 Some(i) => (i, b),
                 None => return err(CellError::Name),
             },

@@ -1386,7 +1386,7 @@ fn chart_pivot(s: &Session, p: &Json) -> Result<(usize, usize)> {
         let (sheet, addr) = match t.rsplit_once('!') {
             Some((sh, a)) => {
                 let sh = sh.trim();
-                let sh = sh.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')).map(|x| x.replace("''", "'")).unwrap_or_else(|| sh.to_string());
+                let sh = gridcraft_core::unquote_sheet(sh);
                 (d.wb.sheet_index(&sh), a)
             }
             None => (Some(d.wb.active_sheet), t),

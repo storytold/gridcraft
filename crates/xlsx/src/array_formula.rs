@@ -53,7 +53,7 @@ impl Scan<'_> {
                     return *shape;
                 }
                 let (scope, bare) = match n.rsplit_once('!') {
-                    Some((s, name)) => (self.wb.sheet_index(&s.trim_matches('\'').replace("''", "'")).unwrap_or(sheet), name),
+                    Some((s, name)) => (self.wb.sheet_index(&gridcraft_core::unquote_sheet(s)).unwrap_or(sheet), name),
                     None => (sheet, n.as_str()),
                 };
                 if let Some(def) = self.wb.name(bare, scope) {

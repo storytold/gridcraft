@@ -230,9 +230,106 @@ impl fmt::Display for RangeRef {
     }
 }
 
+/// Whether `name` reads as an R1C1 reference: `R`, `C`, `RC`, `R1`, `C1`, `R1C`, `RC1`, `R1C1`
+/// in any case.
+fn is_r1c1_token(name: &str) -> bool {
+    let mut chars = name.chars().peekable();
+    let mut letters = 0;
+    for letter in ['r', 'c'] {
+        if chars.peek().is_some_and(|c| c.to_ascii_lowercase() == letter) {
+            chars.next();
+            letters += 1;
+            while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
+                chars.next();
+            }
+        }
+    }
+    letters > 0 && chars.next().is_none()
+}
+
+/// Whether Excel quotes a sheet name in a reference (`'My Sheet'!A1`): it starts with a digit or
+/// `.`, holds anything but letters (any script), digits, `_` and `.`, reads as an A1 cell within
+/// the sheet or as an R1C1 reference, or is a boolean.
+pub fn sheet_needs_quotes(name: &str) -> bool {
+    let Some(first) = name.chars().next() else {
+        return true;
+    };
+    if first.is_ascii_digit() || first == '.' || name.chars().any(|c| !(c.is_alphanumeric() || c == '_' || c == '.')) {
+        return true;
+    }
+    CellRef::parse(name).is_some() || is_r1c1_token(name) || name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE")
+}
+
+/// A sheet name as it is written in a reference: quoted, with `'` doubled, when Excel quotes it.
+pub fn quote_sheet(name: &str) -> String {
+    if sheet_needs_quotes(name) { format!("'{}'", name.replace('\'', "''")) } else { name.to_string() }
+}
+
+/// The inverse of [`quote_sheet`]: takes the quotes off a sheet name and reads `''` as `'`.
+/// Text that isn't quoted is returned as it is.
+pub fn unquote_sheet(text: &str) -> String {
+    match text.trim().strip_prefix('\'').and_then(|t| t.strip_suffix('\'')) {
+        Some(inner) => inner.replace("''", "'"),
+        None => text.trim().to_string(),
+    }
+}
+
+/// `'My Sheet'!A1` → (`Some("My Sheet")`, `A1`). Splits at the last `!`, so a quoted name may
+/// hold one (`'a!b'!A1`).
+pub fn split_sheet(reference: &str) -> (Option<String>, &str) {
+    match reference.rsplit_once('!') {
+        Some((sheet, body)) => (Some(unquote_sheet(sheet)), body),
+        None => (None, reference),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sheet_quoting_follows_excel() {
+        for quoted in [
+            "A1",
+            "XFD1",
+            "AB1048576",
+            "R1",
+            "C1",
+            "RC1",
+            "R",
+            "C",
+            "RC",
+            "R1C",
+            "R1C1",
+            "r2c3",
+            "CR1",
+            ".x",
+            "TRUE",
+            "false",
+            "1abc",
+            "My Sheet",
+            "Bob's",
+            "a-b",
+            "",
+        ] {
+            assert!(sheet_needs_quotes(quoted), "{quoted:?} should be quoted");
+        }
+        for bare in ["Sheet1", "XFE1", "AB1048577", "Ärger", "日本", "Σ", "Sheet.1", "_x", "A1A", "Data", "RR", "CRX"] {
+            assert!(!sheet_needs_quotes(bare), "{bare:?} should stay bare");
+        }
+    }
+
+    #[test]
+    fn quote_unquote_and_split_sheet() {
+        assert_eq!(quote_sheet("Bob's"), "'Bob''s'");
+        assert_eq!(quote_sheet("Data"), "Data");
+        assert_eq!(unquote_sheet("'Bob''s'"), "Bob's");
+        assert_eq!(unquote_sheet("Data"), "Data");
+        assert_eq!(unquote_sheet("'"), "'");
+        assert_eq!(split_sheet("'a!b'!A1"), (Some("a!b".to_string()), "A1"));
+        assert_eq!(split_sheet("'Bob''s'!$A$1:$B$2"), (Some("Bob's".to_string()), "$A$1:$B$2"));
+        assert_eq!(split_sheet("A1"), (None, "A1"));
+    }
 
     #[test]
     fn letters_roundtrip() {

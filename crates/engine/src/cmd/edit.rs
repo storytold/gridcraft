@@ -514,7 +514,7 @@ pub(super) fn go_to(s: &mut Session, p: &Json) -> Result<Json> {
         } else if let Some((si, ti)) = d.wb.table(reference) {
             // As in Excel, a table's name stands for its data, without the header and totals rows.
             let t = d.wb.sheet(si).and_then(|sh| sh.tables.get(ti)).map(|t| t.data_range().unwrap_or(t.range).a1()).unwrap_or_default();
-            format!("'{}'!{}", d.wb.sheet(si).map(|s| s.name.clone()).unwrap_or_default(), t)
+            format!("{}!{}", gridcraft_core::quote_sheet(&d.wb.sheet(si).map(|s| s.name.clone()).unwrap_or_default()), t)
         } else {
             return Err(EngineError::Other("Reference isn't valid.".into()));
         }

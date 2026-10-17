@@ -373,10 +373,7 @@ fn resolve_source(wb: &Workbook, text: &str, default_sheet: usize, depth: u32) -
         let xml = if valid { format!("<worksheetSource name=\"{}\"/>", esc_attr(&tb.name)) } else { range_source_xml(&sh.name, r) };
         return Some((si, r, xml));
     }
-    let (sheet, body) = match t.rsplit_once('!') {
-        Some((sh, body)) => (Some(sh.trim_matches('\'').replace("''", "'")), body),
-        None => (None, t),
-    };
+    let (sheet, body) = gridcraft_core::split_sheet(t);
     if let Some(r) = RangeRef::parse(body) {
         let si = match &sheet {
             Some(n) => wb.sheet_index(n)?,

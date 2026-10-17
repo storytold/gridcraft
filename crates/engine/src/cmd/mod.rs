@@ -269,13 +269,7 @@ pub(crate) fn target_sheet(s: &Session, p: &Json) -> Result<usize> {
     Ok(d.wb.active_sheet)
 }
 
-/// `'My Sheet'!A1` → (`Some("My Sheet")`, `A1`).
-pub(crate) fn split_sheet(r: &str) -> (Option<String>, &str) {
-    match r.rsplit_once('!') {
-        Some((sh, body)) => (Some(sh.trim_matches('\'').replace("''", "'")), body),
-        None => (None, r),
-    }
-}
+pub(crate) use gridcraft_core::split_sheet;
 
 /// A single-cell parameter. Absent or null is `Ok(None)` (callers default it); a value that is not
 /// a cell reference, or that names a sheet other than the active one, is an error rather than a

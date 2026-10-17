@@ -9,7 +9,8 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use gridcraft_core::date::datetime_from_serial;
-use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
+pub use gridcraft_core::quote_sheet;
+use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, split_sheet};
 use gridcraft_model::*;
 
 use crate::pivot_calc::CalcSet;
@@ -44,26 +45,6 @@ pub struct Source {
 impl Source {
     pub fn col(&self, name: &str) -> Option<usize> {
         self.headers.iter().position(|h| h.eq_ignore_ascii_case(name))
-    }
-}
-
-/// `'My Sheet'!A1` → (`Some("My Sheet")`, `A1`).
-fn split_sheet(r: &str) -> (Option<String>, &str) {
-    match r.rsplit_once('!') {
-        Some((sh, body)) => (Some(sh.trim_matches('\'').replace("''", "'")), body),
-        None => (None, r),
-    }
-}
-
-/// Quotes a sheet name for a reference when needed.
-pub fn quote_sheet(name: &str) -> String {
-    if !name.is_empty()
-        && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')
-        && !name.chars().next().is_some_and(|c| c.is_ascii_digit())
-    {
-        name.to_string()
-    } else {
-        format!("'{}'", name.replace('\'', "''"))
     }
 }
 
@@ -1511,7 +1492,7 @@ pub fn parse_chart_link(link: &str) -> Option<(String, String)> {
     };
     let (sheet, name) = t.rsplit_once('!')?;
     let sheet = sheet.trim();
-    let sheet = sheet.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')).map(|x| x.replace("''", "'")).unwrap_or_else(|| sheet.to_string());
+    let sheet = gridcraft_core::unquote_sheet(sheet);
     let name = name.trim();
     if sheet.is_empty() || name.is_empty() {
         return None;

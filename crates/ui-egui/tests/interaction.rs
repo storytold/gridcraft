@@ -228,6 +228,19 @@ fn name_box_enter_goes_to_the_typed_cell_not_the_one_below() {
 }
 
 #[test]
+fn name_box_shows_a_name_defined_on_a_sheet_with_an_apostrophe() {
+    // #1458: the quotes of `'Bob''s'!$A$1:$B$2` were taken off without reading `''` as `'`.
+    let mut h = harness(blank());
+    let session = &mut h.state_mut().session;
+    session.run("home.insertSheet", json!({"name": "Bob's"})).unwrap();
+    session.run("sheet.activate", json!({"sheet": "Bob's"})).unwrap();
+    session.run("formulas.defineName", json!({"name": "Box", "refersTo": "='Bob''s'!$A$1:$B$2"})).unwrap();
+    session.run("selection.set", json!({"range": "A1:B2"})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().name_box_text(), "Box");
+}
+
+#[test]
 fn typing_enters_values_and_moves_down() {
     let mut h = harness(blank());
     text(&mut h, "42");
