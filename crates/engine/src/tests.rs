@@ -815,6 +815,145 @@ fn insert_delete_cells_adjust() {
 }
 
 #[test]
+fn inserted_rows_columns_and_cells_take_the_format_of_the_cells_before() {
+    // Excel's "Format Same As Above" (Range.Insert's default CopyOrigin, xlFormatFromLeftOrAbove):
+    // inserted cells take the formats of the cells above, or to the left, and nothing else.
+    let style = |s: &Session, a: &str| s.doc().unwrap().wb.active().unwrap().style_id(CellRef::parse(a).unwrap());
+    let input = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["input"].clone();
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Step", "Owner", "Notes"], [1, "Team A", "first"], [2, "Team B", "second"]]}))
+        .unwrap();
+    s.execute("cell.set", json!({"cell": "C2", "input": "=A2*2"})).unwrap();
+    s.execute("home.bold", json!({"range": "A1:C1"})).unwrap();
+    s.execute("home.fillColor", json!({"range": "A2:C3", "color": "#FFF2CC"})).unwrap();
+    s.execute("home.borders", json!({"range": "A2:C3", "preset": "all"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "C2:C3", "code": "0.00"})).unwrap();
+    let (a1, b1, c1, a2, b2, c2) = (style(&s, "A1"), style(&s, "B1"), style(&s, "C1"), style(&s, "A2"), style(&s, "B2"), style(&s, "C2"));
+    assert!(a1 != Default::default() && b2 != a1 && c2 != b2, "three distinct formats to copy");
+
+    // A row: each new cell takes the format of the cell above, without its value or formula.
+    s.execute("home.insertRows", json!({"rows": "3:3"})).unwrap();
+    assert_eq!([style(&s, "A3"), style(&s, "B3"), style(&s, "C3")], [a2, b2, c2]);
+    assert_eq!(style(&s, "D3"), Default::default());
+    for cell in ["A3", "B3", "C3"] {
+        assert_eq!(input(&mut s, cell), "", "{cell}");
+    }
+    assert_eq!(v(&s, "A4"), Value::Number(2.0));
+    // One undo step takes the formats away with the row.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::Number(2.0));
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(style(&s, "B3"), b2);
+    assert_eq!(v(&s, "B3"), Value::Empty);
+
+    // A column takes the formats of the column to its left, the header's bold included.
+    s.execute("home.insertColumns", json!({"cols": "C:C"})).unwrap();
+    assert_eq!([style(&s, "C1"), style(&s, "C2"), style(&s, "C3"), style(&s, "C4")], [b1, b2, b2, b2]);
+    assert_eq!(style(&s, "D2"), c2);
+    assert_eq!(input(&mut s, "C2"), "");
+    assert_eq!(input(&mut s, "D2"), "=A2*2");
+
+    // Cells shifted down take the formats of the cells above the block: here the header row.
+    s.execute("home.insertCells", json!({"range": "A2:D2", "shift": "down"})).unwrap();
+    assert_eq!([style(&s, "A2"), style(&s, "B2"), style(&s, "C2"), style(&s, "D2")], [a1, b1, b1, c1]);
+    assert_eq!(v(&s, "A3"), Value::Number(1.0));
+    assert_eq!(style(&s, "A3"), a2);
+    // Cells shifted right take the formats of the cells to their left, only in the block's rows.
+    s.execute("home.insertCells", json!({"range": "B3:B4", "shift": "right"})).unwrap();
+    assert_eq!([style(&s, "B3"), style(&s, "B4")], [a2, a2]);
+    assert_eq!(style(&s, "C3"), b2);
+    assert_eq!(v(&s, "C3"), Value::from("Team A"));
+    assert_eq!(style(&s, "B2"), b1, "the row above the block keeps its cells");
+
+    // The formats are cells like any other in the saved file.
+    let wb = s.doc().unwrap().wb.clone();
+    let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    let id = reopened.active().unwrap().style_id(CellRef::parse("B4").unwrap());
+    assert_eq!(reopened.styles.get(id), wb.styles.get(a2));
+
+    // Nothing comes before row 1 or column A: cells inserted there stay unformatted rather than
+    // taking the formats of the cells pushed below or to the right.
+    s.execute("home.insertCells", json!({"range": "A1:B1", "shift": "down"})).unwrap();
+    assert_eq!([style(&s, "A1"), style(&s, "B1"), style(&s, "A2")], [Default::default(), Default::default(), a1]);
+    assert_eq!(v(&s, "A2"), Value::from("Step"));
+    s.execute("home.insertCells", json!({"range": "A3:A4", "shift": "right"})).unwrap();
+    assert_eq!([style(&s, "A3"), style(&s, "A4"), style(&s, "B4")], [Default::default(), Default::default(), a2]);
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    s.execute("home.insertColumns", json!({"cols": "A:A"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.cells.iter_range(gridcraft_core::RangeRef::rows(0, 0)).count(), 0);
+    assert_eq!(sh.cells.iter_range(gridcraft_core::RangeRef::cols(0, 0)).count(), 0);
+}
+
+#[test]
+fn inserting_many_rows_under_a_wide_formatted_row_stays_bounded() {
+    // A row formatted cell by cell across the sheet (not as a whole row). Ten new rows take its
+    // formats; a thousand would store 16 million cells, so they are left unformatted.
+    let mut s = s();
+    s.execute("home.fillColor", json!({"range": "A1:XFC1", "color": "#FFF2CC"})).unwrap();
+    let filled = s.doc().unwrap().wb.active().unwrap().style_id(CellRef::parse("XFC1").unwrap());
+    s.execute("home.insertRows", json!({"rows": "2:11"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.style_id(CellRef::parse("XFC11").unwrap()), filled);
+    assert_eq!(sh.cells.len(), 16_383 * 11);
+    let result = s.execute("home.insertRows", json!({"rows": "12:1011"})).unwrap();
+    assert_eq!(result["formattingSkipped"], true);
+    assert_eq!(result["formattingCellLimit"], 1_000_000);
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.len(), 16_383 * 11);
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.len(), 16_383);
+}
+
+#[test]
+fn insert_format_cap_counts_only_styles_not_already_inherited() {
+    for columns in [false, true] {
+        let mut s = s();
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        let base = wb.styles.derive(gridcraft_model::StyleId::DEFAULT, |st| st.font.bold = true);
+        let different = wb.styles.derive(base, |st| st.font.italic = true);
+        let sh = wb.sheet_mut(0).unwrap();
+        let map = if columns { &mut sh.cols } else { &mut sh.rows };
+        map.insert(0, gridcraft_model::LineInfo { style: Some(base), ..Default::default() });
+        for k in 0..16_383 {
+            let c = if columns { CellRef::new(k, 0) } else { CellRef::new(0, k) };
+            sh.set_style(c, if k == 0 { different } else { base });
+        }
+        let (command, params) =
+            if columns { ("home.insertColumns", json!({"cols": "B:ALM"})) } else { ("home.insertRows", json!({"rows": "2:1001"})) };
+        let result = s.execute(command, params).unwrap();
+        assert!(result.is_null(), "only 1,000 cells need a stored style: {result}");
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        let c = if columns { CellRef::new(0, 1000) } else { CellRef::new(1000, 0) };
+        assert_eq!(sh.style_id(c), different);
+        assert_eq!(sh.cells.len(), 16_383 + 1_000);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.len(), 16_383);
+    }
+}
+
+#[test]
+fn inserted_cells_report_when_formatting_exceeds_the_storage_cap() {
+    for right in [false, true] {
+        let mut s = s();
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        let style = wb.styles.derive(gridcraft_model::StyleId::DEFAULT, |st| st.font.bold = true);
+        let sh = wb.sheet_mut(0).unwrap();
+        let map = if right { &mut sh.cols } else { &mut sh.rows };
+        map.insert(0, gridcraft_model::LineInfo { style: Some(style), ..Default::default() });
+        let result = s
+            .execute(
+                "home.insertCells",
+                if right { json!({"range": "B1:ALM1001", "shift": "right"}) } else { json!({"range": "A2:ALM1002", "shift": "down"}) },
+            )
+            .unwrap();
+        assert_eq!(result["formattingSkipped"], true);
+        assert_eq!(result["formattingCellLimit"], 1_000_000);
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.len(), 0);
+    }
+}
+
+#[test]
 fn sort_and_filter() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["b", 2], ["c", 3], ["a", 1]]})).unwrap();
