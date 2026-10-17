@@ -311,6 +311,25 @@ fn date_text_coerces_in_the_workbook_date_system() {
 }
 
 #[test]
+fn month_name_text_coerces_to_a_date() {
+    // #1342: `MONTH(1&LEFT(header,3))` turns a "Jan-23" header into a month number.
+    let mut t = T::new();
+    t.set("A1", "'Jan-23");
+    t.set("B1", "=MONTH(1&LEFT(A1,3))");
+    t.set("C1", "=DATE(RIGHT(A1,2)+2000,MONTH(1&LEFT(A1,3)),1)");
+    t.set("D1", "=\"1Jan\"+0");
+    t.set("F1", "=MONTH(1&\"Feb\")");
+    t.set("G1", "=DATEVALUE(\"32Jan\")");
+    assert_eq!(t.num("B1"), 1.0);
+    assert_eq!(t.num("C1"), 44927.0);
+    let year = gridcraft_core::parse::current_year();
+    let jan1 = gridcraft_core::date::serial_from_ymd(gridcraft_core::DateSystem::D1900, year, 1, 1);
+    assert_eq!(Some(t.num("D1")), jan1);
+    assert_eq!(t.num("F1"), 2.0);
+    assert_eq!(t.get("G1"), Value::Error(CellError::Value));
+}
+
+#[test]
 fn operators() {
     let mut t = T::new();
     t.set("A1", "=\"a\"&1&TRUE");
