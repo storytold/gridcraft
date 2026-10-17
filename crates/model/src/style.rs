@@ -119,16 +119,33 @@ pub struct Theme {
     pub colors: [u32; 12],
     pub major_font: String,
     pub minor_font: String,
+    /// The heading font's East Asian typeface (`<a:ea>`); empty when the file did not set one.
+    #[serde(default)]
+    pub major_font_ea: String,
+    /// The body font's East Asian typeface (`<a:ea>`); empty when the file did not set one.
+    #[serde(default)]
+    pub minor_font_ea: String,
+    /// The heading font's complex-script typeface (`<a:cs>`); empty when the file did not set one.
+    #[serde(default)]
+    pub major_font_cs: String,
+    /// The body font's complex-script typeface (`<a:cs>`); empty when the file did not set one.
+    #[serde(default)]
+    pub minor_font_cs: String,
 }
 
 impl Default for Theme {
-    /// GridCraft's own default theme ("Craft"): original palette.
+    /// GridCraft's own default theme ("Craft"): original palette. The East Asian and
+    /// complex-script typefaces stay empty: the file did not set one.
     fn default() -> Self {
         Theme {
             name: "Craft".into(),
             colors: [0xFFFFFF, 0x000000, 0xE8E8E8, 0x0E2841, 0x156082, 0xE97132, 0x196B24, 0x0F9ED5, 0xA02B93, 0x4EA72E, 0x467886, 0x96607D],
             major_font: crate::DEFAULT_FONT.into(),
             minor_font: crate::DEFAULT_FONT.into(),
+            major_font_ea: String::new(),
+            minor_font_ea: String::new(),
+            major_font_cs: String::new(),
+            minor_font_cs: String::new(),
         }
     }
 }
@@ -443,5 +460,28 @@ mod tests {
         assert_eq!(Color::Theme(0, -500).resolve(&th), Some([128, 128, 128]));
         assert_eq!(Color::Theme(1, 500).resolve(&th), Some([128, 128, 128]));
         assert_eq!(Color::Auto.resolve(&th), None);
+    }
+
+    #[test]
+    fn theme_json_keeps_ea_and_cs_and_reads_old_json() {
+        // JSON written before the ea/cs fields existed still deserializes (`serde(default)`).
+        let mut old = serde_json::to_value(Theme::default()).unwrap();
+        let obj = old.as_object_mut().unwrap();
+        for key in ["major_font_ea", "minor_font_ea", "major_font_cs", "minor_font_cs"] {
+            assert!(obj.remove(key).is_some(), "the default theme serializes {key}");
+        }
+        assert_eq!(serde_json::from_value::<Theme>(old).unwrap(), Theme::default());
+
+        // Set fields serialize and come back.
+        let t = Theme {
+            major_font_ea: "游ゴシック".into(),
+            minor_font_ea: "ＭＳ Ｐゴシック".into(),
+            major_font_cs: "Arial".into(),
+            minor_font_cs: "Times New Roman".into(),
+            ..Theme::default()
+        };
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(json.contains("major_font_ea") && json.contains("游ゴシック"), "{json}");
+        assert_eq!(serde_json::from_str::<Theme>(&json).unwrap(), t);
     }
 }

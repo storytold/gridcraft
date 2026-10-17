@@ -41,6 +41,12 @@ fn scheme_rgb(e: &El) -> Option<u32> {
     None
 }
 
+/// The typeface of `<fontScheme>/<font>/<kind>` (`latin`, `ea` or `cs`), `None` when absent or
+/// empty (an empty typeface means "not set" and must not overwrite the default).
+fn typeface<'a>(fs: &'a El, font: &str, kind: &str) -> Option<&'a str> {
+    fs.path(&[font, kind]).and_then(|e| e.attr("typeface")).filter(|f| !f.is_empty())
+}
+
 pub fn read_theme(root: &El) -> Theme {
     let mut t = Theme::default();
     if let Some(n) = root.attr("name") {
@@ -57,11 +63,23 @@ pub fn read_theme(root: &El) -> Theme {
         }
     }
     if let Some(fs) = el.child("fontScheme") {
-        if let Some(f) = fs.path(&["majorFont", "latin"]).and_then(|l| l.attr("typeface")).filter(|f| !f.is_empty()) {
+        if let Some(f) = typeface(fs, "majorFont", "latin") {
             t.major_font = f.to_string();
         }
-        if let Some(f) = fs.path(&["minorFont", "latin"]).and_then(|l| l.attr("typeface")).filter(|f| !f.is_empty()) {
+        if let Some(f) = typeface(fs, "minorFont", "latin") {
             t.minor_font = f.to_string();
+        }
+        if let Some(f) = typeface(fs, "majorFont", "ea") {
+            t.major_font_ea = f.to_string();
+        }
+        if let Some(f) = typeface(fs, "minorFont", "ea") {
+            t.minor_font_ea = f.to_string();
+        }
+        if let Some(f) = typeface(fs, "majorFont", "cs") {
+            t.major_font_cs = f.to_string();
+        }
+        if let Some(f) = typeface(fs, "minorFont", "cs") {
+            t.minor_font_cs = f.to_string();
         }
     }
     t
@@ -80,10 +98,14 @@ pub fn write_theme(t: &Theme) -> String {
     s.push_str("</a:clrScheme>");
     let _ = write!(
         s,
-        "<a:fontScheme name=\"{}\"><a:majorFont><a:latin typeface=\"{}\"/><a:ea typeface=\"\"/><a:cs typeface=\"\"/></a:majorFont><a:minorFont><a:latin typeface=\"{}\"/><a:ea typeface=\"\"/><a:cs typeface=\"\"/></a:minorFont></a:fontScheme>",
+        "<a:fontScheme name=\"{}\"><a:majorFont><a:latin typeface=\"{}\"/><a:ea typeface=\"{}\"/><a:cs typeface=\"{}\"/></a:majorFont><a:minorFont><a:latin typeface=\"{}\"/><a:ea typeface=\"{}\"/><a:cs typeface=\"{}\"/></a:minorFont></a:fontScheme>",
         esc_attr(name),
         esc_attr(&t.major_font),
-        esc_attr(&t.minor_font)
+        esc_attr(&t.major_font_ea),
+        esc_attr(&t.major_font_cs),
+        esc_attr(&t.minor_font),
+        esc_attr(&t.minor_font_ea),
+        esc_attr(&t.minor_font_cs)
     );
     // Format scheme: three entries per list, as the schema requires.
     s.push_str("<a:fmtScheme name=\"Craft\"><a:fillStyleLst>");
@@ -113,6 +135,9 @@ pub fn write_theme(t: &Theme) -> String {
 mod tests {
     use super::*;
 
+    /// A Japanese Office theme: the heading font sets latin, ea and cs; the body font only ea.
+    const EA_THEME: &str = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme"><a:themeElements><a:clrScheme name="Office"/><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri"/><a:ea typeface="游ゴシック"/><a:cs typeface="Arial"/></a:majorFont><a:minorFont><a:ea typeface="ＭＳ Ｐゴシック"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
+
     #[test]
     fn roundtrip() {
         let mut t = Theme::default();
@@ -124,5 +149,58 @@ mod tests {
         let x = write_theme(&t);
         let back = read_theme(&crate::xml::parse(x.as_bytes()).unwrap());
         assert_eq!(back, t);
+    }
+
+    #[test]
+    fn ea_and_cs_typefaces_roundtrip() {
+        let t = read_theme(&crate::xml::parse(EA_THEME.as_bytes()).unwrap());
+        assert_eq!(t.major_font, "Calibri");
+        assert_eq!(t.major_font_ea, "游ゴシック");
+        assert_eq!(t.major_font_cs, "Arial");
+        // No `<a:latin>` under the minor font: the default stays.
+        assert_eq!(t.minor_font, Theme::default().minor_font);
+        assert_eq!(t.minor_font_ea, "ＭＳ Ｐゴシック");
+        assert!(t.minor_font_cs.is_empty());
+
+        let x = write_theme(&t);
+        assert!(
+            x.contains(r#"<a:majorFont><a:latin typeface="Calibri"/><a:ea typeface="游ゴシック"/><a:cs typeface="Arial"/></a:majorFont>"#),
+            "{x}"
+        );
+        assert!(
+            x.contains(r#"<a:minorFont><a:latin typeface="Calibri"/><a:ea typeface="ＭＳ Ｐゴシック"/><a:cs typeface=""/></a:minorFont>"#),
+            "{x}"
+        );
+        assert_eq!(read_theme(&crate::xml::parse(x.as_bytes()).unwrap()), t);
+    }
+
+    #[test]
+    fn theme_without_ea_or_cs_writes_empty_attributes() {
+        let t = Theme::default();
+        let x = write_theme(&t);
+        assert!(x.contains(r#"<a:majorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont>"#), "{x}");
+        assert!(x.contains(r#"<a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont>"#), "{x}");
+    }
+
+    #[test]
+    fn explicit_empty_ea_and_cs_read_as_unset() {
+        let xml = EA_THEME
+            .replace(r#"<a:ea typeface="游ゴシック"/>"#, r#"<a:ea typeface=""/>"#)
+            .replace(r#"<a:ea typeface="ＭＳ Ｐゴシック"/>"#, r#"<a:ea typeface=""/>"#);
+        let t = read_theme(&crate::xml::parse(xml.as_bytes()).unwrap());
+        assert!(t.major_font_ea.is_empty() && t.minor_font_ea.is_empty());
+        assert_eq!(t.major_font_cs, "Arial");
+        let x = write_theme(&t);
+        assert!(x.contains(r#"<a:majorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface="Arial"/></a:majorFont>"#), "{x}");
+        assert_eq!(read_theme(&crate::xml::parse(x.as_bytes()).unwrap()), t);
+    }
+
+    #[test]
+    fn ea_and_cs_typefaces_are_escaped() {
+        let t = Theme { major_font_ea: "游&ゴシック".into(), minor_font_cs: "A<B>\"C\"".into(), ..Theme::default() };
+        let x = write_theme(&t);
+        assert!(x.contains(r#"<a:ea typeface="游&amp;ゴシック"/>"#), "{x}");
+        assert!(x.contains(r#"<a:cs typeface="A&lt;B&gt;&quot;C&quot;"/>"#), "{x}");
+        assert_eq!(read_theme(&crate::xml::parse(x.as_bytes()).unwrap()), t);
     }
 }
