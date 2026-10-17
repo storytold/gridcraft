@@ -1246,6 +1246,7 @@ fn show_levels(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
     let r = data_range(s, p)?;
+    let header = bool_param(p, "header").unwrap_or(true);
     let group_col = col_param(p.get("groupBy"), r.start.col).unwrap_or(r.start.col);
     let func = str_param(p, "function").unwrap_or("sum");
     let code = match func {
@@ -1274,8 +1275,9 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
     let mut groups: Vec<(u32, u32, String)> = Vec::new();
-    let mut start = r.start.row + 1;
-    for row in r.start.row + 1..=r.end.row + 1 {
+    let first = r.start.row + u32::from(header);
+    let mut start = first;
+    for row in first..=r.end.row + 1 {
         let cur = sh.value(CellRef::new(row, group_col)).display();
         let prev = sh.value(CellRef::new(start, group_col)).display();
         if row > r.end.row || cur != prev {
@@ -1303,7 +1305,7 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
     s.execute("home.insertRows", json!({"rows": format!("{}:{}", last + 1, last + 1)}))?;
     s.execute("cell.set", json!({"cell": lbl, "input": format!("Grand {label}")}))?;
     for c in &cols {
-        let range = RangeRef::new(CellRef::new(r.start.row + 1, *c), CellRef::new(last - 1, *c)).a1();
+        let range = RangeRef::new(CellRef::new(first, *c), CellRef::new(last - 1, *c)).a1();
         s.execute("cell.set", json!({"cell": CellRef::new(last, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
     }
     Ok(json!({"groups": inserted}))
@@ -1312,6 +1314,22 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subtotal_honours_header_false() {
+        // #131: with header:false the first data row was treated as a header and left out of its
+        // group's subtotal and the grand total.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["East", 10], ["East", 20], ["West", 30], ["West", 40]]})).unwrap();
+        s.execute("data.subtotal", json!({"range": "A1:B4", "groupBy": "A", "function": "sum", "columns": ["B"], "header": false})).unwrap();
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+        assert_eq!(get(&mut s, "A1")["value"], json!("East"));
+        assert_eq!(get(&mut s, "A3")["text"], json!("East Total"));
+        assert_eq!(get(&mut s, "B3")["value"], json!(30.0), "East's subtotal counts both East rows");
+        assert_eq!(get(&mut s, "A7")["text"], json!("Grand Total"));
+        assert_eq!(get(&mut s, "B7")["value"], json!(100.0), "the grand total counts every data row");
+    }
 
     #[test]
     fn filter_by_huge_numeric_column_is_rejected_not_overflowed() {
