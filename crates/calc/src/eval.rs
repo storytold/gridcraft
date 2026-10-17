@@ -13,10 +13,14 @@ use gridcraft_model::Workbook;
 
 /// Largest array a reference may expand to.
 pub const MAX_CELLS: u64 = 16_000_000;
-/// References up to this many cells are read at their full size; larger ones (`A:A`, ranges
-/// reserved for data to come such as `$A$2:$A$50000`) stop at the sheet's used range, so that
-/// formulas over them stay fast.
+/// References up to this many cells (one whole row) are always read at their full size.
 const FULL_SIZE_CELLS: u64 = 16_384;
+/// Bounded references up to this many cells (one column's worth) are read at their full size too, as
+/// Excel does, so their shape lines up with the arrays next to them (`D3:AZ400*B3:B400` is 398 by
+/// 49 even when the data ends at column F) and their blanks count. References that run to the edge
+/// of the sheet (`A:A`, `A2:A1048576`, several whole rows) and larger blocks stop at the sheet's used
+/// range, so that formulas over them stay fast.
+const FULL_SIZE_BOUNDED_CELLS: u64 = 1_048_576;
 const MAX_DEPTH: usize = 400;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -172,9 +176,15 @@ impl<'h> Evaluator<'h> {
             return self.host.cell_value(a.sheet, a.range.start);
         }
         // A reference keeps its size, so the array has its shape and its blanks count
-        // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`).
+        // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`). A single whole row (`5:5`) is exactly
+        // `FULL_SIZE_CELLS` cells, but like `A:A` or `1:2` it stops at the used range: read at full
+        // size, a whole-row lookup value runs 16,384 lookups over 16,384 cells for each formula.
         let cells = u64::from(a.range.height()) * u64::from(a.range.width());
-        let range = if cells > FULL_SIZE_CELLS { self.trim(a) } else { a.range };
+        // `A:A`, `1:1` and `A2:A1048576` run to the edge of the sheet: they stand for "the rest of
+        // the column", not for a block of a chosen size.
+        let to_edge = a.range.end.row == MAX_ROWS - 1 || a.range.end.col == MAX_COLS - 1;
+        let full_size = (cells <= FULL_SIZE_CELLS && !a.range.is_full_rows()) || (!to_edge && cells <= FULL_SIZE_BOUNDED_CELLS);
+        let range = if full_size { a.range } else { self.trim(a) };
         let (h, w) = (range.height() as usize, range.width() as usize);
         if (h as u64) * (w as u64) > MAX_CELLS {
             return Value::Error(CellError::Num);

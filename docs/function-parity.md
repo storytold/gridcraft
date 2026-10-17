@@ -91,7 +91,7 @@ PIVOTBY, REGEXTEST…) are all present.
 **~82% ready.** The library is broad and has 96 test functions in `crates/functions` with many
 assertions each, but there is no conformance suite against Excel-computed results, and user
 reports keep finding edge cases: MIN() with no arguments (#138), COUNTBLANK past the used range
-(#137), ROUND at 15 digits and DATE(1900,2,29) (fixed 10-09), SUMIF sum-range sizing (fixed
+(#137, and past 16,384 cells #1010, fixed 10-14 for bounded references), ROUND at 15 digits and DATE(1900,2,29) (fixed 10-09), SUMIF sum-range sizing (fixed
 10-09). Statistical distributions and financial functions with iterative solvers (RATE, IRR,
 XIRR, YIELD) are the highest-risk for last-digit differences.
 
@@ -110,6 +110,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-13 | minor | Clear reports changed stored cells sparsely, including those beyond the first million coordinates; dependent formulas and removed spills update, while clearing empty merges still unblocks spills (#1032) |
+| 2026-10-14 | minor | Bounded references up to 1,048,576 cells (`D3:AZ400`) keep their full shape instead of stopping at the used range, so `SUMPRODUCT(D3:AZ400*B3:B400,(A3:A400=x)*(D1:AZ1=y))` broadcasts like Excel and `ROWS`, `COUNTBLANK` and `--(r="")` count the blanks; references that run to the edge of the sheet (`A:A`) still stop at the used range (#1010) |
 | 2026-10-12 | minor | USDOLLAR added as a Compatibility function (not on Microsoft's list, so the counts don't change); MIRR with no positive flow is -1, COUNTIF's bare `"<="` / `">="` skip empty strings, INDIRECT with `a1` = FALSE gives `#REF!` for A1-style text (#738) |
 | 2026-10-11 | minor | TEXT / number formats fixed against Excel-cached results: fraction literals and zero fractions, `0` denominators zero padded, `?` pads the thousands separator, booleans use the text section (226 mismatches → 0 in 352 TEXT cells) |
 | 2026-10-11 | minor | Iterative calculation: circular references iterate up to Maximum Iterations / Maximum Change when enabled |

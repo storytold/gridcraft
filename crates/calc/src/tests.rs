@@ -562,6 +562,38 @@ fn references_keep_their_size_past_the_used_range() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // a native-only timing bound: the clock is read off wasm
+fn a_whole_row_stops_at_the_used_range_like_a_whole_column() {
+    let mut t = T::new();
+    for (i, col) in ["A", "B", "C"].iter().enumerate() {
+        let n = (i + 1) as f64;
+        t.set(&format!("{col}1"), &n.to_string());
+        t.set(&format!("{col}2"), &n.to_string());
+        t.set(&format!("{col}3"), &(n * 10.0).to_string());
+    }
+    // One whole row is exactly 16,384 cells; it is read up to the used range like `1:2` or `A:A`.
+    t.set("A10", "=COLUMNS(1:1*1)");
+    t.set("A11", "=COLUMNS(1:2*1)");
+    t.set("A12", "=SUM(1:1)");
+    assert_eq!(t.num("A10"), 3.0);
+    assert_eq!(t.num("A11"), 3.0);
+    assert_eq!(t.num("A12"), 6.0);
+    // A whole-row lookup value: one lookup per used column, not 16,384 lookups over 16,384 cells.
+    let start = std::time::Instant::now();
+    for r in 13..33 {
+        t.set(&format!("A{r}"), "=INDEX(XLOOKUP(1:1,2:2,3:3),1,2)");
+        assert_eq!(t.num(&format!("A{r}")), 20.0);
+    }
+    // The same inside a one-cell Ctrl+Shift+Enter formula, which shows the first result.
+    let mut fm = Formula::new("=IFERROR(XLOOKUP(1:1,2:2,3:3),0)");
+    fm.array = Some(gridcraft_core::RangeRef::cell(c("B40")));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("B40"), Cell::formula(fm));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("B40"))]);
+    assert_eq!(t.num("B40"), 10.0);
+    assert!(start.elapsed() < std::time::Duration::from_secs(20), "{:?}", start.elapsed());
+}
+
+#[test]
 fn spilled_blank_cells_show_zero() {
     let mut t = T::new();
     t.set("A1", "5");
@@ -1264,5 +1296,53 @@ fn offset_extreme_arguments_return_ref() {
         ("=ROWS(OFFSET(A1,0,0,1048576,1))", 1048576.0),
     ] {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
+    }
+}
+
+#[test]
+fn large_bounded_references_keep_their_shape() {
+    // D3:AZ400 is 19,502 cells, past the size where a block used to be cut to the used range
+    // (which ends at column F here). Sliced that way it no longer lined up with the full-size
+    // operands next to it. Expected values observed in Excel 365 on the same layout.
+    let mut t = T::new();
+    for (at, v) in [
+        ("D1", "1"),
+        ("E1", "2"),
+        ("F1", "3"),
+        ("A3", "1"),
+        ("A4", "2"),
+        ("A5", "1"),
+        ("B3", "2"),
+        ("B4", "3"),
+        ("B5", "4"),
+        ("D3", "10"),
+        ("E3", "20"),
+        ("F3", "30"),
+        ("D4", "40"),
+        ("E4", "50"),
+        ("F4", "60"),
+        ("D5", "70"),
+        ("E5", "80"),
+        ("F5", "90"),
+    ] {
+        t.set(at, v);
+    }
+    let cases = [
+        ("=SUMPRODUCT(D3:AZ400*B3:B400,(A3:A400=1)*(D1:AZ1=2))", Value::Number(360.0)),
+        ("=ROWS(D3:AZ400*1)", Value::Number(398.0)),
+        ("=COLUMNS(D3:AZ400*1)", Value::Number(49.0)),
+        ("=SUMPRODUCT(D3:AZ400,(A3:A400=1)*(D1:AZ1=2))", Value::Number(100.0)),
+        ("=SUMPRODUCT(D3:AZ400+0,D3:AZ401)", Value::Error(CellError::Value)),
+        ("=COUNTBLANK(D3:AZ400)", Value::Number(19493.0)),
+        ("=SUMPRODUCT(--(D3:AZ400=\"\"))", Value::Number(19493.0)),
+        ("=SUM(D3:AZ400*B3:B400)", Value::Number(1530.0)),
+        ("=COLUMNS(TRANSPOSE(D3:AZ400))", Value::Number(398.0)),
+        // Whole columns are still read up to the used range.
+        ("=SUMPRODUCT((A:A=1)*B:B)", Value::Number(6.0)),
+    ];
+    for (i, (formula, want)) in cases.iter().enumerate() {
+        let at = format!("C{}", 1001 + i);
+        t.set(&at, formula);
+        assert_eq!(&t.get(&at), want, "{formula}");
     }
 }
