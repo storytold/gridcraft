@@ -1,5 +1,6 @@
 //! GridCraft number formats: Excel format codes (`#,##0.00;[Red](#,##0.00)`, dates, fractions,
-//! scientific…), the General display format and the `TEXT()` worksheet function. en-US only.
+//! scientific…), the General display format and the `TEXT()` worksheet function. en-US, plus
+//! Japanese 和暦 date formats (`[$-411]`, era tokens, gannen 元年).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
