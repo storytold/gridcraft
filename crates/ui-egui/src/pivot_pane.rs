@@ -2,7 +2,7 @@
 //! report. Ticking a field adds it (text → Rows, numbers → Values); each area lists its fields
 //! with move/remove menus. Everything runs `pivot.*` commands.
 
-use egui::{Color32, Ui, vec2};
+use egui::{Ui, vec2};
 use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
@@ -88,7 +88,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         let is_values = f == VALUES_FIELD;
                         let b = ui.add(
                             egui::Button::new(egui::RichText::new(format!("{f} ▾")).font(theme::ui_font(12.0)))
-                                .fill(Color32::WHITE)
+                                .fill(t.ribbon)
                                 .min_size(vec2(ui.available_width(), 20.0)),
                         );
                         egui::Popup::menu(&b).show(|ui| {
