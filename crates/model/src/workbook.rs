@@ -64,6 +64,59 @@ impl CalcSettings {
     }
 }
 
+/// The code page a CSV/TSV file is read and written with (File › Open and Save As). Excel on
+/// Windows writes CSV in the system ANSI code page — Shift-JIS (CP932) on a Japanese system —
+/// so a Japanese CSV has to be read and written in something other than UTF-8.
+///
+/// [`CsvEncoding::Auto`] applies to reading only: a BOM first, then UTF-8, then Shift-JIS when
+/// the decoded text holds kana, then Windows-1252. Writing `Auto` is UTF-8 without a BOM.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CsvEncoding {
+    /// Detect on read; write UTF-8 without a BOM.
+    #[default]
+    Auto,
+    /// UTF-8 without a BOM.
+    Utf8,
+    /// UTF-8 with a byte order mark (`EF BB BF`), which Excel needs to read UTF-8 as Japanese.
+    Utf8Bom,
+    /// Shift-JIS (Microsoft code page 932, which also covers the NEC and IBM extensions).
+    ShiftJis,
+    /// Windows-1252 (Microsoft code page 1252), Excel's Western ANSI code page.
+    Windows1252,
+}
+
+impl CsvEncoding {
+    /// The spelling used by the file commands and the CLI: `auto`, `utf-8`, `utf-8-bom`,
+    /// `shift_jis` or `windows-1252`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CsvEncoding::Auto => "auto",
+            CsvEncoding::Utf8 => "utf-8",
+            CsvEncoding::Utf8Bom => "utf-8-bom",
+            CsvEncoding::ShiftJis => "shift_jis",
+            CsvEncoding::Windows1252 => "windows-1252",
+        }
+    }
+}
+
+impl std::str::FromStr for CsvEncoding {
+    type Err = String;
+
+    /// Parses [`CsvEncoding::as_str`]'s spellings, case-insensitively, with `cp932` accepted as
+    /// an alias of `shift_jis`.
+    fn from_str(s: &str) -> Result<CsvEncoding, String> {
+        match s.to_ascii_lowercase().as_str() {
+            "auto" => Ok(CsvEncoding::Auto),
+            "utf-8" => Ok(CsvEncoding::Utf8),
+            "utf-8-bom" => Ok(CsvEncoding::Utf8Bom),
+            "shift_jis" | "cp932" => Ok(CsvEncoding::ShiftJis),
+            "windows-1252" => Ok(CsvEncoding::Windows1252),
+            _ => Err(format!("unknown encoding `{s}`: use auto, utf-8, utf-8-bom, shift_jis (cp932) or windows-1252")),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DefinedName {
     pub name: String,
@@ -113,6 +166,11 @@ pub struct Workbook {
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv_delimiter: Option<u8>,
+    /// Encoding of the CSV/TSV this workbook was read from, so saving it as CSV writes the same
+    /// code page back (a Shift-JIS file stays Shift-JIS). `None` = not read from a delimited file:
+    /// CSV saves are UTF-8 without a BOM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub csv_encoding: Option<CsvEncoding>,
     /// Unmodelled file content kept for saving (package root and workbook level). Not in JSON.
     #[serde(skip)]
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
@@ -146,6 +204,7 @@ impl Workbook {
             cell_styles: vec![],
             vba_project: None,
             csv_delimiter: None,
+            csv_encoding: None,
             preserved: None,
             source_dir: None,
         }
@@ -305,5 +364,30 @@ mod tests {
         assert!(wb.check_sheet_name("a/b", None).is_err());
         assert!(wb.check_sheet_name(&"x".repeat(32), None).is_err());
         assert!(wb.check_sheet_name("Budget 2026", None).is_ok());
+    }
+
+    #[test]
+    fn csv_encoding_spellings_and_names() {
+        assert_eq!(CsvEncoding::default(), CsvEncoding::Auto);
+        for (spelling, encoding) in [
+            ("auto", CsvEncoding::Auto),
+            ("utf-8", CsvEncoding::Utf8),
+            ("utf-8-bom", CsvEncoding::Utf8Bom),
+            ("shift_jis", CsvEncoding::ShiftJis),
+            ("cp932", CsvEncoding::ShiftJis),
+            ("windows-1252", CsvEncoding::Windows1252),
+        ] {
+            assert_eq!(spelling.parse::<CsvEncoding>(), Ok(encoding), "{spelling}");
+        }
+        // The command spelling is case-insensitive; `as_str` is the canonical one.
+        assert_eq!("SHIFT_JIS".parse::<CsvEncoding>(), Ok(CsvEncoding::ShiftJis));
+        assert_eq!(CsvEncoding::Utf8Bom.as_str(), "utf-8-bom");
+        assert!("shift-jis".parse::<CsvEncoding>().is_err());
+        assert!("".parse::<CsvEncoding>().is_err());
+        // JSON (the workbook field) uses the lowercase serde name.
+        assert_eq!(serde_json::to_string(&CsvEncoding::ShiftJis).unwrap(), "\"shiftjis\"");
+        assert_eq!(serde_json::to_string(&CsvEncoding::Utf8Bom).unwrap(), "\"utf8bom\"");
+        assert_eq!(serde_json::from_str::<CsvEncoding>("\"windows1252\"").unwrap(), CsvEncoding::Windows1252);
+        assert_eq!(Workbook::new().csv_encoding, None);
     }
 }

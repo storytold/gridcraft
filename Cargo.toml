@@ -35,6 +35,10 @@ regex = { version = "1", default-features = false, features = ["std", "unicode",
 quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 sha2 = { version = "0.11", default-features = false }
+# Legacy text code pages for CSV import/export (Shift-JIS/CP932, Windows-1252): encoding_rs
+# ((Apache-2.0 OR MIT) AND BSD-3-Clause), the de-facto standard, pure Rust (Firefox's), already
+# used by the sibling apps.
+encoding_rs = "0.8"
 # Decrypting password-protected workbooks ([MS-OFFCRYPTO]): AES and SHA-1, pure Rust (wasm-safe).
 aes = { version = "0.9", default-features = false }
 sha1 = { version = "0.11", default-features = false }
