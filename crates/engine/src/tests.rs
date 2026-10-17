@@ -2150,7 +2150,7 @@ fn calculation_options_enable_iterative_calculation() {
     assert!(!s.doc().unwrap().calc.circular.is_empty());
     // Switching it on recalculates the loop.
     let r = s.execute("formulas.calculationOptions", json!({"iterative": true})).unwrap();
-    assert_eq!(r, json!({"mode": "Automatic", "iterative": true, "maxIterations": 100, "maxChange": 0.001}));
+    assert_eq!(r, json!({"mode": "Automatic", "iterative": true, "maxIterations": 100, "maxChange": 0.001, "precisionAsDisplayed": false}));
     near(&s, "A1", 10.0);
     near(&s, "A2", 10.0);
     assert!(s.doc().unwrap().calc.circular.is_empty());
@@ -3281,4 +3281,53 @@ fn paste_special_validation_moves_relative_references() {
     s.execute("edit.pasteSpecial", json!({"what": "validation", "at": "C3"})).unwrap();
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
+}
+
+/// "Set precision as displayed" (formulas.calculationOptions `precisionAsDisplayed`). Behaviour
+/// observed in Excel through COM with synthetic values: turning it on rounds existing constants
+/// and formulas to their formats; constants typed or reformatted while it is on are rounded at
+/// once (permanently: a wider format later doesn't bring digits back); General keeps full
+/// precision; turning it off restores formulas on recalculation, not constants.
+#[test]
+fn precision_as_displayed_option() {
+    let mut s = s();
+    let num = |s: &Session, a: &str| v(s, a).as_f64().unwrap_or(f64::NAN);
+    s.execute("cell.set", json!({"cell": "A1", "input": "1.23456"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=A1*100"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "=7/3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A4", "input": "0.333333333333333"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "0.00"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A3", "code": "0"})).unwrap();
+    assert_eq!((num(&s, "A1"), num(&s, "A3")), (1.23456, 7.0 / 3.0));
+    let r = s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    assert_eq!(r["precisionAsDisplayed"], true);
+    assert_eq!((num(&s, "A1"), num(&s, "A2"), num(&s, "A3"), num(&s, "A4")), (1.23, 123.0, 2.0, 0.333333333333333));
+    let r = s.execute("file.options", json!({})).unwrap();
+    assert_eq!(r["calculation"]["precisionAsDisplayed"], true);
+    // Typed while on: rounded to the cell's format, and dependents read the rounded value.
+    s.execute("cell.set", json!({"cell": "A1", "input": "4.56789"})).unwrap();
+    assert_eq!((num(&s, "A1"), num(&s, "A2")), (4.57, 457.0));
+    s.execute("range.setValues", json!({"range": "A1", "values": [[5.43219]]})).unwrap();
+    assert_eq!(num(&s, "A1"), 5.43);
+    // Reformatting while on rounds a constant and a formula at once.
+    s.execute("cell.set", json!({"cell": "B1", "input": "1.23456"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=1.23456"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B3", "input": "=B1*100"})).unwrap();
+    assert_eq!(num(&s, "B1"), 1.23456);
+    s.execute("home.numberFormat", json!({"range": "B1:B2", "code": "0.0"})).unwrap();
+    assert_eq!((num(&s, "B1"), num(&s, "B2"), num(&s, "B3")), (1.2, 1.2, 120.0));
+    // The constant's digits are gone for good; the formula is rounded again from its result.
+    s.execute("home.numberFormat", json!({"range": "B1:B2", "code": "0.0000"})).unwrap();
+    assert_eq!((num(&s, "B1"), num(&s, "B2")), (1.2, 1.2346));
+    // Undo brings the unrounded constant back.
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(num(&s, "B1"), 1.23456);
+    // Saved with the workbook, and applied on recalculation after reopening.
+    reopen(&mut s);
+    assert!(s.doc().unwrap().wb.calc.precision_as_displayed);
+    assert_eq!(num(&s, "A3"), 2.0);
+    // Off: formulas get their full precision back, constants stay rounded.
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": false})).unwrap();
+    assert_eq!((num(&s, "A1"), num(&s, "A3")), (5.43, 7.0 / 3.0));
 }

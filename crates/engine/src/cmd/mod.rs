@@ -333,12 +333,15 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     let mut sel = d.selection.clone();
     let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new(), protection_checked: false };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, .. } = ctx;
+    let Ctx { mut wb, mut changed, structural, mut fit_rows, protection_checked, .. } = ctx;
     if !protection_checked {
         check_protection(&d.wb, &wb, &d.unlocked_ranges)?;
     }
     if !structural {
         check_arrays(&d.wb, &wb)?;
+    }
+    if wb.calc.precision_as_displayed {
+        round_edited_as_displayed(&d.wb, &mut wb, &mut changed);
     }
     if changed.len() <= 200_000 {
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
@@ -365,6 +368,76 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;
     Ok(r)
+}
+
+/// "Set precision as displayed": a number typed, pasted or reformatted is stored as its format
+/// shows it (Excel rounds a constant when it is entered and when its cell's format changes,
+/// observed through COM). Only cells the edit touched are visited, so this costs nothing for
+/// the rest of the workbook; formula cells whose format changed are recalculated, and the
+/// recalculation rounds them.
+fn round_edited_as_displayed(old: &Workbook, wb: &mut Workbook, changed: &mut Vec<gridcraft_calc::Key>) {
+    let mut prec = gridcraft_calc::DisplayedPrecision::new();
+    for si in 0..wb.sheets.len() {
+        let Some(after) = wb.sheets.get(si) else { continue };
+        // Sheets are matched by name; a new sheet holds cells copied from rounded ones.
+        let Some(before) = old.sheet_index(&after.name).and_then(|i| old.sheets.get(i)) else { continue };
+        if std::sync::Arc::ptr_eq(before, after) {
+            continue;
+        }
+        let mut updates = Vec::new();
+        for c in before.cells.diff(&after.cells) {
+            let Some(cell) = after.cell(c) else { continue };
+            if cell.formula.is_some() {
+                changed.push((si, c));
+            } else if let gridcraft_core::Value::Number(n) = cell.value {
+                let r = prec.round(wb, si, c, n);
+                if r.to_bits() != n.to_bits() {
+                    updates.push((c, r));
+                }
+            }
+        }
+        if updates.is_empty() {
+            continue;
+        }
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        for (c, r) in updates {
+            if let Some(cell) = sh.cells.get_mut(c) {
+                cell.value = gridcraft_core::Value::Number(r);
+                changed.push((si, c));
+            }
+        }
+    }
+}
+
+/// Turning "Set precision as displayed" on rounds every number constant in the workbook to its
+/// format, permanently (Excel warns "Data will permanently lose accuracy"). Formulas are rounded
+/// by the recalculation that follows.
+pub(crate) fn round_all_constants_as_displayed(wb: &mut Workbook) {
+    let mut prec = gridcraft_calc::DisplayedPrecision::new();
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheets.get(si) else { continue };
+        let updates: Vec<(CellRef, f64)> = sh
+            .cells
+            .iter()
+            .filter_map(|(c, cell)| match cell.value {
+                gridcraft_core::Value::Number(n) if cell.formula.is_none() => Some((c, n)),
+                _ => None,
+            })
+            .filter_map(|(c, n)| {
+                let r = prec.round(wb, si, c, n);
+                (r.to_bits() != n.to_bits()).then_some((c, r))
+            })
+            .collect();
+        if updates.is_empty() {
+            continue;
+        }
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        for (c, r) in updates {
+            if let Some(cell) = sh.cells.get_mut(c) {
+                cell.value = gridcraft_core::Value::Number(r);
+            }
+        }
+    }
 }
 
 /// Excel's message for an edit of a locked cell on a protected sheet.

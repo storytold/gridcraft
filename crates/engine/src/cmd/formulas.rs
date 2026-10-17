@@ -61,7 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Calculation Options",
             ["Formulas", "Calculation"],
             None,
-            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
+            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001), precisionAsDisplayed?: bool (Set precision as displayed: numbers are stored as their format shows them; turning it on rounds every number constant permanently)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
             has_doc,
             calc_options
         ),
@@ -577,14 +577,31 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(v) = f64_param(p, "maxChange") {
             cx.wb.calc.set_max_change(v);
         }
+        let precision = bool_param(p, "precisionAsDisplayed");
+        if let Some(v) = precision {
+            cx.wb.calc.precision_as_displayed = v;
+            if v && !before.precision_as_displayed {
+                crate::cmd::round_all_constants_as_displayed(&mut cx.wb);
+            }
+        }
         let c = &cx.wb.calc;
         // Switching to automatic, or changing how circular references are calculated outside
         // manual mode, recalculates the workbook.
         let iteration_changed = (c.iterative, c.max_iterations, c.max_change) != (before.iterative, before.max_iterations, before.max_change);
-        if mode == Some(CalcMode::Automatic) || (iteration_changed && c.mode != CalcMode::Manual) {
+        // Switching precision as displayed recalculates the workbook (in manual mode too: Excel
+        // rounds the values as soon as it is turned on, and restores formulas on the next
+        // calculation when it is turned off).
+        let precision_changed = c.precision_as_displayed != before.precision_as_displayed;
+        if mode == Some(CalcMode::Automatic) || (iteration_changed && c.mode != CalcMode::Manual) || precision_changed {
             cx.structural = true;
         }
-        Ok(json!({"mode": format!("{:?}", c.mode), "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change}))
+        Ok(json!({
+            "mode": format!("{:?}", c.mode),
+            "iterative": c.iterative,
+            "maxIterations": c.max_iterations,
+            "maxChange": c.max_change,
+            "precisionAsDisplayed": c.precision_as_displayed,
+        }))
     })
 }
 

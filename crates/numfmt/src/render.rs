@@ -230,9 +230,31 @@ fn digit_indices(toks: &[Tok], range: std::ops::Range<usize>) -> Vec<usize> {
     range.filter(|&i| matches!(toks.get(i), Some(Tok::Digit(_)))).collect()
 }
 
-/// Renders a non-negative number through a number section.
-pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
-    let mut x = v.abs();
+/// Where a number section's placeholders are: the decimal point, the exponent, and the digit
+/// placeholders before the point (or exponent) and between the point and the exponent.
+struct NumberLayout {
+    point: Option<usize>,
+    exp: Option<usize>,
+    int_idx: Vec<usize>,
+    frac_idx: Vec<usize>,
+}
+
+fn number_layout(toks: &[Tok]) -> NumberLayout {
+    let n = toks.len();
+    let point = toks.iter().position(|t| matches!(t, Tok::Point));
+    let exp = toks.iter().position(|t| matches!(t, Tok::Exp { .. }));
+    let int_end = point.or(exp).unwrap_or(n);
+    let frac_end = exp.unwrap_or(n);
+    let int_idx = digit_indices(toks, 0..int_end);
+    let frac_idx = match point {
+        Some(p) => digit_indices(toks, p + 1..frac_end),
+        None => Vec::new(),
+    };
+    NumberLayout { point, exp, int_idx, frac_idx }
+}
+
+/// The number a section works on: each `%` multiplies by 100, each scaling comma divides by 1000.
+fn scaled(sec: &Section, mut x: f64) -> f64 {
     // Observed: `%` in a scientific section is only a literal (`#%e+#` shows 123456.789 as
     // `1%e+5`).
     if sec.percent > 0 && !sec.exp {
@@ -241,6 +263,75 @@ pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
     if sec.scale > 0 {
         x /= 1000f64.powi(sec.scale.min(110));
     }
+    x
+}
+
+/// Scientific notation of a non-negative `x` with `int_count` integer and `frac_count` fraction
+/// placeholders: the exponent (a multiple of the integer placeholder count, engineering style)
+/// and the mantissa's integer and fraction digits.
+fn scientific_parts(x: f64, int_count: usize, frac_count: usize) -> (i32, String, String) {
+    if x == 0.0 {
+        // Observed: zero shows `0` in every integer placeholder, `#` and `?` too
+        // (`#.#E+#` gives `0.E+0`, `####.####E+#` gives `0000.E+0`).
+        return (0, "0".repeat(int_count), "0".repeat(frac_count));
+    }
+    let step = int_count.max(1) as i32;
+    let (digits, xe) = decimal_digits(x);
+    let mut e = xe - xe.rem_euclid(step);
+    let (mut i, mut f) = fixed_from_digits(&digits, xe - e, frac_count);
+    if i.len() > step as usize {
+        e += step;
+        (i, f) = fixed_from_digits(&digits, xe - e, frac_count);
+    }
+    (e, i, f)
+}
+
+/// The number a number section shows for a non-negative `v`, as a value: what "Set precision as
+/// displayed" stores. `None` when the section shows no digits (`"x"`) or the result isn't finite.
+/// It uses the display's own rounding, so 1.005 with `0.00` gives 1.01, and 0.123456 with
+/// `0.00%` gives 0.1235 (the nearest double to the decimal shown).
+pub(crate) fn shown_value(sec: &Section, v: f64) -> Option<f64> {
+    if !sec.has_digits || !v.is_finite() {
+        return None;
+    }
+    let x = scaled(sec, v.abs());
+    if !x.is_finite() {
+        return None;
+    }
+    if x == 0.0 {
+        return Some(0.0);
+    }
+    // `%` and scaling are undone by moving the decimal point in the digits shown, so the result
+    // is the nearest double to that decimal rather than a product with its own rounding error.
+    let pct = if sec.exp { 0 } else { sec.percent.min(20) };
+    let shift = 3 * sec.scale.clamp(0, 110) - 2 * pct;
+    let shown = if sec.fraction {
+        let lay = fraction_layout(&sec.toks)?;
+        let (whole, num, den) = fraction_parts(&lay, x);
+        let den = den.max(1) as f64;
+        (whole * den + num as f64) / den * 10f64.powi(shift)
+    } else {
+        let NumberLayout { exp, frac_idx, .. } = number_layout(&sec.toks);
+        let (e, int_s, frac_s) = match exp {
+            // Observed: the stored value keeps one digit plus the fraction digits, whatever the
+            // integer placeholders (`##0.0E+0` stores 123456.789 as 120000 though it shows
+            // `123.5E+3`; `###.00E+0` keeps three digits). A `%` in a scientific section stores a
+            // value that matches neither the display nor this rule: left as is.
+            Some(_) if sec.percent > 0 => return None,
+            Some(_) => scientific_parts(x, 1, frac_idx.len()),
+            None => {
+                let (i, f) = fixed(x, frac_idx.len());
+                (0, i, f)
+            }
+        };
+        format!("0{int_s}.{frac_s}0e{}", i64::from(e) + i64::from(shift)).parse::<f64>().ok()?
+    };
+    shown.is_finite().then_some(shown)
+}
+
+/// Renders a non-negative number through a number section.
+pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
+    let mut x = scaled(sec, v.abs());
     if !x.is_finite() {
         x = f64::MAX;
     }
@@ -256,32 +347,10 @@ pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
         lits = vec![None; n];
         render_fraction(sec, x, &mut pieces, &mut lits);
     } else {
-        let point = toks.iter().position(|t| matches!(t, Tok::Point));
-        let exp = toks.iter().position(|t| matches!(t, Tok::Exp { .. }));
-        let int_end = point.or(exp).unwrap_or(n);
-        let frac_end = exp.unwrap_or(n);
-        let int_idx = digit_indices(toks, 0..int_end);
-        let frac_idx = match point {
-            Some(p) => digit_indices(toks, p + 1..frac_end),
-            None => Vec::new(),
-        };
+        let NumberLayout { point, exp, int_idx, frac_idx } = number_layout(toks);
         let (int_s, frac_s) = if let Some(e_at) = exp {
             let exp_idx = digit_indices(toks, e_at + 1..n);
-            let step = int_idx.len().max(1) as i32;
-            let (mut e, int_s, frac_s) = if x == 0.0 {
-                // Observed: zero shows `0` in every integer placeholder, `#` and `?` too
-                // (`#.#E+#` gives `0.E+0`, `####.####E+#` gives `0000.E+0`).
-                (0i32, "0".repeat(int_idx.len()), "0".repeat(frac_idx.len()))
-            } else {
-                let (digits, xe) = decimal_digits(x);
-                let mut e = xe - xe.rem_euclid(step);
-                let (mut i, mut f) = fixed_from_digits(&digits, xe - e, frac_idx.len());
-                if i.len() > step as usize {
-                    e += step;
-                    (i, f) = fixed_from_digits(&digits, xe - e, frac_idx.len());
-                }
-                (e, i, f)
-            };
+            let (mut e, int_s, frac_s) = scientific_parts(x, int_idx.len(), frac_idx.len());
             // Exponent text.
             let (upper, plus) = match toks.get(e_at) {
                 Some(Tok::Exp { upper, plus }) => (*upper, *plus),
@@ -432,11 +501,23 @@ fn blank_range(toks: &[Tok], range: std::ops::Range<usize>, spaces: bool, pieces
 /// becomes spaces when the whole part or the numerator has a `?`); when the fraction is zero and
 /// the numerator has no `0` placeholder, the separator, numerator, bar and denominator disappear
 /// (or become spaces when any part has a `?`) and the whole part shows at least `0`.
-fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Option<String>]) {
-    let toks = &sec.toks;
+/// Where a fraction section's parts are (see [`render_fraction`]).
+struct FractionLayout {
+    slash: usize,
+    num_start: usize,
+    whole_idx: Vec<usize>,
+    num_idx: Vec<usize>,
+    sep_start: usize,
+    fixed_den: Option<u64>,
+    den_start: usize,
+    den_end: usize,
+    den_idx: Vec<usize>,
+}
+
+fn fraction_layout(toks: &[Tok]) -> Option<FractionLayout> {
     let is_digit = |i: usize| matches!(toks.get(i), Some(Tok::Digit(_)));
-    let Some(slash) = toks.iter().position(|t| matches!(t, Tok::Slash)) else { return };
-    let Some(num_last) = (0..slash).rev().find(|&i| is_digit(i)) else { return };
+    let slash = toks.iter().position(|t| matches!(t, Tok::Slash))?;
+    let num_last = (0..slash).rev().find(|&i| is_digit(i))?;
     let mut num_start = num_last;
     while num_start > 0 && is_digit(num_start - 1) {
         num_start -= 1;
@@ -463,13 +544,17 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
         }
     }
     let den_idx = digit_indices(toks, den_start..den_end);
-    let has_q = |idx: &[usize]| idx.iter().any(|&i| toks.get(i) == Some(&Tok::Digit('?')));
-    let has_whole = !whole_idx.is_empty();
+    Some(FractionLayout { slash, num_start, whole_idx, num_idx, sep_start, fixed_den, den_start, den_end, den_idx })
+}
+
+/// The whole part, numerator and denominator a fraction section shows for a non-negative `x`.
+fn fraction_parts(lay: &FractionLayout, x: f64) -> (f64, u64, u64) {
+    let has_whole = !lay.whole_idx.is_empty();
     let (mut whole, f) = if has_whole { (x.floor(), x - x.floor()) } else { (0.0, x) };
-    let (mut num, den) = match fixed_den {
+    let (mut num, den) = match lay.fixed_den {
         Some(d) => ((f * d as f64).round() as u64, d),
         None => {
-            let digits = den_idx.len().clamp(1, 7) as u32;
+            let digits = lay.den_idx.len().clamp(1, 7) as u32;
             approximate(f, 10u64.pow(digits) - 1)
         }
     };
@@ -477,6 +562,16 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
         whole += (num / den) as f64;
         num %= den;
     }
+    (whole, num, den)
+}
+
+fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Option<String>]) {
+    let toks = &sec.toks;
+    let Some(lay) = fraction_layout(toks) else { return };
+    let (whole, num, den) = fraction_parts(&lay, x);
+    let FractionLayout { slash, num_start, whole_idx, num_idx, sep_start, fixed_den, den_start, den_end, den_idx } = lay;
+    let has_q = |idx: &[usize]| idx.iter().any(|&i| toks.get(i) == Some(&Tok::Digit('?')));
+    let has_whole = !whole_idx.is_empty();
     let whole_s = if whole >= 1.0 { fixed(whole, 0).0 } else { String::new() };
     let num_zero_ph = num_idx.iter().any(|&i| toks.get(i) == Some(&Tok::Digit('0')));
     if has_whole && num == 0 && !num_zero_ph {

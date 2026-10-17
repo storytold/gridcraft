@@ -1266,3 +1266,69 @@ fn offset_extreme_arguments_return_ref() {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
     }
 }
+
+/// "Set precision as displayed": results are rounded to their cell's format before they are
+/// stored and before other formulas read them. Values observed in Excel (COM,
+/// `Workbook.PrecisionAsDisplayed = True`) with the same synthetic formulas.
+#[test]
+fn precision_as_displayed_rounds_results_by_cell_format() {
+    let fmt = |t: &mut T, at: &str, code: &str| {
+        let id = t.wb.styles.intern(gridcraft_model::Style { num_fmt: gridcraft_model::NumFmt::new(code), ..Default::default() });
+        t.wb.sheet_mut(0).unwrap().set_style(c(at), id);
+    };
+    let mut t = T::new();
+    t.set("A1", "=-130+657.91");
+    t.set("A2", "=A1*10");
+    t.set("A3", "=A1/7");
+    // Cross-cell: E2 rounds what it reads from E1; E1 itself (General) keeps full precision.
+    t.set("E1", "=10/3");
+    t.set("E2", "=E1");
+    t.set("E3", "=E2*10");
+    t.set("E4", "=E1*10");
+    // A spill: each element takes the format of the cell it lands in.
+    t.set("F1", "=SEQUENCE(3,1,0.123,0.111)");
+    t.set("G4", "=SUM(F1:F3)");
+    t.set("H1", "=TRUE");
+    t.set("H2", "=\"1.5\"");
+    // A conditional format rounds by the sign's section, not the one displayed: `[<1]0.00;0`
+    // shows 2+1/3 as `2` but stores 2.33, and stores -10/3 as -3.
+    t.set("J1", "=2+1/3");
+    t.set("J2", "=-10/3");
+    t.set("K1", "=J1*3");
+    t.set("K2", "=J2*3");
+    fmt(&mut t, "J1", "[<1]0.00;0");
+    fmt(&mut t, "J2", "[<1]0.00;0");
+    fmt(&mut t, "A1", "0");
+    fmt(&mut t, "A3", "0.0000");
+    fmt(&mut t, "E2", "0");
+    fmt(&mut t, "F1", "0.0");
+    fmt(&mut t, "F2", "0.0");
+    fmt(&mut t, "H1", "0");
+    fmt(&mut t, "H2", "0");
+    // Off: formats don't change values.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1"), -130.0 + 657.91);
+    assert_eq!(t.num("E2"), 10.0 / 3.0);
+    t.wb.calc.precision_as_displayed = true;
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (528.0, 5280.0, 75.4286));
+    assert_eq!((t.num("E1"), t.num("E2"), t.num("E3"), t.num("E4")), (10.0 / 3.0, 3.0, 30.0, 10.0 / 3.0 * 10.0));
+    let sh = t.wb.sheet(0).unwrap();
+    assert_eq!(
+        (sh.value(c("F1")), sh.value(c("F2")), sh.value(c("F3"))),
+        (Value::Number(0.1), Value::Number(0.2), Value::Number(0.123 + 0.111 * 2.0))
+    );
+    assert_eq!(t.num("G4"), 0.1 + 0.2 + (0.123 + 0.111 * 2.0));
+    assert_eq!((t.num("J1"), t.num("J2"), t.num("K1"), t.num("K2")), (2.33, -3.0, 2.33 * 3.0, -9.0));
+    // Booleans and text are left alone.
+    assert_eq!((t.get("H1"), t.get("H2")), (Value::Bool(true), Value::from("1.5")));
+    // An edit recalculates through the rounded values too.
+    t.set("A1", "=-130+657.41");
+    fmt(&mut t, "A1", "0");
+    t.calc.cells_changed(&mut t.wb, &[(0, c("A1"))]);
+    assert_eq!((t.num("A1"), t.num("A2")), (527.0, 5270.0));
+    // Off again: a recalculation brings back full precision.
+    t.wb.calc.precision_as_displayed = false;
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A2"), (-130.0 + 657.41) * 10.0);
+}
