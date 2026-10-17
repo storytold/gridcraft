@@ -9,7 +9,7 @@
 
 /// Largest clipboard HTML we look at; past this the paste uses the plain text alone.
 const MAX_HTML: usize = 16 * 1024 * 1024;
-/// Widest `colspan` honoured (the sheet's column count).
+/// Widest row or `colspan` honoured (the sheet's column count).
 const MAX_SPAN: usize = gridcraft_core::MAX_COLS as usize;
 
 /// One table cell: its visible text and the number the source recorded for it, if any.
@@ -19,17 +19,23 @@ pub(crate) struct HtmlCell {
     pub num: Option<f64>,
 }
 
-/// The cells of the first table in `html`, row by row; a cell spanning columns is followed by
-/// empty cells so positions line up with the tab-separated text. Empty when there is no table.
-pub(crate) fn table_cells(html: &str) -> Vec<Vec<HtmlCell>> {
+/// The cells of the first table in `html`, limited to the tab-separated text's row widths.
+/// A cell spanning columns is followed by empty cells so positions line up with the text.
+/// Unused cells are not retained or decoded. Empty when there is no table or no text rows.
+pub(crate) fn table_cells(html: &str, row_widths: impl IntoIterator<Item = usize>) -> Vec<Vec<HtmlCell>> {
     let mut rows: Vec<Vec<HtmlCell>> = Vec::new();
-    if html.len() > MAX_HTML {
+    let mut widths = row_widths.into_iter().peekable();
+    if html.len() > MAX_HTML || widths.peek().is_none() {
         return rows;
     }
+    let mut width = 0;
     let mut cell: Option<(HtmlCell, usize)> = None;
     let mut in_table = false;
     let mut rest = html;
     while !rest.is_empty() {
+        if rows.last().is_some_and(|row| row.len() >= width) && widths.peek().is_none() {
+            break;
+        }
         let Some(lt) = rest.find('<') else {
             if let Some((c, _)) = cell.as_mut() {
                 c.text.push_str(rest);
@@ -65,26 +71,39 @@ pub(crate) fn table_cells(html: &str) -> Vec<Vec<HtmlCell>> {
                 in_table = true;
             }
             ("table", true) => {
-                finish(&mut rows, &mut cell);
+                finish(&mut rows, &mut cell, width);
                 if !rows.is_empty() {
                     break;
                 }
                 in_table = false;
             }
             ("tr", false) if in_table => {
-                finish(&mut rows, &mut cell);
+                finish(&mut rows, &mut cell, width);
+                let Some(cols) = widths.next() else { break };
+                width = cols.min(MAX_SPAN);
                 rows.push(Vec::new());
             }
             ("td" | "th", false) if in_table => {
-                finish(&mut rows, &mut cell);
+                finish(&mut rows, &mut cell, width);
                 if rows.is_empty() {
+                    let Some(cols) = widths.next() else { break };
+                    width = cols.min(MAX_SPAN);
                     rows.push(Vec::new());
+                }
+                if rows.last().is_none_or(|row| row.len() >= width) {
+                    continue;
                 }
                 let num = attr(attrs, "x:num").or_else(|| attr(attrs, "sdval")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| n.is_finite());
                 let span = attr(attrs, "colspan").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, MAX_SPAN);
                 cell = Some((HtmlCell { text: String::new(), num }, span));
             }
-            ("td" | "th", true) | ("tr", true) => finish(&mut rows, &mut cell),
+            ("td" | "th", true) => finish(&mut rows, &mut cell, width),
+            ("tr", true) => {
+                finish(&mut rows, &mut cell, width);
+                if !rows.is_empty() && widths.peek().is_none() {
+                    break;
+                }
+            }
             ("br", _) => {
                 if let Some((c, _)) = cell.as_mut() {
                     c.text.push(' ');
@@ -93,22 +112,18 @@ pub(crate) fn table_cells(html: &str) -> Vec<Vec<HtmlCell>> {
             _ => {}
         }
     }
-    finish(&mut rows, &mut cell);
+    finish(&mut rows, &mut cell, width);
     rows
 }
 
 /// Closes the open cell (if any) into the last row, decoding its text.
-fn finish(rows: &mut Vec<Vec<HtmlCell>>, cell: &mut Option<(HtmlCell, usize)>) {
+fn finish(rows: &mut [Vec<HtmlCell>], cell: &mut Option<(HtmlCell, usize)>, width: usize) {
     let Some((mut c, span)) = cell.take() else { return };
+    let Some(row) = rows.last_mut().filter(|row| row.len() < width) else { return };
     c.text = decode(&c.text);
-    if rows.is_empty() {
-        rows.push(Vec::new());
-    }
-    if let Some(row) = rows.last_mut() {
-        row.push(c);
-        let room = MAX_SPAN.saturating_sub(row.len());
-        row.extend(std::iter::repeat_n(HtmlCell::default(), span.saturating_sub(1).min(room)));
-    }
+    row.push(c);
+    let room = width.saturating_sub(row.len());
+    row.extend(std::iter::repeat_n(HtmlCell::default(), span.saturating_sub(1).min(room)));
 }
 
 /// Byte index of the `>` that closes the tag `rest` starts with; a `>` inside a quoted attribute
@@ -276,7 +291,7 @@ mod tests {
         let excel = r#"<html><head><style>td{mso-number-format:General}</style></head><body><table>
             <!--StartFragment--><tr height=20><td class=xl65 x:num="10000">Rp10,000.00</td><td x:str>Name</td></tr>
             <tr><td colspan=2 x:num="2.5">2.50 &amp; up</td><td>x</td></tr><!--EndFragment--></table></body></html>"#;
-        let rows = table_cells(excel);
+        let rows = table_cells(excel, [2, 3]);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0][0], HtmlCell { text: "Rp10,000.00".into(), num: Some(10000.0) });
         assert_eq!(rows[0][1], HtmlCell { text: "Name".into(), num: None });
@@ -286,10 +301,52 @@ mod tests {
 
         let calc = r#"<table cellspacing="0" border="0"><colgroup width="85"></colgroup><tr>
             <td height="17" align="right" sdval="10000" sdnum="1033;0;[$Rp-421]#,##0.00"><font face="Liberation Sans">Rp10,000.00</font></td></tr></table>"#;
-        assert_eq!(table_cells(calc), vec![vec![HtmlCell { text: "Rp10,000.00".into(), num: Some(10000.0) }]]);
+        assert_eq!(table_cells(calc, [1]), vec![vec![HtmlCell { text: "Rp10,000.00".into(), num: Some(10000.0) }]]);
 
         let quoted_gt = r#"<table><tr><td style='mso-number-format:"\[>=1000\]0"' x:num="1500">1500</td></tr></table>"#;
-        assert_eq!(table_cells(quoted_gt), vec![vec![HtmlCell { text: "1500".into(), num: Some(1500.0) }]]);
+        assert_eq!(table_cells(quoted_gt, [1]), vec![vec![HtmlCell { text: "1500".into(), num: Some(1500.0) }]]);
+    }
+
+    #[test]
+    fn limits_spans_and_following_cells_to_the_text_columns() {
+        let html = r#"<table><tr><td colspan=8 x:num="5">Rp5</td><td x:num="7">unused</td></tr>
+            <tr><td sdval="2.5">Rp2.50</td><td>unused</td></tr><tr><td>unused row</td></tr></table>"#;
+        assert_eq!(
+            table_cells(html, [2, 1]),
+            vec![
+                vec![HtmlCell { text: "Rp5".into(), num: Some(5.0) }, HtmlCell::default()],
+                vec![HtmlCell { text: "Rp2.50".into(), num: Some(2.5) }]
+            ]
+        );
+        let unfinished = r#"<table><tr><td colspan=8 x:num="5">Rp5"#;
+        assert_eq!(table_cells(unfinished, [2]), vec![vec![HtmlCell { text: "Rp5".into(), num: Some(5.0) }, HtmlCell::default()]]);
+    }
+
+    #[test]
+    fn respects_ragged_text_widths_including_empty_rows() {
+        let html = r#"<table><tr><td x:num="1">Rp1</td><td>unused</td></tr>
+            <tr><td x:num="2">unused</td></tr>
+            <tr><td colspan=2 sdval="3">Rp3</td><td x:num="4">Rp4</td><td>unused</td></tr></table>"#;
+        let rows = table_cells(html, [1, 0, 3]);
+        assert_eq!(rows.iter().map(Vec::len).collect::<Vec<_>>(), [1, 0, 3]);
+        assert_eq!(rows[0][0], HtmlCell { text: "Rp1".into(), num: Some(1.0) });
+        assert_eq!(rows[2][0], HtmlCell { text: "Rp3".into(), num: Some(3.0) });
+        assert_eq!(rows[2][1], HtmlCell::default());
+        assert_eq!(rows[2][2], HtmlCell { text: "Rp4".into(), num: Some(4.0) });
+    }
+
+    #[test]
+    fn bounds_implicit_rows_and_empty_targets() {
+        let html = r#"<table><td colspan=8 x:num="1">Rp1</td><td>unused</td>
+            <tr><td sdval="2">Rp2</td></tr><tr><td>unused row</td></tr></table>"#;
+        assert_eq!(
+            table_cells(html, [2, 1]),
+            vec![vec![HtmlCell { text: "Rp1".into(), num: Some(1.0) }, HtmlCell::default()], vec![HtmlCell { text: "Rp2".into(), num: Some(2.0) }]]
+        );
+        assert_eq!(table_cells(html, [0, 1]), vec![vec![], vec![HtmlCell { text: "Rp2".into(), num: Some(2.0) }]]);
+        assert!(table_cells(html, []).is_empty());
+        assert_eq!(table_cells(html, [0]), vec![vec![]]);
+        assert_eq!(table_cells("<table><tr><td>unused</td></tr></table>", [0]), vec![vec![]]);
     }
 
     #[test]
@@ -306,10 +363,10 @@ mod tests {
             "<style>",
             "<table><table><td>",
         ] {
-            let _ = table_cells(html);
+            let _ = table_cells(html, [2]);
         }
-        assert_eq!(table_cells("<table><td x:num='1e999'>1</td></table>")[0][0].num, None);
-        assert!(table_cells("<table><tr><td colspan=999999999>a</td></tr></table>")[0].len() <= MAX_SPAN);
+        assert_eq!(table_cells("<table><td x:num='1e999'>1</td></table>", [1])[0][0].num, None);
+        assert_eq!(table_cells("<table><tr><td colspan=999999999>a</td></tr></table>", [2])[0].len(), 2);
     }
 
     #[test]

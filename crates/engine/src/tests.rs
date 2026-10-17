@@ -79,6 +79,35 @@ fn pasted_currency_text_keeps_the_number_from_the_clipboard_html() {
 }
 
 #[test]
+fn pasted_currency_html_follows_the_ragged_text_shape() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B2", "input": "keep column"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "keep row"})).unwrap();
+    let html = r#"<table><tr><td colspan=8 x:num="1">Rp1.00</td><td x:num="7">unused</td></tr>
+        <tr><td sdval="2.5">Rp2.50</td><td x:num="7">unused</td></tr><tr><td>unused row</td></tr></table>"#;
+    let result = s.execute("edit.paste", json!({"at": "A1", "text": "Rp1.00\t\nRp2.50", "html": html})).unwrap();
+    assert_eq!(result, json!({"rows": 2, "cols": 2}));
+    assert_eq!(v(&s, "A1"), Value::number(1.0));
+    assert!(v(&s, "B1").is_empty());
+    assert_eq!(v(&s, "A2"), Value::number(2.5));
+    assert_eq!(v(&s, "B2"), Value::text("keep column"));
+    assert_eq!(v(&s, "A3"), Value::text("keep row"));
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::parse("A1").unwrap()), "Rp1.00");
+    assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::parse("A2").unwrap()), "Rp2.50");
+}
+
+#[test]
+fn pasting_empty_text_ignores_clipboard_html() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "keep"})).unwrap();
+    let html = r#"<table><tr><td colspan=8 x:num="1">Rp1</td><td>unused</td></tr><tr><td>unused row</td></tr></table>"#;
+    assert_eq!(s.execute("edit.paste", json!({"at": "A1", "text": "", "html": html})).unwrap(), json!({"rows": 0, "cols": 0}));
+    assert_eq!(v(&s, "A1"), Value::text("keep"));
+}
+
+#[test]
 fn editing_a_name_renames_it_in_formulas() {
     // Name Manager › Edit…: `oldName` edits the name in place; formulas that use it follow.
     let mut s = s();

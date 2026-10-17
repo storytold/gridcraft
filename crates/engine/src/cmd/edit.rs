@@ -793,8 +793,8 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let at = cell_param_on(s, p, "at", sheet)?.unwrap_or(s.doc()?.selection.current().start);
     let rows: Vec<Vec<String>> = parse_tsv(text);
-    // The HTML flavour, when the host passed it: the number behind each cell's shown text.
-    let html = str_param(p, "html").map(crate::clip_html::table_cells).unwrap_or_default();
+    // HTML only supplies numbers for the text's cells; ignore the rest of its table.
+    let html = str_param(p, "html").map(|html| crate::clip_html::table_cells(html, rows.iter().map(Vec::len))).unwrap_or_default();
     let h = rows.len();
     let w = rows.iter().map(Vec::len).max().unwrap_or(0);
     edit(s, |cx| {
