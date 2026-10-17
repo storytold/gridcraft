@@ -1,8 +1,8 @@
 use gridcraft_core::{CellRef, DateSystem, Value};
-use gridcraft_model::{Sheet, Workbook};
+use gridcraft_model::{CsvEncoding, Sheet, Workbook};
 
-use crate::csv::{decode_text, sniff_delimiter};
-use crate::{CsvOptions, Format, IoError, read_csv, sniff, write_csv, write_csv_limited};
+use crate::csv::{decode_text, decode_text_as, sniff_delimiter};
+use crate::{CsvOptions, Format, IoError, read_csv, sniff, write_csv, write_csv_encoded, write_csv_limited};
 
 fn v(wb: &Workbook, r: u32, c: u32) -> Value {
     wb.sheet(0).unwrap().value(CellRef::new(r, c))
@@ -66,6 +66,153 @@ fn encodings() {
     let wb = read_csv(&le, &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
     assert_eq!(v(&wb, 0, 0), Value::text("ü"));
     assert_eq!(v(&wb, 0, 1), Value::Number(1.0));
+}
+
+/// A CP932 (Shift-JIS) CSV built in code — `日本語,漢字,ｶﾅ,"a,b"` — never a binary fixture.
+fn japanese_cp932() -> Vec<u8> {
+    let mut b = vec![0x93, 0xFA, 0x96, 0x7B, 0x8C, 0xEA]; // 日本語
+    b.push(b',');
+    b.extend_from_slice(&[0x8A, 0xBF, 0x8E, 0x9A]); // 漢字
+    b.push(b',');
+    b.extend_from_slice(&[0xB6, 0xC5]); // ｶﾅ (halfwidth katakana)
+    b.push(b',');
+    b.extend_from_slice(b"\"a,b\"\r\n");
+    b
+}
+
+/// A sheet holding `日本語,漢字,ｶﾅ,"a,b"` in row 1.
+fn japanese_sheet() -> Workbook {
+    let mut wb = Workbook::new();
+    let mut s = Sheet::new("S");
+    for (col, text) in ["日本語", "漢字", "ｶﾅ", "a,b"].into_iter().enumerate() {
+        s.set_value(CellRef::new(0, col as u32), Value::text(text));
+    }
+    wb.sheets = vec![std::sync::Arc::new(s)];
+    wb
+}
+
+/// The Shift-JIS reading of a CSV: `Auto` picks it up from the kana (halfwidth katakana counts),
+/// an explicit `ShiftJis` (or its `cp932` spelling) forces it, and `Windows1252` stays the Latin-1
+/// reading of the same bytes.
+#[test]
+fn shift_jis_import_under_auto_and_explicit() {
+    let bytes = japanese_cp932();
+    for (label, encoding) in [("auto", CsvEncoding::Auto), ("shift_jis", CsvEncoding::ShiftJis)] {
+        let wb = read_csv(&bytes, &CsvOptions { encoding, ..Default::default() }).unwrap();
+        for (col, text) in ["日本語", "漢字", "ｶﾅ", "a,b"].into_iter().enumerate() {
+            assert_eq!(v(&wb, 0, col as u32), Value::text(text), "{label} column {col}");
+        }
+        assert_eq!(wb.csv_encoding, Some(CsvEncoding::ShiftJis), "{label}");
+    }
+    assert_eq!("cp932".parse::<CsvEncoding>(), Ok(CsvEncoding::ShiftJis));
+    // The same bytes forced through Windows-1252 stay exactly that reading:
+    // 0x93 0xFA 0x96 0x7B 0x8C 0xEA is “ú–{Œê, and 0xB6 0xC5 is ¶Å.
+    let latin = read_csv(&bytes, &CsvOptions { encoding: CsvEncoding::Windows1252, ..Default::default() }).unwrap();
+    assert_eq!(v(&latin, 0, 0), Value::text("\u{201C}\u{FA}\u{2013}{\u{152}\u{EA}"));
+    assert_eq!(v(&latin, 0, 2), Value::text("\u{B6}\u{C5}"));
+    assert_eq!(latin.csv_encoding, Some(CsvEncoding::Windows1252));
+}
+
+/// `Auto` must not steal a Western file: bytes that decode to no kana keep today's Windows-1252
+/// reading (the existing `encodings` assertions are the reference).
+#[test]
+fn auto_does_not_steal_windows_1252() {
+    assert_eq!(decode_text(&[0x80, b'a', 0xE9]), "€aé");
+    let wb = read_csv(&[b'c', b'a', b'f', 0xE9, b',', 0x80], &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 0, 0), Value::text("café"));
+    assert_eq!(v(&wb, 0, 1), Value::text("€"));
+    assert_eq!(wb.csv_encoding, Some(CsvEncoding::Windows1252));
+    // 0xB6/0xC5 are the ambiguous pair: ¶Å in Windows-1252, ｶﾅ in CP932. Kana wins (documented).
+    assert_eq!(read_csv(&[b'a', 0xB6], &CsvOptions::default()).unwrap().csv_encoding, Some(CsvEncoding::ShiftJis));
+}
+
+/// Forcing UTF-8 on Shift-JIS bytes never falls back to another code page: the invalid sequences
+/// become `U+FFFD` (a deliberate, documented lossy read), not silently some other text.
+#[test]
+fn explicit_utf8_on_shift_jis_bytes_is_deliberately_lossy() {
+    let bytes = japanese_cp932();
+    let (text, encoding) = decode_text_as(&bytes, CsvEncoding::Utf8);
+    assert_eq!(text, String::from_utf8_lossy(&bytes));
+    assert!(text.contains('\u{FFFD}') && !text.contains('日'));
+    assert_eq!(encoding, Some(CsvEncoding::Utf8));
+    let wb = read_csv(&bytes, &CsvOptions { encoding: CsvEncoding::Utf8, ..Default::default() }).unwrap();
+    assert_ne!(v(&wb, 0, 0), Value::text("日本語"));
+    assert!(v(&wb, 0, 0).display().contains('\u{FFFD}'), "{}", v(&wb, 0, 0).display());
+    // A UTF-8 BOM is dropped under both UTF-8 spellings.
+    let mut bom = vec![0xEF, 0xBB, 0xBF];
+    bom.extend_from_slice("日本語".as_bytes());
+    for encoding in [CsvEncoding::Utf8, CsvEncoding::Utf8Bom] {
+        let wb = read_csv(&bom, &CsvOptions { encoding, ..Default::default() }).unwrap();
+        assert_eq!(v(&wb, 0, 0), Value::text("日本語"), "{encoding:?}");
+    }
+}
+
+/// Export: the default stays BOM-less UTF-8 byte for byte, `Utf8Bom` puts the BOM first, and a
+/// Shift-JIS export is exactly the CP932 a Japanese Excel writes — reading it back is lossless.
+#[test]
+fn csv_export_encodings_round_trip() {
+    let wb = japanese_sheet();
+    let sh = wb.sheet(0).unwrap();
+    let expected = "日本語,漢字,ｶﾅ,\"a,b\"\r\n";
+    let utf8 = write_csv(sh, b',', text_of(sh)).unwrap();
+    assert_eq!(utf8, expected.as_bytes(), "the default export is still BOM-less UTF-8");
+    assert_eq!(write_csv_encoded(sh, b',', CsvEncoding::Utf8, text_of(sh)).unwrap(), utf8);
+    // `Auto` is import-only: writing it is UTF-8 without a BOM.
+    assert_eq!(write_csv_encoded(sh, b',', CsvEncoding::Auto, text_of(sh)).unwrap(), utf8);
+    let bom = write_csv_encoded(sh, b',', CsvEncoding::Utf8Bom, text_of(sh)).unwrap();
+    assert!(bom.starts_with(&[0xEF, 0xBB, 0xBF]), "{bom:?}");
+    assert_eq!(bom.get(3..), Some(utf8.as_slice()), "the bytes after the BOM are UTF-8");
+    let shift_jis = write_csv_encoded(sh, b',', CsvEncoding::ShiftJis, text_of(sh)).unwrap();
+    assert_eq!(shift_jis, japanese_cp932());
+    let back = read_csv(&shift_jis, &CsvOptions::default()).unwrap();
+    for (col, text) in ["日本語", "漢字", "ｶﾅ", "a,b"].into_iter().enumerate() {
+        assert_eq!(v(&back, 0, col as u32), Value::text(text), "column {col}");
+    }
+    assert_eq!(back.csv_encoding, Some(CsvEncoding::ShiftJis));
+    assert_eq!(write_csv_encoded(sh, b',', CsvEncoding::Windows1252, text_of(sh)).unwrap(), b"???,??,??,\"a,b\"\r\n");
+}
+
+/// Microsoft CP932 has a byte for the wave dash and the double vertical line that WHATWG
+/// `shift_jis` only maps when decoding: Excel writes `1〜5` as `1 0x81 0x60 5`, so they are encoded
+/// through their CP932 equivalents instead of becoming `?`.
+#[test]
+fn cp932_symbols_whatwg_only_maps_when_decoding_still_export() {
+    let mut s = Sheet::new("S");
+    s.set_value(CellRef::new(0, 0), Value::text("1〜5"));
+    s.set_value(CellRef::new(0, 1), Value::text("a‖b"));
+    let bytes = write_csv_encoded(&s, b',', CsvEncoding::ShiftJis, text_of(&s)).unwrap();
+    assert_eq!(bytes, b"1\x81\x60\x35,a\x81\x61\x62\r\n", "{bytes:?}");
+    // The bytes are the ones Excel writes; CP932-decoding them gives the equivalents the code page
+    // maps those bytes to (`～` U+FF5E, `∥` U+2225), exactly as Excel and encoding_rs do.
+    let back = read_csv(&bytes, &CsvOptions { encoding: CsvEncoding::ShiftJis, ..Default::default() }).unwrap();
+    assert_eq!(v(&back, 0, 0), Value::text("1～5"));
+    assert_eq!(v(&back, 0, 1), Value::text("a∥b"));
+}
+
+/// A character the code page cannot map becomes `?`, as Word and Excel write it — never encoding_rs'
+/// default HTML numeric character reference, which would corrupt the field — and the row stays put.
+#[test]
+fn unmappable_characters_become_question_marks_not_entities() {
+    let mut s = Sheet::new("S");
+    s.set_value(CellRef::new(0, 0), Value::text("Ǎ😀x"));
+    s.set_value(CellRef::new(0, 1), Value::text("ok"));
+    let bytes = write_csv_encoded(&s, b',', CsvEncoding::ShiftJis, text_of(&s)).unwrap();
+    assert_eq!(bytes, b"??x,ok\r\n");
+    assert!(!bytes.windows(2).any(|w| w == b"&#"), "never an HTML character reference: {bytes:?}");
+    let back = read_csv(&bytes, &CsvOptions { encoding: CsvEncoding::ShiftJis, ..Default::default() }).unwrap();
+    assert_eq!(v(&back, 0, 0), Value::text("??x"));
+    assert_eq!(v(&back, 0, 1), Value::text("ok"));
+    // More than one encode chunk, in ASCII and in multi-byte text: the chunked encoder keeps
+    // every character and every position.
+    let long = "a".repeat(20_000);
+    let mut wide = Sheet::new("W");
+    wide.set_value(CellRef::new(0, 0), Value::text(long.as_str()));
+    assert_eq!(write_csv_encoded(&wide, b',', CsvEncoding::ShiftJis, text_of(&wide)).unwrap(), format!("{long}\r\n").as_bytes());
+    let repeated = "日本語".repeat(4000);
+    let mut jp = Sheet::new("J");
+    jp.set_value(CellRef::new(0, 0), Value::text(repeated.as_str()));
+    let cp932: Vec<u8> = std::iter::repeat_n([0x93u8, 0xFA, 0x96, 0x7B, 0x8C, 0xEA], 4000).flatten().chain(*b"\r\n").collect();
+    assert_eq!(write_csv_encoded(&jp, b',', CsvEncoding::ShiftJis, text_of(&jp)).unwrap(), cp932);
 }
 
 #[test]
