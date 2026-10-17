@@ -43,11 +43,14 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.add_space(8.0);
-            if crate::widgets::icon_button(ui, Icon::Left, t.text_dim, "Previous sheet", vec2(24.0, 24.0)).clicked() {
-                app.run_or_alert("sheet.previous", json!({}));
-            }
-            if crate::widgets::icon_button(ui, Icon::Right, t.text_dim, "Next sheet", vec2(24.0, 24.0)).clicked() {
-                app.run_or_alert("sheet.next", json!({}));
+            // Previous / next visible sheet; hidden sheets are skipped, and at the first or last
+            // visible sheet nothing happens.
+            for (icon, label, id) in [(Icon::Left, "Previous sheet", "sheet.previous"), (Icon::Right, "Next sheet", "sheet.next")] {
+                let arrow = crate::widgets::icon_button(ui, icon, t.text_dim, label, vec2(24.0, 24.0));
+                arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+                if arrow.clicked() {
+                    app.run_or_alert(id, json!({}));
+                }
             }
             let all = crate::widgets::icon_button(ui, Icon::SheetList, t.text_dim, "All sheets", vec2(24.0, 24.0));
             all.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "All sheets"));

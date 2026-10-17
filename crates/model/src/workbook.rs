@@ -7,7 +7,7 @@ use gridcraft_formula::Expr;
 use serde::{Deserialize, Serialize};
 
 use crate::cell::Formula;
-use crate::sheet::Sheet;
+use crate::sheet::{Sheet, Visibility};
 use crate::style::{StyleTable, Theme};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,6 +162,26 @@ impl Workbook {
     pub fn active(&self) -> Option<&Sheet> {
         self.sheet(self.active_sheet)
     }
+    fn is_visible(&self, i: usize) -> bool {
+        self.sheet(i).is_some_and(|s| s.visibility == Visibility::Visible)
+    }
+    /// The nearest visible sheet after sheet `from` (`forward`) or before it, skipping hidden and
+    /// very hidden sheets: where Next Sheet / Previous Sheet (Ctrl+PageDown / Ctrl+PageUp) go.
+    /// `None` when there is no visible sheet that way, where Excel stays on the current sheet.
+    pub fn next_visible_sheet(&self, from: usize, forward: bool) -> Option<usize> {
+        if forward {
+            (from.saturating_add(1)..self.sheets.len()).find(|i| self.is_visible(*i))
+        } else {
+            (0..from.min(self.sheets.len())).rev().find(|i| self.is_visible(*i))
+        }
+    }
+    /// Sheet `i` when it is visible, else the nearest visible sheet after it, else the nearest one
+    /// before it: the sheet that takes over when the active sheet is hidden or deleted (`i` is then
+    /// the sheet that moved into its place) or when a file's active sheet is hidden. `None` when no
+    /// sheet is visible.
+    pub fn visible_sheet_from(&self, i: usize) -> Option<usize> {
+        (i..self.sheets.len()).find(|j| self.is_visible(*j)).or_else(|| self.next_visible_sheet(i, false))
+    }
     /// A fresh sheet name `SheetN` not in use.
     pub fn next_sheet_name(&self) -> String {
         (1..).map(|n| format!("Sheet{n}")).find(|n| self.sheet_index(n).is_none()).unwrap_or_else(|| "Sheet".into())
@@ -305,5 +325,51 @@ mod tests {
         assert!(wb.check_sheet_name("a/b", None).is_err());
         assert!(wb.check_sheet_name(&"x".repeat(32), None).is_err());
         assert!(wb.check_sheet_name("Budget 2026", None).is_ok());
+    }
+
+    /// `V` visible, `H` hidden, `X` very hidden.
+    fn book(kinds: &str) -> Workbook {
+        let mut wb = Workbook::new();
+        wb.sheets = kinds
+            .chars()
+            .enumerate()
+            .map(|(i, k)| {
+                let mut s = Sheet::new(format!("S{i}"));
+                s.visibility = match k {
+                    'H' => Visibility::Hidden,
+                    'X' => Visibility::VeryHidden,
+                    _ => Visibility::Visible,
+                };
+                Arc::new(s)
+            })
+            .collect();
+        wb
+    }
+
+    #[test]
+    fn next_visible_sheet_skips_hidden_sheets_and_stops_at_the_ends() {
+        let wb = book("VHXV");
+        assert_eq!(wb.next_visible_sheet(0, true), Some(3));
+        assert_eq!(wb.next_visible_sheet(3, false), Some(0));
+        assert_eq!(wb.next_visible_sheet(3, true), None);
+        assert_eq!(wb.next_visible_sheet(0, false), None);
+        // From a hidden sheet (a script activated it), the nearest visible one either way.
+        assert_eq!(wb.next_visible_sheet(1, true), Some(3));
+        assert_eq!(wb.next_visible_sheet(2, false), Some(0));
+        assert_eq!(book("VH").next_visible_sheet(0, true), None);
+        assert_eq!(book("HV").next_visible_sheet(1, false), None);
+        // Out of range never panics.
+        assert_eq!(wb.next_visible_sheet(usize::MAX, true), None);
+        assert_eq!(wb.next_visible_sheet(usize::MAX, false), Some(3));
+    }
+
+    #[test]
+    fn visible_sheet_from_prefers_the_right_then_the_left() {
+        let wb = book("VHXVH");
+        assert_eq!(wb.visible_sheet_from(0), Some(0));
+        assert_eq!(wb.visible_sheet_from(1), Some(3));
+        assert_eq!(wb.visible_sheet_from(4), Some(3));
+        assert_eq!(wb.visible_sheet_from(9), Some(3));
+        assert_eq!(book("HXH").visible_sheet_from(1), None);
     }
 }

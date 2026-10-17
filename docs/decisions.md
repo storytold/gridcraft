@@ -71,3 +71,21 @@ relative steps keep each notch feeling the same, and the doublings land on 25, 5
 400%. The status bar's Zoom In / Zoom Out buttons and Ctrl+Alt+= / Ctrl+Alt+- keep their 10%
 steps, so the wheel and the buttons now step differently. Whether they should share one ladder
 (this one, Excel's, or another) is left to the maintainers.
+
+## The interface never activates a hidden sheet; scripts may
+
+Next / Previous Sheet (`sheet.next` / `sheet.previous`: the arrows by the sheet tabs,
+Ctrl+PageDown / Ctrl+PageUp, Option+Right / Option+Left on a Mac) go to the nearest visible sheet
+that way, skipping hidden and very hidden sheets, and at the first or last visible sheet stay where
+they are, as in Excel (no wrapping). Hiding or deleting the active sheet activates the next visible
+sheet, or the one before it when none follows. Moving or copying a hidden sheet leaves the active
+sheet alone. A workbook whose saved active sheet is hidden (written by another program, or a JSON
+workbook saved after a script activated one) opens on the nearest visible sheet; XLSX export
+already writes a visible active tab. The tabs and All Sheets list only visible sheets.
+
+`sheet.activate` (an index or a name) still activates a hidden sheet. Scripts, agents and the
+CLI's `--sheet` use the active sheet as the default target of commands that read or edit cells,
+and hidden sheets often hold what they need (lookup tables, settings); unhiding first would change
+the workbook. Excel's VBA `Activate` fails on a hidden sheet; whether GridCraft should refuse too,
+once every such command takes an explicit `sheet` target, is left to the maintainers. From a hidden
+active sheet, Next / Previous Sheet go to the nearest visible sheet that way.

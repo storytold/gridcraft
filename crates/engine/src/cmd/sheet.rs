@@ -54,9 +54,17 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("sheet.tabColor", "Tab Color", ["Home", "Cells", "Format"], None, "{sheet?, color: \"#FF0000\"|\"none\"}", has_doc, tab_color),
         cmd!("sheet.hide", "Hide Sheet", ["Home", "Cells", "Format", "Hide & Unhide"], None, "{sheet?}", has_doc, hide_sheet),
         cmd!("sheet.unhide", "Unhide Sheet…", ["Home", "Cells", "Format", "Hide & Unhide"], None, "{sheet}", has_doc, unhide_sheet),
-        cmd!(noundo "sheet.activate", "Activate Sheet", [], None, "{sheet: index | name}", has_doc, activate),
-        cmd!(noundo "sheet.next", "Next Sheet", [], Some("Ctrl+PageDown"), "{}", has_doc, |s, _| step_sheet(s, 1)),
-        cmd!(noundo "sheet.previous", "Previous Sheet", [], Some("Ctrl+PageUp"), "{}", has_doc, |s, _| step_sheet(s, -1)),
+        cmd!(
+            noundo "sheet.activate",
+            "Activate Sheet",
+            [],
+            None,
+            "{sheet: index | name}: any sheet, hidden ones included, so scripts can work on a hidden sheet as the active one. The interface only activates visible sheets: the tabs, All Sheets, Next/Previous Sheet, and the sheet that takes over from a hidden or deleted active sheet",
+            has_doc,
+            activate
+        ),
+        cmd!(noundo "sheet.next", "Next Sheet", [], Some("Ctrl+PageDown"), "{}", has_doc, |s, _| step_sheet(s, true)),
+        cmd!(noundo "sheet.previous", "Previous Sheet", [], Some("Ctrl+PageUp"), "{}", has_doc, |s, _| step_sheet(s, false)),
     ]
 }
 
@@ -753,9 +761,17 @@ fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
-        if cx.wb.active_sheet >= cx.wb.sheets.len() || cx.wb.active_sheet > i {
-            cx.wb.active_sheet = cx.wb.active_sheet.saturating_sub(1).min(cx.wb.sheets.len().saturating_sub(1));
+        let active = cx.wb.active_sheet;
+        cx.wb.active_sheet = if active > i {
+            active - 1
+        } else if active == i {
+            // The active sheet went: the next visible sheet takes over (now at `i`), or the one
+            // before it at the end, never a hidden sheet.
+            cx.wb.visible_sheet_from(i).unwrap_or(i)
+        } else {
+            active
         }
+        .min(cx.wb.sheets.len().saturating_sub(1));
         *cx.sel = crate::Selection::default();
         cx.structural = true;
         Ok(())
@@ -824,6 +840,7 @@ fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let n = cx.wb.sheets.len();
         let Some(src) = cx.wb.sheets.get(i).cloned() else { return Err(bad("sheet.move", "no such sheet")) };
+        let visible = src.visibility == Visibility::Visible;
         if copy {
             let mut sh = (*src).clone();
             let base = sh.name.clone();
@@ -862,27 +879,40 @@ fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             }
             cx.wb.names.extend(copies);
             cx.wb.sheets.insert(at, Arc::new(sh));
-            cx.wb.active_sheet = at;
+            // The copy becomes the active sheet, unless it is hidden like its original: hidden
+            // sheets are never activated, so the active sheet stays (one place further along when
+            // the copy went in before it).
+            cx.wb.active_sheet = match cx.wb.active_sheet {
+                _ if visible => at,
+                a if a >= at => a + 1,
+                a => a,
+            };
         } else {
             let sh = cx.wb.sheets.remove(i);
             let at = to.min(n - 1);
             cx.wb.sheets.insert(at, sh);
-            cx.wb.active_sheet = at;
+            // The moved sheet becomes the active sheet, unless it is hidden.
+            cx.wb.active_sheet = if visible { at } else { moved_index(cx.wb.active_sheet, i, at) };
             // Sheet-level names follow their sheet.
             for nm in cx.wb.names.iter_mut() {
                 if let Some(sc) = nm.scope.as_mut() {
-                    *sc = match *sc {
-                        x if x == i => at,
-                        x if i < x && x <= at => x - 1,
-                        x if at <= x && x < i => x + 1,
-                        x => x,
-                    };
+                    *sc = moved_index(*sc, i, at);
                 }
             }
         }
         cx.structural = true;
         Ok(Json::Null)
     })
+}
+
+/// Where sheet index `x` ends up when the sheet at `from` moves to `to`.
+fn moved_index(x: usize, from: usize, to: usize) -> usize {
+    match x {
+        x if x == from => to,
+        x if from < x && x <= to => x - 1,
+        x if to <= x && x < from => x + 1,
+        x => x,
+    }
 }
 
 fn tab_color(s: &mut Session, p: &Json) -> Result<Json> {
@@ -901,8 +931,9 @@ fn hide_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     }
     edit(s, |cx| {
         cx.sheet_mut(i)?.visibility = Visibility::Hidden;
+        // Hiding the active sheet activates the next visible sheet, or the one before it at the end.
         if cx.wb.active_sheet == i {
-            cx.wb.active_sheet = cx.wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0);
+            cx.wb.active_sheet = cx.wb.visible_sheet_from(i).unwrap_or(i);
         }
         Ok(Json::Null)
     })
@@ -932,17 +963,13 @@ fn activate(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"sheet": i, "name": d.wb.active().map(|s| s.name.clone())}))
 }
 
-fn step_sheet(s: &mut Session, dir: i64) -> Result<Json> {
+/// Next Sheet / Previous Sheet: the nearest visible sheet that way, skipping hidden ones. With no
+/// visible sheet that way the active sheet stays, as in Excel (no wrapping, never a hidden sheet).
+fn step_sheet(s: &mut Session, forward: bool) -> Result<Json> {
     let d = s.doc()?;
-    let n = d.wb.sheets.len() as i64;
-    let mut i = d.wb.active_sheet as i64;
-    for _ in 0..n {
-        i = (i + dir).clamp(0, n - 1);
-        if d.wb.sheet(i as usize).is_some_and(|s| s.visibility == Visibility::Visible) {
-            break;
-        }
+    if let Some(i) = d.wb.next_visible_sheet(d.wb.active_sheet, forward) {
+        s.doc_mut()?.wb_switch_sheet(i);
     }
-    s.doc_mut()?.wb_switch_sheet(i as usize);
     ok()
 }
 
