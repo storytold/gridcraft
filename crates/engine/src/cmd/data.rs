@@ -182,19 +182,36 @@ struct SortKey {
     list: Option<Vec<String>>,
 }
 
+/// The sheet and range a sort works on: the sheet `sheet` or a `Sheet!` prefix on `range` names,
+/// else the active one. The selection belongs to the active sheet, so another sheet needs `range`.
+fn sort_target(s: &Session, p: &Json) -> Result<(usize, RangeRef)> {
+    let sheet = target_sheet(s, p)?;
+    let d = s.doc()?;
+    if let Some(t) = str_param(p, "range")
+        && let (Some(name), _) = split_sheet(t)
+        && d.wb.sheet_index(&name) != Some(sheet)
+    {
+        return Err(bad("data.sort", format!("`{t}` names a sheet other than `sheet`")));
+    }
+    if sheet != d.wb.active_sheet && p.get("range").is_none() {
+        return Err(bad("data.sort", "missing `range`: the selection is on the active sheet"));
+    }
+    Ok((sheet, data_range(s, p)?))
+}
+
 fn quick_sort(s: &mut Session, p: &Json, asc: bool) -> Result<Json> {
-    let r = data_range(s, p)?;
+    let (sheet, r) = sort_target(s, p)?;
     let col = col_param(p.get("column"), r.start.col).unwrap_or(s.doc()?.selection.active.col).clamp(r.start.col, r.end.col);
     let d = s.doc()?;
-    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
     let header = guess_header(&d.wb, sh, r);
-    do_sort(s, r, header, vec![SortKey { col, desc: !asc, by: "values".into(), list: None }], false, false)
+    do_sort(s, sheet, r, header, vec![SortKey { col, desc: !asc, by: "values".into(), list: None }], false, false)
 }
 
 fn sort(s: &mut Session, p: &Json) -> Result<Json> {
-    let r = data_range(s, p)?;
+    let (sheet, r) = sort_target(s, p)?;
     let d = s.doc()?;
-    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
     let header = bool_param(p, "header").unwrap_or_else(|| guess_header(&d.wb, sh, r));
     let by_cols = str_param(p, "orientation") == Some("columns");
     let case = bool_param(p, "matchCase").unwrap_or(false);
@@ -228,10 +245,10 @@ fn sort(s: &mut Session, p: &Json) -> Result<Json> {
     if keys.len() > 64 {
         return Err(bad("data.sort", "too many sort levels (64 max)"));
     }
-    do_sort(s, r, header, keys, by_cols, case)
+    do_sort(s, sheet, r, header, keys, by_cols, case)
 }
 
-fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_cols: bool, case: bool) -> Result<Json> {
+fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<SortKey>, by_cols: bool, case: bool) -> Result<Json> {
     let body = if by_cols {
         if header && r.width() > 1 { RangeRef::new(CellRef::new(r.start.row, r.start.col + 1), r.end) } else { r }
     } else if header && r.height() > 1 {
@@ -242,7 +259,6 @@ fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_co
     if body.count() > 20_000_000 {
         return Err(bad("data.sort", "range too large"));
     }
-    let sheet = s.doc()?.wb.active_sheet;
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(Json::Null) };
         if sh.merges.iter().any(|m| m.intersects(&body) && !m.is_single()) {

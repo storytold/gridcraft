@@ -1028,6 +1028,31 @@ fn case_sensitive_sort_puts_lowercase_first() {
 }
 
 #[test]
+fn sort_with_a_sheet_prefix_sorts_the_named_sheet() {
+    let col = |s: &Session, sheet: &str| -> Vec<Value> {
+        let wb = &s.doc().unwrap().wb;
+        let sh = wb.sheet(wb.sheet_index(sheet).unwrap()).unwrap();
+        (1..=3).map(|r| sh.value(CellRef::new(r, 0))).collect()
+    };
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Qty"], ["a", 3], ["b", 1], ["c", 2]]})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Prices"})).unwrap();
+    s.execute("range.setValues", json!({"range": "Prices!A1", "values": [["Item", "Price"], ["p1", 10], ["p2", 30], ["p3", 20]]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    let r = s.execute("data.sort", json!({"range": "Prices!A1:B4", "header": true, "keys": [{"column": "B", "order": "desc"}]})).unwrap();
+    assert_eq!(r["sorted"], "A2:B4");
+    assert_eq!(col(&s, "Prices"), ["p2", "p3", "p1"].map(Value::from));
+    assert_eq!(col(&s, "Sheet1"), ["a", "b", "c"].map(Value::from));
+    s.execute("data.sortAscending", json!({"range": "Prices!A2:B4", "column": "B"})).unwrap();
+    assert_eq!(col(&s, "Prices"), ["p1", "p3", "p2"].map(Value::from));
+    assert_eq!(col(&s, "Sheet1"), ["a", "b", "c"].map(Value::from));
+    // The selection belongs to the active sheet, so another sheet needs its range.
+    assert!(s.execute("data.sort", json!({"sheet": "Prices", "keys": [{"column": "B"}]})).is_err());
+    assert!(s.execute("data.sort", json!({"range": "Nowhere!A1:B4", "keys": [{"column": "B"}]})).is_err());
+    assert_eq!(col(&s, "Sheet1"), ["a", "b", "c"].map(Value::from));
+}
+
+#[test]
 fn remove_duplicates_compares_shown_text() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Date", "Price"], ["2006-03-08", 1.01], ["2006-03-08", 1.02]]})).unwrap();
