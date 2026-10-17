@@ -311,6 +311,29 @@ fn date_text_coerces_in_the_workbook_date_system() {
 }
 
 #[test]
+fn lambda_helpers_check_shapes_and_parameters() {
+    let mut t = T::new();
+    let calc = Value::Error(CellError::Calc);
+    // A LAMBDA returning several values can't fill one cell: the whole result is #CALC!.
+    t.set("A1", "=MAP({1,2},LAMBDA(x,{1,2}))");
+    assert_eq!((t.get("A1"), t.get("B1")), (calc.clone(), Value::Empty));
+    t.set("A2", "=BYROW({1,2;3,4},LAMBDA(r,r))");
+    assert_eq!((t.get("A2"), t.get("A3")), (calc.clone(), Value::Empty));
+    t.set("A4", "=MAKEARRAY(1,2,LAMBDA(r,c,{1,2}))");
+    assert_eq!(t.get("A4"), calc.clone());
+    t.set("D1", "=SCAN(0,{1,2},LAMBDA(a,b,{1,2}))");
+    assert_eq!((t.get("D1"), t.get("E1")), (calc, Value::Empty));
+    // One parameter per array (MAP) or exactly one (BYROW/BYCOL).
+    t.set("A5", "=MAP({1,2},LAMBDA(x,y,x))");
+    assert_eq!(t.get("A5"), Value::Error(CellError::Value));
+    t.set("A6", "=BYCOL({1,2},LAMBDA(c,d,SUM(c)))");
+    assert_eq!(t.get("A6"), Value::Error(CellError::Value));
+    // A single value in an array is fine.
+    t.set("A7", "=MAP({1,2},LAMBDA(x,SEQUENCE(1)*x))");
+    assert_eq!(t.num("B7"), 2.0);
+}
+
+#[test]
 fn operators() {
     let mut t = T::new();
     t.set("A1", "=\"a\"&1&TRUE");

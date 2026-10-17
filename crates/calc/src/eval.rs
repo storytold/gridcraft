@@ -1015,12 +1015,17 @@ impl<'h> Evaluator<'h> {
                 if (rows * cols) as u64 > MAX_CELLS {
                     return err(CellError::Num);
                 }
+                // The LAMBDA takes one parameter per array.
+                if l.params.len() != arrays.len() {
+                    return err(CellError::Value);
+                }
                 let mut out = Vec::with_capacity(rows * cols);
                 for r in 0..rows {
                     for c in 0..cols {
                         let bound = l.params.iter().zip(arrays.iter()).map(|(p, a)| (p.clone(), Ev::V(a.get_broadcast(r, c)))).collect();
                         let v = self.call_lambda_values(&l, bound);
-                        out.push(self.deref(v).scalar());
+                        let Some(one) = single(self.deref(v)) else { return err(CellError::Calc) };
+                        out.push(one);
                     }
                 }
                 Ev::V(Array::new(rows, cols, out).map(Value::from).unwrap_or(Value::Error(CellError::Calc)))
@@ -1041,7 +1046,8 @@ impl<'h> Evaluator<'h> {
                     let r = self.call_lambda_values(&l, bound);
                     acc = self.deref(r);
                     if name == "SCAN" {
-                        scan.push(acc.scalar());
+                        let Some(one) = single(acc.clone()) else { return err(CellError::Calc) };
+                        scan.push(one);
                     }
                 }
                 if name == "SCAN" {
@@ -1057,6 +1063,9 @@ impl<'h> Evaluator<'h> {
                 let arr = as_array(self.value(&args[0]));
                 let Some(l) = self.lambda_arg(args.get(1), 1) else { return err(CellError::Value) };
                 let Some(p) = l.params.first().cloned() else { return err(CellError::Value) };
+                if l.params.len() != 1 {
+                    return err(CellError::Value);
+                }
                 let by_row = name == "BYROW";
                 let n = if by_row { arr.rows } else { arr.cols };
                 let mut out = Vec::with_capacity(n);
@@ -1068,7 +1077,8 @@ impl<'h> Evaluator<'h> {
                     };
                     let a = if by_row { Array::row(slice) } else { Array::column(slice) };
                     let r = self.call_lambda_values(&l, vec![(p.clone(), Ev::V(a.into()))]);
-                    out.push(self.deref(r).scalar());
+                    let Some(one) = single(self.deref(r)) else { return err(CellError::Calc) };
+                    out.push(one);
                 }
                 let a = if by_row { Array::column(out) } else { Array::row(out) };
                 Ev::V(a.into())
@@ -1097,7 +1107,8 @@ impl<'h> Evaluator<'h> {
                             (l.params[1].clone(), Ev::V(Value::number(c as f64 + 1.0))),
                         ];
                         let v = self.call_lambda_values(&l, bound);
-                        out.push(self.deref(v).scalar());
+                        let Some(one) = single(self.deref(v)) else { return err(CellError::Calc) };
+                        out.push(one);
                     }
                 }
                 Ev::V(Array::new(rows, cols, out).map(Value::from).unwrap_or(Value::Error(CellError::Calc)))
@@ -1653,6 +1664,15 @@ fn zip3(c: &Array, t: &Value, f: &Value, g: impl Fn(&Value, &Value, &Value) -> V
         }
     }
     Value::from(Array { rows, cols, data })
+}
+
+/// One cell of a LAMBDA helper's result, or `None` for an array of more than one value: arrays
+/// can't nest, so the whole helper gives `#CALC!`, as in Excel.
+fn single(v: Value) -> Option<Value> {
+    match v {
+        Value::Array(a) if a.rows * a.cols > 1 => None,
+        v => Some(v.scalar()),
+    }
 }
 
 pub fn binary_values(op: BinOp, x: &Value, y: &Value, sys: gridcraft_core::DateSystem) -> Value {
