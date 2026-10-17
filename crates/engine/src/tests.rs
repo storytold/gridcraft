@@ -1150,6 +1150,33 @@ fn open_leaves_plain_workbooks_untouched() {
     assert!(sh.rows.values().all(|i| i.size.is_none()), "no row gains a height entry");
 }
 
+/// Merged cells never auto-fit their rows, like Excel (issue #1605): a wrapped merged
+/// header keeps the default height instead of growing to its column-A wrap width, while an
+/// unmerged wrapped cell in the same sheet still fits.
+#[test]
+fn autofit_skips_merged_cells() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "This is a long sentence that should wrap across the merged width of five columns"}))
+        .unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:E1"})).unwrap();
+    s.execute("home.wrapText", json!({"range": "A1:E1", "on": true})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "This is a long sentence that should wrap across the merged width of five columns"}))
+        .unwrap();
+    s.execute("home.wrapText", json!({"range": "A3", "on": true})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert!(sh.rows.get(&0).is_none_or(|i| i.size.is_none()), "merged wrap must not auto-fit row 1, got {:?}", sh.rows.get(&0));
+    assert!(sh.rows.get(&2).is_some_and(|i| i.size.is_some_and(|h| h > 15.0)), "unmerged wrap still fits its row");
+    // The save writes no height for the merged row.
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let bytes = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("xl/worksheets/sheet1.xml").unwrap(), &mut xml).unwrap();
+    let row1 = xml.split("<row").skip(1).map(|r| format!("<row{r}")).find(|r| r.starts_with("<row r=\"1\"")).unwrap();
+    assert!(!row1.split('>').next().unwrap().contains("ht="), "merged row 1 must be saved without ht, got {row1}");
+    assert!(xml.contains("<mergeCell ref=\"A1:E1\"/>"), "the merge itself is saved");
+}
+
 #[test]
 fn tables_and_structured_refs() {
     let mut s = s();

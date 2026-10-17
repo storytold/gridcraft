@@ -482,6 +482,10 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
     }
     let mut need: f32 = default;
     for (c, cell) in sh.cells.row(row, 0, gridcraft_core::MAX_COLS - 1) {
+        // Merged cells never auto-fit their rows, like Excel (column autofit skips them too).
+        if sh.merge_at(CellRef::new(row, c)).is_some_and(|m| !m.is_single()) {
+            continue;
+        }
         let st = wb.styles.get(cell.style);
         let size = st.font.size;
         let line = (size * 1.8).round().max(default * size / gridcraft_model::DEFAULT_FONT_SIZE);
