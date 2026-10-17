@@ -382,6 +382,7 @@ fn sample() -> Workbook {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            label_number_format: None,
         }],
         legend: LegendPos::Bottom,
         data_labels: true,
@@ -392,6 +393,8 @@ fn sample() -> Workbook {
         source: None,
         by_rows: false,
         pivot: None,
+        axis_number_formats: Default::default(),
+        pivot_label_formats: Vec::new(),
     };
     for kind in [
         ChartKind::ColumnClustered,

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, Value};
-use gridcraft_model::{Anchor, Chart, ChartKind, Color, LegendPos, Series, SparklineKind, Style, Workbook};
+use gridcraft_model::{Anchor, AxisNumberFormats, Chart, ChartKind, Color, LegendPos, Series, SparklineKind, Style, Workbook};
 
 use crate::*;
 
@@ -49,6 +49,8 @@ fn chart(kind: ChartKind) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        axis_number_formats: Default::default(),
+        pivot_label_formats: Vec::new(),
     }
 }
 
@@ -64,6 +66,7 @@ fn series(name: &str, values: &[f64], color: Rgba, kind: ChartKind) -> SeriesDat
         smooth: false,
         trendlines: Vec::new(),
         number_format: "$#,##0".into(),
+        label_number_format: None,
     }
 }
 
@@ -202,6 +205,30 @@ fn axis_labels_use_number_format() {
 }
 
 #[test]
+fn typed_axis_and_label_formats_override_the_source() {
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.axis_number_formats.y = Some("#,##0.0,\"k\"".into());
+    let mut d = sample(ChartKind::ColumnClustered);
+    // `0;;;` labels positives only: North's -4000 gets no label.
+    d.series[0].label_number_format = Some("0;;;".into());
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let t = texts(&prims);
+    assert!(t.contains(&"40.0k") && !t.contains(&"$40,000"), "axis uses its own format: {t:?}");
+    assert!(t.contains(&"12000") && !t.contains(&"$12,000"), "North's labels use theirs: {t:?}");
+    assert!(!t.contains(&"-$4,000") && !t.contains(&"-4000"), "{t:?}");
+    assert!(t.contains(&"$30,000"), "other series keep the source format: {t:?}");
+
+    // A combo's secondary axis has a format of its own; the primary keeps the source's.
+    let mut c = chart(ChartKind::Combo);
+    c.data_labels = false;
+    c.axis_number_formats.y2 = Some("#,##0,\"K\"".into());
+    let t = render(&c, &sample(ChartKind::Combo), 640.0, 400.0, &ApproxMeasure);
+    let t = texts(&t);
+    assert!(t.contains(&"70K") && !t.contains(&"$70,000"), "{t:?}");
+    assert!(t.contains(&"$30,000"), "{t:?}");
+}
+
+#[test]
 fn resolve_from_workbook() {
     let mut wb = Workbook::new();
     let cur = wb.styles.intern(Style { num_fmt: gridcraft_model::NumFmt(Arc::from("$#,##0")), ..Style::default() });
@@ -229,6 +256,7 @@ fn resolve_from_workbook() {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            label_number_format: None,
         },
         Series {
             name: None,
@@ -240,6 +268,7 @@ fn resolve_from_workbook() {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            label_number_format: None,
         },
         Series {
             name: Some("Literal".into()),
@@ -251,6 +280,7 @@ fn resolve_from_workbook() {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            label_number_format: None,
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -289,6 +319,7 @@ fn resolve_from_workbook() {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            label_number_format: None,
         },
         Series {
             name: None,
@@ -300,6 +331,7 @@ fn resolve_from_workbook() {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            label_number_format: None,
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -316,6 +348,7 @@ fn resolve_from_workbook() {
         kind: None,
         smooth: false,
         trendlines: Vec::new(),
+        label_number_format: None,
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series[0].x.as_ref().map(|x| x.len()), Some(3));
@@ -333,6 +366,7 @@ fn resolve_from_workbook() {
         kind: None,
         smooth: false,
         trendlines: Vec::new(),
+        label_number_format: None,
     }];
     let d = resolve(&wb, 7, &c);
     assert_eq!(d.series.len(), 1);
@@ -631,12 +665,18 @@ fn fuzz_random_data_and_sizes() {
                     })
                     .collect(),
                 number_format: ["General", "$#,##0", "0.00%", "yyyy-mm-dd", "#,##0.0;[Red]-#,##0.0", "@"][(r.next() % 6) as usize].into(),
+                label_number_format: [None, Some("0;;;"), Some("[h]:mm"), Some(";;;")][(r.next() % 4) as usize].map(str::to_string),
             })
             .collect();
         let ncat = (r.next() % 50) as usize;
         let d = ChartData { palette: vec![], categories: (0..ncat).map(|i| "c".repeat(i % 7) + &i.to_string()).collect(), series };
         let mut c = chart(kind);
         c.legend = [LegendPos::None, LegendPos::Bottom, LegendPos::Top, LegendPos::Left, LegendPos::Right][(r.next() % 5) as usize];
+        c.axis_number_formats = AxisNumberFormats {
+            x: [None, Some("0%"), Some(";;;")][(r.next() % 3) as usize].map(str::to_string),
+            y: [None, Some("[h]:mm"), Some("#,##0"), Some("")][(r.next() % 4) as usize].map(str::to_string),
+            y2: [None, Some("0%"), Some("0;;;")][(r.next() % 3) as usize].map(str::to_string),
+        };
         c.data_labels = r.next().is_multiple_of(2);
         c.gridlines = r.next().is_multiple_of(2);
         if r.next().is_multiple_of(3) {
@@ -1003,6 +1043,7 @@ fn pie_points_follow_workbook_theme() {
         kind: None,
         smooth: false,
         trendlines: Vec::new(),
+        label_number_format: None,
     }];
     let d = resolve(&wb, 0, &c);
     let expected = vec![series_color(&wb.theme, 0), series_color(&wb.theme, 1)];

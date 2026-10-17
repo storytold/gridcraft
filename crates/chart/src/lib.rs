@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 pub use axis::{Scale, format_number, nice_scale};
 pub use raster::rasterize;
 pub use render::{Swatch, legend_entries, render, supports_trendline};
-pub use resolve::{default_palette, resolve, series_color, series_plot_kind};
+pub use resolve::{default_palette, resolve, series_color, series_name, series_plot_kind};
 pub use sparkline::render_sparkline;
 
 /// Straight (non-premultiplied) RGBA colour.
@@ -148,6 +148,9 @@ pub struct SeriesData {
     pub trendlines: Vec<TrendlineData>,
     /// Number format code of the source values ("General" by default).
     pub number_format: String,
+    /// Number format typed for the data labels; `None` labels with `number_format`.
+    #[serde(default)]
+    pub label_number_format: Option<String>,
 }
 
 /// A trendline to draw: the model settings with the line colour resolved against the theme.
@@ -170,6 +173,7 @@ impl Default for SeriesData {
             smooth: false,
             trendlines: vec![],
             number_format: "General".into(),
+            label_number_format: None,
         }
     }
 }

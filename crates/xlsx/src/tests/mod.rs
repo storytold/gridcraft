@@ -2,6 +2,7 @@
 
 mod array_export;
 mod chart_bool_default;
+mod chart_number_format;
 mod csv_tests;
 mod encrypted_tests;
 mod fixtures;

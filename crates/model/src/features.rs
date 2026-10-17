@@ -424,6 +424,10 @@ pub struct Series {
     /// Trendlines fitted to this series (Excel allows several per series).
     #[serde(default)]
     pub trendlines: Vec<Trendline>,
+    /// Data label number format typed for the labels (`dLbls/numFmt` with `sourceLinked="0"`);
+    /// `None` shows the values in their source cells' format.
+    #[serde(default)]
+    pub label_number_format: Option<String>,
 }
 
 /// Regression a trendline fits (`c:trendlineType`).
@@ -482,6 +486,19 @@ pub struct Trendline {
     pub dash: Option<LineDash>,
 }
 
+/// Number formats typed on a chart's axes (`c:numFmt` with `sourceLinked="0"`); `None` follows the
+/// source cells, as Excel's "Linked to source" does.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AxisNumberFormats {
+    /// The horizontal value axis of scatter and bubble charts.
+    pub x: Option<String>,
+    /// The (primary) value axis.
+    pub y: Option<String>,
+    /// The secondary value axis of a combo chart.
+    pub y2: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Chart {
     pub id: u32,
@@ -502,6 +519,14 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+    #[serde(default)]
+    pub axis_number_formats: AxisNumberFormats,
+    /// A PivotChart's typed data label formats by series items (column items, then the value
+    /// field when there are several), as of its last refresh. A refresh that drops series keeps
+    /// theirs here, so they come back with their format. Only the current series' formats are
+    /// saved.
+    #[serde(default)]
+    pub pivot_label_formats: Vec<(Vec<String>, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
