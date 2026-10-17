@@ -54,7 +54,7 @@ fn median(v: Vec<f64>) -> R<f64> {
     let s = sorted(v);
     let n = s.len();
     let hi = s.get(n / 2).copied().unwrap_or(0.0);
-    if n % 2 == 1 { Ok(hi) } else { Ok((s.get(n / 2 - 1).copied().unwrap_or(0.0) + hi) / 2.0) }
+    if n % 2 == 1 { Ok(hi) } else { Ok(s.get(n / 2 - 1).copied().unwrap_or(0.0).midpoint(hi)) }
 }
 
 /// Values occurring at least twice, ordered by first occurrence, with their (equal, maximal) count.
@@ -2253,6 +2253,46 @@ mod tests {
 
     fn c(xs: &[f64]) -> crate::Arg {
         av(col(xs))
+    }
+
+    // The two middle values are finite and their midpoint is representable even when
+    // adding them first would overflow. Exercise both callers of the shared helper.
+    #[test]
+    fn median_finite_midpoint_does_not_overflow() {
+        for (values, expected) in [
+            (vec![1e308, 1e308], 1e308),
+            (vec![-1e308, -1e308], -1e308),
+            (vec![1.6e308, 1e308], 1.3e308),
+            (vec![-1e308, -1.6e308], -1.3e308),
+            (vec![f64::MAX, f64::MAX], f64::MAX),
+            (vec![-f64::MAX, -f64::MAX], -f64::MAX),
+            (vec![-f64::MAX, f64::MAX], 0.0),
+            (vec![1.7e308, -1.7e308, 1e308, 1.6e308], 1.3e308),
+        ] {
+            close(ev("MEDIAN", values.iter().copied().map(n).collect()), expected);
+            close(ev("MEDIAN", vec![rf(col(&values))]), expected);
+            close(aggregate_values(12, &values.iter().copied().map(nv).collect::<Vec<_>>()), expected);
+        }
+    }
+
+    #[test]
+    fn median_midpoint_keeps_small_values_and_argument_semantics() {
+        // Halving each operand unconditionally can lose the smallest numbers. Use exact
+        // equality here: the usual aggregate-test tolerance would accept zero.
+        for value in [f64::MIN_POSITIVE, -f64::MIN_POSITIVE, f64::from_bits(1), -f64::from_bits(1)] {
+            assert_eq!(ev("MEDIAN", vec![n(value), n(value)]), nv(value));
+            assert_eq!(aggregate_values(12, &[nv(value), nv(value)]), nv(value));
+        }
+        close(ev("MEDIAN", vec![c(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])]), 3.5);
+        close(ev("MEDIAN", vec![c(&[1e308, -1e308, 3.0])]), 3.0);
+        close(ev("MEDIAN", vec![n(1e308)]), 1e308);
+        close(ev("MEDIAN", vec![t("4"), b(true)]), 2.5);
+        close(ev("MEDIAN", vec![rf(arr(vec![vec![nv(1.0), tv("ignored"), Value::Empty, Value::Bool(true), nv(6.0)]]))]), 3.5);
+        is_err(ev("MEDIAN", vec![t("invalid")]), CellError::Value);
+        is_err(ev("MEDIAN", vec![e(CellError::NA), n(1e308)]), CellError::NA);
+        is_err(ev("MEDIAN", vec![rf(arr(vec![vec![tv("ignored"), Value::Empty]]))]), CellError::Num);
+        is_err(aggregate_values(12, &[]), CellError::Num);
+        is_err(aggregate_values(12, &[nv(1e308), Value::Error(CellError::Div0)]), CellError::Div0);
     }
 
     #[test]
