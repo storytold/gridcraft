@@ -327,6 +327,228 @@ impl<'a> Compound<'a> {
     }
 }
 
+// ---- writing -------------------------------------------------------------------------------
+
+/// Sector size of the files written (version 3).
+const SECTOR: usize = 512;
+const MINI_SECTOR: usize = 64;
+/// Streams shorter than this live in the mini stream.
+const MINI_CUTOFF: usize = 4096;
+const FREE_SECT: u32 = 0xFFFF_FFFF;
+const FAT_SECT: u32 = 0xFFFF_FFFD;
+const DIFAT_SECT: u32 = 0xFFFF_FFFC;
+/// FAT sector ids the header holds; the rest go in DIFAT sectors, 127 to a sector.
+const HEADER_DIFAT: usize = 109;
+const STORAGE_OBJECT: u8 = 1;
+const ROOT_STORAGE_OBJECT: u8 = 5;
+
+/// A storage or stream being written.
+struct Node<'a> {
+    name: Vec<u16>,
+    kind: u8,
+    data: &'a [u8],
+    children: Vec<usize>,
+}
+
+/// Where an entry sits among its siblings: its subtrees and its colour.
+#[derive(Clone, Copy)]
+struct Link {
+    left: u32,
+    right: u32,
+    red: bool,
+}
+
+/// [MS-CFB] 2.6.4: siblings are ordered by name length, then by the names uppercased. The names
+/// written here are ASCII, so ASCII uppercasing is the whole rule.
+fn name_order(a: &[u16], b: &[u16]) -> std::cmp::Ordering {
+    let upper = |u: &u16| if (0x61..=0x7A).contains(u) { u - 0x20 } else { *u };
+    a.len().cmp(&b.len()).then_with(|| a.iter().map(upper).cmp(b.iter().map(upper)))
+}
+
+/// Links the `sorted` siblings into a balanced binary tree and returns its root. The nodes on
+/// the deepest level are red and the rest black, so every path holds as many black nodes and
+/// no red node has a red parent: a valid red-black tree, as [MS-CFB] asks for.
+fn balance(sorted: &[usize], depth: u32, red_depth: u32, links: &mut [Link]) -> Result<u32, String> {
+    let mid = sorted.len() / 2;
+    let Some(&node) = sorted.get(mid) else { return Ok(NO_STREAM) };
+    let left = balance(sorted.get(..mid).unwrap_or_default(), depth + 1, red_depth, links)?;
+    let right = balance(sorted.get(mid + 1..).unwrap_or_default(), depth + 1, red_depth, links)?;
+    if let Some(l) = links.get_mut(node) {
+        *l = Link { left, right, red: depth > 0 && depth == red_depth };
+    }
+    u32::try_from(node).map_err(|_| "too many directory entries".to_string())
+}
+
+/// A version 3 compound file holding `streams`, each named by its path from the root with `/`
+/// between storages (`"a/b"` is stream `b` in storage `a`). Streams under 4096 bytes go in the
+/// mini stream, as Office writes them. Implemented from Microsoft's public [MS-CFB].
+pub(crate) fn write(streams: &[(&str, &[u8])]) -> Result<Vec<u8>, String> {
+    let id = |x: usize| u32::try_from(x).map_err(|_| "the file is too large for a compound file".to_string());
+    let mut nodes = vec![Node { name: "Root Entry".encode_utf16().collect(), kind: ROOT_STORAGE_OBJECT, data: &[], children: vec![] }];
+    for (path, data) in streams {
+        let parts: Vec<&str> = path.split('/').collect();
+        let mut parent = 0;
+        for (k, part) in parts.iter().enumerate() {
+            let stream = k + 1 == parts.len();
+            let name: Vec<u16> = part.encode_utf16().collect();
+            if name.is_empty() || name.len() > 31 {
+                return Err(format!("'{path}' isn't a valid compound file name"));
+            }
+            let siblings = nodes.get(parent).map(|p| p.children.clone()).unwrap_or_default();
+            let existing = siblings.into_iter().find(|&c| nodes.get(c).is_some_and(|n| name_order(&n.name, &name).is_eq()));
+            parent = match existing {
+                Some(c) if !stream && nodes.get(c).is_some_and(|n| n.kind == STORAGE_OBJECT) => c,
+                Some(_) => return Err(format!("'{path}' is written twice")),
+                None => {
+                    let kind = if stream { STREAM_OBJECT } else { STORAGE_OBJECT };
+                    nodes.push(Node { name, kind, data: if stream { data } else { &[] }, children: vec![] });
+                    let new = nodes.len() - 1;
+                    if let Some(p) = nodes.get_mut(parent) {
+                        p.children.push(new);
+                    }
+                    new
+                }
+            };
+        }
+    }
+
+    // The mini stream: small streams in 64-byte mini sectors, chained by the mini FAT.
+    let is_mini = |n: &Node| n.kind == STREAM_OBJECT && n.data.len() < MINI_CUTOFF;
+    let mut starts = vec![END_OF_CHAIN; nodes.len()];
+    let mut container = vec![];
+    let mut mini_fat: Vec<u32> = vec![];
+    for (n, start) in nodes.iter().zip(starts.iter_mut()) {
+        if !is_mini(n) || n.data.is_empty() {
+            continue;
+        }
+        let first = mini_fat.len();
+        let count = n.data.len().div_ceil(MINI_SECTOR);
+        for k in 1..count {
+            mini_fat.push(id(first + k)?);
+        }
+        mini_fat.push(END_OF_CHAIN);
+        *start = id(first)?;
+        container.extend_from_slice(n.data);
+        container.resize((first + count) * MINI_SECTOR, 0);
+    }
+    let mini_fat: Vec<u8> = mini_fat.iter().flat_map(|v| v.to_le_bytes()).collect();
+
+    // Regular sectors, in order: the FAT, the DIFAT, then the directory, the mini FAT, the mini
+    // stream and each larger stream.
+    let large: Vec<usize> = (0..nodes.len()).filter(|&i| nodes.get(i).is_some_and(|n| n.kind == STREAM_OBJECT && !is_mini(n))).collect();
+    let dir_sectors = nodes.len().div_ceil(SECTOR / 128);
+    let mut counts = vec![dir_sectors, mini_fat.len().div_ceil(SECTOR), container.len().div_ceil(SECTOR)];
+    counts.extend(large.iter().map(|&i| nodes.get(i).map_or(0, |n| n.data.len().div_ceil(SECTOR))));
+    let body: usize = counts.iter().sum();
+    // The FAT maps every sector, its own and the DIFAT's included, 128 to a FAT sector.
+    let mut fat_sectors = body.div_ceil(127).max(1);
+    let difat_sectors = loop {
+        let difat = fat_sectors.saturating_sub(HEADER_DIFAT).div_ceil(127);
+        if fat_sectors * 128 >= fat_sectors + difat + body {
+            break difat;
+        }
+        fat_sectors += 1;
+    };
+    let mut fat = vec![FAT_SECT; fat_sectors];
+    fat.resize(fat_sectors + difat_sectors, DIFAT_SECT);
+    let mut chain_starts = vec![];
+    for &n in &counts {
+        if n == 0 {
+            chain_starts.push(END_OF_CHAIN);
+            continue;
+        }
+        let first = fat.len();
+        chain_starts.push(id(first)?);
+        for k in 1..n {
+            fat.push(id(first + k)?);
+        }
+        fat.push(END_OF_CHAIN);
+    }
+    fat.resize(fat_sectors * 128, FREE_SECT);
+    let chain = |k: usize| chain_starts.get(k).copied().unwrap_or(END_OF_CHAIN);
+    for (j, &i) in large.iter().enumerate() {
+        if let Some(s) = starts.get_mut(i) {
+            *s = chain(3 + j);
+        }
+    }
+
+    // The directory: every storage's children as a red-black tree.
+    let mut links = vec![Link { left: NO_STREAM, right: NO_STREAM, red: false }; nodes.len()];
+    let mut child = vec![NO_STREAM; nodes.len()];
+    for (n, c) in nodes.iter().zip(child.iter_mut()) {
+        let mut kids = n.children.clone();
+        kids.sort_by(|&a, &b| match (nodes.get(a), nodes.get(b)) {
+            (Some(a), Some(b)) => name_order(&a.name, &b.name),
+            _ => std::cmp::Ordering::Equal,
+        });
+        *c = balance(&kids, 0, kids.len().checked_ilog2().unwrap_or(0), &mut links)?;
+    }
+    let mut dir = Vec::with_capacity(dir_sectors * SECTOR);
+    for (((n, link), c), start) in nodes.iter().zip(&links).zip(&child).zip(&starts) {
+        let mut name = [0u8; 64];
+        name.as_chunks_mut::<2>().0.iter_mut().zip(&n.name).for_each(|(slot, u)| slot.copy_from_slice(&u.to_le_bytes()));
+        dir.extend_from_slice(&name);
+        dir.extend_from_slice(&u16::try_from((n.name.len() + 1) * 2).unwrap_or(64).to_le_bytes());
+        dir.extend_from_slice(&[n.kind, if link.red { 0 } else { 1 }]);
+        for v in [link.left, link.right, *c] {
+            dir.extend_from_slice(&v.to_le_bytes());
+        }
+        // CLSID, state bits, creation and modification times.
+        dir.extend_from_slice(&[0; 36]);
+        let (start, size) = match n.kind {
+            ROOT_STORAGE_OBJECT => (chain(2), container.len()),
+            STREAM_OBJECT => (*start, n.data.len()),
+            _ => (0, 0),
+        };
+        dir.extend_from_slice(&start.to_le_bytes());
+        dir.extend_from_slice(&u64::from(id(size)?).to_le_bytes());
+    }
+    while dir.len() < dir_sectors * SECTOR {
+        dir.extend_from_slice(&[0; 68]);
+        for _ in 0..3 {
+            dir.extend_from_slice(&NO_STREAM.to_le_bytes());
+        }
+        dir.extend_from_slice(&[0; 48]);
+    }
+
+    let mut out = Vec::with_capacity((1 + fat_sectors + difat_sectors + body) * SECTOR);
+    out.extend_from_slice(&SIGNATURE);
+    out.extend_from_slice(&[0; 16]); // CLSID
+    for v in [0x3E, 3, 0xFFFE, 9, 6] {
+        // minor and major version, byte order, sector and mini sector shifts
+        out.extend_from_slice(&u16::to_le_bytes(v));
+    }
+    out.extend_from_slice(&[0; 6]);
+    let first_difat = if difat_sectors > 0 { id(fat_sectors)? } else { END_OF_CHAIN };
+    // Directory sectors (none in version 3), FAT sectors, first directory sector, transaction
+    // signature, mini stream cutoff, mini FAT, DIFAT.
+    for v in [0, id(fat_sectors)?, chain(0), 0, id(MINI_CUTOFF)?, chain(1), id(counts.get(1).copied().unwrap_or(0))?, first_difat, id(difat_sectors)?]
+    {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    let fat_ids = (0..fat_sectors).map(id).collect::<Result<Vec<u32>, String>>()?;
+    let (head, rest) = fat_ids.split_at(fat_ids.len().min(HEADER_DIFAT));
+    for k in 0..HEADER_DIFAT {
+        out.extend_from_slice(&head.get(k).copied().unwrap_or(FREE_SECT).to_le_bytes());
+    }
+    for v in &fat {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    for (d, ids) in rest.chunks(127).enumerate() {
+        for k in 0..127 {
+            out.extend_from_slice(&ids.get(k).copied().unwrap_or(FREE_SECT).to_le_bytes());
+        }
+        let next = if d + 1 < difat_sectors { id(fat_sectors + d + 1)? } else { END_OF_CHAIN };
+        out.extend_from_slice(&next.to_le_bytes());
+    }
+    let blobs = [dir.as_slice(), &mini_fat, &container].into_iter().chain(large.iter().map(|&i| nodes.get(i).map_or(&[][..], |n| n.data)));
+    for blob in blobs {
+        out.extend_from_slice(blob);
+        out.resize(out.len().div_ceil(SECTOR) * SECTOR, 0);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -366,6 +588,42 @@ pub(crate) mod tests {
             b[e + 66] = if k == 0 { 5 } else { 2 };
         }
         b
+    }
+
+    /// The names under storage entry `i`, in tree order (left subtree, node, right subtree).
+    fn children(cf: &Compound, i: u32) -> Vec<(String, u8)> {
+        fn walk(cf: &Compound, i: u32, out: &mut Vec<(String, u8)>) {
+            let Some(e) = cf.entries.get(i as usize) else { return };
+            walk(cf, e.left, out);
+            out.push((e.name.clone(), e.kind));
+            walk(cf, e.right, out);
+        }
+        let mut out = vec![];
+        walk(cf, cf.entries[i as usize].child, &mut out);
+        out
+    }
+
+    fn index(cf: &Compound, name: &str) -> u32 {
+        cf.entries.iter().position(|e| e.name == name).unwrap() as u32
+    }
+
+    #[test]
+    fn the_writer_nests_storages_and_orders_siblings() {
+        let big: Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
+        let streams: [(&str, &[u8]); 7] =
+            [("Zeta", b"z"), ("dir/x", b"22"), ("Big", &big), ("dir/sub/y", b"333"), ("Empty", b""), ("ab", b"a"), ("dir/AA", b"4")];
+        let file = write(&streams).unwrap();
+        let cf = Compound::open(&file).unwrap();
+        assert_eq!(cf.root_stream("Big").unwrap().unwrap(), big);
+        assert_eq!(cf.root_stream("Zeta").unwrap().unwrap(), b"z");
+        assert_eq!(cf.root_stream("Empty").unwrap().unwrap(), b"");
+        // Siblings sorted as [MS-CFB] 2.6.4 says: shorter names first, then case-insensitively.
+        let names = |i| children(&cf, i).into_iter().map(|(n, k)| format!("{n}:{k}")).collect::<Vec<_>>();
+        assert_eq!(names(0), ["ab:2", "Big:2", "dir:1", "Zeta:2", "Empty:2"]);
+        assert_eq!(names(index(&cf, "dir")), ["x:2", "AA:2", "sub:1"]);
+        assert_eq!(names(index(&cf, "sub")), ["y:2"]);
+        assert!(write(&[("a", b"1"), ("A", b"2")]).is_err(), "a name used twice");
+        assert!(write(&[("a/", b"1")]).is_err(), "an empty name");
     }
 
     #[test]

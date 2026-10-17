@@ -780,9 +780,7 @@ fn split(s: &mut Session, _: &Json) -> Result<Json> {
 
 fn new_window(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?.clone();
-    let mut copy = crate::DocState::new((*d.wb).clone(), d.path.clone(), format!("{}:2", d.display_title()));
-    copy.selection = d.selection.clone();
-    let i = s.add_document(copy);
+    let i = s.add_document(d.linked_copy(format!("{}:2", d.display_title())));
     Ok(json!({"index": i}))
 }
 
