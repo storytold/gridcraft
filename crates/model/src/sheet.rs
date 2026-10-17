@@ -64,7 +64,7 @@ pub struct Sheet {
     pub spill_ranges: BTreeMap<CellRef, RangeRef>,
     pub cols: BTreeMap<u32, LineInfo>,
     pub rows: BTreeMap<u32, LineInfo>,
-    /// Default column width and row height in points.
+    /// Default column width and row height in pixels at 96 dpi (a file stores row heights in points).
     pub default_col_width: f32,
     pub default_row_height: f32,
     pub merges: Vec<RangeRef>,
@@ -113,7 +113,7 @@ pub struct Sheet {
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
 }
 
-/// Default width of a column (points) and height of a row (points) for the default font.
+/// Default width of a column and height of a row (pixels at 96 dpi) for the default font.
 pub const DEFAULT_COL_WIDTH: f32 = 64.0;
 pub const DEFAULT_ROW_HEIGHT: f32 = 20.0;
 

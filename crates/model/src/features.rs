@@ -865,7 +865,7 @@ pub fn password_hash(pw: &str) -> u64 {
 /// Outline grouping info for a row or column.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LineInfo {
-    /// Size in points; `None` = default (rows auto-fit to content).
+    /// Size in pixels at 96 dpi; `None` = default (rows auto-fit to content).
     pub size: Option<f32>,
     pub hidden: bool,
     pub outline: u8,

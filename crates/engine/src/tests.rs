@@ -3063,6 +3063,48 @@ fn row_height_and_column_width_take_a_list_of_areas() {
 }
 
 #[test]
+fn row_height_and_column_width_take_pixels_or_excel_units() {
+    // `height` and `width` are pixels at 96 dpi (the model's unit); `points` and `chars` are
+    // Excel's units, those of its Row Height and Column Width dialogs. A row is saved in points.
+    let mut s = s();
+    s.execute("home.rowHeight", json!({"rows": "1:1", "points": 30})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "2:2", "height": 30})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "3:3", "points": 409.5})).unwrap();
+    s.execute("home.columnWidth", json!({"cols": "A:A", "chars": 8.43})).unwrap();
+    s.execute("home.columnWidth", json!({"cols": "B:B", "width": 100})).unwrap();
+    let sheet = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!([sheet.row_height(0), sheet.row_height(1), sheet.row_height(2)], [40.0, 30.0, 546.0]);
+    assert_eq!([sheet.col_width(0), sheet.col_width(1)], [64.0, 100.0]);
+    let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("xl/worksheets/sheet1.xml").unwrap(), &mut xml).unwrap();
+    for row in [r#"<row r="1" ht="30" customHeight="1""#, r#"<row r="2" ht="22.5" customHeight="1""#, r#"<row r="3" ht="409.5" customHeight="1""#] {
+        assert!(xml.contains(row), "{row} missing from {xml}");
+    }
+
+    // Out of range, the message gives the limit in the unit that was passed.
+    for (id, params, message) in [
+        ("home.rowHeight", json!({"height": 547}), "Row height must be between 0 and 546 pixels (409.5 points)."),
+        ("home.rowHeight", json!({"points": 410}), "Row height must be between 0 and 409.5 points."),
+        ("home.columnWidth", json!({"width": 1801}), "Column width must be between 0 and 1800 pixels."),
+        ("home.columnWidth", json!({"chars": 256}), "Column width must be between 0 and 255 characters."),
+    ] {
+        assert_eq!(s.execute(id, params).unwrap_err().to_string(), message);
+    }
+
+    // The parameter docs agents read (`list_commands`) name the unit.
+    for (id, unit) in [
+        ("home.rowHeight", "height: 20 (pixels) | points: 15"),
+        ("home.columnWidth", "width: 64 (pixels) | chars: 8.43"),
+        ("home.defaultWidth", "width: 64 (pixels)"),
+    ] {
+        let params = s.commands().into_iter().find(|c| c.id == id).map(|c| c.params).unwrap_or_default();
+        assert!(params.contains(unit), "{id}: {params}");
+    }
+}
+
+#[test]
 fn copying_areas_that_share_rows_or_columns_pastes_them_as_one_block() {
     // Issue #348: Excel slides lined-up areas together; formulas travel as their values.
     let mut s = s();

@@ -156,7 +156,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Row Height…",
             ["Home", "Cells", "Format"],
             None,
-            "{rows?: \"2:5\" | \"2:2,4:5\", height: 20 (points on screen)}",
+            "{rows?: \"2:5\" | \"2:2,4:5\", height: 20 (pixels) | points: 15}",
             has_doc,
             row_height
         ),
@@ -165,13 +165,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "Column Width…",
             ["Home", "Cells", "Format"],
             None,
-            "{cols?: \"B:D\" | \"B:B,D:F\", width: 64 (points) | chars: 8.43}",
+            "{cols?: \"B:D\" | \"B:B,D:F\", width: 64 (pixels) | chars: 8.43}",
             has_doc,
             col_width
         ),
         cmd!("home.autofitRowHeight", "AutoFit Row Height", ["Home", "Cells", "Format"], None, "{rows?}", has_doc, autofit_rows),
         cmd!("home.autofitColumnWidth", "AutoFit Column Width", ["Home", "Cells", "Format"], None, "{cols?}", has_doc, autofit_cols),
-        cmd!("home.defaultWidth", "Default Width…", ["Home", "Cells", "Format"], None, "{width: 64}", has_doc, default_width),
+        cmd!("home.defaultWidth", "Default Width…", ["Home", "Cells", "Format"], None, "{width: 64 (pixels)}", has_doc, default_width),
         cmd!("home.hideRows", "Hide Rows", ["Home", "Cells", "Format", "Hide & Unhide"], Some("Cmd+9"), "{rows?}", has_doc, |s, p| hide(
             s, p, true, true
         )),
@@ -948,11 +948,25 @@ fn line_targets(s: &Session, p: &Json, rows: bool) -> Result<Vec<(u32, u32)>> {
     Ok(s.doc()?.selection.ranges.iter().map(|r| if rows { (r.start.row, r.end.row) } else { (r.start.col, r.end.col) }).collect())
 }
 
+/// Sizes are pixels at 96 dpi, the model's unit (header drags send pixels). `points` (row height)
+/// and `chars` (column width) take Excel's units, those of its Row Height and Column Width dialogs
+/// and of the file (`ht` is in points).
 fn row_height(s: &mut Session, p: &Json) -> Result<Json> {
-    let h = f64_param(p, "height").ok_or_else(|| bad("home.rowHeight", "missing `height`"))?;
-    if !(0.0..=546.0).contains(&h) {
-        return Err(EngineError::Other("Row height must be between 0 and 409 points.".into()));
-    }
+    let h = match (f64_param(p, "height"), f64_param(p, "points")) {
+        (Some(h), _) => {
+            if !(0.0..=546.0).contains(&h) {
+                return Err(EngineError::Other("Row height must be between 0 and 546 pixels (409.5 points).".into()));
+            }
+            h
+        }
+        (None, Some(pt)) => {
+            if !(0.0..=409.5).contains(&pt) {
+                return Err(EngineError::Other("Row height must be between 0 and 409.5 points.".into()));
+            }
+            pt * 4.0 / 3.0
+        }
+        _ => return Err(bad("home.rowHeight", "missing `height` (pixels) or `points`")),
+    };
     let lines = line_targets(s, p, true)?;
     edit(s, |cx| {
         let si = cx.sheet_index();
@@ -972,13 +986,20 @@ fn row_height(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
     let w = match (f64_param(p, "width"), f64_param(p, "chars")) {
-        (Some(w), _) => w,
-        (None, Some(c)) => chars_to_points(c),
-        _ => return Err(bad("home.columnWidth", "missing `width`")),
+        (Some(w), _) => {
+            if !(0.0..=1800.0).contains(&w) {
+                return Err(EngineError::Other("Column width must be between 0 and 1800 pixels.".into()));
+            }
+            w
+        }
+        (None, Some(c)) => {
+            if !(0.0..=255.0).contains(&c) {
+                return Err(EngineError::Other("Column width must be between 0 and 255 characters.".into()));
+            }
+            chars_to_points(c)
+        }
+        _ => return Err(bad("home.columnWidth", "missing `width` (pixels) or `chars`")),
     };
-    if !(0.0..=1800.0).contains(&w) {
-        return Err(EngineError::Other("Column width must be between 0 and 255 characters.".into()));
-    }
     let lines = line_targets(s, p, false)?;
     edit(s, |cx| {
         let si = cx.sheet_index();
@@ -994,7 +1015,7 @@ fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Excel column width in characters (of the default font's digit width, 7 px) → points.
+/// Excel column width in characters (of the default font's digit width, 7 px) → pixels.
 pub fn chars_to_points(c: f64) -> f64 {
     if c <= 0.0 {
         0.0
