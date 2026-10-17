@@ -146,6 +146,7 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         F1 if cmd && !s => run("view.collapseRibbon"),
         F2 if (cmd || ctrl) && s => Shortcut::Dialog("comment", json!({"threaded": true})),
         F2 if plain && s => Shortcut::Dialog("comment", json!({"threaded": false})),
+        F2 if cmd => run("file.printPreview"),
         F3 if cmd && s => run("formulas.createFromSelection"),
         F3 if cmd && mac => Shortcut::Dialog("defineName", json!({})),
         F3 if cmd => Shortcut::Dialog("nameManager", json!({})),

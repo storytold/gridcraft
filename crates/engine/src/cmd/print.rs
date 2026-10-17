@@ -40,8 +40,8 @@ pub fn specs() -> Vec<CommandSpec> {
             query "file.printPreview",
             "Print Preview",
             ["File"],
-            None,
-            "{page? (1-based), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, width, height}]}",
+            Some("Cmd+F2"),
+            "{page? (1-based), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, width, height (points), margins: {left,right,top,bottom,header,footer} (inches), centerH, centerV, content: {x,y,width,height} (points: where the printed block sits on the paper), body: {x,y} (points: where the page's first cell starts)}]}. From a menu or Ctrl+F2 the UI opens the Print page with the margins shown, to drag margins and the table into place.",
             has_doc,
             print_preview
         ),
@@ -1454,6 +1454,18 @@ fn seg_size(sh: &Sheet, seg: (u32, u32), rows: bool) -> f32 {
     if rows { (seg.0..=seg.1).map(|r| sh.row_height(r)).sum() } else { (seg.0..=seg.1).map(|c| sh.col_width(c)).sum() }
 }
 
+/// Where a page's printed block (headings, repeated titles and the band) sits on the paper:
+/// `[x, y, width, height]` in points from the page's top-left, after the margins and centring.
+pub fn page_box(sh: &Sheet, lay: &SheetLayout, rband: (u32, u32), cband: (u32, u32)) -> [f32; 4] {
+    let k = lay.k();
+    let (aw, ah) = lay.avail();
+    let w = (lay.heading_w + segments(lay.title_cols, cband).iter().map(|s| seg_size(sh, *s, false)).sum::<f32>()) * k;
+    let h = (lay.heading_h + segments(lay.title_rows, rband).iter().map(|s| seg_size(sh, *s, true)).sum::<f32>()) * k;
+    let x = lay.margins[0] + if lay.settings.center_h { ((aw - w) / 2.0).max(0.0) } else { 0.0 };
+    let y = lay.margins[2] + if lay.settings.center_v { ((ah - h) / 2.0).max(0.0) } else { 0.0 };
+    [x, y, w, h]
+}
+
 /// Renders laid-out sheets to a PDF.
 pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
     let mut doc = PdfDoc::new();
@@ -1466,16 +1478,12 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
         let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
         let k = lay.k();
-        let (aw, ah) = lay.avail();
         for (pi, (ri, ci)) in lay.pages.iter().enumerate() {
             page_no += 1;
             let (Some(rband), Some(cband)) = (lay.row_bands.get(*ri).copied(), lay.col_bands.get(*ci).copied()) else { continue };
             let rsegs = segments(lay.title_rows, rband);
             let csegs = segments(lay.title_cols, cband);
-            let content_w = (lay.heading_w + csegs.iter().map(|s| seg_size(sh, *s, false)).sum::<f32>()) * k;
-            let content_h = (lay.heading_h + rsegs.iter().map(|s| seg_size(sh, *s, true)).sum::<f32>()) * k;
-            let ox = lay.margins[0] + if lay.settings.center_h { ((aw - content_w) / 2.0).max(0.0) } else { 0.0 };
-            let oy = lay.margins[2] + if lay.settings.center_v { ((ah - content_h) / 2.0).max(0.0) } else { 0.0 };
+            let [ox, oy, _, _] = page_box(sh, lay, rband, cband);
             let pg = doc.add_page(lay.page_w, lay.page_h);
             let mut y = oy + lay.heading_h * k;
             let mut body: Option<Block> = None;
@@ -1556,11 +1564,16 @@ fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
     let mut list = Vec::new();
     let mut n = 0usize;
     for lay in &lays {
-        let name = d.wb.sheet(lay.sheet).map(|s| s.name.clone()).unwrap_or_default();
+        let Some(sh) = d.wb.sheet(lay.sheet) else { continue };
+        let name = sh.name.clone();
+        let inches = |pt: f32| (f64::from(pt) / 72.0 * 1000.0).round() / 1000.0;
+        let [ml, mr, mt, mb, mh, mf] = lay.margins.map(inches);
         for (ri, ci) in &lay.pages {
             n += 1;
             let (Some(rb), Some(cb)) = (lay.row_bands.get(*ri), lay.col_bands.get(*ci)) else { continue };
             let r = RangeRef::new(CellRef::new(rb.0, cb.0), CellRef::new(rb.1, cb.1));
+            let [bx, by, bw, bh] = page_box(sh, lay, *rb, *cb);
+            let k = lay.k();
             list.push(json!({
                 "page": n,
                 "sheet": name,
@@ -1572,6 +1585,11 @@ fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
                 "orientation": if lay.settings.orientation == Orientation::Landscape { "landscape" } else { "portrait" },
                 "width": lay.page_w,
                 "height": lay.page_h,
+                "margins": {"left": ml, "right": mr, "top": mt, "bottom": mb, "header": mh, "footer": mf},
+                "centerH": lay.settings.center_h,
+                "centerV": lay.settings.center_v,
+                "content": {"x": bx, "y": by, "width": bw, "height": bh},
+                "body": {"x": bx + lay.heading_w * k, "y": by + lay.heading_h * k},
             }));
         }
     }
@@ -1822,6 +1840,30 @@ mod tests {
         assert_eq!(s.execute("view.ruler", json!({"on": false})).unwrap()["on"], false);
         assert!(s.hide_ruler);
         assert_eq!(s.execute("view.ruler", json!({})).unwrap()["on"], true);
+    }
+
+    #[test]
+    fn preview_reports_margins_and_where_the_table_sits() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [3, 4]]})).unwrap();
+        s.execute("pageLayout.pageSetup", json!({"margins": {"left": 1, "right": 0.5, "top": 2, "bottom": 0.5, "header": 0.4, "footer": 0.3}}))
+            .unwrap();
+        let page = s.execute("file.printPreview", json!({"page": 1})).unwrap()["page"].clone();
+        assert_eq!(page["margins"]["left"], 1.0);
+        assert_eq!(page["margins"]["top"], 2.0);
+        assert_eq!(page["margins"]["header"], 0.4);
+        assert_eq!(page["content"]["x"], 72.0);
+        assert_eq!(page["content"]["y"], 144.0);
+        // Two 64px columns and two 20px rows at 0.75pt per pixel.
+        assert_eq!(page["content"]["width"], 96.0);
+        assert_eq!(page["content"]["height"], 30.0);
+        assert_eq!(page["body"]["x"], 72.0);
+        // Centred horizontally: (612 - 72 - 36 - 96) / 2 past the left margin.
+        s.execute("pageLayout.pageSetup", json!({"centerH": true})).unwrap();
+        let page = s.execute("file.printPreview", json!({"page": 1})).unwrap()["page"].clone();
+        assert_eq!(page["centerH"], true);
+        assert_eq!(page["content"]["x"], 72.0 + 204.0);
+        assert_eq!(page["content"]["y"], 144.0);
     }
 
     #[test]

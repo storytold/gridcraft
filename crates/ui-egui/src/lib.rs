@@ -500,6 +500,15 @@ impl SheetApp {
             }
             return self.print_now(params);
         }
+        // Menu-style Print Preview: the Print page with the margins out, ready to drag. Programmatic
+        // callers use `run` and get the pagination back.
+        if id == "file.printPreview" {
+            self.open_backstage(backstage::Page::Print);
+            if let Some(b) = &mut self.backstage {
+                b.show_margins = true;
+            }
+            return;
+        }
         // Menu-style Export as PDF with no file named: ask where to save, like Save As does.
         // Programmatic callers use `run` and keep getting the PDF bytes back.
         if id == "file.exportPdf" && self.services.pick_save.is_some() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
