@@ -782,15 +782,24 @@ fn forecast_grid(x: &[f64], f: &[Option<f64>], se_window: usize, p: &Json) -> Gr
         g.put(idx(i), 0, fi.map(Value::number).unwrap_or_else(na));
     }
     if flag(p, "standardErrors") {
+        // A running sum of squared residuals over the last `se_window` points: O(n), not
+        // O(n·window). A point without a forecast restarts it, so every window touching it is #N/A.
+        let sq = |j: usize| Some((x.get(j)? - (*f.get(j)?)?).powi(2));
+        let (mut acc, mut run) = (0.0, 0usize);
         for i in 0..f.len() {
-            let start = (i + 1).checked_sub(se_window);
-            let v = start.and_then(|s0| {
-                let mut acc = 0.0;
-                for j in s0..=i {
-                    acc += (x.get(j)? - (*f.get(j)?)?).powi(2);
+            match sq(i) {
+                Some(t) => {
+                    acc += t;
+                    run += 1;
                 }
-                Some((acc / se_window as f64).sqrt())
-            });
+                None => (acc, run) = (0.0, 0),
+            }
+            if run > se_window {
+                acc -= i.checked_sub(se_window).and_then(sq).unwrap_or(0.0);
+                run = se_window;
+            }
+            // Rounding in the subtraction can leave a tiny negative sum.
+            let v = (run == se_window).then(|| (acc.max(0.0) / se_window as f64).sqrt());
             g.put(idx(i), 1, v.map(Value::number).unwrap_or_else(na));
         }
     }
@@ -1188,6 +1197,37 @@ mod tests {
         let x = n(s, "Z1000");
         s.execute("cell.set", json!({"cell": "Z1000", "input": ""})).unwrap();
         x
+    }
+
+    #[test]
+    fn forecast_standard_errors_match_the_full_window_rescan() {
+        // #1043: the running sum must give what re-adding every window gave, gaps included.
+        let x: [f64; 11] = [2.0, 4.0, 5.0, 4.0, 5.0, 7.0, 1.0, 3.0, 8.0, 6.0, 2.0];
+        let f = [None, Some(3.0), Some(4.5), None, Some(4.0), Some(6.5), Some(2.0), Some(2.5), Some(7.0), Some(5.0), Some(4.0)];
+        let rescan = |i: usize, w: usize| -> Value {
+            let v = (i + 1).checked_sub(w).and_then(|s0| {
+                let mut acc = 0.0;
+                for j in s0..=i {
+                    acc += (x.get(j)? - (*f.get(j)?)?).powi(2);
+                }
+                Some((acc / w as f64).sqrt())
+            });
+            v.map(Value::number).unwrap_or(Value::Error(gridcraft_core::CellError::NA))
+        };
+        for w in 1..=5 {
+            let g = super::forecast_grid(&x, &f, w, &json!({"standardErrors": true}));
+            for i in 0..f.len() {
+                let (got, want) = (g.cells.get(&(i as u32, 1)).cloned().unwrap_or(Value::Empty), rescan(i, w));
+                match (got.as_f64(), want.as_f64()) {
+                    (Some(a), Some(b)) => assert!(close(a, b, 1e-12), "window {w}, row {i}: {a} vs {b}"),
+                    _ => assert_eq!(got, want, "window {w}, row {i}"),
+                }
+            }
+        }
+        // Row 3 has no forecast: windows through it are #N/A, the next full window after it is not.
+        let g = super::forecast_grid(&x, &f, 3, &json!({"standardErrors": true}));
+        assert_eq!(g.cells.get(&(5, 1)), Some(&Value::Error(gridcraft_core::CellError::NA)));
+        assert!(g.cells.get(&(6, 1)).and_then(Value::as_f64).is_some());
     }
 
     #[test]
