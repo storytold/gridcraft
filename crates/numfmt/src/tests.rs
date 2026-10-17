@@ -145,6 +145,18 @@ fn fractions() {
     assert_eq!(f("# ???/???", 0.5), "   1/2  ");
 }
 
+/// A fraction without a whole part puts the whole value in the numerator; large values must
+/// not saturate at u64::MAX.
+#[test]
+fn fraction_numerator_beyond_u64() {
+    assert_eq!(f("?/1000000000", 2e10), "20000000000000000000/1000000000");
+    assert_eq!(f("?/?", 1e20), "100000000000000000000/1");
+    assert_eq!(f("?/100", 1e18), "100000000000000000000/100");
+    assert_eq!(f("??/??", 1e25), "10000000000000000000000000/1 ");
+    assert!(!f("?/10", 1e300).contains("18446744073709551615"));
+    assert_eq!(f("?/1000000000", 2.5), "2500000000/1000000000");
+}
+
 /// Fraction sections with literal text, as Excel renders them (observed `TEXT()` results).
 #[test]
 fn fractions_with_literals() {
