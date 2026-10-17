@@ -123,9 +123,11 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         if let Some(x) = cx.optional_xml(&r.target)? {
             let StylesIn { xfs, dxfs, palette, named, num_fmts } = read_styles(&x, &checkboxes);
             cx.num_fmts = num_fmts;
-            // Cell format 0 is the Normal style: its font is what every unformatted cell shows.
+            // Cell format 0 is the Normal cell format: everything on it (font, number format,
+            // fill, borders, alignment, protection) is what a cell without its own format shows
+            // (#1013).
             if let Some(normal) = xfs.first() {
-                cx.styles = StyleTable::with_default(Style { font: normal.font.clone(), ..Style::default() });
+                cx.styles = StyleTable::with_default(normal.clone());
             }
             cx.xf_map = xfs.into_iter().enumerate().map(|(i, s)| if i == 0 { StyleId::DEFAULT } else { cx.styles.intern(s) }).collect();
             cx.dxfs = dxfs;

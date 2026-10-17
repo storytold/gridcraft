@@ -553,6 +553,36 @@ fn text_box_formatting_is_read_and_written() {
     assert_eq!(g.text_outline.map(|o| o.1), Some(1.5));
 }
 
+/// #1013: cell format 0 is the workbook's Normal cell format. A file that gives it a number
+/// format, fill, alignment or protection must keep all of it for cells that omit their style (or
+/// say s="0"), not only the font.
+#[test]
+fn the_default_cell_format_keeps_every_property_of_xf_zero() {
+    let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+      <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF00B050"/><bgColor indexed="64"/></patternFill></fill></fills>
+      <borders count="1"><border/></borders>
+      <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+      <cellXfs count="2"><xf numFmtId="2" fontId="0" fillId="1" borderId="0" applyNumberFormat="1" applyFill="1" applyAlignment="1" applyProtection="1"><alignment horizontal="center"/><protection locked="0"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
+    </styleSheet>"#;
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>5</v></c><c r="B1" s="0"><v>5</v></c></row></sheetData>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles)], rels, "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    let check = |st: &gridcraft_model::Style, when: &str| {
+        assert_eq!(st.num_fmt.as_str(), "0.00", "number format {when}");
+        assert_eq!(st.fill.pattern, PatternType::Solid, "fill {when}");
+        assert_eq!(st.fill.fg, Color::Rgb(0x00B050), "fill colour {when}");
+        assert_eq!(st.align.h, HAlign::Center, "alignment {when}");
+        assert!(!st.protection.locked, "protection {when}");
+    };
+    check(wb.styles.get(StyleId::DEFAULT), "after reading");
+    assert_eq!(s.cell(at("A1")).unwrap().style, StyleId::DEFAULT);
+    assert_eq!(s.cell(at("B1")).unwrap().style, StyleId::DEFAULT);
+    let (back, _) = read_xlsx(&crate::write_xlsx(&wb).unwrap()).unwrap();
+    check(back.styles.get(StyleId::DEFAULT), "after saving");
+}
+
 /// `_xludf.` marks a user-defined call even when a built-in has the same name; dropping it turns
 /// the call into the built-in, and `_xludf.EOMONTH()` into a call Excel repairs away (#726).
 #[test]
