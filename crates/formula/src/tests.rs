@@ -93,6 +93,15 @@ fn spill_operator() {
     assert_eq!(print(&crate::adjust::delete_sheet(parse("SUM(Data!A1#)").unwrap(), "Data", &[])), "SUM(#REF!)");
 }
 
+/// Files spell `@x` as `_xlfn.SINGLE(x)`; an operation inside keeps its parentheses.
+#[test]
+fn single_is_the_implicit_intersection_operator() {
+    assert_eq!(rt("_xlfn.SINGLE(A1:A3)*2"), "@A1:A3*2");
+    assert_eq!(rt("_xlfn.SINGLE(A1:A3*2)"), "@(A1:A3*2)");
+    assert_eq!(rt("_xlfn.SINGLE(-A1:A3)"), "@(-A1:A3)");
+    assert_eq!(rt("SQRT(_xlfn.SINGLE(Data[Qty]))"), "SQRT(@Data[Qty])");
+}
+
 #[test]
 fn delete_sheet_shrinks_3d_span() {
     let order: Vec<String> = ["Sheet1", "Sheet2", "Sheet3", "Results"].iter().map(|s| s.to_string()).collect();

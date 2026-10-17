@@ -452,6 +452,11 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     let value = if formula.is_none() && st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos) { Value::Empty } else { value };
+    // A formula without dynamic-array metadata is a legacy formula, unless entered as a
+    // Ctrl+Shift+Enter array.
+    if !dynamic && formula.as_ref().is_some_and(|f| f.array.is_none() && f.expr_arc().is_some()) {
+        cx.legacy_formulas.push(pos);
+    }
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
 }
 
