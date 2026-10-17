@@ -93,14 +93,17 @@ The ribbon is translated into Japanese, Simplified Chinese, Korean, Brazilian Po
 and German (266–268 labels each, ~12% of ~2,200 strings; merged 10-10 in #31, #104, #82, German
 added 10-11), the
 interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
-(#38). Dialogs, menus and messages are English; formulas and number formats are en-US only.
+(#38). Dialogs and message boxes follow the interface language (Spanish translated in full;
+other languages fall back to English per string); context menus, task panes and status messages
+are still English. Spanish also has Spanish formula entry (`;` separators, decimal comma, 10 local
+function names); number formats are en-US only.
 Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |
 |---|---|---|---|
 | English | en | full (source language) | 100% |
 | Simplified Chinese | zh-Hans | menus only | ~12% |
-| Spanish | es | none | 0% |
+| Spanish | es | ribbon and dialogs | ~35% |
 | Hindi | hi | none | 0% |
 | Arabic | ar | none (no RTL layout, no shaping) | 0% |
 | French | fr | none | 0% |

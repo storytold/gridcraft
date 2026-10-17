@@ -540,6 +540,35 @@ fn dialogs_open_and_close() {
 }
 
 #[test]
+fn dialogs_draw_in_the_interface_language() {
+    // Dialogs followed the interface language only in the formula language; their chrome was English.
+    let mut h = harness(blank());
+    h.state_mut().ui.language = gridcraft_ui_egui::i18n::Language::Es;
+    h.state_mut().open_dialog("find", json!({"replace": true}));
+    h.run_steps(3);
+    for label in ["Buscar y reemplazar", "Reemplazar con:", "Reemplazar todos", "Buscar siguiente", "Coincidir mayúsculas y minúsculas"] {
+        h.get_by_label(label);
+    }
+    assert!(h.query_by_label("Find Next").is_none(), "no English left in Find and Replace");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+
+    h.state_mut().open_dialog("formatCells", json!({"tab": "Alignment"}));
+    h.run_steps(3);
+    for label in ["Formato de celdas", "Número", "Alineación", "Relleno", "Proteger", "Reducir hasta ajustar"] {
+        h.get_by_label(label);
+    }
+    // OK and Cancel carry padding in the label.
+    assert!(h.query_by_label_contains("Aceptar").is_some() && h.query_by_label_contains("Cancelar").is_some());
+    key(&mut h, Key::Escape, Modifiers::NONE);
+
+    h.state_mut().open_dialog("insertCells", json!({}));
+    h.run_steps(3);
+    h.get_by_label("Desplazar las celdas hacia abajo").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().and_then(|d| d.values.get("shift")).and_then(|v| v.as_str()), Some("down"), "options keep their values");
+}
+
+#[test]
 fn data_analysis_dialog_runs_a_tool_and_asks_before_overwriting() {
     let mut s = blank();
     s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3], [4], [5]]})).unwrap();

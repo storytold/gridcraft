@@ -18,6 +18,12 @@ right-to-left sheets and full complex-script support. Part of
   dialog, every dialog title and the shared OK/Cancel buttons; the other dialogs, menus,
   context menus, task panes, status messages, command labels and function descriptions are still
   English literals. Untranslated labels fall back to English.
+- **Dialogs follow the interface language** (2026-10-12): `dialogs.rs` keeps titles, tabs, field
+  labels and options English (they are ids for the control channel) and translates them when drawn,
+  as do message boxes. Spanish covers every dialog string, checked by
+  `dialogs::tests::spanish_translates_every_dialog_string`; other languages fall back to English
+  per string until their catalogs grow. Spanish now has 764 entries (~35%) and Spanish formula
+  entry (`docs/formula-input.md`).
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so each shipped language covers **~12%** (measured
   count / estimated total).
@@ -45,7 +51,7 @@ separators, number/date formats, machine translation with agent review, and scri
 |---|---|---|---|---|---|---|---|
 | English | en | ~2,200 / ~2,200 (100%, source) | yes | Latin: yes | yes | full | — |
 | Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
-| Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
+| Spanish | es | 764 (~35%) | dialogs: yes; tooltips partly; help no | Latin: yes | no | ribbon and dialogs | 4–7 h |
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
 | Arabic | ar | 0 (0%) | no | **no shaping, no RTL UI**; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
 | French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |

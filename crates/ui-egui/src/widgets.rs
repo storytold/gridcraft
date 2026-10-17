@@ -280,13 +280,15 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
             ui.painter().circle_filled(r.center(), 16.0, Color32::from_rgb(0xF2, 0xC3, 0x2E));
             ui.painter().text(r.center(), Align2::CENTER_CENTER, "!", theme::ui_bold(20.0), Color32::WHITE);
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new(title).strong());
-                ui.add(egui::Label::new(msg).wrap());
+                ui.label(egui::RichText::new(tr(ui, &title)).strong());
+                ui.add(egui::Label::new(tr(ui, &msg)).wrap());
             });
         });
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("  OK  ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            if ui.button(format!("  {}  ", tr(ui, "OK"))).clicked()
+                || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape))
+            {
                 close = true;
             }
         });
