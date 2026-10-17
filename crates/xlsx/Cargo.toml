@@ -23,3 +23,5 @@ zip = { workspace = true }
 aes = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
+# Legacy DBF code pages; pure Rust, no transitive dependencies or platform APIs.
+yore = "2.1"

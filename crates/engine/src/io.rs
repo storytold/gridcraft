@@ -15,6 +15,8 @@ pub enum FileKind {
     Xls,
     Xlsb,
     Ods,
+    /// Classic dBASE table (import only).
+    Dbf,
     Csv,
     Tsv,
     Json,
@@ -29,6 +31,7 @@ impl FileKind {
             "xls" | "xlt" => FileKind::Xls,
             "xlsb" => FileKind::Xlsb,
             "ods" => FileKind::Ods,
+            "dbf" => FileKind::Dbf,
             "csv" => FileKind::Csv,
             "tsv" | "tab" | "txt" => FileKind::Tsv,
             "json" | "scjson" => FileKind::Json,
@@ -144,6 +147,11 @@ fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
         return Ok((wb, report.warnings));
     }
     match kind {
+        Some(FileKind::Dbf) => {
+            let (mut wb, report) = gridcraft_xlsx::read_dbf(bytes).map_err(|e| EngineError::Other(format!("We can't import '{name}': {e}")))?;
+            rename_first_sheet(&mut wb, name);
+            Ok((wb, report.warnings))
+        }
         Some(FileKind::Json) => {
             let mut wb: Workbook = serde_json::from_slice(bytes).map_err(|e| EngineError::Other(format!("not a GridCraft JSON workbook: {e}")))?;
             wb.styles.rebuild_index();
@@ -206,6 +214,7 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
         }
         FileKind::Xlsb => Err(EngineError::Other("XLSB is supported for data import only. Save as .xlsx or another supported export format.".into())),
         FileKind::Ods => Err(EngineError::Other("ODS is supported for data import only. Save as .xlsx or another supported export format.".into())),
+        FileKind::Dbf => Err(EngineError::Other("DBF is supported for data import only. Save as .xlsx or another supported export format.".into())),
         // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
         FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','))).transpose().map(Option::unwrap_or_default),
         FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t')).transpose().map(Option::unwrap_or_default),

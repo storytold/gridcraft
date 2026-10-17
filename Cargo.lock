@@ -1682,6 +1682,7 @@ dependencies = [
  "sha1",
  "sha2",
  "thiserror 2.0.21",
+ "yore",
  "zip",
 ]
 
@@ -4531,6 +4532,12 @@ dependencies = [
  "gridcraft-engine",
  "serde_json",
 ]
+
+[[package]]
+name = "yore"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb62c05420bd427bd71b7a78c963f3bff55a518e5827ccf1119b2c380ec9d2bb"
 
 [[package]]
 name = "zbus"
