@@ -154,6 +154,18 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) {
     });
 }
 
+/// Backspace and Delete take back the AutoComplete proposal (Excel's selected rest), not a typed character.
+fn dismiss_completion(i: &mut egui::InputState, completion: &mut Option<String>) {
+    if completion.is_some() && (i.consume_key(egui::Modifiers::NONE, Key::Backspace) || i.consume_key(egui::Modifiers::NONE, Key::Delete)) {
+        *completion = None;
+    }
+}
+
+/// Column AutoComplete proposes only after typing: deleting characters (Backspace, Delete) brings no proposal back, as in Excel.
+fn entry_shrank(chars_before: usize, text: &str) -> bool {
+    text.chars().count() < chars_before
+}
+
 /// The text editor used in the cell and in the formula bar (they share `app.editor`).
 pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32) {
     let Some(mut ed) = app.editor.take() else { return };
@@ -173,10 +185,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             let enter = i.consume_key(egui::Modifiers::NONE, Key::Enter) || i.consume_key(egui::Modifiers::SHIFT, Key::Enter);
             let tab = i.consume_key(egui::Modifiers::NONE, Key::Tab) || i.consume_key(egui::Modifiers::SHIFT, Key::Tab);
             let esc = i.consume_key(egui::Modifiers::NONE, Key::Escape);
-            // Backspace takes back the AutoComplete proposal (Excel's selected rest), not a typed character.
-            if ed.completion.is_some() && i.consume_key(egui::Modifiers::NONE, Key::Backspace) {
-                ed.completion = None;
-            }
+            dismiss_completion(i, &mut ed.completion);
             (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, m.shift)
         });
         if alt_enter {
@@ -279,6 +288,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         job.wrap.max_width = if multiline { wrap_width } else { f32::INFINITY };
         ui.fonts_mut(|f| f.layout_job(job))
     };
+    let chars_before = ed.text.chars().count();
     let edit = if multiline || ed.text.contains('\n') { TextEdit::multiline(&mut ed.text) } else { TextEdit::singleline(&mut ed.text) };
     let mut output = edit
         .id(id)
@@ -313,6 +323,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         ed.completion = None;
         if app.ui.autocomplete
             && !ed.is_formula()
+            && !entry_shrank(chars_before, &ed.text)
             && ed.caret == ed.text.chars().count()
             && let Some(sh) = app.session.active().and_then(|d| d.wb.sheet(ed.sheet))
         {
@@ -473,4 +484,36 @@ pub fn function_signature(name: &str) -> Option<String> {
 
 pub fn function_description(name: &str) -> Option<String> {
     function_info(name).and_then(|f| f["description"].as_str().map(str::to_string))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn press(key: Key) -> egui::RawInput {
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        raw
+    }
+
+    #[test]
+    fn backspace_and_delete_dismiss_completion() {
+        let ctx = egui::Context::default();
+        for key in [Key::Backspace, Key::Delete] {
+            let mut completion = Some("SomeText".to_string());
+            let _ = ctx.run_ui(press(key), |ui| ui.input_mut(|i| dismiss_completion(i, &mut completion)));
+            assert_eq!(completion, None, "{key:?} must drop the proposal");
+        }
+        let mut completion = Some("SomeText".to_string());
+        let _ = ctx.run_ui(press(Key::A), |ui| ui.input_mut(|i| dismiss_completion(i, &mut completion)));
+        assert!(completion.is_some());
+    }
+
+    #[test]
+    fn only_typing_proposes_completion() {
+        assert!(!entry_shrank(4, "SomeT"));
+        // Backspacing "Some" to "Som" must not bring "SomeText" back.
+        assert!(entry_shrank(4, "Som"));
+        assert!(!entry_shrank(4, "Same"));
+    }
 }
