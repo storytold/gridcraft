@@ -260,6 +260,9 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                     .replace(locale.decimal_separator(), ".")
                     .parse()
                     .map_err(|_| LexError { msg: format!("bad number `{text}`"), pos: start })?;
+                if !v.is_finite() {
+                    return Err(LexError { msg: format!("number too large `{text}`"), pos: start });
+                }
                 push(&mut out, Tok::Number(v), j);
                 i = j;
             }

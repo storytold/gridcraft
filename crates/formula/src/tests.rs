@@ -401,3 +401,11 @@ fn formulas_longer_than_excel_allows_are_refused() {
     assert!(text.len() > crate::MAX_FORMULA_LEN);
     assert!(parse(&text).is_ok());
 }
+
+#[test]
+fn number_literal_too_large_for_f64_is_a_parse_error() {
+    for bad in ["1E+400", "-1E+400", "1E+400*A1", "SUM(1E309,1)", "9".repeat(400).as_str()] {
+        assert!(parse(bad).is_err(), "{bad} should fail");
+    }
+    assert!(parse("1E+308").is_ok());
+}
