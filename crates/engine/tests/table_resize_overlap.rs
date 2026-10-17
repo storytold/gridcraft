@@ -27,3 +27,30 @@ fn resize_to_overlapping_range_still_works() {
     s.execute("table.resize", json!({"table":"T", "range":"B1:C2"})).unwrap();
     assert_eq!(table_range(&s), "B1:C2");
 }
+
+fn two_tables() -> Session {
+    let mut s = table();
+    s.execute("range.setValues", json!({"range":"D1", "values":[["P", "Q"], ["y", "8"]]})).unwrap();
+    s.execute("insert.table", json!({"range":"D1:E2", "header":true, "name":"U"})).unwrap();
+    s
+}
+
+fn ranges(s: &Session) -> Vec<String> {
+    s.doc().unwrap().wb.active().unwrap().tables.iter().map(|t| t.range.a1()).collect()
+}
+
+#[test]
+fn resize_over_another_table_is_rejected() {
+    let mut s = two_tables();
+    assert!(s.execute("table.resize", json!({"table":"T", "range":"A1:E2"})).is_err());
+    assert_eq!(ranges(&s), ["A1:B2", "D1:E2"]);
+    assert!(s.execute("table.resize", json!({"table":"U", "range":"A1:E2"})).is_err());
+    assert_eq!(ranges(&s), ["A1:B2", "D1:E2"]);
+}
+
+#[test]
+fn resize_next_to_another_table_still_works() {
+    let mut s = two_tables();
+    s.execute("table.resize", json!({"table":"T", "range":"A1:C3"})).unwrap();
+    assert_eq!(ranges(&s), ["A1:C3", "D1:E2"]);
+}

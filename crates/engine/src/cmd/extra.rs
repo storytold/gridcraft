@@ -828,6 +828,9 @@ fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let sheet = cx.sheet_mut(si)?;
         let headers: Vec<String> = (r.start.col..=r.end.col).map(|c| sheet.value(CellRef::new(r.start.row, c)).display()).collect();
+        if sheet.tables.iter().enumerate().any(|(i, o)| i != ti && o.range.intersects(&r)) {
+            return Err(EngineError::Other("A table can't overlap another table.".into()));
+        }
         let t = sheet.tables.get_mut(ti).ok_or_else(|| bad("table", "gone"))?;
         if r.start.row != t.range.start.row || !r.intersects(&t.range) {
             return Err(EngineError::Other(
