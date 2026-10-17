@@ -1243,6 +1243,10 @@ fn binom_inv(a: &[Arg], _: C) -> R<Value> {
     }
     while hi - lo > 1.0 {
         let mid = ((lo + hi) / 2.0).floor();
+        // Above 2^53 adjacent f64 values are more than 1 apart, so the gap can stop shrinking.
+        if mid <= lo || mid >= hi {
+            break;
+        }
         if binom_cdf(mid, n, p) >= alpha {
             hi = mid;
         } else {
@@ -2582,6 +2586,24 @@ mod tests {
         close_tol(ev("F.TEST", vec![c(&[6.0, 7.0, 9.0, 15.0, 21.0]), c(&[20.0, 28.0, 31.0, 38.0, 40.0])]), 0.64831785, D7);
         close_tol(ev("FTEST", vec![c(&[6.0, 7.0, 9.0, 15.0, 21.0]), c(&[20.0, 28.0, 31.0, 38.0, 40.0])]), 0.64831785, D7);
         is_err(ev("F.DIST", vec![n(1.0), n(0.0), n(4.0), b(true)]), CellError::Num);
+    }
+
+    #[test]
+    fn binom_inv_huge_trials_returns() {
+        // Above 2^53 neighbouring f64 values are more than 1 apart; the bisection must still end.
+        let cases: [(&str, f64, f64, f64); 3] = [("BINOM.INV", 1e17, 0.5, 0.5), ("CRITBINOM", 1e300, 1.0, 0.5), ("BINOM.INV", 1e300, 0.5, 0.5)];
+        for (name, trials, p, alpha) in cases {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let r = ev(name, vec![n(trials), n(p), n(alpha)]);
+                let _ = tx.send(r);
+            });
+            match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                Ok(Value::Number(_)) | Ok(Value::Error(CellError::Num)) => {}
+                Ok(other) => panic!("{name}({trials},{p},{alpha}) returned {other:?}"),
+                Err(_) => panic!("{name}({trials},{p},{alpha}) did not return within 5 s"),
+            }
+        }
     }
 
     #[test]
