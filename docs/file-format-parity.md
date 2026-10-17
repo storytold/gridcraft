@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** trivial (formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; previously trivial: XLSX chart sheets are kept on save (#727)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (File › Info › Protect Workbook › Encrypt with Password (#770); previously minor: encrypted workbooks are saved with their password (#770)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -34,7 +34,7 @@ and repair-free opening remain unverified.
 | `.xlam` / `.xla` add-ins | R/W | no | no | VBA; out of scope | — |
 | `.xml` XML Spreadsheet 2003 | R/W | no | no | Simple to support | — |
 | `.ods` OpenDocument Spreadsheet | R/W | **values only** (#100) | no | Sheets, values, dates, merges, repeated cells, cached formula results; no formulas, formatting, charts; encrypted ODS refused | `ods_tests.rs` |
-| Password-encrypted workbooks (Agile/Standard encryption) | R | **yes** (#11): asks for the password on open; Agile (AES-128/192/256, SHA-1/256/384/512) and Standard (AES, SHA-1) | no (opens with no save path; Save As writes it without the password) | Clean-room from [MS-OFFCRYPTO] on the CFB reader. RC4, Extensible and certificate-only encryption refused with a message. Data-integrity HMAC not checked | `crypto/tests.rs`, `encrypted_tests.rs` |
+| Password-encrypted workbooks (Agile/Standard encryption) | R/W | **yes** (#11): asks for the password on open; Agile (AES-128/192/256, SHA-1/256/384/512) and Standard (AES, SHA-1) | **yes** (#770): saved (and Saved As `.xlsx`) with the password it was opened with; `file.encryptWithPassword` and File › Info › Protect Workbook › Encrypt with Password set or remove it; Save As `.json` can't hold it, so it drops the password with a warning. Written as Excel writes it: Agile, AES-256, SHA-512, 100,000 spins, fresh salts and key per save, with the data-integrity HMAC | Clean-room from [MS-OFFCRYPTO] and [MS-CFB]. RC4, Extensible and certificate-only encryption refused with a message. Data-integrity HMAC written, not checked on open | `crypto/tests.rs`, `encrypted_tests.rs`, `cfb.rs`, engine `tests.rs` |
 | `.xlw` Excel 4.0 workbook, `.wk*`, `.dbf` | open only (some) | no | no | Rare | — |
 
 ## Text and data formats
@@ -68,7 +68,7 @@ Server, Access, ODBC, …), web pages, SharePoint and online services, through P
 GridCraft imports CSV/TSV, JSON and HTML tables only, with no query editor, no connections and no
 refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
-## Work (76–114 h)
+## Work (73–110 h)
 
 | Work | Hours |
 |---|---|
@@ -76,7 +76,6 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | Preserve the rest of the unmodelled XLSX content (slicers, timelines, data model, table query tables, `extLst` entries); pass-through landed for the rest (#330) | 6–10 |
 | Streaming XLSX reader for very large files (#175), part-size limits that degrade instead of failing | 10–15 |
 | Legacy `.xls` (BIFF8): styles (fonts, fills, borders, alignment), comments, CF, validation, pictures and charts on import; corpus run; then write | 10–15 |
-| Encrypted workbooks: save with password (#11) | 4–6 |
 | XLSB and ODS: formulas and formatting on import; then write | 10–15 |
 | CSV/text: encoding choice, `.prn`, `.dif`, `.slk`, XML Spreadsheet 2003 | 4–7 |
 | PDF: embed subsetted system fonts so every script exports | (counted in [localization](localization-parity.md) script work) |
@@ -85,6 +84,8 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | File › Info › Protect Workbook › Encrypt with Password sets or removes the password to open (#770) |
+| 2026-10-15 | minor | Encrypted workbooks are saved with their password (Agile, AES-256, SHA-512); `file.encryptWithPassword` sets or removes the password to open (#770) |
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |

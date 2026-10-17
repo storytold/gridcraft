@@ -75,13 +75,15 @@ fn opening_an_encrypted_file_asks_for_its_password() {
     assert_eq!(h.state().dialog.as_ref().and_then(|d| d.values.get("path")), Some(&json!(p)));
     h.state_mut().message = None;
 
-    // The right one opens the workbook: no save path, in Recent, with the notice.
+    // The right one opens the workbook: saved back to its file with the password, in Recent,
+    // with the notice.
     h.state_mut().dialog.as_mut().unwrap().values.insert("password".into(), json!(PW));
     h.get_by_label("   OK   ").click();
     h.run_steps(3);
     assert_eq!(dialog(&h), None);
     assert_eq!(a1(&h), Value::Number(42.0));
-    assert_eq!(h.state().session.active().unwrap().path, None);
+    assert_eq!(h.state().session.active().unwrap().path.as_deref(), Some(p.as_str()));
+    assert_eq!(h.state().session.active().unwrap().password.as_deref(), Some(PW));
     assert_eq!(h.state().ui.recent.first(), Some(&p));
     assert!(h.state().notice.as_ref().is_some_and(|n| n.text.contains("password-protected")));
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
@@ -168,5 +170,19 @@ fn app_open_over_the_control_channel_never_opens_a_dialog() {
     assert_eq!(r["result"]["title"], json!("Secret.xlsx"));
     assert_eq!(a1(&h), Value::Number(42.0));
     assert_eq!(h.state().ui.recent.first(), Some(&p));
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn saving_as_json_says_the_password_is_dropped() {
+    let path = encrypted_file("json");
+    let mut h = harness(Services::default());
+    let p = path.to_string_lossy().to_string();
+    h.state_mut().run_or_alert("file.open", json!({"path": p, "password": PW}));
+    h.run_steps(2);
+    let json_path = path.with_extension("json").to_string_lossy().to_string();
+    h.state_mut().run_or_alert("file.saveAs", json!({"path": json_path}));
+    h.run_steps(2);
+    assert!(h.state().notice.as_ref().is_some_and(|n| n.text.contains("without its password")), "the info bar says so");
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }

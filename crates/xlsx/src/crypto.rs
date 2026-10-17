@@ -2,12 +2,13 @@
 //! two streams: `EncryptionInfo` (how the key comes from the password, and a verifier that tells
 //! a wrong password) and `EncryptedPackage` (the package, encrypted with AES). Agile encryption
 //! (Excel 2010 onward) and Standard encryption (Excel 2007) are read; RC4, Extensible and
-//! certificate-only encryption are reported as unsupported.
+//! certificate-only encryption are reported as unsupported. Workbooks are written with Agile
+//! encryption, as Excel saves a workbook with a password to open.
 //!
 //! Clean-room from Microsoft's public [MS-OFFCRYPTO] specification. Every read is
 //! bounds-checked, and the costly inputs (spin count, stated sizes) are capped.
 
-use aes::cipher::{BlockCipherDecrypt, KeyInit};
+use aes::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 use sha2::Digest;
 
 use crate::cfb::Compound;
@@ -26,6 +27,11 @@ const BLOCK: usize = 16;
 pub(crate) const BLOCK_VERIFIER_INPUT: [u8; 8] = [0xFE, 0xA7, 0xD2, 0x76, 0x3B, 0x4B, 0x9E, 0x79];
 pub(crate) const BLOCK_VERIFIER_HASH: [u8; 8] = [0xD7, 0xAA, 0x0F, 0x6D, 0x30, 0x61, 0x34, 0x4E];
 pub(crate) const BLOCK_KEY: [u8; 8] = [0x14, 0x6E, 0x0B, 0xE7, 0xAB, 0xAC, 0xD0, 0xD6];
+/// Agile block keys for the data-integrity HMAC's key and value ([MS-OFFCRYPTO] 2.3.4.14).
+const BLOCK_HMAC_KEY: [u8; 8] = [0x5F, 0xB2, 0xAD, 0x01, 0x0C, 0xB9, 0xE1, 0xF6];
+const BLOCK_HMAC_VALUE: [u8; 8] = [0xA0, 0x67, 0x7F, 0x02, 0xB2, 0x2C, 0x84, 0x33];
+/// The spin count written: Excel's default.
+const WRITE_SPIN_COUNT: u32 = 100_000;
 
 /// The password key encryptor's URI (the other kind is certificate-based).
 pub(crate) const PASSWORD_ENCRYPTOR: &str = "http://schemas.microsoft.com/office/2006/keyEncryptor/password";
@@ -47,6 +53,15 @@ pub enum DecryptError {
     Malformed(String),
 }
 
+/// Why a workbook couldn't be encrypted.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum EncryptError {
+    #[error("no secure random numbers are available ({0})")]
+    Random(String),
+    #[error("the workbook is too large to encrypt ({0})")]
+    TooLarge(String),
+}
+
 fn malformed(m: impl Into<String>) -> DecryptError {
     DecryptError::Malformed(m.into())
 }
@@ -55,6 +70,18 @@ fn malformed(m: impl Into<String>) -> DecryptError {
 pub fn decrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, DecryptError> {
     let (info, package) = streams(bytes)?;
     decrypt_streams(&info, &package, password)
+}
+
+/// `package` (an `.xlsx` or `.xlsm` zip) encrypted with `password` the way Excel saves a
+/// workbook with a password to open: Agile encryption (AES-256, SHA-512, 100,000 spins) in a
+/// compound file, with fresh random salts and key every time.
+pub fn encrypt(package: &[u8], password: &str) -> Result<Vec<u8>, EncryptError> {
+    let (info, encrypted) = encrypt_streams(package, password, WRITE_SPIN_COUNT, &Secrets::random()?)?;
+    let spaces = data_spaces();
+    let mut streams: Vec<(&str, &[u8])> = spaces.iter().map(|(name, data)| (*name, data.as_slice())).collect();
+    streams.push(("EncryptionInfo", &info));
+    streams.push(("EncryptedPackage", &encrypted));
+    crate::cfb::write(&streams).map_err(EncryptError::TooLarge)
 }
 
 /// Whether the right password could decrypt this encrypted workbook, checked without one. An
@@ -128,6 +155,37 @@ fn package_parts(package: &[u8]) -> Result<(usize, &[u8]), DecryptError> {
     Ok((size, data))
 }
 
+/// The `\x06DataSpaces` storage ([MS-OFFCRYPTO] 2.1.5, 2.2): it declares the encryption
+/// transform applied to `EncryptedPackage`, the same for every password-encrypted workbook.
+fn data_spaces() -> [(&'static str, Vec<u8>); 4] {
+    // UNICODE-LP-P4: the byte length, then UTF-16LE, padded to 4 bytes.
+    let text = |t: &str| {
+        let units: Vec<u8> = t.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let mut v = u32::try_from(units.len()).unwrap_or(0).to_le_bytes().to_vec();
+        v.extend(units);
+        v.resize(v.len().div_ceil(4) * 4, 0);
+        v
+    };
+    let words = |w: &[usize]| -> Vec<u8> { w.iter().flat_map(|v| u32::try_from(*v).unwrap_or(0).to_le_bytes()).collect() };
+    // Reader, updater and writer versions, each 1.0.
+    let versions = words(&[1, 1, 1]);
+    let version = [text("Microsoft.Container.DataSpaces"), versions.clone()].concat();
+    // One map entry: the EncryptedPackage stream in StrongEncryptionDataSpace.
+    let entry = [words(&[1, 0]), text("EncryptedPackage"), text("StrongEncryptionDataSpace")].concat();
+    let map = [words(&[8, 1, entry.len() + 4]), entry].concat();
+    let space = [words(&[8, 1]), text("StrongEncryptionTransform")].concat();
+    let id = text("{FF9A3F03-56EF-4613-BDD5-5A41C1D07246}");
+    // The transform header (its length counts up to the name), then an empty encryption name,
+    // block size 0, cipher mode 0 and the reserved 4.
+    let primary = [words(&[8 + id.len(), 1]), id, text("Microsoft.Container.EncryptionTransform"), versions, words(&[0, 0, 0, 4])].concat();
+    [
+        ("\u{6}DataSpaces/Version", version),
+        ("\u{6}DataSpaces/DataSpaceMap", map),
+        ("\u{6}DataSpaces/DataSpaceInfo/StrongEncryptionDataSpace", space),
+        ("\u{6}DataSpaces/TransformInfo/StrongEncryptionTransform/\u{6}Primary", primary),
+    ]
+}
+
 // ---- hashing -------------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -184,6 +242,16 @@ pub(crate) fn derive(hash: Hash, a: &[u8], b: &[u8], len: usize) -> Vec<u8> {
     k
 }
 
+/// HMAC-SHA-512 (RFC 2104): Agile's data-integrity check.
+fn hmac_sha512(key: &[u8], message: &[u8]) -> Vec<u8> {
+    const SHA512_BLOCK: usize = 128;
+    let mut k = if key.len() > SHA512_BLOCK { Hash::Sha512.digest(&[key]) } else { key.to_vec() };
+    k.resize(SHA512_BLOCK, 0);
+    let pad = |x: u8| k.iter().map(|b| b ^ x).collect::<Vec<u8>>();
+    let inner = Hash::Sha512.digest(&[&pad(0x36), message]);
+    Hash::Sha512.digest(&[&pad(0x5C), &inner])
+}
+
 /// The Standard encryption key ([MS-OFFCRYPTO] 2.3.4.7): SHA-1 iterated 50,000 times, the
 /// block-0 hash, then the 0x36 / 0x5C expansion, truncated to `key_len`.
 pub(crate) fn standard_key(password: &str, salt: &[u8], key_len: usize) -> Vec<u8> {
@@ -219,6 +287,34 @@ impl Aes {
             32 => Aes::A256(aes::Aes256::new_from_slice(key).map_err(bad)?),
             n => return Err(malformed(format!("a {n}-byte AES key"))),
         })
+    }
+
+    /// AES-256 with a 32-byte `key` (a shorter one would be zero-padded; callers pass 32).
+    fn aes256(key: &[u8]) -> Aes {
+        let mut k = [0u8; 32];
+        k.iter_mut().zip(key).for_each(|(a, b)| *a = *b);
+        Aes::A256(aes::Aes256::new(&k.into()))
+    }
+
+    fn encrypt_block(&self, block: &mut [u8; BLOCK]) {
+        let b = aes::Block::cast_from_core_mut(block);
+        match self {
+            Aes::A128(c) => c.encrypt_block(b),
+            Aes::A192(c) => c.encrypt_block(b),
+            Aes::A256(c) => c.encrypt_block(b),
+        }
+    }
+
+    /// CBC encryption of `data`, first zero-padded to whole blocks.
+    fn encrypt_cbc(&self, iv: &[u8], data: &mut Vec<u8>) {
+        data.resize(data.len().div_ceil(BLOCK) * BLOCK, 0);
+        let mut prev = [0u8; BLOCK];
+        prev.iter_mut().zip(iv).for_each(|(p, i)| *p = *i);
+        for b in data.as_chunks_mut::<BLOCK>().0 {
+            b.iter_mut().zip(prev).for_each(|(x, p)| *x ^= p);
+            self.encrypt_block(b);
+            prev = *b;
+        }
     }
 
     fn decrypt_block(&self, block: &mut [u8; BLOCK]) {
@@ -439,6 +535,77 @@ fn agile(xml: &[u8], package: &[u8], password: &str) -> Result<Vec<u8>, DecryptE
     Ok(out)
 }
 
+/// The random values one encryption draws.
+pub(crate) struct Secrets {
+    pub(crate) key_data_salt: [u8; 16],
+    pub(crate) password_salt: [u8; 16],
+    /// The package key.
+    pub(crate) key: [u8; 32],
+    pub(crate) verifier: [u8; 16],
+    pub(crate) hmac_key: [u8; 64],
+}
+
+impl Secrets {
+    pub(crate) fn random() -> Result<Secrets, EncryptError> {
+        let mut s = Secrets { key_data_salt: [0; 16], password_salt: [0; 16], key: [0; 32], verifier: [0; 16], hmac_key: [0; 64] };
+        for buf in [&mut s.key_data_salt[..], &mut s.password_salt, &mut s.key, &mut s.verifier, &mut s.hmac_key] {
+            getrandom::fill(buf).map_err(|e| EncryptError::Random(e.to_string()))?;
+        }
+        Ok(s)
+    }
+}
+
+/// `EncryptionInfo` and `EncryptedPackage` for `plain` with Agile encryption, AES-256 and
+/// SHA-512 ([MS-OFFCRYPTO] 2.3.4.10 to 2.3.4.15).
+pub(crate) fn encrypt_streams(plain: &[u8], password: &str, spin: u32, s: &Secrets) -> Result<(Vec<u8>, Vec<u8>), EncryptError> {
+    let too_large = || EncryptError::TooLarge(format!("{} bytes", plain.len()));
+    let aes = Aes::aes256(&s.key);
+    let key_data = Params { hash: Hash::Sha512, salt: s.key_data_salt.to_vec(), key_len: s.key.len() };
+    let mut package = u64::try_from(plain.len()).map_err(|_| too_large())?.to_le_bytes().to_vec();
+    for (i, segment) in plain.chunks(SEGMENT).enumerate() {
+        let index = u32::try_from(i).map_err(|_| too_large())?;
+        let mut block = segment.to_vec();
+        aes.encrypt_cbc(&key_data.iv(Some(&index.to_le_bytes())), &mut block);
+        package.extend(block);
+    }
+    // The HMAC of the whole stream, size field included; its key and value sealed with the
+    // package key.
+    let seal = |data: &[u8], block_key: &[u8]| {
+        let mut v = data.to_vec();
+        aes.encrypt_cbc(&key_data.iv(Some(block_key)), &mut v);
+        base64_encode(&v)
+    };
+    let hmac_key = seal(&s.hmac_key, &BLOCK_HMAC_KEY);
+    let hmac_value = seal(&hmac_sha512(&s.hmac_key, &package), &BLOCK_HMAC_VALUE);
+    // The password key encryptor: a verifier and the package key, under keys from the password.
+    let key = Params { hash: Hash::Sha512, salt: s.password_salt.to_vec(), key_len: s.key.len() };
+    let h = iterated_hash(key.hash, password, &key.salt, spin);
+    let lock = |data: &[u8], block_key: &[u8]| {
+        let mut v = data.to_vec();
+        Aes::aes256(&derive(key.hash, &h, block_key, key.key_len)).encrypt_cbc(&key.iv(None), &mut v);
+        base64_encode(&v)
+    };
+    let input = lock(&s.verifier, &BLOCK_VERIFIER_INPUT);
+    let value = lock(&key.hash.digest(&[&s.verifier]), &BLOCK_VERIFIER_HASH);
+    let secret = lock(&s.key, &BLOCK_KEY);
+    let params = |salt: &[u8]| {
+        format!(
+            "saltSize=\"{}\" blockSize=\"16\" keyBits=\"256\" hashSize=\"64\" cipherAlgorithm=\"AES\" cipherChaining=\"ChainingModeCBC\" hashAlgorithm=\"SHA512\" saltValue=\"{}\"",
+            salt.len(),
+            base64_encode(salt)
+        )
+    };
+    let xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<encryption xmlns=\"http://schemas.microsoft.com/office/2006/encryption\" xmlns:p=\"{PASSWORD_ENCRYPTOR}\"><keyData {}/><dataIntegrity encryptedHmacKey=\"{hmac_key}\" encryptedHmacValue=\"{hmac_value}\"/><keyEncryptors><keyEncryptor uri=\"{PASSWORD_ENCRYPTOR}\"><p:encryptedKey spinCount=\"{spin}\" {} encryptedVerifierHashInput=\"{input}\" encryptedVerifierHashValue=\"{value}\" encryptedKeyValue=\"{secret}\"/></keyEncryptor></keyEncryptors></encryption>",
+        params(&s.key_data_salt),
+        params(&s.password_salt),
+    );
+    // Version 4.4 (Agile), then the reserved 0x40.
+    let mut info = vec![4, 0, 4, 0, 0x40, 0, 0, 0];
+    info.extend_from_slice(xml.as_bytes());
+    Ok((info, package))
+}
+
 // ---- base64 --------------------------------------------------------------------------------
 
 /// Standard base64 (whitespace ignored), as Agile's XML uses for every binary value.
@@ -463,6 +630,21 @@ fn base64(s: &str) -> Result<Vec<u8>, DecryptError> {
         }
     }
     Ok(out)
+}
+
+/// Standard base64, padded.
+fn base64_encode(b: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::with_capacity(b.len().div_ceil(3) * 4);
+    for c in b.chunks(3) {
+        let byte = |i: usize| u32::from(c.get(i).copied().unwrap_or(0));
+        let n = (byte(0) << 16) | (byte(1) << 8) | byte(2);
+        for i in 0..4 {
+            let digit = ALPHABET.get((n >> (18 - 6 * i)) as usize & 63).copied().unwrap_or(b'A');
+            s.push(if i <= c.len() { char::from(digit) } else { '=' });
+        }
+    }
+    s
 }
 
 #[cfg(test)]

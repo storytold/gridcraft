@@ -80,7 +80,7 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "grid": app.grid.cells_rect.map(|c| json!([c.left(), c.top(), c.width(), c.height()])),
         "scroll": [v.scroll.x, v.scroll.y],
         "editor": app.editor.as_ref().map(|e| json!({"cell": e.cell.a1(), "text": e.text, "formulaBar": e.from_formula_bar, "point": e.can_point()})),
-        "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": d.values, "tab": d.tab})),
+        "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": gridcraft_engine::cmd::journal_params(&Json::Object(d.values.clone())), "tab": d.tab})),
         "backstage": app.backstage.as_ref().map(|b| b.page.id()),
         "message": app.message.as_ref().map(|(t, m)| json!({"title": t, "text": m})),
         "selectedChart": app.selected_chart,

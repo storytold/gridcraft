@@ -155,3 +155,65 @@ fn non_ascii_passwords_hash_as_utf16le_like_msoffcrypto() {
         hex("2bca96ca0a7e8d88d9314a2eb1819a1ece94ff9ce34266ff82f891a88c4240c4c9f39c729b7c5c410c27fc8e2b7ad90d8c005eb68a603377b8a4ab858041c76a")
     );
 }
+
+#[test]
+fn hmac_matches_rfc_4231() {
+    // Test cases 2 and 6 (a key longer than the block is hashed first).
+    assert_eq!(
+        hmac_sha512(b"Jefe", b"what do ya want for nothing?"),
+        hex("164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea2505549758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737")
+    );
+    assert_eq!(
+        hmac_sha512(&[0xAA; 131], b"Test Using Larger Than Block-Size Key - Hash Key First"),
+        hex("80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f3526b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598")
+    );
+}
+
+#[test]
+fn encrypted_packages_carry_a_valid_data_integrity_hmac() {
+    // [MS-OFFCRYPTO] 2.3.4.14: the HMAC of the whole EncryptedPackage stream, its key and value
+    // encrypted with the package key.
+    let secrets = Secrets::random().unwrap();
+    let (info, package) = encrypt_streams(&payload(10_000), PASSWORD, 1000, &secrets).unwrap();
+    assert_eq!(decrypt_streams(&info, &package, PASSWORD).unwrap(), payload(10_000));
+    let root = crate::xml::parse(&info[8..]).unwrap();
+    let key_data = Params::read(root.child("keyData").unwrap()).unwrap();
+    let integrity = root.child("dataIntegrity").unwrap();
+    let aes = Aes::new(&secrets.key).unwrap();
+    let field = |name: &str, block_key: &[u8]| {
+        let mut v = base64(integrity.attr(name).unwrap()).unwrap();
+        aes.decrypt_cbc(&key_data.iv(Some(block_key)), &mut v).unwrap();
+        v
+    };
+    let hmac_key = field("encryptedHmacKey", &BLOCK_HMAC_KEY);
+    assert_eq!(hmac_key, secrets.hmac_key);
+    assert_eq!(field("encryptedHmacValue", &BLOCK_HMAC_VALUE), hmac_sha512(&hmac_key, &package));
+}
+
+#[test]
+fn agile_encryption_matches_msoffcrypto_byte_for_byte() {
+    // The expected values were produced by msoffcrypto-tool 5.4.2 encrypting the same payload
+    // with the same password, spin count, salts, package key, verifier and HMAC key (its random
+    // source replaced by fixed bytes). A swapped block key or a wrong HMAC range shows up here
+    // even though our own reader would accept it.
+    let secrets = Secrets {
+        key_data_salt: hex("303132333435363738393a3b3c3d3e3f").try_into().unwrap(),
+        password_salt: salt().try_into().unwrap(),
+        key: hex("202122232425262728292a2b2c2d2e2f36363636363636363636363636363636").try_into().unwrap(),
+        verifier: hex("101112131415161718191a1b1c1d1e1f").try_into().unwrap(),
+        hmac_key: (0x40u8..0x80).collect::<Vec<u8>>().try_into().unwrap(),
+    };
+    let (info, package) = encrypt_streams(&payload(10_000), PASSWORD, 1000, &secrets).unwrap();
+    let xml = std::str::from_utf8(&info[8..]).unwrap();
+    for (name, value) in [
+        ("encryptedVerifierHashInput", "ucd1B40nHl++cD1L6gE+Gg=="),
+        ("encryptedVerifierHashValue", "xlu4hLqser6fmkIsoAjn2X2fMQO2e99+c5ZmXcReDmGCv1F1WHFWaLOUbD9iB6MjtsW9n7h02z3P3F2BSxLGDA=="),
+        ("encryptedKeyValue", "YOnSX7hf2oEFlp68V/WkAx5r4aDjCh/G8N8Bhcu4s+g="),
+        ("encryptedHmacKey", "7b3gqsajD9UBzQttVnmw3OIx8TOxISKTj+W7SdRwISNC/ur9uU01m/u4bhpGAR4d/RLtlkV96VqoqntcNJ7Wew=="),
+        ("encryptedHmacValue", "JG5hyYKCtubUl8y5tnwz6LYDofmCHQXeiYm+BuAP6Adcls+/Cu6yVfaL42llhOtY/55Qstcao8IE7T0DzDeDRA=="),
+    ] {
+        assert!(xml.contains(&format!("{name}=\"{value}\"")), "{name} in {xml}");
+    }
+    assert_eq!(package.len(), 10_008);
+    assert_eq!(package[..40], hex("1027000000000000863d133807906d724db0118fb5e5cc7d99b1e847a7bc24748279369b0f9310da")[..]);
+}

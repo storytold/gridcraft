@@ -12,6 +12,10 @@ use serde_json::{Map, Value as Json, json};
 use crate::SheetApp;
 use crate::theme;
 
+/// Encrypt with Password's stand-in for a password that is already set: the field shows that
+/// there is one without holding it.
+const KEEP_PASSWORD: &str = "\u{E000}\u{E000}\u{E000}\u{E000}\u{E000}\u{E000}\u{E000}\u{E000}";
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
     Text { key: &'static str, label: &'static str },
@@ -246,6 +250,27 @@ impl Dialog {
                 "review.protectWorkbook",
                 vec![Password { key: "password", label: "Password:" }],
                 json!({"on": false}),
+            ),
+            // File › Info › Protect Workbook › Encrypt with Password: an empty field removes the
+            // password at once; any other is asked again in Confirm Password before it's set. A
+            // set password shows as a stand-in, never as itself: OK on it keeps the password.
+            "encryptPassword" => Dialog::form(
+                "encryptPassword",
+                "Encrypt Document",
+                "file.encryptWithPassword",
+                vec![
+                    Note("Encrypt the contents of this file".into()),
+                    Password { key: "password", label: "Password:" },
+                    Note("A lost or forgotten password can't be recovered: keep it in a safe place.".into()),
+                ],
+                json!({"password": if app.session.active().is_some_and(|d| d.password.is_some()) { KEEP_PASSWORD } else { "" }}),
+            ),
+            "confirmPassword" => Dialog::form(
+                "confirmPassword",
+                "Confirm Password",
+                "file.encryptWithPassword",
+                vec![Password { key: "confirmPassword", label: "Reenter password:" }],
+                json!({"password": p("password").as_str().unwrap_or_default(), "confirmPassword": ""}),
             ),
             "openPassword" => {
                 // The file rides along in the values (`path` on the desktop, `name` and `base64`
@@ -983,6 +1008,11 @@ fn build_params(d: &Dialog) -> Json {
                 }
             }
         }
+        "confirmPassword" => {
+            if let Some(m) = v.as_object_mut() {
+                m.remove("confirmPassword");
+            }
+        }
         "zoom" => {
             if let Some(p) = d.values.get("preset").and_then(Json::as_str)
                 && d.values.get("percent").is_none()
@@ -1249,8 +1279,30 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             open_url(&u);
         }
     }
-    if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {
+    // Enter and Esc on a message box over the dialog close only the message.
+    let message = app.message.is_some();
+    if message {
+        confirm = false;
+    }
+    if (!message && ctx.input(|i| i.key_pressed(Key::Escape))) || !win_open {
         open = false;
+    }
+    // A new password to open is asked twice; clearing it removes the password at once, and the
+    // untouched stand-in keeps it.
+    let new_password = d.values.get("password").and_then(Json::as_str).unwrap_or_default().to_string();
+    if confirm && d.name == "encryptPassword" && new_password == KEEP_PASSWORD {
+        confirm = false;
+        open = false;
+    }
+    if confirm && d.name == "encryptPassword" && !new_password.is_empty() {
+        app.open_dialog("confirmPassword", json!({"password": new_password}));
+        confirm = false;
+        open = false;
+    }
+    if confirm && d.name == "confirmPassword" && d.values.get("confirmPassword").and_then(Json::as_str) != Some(new_password.as_str()) {
+        app.message = Some((d.title.clone(), "The confirmation password is not identical.".into()));
+        d.values.insert("confirmPassword".into(), json!(""));
+        confirm = false;
     }
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
@@ -1416,10 +1468,16 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                     ui.vertical(|ui| {
                         ui.label(label);
                         let mut s = d.values.get(key).and_then(Json::as_str).unwrap_or_default().to_string();
+                        let stand_in = s == KEEP_PASSWORD;
                         if ui.add(egui::TextEdit::singleline(&mut s).password(!d.show_password).desired_width(320.0)).changed() {
+                            // Typing over the stand-in starts a new password; Backspace empties it.
+                            let s = if stand_in { s.replace('\u{E000}', "") } else { s };
                             d.values.insert(key.into(), json!(s));
                         }
-                        ui.checkbox(&mut d.show_password, "Show password");
+                        // The stand-in for a set password to open has nothing to reveal.
+                        if d.name != "encryptPassword" {
+                            ui.checkbox(&mut d.show_password, "Show password");
+                        }
                     });
                 }
                 Field::Number { key, label } => {

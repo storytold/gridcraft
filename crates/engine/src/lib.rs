@@ -112,6 +112,12 @@ pub struct DocState {
     /// The format `path`'s content was recognised as when its extension doesn't name one (an
     /// XLSX called `budget.dat`): Save writes it back in that format.
     pub content_kind: Option<io::FileKind>,
+    /// The password to open the workbook: the one its encrypted file was opened with, or one set
+    /// with File › Info › Protect Workbook › Encrypt with Password. Saving as `.xlsx` encrypts
+    /// with it.
+    pub password: Option<String>,
+    /// The password was set or removed since the last save: a change `wb` doesn't show.
+    pub password_changed: bool,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -137,10 +143,22 @@ impl DocState {
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
+            password: None,
+            password_changed: false,
         }
     }
+    /// Another window on the same workbook (View › New Window): a copy that saves to the same
+    /// file, in the same format and with the same password.
+    pub fn linked_copy(&self, title: String) -> DocState {
+        let mut copy = DocState::new((*self.wb).clone(), self.path.clone(), title);
+        copy.selection = self.selection.clone();
+        copy.content_kind = self.content_kind;
+        copy.password = self.password.clone();
+        copy.password_changed = self.password_changed;
+        copy
+    }
     pub fn is_dirty(&self) -> bool {
-        !Arc::ptr_eq(&self.wb, &self.saved)
+        !Arc::ptr_eq(&self.wb, &self.saved) || self.password_changed
     }
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet

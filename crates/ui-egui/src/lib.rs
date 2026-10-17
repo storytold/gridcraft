@@ -394,6 +394,13 @@ impl SheetApp {
         {
             self.deliver_pdf(r);
         }
+        // A save that left something behind (a password a JSON file can't hold) says so.
+        if matches!(id, "file.save" | "file.saveAs")
+            && let Ok(r) = &r
+            && let Some(text) = r.get("warnings").and_then(Json::as_array).and_then(|w| w.first()).and_then(Json::as_str)
+        {
+            self.notice = Some(Notice { text: text.to_string(), kind: NoticeKind::Warning, action: None });
+        }
         r
     }
 

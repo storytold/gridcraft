@@ -581,6 +581,12 @@ pub fn protect_workbook(app: &mut SheetApp) {
     }
 }
 
+/// File › Info › Protect Workbook › Encrypt with Password: the password dialog. A set password
+/// shows as a stand-in, never as itself; clearing the field removes it, as in Excel.
+fn encrypt_with_password(app: &mut SheetApp) {
+    app.open_dialog("encryptPassword", json!({}));
+}
+
 fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
@@ -592,6 +598,7 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
     let path = d.path.clone();
     let sheets = d.wb.sheets.len();
     let protected = d.wb.protected_structure;
+    let encrypted = d.password.is_some();
     let current: Vec<String> = {
         let pr = &d.wb.props;
         vec![pr.title.clone(), pr.subject.clone(), pr.author.clone(), pr.company.clone(), pr.keywords.clone(), pr.description.clone()]
@@ -609,13 +616,22 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
     });
     ui.add_space(18.0);
     ui.horizontal(|ui| {
-        if square_button(ui, Icon::Lock, lang.tr("Protect Workbook")).clicked() {
-            protect_workbook(app);
-        }
+        let protect = square_button(ui, Icon::Lock, lang.tr("Protect Workbook"));
+        egui::Popup::menu(&protect).show(|ui| {
+            if ui.button(lang.tr("Encrypt with Password")).clicked() {
+                encrypt_with_password(app);
+            }
+            if ui.button(lang.tr("Protect Workbook Structure")).clicked() {
+                protect_workbook(app);
+            }
+        });
         ui.add_space(12.0);
         ui.vertical(|ui| {
             ui.add_space(14.0);
             ui.label(RichText::new(lang.tr("Protect Workbook")).font(theme::ui_bold(13.5)).color(t.text));
+            if encrypted {
+                dim(ui, lang.tr("A password is required to open this workbook."));
+            }
             let text = if protected {
                 "Sheet structure is locked: sheets can't be added, moved, renamed or deleted."
             } else {

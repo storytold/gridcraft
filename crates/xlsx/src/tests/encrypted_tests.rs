@@ -64,3 +64,37 @@ fn schemes_no_password_opens_are_named_before_asking_for_one() {
     assert_eq!(check_encryption(&irm), unsupported("rights-management"));
     assert_eq!(decrypt(&irm, "pw"), Err(DecryptError::Unsupported("rights-management".into())));
 }
+
+#[test]
+fn encrypt_writes_a_file_only_its_password_opens() {
+    let package: Vec<u8> = (0..3_000_000u32).map(|i| (i * 7 % 251) as u8).collect();
+    let file = crate::encrypt(&package, "Pass1234").unwrap();
+    assert_eq!(crate::sniff(&file), crate::Format::Encrypted);
+    assert_eq!(decrypt(&file, "Pass1234").unwrap(), package);
+    assert_eq!(decrypt(&file, "pass1234"), Err(DecryptError::WrongPassword), "passwords are case-sensitive");
+    assert_eq!(decrypt(&file, ""), Err(DecryptError::WrongPassword));
+    // Fresh salts and key on every save: the same workbook never encrypts the same way twice.
+    assert_ne!(crate::encrypt(&package, "Pass1234").unwrap(), file);
+}
+
+#[test]
+fn encrypt_writes_agile_encryption_with_excels_defaults() {
+    let file = crate::encrypt(b"package", "pw").unwrap();
+    let info = crate::cfb::Compound::open(&file).unwrap().root_stream("EncryptionInfo").unwrap().unwrap();
+    assert_eq!(info[..8], [4, 0, 4, 0, 0x40, 0, 0, 0], "version 4.4 (Agile), reserved 0x40");
+    let xml = std::str::from_utf8(&info[8..]).unwrap();
+    for want in
+        ["<keyData ", "<dataIntegrity ", "keyBits=\"256\"", "hashAlgorithm=\"SHA512\"", "cipherChaining=\"ChainingModeCBC\"", "spinCount=\"100000\""]
+    {
+        assert!(xml.contains(want), "{want} missing from {xml}");
+    }
+}
+
+#[test]
+fn encrypt_handles_workbooks_past_the_header_fat() {
+    // The header lists 109 FAT sectors, which map about 7 MB; past that the FAT continues in
+    // DIFAT sectors.
+    let package: Vec<u8> = (0..9_000_000u32).map(|i| (i % 241) as u8).collect();
+    let file = crate::encrypt(&package, "pw").unwrap();
+    assert_eq!(decrypt(&file, "pw").unwrap(), package);
+}

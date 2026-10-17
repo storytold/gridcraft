@@ -44,7 +44,7 @@ pub const PASSWORD_REQUIRED: &str = "is password-protected. Enter its password t
 /// The error for a wrong password contains this.
 pub const WRONG_PASSWORD: &str = "The password is incorrect.";
 /// The first open warning of a workbook decrypted with its password.
-pub const DECRYPTED_NOTICE: &str = "This workbook was password-protected. GridCraft saves it without the password.";
+pub const DECRYPTED_NOTICE: &str = "This workbook is password-protected. GridCraft saves it with the same password.";
 
 /// Parses a file's bytes into a workbook. `name` picks the format by extension when the bytes
 /// don't say. An encrypted workbook needs [`open_bytes_with_password`].
@@ -181,6 +181,11 @@ fn rename_first_sheet(wb: &mut Workbook, path: &str) {
     {
         sh.name = clean;
     }
+}
+
+/// An `.xlsx` package encrypted with a password to open, as Excel saves it.
+pub fn encrypt(package: &[u8], password: &str) -> Result<Vec<u8>> {
+    gridcraft_xlsx::encrypt(package, password).map_err(|e| EngineError::Other(format!("We can't save the workbook with its password: {e}.")))
 }
 
 /// Encodes a workbook in the format chosen by `path`'s extension.
