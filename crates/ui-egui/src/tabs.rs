@@ -53,7 +53,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             all.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "All sheets"));
             let items = app.session.active().map(|d| navigator_items(&d.wb.sheets)).unwrap_or_default();
             let active = app.session.active().map(|d| d.wb.active_sheet.to_string()).unwrap_or_default();
-            let rows: Vec<(&str, String)> = items.iter().map(|(i, name)| (i.as_str(), name.clone())).collect();
+            let rows: Vec<(&str, String)> = items.iter().map(|(i, name)| (i.as_str(), crate::bidi::visual(name).into_owned())).collect();
             if let crate::ribbon::ComboResult::Picked(i) = crate::ribbon::editable_combo(ui, &all, "sheet_navigator", &active, &rows, false)
                 && let Ok(i) = i.parse::<usize>()
             {
@@ -105,7 +105,9 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                             for (i, name, color, active) in sheets {
                                 let renaming = app.grid.renaming_tab == Some(i);
                                 let font = if active { theme::ui_bold(13.0) } else { theme::ui_font(13.0) };
-                                let tw = ui.painter().layout_no_wrap(name.clone(), font.clone(), t.text).size().x;
+                                // A sheet name is user text: measured and drawn in display order.
+                                let shown = crate::bidi::visual(&name);
+                                let tw = ui.painter().layout_no_wrap(shown.to_string(), font.clone(), t.text).size().x;
                                 let w = (tw + 32.0).max(72.0);
                                 let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click_and_drag());
                                 if active && reveal_active {
@@ -146,7 +148,13 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                         app.grid.renaming_tab = None;
                                     }
                                 } else {
-                                    ui.painter().text(r.center(), Align2::CENTER_CENTER, &name, font, if active { t.accent } else { t.text });
+                                    ui.painter().text(
+                                        r.center(),
+                                        Align2::CENTER_CENTER,
+                                        shown.as_ref(),
+                                        font,
+                                        if active { t.accent } else { t.text },
+                                    );
                                 }
                                 if resp.clicked() {
                                     activate_sheet(app, i);

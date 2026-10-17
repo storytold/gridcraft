@@ -112,13 +112,13 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     app.print_now(json!({}));
                 }
             });
-            // Centered title.
+            // Centered title. The workbook name is user text, drawn in display order.
             let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
             let dirty = app.session.active().is_some_and(|d| d.is_dirty());
             ui.painter().text(
                 rect.center(),
                 Align2::CENTER_CENTER,
-                format!("{title}{}", if dirty { " •" } else { "" }),
+                format!("{}{}", crate::bidi::visual(&title), if dirty { " •" } else { "" }),
                 theme::ui_bold(13.0),
                 t.text,
             );

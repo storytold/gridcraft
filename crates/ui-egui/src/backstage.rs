@@ -389,8 +389,15 @@ fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Ou
         // A long name or folder stops short of the column instead of running under it.
         let room = if modified_w > 0.0 { rect.right() - modified_w - 14.0 } else { rect.right() };
         let text = p.with_clip_rect(Rect::from_min_max(rect.min, pos2(room, rect.bottom())).intersect(p.clip_rect()));
-        text.text(pos2(rect.left() + 42.0, rect.center().y - 8.0), Align2::LEFT_CENTER, &name, theme::ui_font(13.5), t.text);
-        text.text(pos2(rect.left() + 42.0, rect.center().y + 9.0), Align2::LEFT_CENTER, &folder, theme::ui_font(11.5), t.text_dim);
+        // The file name and folder are user text: drawn in display order (`bidi::visual`).
+        text.text(pos2(rect.left() + 42.0, rect.center().y - 8.0), Align2::LEFT_CENTER, crate::bidi::visual(&name), theme::ui_font(13.5), t.text);
+        text.text(
+            pos2(rect.left() + 42.0, rect.center().y + 9.0),
+            Align2::LEFT_CENTER,
+            crate::bidi::visual(&folder),
+            theme::ui_font(11.5),
+            t.text_dim,
+        );
         if modified_w > 0.0 {
             let (words, color) = match known.get(&path) {
                 Some(Modified::At(seconds)) => (age(lang, now - seconds), t.text_dim),

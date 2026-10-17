@@ -492,6 +492,7 @@ fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u32)>)> {
         ("sys-cjk-hangul", cjk_hangul()),
         ("sys-thai", thai()),
         ("sys-hebrew", hebrew()),
+        ("sys-arabic", arabic()),
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
     ]
@@ -616,6 +617,34 @@ fn hebrew() -> Vec<(String, u32)> {
     v.push((format!("{mac_sys}/Lucida Grande.ttc"), 0));
     for d in lin {
         v.push((format!("{d}/NotoSansHebrew-Regular.ttf"), 0));
+        v.push((format!("{d}/dejavu/DejaVuSans.ttf"), 0));
+        v.push((format!("{d}/freefont/FreeSans.ttf"), 0));
+    }
+    v
+}
+
+/// Arabic faces. Windows has Tahoma (its Arabic UI face), Arial and Dubai; macOS has Geeza Pro,
+/// Baghdad and Arial (all in Supplemental); Linux usually has a Noto Arabic or DejaVu Sans.
+/// [`load_fallback`] skips the file if Hebrew already loaded it (Tahoma carries both scripts).
+#[cfg(not(target_arch = "wasm32"))]
+fn arabic() -> Vec<(String, u32)> {
+    let mac_sys = "/System/Library/Fonts";
+    let mac_sup = "/System/Library/Fonts/Supplemental";
+    let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
+    let lin = ["/usr/share/fonts/truetype/noto", "/usr/share/fonts/opentype/noto", "/usr/share/fonts/truetype", "/usr/share/fonts"];
+    let mut v: Vec<(String, u32)> = Vec::new();
+    v.push((format!("{win}\\tahoma.ttf"), 0)); // Tahoma
+    v.push((format!("{win}\\arial.ttf"), 0)); // Arial
+    v.push((format!("{win}\\dubai.ttf"), 0)); // Dubai
+    v.push((format!("{win}\\Dubai-Regular.ttf"), 0));
+    v.push((format!("{mac_sys}/GeezaPro.ttc"), 0)); // Geeza Pro
+    v.push((format!("{mac_sup}/Baghdad.ttc"), 0));
+    v.push((format!("{mac_sup}/Arial.ttf"), 0));
+    v.push((format!("{mac_sup}/Noto Naskh Arabic.ttc"), 0));
+    v.push((format!("{mac_sup}/Noto Sans Arabic.ttc"), 0));
+    for d in lin {
+        v.push((format!("{d}/NotoNaskhArabic-Regular.ttf"), 0));
+        v.push((format!("{d}/NotoSansArabic-Regular.ttf"), 0));
         v.push((format!("{d}/dejavu/DejaVuSans.ttf"), 0));
         v.push((format!("{d}/freefont/FreeSans.ttf"), 0));
     }
@@ -815,14 +844,14 @@ mod tests {
         let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
         assert_eq!(
             keys(HanOrder::Japanese),
-            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-arabic", "sys-symbols", "sys-symbols-2"]
         );
         assert_eq!(
             keys(HanOrder::Chinese),
-            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-arabic", "sys-symbols", "sys-symbols-2"]
         );
         assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
-        for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs] {
+        for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs, Language::Ar] {
             assert_eq!(HanOrder::of(l), HanOrder::Chinese, "{l:?} shares the default order (no font rebuild)");
         }
     }
@@ -848,12 +877,13 @@ mod tests {
         // Real render check, per script: the proportional family (what cells and the UI use) must
         // resolve a sample string to a real glyph, not the tofu replacement char. Skips a script
         // whose face is absent (a minimal machine) and fails if a face is present but not wired in.
-        let cases: [(&str, Vec<(String, u32)>, &str); 7] = [
+        let cases: [(&str, Vec<(String, u32)>, &str); 8] = [
             ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
             ("sys-cjk-han-zh", cjk_han_simplified(), "页面布局 客户端配置"),
             ("sys-cjk-hangul", cjk_hangul(), "한글"),
             ("sys-thai", thai(), "ทดสอบ"),
             ("sys-hebrew", hebrew(), "עברית"),
+            ("sys-arabic", arabic(), "العربية"),
             ("ui", candidates(UI), "Русский"),
             // Czech interface labels: every Czech accented letter, in both cases.
             ("ui", candidates(UI), "Příliš žluťoučký kůň úpěl ďábelské ódy ŘŠČŽÝÁÍÉÚŮĚŤĎŇÓ"),

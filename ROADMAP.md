@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** minor (Arabic interface language: bidi display order, system-font fallback) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -62,7 +62,7 @@ collaboration, mobile, AI).
 | File formats | ~50% | 80–120 | [file-format-parity.md](docs/file-format-parity.md) |
 | Performance | ~35% | 35–55 | [target-app-parity.md](docs/target-app-parity.md#performance) |
 | Stability | ~60% | 15–25 | [gaps.md](docs/gaps.md) |
-| Localization | ~10% (ribbon in 6 languages) | 100–165 | [localization-parity.md](docs/localization-parity.md) |
+| Localization | ~10% (ribbon in 11 languages) | 100–165 | [localization-parity.md](docs/localization-parity.md) |
 | Hardware (multi-core calc, GPU, pen, multi-window) | ~40% | 25–40 | [hardware-parity.md](docs/hardware-parity.md) |
 | Platforms | ~80% (no iOS/Android; ahead on Linux, BSD, RISC-V) | 30–60 | [target-app-parity.md](docs/target-app-parity.md#platforms) |
 | Ecosystem / add-ins | ~10% (VBA out of scope; own scripts, MCP, CLI) | 25–40 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
@@ -89,29 +89,31 @@ collaboration, mobile, AI).
 
 ## Languages
 
-The ribbon is translated into Japanese, Simplified Chinese, Korean, Brazilian Portuguese, Russian
-and German (266–268 labels each, ~12% of ~2,200 strings; merged 10-10 in #31, #104, #82, German
-added 10-11), the
-interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
-(#38). Dialogs, menus and messages are English; formulas and number formats are en-US only.
+The ribbon is translated into Japanese, Simplified Chinese, Korean, Brazilian Portuguese, Russian,
+German, Spanish, French, Czech, Serbian and Arabic (~394 labels each, ~18% of ~2,200 strings; first
+languages merged 10-10 in #31, #104, #82), the
+interface follows the system language, and CJK, Thai, Hebrew and Arabic text falls back to system fonts
+(#38). Arabic labels are stored in logical order and reordered for egui at lookup (unicode-bidi);
+workbook, sheet and recent-file names go through the same bidi pass at paint time. Dialogs, menus
+and messages are English; formulas and number formats are en-US only.
 Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |
 |---|---|---|---|
 | English | en | full (source language) | 100% |
-| Simplified Chinese | zh-Hans | menus only | ~12% |
-| Spanish | es | none | 0% |
+| Simplified Chinese | zh-Hans | menus only | ~18% |
+| Spanish | es | menus only | ~18% |
 | Hindi | hi | none | 0% |
-| Arabic | ar | none (no RTL layout, no shaping) | 0% |
-| French | fr | none | 0% |
-| Portuguese | pt-BR | menus only | ~12% |
+| Arabic | ar | menus only (bidi display order, system-font fallback) | ~18% |
+| French | fr | menus only | ~18% |
+| Portuguese | pt-BR | menus, File view, dialogs | ~42% |
 | Indonesian | id | none | 0% |
-| Japanese | ja | menus only | ~12% |
-| German | de | menus only | ~12% |
-| Korean | ko | menus only | ~12% |
+| Japanese | ja | menus only | ~18% |
+| German | de | menus only | ~18% |
+| Korean | ko | menus only | ~18% |
 | Vietnamese | vi | none | 0% |
 
-Other shipped languages: 2 (Russian and German, menus only, ~12%).
+Other shipped languages: 3 (Russian, Czech and Serbian, menus only, ~18%).
 
 ## Upcoming
 
@@ -193,6 +195,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Arabic interface language (`ar` catalog + `bidi::display_rtl`/`visual` + `sys-arabic` fallback); shipped-language counts re-measured (266/268 → ~395 labels, ~18%) |
 | 2026-10-12 | minor | Rows auto-fit oversized fonts on open and whole-row/column formatting (#833); progress log row |
 | 2026-10-12 | minor | Progress log: multi-area row/column delete (#758) |
 | 2026-10-12 | trivial | Progress log: XLSX chart sheets kept on save (#727) |

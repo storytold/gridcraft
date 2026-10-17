@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod backstage;
+mod bidi;
 mod border_preview;
 mod cell_pictures;
 pub mod chartview;

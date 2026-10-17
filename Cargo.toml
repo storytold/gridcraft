@@ -54,6 +54,8 @@ sys-locale = "0.3"
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
 # Real font bytes for tests (Ubuntu Light, compiled into epaint).
 epaint_default_fonts = "0.36"
+# Display order for right-to-left interface labels and user text (the Arabic catalog).
+unicode-bidi = "0.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
