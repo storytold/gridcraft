@@ -1989,8 +1989,37 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         return;
     }
 
+    // A press on a plain cell selects it at once, like Excel, and dragging extends from it. Presses
+    // on button-like targets, objects, the fill handle or the move border, and presses while
+    // editing, are still decided below on drag or release.
+    let press_at = pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos);
+    if pointer.primary_pressed()
+        && resp.is_pointer_button_down_on()
+        && !primary_clicked
+        && app.grid.drag == Drag::None
+        && app.editor.is_none()
+        && app.session.draw_tool.is_empty()
+        && in_cells
+        && let Some(p) = press_at
+        && crate::outline::hit(geo, sh, p).is_none()
+        && !freeze_cols.contains(p)
+        && !freeze_rows.contains(p)
+        && crate::chartview::hit(app, geo, sh, p).is_none()
+        && !validation_arrow(sh, geo, sel.active).is_some_and(|r| r.contains(p))
+        && !is_filter_button(sh, geo, p)
+        && !on_handle(p)
+        && !on_cur_border(p)
+    {
+        select_pressed_cell(app, &sel, geo.cell_at(sh, p), mods);
+        app.grid.drag = Drag::Select;
+        app.grid.drag_select = true;
+        return;
+    }
+    // The press already selected: the release only follows a link, toggles a checkbox or edits.
+    let pressed = app.grid.drag == Drag::Select;
+
     // Press: decide the drag mode.
-    if resp.drag_started() || (primary_clicked && app.grid.drag == Drag::None) {
+    if (resp.drag_started() && app.grid.drag == Drag::None) || (primary_clicked && matches!(app.grid.drag, Drag::None | Drag::Select)) {
         // Where the press began (a drag is only recognised after the pointer has moved).
         let Some(p) = pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) else { return };
         // The outline band's − / + and level buttons act on release, like buttons.
@@ -2108,15 +2137,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             return;
         }
         app.grid.last_click = Some((c, now));
-        if mods.shift {
-            let _ = app.session.run("selection.set", json!({"range": RangeRef::new(sel.anchor, c).a1(), "active": sel.active.a1()}));
-            if let Some(d) = app.session.active_mut() {
-                d.selection.anchor = sel.anchor;
-            }
-        } else if mods.command {
-            select_ranges(app, RangeRef::cell(c), true, c);
-        } else {
-            let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
+        if !pressed {
+            select_pressed_cell(app, &sel, c, mods);
+        }
+        if !mods.shift && !mods.command {
             if primary_clicked && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox" {
                 let _ = app.run("cell.toggleCheckbox", json!({"cell": c.a1()}));
             }
@@ -2328,6 +2352,20 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         resp.request_focus();
     }
     keyboard(app, &ctx, resp, geo, sh);
+}
+
+/// The selection a press on cell `c` makes: Shift extends from the anchor, Ctrl (Cmd) adds an area.
+fn select_pressed_cell(app: &mut SheetApp, sel: &gridcraft_engine::Selection, c: CellRef, mods: egui::Modifiers) {
+    if mods.shift {
+        let _ = app.session.run("selection.set", json!({"range": RangeRef::new(sel.anchor, c).a1(), "active": sel.active.a1()}));
+        if let Some(d) = app.session.active_mut() {
+            d.selection.anchor = sel.anchor;
+        }
+    } else if mods.command {
+        select_ranges(app, RangeRef::cell(c), true, c);
+    } else {
+        let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
+    }
 }
 
 /// Point mode on a header: inserts the whole-column or whole-row reference instead of selecting.

@@ -3,7 +3,9 @@
 use egui::{Event, Modifiers, PointerButton, Pos2};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, RangeRef};
-use gridcraft_ui_egui::{SheetApp, grid::Geo};
+use gridcraft_ui_egui::SheetApp;
+use gridcraft_ui_egui::grid::{Geo, filter_button_rect};
+use gridcraft_ui_egui::outline::{Action, layout};
 use serde_json::{Value, json};
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
@@ -158,4 +160,53 @@ fn formula_point_drag_keeps_the_sheet_qualifier() {
     assert_eq!(cells(&h), other_before);
     h.state_mut().session.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
     assert_eq!(cells(&h), before);
+}
+
+#[test]
+fn a_press_selects_the_cell_before_the_release() {
+    let mut h = harness("A1");
+    press(&mut h, "C3");
+    assert_selection(&h, "C3", "C3");
+    let at = point(&h, "C3");
+    frame(&mut h, button(at, false));
+    assert_selection(&h, "C3", "C3");
+}
+
+#[test]
+fn a_press_that_moves_within_the_cell_selects_it() {
+    let mut h = harness("A1");
+    let before = cells(&h);
+    press(&mut h, "C3");
+    let to = point(&h, "C3") + egui::vec2(12.0, 0.0);
+    // The movement and the release arrive in the same frame: neither a click nor a drag.
+    h.input_mut().events.push(Event::PointerMoved(to));
+    frame(&mut h, button(to, false));
+    h.run_steps(1);
+    assert_selection(&h, "C3", "C3");
+    assert_eq!(cells(&h), before);
+}
+
+#[test]
+fn pressing_a_filter_arrow_or_an_outline_button_keeps_the_selection() {
+    let mut h = harness("D5");
+    h.state_mut().session.execute("data.filter", json!({"range": "A1:B2"})).unwrap();
+    h.state_mut().session.execute("data.group", json!({"rows": "10:12"})).unwrap();
+    h.run_steps(2);
+    let (minus, arrow) = {
+        let app = h.state();
+        let sh = app.session.active().unwrap().wb.active().unwrap();
+        let geo = Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
+        let minus = layout(&geo, sh).buttons.into_iter().find(|b| matches!(b.action, Action::Toggle { rows: true, .. })).unwrap();
+        (geo.mirror_pos(minus.rect.center()), filter_button_rect(&geo, sh, CellRef::parse("A1").unwrap()).center())
+    };
+    for at in [minus, arrow] {
+        frame(&mut h, Event::PointerMoved(at));
+        frame(&mut h, button(at, true));
+        assert_selection(&h, "D5", "D5");
+        frame(&mut h, button(at, false));
+        h.run_steps(1);
+        assert_selection(&h, "D5", "D5");
+    }
+    assert!(h.state().grid.filter_menu.is_some(), "the arrow still opens the filter menu on release");
+    assert!(h.state().session.active().unwrap().wb.active().unwrap().rows.iter().any(|(_, l)| l.hidden), "the − button still collapses the group");
 }
