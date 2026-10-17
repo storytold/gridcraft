@@ -422,6 +422,16 @@ fn same_value(a: &Value, b: &Value) -> bool {
     }
 }
 
+fn competing_spill(x: &Sheet, y: &Sheet, c: CellRef) -> bool {
+    let is_spill_err = |s: &Sheet, cell: CellRef| s.cell(cell).is_some_and(|cl| cl.value == Value::Error(gridcraft_core::CellError::Spill));
+    if (x.spill_ranges.contains_key(&c) && is_spill_err(y, c)) || (y.spill_ranges.contains_key(&c) && is_spill_err(x, c)) {
+        return true;
+    }
+    let in_competing_range =
+        |s_spilled: &Sheet, s_err: &Sheet| s_spilled.spill_ranges.iter().any(|(anchor, r)| r.contains(c) && is_spill_err(s_err, *anchor));
+    in_competing_range(x, y) || in_competing_range(y, x)
+}
+
 /// The first cell whose displayed value (own value or spilled) differs between two workbooks.
 fn value_diff(a: &Workbook, b: &Workbook, what: &str) -> Option<String> {
     for (x, y) in a.sheets.iter().zip(&b.sheets) {
@@ -433,6 +443,9 @@ fn value_diff(a: &Workbook, b: &Workbook, what: &str) -> Option<String> {
         for c in keys {
             let (va, vb) = (x.value(c), y.value(c));
             if !same_value(&va, &vb) {
+                if competing_spill(x, y, c) {
+                    continue;
+                }
                 let f = x.cell(c).and_then(|c| c.formula.as_ref()).map(|f| format!(" (formula ={})", f.text)).unwrap_or_default();
                 return Some(format!("{}!{c}{f}: {va:?} in memory, {vb:?} after {what}", x.name));
             }

@@ -186,6 +186,20 @@ fn keytip_es_() {
 }
 
 #[test]
+fn keytip_ei_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "EI", false);
+    assert_eq!(h.state().keytips.prefix(), Some("EI"), "EI must stay armed waiting for more input");
+}
+
+#[test]
+fn keytip_eij_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "EIJ", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "edit.fillJustify"), "EIJ must journal edit.fillJustify");
+}
+
+#[test]
 fn keytip_hoi_() {
     let mut h = harness(blank());
     sequence(&mut h, "HOI", false);
@@ -596,7 +610,7 @@ fn keytip_hfif_() {
 fn keytip_hfij_() {
     let mut h = harness(blank());
     sequence(&mut h, "HFIJ", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "home.justify"), "HFIJ must journal home.justify");
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "edit.fillJustify"), "HFIJ must journal edit.fillJustify");
 }
 
 #[test]
@@ -2741,7 +2755,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 364;
+    const EXPECTED: usize = 366;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 

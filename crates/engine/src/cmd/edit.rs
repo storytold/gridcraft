@@ -92,6 +92,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             fill_series
         ),
+        cmd!(
+            "edit.fillJustify",
+            "Justify",
+            ["Home", "Editing", "Fill"],
+            None,
+            "{range?, allowOverflow?: bool, overwrite?: bool}",
+            has_doc,
+            fill_justify
+        ),
         cmd!("edit.flashFill", "Flash Fill", ["Home", "Editing", "Fill"], Some("Ctrl+E"), "{range?}", has_doc, flash_fill),
         cmd!(noundo "edit.find", "Find…", ["Home", "Editing", "Find & Select"], Some("Cmd+F"), "{what, matchCase?, wholeCell?, lookIn?: formulas|values, byColumns?, all?: bool, within?: sheet|workbook}", has_doc, find),
         cmd!(
@@ -1393,6 +1402,18 @@ fn flash_fill(s: &mut Session, p: &Json) -> Result<Json> {
         ));
     }
     Ok(json!({"filled": n}))
+}
+
+fn fill_justify(s: &mut Session, p: &Json) -> Result<Json> {
+    let sheet = target_sheet(s, p)?;
+    let r = target_range(s, p)?;
+    if r.count() > 10_000_000 {
+        return Err(bad("edit.fillJustify", "range too large"));
+    }
+    let allow_overflow = bool_param(p, "allowOverflow").unwrap_or(true);
+    let overwrite = bool_param(p, "overwrite").unwrap_or(false);
+    let n = edit(s, |cx| crate::fill::justify(cx, sheet, r, allow_overflow, overwrite))?;
+    Ok(json!({"lines": n}))
 }
 
 // ---------------------------------------------------------------- find & replace

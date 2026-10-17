@@ -109,6 +109,18 @@
    "excel": "Classic Paste Special dialog (legacy Edit route); A/F/T/V are dialog mnemonics"
   },
   {
+   "seq": "EI",
+   "kind": "continue",
+   "excel": "Fill",
+   "note": "Legacy Edit > Fill"
+  },
+  {
+   "seq": "EIJ",
+   "kind": "command",
+   "target": "edit.fillJustify",
+   "excel": "Fill Justify (legacy Alt+E, I, J)"
+  },
+  {
    "seq": "HOI",
    "kind": "command",
    "target": "home.autofitColumnWidth"
@@ -504,7 +516,7 @@
   {
    "seq": "HFIJ",
    "kind": "command",
-   "target": "home.justify",
+   "target": "edit.fillJustify",
    "excel": "Fill Justify",
    "note": "containment(Justify)"
   },

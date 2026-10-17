@@ -642,6 +642,15 @@ fn symbols() -> Vec<(String, u32)> {
     ] {
         v.push((format!("{d}/DejaVuSans.ttf"), 0));
     }
+    for d in [
+        "/usr/share/fonts/noto",
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/opentype/noto",
+        "/usr/share/fonts/google-noto",
+        "/usr/local/share/fonts/noto",
+    ] {
+        v.push((format!("{d}/NotoSansSymbols-Regular.ttf"), 0));
+    }
     v
 }
 

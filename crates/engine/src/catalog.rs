@@ -94,6 +94,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("edit.fillUp", "Home", "Editing", "Fill Up"),
     ("edit.fillLeft", "Home", "Editing", "Fill Left"),
     ("edit.fillSeries", "Home", "Editing", "Series"),
+    ("edit.fillJustify", "Home", "Editing", "Justify"),
     ("edit.flashFill", "Home", "Editing", "Flash Fill"),
     ("edit.clearAll", "Home", "Editing", "Clear All"),
     ("edit.clearFormats", "Home", "Editing", "Clear Formats"),

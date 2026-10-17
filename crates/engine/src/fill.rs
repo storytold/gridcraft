@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use gridcraft_core::date::{MONTHS, WEEKDAYS, datetime_from_serial, days_in_month, serial_from_ymd};
 use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::{Cell, Formula};
+use gridcraft_model::{Cell, Formula, StyleId};
 use gridcraft_numfmt::{FormatKind, NumberFormat};
 
 use crate::Result;
@@ -599,6 +599,161 @@ fn synthesize(src: &str, dst: &str) -> Vec<Program> {
     out
 }
 
+/// Reflows text across selected cells (Excel Home > Editing > Fill > Justify).
+///
+/// Ingests text from cells in the selected range, word-wraps it to fit the combined
+/// column width of the selected columns, and writes the reflowed lines into the
+/// leftmost column of the range.
+///
+/// Occupied-cell & overflow rules:
+/// - Cells within the selection that are not needed for the reflowed lines (or in other columns)
+///   are cleared.
+/// - If the reflowed text requires more rows than the selection provides (`allow_overflow: true` by default),
+///   it extends downward into subsequent rows in the leftmost column.
+/// - If `allow_overflow` is `false`, extending below the selection returns an error.
+/// - If extending below the selection would overwrite existing non-empty cells outside the selection,
+///   an error is returned unless `overwrite: true` is explicitly passed.
+/// - Formulas in the selection are not supported and return an error.
+pub fn justify(cx: &mut Ctx, sheet: usize, r: RangeRef, allow_overflow: bool, overwrite: bool) -> Result<usize> {
+    let Some(sh) = cx.wb.sheet(sheet) else { return Ok(0) };
+
+    // 1. Calculate max characters per line based on total column width across selected columns.
+    let total_width: f32 = (r.start.col..=r.end.col).map(|c| sh.col_width(c)).sum();
+    let char_capacity = gridcraft_model::points_to_chars(total_width as f64).floor() as usize;
+    let max_line_len = char_capacity.clamp(1, 255);
+
+    // 2. Gather text and check for formulas.
+    let mut words: Vec<String> = Vec::new();
+    let mut style_to_use = StyleId::DEFAULT;
+    let mut found_style = false;
+
+    for row in r.start.row..=r.end.row {
+        for col in r.start.col..=r.end.col {
+            let c = CellRef::new(row, col);
+            if let Some(cell) = sh.cell(c) {
+                if cell.formula.is_some() {
+                    return Err(crate::cmd::bad("edit.fillJustify", "Cannot justify cells containing formulas"));
+                }
+                if !found_style && !cell.is_blank() {
+                    style_to_use = cell.style;
+                    found_style = true;
+                }
+                match &cell.value {
+                    Value::Empty => {}
+                    Value::Text(t) => {
+                        for w in t.split_whitespace() {
+                            words.push(w.to_string());
+                        }
+                    }
+                    v => {
+                        let text = v.display();
+                        for w in text.split_whitespace() {
+                            words.push(w.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if words.is_empty() {
+        return Ok(0);
+    }
+
+    // 3. Word-wrap the words into lines according to max_line_len.
+    // Like Excel, words are kept intact (never sliced or hyphenated).
+    // If a single word exceeds max_line_len, it occupies its own line unbroken.
+    let mut lines: Vec<String> = Vec::new();
+    let mut current_line = String::new();
+
+    for word in words {
+        let word_len = word.chars().count();
+        if current_line.is_empty() {
+            current_line = word;
+        } else if current_line.chars().count() + 1 + word_len <= max_line_len {
+            current_line.push(' ');
+            current_line.push_str(&word);
+        } else {
+            lines.push(current_line);
+            current_line = word;
+        }
+    }
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+
+    let n = lines.len();
+    if n == 0 {
+        return Ok(0);
+    }
+
+    // 4. Check bounds, overflow, and occupied cells.
+    let target_col = r.start.col;
+    let target_start_row = r.start.row;
+    let target_end_row = target_start_row.saturating_add(n as u32 - 1);
+
+    if target_end_row >= gridcraft_core::MAX_ROWS {
+        return Err(crate::cmd::bad("edit.fillJustify", "Text extends beyond sheet bounds"));
+    }
+
+    let range_height = r.height() as usize;
+    if n > range_height {
+        if !allow_overflow {
+            return Err(crate::cmd::bad("edit.fillJustify", "Text will extend below selected range"));
+        }
+        if !overwrite {
+            for row in (r.end.row + 1)..=target_end_row {
+                let c = CellRef::new(row, target_col);
+                if let Some(cell) = sh.cell(c)
+                    && !cell.is_blank()
+                    && !cell.value.is_empty()
+                {
+                    return Err(crate::cmd::bad("edit.fillJustify", "Text will extend below selected range and overwrite existing data"));
+                }
+            }
+        }
+    }
+
+    // 5. Apply the writes.
+    let mut writes: Vec<(CellRef, Option<Cell>)> = Vec::new();
+
+    for (i, line) in lines.iter().enumerate() {
+        let c = CellRef::new(target_start_row + i as u32, target_col);
+        let cell = Cell { value: Value::Text(Arc::from(line.as_str())), formula: None, style: style_to_use };
+        writes.push((c, Some(cell)));
+    }
+
+    if n < range_height {
+        for row in (target_start_row + n as u32)..=r.end.row {
+            let c = CellRef::new(row, target_col);
+            writes.push((c, None));
+        }
+    }
+
+    for col in (r.start.col + 1)..=r.end.col {
+        for row in r.start.row..=r.end.row {
+            let c = CellRef::new(row, col);
+            writes.push((c, None));
+        }
+    }
+
+    let sh_mut = cx.sheet_mut(sheet)?;
+    for (c, cell) in &writes {
+        match cell {
+            Some(x) => sh_mut.set_cell(*c, x.clone()),
+            None => {
+                sh_mut.remove_cell(*c);
+            }
+        }
+    }
+
+    for (c, _) in writes {
+        cx.touch(sheet, c);
+    }
+
+    Ok(n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -651,5 +806,87 @@ mod tests {
         let sh = d.wb.active().unwrap();
         let growth: Vec<String> = (1..6).map(|r| crate::display::cell_text(&d.wb, sh, CellRef::new(r, 0))).collect();
         assert_eq!(growth, ["2.5", "1.25", "", "", ""]);
+    }
+
+    #[test]
+    fn fill_justify_basic_reflow_and_consolidation() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+
+        // 1. Consolidation of fragmented rows across wider column selection
+        s.execute("cell.set", serde_json::json!({"cell": "A1", "input": "Quick"})).unwrap();
+        s.execute("cell.set", serde_json::json!({"cell": "A2", "input": "brown"})).unwrap();
+        s.execute("cell.set", serde_json::json!({"cell": "A3", "input": "fox"})).unwrap();
+        s.execute("cell.set", serde_json::json!({"cell": "A4", "input": "jumps"})).unwrap();
+        // A1:C4 has 3 columns width (~25 chars capacity)
+        let res = s.execute("edit.fillJustify", serde_json::json!({"range": "A1:C4"})).unwrap();
+        assert_eq!(res["lines"], 1);
+
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::new(0, 0)), "Quick brown fox jumps");
+        // Rows 2, 3, 4 should be cleared
+        assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::new(1, 0)), "");
+        assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::new(2, 0)), "");
+        assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::new(3, 0)), "");
+    }
+
+    #[test]
+    fn fill_justify_overflow_and_overwrite_guards() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+
+        // Put a long sentence in A1
+        s.execute("cell.set", serde_json::json!({"cell": "A1", "input": "The quick brown fox jumps over the lazy dog"})).unwrap();
+
+        // Single cell A1: width is 8 chars, needs ~7 lines
+        // allowOverflow: false should fail if range is only 1 row
+        let err = s.execute("edit.fillJustify", serde_json::json!({"range": "A1", "allowOverflow": false}));
+        assert!(err.is_err(), "should fail without allowOverflow");
+
+        // Occupied cell below selection: put something in A3
+        s.execute("cell.set", serde_json::json!({"cell": "A3", "input": "Don't overwrite me"})).unwrap();
+        // Selecting A1:A2 with overflow into A3 without overwrite: true should fail
+        let err_occupied = s.execute("edit.fillJustify", serde_json::json!({"range": "A1:A2", "allowOverflow": true, "overwrite": false}));
+        assert!(err_occupied.is_err(), "should fail when cell below is occupied without overwrite flag");
+
+        // Now with overwrite: true, it should succeed
+        let ok = s.execute("edit.fillJustify", serde_json::json!({"range": "A1:A2", "allowOverflow": true, "overwrite": true}));
+        assert!(ok.is_ok(), "should succeed with overwrite: true");
+    }
+
+    #[test]
+    fn fill_justify_refuses_formulas() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+
+        s.execute("cell.set", serde_json::json!({"cell": "A1", "input": "=1+1"})).unwrap();
+        let err = s.execute("edit.fillJustify", serde_json::json!({"range": "A1:A3"}));
+        assert!(err.is_err(), "cannot justify formulas");
+    }
+
+    #[test]
+    fn fill_justify_never_chops_words() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+
+        // "repeatedly" is 10 chars. Default column width capacity is 8 chars.
+        s.execute("cell.set", serde_json::json!({"cell": "A1", "input": "Hello repeatedly world"})).unwrap();
+        // Justify within single column A (A1:A5)
+        s.execute("edit.fillJustify", serde_json::json!({"range": "A1:A5"})).unwrap();
+
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::new(0, 0)), "Hello");
+        assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::new(1, 0)), "repeatedly");
+        assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::new(2, 0)), "world");
+
+        // Now justify across 3 columns (A1:C5) to recombine
+        s.execute("edit.fillJustify", serde_json::json!({"range": "A1:C5"})).unwrap();
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::new(0, 0)), "Hello repeatedly world");
+        assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::new(1, 0)), "");
+        assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::new(2, 0)), "");
     }
 }

@@ -24,6 +24,8 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("HAC", Entry::Finish(Action::Command("home.alignCenter"))),
     ("HVS", Entry::Finish(Action::Dialog("pasteSpecial"))),
     ("ES", Entry::Finish(Action::Dialog("pasteSpecial"))), // Excel: Classic Paste Special dialog (legacy Edit route); A/F/T/V are dialog mnemonics
+    ("EI", Entry::Continue),                               // Excel: Fill; Legacy Edit > Fill
+    ("EIJ", Entry::Finish(Action::Command("edit.fillJustify"))), // Excel: Fill Justify (legacy Alt+E, I, J)
     ("HOI", Entry::Finish(Action::Command("home.autofitColumnWidth"))),
     ("OCA", Entry::Finish(Action::Command("home.autofitColumnWidth"))), // Legacy Format menu.
     ("WVG", Entry::Finish(Action::Command("view.gridlines"))),
@@ -81,7 +83,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("HFIA", Entry::Finish(Action::Pending("home.fillAcrossWorksheets"))), // pending; Excel: Fill Across Worksheets; Fill Across Worksheets; reserved until the command lands
     ("HFID", Entry::Finish(Action::Command("edit.fillDown"))),             // Excel: Fill Down
     ("HFIF", Entry::Finish(Action::Command("edit.flashFill"))),            // Excel: Flash Fill
-    ("HFIJ", Entry::Finish(Action::Command("home.justify"))),              // Excel: Fill Justify; containment(Justify)
+    ("HFIJ", Entry::Finish(Action::Command("edit.fillJustify"))),          // Excel: Fill Justify; containment(Justify)
     ("HFIL", Entry::Finish(Action::Command("edit.fillLeft"))),             // Excel: Fill Left
     ("HFIR", Entry::Finish(Action::Command("edit.fillRight"))),            // Excel: Fill Right
     ("HFIS", Entry::Finish(Action::Dialog("series"))),                     // Excel: Fill Series; containment(Series)
