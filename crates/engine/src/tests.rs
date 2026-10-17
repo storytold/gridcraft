@@ -3282,3 +3282,71 @@ fn paste_special_validation_moves_relative_references() {
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
 }
+
+/// Protect Sheet's Delete Rows and Delete Columns can actually be used. The line-level check read
+/// a line without a format of its own as carrying the default style, which is locked, so every
+/// delete was refused however the permission was set — and the cell scan after it never ran.
+#[test]
+fn a_protected_sheet_deletes_lines_when_it_says_so() {
+    fn grant(sess: &mut Session) {
+        let d = sess.doc_mut().unwrap();
+        let mut wb = (*d.wb).clone();
+        if let Some(p) = wb.sheet_mut(0).and_then(|sh| sh.protection.as_mut()) {
+            p.delete_rows = true;
+            p.delete_columns = true;
+        }
+        d.wb = std::sync::Arc::new(wb);
+    }
+    let book = |unlock: bool| {
+        let mut sess = s();
+        for (c, v) in [("A1", "1"), ("A2", "2"), ("A3", "3")] {
+            sess.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+        }
+        if unlock {
+            sess.execute("home.lockCell", json!({"range": "A1:D10", "on": false})).unwrap();
+        }
+        sess.execute("review.protectSheet", json!({})).unwrap();
+        sess
+    };
+
+    // Granted, over cells the user unlocked: the row goes, and the rows below move up.
+    let mut sess = book(true);
+    grant(&mut sess);
+    sess.execute("selection.set", json!({"range": "A1:A1"})).unwrap();
+    sess.execute("home.deleteRows", json!({})).unwrap();
+    assert_eq!((v(&sess, "A1"), v(&sess, "A2")), (Value::Number(2.0), Value::Number(3.0)));
+    sess.execute("home.deleteColumns", json!({})).unwrap();
+    assert_eq!(v(&sess, "A1"), Value::Empty);
+
+    // Not granted: refused, and the rows stay.
+    let mut sess = book(true);
+    sess.execute("selection.set", json!({"range": "A1:A1"})).unwrap();
+    assert!(sess.execute("home.deleteRows", json!({})).is_err(), "Delete rows is off");
+    assert!(sess.execute("home.deleteColumns", json!({})).is_err(), "Delete columns is off");
+    assert_eq!(v(&sess, "A1"), Value::Number(1.0));
+
+    // Granted, but the cells are locked: still refused, as Excel refuses a delete that would take
+    // a locked cell with it. This is the check that the line-level one used to hide.
+    let mut sess = book(false);
+    grant(&mut sess);
+    sess.execute("selection.set", json!({"range": "A1:A1"})).unwrap();
+    assert!(sess.execute("home.deleteRows", json!({})).is_err(), "locked cells are not deleted");
+    assert_eq!(v(&sess, "A1"), Value::Number(1.0));
+
+    // Granted, and the row carries a locked format of its own: refused by the line-level check,
+    // which is what it is for. The format has to go on before the sheet is protected, since
+    // changing a format on a protected sheet is itself refused.
+    let mut sess = s();
+    sess.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    sess.execute("home.lockCell", json!({"range": "A1:D10", "on": false})).unwrap();
+    sess.execute("home.lockCell", json!({"range": "A5:XFD5", "on": true})).unwrap();
+    sess.execute("review.protectSheet", json!({})).unwrap();
+    grant(&mut sess);
+    sess.execute("selection.set", json!({"range": "A5:A5"})).unwrap();
+    assert!(sess.execute("home.deleteRows", json!({})).is_err(), "a locked row format still refuses");
+
+    // An unprotected sheet is untouched by any of this.
+    let mut sess = s();
+    sess.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    sess.execute("home.deleteRows", json!({})).unwrap();
+}
