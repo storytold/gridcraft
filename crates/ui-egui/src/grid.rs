@@ -2748,6 +2748,20 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
     let _ = geo;
     // Tables get an autofilter on demand.
     let table_range = filter_table_range(sh, col, row);
+    // Clicking a filter arrow does not move the selection. Sort its range explicitly, leaving
+    // table totals outside the body even when another table or region is selected (#1097).
+    let sort_range = table_range
+        .map(|r| {
+            let last_row = sh.table_at(r.start).and_then(|t| t.data_range()).map_or(r.start.row, |data| data.end.row);
+            RangeRef::new(r.start, CellRef::new(last_row, r.end.col))
+        })
+        .or_else(|| {
+            sh.autofilter.as_ref().filter(|f| f.range.start.row == row && col >= f.range.start.col && col <= f.range.end.col).map(|f| f.range)
+        });
+    let Some(sort_range) = sort_range else {
+        app.grid.filter_menu = None;
+        return;
+    };
     if sh.autofilter.is_none()
         && let Some(r) = table_range
     {
@@ -2782,12 +2796,12 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             ui.set_width(230.0);
             let ascending = ui.button("↑  Sort Ascending");
             if ascending.clicked() {
-                let _ = app.run("data.sortAscending", json!({"column": col_to_letters(col)}));
+                let _ = app.run("data.sortAscending", json!({"range": sort_range.a1(), "column": col_to_letters(col), "header": true}));
                 close = true;
             }
             let descending = ui.button("↓  Sort Descending");
             if descending.clicked() {
-                let _ = app.run("data.sortDescending", json!({"column": col_to_letters(col)}));
+                let _ = app.run("data.sortDescending", json!({"range": sort_range.a1(), "column": col_to_letters(col), "header": true}));
                 close = true;
             }
             ui.separator();
