@@ -737,7 +737,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
     // Headers.
     if sh.show_headings {
-        paint_headers(&painter, &geo, sh, &sel, &t, &quads);
+        let headings = table_headings(&geo, sh, sel.active);
+        paint_headers(&painter, &geo, sh, &sel, &t, &quads, &headings);
         paint_freeze_handles(&painter, &geo, sh, &app.grid.drag, &t);
     }
     crate::outline::paint(&painter, &geo, sh, &t);
@@ -1387,10 +1388,7 @@ pub(crate) fn paint_quadrant(
         if !range.contains(c) {
             continue;
         }
-        let r = filter_button_rect(geo, sh, c);
-        p.rect_filled(r, 2.0, Color32::from_gray(250));
-        p.rect_stroke(r, 2.0, Stroke::new(1.0, Color32::from_gray(170)), StrokeKind::Inside);
-        crate::icons::paint(p, r.shrink(1.5), if active { crate::icons::Icon::Filter } else { crate::icons::Icon::Chevron }, Color32::from_gray(70));
+        paint_filter_button(p, filter_button_rect(geo, sh, c), active);
     }
 }
 
@@ -1400,6 +1398,67 @@ pub fn filter_button_rect(geo: &Geo, sh: &Sheet, c: CellRef) -> Rect {
     let pad = 2.0 * geo.z;
     let s = (rect.height() - 4.0).clamp(10.0, 18.0).min((sh.filter_button_space(c) * geo.z - pad).max(0.0));
     Rect::from_min_size(pos2(rect.right() - s - pad, rect.bottom() - s - pad), vec2(s, s))
+}
+
+/// A Table column heading that shows the column's header name in place of its letters.
+#[derive(Clone, Debug)]
+pub struct TableHeading {
+    pub col: u32,
+    /// The table's header row, which the filter menu is keyed by.
+    pub header_row: u32,
+    pub name: String,
+    /// The heading slot over the column (logical coordinates).
+    pub rect: Rect,
+    /// The filter button, when the table shows filter buttons.
+    pub button: Option<Rect>,
+    /// The column is filtered (the button shows the funnel).
+    pub filtered: bool,
+}
+
+/// The Table whose header names replace the column letters: the one holding the active cell,
+/// with its header row scrolled out of view and some of its rows still in view (Excel, #1423).
+pub fn heading_table<'a>(geo: &Geo, sh: &'a Sheet, active: CellRef) -> Option<&'a gridcraft_engine::model::Table> {
+    // Page Layout view keeps the letters.
+    if geo.paper.is_some() || geo.header_h <= 0.0 {
+        return None;
+    }
+    let tb = sh.tables.iter().find(|t| t.header_row && t.range.contains(active))?;
+    let header = tb.range.start.row;
+    // A header row in the frozen rows is always on screen.
+    if header < geo.fr {
+        return None;
+    }
+    let top = geo.cells.top() + geo.frozen_h;
+    let bottom = |r: u32| geo.y(sh, r) + sh.row_height(r) * geo.z;
+    (bottom(header) <= top + 0.5 && bottom(tb.range.end.row) > top + 0.5).then_some(tb)
+}
+
+/// The headings of `heading_table`'s visible columns.
+pub fn table_headings(geo: &Geo, sh: &Sheet, active: CellRef) -> Vec<TableHeading> {
+    let Some(tb) = heading_table(geo, sh, active) else { return Vec::new() };
+    let af = sh.autofilter.as_ref().filter(|af| af.range == tb.range);
+    let mut out = Vec::new();
+    for col in tb.range.start.col..=tb.range.end.col {
+        let w = sh.col_width(col) * geo.z;
+        let off = col - tb.range.start.col;
+        let Some(column) = tb.columns.get(off as usize) else { continue };
+        if w <= 0.0 {
+            continue;
+        }
+        let rect = Rect::from_min_size(pos2(geo.x(sh, col), geo.head_top()), vec2(w, geo.header_h));
+        // Clear of the 4-point column resize edge, and never wider than the column.
+        let s = (rect.height() - 6.0).clamp(10.0, 16.0).min(w - 7.0);
+        let button = (tb.filter_button && s > 0.0).then(|| Rect::from_min_size(pos2(rect.right() - s - 5.0, rect.center().y - s / 2.0), vec2(s, s)));
+        let filtered = tb.filter.iter().any(|(o, _)| *o == off) || af.is_some_and(|af| af.criteria.iter().any(|(o, _)| *o == off));
+        out.push(TableHeading { col, header_row: tb.range.start.row, name: column.name.clone(), rect, button, filtered });
+    }
+    out
+}
+
+fn paint_filter_button(p: &Painter, r: Rect, filtered: bool) {
+    p.rect_filled(r, 2.0, Color32::from_gray(250));
+    p.rect_stroke(r, 2.0, Stroke::new(1.0, Color32::from_gray(170)), StrokeKind::Inside);
+    crate::icons::paint(p, r.shrink(1.5), if filtered { crate::icons::Icon::Filter } else { crate::icons::Icon::Chevron }, Color32::from_gray(70));
 }
 
 /// The outline segments of merged area `m` drawn at `rect`: the top and left edges come from the
@@ -1696,6 +1755,7 @@ pub(crate) fn paint_headers(
     sel: &gridcraft_engine::Selection,
     t: &Tokens,
     quads: &[((u32, u32), (u32, u32), Rect)],
+    headings: &[TableHeading],
 ) {
     let font = theme::ui_font((11.5 * (geo.z / DISPLAY_SCALE).max(0.75)).min(16.0));
     // The headers' own area: inside the outline bands.
@@ -1731,7 +1791,21 @@ pub(crate) fn paint_headers(
                 }
                 pc.line_segment([pos2(cr.right() - 0.5, cr.top() + 3.0), pos2(cr.right() - 0.5, cr.bottom())], Stroke::new(1.0, t.header_line));
                 let color = if col_sel(c) { t.header_sel_text } else { t.header_text };
-                pc.text(cr.center(), Align2::CENTER_CENTER, col_to_letters(c), font.clone(), color);
+                match headings.iter().find(|h| h.col == c) {
+                    Some(h) => {
+                        // The name is cut off at the button, as a cell's text is at its neighbour.
+                        let end = h.button.map_or(cr.right(), |b| b.left()) - 2.0;
+                        let room = Rect::from_min_max(cr.min, pos2(end.max(cr.left()), cr.bottom())).intersect(pc.clip_rect());
+                        let pad = 4.0 * (geo.z / DISPLAY_SCALE).max(0.75);
+                        pc.with_clip_rect(room).text(pos2(cr.left() + pad, cr.center().y), Align2::LEFT_CENTER, &h.name, font.clone(), color);
+                        if let Some(b) = h.button {
+                            paint_filter_button(&pc, b, h.filtered);
+                        }
+                    }
+                    None => {
+                        pc.text(cr.center(), Align2::CENTER_CENTER, col_to_letters(c), font.clone(), color);
+                    }
+                }
             }
         }
         let pr = p.with_clip_rect(Rect::from_min_max(pos2(left.left(), clip.top()), pos2(left.right(), clip.bottom())));
@@ -2016,6 +2090,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 return;
             }
             let c = geo.col_at(sh, p.x);
+            // A Table heading's filter button, while the header names stand in for the letters.
+            if let Some(h) = table_headings(geo, sh, sel.active).into_iter().find(|h| h.col == c && h.button.is_some_and(|b| b.contains(p))) {
+                app.grid.filter_menu = Some((c, h.header_row, geo.mirror_pos(p)));
+                return;
+            }
             if point_header(app, wb, sh, RangeRef::cols(c, c)) {
                 return;
             }
