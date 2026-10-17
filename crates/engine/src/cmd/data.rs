@@ -581,6 +581,11 @@ fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
     }
 }
 
+/// The filter's "(Blanks)" group: truly empty cells and zero-length text such as a `=""` result.
+fn filter_blank(v: &Value) -> bool {
+    v.is_empty() || matches!(v, Value::Text(t) if t.is_empty())
+}
+
 /// Hides rows of the autofilter range that fail any criterion.
 pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
     let Some(sh) = wb.sheet(sheet) else { return };
@@ -614,7 +619,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             let text = crate::display::cell_text(wb, sh, c);
             let ok = match crit {
                 FilterCriterion::Values { values, blanks } => {
-                    if v.is_empty() {
+                    if filter_blank(&v) {
                         *blanks
                     } else {
                         values.iter().any(|x| x.eq_ignore_ascii_case(&text) || x.eq_ignore_ascii_case(&v.display()))
@@ -701,10 +706,11 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
     for row in af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000) {
         let c = CellRef::new(row, col);
         let v = sh.value(c);
-        let t = if v.is_empty() { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
+        let blank = filter_blank(&v);
+        let t = if blank { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
         let on = match selected {
             Some(FilterCriterion::Values { values, blanks }) => {
-                if v.is_empty() {
+                if blank {
                     *blanks
                 } else {
                     values.iter().any(|x| x.eq_ignore_ascii_case(&t))
@@ -712,7 +718,8 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
             }
             _ => true,
         };
-        seen.entry((sort_key(&v), t)).or_insert(on);
+        let key = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
+        seen.entry((key, t)).or_insert(on);
     }
     seen.into_iter().map(|((_, t), on)| (t, on)).collect()
 }
@@ -1312,6 +1319,21 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_blanks_include_empty_text_and_formula_results() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["id", "f"], ["e", null], ["ef", "=\"\""], ["sp", " "], ["z", 0]]})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:B5"})).unwrap();
+        let r = s.execute("data.filterBy", json!({"column": "B", "values": [], "blanks": true})).unwrap();
+        assert_eq!(r["hiddenRows"], json!(2));
+        let vals = filter_values(&s.doc().unwrap().wb, 0, 1);
+        // The `=""` result joins (Blanks) instead of showing as its own empty entry.
+        assert!(!vals.iter().any(|(t, _)| t.is_empty()), "{vals:?}");
+        let blanks: Vec<_> = vals.into_iter().filter(|(t, _)| t == "(Blanks)").collect();
+        assert_eq!(blanks, vec![("(Blanks)".to_string(), true)]);
+    }
 
     #[test]
     fn filter_by_huge_numeric_column_is_rejected_not_overflowed() {
