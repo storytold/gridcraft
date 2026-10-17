@@ -198,6 +198,15 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("app.language.set", "Interface Language", "{language: \"en\"|\"zh\"|\"ja\"|\"ko\"|\"ru\"|\"pt\"|\"de\"|\"cs\"} (alias: code)"),
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),
+                ("cloud.open", "Open from the Cloud", "{} opens File › Open and lists your cloud files"),
+                ("cloud.browse", "Browse a Cloud Folder", "{path?} (the root when empty) → the folder being listed"),
+                ("cloud.shared", "List Shared With Me", "{}"),
+                ("cloud.openFile", "Open a Cloud File", "{id} | {name}, from the current listing"),
+                ("cloud.save", "Save to the Cloud", "{} writes back under the version the document was opened at"),
+                ("cloud.saveAs", "Save to the Cloud As", "{folder, name} saves at once; without them, opens File › Save As on the cloud"),
+                ("cloud.reload", "Reload from the Cloud", "{} replaces local edits with the stored copy"),
+                ("cloud.link", "Link a Cloud Account", "{}"),
+                ("cloud.status", "Cloud Status", "{} → account, capabilities, folder, transfer in flight, conflict, origin"),
             ] {
                 v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
             }

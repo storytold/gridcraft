@@ -16,6 +16,7 @@ use egui::{Align2, Color32, Key, Modifiers, Rect, RichText, Sense, Stroke, Strok
 use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
+use crate::cloud;
 use crate::i18n::{self, Language};
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
@@ -116,6 +117,10 @@ pub struct Backstage {
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
+    /// Save As: the chosen destination, once the user has picked one. `None`
+    /// follows the workbook, so one that came from the cloud offers the cloud
+    /// first and everything else starts on this computer.
+    pub save_to_cloud: Option<bool>,
 }
 
 /// Save As file types: (extension, label). The first is the workbook itself; the others are
@@ -134,6 +139,7 @@ impl Backstage {
             preview: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
+            save_to_cloud: None,
         }
     }
 }
@@ -240,7 +246,9 @@ fn save(app: &mut SheetApp, out: &mut Outcome) {
     if !app.commit_edit(0, 0, false, false) {
         return;
     }
-    if app.session.active().is_some_and(|d| d.path.is_some()) {
+    // A workbook that came from the cloud already has a destination too, and
+    // `SheetApp::run` sends its Save back there (see `cloud::save`).
+    if app.session.active().is_some_and(|d| d.path.is_some()) || cloud::has_target(app) {
         app.run_or_alert("file.save", json!({}));
         out.close = true;
     } else {
@@ -517,6 +525,25 @@ fn action_row(ui: &mut Ui, icon: Icon, title: &str, detail: &str) -> egui::Respo
     resp
 }
 
+/// A selectable destination on the Save As page (icon, title, one-line detail).
+fn place_row(ui: &mut Ui, icon: Icon, title: &str, detail: &str, selected: bool) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let width = ui.available_width().min(CONTENT_W);
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 52.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, title));
+    let p = ui.painter();
+    if selected {
+        p.rect_filled(rect, 4.0, t.accent_soft);
+        p.rect_stroke(rect, 4.0, Stroke::new(1.0, t.accent), StrokeKind::Inside);
+    } else if resp.hovered() {
+        p.rect_filled(rect, 4.0, t.hover);
+    }
+    icons::paint(p, Rect::from_center_size(pos2(rect.left() + 24.0, rect.center().y), vec2(22.0, 22.0)), icon, t.text);
+    p.text(pos2(rect.left() + 52.0, rect.center().y - 8.0), Align2::LEFT_CENTER, title, theme::ui_bold(13.5), t.text);
+    p.text(pos2(rect.left() + 52.0, rect.center().y + 9.0), Align2::LEFT_CENTER, detail, theme::ui_font(12.0), t.text_dim);
+    resp
+}
+
 /// A bordered square command button (Browse…, Print, Protect Workbook).
 fn square_button(ui: &mut Ui, icon: Icon, label: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
@@ -561,6 +588,12 @@ fn open_page(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outc
         if app.session.active().map(|d| d.uid) != before {
             out.close = true;
         }
+    }
+    // Cloud storage sits beside the local picker and never in place of it.
+    if cloud::available(app) {
+        ui.add_space(22.0);
+        section(ui, lang, "Cloud");
+        cloud::open_page(app, ui);
     }
     ui.add_space(22.0);
     section(ui, lang, "Recent");
@@ -656,6 +689,28 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     let lang = app.ui.language;
     dim(ui, lang.tr("Save the workbook under another name or in another folder."));
     ui.add_space(14.0);
+    // Where to save, when there is more than one answer to that.
+    let to_cloud = bs.save_to_cloud.unwrap_or_else(|| cloud::prefers_cloud(app));
+    if cloud::available(app) {
+        section(ui, lang, "Where");
+        // Named here, before anything is picked, so the destination reads as
+        // the user's own account and not as a generic place.
+        cloud::start(app);
+        let account = cloud::destination_name(app);
+        if place_row(ui, Icon::Save, lang.tr("This PC"), lang.tr("A folder on this computer"), !to_cloud).clicked() {
+            bs.save_to_cloud = Some(false);
+        }
+        if place_row(ui, Icon::Share, &account, lang.tr("Your cloud account"), to_cloud).clicked() {
+            bs.save_to_cloud = Some(true);
+        }
+        ui.add_space(18.0);
+        if to_cloud {
+            if cloud::save_page(app, ui) {
+                out.close = true;
+            }
+            return;
+        }
+    }
     let fmt = bs.save_format;
     let current = SAVE_TYPES.iter().find(|(ext, _)| *ext == fmt).map_or("Excel Workbook (*.xlsx)", |(_, label)| *label);
     ui.horizontal(|ui| {

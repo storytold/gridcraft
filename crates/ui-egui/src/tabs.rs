@@ -237,6 +237,15 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     gridcraft_engine::Mode::Point => "Point",
                 };
                 ui.label(egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
+                // A cloud read or write in flight. The File view is usually
+                // closed by now, and a transfer nobody can see looks like a
+                // frozen window.
+                if let Some(busy) = app.cloud.busy.as_ref().map(crate::cloud::Busy::text) {
+                    ui.add_space(12.0);
+                    ui.add(egui::Spinner::new().size(12.0));
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(busy).font(theme::ui_font(12.5)).color(t.text_dim));
+                }
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);

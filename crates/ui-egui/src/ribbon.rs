@@ -34,12 +34,19 @@ const TITLE_BAR_H: f32 = if MAC { MAC_TITLE_BAR } else { 38.0 };
 /// The tallest title-bar controls, smaller on macOS to keep a margin in the shorter bar.
 const TITLE_CONTROL_H: f32 = if MAC { 22.0 } else { 26.0 };
 const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a margin above and below");
+/// Below this width the AutoSave label and toggle collapse into the More overflow menu, freeing
+/// space for the cloud account badge, presence bar, and Share split button that live at the right
+/// end of the title bar. Chosen to cover mobile viewports down to about 472 CSS px without
+/// affecting typical desktop or tablet widths (≥ 600 px).
+const AUTOSAVE_COLLAPSED_W: f32 = 560.0;
 
 pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let ch = TITLE_CONTROL_H;
     egui::Panel::top("title_bar").exact_size(TITLE_BAR_H).frame(egui::Frame::NONE.fill(t.window)).show(ui, |ui| {
         let rect = ui.max_rect();
+        // Below this width AutoSave moves into the More menu; see AUTOSAVE_COLLAPSED_W.
+        let narrow = rect.width() < AUTOSAVE_COLLAPSED_W;
         // Dragging the empty title area moves the window.
         let bg = ui.interact(rect, ui.id().with("drag_title"), Sense::click_and_drag());
         if bg.drag_started() {
@@ -52,17 +59,21 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
         ui.horizontal_centered(|ui| {
             ui.add_space(TITLE_LEFT_PAD);
             // AutoSave toggle (saves after each change when the workbook has a file).
-            ui.label(egui::RichText::new("AutoSave").font(theme::ui_font(12.5)).color(t.text_dim));
-            let on = app.grid.autosave();
-            let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
-            ui.painter().rect_filled(r, 8.0, if on { t.accent } else { Color32::TRANSPARENT });
-            ui.painter().rect_stroke(r, 8.0, Stroke::new(1.0, if on { t.accent } else { t.text_dim }), StrokeKind::Inside);
-            let knob = if on { pos2(r.right() - 8.0, r.center().y) } else { pos2(r.left() + 8.0, r.center().y) };
-            ui.painter().circle_filled(knob, 5.0, if on { Color32::WHITE } else { t.text_dim });
-            if resp.on_hover_text("AutoSave: save after every change (workbooks saved to a file)").clicked() {
-                app.grid.toggle_autosave();
+            // At narrow widths (< AUTOSAVE_COLLAPSED_W) this moves into the More popup so
+            // that the cloud account, presence, and Share controls always fit on the right.
+            if !narrow {
+                ui.label(egui::RichText::new("AutoSave").font(theme::ui_font(12.5)).color(t.text_dim));
+                let on = app.grid.autosave();
+                let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
+                ui.painter().rect_filled(r, 8.0, if on { t.accent } else { Color32::TRANSPARENT });
+                ui.painter().rect_stroke(r, 8.0, Stroke::new(1.0, if on { t.accent } else { t.text_dim }), StrokeKind::Inside);
+                let knob = if on { pos2(r.right() - 8.0, r.center().y) } else { pos2(r.left() + 8.0, r.center().y) };
+                ui.painter().circle_filled(knob, 5.0, if on { Color32::WHITE } else { t.text_dim });
+                if resp.on_hover_text("AutoSave: save after every change (workbooks saved to a file)").clicked() {
+                    app.grid.toggle_autosave();
+                }
+                ui.add_space(6.0);
             }
-            ui.add_space(6.0);
             let __k = icon_button(ui, Icon::Home, t.text_dim, "Home", vec2(26.0, ch));
             control_keytip(app, ui, &__k, "start");
             if __k.clicked() {
@@ -97,6 +108,16 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             }
             let more = icon_button(ui, Icon::More, t.text_dim, "More commands", vec2(26.0, ch));
             egui::Popup::menu(&more).show(|ui| {
+                // At narrow widths AutoSave is not in the toolbar; put it here so it stays
+                // reachable. It appears before the other items so it is easy to find.
+                if narrow {
+                    let on = app.grid.autosave();
+                    let autosave_label = if on { "AutoSave: On" } else { "AutoSave: Off" };
+                    if ui.button(autosave_label).on_hover_text("AutoSave: save after every change (workbooks saved to a file)").clicked() {
+                        app.grid.toggle_autosave();
+                    }
+                    ui.separator();
+                }
                 for (label, id) in [
                     ("New Workbook", "file.new"),
                     ("Open…", "file.open"),
@@ -124,24 +145,42 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
+                // Who is signed in and who else is here, at the far right,
+                // where every office suite puts them. Drawn first because
+                // this layout runs right to left.
+                crate::cloud::who(app, ui);
                 let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, ch));
                 control_keytip(app, ui, &__k, "commandSearch");
                 if __k.clicked() {
                     app.open_dialog("commandSearch", json!({}));
                 }
-                let share = small_button(ui, Icon::Share, "Share", "Share: export or save a copy", true);
-                egui::Popup::menu(&share).show(|ui| {
-                    if ui.button("Export as PDF…").clicked() {
-                        app.run_or_alert("file.exportPdf", json!({}));
+                // Share means share when there is somewhere to share to. The
+                // dialog itself lives in craft-ui, so every Craft app offers
+                // the same one. Without a service that reports sharing this
+                // falls back to the export menu the button used to be, rather
+                // than offering a share that would fail.
+                if crate::cloud::shares(app) {
+                    // A split button, drawn by craft-ui so every Craft app
+                    // offers the same one. Only the Save a Copy formats under
+                    // it are GridCraft's own.
+                    if let Some(fmt) = crate::cloud::share_button(app, ui, &crate::cloud::copies()) {
+                        app.open_dialog("saveCopy", json!({"format": fmt}));
                     }
-                    for (label, fmt) in
-                        [("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"), ("Export as CSV…", "csv"), ("Export as Web Page (.html)…", "html")]
-                    {
-                        if ui.button(label).clicked() {
-                            app.open_dialog("saveCopy", json!({"format": fmt}));
+                } else {
+                    let share = small_button(ui, Icon::Share, "Share", "Share: export or save a copy", true);
+                    egui::Popup::menu(&share).show(|ui| {
+                        if ui.button("Export as PDF…").clicked() {
+                            app.run_or_alert("file.exportPdf", json!({}));
                         }
-                    }
-                });
+                        for (label, fmt) in
+                            [("Save a Copy as Excel Workbook (.xlsx)…", "xlsx"), ("Export as CSV…", "csv"), ("Export as Web Page (.html)…", "html")]
+                        {
+                            if ui.button(label).clicked() {
+                                app.open_dialog("saveCopy", json!({"format": fmt}));
+                            }
+                        }
+                    });
+                }
                 let __k = icon_button(ui, Icon::Comment, t.text_dim, "Comments", vec2(28.0, ch));
                 control_keytip(app, ui, &__k, "comments");
                 if __k.clicked() {
@@ -2497,6 +2536,29 @@ mod title_bar_tests {
         let margin = (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
         let lights_end = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT;
         assert_eq!(MAC_CONTENT_LEFT - lights_end, margin);
+    }
+
+    #[test]
+    fn autosave_threshold_leaves_room_for_cloud_controls_at_mobile_width() {
+        // AUTOSAVE_COLLAPSED_W must exceed the 472-px mobile target so the toggle is
+        // already in the More menu by the time the viewport is that narrow.
+        assert!(AUTOSAVE_COLLAPSED_W > 472.0, "threshold ({AUTOSAVE_COLLAPSED_W} px) must exceed the 472-px mobile target");
+
+        // Without AutoSave the left-side QAT items occupy:
+        //   pad + Home + Save + Undo + Chevron + Redo + More, each with 8-px spacing after it.
+        let qat_w: f32 = TITLE_LEFT_PAD       // initial indent
+            + (26.0 + 8.0) * 4.0             // Home, Save, Undo, Redo
+            + (14.0 + 8.0)                   // undo-list chevron
+            + (26.0 + 8.0); // More + trailing gap before the RTL section
+        // Right-to-left section worst case: signed-in account badge + Search + Share split
+        // button + Comments + Appearance, each with 8-px leading gap, plus the 8-px right pad.
+        let rhs_w: f32 = 8.0                 // right-edge pad
+            + (26.0 + 8.0)                   // account badge
+            + (28.0 + 8.0)                   // Search
+            + (85.0 + 8.0)                   // Share split button (primary + chevron halves)
+            + (28.0 + 8.0)                   // Comments
+            + 28.0; // Appearance
+        assert!(qat_w + rhs_w <= 472.0, "QAT ({qat_w} px) + cloud controls ({rhs_w} px) = {} px must fit in 472 px", qat_w + rhs_w);
     }
 }
 

@@ -10,6 +10,7 @@ pub mod backstage;
 mod border_preview;
 mod cell_pictures;
 pub mod chartview;
+pub mod cloud;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
@@ -218,6 +219,20 @@ pub struct SheetApp {
     pub dialog: Option<dialogs::Dialog>,
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
+    /// Open and Save against cloud storage: the account, the folder being
+    /// browsed, transfers in flight, and where each open document came from.
+    /// The pages are `craft_ui`'s, so every Craft app offers the same ones.
+    /// Inert until the host connects a backend (see [`cloud`]).
+    pub cloud: cloud::CloudFiles,
+    /// The workbook snapshot each cloud save in flight encoded. Only GridCraft
+    /// knows what a version of a workbook is, so the pages do not hold these.
+    pub(crate) cloud_sent: cloud::Sent,
+    /// Giving other people access to this workbook. The dialog is `craft-ui`'s,
+    /// so every Craft app offers the same one. Inert until the host connects a
+    /// backend, and unavailable until that service says sharing exists.
+    pub share: craft_ui::share::ShareDialog,
+    /// Who else is in this document. Draws nothing when nobody is.
+    pub presence: craft_ui::presence::PresenceBar,
     pub message: Option<(String, String)>,
     pub toast: Option<(String, f64)>,
     /// Dismissible info bar under the ribbon (open-time notices).
@@ -275,6 +290,10 @@ impl SheetApp {
             text_box_editor: None,
             dialog: None,
             backstage: None,
+            cloud: cloud::CloudFiles::new(),
+            cloud_sent: cloud::Sent::new(),
+            share: craft_ui::share::ShareDialog::new(),
+            presence: craft_ui::presence::PresenceBar::new().badges_only(),
             message: None,
             toast: None,
             notice: None,
@@ -679,6 +698,81 @@ impl SheetApp {
                 self.notice = None;
                 Ok(Json::Null)
             }
+            // ---- cloud storage (File › Open, File › Save As)
+            //
+            // `file.save` is intercepted only for a workbook that came from
+            // the cloud and has no local file of its own, so saving a local
+            // workbook behaves exactly as it always did.
+            "file.save" if p.get("path").is_none() && cloud::has_target(self) => cloud::save(self),
+            "cloud.status" => Ok(cloud::status(self)),
+            "cloud.open" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                self.open_backstage(backstage::Page::Open);
+                cloud::start(self);
+                Ok(cloud::status(self))
+            }
+            "cloud.browse" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                let path = p.get("path").and_then(Json::as_str).unwrap_or("");
+                cloud::browse(self, path);
+                Ok(json!({"folder": path}))
+            }
+            "cloud.shared" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                cloud::load_shared(self);
+                Ok(Json::Null)
+            }
+            "cloud.link" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                cloud::link(self);
+                Ok(cloud::status(self))
+            }
+            // Opens something already listed, by id or by name. The listing is
+            // what the user can see, which keeps a scripted open and a clicked
+            // one on the same footing.
+            "cloud.openFile" => {
+                let id = p.get("id").and_then(Json::as_str);
+                let name = p.get("name").and_then(Json::as_str).unwrap_or("");
+                let found = self
+                    .cloud
+                    .mine
+                    .entries
+                    .iter()
+                    .chain(self.cloud.shared.entries.iter())
+                    .find(|e| id.is_some_and(|id| e.id == id) || (!name.is_empty() && e.name == name))
+                    .cloned();
+                match found {
+                    Some(entry) if cloud::opens(&entry) => {
+                        cloud::open_entry(self, entry, None);
+                        Ok(cloud::status(self))
+                    }
+                    Some(entry) => return Some(Err(format!("GridCraft cannot open {}", entry.name))),
+                    None => return Some(Err("no such file in the cloud listing".to_owned())),
+                }
+            }
+            "cloud.save" => cloud::save(self),
+            "cloud.saveAs" => match (p.get("folder").and_then(Json::as_str), p.get("name").and_then(Json::as_str)) {
+                (Some(folder), Some(name)) => cloud::save_as(self, folder, name),
+                _ => {
+                    if !cloud::available(self) {
+                        return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                    }
+                    self.open_backstage(backstage::Page::SaveAs);
+                    if let Some(backstage) = &mut self.backstage {
+                        backstage.save_to_cloud = Some(true);
+                    }
+                    Ok(cloud::status(self))
+                }
+            },
+            "cloud.reload" => cloud::reload_active(self),
             _ => return None,
         };
         Some(r)
@@ -1056,6 +1150,8 @@ impl SheetApp {
             ctx.request_repaint();
         }
         control::poll(self, ctx);
+        // Answers from the cloud worker, and anything still in flight.
+        cloud::pump(self, ctx);
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
             .services
@@ -1129,6 +1225,16 @@ impl SheetApp {
             });
         }
         dialogs::show(self, &ctx);
+        // Unconditional, because this is also where the share service's
+        // answers are collected, which has to keep happening while the dialog
+        // is shut.
+        self.share.show(&ctx);
+        // A share of a document that has never been saved. The dialog asked;
+        // only this side can serialise a workbook, so it answers.
+        share_save(self);
+        // Above the message box: a refused save has to be answered, and the
+        // answer decides what happens to the user's edits.
+        cloud::conflict_modal(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
         control::issue_screenshots(self, &ctx);
@@ -1258,4 +1364,35 @@ pub fn now_ms() -> f64 {
 
 pub fn cell(r: u32, c: u32) -> CellRef {
     CellRef::new(r, c)
+}
+
+/// Carry out a save the share dialog asked for, and report the outcome back.
+///
+/// Split into asking and answering because the save is asynchronous. The
+/// dialog waits, showing its own progress, until one of these arrives.
+fn share_save(app: &mut SheetApp) {
+    if let Some(request) = app.share.take_save_request() {
+        // One destination today. `request.destination` names which, and is
+        // carried through so a second provider needs no change here.
+        let _ = request.destination;
+        match cloud::save_as(app, "/", &request.name) {
+            Ok(_) => app.cloud.sharing_save = true,
+            Err(reason) => app.share.save_failed(reason),
+        }
+    }
+
+    // The worker reports by clearing `busy`. A new origin means it landed.
+    if app.cloud.sharing_save && app.cloud.busy.is_none() {
+        app.cloud.sharing_save = false;
+        match cloud::origin(app) {
+            Some(origin) => {
+                let (id, name) = (origin.entry.id.clone(), origin.entry.name.clone());
+                app.share.saved(id, name);
+            }
+            None => {
+                let reason = app.cloud.status.clone().unwrap_or_else(|| "the workbook was not saved".to_owned());
+                app.share.save_failed(reason);
+            }
+        }
+    }
 }

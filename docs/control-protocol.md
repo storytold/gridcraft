@@ -33,12 +33,45 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | `ui.ribbon` | `{tab}` | Switch ribbon tab |
 | `ui.dialog` / `ui.dialog.set` / `ui.dialog.confirm` / `ui.dialog.cancel` | `{name}` / `{field, value}` | Open, fill in and confirm dialogs |
 | `ui.backstage` (via `engine.execute`) | `{page?: home\|new\|open\|info\|saveAs\|print\|export\|options\|close}` | Open the File tab's Backstage view on a page, or close it (`ui.inspect` reports the open page as `backstage`) |
+| `cloud.*` (via `engine.execute`) | see below | Open and Save against cloud storage |
 | `ui.screenshot` | `{path?}` | PNG of the window (base64 when no path). Animations are settled first: the picture shows the final state |
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
 | `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?}` | Files and lifetime. `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog) |
 
 Any other method name that is a command id (e.g. `home.bold`) runs that command.
+
+### Cloud storage
+
+Everything reaches storage through the CollabCraft service, and every call to it
+blocks, so these commands start the work and return at once. Poll `cloud.status`
+for the answer. It reports the account, what the provider can do, the folder
+being listed, any transfer in flight, a refused save, and where the open
+document came from.
+
+| Command | Params | What it does |
+| --- | --- | --- |
+| `cloud.open` | `{}` | Opens File › Open and lists your cloud files |
+| `cloud.browse` | `{path?}` | Lists one folder (the root when empty) |
+| `cloud.shared` | `{}` | Lists what other people shared with you |
+| `cloud.openFile` | `{id}` or `{name}` | Opens something from the current listing |
+| `cloud.save` | `{}` | Writes back under the version the document was opened at |
+| `cloud.saveAs` | `{folder, name}` | Saves a new document. Without both, opens File › Save As on the cloud |
+| `cloud.reload` | `{}` | Replaces local edits with the stored copy |
+| `cloud.link` | `{}` | Starts linking a cloud account, which finishes in a browser |
+| `cloud.status` | `{}` | The whole cloud state as JSON |
+
+`Ctrl+S` and `file.save` need no cloud-specific call. A workbook opened from
+the cloud saves back to it. One with a file on this computer saves to that file.
+
+A refused save is the case worth scripting against. `cloud.status` reports
+`conflict` when the stored copy moved on while the document was being edited,
+and nothing has been written at that point. `cloud.reload` takes the stored
+copy and discards the local edits. Nothing else does.
+
+Without a configured service (`GRIDCRAFT_CLOUD_URL`) these commands answer
+`no cloud service is configured`, and the interface offers nothing
+cloud-shaped.
 
 Use `engine.execute` with `{command: "view.theme", params: {mode: "system"}}`
 to choose the display theme; `mode` accepts `"system"`, `"light"`, or `"dark"`.

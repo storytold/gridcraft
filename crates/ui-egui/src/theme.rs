@@ -152,10 +152,18 @@ pub const SERIF: &str = "serif";
 pub const MONO: &str = "mono";
 
 pub fn ui_font(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(UI.into()))
+    FontId::new(size, ui_family())
 }
 pub fn ui_bold(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(UI_BOLD.into()))
+    FontId::new(size, ui_bold_family())
+}
+
+/// The interface face, for a control that chooses its own sizes.
+pub fn ui_family() -> FontFamily {
+    FontFamily::Name(UI.into())
+}
+pub fn ui_bold_family() -> FontFamily {
+    FontFamily::Name(UI_BOLD.into())
 }
 
 /// The font family to use for a cell font name and weight.

@@ -10,6 +10,8 @@
 
 #[cfg(target_os = "macos")]
 mod apple_events;
+mod cloud;
+mod collab;
 mod control_server;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
@@ -25,41 +27,64 @@ use gridcraft_engine::Session;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
-struct App(SheetApp, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+struct App {
+    sheet: SheetApp,
+    /// Shared editing, when a credential was configured. `None` leaves the app
+    /// behaving exactly as it did before.
+    collab: Option<collab::Link>,
+    #[cfg(target_os = "macos")]
+    menu: Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")]
+    events: fmv_macos_events::Inbox,
+}
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         {
-            if self.1.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
-                self.1 = Some(native_menu::NativeMenu::install(ctx));
+            if self.menu.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
+                self.menu = Some(native_menu::NativeMenu::install(ctx));
             }
-            if let Some(m) = &self.1 {
-                m.poll(&mut self.0, ctx);
+            if let Some(m) = &self.menu {
+                m.poll(&mut self.sheet, ctx);
             }
-            apple_events::poll(&self.2, &mut self.0, ctx);
+            apple_events::poll(&self.events, &mut self.sheet, ctx);
         }
-        self.0.logic(ctx);
-        self.0.poll_printing(ctx);
-        if ctx.input(|input| input.viewport().close_requested()) && self.0.printing.busy() {
+        if let Some(link) = &mut self.collab {
+            link.pump(&mut self.sheet.session);
+            // Who else is here, straight from the relay's roster. The whole set
+            // is handed over rather than a change, so somebody who left stops
+            // being shown without waiting for a reconnection.
+            self.sheet.presence.set(link.roster.iter().map(|(id, display)| craft_ui::presence::Peer::new(id.clone(), display.clone())).collect());
+            for notice in std::mem::take(&mut link.notices) {
+                self.sheet.toast = Some((notice, gridcraft_ui_egui::now_ms()));
+            }
+            // egui only draws when something happens locally, and another
+            // person typing is not a local event. Without this a remote edit
+            // sits in the socket until the mouse moves.
+            ctx.request_repaint_after(std::time::Duration::from_millis(120));
+        }
+        self.sheet.logic(ctx);
+        self.sheet.poll_printing(ctx);
+        if ctx.input(|input| input.viewport().close_requested()) && self.sheet.printing.busy() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.0.raw_input_hook(raw);
+        self.sheet.raw_input_hook(raw);
         // Files dropped on the window open as workbooks.
         for f in std::mem::take(&mut raw.dropped_files) {
             if let Some(p) = f.path().to_str().map(str::to_string).filter(|p| !p.is_empty()) {
-                self.0.open_path(&p);
+                self.sheet.open_path(&p);
             }
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.0.ui(ui);
+        self.sheet.ui(ui);
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
-        save_prefs(&self.0);
+        save_prefs(&self.sheet);
         // macOS (#117): end the process here, before eframe tears the window down. AccessKit's
         // macOS adapter subclasses the window's content view and restores its class on teardown;
         // AppKit's Touch Bar support observes that view (KVO), so in the next display cycle
@@ -351,19 +376,42 @@ fn main() -> eframe::Result<()> {
                     return Err("the app was already created".into());
                 };
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
+                // Open and Save against cloud storage, when a CollabCraft
+                // service is configured. Every call it makes blocks, so it
+                // runs on a worker and answers reach the window on a channel.
+                // Without a service the application is local-only and offers
+                // nothing cloud-shaped.
+                if let Some(backend) = cloud::service(cc.egui_ctx.clone()) {
+                    app.cloud.connect(backend);
+                }
+                app.share.connect(collabcraft_share::CollabCraft::from_fn(cloud::client).for_app("gridcraft"));
                 if let Some(port) = control_port {
                     match control_server::start(port, cc.egui_ctx.clone()) {
                         Ok(rx) => app.control_rx = Some(rx),
                         Err(e) => log::error!("control channel on port {port}: {e}"),
                     }
                 }
-                Ok(Box::new(App(
-                    app,
+                // Attached after the workbook exists, so the first
+                // remote edit has somewhere to land. A missing credential or
+                // an unreachable relay logs and yields None, and the app runs
+                // as an ordinary single-user spreadsheet.
+                //
+                // A document named by the launcher, reached through
+                // CollabCraft, which signs in through the browser. Otherwise
+                // the plain token in the environment, which is what a test
+                // harness supplies.
+                let link = match cloud::CloudToken::from_env() {
+                    Some(source) => collab::Link::attach(&mut app.session, &source),
+                    None => collab::Link::attach(&mut app.session, &collab::EnvToken),
+                };
+                Ok(Box::new(App {
+                    sheet: app,
+                    collab: link,
                     #[cfg(target_os = "macos")]
-                    None,
+                    menu: None,
                     #[cfg(target_os = "macos")]
-                    apple_events.connect(&cc.egui_ctx),
-                )))
+                    events: apple_events.connect(&cc.egui_ctx),
+                }))
             }),
         )
     };

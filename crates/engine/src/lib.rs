@@ -10,6 +10,8 @@ pub mod catalog;
 pub mod cf;
 mod clip_html;
 pub mod cmd;
+pub mod collab;
+pub use collab::CollabSink;
 pub mod display;
 pub mod fill;
 pub mod io;
@@ -256,6 +258,12 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
+    /// Hears about every local command, when a collaboration layer is attached.
+    /// `None` is the ordinary single-user case and costs nothing.
+    pub collab: Option<std::sync::Arc<dyn collab::CollabSink>>,
+    /// Set while a remote command is being applied, so it is not sent back to
+    /// the peer that sent it. Without this, one edit echoes forever.
+    applying_remote: bool,
 }
 
 impl Session {
@@ -278,6 +286,15 @@ impl Session {
     }
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.docs.get_mut(self.active)
+    }
+    /// A document by its uid, active or not.
+    ///
+    /// For a caller holding an answer that outlived the frame it was asked
+    /// for. A cloud save lands after the bytes have travelled, and it belongs
+    /// to the document it was made from even when another window is active by
+    /// then.
+    pub fn document_mut(&mut self, uid: u64) -> Option<&mut DocState> {
+        self.docs.iter_mut().find(|d| d.uid == uid)
     }
     pub fn doc(&self) -> Result<&DocState> {
         self.active().ok_or(EngineError::NoDocument)
@@ -344,6 +361,16 @@ impl Session {
             if self.journal.len() > 10_000 {
                 self.journal.drain(..5_000);
             }
+            // `spec.journal` already means the command changed the workbook,
+            // so it is exactly the right predicate for what a peer needs to
+            // see. Commands that only move the view are not journaled and are
+            // not shared. The Arc is cloned so the sink can be called without
+            // holding a borrow of `self`.
+            if !self.applying_remote
+                && let Some(sink) = self.collab.clone()
+            {
+                sink.on_local(id, &params);
+            }
         }
         if spec.undoable
             && let Some((uid, wb, sel)) = before
@@ -362,6 +389,19 @@ impl Session {
 
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {
         self.execute(id, params).map_err(|e| e.to_string())
+    }
+
+    /// Runs a command that arrived from another peer.
+    ///
+    /// Identical to [`Session::execute`] except that it is not reported to the
+    /// [`collab::CollabSink`], which is what stops an edit bouncing between
+    /// two peers forever. It still journals and still records undo history, so
+    /// a remote edit can be undone locally like any other.
+    pub fn apply_remote(&mut self, id: &str, params: Json) -> Result<Json> {
+        let was = std::mem::replace(&mut self.applying_remote, true);
+        let out = self.execute(id, params);
+        self.applying_remote = was;
+        out
     }
 
     pub fn take_ui_requests(&mut self) -> Vec<UiRequest> {
