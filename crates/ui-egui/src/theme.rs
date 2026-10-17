@@ -413,8 +413,11 @@ pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -
         bound.push(role.to_string());
     }
     // Installed workbook fonts, so a cell's chosen font actually renders in it.
+    // Their chains end with egui's own faces, which have no Hebrew, Arabic, Thai or Han, so the
+    // script fallback faces follow them as they follow the roles': a Hebrew cell set in Calibri
+    // showed rectangles.
     for family in crate::fonts::installed_among(used) {
-        bound.extend(crate::fonts::bind_family(&mut fonts, &family));
+        bound.extend(bind_with_fallback(&mut fonts, &family, &crate::fonts::faces_of(&family), &fallback));
     }
     // Interface text (formula bar, name box, dialogs) falls back to the cell font before the
     // script faces: whatever a cell can draw, the formula bar can draw too, even where no script
@@ -439,6 +442,22 @@ pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -
     bound.retain(|f| fonts.families.get(&FontFamily::Name(f.as_str().into())).is_some_and(|c| !c.is_empty()));
     crate::fonts::set_bound(bound);
     fonts
+}
+
+/// [`crate::fonts::bind_faces`], with the script fallback faces `fallback` appended to the end of
+/// every bound role's chain, each once. Returns the bound roles.
+fn bind_with_fallback(fonts: &mut FontDefinitions, family: &str, faces: &[crate::fonts::Face], fallback: &[String]) -> Vec<String> {
+    let roles = crate::fonts::bind_faces(fonts, family, faces);
+    for role in &roles {
+        if let Some(chain) = fonts.families.get_mut(&FontFamily::Name(role.as_str().into())) {
+            for key in fallback {
+                if !chain.contains(key) {
+                    chain.push(key.clone());
+                }
+            }
+        }
+    }
+    roles
 }
 
 /// Loads the system non-Latin fallback faces (one file per script family) and returns their keys so
@@ -789,6 +808,31 @@ mod tests {
                 assert_eq!(tail, fb_keys.as_slice(), "{role} must end its chain with the fallback faces");
             }
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn workbook_fonts_fall_back_to_the_script_faces() {
+        // A cell set in an installed workbook font draws the scripts that font lacks with the
+        // fallback faces, as the built-in roles do: Hebrew in a Latin-only font showed rectangles,
+        // since the bound chain ended with egui's own faces.
+        let dir = std::env::temp_dir().join(format!("gridcraft-theme-bind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("Ubuntu-Light.ttf");
+        std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT).expect("write");
+        let face = crate::fonts::Face { family: "Ubuntu".into(), path, index: 0, weight: 300.0, italic: false };
+        let mut fonts = FontDefinitions::default();
+        fonts.font_data.insert("sys-hebrew".into(), Arc::new(FontData::from_static(epaint_default_fonts::UBUNTU_LIGHT)));
+        let fallback = vec!["sys-hebrew".to_string()];
+        let roles = bind_with_fallback(&mut fonts, "Ubuntu", std::slice::from_ref(&face), &fallback);
+        assert_eq!(roles.len(), 4);
+        for role in &roles {
+            let chain = fonts.families.get(&FontFamily::Name(role.as_str().into())).expect("role family");
+            assert_eq!(chain.last().map(String::as_str), Some("sys-hebrew"), "{role}: {chain:?}");
+            assert_eq!(chain.iter().filter(|k| *k == "sys-hebrew").count(), 1);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -389,8 +389,23 @@ fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Ou
         // A long name or folder stops short of the column instead of running under it.
         let room = if modified_w > 0.0 { rect.right() - modified_w - 14.0 } else { rect.right() };
         let text = p.with_clip_rect(Rect::from_min_max(rect.min, pos2(room, rect.bottom())).intersect(p.clip_rect()));
-        text.text(pos2(rect.left() + 42.0, rect.center().y - 8.0), Align2::LEFT_CENTER, &name, theme::ui_font(13.5), t.text);
-        text.text(pos2(rect.left() + 42.0, rect.center().y + 9.0), Align2::LEFT_CENTER, &folder, theme::ui_font(11.5), t.text_dim);
+        // As a file manager shows them: a Hebrew name reads from the right, its extension at the end.
+        crate::bidi::paint_file_name(
+            &text,
+            pos2(rect.left() + 42.0, rect.center().y - 8.0),
+            Align2::LEFT_CENTER,
+            &name,
+            theme::ui_font(13.5),
+            t.text,
+        );
+        crate::bidi::paint_file_name(
+            &text,
+            pos2(rect.left() + 42.0, rect.center().y + 9.0),
+            Align2::LEFT_CENTER,
+            &folder,
+            theme::ui_font(11.5),
+            t.text_dim,
+        );
         if modified_w > 0.0 {
             let (words, color) = match known.get(&path) {
                 Some(Modified::At(seconds)) => (age(lang, now - seconds), t.text_dim),
@@ -641,7 +656,8 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
             if !ui.ctx().memory(|m| m.has_focus(id)) {
                 draft.clone_from(saved);
             }
-            let resp = ui.add(egui::TextEdit::singleline(draft).id(id).desired_width(360.0));
+            crate::bidi::rtl_arrows(ui, Some(id), draft);
+            let resp = ui.add(crate::bidi::singleline(draft).id(id).desired_width(360.0));
             if resp.lost_focus() && draft != saved {
                 let mut params = serde_json::Map::new();
                 params.insert((*key).to_string(), json!(draft.clone()));

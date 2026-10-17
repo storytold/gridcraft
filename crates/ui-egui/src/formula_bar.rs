@@ -261,9 +261,12 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let text_color = Tokens::get(ui.ctx()).text;
     let cell_text_color = if id == egui::Id::new("gridcraft.cell_editor") { Color32::BLACK } else { text_color };
     let font2 = font.clone();
+    // Text reading right to left sits against the right edge, as in a right-to-left field.
+    let rtl_text = crate::bidi::reads_rtl(ed.text.chars());
     let mut layouter = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let s = buf.as_str();
-        let mut job = egui::text::LayoutJob::default();
+        // Sections in logical order: plain text and the coloured references.
+        let mut sections: Vec<(&str, egui::text::TextFormat)> = Vec::new();
         let mut pos = 0usize;
         let mut spans: Vec<(usize, usize, usize)> = refs.iter().filter(|r| r.1 <= s.len()).map(|r| (r.0, r.1, r.4)).collect();
         spans.sort();
@@ -271,16 +274,25 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             if a < pos || !s.is_char_boundary(a) || !s.is_char_boundary(b) {
                 continue;
             }
-            job.append(s.get(pos..a).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), cell_text_color));
-            job.append(s.get(a..b).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), REF_COLORS[idx]));
+            sections.push((s.get(pos..a).unwrap_or(""), egui::TextFormat::simple(font2.clone(), cell_text_color)));
+            sections.push((s.get(a..b).unwrap_or(""), egui::TextFormat::simple(font2.clone(), REF_COLORS[idx])));
             pos = b;
         }
-        job.append(s.get(pos..).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), cell_text_color));
+        sections.push((s.get(pos..).unwrap_or(""), egui::TextFormat::simple(font2.clone(), cell_text_color)));
+        let mut job = egui::text::LayoutJob::default();
         job.wrap.max_width = if multiline { wrap_width } else { f32::INFINITY };
-        ui.fonts_mut(|f| f.layout_job(job))
+        job.halign = if rtl_text { egui::Align::RIGHT } else { egui::Align::LEFT };
+        // Hebrew and Arabic in reading order, with the caret following it (see `bidi`).
+        crate::bidi::layout(ui.ctx(), job, &sections, None)
     };
+    // Editing (not Enter mode, where the arrows move between cells): in text reading right to
+    // left the Left and Right arrows move the caret the way they point.
+    if !ed.enter_mode || ed.from_formula_bar {
+        crate::bidi::rtl_arrows(ui, Some(id), &ed.text);
+    }
     let edit = if multiline || ed.text.contains('\n') { TextEdit::multiline(&mut ed.text) } else { TextEdit::singleline(&mut ed.text) };
     let mut output = edit
+        .horizontal_align(if rtl_text { egui::Align::Max } else { egui::Align::Min })
         .id(id)
         .frame(egui::Frame::NONE)
         .font(font)

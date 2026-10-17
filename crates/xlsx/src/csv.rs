@@ -17,7 +17,9 @@ const CP1252: [u32; 32] = [
     0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178,
 ];
 
-/// Decodes CSV bytes: UTF-8/UTF-16 BOMs, else UTF-8, else Windows-1252.
+/// Decodes CSV bytes: UTF-8/UTF-16 BOMs, else UTF-8, else Windows-1255 when the bytes read as
+/// Hebrew ([`looks_hebrew`]: Excel saves a Hebrew sheet's CSV in the Hebrew Windows code page),
+/// else Windows-1252.
 pub fn decode_text(bytes: &[u8]) -> String {
     if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
         return String::from_utf8_lossy(rest).into_owned();
@@ -34,6 +36,7 @@ pub fn decode_text(bytes: &[u8]) -> String {
     }
     match std::str::from_utf8(bytes) {
         Ok(s) => s.to_string(),
+        Err(_) if looks_hebrew(bytes) => bytes.iter().map(|&b| windows_1255(b)).collect(),
         Err(_) => bytes
             .iter()
             .map(|&b| match b {
@@ -42,6 +45,51 @@ pub fn decode_text(bytes: &[u8]) -> String {
             })
             .collect(),
     }
+}
+
+/// Whether 8-bit text is Hebrew in Windows-1255 (or ISO 8859-8, which shares its letters): its
+/// high bytes are mostly Hebrew letters (`0xE0`–`0xFA`) standing next to each other, as the letters
+/// of Hebrew words do, rather than accented Latin letters inside Latin words (French or German in
+/// Windows-1252 use the same bytes). A byte Hebrew never uses (`0xD9`–`0xDF`, `0xFB`, `0xFC`,
+/// `0xFF`: frequent Cyrillic, Arabic and Greek letters in their code pages) rules it out.
+pub fn looks_hebrew(bytes: &[u8]) -> bool {
+    let letter = |b: u8| (0xE0..=0xFA).contains(&b);
+    let (mut paired, mut mixed) = (0usize, 0usize);
+    for (i, &b) in bytes.iter().enumerate() {
+        if matches!(b, 0xD9..=0xDF | 0xFB | 0xFC | 0xFF) {
+            return false;
+        }
+        if !letter(b) {
+            continue;
+        }
+        let next = bytes.get(i + 1).copied();
+        let prev = i.checked_sub(1).and_then(|p| bytes.get(p)).copied();
+        if next.is_some_and(letter) {
+            paired = paired.saturating_add(1);
+        }
+        if next.is_some_and(|n| n.is_ascii_alphabetic()) || prev.is_some_and(|p| p.is_ascii_alphabetic()) {
+            mixed = mixed.saturating_add(1);
+        }
+    }
+    paired >= 2 && paired > mixed.saturating_mul(2)
+}
+
+/// One Windows-1255 byte as a character. The punctuation at `0x80`–`0x9F` is Windows-1252's.
+fn windows_1255(b: u8) -> char {
+    let code = match b {
+        0x80..=0x9F => CP1252.get(usize::from(b - 0x80)).copied().unwrap_or(0xFFFD),
+        0xA4 => 0x20AA,                              // new sheqel sign
+        0xAA => 0x00D7,                              // multiplication sign
+        0xBA => 0x00F7,                              // division sign
+        0xC0..=0xD3 => 0x05B0 + u32::from(b - 0xC0), // points (niqqud) and punctuation
+        0xD4..=0xD8 => 0x05F0 + u32::from(b - 0xD4), // Yiddish ligatures, geresh, gershayim
+        0xE0..=0xFA => 0x05D0 + u32::from(b - 0xE0), // alef to tav
+        0xFD => 0x200E,
+        0xFE => 0x200F,
+        0xD9..=0xDF | 0xFB | 0xFC | 0xFF => 0xFFFD,
+        _ => u32::from(b),
+    };
+    char::from_u32(code).unwrap_or('\u{FFFD}')
 }
 
 /// Picks comma, semicolon or tab: the candidate with the most consistent count per line

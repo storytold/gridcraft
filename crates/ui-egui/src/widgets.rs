@@ -131,7 +131,8 @@ pub fn committed_text(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f3
     let width = width.unwrap_or(ui.spacing().text_edit_width);
     let draft = id.with("draft");
     let mut text = ui.data_mut(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| current.to_string());
-    let r = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(width));
+    crate::bidi::rtl_arrows(ui, Some(id), &text);
+    let r = ui.add(crate::bidi::singleline(&mut text).id(id).desired_width(width));
     if r.lost_focus() {
         ui.data_mut(|d| d.remove::<String>(draft));
         return (!ui.input(|i| i.key_pressed(egui::Key::Escape))).then_some(text);

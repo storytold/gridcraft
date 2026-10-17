@@ -1,6 +1,6 @@
 //! In-place editing of a text box. The draft becomes one undoable engine command.
 
-use egui::{Color32, FontId, Key, Modifiers, Rect, TextEdit};
+use egui::{Color32, FontId, Key, Modifiers, Rect};
 use gridcraft_engine::{Mode, model::ShapeKind};
 use serde_json::json;
 
@@ -147,11 +147,14 @@ pub(crate) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &gridcr
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(rect));
     child.set_clip_rect(rect);
     egui::ScrollArea::vertical().id_salt(id).max_height(rect.height()).auto_shrink([false, false]).show(&mut child, |ui| {
+        // The font and colour go through the style: the field lays Hebrew and Arabic out in
+        // reading order (see `bidi`), with the caret and arrows following it.
+        ui.style_mut().override_font_id = Some(FontId::new(14.0 * geo.z, egui::FontFamily::Name(theme::CELL.into())));
+        ui.visuals_mut().override_text_color = Some(Color32::BLACK);
+        crate::bidi::rtl_arrows(ui, Some(id), &ed.text);
         let response = ui.add(
-            TextEdit::multiline(&mut ed.text)
+            crate::bidi::multiline(&mut ed.text)
                 .id(id)
-                .font(FontId::new(14.0 * geo.z, egui::FontFamily::Name(theme::CELL.into())))
-                .text_color(Color32::BLACK)
                 .frame(egui::Frame::NONE)
                 .margin(egui::Margin::ZERO)
                 .desired_width(rect.width())

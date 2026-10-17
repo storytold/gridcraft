@@ -1172,6 +1172,9 @@ pub(crate) fn paint_quadrant(
                 Value::Number(_) => HAlign::Right,
                 Value::Bool(_) | Value::Error(_) => HAlign::Center,
                 _ if numeric => HAlign::Right,
+                // Text reading right to left (Hebrew, Arabic) starts at the right, as in Excel. A
+                // right-to-left sheet is painted mirrored, so there its start is already the right.
+                _ if crate::bidi::reads_rtl(text.chars()) && !sh.right_to_left => HAlign::Right,
                 _ => HAlign::Left,
             },
             h => h,
@@ -1182,13 +1185,13 @@ pub(crate) fn paint_quadrant(
         // Rotated text wraps along its own direction (below), not across the column width.
         if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
             let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
-            let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
-            job.halign = match halign {
+            let align = match halign {
                 HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
                 HAlign::Right => egui::Align::RIGHT,
                 _ => egui::Align::LEFT,
             };
-            let galley = p.layout_job(job);
+            // Right-to-left text in reading order (see `bidi`).
+            let galley = crate::bidi::layout_cell(p.ctx(), &text, font.clone(), color, Some(wrap_w), align);
             let x = match halign {
                 HAlign::Center | HAlign::CenterAcross => rect.center().x,
                 HAlign::Right => rect.right() - pad,
@@ -1206,7 +1209,7 @@ pub(crate) fn paint_quadrant(
             .flatten();
         let shrunk = small.is_some();
         let font = small.unwrap_or(font);
-        let mut galley = p.layout_no_wrap(first_line.clone(), font.clone(), color);
+        let mut galley = crate::bidi::layout_no_wrap(p.ctx(), &first_line, font.clone(), color);
         let mut w = galley.size().x;
         // Numbers and dates never overflow: they show #### when too narrow.
         if !shrunk && (numeric || matches!(v, Value::Number(_))) && w > avail_w - 2.0 * pad && st.align.h != HAlign::Fill {
@@ -1225,7 +1228,7 @@ pub(crate) fn paint_quadrant(
             if first_line.is_char_boundary(pos) {
                 s.insert_str(pos, &ch.to_string().repeat(n));
             }
-            galley = p.layout_no_wrap(s, font.clone(), color);
+            galley = crate::bidi::layout_no_wrap(p.ctx(), &s, font.clone(), color);
             w = galley.size().x;
         }
         // Center Across Selection: the text is centred over this cell and the empty cells to its right that also use it.
@@ -1287,8 +1290,7 @@ pub(crate) fn paint_quadrant(
             let angle = -(st.align.rotation as f32).to_radians();
             // Upright (±90°) wrapped text wraps to the row height: lines then stack across the column.
             let galley = if st.align.wrap && st.align.rotation.abs() == 90 {
-                let job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, (rect.height() - 2.0 * pad).max(4.0));
-                p.layout_job(job)
+                crate::bidi::layout_cell(p.ctx(), &text, font.clone(), color, Some((rect.height() - 2.0 * pad).max(4.0)), egui::Align::LEFT)
             } else {
                 galley.clone()
             };
@@ -2795,7 +2797,8 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             let mut checks: Vec<(String, bool)> = ui.ctx().data_mut(|d| d.get_temp::<Vec<(String, bool)>>(key)).unwrap_or(values.clone());
             // A search narrows the list; Select All and Apply then only cover the matches.
             let mut search: String = ui.ctx().data_mut(|d| d.get_temp(search_key)).unwrap_or_default();
-            let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search").desired_width(f32::INFINITY));
+            crate::bidi::rtl_arrows(ui, None, &search);
+            let field = ui.add(crate::bidi::singleline(&mut search).hint_text("Search").desired_width(f32::INFINITY));
             if !was_open {
                 field.request_focus();
             }

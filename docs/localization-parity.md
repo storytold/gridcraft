@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Format Cells dialog looks its labels up in the catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (bidirectional layout for right-to-left text) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -26,12 +26,23 @@ right-to-left sheets and full complex-script support. Part of
   localized function names and `;` separators (#45). German with localized numbers and formulas
   is in PR #163 (open).
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
-  #142 is still open pending confirmation). There is no complex-text shaping: Arabic and
-  Devanagari don't join or reorder, and there is no bidirectional layout. **Sheet Right-to-Left**
+  #142 is still open pending confirmation). Workbook fonts bound by name fall back to those
+  faces too (Hebrew in Calibri showed rectangles). **Bidirectional layout** (`crates/ui-egui/src/bidi.rs`,
+  UAX #9): cells, the cell editor and formula bar, text boxes, sheet tabs, chart labels, headers and
+  footers and the main text fields show Hebrew and Arabic in display order, digits and Latin left
+  to right inside; a wrapped cell breaks in reading order. General-aligned right-to-left text sits
+  right. In the editors the caret, clicks and Backspace follow the text (a vendored epaint with
+  two patches) and Edit-mode arrows move the way they point. Hebrew CSV files in Windows-1255 are
+  detected. Multi-line fields (text boxes, comments, dialog text) wrap a right-to-left line between
+  words in reading order too. Still missing: a long line wrapped inside the cell editor or the
+  expanded formula bar keeps drawing order on its rows, the
+  dialogs' search fields and the header/footer editor use plain fields, Excel's per-cell reading
+  order setting is not read, and PDF export can't draw non-Latin text. Arabic joining and
+  Devanagari reordering depend on egui's shaper and are unverified. **Sheet Right-to-Left**
   (`view.rightToLeft`, Page Layout › Sheet Options, XLSX `rightToLeft`) mirrors the grid (#146):
   column A and the row headers on the right, the vertical scrollbar on the left; hit-testing,
-  arrow keys, editor, popups and floating objects follow; text stays left-to-right inside its box
-  (no bidi), and the sheet tabs, horizontal scrollbar and printing/PDF are not mirrored yet. IME input goes
+  arrow keys, editor, popups and floating objects follow; text inside a cell reads in its own
+  direction (above), and the sheet tabs, horizontal scrollbar and printing/PDF are not mirrored yet. IME input goes
   through egui/winit and is unverified for Chinese, Japanese and Korean.
 - **PDF export** uses only the 14 standard PDF fonts: non-Latin text cannot export.
 
@@ -78,6 +89,8 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Recent workbooks and the title bar show Hebrew and Arabic file names as a file manager does: the words read from the right, the extension at the end |
+| 2026-10-15 | minor | Bidirectional layout for right-to-left text in cells, editors and fields; workbook fonts fall back to the script faces; Windows-1255 CSV detection |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |

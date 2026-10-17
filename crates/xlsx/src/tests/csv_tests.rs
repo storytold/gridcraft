@@ -190,3 +190,40 @@ fn the_cap_counts_the_bytes_the_cells_hold_and_accepted_exports_keep_every_posit
     let tabs = write_csv_limited(&s, b'\t', 14, text_of(&s)).unwrap();
     assert_eq!(tabs.len(), 14);
 }
+
+/// Windows-1255 bytes for `text` (Hebrew letters, ASCII and the sheqel sign only).
+fn cp1255(text: &str) -> Vec<u8> {
+    text.chars()
+        .map(|c| match u32::from(c) {
+            0x05D0..=0x05EA => (u32::from(c) - 0x05D0 + 0xE0) as u8,
+            0x20AA => 0xA4,
+            _ => c as u8,
+        })
+        .collect()
+}
+
+#[test]
+fn hebrew_csv_in_the_windows_code_page_reads_as_hebrew() {
+    // A Hebrew sheet saved as CSV by Excel on Hebrew Windows: Windows-1255, no BOM. It used to
+    // read as Latin letters ("ùí" for "שם").
+    let bytes = cp1255("שם,עיר,סכום\nדנה כהן,תל אביב,1200 ₪\n");
+    assert_eq!(decode_text(&bytes), "שם,עיר,סכום\nדנה כהן,תל אביב,1200 ₪\n");
+    let wb = read_csv(&bytes, &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
+    assert_eq!(v(&wb, 0, 0), Value::text("שם"));
+    assert_eq!(v(&wb, 1, 1), Value::text("תל אביב"));
+    // Points (niqqud), and the left-to-right and right-to-left marks.
+    assert_eq!(decode_text(&[0xF9, 0xC8, 0xEC, 0xE5, 0xEC, 0xFE]), "\u{05E9}\u{05B8}\u{05DC}\u{05D5}\u{05DC}\u{200F}");
+}
+
+#[test]
+fn latin_text_in_windows_1252_stays_latin() {
+    // French and German accents sit among Latin letters, on the bytes Hebrew letters use.
+    for text in ["élève,café,à côté\n", "Größe,Übung,Bär\n", "ñandú,año\n"] {
+        let bytes: Vec<u8> = text.chars().map(|c| c as u8).collect();
+        assert_eq!(decode_text(&bytes), text);
+    }
+    // Russian in Windows-1251 uses bytes Hebrew never does, so it is not taken for Hebrew.
+    assert!(!crate::csv::looks_hebrew(&[0xEF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2, 0x20, 0xEC, 0xE8, 0xF0, 0xFB]));
+    assert!(!crate::csv::looks_hebrew(b"plain ascii"));
+    assert!(!crate::csv::looks_hebrew(&[]));
+}

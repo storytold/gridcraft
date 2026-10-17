@@ -133,8 +133,11 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                 if renaming {
                                     let mut text = app.grid.rename_text.clone();
                                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(6.0, 5.0))));
-                                    let ed =
-                                        child.add(egui::TextEdit::singleline(&mut text).font(theme::ui_font(13.0)).desired_width(r.width() - 12.0));
+                                    // The field's font, through the style: a Hebrew sheet name reads
+                                    // right to left (see `bidi`).
+                                    child.style_mut().override_font_id = Some(theme::ui_font(13.0));
+                                    crate::bidi::rtl_arrows(&child, None, &text);
+                                    let ed = child.add(crate::bidi::singleline(&mut text).desired_width(r.width() - 12.0));
                                     app.grid.rename_text = text.clone();
                                     if rename_needs_focus(ed.has_focus(), ed.lost_focus()) {
                                         ed.request_focus();
@@ -146,7 +149,14 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                         app.grid.renaming_tab = None;
                                     }
                                 } else {
-                                    ui.painter().text(r.center(), Align2::CENTER_CENTER, &name, font, if active { t.accent } else { t.text });
+                                    crate::bidi::paint_text(
+                                        ui.painter(),
+                                        r.center(),
+                                        Align2::CENTER_CENTER,
+                                        &name,
+                                        font,
+                                        if active { t.accent } else { t.text },
+                                    );
                                 }
                                 if resp.clicked() {
                                     activate_sheet(app, i);

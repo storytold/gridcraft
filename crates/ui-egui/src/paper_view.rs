@@ -267,7 +267,7 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
                 let block = line_h * lines.len() as f32;
                 let top = if footer { screen(geo, 0.0, py + h - fm).y - block } else { screen(geo, 0.0, py + hm).y };
                 for (li, line) in lines.iter().enumerate() {
-                    p.text(pos2(x, top + li as f32 * line_h), anchor, *line, font.clone(), Color32::BLACK);
+                    crate::bidi::paint_text(&p, pos2(x, top + li as f32 * line_h), anchor, line, font.clone(), Color32::BLACK);
                 }
             }
         }
@@ -466,7 +466,7 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
         let Some(text) = e.texts.get(k) else { continue };
         let anchor = [Align2::LEFT_TOP, Align2::CENTER_TOP, Align2::RIGHT_TOP][k];
         let x = [r.left() + 3.0, r.center().x, r.right() - 3.0][k];
-        p.text(pos2(x, r.top() + 2.0), anchor, text, font.clone(), Color32::BLACK);
+        crate::bidi::paint_text(&p, pos2(x, r.top() + 2.0), anchor, text, font.clone(), Color32::BLACK);
         if ui.interact(*r, ui.id().with(("hf_section", k)), egui::Sense::click()).clicked() {
             switch_to = Some(k);
         }

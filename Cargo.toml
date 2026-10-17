@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
+exclude = ["vendor"]
 default-members = ["crates/*", "apps/gridcraft", "apps/gridcraft-cli", "xtask"]
 
 [workspace.package]
@@ -41,6 +42,9 @@ sha1 = { version = "0.11", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # ui
+# Unicode bidirectional algorithm (UAX #9): right-to-left text (Hebrew, Arabic) in cells and
+# text fields, in display order. Pure Rust, MIT OR Apache-2.0, no dependencies.
+unicode-bidi = "0.3"
 egui = "0.36"
 egui_extras = { version = "0.36", default-features = false }
 eframe = { version = "0.36", default-features = false }
@@ -75,3 +79,7 @@ opt-level = 3
 lto = "thin"
 codegen-units = 16
 debug = 0
+
+# Patched copies of upstream crates; see vendor/README.md.
+[patch.crates-io]
+epaint = { path = "vendor/epaint" }

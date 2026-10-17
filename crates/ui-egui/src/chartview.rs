@@ -123,7 +123,7 @@ pub fn paint_prims(p: &Painter, origin: Pos2, prims: &[Prim], z: f32) {
             }
             Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
                 let font: FontId = if *bold { theme::ui_bold(size * z) } else { theme::ui_font(size * z) };
-                let galley = p.layout_no_wrap(text.clone(), font, rgba(*color));
+                let galley = crate::bidi::layout_no_wrap(p.ctx(), text, font, rgba(*color));
                 let sz = galley.size();
                 let ax = match align {
                     HAlign::Left => 0.0,
@@ -202,7 +202,9 @@ fn paint_shape_text(p: &Painter, wb: &Workbook, sp: &gridcraft_engine::model::Sh
     use gridcraft_engine::model::{ShapeTextAlign, ShapeTextAnchor};
     let f = &sp.format;
     let text_box = sp.kind == ShapeKind::TextBox;
-    let align = f.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
+    // A text box reading right to left (Hebrew, Arabic) starts at the right.
+    let start = if crate::bidi::reads_rtl(sp.text.chars()) { ShapeTextAlign::Right } else { ShapeTextAlign::Left };
+    let align = f.align.unwrap_or(if text_box { start } else { ShapeTextAlign::Center });
     let anchor = f.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
     let default_color = if text_box { Color32::BLACK } else { Color32::WHITE };
     let color = f.text_color.and_then(|c| c.resolve(&wb.theme)).map(theme::color32).unwrap_or(default_color);
@@ -211,13 +213,13 @@ fn paint_shape_text(p: &Painter, wb: &Workbook, sp: &gridcraft_engine::model::Sh
     let family = theme::cell_family(f.font.as_deref().unwrap_or(""), f.bold, f.italic);
     let inset = 4.0;
     let width = (r.width() - 2.0 * inset).max(1.0);
-    let mut job = egui::text::LayoutJob::simple(sp.text.clone(), FontId::new(size, family), color, width);
-    job.halign = match align {
+    let halign = match align {
         ShapeTextAlign::Left => egui::Align::LEFT,
         ShapeTextAlign::Center => egui::Align::Center,
         ShapeTextAlign::Right => egui::Align::RIGHT,
     };
-    let g = p.layout_job(job);
+    // Right-to-left text in reading order (see `bidi`).
+    let g = crate::bidi::layout_cell(p.ctx(), &sp.text, FontId::new(size, family), color, Some(width), halign);
     let x = match align {
         ShapeTextAlign::Left => r.left() + inset,
         ShapeTextAlign::Center => r.center().x,

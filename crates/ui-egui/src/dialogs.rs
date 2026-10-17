@@ -1402,7 +1402,8 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                             .unwrap_or_default();
                         let multiline = key == "text";
                         let r = if multiline {
-                            ui.add(egui::TextEdit::multiline(&mut s).desired_rows(4).desired_width(320.0))
+                            crate::bidi::rtl_arrows(ui, None, &s);
+                            ui.add(crate::bidi::multiline(&mut s).desired_rows(4).desired_width(320.0))
                         } else {
                             ui.add(egui::TextEdit::singleline(&mut s).desired_width(320.0))
                         };
@@ -1812,12 +1813,14 @@ fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let mut with = d.values.get("with").and_then(Json::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
         ui.label("Find what:");
-        ui.add(egui::TextEdit::singleline(&mut what).desired_width(260.0));
+        crate::bidi::rtl_arrows(ui, None, &what);
+        ui.add(crate::bidi::singleline(&mut what).desired_width(260.0));
     });
     if d.tab == "Replace" {
         ui.horizontal(|ui| {
             ui.label("Replace with:");
-            ui.add(egui::TextEdit::singleline(&mut with).desired_width(244.0));
+            crate::bidi::rtl_arrows(ui, None, &with);
+            ui.add(crate::bidi::singleline(&mut with).desired_width(244.0));
         });
     }
     let mut case = d.values.get("matchCase").and_then(Json::as_bool).unwrap_or(false);
@@ -2153,7 +2156,8 @@ fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &
     let edit = |ui: &mut egui::Ui, d: &mut Dialog, key: &str, label: &str| {
         ui.label(label);
         let mut v = text(d, key);
-        if ui.add(egui::TextEdit::singleline(&mut v).desired_width(420.0)).changed() {
+        crate::bidi::rtl_arrows(ui, None, &v);
+        if ui.add(crate::bidi::singleline(&mut v).desired_width(420.0)).changed() {
             d.values.insert(key.into(), json!(v));
         }
     };
