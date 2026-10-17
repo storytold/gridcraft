@@ -17,6 +17,7 @@ mod ko;
 mod pt;
 mod ru;
 mod sr;
+mod vi;
 mod zh;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,10 +36,12 @@ pub enum Language {
     Cs,
     Fr,
     Sr,
+    Vi,
 }
 
 impl Language {
-    pub const ALL: [Self; 11] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr];
+    pub const ALL: [Self; 12] =
+        [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr, Self::Vi];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
@@ -54,6 +57,7 @@ impl Language {
             Self::Cs => "Čeština",
             Self::Fr => "Français",
             Self::Sr => "Srpski",
+            Self::Vi => "Tiếng Việt",
         }
     }
 
@@ -71,6 +75,7 @@ impl Language {
             Self::Cs => "cs",
             Self::Fr => "fr",
             Self::Sr => "sr",
+            Self::Vi => "vi",
         }
     }
 
@@ -91,6 +96,7 @@ impl Language {
             "cs" => Some(Self::Cs),
             "fr" => Some(Self::Fr),
             "sr" => Some(Self::Sr),
+            "vi" => Some(Self::Vi),
             _ => None,
         }
     }
@@ -129,6 +135,7 @@ impl Language {
             Self::Cs => cs::translate(text),
             Self::Fr => fr::translate(text),
             Self::Sr => sr::translate(text),
+            Self::Vi => vi::translate(text),
         };
         translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
@@ -611,6 +618,7 @@ mod tests {
             assert!(cs::translate(english).is_some_and(|text| !text.is_empty()), "missing Czech: {english}");
             assert!(fr::translate(english).is_some_and(|text| !text.is_empty()), "missing French: {english}");
             assert!(sr::translate(english).is_some_and(|text| !text.is_empty()), "missing Serbian: {english}");
+            assert!(vi::translate(english).is_some_and(|text| !text.is_empty()), "missing Vietnamese: {english}");
         }
         assert_eq!(Language::Ja.tr("Data"), "データ");
         assert_eq!(Language::Zh.tr("Data"), "数据");
@@ -644,6 +652,10 @@ mod tests {
         assert_eq!(Language::Sr.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::Sr.tr("Page Layout|Orientation"), "Orijentacija");
         assert_eq!(Language::Sr.tr("Orientation"), "Orijentacija");
+        assert_eq!(Language::Vi.tr("Data"), "Dữ liệu");
+        assert_eq!(Language::Vi.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(Language::Vi.tr("Page Layout|Orientation"), "Hướng giấy");
+        assert_eq!(Language::Vi.tr("Orientation"), "Hướng chữ");
         assert_eq!(Language::parse("xx"), None);
     }
 
@@ -685,6 +697,8 @@ mod tests {
         assert_eq!(Language::from_tag("sr-Latn-RS"), Some(Language::Sr));
         assert_eq!(Language::from_tag("sr-RS"), Some(Language::Sr));
         assert_eq!(Language::parse("sr"), Some(Language::Sr));
+        assert_eq!(Language::from_tag("vi-VN"), Some(Language::Vi));
+        assert_eq!(Language::parse("vi"), Some(Language::Vi));
     }
 
     #[test]
