@@ -221,6 +221,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark Mode" => "Тёмный режим",
         "Interface language" => "Язык интерфейса",
         "Interface size" => "Размер интерфейса",
+        "Cell grid size" => "Размер сетки ячеек",
         "Auto" => "Авто",
         "Drag to freeze columns" => "Перетащите, чтобы закрепить столбцы",
         "Drag to freeze rows" => "Перетащите, чтобы закрепить строки",

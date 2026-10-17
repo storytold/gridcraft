@@ -224,6 +224,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Tamna",
         "Interface language" => "Jezik interfejsa",
         "Interface size" => "Veličina interfejsa",
+        "Cell grid size" => "Veličina mreže ćelija",
         "Auto" => "Automatski",
         "Drag to freeze columns" => "Prevuci da zamrzneš kolone",
         "Drag to freeze rows" => "Prevuci da zamrzneš redove",

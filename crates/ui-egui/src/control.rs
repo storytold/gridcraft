@@ -183,6 +183,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
+                ("view.gridScale", "Cell Grid Size", "{percent: 50–300 | \"default\"} (100 = default; scales the grid like a display DPI; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
                 ("ui.backstage", "File (Backstage view)", "{page?: home|new|open|info|saveAs|print|export|options|close}"),
                 (

@@ -221,6 +221,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark Mode" => "深色模式",
         "Interface language" => "界面语言",
         "Interface size" => "界面大小",
+        "Cell grid size" => "单元格网格大小",
         "Auto" => "自动",
         "Drag to freeze columns" => "拖动以冻结列",
         "Drag to freeze rows" => "拖动以冻结行",
