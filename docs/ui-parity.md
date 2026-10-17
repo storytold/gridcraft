@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (horizontal scrollbar in the sheet tab bar, #840) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (punctuation shortcuts follow the keyboard layout's characters) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -88,6 +88,9 @@ Checked against Microsoft's published "Keyboard shortcuts in Excel" (Windows and
 `keymap.rs` (everything added in #110, with a `lookup` table that tests cover) and
 `formula_bar.rs` (keys while editing). "Ctrl" means Cmd on a Mac unless the Mac column says
 otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, wherever `$` is).
+Punctuation keys go by the character the keyboard layout types, as in Excel: on a Croatian or German
+keyboard Ctrl+Shift+, types `;` and inserts the date, Ctrl+Shift+. (`:`) the time, Ctrl++ opens Insert.
+A character egui has no key for (`č`, `ö`, `<`) falls back to the key's position.
 
 | Shortcut (Windows) | Mac | Action | Status |
 |---|---|---|---|
@@ -161,6 +164,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Punctuation shortcuts follow the character the keyboard layout types, digits keep their position: on a Croatian or German keyboard Ctrl+Shift+, (`;`) inserts the date instead of decreasing the font size, Ctrl+Shift+. (`:`) the time, Ctrl++ opens Insert, Ctrl+' copies the formula above, and Ctrl+Shift+0 (`=`) unhides columns instead of opening Insert |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
 | 2026-10-12 | minor | Ctrl+wheel zoom steps along a ladder of percentages about 20% apart that never skips 100%, gliding to each step with animations on, so a notch out undoes a notch in (it drifted: 100 → 122 → 101); Excel steps 15 points, see decisions.md |

@@ -2681,7 +2681,11 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                     }
                     Key::F9 => app.run_or_alert("formulas.calculateNow", json!({})),
                     Key::F4 if !cmd => {}
-                    _ if cmd => crate::ribbon::shortcut(app, key, m),
+                    _ if cmd => {
+                        // The same key the English table reads: Ctrl+Shift+, typing `;` is Ctrl+;.
+                        let (key, shift) = crate::keymap::us_key(key, physical_key, shift).unwrap_or((key, shift));
+                        crate::ribbon::shortcut(app, key, egui::Modifiers { shift, ..m });
+                    }
                     _ => {}
                 }
             }

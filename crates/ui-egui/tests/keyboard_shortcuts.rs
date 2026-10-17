@@ -214,3 +214,90 @@ fn alt_down_only_opens_enabled_table_filter_buttons() {
         assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "B1");
     }
 }
+
+/// A key press as a non-US layout reports it: `typed` is the character the layout types (egui's
+/// logical key), `at` the key's position named after a US keyboard.
+fn key_on_layout(h: &mut Harness, typed: Key, at: Key, m: Modifiers) {
+    h.input_mut().events.push(Event::Key { key: typed, physical_key: Some(at), pressed: true, repeat: false, modifiers: m });
+    h.input_mut().events.push(Event::Key { key: typed, physical_key: Some(at), pressed: false, repeat: false, modifiers: m });
+    h.run_steps(2);
+}
+
+fn editor_text(h: &Harness) -> Option<String> {
+    h.state().editor.as_ref().map(|e| e.text.clone())
+}
+
+fn today(h: &Harness) -> String {
+    let d = h.state().session.active().unwrap();
+    let now = gridcraft_engine::core::date::serial_in_system(d.wb.date_system, gridcraft_engine::calc::now_serial());
+    gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(now.floor()), "m/d/yyyy", &d.wb).text
+}
+
+#[test]
+fn symbol_shortcuts_follow_the_character_the_layout_types() {
+    // Croatian and German keyboards type `;` with Shift+, and `:` with Shift+. (US positions).
+    // `+` is unshifted, on the US `=` key (Croatian) or `]` key (German); `'` is the US `-` key
+    // (Croatian) or Shift+# on the US `\` key (German); Shift+0 types `=` on both.
+    for (layout, plus_at, quote_at, quote_shift) in [("hr", Key::Equals, Key::Minus, false), ("de", Key::CloseBracket, Key::Backslash, true)] {
+        let mut h = harness(book("C2"));
+        let size = style(&h, "C2").font.size;
+        // Ctrl+; (Ctrl+Shift+,): today's date, not Decrease Font Size.
+        key_on_layout(&mut h, Key::Semicolon, Key::Comma, CTRL_SHIFT);
+        assert_eq!(editor_text(&h), Some(today(&h)), "{layout}: Ctrl+;");
+        assert_eq!(style(&h, "C2").font.size, size, "{layout}: Ctrl+; changed the font size");
+        key(&mut h, Key::Escape, Modifiers::NONE);
+        // Ctrl+: (Ctrl+Shift+.): the time, not Increase Font Size.
+        key_on_layout(&mut h, Key::Colon, Key::Period, CTRL_SHIFT);
+        let time = editor_text(&h).unwrap_or_default();
+        assert!(time.contains(':') && (time.ends_with("AM") || time.ends_with("PM")), "{layout}: Ctrl+: gave {time:?}");
+        assert_eq!(style(&h, "C2").font.size, size, "{layout}: Ctrl+: changed the font size");
+        key(&mut h, Key::Escape, Modifiers::NONE);
+        // Ctrl+': the formula of the cell above.
+        key_on_layout(&mut h, Key::Quote, quote_at, if quote_shift { CTRL_SHIFT } else { CTRL });
+        assert_eq!(editor_text(&h).as_deref(), Some("=A1*2"), "{layout}: Ctrl+'");
+        key(&mut h, Key::Escape, Modifiers::NONE);
+        // Ctrl++: Insert, as Ctrl+Shift+= on a US keyboard.
+        key_on_layout(&mut h, Key::Plus, plus_at, CTRL);
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("insertCells"), "{layout}: Ctrl++");
+        h.state_mut().dialog = None;
+        // Digits go by position: Ctrl+Shift+0 unhides columns although it types `=`.
+        h.state_mut().session.run("selection.set", json!({"range": "B:B"})).unwrap();
+        h.state_mut().session.run("home.hideColumns", json!({})).unwrap();
+        h.state_mut().session.run("selection.set", json!({"range": "A1:C1"})).unwrap();
+        key_on_layout(&mut h, Key::Equals, Key::Num0, CTRL_SHIFT);
+        assert!(h.state().dialog.is_none(), "{layout}: Ctrl+Shift+0 opened {:?}", h.state().dialog.as_ref().map(|d| d.name()));
+        let d = h.state().session.active().unwrap();
+        assert!(!d.wb.active().unwrap().is_col_hidden(1), "{layout}: Ctrl+Shift+0 didn't unhide column B");
+    }
+}
+
+#[test]
+fn us_symbol_shortcuts_keep_their_keys() {
+    let mut h = harness(book("C2"));
+    // Ctrl+;: the date. Ctrl+Shift+; arrives as `:` on Windows and as `;` with Shift elsewhere.
+    key(&mut h, Key::Semicolon, CTRL);
+    assert_eq!(editor_text(&h), Some(today(&h)));
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    for typed in [Key::Colon, Key::Semicolon] {
+        key_on_layout(&mut h, typed, Key::Semicolon, CTRL_SHIFT);
+        assert!(editor_text(&h).is_some_and(|t| t.ends_with("AM") || t.ends_with("PM")), "Ctrl+Shift+; as {typed:?}");
+        key(&mut h, Key::Escape, Modifiers::NONE);
+    }
+    // Ctrl+Shift+, and Ctrl+Shift+. (`<` and `>` have no egui key) change the font size.
+    let size = style(&h, "C2").font.size;
+    key(&mut h, Key::Period, CTRL_SHIFT);
+    assert!(style(&h, "C2").font.size > size);
+    key(&mut h, Key::Comma, CTRL_SHIFT);
+    assert_eq!(style(&h, "C2").font.size, size);
+    // Ctrl+Shift+= arrives as `+`: Insert.
+    key_on_layout(&mut h, Key::Plus, Key::Equals, CTRL_SHIFT);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("insertCells"));
+    let run = |id: &'static str| Some(Shortcut::Run(id, json!({})));
+    // The lookup itself: `;` typed with Shift is Ctrl+; (handled with the Ctrl letters), not the
+    // key's position (Decrease Font Size).
+    assert_eq!(lookup(Key::Semicolon, Some(Key::Comma), CTRL_SHIFT, false), None);
+    assert_eq!(lookup(Key::Colon, Some(Key::Period), CTRL_SHIFT, false), Some(Shortcut::Time));
+    assert_eq!(lookup(Key::Comma, Some(Key::Comma), CTRL_SHIFT, false), run("home.decreaseFontSize"));
+    // A character egui has no key for (`č` on the US `;` key) leaves the position.
+    assert_eq!(lookup(Key::Semicolon, Some(Key::Semicolon), CTRL_SHIFT, false), Some(Shortcut::Time));
+}
