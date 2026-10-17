@@ -80,13 +80,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "Group",
             ["Data", "Outline"],
             Some("Alt+Shift+Right"),
-            "{rows?: \"2:5\" | cols?: \"B:C\" | by?: rows|cols (the selection's rows or columns; a block of cells groups rows by default)}",
+            "{rows?: \"2:5\" | cols?: \"B:C\" | by?: rows|cols (the selection's rows or columns; a block of cells groups rows by default), sheet?}",
             has_doc,
             |s, p| group(s, p, true)
         ),
-        cmd!("data.ungroup", "Ungroup", ["Data", "Outline"], Some("Alt+Shift+Left"), "{rows? | cols? | by?: rows|cols}", has_doc, |s, p| group(
-            s, p, false
-        )),
+        cmd!("data.ungroup", "Ungroup", ["Data", "Outline"], Some("Alt+Shift+Left"), "{rows? | cols? | by?: rows|cols, sheet?}", has_doc, |s, p| {
+            group(s, p, false)
+        }),
         cmd!(
             "data.hideDetail",
             "Hide Detail",
@@ -145,6 +145,23 @@ fn data_range(s: &Session, p: &Json) -> Result<RangeRef> {
         return Ok(sel.intersection(&used).unwrap_or(sel));
     }
     Ok(current_region(sh, d.selection.active))
+}
+
+/// The sheet and range a data command works on: the sheet `sheet` or a `Sheet!` prefix on `range`
+/// names, else the active one. The selection belongs to the active sheet, so another sheet needs `range`.
+fn data_target(s: &Session, p: &Json, cmd: &str) -> Result<(usize, RangeRef)> {
+    let sheet = target_sheet(s, p)?;
+    let d = s.doc()?;
+    if let Some(t) = str_param(p, "range")
+        && let (Some(name), _) = split_sheet(t)
+        && d.wb.sheet_index(&name) != Some(sheet)
+    {
+        return Err(bad(cmd, format!("`{t}` names a sheet other than `sheet`")));
+    }
+    if sheet != d.wb.active_sheet && p.get("range").is_none() {
+        return Err(bad(cmd, "missing `range`: the selection is on the active sheet"));
+    }
+    Ok((sheet, data_range(s, p)?))
 }
 
 /// Excel's header guess: the first row is text over a column of numbers, or is bold.
@@ -437,10 +454,11 @@ fn sorted_anchor(sh: &Sheet, a: Anchor, bottom: (u32, u32, f32, f32), by_cols: b
 // ---------------------------------------------------------------- filter
 
 fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
-    let sheet = s.doc()?.wb.active_sheet;
+    let (sheet, r) = data_target(s, p, "data.filter")?;
+    // The active cell belongs to the active sheet: on another sheet the table is the one at `range`.
+    let at = if sheet == s.doc()?.wb.active_sheet { s.doc()?.selection.active } else { r.start };
     let has = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.autofilter.is_some());
-    let in_table =
-        s.doc()?.wb.sheet(sheet).and_then(|sh| sh.table_at(s.doc().map(|d| d.selection.active).unwrap_or_default()).map(|t| t.name.clone()));
+    let in_table = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.table_at(at).map(|t| t.name.clone()));
     if let Some(name) = in_table {
         return edit(s, |cx| {
             let sh = cx.sheet_mut(sheet)?;
@@ -473,8 +491,7 @@ fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// Turn a sheet AutoFilter on over `p.range`, or over the data range of the selection.
 fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
-    let sheet = s.doc()?.wb.active_sheet;
-    let mut r = data_range(s, p)?;
+    let (sheet, mut r) = data_target(s, p, "data.filter")?;
     // A selected header row filters the data below it (#201).
     if p.get("range").is_none() && r.height() == 1 {
         let d = s.doc()?;
@@ -736,9 +753,9 @@ fn sort_key(v: &Value) -> (u8, i64, String) {
 // ---------------------------------------------------------------- tools
 
 fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
-    let r = data_range(s, p)?;
+    let (sheet, r) = data_target(s, p, "data.removeDuplicates")?;
     let d = s.doc()?;
-    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
     // Rows and columns past the data are blank: only the part with data is compared (whole
     // columns compared a million blank rows and reported them as removed duplicates).
     let r = sh.used_range().and_then(|u| r.intersection(&u)).unwrap_or(RangeRef::cell(r.start));
@@ -748,7 +765,6 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         .and_then(Json::as_array)
         .map(|a| a.iter().filter_map(|c| col_param(Some(c), r.start.col)).collect())
         .unwrap_or_else(|| (r.start.col..=r.end.col).collect());
-    let sheet = d.wb.active_sheet;
     let start = r.start.row + header as u32;
     let mut removed = 0;
     edit(s, |cx| {
@@ -1143,9 +1159,13 @@ fn outline_lines(s: &Session, p: &Json) -> Result<(bool, u32, u32)> {
 }
 
 fn group(s: &mut Session, p: &Json, on: bool) -> Result<Json> {
+    let si = target_sheet(s, p)?;
+    // The selection belongs to the active sheet, so another sheet needs its lines.
+    if si != s.doc()?.wb.active_sheet && p.get("rows").is_none() && p.get("cols").is_none() {
+        return Err(bad(if on { "data.group" } else { "data.ungroup" }, "missing `rows` or `cols`: the selection is on the active sheet"));
+    }
     let (rows, a, b) = outline_lines(s, p)?;
     edit(s, |cx| {
-        let si = cx.sheet_index();
         let sh = cx.sheet_mut(si)?;
         let map = if rows { &mut sh.rows } else { &mut sh.cols };
         let b = b.min(a.saturating_add(1_048_575));
@@ -1245,7 +1265,7 @@ fn show_levels(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
-    let r = data_range(s, p)?;
+    let (sheet, r) = data_target(s, p, "data.subtotal")?;
     let group_col = col_param(p.get("groupBy"), r.start.col).unwrap_or(r.start.col);
     let func = str_param(p, "function").unwrap_or("sum");
     let code = match func {
@@ -1269,7 +1289,6 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
         "product" => "Product",
         _ => "Total",
     };
-    let sheet = s.doc()?.wb.active_sheet;
     // Group boundaries (header in the first row).
     let d = s.doc()?;
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
@@ -1286,25 +1305,28 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
     // Insert a total row after each group, bottom-up so indices stay valid.
     let mut inserted = 0;
     for (g0, g1, name) in groups.iter().rev() {
-        s.execute("home.insertRows", json!({"rows": format!("{}:{}", g1 + 2, g1 + 2)}))?;
+        s.execute("home.insertRows", json!({"sheet": sheet, "rows": format!("{}:{}", g1 + 2, g1 + 2)}))?;
         let row = g1 + 1;
         let lbl = CellRef::new(row, group_col).a1();
-        s.execute("cell.set", json!({"cell": lbl, "input": format!("{name} {label}")}))?;
+        s.execute("cell.set", json!({"sheet": sheet, "cell": lbl, "input": format!("{name} {label}")}))?;
         for c in &cols {
             let range = RangeRef::new(CellRef::new(*g0, *c), CellRef::new(*g1, *c)).a1();
-            s.execute("cell.set", json!({"cell": CellRef::new(row, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
+            s.execute("cell.set", json!({"sheet": sheet, "cell": CellRef::new(row, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
         }
-        s.execute("home.bold", json!({"range": RangeRef::new(CellRef::new(row, r.start.col), CellRef::new(row, r.end.col)).a1(), "on": true}))?;
-        s.execute("data.group", json!({"rows": format!("{}:{}", g0 + 1, g1 + 1)}))?;
+        s.execute(
+            "home.bold",
+            json!({"sheet": sheet, "range": RangeRef::new(CellRef::new(row, r.start.col), CellRef::new(row, r.end.col)).a1(), "on": true}),
+        )?;
+        s.execute("data.group", json!({"sheet": sheet, "rows": format!("{}:{}", g0 + 1, g1 + 1)}))?;
         inserted += 1;
     }
     let last = r.end.row + inserted + 1;
     let lbl = CellRef::new(last, group_col).a1();
-    s.execute("home.insertRows", json!({"rows": format!("{}:{}", last + 1, last + 1)}))?;
-    s.execute("cell.set", json!({"cell": lbl, "input": format!("Grand {label}")}))?;
+    s.execute("home.insertRows", json!({"sheet": sheet, "rows": format!("{}:{}", last + 1, last + 1)}))?;
+    s.execute("cell.set", json!({"sheet": sheet, "cell": lbl, "input": format!("Grand {label}")}))?;
     for c in &cols {
         let range = RangeRef::new(CellRef::new(r.start.row + 1, *c), CellRef::new(last - 1, *c)).a1();
-        s.execute("cell.set", json!({"cell": CellRef::new(last, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
+        s.execute("cell.set", json!({"sheet": sheet, "cell": CellRef::new(last, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
     }
     Ok(json!({"groups": inserted}))
 }

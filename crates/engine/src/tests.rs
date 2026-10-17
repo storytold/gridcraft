@@ -1040,6 +1040,93 @@ fn remove_duplicates_compares_shown_text() {
 }
 
 #[test]
+fn remove_duplicates_with_a_sheet_prefix_works_on_the_named_sheet() {
+    let col = |s: &Session, sheet: &str| -> Vec<Value> {
+        let wb = &s.doc().unwrap().wb;
+        let sh = wb.sheet(wb.sheet_index(sheet).unwrap()).unwrap();
+        (1..=3).map(|r| sh.value(CellRef::new(r, 0))).collect()
+    };
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["a"], ["a"], ["a"]]})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Prices"})).unwrap();
+    s.execute("range.setValues", json!({"range": "Prices!A1", "values": [["Item"], ["p1"], ["p1"], ["p2"]]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    let r = s.execute("data.removeDuplicates", json!({"range": "Prices!A1:A4", "header": true})).unwrap();
+    assert_eq!(r["removed"], 1);
+    assert_eq!(col(&s, "Prices"), [Value::from("p1"), Value::from("p2"), Value::Empty]);
+    assert_eq!(col(&s, "Sheet1"), ["a", "a", "a"].map(Value::from));
+    // The selection belongs to the active sheet, so another sheet needs its range.
+    assert!(s.execute("data.removeDuplicates", json!({"sheet": "Prices", "header": true})).is_err());
+    assert!(s.execute("data.removeDuplicates", json!({"sheet": "Sheet1", "range": "Prices!A1:A4", "header": true})).is_err());
+    assert!(s.execute("data.removeDuplicates", json!({"range": "Nowhere!A1:A4", "header": true})).is_err());
+    assert_eq!(col(&s, "Sheet1"), ["a", "a", "a"].map(Value::from));
+}
+
+#[test]
+fn filter_with_a_sheet_prefix_toggles_the_named_sheet() {
+    let sheet = |s: &Session, name: &str| -> gridcraft_model::Sheet {
+        let wb = &s.doc().unwrap().wb;
+        wb.sheet(wb.sheet_index(name).unwrap()).unwrap().clone()
+    };
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Qty"], ["a", 3], ["b", 1]]})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Prices"})).unwrap();
+    s.execute("range.setValues", json!({"range": "Prices!A1", "values": [["Item", "Price"], ["p1", 10], ["p2", 30]]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    let r = s.execute("data.filter", json!({"range": "Prices!A1:B3"})).unwrap();
+    assert_eq!(r["range"], "A1:B3");
+    assert_eq!(sheet(&s, "Prices").autofilter.map(|a| a.range.a1()), Some("A1:B3".to_string()));
+    assert!(sheet(&s, "Sheet1").autofilter.is_none());
+    s.execute("data.filter", json!({"range": "Prices!A1:B3"})).unwrap();
+    assert!(sheet(&s, "Prices").autofilter.is_none());
+    assert!(sheet(&s, "Sheet1").autofilter.is_none());
+    assert!(s.execute("data.filter", json!({"sheet": "Prices"})).is_err());
+}
+
+#[test]
+fn filter_with_a_sheet_prefix_toggles_the_table_at_the_range() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Prices"})).unwrap();
+    s.execute("range.setValues", json!({"range": "Prices!A1", "values": [["Item", "Price"], ["p1", 10], ["p2", 30]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    // The active cell is outside the table's cells, so only `range` can find the table.
+    s.execute("selection.set", json!({"range": "E10"})).unwrap();
+    let prices = |s: &Session| {
+        let wb = &s.doc().unwrap().wb;
+        wb.sheet(wb.sheet_index("Prices").unwrap()).unwrap().clone()
+    };
+    assert!(prices(&s).tables[0].filter_button);
+    s.execute("data.filter", json!({"range": "Prices!A2:B3"})).unwrap();
+    assert!(!prices(&s).tables[0].filter_button);
+    assert!(prices(&s).autofilter.is_none());
+    assert!(s.doc().unwrap().wb.active().unwrap().autofilter.is_none());
+}
+
+#[test]
+fn subtotal_with_a_sheet_prefix_works_on_the_named_sheet() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Qty"], ["x", 1], ["x", 2], ["y", 3]]})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Prices"})).unwrap();
+    s.execute("range.setValues", json!({"range": "Prices!A1", "values": [["Item", "Qty"], ["a", 1], ["a", 2], ["b", 4]]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    let r = s.execute("data.subtotal", json!({"range": "Prices!A1:B4", "groupBy": "A", "columns": ["B"]})).unwrap();
+    assert_eq!(r["groups"], 2);
+    let wb = &s.doc().unwrap().wb;
+    let prices = wb.sheet(wb.sheet_index("Prices").unwrap()).unwrap();
+    let col = |sh: &gridcraft_model::Sheet, c: u32| -> Vec<Value> { (0..7).map(|r| sh.value(CellRef::new(r, c))).collect() };
+    assert_eq!(col(prices, 0), ["Item", "a", "a", "a Total", "b", "b Total", "Grand Total"].map(Value::from));
+    assert_eq!(col(prices, 1)[1..], [1.0, 2.0, 3.0, 4.0, 4.0, 7.0].map(Value::from));
+    assert!(wb.styles.get(prices.style_id(CellRef::new(3, 0))).font.bold);
+    assert_eq!(prices.rows.get(&1).map(|l| l.outline), Some(1));
+    let sheet1 = wb.sheet(wb.sheet_index("Sheet1").unwrap()).unwrap();
+    assert_eq!(col(sheet1, 0)[..4], ["Name", "x", "x", "y"].map(Value::from));
+    assert!(sheet1.value(CellRef::new(4, 0)).is_empty());
+    assert!(sheet1.rows.values().all(|l| l.outline == 0));
+    assert!(s.execute("data.group", json!({"sheet": "Prices"})).is_err());
+}
+
+#[test]
 fn formatting_and_styles() {
     let mut s = s();
     s.execute("selection.set", json!({"range": "A1:B2"})).unwrap();
