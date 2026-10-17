@@ -488,7 +488,7 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
-    let Some(patch) = p.get("style").cloned() else {
+    let Some(patch) = p.get("style").map(snake_case_keys) else {
         // Menu invocation without params: the UI opens the dialog.
         s.ui_requests.push(crate::UiRequest::Dialog("formatCells".into(), json!({})));
         return ok();
@@ -504,6 +504,32 @@ fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
             *st = new;
         }
     })
+}
+
+/// The style patch with camelCase keys (`numFmt`, `diagDown`, as documented) renamed to the
+/// style's own snake_case (`num_fmt`, `diag_down`). Keys starting with a capital (`Rgb`) stay.
+fn snake_case_keys(v: &Json) -> Json {
+    match v {
+        Json::Object(m) => Json::Object(
+            m.iter()
+                .map(|(k, v)| {
+                    let key = if k.starts_with(|c: char| c.is_ascii_lowercase()) {
+                        k.chars().fold(String::new(), |mut out, c| {
+                            if c.is_ascii_uppercase() {
+                                out.push('_');
+                            }
+                            out.push(c.to_ascii_lowercase());
+                            out
+                        })
+                    } else {
+                        k.clone()
+                    };
+                    (key, snake_case_keys(v))
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 /// Deep-merges `patch` into `base` (objects merge, everything else replaces).
@@ -1147,6 +1173,20 @@ mod tests {
         assert_eq!(adjust_decimals("0.0", &v, -1), "0");
         assert_eq!(adjust_decimals("#,##0.00;[Red]-#,##0.00", &v, 1), "#,##0.000;[Red]-#,##0.000");
         assert_eq!(adjust_decimals("0%", &v, 1), "0.0%");
+    }
+
+    #[test]
+    fn format_cells_takes_the_documented_keys() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"numFmt": "0.0", "borders": {"diagUp": {"style": "Thin"}}}})).unwrap();
+        let st = &s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"];
+        assert_eq!(st["num_fmt"], "0.0");
+        assert_eq!(st["borders"]["diag_up"]["style"], "Thin");
+        // The style's own snake_case keys keep working.
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"num_fmt": "0.00"}})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["num_fmt"], "0.00");
     }
 
     #[test]
