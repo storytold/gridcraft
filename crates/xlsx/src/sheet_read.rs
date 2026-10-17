@@ -8,7 +8,7 @@ use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRe
 use gridcraft_formula::Expr;
 use gridcraft_model::{
     AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
-    Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation, ValidationKind,
+    Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Style, Table, TableColumn, TotalsFn, Validation, ValidationKind,
     XmlColumnPr,
 };
 
@@ -596,73 +596,152 @@ fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
     for r in e.kids("cfRule") {
         let style = Box::new(r.attr_u32("dxfId").and_then(|i| cx.dxfs.get(i as usize)).cloned().unwrap_or_default());
         let formulas: Vec<String> = r.kids("formula").map(|f| from_file(f.text.trim())).collect();
-        let f0 = formulas.first().cloned().unwrap_or_default();
-        let text = r.attr("text").unwrap_or("").to_string();
         // The x14 id that links a data bar to its Excel 2010 extension (solid fill lives there).
         let ext_id =
             r.child("extLst").and_then(|l| l.kids("ext").find_map(|x| x.child("id"))).map(|i| i.text.trim().to_string()).filter(|i| !i.is_empty());
-        let rule = match r.attr("type").unwrap_or("") {
-            "cellIs" => CfRule::CellIs { op: cf_op(r.attr("operator")), a: f0, b: formulas.get(1).cloned(), style },
-            "expression" => CfRule::Expression { formula: f0, style },
-            "containsText" => CfRule::ContainsText { text, style },
-            "notContainsText" => CfRule::NotContainsText { text, style },
-            "beginsWith" => CfRule::BeginsWith { text, style },
-            "endsWith" => CfRule::EndsWith { text, style },
-            "containsBlanks" => CfRule::Blanks { style },
-            "notContainsBlanks" => CfRule::NoBlanks { style },
-            "containsErrors" => CfRule::Errors { style },
-            "notContainsErrors" => CfRule::NoErrors { style },
-            "duplicateValues" => CfRule::Duplicate { style },
-            "uniqueValues" => CfRule::Unique { style },
-            "top10" => {
-                CfRule::Top10 { bottom: r.flag("bottom", false), percent: r.flag("percent", false), rank: r.attr_u32("rank").unwrap_or(10), style }
-            }
-            "aboveAverage" => CfRule::AboveAverage {
-                below: !r.flag("aboveAverage", true),
-                equal: r.flag("equalAverage", false),
-                std_dev: r.attr_u32("stdDev").unwrap_or(0).min(3) as u8,
-                style,
-            },
-            "timePeriod" => CfRule::TimePeriod { period: r.attr("timePeriod").unwrap_or("today").to_string(), style },
-            "colorScale" => {
-                let Some(cs) = r.child("colorScale") else { continue };
-                let colors = cs.kids("color").map(|c| read_color(c, &cx.palette));
-                CfRule::ColorScale { stops: cfvos(cs).into_iter().zip(colors).collect() }
-            }
-            "dataBar" => {
-                let Some(db) = r.child("dataBar") else { continue };
-                let v = cfvos(db);
-                CfRule::DataBar {
-                    min: v.first().cloned().unwrap_or(CfValueKind::Min),
-                    max: v.get(1).cloned().unwrap_or(CfValueKind::Max),
-                    color: db.child("color").map(|c| read_color(c, &cx.palette)).unwrap_or_default(),
-                    gradient: true,
-                    show_value: db.flag("showValue", true),
+        let ty = r.attr("type").unwrap_or("");
+        match cf_rule(cx, r, ty, formulas, style) {
+            Some(rule) => {
+                if let Some(id) = ext_id {
+                    cx.cf_ext_ids.push((id, sheet.cond_formats.len()));
                 }
+                push_cf(sheet, &ranges, r, rule);
             }
-            "iconSet" => {
-                let Some(is) = r.child("iconSet") else { continue };
-                CfRule::IconSet {
-                    set: is.attr("iconSet").unwrap_or("3TrafficLights1").to_string(),
-                    thresholds: cfvos(is),
-                    reverse: is.flag("reverse", false),
-                    show_value: is.flag("showValue", true),
+            None if matches!(ty, "colorScale" | "dataBar" | "iconSet") => {}
+            None => cx.warn(format!("conditional format type \"{ty}\" is not supported")),
+        }
+    }
+}
+
+fn push_cf(sheet: &mut Sheet, ranges: &[RangeRef], r: &El, rule: CfRule) {
+    sheet.cond_formats.push(CondFormat {
+        ranges: ranges.to_vec(),
+        rule,
+        priority: r.attr_u32("priority").unwrap_or(0),
+        stop_if_true: r.flag("stopIfTrue", false),
+    });
+}
+
+/// The rule of a `cfRule` (main namespace or x14) of type `ty`, given its formulas and
+/// differential style; `None` for an unknown type or a scale, bar or icon set without its body.
+fn cf_rule(cx: &Ctx<'_>, r: &El, ty: &str, formulas: Vec<String>, style: Box<Style>) -> Option<CfRule> {
+    let mut formulas = formulas.into_iter();
+    let f0 = formulas.next().unwrap_or_default();
+    let text = r.attr("text").unwrap_or("").to_string();
+    Some(match ty {
+        "cellIs" => CfRule::CellIs { op: cf_op(r.attr("operator")), a: f0, b: formulas.next(), style },
+        "expression" => CfRule::Expression { formula: f0, style },
+        "containsText" => CfRule::ContainsText { text, style },
+        "notContainsText" => CfRule::NotContainsText { text, style },
+        "beginsWith" => CfRule::BeginsWith { text, style },
+        "endsWith" => CfRule::EndsWith { text, style },
+        "containsBlanks" => CfRule::Blanks { style },
+        "notContainsBlanks" => CfRule::NoBlanks { style },
+        "containsErrors" => CfRule::Errors { style },
+        "notContainsErrors" => CfRule::NoErrors { style },
+        "duplicateValues" => CfRule::Duplicate { style },
+        "uniqueValues" => CfRule::Unique { style },
+        "top10" => {
+            CfRule::Top10 { bottom: r.flag("bottom", false), percent: r.flag("percent", false), rank: r.attr_u32("rank").unwrap_or(10), style }
+        }
+        "aboveAverage" => CfRule::AboveAverage {
+            below: !r.flag("aboveAverage", true),
+            equal: r.flag("equalAverage", false),
+            std_dev: r.attr_u32("stdDev").unwrap_or(0).min(3) as u8,
+            style,
+        },
+        "timePeriod" => CfRule::TimePeriod { period: r.attr("timePeriod").unwrap_or("today").to_string(), style },
+        "colorScale" => {
+            let cs = r.child("colorScale")?;
+            let colors = cs.kids("color").map(|c| read_color(c, &cx.palette));
+            CfRule::ColorScale { stops: cfvos(cs).into_iter().zip(colors).collect() }
+        }
+        "dataBar" => {
+            let db = r.child("dataBar")?;
+            let v = cfvos(db);
+            CfRule::DataBar {
+                min: v.first().cloned().unwrap_or(CfValueKind::Min),
+                max: v.get(1).cloned().unwrap_or(CfValueKind::Max),
+                color: db.child("color").map(|c| read_color(c, &cx.palette)).unwrap_or_default(),
+                gradient: true,
+                show_value: db.flag("showValue", true),
+            }
+        }
+        "iconSet" => {
+            let is = r.child("iconSet")?;
+            CfRule::IconSet {
+                set: is.attr("iconSet").unwrap_or("3TrafficLights1").to_string(),
+                thresholds: cfvos(is),
+                reverse: is.flag("reverse", false),
+                show_value: is.flag("showValue", true),
+            }
+        }
+        _ => return None,
+    })
+}
+
+/// `x14:conditionalFormattings` (MS-XLSX 2.4.6): rules kept out of the main section, such as
+/// those whose formulas refer to other sheets in the one LibreOffice-saved file seen. They carry
+/// `xm:f` formulas, an inline `x14:dxf` and priorities shared with the main-section rules.
+/// Read: cellIs, expression, (not)containsBlanks, (not)containsErrors, duplicate/unique values,
+/// top10, aboveAverage and timePeriod. The x14 extension a main-section data bar links to by
+/// `x14:id` adds no rule, only that bar's solid fill (its other settings are skipped with a
+/// warning). Skipped with a warning (and so lost on save): other data bars, icon sets, colour
+/// scales and the text rules containsText, notContainsText, beginsWith and endsWith.
+fn read_x14_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
+    for cf in e.kids("conditionalFormatting") {
+        let ranges = parse_sqref(cf.child("sqref").map(|s| s.text.as_str()));
+        for r in cf.kids("cfRule") {
+            let ty = r.attr("type").unwrap_or("");
+            let linked = r.attr("id").and_then(|id| cx.cf_ext_ids.iter().find(|(i, _)| i == id.trim())).map(|(_, n)| *n);
+            if let Some(n) = linked {
+                match (sheet.cond_formats.get_mut(n), r.child("dataBar")) {
+                    (Some(CondFormat { rule: CfRule::DataBar { gradient, .. }, .. }), Some(db)) => {
+                        *gradient = db.flag("gradient", true);
+                        // Only the fill style is modelled, with negatives in the bar's colour and no axis;
+                        // borders, lengths, other axis positions or negative colours are lost.
+                        let modelled = |k: &str, v: &str| {
+                            k == "gradient"
+                                || (k == "axisPosition" && v == "none")
+                                || (k == "negativeBarColorSameAsPositive" && matches!(v, "1" | "true"))
+                        };
+                        if db.attrs.iter().any(|(k, v)| !modelled(k, v)) || db.children.iter().any(|k| k.name != "cfvo") {
+                            cx.warn(format!("Excel 2010 conditional format extension \"{ty}\" was partly skipped (only its solid fill is kept)"));
+                        }
+                    }
+                    _ => cx.warn(format!("Excel 2010 conditional format extension \"{ty}\" was skipped")),
                 }
-            }
-            other => {
-                cx.warn(format!("conditional format type \"{other}\" is not supported"));
                 continue;
             }
-        };
-        if let Some(id) = ext_id {
-            cx.cf_ext_ids.push((id, sheet.cond_formats.len()));
+            if ranges.is_empty() {
+                continue;
+            }
+            // Only rule kinds whose formulas are kept and written back here; the others' x14
+            // forms add settings (bar fills and axes, custom icons) the model doesn't hold.
+            let supported = matches!(
+                ty,
+                "cellIs"
+                    | "expression"
+                    | "containsBlanks"
+                    | "notContainsBlanks"
+                    | "containsErrors"
+                    | "notContainsErrors"
+                    | "duplicateValues"
+                    | "uniqueValues"
+                    | "top10"
+                    | "aboveAverage"
+                    | "timePeriod"
+            );
+            if !supported {
+                cx.warn(format!("Excel 2010 conditional format extension \"{ty}\" was skipped"));
+                continue;
+            }
+            let style = Box::new(r.child("dxf").map(|x| crate::styles::read_dxf(x, &cx.palette, &cx.num_fmts)).unwrap_or_default());
+            let formulas: Vec<String> = r.kids("f").map(|f| from_file(f.text.trim())).collect();
+            if let Some(rule) = cf_rule(cx, r, ty, formulas, style) {
+                push_cf(sheet, &ranges, r, rule);
+            }
         }
-        sheet.cond_formats.push(CondFormat {
-            ranges: ranges.clone(),
-            rule,
-            priority: r.attr_u32("priority").unwrap_or(0),
-            stop_if_true: r.flag("stopIfTrue", false),
-        });
     }
 }
 
@@ -949,7 +1028,7 @@ fn read_threaded(cx: &Ctx<'_>, x: &El, sheet: &mut Sheet) {
     }
 }
 
-/// Worksheet extensions: x14 data validations and sparklines.
+/// Worksheet extensions: x14 conditional formats, data validations and sparklines.
 fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
     for ext in e.kids("ext") {
         for c in &ext.children {
@@ -978,23 +1057,7 @@ fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
                         }
                     }
                 }
-                "conditionalFormattings" => {
-                    let mut skipped = false;
-                    for r in c.kids("conditionalFormatting").flat_map(|f| f.kids("cfRule")) {
-                        let idx = r.attr("id").and_then(|id| cx.cf_ext_ids.iter().find(|(i, _)| i == id)).map(|(_, n)| *n);
-                        match (idx.and_then(|n| sheet.cond_formats.get_mut(n)), r.child("dataBar")) {
-                            (Some(CondFormat { rule: CfRule::DataBar { gradient, .. }, .. }), Some(db)) => {
-                                *gradient = db.flag("gradient", true);
-                                // Only the fill style is modelled; borders, lengths, axis or negative colours are lost.
-                                skipped |= db.attrs.iter().any(|(k, _)| k != "gradient") || db.children.iter().any(|k| k.name != "cfvo");
-                            }
-                            _ => skipped = true,
-                        }
-                    }
-                    if skipped {
-                        cx.warn("some Excel 2010 conditional format extensions were skipped");
-                    }
-                }
+                "conditionalFormattings" => read_x14_cf(cx, c, sheet),
                 _ => {}
             }
         }

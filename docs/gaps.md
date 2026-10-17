@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-13 · **Change:** minor (§3: Excel 2010 conditional formats read and written) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -35,9 +35,12 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 3. Some unmodelled XLSX content is dropped on save (FF)
 - **Missing:** slicers and their caches, timelines, the data model, query tables attached to
-  tables, unmodelled `extLst` entries, chart details. Pass-through (#330) keeps custom XML,
-  external links, connections, sheet query tables, printer settings, form and ActiveX controls,
-  OLE objects and sheet backgrounds; never checked in Excel (repair prompts unknown).
+  tables, unmodelled `extLst` entries (among them x14 data bar settings beyond a solid fill,
+  icon sets, colour scales and the text rules containsText, notContainsText, beginsWith and
+  endsWith), chart details. Pass-through (#330) keeps custom XML, external links, connections,
+  sheet query tables, printer settings, form and ActiveX controls, OLE objects and sheet
+  backgrounds; the other Excel 2010 conditional format rules (cross-sheet rules among them) are
+  read and written; never checked in Excel (repair prompts unknown).
 - **Evidence:** `crates/xlsx/src/passthrough.rs` (what is kept, and why the rest isn't).
 - **Impact:** open-edit-save still simplifies workbooks with slicers, timelines or Power Pivot.
 - **Estimate:** 6–10 h. [file-format-parity.md](file-format-parity.md)
@@ -168,6 +171,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | §3: Excel 2010 conditional formats (`x14:conditionalFormattings`, cross-sheet rules) read, evaluated and written back in the extension |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
 | 2026-10-12 | minor | Page Layout view: dragging margins on the rulers (#792) removed from the §14 remainder |
 | 2026-10-12 | minor | §13: Forecast Sheet Forecast Start (hindcast) landed (#785) |

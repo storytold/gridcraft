@@ -410,4 +410,42 @@ mod tests {
         let mut look = |a: &str| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.style).is_some();
         assert_eq!([look("A1"), look("A2")], [true, false]);
     }
+
+    #[test]
+    fn rules_compare_with_cells_on_other_sheets() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "E1", "values": [["Suspended"], ["OK"], ["Terminated"], [7], [3]]})).unwrap();
+        let rule = |r: serde_json::Value| json!({"range": "E1:E5", "rule": r});
+        s.execute(
+            "home.conditionalFormat",
+            rule(json!({"type": "cellIs", "operator": "equal", "value": "='Vehicle Range'!$A$8", "preset": "redText"})),
+        )
+        .unwrap();
+        s.execute(
+            "home.conditionalFormat",
+            rule(json!({"type": "cellIs", "operator": "equal", "value": "='Vehicle Range'!$A$9", "preset": "redText"})),
+        )
+        .unwrap();
+        s.execute(
+            "home.conditionalFormat",
+            rule(json!({"type": "expression", "formula": "=AND(ISNUMBER(E1),E1>'Vehicle Range'!$B$1)", "preset": "yellowFill"})),
+        )
+        .unwrap();
+        s.execute("home.insertSheet", json!({"name": "Vehicle Range"})).unwrap();
+        s.execute("range.setValues", json!({"range": "'Vehicle Range'!A8", "values": [["Suspended"], ["Terminated"]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "'Vehicle Range'!B1", "values": [[5]]})).unwrap();
+        let d = s.doc().unwrap();
+        let report = d.wb.sheets.iter().position(|sh| sh.name != "Vehicle Range").unwrap();
+        let mut cache = CfCache::new();
+        let mut look = |a: &str| cache.look(&d.wb, report, CellRef::parse(a).unwrap()).and_then(|l| l.style).unwrap_or_default();
+        let looks = ["E1", "E2", "E3", "E4", "E5"].map(&mut look);
+        // The cells equal to 'Vehicle Range'!A8 or A9 get the red text.
+        let red_text = looks[0].font.color;
+        assert_ne!(red_text, Color::Auto);
+        let red = |st: &Style| st.font.color == red_text;
+        let filled = |st: &Style| st.fill.pattern == PatternType::Solid;
+        assert_eq!(looks.each_ref().map(red), [true, false, true, false, false]);
+        assert_eq!(looks.each_ref().map(filled), [false, false, false, true, false]);
+    }
 }

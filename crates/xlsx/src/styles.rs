@@ -342,42 +342,38 @@ pub fn read_styles(root: &El, checkboxes: &[bool]) -> StylesIn {
             }
         }
     }
-    let dxfs = root
-        .child("dxfs")
-        .map(|d| {
-            d.kids("dxf")
-                .map(|x| {
-                    let mut s = Style::default();
-                    if let Some(f) = x.child("font") {
-                        let f = read_font(f, &palette);
-                        // Differential fonts rarely name a face; keep the default face and size.
-                        s.font = Font { name: s.font.name.clone(), size: s.font.size, ..f };
-                    }
-                    if let Some(n) = x.child("numFmt") {
-                        if let Some(code) = n.attr("formatCode") {
-                            s.num_fmt = NumFmt::new(code);
-                        } else if let Some(id) = n.attr_u32("numFmtId") {
-                            s.num_fmt = num_fmt_code(id, &fmts);
-                        }
-                    }
-                    if let Some(f) = x.child("fill") {
-                        s.fill = read_fill(f, &palette, true);
-                    }
-                    if let Some(b) = x.child("border") {
-                        s.borders = read_border(b, &palette);
-                    }
-                    if let Some(a) = x.child("alignment") {
-                        s.align = read_alignment(a);
-                    }
-                    if let Some(p) = x.child("protection") {
-                        s.protection = read_protection(p);
-                    }
-                    s
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let dxfs = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &fmts)).collect()).unwrap_or_default();
     StylesIn { xfs, dxfs, palette, named, num_fmts: fmts }
+}
+
+/// A differential format: a `dxf` of the styles part, or an inline Excel 2010 `x14:dxf`.
+pub fn read_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, String>) -> Style {
+    let mut s = Style::default();
+    if let Some(f) = x.child("font") {
+        let f = read_font(f, palette);
+        // Differential fonts rarely name a face; keep the default face and size.
+        s.font = Font { name: s.font.name.clone(), size: s.font.size, ..f };
+    }
+    if let Some(n) = x.child("numFmt") {
+        if let Some(code) = n.attr("formatCode") {
+            s.num_fmt = NumFmt::new(code);
+        } else if let Some(id) = n.attr_u32("numFmtId") {
+            s.num_fmt = num_fmt_code(id, fmts);
+        }
+    }
+    if let Some(f) = x.child("fill") {
+        s.fill = read_fill(f, palette, true);
+    }
+    if let Some(b) = x.child("border") {
+        s.borders = read_border(b, palette);
+    }
+    if let Some(a) = x.child("alignment") {
+        s.align = read_alignment(a);
+    }
+    if let Some(p) = x.child("protection") {
+        s.protection = read_protection(p);
+    }
+    s
 }
 
 // ---------------------------------------------------------------- writing
@@ -556,14 +552,16 @@ fn intern<T: Clone + Eq + std::hash::Hash>(list: &mut Vec<T>, map: &mut HashMap<
     i
 }
 
-/// Number format ids assigned while writing.
-struct NumFmts {
+/// Number format ids assigned while writing. Worksheets that carry inline differential formats
+/// (`x14:dxf`) assign ids first, through [`crate::write::Out`]; `styles.xml` lists them all.
+#[derive(Default)]
+pub struct NumFmts {
     custom: Vec<(u32, String)>,
     map: HashMap<String, u32>,
 }
 
 impl NumFmts {
-    fn id(&mut self, code: &str) -> u32 {
+    pub fn id(&mut self, code: &str) -> u32 {
         if let Some(id) = builtin_id(code) {
             return id;
         }
@@ -579,10 +577,10 @@ impl NumFmts {
 
 /// `styles.xml` for the workbook: one cell format per model style, in `StyleId` order (so a
 /// cell's `s` attribute is its style id), plus the given differential formats.
-/// `extra_fmts` are number formats used outside cell styles (PivotTable value fields); the
-/// returned map gives the id of every custom format written.
-pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (String, HashMap<String, u32>) {
-    let mut nf = NumFmts { custom: vec![], map: HashMap::new() };
+/// `extra_fmts` are number formats used outside cell styles (PivotTable value fields); `nf`
+/// holds the ids worksheets already assigned. The returned map gives the id of every custom
+/// format written.
+pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String], mut nf: NumFmts) -> (String, HashMap<String, u32>) {
     let mut fonts: Vec<Font> = vec![];
     let mut font_map = HashMap::new();
     let mut fills: Vec<Fill> = vec![Fill::default(), Fill { pattern: PatternType::Gray125, fg: Color::Auto, bg: Color::Auto }];
@@ -662,31 +660,7 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
 
     let mut dx = String::new();
     for d in dxfs {
-        dx.push_str("<dxf>");
-        let def = Style::default();
-        if d.font.bold
-            || d.font.italic
-            || d.font.strike
-            || d.font.underline != Underline::None
-            || d.font.color != Color::Auto
-            || d.font.vert != VertAlign::Baseline
-        {
-            dx.push_str(&font_xml(&d.font, true, false));
-        }
-        if d.num_fmt != def.num_fmt {
-            let id = nf.id(d.num_fmt.as_str());
-            let _ = write!(dx, "<numFmt numFmtId=\"{id}\" formatCode=\"{}\"/>", esc_attr(d.num_fmt.as_str()));
-        }
-        if d.fill != def.fill {
-            dx.push_str(&fill_xml(&d.fill, true));
-        }
-        if let Some(a) = alignment_xml(&d.align) {
-            dx.push_str(&a);
-        }
-        if d.borders != def.borders {
-            dx.push_str(&border_xml(&d.borders));
-        }
-        dx.push_str("</dxf>");
+        dx.push_str(&dxf_xml("dxf", d, &mut nf));
     }
     for f in extra_fmts {
         nf.id(f);
@@ -721,6 +695,39 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
     let _ = write!(s, "<dxfs count=\"{}\">{dx}</dxfs>", dxfs.len());
     s.push_str("<tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" defaultPivotStyle=\"PivotStyleLight16\"/></styleSheet>");
     (s, nf.map)
+}
+
+/// A differential format element named `tag` (`dxf`, or `x14:dxf` inline in a worksheet rule).
+pub fn dxf_xml(tag: &str, d: &Style, nf: &mut NumFmts) -> String {
+    let mut dx = format!("<{tag}>");
+    let def = Style::default();
+    if d.font.bold
+        || d.font.italic
+        || d.font.strike
+        || d.font.underline != Underline::None
+        || d.font.color != Color::Auto
+        || d.font.vert != VertAlign::Baseline
+    {
+        dx.push_str(&font_xml(&d.font, true, false));
+    }
+    if d.num_fmt != def.num_fmt {
+        let id = nf.id(d.num_fmt.as_str());
+        let _ = write!(dx, "<numFmt numFmtId=\"{id}\" formatCode=\"{}\"/>", esc_attr(d.num_fmt.as_str()));
+    }
+    if d.fill != def.fill {
+        dx.push_str(&fill_xml(&d.fill, true));
+    }
+    if let Some(a) = alignment_xml(&d.align) {
+        dx.push_str(&a);
+    }
+    if d.borders != def.borders {
+        dx.push_str(&border_xml(&d.borders));
+    }
+    if let Some(p) = protection_xml(&d.protection) {
+        dx.push_str(&p);
+    }
+    let _ = write!(dx, "</{tag}>");
+    dx
 }
 
 /// Index of a differential format, adding it when new.
