@@ -221,8 +221,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sheet Name" => "Blattname",
         "Sheet\nName" => "Blatt-\nname",
         "Animations" => "Animationen",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Den Auswahlrahmen zur angesteuerten Zelle gleiten lassen, statt zu springen"
+        "Animation effects" => "Animationseffekte",
+        "Use system setting" => "Systemeinstellung verwenden",
+        "Animation effects|On" => "Ein",
+        "Animation effects|Off" => "Aus",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Weiches Scrollen und Zoomen; der Auswahlrahmen gleitet zur angesteuerten Zelle"
         }
         "Insert Copied Cells" => "Kopierte Zellen einfügen",
         "Insert Copied Cells…" => "Kopierte Zellen einfügen…",

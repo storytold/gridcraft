@@ -57,9 +57,10 @@ limits, which are never skipped: 121% out goes to 100%, and 99% or 101% towards 
 The wheel's turning is counted in notches (egui eases each notch in over several frames, and
 fine-grained wheels send parts of one); a notch steps once 60% of it has turned. With animations
 on, the zoom then glides to the step over about a tenth of a second (as egui eases a scroll notch),
-and a notch turned during a glide steps on from the step it's going to. With View › Animations off
-it goes to the step at once. Whether the zoom glide should have a setting of its own is left to the
-maintainers.
+and a notch turned during a glide steps on from the step it's going to. With Animation effects off
+(File › Options: chosen there, or the system's own setting while the preference follows it) the
+notch isn't eased in either, so the zoom is on its step in the frame the wheel turned. Whether the
+zoom glide should have a setting of its own is left to the maintainers.
 
 Before, each frame multiplied the whole-number zoom by egui's eased factor and rounded, so a notch
 out never undid a notch in (100 → 122 → 101 → 123 → 102). Keeping the zoom unrounded fixed that

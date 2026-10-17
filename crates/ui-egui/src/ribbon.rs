@@ -2199,8 +2199,10 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
                 }
             }
         });
-        let mut animations = app.ui.animations;
-        let hint = lang.tr("Glide the selection outline to the cell you move to instead of jumping there");
+        // Ticked while animation effects run, whichever way Options has them (on, or following
+        // the system); a click here chooses on or off.
+        let mut animations = app.animations_on();
+        let hint = lang.tr(crate::motion::HINT);
         if ui.checkbox(&mut animations, lang.tr("Animations")).on_hover_text(hint).changed() {
             act(app, "view.animations", json!({"on": animations}));
         }

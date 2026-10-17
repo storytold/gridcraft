@@ -22,6 +22,7 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+pub mod motion;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -55,8 +56,14 @@ pub struct UiState {
     pub ribbon_collapsed: bool,
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
-    /// Motion in the UI: the selection outline glides to a new selection (View ▸ Animations).
-    pub animations: bool,
+    /// Animation effects (File ▸ Options, View ▸ Animations): smooth scrolling and zooming, the
+    /// gliding selection outline and egui's own fades are on, off, or follow the system's setting
+    /// (see [`motion`]). Saved as `animationEffects`: `"system"`, `"on"` or `"off"`. The
+    /// checkbox this used to be was saved as `animations`, a boolean, which is still read (Off
+    /// when it was unticked) but no longer written: a `ui.json` shared with an older GridCraft
+    /// stays readable there, where a string under the old name would lose every preference.
+    #[serde(rename = "animationEffects", alias = "animations", deserialize_with = "motion::lenient")]
+    pub animations: motion::Animations,
     /// Enable AutoComplete for cell values (File ▸ Options ▸ Editing): typed text is completed
     /// from the one matching entry in the same column.
     pub autocomplete: bool,
@@ -101,7 +108,7 @@ impl Default for UiState {
             ribbon_collapsed: false,
             formula_bar_expanded: false,
             status_bar: true,
-            animations: true,
+            animations: motion::Animations::System,
             autocomplete: true,
             recent: vec![],
             keytip_invoke: None,
@@ -196,6 +203,12 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<Box<dyn Fn(&[u8])>>,
+    /// Whether the system has animation effects on (Windows: Animation effects; macOS: Reduce
+    /// motion off; Linux and the BSDs: the desktop's animations setting; the web: no
+    /// `prefers-reduced-motion`), `None` when it doesn't say. What Animation effects ▸ Use system
+    /// setting follows ([`motion::Animations`]). Asked every frame, so the host answers from
+    /// memory and does any slow asking elsewhere. Without the hook, animations stay on.
+    pub animations_enabled: Option<Box<dyn Fn() -> Option<bool>>>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
@@ -248,6 +261,10 @@ pub struct SheetApp {
     desktop_theme: desktop_theme::DesktopTheme,
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
     desktop_dark: Option<bool>,
+    /// What the system last said about its animation effects ([`Services::animations_enabled`]).
+    system_animations: Option<bool>,
+    /// egui's own animation settings while Animation effects has them off ([`motion::apply`]).
+    egui_motion: Option<motion::EguiMotion>,
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,
@@ -299,6 +316,8 @@ impl SheetApp {
             effective_dark: false,
             desktop_theme: desktop_theme::DesktopTheme::default(),
             desktop_dark: None,
+            system_animations: None,
+            egui_motion: None,
             name_box: None,
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
@@ -336,6 +355,22 @@ impl SheetApp {
             names.extend(d.wb.sheets.iter().flat_map(|sh| sh.shapes.iter().filter_map(|s| s.format.font.clone())));
         }
         names
+    }
+
+    /// Whether animation effects run right now: the Animation effects preference, where Use
+    /// system setting follows what the system says ([`motion::Animations::enabled`]).
+    pub fn animations_on(&self) -> bool {
+        self.ui.animations.enabled(self.system_animations)
+    }
+
+    /// What the system last said about its animation effects (`None`: it doesn't say).
+    pub fn system_animations(&self) -> Option<bool> {
+        self.system_animations
+    }
+
+    /// Asks the host what the system says about animation effects.
+    fn read_system_animations(&mut self) {
+        self.system_animations = self.services.animations_enabled.as_ref().and_then(|ask| ask());
     }
 
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
@@ -601,8 +636,21 @@ impl SheetApp {
                 Ok(json!({"mode": self.ui.theme_mode()}))
             }
             "view.animations" => {
-                self.ui.animations = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.animations);
-                Ok(json!({"on": self.ui.animations}))
+                // `{"mode": "system" | "on" | "off"}`, or the checkbox's `{"on": bool}`; without
+                // either it toggles what shows now.
+                self.read_system_animations();
+                let mode = match (p.get("mode").filter(|mode| !mode.is_null()), p.get("on").and_then(Json::as_bool)) {
+                    (Some(mode), _) => match mode.as_str().and_then(motion::Animations::parse) {
+                        Some(mode) => mode,
+                        None => return Some(Err("animations mode must be system, on, or off".into())),
+                    },
+                    (None, Some(true)) => motion::Animations::On,
+                    (None, Some(false)) => motion::Animations::Off,
+                    (None, None) if self.animations_on() => motion::Animations::Off,
+                    (None, None) => motion::Animations::On,
+                };
+                self.ui.animations = mode;
+                Ok(json!({"mode": mode.code(), "on": self.animations_on(), "system": self.system_animations}))
             }
             "options.autoComplete" => {
                 self.ui.autocomplete = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autocomplete);
@@ -1055,6 +1103,10 @@ impl SheetApp {
             ctx.set_zoom_factor(zoom);
             ctx.request_repaint();
         }
+        // Animation effects: the host is asked every frame (it answers from memory), so a change
+        // made in the system's settings is followed while the app runs.
+        self.read_system_animations();
+        motion::apply(ctx, self.animations_on(), &mut self.egui_motion);
         control::poll(self, ctx);
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
@@ -1099,6 +1151,11 @@ impl SheetApp {
             return;
         }
         let t0 = now_ms();
+        // Animation effects off: a wheel notch scrolls whole, not eased in over the next frames.
+        if !self.animations_on() {
+            let options = ctx.options(|o| o.input_options);
+            ctx.input_mut(|i| i.smooth_scroll_delta = motion::unsmoothed_scroll(i, &options));
+        }
         text_box::before_ui(self, &ctx);
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);

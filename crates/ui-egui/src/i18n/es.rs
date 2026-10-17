@@ -222,8 +222,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sheet Name" => "Nombre de la hoja",
         "Sheet\nName" => "Nombre de\nla hoja",
         "Animations" => "Animaciones",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Desliza el contorno de la selección hasta la celda a la que te mueves en lugar de saltar"
+        "Animation effects" => "Efectos de animación",
+        "Use system setting" => "Usar la configuración del sistema",
+        "Animation effects|On" => "Activado",
+        "Animation effects|Off" => "Desactivado",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Desplazamiento y zoom suaves; el contorno de la selección se desliza hasta la celda a la que te mueves"
         }
         "Insert Copied Cells" => "Insertar celdas copiadas",
         "Insert Copied Cells…" => "Insertar celdas copiadas…",

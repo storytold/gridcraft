@@ -591,8 +591,16 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
         Geo::new(sh, rect, scroll)
     };
-    // Scrolling.
-    let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
+    // Scrolling. With Animation effects off a wheel notch arrives whole, not eased in over the
+    // next frames: the scroll delta has been put right for the whole window already
+    // (`SheetApp::ui`), and the zoom ladder below gets its notch in one piece, so it steps in the
+    // frame the wheel turned.
+    let animate = app.animations_on();
+    let wheel = ui.ctx().options(|o| o.input_options);
+    let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| {
+        let zoom = if animate { i.zoom_delta() } else { crate::motion::unsmoothed_zoom(i, &wheel) };
+        (i.smooth_scroll_delta, zoom, i.modifiers, i.time)
+    });
     if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
         if zoom_delta != 1.0 {
             // egui's zoom factor is e^(speed × points); one notch is `line_scroll_speed` points.
@@ -638,11 +646,11 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
     }
     // The zoom glides to its step like egui eases a wheel notch (90% of the way in 0.1 s), or goes
-    // there at once without animations (as for the selection outline below: View › Animations
+    // there at once without animations (as for the selection outline below: Animation effects
     // off, egui's off in the headless harness, or a screenshot on its way).
     let mut zooming = WheelZoom::at(app, place, sh.zoom, now);
     if let Some((to, shown)) = zooming.glide {
-        let glides = app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
+        let glides = animate && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
         let share = egui::emath::exponential_smooth_factor(0.9, 0.1, ui.input(|i| i.stable_dt).min(0.1));
         let z = if glides { zoom_glide_step(shown, to, share) } else { to };
         let _ = app.session.run("view.zoom", json!({"percent": z}));
@@ -701,8 +709,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         *v = view;
     }
     app.grid.cells_rect = Some(geo.mirror_rect(geo.cells));
-    // The selection outline glides to a new selection. It stays on its cells when Animations is
-    // off, when egui's animations are (the headless harness), and while a screenshot is on its way.
+    // The selection outline glides to a new selection. It stays on its cells when Animation
+    // effects are off, when egui's animations are (the headless harness), and while a screenshot
+    // is on its way.
     let outline = app.grid.glide.frame(crate::selection_glide::Frame {
         place,
         range: sel.current(),
@@ -710,7 +719,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         view: geo.cells,
         now,
         frame_nr: ui.ctx().cumulative_frame_nr(),
-        animate: app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight(),
+        animate: animate && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight(),
     });
     if app.grid.glide.is_gliding() {
         ui.ctx().request_repaint();
@@ -762,10 +771,13 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     context_menu(app, ui);
     let track_x = if rtl { (available.left(), rect.left()) } else { (rect.right(), available.right()) };
     vertical_scrollbar(app, ui, sh, &geo, track_x, max_y, &t);
-    if app.session.clipboard.is_some() {
+    if app.session.clipboard.is_some() && animate {
         // By the clock, not per frame: a gliding outline repaints more often than the ants step.
         app.grid.marching_phase = crate::selection_glide::ants_phase(now);
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+    } else {
+        // Animation effects off: the dashes round a copied range stand still.
+        app.grid.marching_phase = 0.0;
     }
 }
 

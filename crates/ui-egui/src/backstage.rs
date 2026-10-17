@@ -946,6 +946,21 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
         ui.end_row();
+        ui.label(lang.tr("Animation effects"));
+        let animations = app.ui.animations;
+        egui::ComboBox::from_id_salt("backstage_animations")
+            .width(160.0)
+            .selected_text(lang.tr(animations.label()))
+            .show_ui(ui, |ui| {
+                for mode in crate::motion::Animations::ALL {
+                    if ui.selectable_label(animations == mode, lang.tr(mode.label())).clicked() {
+                        app.run_or_alert("view.animations", json!({"mode": mode.code()}));
+                    }
+                }
+            })
+            .response
+            .on_hover_text(lang.tr(crate::motion::HINT));
+        ui.end_row();
         ui.label(lang.tr("Interface language"));
         egui::ComboBox::from_id_salt("backstage_language").width(160.0).selected_text(lang.name()).show_ui(ui, |ui| {
             for l in i18n::Language::ALL {

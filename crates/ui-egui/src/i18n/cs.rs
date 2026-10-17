@@ -221,8 +221,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sheet Name" => "Název listu",
         "Sheet\nName" => "Název\nlistu",
         "Animations" => "Animace",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Plynule posouvat rámeček výběru na buňku, na kterou přejdete, místo skoku"
+        "Animation effects" => "Efekty animace",
+        "Use system setting" => "Použít nastavení systému",
+        "Animation effects|On" => "Zapnuto",
+        "Animation effects|Off" => "Vypnuto",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Plynulé posouvání a lupa; rámeček výběru se plynule přesune na buňku, na kterou přejdete"
         }
         "Insert Copied Cells" => "Vložit zkopírované buňky",
         "Insert Copied Cells…" => "Vložit zkopírované buňky…",

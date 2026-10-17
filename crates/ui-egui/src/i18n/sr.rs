@@ -216,8 +216,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark Mode" => "Tamni režim",
         "Display theme" => "Tema prikaza",
         "Animations" => "Animacije",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Kliziti obris selekcije do ćelije na koju se pomeraš umesto skoka"
+        "Animation effects" => "Efekti animacije",
+        "Use system setting" => "Koristi sistemsko podešavanje",
+        "Animation effects|On" => "Uključeno",
+        "Animation effects|Off" => "Isključeno",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Glatko pomeranje i uvećanje; obris selekcije klizi do ćelije na koju se pomeraš"
         }
         "System" => "Sistem",
         "Light" => "Svetla",

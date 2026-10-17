@@ -297,8 +297,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Layout|Orientation" => "Ориентация",
         "Display theme" => "Тема оформления",
         "Animations" => "Анимация",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Рамка выделения плавно скользит к новой ячейке, а не перескакивает"
+        "Animation effects" => "Эффекты анимации",
+        "Use system setting" => "Использовать системный параметр",
+        "Animation effects|On" => "Вкл.",
+        "Animation effects|Off" => "Откл.",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Плавная прокрутка и масштабирование; рамка выделения плавно скользит к новой ячейке"
         }
         "System" => "Системная",
         "Light" => "Светлая",

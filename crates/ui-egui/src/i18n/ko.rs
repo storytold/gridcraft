@@ -297,8 +297,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Layout|Orientation" => "용지 방향",
         "Display theme" => "표시 테마",
         "Animations" => "애니메이션",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "선택 테두리가 바로 건너뛰지 않고 이동한 셀까지 부드럽게 미끄러집니다"
+        "Animation effects" => "애니메이션 효과",
+        "Use system setting" => "시스템 설정 사용",
+        "Animation effects|On" => "켬",
+        "Animation effects|Off" => "끔",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "부드럽게 스크롤하고 확대/축소하며, 선택 테두리가 이동한 셀까지 부드럽게 미끄러집니다"
         }
         "System" => "시스템",
         "Light" => "밝게",

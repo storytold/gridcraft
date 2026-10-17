@@ -1,6 +1,7 @@
 //! The selection outline glides to a new selection instead of jumping there, like Excel's cell
 //! cursor: press an arrow key or click a cell and the border slides over in about a tenth of a
-//! second; extend the selection and it grows edge by edge. View ▸ Animations turns it off.
+//! second; extend the selection and it grows edge by edge. Animation effects (File ▸ Options, or
+//! the View tab's Animations box) turn it off; see [`crate::motion`].
 //!
 //! The behaviour comes from using Excel as a user; the duration and the easing curve are an
 //! estimate ([`GLIDE_SECS`]), not yet measured against Excel.
@@ -15,7 +16,8 @@
 //!   or ends off screen: it appears in place;
 //! - a control-channel screenshot is on its way, or egui's animations are off (the headless
 //!   harness turns them off): it appears in place, so scripted pictures never catch it in flight;
-//! - Animations is turned off (`view.animations`): it jumps.
+//! - Animation effects are off (`view.animations`, or the system's own setting when the
+//!   preference follows it): it jumps.
 //!
 //! Only painting is delayed. The selection itself, hit testing (the fill handle, the border you
 //! drag) and the cell editor use the real cells at once.

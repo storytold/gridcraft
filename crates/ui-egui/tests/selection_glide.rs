@@ -1,10 +1,12 @@
-//! The selection outline glides to a new selection, and View ▸ Animations turns that off.
+//! The selection outline glides to a new selection, and View ▸ Animations turns that off (the
+//! whole Animation effects setting is in `animation_effects.rs`).
 
 use egui::Rect;
 use egui_kittest::kittest::Queryable;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_ui_egui::control::{self, Outcome};
+use gridcraft_ui_egui::motion::Animations;
 use gridcraft_ui_egui::{ControlRequest, SheetApp, UiState, grid::Geo};
 use serde_json::{Value, json};
 
@@ -124,7 +126,7 @@ fn the_view_tab_checkbox_turns_the_glide_off_and_on() {
     h.run_steps(2);
     h.get_by_label("Animations").click();
     h.run_steps(2);
-    assert!(!h.state().ui.animations, "the checkbox turns the setting off");
+    assert_eq!(h.state().ui.animations, Animations::Off, "the checkbox turns the setting off");
     select(&mut h, "E9");
     let e9 = cell_rect(&h, "E9");
     for _ in 0..5 {
@@ -134,7 +136,7 @@ fn the_view_tab_checkbox_turns_the_glide_off_and_on() {
     }
     h.get_by_label("Animations").click();
     h.run_steps(2);
-    assert!(h.state().ui.animations, "and on again");
+    assert_eq!(h.state().ui.animations, Animations::On, "and on again");
     select(&mut h, "B1");
     steps(&mut h, 2);
     let (x, b1) = (outline(&h).min.x, cell_rect(&h, "B1"));
@@ -161,29 +163,48 @@ fn a_screenshot_never_catches_the_outline_in_flight() {
 }
 
 #[test]
-fn animations_are_on_until_turned_off_and_the_choice_is_saved() {
-    assert!(UiState::default().animations);
-    // A `ui.json` written before the setting existed leaves them on.
+fn animations_follow_the_system_until_chosen_and_the_choice_is_saved() {
+    assert_eq!(UiState::default().animations, Animations::System);
+    // A `ui.json` written before the setting existed follows the system.
     let old: UiState = serde_json::from_str(r#"{"dark": true, "ribbonTab": "View"}"#).unwrap();
-    assert!(old.animations && old.dark);
+    assert!(old.animations == Animations::System && old.dark);
+    // While it was a checkbox it was saved as a boolean: ticked was only the default, so it
+    // follows the system now; unticked was a choice, and stays off.
+    let ticked: UiState = serde_json::from_value(json!({"animations": true})).unwrap();
+    assert_eq!(ticked.animations, Animations::System);
     let off: UiState = serde_json::from_value(json!({"animations": false})).unwrap();
-    let saved = serde_json::to_value(&off).unwrap();
-    assert_eq!(saved["animations"], json!(false));
-    assert!(!serde_json::from_value::<UiState>(saved).unwrap().animations);
+    assert_eq!(off.animations, Animations::Off);
+    // The three values are saved under a name of their own. An older GridCraft sharing the
+    // `ui.json` skips it, and still finds no string where it expects its boolean.
+    for mode in Animations::ALL {
+        let ui = UiState { animations: mode, ..Default::default() };
+        let saved = serde_json::to_value(&ui).unwrap();
+        assert_eq!(saved["animationEffects"], json!(mode.code()));
+        assert!(saved.get("animations").is_none(), "{saved}");
+        assert_eq!(serde_json::from_value::<UiState>(saved).unwrap().animations, mode);
+    }
+    // A value that makes no sense is the default, and the other preferences are kept.
+    for odd in [json!("sometimes"), json!(7), json!(null), json!([true])] {
+        for name in ["animationEffects", "animations"] {
+            let ui: UiState = serde_json::from_value(json!({name: odd, "dark": true})).unwrap();
+            assert!(ui.animations == Animations::System && ui.dark, "{name}: {odd}");
+        }
+    }
 }
 
 #[test]
 fn view_animations_sets_and_toggles_without_a_dialog() {
     let mut a = app();
-    assert_eq!(a.run("view.animations", json!({"on": false})), Ok(json!({"on": false})));
-    assert_eq!(a.run("view.animations", json!({"on": false})), Ok(json!({"on": false})), "setting it twice changes nothing");
+    let (on, off) = (json!({"mode": "on", "on": true, "system": null}), json!({"mode": "off", "on": false, "system": null}));
+    assert_eq!(a.run("view.animations", json!({"on": false})), Ok(off.clone()));
+    assert_eq!(a.run("view.animations", json!({"on": false})), Ok(off.clone()), "setting it twice changes nothing");
     // No parameters: it toggles, and never opens a dialog.
-    assert_eq!(a.run("view.animations", json!({})), Ok(json!({"on": true})));
-    assert_eq!(a.run("view.animations", json!({})), Ok(json!({"on": false})));
+    assert_eq!(a.run("view.animations", json!({})), Ok(on.clone()));
+    assert_eq!(a.run("view.animations", json!({})), Ok(off.clone()));
     assert!(a.dialog.is_none() && a.message.is_none());
     // Parameters that make no sense toggle too, rather than failing or panicking.
-    assert_eq!(a.run("view.animations", json!({"on": "yes"})), Ok(json!({"on": true})));
-    assert_eq!(a.run("view.animations", Value::Null), Ok(json!({"on": false})));
+    assert_eq!(a.run("view.animations", json!({"on": "yes"})), Ok(on));
+    assert_eq!(a.run("view.animations", Value::Null), Ok(off));
 }
 
 #[test]
@@ -192,12 +213,19 @@ fn agents_find_run_and_read_the_setting_over_the_control_channel() {
     let ctx = egui::Context::default();
     let found = reply(control::handle(&mut a, &ctx, "engine.commands", &json!({"search": "animations"})));
     let entry = found["result"].as_array().and_then(|all| all.iter().find(|c| c["id"] == "view.animations")).cloned().unwrap();
-    assert_eq!((&entry["label"], &entry["ui"]), (&json!("Animations"), &json!(true)));
-    assert!(entry["params"].as_str().is_some_and(|doc| doc.contains("on")), "{entry}");
+    assert_eq!((&entry["label"], &entry["ui"]), (&json!("Animation Effects"), &json!(true)));
+    assert!(entry["params"].as_str().is_some_and(|doc| doc.contains("mode") && doc.contains("on")), "{entry}");
     let ran = reply(control::handle(&mut a, &ctx, "engine.execute", &json!({"command": "view.animations", "params": {"on": false}})));
-    assert_eq!(ran, json!({"ok": true, "result": {"on": false}}));
-    assert_eq!(reply(control::handle(&mut a, &ctx, "ui.inspect", &json!({})))["result"]["ui"]["animations"], json!(false));
+    assert_eq!(ran, json!({"ok": true, "result": {"mode": "off", "on": false, "system": null}}));
+    let seen = reply(control::handle(&mut a, &ctx, "ui.inspect", &json!({})));
+    assert_eq!((&seen["result"]["ui"]["animationEffects"], &seen["result"]["animationsOn"]), (&json!("off"), &json!(false)));
+    // `ui.set` takes the setting's three values, and the checkbox's true and false.
     let set = reply(control::handle(&mut a, &ctx, "ui.set", &json!({"animations": true})));
-    assert_eq!(set["result"]["animations"], json!(true));
-    assert!(a.ui.animations);
+    assert_eq!(set["result"]["animationEffects"], json!("on"));
+    assert_eq!(a.ui.animations, Animations::On);
+    let set = reply(control::handle(&mut a, &ctx, "ui.set", &json!({"animations": "system"})));
+    assert_eq!(set["result"]["animationEffects"], json!("system"));
+    let set = reply(control::handle(&mut a, &ctx, "ui.set", &json!({"animations": "sideways"})));
+    assert_eq!(set["ok"], json!(false), "{set}");
+    assert_eq!(a.ui.animations, Animations::System, "a value that isn't one of the three changes nothing");
 }

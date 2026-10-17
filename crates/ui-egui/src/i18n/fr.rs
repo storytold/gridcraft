@@ -224,8 +224,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark Mode" => "Mode sombre",
         "Display theme" => "Thème d'affichage",
         "Animations" => "Animations",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Faire glisser le contour de la sélection jusqu'à la cellule de destination au lieu d'y sauter directement"
+        "Animation effects" => "Effets d'animation",
+        "Use system setting" => "Utiliser le paramètre système",
+        "Animation effects|On" => "Activé",
+        "Animation effects|Off" => "Désactivé",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Défilement et zoom fluides ; le contour de la sélection glisse jusqu'à la cellule de destination"
         }
         "System" => "Système",
         "Light" => "Clair",

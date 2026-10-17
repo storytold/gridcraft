@@ -14,6 +14,7 @@
 //! - `ui.edit.begin {text?}`, `ui.edit.commit {move?}`, `ui.edit.cancel`
 //! - `ui.screenshot {path?}` — PNG of the window (base64 when no path); animations are settled
 //! - `ui.resize {width, height}`, `ui.set {dark?, formulaBar?, ribbonCollapsed?, animations?}`
+//!   (`animations`: `"system"`, `"on"` or `"off"`; `true`/`false` read as on/off)
 //! - `app.open {path, password?}`, `app.save {path?}`, `app.quit`
 
 use std::sync::mpsc::Sender;
@@ -76,6 +77,8 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
     let v = app.view();
     json!({
         "ui": serde_json::to_value(&app.ui).unwrap_or_default(),
+        // What the Animation effects preference comes to right now (`ui.animationEffects` may be "system").
+        "animationsOn": app.animations_on(),
         "window": [r.width(), r.height()],
         "grid": app.grid.cells_rect.map(|c| json!([c.left(), c.top(), c.width(), c.height()])),
         "scroll": [v.scroll.x, v.scroll.y],
@@ -180,7 +183,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),
-                ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
+                (
+                    "view.animations",
+                    "Animation Effects",
+                    "{mode?: \"system\"|\"on\"|\"off\"} or {on?: bool} (toggles without either) → {mode, on, system}",
+                ),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
@@ -222,8 +229,17 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             if let Some(v) = p.get("ribbonCollapsed").and_then(Json::as_bool) {
                 app.ui.ribbon_collapsed = v;
             }
-            if let Some(v) = p.get("animations").and_then(Json::as_bool) {
-                app.ui.animations = v;
+            // `"system"`, `"on"` or `"off"`; the older `true`/`false` read as on/off.
+            match p.get("animations") {
+                Some(Json::Bool(on)) => {
+                    let _ = app.run("view.animations", json!({"on": on}));
+                }
+                Some(Json::String(mode)) => {
+                    if let Err(e) = app.run("view.animations", json!({"mode": mode})) {
+                        return err(e);
+                    }
+                }
+                _ => {}
             }
             let mut out = serde_json::to_value(&app.ui).unwrap_or_default();
             if let Some(o) = out.as_object_mut() {
