@@ -824,7 +824,10 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
                 Some(w) => {
                     let chars: Vec<char> = text.chars().collect();
                     let mut cuts = vec![0];
-                    cuts.extend(w.iter().copied().filter(|x| *x < chars.len()));
+                    let mut breaks: Vec<usize> = w.iter().copied().filter(|x| *x > 0 && *x < chars.len()).collect();
+                    breaks.sort_unstable();
+                    breaks.dedup();
+                    cuts.extend(breaks);
                     cuts.push(chars.len());
                     cuts.windows(2)
                         .map(|p| chars.get(p[0]..p[1]).map(|s| s.iter().collect::<String>().trim().to_string()).unwrap_or_default())
@@ -1490,6 +1493,26 @@ mod tests {
             let params = json!({"range": "A1:B2", "header": false, "orientation": "columns", "keys": [{"row": row}]});
             let err = s.execute("data.sort", params).unwrap_err();
             assert!(matches!(err, EngineError::BadParams { .. }), "row {row}: {err:?}");
+        }
+    }
+
+    #[test]
+    fn t2c_fixed_widths_are_positions_in_any_order_without_duplicates() {
+        let cases: [(Json, [&str; 4]); 5] = [
+            (json!([6, 3]), ["abc", "def", "ghij", ""]),
+            (json!([3, 3]), ["abc", "defghij", "", ""]),
+            (json!([0]), ["abcdefghij", "", "", ""]),
+            (json!([20]), ["abcdefghij", "", "", ""]),
+            (json!([7, 0, 3, 7, 10]), ["abc", "defg", "hij", ""]),
+        ];
+        for (widths, want) in cases {
+            let mut s = Session::new();
+            s.new_workbook();
+            s.execute("cell.set", json!({"cell": "A1", "input": "abcdefghij"})).unwrap();
+            s.execute("data.textToColumns", json!({"range": "A1:A1", "fixedWidths": widths})).unwrap();
+            let sh = s.doc().unwrap().wb.active().unwrap();
+            let got: Vec<String> = (0..4).map(|c| sh.value(CellRef::new(0, c)).display()).collect();
+            assert_eq!(got, want, "{widths}");
         }
     }
 
