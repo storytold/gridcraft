@@ -486,6 +486,19 @@ fn recommended_charts_dialog_inserts_the_chosen_chart() {
 }
 
 #[test]
+fn recommended_charts_command_without_a_type_opens_the_dialog() {
+    // #1399: the ribbon button and the NR keytip ran the command directly and inserted the first
+    // recommendation (a scatter plot) instead of showing the chart picker.
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3], ["Plums", 2]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().run_or_alert("insert.recommendedCharts", json!({}));
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("recommendedCharts"));
+    assert!(h.state().session.active().unwrap().wb.active().unwrap().charts.is_empty(), "no chart is inserted before one is picked");
+}
+
+#[test]
 fn select_data_dialog_sets_the_category_axis_labels() {
     // #287: Chart Design › Select Data edits the Horizontal (Category) Axis Labels and removes the
     // series the X values were plotted as.
