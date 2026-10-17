@@ -4,6 +4,31 @@
 
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Choose a light or dark appearance, or follow your system's theme." => "Elija una apariencia clara u oscura, o use el tema del sistema.",
+        "Choose the interface language. Spanish also localizes formula names and separators." => {
+            "Elija el idioma de la interfaz. El español también adapta los nombres de las funciones y los separadores de las fórmulas."
+        }
+        "Show or hide the formula bar used to view and edit the active cell." => {
+            "Muestre u oculte la barra de fórmulas para ver y editar la celda activa."
+        }
+        "Complete text from a matching value in the same column while typing in a cell." => {
+            "Complete el texto con un valor coincidente de la misma columna al escribir en una celda."
+        }
+        "Save changes automatically to .xlsx workbooks that already have a file path." => {
+            "Guarde los cambios automáticamente en los libros .xlsx que ya tengan una ruta de archivo."
+        }
+        "Recalculate formulas automatically when workbook values or formulas change." => {
+            "Recalcule las fórmulas automáticamente al cambiar los valores o las fórmulas del libro."
+        }
+        "Recalculate formulas automatically. What-if data tables are currently snapshots; run Data Table again to update them." => {
+            "Recalcule las fórmulas automáticamente. Las tablas de datos de análisis de hipótesis son instantáneas; vuelva a ejecutar Tabla de datos para actualizarlas."
+        }
+        "Defer updates to dependent formulas until Calculate Now or Calculate Sheet. Formulas you edit still calculate immediately." => {
+            "Aplace la actualización de las fórmulas dependientes hasta elegir Calcular ahora o Calcular hoja. Las fórmulas que edite se calculan de inmediato."
+        }
+        "Repeatedly calculate circular references until results converge or the iteration limit is reached. Enable only for intentional circular formulas." => {
+            "Calcule las referencias circulares repetidamente hasta que los resultados converjan o se alcance el límite de iteraciones. Active esta opción solo para fórmulas circulares intencionadas."
+        }
         "Paste" => "Pegar",
         "Paste Values" => "Pegar valores",
         "Paste Formulas" => "Pegar fórmulas",
