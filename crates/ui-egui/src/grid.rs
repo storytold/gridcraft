@@ -1035,7 +1035,9 @@ pub(crate) fn paint_quadrant(
     let (r0, r1) = rows;
     let (c0, c1) = cols;
     let range = RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1));
-    let merges: Vec<RangeRef> = sh.merges.iter().filter(|m| m.intersects(&range)).copied().collect();
+    // Merges are looked up 20 columns beyond the quadrant too: text overflowing in from off-screen cells stops at them.
+    let near = RangeRef::new(CellRef::new(r0, c0.saturating_sub(20)), CellRef::new(r1, c1.saturating_add(20).min(MAX_COLS - 1)));
+    let merges: Vec<RangeRef> = sh.merges.iter().filter(|m| m.intersects(&near)).copied().collect();
     let in_merge = |c: CellRef| merges.iter().find(|m| m.contains(c)).copied();
     // Gridlines.
     if sh.show_gridlines {
@@ -1089,8 +1091,25 @@ pub(crate) fn paint_quadrant(
         }
         looks.push((anchor, rect, lk, cfl));
     }
+    // Text cells just outside the quadrant whose text may overflow into it: the nearest non-empty
+    // cell left of `c0` and right of `c1` in each row (within the same frozen / scrolled pane).
+    let mut outside: Vec<(CellRef, Rect, Look, Option<CfLook>)> = Vec::new();
+    let same_pane = |col: u32| (col < geo.fc) == (c0 < geo.fc);
+    for r in r0..=r1 {
+        if sh.row_height(r) == 0.0 {
+            continue;
+        }
+        let left = (c0.saturating_sub(20)..c0).rev().map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
+        let right = (c1.saturating_add(1)..=c1.saturating_add(20).min(MAX_COLS - 1)).map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
+        for n in [left, right].into_iter().flatten() {
+            if same_pane(n.col) && sh.col_width(n.col) > 0.0 && in_merge(n).is_none() {
+                let (lk, cfl) = look(wb, si, sh, n, cf);
+                outside.push((n, geo.cell_rect(sh, n), lk, cfl));
+            }
+        }
+    }
     // Text and per-cell decorations.
-    for (c, rect, lk, cfl) in &looks {
+    for (c, rect, lk, cfl) in looks.iter().chain(&outside) {
         let c = *c;
         if let Some(picture) = sh.cell_pictures.get(&c) {
             crate::cell_pictures::paint(p, *rect, picture);
