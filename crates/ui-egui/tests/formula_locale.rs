@@ -42,6 +42,18 @@ fn language_controls_entry_display_persistence_and_xlsx_roundtrip() {
 }
 
 #[test]
+fn brazilian_portuguese_controls_entry_display_and_keeps_xlsx_canonical() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"pt"})).unwrap();
+    assert!(enter(&mut app, "=SE(VERDADEIRO;SOMA(1,5;2,25);PROCX(1;{1\\2};{3\\4}))"));
+    assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),XLOOKUP(1,{1,2},{3,4}))");
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"locale-pt-br.xlsx", "base64":saved["base64"]})).unwrap();
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=SE(VERDADEIRO;SOMA(1,5;2,25);PROCX(1;{1\\2};{3\\4}))");
+}
+
+#[test]
 fn language_does_not_change_api_syntax_or_an_edit_already_in_progress() {
     let mut app = app();
     app.run("app.language.set", json!({"language":"es"})).unwrap();

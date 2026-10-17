@@ -93,7 +93,7 @@ The ribbon is translated into Japanese, Simplified Chinese, Korean, Brazilian Po
 and German (266–268 labels each, ~12% of ~2,200 strings; merged 10-10 in #31, #104, #82, German
 added 10-11), the
 interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
-(#38). Dialogs, menus and messages are English; formulas and number formats are en-US only.
+(#38). Brazilian Portuguese formula entry covers all 514 recognized names; number formats remain en-US only.
 Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |
@@ -104,7 +104,7 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 | Hindi | hi | none | 0% |
 | Arabic | ar | none (no RTL layout, no shaping) | 0% |
 | French | fr | none | 0% |
-| Portuguese | pt-BR | menus only | ~12% |
+| Portuguese | pt-BR | menus, dialogs and formulas | ~42% UI plus all formula names |
 | Indonesian | id | none | 0% |
 | Japanese | ja | menus only | ~12% |
 | German | de | menus only | ~12% |

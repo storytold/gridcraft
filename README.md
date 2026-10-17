@@ -109,7 +109,7 @@ cargo run --release -p gridcraft -- --sample sales --control 7979   # + JSON con
 cargo xtask ci                                                 # fmt, clippy, tests, assets, layering, wasm
 ```
 
-Choose Español under View → Interface language for [Spanish formula names, decimal commas, and semicolon arguments](docs/formula-input.md).
+Choose Español or Português (Brasil) under View → Interface language for [localized formula names, decimal commas, and semicolon arguments](docs/formula-input.md).
 Workbooks, clipboard exchange, and programmatic APIs retain canonical English syntax.
 
 ### Web

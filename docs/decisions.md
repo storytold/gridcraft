@@ -8,8 +8,9 @@ locale setting. Formula syntax without a supplied translation table falls back t
 The editor translates to canonical English before engine commands, and translates back only
 for display. API, clipboard and XLSX syntax remain stable. Existing names override aliases.
 
-The revision is based directly on main after #31/#104 and Portuguese interface support (#82)
-merged. Those locales retain their existing formula fallback; this change adds only Spanish.
+Brazilian Portuguese subsequently adopted the same boundary with a complete table for the 514
+canonical function names recognized by GridCraft. Names and boolean literals are translated in
+the editor; files, commands and APIs remain canonical English.
 
 ## Preserve array evaluation when exporting formulas (#64)
 

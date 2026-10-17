@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Format Cells dialog looks its labels up in the catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (complete pt-BR formula-name table and separators) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -21,10 +21,11 @@ right-to-left sheets and full complex-script support. Part of
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so each shipped language covers **~12%** (measured
   count / estimated total).
-- **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
-  separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
-  localized function names and `;` separators (#45). German with localized numbers and formulas
-  is in PR #163 (open).
+- **Spanish and Brazilian Portuguese formula entry.** The formula-bar boundary translates
+  localized names and separators while files and APIs retain canonical English. Portuguese covers
+  all 514 recognized function names; descriptions still fall back to English. Number and date
+  formats remain en-US only (`crates/numfmt` says "en-US only"). German with localized numbers
+  and formulas is in PR #163 (open).
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). There is no complex-text shaping: Arabic and
   Devanagari don't join or reorder, and there is no bidirectional layout. **Sheet Right-to-Left**
@@ -49,7 +50,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
 | Arabic | ar | 0 (0%) | no | **no shaping, no RTL UI**; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
 | French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
-| Portuguese | pt-BR | 923 (~42%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
+| Portuguese | pt-BR | 923 (~42%) | dialogs and tooltips; 514 formula names | Latin: yes | formula names observed in pt-BR Excel | menus, File view, dialogs, formulas | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display | no | menus only | 8–12 h |
 | German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
@@ -67,9 +68,8 @@ language (none so far) and of localized function names.
 1. Extend the catalog from the ribbon to every user-visible string (dialogs, menus, task panes,
    status and error messages, command labels, function descriptions), with a missing-key check
    in `cargo xtask ci`. Language switching and the system-language default already exist (#31).
-2. Locale-aware formulas: localized function-name tables and separators at the formula-bar
-   boundary only (files keep en-US invariant names), locale number and date formats, list
-   separators in CSV.
+2. Extend locale-aware formulas beyond Spanish and Brazilian Portuguese; files keep en-US
+   invariant names. Add locale number and date formats and list separators in CSV.
 3. Text shaping and fallback: a shaping engine for grid, editor and PDF text (Arabic, Devanagari,
    Thai), system font fallback for CJK, bidirectional runs, right-to-left sheet tabs and printing;
    embedded subset fonts in PDF.
@@ -78,6 +78,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Brazilian Portuguese formula entry covers all 514 canonical names recognized by GridCraft, boolean literals, decimal commas, semicolon arguments and backslash array columns; stored formulas and XLSX remain English |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |
