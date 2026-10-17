@@ -172,6 +172,80 @@ fn save_as_offers_pdf_and_leaves_the_workbook_file_alone() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The window's close button (or Alt+F4, or the OS quitting the app): steps until the request
+/// has been handled and returns the viewport commands the app answered with.
+fn request_window_close(h: &mut egui_kittest::Harness<'static, SheetApp>) -> Vec<egui::ViewportCommand> {
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    step_commands(h)
+}
+
+/// Runs a few frames and gathers the commands sent to the window.
+fn step_commands(h: &mut egui_kittest::Harness<'static, SheetApp>) -> Vec<egui::ViewportCommand> {
+    let mut out = Vec::new();
+    for _ in 0..3 {
+        h.step();
+        out.extend(h.output().viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default());
+    }
+    out
+}
+
+fn click_commands(h: &mut egui_kittest::Harness<'static, SheetApp>, label: &str) -> Vec<egui::ViewportCommand> {
+    h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
+    step_commands(h)
+}
+
+#[test]
+fn closing_the_window_asks_about_every_unsaved_workbook() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "B2", "input": "7"})).unwrap();
+    h.run_steps(2);
+
+    let sent = request_window_close(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::CancelClose), "unsaved changes hold the window open: {sent:?}");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    let sent = click_commands(&mut h, "Cancel");
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "Cancel keeps the app open");
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.documents().len(), 2, "Cancel keeps both workbooks");
+
+    request_window_close(&mut h);
+    let sent = click_commands(&mut h, "Don't Save");
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "the other workbook is still unsaved");
+    assert_eq!(h.state().session.documents().len(), 1);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"), "then it asks about the next one");
+    let sent = click_commands(&mut h, "Don't Save");
+    assert!(sent.contains(&egui::ViewportCommand::Close), "once every workbook is answered the window closes: {sent:?}");
+    let sent = request_window_close(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::CancelClose), "the close that follows is let through");
+}
+
+#[test]
+fn closing_the_window_can_save_first_and_a_saved_workbook_closes_at_once() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-close-window-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx").to_string_lossy().into_owned();
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.save", serde_json::json!({"path": &path})).unwrap();
+    h.run_steps(2);
+    let sent = request_window_close(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::CancelClose), "nothing unsaved: the window just closes");
+    assert!(h.state().dialog.is_none());
+
+    // A cell still being typed is an unsaved change too.
+    h.input_mut().events.push(egui::Event::Text("123".into()));
+    h.run_steps(2);
+    assert!(h.state().editor.is_some());
+    let sent = request_window_close(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::CancelClose), "{sent:?}");
+    let sent = click_commands(&mut h, "Save");
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    let (wb, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(123.0), "Save wrote the change before closing");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn pdf_picker_harness(dir: &std::path::Path) -> (Arc<Mutex<Vec<String>>>, egui_kittest::Harness<'static, SheetApp>) {
     let asked = Arc::new(Mutex::new(Vec::<String>::new()));
     let (capture, target) = (asked.clone(), dir.to_path_buf());
