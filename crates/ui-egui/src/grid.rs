@@ -923,26 +923,44 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     }
 }
 
-pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let pad_v = 1.5 * z;
-    let y_top = rect.top() + pad_v;
-    let y_bottom = (rect.bottom() - gh - pad_v).max(y_top);
-    match valign {
-        VAlign::Top => y_top,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
-        VAlign::Bottom => y_bottom,
-    }
+/// The descent Excel's cell text box leaves under the last baseline, as a share of the font size
+/// (Calibri and Aptos: about a quarter of the em). egui's font metrics don't expose the descent.
+const CELL_TEXT_DESCENT_EM: f32 = 0.25;
+
+/// The gridline drawn along a cell's bottom edge, inside the cell (see the gridline pass).
+const GRIDLINE_W: f32 = 1.0;
+
+/// How far to move a cell's galley down so it sits in its line box the way Excel's does.
+///
+/// Excel's line box is the font's full line height with the extra leading above the ascender:
+/// the baseline sits one descent above the box's bottom. egui's galley rows put that leading
+/// under the descender instead, so text drawn at the galley's top rides high in the box (top
+/// aligned text touches the top border, bottom aligned text floats above the bottom one).
+pub(crate) fn cell_text_lead(galley: &egui::Galley, font_size: f32) -> f32 {
+    galley
+        .rows
+        .first()
+        .and_then(|row| row.glyphs.first())
+        .map(|g| g.font_height - g.font_ascent - CELL_TEXT_DESCENT_EM * font_size)
+        .filter(|lead| lead.is_finite())
+        .map_or(0.0, |lead| lead.clamp(0.0, font_size.max(0.0)))
 }
 
-pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let top_inset = 1.0 * z;
-    let y_top = rect.top() - top_inset;
-    let y_bottom = (rect.bottom() - gh - 0.5 * z).max(y_top);
-    match valign {
+/// The top of a cell's text galley of height `gh` (one row or wrapped) aligned `valign` in
+/// `rect`, its line box moved down by `lead` (see [`cell_text_lead`]).
+///
+/// As in Excel, the line box sits half a point below the top border when top aligned and right on
+/// the bottom gridline (the cell's last point) when bottom aligned, so a tall row shows the text
+/// where a standard row does.
+pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, lead: f32, z: f32) -> f32 {
+    let y_top = rect.top() + 0.5 * z;
+    let y_bottom = (rect.bottom() - GRIDLINE_W - gh).max(y_top);
+    let y = match valign {
         VAlign::Top => y_top,
         VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
         VAlign::Bottom => y_bottom,
-    }
+    };
+    y + lead
 }
 
 /// Where to put a `TextShape` holding a galley of `size` turned by `angle` (egui radians, so
@@ -1194,7 +1212,7 @@ pub(crate) fn paint_quadrant(
                 HAlign::Right => rect.right() - pad,
                 _ => text_left + pad + indent,
             };
-            let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
+            let y = cell_text_y(st.align.v, *rect, galley.size().y, cell_text_lead(&galley, font.size), z);
             p.with_clip_rect(rect.intersect(p.clip_rect())).galley(pos2(x, y), galley, color);
             continue;
         }
@@ -1281,7 +1299,7 @@ pub(crate) fn paint_quadrant(
             _ => text_left + pad + indent,
         };
         let gh = galley.size().y;
-        let y = cell_text_y(st.align.v, *rect, gh, z);
+        let y = cell_text_y(st.align.v, *rect, gh, cell_text_lead(&galley, font.size), z);
         let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
         if rotated {
             let angle = -(st.align.rotation as f32).to_radians();
@@ -3440,39 +3458,41 @@ mod tests {
         let gh = 18.5;
         let z = 1.0;
 
-        let y_top_std = cell_text_y(VAlign::Top, rect_std, gh, z);
-        let y_center_std = cell_text_y(VAlign::Center, rect_std, gh, z);
-        let y_bottom_std = cell_text_y(VAlign::Bottom, rect_std, gh, z);
+        let y_top_std = cell_text_y(VAlign::Top, rect_std, gh, 0.0, z);
+        let y_center_std = cell_text_y(VAlign::Center, rect_std, gh, 0.0, z);
+        let y_bottom_std = cell_text_y(VAlign::Bottom, rect_std, gh, 0.0, z);
 
-        assert!(y_top_std < y_center_std, "Top ({y_top_std}) must be higher than Center ({y_center_std})");
-        assert!(y_center_std < y_bottom_std, "Center ({y_center_std}) must be higher than Bottom ({y_bottom_std})");
+        // A standard row is about one line tall: as in Excel, the alignments differ by a pixel at most.
+        assert!(y_top_std <= y_center_std, "Top ({y_top_std}) must not be lower than Center ({y_center_std})");
+        assert!(y_center_std <= y_bottom_std, "Center ({y_center_std}) must not be lower than Bottom ({y_bottom_std})");
+        assert!(y_bottom_std - y_top_std <= 1.0, "Top ({y_top_std}) and Bottom ({y_bottom_std}) stay within a pixel");
 
         // Verify tall row (e.g. 40px)
         let rect_tall = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 40.0));
-        let y_top_tall = cell_text_y(VAlign::Top, rect_tall, gh, z);
-        let y_center_tall = cell_text_y(VAlign::Center, rect_tall, gh, z);
-        let y_bottom_tall = cell_text_y(VAlign::Bottom, rect_tall, gh, z);
+        let y_top_tall = cell_text_y(VAlign::Top, rect_tall, gh, 0.0, z);
+        let y_center_tall = cell_text_y(VAlign::Center, rect_tall, gh, 0.0, z);
+        let y_bottom_tall = cell_text_y(VAlign::Bottom, rect_tall, gh, 0.0, z);
 
         assert!(y_top_tall < y_center_tall, "Top ({y_top_tall}) must be higher than Center ({y_center_tall})");
         assert!(y_center_tall < y_bottom_tall, "Center ({y_center_tall}) must be higher than Bottom ({y_bottom_tall})");
     }
 
     #[test]
-    fn wrapped_cell_text_y_positions_correctly_and_safeguards_overflow() {
+    fn cell_text_y_positions_wrapped_text_correctly_and_safeguards_overflow() {
         let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 40.0));
         let gh = 30.0;
         let z = 1.0;
 
-        let y_top = wrapped_cell_text_y(VAlign::Top, rect, gh, z);
-        let y_center = wrapped_cell_text_y(VAlign::Center, rect, gh, z);
-        let y_bottom = wrapped_cell_text_y(VAlign::Bottom, rect, gh, z);
+        let y_top = cell_text_y(VAlign::Top, rect, gh, 0.0, z);
+        let y_center = cell_text_y(VAlign::Center, rect, gh, 0.0, z);
+        let y_bottom = cell_text_y(VAlign::Bottom, rect, gh, 0.0, z);
 
         assert!(y_top < y_center);
         assert!(y_center < y_bottom);
 
         // Overflow case: gh exceeds rect height
         let gh_overflow = 60.0;
-        let y_bottom_ovf = wrapped_cell_text_y(VAlign::Bottom, rect, gh_overflow, z);
+        let y_bottom_ovf = cell_text_y(VAlign::Bottom, rect, gh_overflow, 0.0, z);
         assert!(y_bottom_ovf >= rect.top());
     }
 
