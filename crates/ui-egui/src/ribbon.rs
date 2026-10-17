@@ -35,6 +35,29 @@ const TITLE_BAR_H: f32 = if MAC { MAC_TITLE_BAR } else { 38.0 };
 const TITLE_CONTROL_H: f32 = if MAC { 22.0 } else { 26.0 };
 const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a margin above and below");
 
+/// One tab per open workbook, centred in the title bar, so opening or creating a workbook never
+/// hides the others: click a tab to switch, Cmd/Ctrl+W closes the current one.
+fn workbook_tabs(app: &mut SheetApp, ui: &mut Ui, rect: Rect, docs: &[(String, bool)], ch: f32, t: &Tokens) {
+    let active = app.session.active_index();
+    let width = (docs.len() as f32 * 150.0).min((rect.width() - 520.0).max(150.0));
+    let area = Rect::from_center_size(rect.center(), vec2(width, ch));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    child.set_clip_rect(area.intersect(ui.clip_rect()));
+    child.spacing_mut().item_spacing.x = 2.0;
+    let mut switch = None;
+    for (i, (title, dirty)) in docs.iter().enumerate() {
+        let label = format!("{title}{}", if *dirty { " •" } else { "" });
+        let text = egui::RichText::new(label).color(if i == active { t.text } else { t.text_dim });
+        let r = child.add(egui::Button::selectable(i == active, text).min_size(vec2(60.0, ch - 2.0)));
+        if r.on_hover_text(format!("Workbook: {title}")).clicked() && i != active {
+            switch = Some(i);
+        }
+    }
+    if let Some(i) = switch {
+        app.run_or_alert("window.activate", json!({"index": i}));
+    }
+}
+
 pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let ch = TITLE_CONTROL_H;
@@ -115,13 +138,18 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             // Centered title.
             let title = app.session.active().map(|d| d.display_title()).unwrap_or_default();
             let dirty = app.session.active().is_some_and(|d| d.is_dirty());
-            ui.painter().text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                format!("{title}{}", if dirty { " •" } else { "" }),
-                theme::ui_bold(13.0),
-                t.text,
-            );
+            let docs: Vec<(String, bool)> = app.session.documents().iter().map(|d| (d.display_title(), d.is_dirty())).collect();
+            if docs.len() > 1 {
+                workbook_tabs(app, ui, rect, &docs, ch, &t);
+            } else {
+                ui.painter().text(
+                    rect.center(),
+                    Align2::CENTER_CENTER,
+                    format!("{title}{}", if dirty { " •" } else { "" }),
+                    theme::ui_bold(13.0),
+                    t.text,
+                );
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
                 let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, ch));

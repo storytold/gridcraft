@@ -217,3 +217,43 @@ fn a_cancelled_export_pdf_picker_writes_nothing() {
     assert!(h.state().message.is_none());
     assert!(h.state_mut().session.take_ui_requests().is_empty());
 }
+
+fn temp_csv(name: &str, body: &str) -> String {
+    let dir = std::env::temp_dir().join(format!("gridcraft_open_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join(name);
+    std::fs::write(&p, body).unwrap();
+    p.to_string_lossy().into_owned()
+}
+
+#[test]
+fn opening_a_second_file_adds_a_visible_tab_and_keeps_the_first() {
+    let a = temp_csv("one.csv", "a,1\n");
+    let b = temp_csv("two.csv", "b,2\n");
+    let mut h = harness(Services::default());
+    h.state_mut().open_path(&a); // replaces the untouched blank Book1
+    assert_eq!(h.state().session.documents().len(), 1);
+    h.state_mut().open_path(&b);
+    h.run_steps(3);
+    assert_eq!(h.state().session.documents().len(), 2, "the second file is added, not swapped in");
+    assert_eq!(h.state().session.active_index(), 1);
+    // Both workbooks have a tab, and clicking the first switches back to it.
+    h.get_by_label_contains("two.csv");
+    h.get_by_label_contains("one.csv").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.active_index(), 0);
+    assert_eq!(h.state().session.documents().len(), 2);
+}
+
+#[test]
+fn new_and_open_never_replace_an_edited_or_saved_workbook() {
+    let a = temp_csv("edited.csv", "x,1\n");
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "7"})).unwrap();
+    h.state_mut().open_path(&a);
+    assert_eq!(h.state().session.documents().len(), 2, "an edited Book1 is kept");
+    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    assert_eq!(h.state().session.documents().len(), 3);
+    h.run_steps(2);
+    assert_eq!(h.state().session.documents()[0].wb.sheets[0].cells.is_empty(), false);
+}
