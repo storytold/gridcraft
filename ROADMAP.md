@@ -21,6 +21,7 @@ This page is the summary. The detail is in:
 
 | Number | Value | Kind |
 |---|---|---|
+| 2026-10-14 | Editing a cell with text that would read back as a number, boolean, date or formula (entered with a leading apostrophe) shows the apostrophe in the editor and formula bar, so Enter unchanged keeps it text (#1362) |
 | **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 274 / 290 (94.5%), worksheet functions 513 / 523 (98.1%; 504 working, 96.4%) |
 | **Ready for real work** | **~50%** | estimated from written weights (51.6); [target-app-parity.md](docs/target-app-parity.md) |
 | **Mainstream practitioner** | **~50%** | estimated: typical analyst/finance user, weekly features, × 0.90 interaction × 0.92 stability × 0.88 file exchange; [method](docs/target-app-parity.md#mainstream-practitioner) |
