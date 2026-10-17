@@ -145,7 +145,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "view.arrangeAll", "Arrange All", ["View", "Window"], None, "{}", has_doc, |_, _| ok()),
         cmd!(noundo "view.hideWindow", "Hide", ["View", "Window"], None, "{}", has_doc, hide_window),
         cmd!(noundo "view.unhideWindow", "Unhide…", ["View", "Window"], None, "{index?}", has_doc, unhide_window),
-        cmd!(query "view.switchWindows", "Switch Windows", ["View", "Window"], None, "{} → open windows", always, switch_windows),
+        cmd!(query "view.switchWindows", "Switch Windows", ["View", "Window"], None, "{} → open windows (index, uid, title, active, hidden)", always, switch_windows),
         cmd!(noundo "view.ruler", "Ruler", ["View", "Show"], None, "{on?} → {on}: rulers in Page Layout view (an application option)", has_doc, ruler),
         cmd!(query "view.macros", "Macros", ["View", "Macros"], None, "{} → scripts", has_doc, all_scripts),
         // Table tools
@@ -810,7 +810,7 @@ fn switch_windows(s: &mut Session, _: &Json) -> Result<Json> {
         s.documents()
             .iter()
             .enumerate()
-            .map(|(i, d)| json!({"index": i, "title": d.display_title(), "active": i == s.active_index(), "hidden": s.hidden_windows.contains(&i)}))
+            .map(|(i, d)| json!({"index": i, "uid": d.uid, "title": d.display_title(), "active": i == s.active_index(), "hidden": s.hidden_windows.contains(&i)}))
             .collect(),
     ))
 }

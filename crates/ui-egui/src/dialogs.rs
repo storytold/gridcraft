@@ -158,21 +158,19 @@ impl Dialog {
                 json!({"name": app.session.active().and_then(|d| d.wb.active().map(|s| s.name.clone()))}),
             ),
             "moveSheet" => {
-                let sheets: Vec<String> = app.session.active().map(|d| d.wb.sheets.iter().map(|s| s.name.clone()).collect()).unwrap_or_default();
+                let doc = app.session.active();
                 let mut d = Dialog::form(
                     "moveSheet",
                     "Move or Copy",
                     "sheet.move",
-                    vec![
-                        Number { key: "to", label: "Before sheet (position, 0 = first):" },
-                        Check { key: "copy", label: "Create a copy" },
-                        Note(format!("Sheets: {}", sheets.join(", "))),
-                    ],
-                    json!({"to": 0, "copy": false}),
+                    vec![],
+                    json!({"to":0,"copy":false,"sourceWorkbook":doc.map(|d| d.uid),"targetWorkbook":doc.map(|d| d.uid)}),
                 );
-                if let Some(s) = params.get("sheet") {
-                    d.values.insert("sheet".into(), s.clone());
-                }
+                let sheet = params.get("sheet").cloned().unwrap_or_else(|| json!(doc.map(|d| d.wb.active_sheet).unwrap_or(0)));
+                let index = sheet.as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or_else(|| doc.map(|d| d.wb.active_sheet).unwrap_or(0));
+                let name = sheet.as_str().map(str::to_string).or_else(|| doc.and_then(|d| d.wb.sheet(index)).map(|sh| sh.name.clone()));
+                d.values.insert("sheet".into(), json!(name));
+                d.values.insert("sourceSheetIndex".into(), json!(index));
                 d
             }
             "protectSheet" => Dialog::form(
@@ -942,6 +940,15 @@ fn data_validation_form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, o
 fn build_params(d: &Dialog) -> Json {
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
+        "moveSheet" => {
+            if v["targetWorkbook"] == v["sourceWorkbook"] && !v["copy"].as_bool().unwrap_or(false) {
+                let before = v["to"].as_u64().unwrap_or(0);
+                let sheet = v["sourceSheetIndex"].as_u64().unwrap_or(0);
+                if before > sheet {
+                    v["to"] = json!(before - 1);
+                }
+            }
+        }
         "dataValidation" => {
             let kind = d.values.get("type").and_then(Json::as_str).unwrap_or("any");
             let operator = d.values.get("operator").and_then(Json::as_str).unwrap_or("between");
@@ -1046,6 +1053,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     window.show(ctx, |ui| {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
+                "moveSheet" => move_sheet_dialog(app, ui, &mut d, &mut confirm, &mut open),
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
                 "insertFunction" => insert_function(app, ui, &mut d, &mut confirm),
@@ -1298,6 +1306,67 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     } else if let Some(back) = d.back.take() {
         app.dialog = Some(*back);
     }
+}
+
+fn move_sheet_dialog(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let lang = app.ui.language;
+    ui.label(lang.tr("To book:"));
+    let target = d.values.get("targetWorkbook").cloned().unwrap_or(Json::Null);
+    let title = if target.as_str() == Some("new") {
+        lang.tr("(new book)").to_string()
+    } else {
+        app.session
+            .documents()
+            .iter()
+            .find(|doc| Some(doc.uid) == target.as_u64())
+            .map(|doc| doc.display_title())
+            .unwrap_or_else(|| lang.tr("Workbook closed").to_string())
+    };
+    egui::ComboBox::from_id_salt("moveSheet.workbook").selected_text(title).width(310.0).show_ui(ui, |ui| {
+        if ui.selectable_label(target.as_str() == Some("new"), lang.tr("(new book)")).clicked() {
+            d.set_value("targetWorkbook", json!("new"));
+            d.set_value("to", json!(0));
+        }
+        for doc in app.session.documents() {
+            if ui.selectable_label(target.as_u64() == Some(doc.uid), doc.display_title()).clicked() {
+                if target.as_u64() != Some(doc.uid) {
+                    d.set_value("to", json!(0));
+                }
+                d.set_value("targetWorkbook", json!(doc.uid));
+            }
+        }
+    });
+    let target = d.values.get("targetWorkbook").and_then(Json::as_u64);
+    if let Some(doc) = app.session.documents().iter().find(|doc| Some(doc.uid) == target) {
+        ui.add_space(8.0);
+        ui.label(lang.tr("Before sheet:"));
+        let before = d.values.get("to").and_then(Json::as_u64).unwrap_or(0) as usize;
+        egui::ScrollArea::vertical().id_salt("moveSheet.position").max_height(200.0).show(ui, |ui| {
+            ui.set_min_width(310.0);
+            for (index, sheet) in doc.wb.sheets.iter().enumerate() {
+                if ui.selectable_label(index == before, &sheet.name).clicked() {
+                    d.set_value("to", json!(index));
+                }
+            }
+            if ui.selectable_label(before == doc.wb.sheets.len(), lang.tr("(move to end)")).clicked() {
+                d.set_value("to", json!(doc.wb.sheets.len()));
+            }
+        });
+    }
+    ui.add_space(8.0);
+    let mut copy = d.values.get("copy").and_then(Json::as_bool).unwrap_or(false);
+    if ui.checkbox(&mut copy, lang.tr("Create a copy")).changed() {
+        d.set_value("copy", json!(copy));
+    }
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        if ui.button(lang.tr("OK")).clicked() {
+            *confirm = true;
+        }
+        if ui.button(lang.tr("Cancel")).clicked() {
+            *open = false;
+        }
+    });
 }
 
 /// Paste Special's legacy mnemonics select options; Enter still performs the paste.

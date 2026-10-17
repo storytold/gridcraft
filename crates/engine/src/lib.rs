@@ -20,6 +20,7 @@ pub mod pivot;
 pub mod pivot_calc;
 pub mod sample;
 pub mod selection;
+mod sheet_transfer;
 pub mod tables;
 
 use std::sync::Arc;
@@ -61,6 +62,13 @@ pub struct HistoryEntry {
     pub label: String,
     pub wb: Arc<Workbook>,
     pub selection: Selection,
+    /// A cross-workbook move is restored atomically from either workbook.
+    pub group: Option<Arc<HistoryGroup>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct HistoryGroup {
+    pub documents: Vec<u64>,
 }
 
 /// The clipboard: a block of cells (with formulas and styles) or marching-ants reference.
@@ -320,7 +328,14 @@ impl Session {
         if let Err(why) = (spec.enabled)(self) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
-        let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
+        let transfer = id == "sheet.move" && params.get("targetWorkbook").is_some();
+        let original_active = self.active;
+        let mut before: Vec<_> = self
+            .docs
+            .iter()
+            .filter(|d| transfer || self.active().is_some_and(|a| a.uid == d.uid))
+            .map(|d| (d.uid, d.wb.clone(), d.selection.clone()))
+            .collect();
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
         let result = match result {
@@ -329,12 +344,16 @@ impl Session {
                 let msg =
                     p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
                 // Restore the workbook as it was.
-                if let Some((uid, wb, sel)) = &before
-                    && let Some(d) = self.docs.iter_mut().find(|d| d.uid == *uid)
-                {
-                    d.wb = wb.clone();
-                    d.selection = sel.clone();
-                    d.calc.rebuild(&d.wb);
+                if transfer {
+                    self.docs.retain(|d| before.iter().any(|(uid, _, _)| *uid == d.uid));
+                    self.active = original_active.min(self.docs.len().saturating_sub(1));
+                }
+                for (uid, wb, sel) in &before {
+                    if let Some(d) = self.docs.iter_mut().find(|d| d.uid == *uid) {
+                        d.wb = wb.clone();
+                        d.selection = sel.clone();
+                        d.calc.rebuild(&d.wb);
+                    }
                 }
                 return Err(EngineError::Internal(id.to_string(), msg));
             }
@@ -345,19 +364,83 @@ impl Session {
                 self.journal.drain(..5_000);
             }
         }
-        if spec.undoable
-            && let Some((uid, wb, sel)) = before
-            && let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid)
-            && !Arc::ptr_eq(&d.wb, &wb)
-        {
-            d.undo.push(HistoryEntry { label: spec.label.trim_end_matches('…').to_string(), wb, selection: sel });
-            if d.undo.len() > UNDO_LIMIT {
-                d.undo.remove(0);
+        if transfer && result.is_ok() {
+            // A new destination undoes to an empty workbook, rather than disappearing.
+            before.extend(
+                self.docs
+                    .iter()
+                    .filter(|d| !before.iter().any(|(uid, _, _)| *uid == d.uid))
+                    .map(|d| (d.uid, d.saved.clone(), Selection::default()))
+                    .collect::<Vec<_>>(),
+            );
+        }
+        if spec.undoable {
+            let changed: Vec<_> =
+                before.into_iter().filter(|(uid, wb, _)| self.docs.iter().any(|d| d.uid == *uid && !Arc::ptr_eq(&d.wb, wb))).collect();
+            let group = (changed.len() > 1).then(|| Arc::new(HistoryGroup { documents: changed.iter().map(|(uid, _, _)| *uid).collect() }));
+            for (uid, wb, sel) in changed {
+                if let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid) {
+                    d.undo.push(HistoryEntry { label: spec.label.trim_end_matches('…').to_string(), wb, selection: sel, group: group.clone() });
+                    if d.undo.len() > UNDO_LIMIT {
+                        d.undo.remove(0);
+                    }
+                    d.redo.clear();
+                    d.revision += 1;
+                }
             }
-            d.redo.clear();
-            d.revision += 1;
         }
         result
+    }
+
+    /// Restore a linked move only when it is the next operation in every participant.
+    /// A closed workbook or later edit must never turn Undo into a partial sheet deletion.
+    pub(crate) fn restore_history(&mut self, redo: bool) -> Result<Option<String>> {
+        let current = self.doc()?;
+        let entry = if redo { current.redo.last() } else { current.undo.last() };
+        let Some(entry) = entry else { return Ok(None) };
+        let group = entry.group.clone();
+        let label = entry.label.clone();
+        let uids = group.as_ref().map(|g| g.documents.clone()).unwrap_or_else(|| vec![current.uid]);
+        let mut indices = Vec::new();
+        for uid in uids {
+            let index = self
+                .docs
+                .iter()
+                .position(|d| d.uid == uid)
+                .ok_or_else(|| EngineError::Other("This sheet move cannot be undone after one of its workbooks was closed.".into()))?;
+            let d = self.docs.get(index).ok_or(EngineError::NoDocument)?;
+            let next = if redo { d.redo.last() } else { d.undo.last() };
+            let matching = next.is_some_and(|e| match (&group, &e.group) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            });
+            if !matching {
+                return Err(EngineError::Other("Undo or redo the more recent changes in the other workbook first.".into()));
+            }
+            indices.push(index);
+        }
+        for index in indices {
+            let Some(d) = self.docs.get_mut(index) else { continue };
+            let e = if redo { d.redo.pop() } else { d.undo.pop() };
+            let Some(e) = e else { continue };
+            let old = d.wb.clone();
+            let now = HistoryEntry { label: e.label, wb: old.clone(), selection: d.selection.clone(), group: e.group };
+            if redo {
+                d.undo.push(now);
+            } else {
+                d.redo.push(now);
+            }
+            d.wb = e.wb;
+            d.selection = e.selection;
+            cmd::extra::keep_watch_list(&old, &mut d.wb);
+            if group.is_some() || old.sheets.len() != d.wb.sheets.len() {
+                d.sheet_selections.clear();
+            }
+            d.calc.rebuild(&d.wb);
+            d.revision += 1;
+        }
+        Ok(Some(label))
     }
 
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {

@@ -50,7 +50,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("home.insertSheet", "Insert Sheet", ["Home", "Cells", "Insert"], Some("Shift+F11"), "{name?, before?: index}", has_doc, insert_sheet),
         cmd!("home.deleteSheet", "Delete Sheet", ["Home", "Cells", "Delete"], None, "{sheet?}", has_doc, delete_sheet),
         cmd!("sheet.rename", "Rename Sheet", ["Home", "Cells", "Format"], None, "{sheet?, name}", has_doc, rename_sheet),
-        cmd!("sheet.move", "Move or Copy Sheet…", ["Home", "Cells", "Format"], None, "{sheet?, to: index, copy?: bool}", has_doc, move_sheet),
+        cmd!(
+            "sheet.move",
+            "Move or Copy Sheet…",
+            ["Home", "Cells", "Format"],
+            None,
+            "{sheet?, to: index, copy?: bool, targetWorkbook?: document uid | new, sourceWorkbook?: document uid}",
+            has_doc,
+            move_sheet
+        ),
         cmd!("sheet.tabColor", "Tab Color", ["Home", "Cells", "Format"], None, "{sheet?, color: \"#FF0000\"|\"none\"}", has_doc, tab_color),
         cmd!("sheet.hide", "Hide Sheet", ["Home", "Cells", "Format", "Hide & Unhide"], None, "{sheet?}", has_doc, hide_sheet),
         cmd!("sheet.unhide", "Unhide Sheet…", ["Home", "Cells", "Format", "Hide & Unhide"], None, "{sheet}", has_doc, unhide_sheet),
@@ -818,9 +826,25 @@ fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
+    if let Some(uid) = p.get("sourceWorkbook")
+        && uid.as_u64() != Some(s.doc()?.uid)
+    {
+        return Err(bad("sheet.move", "return to the original workbook or reopen the dialog"));
+    }
+    if p.get("copy").is_some_and(|v| !v.is_boolean()) {
+        return Err(bad("sheet.move", "copy must be a boolean"));
+    }
+    if p.get("sheet").and_then(Json::as_u64).is_some_and(|v| usize::try_from(v).is_err()) {
+        return Err(bad("sheet.move", "no such sheet"));
+    }
     let i = target_sheet(s, p)?;
     let copy = bool_param(p, "copy").unwrap_or(false);
-    let to = p.get("to").and_then(Json::as_u64).map(|v| v as usize).ok_or_else(|| bad("sheet.move", "missing `to`"))?;
+    let to = p.get("to").and_then(Json::as_u64).and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad("sheet.move", "missing `to`"))?;
+    if let Some(target) = p.get("targetWorkbook")
+        && target.as_u64() != Some(s.doc()?.uid)
+    {
+        return crate::sheet_transfer::run(s, target, i, to, copy);
+    }
     edit(s, |cx| {
         let n = cx.wb.sheets.len();
         let Some(src) = cx.wb.sheets.get(i).cloned() else { return Err(bad("sheet.move", "no such sheet")) };
