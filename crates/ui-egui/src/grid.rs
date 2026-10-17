@@ -100,6 +100,23 @@ pub enum Drag {
     },
 }
 
+/// Temporary ribbon formatting, rebuilt each UI frame and never written to the workbook.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ColorPreview {
+    Fill(Color),
+    Font(Color),
+}
+
+impl ColorPreview {
+    fn apply(self, style: &mut Style) {
+        match self {
+            Self::Fill(Color::Auto) => style.fill = Default::default(),
+            Self::Fill(color) => style.fill = gridcraft_engine::model::Fill::solid(color),
+            Self::Font(color) => style.font.color = color,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct GridState {
     pub drag: Drag,
@@ -124,6 +141,7 @@ pub struct GridState {
     pub last_border: String,
     pub last_fill: String,
     pub last_font_color: String,
+    pub color_preview: Option<ColorPreview>,
     pub trace: Option<serde_json::Value>,
     pub renaming_tab: Option<usize>,
     pub rename_text: String,
@@ -456,9 +474,16 @@ fn center_across_end(start: u32, limit: u32, continues: impl Fn(u32) -> bool) ->
 }
 
 fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (Look, Option<CfLook>) {
+    look_with_preview(wb, si, sh, c, cf, None)
+}
+
+fn look_with_preview(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache, preview: Option<ColorPreview>) -> (Look, Option<CfLook>) {
     let mut style = wb.styles.get(sh.style_id(c)).clone();
+    if let Some(preview) = preview {
+        preview.apply(&mut style);
+    }
     if let Some(t) = sh.table_at(c) {
-        style = gridcraft_engine::tables::table_cell_style(wb, si, t, c);
+        style = gridcraft_engine::tables::table_cell_style_with_base(t, c, &style);
     }
     let cfl = cf.look(wb, si, c);
     if let Some(l) = &cfl
@@ -804,7 +829,7 @@ fn paint_panes(
             continue;
         }
         let p = painter.with_clip_rect(*clip);
-        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t);
+        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t, sel, app.grid.color_preview);
         paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols);
     }
     // Freeze lines.
@@ -1030,6 +1055,8 @@ pub(crate) fn paint_quadrant(
     cols: (u32, u32),
     cf: &mut CfCache,
     t: &Tokens,
+    selection: &gridcraft_engine::Selection,
+    preview: Option<ColorPreview>,
 ) {
     let z = geo.z;
     let (r0, r1) = rows;
@@ -1081,7 +1108,8 @@ pub(crate) fn paint_quadrant(
             Some(m) => (geo.range_rect(sh, m), m.start),
             None => (geo.cell_rect(sh, c), c),
         };
-        let (lk, cfl) = look(wb, si, sh, anchor, cf);
+        let cell_preview = preview.filter(|_| selection.contains(anchor));
+        let (lk, cfl) = look_with_preview(wb, si, sh, anchor, cf, cell_preview);
         if let Some(f) = lk.fill {
             p.rect_filled(rect.expand(0.0), 0.0, f);
         } else if in_merge(c).is_some() {
@@ -3335,6 +3363,38 @@ mod selection_fill_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_preview_matches_committed_style_in_plain_cells_and_tables() {
+        for table in [false, true] {
+            for (command, color, preview) in [
+                ("home.fillColor", "#FF0000", ColorPreview::Fill(Color::Rgb(0xFF0000))),
+                ("home.fillColor", "none", ColorPreview::Fill(Color::Auto)),
+                ("home.fontColor", "#FF0000", ColorPreview::Font(Color::Rgb(0xFF0000))),
+                ("home.fontColor", "auto", ColorPreview::Font(Color::Auto)),
+            ] {
+                let mut session = gridcraft_engine::Session::new();
+                session.new_workbook();
+                session.execute("range.setValues", json!({"range":"A1", "values":[["Heading"], ["Body"]]})).unwrap();
+                if table {
+                    session.execute("insert.table", json!({"range":"A1:A2"})).unwrap();
+                }
+                session.execute("home.fillColor", json!({"range":"A1:A2", "color":"#00FF00"})).unwrap();
+                session.execute("home.fontColor", json!({"range":"A1:A2", "color":"#0000FF"})).unwrap();
+                let before = session.active().unwrap().wb.clone();
+                session.execute(command, json!({"range":"A1:A2", "color":color})).unwrap();
+                let after = &session.active().unwrap().wb;
+                for row in 0..2 {
+                    let cell = CellRef::new(row, 0);
+                    let predicted = look_with_preview(&before, 0, before.active().unwrap(), cell, &mut CfCache::default(), Some(preview)).0;
+                    let committed = look(after, 0, after.active().unwrap(), cell, &mut CfCache::default()).0;
+                    assert_eq!(predicted.style, committed.style);
+                    assert_eq!(predicted.fill, committed.fill);
+                    assert_eq!(predicted.text_color, committed.text_color);
+                }
+            }
+        }
+    }
 
     #[test]
     fn wheel_zoom_steps_along_the_ladder_and_stops_at_100() {

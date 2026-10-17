@@ -81,6 +81,11 @@ pub fn look(style: &str) -> TableLook {
 /// The style a table gives a cell (merged over the cell's own style: explicit fills/fonts win).
 pub fn table_cell_style(wb: &Workbook, sheet: usize, t: &Table, c: CellRef) -> Style {
     let own = wb.sheet(sheet).map(|sh| wb.styles.get(sh.style_id(c)).clone()).unwrap_or_default();
+    table_cell_style_with_base(t, c, &own)
+}
+
+/// Resolve a table over a supplied direct style (also used for display-only formatting previews).
+pub fn table_cell_style_with_base(t: &Table, c: CellRef, own: &Style) -> Style {
     let mut s = own.clone();
     let lk = look(&t.style);
     let is_header = t.header_row && c.row == t.range.start.row;

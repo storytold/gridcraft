@@ -8,7 +8,7 @@ use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Tokens};
-use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::widgets::{big_button, icon_button, small_button, split_button, toggle_button};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -670,7 +670,13 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             }
             let forced = invoke(app, "home.fillColor");
             egui::Popup::menu(&fa).open_memory(popup_command(forced, fa.clicked())).show(|ui| {
-                if let Some(c) = color_palette(ui, &theme_colors(app), "No Fill") {
+                let response = crate::widgets::color_palette_preview(ui, &theme_colors(app), "No Fill");
+                app.grid.color_preview = response
+                    .hovered
+                    .as_deref()
+                    .map(|hex| crate::grid::ColorPreview::Fill(gridcraft_engine::model::Color::from_hex(hex).unwrap_or_default()));
+                if let Some(c) = response.picked {
+                    app.grid.color_preview = None;
                     if c != "none" {
                         app.grid.last_fill = c.clone();
                     }
@@ -687,7 +693,13 @@ fn home(app: &mut SheetApp, ui: &mut Ui) {
             }
             let forced = invoke(app, "home.fontColor");
             egui::Popup::menu(&ca).open_memory(popup_command(forced, ca.clicked())).show(|ui| {
-                if let Some(c) = color_palette(ui, &theme_colors(app), "Automatic") {
+                let response = crate::widgets::color_palette_preview(ui, &theme_colors(app), "Automatic");
+                app.grid.color_preview = response
+                    .hovered
+                    .as_deref()
+                    .map(|hex| crate::grid::ColorPreview::Font(gridcraft_engine::model::Color::from_hex(hex).unwrap_or_default()));
+                if let Some(c) = response.picked {
+                    app.grid.color_preview = None;
                     if c != "none" {
                         app.grid.last_font_color = c.clone();
                     }

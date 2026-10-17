@@ -1098,6 +1098,7 @@ impl SheetApp {
             ctx.request_repaint();
             return;
         }
+        self.grid.color_preview = None;
         let t0 = now_ms();
         text_box::before_ui(self, &ctx);
         // The language the widgets translate with this frame (see `i18n::current`).

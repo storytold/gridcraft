@@ -148,7 +148,19 @@ pub fn committed_text(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f3
 /// `Some("none")` for No Fill/Automatic. Arrow keys move a highlight through the swatches and
 /// Enter applies; the key events are stripped so the grid behind the popup does not also react.
 pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {
+    color_palette_preview(ui, theme_colors, none_label).picked
+}
+
+/// A hover is display-only; only `picked` commits a formatting command.
+#[derive(Default)]
+pub struct ColorPaletteResponse {
+    pub picked: Option<String>,
+    pub hovered: Option<String>,
+}
+
+pub fn color_palette_preview(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) -> ColorPaletteResponse {
     let mut picked = None;
+    let mut hovered = None;
     const ROWS: usize = 7; // 6 tint rows + 1 standard row
     const COLS: usize = 10;
     let pal_id = ui.id().with("__color_palette");
@@ -222,7 +234,11 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
         });
         ui.data_mut(|d| d.remove_temp::<Option<(usize, usize)>>(pal_id));
     }
-    if ui.button(none_label).clicked() {
+    let none = ui.button(none_label);
+    if none.hovered() {
+        hovered = Some("none".to_string());
+    }
+    if none.clicked() {
         picked = Some("none".to_string());
     }
     ui.label(egui::RichText::new("Theme Colors").small());
@@ -236,10 +252,14 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
                 let c = gridcraft_engine::model::style::apply_tint(rgb, *tint);
                 let col32 = Color32::from_rgb(c[0], c[1], c[2]);
                 let (r, resp) = ui.allocate_exact_size(vec2(16.0, 14.0), Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), theme_hex(base, *tint)));
                 ui.painter().rect_filled(r, 1.0, col32);
                 ui.painter().rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_gray(200)), StrokeKind::Inside);
                 if resp.hovered() || cur == Some((row, col)) {
                     ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, Color32::from_rgb(0xE8, 0x7D, 0x2B)), StrokeKind::Outside);
+                }
+                if resp.hovered() {
+                    hovered = Some(theme_hex(base, *tint));
                 }
                 if resp.clicked() {
                     picked = Some(theme_hex(base, *tint));
@@ -257,9 +277,13 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
                 .map(theme::color32)
                 .unwrap_or(Color32::BLACK);
             let (r, resp) = ui.allocate_exact_size(vec2(16.0, 14.0), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), *hex));
             ui.painter().rect_filled(r, 1.0, c);
             if resp.hovered() || cur == Some((ROWS - 1, col)) {
                 ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, Color32::from_rgb(0xE8, 0x7D, 0x2B)), StrokeKind::Outside);
+            }
+            if resp.hovered() {
+                hovered = Some(hex.to_string());
             }
             if resp.clicked() {
                 picked = Some(hex.to_string());
@@ -267,7 +291,7 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
         }
     });
     ui.data_mut(|d| d.insert_temp(pal_id, cur));
-    picked
+    ColorPaletteResponse { picked, hovered }
 }
 
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
