@@ -308,6 +308,9 @@ pub struct Ctx<'a> {
     pub wb: Workbook,
     pub changed: Vec<Key>,
     pub structural: bool,
+    /// Only filter/row visibility changed, so the existing dependency graph is valid.
+    /// Table header synchronization clears this conservative optimization flag.
+    pub visibility_only: bool,
     pub sel: &'a mut Selection,
     /// Rows whose automatic height should be recomputed (sheet, row).
     pub fit_rows: Vec<(usize, u32)>,
@@ -331,9 +334,17 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     #[allow(clippy::disallowed_methods)]
     let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| std::time::Instant::now()) };
     let mut sel = d.selection.clone();
-    let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new(), protection_checked: false };
+    let mut ctx = Ctx {
+        wb: (*d.wb).clone(),
+        changed: Vec::new(),
+        structural: false,
+        visibility_only: false,
+        sel: &mut sel,
+        fit_rows: Vec::new(),
+        protection_checked: false,
+    };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, .. } = ctx;
+    let Ctx { mut wb, changed, structural, visibility_only, mut fit_rows, protection_checked, .. } = ctx;
     if !protection_checked {
         check_protection(&d.wb, &wb, &d.unlocked_ranges)?;
     }
@@ -347,7 +358,11 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         eprintln!("commit: edit {:?}, {} changed", t0.elapsed(), changed.len());
     }
     if structural {
-        d.calc.recalc_all(&mut wb);
+        if visibility_only && changed.is_empty() {
+            d.calc.recalc_after_visibility_change(&mut wb);
+        } else {
+            d.calc.recalc_all(&mut wb);
+        }
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }

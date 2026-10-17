@@ -154,6 +154,9 @@ pub(crate) fn sync_headers(cx: &mut crate::cmd::Ctx) {
     if cx.wb.sheets.iter().all(|s| s.tables.is_empty()) {
         return;
     }
+    // Header normalization can rewrite cells and structured references, even when the
+    // initiating command only changed a filter. Keep the full rebuild for table workbooks.
+    cx.visibility_only = false;
     // (sheet, table name, table range, old column name, new column name)
     let mut renames: Vec<(usize, String, RangeRef, String, String)> = Vec::new();
     let heads: Vec<(usize, RangeRef)> = (0..cx.wb.sheets.len())

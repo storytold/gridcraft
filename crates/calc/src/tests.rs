@@ -3,6 +3,51 @@ use gridcraft_model::{Cell, Formula, Workbook};
 
 use crate::Calc;
 
+#[test]
+fn visibility_recalc_matches_full_rebuild_with_spills_cycles_and_volatile_functions() {
+    use gridcraft_model::{AutoFilter, FilterCriterion, Sheet};
+    use std::sync::Arc;
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    for row in 1..=4 {
+        sh.set_cell(CellRef::new(row, 0), Cell::value((row as f64).into()));
+    }
+    sh.autofilter =
+        Some(AutoFilter { range: gridcraft_core::RangeRef::parse("A1:A5").unwrap(), criteria: vec![(0, FilterCriterion::AboveAverage(true))] });
+    for (cell, formula) in [
+        ("B1", "=SUBTOTAL(9,A2:A5)"),
+        ("B2", "=AGGREGATE(9,5,A2:A5)"),
+        ("B3", "=SUM(A2:A5)"),
+        ("B4", "=B1+B2"),
+        ("D1", "=IF(B1>5,SEQUENCE(3),SEQUENCE(2))"),
+        ("F1", "=RAND()"),
+        ("F2", "=NOW()"),
+        ("F3", "=F1+F2"),
+        ("H1", "=H1+1"),
+        ("I1", "=INDIRECT(\"B1\")"),
+    ] {
+        sh.set_cell(c(cell), Cell::formula(Formula::new(formula)));
+    }
+    let mut other = Sheet::new("Other");
+    other.set_cell(c("A1"), Cell::formula(Formula::new("=Sheet1!B4")));
+    wb.sheets.push(Arc::new(other));
+    let mut calc = Calc::new();
+    calc.fixed_now = Some(45000.0);
+    calc.recalc_all(&mut wb);
+    for hidden in [true, false, true] {
+        for row in [3, 4] {
+            wb.sheet_mut(0).unwrap().rows.entry(row).or_default().hidden = hidden;
+        }
+        let mut reference = wb.clone();
+        let mut reference_calc = calc.clone();
+        calc.recalc_after_visibility_change(&mut wb);
+        reference_calc.recalc_all(&mut reference);
+        assert_eq!(wb, reference, "hidden={hidden}");
+        assert_eq!(calc.last_recalc_cells, reference_calc.last_recalc_cells);
+        assert_eq!(calc.circular, reference_calc.circular);
+    }
+}
+
 fn c(s: &str) -> CellRef {
     CellRef::parse(s).unwrap()
 }

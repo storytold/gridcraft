@@ -26,7 +26,7 @@ pub struct CfCache {
     stats: HashMap<usize, RuleStats>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 struct RuleStats {
     sorted: Vec<f64>,
     avg: f64,
@@ -111,17 +111,27 @@ impl CfCache {
         let v = sh.value(c);
         for (idx, cf) in rules {
             let first = cf.ranges.first().map(|r| r.start).unwrap_or(c);
-            let st = self
-                .stats
-                .entry(idx)
-                .or_insert_with(|| {
+            let empty = RuleStats::default();
+            let st: &RuleStats = if matches!(
+                &cf.rule,
+                CfRule::Duplicate { .. }
+                    | CfRule::Unique { .. }
+                    | CfRule::Top10 { .. }
+                    | CfRule::AboveAverage { .. }
+                    | CfRule::ColorScale { .. }
+                    | CfRule::DataBar { .. }
+                    | CfRule::IconSet { .. }
+            ) {
+                self.stats.entry(idx).or_insert_with(|| {
                     let (sorted, counts) = numbers_in(sh, &cf.ranges);
                     let n = sorted.len().max(1) as f64;
                     let avg = sorted.iter().sum::<f64>() / n;
                     let std = (sorted.iter().map(|x| (x - avg).powi(2)).sum::<f64>() / n).sqrt();
                     RuleStats { sorted, avg, std, counts }
                 })
-                .clone();
+            } else {
+                &empty
+            };
             let text = v.display();
             let matched_style: Option<&Style> = match &cf.rule {
                 CfRule::CellIs { op, a, b, style } => {
@@ -218,7 +228,7 @@ impl CfCache {
                     if let Some(n) = v.as_f64() {
                         let pts: Vec<(f64, [u8; 3])> = stops
                             .iter()
-                            .map(|(k, col)| (threshold(wb, sheet, c, &st, k), col.resolve(&wb.theme).unwrap_or([255, 255, 255])))
+                            .map(|(k, col)| (threshold(wb, sheet, c, st, k), col.resolve(&wb.theme).unwrap_or([255, 255, 255])))
                             .collect();
                         let rgb = match pts.as_slice() {
                             [(a, ca), (b, cb)] => lerp(*ca, *cb, if b > a { (n - a) / (b - a) } else { 0.0 }),
@@ -240,8 +250,8 @@ impl CfCache {
                 }
                 CfRule::DataBar { min, max, color, gradient, show_value } => {
                     if let Some(n) = v.as_f64() {
-                        let lo = threshold(wb, sheet, c, &st, min);
-                        let hi = threshold(wb, sheet, c, &st, max);
+                        let lo = threshold(wb, sheet, c, st, min);
+                        let hi = threshold(wb, sheet, c, st, max);
                         let lo = if lo > 0.0 { 0.0 } else { lo };
                         let frac = if hi > lo { ((n - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 1.0 };
                         if out.bar.is_none() {
@@ -270,7 +280,7 @@ impl CfCache {
                                 defaults.get(1..).unwrap_or_default()
                             }
                         };
-                        let cuts: Vec<f64> = lower.iter().map(|t| threshold(wb, sheet, c, &st, t)).collect();
+                        let cuts: Vec<f64> = lower.iter().map(|t| threshold(wb, sheet, c, st, t)).collect();
                         let mut idx = cuts.iter().filter(|cut| n >= **cut).count();
                         if *reverse {
                             idx = k - 1 - idx.min(k - 1);
@@ -352,6 +362,43 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn cell_rules_do_not_scan_ranges_for_unused_statistics() {
+        let mut wb = Workbook::new();
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.set_cell(CellRef::new(0, 0), Cell::value(10.0.into()));
+        sh.cond_formats.push(CondFormat {
+            ranges: vec![RangeRef::parse("A1:A100000").unwrap()],
+            rule: CfRule::CellIs { op: CfOperator::Greater, a: "5".into(), b: None, style: Box::default() },
+            priority: 1,
+            stop_if_true: false,
+        });
+        let mut cache = CfCache::new();
+        assert!(cache.look(&wb, 0, CellRef::new(0, 0)).is_some());
+        assert!(cache.stats.is_empty(), "cell-local rule needs no range statistics");
+    }
+
+    #[test]
+    fn statistical_rules_share_stats_and_preserve_duplicate_matching() {
+        let mut wb = Workbook::new();
+        let sh = wb.sheet_mut(0).unwrap();
+        for (row, value) in ["X", "x", "Y"].into_iter().enumerate() {
+            sh.set_cell(CellRef::new(row as u32, 0), Cell::value(value.into()));
+        }
+        sh.cond_formats.push(CondFormat {
+            ranges: vec![RangeRef::parse("A1:A3").unwrap()],
+            rule: CfRule::Duplicate { style: Box::default() },
+            priority: 1,
+            stop_if_true: false,
+        });
+        let mut cache = CfCache::new();
+        for (row, expected) in [(0, true), (1, true), (2, false)] {
+            assert_eq!(cache.look(&wb, 0, CellRef::new(row, 0)).is_some(), expected);
+            assert_eq!(cache.stats.len(), 1);
+        }
+        assert_eq!(cache.stats.get(&0).unwrap().counts.get("x"), Some(&2));
+    }
 
     #[test]
     fn every_matching_rule_applies() {

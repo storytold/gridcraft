@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (large-workbook performance measurements and optimizations) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -166,8 +166,14 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ## Revision history
 
+Large-workbook navigation and filter optimizations, including tests up to one million rows,
+are documented in [large-workbook-performance.md](large-workbook-performance.md). They do
+not establish GPU FPS or multi-core recalculation parity; full formula evaluation and
+whole-workbook XLSX import remain relevant costs.
+
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Added measured large-workbook performance work and remaining GPU/import/recalc limitations; readiness estimates are unchanged. |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
 | 2026-10-12 | minor | Page Layout view: dragging margins on the rulers (#792) removed from the §14 remainder |
 | 2026-10-12 | minor | §13: Forecast Sheet Forecast Start (hindcast) landed (#785) |
