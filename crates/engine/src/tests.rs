@@ -721,6 +721,51 @@ fn inserting_or_deleting_cells_cancels_copy_mode() {
 }
 
 #[test]
+fn editing_copied_cells_cancels_the_snapshot_but_other_edits_do_not() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["old", "other"]]})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "changed"})).unwrap();
+    assert!(s.clipboard.is_some(), "editing outside the source keeps copy mode");
+    s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+    assert_eq!(v(&s, "D1"), Value::from("old"));
+
+    s.execute("cell.set", json!({"cell": "A1", "input": "new"})).unwrap();
+    assert!(s.clipboard.is_none(), "the copied snapshot is stale after its source changes");
+    assert!(s.execute("edit.paste", json!({"at": "E1"})).is_err());
+    assert_eq!(v(&s, "E1"), Value::Empty);
+
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("edit.clearContents", json!({"range": "A1"})).unwrap();
+    assert!(s.clipboard.is_none(), "clearing the source ends copy mode");
+
+    s.execute("edit.copy", json!({"range": "B1"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.clipboard.is_some(), "undoing an unrelated edit keeps copy mode");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(s.clipboard.is_some(), "redoing an unrelated edit keeps copy mode");
+}
+
+#[test]
+fn copy_mode_tracks_real_source_areas_and_undo_changes() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["a", "between", "c"]]})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1,C1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "changed"})).unwrap();
+    assert!(s.clipboard.is_some(), "the packed copy's B1 is not a source cell");
+    s.execute("cell.set", json!({"cell": "C1", "input": "new"})).unwrap();
+    assert!(s.clipboard.is_none(), "changing the second source area ends copy mode");
+
+    s.execute("edit.copy", json!({"range": "C1"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.clipboard.is_none(), "undo changes the source back and ends copy mode");
+
+    s.execute("edit.cut", json!({"range": "A1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "cut source edited"})).unwrap();
+    assert!(s.clipboard.is_none(), "a cut snapshot also ends when its source changes");
+}
+
+#[test]
 fn fill_series() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [[1], [3]]})).unwrap();
@@ -2827,7 +2872,7 @@ fn cell_picture_side_map_follows_fill_shift_merge_and_undo() {
 }
 
 #[test]
-fn cell_picture_cut_uses_live_source_after_edit() {
+fn editing_a_cut_cell_picture_ends_cut_mode_without_moving_the_new_source() {
     for clear in [false, true] {
         let mut s = s();
         insert_cell_picture(&mut s, "B2", "original");
@@ -2837,14 +2882,13 @@ fn cell_picture_cut_uses_live_source_after_edit() {
         } else {
             insert_cell_picture(&mut s, "B2", "replacement");
         }
-        s.execute("edit.paste", json!({"at": "D2"})).unwrap();
-        assert!(cell_picture(&s, "B2").is_none());
+        assert!(s.clipboard.is_none(), "changing the cut source cancels the move");
+        assert!(s.execute("edit.paste", json!({"at": "D2"})).is_err());
+        assert!(cell_picture(&s, "D2").is_none());
         if clear {
-            assert!(cell_picture(&s, "D2").is_none());
-            assert_eq!(v(&s, "D2"), Value::Empty);
+            assert!(cell_picture(&s, "B2").is_none());
         } else {
-            assert_eq!(cell_picture(&s, "D2").unwrap().alt, "replacement");
-            assert_eq!(v(&s, "D2"), Value::Error(gridcraft_core::CellError::Value));
+            assert_eq!(cell_picture(&s, "B2").unwrap().alt, "replacement");
         }
     }
 }

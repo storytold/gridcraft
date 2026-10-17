@@ -258,9 +258,10 @@ pub struct SheetApp {
     /// control-channel or MCP `edit.copy`/`edit.cut`). While the system clipboard still holds this
     /// text, GridCraft's copy is the newer one and Paste uses it.
     clipboard_text_at_copy: Option<String>,
-    /// The system clipboard's text right after GridCraft's last cut (the published text, or the
-    /// text noted for an unpublished cut); `None` after a copy, or once the clipboard is seen
-    /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
+    /// Text the UI last published to the host clipboard. Programmatic copies leave it alone.
+    published_copy_text: Option<String>,
+    /// Text from a completed cut or an invalidated copy. The host may still hold this text;
+    /// don't paste that stale snapshot back into the sheet.
     cut_text: Option<String>,
     pub started: f64,
 }
@@ -304,6 +305,7 @@ impl SheetApp {
             shots: control::Shots::default(),
             selected_chart: None,
             clipboard_text_at_copy: None,
+            published_copy_text: None,
             cut_text: None,
             started: now_ms(),
         }
@@ -345,6 +347,7 @@ impl SheetApp {
         // that GridCraft's copy is newer while that text is still there.
         if matches!(id, "edit.copy" | "edit.cut") && r.is_ok() {
             self.clipboard_text_at_copy = self.system_clipboard_text();
+            self.published_copy_text = None;
             self.cut_text = if id == "edit.cut" { self.clipboard_text_at_copy.clone() } else { None };
         }
         r
@@ -380,7 +383,11 @@ impl SheetApp {
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
+        let copied_before = self.session.clipboard.as_ref().is_some_and(|clip| !clip.cut);
         let r = self.session.run(id, params);
+        if r.is_ok() && copied_before && self.session.clipboard.is_none() && id != "edit.clearClipboard" {
+            self.cut_text = self.published_copy_text.clone();
+        }
         self.after_engine();
         // The new chart is selected, as after inserting any object, so Delete removes it, not its data.
         if id == "insert.chart"
@@ -408,6 +415,7 @@ impl SheetApp {
         let Some(text) = result.get("text").and_then(Json::as_str) else { return };
         // The system clipboard gets this copy, so its text decides what Paste pastes.
         self.clipboard_text_at_copy = None;
+        self.published_copy_text = Some(text.replace("\r\n", "\n"));
         self.cut_text = (command == "edit.cut").then(|| text.replace("\r\n", "\n"));
         if let Some(html) = result.get("html").and_then(Json::as_str)
             && let Some(copy_html) = &mut self.services.copy_html
@@ -423,10 +431,9 @@ impl SheetApp {
     /// Paste text that came from the system clipboard (Cmd/Ctrl+V, or the ribbon and menu Paste),
     /// with the clipboard's HTML flavour when the host can read it.
     ///
-    /// Excel pastes a cut once: after GridCraft's cut has been pasted, the system clipboard text
-    /// that came with it is not pasted again over the moved block; GridCraft's own (empty)
-    /// clipboard is pasted instead, which reports "Nothing to paste.". Other text means the
-    /// clipboard has moved on, so the cut's text is forgotten and pastes normally later.
+    /// After a cut is pasted or copied source cells change, GridCraft's internal copy mode ends.
+    /// The host may still hold that old text; treat it as the ended copy rather than a new paste.
+    /// Other text means the host clipboard has moved on and can be pasted normally.
     pub fn paste_external(&mut self, text: String) {
         if Self::same_clipboard_text(Some(&text), self.cut_text.as_deref()) {
             if self.session.clipboard.is_none() {
@@ -929,6 +936,7 @@ impl SheetApp {
             }
             self.toast = Some((msg, now_ms()));
         }
+        let copied_before = self.session.clipboard.as_ref().is_some_and(|clip| !clip.cut);
         let r = if fill_selection {
             self.session.run("range.fill", json!({"input": text}))
         } else {
@@ -936,6 +944,9 @@ impl SheetApp {
         };
         match r {
             Ok(_) => {
+                if copied_before && self.session.clipboard.is_none() {
+                    self.cut_text = self.published_copy_text.clone();
+                }
                 if dr != 0 || dc != 0 {
                     self.move_after_enter(dr, dc);
                 }

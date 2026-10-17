@@ -83,6 +83,12 @@ pub struct Clipboard {
     pub areas: Vec<RangeRef>,
 }
 
+impl Clipboard {
+    fn contains_source(&self, cell: CellRef) -> bool {
+        if self.areas.is_empty() { self.range.contains(cell) } else { self.areas.iter().any(|area| area.contains(cell)) }
+    }
+}
+
 /// In-cell edit mode as shown in the status bar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub enum Mode {
@@ -344,6 +350,24 @@ impl Session {
             if self.journal.len() > 10_000 {
                 self.journal.drain(..5_000);
             }
+        }
+        // A copied block is a snapshot. Once one of its source cells changes, the marquee must
+        // not continue promising that a later paste will use the cells now shown beneath it.
+        // Compare the edited cell stores rather than walking the copied range (which may be an
+        // entire column or sheet). This also covers undo/redo and commands outside `edit`.
+        if result.is_ok()
+            && let (Some(clip), Some((uid, old, _))) = (self.clipboard.as_ref(), before.as_ref())
+            && clip.doc_uid == *uid
+            && let (Some(before_sheet), Some(after_sheet)) =
+                (old.sheets.get(clip.sheet), self.docs.iter().find(|d| d.uid == *uid).and_then(|d| d.wb.sheets.get(clip.sheet)))
+            && !Arc::ptr_eq(before_sheet, after_sheet)
+            && (before_sheet.cells.diff(&after_sheet.cells).iter().any(|&cell| clip.contains_source(cell))
+                || before_sheet.cell_pictures.iter().any(|(&cell, picture)| {
+                    clip.contains_source(cell) && after_sheet.cell_pictures.get(&cell).is_none_or(|after| !Arc::ptr_eq(picture, after))
+                })
+                || after_sheet.cell_pictures.keys().any(|&cell| clip.contains_source(cell) && !before_sheet.cell_pictures.contains_key(&cell)))
+        {
+            self.clipboard = None;
         }
         if spec.undoable
             && let Some((uid, wb, sel)) = before

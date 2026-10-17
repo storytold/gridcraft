@@ -1643,6 +1643,26 @@ pub(crate) fn paint_selection(
     if active_here && sel.ranges.len() > 1 {
         p.rect_stroke(active, 0.0, Stroke::new(1.0, t.sel_border), StrokeKind::Inside);
     }
+    // Marching ants around the copied range. Paint the fill handle afterwards so its square
+    // remains solid at the corner of a copied active selection.
+    if let Some(clip) = &app.session.clipboard
+        && app.session.active().is_some_and(|d| d.uid == clip.doc_uid && d.wb.active_sheet == clip.sheet)
+        && range_in_pane(clip.range, rows, cols)
+    {
+        // A multi-area copy marks each area as selected.
+        let areas = if clip.areas.is_empty() { std::slice::from_ref(&clip.range) } else { clip.areas.as_slice() };
+        for area in areas {
+            // Excel's moving gaps sit inside the green selection border, including when the
+            // copied range is no longer the active selection. Keep the outside edge solid.
+            let rr = geo.range_rect(sh, *area);
+            let phase = app.grid.marching_phase;
+            let pts = [rr.left_top(), rr.right_top(), rr.right_bottom(), rr.left_bottom(), rr.left_top()];
+            for side in outline_bands(rr.expand(0.5), 2.0, p.clip_rect()) {
+                p.rect_filled(side, 0.0, t.sel_border);
+            }
+            p.extend(egui::Shape::dashed_line_with_offset(&pts, Stroke::new(1.0, t.grid_bg), &[4.0], &[4.0], phase));
+        }
+    }
     // Fill handle (bottom-right of the current area).
     if app.editor.is_none() && range_in_pane(RangeRef::cell(sel.current().end), rows, cols) {
         let h = Rect::from_center_size(outline.right_bottom(), vec2(6.0, 6.0));
@@ -1672,20 +1692,6 @@ pub(crate) fn paint_selection(
     if let crate::grid::Drag::MoveCols { before: Some(before), .. } = &app.grid.drag {
         let x = geo.x(sh, *before);
         p.line_segment([pos2(x, geo.rect.top()), pos2(x, geo.rect.bottom())], Stroke::new(3.0, t.accent));
-    }
-    // Marching ants around the copied range.
-    if let Some(clip) = &app.session.clipboard
-        && app.session.active().is_some_and(|d| d.uid == clip.doc_uid && d.wb.active_sheet == clip.sheet)
-        && range_in_pane(clip.range, rows, cols)
-    {
-        // A multi-area copy marks each area as selected.
-        let areas = if clip.areas.is_empty() { std::slice::from_ref(&clip.range) } else { clip.areas.as_slice() };
-        for area in areas {
-            let rr = geo.range_rect(sh, *area).expand(0.5);
-            let phase = app.grid.marching_phase;
-            let pts = [rr.left_top(), rr.right_top(), rr.right_bottom(), rr.left_bottom(), rr.left_top()];
-            p.extend(egui::Shape::dashed_line_with_offset(&pts, Stroke::new(2.0, t.sel_border), &[4.0], &[4.0], phase));
-        }
     }
 }
 

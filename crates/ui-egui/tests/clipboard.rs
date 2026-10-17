@@ -142,6 +142,38 @@ fn enter_pastes_the_copied_cells_and_ends_copy_mode() {
 }
 
 #[test]
+fn changing_the_copied_cell_rejects_its_stale_host_text() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("selection.set", json!({"cell": "A1"})).unwrap();
+    h.input_mut().events.push(Event::Copy);
+    h.step();
+    assert!(h.state().session.clipboard.is_some());
+
+    h.state_mut().begin_edit(Some("New".into()), false);
+    assert!(h.state_mut().commit_edit(0, 0, false, false));
+    assert!(h.state().session.clipboard.is_none());
+    h.state_mut().run("selection.set", json!({"cell": "D1"})).unwrap();
+    h.input_mut().events.push(Event::Paste("Name\n".into()));
+    h.step();
+    assert_eq!(value_at(&h, "D1"), Some(Value::Empty), "the ended copy cannot paste its old text");
+    assert!(h.state().message.is_some(), "the ended copy reports that there is nothing to paste");
+
+    dismiss(&mut h);
+    h.input_mut().events.push(Event::Paste("External".into()));
+    h.step();
+    assert_eq!(value_at(&h, "D1"), Some(Value::from("External")), "a new host copy can still be pasted");
+
+    h.state_mut().run("selection.set", json!({"cell": "A1"})).unwrap();
+    h.input_mut().events.push(Event::Copy);
+    h.step();
+    h.state_mut().run("edit.clearClipboard", json!({})).unwrap();
+    h.state_mut().run("selection.set", json!({"cell": "E1"})).unwrap();
+    h.input_mut().events.push(Event::Paste("New\n".into()));
+    h.step();
+    assert_eq!(value_at(&h, "E1"), Some(Value::from("New")), "explicitly ending copy mode leaves the host clipboard usable");
+}
+
+#[test]
 fn clicking_the_ribbon_paste_button_or_its_menu_does_not_freeze() {
     // #273: a click on Paste deadlocked the UI thread (a click-state query inside the egui context
     // lock), so the frame never returned. Run the clicks on a worker and fail on a timeout instead of

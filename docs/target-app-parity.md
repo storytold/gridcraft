@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and row formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-13 · **Change:** minor (copy-mode behavior, #939) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -76,6 +76,11 @@ Dimension weights for **ready for real work**: features 45, file formats 15, UI/
 performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2, AI 2.
 
 ## Feature areas
+
+**Intentional interaction difference (#939):** GridCraft keeps a copied cell snapshot after an
+edit elsewhere, while the issue's Windows Excel observation says Excel ends copy mode after any
+cell edit. Editing a cell in the copied source ends GridCraft's copy mode, because the displayed
+source would otherwise disagree with the saved snapshot.
 
 | Area | Weight | Breadth | Ready | Hours | Evidence |
 |---|---|---|---|---|---|
@@ -332,6 +337,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Copy mode: a changed source cell ends the copy snapshot; edits outside that source deliberately keep it (#939), unlike the Excel behavior reported in the issue |
 | 2026-10-12 | minor | Essentials AutoFit evidence: rows auto-fit oversized fonts on open and row formatting (#833) |
 | 2026-10-12 | minor | Sheet tabs: reveal the selected tab on navigation and resize while preserving manual scrolling (#681); no score change |
 | 2026-10-12 | minor | PivotTables: values on rows (Σ Values in Rows at any position, all three layouts; `pivot.moveField` and the field pane move it; `dataOnRows` round-trips) (no score change) |
