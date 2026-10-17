@@ -2925,6 +2925,33 @@ fn notes_comments_and_links_survive_a_json_save() {
     assert_eq!(after.cells, before.cells);
 }
 
+/// Page Layout ▸ Print Titles: naming one axis must not clear the other. `print_titles` read
+/// both `rows` and `cols` into `Option`s and assigned both unconditionally, so
+/// `{"rows":"2:2"}` silently dropped the repeated columns from every printed page.
+#[test]
+fn print_titles_keeps_the_axis_it_is_not_given() {
+    let mut s = s();
+    s.execute("pageLayout.printTitles", json!({"rows": "1:1", "cols": "A:A"})).unwrap();
+    let titles = |s: &Session| {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        (sh.print.title_rows, sh.print.title_cols)
+    };
+    assert_eq!(titles(&s), (Some((0, 0)), Some((0, 0))));
+    // Only rows: the columns stay.
+    s.execute("pageLayout.printTitles", json!({"rows": "2:2"})).unwrap();
+    assert_eq!(titles(&s), (Some((1, 1)), Some((0, 0))), "rows alone must not clear the columns");
+    // Only columns: the rows stay.
+    s.execute("pageLayout.printTitles", json!({"cols": "B:B"})).unwrap();
+    assert_eq!(titles(&s), (Some((1, 1)), Some((1, 1))), "columns alone must not clear the rows");
+    // An empty value clears that axis on purpose.
+    s.execute("pageLayout.printTitles", json!({"cols": ""})).unwrap();
+    assert_eq!(titles(&s), (Some((1, 1)), None));
+    // A bad range is an error, not a silent wipe.
+    assert!(s.execute("pageLayout.printTitles", json!({"rows": "not a range"})).is_err());
+    assert_eq!(titles(&s), (Some((1, 1)), None));
+}
+
 /// Insert › Link sorts a target as Excel's dialog does: a sheet reference, a defined name or `#…` is
 /// a place in this document, anything else an existing file or web page. A file saved as a
 /// `location` opens nothing in Excel (#800).

@@ -232,13 +232,31 @@ fn print_area(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn print_titles(s: &mut Session, p: &Json) -> Result<Json> {
-    let rows = str_param(p, "rows").and_then(RangeRef::parse).map(|r| (r.start.row, r.end.row));
-    let cols = str_param(p, "cols").and_then(RangeRef::parse).map(|r| (r.start.col, r.end.col));
+    // An absent key leaves that axis alone, and an empty or null value clears it — the same
+    // reading `pageLayout.pageSetup` gives `titleRows`/`titleCols`. Assigning `None` for a
+    // key that was never sent used to wipe the other axis.
+    let axis = |key: &str, is_cols: bool| -> Result<Option<Option<(u32, u32)>>> {
+        match p.get(key) {
+            None => Ok(None),
+            Some(Json::Null) => Ok(Some(None)),
+            Some(Json::String(t)) if t.trim().is_empty() => Ok(Some(None)),
+            Some(Json::String(t)) => match RangeRef::parse(t) {
+                Some(r) => Ok(Some(Some(if is_cols { (r.start.col, r.end.col) } else { (r.start.row, r.end.row) }))),
+                None => Err(bad("pageLayout.printTitles", format!("`{key}` is not a range: `{t}`"))),
+            },
+            Some(_) => Err(bad("pageLayout.printTitles", format!("`{key}` must be text like \"1:2\" or \"A:A\""))),
+        }
+    };
+    let (rows, cols) = (axis("rows", false)?, axis("cols", true)?);
     edit(s, |cx| {
         let si = cx.sheet_index();
         let pr = &mut cx.sheet_mut(si)?.print;
-        pr.title_rows = rows;
-        pr.title_cols = cols;
+        if let Some(t) = rows {
+            pr.title_rows = t;
+        }
+        if let Some(t) = cols {
+            pr.title_cols = t;
+        }
         Ok(Json::Null)
     })
 }
