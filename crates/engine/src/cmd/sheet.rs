@@ -701,7 +701,12 @@ fn check_lines_protection(s: &Session, p: &Json, axis: Axis, at: u32, count: u32
     }
     let end = at.saturating_add(count - 1).min(if axis == Axis::Rows { MAX_ROWS - 1 } else { MAX_COLS - 1 });
     let infos = if axis == Axis::Rows { &sh.rows } else { &sh.cols };
-    if (at..=end).any(|i| locked(infos.get(&i).and_then(|x| x.style).unwrap_or_default())) {
+    // Only a line that carries a format of its own can be locked by it. `unwrap_or_default()`
+    // here gave the default style, which is locked, so a line without its own format counted as
+    // locked and every delete was refused — including one the permission allows over cells the
+    // user had unlocked, which is the whole point of granting it. It also left the cell scan
+    // below unreachable. A line with no format of its own is judged by its cells.
+    if (at..=end).any(|i| infos.get(&i).and_then(|x| x.style).is_some_and(locked)) {
         return Err(refuse());
     }
     let block = if axis == Axis::Rows { RangeRef::rows(at, end) } else { RangeRef::cols(at, end) };
