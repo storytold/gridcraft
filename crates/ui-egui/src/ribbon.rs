@@ -2211,16 +2211,23 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
         ui.label(egui::RichText::new(lang.tr("Interface size")).font(theme::ui_font(11.5)).color(t.text_dim));
         let current = app.ui.interface_scale;
         let text = |v: u16| if v == 100 { lang.tr("Auto").to_string() } else { format!("{v}%") };
+        let reset_shortcut = ui.ctx().format_shortcut(&crate::keymap::RESET_INTERFACE_SCALE);
         egui::ComboBox::from_id_salt("ui_interface_size")
             .width(120.0)
             .selected_text(egui::RichText::new(text(current)).font(theme::ui_font(12.5)))
             .show_ui(ui, |ui| {
                 for v in [100, 75, 90, 110, 125, 150, 175, 200] {
-                    if ui.selectable_label(v == current, text(v)).clicked() {
+                    let mut button = egui::Button::selectable(v == current, text(v));
+                    if v == 100 {
+                        button = button.shortcut_text(&reset_shortcut);
+                    }
+                    if ui.add(button).clicked() {
                         act(app, "view.interfaceScale", json!({"percent": v}));
                     }
                 }
-            });
+            })
+            .response
+            .on_hover_text(format!("{}: {} ({reset_shortcut})", lang.tr("Interface size"), lang.tr("Auto")));
     });
     // Interface language: settings live in the View tab, like Excel's Options. The label follows
     // the current language so it stays readable; the choices are always shown in their own script.

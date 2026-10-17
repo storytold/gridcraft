@@ -54,6 +54,19 @@ The saved choice remains System; new users still start in Light. The legacy
 outline then jumps to a new selection instead of gliding there); without `on` it toggles. It is
 the View ▸ Animations checkbox, saved with the other UI preferences and on by default.
 
+`{command: "view.interfaceScale", params: {percent: "auto"}}` restores the whole interface
+to Auto (100% on top of the desktop's display scale). Numeric values are clamped to 75–200.
+For a running window started with `--control`, send:
+
+```json
+{"id": 1, "method": "engine.execute", "params": {"command": "view.interfaceScale", "params": {"percent": "auto"}}}
+```
+
+This is a UI command, so it requires the running window rather than a standalone CLI session.
+Without the control channel, press Ctrl+Shift+F8 (Cmd+Shift+F8 on macOS; Fn if required).
+It works even when an editor or dialog has focus and leaves sheet zoom alone. The desktop app
+saves the interface preference in `ui.json` on normal exit.
+
 `{command: "app.language.set", params: {language: "ja"}}` switches the interface language
 (`code` is accepted as an alias for `language`); `app.language.english` and
 `app.language.japanese` are shortcuts. Only interface chrome is translated, never command ids or

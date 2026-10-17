@@ -1050,6 +1050,7 @@ impl SheetApp {
         if ctx.options(|o| o.zoom_with_keyboard) {
             ctx.options_mut(|o| o.zoom_with_keyboard = false);
         }
+        keymap::reset_interface_scale(self, ctx);
         let zoom = self.ui.zoom_factor();
         if (ctx.zoom_factor() - zoom).abs() > 0.001 {
             ctx.set_zoom_factor(zoom);

@@ -11,6 +11,39 @@ use serde_json::{Value as Json, json};
 use crate::SheetApp;
 use crate::grid::Geo;
 
+pub(crate) const RESET_INTERFACE_SCALE: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(Modifiers { shift: true, ..Modifiers::COMMAND }, Key::F8);
+
+/// A recovery shortcut must work even when an oversized editor, dialog or Backstage owns focus.
+/// Run before widgets and keytips; ordinary grid shortcuts still go through `dispatch` below.
+pub(crate) fn reset_interface_scale(app: &mut SheetApp, ctx: &egui::Context) {
+    if !ctx.input(|i| i.focused) {
+        return;
+    }
+    let mac = ctx.os() == egui::os::OperatingSystem::Mac;
+    let mut reset = false;
+    ctx.input_mut(|i| {
+        i.events.retain(|event| {
+            let egui::Event::Key { key, modifiers: m, pressed, repeat, .. } = event else { return true };
+            let command = if mac { m.command && m.mac_cmd && !m.ctrl } else { m.command && m.ctrl && !m.mac_cmd };
+            if *key == RESET_INTERFACE_SCALE.logical_key && command && m.shift && !m.alt {
+                reset |= *pressed && !repeat;
+                false
+            } else {
+                true
+            }
+        });
+    });
+    if reset {
+        // Consuming the command key above bypasses keytips' usual cancellation.
+        if app.keytips.prefix().is_some() {
+            egui::Popup::close_all(ctx);
+        }
+        app.keytips.clear();
+        app.run_or_alert("view.interfaceScale", json!({"percent": "auto"}));
+    }
+}
+
 /// What a shortcut does.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shortcut {

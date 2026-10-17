@@ -145,6 +145,14 @@ or using another dialog. This is initial support for these Home and legacy paths
 other ribbon commands and full mouse-free navigation remain to be implemented.
 Browsers or desktop environments may reserve Alt/F10 for their own menus.
 
+### Reset interface size
+
+If View › Interface size makes the controls too large to reach, press **Ctrl+Shift+F8**
+(**Cmd+Shift+F8** on macOS; hold Fn too if your keyboard uses media keys).
+This restores **Auto (100%)**, including while editing a cell or using a dialog. It keeps
+your sheet zoom and unfinished edits. The desktop app saves the restored size when it exits
+normally. The shortcut also appears beside Auto in the Interface size menu.
+
 ### Logs
 
 The desktop app writes its log to standard error and to `gridcraft.log` in the `logs` folder

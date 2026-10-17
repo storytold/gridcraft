@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (direct desktop printing through craft-print) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (keyboard recovery for oversized interfaces, #1584) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 The hardware Excel uses, per platform, against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Hardware: ~40% ready, 25–40 h** (estimated).
@@ -12,7 +12,7 @@ The hardware Excel uses, per platform, against GridCraft. Part of
 | Pen and touch (Draw tab) | Pen pressure and tilt, eraser end, touch mode, Ink to Shape, ink replay | Pen, highlighter, eraser, Ink to Shape with mouse/pen input; **no pressure or tilt**, no touch mode | Pressure-sensitive strokes where winit reports force; touch-friendly ribbon spacing: 4–6 h |
 | Trackpad and mouse | Smooth scrolling, pinch zoom, horizontal scroll, Magic Mouse | Smooth scrolling and zoom via egui | Verify pinch zoom on each platform: 1–2 h |
 | Multiple windows and monitors | One window per workbook, New Window for the same workbook, per-monitor DPI | One window; multiple workbooks switch inside it (#162; PR #171) | Native window per workbook, New Window, Arrange All across monitors: 6–8 h |
-| High-DPI and display scaling | yes | yes (display scale matched to desktop density; View › Interface size 75–200 % on top, #230) | — |
+| High-DPI and display scaling | yes | yes (display scale matched to desktop density; View › Interface size 75–200 % on top, #230; Ctrl/Cmd+Shift+F8 restores Auto even if controls are offscreen, #1584) | — |
 | Accessibility hardware (screen readers, braille displays, switch control) | Narrator, JAWS, NVDA, VoiceOver | AccessKit enabled in eframe; grid cells and ribbon not yet exposed as an accessible tree | Counted under UI ([ui-parity.md](ui-parity.md)) |
 | Printers | System print with driver options | Desktop submits through craft-print with printer choice, copies, duplex and grayscale; web browser printing | Counted under print |
 
@@ -20,6 +20,7 @@ The hardware Excel uses, per platform, against GridCraft. Part of
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Interface-size recovery: Ctrl/Cmd+Shift+F8 restores Auto through the existing preference command, including with editors, dialogs and Backstage open (#1584). |
 | 2026-10-12 | minor | Desktop File > Print now discovers printers and submits PDF jobs through pinned craft-print with printer choice, copies, duplex and grayscale; browser printing and PDF export remain available. Remaining print parity includes page ranges and driver-specific tray/options UI; physical printer fidelity needs hardware validation. |
 | 2026-10-11 | trivial | Windows: DirectX 12 shaders compiled with FXC, no DXC runtime needed (#339, #354) |
 | 2026-10-11 | trivial | Windows: OpenGL fallback when DirectX 12 has no GPU or fails to start; Vulkan never by default (#120) |
