@@ -486,10 +486,11 @@ fn scenario_show(s: &mut Session, p: &Json) -> Result<Json> {
     let sc = list.get(i).cloned().ok_or_else(|| bad(CMD, "no such scenario"))?;
     let si = d.wb.sheet_index(&sc.sheet).ok_or_else(|| bad(CMD, format!("the scenario's sheet `{}` no longer exists", sc.sheet)))?;
     let (_, cells) = cell_list(&d.wb, &sc.changing, CMD, MAX_SCENARIO_CELLS)?;
+    let conv = s.prefs.data_conversion;
     edit(s, |cx| {
         for (c, v) in cells.iter().zip(sc.values.iter()) {
             let input = super::edit::json_to_input(v);
-            let cell = super::edit::input_to_cell(&input, si, *c, &mut cx.wb)?;
+            let cell = super::edit::input_to_cell(&input, si, *c, &mut cx.wb, &conv)?;
             let sh = cx.sheet_mut(si)?;
             match cell {
                 Some(cell) => sh.set_cell(*c, cell),

@@ -815,6 +815,7 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
     let consecutive = bool_param(p, "treatConsecutive").unwrap_or(false);
     let quote = str_param(p, "textQualifier").and_then(|q| q.chars().next()).unwrap_or('"');
     let dest = cell_param_on(s, p, "destination", sheet)?.unwrap_or(r.start);
+    let conv = s.prefs.data_conversion;
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
         let mut out: Vec<(CellRef, String)> = Vec::new();
@@ -837,7 +838,7 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         for (c, t) in out {
-            let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb).unwrap_or(None);
+            let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb, &conv).unwrap_or(None);
             let shm = cx.sheet_mut(sheet)?;
             match cell {
                 Some(x) => shm.set_cell(c, x),

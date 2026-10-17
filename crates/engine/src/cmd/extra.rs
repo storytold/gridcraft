@@ -887,7 +887,7 @@ fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
             let delim = str_param(p, "delimiter")
                 .and_then(|d| d.chars().next())
                 .unwrap_or(if text.lines().next().is_some_and(|l| l.contains('\t')) { '\t' } else { ',' });
-            let opts = gridcraft_xlsx::CsvOptions { delimiter: delim as u8, ..Default::default() };
+            let opts = gridcraft_xlsx::CsvOptions { delimiter: delim as u8, conversion: s.prefs.data_conversion, ..Default::default() };
             let wb = gridcraft_xlsx::read_csv(&bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             let sh = wb.sheet(0).ok_or(EngineError::NoDocument)?;
             let Some(u) = sh.used_range() else { return Err(EngineError::Other("The file is empty.".into())) };

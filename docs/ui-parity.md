@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (horizontal scrollbar in the sheet tab bar, #840) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (File › Options › Data: date and time conversion can be switched off; previously minor: Automatic Data Conversion and trailing decimal zeros) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -24,7 +24,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Sheet tabs: rename, reorder, colour, hide, scroll | yes | yes | active tab revealed on navigation and resize (#681); manual wheel/trackpad browsing preserved; rename focus bug on macOS (#145) |
 | Status bar: Sum/Count/Average and more, view buttons, zoom | yes | yes | customizable statistics partial |
 | Task panes (Format Chart, Comments, Watch, Selection, PivotTable fields) | yes | yes | element-level Format pane for shapes and pictures missing |
-| Backstage (File) view: Info, New with templates, Open recent, Export, Options | yes | partial | Options dialog and template gallery missing |
+| Backstage (File) view: Info, New with templates, Open recent, Export, Options | yes | partial | Options page has General, Save, Data (Automatic Data Conversion) and Formulas; Excel's other Options pages and the template gallery missing |
 | Dark mode, system appearance | yes | yes | done (10-09); follows the system on first run, title-bar switch and File › Display theme (#194, #239) |
 | Backstage (File) view: Info, New with templates, Open recent, Export, Options | yes | yes (#174, 10-11): the File tab opens a full-window view (Esc or the back arrow return) with Home, New (blank + the three samples), Open (recent + Browse; the recent list tells when each workbook was last changed, 10-12), Info (location, properties, Protect Workbook), Save, Save As, Print (page preview, active sheet or workbook, fit to page, Page Setup), Export (PDF, CSV, web page), Close and Options (`file.options`: theme, language, formula bar, AutoSave, calculation) | no Account, Share or template gallery beyond the samples; Options applies at once (no OK/Cancel dialog) and holds only the settings GridCraft has |
 | Dark mode, system appearance | yes | yes | done (10-09) |
@@ -161,6 +161,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | File › Options › Data: "Convert text that looks like a date or time to a date" (GridCraft addition, in the place of Excel's greyed-out fourth option) (#506) |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
 | 2026-10-12 | minor | Ctrl+wheel zoom steps along a ladder of percentages about 20% apart that never skips 100%, gliding to each step with animations on, so a notch out undoes a notch in (it drifted: 100 → 122 → 101); Excel steps 15 points, see decisions.md |
@@ -171,6 +172,8 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-11 | minor | Outline band for grouped rows and columns, Show / Hide Detail on the Data tab, numpad navigation keys in shortcuts (#373) |
 | 2026-10-11 | minor | Shift+Space / Ctrl+Space no longer start an edit; Control+Space selects the column on Mac (#338) |
 | 2026-10-11 | minor | Selected whole columns can be reordered by dragging their headers to an insertion point |
+| 2026-10-12 | minor | File › Options › Data: "Remove trailing zeros after the decimal separator" (GridCraft addition to the list) |
+| 2026-10-12 | minor | File › Options › Data: Automatic Data Conversion checkboxes with a digit limit for long numbers |
 | 2026-10-11 | minor | Page Layout view with rulers and in-place headers and footers (#329) |
 | 2026-10-11 | minor | Forecast Sheet dialog (#322) |
 | 2026-10-11 | minor | Delete and Backspace now remove the selected chart, picture or shape (#213) |

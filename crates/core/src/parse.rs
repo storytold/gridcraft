@@ -14,9 +14,170 @@ pub struct Parsed {
     pub format: Option<&'static str>,
 }
 
+/// Excel's File › Options › Data › Automatic Data Conversion, for entering, pasting and loading
+/// text (CSV): which number-like text becomes a number. The default converts everything, like
+/// Excel and like GridCraft before the options existed; each switch only keeps more input as text.
+/// Excel's fourth option, continuous letters and numbers to a date, stops conversions GridCraft
+/// never makes (`12JAN2026` is always text); in its place [`Self::convert_dates`] covers every date
+/// and time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DataConversion {
+    /// "Remove leading zeros and convert to a number": off keeps `0123` as text.
+    pub remove_leading_zeros: bool,
+    /// "Keep first 15 digits of long numbers and display in scientific notation": on converts
+    /// every digit string, losing digits past the 15th and showing long ones as `1.24412E+11`.
+    /// Off, nothing is cut short or turned into scientific notation: a number converts only when
+    /// it has at most [`Self::long_number_digits`] digits and, with the default limit, General
+    /// format shows it without scientific notation. Everything else stays text, as written.
+    pub keep_first_15_digits: bool,
+    /// The digit limit while `keep_first_15_digits` is off: 1–15, default [`GENERAL_DIGITS`] (11),
+    /// remembered while the box is on. Above 11 the person allows scientific display for numbers
+    /// up to that many digits (15 is where Excel's unchecked box stops); no digit is ever lost.
+    pub long_number_digits: u8,
+    /// "Convert digits surrounding the letter E to a number in scientific notation": off keeps
+    /// `1244121406E6`, and any number written with an exponent, as text.
+    pub digits_around_e: bool,
+    /// "Remove trailing zeros after the decimal separator", GridCraft's addition to the list: on (the
+    /// default, as in Excel) `720.0` shows and saves as `720`. Off, a number written with trailing
+    /// decimal zeros gets a number format that shows them (`720.0` → `0.0`, `3.10` → `0.00`), so the
+    /// grid shows it as written and a saved CSV writes it back the same. It stays a number.
+    pub remove_trailing_zeros: bool,
+    /// "Convert text that looks like a date or time to a date", GridCraft's addition in the place of
+    /// Excel's fourth option: on (the default, as in Excel) `3/4/2026`, `2.6.70`, `4-Mar-2026` and
+    /// `10:30` become dates and times. Off, they stay text, as written; numbers and fractions
+    /// (`1 1/2`) still convert.
+    pub convert_dates: bool,
+}
+
+/// `0.0` … `0.000000000000000`: the formats that keep trailing zeros
+/// ([`DataConversion::remove_trailing_zeros`] off), by count.
+const DECIMALS: [&str; 15] = [
+    "0.0",
+    "0.00",
+    "0.000",
+    "0.0000",
+    "0.00000",
+    "0.000000",
+    "0.0000000",
+    "0.00000000",
+    "0.000000000",
+    "0.0000000000",
+    "0.00000000000",
+    "0.000000000000",
+    "0.0000000000000",
+    "0.00000000000000",
+    "0.000000000000000",
+];
+
+/// The same for numbers written without a leading digit (`.50` shows as `.50`, not `0.50`).
+const DECIMALS_NO_INT: [&str; 15] = [
+    "#.0",
+    "#.00",
+    "#.000",
+    "#.0000",
+    "#.00000",
+    "#.000000",
+    "#.0000000",
+    "#.00000000",
+    "#.000000000",
+    "#.0000000000",
+    "#.00000000000",
+    "#.000000000000",
+    "#.0000000000000",
+    "#.00000000000000",
+    "#.000000000000000",
+];
+
+/// The most digits a number may have and still convert with the long-number box off: past 15,
+/// digits would be lost.
+pub const MAX_LONG_NUMBER_DIGITS: u8 = 15;
+
+/// The characters General format has for a number (`GENERAL_WIDTH` in gridcraft-numfmt, which
+/// checks the two agree): a number that needs more is shown in scientific notation.
+pub const GENERAL_DIGITS: u8 = 11;
+
+/// Whether General format shows every digit of `n`: no scientific notation and no rounding. That
+/// holds when `n` isn't below 1E-4 (General switches to scientific there) and its shortest exact
+/// decimal form fits in [`GENERAL_DIGITS`] characters (gridcraft-numfmt checks this against
+/// `format_general_fit`).
+pub fn general_shows_exactly(n: f64) -> bool {
+    n == 0.0 || (n.is_finite() && n.abs() >= 1e-4 && format!("{n}").len() <= usize::from(GENERAL_DIGITS))
+}
+
+impl Default for DataConversion {
+    fn default() -> Self {
+        DataConversion {
+            remove_leading_zeros: true,
+            keep_first_15_digits: true,
+            long_number_digits: GENERAL_DIGITS,
+            digits_around_e: true,
+            remove_trailing_zeros: true,
+            convert_dates: true,
+        }
+    }
+}
+
+impl DataConversion {
+    /// Every conversion on, like Excel's "Enable all default data conversions" checkbox. Off,
+    /// everything number-like is kept as written.
+    pub fn all(&self) -> bool {
+        self.remove_leading_zeros && self.keep_first_15_digits && self.digits_around_e && self.remove_trailing_zeros && self.convert_dates
+    }
+
+    /// Whether `plain`, text [`parse_plain`] read as the number `n`, may become one. Digits are
+    /// counted as written: leading zeros count, the sign, currency, separators, the decimal point
+    /// and the exponent don't.
+    fn converts(&self, plain: &str, n: f64) -> bool {
+        let (mantissa, exponent) = match plain.split_once(['e', 'E']) {
+            Some((m, _)) => (m, true),
+            None => (plain, false),
+        };
+        if exponent && !self.digits_around_e {
+            return false;
+        }
+        let int: String = mantissa.split('.').next().unwrap_or("").chars().filter(char::is_ascii_digit).collect();
+        if !self.remove_leading_zeros && int.len() > 1 && int.starts_with('0') {
+            return false;
+        }
+        if self.keep_first_15_digits {
+            return true;
+        }
+        // A hand-edited prefs.json can hold any number: stay within the limits the command allows.
+        let max = self.long_number_digits.clamp(1, MAX_LONG_NUMBER_DIGITS);
+        // Up to 11 digits a number converts only when General shows it as written: nothing turns
+        // into scientific notation (a negative 11-digit number, 0.00001) or gets rounded. A
+        // higher limit is the person allowing that for numbers that long. A number written with
+        // an exponent already is scientific: the E option decides about it.
+        let shown_ok = exponent || max > GENERAL_DIGITS || general_shows_exactly(n);
+        mantissa.chars().filter(char::is_ascii_digit).count() <= usize::from(max) && shown_ok
+    }
+
+    /// With [`Self::remove_trailing_zeros`] off, the format that shows the plain number `plain` with
+    /// the decimal places it was written with, when General would drop trailing zeros. `None` when
+    /// General already shows it as written, or past 15 decimals.
+    fn decimals_format(&self, plain: &str) -> Option<&'static str> {
+        if self.remove_trailing_zeros {
+            return None;
+        }
+        let body = plain.trim_start_matches(['-', '+']).trim_start();
+        let (int, frac) = body.split_once('.')?;
+        if !frac.ends_with('0') || !frac.bytes().all(|b| b.is_ascii_digit()) || !int.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let table = if int.is_empty() { &DECIMALS_NO_INT } else { &DECIMALS };
+        table.get(frac.len().checked_sub(1)?).copied()
+    }
+}
+
 /// Interprets typed cell input (not formulas). Text that isn't a number, date, boolean or error
 /// stays text. A leading apostrophe forces text.
 pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
+    parse_input_with(s, sys, &DataConversion::default())
+}
+
+/// [`parse_input`] under the Automatic Data Conversion options (typed input, paste, CSV import).
+pub fn parse_input_with(s: &str, sys: DateSystem, conv: &DataConversion) -> Parsed {
     if s.is_empty() {
         return Parsed { value: Value::Empty, format: None };
     }
@@ -33,37 +194,45 @@ pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
     if let Some(e) = CellError::parse(t) {
         return Parsed { value: Value::Error(e), format: None };
     }
-    if let Some((n, f)) = parse_numeric(t, sys) {
+    if let Some((n, f)) = parse_numeric(t, sys, conv) {
         return Parsed { value: Value::number(n), format: f };
     }
     Parsed { value: Value::text(s), format: None }
 }
 
-/// Numeric text as arithmetic coerces it ("1,000", "50%", "$3", "1/2/2020", "10:00").
+/// Numeric text as arithmetic coerces it ("1,000", "50%", "$3", "1/2/2020", "10:00"). The data
+/// conversion options don't apply here: in Excel too, `="0123"+1` is 124 whatever they say.
 pub fn parse_number_text(s: &str) -> Option<f64> {
     parse_number_text_in(s, DateSystem::D1900)
 }
 
 /// Like [`parse_number_text`], with date text read in the given workbook date system.
 pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
-    parse_numeric(s.trim(), sys).map(|(n, _)| n)
+    parse_numeric(s.trim(), sys, &DataConversion::default()).map(|(n, _)| n)
 }
 
-fn parse_numeric(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
+fn parse_numeric(t: &str, sys: DateSystem, conv: &DataConversion) -> Option<(f64, Option<&'static str>)> {
     if t.is_empty() {
         return None;
     }
     // Parenthesised negatives: (100) = -100.
     if let Some(inner) = t.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
-        return parse_numeric(inner.trim(), sys).map(|(n, f)| (-n, f));
+        return parse_numeric(inner.trim(), sys, conv).map(|(n, f)| (-n, f));
     }
-    if let Some(r) = parse_plain(t) {
-        return Some(r);
+    if let Some((n, format)) = parse_plain(t) {
+        // A number the options keep as text is text: it isn't a fraction or date either.
+        if !conv.converts(t, n) {
+            return None;
+        }
+        // Currency, percent, separators and exponents bring their own formats.
+        return Some((n, format.or_else(|| conv.decimals_format(t))));
     }
     if let Some(r) = parse_fraction(t) {
         return Some((r, Some("# ?/?")));
     }
-    if let Some(r) = parse_datetime(t, sys) {
+    if conv.convert_dates
+        && let Some(r) = parse_datetime(t, sys)
+    {
         return Some(r);
     }
     None
@@ -382,6 +551,175 @@ mod tests {
         assert_eq!(p("25:00").value, Value::Number(25.0 / 24.0));
         assert_eq!(p("25:00").format, Some("[h]:mm:ss"));
         assert_eq!(p("23:59").format, Some("h:mm"));
+    }
+
+    #[test]
+    fn data_conversion_options() {
+        let with = |s: &str, conv: DataConversion| parse_input_with(s, DateSystem::D1900, &conv).value;
+        let all = DataConversion::default();
+        // The default converts as before.
+        assert!(all.all());
+        assert_eq!(with("0123", all), Value::Number(123.0));
+        assert_eq!(with("1244121406E6", all), Value::Number(1.244121406e15));
+        assert_eq!(with("12345678901234567890", all), Value::Number(12345678901234567890.0));
+        assert_eq!(p("124412140710"), parse_input_with("124412140710", DateSystem::D1900, &all));
+
+        let zeros = DataConversion { remove_leading_zeros: false, ..all };
+        for kept in ["0123", "00", "-0123", "$0123", "0,123", "012.5", "(0123)"] {
+            assert_eq!(with(kept, zeros), Value::text(kept), "{kept}");
+        }
+        assert_eq!(with("0", zeros), Value::Number(0.0));
+        assert_eq!(with("0.5", zeros), Value::Number(0.5));
+        assert_eq!(with("-0.25", zeros), Value::Number(-0.25));
+        assert_eq!(with("120", zeros), Value::Number(120.0));
+        // Only numbers: dates and times with leading zeros still convert.
+        assert_eq!(with("01:30", zeros), Value::Number(1.5 / 24.0));
+        assert_eq!(with("2026-01-05", zeros), p("2026-01-05").value);
+
+        let e = DataConversion { digits_around_e: false, ..all };
+        for kept in ["1244121406E6", "1144121408E7", "1e3", "1.5E-3", "-2E+5"] {
+            assert_eq!(with(kept, e), Value::text(kept), "{kept}");
+        }
+        assert_eq!(with("1244121406FB", e), Value::text("1244121406FB"));
+        assert_eq!(with("720.0", e), Value::Number(720.0));
+
+        // Box off with the default limit (11): nothing is cut short or shown in scientific
+        // notation; the 12-digit part codes of a CAD/CAM cut list stay text, exactly as written.
+        let off = DataConversion { keep_first_15_digits: false, ..all };
+        assert!(!off.all());
+        assert_eq!(off.long_number_digits, GENERAL_DIGITS);
+        let ids = DataConversion { keep_first_15_digits: false, long_number_digits: 11, ..all };
+        assert_eq!(off, ids);
+        // Within 11 digits, what General would still show in scientific notation or rounded stays
+        // text too.
+        for kept in ["-12345678901", "0.00001", "0.0000123", "-0.00005", "12345.678901", "-9999999999.9"] {
+            assert_eq!(with(kept, off), Value::text(kept), "{kept}");
+        }
+        for converted in ["-1234567890", "0.0001", "99999999999", "1234.5678", "0"] {
+            assert!(with(converted, off).is_number(), "{converted}");
+        }
+        // Excel's unchecked box stops at 15: a limit of 15 allows scientific display up to 15
+        // digits and still never loses one.
+        let excel_off = DataConversion { keep_first_15_digits: false, long_number_digits: 15, ..all };
+        assert_eq!(with("1234567890123456", excel_off), Value::text("1234567890123456"));
+        assert_eq!(with("123456789012345", excel_off), Value::Number(123456789012345.0));
+        assert_eq!(with("0.00001", excel_off), Value::Number(0.00001));
+        for kept in ["124412140710", "114412140641", "000000000012", "1,244,121,407,10", "12345678901.5", "-124412140710"] {
+            assert_eq!(with(kept, ids), Value::text(kept), "{kept}");
+        }
+        assert_eq!(with("12345678901", ids), Value::Number(12345678901.0));
+        assert_eq!(with("2320.0", ids), Value::Number(2320.0));
+        // The limit counts the mantissa only; the exponent is the E option's business.
+        assert_eq!(with("1.5E+20", ids), Value::Number(1.5e20));
+        // The limit only counts while the box is off.
+        assert_eq!(with("124412140710", DataConversion { long_number_digits: 11, ..all }), Value::Number(124412140710.0));
+        // Out-of-range limits (a hand-edited prefs.json) are held to 1–15.
+        let wild = |n| DataConversion { keep_first_15_digits: false, long_number_digits: n, ..all };
+        assert_eq!(with("1234567890123456", wild(200)), Value::text("1234567890123456"));
+        assert_eq!(with("7", wild(0)), Value::Number(7.0));
+        assert_eq!(with("12", wild(0)), Value::text("12"));
+        // A leading apostrophe and arithmetic coercion are unaffected.
+        let none = DataConversion {
+            remove_leading_zeros: false,
+            keep_first_15_digits: false,
+            long_number_digits: 1,
+            digits_around_e: false,
+            remove_trailing_zeros: false,
+            convert_dates: false,
+        };
+        assert_eq!(with("'5", none), Value::text("5"));
+        assert_eq!(with("TRUE", none), Value::Bool(true));
+        assert_eq!(parse_number_text("0123"), Some(123.0));
+        assert_eq!(parse_number_text("1E3"), Some(1000.0));
+    }
+
+    #[test]
+    fn trailing_zeros_kept_when_not_removed() {
+        let on = DataConversion { remove_trailing_zeros: false, ..DataConversion::default() };
+        let with = |s: &str, conv: &DataConversion| parse_input_with(s, DateSystem::D1900, conv);
+        // Trailing decimal zeros get a format that shows them; the value is the same number.
+        for (input, n, format) in [
+            ("720.0", 720.0, "0.0"),
+            ("3.10", 3.1, "0.00"),
+            ("-0.50", -0.5, "0.00"),
+            ("+1.0", 1.0, "0.0"),
+            (".50", 0.5, "#.00"),
+            ("-.50", -0.5, "#.00"),
+            ("(720.0)", -720.0, "0.0"),
+            ("0.000000000000000", 0.0, "0.000000000000000"),
+        ] {
+            assert_eq!(with(input, &on), Parsed { value: Value::Number(n), format: Some(format) }, "{input}");
+        }
+        // Nothing to keep, or more decimals than a format can show: General, as before.
+        for (input, n) in [("720", 720.0), ("720.5", 720.5), ("720.", 720.0), ("0.0000000000000000", 0.0)] {
+            assert_eq!(with(input, &on), Parsed { value: Value::Number(n), format: None }, "{input}");
+        }
+        // Inputs with their own format keep it.
+        assert_eq!(with("$1.50", &on).format, Some("\"$\"#,##0.00"));
+        assert_eq!(with("1,234.50", &on).format, Some("#,##0.00"));
+        assert_eq!(with("12.50%", &on).format, Some("0.00%"));
+        assert_eq!(with("1.50E+3", &on).format, Some("0.00E+00"));
+        // Removed by default, as in Excel; keeping them is one of the conversions "all" turns off.
+        assert_eq!(p("720.0"), Parsed { value: Value::Number(720.0), format: None });
+        assert!(!on.all());
+    }
+
+    #[test]
+    fn dates_and_times_stay_text_when_not_converted() {
+        let off = DataConversion { convert_dates: false, ..DataConversion::default() };
+        let with = |s: &str| parse_input_with(s, DateSystem::D1900, &off);
+        // Converted by default: `2.6.70` is 6 February 1970 (m.d.yy), as en-US reads it.
+        assert_eq!(p("2.6.70"), Parsed { value: Value::Number(25605.0), format: Some("m/d/yyyy") });
+        for kept in [
+            "2.6.70",
+            "3/4/2026",
+            "2026-03-04",
+            "4-Mar-2026",
+            "Mar 4, 2026",
+            "4 March 2026",
+            "Mar-26",
+            "1/2",
+            "10:30",
+            "10:30:15 PM",
+            "25:00",
+            "10/7/2026 18:00",
+            " 3/4/2026 ",
+        ] {
+            assert!(p(kept).value.is_number(), "{kept} converts by default");
+            assert_eq!(with(kept), Parsed { value: Value::text(kept), format: None }, "{kept}");
+        }
+        // Numbers, fractions and the other kinds of entry are unaffected.
+        assert_eq!(with("720"), p("720"));
+        assert_eq!(with("1 1/2"), p("1 1/2"));
+        assert_eq!(with("$1,234.50"), p("$1,234.50"));
+        assert_eq!(with("12.5%"), p("12.5%"));
+        assert_eq!(with("TRUE").value, Value::Bool(true));
+        // Arithmetic still reads date text, as it reads `0123` whatever the options say.
+        assert_eq!(parse_number_text("3/4/2026"), p("3/4/2026").value.as_f64());
+        assert!(!off.all());
+    }
+
+    #[test]
+    fn data_conversion_json() {
+        // Prefs saved before the options existed (or with some missing) get Excel's defaults.
+        let old: DataConversion = serde_json::from_str("{}").unwrap();
+        assert_eq!(old, DataConversion::default());
+        let some: DataConversion = serde_json::from_str(r#"{"digitsAroundE": false, "keepFirst15Digits": false, "longNumberDigits": 11}"#).unwrap();
+        assert_eq!(
+            some,
+            DataConversion {
+                remove_leading_zeros: true,
+                keep_first_15_digits: false,
+                long_number_digits: 11,
+                digits_around_e: false,
+                remove_trailing_zeros: true,
+                convert_dates: true
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(some).unwrap(),
+            serde_json::json!({"removeLeadingZeros": true, "keepFirst15Digits": false, "longNumberDigits": 11, "digitsAroundE": false, "removeTrailingZeros": true, "convertDates": true})
+        );
     }
 
     #[test]

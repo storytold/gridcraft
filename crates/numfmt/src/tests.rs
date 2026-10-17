@@ -301,6 +301,28 @@ fn text_and_other_values() {
     assert!(!r.numeric);
 }
 
+/// Core's Automatic Data Conversion keeps as text what General can't show exactly (scientific
+/// notation or rounding). It restates this crate's rule (core can't depend on numfmt), so the two
+/// must agree: "exactly" means no `E` and the shown text reads back as the same number.
+#[test]
+fn data_conversion_agrees_with_general_on_exact_display() {
+    assert_eq!(GENERAL_WIDTH, usize::from(gridcraft_core::parse::GENERAL_DIGITS));
+    let mut checked = 0;
+    for sign in [1.0, -1.0] {
+        for exp in -12..=16 {
+            for mantissa in [1.0, 1.5, 1.23456789, 9.99999, 9.9999999999, 9.999999999999] {
+                let n = sign * mantissa * 10f64.powi(exp);
+                let shown = f("General", n);
+                let exact = !shown.contains('E') && shown.parse::<f64>() == Ok(n);
+                assert_eq!(gridcraft_core::parse::general_shows_exactly(n), exact, "{n} shows as {shown}");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 300);
+    assert!(gridcraft_core::parse::general_shows_exactly(0.0));
+}
+
 #[test]
 fn general() {
     assert_eq!(f("General", 1e11), "1E+11");

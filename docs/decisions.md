@@ -48,6 +48,53 @@ new images show the existing placeholder until capacity is available; header-bas
 avoids repeatedly decoding overflow images. More than 128 small visible pictures now keep stable
 texture handles instead of cycling through the cache every frame.
 
+## Automatic Data Conversion: off means nothing is cut short or turned scientific
+
+File › Options › Data copies Excel's Automatic Data Conversion list (enable all, remove leading
+zeros, keep first 15 digits of long numbers, convert digits around "E"; Excel's fourth option,
+continuous letters and numbers to a date, stops a conversion GridCraft never makes, so its place
+holds a broader date option, below). The options apply to typing, pasting and opening CSV/text
+files, as in Excel, and are an application preference (`Prefs::data_conversion`,
+`app.dataConversion`), not workbook state.
+All default on, so nothing changes until someone opts out.
+
+One deliberate difference: with "Keep first 15 digits of long numbers and display in scientific
+notation" unchecked, Excel still converts 12–15 digit strings, which General format then shows as
+`1.24412E+11`, and a CSV saved from Excel writes that text, so the digits are gone. In GridCraft,
+unchecked means no number is cut short or shown in scientific notation: a number converts only if
+General shows every digit of it as written (at most 11 characters, not below 1E-4); anything else
+stays text exactly as written. A digit limit (default 11, up to 15) lets someone allow scientific
+display for longer numbers; even at 15 no digit is lost. Core restates General's rule
+(`general_shows_exactly`) because core can't depend on numfmt; a numfmt test checks the two agree.
+The case that prompted it: CAD/CAM cut lists whose 12-character part codes are hex, all digits
+(`124412140710`) or digits-E-digits (`1244121406E6`).
+
+GridCraft adds one item to Excel's list, next to its counterpart "Remove leading zeros": *Remove
+trailing zeros after the decimal separator*, on by default (today's behaviour). Off, a plain
+number written with trailing decimal zeros (`720.0`, `3.10`, `.50`) gets a number format that shows
+them (`0.0`, `0.00`, `#.00`), as `1,234.50` already gets `#,##0.00`. It stays a number; the grid
+shows it as written; and since CSV export writes displayed values, the saved file has `720.0` again.
+It is one of the conversions "Enable all" sets, so unchecking that keeps everything as written. As
+with every automatic format, a cell that already has a format keeps it.
+
+In the place of Excel's fourth option, GridCraft has *Convert text that looks like a date or time
+to a date*, on by default (today's behaviour). Excel's box only keeps runs like `SEPT2` or
+`12JAN2026` as text, which GridCraft never converts; Excel's other date and time conversions can't
+be switched off, and GridCraft's couldn't either, so `2.6.70` (a version or part number) opened as
+6 February 1970 and saved back as
+`2/6/1970` (#506). Off, every date and time (`3/4/2026`, `2.6.70`, `4-Mar-2026`, `1/2`, `10:30`) stays
+text, as written, when typed, pasted or opened; numbers and fractions (`1 1/2`) still convert, and
+formulas still read date text (`=DATEVALUE("3/4/2026")`), as they read `0123` whatever the options
+say. It is one of the conversions "Enable all" sets. A Text Import Wizard with a type per column
+would be the finer tool; this is the switch for files that must come back as they were.
+
+Paste also reads the clipboard's HTML, where a spreadsheet records the number behind a cell
+(`x:num`, `sdval`; #257). That number doesn't override the options: a field they keep as text
+(`0042`, `990000000000000019`, `2.6.70`) stays text even when the source recorded it as a number
+(a date as its serial number), which for a long code may already have lost digits. The HTML still supplies the number for text the options
+don't cover, like pasted currency (`Rp10,000.00`). JSON numbers in `range.setValues` are different:
+they're numbers the caller typed, not text, so the options don't apply to them.
+
 ## Ctrl+wheel zoom steps along its own ladder, not Excel's 15-point steps
 
 A Ctrl+wheel notch moves the zoom to the next step on `grid::WHEEL_ZOOM_LADDER`: 10, 12, 15, 18,

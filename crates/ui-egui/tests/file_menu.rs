@@ -132,6 +132,25 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     assert!(h.state().backstage.is_none());
 }
 
+/// File › Options › Data: the date checkbox, in the place of Excel's greyed-out fourth option, is
+/// live. Unticked, typed date text stays text (#506).
+#[test]
+fn options_date_conversion_checkbox_keeps_dates_as_text() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.options", serde_json::json!({})).unwrap();
+    h.run_steps(3);
+    let label = "Convert text that looks like a date or time to a date";
+    assert!(h.state().session.prefs.data_conversion.convert_dates);
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).click();
+    h.run_steps(3);
+    assert!(!h.state().session.prefs.data_conversion.convert_dates);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "2.6.70"})).unwrap();
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("2.6.70"));
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).click();
+    h.run_steps(3);
+    assert!(h.state().session.prefs.data_conversion.convert_dates);
+}
+
 #[test]
 fn export_as_pdf_is_delivered_as_a_download() {
     let files = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
