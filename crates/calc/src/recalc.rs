@@ -781,6 +781,17 @@ impl Host for PassHost<'_> {
     }
 }
 
+/// What a full recalculation knows about the spill layout it clears, so a contested area goes to
+/// the same formula as in an incremental recalculation.
+#[derive(Default)]
+struct Prior {
+    /// Formulas that spilled (their area, from the last calculation or the file's `ref`).
+    spilled: HashSet<Key>,
+    /// Formulas that showed #SPILL!. A cell's value moves with it on a structural edit, its spill
+    /// area doesn't.
+    blocked: HashSet<Key>,
+}
+
 impl Calc {
     pub fn new() -> Self {
         Self::default()
@@ -814,16 +825,19 @@ impl Calc {
         self.rebuild(wb);
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
+        let mut prior = Prior::default();
         for i in 0..wb.sheets.len() {
             if wb.sheet(i).is_some_and(|s| !s.spill_ranges.is_empty() || !s.spill.is_empty())
                 && let Some(sh) = wb.sheet_mut(i)
             {
+                prior.spilled.extend(sh.spill_ranges.iter().filter(|(_, r)| !r.is_single()).map(|(c, _)| (i, *c)));
                 sh.spill.clear();
                 sh.spill_ranges.clear();
             }
         }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
-        self.run(wb, all, true);
+        prior.blocked = all.iter().copied().filter(|k| wb.sheet(k.0).is_some_and(|s| s.value(k.1) == Value::Error(CellError::Spill))).collect();
+        self.run(wb, all, &prior);
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
@@ -860,7 +874,7 @@ impl Calc {
         if wb.calc.mode == CalcMode::Manual {
             // Only the edited formulas themselves are evaluated.
             let own: Vec<Key> = changed.iter().copied().filter(|k| self.graph.nodes.contains_key(k)).collect();
-            self.run(wb, own, false);
+            self.run(wb, own, &Prior::default());
             return;
         }
         let mut seeds: Vec<Key> = changed.to_vec();
@@ -908,7 +922,7 @@ impl Calc {
         let dirty = self.dirty_closure(wb, &seeds);
         let t1 = prof_now();
         let n = dirty.len();
-        self.run(wb, dirty, false);
+        self.run(wb, dirty, &Prior::default());
         if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
             eprintln!("recalc: {} seeds, closure {} cells {:.1} ms, run {:.1} ms", seeds.len(), n, t1 - t0, prof_now() - t1);
         }
@@ -947,8 +961,9 @@ impl Calc {
         seen.into_iter().collect()
     }
 
-    /// Evaluates the dirty set and writes results (and spills) back.
-    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
+    /// Evaluates the dirty set and writes results (and spills) back. `prior` is the layout a full
+    /// recalculation cleared (empty otherwise).
+    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, prior: &Prior) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         for _round in 0..8 {
             if dirty.is_empty() {
@@ -997,6 +1012,14 @@ impl Calc {
                     cell.value = v;
                 }
             }
+            // When two arrays want the same cells, the one already spilling there keeps them and
+            // the newcomer is #SPILL! (as when it is entered), and one that was #SPILL! stays so:
+            // arrays are laid out in that order, then in reading order. Without this, a full
+            // recalculation or reopening the file handed the area to whichever came first.
+            dirty.sort_by_key(|k| {
+                let owns = prior.spilled.contains(k) || wb.sheet(k.0).is_some_and(|s| s.spill_ranges.contains_key(&k.1));
+                (prior.blocked.contains(k), !owns)
+            });
             for k in &dirty {
                 let new = spills.get(k);
                 let Some(sheet) = wb.sheet_mut(k.0) else { continue };
@@ -1061,9 +1084,6 @@ impl Calc {
                         spill_changes.push((s, c));
                     }
                 }
-            }
-            if full {
-                // Everything was already evaluated once; spill dependents need another pass.
             }
             if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
                 eprintln!("  write-back {:.1} ms", prof_now() - tw);

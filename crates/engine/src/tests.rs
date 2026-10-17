@@ -2009,6 +2009,21 @@ fn a_spill_that_goes_away_unblocks_another() {
 }
 
 #[test]
+fn a_contested_spill_area_stays_with_its_array_after_reopening() {
+    // F13's array wants F14:G14, which C14's array already fills, so F13 is #SPILL!. The file
+    // can only cache #VALUE! for it; reopening (which recalculates) used to hand the area to F13
+    // for coming first in reading order.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "C14", "input": "=SEQUENCE(1,7)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F13", "input": "=SEQUENCE(5,2)"})).unwrap();
+    assert_eq!(v(&s, "F13"), Value::Error(gridcraft_core::CellError::Spill));
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "contested.xlsx", "base64": saved["base64"]})).unwrap();
+    assert_eq!(v(&s, "F13"), Value::Error(gridcraft_core::CellError::Spill));
+    assert_eq!((v(&s, "C14"), v(&s, "G14"), v(&s, "I14")), (Value::Number(1.0), Value::Number(5.0), Value::Number(7.0)));
+}
+
+#[test]
 fn an_array_reading_another_arrays_spill_is_updated() {
     // G5 is evaluated before D11 in the same pass, so it first reads D11's old spill.
     let mut s = s();
