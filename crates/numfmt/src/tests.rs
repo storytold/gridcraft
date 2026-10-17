@@ -135,13 +135,15 @@ fn fractions() {
     assert_eq!(f("# ?/?", 2.0), "2    ");
     assert_eq!(f("# ?/?", 0.0), "0    ");
     assert_eq!(f("# ?/?", -1.5), "-1 1/2");
-    assert_eq!(f("# ??/??", std::f64::consts::PI), "3 14/99");
+    assert_eq!(f("# ??/??", std::f64::consts::PI), "3  1/7 ");
     assert_eq!(f("# ??/??", 1.0 / 3.0), "  1/3 ");
     assert_eq!(f("?/8", 0.5), "4/8");
     assert_eq!(f("# ?/8", 2.125), "2 1/8");
     assert_eq!(f("?/?", 1.5), "3/2");
     assert_eq!(f("# ?/?", 0.99), "1    ");
-    assert_eq!(f("# ???/???", 0.123), " 100/813");
+    assert_eq!(f("# ???/???", 0.123), "  23/187");
+    assert_eq!(f("?/?", 0.1), "0/1");
+    assert_eq!(f("?/?", 0.7), "2/3");
     assert_eq!(f("# ???/???", 0.5), "   1/2  ");
 }
 
@@ -863,4 +865,77 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(parse::parse_sections("[unknown;x]0;0").len(), 2);
     assert_eq!(f("0\\[0", 5.0), "0[5");
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
+}
+
+// ---- Excel's own TEXT() answers (Spreadsheet Accuracy Suite number-format golden, `excel:asked`;
+// checked again on Windows Excel 16.0.20430) ----
+
+#[test]
+fn system_long_time_and_date_codes_draw_the_system_pattern() {
+    for code in ["[$-F400]", "[$-x-systime]", "[Red][$-F400]"] {
+        assert_eq!(f(code, 0.0), "12:00:00 AM", "{code}");
+        assert_eq!(f(code, 0.25), "6:00:00 AM", "{code}");
+        assert_eq!(f(code, 45000.300462962965), "7:12:40 AM", "{code}");
+        assert_eq!(f(code, 0.999999999), "12:00:00 AM", "{code}");
+    }
+    assert_eq!(full("[Red][$-F400]", Value::Number(0.5)).color, Some(FormatColor::Red));
+    // What follows a system date tag is ignored: `dd` still shows 1, not 01.
+    for code in ["[$-F800]dddd, mmmm dd, yyyy", "[$-x-sysdate]dddd, mmmm dd, yyyy", "[$-F800]dd/mm"] {
+        assert_eq!(f(code, 61.0), "Thursday, March 1, 1900", "{code}");
+        assert_eq!(f(code, 45292.5), "Monday, January 1, 2024", "{code}");
+    }
+}
+
+#[test]
+fn a_colour_or_condition_alone_shows_general() {
+    assert_eq!(f("[Blue]", 0.0), "0");
+    assert_eq!(f("[Blue]", 1234.5678), "1234.5678");
+    assert_eq!(f("[Blue]", -3.0), "-3");
+    // A second section of only a colour: the absolute value, as General.
+    assert_eq!(f("0.00;[Red]", -1234.5678), "1234.5678");
+    assert_eq!(f("0.00;[Red]", 1.0), "1.00");
+    assert_eq!(f("[>100];0.0", 1234.5678), "1234.5678");
+    assert_eq!(f("[>100];0.0", 1.0), "1.0");
+    assert_eq!(f("[Red][<=100];[Blue][>100]", 12.5), "12.5");
+    // Any other tag or any text keeps the section empty.
+    assert_eq!(f("[$-409]", 5.0), "");
+    assert_eq!(f("[$-409][Red]", -5.0), "-");
+    assert_eq!(f("[Red][$-409];0", 5.0), "");
+    assert_eq!(f("[=0]\"\";General", 0.0), "");
+    assert_eq!(f("0.00;;", -1.0), "");
+}
+
+#[test]
+fn fractions_take_the_last_convergent_that_fits() {
+    // Never a closer semiconvergent: 0.951 is 39/41 (58/61 is closer), pi is 3 1/7 (14/99 is closer).
+    assert_eq!(f("??/??", 0.951), "39/41");
+    assert_eq!(f("# ??/??", std::f64::consts::PI), "3  1/7 ");
+    assert_eq!(f("???/???", 0.1415926), " 16/113");
+    // The continued fraction runs in floating point: 0.3's second term is 2.9999999999999987, so
+    // 2/7 is a convergent of 0.3 but not of 0.30000000000000004.
+    assert_eq!(f("?/?", 0.3), "2/7");
+    assert_eq!(f("?/?", 0.30000000000000004), "1/3");
+    assert_eq!(f("?/?", 1.2349999999999997), "5/4");
+    assert_eq!(f("# ?/?", 1.2349999999999997), "1 1/4");
+    // Nothing fits: zero.
+    assert_eq!(f("?/?", 0.0865), "0/1");
+    assert_eq!(f("# ?/?", 0.0865), "0    ");
+    assert_eq!(f("# #/#", 0.0865), "0");
+    assert_eq!(f("# 0/0", 0.0865), "0/1");
+}
+
+#[test]
+fn a_fixed_denominator_rounds_the_whole_value() {
+    // 2.675 × 100 is exactly 267.5; 0.675 × 100 is 67.49999999999998.
+    assert_eq!(f("# ??/100", 2.675), "2 68/100");
+    assert_eq!(f("# ??/100", 1.2349999999999997), "1 23/100");
+}
+
+#[test]
+fn a_negative_fraction_shown_as_zero() {
+    // With no whole part the minus sign goes; with one it stays.
+    assert_eq!(f("?/?", -0.004), "0/1");
+    assert_eq!(f("#?/12", -0.004), "0/12");
+    assert_eq!(f("# 0/0", -0.004), "-0/1");
+    assert_eq!(f("# ??/??", -0.0051), "-0      ");
 }

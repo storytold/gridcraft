@@ -251,10 +251,10 @@ pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
     let mut pieces: Vec<String> = vec![String::new(); n];
     let mut before: Vec<String> = vec![String::new(); n + 1];
     let mut lits: Vec<Option<String>> = Vec::new();
-    let mut zero = false;
+    let zero;
     if sec.fraction {
         lits = vec![None; n];
-        render_fraction(sec, x, &mut pieces, &mut lits);
+        zero = render_fraction(sec, x, &mut pieces, &mut lits);
     } else {
         let point = toks.iter().position(|t| matches!(t, Tok::Point));
         let exp = toks.iter().position(|t| matches!(t, Tok::Exp { .. }));
@@ -354,7 +354,9 @@ pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
     out
 }
 
-/// Best rational approximation of `x` with denominator at most `max_den` (continued fractions).
+/// The last continued-fraction convergent of `x` whose denominator is at most `max_den`. Excel
+/// stops there and never takes a closer semiconvergent: 0.3 under `?/?` is 1/3, not 2/7, and 0.951
+/// under `??/??` is 39/41, not 58/61 (suite number-format golden, `excel:asked`).
 fn approximate(x: f64, max_den: u64) -> (u64, u64) {
     if x.is_nan() || x <= 0.0 || !x.is_finite() {
         return (0, 1);
@@ -385,12 +387,7 @@ fn approximate(x: f64, max_den: u64) -> (u64, u64) {
     if q1 == 0 {
         return (x.round() as u64, 1);
     }
-    // Semiconvergent bound.
-    let k = (max_den - q0) / q1;
-    let (pb, qb) = (p0.saturating_add(k.saturating_mul(p1)), q0.saturating_add(k.saturating_mul(q1)));
-    let err_a = (p1 as f64 / q1 as f64 - x).abs();
-    let err_b = if qb > 0 { (pb as f64 / qb as f64 - x).abs() } else { f64::INFINITY };
-    if err_b < err_a { (pb, qb) } else { (p1, q1) }
+    (p1, q1)
 }
 
 /// Display width of a token in a fraction section, for blanking a hidden part with spaces.
@@ -432,11 +429,15 @@ fn blank_range(toks: &[Tok], range: std::ops::Range<usize>, spaces: bool, pieces
 /// becomes spaces when the whole part or the numerator has a `?`); when the fraction is zero and
 /// the numerator has no `0` placeholder, the separator, numerator, bar and denominator disappear
 /// (or become spaces when any part has a `?`) and the whole part shows at least `0`.
-fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Option<String>]) {
+///
+/// Returns true when a fraction with no whole part is drawn as zero (`0/1` under `?/?`, `0/12`):
+/// Excel then drops a negative number's minus sign. With a whole part it keeps it (`-0/1` under
+/// `# 0/0`, `-0      ` under `# ??/??`).
+fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Option<String>]) -> bool {
     let toks = &sec.toks;
     let is_digit = |i: usize| matches!(toks.get(i), Some(Tok::Digit(_)));
-    let Some(slash) = toks.iter().position(|t| matches!(t, Tok::Slash)) else { return };
-    let Some(num_last) = (0..slash).rev().find(|&i| is_digit(i)) else { return };
+    let Some(slash) = toks.iter().position(|t| matches!(t, Tok::Slash)) else { return false };
+    let Some(num_last) = (0..slash).rev().find(|&i| is_digit(i)) else { return false };
     let mut num_start = num_last;
     while num_start > 0 && is_digit(num_start - 1) {
         num_start -= 1;
@@ -467,7 +468,10 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
     let has_whole = !whole_idx.is_empty();
     let (mut whole, f) = if has_whole { (x.floor(), x - x.floor()) } else { (0.0, x) };
     let (mut num, den) = match fixed_den {
-        Some(d) => ((f * d as f64).round() as u64, d),
+        // Rounds x × d and takes the whole part away, so 2.675 under `# ??/100` is 2 68/100
+        // (2.675 × 100 is 267.5, while 0.675 × 100 is 67.49999999999998) and 1.2349999999999997
+        // is 1 23/100.
+        Some(d) => (((x * d as f64).round() - whole * d as f64).max(0.0) as u64, d),
         None => {
             let digits = den_idx.len().clamp(1, 7) as u32;
             approximate(f, 10u64.pow(digits) - 1)
@@ -483,7 +487,7 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
         fill_int(toks, &whole_idx, &whole_s, sec.thousands, true, pieces);
         let spaces = has_q(&whole_idx) || has_q(&num_idx) || has_q(&den_idx);
         blank_range(toks, sep_start..den_end, spaces, pieces, lits);
-        return;
+        return false;
     }
     if has_whole {
         // A zero value shows `0` in a `?` or `0` units place, nothing in a `#` one.
@@ -534,6 +538,7 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
             }
         }
     }
+    num == 0 && !has_whole
 }
 
 #[cfg(test)]
@@ -544,7 +549,9 @@ mod tests {
     fn approximations() {
         assert_eq!(approximate(0.5, 9), (1, 2));
         assert_eq!(approximate(0.333333, 9), (1, 3));
-        assert_eq!(approximate(std::f64::consts::PI - 3.0, 99), (14, 99));
+        // Excel takes the last convergent, never a closer semiconvergent (14/99 here).
+        assert_eq!(approximate(std::f64::consts::PI - 3.0, 99), (1, 7));
+        assert_eq!(approximate(0.951, 99), (39, 41));
         assert_eq!(approximate(std::f64::consts::PI - 3.0, 9), (1, 7));
         assert_eq!(approximate(0.0, 9), (0, 1));
         assert_eq!(approximate(0.999, 9), (1, 1));

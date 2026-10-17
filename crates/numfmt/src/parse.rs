@@ -251,16 +251,50 @@ struct Raw {
     color: Option<FormatColor>,
     cond: Option<Cond>,
     currency: bool,
+    /// A `[$-F400]`/`[$-x-systime]` or `[$-F800]`/`[$-x-sysdate]` tag: Windows' system long time or date.
+    system: Option<SystemFormat>,
+    /// A bracket other than a colour or a condition (a locale tag, `[DBNum1]`…).
+    other_tag: bool,
+    /// Anything written outside brackets, even an empty `""`.
+    text: bool,
+}
+
+/// Excel's system formats, drawn as Windows draws them in en-US (the suite's `excel:asked` locale).
+#[derive(Clone, Copy)]
+enum SystemFormat {
+    LongTime,
+    LongDate,
+}
+
+impl SystemFormat {
+    fn of(content: &str) -> Option<SystemFormat> {
+        match content.trim().to_ascii_lowercase().as_str() {
+            "$-f400" | "$-x-systime" => Some(SystemFormat::LongTime),
+            "$-f800" | "$-x-sysdate" => Some(SystemFormat::LongDate),
+            _ => None,
+        }
+    }
+    /// The pattern drawn in place of the whole section: Excel ignores what follows the tag
+    /// (`[$-F800]dddd, mmmm dd, yyyy` shows March 1, not March 01).
+    fn pattern(self) -> &'static str {
+        match self {
+            SystemFormat::LongTime => "h:mm:ss AM/PM",
+            SystemFormat::LongDate => "dddd, mmmm d, yyyy",
+        }
+    }
 }
 
 fn tokenize(src: &str) -> Raw {
     let cs: Vec<char> = src.chars().collect();
-    let mut raw = Raw { toks: Vec::new(), color: None, cond: None, currency: false };
+    let mut raw = Raw { toks: Vec::new(), color: None, cond: None, currency: false, system: None, other_tag: false, text: false };
     let toks = &mut raw.toks;
     // With no `]` at or after a `[`, that `[` is a literal; checking this once keeps the scan linear.
     let last_close = cs.iter().rposition(|&c| c == ']');
     let mut i = 0usize;
     while let Some(&c) = cs.get(i) {
+        if c != '[' {
+            raw.text = true;
+        }
         match c {
             '"' => {
                 let mut s = String::new();
@@ -306,9 +340,17 @@ fn tokenize(src: &str) -> Raw {
                 let close = if last_close.is_some_and(|l| l > i) { cs.get(i + 1..).and_then(|r| r.iter().position(|&d| d == ']')) } else { None };
                 if let Some(p) = close {
                     let content: String = cs.get(i + 1..i + 1 + p).unwrap_or(&[]).iter().collect();
+                    if let Some(system) = SystemFormat::of(&content) {
+                        raw.system = Some(system);
+                    }
+                    let lc = content.trim().to_ascii_lowercase();
+                    if parse_color(&lc).is_none() && !lc.starts_with(['<', '>', '=']) {
+                        raw.other_tag = true;
+                    }
                     bracket(&mut raw_parts(toks, &mut raw.color, &mut raw.cond, &mut raw.currency), &content);
                     i += p + 2;
                 } else {
+                    raw.text = true;
                     push_lit(toks, "[");
                     i += 1;
                 }
@@ -438,7 +480,7 @@ fn date_part(t: &Tok) -> Option<DatePart> {
 }
 
 fn analyze(raw: Raw) -> Section {
-    let Raw { mut toks, color, cond, currency } = raw;
+    let Raw { mut toks, color, cond, currency, .. } = raw;
     let is_date = toks.iter().any(|t| matches!(t, Tok::Date(_)));
     let has_general = toks.iter().any(|t| matches!(t, Tok::General));
     let mut sec = Section {
@@ -634,8 +676,25 @@ fn analyze(raw: Raw) -> Section {
 }
 
 /// Parses a whole format code into its sections.
+///
+/// Two whole-section rules (Excel's own `TEXT()`, suite `number_format_golden.tsv`):
+/// - a system date or time tag draws the system pattern, keeping the section's colour and condition;
+/// - a section of only a colour and/or a condition (`[Blue]`, the `[Red]` of `0.00;[Red]`) shows the
+///   number as General, while one with any other tag (`[$-409]`) or any text (`[=0]""`) does not.
 pub(crate) fn parse_sections(code: &str) -> Vec<Section> {
-    split_sections(code).iter().map(|s| analyze(tokenize(s))).collect()
+    split_sections(code)
+        .iter()
+        .map(|s| {
+            let mut raw = tokenize(s);
+            if let Some(system) = raw.system {
+                let pattern = tokenize(system.pattern());
+                raw = Raw { toks: pattern.toks, ..raw };
+            } else if !raw.text && (raw.color.is_some() || raw.cond.is_some()) && !raw.other_tag {
+                raw.toks.push(Tok::General);
+            }
+            analyze(raw)
+        })
+        .collect()
 }
 
 #[cfg(test)]
