@@ -784,6 +784,10 @@ const CURATED: &[(&str, usize)] = &[
     ("formulas.defineName", 2),
     ("formulas.deleteName", 1),
     ("edit.replace", 1),
+    // Get & Transform: queries over this workbook's tables, their steps, refresh.
+    ("data.fromTableRange", 1),
+    ("query.addStep", 1),
+    ("data.refreshAll", 1),
 ];
 
 fn generate(rng: &mut Rng, s: &Session) -> Step {
@@ -928,6 +932,21 @@ fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
             None => json!({"name": "Nope"}),
         },
         "edit.replace" => json!({"what": rng.pick(&["North", "1", "A", "Sales"]), "with": rng.pick(&["South", "2", "B", ""]), "all": true}),
+        "query.addStep" => {
+            let name = wb.queries.get(rng.below(wb.queries.len() + 1)).map_or_else(|| "Nope".to_string(), |q| q.name.clone());
+            let step = rng
+                .pick(&[
+                    json!({"op": "removeTopRows", "count": 1}),
+                    json!({"op": "keepTopRows", "count": 3}),
+                    json!({"op": "removeDuplicates"}),
+                    json!({"op": "addIndexColumn", "start": 1}),
+                    json!({"op": "transpose"}),
+                    json!({"op": "demoteHeaders"}),
+                    json!({"op": "sort", "keys": [{"column": "Column1", "descending": true}]}),
+                ])
+                .clone();
+            json!({"name": name, "step": step})
+        }
         _ => maybe_range(rng),
     }
 }

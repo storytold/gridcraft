@@ -26,6 +26,7 @@ pub mod outline;
 pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
+pub mod power_query;
 pub mod printing;
 pub mod ribbon;
 pub mod selection_glide;
@@ -170,6 +171,10 @@ pub struct Services {
     pub print_native: Option<printing::Submit>,
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// Get Data › From File: pick a data file of a kind (`csv`, `excel`, `xml`, `json`, `access`).
+    pub pick_data_file: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// Get Data › From Folder: pick a folder.
+    pub pick_folder: Option<Box<dyn Fn() -> Option<String>>>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
     /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot
@@ -218,6 +223,10 @@ pub struct SheetApp {
     pub dialog: Option<dialogs::Dialog>,
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
+    /// The Power Query Editor, when open (Data › Get Data › Launch Power Query Editor).
+    pub power_query: Option<power_query::Editor>,
+    /// When scheduled query refreshes ("refresh every N minutes") were last looked for.
+    refresh_checked: f64,
     pub message: Option<(String, String)>,
     pub toast: Option<(String, f64)>,
     /// Dismissible info bar under the ribbon (open-time notices).
@@ -275,6 +284,8 @@ impl SheetApp {
             text_box_editor: None,
             dialog: None,
             backstage: None,
+            power_query: None,
+            refresh_checked: 0.0,
             message: None,
             toast: None,
             notice: None,
@@ -739,6 +750,32 @@ impl SheetApp {
                     dl(&name, &b);
                 }
             }
+            // Get Data's file sources: the file picker, then the Navigator.
+            "importFile" => power_query::import_file(self, &params),
+            "powerQueryEditor" => {
+                let name = params.get("query").and_then(Json::as_str).map(str::to_string);
+                power_query::open_editor(self, name.as_deref(), None);
+            }
+            "refreshStatus" => {
+                let lang = self.ui.language;
+                let status = self.session.run("data.refreshStatus", json!({})).unwrap_or(Json::Null);
+                let lines: Vec<String> = status["queries"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|q| {
+                        let name = q["query"].as_str().unwrap_or("");
+                        match (q["error"].as_str(), q["rows"].as_u64()) {
+                            (Some(e), _) => format!("{name}: {e}"),
+                            (None, Some(n)) => format!("{name}: {}", lang.tr("{n} rows loaded.").replace("{n}", &n.to_string())),
+                            _ => format!("{name}: {}", lang.tr("Not loaded yet.")),
+                        }
+                    })
+                    .collect();
+                let text = if lines.is_empty() { lang.tr("No refresh is in progress.").to_string() } else { lines.join("\n") };
+                self.message = Some((lang.tr("Refresh Status").into(), text));
+            }
             // File › Options (`file.options`) and the File tab itself open the Backstage view.
             "options" => self.open_backstage(backstage::Page::Options),
             "backstage" => {
@@ -788,6 +825,15 @@ impl SheetApp {
     /// most important one (a preserved VBA project outranks, say, a skipped optional part).
     /// Kept deliberately generic: any open-time warning can reach the user this way.
     pub fn show_open_warnings(&mut self, r: &Json) {
+        // Queries or WEBSERVICE calls in the file: Excel's message bar, with Enable Content.
+        if r.get("externalBlocked").and_then(Json::as_bool) == Some(true) {
+            self.notice = Some(Notice {
+                text: self.ui.language.tr("SECURITY WARNING  External data connections have been disabled").into(),
+                kind: NoticeKind::Warning,
+                action: Some((self.ui.language.tr("Enable Content").into(), "cmd:data.enableContent".into())),
+            });
+            return;
+        }
         let Some(list) = r.get("warnings").and_then(Json::as_array) else {
             self.notice = None;
             return;
@@ -1082,6 +1128,22 @@ impl SheetApp {
         if self.session.active().is_none() {
             self.session.new_workbook();
         }
+        self.scheduled_refresh();
+    }
+
+    /// Query Properties › Refresh every N minutes: refreshes the queries that are due (looked for
+    /// about every five seconds; never while external content is disabled).
+    fn scheduled_refresh(&mut self) {
+        let now = now_ms();
+        if now - self.refresh_checked < 5_000.0 || now <= 0.0 {
+            return;
+        }
+        self.refresh_checked = now;
+        for name in gridcraft_engine::cmd::query::due_refreshes(&mut self.session, now) {
+            if let Err(e) = self.run("data.refresh", json!({"query": name})) {
+                self.toast = Some((format!("{name}: {}", clean_error(&e)), now));
+            }
+        }
     }
 
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
@@ -1128,6 +1190,7 @@ impl SheetApp {
                 self.perf.grid_ms = now_ms() - g0;
             });
         }
+        power_query::show_editor(self, &ctx);
         dialogs::show(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);

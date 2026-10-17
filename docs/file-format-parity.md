@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** trivial (formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; previously trivial: XLSX chart sheets are kept on save (#727)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (Excel's Power Query queries refresh from their M formulas) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -65,8 +65,17 @@ and repair-free opening remain unverified.
 
 Excel's Get Data reaches files (Excel, CSV, XML, JSON, PDF, Parquet, folders), databases (SQL
 Server, Access, ODBC, …), web pages, SharePoint and online services, through Power Query.
-GridCraft imports CSV/TSV, JSON and HTML tables only, with no query editor, no connections and no
-refresh. Counted under features (Get & Transform, ~10% ready), not here.
+GridCraft's queries read Text/CSV (delimiter and file origin detected or chosen), Excel workbooks
+(sheets, tables, names), XML (repeating elements), JSON (arrays of records, flattened), folders
+(file list, or files combined), web pages (HTML tables), CSV/JSON/XML over HTTP(S), OData feeds,
+and ODBC data sources including SQL Server and Access (Windows). PDF, Parquet, SharePoint, Azure,
+online services, Analysis Services and OLE DB are listed and disabled. Query definitions are saved
+in GridCraft's own custom XML part (`customXml/gridcraftQueries.xml`), which Excel keeps; Excel's
+own Power Query parts (DataMashup, connections) are passed through unchanged; their queries are
+read from the DataMashup part ([MS-QDEFF]: M formulas, load settings, linked connections and
+tables), listed, and refreshed by GridCraft's M interpreter (the M the Power Query Editor writes;
+functions it lacks are named per query). A query table hanging off a loaded table is dropped on
+save, because the table part is rewritten. Loaded results are ordinary tables. Counted under features (Get & Transform, ~45% ready).
 
 ## Work (76–114 h)
 
@@ -85,6 +94,9 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Excel's Power Query queries refresh from their M formulas (DataMashup kept byte for byte) |
+| 2026-10-14 | minor | Excel's Power Query queries are read from the DataMashup part and listed read-only; the part stays byte for byte |
+| 2026-10-14 | minor | Get & Transform sources listed; query definitions round-trip in a GridCraft custom XML part beside Excel's kept DataMashup |
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |

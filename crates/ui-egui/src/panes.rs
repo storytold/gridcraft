@@ -7,6 +7,28 @@ use crate::SheetApp;
 use crate::theme::{self, Tokens};
 
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
+    // Data › Queries & Connections is engine state too (`data.queriesConnections`).
+    if app.session.queries_pane {
+        let t = Tokens::get(ui.ctx());
+        let max = (ui.available_width() / 2.0).max(300.0);
+        egui::Panel::right("queries_pane")
+            .default_size(300.0)
+            .max_size(max)
+            .resizable(true)
+            .frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(10))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(app.ui.language.tr("Queries & Connections")).font(theme::ui_bold(15.0)));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if crate::widgets::icon_button(ui, crate::icons::Icon::Close, t.text_dim, "Close", vec2(22.0, 22.0)).clicked() {
+                            app.run_or_alert("data.queriesConnections", json!({"on": false}));
+                        }
+                    });
+                });
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| crate::power_query::pane(app, ui));
+            });
+    }
     // The Comments pane is engine state (`review.showComments`, so agents can drive it); the other
     // panes are UI state. One pane shows at a time: opening another one closes Comments.
     if app.grid.pane.as_deref() == Some("comments") {

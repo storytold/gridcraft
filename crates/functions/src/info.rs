@@ -321,8 +321,57 @@ fn encodeurl(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     Ok(Value::from(out))
 }
 
-fn value_err(_a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Err(CellError::Value)
+/// WEBSERVICE(url): the text an http or https URL returns. The host makes the request (each URL
+/// once per recalculation, with a timeout); no host, external content disabled, a failed
+/// request, or a response longer than a cell holds give `#VALUE!`, as in Excel.
+fn webservice(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let url = text(a, 0)?;
+    let url = url.trim();
+    let lower = url.to_ascii_lowercase();
+    if url.is_empty() || url.chars().count() > 2048 || !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err(CellError::Value);
+    }
+    c.web_service(url).map(Value::from)
+}
+
+/// FILTERXML(xml, xpath): the values an XPath selects, one per row (a single value as such).
+/// Numeric text comes back as numbers. Invalid XML, an invalid XPath, a result that isn't a
+/// node-set, or no match give `#VALUE!`.
+fn filterxml(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+    let xml = text(a, 0)?;
+    let xpath = text(a, 1)?;
+    let doc = crate::xpath::Doc::parse(&xml).ok_or(CellError::Value)?;
+    let crate::xpath::XValue::Nodes(nodes) = crate::xpath::evaluate(&doc, &xpath).ok_or(CellError::Value)? else {
+        return Err(CellError::Value);
+    };
+    let mut values: Vec<Value> = nodes.iter().take(1_048_576).map(|n| xml_value(doc.string_value(*n))).collect();
+    match values.len() {
+        0 => Err(CellError::Value),
+        1 => Ok(values.pop().unwrap_or(Value::Error(CellError::Value))),
+        _ => Ok(Value::Array(std::sync::Arc::new(gridcraft_core::Array::column(values)))),
+    }
+}
+
+/// A selected node's text as a cell value: plain decimal numbers become numbers.
+fn xml_value(s: String) -> Value {
+    let t = s.trim();
+    let body = t.strip_prefix(['-', '+']).unwrap_or(t);
+    let (mantissa, exponent) = match body.find(['e', 'E']) {
+        Some(i) => (body.get(..i).unwrap_or(""), body.get(i + 1..)),
+        None => (body, None),
+    };
+    let digits_ok = !mantissa.is_empty()
+        && mantissa != "."
+        && mantissa.chars().all(|c| c.is_ascii_digit() || c == '.')
+        && mantissa.matches('.').count() <= 1
+        && exponent.is_none_or(|e| {
+            let e = e.strip_prefix(['-', '+']).unwrap_or(e);
+            !e.is_empty() && e.chars().all(|c| c.is_ascii_digit())
+        });
+    match t.parse::<f64>() {
+        Ok(n) if digits_ok && n.is_finite() => Value::number(n),
+        _ => Value::from(s.chars().take(32_767).collect::<String>()),
+    }
 }
 
 pub(crate) fn specs() -> Vec<FnSpec> {
@@ -419,8 +468,17 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             hyperlink
         ),
         f!("ENCODEURL", 1, 1, Web, S, "ENCODEURL(text)", "Percent-encodes text for use in a URL.", encodeurl),
-        f!("WEBSERVICE", 1, 1, Web, S, "WEBSERVICE(url)", "Fetches data from a web service (not available; returns #VALUE!).", value_err),
-        f!("FILTERXML", 2, 2, Web, S, "FILTERXML(xml, xpath)", "Extracts data from XML with an XPath (not available; returns #VALUE!).", value_err),
+        f!(
+            "WEBSERVICE",
+            1,
+            1,
+            Web,
+            S,
+            "WEBSERVICE(url)",
+            "Returns the text an http or https web service gives back (#VALUE! while external content is disabled).",
+            webservice
+        ),
+        f!("FILTERXML", 2, 2, Web, S, "FILTERXML(xml, xpath)", "Returns the values an XPath selects from XML text, one per row.", filterxml),
         f!(
             "CUBEKPIMEMBER",
             3,
@@ -597,9 +655,43 @@ mod tests {
         is_text(ev("HYPERLINK", vec![t("http://x.com"), t("Click")]), "Click");
         close(ev("HYPERLINK", vec![t("http://x.com"), n(5.0)]), 5.0);
         is_text(ev("ENCODEURL", vec![t("a b&c/é")]), "a%20b%26c%2F%C3%A9");
+        // No web access in this context: WEBSERVICE gives #VALUE!, as it does when blocked.
         is_err(ev("WEBSERVICE", vec![t("http://x")]), CellError::Value);
-        is_err(ev("FILTERXML", vec![t("<a/>"), t("//a")]), CellError::Value);
+        is_err(ev("FILTERXML", vec![t("<a/>"), t("//b")]), CellError::Value);
         is_err(ev("CUBEVALUE", vec![t("conn")]), CellError::NA);
         is_err(ev("CUBESETCOUNT", vec![t("set")]), CellError::NA);
+    }
+
+    #[test]
+    fn filterxml_like_excel() {
+        // The documentation's pattern: attributes of repeated elements of an API response, one per
+        // row (a recent-changes feed with `rc` elements and their `title` attributes).
+        let feed = r#"<?xml version="1.0"?><api><query><recentchanges>
+            <rc type="edit" title="Rust (language)" revid="101"/>
+            <rc type="new" title="Spreadsheet" revid="102"/>
+            <rc type="edit" title="XPath" revid="103"/>
+        </recentchanges></query></api>"#;
+        let r = ev("FILTERXML", vec![t(feed), t("//rc/@title")]);
+        assert_eq!(rows_of(&r), vec![vec![Value::from("Rust (language)")], vec![Value::from("Spreadsheet")], vec![Value::from("XPath")]]);
+        // Numeric text comes back as numbers; a single match is a single value.
+        let r = ev("FILTERXML", vec![t(feed), t("//rc/@revid")]);
+        assert_eq!(rows_of(&r), vec![vec![nv(101.0)], vec![nv(102.0)], vec![nv(103.0)]]);
+        is_text(ev("FILTERXML", vec![t(feed), t("//rc[@type='new']/@title")]), "Spreadsheet");
+        close(ev("FILTERXML", vec![t(feed), t("//rc[last()]/@revid")]), 103.0);
+        // Element text, positions and nested paths.
+        let doc = "<data><a><b>1</b><b>2</b></a><a><b>3.5</b><c>x</c></a></data>";
+        let r = ev("FILTERXML", vec![t(doc), t("//b")]);
+        assert_eq!(rows_of(&r), vec![vec![nv(1.0)], vec![nv(2.0)], vec![nv(3.5)]]);
+        close(ev("FILTERXML", vec![t(doc), t("/data/a[2]/b")]), 3.5);
+        is_text(ev("FILTERXML", vec![t(doc), t("//a[b>3]/c")]), "x");
+        is_text(ev("FILTERXML", vec![t("<p>1,5</p>"), t("/p")]), "1,5");
+        // Invalid XML, an invalid XPath, no match, or a non-node result: #VALUE!.
+        for (xml, xpath) in [("<a><b>", "//b"), ("<a/>", "//"), ("<a/>", "//b"), ("<a><b/></a>", "count(//b)"), ("", "//a")] {
+            is_err(ev("FILTERXML", vec![t(xml), t(xpath)]), CellError::Value);
+        }
+        // WEBSERVICE refuses what isn't an http(s) URL before asking the host.
+        for bad in ["", "ftp://x", "file:///c:/x", &format!("https://x.com/{}", "a".repeat(2100))] {
+            is_err(ev("WEBSERVICE", vec![t(bad)]), CellError::Value);
+        }
     }
 }

@@ -823,3 +823,45 @@ fn file_version_and_calc_features_survive_a_save() {
     let plain = Unpacked::new(&write_xlsx(&gridcraft_model::Workbook::new()).unwrap()).text("xl/workbook.xml");
     assert!(!plain.contains("fileVersion") && !plain.contains("extLst"), "{plain}");
 }
+
+#[test]
+fn gridcraft_queries_round_trip_beside_kept_custom_xml() {
+    use gridcraft_model::query::{LoadTo, Query, QuerySource, QueryStep, StepOp};
+    let (mut wb, _) = read_xlsx(&rich_package()).unwrap();
+    let mut q = Query::new("Sales & \"more\"", QuerySource::Web { url: "https://example.com/a?b=1&c=<2>".into(), item: Some("Table 1".into()) });
+    q.steps = vec![QueryStep { name: "Promoted Headers".into(), op: StepOp::PromoteHeaders }];
+    q.load.to = LoadTo::ConnectionOnly;
+    q.refresh.on_open = true;
+    wb.queries = vec![q.clone(), Query::new("Blank", QuerySource::Blank)];
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    // Excel's own custom XML is kept byte for byte; GridCraft's part sits beside it.
+    assert_eq!(u.find(CUSTOM_XML.as_bytes()).len(), 1);
+    let part = u.text("customXml/gridcraftQueries.xml");
+    assert!(part.contains("urn:gridcraft:queries:1") && part.contains("&amp;c=&lt;2&gt;"), "{part}");
+    assert!(u.rels("customXml/gridcraftQueries.xml").iter().any(|r| r.1.ends_with("/customXmlProps")));
+    // Read back: the queries are in the model, not kept a second time.
+    let (back, rep) = read_xlsx(&out).unwrap();
+    assert_eq!(back.queries, wb.queries, "{:?}", rep.warnings);
+    let kept = back.preserved.as_ref().unwrap();
+    assert!(!kept.parts.iter().any(|p| p.name.contains("gridcraftQueries")));
+    assert!(kept.parts.iter().any(|p| p.data.as_ref() == CUSTOM_XML.as_bytes()));
+    // Saving again writes one query part; a workbook without queries writes none.
+    let again = Unpacked::new(&write_xlsx(&back).unwrap());
+    assert_eq!(again.parts.keys().filter(|k| k.contains("gridcraftQueries.xml") && !k.ends_with(".rels")).count(), 1);
+    let mut none = back.clone();
+    none.queries.clear();
+    let plain = Unpacked::new(&write_xlsx(&none).unwrap());
+    assert!(!plain.parts.keys().any(|k| k.contains("gridcraftQueries")));
+    // A damaged query part is dropped with a warning; the workbook still opens.
+    let mut parts = u.parts.clone();
+    parts.insert(
+        "customXml/gridcraftQueries.xml".into(),
+        br#"<gridcraftQueries xmlns="urn:gridcraft:queries:1">[{"name":</gridcraftQueries>"#.to_vec(),
+    );
+    let files: Vec<(&str, &[u8])> = parts.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+    let (broken, rep) = read_xlsx(&make_zip(&files)).unwrap();
+    assert!(broken.queries.is_empty());
+    assert!(rep.warnings.iter().any(|w| w.contains("query definitions")), "{:?}", rep.warnings);
+}

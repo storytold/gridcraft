@@ -162,15 +162,6 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("pivot.refresh", "Refresh", ["PivotTable Analyze", "Data"], Some("Alt+F5"), "{pivot?, replace?}", has_doc, refresh),
         cmd!(
-            "data.refreshAll",
-            "Refresh All",
-            ["Data", "Queries & Connections"],
-            Some("Cmd+Alt+F5"),
-            "{replace?} refreshes every PivotTable → {refreshed, errors}",
-            has_doc,
-            refresh_all
-        ),
-        cmd!(
             "pivot.changeSource",
             "Change Data Source",
             ["PivotTable Analyze", "Data"],
@@ -1294,24 +1285,25 @@ fn refresh(s: &mut Session, p: &Json) -> Result<Json> {
     update(s, p, |_, src, _| Ok(json!({"records": src.rows.len()})))
 }
 
-fn refresh_all(s: &mut Session, p: &Json) -> Result<Json> {
-    let replace = bool_param(p, "replace").unwrap_or(false);
-    edit(s, |cx| {
-        let mut n = 0;
-        let mut errors = vec![];
-        for si in 0..cx.wb.sheets.len() {
-            let count = cx.wb.sheet(si).map(|sh| sh.pivots.len()).unwrap_or(0);
-            for pi in 0..count {
-                let name = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).map(|p| p.name.clone()).unwrap_or_default();
-                match pv::refresh(&mut cx.wb, si, pi, replace) {
-                    Ok(_) => n += 1,
-                    Err(e) => errors.push(json!({"pivot": name, "error": e})),
-                }
+/// Refreshes every PivotTable of the workbook being edited (the last part of Refresh All, after
+/// the queries): how many were refreshed, and the errors of those that couldn't be.
+pub(crate) fn refresh_pivots(cx: &mut Ctx, replace: bool) -> (usize, Vec<Json>) {
+    let mut n = 0;
+    let mut errors = vec![];
+    for si in 0..cx.wb.sheets.len() {
+        let count = cx.wb.sheet(si).map(|sh| sh.pivots.len()).unwrap_or(0);
+        for pi in 0..count {
+            let name = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).map(|p| p.name.clone()).unwrap_or_default();
+            match pv::refresh(&mut cx.wb, si, pi, replace) {
+                Ok(_) => n += 1,
+                Err(e) => errors.push(json!({"pivot": name, "error": e})),
             }
         }
-        cx.structural = n > 0;
-        Ok(json!({"refreshed": n, "errors": errors}))
-    })
+    }
+    if n > 0 {
+        cx.structural = true;
+    }
+    (n, errors)
 }
 
 fn change_source(s: &mut Session, p: &Json) -> Result<Json> {

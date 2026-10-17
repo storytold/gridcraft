@@ -260,3 +260,132 @@ pub(crate) fn encrypt_standard(plain: &[u8], password: &str) -> (Vec<u8>, Vec<u8
     info.extend(encrypt_ecb(&key, &Hash::Sha1.digest(&[&VERIFIER])));
     (info, package(plain.len(), encrypt_ecb(&key, plain)))
 }
+
+// ---------------------------------------------------------------- Power Query packages
+
+const NS_MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const NS_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const NS_PKG_REL: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+
+fn block(out: &mut Vec<u8>, data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(data);
+}
+
+fn zip(parts: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::Write;
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, data) in parts {
+        z.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(data).unwrap();
+    }
+    z.finish().unwrap().into_inner()
+}
+
+/// The `DataMashup` binary stream ([MS-QDEFF]): version, the package parts (with
+/// `Formulas/Section1.m` = `section`), permissions, the metadata document and empty permission
+/// bindings.
+pub fn mashup_stream(section: &str, metadata: &str) -> Vec<u8> {
+    let package = zip(&[
+        ("[Content_Types].xml", br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="text/xml"/><Default Extension="m" ContentType="application/x-ms-m"/></Types>"#),
+        ("Config/Package.xml", br#"<?xml version="1.0"?><Package xmlns="http://schemas.microsoft.com/DataMashup"><Version>1.0.0</Version></Package>"#),
+        ("Formulas/Section1.m", section.as_bytes()),
+    ]);
+    let mut meta = vec![];
+    meta.extend_from_slice(&0u32.to_le_bytes());
+    block(&mut meta, metadata.as_bytes());
+    block(&mut meta, &[]);
+    let mut out = vec![];
+    out.extend_from_slice(&0u32.to_le_bytes());
+    block(&mut out, &package);
+    block(&mut out, br#"<?xml version="1.0"?><PermissionList/>"#);
+    block(&mut out, &meta);
+    block(&mut out, &[]);
+    out
+}
+
+/// The custom XML part holding a mashup stream, as Excel writes it: UTF-16 with a byte order mark.
+pub fn mashup_part(stream: &[u8]) -> Vec<u8> {
+    let text = format!(
+        r#"<?xml version="1.0" encoding="utf-16"?><DataMashup xmlns="http://schemas.microsoft.com/DataMashup">{}</DataMashup>"#,
+        base64_encode(stream)
+    );
+    let mut out = vec![0xFF, 0xFE];
+    out.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+    out
+}
+
+/// A one-sheet workbook (sheet `Data`) as Excel saves one with a Power Query query: the query
+/// `Sales` (its M is `sales_formula`) loads into the query table `Sales` at A1:B3 (`Region`,
+/// `Amount`; North 5, South 7 from the last refresh) through connection 1, and the ordinary table
+/// `Raw` at D1:E4 holds North 10, South 20, East 30.
+pub fn power_query_workbook(sales_formula: &str) -> Vec<u8> {
+    let section = format!("section Section1;\r\n\r\nshared Sales = {sales_formula};\r\n");
+    let metadata = r#"<?xml version="1.0" encoding="utf-8"?><LocalPackageMetadataFile><Items><Item><ItemLocation><ItemType>Formula</ItemType><ItemPath>Section1/Sales</ItemPath></ItemLocation><StableEntries><Entry Type="FillEnabled" Value="l1" /><Entry Type="FillTarget" Value="sSales" /><Entry Type="FillCount" Value="l2" /></StableEntries></Item></Items></LocalPackageMetadataFile>"#;
+    let mashup = mashup_part(&mashup_stream(&section, metadata));
+    let cell = |r: &str, v: &str| match v.parse::<f64>() {
+        Ok(_) => format!(r#"<c r="{r}"><v>{v}</v></c>"#),
+        Err(_) => format!(r#"<c r="{r}" t="inlineStr"><is><t>{v}</t></is></c>"#),
+    };
+    let rows = [
+        ["Region", "Amount", "", "Region", "Amount"],
+        ["North", "5", "", "North", "10"],
+        ["South", "7", "", "South", "20"],
+        ["", "", "", "East", "30"],
+    ];
+    let mut data = String::new();
+    for (i, row) in rows.iter().enumerate() {
+        data.push_str(&format!(r#"<row r="{}">"#, i + 1));
+        for (j, v) in row.iter().enumerate() {
+            if !v.is_empty() {
+                data.push_str(&cell(&format!("{}{}", ["A", "B", "C", "D", "E"][j], i + 1), v));
+            }
+        }
+        data.push_str("</row>");
+    }
+    let sheet = format!(
+        r#"<?xml version="1.0"?><worksheet xmlns="{NS_MAIN}" xmlns:r="{NS_REL}"><sheetData>{data}</sheetData><tableParts count="2"><tablePart r:id="rId1"/><tablePart r:id="rId2"/></tableParts></worksheet>"#
+    );
+    let sheet_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="{NS_PKG_REL}"><Relationship Id="rId1" Type="{NS_REL}/table" Target="../tables/table1.xml"/><Relationship Id="rId2" Type="{NS_REL}/table" Target="../tables/table2.xml"/></Relationships>"#
+    );
+    let sales = format!(
+        r#"<?xml version="1.0"?><table xmlns="{NS_MAIN}" id="1" name="Sales" displayName="Sales" ref="A1:B3" tableType="queryTable" totalsRowShown="0"><autoFilter ref="A1:B3"/><tableColumns count="2"><tableColumn id="1" uniqueName="1" name="Region" queryTableFieldId="1"/><tableColumn id="2" uniqueName="2" name="Amount" queryTableFieldId="2"/></tableColumns><tableStyleInfo name="TableStyleMedium7" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>"#
+    );
+    let sales_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="{NS_PKG_REL}"><Relationship Id="rId1" Type="{NS_REL}/queryTable" Target="../queryTables/queryTable1.xml"/></Relationships>"#
+    );
+    let raw = format!(
+        r#"<?xml version="1.0"?><table xmlns="{NS_MAIN}" id="2" name="Raw" displayName="Raw" ref="D1:E4" totalsRowShown="0"><autoFilter ref="D1:E4"/><tableColumns count="2"><tableColumn id="1" name="Region"/><tableColumn id="2" name="Amount"/></tableColumns><tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>"#
+    );
+    let query_table = format!(
+        r#"<?xml version="1.0"?><queryTable xmlns="{NS_MAIN}" name="ExternalData_1" connectionId="1" autoFormatId="16" applyNumberFormats="0" applyBorderFormats="0" applyFontFormats="0" applyPatternFormats="0" applyAlignmentFormats="0" applyWidthHeightFormats="0"><queryTableRefresh nextId="3"><queryTableFields count="2"><queryTableField id="1" name="Region" tableColumnId="1"/><queryTableField id="2" name="Amount" tableColumnId="2"/></queryTableFields></queryTableRefresh></queryTable>"#
+    );
+    let connections = format!(
+        r#"<?xml version="1.0"?><connections xmlns="{NS_MAIN}"><connection id="1" keepAlive="1" name="Query - Sales" type="5" refreshedVersion="8" background="1" saveData="1"><dbPr connection="Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location=Sales;Extended Properties=&quot;&quot;" command="SELECT * FROM [Sales]"/></connection></connections>"#
+    );
+    let workbook = format!(
+        r#"<?xml version="1.0"?><workbook xmlns="{NS_MAIN}" xmlns:r="{NS_REL}"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#
+    );
+    let wb_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="{NS_PKG_REL}"><Relationship Id="rId1" Type="{NS_REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId8" Type="{NS_REL}/customXml" Target="../customXml/item1.xml"/><Relationship Id="rId9" Type="{NS_REL}/connections" Target="connections.xml"/></Relationships>"#
+    );
+    let content_types = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/></Types>"#;
+    let root_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="{NS_PKG_REL}"><Relationship Id="rId1" Type="{NS_REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>"#
+    );
+    zip(&[
+        ("[Content_Types].xml", content_types.as_bytes()),
+        ("_rels/.rels", root_rels.as_bytes()),
+        ("xl/workbook.xml", workbook.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels.as_bytes()),
+        ("xl/tables/table1.xml", sales.as_bytes()),
+        ("xl/tables/_rels/table1.xml.rels", sales_rels.as_bytes()),
+        ("xl/tables/table2.xml", raw.as_bytes()),
+        ("xl/queryTables/queryTable1.xml", query_table.as_bytes()),
+        ("xl/connections.xml", connections.as_bytes()),
+        ("customXml/item1.xml", &mashup),
+    ])
+}

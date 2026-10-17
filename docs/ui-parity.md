@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (horizontal scrollbar in the sheet tab bar, #840) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (Power Query Editor, Get Data menus, Queries & Connections pane, Security Warning bar) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -135,9 +135,11 @@ text, so AltGr symbols (e.g. `~` on a German layout) never trigger a shortcut.
 
 Format Cells, Insert Function/Formula Builder, Find and Replace, Go To and Go To Special, Sort,
 Name Manager, Data Validation, Paste Special, Conditional Formatting manager, Page Setup, Goal
-Seek, Scenario Manager, Data Analysis, Forecast Sheet and others exist. Missing or partial: Options,
-Solver, Power Query editor, Insert Object, Equation editor, Protect/Allow Edit Ranges,
-Workbook Links, Accessibility checker.
+Seek, Scenario Manager, Data Analysis, Forecast Sheet, the Power Query Editor (Home, Transform,
+Add Column and View tabs, Applied Steps, Query Settings, Advanced Editor view), Navigator, Import
+Data, Query Properties, Data Source Settings and others exist; the Queries & Connections pane and
+the Security Warning bar (Enable Content) do too. Missing or partial: Options, Solver, Insert
+Object, Equation editor, Protect/Allow Edit Ranges, Workbook Links, Accessibility checker.
 
 ## Accessibility
 
@@ -161,6 +163,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Data tab: Get & Transform Data and Queries & Connections groups with Excel's Get Data menu; Power Query Editor, Navigator and related dialogs; Queries & Connections pane; Security Warning bar |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
 | 2026-10-12 | minor | Ctrl+wheel zoom steps along a ladder of percentages about 20% apart that never skips 100%, gliding to each step with animations on, so a notch out undoes a notch in (it drifted: 100 → 122 → 101); Excel steps 15 points, see decisions.md |

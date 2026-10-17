@@ -4,7 +4,7 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 274 / 290 commands implemented (94.5%).**
+**Overall: 294 / 309 commands implemented (95.1%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
@@ -14,7 +14,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | Draw | 4 | 4 | 100% |
 | Page Layout | 23 | 23 | 100% |
 | Formulas | 23 | 23 | 100% |
-| Data | 23 | 28 | 82% |
+| Data | 43 | 47 | 91% |
 | Review | 15 | 18 | 83% |
 | View | 20 | 20 | 100% |
 | Automate | 3 | 3 | 100% |
@@ -237,15 +237,35 @@ Implemented:
 - `formulas.calculateNow` Calculate Now (Calculation)
 - `formulas.calculateSheet` Calculate Sheet (Calculation)
 
-## Data (23 / 28, 82%)
+## Data (43 / 47, 91%)
 
 Implemented:
 
 - `data.getData` Get Data (Get & Transform Data)
 - `data.fromTextCsv` From Text/CSV (Get & Transform Data)
+- `data.fromWeb` From Web (Get & Transform Data)
 - `data.fromTableRange` From Table/Range (Get & Transform Data)
+- `data.recentSources` Recent Sources (Get & Transform Data)
+- `data.existingConnections` Existing Connections (Get & Transform Data)
+- `data.fromExcelWorkbook` From Excel Workbook (Get & Transform Data)
+- `data.fromXml` From XML (Get & Transform Data)
+- `data.fromJson` From JSON (Get & Transform Data)
+- `data.fromFolder` From Folder (Get & Transform Data)
+- `data.fromSqlServer` From SQL Server Database (Get & Transform Data)
+- `data.fromAccess` From Microsoft Access Database (Get & Transform Data)
+- `data.fromODataFeed` From OData Feed (Get & Transform Data)
+- `data.fromOdbc` From ODBC (Get & Transform Data)
+- `data.blankQuery` Blank Query (Get & Transform Data)
+- `data.mergeQueries` Combine Queries: Merge (Get & Transform Data)
+- `data.appendQueries` Combine Queries: Append (Get & Transform Data)
+- `data.powerQueryEditor` Launch Power Query Editor (Get & Transform Data)
+- `data.dataSourceSettings` Data Source Settings (Get & Transform Data)
+- `data.queryOptions` Query Options (Get & Transform Data)
 - `data.refreshAll` Refresh All (Queries & Connections)
+- `data.refresh` Refresh (Queries & Connections)
+- `data.connectionProperties` Connection Properties (Queries & Connections)
 - `data.queriesConnections` Queries & Connections (Queries & Connections)
+- `data.properties` Properties (Queries & Connections)
 - `data.advancedFilter` Advanced (Sort & Filter)
 - `data.textToColumns` Text to Columns (Data Tools)
 - `data.flashFill` Flash Fill (Data Tools)
@@ -267,7 +287,6 @@ Implemented:
 
 Missing:
 
-- `data.fromWeb` From Web (Get & Transform Data)
 - `data.stocks` Stocks (Data Types)
 - `data.geography` Geography (Data Types)
 - `data.relationships` Relationships (Data Tools)

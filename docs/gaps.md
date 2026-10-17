@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (§12: the M functions written by hand in custom columns) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -102,8 +102,35 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   100–165 h including #5. [localization-parity.md](localization-parity.md)
 
 ### 12. Get & Transform, external data, data model (F)
-- No Power Query editor, connections, refresh, From Web/database/folder sources, relationships or
-  data model (`data.fromWeb`, `data.relationships` missing). **Estimate:** 60–100 h.
+- Landed: queries with typed applied steps, the Power Query Editor and Navigator, Text/CSV, Excel
+  workbook, XML, JSON, folder, web, OData and (Windows) ODBC/SQL Server/Access sources, Merge and
+  Append, Load To, Refresh All with refresh on open and every N minutes, the Security Warning and
+  Trust Center setting, WEBSERVICE and FILTERXML.
+- Landed: Excel's own Power Query queries (the DataMashup part, [MS-QDEFF]) are listed in
+  Queries & Connections with their M formula, load target and connection (`query.listExcel`), and
+  refresh in GridCraft (Refresh, Refresh All, from a cell of their table): an M interpreter
+  (`engine/query/m`: lexer, parser, lazy evaluator) runs the M the Power Query Editor writes,
+  about 60 `Table.*` functions (Change Type with locale, filters, sort, group, merge and expand,
+  pivot and unpivot, split, add column…), the sources (current workbook, Excel workbooks,
+  Text/CSV, web pages, JSON, folders, OData, ODBC, Enter Data) and the scalar functions those
+  steps use. Errors stay in their cells, as in Power Query. What a query needs that isn't
+  supported yet is named (`unsupported`); their parts are kept byte for byte on save.
+- Landed: the M functions people write by hand in custom columns (about 300 library functions in
+  all): `Text.*` (padding, ranges, positions, `Text.Format`, character ranges like `{"0".."9"}`),
+  `Date.*`/`DateTime.*`/`Time.*`/`Duration.*` (adding months, start and end of periods, week and
+  day names in six languages, `Date.ToText` with .NET formats, the `Date.IsIn…` filters),
+  `Number.ToText` with standard and custom formats, `Int64.From` and the other conversions,
+  `Value.Is`/`Value.Type`, and more of `List.*` (`Accumulate`, `Generate`, `Union`, `Zip`…).
+- Missing: the data model and relationships (`data.relationships`); Excel's queries can't be
+  edited; the rest of the M library (records and tables as values beyond the basics, comparer
+  functions in sort, `#shared`, `Sql.Database` and other connectors, privacy levels and query
+  folding); the default culture is en-US; a table's saved sort isn't reapplied after a
+  refresh (its filter and calculated columns are kept); a table an Excel query loads into loses
+  its query table link on save (the table is rewritten); PDF, SharePoint, Azure, Power Platform,
+  online-service, Analysis Services and OLE DB sources are listed and disabled; no credentials or
+  privacy levels; background refresh runs in the foreground; ODBC only on Windows; the editor's
+  column filter lists values of the preview rows only. **Estimate:** 30–60 h, and 100–170 h for
+  the rest of the M library.
 
 ### 13. Analysis tools: Solver, Analysis ToolPak, Forecast Sheet (F)
 - `data.solver`, `data.analysisToolPak` missing. Forecast Sheet (`data.forecastSheet`) and the
@@ -168,6 +195,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | §12: hand-written M functions (Text, Date, Time, Duration, Number formats, conversions, List extras; ~300 in all); the rest of the M library 100–170 h |
+| 2026-10-15 | minor | §12: Excel's Power Query queries refresh through an M interpreter (the M the Power Query Editor writes); the rest of the M library, editing M and the query table link on save remain |
+| 2026-10-14 | minor | §12: Excel's Power Query queries (DataMashup) are listed read-only with their M formula; refresh and the query table link on save remain |
+| 2026-10-14 | minor | §12: Get & Transform landed (queries, editor, sources, refresh, trust; WEBSERVICE and FILTERXML); remaining is the data model, Excel's M queries and cloud sources (30–60 h) |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
 | 2026-10-12 | minor | Page Layout view: dragging margins on the rulers (#792) removed from the §14 remainder |
 | 2026-10-12 | minor | §13: Forecast Sheet Forecast Start (hindcast) landed (#785) |

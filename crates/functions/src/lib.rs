@@ -75,6 +75,7 @@ pub(crate) mod special;
 pub(crate) mod stat;
 pub(crate) mod text;
 pub(crate) mod util;
+pub(crate) mod xpath;
 
 pub use ets::Timeline;
 pub use stat::{aggregate_values, aggregate_values_k};
@@ -110,6 +111,12 @@ pub trait Ctx {
     /// criteria didn't come from a reference.
     fn computed_criterion(&mut self, _row: usize, _col: usize, _db: &Array, _record: usize) -> Option<bool> {
         None
+    }
+    /// WEBSERVICE: the text the URL returns (an HTTP GET made by the host, cached per
+    /// recalculation). Hosts without web access, or with external content disabled, give
+    /// `#VALUE!`.
+    fn web_service(&mut self, _url: &str) -> Result<String, gridcraft_core::CellError> {
+        Err(gridcraft_core::CellError::Value)
     }
 }
 

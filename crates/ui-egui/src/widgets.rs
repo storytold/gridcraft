@@ -76,6 +76,52 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
     resp.on_hover_text(tr(ui, tip))
 }
 
+/// Large split button (Refresh All): the icon half runs the default action, the label half with
+/// its arrow opens the menu. Returns (icon half clicked, label half response).
+pub fn big_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (bool, Response) {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::ui_font(11.5);
+    let label = tr(ui, label);
+    let lines: Vec<_> = label.split('\n').map(|line| ui.painter().layout_no_wrap(line.to_string(), font.clone(), t.text)).collect();
+    let arrow_size = 10.0;
+    let text_w =
+        lines.iter().enumerate().map(|(i, line)| line.size().x + if i + 1 == lines.len() { 4.0 + arrow_size } else { 0.0 }).fold(0.0, f32::max);
+    let w = (text_w + 12.0).max(44.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(w, 72.0), Sense::hover());
+    let top = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + 38.0));
+    let bottom = Rect::from_min_max(pos2(rect.left(), top.bottom()), rect.max);
+    let main = ui.interact(top, ui.id().with((tip, "split_main")), Sense::click());
+    let menu = ui.interact(bottom, ui.id().with((tip, "split_menu")), Sense::click());
+    for (r, part) in [(&main, top), (&menu, bottom)] {
+        if r.is_pointer_button_down_on() {
+            ui.painter().rect_filled(part, 5.0, t.pressed);
+        } else if r.hovered() {
+            ui.painter().rect_filled(part, 5.0, t.hover);
+        }
+    }
+    if main.hovered() || menu.hovered() {
+        ui.painter().rect_stroke(rect, 5.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text);
+    for (i, line) in lines.iter().enumerate() {
+        let has_arrow = i + 1 == lines.len();
+        let line_w = line.size().x + if has_arrow { 4.0 + arrow_size } else { 0.0 };
+        let left = rect.center().x - line_w / 2.0;
+        let y = rect.top() + 46.0 + i as f32 * 13.0;
+        ui.painter().galley(pos2(left, y - line.size().y / 2.0), line.clone(), t.text);
+        if has_arrow {
+            icons::paint(
+                ui.painter(),
+                Rect::from_center_size(pos2(left + line_w - arrow_size / 2.0, y + 1.0), vec2(arrow_size, arrow_size)),
+                Icon::Chevron,
+                t.text_dim,
+            );
+        }
+    }
+    let tip = tr(ui, tip).to_string();
+    (main.on_hover_text(tip.clone()).clicked(), menu.on_hover_text(tip))
+}
+
 /// Small ribbon button: 16px icon with optional label to the right.
 pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
     let t = Tokens::get(ui.ctx());
@@ -355,8 +401,15 @@ pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
             });
         });
     });
-    if let Some((_, dialog)) = action {
-        app.open_dialog(&dialog, serde_json::json!({}));
+    if let Some((_, target)) = action {
+        // `cmd:` actions run a command (Enable Content); others open a dialog.
+        match target.strip_prefix("cmd:") {
+            Some(id) => {
+                app.run_or_alert(id, serde_json::json!({}));
+                app.notice = None;
+            }
+            None => app.open_dialog(&target, serde_json::json!({})),
+        }
     }
     if dismiss {
         app.notice = None;

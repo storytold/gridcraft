@@ -8,6 +8,7 @@ mod fixtures;
 mod ink_roundtrip;
 mod literal_category_roundtrip;
 mod malformed;
+mod mashup_tests;
 mod ods_tests;
 mod passthrough_tests;
 mod pivot_tests;

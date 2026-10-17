@@ -163,14 +163,22 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
     r
 }
 
-fn open(path: &str) -> Result<Session, String> {
+/// A session with native data access (web and ODBC sources, WEBSERVICE).
+fn session() -> Session {
     let mut s = Session::new();
+    #[cfg(not(target_arch = "wasm32"))]
+    gridcraft_external::install(&mut s);
+    s
+}
+
+fn open(path: &str) -> Result<Session, String> {
+    let mut s = session();
     exec(&mut s, "file.open", json!({"path": path}))?;
     Ok(s)
 }
 
 fn blank() -> Session {
-    let mut s = Session::new();
+    let mut s = session();
     s.new_workbook();
     s
 }
@@ -388,7 +396,7 @@ fn run(args: &[String]) -> Result<(), String> {
         (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
         (Some(p), None) => open(p)?,
         (None, Some(name)) => {
-            let mut s = Session::new();
+            let mut s = session();
             exec(&mut s, "file.new", json!({"sample": name}))?;
             s
         }
@@ -510,7 +518,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
             let session = match (a.opt("in"), a.opt("sample")) {
                 (Some(p), _) => open(p)?,
                 (None, Some(name)) => {
-                    let mut s = Session::new();
+                    let mut s = session();
                     exec(&mut s, "file.new", json!({"sample": name}))?;
                     s
                 }

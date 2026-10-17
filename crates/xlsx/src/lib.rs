@@ -20,10 +20,12 @@ mod csv;
 mod drawing;
 mod feature_bags;
 mod fmla;
+mod mashup;
 mod ods;
 mod package;
 mod passthrough;
 mod pivot;
+mod queries;
 mod read;
 mod richdata;
 mod sheet_read;
@@ -45,11 +47,18 @@ use gridcraft_core::DateSystem;
 use gridcraft_model::Workbook;
 
 pub use crypto::{DecryptError, check_encryption, decrypt};
-pub use csv::{MAX_CSV_BYTES, read_csv, write_csv, write_csv_limited};
+pub use csv::{MAX_CSV_BYTES, csv_records, decode_text, read_csv, sniff_delimiter, write_csv, write_csv_limited};
 pub use ods::read_ods;
 pub use passthrough::rebase_links;
 pub use xls::read_xls;
 pub use xlsb::read_xlsb;
+pub use xml::El as XmlElement;
+
+/// Parses an XML document into a tree of elements (namespace prefixes dropped, nesting capped at
+/// 256 levels): what Get & Transform's From XML reads.
+pub fn parse_xml(bytes: &[u8]) -> Result<XmlElement, IoError> {
+    xml::parse(bytes)
+}
 
 /// Errors from reading or writing files.
 #[derive(Debug, thiserror::Error)]

@@ -19,6 +19,8 @@ gridcraft-formula = { workspace = true }
 gridcraft-model = { workspace = true }
 thiserror = { workspace = true }
 quick-xml = { workspace = true }
+# GridCraft's query definitions are JSON inside their custom XML part.
+serde_json = { workspace = true }
 zip = { workspace = true }
 aes = { workspace = true }
 sha1 = { workspace = true }

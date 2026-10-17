@@ -1765,9 +1765,8 @@
    "seq": "AFA",
    "kind": "command",
    "target": "data.fromAccess",
-   "pending": true,
    "excel": "Get External Data: From Access",
-   "note": "gap #12 Get & Transform; reserved until the command lands"
+   "note": ""
   },
   {
    "seq": "AFC",
@@ -1803,18 +1802,16 @@
   {
    "seq": "AFT",
    "kind": "command",
-   "target": "data.fromText",
-   "pending": true,
+   "target": "data.fromTextCsv",
    "excel": "Get External Data: From Text",
-   "note": "gap #12; reserved until the command lands"
+   "note": "Legacy Get External Data: From Text; GridCraft imports it as a query (From Text/CSV)"
   },
   {
    "seq": "AFW",
    "kind": "command",
    "target": "data.fromWeb",
-   "pending": true,
    "excel": "Get External Data: From Web",
-   "note": "reserved until the command lands"
+   "note": ""
   },
   {
    "seq": "AG",
@@ -1875,9 +1872,9 @@
   {
    "seq": "AP1",
    "kind": "command",
-   "target": "file.properties",
+   "target": "data.properties",
    "excel": "Properties",
-   "note": ""
+   "note": "Properties (Queries & Connections): the query table at the active cell"
   },
   {
    "seq": "APN",
@@ -1888,18 +1885,16 @@
   {
    "seq": "APND",
    "kind": "command",
-   "target": "data.fromDatabase",
-   "pending": true,
+   "target": "data.fromMicrosoftQuery",
    "excel": "From Database (Microsoft Query)",
-   "note": "gap #12; reserved until the command lands"
+   "note": "Microsoft Query is disabled with its reason"
   },
   {
    "seq": "APNE",
    "kind": "command",
    "target": "data.powerQueryEditor",
-   "pending": true,
    "excel": "Launch Power Query Editor",
-   "note": "gap #12; reserved until the command lands"
+   "note": ""
   },
   {
    "seq": "APNG",
@@ -1911,42 +1906,37 @@
   {
    "seq": "APNH",
    "kind": "command",
-   "target": "data.fromHtml",
-   "pending": true,
+   "target": "data.fromWeb",
    "excel": "From HTML",
-   "note": "gap #12; reserved until the command lands"
+   "note": "Legacy From HTML; GridCraft reads HTML tables with From Web"
   },
   {
    "seq": "APNL",
    "kind": "command",
    "target": "data.fromSqlServer",
-   "pending": true,
    "excel": "From SQL Server ODBC",
-   "note": "gap #12; reserved until the command lands"
+   "note": ""
   },
   {
    "seq": "APNS",
    "kind": "command",
    "target": "data.dataSourceSettings",
-   "pending": true,
    "excel": "Data Source Settings",
-   "note": "gap #12; reserved until the command lands"
+   "note": ""
   },
   {
    "seq": "APNT",
    "kind": "command",
-   "target": "data.fromTextLegacy",
-   "pending": true,
+   "target": "data.fromTextCsv",
    "excel": "From Text (Legacy)",
-   "note": "gap #12; reserved until the command lands"
+   "note": "Legacy From Text; GridCraft imports it as a query (From Text/CSV)"
   },
   {
    "seq": "APR",
    "kind": "command",
    "target": "data.recentSources",
-   "pending": true,
    "excel": "Recent Sources",
-   "note": "gap #12; reserved until the command lands"
+   "note": ""
   },
   {
    "seq": "APS",
@@ -1958,10 +1948,9 @@
   {
    "seq": "APT",
    "kind": "command",
-   "target": "data.fromTable",
-   "pending": true,
+   "target": "data.fromTableRange",
    "excel": "From Table (query)",
-   "note": "gap #12; reserved until the command lands"
+   "note": ""
   },
   {
    "seq": "AQ",
@@ -1986,32 +1975,29 @@
    "seq": "ARC",
    "kind": "command",
    "target": "data.cancelRefresh",
-   "pending": true,
    "excel": "Cancel Refresh",
-   "note": "gap #12; reserved until the command lands"
+   "note": ""
   },
   {
    "seq": "ARO",
    "kind": "command",
    "target": "data.connectionProperties",
-   "pending": true,
    "excel": "Connection Properties",
-   "note": "gap #12; reserved until the command lands"
+   "note": ""
   },
   {
    "seq": "ARR",
    "kind": "command",
-   "target": "pivot.refresh",
+   "target": "data.refresh",
    "excel": "Refresh",
-   "note": ""
+   "note": "Refresh (Refresh All menu): the query table or PivotTable at the active cell"
   },
   {
    "seq": "ARS",
    "kind": "command",
    "target": "data.refreshStatus",
-   "pending": true,
    "excel": "Refresh Status",
-   "note": "gap #12; reserved until the command lands"
+   "note": ""
   },
   {
    "seq": "ASA",
@@ -2120,9 +2106,8 @@
    "seq": "AX",
    "kind": "command",
    "target": "data.existingConnections",
-   "pending": true,
    "excel": "Existing Connections",
-   "note": "gap #12; reserved until the command lands"
+   "note": ""
   },
   {
    "seq": "AY",

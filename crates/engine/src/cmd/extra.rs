@@ -152,35 +152,6 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("table.resize", "Resize Table", ["Table Design", "Properties"], None, "{table?, range: \"A1:F20\"}", has_doc, table_resize),
         cmd!("table.removeDuplicates", "Remove Duplicates", ["Table Design", "Tools"], None, "{table?, columns?}", has_doc, |s, p| s
             .execute("data.removeDuplicates", p.clone())),
-        // Get & Transform
-        cmd!(
-            "data.fromTextCsv",
-            "From Text/CSV",
-            ["Data", "Get & Transform Data"],
-            None,
-            "{path | text, delimiter?: \",\", sheet?: new sheet name} → imports into a new sheet as a table",
-            has_doc,
-            from_csv
-        ),
-        cmd!(
-            "data.getData",
-            "Get Data",
-            ["Data", "Get & Transform Data"],
-            None,
-            "{path | text} (CSV/TSV/JSON array of objects) → new sheet table",
-            has_doc,
-            from_csv
-        ),
-        cmd!(
-            "data.fromTableRange",
-            "From Table/Range",
-            ["Data", "Get & Transform Data"],
-            None,
-            "{range?} → copies the table/range to a new sheet as a table",
-            has_doc,
-            from_table_range
-        ),
-        cmd!(query "data.queriesConnections", "Queries & Connections", ["Data", "Queries & Connections"], None, "{} → imported tables", has_doc, queries),
         // Automate
         cmd!(noundo "automate.recordActions", "Record Actions", ["Automate", "Scripting Tools"], None, "{stop?: bool, name?: script name when stopping}", has_doc, record),
         cmd!(
@@ -782,6 +753,8 @@ fn new_window(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?.clone();
     let mut copy = crate::DocState::new((*d.wb).clone(), d.path.clone(), format!("{}:2", d.display_title()));
     copy.selection = d.selection.clone();
+    // A second window on a workbook whose external content is disabled doesn't enable it.
+    copy.external_blocked = d.external_blocked;
     let i = s.add_document(copy);
     Ok(json!({"index": i}))
 }
@@ -852,94 +825,6 @@ fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
         cx.structural = true;
         Ok(Json::Null)
     })
-}
-
-fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
-    let bytes = if let Some(t) = str_param(p, "text") {
-        t.as_bytes().to_vec()
-    } else if let Some(path) = str_param(p, "path") {
-        crate::io::read_file(path)?
-    } else {
-        s.ui_requests.push(crate::UiRequest::Dialog("open".into(), json!({})));
-        return ok();
-    };
-    let text = String::from_utf8_lossy(&bytes);
-    // JSON array of objects → rows.
-    let rows: Vec<Vec<Json>> =
-        if text.trim_start().starts_with('[') {
-            let arr: Vec<Json> = serde_json::from_str(&text).map_err(|e| bad("data.getData", e.to_string()))?;
-            let mut keys: Vec<String> = Vec::new();
-            for o in &arr {
-                if let Some(m) = o.as_object() {
-                    for k in m.keys() {
-                        if !keys.contains(k) {
-                            keys.push(k.clone());
-                        }
-                    }
-                }
-            }
-            let mut out = vec![keys.iter().map(|k| json!(k)).collect::<Vec<_>>()];
-            for o in &arr {
-                out.push(keys.iter().map(|k| o.get(k).cloned().unwrap_or(Json::Null)).collect());
-            }
-            out
-        } else {
-            let delim = str_param(p, "delimiter")
-                .and_then(|d| d.chars().next())
-                .unwrap_or(if text.lines().next().is_some_and(|l| l.contains('\t')) { '\t' } else { ',' });
-            let opts = gridcraft_xlsx::CsvOptions { delimiter: delim as u8, ..Default::default() };
-            let wb = gridcraft_xlsx::read_csv(&bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
-            let sh = wb.sheet(0).ok_or(EngineError::NoDocument)?;
-            let Some(u) = sh.used_range() else { return Err(EngineError::Other("The file is empty.".into())) };
-            (u.start.row..=u.end.row)
-                .map(|r| {
-                    (u.start.col..=u.end.col)
-                        .map(|c| match sh.value(CellRef::new(r, c)) {
-                            Value::Number(n) => json!(n),
-                            Value::Bool(b) => json!(b),
-                            Value::Empty => Json::Null,
-                            v => json!(v.display()),
-                        })
-                        .collect()
-                })
-                .collect()
-        };
-    if rows.is_empty() || rows.len() > 1_048_576 {
-        return Err(EngineError::Other("Nothing to import.".into()));
-    }
-    let name = str_param(p, "sheet").map(str::to_string).or_else(|| {
-        str_param(p, "path").and_then(|x| std::path::Path::new(x).file_stem().and_then(|f| f.to_str()).map(|f| f.chars().take(31).collect()))
-    });
-    let r = s.execute("home.insertSheet", json!({"name": name})).or_else(|_| s.execute("home.insertSheet", json!({})))?;
-    let w = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
-    s.execute("range.setValues", json!({"range": "A1", "values": rows}))?;
-    let range = RangeRef::new(CellRef::new(0, 0), CellRef::new(rows.len() as u32 - 1, w as u32 - 1));
-    let _ = s.execute("insert.table", json!({"range": range.a1(), "header": true}));
-    let _ = s.execute("home.autofitColumnWidth", json!({"cols": RangeRef::cols(0, w as u32 - 1).a1()}));
-    Ok(json!({"sheet": r["name"], "rows": rows.len(), "cols": w}))
-}
-
-fn from_table_range(s: &mut Session, p: &Json) -> Result<Json> {
-    let r = target_range(s, p)?;
-    let d = s.doc()?;
-    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
-    let r = if r.is_single() { crate::selection::current_region(sh, r.start) } else { r };
-    let text = crate::display::range_text(&d.wb, d.wb.active_sheet, r);
-    from_csv(s, &json!({"text": text, "delimiter": "\t", "sheet": format!("{} (2)", sh.name).chars().take(31).collect::<String>()}))
-}
-
-fn queries(s: &mut Session, _: &Json) -> Result<Json> {
-    let d = s.doc()?;
-    Ok(Json::Array(
-        d.wb.sheets
-            .iter()
-            .flat_map(|sh| {
-                sh.tables
-                    .iter()
-                    .map(move |t| json!({"name": t.name, "sheet": sh.name, "range": t.range.a1(), "rows": t.range.height().saturating_sub(1)}))
-            })
-            .collect(),
-    ))
 }
 
 fn record(s: &mut Session, p: &Json) -> Result<Json> {
