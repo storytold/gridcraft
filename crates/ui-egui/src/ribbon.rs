@@ -184,7 +184,13 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         let active = app.ui.ribbon_tab == tab;
                         let contextual = ctx_tabs.contains(&tab);
                         let font = theme::ui_font(13.5);
-                        let label = app.ui.language.tr(tab);
+                        // Some languages name the Insert tab differently from the Insert command
+                        // (Polish «Wstawianie» vs «Wstaw»); a `Tab|` key wins where a catalog has one.
+                        let tab_key = format!("Tab|{tab}");
+                        let label = match app.ui.language.tr(&tab_key) {
+                            tab_label if tab_label != tab => tab_label,
+                            _ => app.ui.language.tr(tab),
+                        };
                         let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
                         let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
                         if resp.hovered() && !active {

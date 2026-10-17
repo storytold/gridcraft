@@ -101,11 +101,50 @@ const SPANISH_HELP: &[(&str, &str, &str)] = &[
     ("FALSE", "FALSO()", "Devuelve el valor lógico FALSO."),
 ];
 
+// Polish help for the most used functions; the rest of the Polish table keeps English help.
+const POLISH_HELP: &[(&str, &str, &str)] = &[
+    ("SUM", "SUMA(liczba1; [liczba2]; ...)", "Dodaje liczby."),
+    ("AVERAGE", "ŚREDNIA(liczba1; [liczba2]; ...)", "Zwraca średnią arytmetyczną liczb."),
+    (
+        "IF",
+        "JEŻELI(test_logiczny; wartość_jeżeli_prawda; [wartość_jeżeli_fałsz])",
+        "Zwraca jedną wartość, jeśli warunek jest spełniony, a inną, jeśli nie.",
+    ),
+    ("IFERROR", "JEŻELI.BŁĄD(wartość; wartość_jeśli_błąd)", "Zwraca podaną wartość, jeśli wyrażenie daje błąd."),
+    ("COUNT", "ILE.LICZB(wartość1; [wartość2]; ...)", "Zlicza komórki zawierające liczby."),
+    ("COUNTA", "ILE.NIEPUSTYCH(wartość1; [wartość2]; ...)", "Zlicza niepuste komórki."),
+    ("SUMIF", "SUMA.JEŻELI(zakres; kryteria; [suma_zakres])", "Dodaje komórki spełniające kryterium."),
+    ("COUNTIF", "LICZ.JEŻELI(zakres; kryteria)", "Zlicza komórki spełniające kryterium."),
+    (
+        "VLOOKUP",
+        "WYSZUKAJ.PIONOWO(szukana_wartość; tabela_tablica; nr_kolumny; [przeszukiwany_zakres])",
+        "Wyszukuje wartość w pierwszej kolumnie tabeli.",
+    ),
+    (
+        "XLOOKUP",
+        "X.WYSZUKAJ(szukana_wartość; szukana_tablica; zwracana_tablica; [jeżeli_nie_znaleziono])",
+        "Wyszukuje wartość w zakresie i zwraca odpowiadający jej element.",
+    ),
+    ("MAX", "MAKS(liczba1; [liczba2]; ...)", "Zwraca największą wartość."),
+    ("MIN", "MIN(liczba1; [liczba2]; ...)", "Zwraca najmniejszą wartość."),
+    ("ROUND", "ZAOKR(liczba; liczba_cyfr)", "Zaokrągla liczbę do podanej liczby cyfr."),
+    ("TODAY", "DZIŚ()", "Zwraca bieżącą datę."),
+    ("NOW", "TERAZ()", "Zwraca bieżącą datę i godzinę."),
+    ("TRUE", "PRAWDA()", "Zwraca wartość logiczną PRAWDA."),
+    ("FALSE", "FAŁSZ()", "Zwraca wartość logiczną FAŁSZ."),
+];
+
+fn help(locale: FormulaLocale) -> &'static [(&'static str, &'static str, &'static str)] {
+    match locale {
+        FormulaLocale::En => &[],
+        FormulaLocale::Es => SPANISH_HELP,
+        FormulaLocale::Pl => POLISH_HELP,
+    }
+}
+
 pub(crate) fn signature(name: &str, locale: FormulaLocale) -> Option<String> {
     let canonical = locale.canonical_name(name);
-    if locale == FormulaLocale::Es
-        && let Some((_, signature, _)) = SPANISH_HELP.iter().find(|(name, ..)| *name == canonical)
-    {
+    if let Some((_, signature, _)) = help(locale).iter().find(|(name, ..)| *name == canonical) {
         return Some((*signature).into());
     }
     crate::formula_bar::function_signature(canonical).map(|s| s.replace(',', &locale.list_separator().to_string()))
@@ -113,9 +152,7 @@ pub(crate) fn signature(name: &str, locale: FormulaLocale) -> Option<String> {
 
 pub(crate) fn description(name: &str, locale: FormulaLocale) -> Option<String> {
     let canonical = locale.canonical_name(name);
-    if locale == FormulaLocale::Es
-        && let Some((_, _, description)) = SPANISH_HELP.iter().find(|(name, ..)| *name == canonical)
-    {
+    if let Some((_, _, description)) = help(locale).iter().find(|(name, ..)| *name == canonical) {
         return Some((*description).into());
     }
     crate::formula_bar::function_description(canonical)

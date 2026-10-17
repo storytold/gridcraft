@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Format Cells dialog looks its labels up in the catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (Polish catalog and formula locale) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -56,7 +56,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 
-Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only.
+Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only; Polish (pl), 900 labels (~41%: every key the other catalogs translate, dialogs included) with Polish formula entry (103 function names, PRAWDA/FAŁSZ, `;` argument and `` array-column separators, decimal comma). Polish needs native review of the array-column separator and of grid number formats, which stay en-US.
 
 **Total:** catalog work 10–20 h + languages 92–144 h ≈ **100–165 h**. Parallelizes almost fully
 once the catalog covers dialogs and commands. **Needs a human:** native-speaker review of every
@@ -78,6 +78,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | Polish catalog (`i18n/pl.rs`, 900 entries, ~41%); `pl` locale tags resolve to Polish; `FormulaLocale::Pl` with 103 Excel-Polish function names, PRAWDA/FAŁSZ, `;` separators and decimal comma; alias matching folds non-ASCII case (`jeżeli` = `JEŻELI`) |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |
