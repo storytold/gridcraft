@@ -66,6 +66,15 @@ pub trait Host {
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
         range.iter().map(|c| self.cell_value(sheet, c)).collect()
     }
+    /// The parsed formula of a defined name visible from `scope_sheet`, with the sheet its
+    /// unqualified references refer to: `Some((expr, scope))` for a name that parses, `Some((None,
+    /// _))`-equivalent `None` inside for one that doesn't (it evaluates to `#NAME?`), and `None`
+    /// for no such name. The default parses on every call; a recalc pass caches per name, since a
+    /// formula column calling a LAMBDA name re-parses that name once per cell otherwise.
+    fn name_expr(&mut self, name: &str, scope_sheet: usize) -> Option<(Option<Arc<Expr>>, Option<usize>)> {
+        let def = self.workbook().name(name, scope_sheet)?;
+        Some((gridcraft_formula::parse(&def.formula).ok().map(Arc::new), def.scope))
+    }
     /// The sheet's used range (`Sheet::used_range`, which walks every stored row). Hosts that
     /// keep the workbook unchanged while evaluating can remember it.
     fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
@@ -259,38 +268,35 @@ impl<'h> Evaluator<'h> {
         if let Some((_, v)) = self.env.iter().rev().find(|(k, _)| k.eq_ignore_ascii_case(n)) {
             return v.clone();
         }
-        let wb = self.host.workbook();
         // Sheet-qualified `Sheet1!Name`.
         let (scope_sheet, bare) = match n.split_once('!') {
-            Some((s, b)) => match wb.sheet_index(s.trim_matches('\'')) {
+            Some((s, b)) => match self.host.workbook().sheet_index(s.trim_matches('\'')) {
                 Some(i) => (i, b),
                 None => return err(CellError::Name),
             },
             None => (self.sheet, n),
         };
-        if let Some(def) = wb.name(bare, scope_sheet) {
-            let text = def.formula.clone();
-            let scope = def.scope.unwrap_or(self.sheet);
-            return match gridcraft_formula::parse(&text) {
-                Ok(expr) => {
-                    // Relative references in a name are relative to A1: used here, they move by
-                    // this cell's offset from it.
-                    let expr = if gridcraft_formula::adjust::has_relative_refs(&expr) {
-                        gridcraft_formula::adjust::shift_relative_wrapping(expr, self.at.row as i64, self.at.col as i64)
-                    } else {
-                        expr
-                    };
-                    let saved = self.sheet;
-                    // Unqualified references in a name refer to the scope sheet.
-                    self.sheet = scope;
-                    let r = self.eval(&expr);
-                    self.sheet = saved;
-                    r
-                }
-                Err(_) => err(CellError::Name),
+        if let Some((parsed, def_scope)) = self.host.name_expr(bare, scope_sheet) {
+            let scope = def_scope.unwrap_or(self.sheet);
+            let Some(expr) = parsed else { return err(CellError::Name) };
+            // Relative references in a name are relative to A1: used here, they move by this
+            // cell's offset from it. Only then is the shared parse copied.
+            let shifted;
+            let expr: &Expr = if gridcraft_formula::adjust::has_relative_refs(&expr) {
+                shifted = gridcraft_formula::adjust::shift_relative_wrapping((*expr).clone(), self.at.row as i64, self.at.col as i64);
+                &shifted
+            } else {
+                &expr
             };
+            let saved = self.sheet;
+            // Unqualified references in a name refer to the scope sheet.
+            self.sheet = scope;
+            let r = self.eval(expr);
+            self.sheet = saved;
+            return r;
         }
         // A table name alone means its data body.
+        let wb = self.host.workbook();
         if let Some((si, ti)) = wb.table(bare)
             && let Some(t) = wb.sheet(si).and_then(|s| s.tables.get(ti))
             && let Some(d) = t.data_range()
@@ -741,15 +747,26 @@ impl<'h> Evaluator<'h> {
                 let v = self.arg_val(args, 0).unwrap_or_default();
                 let f = self.arg_val(args, 1).unwrap_or_default();
                 let sys = self.host.workbook().date_system;
+                // One format code for a whole range of values is the usual shape
+                // (`TEXT(A2:A2000, "0")`): convert the code to text once, not per element.
+                let scalar_code: Option<Result<String, CellError>> = if matches!(f, Value::Array(_)) { None } else { Some(f.to_text()) };
                 let one = |v: &Value, f: &Value| -> Value {
                     if let Value::Error(e) = v {
                         return Value::Error(*e);
                     }
-                    let code = match f.to_text() {
-                        Ok(c) => c,
-                        Err(e) => return Value::Error(e),
+                    let owned;
+                    let code: &str = match &scalar_code {
+                        Some(Ok(c)) => c.as_str(),
+                        Some(Err(e)) => return Value::Error(*e),
+                        None => match f.to_text() {
+                            Ok(c) => {
+                                owned = c;
+                                owned.as_str()
+                            }
+                            Err(e) => return Value::Error(e),
+                        },
                     };
-                    match gridcraft_numfmt::text_function(v, &code, sys) {
+                    match gridcraft_numfmt::text_function(v, code, sys) {
                         Ok(s) => Value::text(s),
                         Err(e) => Value::Error(e),
                     }
@@ -1732,11 +1749,30 @@ pub fn resized_sum_range(sum: RangeRef, height: u32, width: u32) -> RangeRef {
 }
 
 /// Collects the static references of an expression with their sheets resolved; `dynamic` is
-/// set when the formula uses INDIRECT/OFFSET/names/tables whose targets can change.
+/// set when the formula uses INDIRECT/OFFSET/tables (or a name that can't be resolved now) whose
+/// targets can change between recalcs.
+///
+/// Defined names are resolved here, not treated as dynamic: a name holding a range contributes
+/// that range, a name holding a LAMBDA contributes the references inside its body (its
+/// parameters, and LET variables, are bound names, not lookups), names referring to names follow
+/// the chain to a bounded depth. A column of cells calling one LAMBDA name is then an ordinary
+/// static dependency, re-evaluated when its inputs change and only then. Changing a name's
+/// definition is a structural edit (full rebuild), so the resolution can't go stale. Names with
+/// relative references (evaluated relative to the using cell), unknown names, unparsable names
+/// and chains deeper than the bound stay dynamic.
 pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
     let mut out = Vec::new();
     let mut dynamic = false;
-    let push = |out: &mut Vec<Area>, r: &Reference, range: RangeRef| match &r.sheet {
+    let mut seen: Vec<(String, usize)> = Vec::new();
+    collect_precedents(wb, sheet, e, &mut Vec::new(), &mut out, &mut dynamic, 0, &mut seen);
+    (out, dynamic)
+}
+
+/// Names referring to names are followed this many levels before the formula is called dynamic.
+const NAME_DEPTH: usize = 8;
+
+fn push_area(wb: &Workbook, sheet: usize, out: &mut Vec<Area>, r: &Reference, range: RangeRef) {
+    match &r.sheet {
         SheetSel::Current => out.push(Area { sheet, range }),
         SheetSel::Named(n) => {
             if let Some(i) = wb.sheet_index(n) {
@@ -1750,31 +1786,86 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
                 }
             }
         }
-    };
-    e.walk(&mut |x| match x {
-        Expr::Ref(r) => push(&mut out, r, r.range()),
-        // The cells SUMIF/AVERAGEIF really read from the sum range (see `resized_sum_range`); when
-        // the criteria range's size isn't known statically, recalculate the formula every time.
-        Expr::Call(n, args) if resizes_sum_range(n, args.len()) => match (args.first(), args.get(2)) {
-            (Some(Expr::Ref(c)), Some(Expr::Ref(s))) => {
-                let (crit, sum) = (c.range(), s.range());
-                push(&mut out, s, resized_sum_range(sum, crit.height(), crit.width()));
+    }
+}
+
+/// A LET/LAMBDA parameter as written: `[x]` for an optional one is bound as `x`.
+fn bound_name(n: &str) -> String {
+    n.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase()
+}
+
+/// The precedents a defined name contributes when used from `sheet`.
+#[allow(clippy::too_many_arguments)]
+fn name_precedents(wb: &Workbook, sheet: usize, n: &str, out: &mut Vec<Area>, dynamic: &mut bool, depth: usize, seen: &mut Vec<(String, usize)>) {
+    if depth >= NAME_DEPTH {
+        *dynamic = true;
+        return;
+    }
+    let (scope_sheet, bare) = match n.split_once('!') {
+        Some((s, b)) => match wb.sheet_index(s.trim_matches('\'')) {
+            Some(i) => (i, b),
+            None => {
+                *dynamic = true;
+                return;
             }
-            (_, Some(Expr::Number(_) | Expr::Text(_) | Expr::Bool(_) | Expr::Error(_) | Expr::Array(_) | Expr::Missing)) => {}
-            _ => dynamic = true,
         },
-        Expr::Call(n, _)
-            if matches!(n.as_str(), "INDIRECT" | "OFFSET" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO") =>
-        {
-            dynamic = true
+        None => (sheet, n),
+    };
+    let Some(def) = wb.name(bare, scope_sheet) else {
+        // Not a defined name: a table name (data body known only at evaluation) or a typo
+        // (#NAME?). Either way, evaluate every time.
+        *dynamic = true;
+        return;
+    };
+    let key = (def.name.to_ascii_lowercase(), def.scope.unwrap_or(usize::MAX));
+    if seen.contains(&key) {
+        return; // a cycle adds nothing new; evaluation reports it
+    }
+    let Ok(expr) = gridcraft_formula::parse(&def.formula) else {
+        *dynamic = true;
+        return;
+    };
+    if gridcraft_formula::adjust::has_relative_refs(&expr) {
+        *dynamic = true;
+        return;
+    }
+    seen.push(key);
+    let name_sheet = def.scope.unwrap_or(sheet);
+    collect_precedents(wb, name_sheet, &expr, &mut Vec::new(), out, dynamic, depth + 1, seen);
+    seen.pop();
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_precedents(
+    wb: &Workbook,
+    sheet: usize,
+    e: &Expr,
+    bound: &mut Vec<String>,
+    out: &mut Vec<Area>,
+    dynamic: &mut bool,
+    depth: usize,
+    seen: &mut Vec<(String, usize)>,
+) {
+    match e {
+        Expr::Ref(r) => push_area(wb, sheet, out, r, r.range()),
+        Expr::Name(n) => {
+            if !bound.contains(&bound_name(n)) {
+                name_precedents(wb, sheet, n, out, dynamic, depth, seen);
+            }
         }
-        Expr::Name(_) | Expr::Struct(_) => dynamic = true,
-        Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !is_special(n) => dynamic = true,
+        Expr::Struct(_) => *dynamic = true,
+        Expr::Array(rows) => {
+            for x in rows.iter().flatten() {
+                collect_precedents(wb, sheet, x, bound, out, dynamic, depth, seen);
+            }
+        }
+        Expr::Unary(_, a) | Expr::Paren(a) => collect_precedents(wb, sheet, a, bound, out, dynamic, depth, seen),
         // A range ending in a function's result (`A1:INDEX(B1:B9,n)`) covers the cells between
         // the references inside it, not only those references.
         Expr::Binary(BinOp::Range, a, b) if !matches!((&**a, &**b), (Expr::Ref(_), Expr::Ref(_))) => {
-            let mut inner = precedents(wb, sheet, a).0;
-            inner.extend(precedents(wb, sheet, b).0);
+            let mut inner = Vec::new();
+            collect_precedents(wb, sheet, a, bound, &mut inner, dynamic, depth, seen);
+            collect_precedents(wb, sheet, b, bound, &mut inner, dynamic, depth, seen);
             let mut boxes: Vec<Area> = Vec::new();
             for area in inner {
                 match boxes.iter_mut().find(|x| x.sheet == area.sheet) {
@@ -1784,9 +1875,77 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
             }
             out.extend(boxes);
         }
-        _ => {}
-    });
-    (out, dynamic)
+        Expr::Binary(_, a, b) => {
+            collect_precedents(wb, sheet, a, bound, out, dynamic, depth, seen);
+            collect_precedents(wb, sheet, b, bound, out, dynamic, depth, seen);
+        }
+        Expr::Invoke(f, args) => {
+            collect_precedents(wb, sheet, f, bound, out, dynamic, depth, seen);
+            for a in args {
+                collect_precedents(wb, sheet, a, bound, out, dynamic, depth, seen);
+            }
+        }
+        Expr::Call(n, args) => {
+            // The cells SUMIF/AVERAGEIF really read from the sum range (see `resized_sum_range`);
+            // when the criteria range's size isn't known statically, recalculate every time.
+            if resizes_sum_range(n, args.len()) {
+                match (args.first(), args.get(2)) {
+                    (Some(Expr::Ref(c)), Some(Expr::Ref(s))) => {
+                        let (crit, sum) = (c.range(), s.range());
+                        push_area(wb, sheet, out, s, resized_sum_range(sum, crit.height(), crit.width()));
+                    }
+                    (_, Some(Expr::Number(_) | Expr::Text(_) | Expr::Bool(_) | Expr::Error(_) | Expr::Array(_) | Expr::Missing)) => {}
+                    _ => *dynamic = true,
+                }
+            }
+            if matches!(n.as_str(), "INDIRECT" | "OFFSET" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO") {
+                *dynamic = true;
+            }
+            match n.as_str() {
+                // Parameters are bound inside the body only; the body is the last argument.
+                "LAMBDA" if !args.is_empty() => {
+                    let added = args.len() - 1;
+                    for p in &args[..added] {
+                        if let Expr::Name(pn) = p {
+                            bound.push(bound_name(pn));
+                        }
+                    }
+                    if let Some(body) = args.last() {
+                        collect_precedents(wb, sheet, body, bound, out, dynamic, depth, seen);
+                    }
+                    bound.truncate(bound.len().saturating_sub(added));
+                }
+                // Each LET variable is bound for the values after it and for the result.
+                "LET" if args.len() >= 3 => {
+                    let mut added = 0;
+                    for pair in args[..args.len() - 1].chunks(2) {
+                        if let [Expr::Name(vn), value] = pair {
+                            collect_precedents(wb, sheet, value, bound, out, dynamic, depth, seen);
+                            bound.push(bound_name(vn));
+                            added += 1;
+                        } else if let [other] = pair {
+                            collect_precedents(wb, sheet, other, bound, out, dynamic, depth, seen);
+                        }
+                    }
+                    if let Some(result) = args.last() {
+                        collect_precedents(wb, sheet, result, bound, out, dynamic, depth, seen);
+                    }
+                    bound.truncate(bound.len().saturating_sub(added));
+                }
+                _ => {
+                    for a in args {
+                        collect_precedents(wb, sheet, a, bound, out, dynamic, depth, seen);
+                    }
+                    // Not a built-in: a defined name holding a LAMBDA (its body's references are
+                    // this cell's precedents too), or unknown (#NAME?, evaluated every time).
+                    if gridcraft_functions::lookup(n).is_none() && !is_special(n) && !bound.contains(&bound_name(n)) {
+                        name_precedents(wb, sheet, n, out, dynamic, depth, seen);
+                    }
+                }
+            }
+        }
+        Expr::Number(_) | Expr::Text(_) | Expr::Bool(_) | Expr::Error(_) | Expr::Missing => {}
+    }
 }
 
 fn is_special(n: &str) -> bool {

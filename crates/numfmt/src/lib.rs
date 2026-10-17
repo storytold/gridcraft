@@ -417,6 +417,13 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
     if !n.is_finite() {
         return Err(CellError::Num);
     }
+    // The commonest key-normalising call, `TEXT(id, "0")` over a whole lookup column, is an
+    // integer through the one-digit code: its answer is the integer's decimal digits, so it skips
+    // the general renderer (which builds the result piece by piece per element). Anything with a
+    // fraction, a sign-and-zero case or a magnitude the renderer handles differently falls through.
+    if code == "0" && n.fract() == 0.0 && n.abs() < 1e15 && !(n == 0.0 && n.is_sign_negative()) {
+        return Ok(format!("{}", n as i64));
+    }
     let (f, overflow) = fmt.format_number(n, sys);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }

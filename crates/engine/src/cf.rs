@@ -109,19 +109,33 @@ impl CfCache {
             sh.cond_formats.iter().enumerate().filter(|(_, cf)| cf.ranges.iter().any(|r| r.contains(c))).collect();
         rules.sort_by_key(|(_, cf)| cf.priority);
         let v = sh.value(c);
+        // Statistics over the rule's whole range cost a pass over every cell in it (a row-wide
+        // rule on a large sheet: a million cells). Only the rule kinds that read them pay for
+        // them, and they are borrowed, never copied per cell.
+        let no_stats = RuleStats::default();
         for (idx, cf) in rules {
             let first = cf.ranges.first().map(|r| r.start).unwrap_or(c);
-            let st = self
-                .stats
-                .entry(idx)
-                .or_insert_with(|| {
+            let needs_stats = matches!(
+                cf.rule,
+                CfRule::Duplicate { .. }
+                    | CfRule::Unique { .. }
+                    | CfRule::Top10 { .. }
+                    | CfRule::AboveAverage { .. }
+                    | CfRule::ColorScale { .. }
+                    | CfRule::DataBar { .. }
+                    | CfRule::IconSet { .. }
+            );
+            let st: &RuleStats = if needs_stats {
+                self.stats.entry(idx).or_insert_with(|| {
                     let (sorted, counts) = numbers_in(sh, &cf.ranges);
                     let n = sorted.len().max(1) as f64;
                     let avg = sorted.iter().sum::<f64>() / n;
                     let std = (sorted.iter().map(|x| (x - avg).powi(2)).sum::<f64>() / n).sqrt();
                     RuleStats { sorted, avg, std, counts }
                 })
-                .clone();
+            } else {
+                &no_stats
+            };
             let text = v.display();
             let matched_style: Option<&Style> = match &cf.rule {
                 CfRule::CellIs { op, a, b, style } => {
@@ -218,7 +232,7 @@ impl CfCache {
                     if let Some(n) = v.as_f64() {
                         let pts: Vec<(f64, [u8; 3])> = stops
                             .iter()
-                            .map(|(k, col)| (threshold(wb, sheet, c, &st, k), col.resolve(&wb.theme).unwrap_or([255, 255, 255])))
+                            .map(|(k, col)| (threshold(wb, sheet, c, st, k), col.resolve(&wb.theme).unwrap_or([255, 255, 255])))
                             .collect();
                         let rgb = match pts.as_slice() {
                             [(a, ca), (b, cb)] => lerp(*ca, *cb, if b > a { (n - a) / (b - a) } else { 0.0 }),
@@ -240,8 +254,8 @@ impl CfCache {
                 }
                 CfRule::DataBar { min, max, color, gradient, show_value } => {
                     if let Some(n) = v.as_f64() {
-                        let lo = threshold(wb, sheet, c, &st, min);
-                        let hi = threshold(wb, sheet, c, &st, max);
+                        let lo = threshold(wb, sheet, c, st, min);
+                        let hi = threshold(wb, sheet, c, st, max);
                         let lo = if lo > 0.0 { 0.0 } else { lo };
                         let frac = if hi > lo { ((n - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 1.0 };
                         if out.bar.is_none() {
@@ -270,7 +284,7 @@ impl CfCache {
                                 defaults.get(1..).unwrap_or_default()
                             }
                         };
-                        let cuts: Vec<f64> = lower.iter().map(|t| threshold(wb, sheet, c, &st, t)).collect();
+                        let cuts: Vec<f64> = lower.iter().map(|t| threshold(wb, sheet, c, st, t)).collect();
                         let mut idx = cuts.iter().filter(|cut| n >= **cut).count();
                         if *reverse {
                             idx = k - 1 - idx.min(k - 1);
@@ -352,6 +366,35 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn expression_rules_do_not_scan_their_range() {
+        // An Expression (or CellIs) rule needs no statistics over its range. Computing them
+        // anyway - a pass over every cell building a value histogram, then cloned per cell -
+        // made a row-wide rule on a large sheet cost seconds per frame (2026-10-14). Only the
+        // rule kinds that read statistics (Duplicate, Top10, ColorScale, ...) may populate them.
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [3, 4], [3, 6]]})).unwrap();
+        s.execute(
+            "home.conditionalFormat",
+            json!({"range": "A1:B20000", "rule": {"type": "expression", "formula": "=$A1=3", "preset": "lightRedFill"}}),
+        )
+        .unwrap();
+        {
+            let d = s.doc().unwrap();
+            let mut cache = CfCache::new();
+            assert!(cache.look(&d.wb, 0, CellRef::parse("A2").unwrap()).and_then(|l| l.style).is_some());
+            assert!(cache.look(&d.wb, 0, CellRef::parse("A1").unwrap()).and_then(|l| l.style).is_none());
+            assert!(cache.stats.is_empty(), "an expression rule must not compute range statistics");
+        }
+        // A Duplicate rule on the same sheet still does, for its own range only.
+        s.execute("home.conditionalFormat", json!({"range": "B1:B3", "rule": {"type": "duplicate", "preset": "lightRedFill"}})).unwrap();
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::new();
+        let _ = cache.look(&d.wb, 0, CellRef::parse("B1").unwrap());
+        assert_eq!(cache.stats.len(), 1);
+    }
 
     #[test]
     fn every_matching_rule_applies() {

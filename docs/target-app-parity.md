@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and row formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** minor (performance: names as static precedents, TEXT fast path, conditional-format statistics on demand) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -202,8 +202,10 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 |---|---|---|---|
 | Sheet size limits | 1,048,576 × 16,384 | same | measured (`crates/core/src/addr.rs`) |
 | Recalc threads | 1 | all cores | measured (no threading in `crates/calc`) |
+| Formulas referencing defined names | static dependencies (2026-10-14; were volatile: every name made its formula recalculate on every edit) | static | measured: 1M-cell workbook with 49K LAMBDA-name calls, unrelated edit ~10 s → ~1 s |
+| Open a 1M-cell, 49K-formula XLSX (no cached values) | 109 s single-threaded (2026-10-14; was 447 s) | seconds, multi-threaded | measured on a 2-core sandbox |
 | Edit → recalc, 100k dependents | ~0.4 s (2026-10-07), target < 100 ms | tens of ms | measured on the owner's machine; #66 since made range-formula recalc linear, not re-timed |
-| Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
+| Grid scrolling | virtualised, O(log n) geometry with custom row heights; conditional-format statistics computed only for the rule kinds that read them (2026-10-14; a row-wide expression rule on 1M cells was 1.8 s per frame, now 2 ms) | smooth | measured in code and on a 1M-cell sheet |
 | Open a ~100 MB XLSX | fails (#175) | opens | user report |
 | Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
 
@@ -332,6 +334,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Performance: defined names are static precedents (formulas calling LAMBDA names no longer recalculate on every edit), parsed names cached per pass, `TEXT(n,"0")` integer fast path, conditional-format statistics only for rule kinds that read them; measured on a 1M-cell workbook (no score change) |
 | 2026-10-12 | minor | Essentials AutoFit evidence: rows auto-fit oversized fonts on open and row formatting (#833) |
 | 2026-10-12 | minor | Sheet tabs: reveal the selected tab on navigation and resize while preserving manual scrolling (#681); no score change |
 | 2026-10-12 | minor | PivotTables: values on rows (Σ Values in Rows at any position, all three layouts; `pivot.moveField` and the field pane move it; `dataOnRows` round-trips) (no score change) |

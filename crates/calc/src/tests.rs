@@ -1266,3 +1266,87 @@ fn offset_extreme_arguments_return_ref() {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
     }
 }
+
+#[test]
+fn names_are_static_precedents_not_dynamic() {
+    // A formula that reads a defined name (a range, or a LAMBDA whose body reads a range) depends
+    // on the cells the name resolves to, like a plain reference: it is NOT re-evaluated on every
+    // recalc, and it IS re-evaluated when those cells change. Before 2026-10-14 any name made the
+    // formula dynamic, so a column of LAMBDA calls was recomputed on every edit anywhere.
+    let mut t = T::new();
+    for (r, v) in ["10", "20", "30"].iter().enumerate() {
+        t.set(&format!("A{}", r + 1), v);
+    }
+    for def in [("Keys", "Sheet1!$A$1:$A$3"), ("Pick", "LAMBDA(k,XLOOKUP(k,Keys,Keys,\"none\"))"), ("Deep", "LAMBDA(k,Pick(k))")] {
+        t.wb.names.push(gridcraft_model::DefinedName {
+            name: def.0.into(),
+            scope: None,
+            formula: def.1.into(),
+            comment: String::new(),
+            hidden: false,
+        });
+    }
+    t.calc.rebuild(&t.wb);
+    t.set("C1", "=SUM(Keys)");
+    t.set("C2", "=Pick(20)");
+    t.set("C3", "=Deep(30)");
+    t.set("C4", "=LET(x, Pick(10), x * 2)");
+    assert_eq!(t.num("C1"), 60.0);
+    assert_eq!(t.num("C2"), 20.0);
+    assert_eq!(t.num("C3"), 30.0);
+    assert_eq!(t.num("C4"), 20.0);
+    for at in ["C1", "C2", "C3", "C4"] {
+        assert!(!t.calc.graph.is_dynamic((0, c(at))), "{at} should be a static dependency of A1:A3");
+    }
+    // A LAMBDA parameter is a bound name, not a lookup: it must not make the call dynamic or
+    // #NAME?. Unknown names and INDIRECT still do.
+    t.set("D1", "=INDIRECT(\"A1\")");
+    t.set("D2", "=NoSuchName+1");
+    assert!(t.calc.graph.is_dynamic((0, c("D1"))));
+    assert!(t.calc.graph.is_dynamic((0, c("D2"))));
+    // Editing a cell the names resolve to re-evaluates the readers...
+    t.set("A2", "25");
+    assert_eq!(t.num("C1"), 65.0);
+    assert_eq!(t.get("C2"), Value::text("none"));
+    assert_eq!(t.num("C4"), 20.0);
+    // ...and editing an unrelated cell does not (the graph has no edge to it).
+    let mut deps = Vec::new();
+    t.calc.graph.dependents(0, c("F9"), &mut deps);
+    assert!(deps.is_empty());
+}
+
+#[test]
+fn name_chains_and_cycles_stay_bounded() {
+    // Names referring to names are followed to a depth bound; a cycle adds nothing and does not
+    // hang the graph build.
+    let mut t = T::new();
+    t.set("A1", "7");
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "Loop1".into(),
+        scope: None,
+        formula: "Loop2+1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "Loop2".into(),
+        scope: None,
+        formula: "Loop1+1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "Base".into(),
+        scope: None,
+        formula: "Sheet1!$A$1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    t.calc.rebuild(&t.wb);
+    t.set("B1", "=Loop1");
+    t.set("B2", "=Base*2");
+    assert_eq!(t.num("B2"), 14.0);
+    assert!(!t.calc.graph.is_dynamic((0, c("B2"))));
+    t.set("A1", "8");
+    assert_eq!(t.num("B2"), 16.0);
+}

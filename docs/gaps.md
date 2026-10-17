@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** minor (§2 performance: names as static precedents, TEXT fast path, CF statistics on demand) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -29,7 +29,12 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Missing:** streaming read for ~100 MB XLSX; multi-threaded recalc; 100k-dependent edit under
   100 ms (was ~0.4 s); whole-sheet operations bounded.
 - **Evidence:** #175; no threading in `crates/calc`; PR #152 (whole-sheet Fill/Remove Duplicates
-  out of memory), PR #151 (current region past 10,000 rows).
+  out of memory), PR #151 (current region past 10,000 rows). Landed 2026-10-14: formulas
+  referencing defined names are static dependencies (were volatile: a 49K-cell column of LAMBDA
+  calls recalculated on every edit), names parsed once per pass, `TEXT(n,"0")` fast path,
+  conditional-format statistics only for rule kinds that read them; a real 1M-cell workbook opens
+  in 109 s instead of 447 s and edits in ~1 s instead of ~10 s. Still single-threaded, and cached
+  values are still ignored on open.
 - **Impact:** finance and data users routinely have big workbooks.
 - **Estimate:** 25–40 h. [target-app-parity.md](target-app-parity.md#performance), [hardware-parity.md](hardware-parity.md)
 
@@ -168,6 +173,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | §2: names as static precedents, per-pass name parse cache, TEXT fast path, CF statistics on demand; measured 447 s → 109 s open, ~10 s → ~1 s edit on a 1M-cell workbook |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
 | 2026-10-12 | minor | Page Layout view: dragging margins on the rulers (#792) removed from the §14 remainder |
 | 2026-10-12 | minor | §13: Forecast Sheet Forecast Start (hindcast) landed (#785) |

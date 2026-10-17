@@ -301,6 +301,11 @@ impl Graph {
     }
 
     /// Formulas that read cell `c` of `sheet`.
+    /// Whether the formula at `k` is evaluated on every recalc (its references aren't known
+    /// statically: INDIRECT, OFFSET, tables, unresolvable names).
+    pub fn is_dynamic(&self, k: Key) -> bool {
+        self.dynamic.contains(&k)
+    }
     pub fn dependents(&self, sheet: usize, c: CellRef, out: &mut Vec<Key>) {
         if let Some(v) = self.cell_deps.get(&(sheet, c)) {
             out.extend(v.iter().copied());
@@ -408,6 +413,10 @@ struct PassHost<'a> {
     tainted: HashSet<Key>,
     /// Whether the formula being evaluated has read a previous value.
     taint: bool,
+    /// Parsed defined names, by (lower-cased name, scope sheet asked from): the workbook doesn't
+    /// change during a pass, and a column of cells calling one LAMBDA name would otherwise parse
+    /// that name's formula (and every name it calls) once per cell.
+    names: HashMap<(String, usize), Option<(Option<std::sync::Arc<Expr>>, Option<usize>)>>,
 }
 
 impl<'a> PassHost<'a> {
@@ -431,6 +440,7 @@ impl<'a> PassHost<'a> {
             members: HashSet::default(),
             tainted: HashSet::default(),
             taint: false,
+            names: HashMap::default(),
         }
     }
 }
@@ -627,6 +637,15 @@ fn fit_to_range(v: Value, range: RangeRef) -> Value {
 impl Host for PassHost<'_> {
     fn workbook(&self) -> &Workbook {
         self.wb
+    }
+    fn name_expr(&mut self, name: &str, scope_sheet: usize) -> Option<(Option<std::sync::Arc<Expr>>, Option<usize>)> {
+        let key = (name.to_ascii_lowercase(), scope_sheet);
+        if let Some(hit) = self.names.get(&key) {
+            return hit.clone();
+        }
+        let found = self.wb.name(name, scope_sheet).map(|def| (gridcraft_formula::parse(&def.formula).ok().map(std::sync::Arc::new), def.scope));
+        self.names.insert(key, found.clone());
+        found
     }
     fn spill_range(&mut self, sheet: usize, anchor: CellRef) -> Option<RangeRef> {
         let k = (sheet, anchor);
