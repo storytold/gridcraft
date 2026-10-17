@@ -348,6 +348,7 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
             let Some(e) = f.expr().and_then(rename) else { continue };
             let mut nf = Formula::from_expr(e);
             nf.array = f.array;
+            nf.dynamic = f.dynamic;
             if let Some(cell) = sh.cells.get_mut(c) {
                 cell.formula = Some(std::sync::Arc::new(nf));
             }

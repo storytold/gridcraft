@@ -667,6 +667,10 @@ fn write_cell(
         Value::Error(CellError::Spill | CellError::Calc) => Value::Error(CellError::Value),
         v => v,
     };
+    // A formula read with dynamic-array metadata keeps it, even where the shape analysis would
+    // not need it: Excel decided the formula is evaluated as an array.
+    let own = formula.filter(|f| f.dynamic && f.array.is_none()).map(|_| RangeRef::cell(c));
+    let dynamic = dynamic.or(own.as_ref());
     // A non-spilling formula may still need array evaluation to avoid implicit intersection.
     if dynamic.is_some() && formula.is_some_and(|f| f.array.is_none()) {
         s.push_str(" cm=\"1\"");

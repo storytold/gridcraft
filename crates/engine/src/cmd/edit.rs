@@ -999,11 +999,12 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                 // The array range moves with its formula.
                                 let (dr, dc) = (dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
                                 moved.array = f.array.and_then(|a| Some(RangeRef::new(a.start.offset(dr, dc)?, a.end.offset(dr, dc)?)));
+                                moved.dynamic = f.dynamic;
                                 return Some(std::sync::Arc::new(moved));
                             }
                             let moved =
                                 gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
-                            Some(std::sync::Arc::new(Formula::from_expr(moved)))
+                            Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..Formula::from_expr(moved) }))
                         };
                         if link {
                             let sheet_prefix = if dest_sheet == clip.sheet && same_doc {
@@ -1205,6 +1206,7 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
             {
                 let mut nf = Formula::from_expr(new);
                 nf.array = array;
+                nf.dynamic = f.dynamic;
                 cell.formula = Some(std::sync::Arc::new(nf));
             }
         }
