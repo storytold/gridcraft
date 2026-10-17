@@ -1266,3 +1266,38 @@ fn offset_extreme_arguments_return_ref() {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
     }
 }
+
+/// `@` intersects a reference with the formula's row (a column range) or column (a row range);
+/// a 2D range or one the formula does not line up with gives #VALUE!. An array gives its
+/// top-left value. Legacy formulas read from files use it where Excel intersects implicitly.
+#[test]
+fn implicit_intersection_operator() {
+    let mut t = T::new();
+    for (at, v) in [("A1", "1"), ("A2", "2"), ("A3", "3"), ("A5", "4"), ("B5", "5"), ("C5", "6")] {
+        t.set(at, v);
+    }
+    t.set("B2", "=TANH(@A1:A3)");
+    t.set("B7", "=TANH(@A5:C5)");
+    t.set("B3", "=@A1:C3");
+    t.set("B9", "=@A1:A3");
+    t.set("E9", "=@A5:C5");
+    t.set("D1", "=@{7,8;9,10}");
+    t.set("D2", "=@A2");
+    t.set("D3", "=SUM(@A1:A3)");
+    assert_eq!(t.num("B2"), 2f64.tanh());
+    assert_eq!(t.num("B7"), 5f64.tanh());
+    for at in ["B3", "B9", "E9"] {
+        assert_eq!(t.get(at), Value::Error(CellError::Value), "{at}");
+    }
+    assert_eq!(t.num("D1"), 7.0);
+    assert_eq!(t.num("D2"), 2.0);
+    assert_eq!(t.num("D3"), 3.0);
+    // An array result shows its top-left value (T of a reference reads its top-left cell).
+    t.set("A11", "x");
+    t.set("C11", "y");
+    t.set("E1", "=@T(A11:C11)");
+    assert_eq!(t.get("E1"), Value::text("x"));
+    // Without `@` (a dynamic-array formula) the same formula spills.
+    t.set("F1", "=TANH(A1:A3)");
+    assert_eq!((t.num("F1"), t.num("F2"), t.num("F3")), (1f64.tanh(), 2f64.tanh(), 3f64.tanh()));
+}

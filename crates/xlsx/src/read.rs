@@ -30,6 +30,9 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// Cells of the worksheet being read whose formulas lack dynamic-array metadata (legacy
+    /// formulas, evaluated with implicit intersection), collected per sheet.
+    pub legacy_formulas: Vec<gridcraft_core::CellRef>,
 }
 
 impl Ctx<'_> {
@@ -66,7 +69,7 @@ pub fn find_rel<'r>(rels: &'r [Rel], kind: &str) -> Option<&'r Rel> {
     rels.iter().find(|r| r.kind == kind)
 }
 
-pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
+pub fn read_xlsx(bytes: &[u8], functions: crate::FunctionInfo) -> Result<(Workbook, ReadReport), IoError> {
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
         pkg,
@@ -82,6 +85,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        legacy_formulas: vec![],
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -198,6 +202,8 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
 
     // Sheets. `file_to_model[i]` maps the i-th <sheet> to a model sheet index.
     let mut file_to_model: Vec<Option<usize>> = vec![];
+    // Legacy formula cells per model sheet, rewritten once names and tables are known.
+    let mut legacy_formulas: Vec<(usize, Vec<gridcraft_core::CellRef>)> = vec![];
     let mut pivot_caches = crate::pivot::CachesIn::new(&wb_xml, &wb_rels);
     let sheet_els: Vec<El> = wb_xml.child("sheets").map(|s| s.kids("sheet").cloned().collect()).unwrap_or_default();
     for (i, se) in sheet_els.iter().enumerate() {
@@ -219,14 +225,17 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             continue;
         }
         let name = unique_name(&wb, &name, i);
+        cx.legacy_formulas.clear();
         let mut sheet = match crate::sheet_read::read_sheet(&mut cx, &rel.target, &name) {
             Ok(s) => s,
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
             Err(e) => {
                 cx.warn(format!("sheet \"{name}\" could not be read: {e}"));
+                cx.legacy_formulas.clear();
                 Sheet::new(name.clone())
             }
         };
+        legacy_formulas.push((wb.sheets.len(), std::mem::take(&mut cx.legacy_formulas)));
         match crate::pivot::read_pivots(&mut cx, &mut pivot_caches, &rel.target, &name) {
             Ok(p) => sheet.pivots = p,
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
@@ -342,6 +351,8 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     wb.preserved = kept.workbook(&mut cx, &wb_part, &wb_xml, &file_to_model);
     // Calls of LAMBDA names are spelled like the names (the parser upper-cases them).
     wb.apply_name_call_case();
+    // Legacy formulas read as dynamic-array formulas with Excel's implicit `@`.
+    crate::array_formula::apply_legacy(&mut wb, legacy_formulas, functions);
     wb.styles = cx.styles;
     Ok((wb, cx.report))
 }

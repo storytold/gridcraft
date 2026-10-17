@@ -577,3 +577,90 @@ fn user_defined_function_prefix_round_trips() {
         assert_eq!(cell.child("f").unwrap().text, f, "written {a}");
     }
 }
+
+/// A formula saved without dynamic-array metadata is a legacy formula: Excel intersects a range
+/// given where one value is expected with the formula's row or column, and shows the formula with
+/// `@` there. Dynamic-array formulas (`cm`) and Ctrl+Shift+Enter arrays are read as written.
+#[test]
+fn legacy_formulas_read_with_implicit_intersection() {
+    let body = r#"<sheetData>
+      <row r="1"><c r="A1"><v>1</v></c></row>
+      <row r="2"><c r="A2"><v>2</v></c><c r="B2"><f>TANH(A1:A3)</f><v>0.96</v></c><c r="C2" cm="1"><f t="array" ref="C2:C4">TANH(A1:A3)</f><v>0.76</v></c><c r="D2"><f t="array" ref="D2:D4">TANH(A1:A3)</f><v>0.76</v></c></row>
+      <row r="3"><c r="A3"><v>3</v></c><c r="B3"><f>SUM(A1:A3)</f><v>6</v></c><c r="E3"><f>SUMPRODUCT(A1:A3*A1:A3)</f><v>14</v></c></row>
+      <row r="4"><c r="B4"><f>A1:A3+Vals*2</f></c><c r="E4"><f>INDEX(A1:C3,0,1)</f></c><c r="F4"><f>IF(A1&gt;0,A1:A3,0)</f></c><c r="G4"><f>SUM(IF(A1:A3&gt;1,A1:A3))</f></c></row>
+      <row r="5"><c r="A5"><v>4</v></c><c r="B5"><v>5</v></c><c r="C5"><v>6</v></c></row>
+      <row r="7"><c r="B7"><f>TANH(A5:C5)</f></c><c r="C7"><f>COUNTIF(A1:A3,"&gt;1")+ROWS(A1:A3)</f></c><c r="D7"><f>ROW(A1:A3)</f></c><c r="E7"><f>T(A5:C5)</f></c></row>
+    </sheetData>"#;
+    let names = r#"<definedNames><definedName name="Vals">Data!$A$1:$A$3</definedName></definedNames>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", names)).unwrap();
+    let s = wb.sheet(0).unwrap();
+    let f = |a: &str| s.cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| (f.text.clone(), f.array)).unwrap();
+    let cases = [
+        ("B2", "TANH(@A1:A3)"),
+        ("C2", "TANH(A1:A3)"),
+        ("B3", "SUM(A1:A3)"),
+        ("E3", "SUMPRODUCT(A1:A3*A1:A3)"),
+        ("B4", "@A1:A3+@Vals*2"),
+        ("E4", "@INDEX(A1:C3,0,1)"),
+        ("F4", "IF(A1>0,@A1:A3,0)"),
+        ("G4", "SUM(IF(@A1:A3>1,A1:A3))"),
+        ("B7", "TANH(@A5:C5)"),
+        ("C7", "COUNTIF(A1:A3,\">1\")+ROWS(A1:A3)"),
+        ("D7", "@ROW(A1:A3)"),
+        // T reads a reference's top-left cell rather than intersecting it.
+        ("E7", "@T(A5:C5)"),
+    ];
+    for (a, text) in cases {
+        assert_eq!(f(a), (text.to_string(), None), "{a}");
+    }
+    assert_eq!(f("D2"), ("TANH(A1:A3)".to_string(), RangeRef::parse("D2:D4")));
+}
+
+/// The caller's function facts decide what a legacy formula means: an add-in function takes the
+/// range whole and its result is intersected; a parameter the library says takes an array is not
+/// intersected. Saving the intersected add-in call writes it back as the legacy formula it was.
+#[test]
+fn legacy_formulas_use_the_callers_function_facts() {
+    let body = r#"<sheetData>
+      <row r="1"><c r="A1"><v>1</v></c></row>
+      <row r="2"><c r="A2"><v>2</v></c><c r="B2"><f>MYUDF(A1:A3)</f></c><c r="C2"><f>TANH(A1:A3)</f></c></row>
+      <row r="3"><c r="A3"><v>3</v></c></row>
+    </sheetData>"#;
+    let bytes = minimal(body, &[], "", "");
+    let library = crate::FunctionInfo { is_builtin: |n| n != "MYUDF", is_scalar_arg: |n, _| n != "TANH" };
+    let text =
+        |wb: &gridcraft_model::Workbook, a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap();
+    let (plain, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(text(&plain, "B2"), "MYUDF(@A1:A3)", "without facts every function is built in");
+    assert_eq!(text(&plain, "C2"), "TANH(@A1:A3)");
+    let (wb, _) = crate::read_xlsx_with(&bytes, library).unwrap();
+    assert_eq!(text(&wb, "B2"), "@MYUDF(A1:A3)");
+    assert_eq!(text(&wb, "C2"), "TANH(A1:A3)");
+    let out = crate::write_xlsx_with(&wb, crate::XlsxKind::Workbook, library).unwrap();
+    let mut pkg = crate::package::Package::open(&out).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    let b2 = sheet.child("sheetData").unwrap().kids("row").flat_map(|r| r.kids("c")).find(|c| c.attr("r") == Some("B2")).unwrap();
+    assert_eq!(b2.attr("cm"), None);
+    assert_eq!(b2.child("f").map(|f| f.text.as_str()), Some("MYUDF(A1:A3)"));
+    let (back, _) = crate::read_xlsx_with(&out, library).unwrap();
+    assert_eq!(text(&back, "B2"), "@MYUDF(A1:A3)");
+}
+
+/// Legacy IF does not evaluate its condition as an array inside SUMPRODUCT, nor IFERROR and IFNA
+/// their arguments (that needs Ctrl+Shift+Enter): they are intersected there, while IF's results
+/// stay arrays.
+#[test]
+fn legacy_if_and_iferror_arguments_are_intersected_inside_array_functions() {
+    let body = r#"<sheetData>
+      <row r="1"><c r="A1"><v>1</v></c></row>
+      <row r="2"><c r="A2"><v>2</v></c><c r="D2"><f>SUMPRODUCT(IFERROR(A1:A3/A1:A3,0))</f></c><c r="E2"><f>SUMPRODUCT(IFNA(A1:A3,0),A1:A3)</f></c></row>
+      <row r="3"><c r="A3"><v>3</v></c></row>
+      <row r="4"><c r="D4"><f>SUMPRODUCT(IF(A1:A3&gt;1,1,0))</f></c><c r="E4"><f>SUMPRODUCT(IF(A1&gt;1,A1:A3,0))</f></c></row>
+    </sheetData>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let text = |a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap();
+    assert_eq!(text("D2"), "SUMPRODUCT(IFERROR(@A1:A3/@A1:A3,0))");
+    assert_eq!(text("E2"), "SUMPRODUCT(IFNA(@A1:A3,0),A1:A3)");
+    assert_eq!(text("D4"), "SUMPRODUCT(IF(@A1:A3>1,1,0))");
+    assert_eq!(text("E4"), "SUMPRODUCT(IF(A1>1,A1:A3,0))");
+}
