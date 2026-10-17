@@ -3222,6 +3222,43 @@ fn a_decrypted_workbook_never_overwrites_its_encrypted_original() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+fn saved_bytes(s: &mut Session) -> String {
+    s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string()
+}
+
+/// A workbook opened from bytes (the web's File › Open, a dropped file) and opened again is the one
+/// already open, not a second copy in memory: each copy of a 4 MB workbook of formulas took about
+/// 480 MB, and the ninth ran wasm32 out of its 4 GiB. Another file under that name is refused.
+#[test]
+fn reopening_the_same_bytes_switches_to_the_open_workbook() {
+    let mut a = s();
+    a.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    let one = saved_bytes(&mut a);
+    a.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    let two = saved_bytes(&mut a);
+
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "book.xlsx", "base64": one})).unwrap();
+    s.execute("file.new", json!({})).unwrap();
+    assert_eq!((s.documents().len(), s.active_index()), (2, 1));
+    let again = s.execute("file.open", json!({"name": "book.xlsx", "base64": one})).unwrap();
+    assert_eq!(again["alreadyOpen"], json!(true));
+    assert_eq!((s.documents().len(), s.active_index()), (2, 0), "the open copy is shown, not a second one");
+
+    // Another file under that name is refused, and the open workbook is left as it was.
+    assert!(s.execute("file.open", json!({"name": "book.xlsx", "base64": two})).is_err());
+    assert_eq!(s.documents().len(), 2);
+    assert_eq!(v(&s, "A1"), Value::Number(1.0));
+
+    // Under another name it is another workbook; with the first closed, its name is free again.
+    s.execute("file.open", json!({"name": "other.xlsx", "base64": two})).unwrap();
+    assert_eq!(s.documents().len(), 3);
+    s.execute("window.activate", json!({"index": 0})).unwrap();
+    s.execute("file.close", json!({"force": true})).unwrap();
+    s.execute("file.open", json!({"name": "book.xlsx", "base64": two})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(2.0));
+}
+
 #[test]
 fn link_open_refuses_every_scheme_but_http_https_and_mailto() {
     let mut s = s();

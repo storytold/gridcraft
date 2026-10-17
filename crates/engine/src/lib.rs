@@ -112,6 +112,10 @@ pub struct DocState {
     /// The format `path`'s content was recognised as when its extension doesn't name one (an
     /// XLSX called `budget.dat`): Save writes it back in that format.
     pub content_kind: Option<io::FileKind>,
+    /// A hash of the bytes a workbook was opened from when they came without a path (`file.open`
+    /// with `base64`: the web's File › Open, a dropped file), to know that file when it is opened
+    /// again.
+    pub content_hash: Option<u64>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -137,6 +141,7 @@ impl DocState {
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
+            content_hash: None,
         }
     }
     pub fn is_dirty(&self) -> bool {

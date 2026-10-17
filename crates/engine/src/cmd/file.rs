@@ -8,7 +8,7 @@ use crate::DocState;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
-        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
+        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json); a path or the same bytes already open switch to that workbook (alreadyOpen), and other bytes under an open name are refused", always, open),
         cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
@@ -41,6 +41,14 @@ fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"index": i, "title": s.doc()?.display_title()}))
 }
 
+/// A hash of a file's bytes, to know the same file opened twice.
+fn bytes_hash(bytes: &[u8]) -> u64 {
+    use std::hash::{DefaultHasher, Hasher};
+    let mut h = DefaultHasher::new();
+    h.write(bytes);
+    h.finish()
+}
+
 fn open(s: &mut Session, p: &Json) -> Result<Json> {
     let (name, bytes) = if let Some(b) = str_param(p, "base64") {
         (str_param(p, "name").unwrap_or("Book.xlsx").to_string(), crate::io::base64_decode(b).ok_or_else(|| bad("file.open", "invalid base64"))?)
@@ -56,8 +64,6 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         return ok();
     };
     let encrypted = gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Encrypted;
-    let (mut wb, warnings) = crate::io::open_bytes_with_password(&name, &bytes, str_param(p, "password"))?;
-    wb.source_dir = str_param(p, "path").and_then(crate::io::source_dir);
     let imported =
         matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Ods | crate::io::FileKind::Xlsb | crate::io::FileKind::Xls))
             || matches!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Ods | gridcraft_xlsx::Format::Xlsb | gridcraft_xlsx::Format::Xls);
@@ -66,6 +72,23 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     } else {
         std::path::Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or("Book").to_string()
     };
+    // Bytes have no path to know them by. The same file opened from bytes again (File › Open of it
+    // a second time on the web, the same file dropped again) is the workbook already open: switch
+    // to it, as an open path does. Each copy used to stay in memory, about 480 MB for a 4 MB
+    // workbook of formulas, until the ninth ran wasm32 out of its 4 GiB and every open workbook
+    // was lost. Another file of the same name is refused, as Excel opens one workbook per name.
+    let content_hash = str_param(p, "base64").map(|_| bytes_hash(&bytes));
+    if let Some(hash) = content_hash
+        && let Some(i) = s.documents().iter().position(|d| d.path.is_none() && d.content_hash.is_some() && d.title == title)
+    {
+        if s.documents().get(i).and_then(|d| d.content_hash) != Some(hash) {
+            return Err(bad("file.open", format!("a workbook named \"{title}\" is already open: close it before opening another file of that name")));
+        }
+        s.set_active(i);
+        return Ok(json!({"index": i, "alreadyOpen": true}));
+    }
+    let (mut wb, warnings) = crate::io::open_bytes_with_password(&name, &bytes, str_param(p, "password"))?;
+    wb.source_dir = str_param(p, "path").and_then(crate::io::source_dir);
     // An import has no save target: ordinary Save must ask for a new destination. Neither does a
     // workbook decrypted with its password, so Save never replaces the encrypted original with
     // an unprotected copy.
@@ -80,6 +103,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
+    doc.content_hash = content_hash;
     let i = s.add_document(doc);
     // The decrypted-workbook notice is for the info bar, not a message box.
     let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE).collect();
