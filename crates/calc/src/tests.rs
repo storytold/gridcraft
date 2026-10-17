@@ -912,6 +912,478 @@ fn sumif_resized_sum_range_on_another_sheet_and_through_a_name() {
     assert_eq!(t.num("C2"), 5.0);
 }
 
+// ---- Excel's snap to zero (suite: cancel-ulps, cancel-band, decimal-sum, excel-probe) ----
+
+impl T {
+    /// Stores an exact double, bypassing input parsing.
+    fn put(&mut self, at: &str, x: f64) {
+        self.wb.sheet_mut(0).unwrap().cells.set(c(at), Cell::value(Value::Number(x)));
+        self.calc.cells_changed(&mut self.wb, &[(0, c(at))]);
+    }
+}
+
+const ULP1: f64 = f64::EPSILON; // the spacing of doubles just above 1.0
+
+#[test]
+fn a_bare_root_add_or_sub_snaps_a_near_cancellation_to_zero() {
+    let mut t = T::new();
+    t.put("A1", 1.0);
+    t.put("B1", 1.0 + ULP1); // one ulp apart: Excel shows 0, not -2.22e-16
+    t.set("C1", "=A1-B1");
+    t.set("C2", "=B1-A1");
+    t.set("C3", "=A1+-B1");
+    t.set("C4", "=0+A1-B1"); // the end of =0+A-B snaps too
+    t.set("C5", "=SUM(A1,-B1)*1"); // the last addition of a SUM snaps even when SUM isn't the root
+    t.put("D1", -(1.0 + ULP1));
+    t.set("C6", "=SUM(A1,D1)");
+    t.set("C7", "=A1+D1");
+    for at in ["C1", "C2", "C3", "C4", "C5", "C6", "C7"] {
+        assert_eq!(t.get(at), Value::Number(0.0), "{at}");
+    }
+    // The classic: 0.1+0.2-0.3 is 0 in Excel (5.55e-17 in IEEE).
+    t.put("E1", 0.1);
+    t.put("E2", 0.2);
+    t.put("E3", 0.3);
+    t.set("E4", "=E1+E2-E3");
+    assert_eq!(t.get("E4"), Value::Number(0.0));
+}
+
+#[test]
+fn sum_snaps_its_last_addition_when_it_folds_a_range_in_place() {
+    // SUM, COUNT and AVERAGE fold ranges over the stored cells instead of calling SUM; the fold must
+    // keep SUM's rule: only the last number added snaps, and a blank cell adds no number.
+    let mut t = T::new();
+    t.put("A1", 1.0);
+    t.put("A2", -(1.0 + ULP1));
+    t.set("C1", "=SUM(A1:A2)");
+    t.set("C2", "=SUM(A1:A2,Z9)");
+    t.set("C3", "=SUM(A1:A2,0)"); // the last addition is residue + 0: no snap
+    t.set("C4", "=AVERAGE(A1:A2)"); // AVERAGE does not snap
+    assert_eq!(t.get("C1"), Value::Number(0.0));
+    assert_eq!(t.get("C2"), Value::Number(0.0));
+    assert_eq!(t.get("C3"), Value::Number(-ULP1));
+    assert_eq!(t.get("C4"), Value::Number(-ULP1 / 2.0));
+}
+
+#[test]
+fn the_snap_threshold_is_two_to_the_e_minus_49_of_the_left_operand() {
+    let mut t = T::new();
+    t.put("A1", 1.0);
+    // 7 ulps below the threshold of 8 ulps (2^-49): snaps. Exactly 8: does not.
+    t.put("B1", 1.0 + 7.0 * ULP1);
+    t.put("B2", 1.0 + 8.0 * ULP1);
+    t.set("C1", "=A1-B1");
+    t.set("C2", "=A1-B2");
+    assert_eq!(t.get("C1"), Value::Number(0.0));
+    assert_eq!(t.get("C2"), Value::Number(-8.0 * ULP1));
+    // The binade is the LEFT operand's (Excel observed, request 4, excel-probe-4.00044 to 00046).
+    t.put("A3", 0.4999999999999998);
+    t.put("B3", 0.5000000000000002);
+    t.set("C3", "=A3-B3");
+    t.set("C4", "=B3-A3");
+    assert_eq!(t.get("C3"), Value::Number(-4.440892098500626e-16));
+    assert_eq!(t.get("C4"), Value::Number(0.0));
+}
+
+#[test]
+fn the_snap_does_not_apply_inside_parentheses_unary_if_or_inner_steps() {
+    let mut t = T::new();
+    t.put("A1", 1.0);
+    t.put("B1", 1.0 + ULP1);
+    let residue = 1.0 - (1.0 + ULP1);
+    for (at, f) in [
+        ("C1", "=(A1-B1)"),
+        ("C2", "=+(A1-B1)"),
+        ("C3", "=-(B1-A1)"),
+        ("C4", "=IF(TRUE,A1-B1)"),
+        ("C5", "=A1-B1+0"),       // the root is the +0; the inner subtraction is not a root
+        ("C6", "=SUM(A1,-B1,0)"), // the last addition is residue+0
+    ] {
+        t.set(at, f);
+        assert_eq!(t.get(at), Value::Number(residue), "{f}");
+    }
+    // Excel observed (request 3): =SUM(A-B) does not snap (the subtraction is an inner step, the SUM's
+    // last addition is residue + 0), and neither does a root that adds a zero.
+    t.set("C7", "=SUM(A1-B1)");
+    t.set("C8", "=A1-B1-0");
+    assert_eq!(t.get("C7"), Value::Number(residue));
+    assert_eq!(t.get("C8"), Value::Number(residue));
+    // Only the LAST addition of a SUM snaps: 3+1e16-1e16 is 4, not 0.
+    t.put("D1", 3.0);
+    t.put("D2", 1e16);
+    t.put("D3", -1e16);
+    t.put("D4", 0.0);
+    t.set("E1", "=SUM(D1:D4)");
+    assert_eq!(t.get("E1"), Value::Number(4.0));
+}
+
+#[test]
+fn same_sign_and_exact_arithmetic_never_snap() {
+    let mut t = T::new();
+    t.put("A1", 1e-20);
+    t.put("B1", 2e-20);
+    t.set("C1", "=A1+B1"); // a tiny sum of small numbers is not a cancellation
+    t.set("C2", "=A1-B1");
+    t.put("A2", 3.0);
+    t.put("B2", 2.0);
+    t.set("C3", "=A2-B2");
+    assert_eq!(t.num("C1"), 1e-20 + 2e-20);
+    assert_eq!(t.num("C2"), 1e-20 - 2e-20);
+    assert_eq!(t.num("C3"), 1.0);
+}
+
+#[test]
+fn the_snap_threshold_follows_the_left_operand_across_a_binade_boundary() {
+    // Windows Excel 16.0.20430, snap probe rows 226, 231 and 236 (=A-B, A just below 1.0): the
+    // threshold is 2^-50 (A's binade), not 2^-49 (B's), so 7.8e-16 snaps and 9.99e-16 does not.
+    let mut t = T::new();
+    t.put("A1", 0.9999999999999999);
+    t.put("B1", 1.0000000000000004);
+    t.put("B2", 1.0000000000000007);
+    t.put("B3", 1.0000000000000009);
+    t.set("D1", "=A1-B1");
+    t.set("D2", "=A1-B2");
+    t.set("D3", "=A1-B3");
+    assert_eq!(t.get("D1"), Value::Number(0.0));
+    assert_eq!(t.get("D2"), Value::Number(0.0));
+    assert_eq!(t.get("D3"), Value::Number(-9.992007221626409e-16));
+}
+
+#[test]
+fn the_snap_leaves_error_and_text_operands_alone() {
+    let mut t = T::new();
+    t.put("B1", 1.0 + ULP1);
+    t.set("A1", "=1/0");
+    t.set("C1", "=A1-B1");
+    assert_eq!(t.get("C1"), Value::Error(CellError::Div0));
+    t.set("A2", "abc");
+    t.set("C2", "=A2-B1");
+    assert_eq!(t.get("C2"), Value::Error(CellError::Value));
+    t.set("A3", "1"); // numeric text still converts, then the subtraction snaps like any other
+    t.put("B3", 1.0);
+    t.set("C3", "=A3-B3");
+    assert_eq!(t.get("C3"), Value::Number(0.0));
+}
+
+// ---- the snap in a defined name's body (Windows Excel 16.0.20430, name probe: 8 bodies x 12 positions) ----
+
+impl T {
+    fn name(&mut self, name: &str, body: &str) {
+        self.wb.names.push(gridcraft_model::DefinedName {
+            name: name.into(),
+            scope: None,
+            formula: body.into(),
+            comment: String::new(),
+            hidden: false,
+        });
+    }
+}
+
+#[test]
+fn a_defined_name_is_a_formula_of_its_own_so_its_body_snaps_wherever_it_is_used() {
+    let mut t = T::new();
+    t.put("A1", 1.0);
+    t.put("B1", 1.0 + ULP1);
+    // (body, does Excel snap it?) Only the shape of the BODY matters, not where the name is used.
+    let bodies = [
+        ("N_sub", "Sheet1!$A$1-Sheet1!$B$1", true),
+        ("N_par", "(Sheet1!$A$1-Sheet1!$B$1)", false),
+        ("N_plus0", "Sheet1!$A$1-Sheet1!$B$1+0", false),
+        ("N_sum", "SUM(Sheet1!$A$1,-Sheet1!$B$1)", true),
+        ("N_neg", "-(Sheet1!$B$1-Sheet1!$A$1)", false),
+        ("N_ref", "N_sub", true), // a name that is a name inherits it
+        ("N_if", "IF(TRUE,Sheet1!$A$1-Sheet1!$B$1)", false),
+        ("N_sumsub", "SUM(Sheet1!$A$1-Sheet1!$B$1)", false),
+    ];
+    for (name, body, _) in bodies {
+        t.name(name, body);
+    }
+    // All 12 positions of the Excel probe.
+    let uses = ["{n}", "{n}*1", "{n}+0", "0+{n}", "({n})", "-{n}", "+{n}", "SUM({n})", "IF(TRUE,{n})", "ABS({n})", "1*{n}", "{n}-0"];
+    let mut row = 2;
+    for (name, body, snaps) in bodies {
+        for u in uses {
+            let at = format!("D{row}");
+            t.set(&at, &format!("={}", u.replace("{n}", name)));
+            // Every body is -1 ulp (A1-B1) or exactly 0; a minus sign or ABS flips the residue.
+            let flips = u.starts_with('-') || u.starts_with("ABS");
+            let want = if snaps {
+                0.0
+            } else if flips {
+                ULP1
+            } else {
+                -ULP1
+            };
+            assert_eq!(t.get(&at), Value::Number(want), "{u} over {name} = {body}");
+            row += 1;
+        }
+    }
+}
+
+#[test]
+fn excels_own_gap_shapes_from_lookup_shapes_xlsx() {
+    // excel-evidence/request-3/files/lookup-shapes.xlsx, Sheet1!H15:H26: the gaps of 1, 4 and 7 ulps
+    // snap to 0 as =Gap, =Gap*1 and =Gap+0; the gap of 8 ulps keeps its residue.
+    let mut t = T::new();
+    for (cell, v) in [("A1", 1.0000000000000002), ("A2", 1.0000000000000009), ("A3", 1.0000000000000016), ("A4", 1.0000000000000018)] {
+        t.put(cell, v);
+    }
+    for (cell, v) in [("B1", 1.0), ("B2", 1.0), ("B3", 1.0), ("B4", 1.0)] {
+        t.put(cell, v);
+    }
+    for (name, row) in [("Gap_1", 1), ("Gap_4", 2), ("Gap_7", 3), ("Gap_8", 4)] {
+        t.name(name, &format!("Sheet1!$A${row}-Sheet1!$B${row}"));
+    }
+    let mut r = 10;
+    for (name, residue) in [("Gap_1", 0.0), ("Gap_4", 0.0), ("Gap_7", 0.0), ("Gap_8", 1.7763568394002505e-15)] {
+        for f in ["{n}", "{n}*1", "{n}+0"] {
+            let at = format!("F{r}");
+            t.set(&at, &format!("={}", f.replace("{n}", name)));
+            assert_eq!(t.get(&at), Value::Number(residue), "{f} over {name}");
+            r += 1;
+        }
+    }
+}
+
+#[test]
+fn a_name_that_refers_to_a_range_still_refers_to_it() {
+    // Only a reference answers these: ISREF, ROW and OFFSET over a name. Wrapping every name
+    // body in value_root would turn the range into an array and fail all three.
+    let mut t = T::new();
+    t.put("A1", 1.0);
+    t.put("A2", 2.0);
+    t.put("B1", 3.0);
+    t.put("B2", 4.0);
+    t.name("Block", "Sheet1!$A$1:$B$2");
+    t.set("D1", "=ISREF(Block)");
+    t.set("D2", "=MIN(ROW(Block))");
+    t.set("D3", "=SUM(OFFSET(Block,0,1))");
+    assert_eq!(t.get("D1"), Value::Bool(true));
+    assert_eq!(t.num("D2"), 1.0);
+    assert_eq!(t.num("D3"), 7.0);
+}
+
+#[test]
+fn a_name_whose_body_is_an_array_difference_snaps_element_wise() {
+    // Windows Excel (review probe): INDEX(Arr,1)*1 and INDEX(Arr,2)*1 are 0 for Arr = A1:A2-B1:B2.
+    let mut t = T::new();
+    for (a, b) in [("A1", "B1"), ("A2", "B2")] {
+        t.put(a, 1.0);
+        t.put(b, 1.0 + ULP1);
+    }
+    t.name("Arr", "Sheet1!$A$1:$A$2-Sheet1!$B$1:$B$2");
+    t.set("D1", "=INDEX(Arr,1)*1");
+    t.set("D2", "=INDEX(Arr,2)*1");
+    t.set("D3", "=SUM(Arr)");
+    assert_eq!((t.get("D1"), t.get("D2")), (Value::Number(0.0), Value::Number(0.0)));
+    assert_eq!(t.get("D3"), Value::Number(0.0));
+}
+
+#[test]
+fn a_sheet_scoped_name_snaps_on_its_own_sheet() {
+    // Windows Excel (review probe): a sheet-scoped Loc = S2!$A$1-S2!$B$1 gives 0 as =S2!Loc*1.
+    let mut t = T::new();
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("S2")));
+    t.wb.sheet_mut(1).unwrap().cells.set(c("A1"), Cell::value(Value::Number(1.0)));
+    t.wb.sheet_mut(1).unwrap().cells.set(c("B1"), Cell::value(Value::Number(1.0 + ULP1)));
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "Loc".into(),
+        scope: Some(1),
+        formula: "S2!$A$1-S2!$B$1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    t.set("D1", "=S2!Loc*1");
+    t.set("D2", "=S2!Loc");
+    assert_eq!((t.get("D1"), t.get("D2")), (Value::Number(0.0), Value::Number(0.0)));
+}
+
+#[test]
+fn recursive_names_stay_bounded_and_cost_the_same_depth_as_before_the_snap() {
+    let mut t = T::new();
+    // A name that refers to itself ends in #CALC!, not a stack overflow.
+    t.name("Rec", "Rec-1");
+    t.set("A1", "=Rec");
+    assert_eq!(t.get("A1"), Value::Error(CellError::Calc));
+    // A long chain of names, each one `-0` over the last, runs out of depth at the same place as it did
+    // before names were snapped (value_root must charge its own level, or each link would be cheaper
+    // and a chain through cells could overflow the stack).
+    t.name("Nm_0", "1");
+    for i in 1..=250 {
+        t.name(&format!("Nm_{i}"), &format!("Nm_{}-0", i - 1));
+    }
+    t.set("A2", "=Nm_250");
+    assert_eq!(t.get("A2"), Value::Error(CellError::Calc));
+    t.set("A3", "=Nm_20");
+    assert_eq!(t.get("A3"), Value::Number(1.0));
+}
+
+// ---- the snap in a LAMBDA body (Windows Excel 16.0.20430, LAMBDA probe: 126 formulas) ----
+// A LAMBDA body is a formula of its own, like a defined name's: Excel snaps it by the root rule in every
+// context (named, inline, LET-bound, and under MAP, REDUCE, SCAN, MAKEARRAY, BYROW and BYCOL).
+
+fn lambda_t() -> T {
+    let mut t = T::new();
+    t.put("A1", 1.0);
+    t.put("B1", 1.0 + ULP1);
+    t.put("A2", 1.0 + ULP1);
+    t.put("B2", 1.0 + ULP1);
+    t
+}
+
+#[test]
+fn a_lambda_body_snaps_by_its_own_root_wherever_the_lambda_is_called() {
+    let mut t = lambda_t();
+    // (name, body, does Excel snap it?)
+    let lambdas = [
+        ("L_sub", "LAMBDA(x,y,x-y)", true),
+        ("L_par", "LAMBDA(x,y,(x-y))", false),
+        ("L_plus0", "LAMBDA(x,y,x-y+0)", false),
+        ("L_sum", "LAMBDA(x,y,SUM(x,-y))", true),
+        ("L_neg", "LAMBDA(x,y,-(y-x))", false),
+        ("L_if", "LAMBDA(x,y,IF(TRUE,x-y))", false),
+        ("L_sumsub", "LAMBDA(x,y,SUM(x-y))", false),
+        ("L_let", "LAMBDA(x,y,LET(d,x-y,d))", false), // a LET inside the body does not snap
+        ("L_letroot", "LAMBDA(x,y,LET(a,x,a-y))", false),
+        ("L_ref", "LAMBDA(x,y,L_sub(x,y))", true), // a lambda that calls one inherits it
+    ];
+    for (name, body, _) in lambdas {
+        t.name(name, body);
+    }
+    let uses = ["{c}", "{c}*1", "{c}+0", "0+{c}", "({c})", "-{c}", "SUM({c})", "IF(TRUE,{c})", "ABS({c})"];
+    let mut row = 5;
+    for (name, body, snaps) in lambdas {
+        for u in uses {
+            let at = format!("D{row}");
+            t.set(&at, &format!("={}", u.replace("{c}", &format!("{name}(Sheet1!$A$1,Sheet1!$B$1)"))));
+            let flips = u.starts_with('-') || u.starts_with("ABS");
+            let want = if snaps {
+                0.0
+            } else if flips {
+                ULP1
+            } else {
+                -ULP1
+            };
+            assert_eq!(t.get(&at), Value::Number(want), "{u} over {name} = {body}");
+            row += 1;
+        }
+    }
+}
+
+#[test]
+fn inline_and_let_bound_lambdas_snap_the_same_way() {
+    let mut t = lambda_t();
+    for (i, (f, snaps)) in [
+        ("LAMBDA(x,y,x-y)(Sheet1!$A$1,Sheet1!$B$1)", true),
+        ("LAMBDA(x,y,x-y)(Sheet1!$A$1,Sheet1!$B$1)*1", true),
+        ("LAMBDA(x,y,(x-y))(Sheet1!$A$1,Sheet1!$B$1)", false),
+        ("LAMBDA(x,y,x-y+0)(Sheet1!$A$1,Sheet1!$B$1)", false),
+        ("LAMBDA(x,y,SUM(x,-y))(Sheet1!$A$1,Sheet1!$B$1)", true),
+        ("LET(f,LAMBDA(x,y,x-y),f(Sheet1!$A$1,Sheet1!$B$1))", true),
+        ("LET(f,LAMBDA(x,y,x-y),f(Sheet1!$A$1,Sheet1!$B$1))*1", true),
+        ("LET(f,LAMBDA(x,y,(x-y)),f(Sheet1!$A$1,Sheet1!$B$1))", false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let at = format!("D{}", i + 5);
+        t.set(&at, &format!("={f}"));
+        assert_eq!(t.get(&at), Value::Number(if snaps { 0.0 } else { -ULP1 }), "{f}");
+    }
+}
+
+#[test]
+fn higher_order_functions_snap_their_lambda_body() {
+    let mut t = lambda_t();
+    // The cell is INDEX(<result>,1,1), bare and times 1. A is (1, 1+ulp), B is (1+ulp, 1+ulp).
+    let cases = [
+        ("MAP(Sheet1!$A$1:$A$2,Sheet1!$B$1:$B$2,LAMBDA(x,y,{b}))", "x-y"),
+        ("REDUCE(Sheet1!$A$1,Sheet1!$B$1,LAMBDA(x,y,{b}))", "x-y"),
+        ("SCAN(Sheet1!$A$1,Sheet1!$B$1:$B$2,LAMBDA(x,y,{b}))", "x-y"),
+        ("MAKEARRAY(1,1,LAMBDA(x,y,{b}))", "Sheet1!$A$1-Sheet1!$B$1"),
+        ("BYROW(Sheet1!$A$1:$B$2,LAMBDA(r,{b}))", "INDEX(r,1,1)-INDEX(r,1,2)"),
+        ("BYCOL(Sheet1!$A$1:$B$2,LAMBDA(r,{b}))", "INDEX(r,1,1)-INDEX(r,2,1)"),
+    ];
+    let mut row = 5;
+    for (f, bare) in cases {
+        for (b, snaps) in [(bare.to_string(), true), (format!("({bare})"), false)] {
+            for u in ["INDEX({c},1,1)", "INDEX({c},1,1)*1"] {
+                let at = format!("D{row}");
+                let formula = u.replace("{c}", &f.replace("{b}", &b));
+                t.set(&at, &format!("={formula}"));
+                assert_eq!(t.get(&at), Value::Number(if snaps { 0.0 } else { -ULP1 }), "{formula}");
+                row += 1;
+            }
+        }
+    }
+}
+
+#[test]
+fn a_lambda_body_that_returns_a_reference_still_returns_one() {
+    // Windows Excel (review probe): a body that returns a reference is still a reference, so only an
+    // add or subtract root takes the snapping path. ISREF and OFFSET need the reference; wrapping every
+    // body in value_root would turn it into a value.
+    let mut t = lambda_t();
+    t.set("D5", "=ISREF(LAMBDA(x,x)(Sheet1!$A$1))");
+    t.set("D6", "=ISREF(LAMBDA(x,IF(TRUE,x))(Sheet1!$A$1))");
+    t.set("D7", "=ROW(LAMBDA(x,OFFSET(x,1,0))(Sheet1!$A$1))");
+    assert_eq!(t.get("D5"), Value::Bool(true));
+    assert_eq!(t.get("D6"), Value::Bool(true));
+    assert_eq!(t.num("D7"), 2.0);
+}
+
+#[test]
+fn nested_curried_and_closed_over_lambda_bodies_snap_by_the_root_of_the_inner_body() {
+    // Windows Excel (review probe): each of these is exactly 0.
+    let mut t = lambda_t();
+    for (i, f) in [
+        "LAMBDA(x,LAMBDA(y,x-y))(Sheet1!$A$1)(Sheet1!$B$1)",         // curried
+        "LAMBDA(x,y,LAMBDA(p,q,p-q)(x,y))(Sheet1!$A$1,Sheet1!$B$1)", // a body that calls an inner lambda
+        "LAMBDA(x,y,0+x-y)(Sheet1!$A$1,Sheet1!$B$1)",                // the end of 0+x-y snaps like =0+A-B
+        "LET(a,Sheet1!$A$1,LAMBDA(y,a-y)(Sheet1!$B$1))",             // a closure over a LET variable
+        "LAMBDA(x,y,x-y)(Sheet1!$A$1+0,Sheet1!$B$1+0)",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let at = format!("D{}", i + 5);
+        t.set(&at, &format!("={f}"));
+        assert_eq!(t.get(&at), Value::Number(0.0), "{f}");
+    }
+}
+
+#[test]
+fn a_lambda_body_uses_the_same_threshold_and_snaps_array_arguments_element_wise() {
+    // Windows Excel (review probe): 7 ulps snap, 8 ulps keep the residue, inside a body as in a cell.
+    let mut t = lambda_t();
+    t.put("G1", 1.0);
+    t.put("G2", 1.0 + 7.0 * ULP1);
+    t.put("G3", 1.0 + 8.0 * ULP1);
+    t.set("D5", "=LAMBDA(x,y,x-y)(Sheet1!$G$1,Sheet1!$G$2)");
+    t.set("D6", "=LAMBDA(x,y,x-y)(Sheet1!$G$1,Sheet1!$G$3)");
+    assert_eq!(t.get("D5"), Value::Number(0.0));
+    assert_eq!(t.get("D6"), Value::Number(-8.0 * ULP1));
+    // Array arguments: each element snaps by its own left operand (1 and 3 are different binades).
+    t.put("E1", 1.0);
+    t.put("E2", 3.0);
+    t.put("F1", 1.0 + ULP1);
+    t.put("F2", 3.0 + 2.0 * ULP1);
+    t.set("D8", "=INDEX(LAMBDA(x,y,x-y)(Sheet1!$E$1:$E$2,Sheet1!$F$1:$F$2),1,1)");
+    t.set("D9", "=INDEX(LAMBDA(x,y,x-y)(Sheet1!$E$1:$E$2,Sheet1!$F$1:$F$2),2,1)");
+    assert_eq!(t.get("D8"), Value::Number(0.0));
+    assert_eq!(t.get("D9"), Value::Number(0.0));
+}
+
+#[test]
+fn a_lambda_that_calls_itself_ends_in_an_error_not_a_crash() {
+    // Which error depends on where the depth runs out first (#CALC! or #NAME?); what matters is that
+    // it ends. A recursion through cells is a separate, existing limit.
+    let mut t = lambda_t();
+    t.name("Loop", "LAMBDA(x,Loop(x)-1)");
+    t.set("D5", "=Loop(1)");
+    assert!(matches!(t.get("D5"), Value::Error(_)), "{:?}", t.get("D5"));
+}
+
 #[test]
 fn trimrange() {
     let mut t = T::new();

@@ -533,7 +533,12 @@ fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
         }
     });
     for e in nodes.into_iter().rev().take(200) {
-        let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, at, &e);
+        // The snap to zero belongs to a formula's root: the root step is the result, an inner one is not.
+        let v = if e == expr {
+            gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, at, &e)
+        } else {
+            gridcraft_calc::recalc::evaluate_inner_expr(&d.wb, sheet, at, &e)
+        };
         steps.push(json!({"expression": gridcraft_formula::print(&e), "value": crate::cmd::inspect::value_json(&v)}));
     }
     let result = gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, at, &expr);

@@ -485,7 +485,7 @@ impl PassHost<'_> {
         let expr = std::sync::Arc::clone(expr);
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
-            ev.value(&expr)
+            ev.value_root(&expr)
         };
         // A legacy array formula fills the range it was entered in.
         let legacy = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
@@ -1094,11 +1094,21 @@ pub fn evaluate(wb: &Workbook, sheet: usize, at: CellRef, formula: &str) -> Valu
 }
 
 pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> Value {
+    evaluate_expr_at(wb, sheet, at, expr, true)
+}
+
+/// Like [`evaluate_expr`] for a sub-expression of a larger formula (Evaluate Formula's steps): Excel's
+/// snap to zero applies at a formula's root only, so an inner `A1-B1` keeps its IEEE residue.
+pub fn evaluate_inner_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> Value {
+    evaluate_expr_at(wb, sheet, at, expr, false)
+}
+
+fn evaluate_expr_at(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr, root: bool) -> Value {
     let exprs = HashMap::default();
     let mut rng = 0x1234_5678_9ABC_DEF0u64;
     let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
     let mut ev = Evaluator::new(&mut host, sheet, at);
-    ev.value(expr)
+    if root { ev.value_root(expr) } else { ev.value(expr) }
 }
 
 #[allow(clippy::disallowed_methods)] // the clock is read only off wasm

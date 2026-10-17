@@ -2976,6 +2976,31 @@ fn links_to_files_are_saved_as_external_relationships() {
 }
 
 #[test]
+fn evaluate_formula_steps_snap_only_the_root() {
+    // Excel snaps a near-cancelling subtraction only at the root of a formula, so an inner step shows
+    // the IEEE residue while the final result of =(A1-B1) is the same residue, and =A1-B1 shows 0 for both.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1.0, 1.0 + f64::EPSILON]]})).unwrap();
+    let steps = |s: &mut Session, f: &str| s.execute("formulas.evaluateFormula", json!({"formula": f})).unwrap();
+    let find = |r: &serde_json::Value, expr: &str| {
+        r["steps"].as_array().unwrap().iter().find(|x| x["expression"] == expr).map(|x| x["value"].as_f64().unwrap())
+    };
+
+    let r = steps(&mut s, "=(A1-B1)");
+    assert_eq!(find(&r, "A1-B1"), Some(-f64::EPSILON));
+    assert_eq!(r["result"].as_f64(), Some(-f64::EPSILON));
+
+    let r = steps(&mut s, "=A1-B1");
+    assert_eq!(find(&r, "A1-B1"), Some(0.0), "the root step is the result");
+    assert_eq!(r["result"].as_f64(), Some(0.0));
+
+    // An inner step of a larger formula does not snap, even when it is itself a subtraction.
+    let r = steps(&mut s, "=A1-B1+0");
+    assert_eq!(find(&r, "A1-B1"), Some(-f64::EPSILON));
+    assert_eq!(r["result"].as_f64(), Some(-f64::EPSILON));
+}
+
+#[test]
 fn vertical_alignment_commands_and_roundtrip() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "top"})).unwrap();

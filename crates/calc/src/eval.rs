@@ -137,6 +137,29 @@ impl<'h> Evaluator<'h> {
         self.deref(ev)
     }
 
+    /// Evaluates the root of a formula. Excel snaps a near-cancelling add or subtract to exactly 0
+    /// only here (and in the last addition of a `SUM`), never inside parentheses, unary signs,
+    /// `IF` branches or an inner step: `=A1-B1` is 0 over two numbers one ulp apart, `=(A1-B1)` is not.
+    pub fn value_root(&mut self, e: &Expr) -> Value {
+        match e {
+            Expr::Binary(op @ (BinOp::Add | BinOp::Sub), a, b) => {
+                // The root skips `eval`, so it must pay its own depth: a name that refers to itself
+                // (directly or through cells) is bounded only by this counter.
+                self.depth += 1;
+                if self.depth > MAX_DEPTH {
+                    self.depth -= 1;
+                    return Value::Error(CellError::Calc);
+                }
+                let x = self.value(a);
+                let y = self.value(b);
+                self.depth -= 1;
+                let sys = self.host.workbook().date_system;
+                zip2(&x, &y, |l, r| binary_scalar_snapped(*op, l, r, sys))
+            }
+            _ => self.value(e),
+        }
+    }
+
     fn resolve_sheet(&self, s: &SheetSel) -> Result<Vec<usize>, CellError> {
         let wb = self.host.workbook();
         match s {
@@ -283,7 +306,13 @@ impl<'h> Evaluator<'h> {
                     let saved = self.sheet;
                     // Unqualified references in a name refer to the scope sheet.
                     self.sheet = scope;
-                    let r = self.eval(&expr);
+                    // A name's body is a formula of its own, so Excel snaps it by the root rule wherever
+                    // the name is used (name probe, Windows Excel 16.0.20430). Only a value-producing
+                    // add or subtract needs it; any other body, a range included, stays as it is.
+                    let r = match &expr {
+                        Expr::Binary(BinOp::Add | BinOp::Sub, ..) => Ev::V(self.value_root(&expr)),
+                        _ => self.eval(&expr),
+                    };
                     self.sheet = saved;
                     r
                 }
@@ -899,17 +928,18 @@ impl<'h> Evaluator<'h> {
         self.aggregate_value(kind, value, true, acc)
     }
 
-    /// Adds one argument's value by calling `SUM` and `COUNT` on it, so coercion and error rules
-    /// stay in one place (`AVERAGE` of an argument is its `SUM` over its `COUNT`).
+    /// Adds one argument's value with `SUM`'s numbers and a call to `COUNT`, so coercion and error
+    /// rules stay in one place (`AVERAGE` of an argument is its `SUM` over its `COUNT`). The numbers
+    /// are added one by one so `SUM` can snap only its last addition.
     fn aggregate_value(&mut self, kind: Agg, value: Value, from_ref: bool, acc: &mut Acc) -> Result<(), Ev> {
-        let (Some(sum), Some(count)) = (gridcraft_functions::lookup("SUM"), gridcraft_functions::lookup("COUNT")) else {
+        let Some(count) = gridcraft_functions::lookup("COUNT") else {
             return Err(err(CellError::Name));
         };
         let args = [Arg { value, from_ref }];
         if kind != Agg::Count {
-            match gridcraft_functions::call(sum, &args, &mut FnCtx { ev: self, criteria: None }) {
-                Value::Number(n) => acc.sum += n,
-                other => return Err(Ev::V(other)),
+            match gridcraft_functions::numbers(&args) {
+                Ok(ns) => ns.into_iter().for_each(|n| acc.add(n)),
+                Err(e) => return Err(err(e)),
             }
         }
         if kind != Agg::Sum {
@@ -944,7 +974,13 @@ impl<'h> Evaluator<'h> {
     fn call_lambda_values(&mut self, l: &Lambda, bound: Vec<(String, Ev)>) -> Ev {
         let saved = std::mem::replace(&mut self.env, l.env.clone());
         self.env.extend(bound);
-        let r = self.eval(&l.body);
+        // A LAMBDA body is a formula of its own, so Excel snaps it by the root rule in every context
+        // (named, inline, LET-bound, MAP, REDUCE, SCAN, MAKEARRAY, BYROW, BYCOL; LAMBDA probe on Windows
+        // Excel 16.0.20430). A LET, IF, parenthesis or unary sign at the root of the body does not.
+        let r = match &l.body {
+            Expr::Binary(BinOp::Add | BinOp::Sub, ..) => Ev::V(self.value_root(&l.body)),
+            _ => self.eval(&l.body),
+        };
         self.env = saved;
         r
     }
@@ -1566,17 +1602,26 @@ impl Agg {
 /// What a folded aggregate carries from one value to the next.
 #[derive(Default)]
 struct Acc {
+    /// The sum of every number but the last, left to right.
     sum: f64,
+    /// The last number seen: `SUM` snaps only its last addition (see `gridcraft_core::arith::sum_snapped`).
+    last: Option<f64>,
     count: u64,
 }
 
 impl Acc {
+    fn add(&mut self, n: f64) {
+        if let Some(prev) = self.last.replace(n) {
+            self.sum += prev;
+        }
+    }
+
     /// Takes a value found inside a reference: only numbers count. `Err` is an error value that
     /// ends `SUM` and `AVERAGE`; `COUNT` skips errors.
     fn add_cell(&mut self, kind: Agg, v: &Value) -> Result<(), CellError> {
         match v {
             Value::Number(n) => {
-                self.sum += n;
+                self.add(*n);
                 self.count = self.count.saturating_add(1);
                 Ok(())
             }
@@ -1586,11 +1631,12 @@ impl Acc {
     }
 
     fn finish(&self, kind: Agg) -> Value {
+        let plain = self.sum + self.last.unwrap_or(0.0);
         match kind {
-            Agg::Sum => Value::number(self.sum),
+            Agg::Sum => Value::number(self.last.map_or(self.sum, |l| gridcraft_core::arith::snap_add(self.sum, l))),
             Agg::Count => Value::number(self.count as f64),
             Agg::Average if self.count == 0 => Value::Error(CellError::Div0),
-            Agg::Average => Value::number(self.sum / self.count as f64),
+            Agg::Average => Value::number(plain / self.count as f64),
         }
     }
 }
@@ -1657,6 +1703,17 @@ fn zip3(c: &Array, t: &Value, f: &Value, g: impl Fn(&Value, &Value, &Value) -> V
 
 pub fn binary_values(op: BinOp, x: &Value, y: &Value, sys: gridcraft_core::DateSystem) -> Value {
     zip2(x, y, |a, b| binary_scalar(op, a, b, sys))
+}
+
+/// `a + b` or `a - b` with Excel's snap to zero (see [`Evaluator::value_root`]).
+fn binary_scalar_snapped(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem) -> Value {
+    match (a, b) {
+        (Value::Error(_), _) | (_, Value::Error(_)) => binary_scalar(op, a, b, sys),
+        _ => match (a.to_number_in(sys), b.to_number_in(sys)) {
+            (Ok(x), Ok(y)) => Value::number(gridcraft_core::arith::snap_add(x, if op == BinOp::Sub { -y } else { y })),
+            (Err(e), _) | (_, Err(e)) => Value::Error(e),
+        },
+    }
 }
 
 fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem) -> Value {

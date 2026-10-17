@@ -79,6 +79,12 @@ pub(crate) mod util;
 pub use ets::Timeline;
 pub use stat::{aggregate_values, aggregate_values_k};
 
+/// The numbers `SUM` adds from `args`, in order, with its coercion and error rules: numbers in a
+/// reference or array count, text and booleans there are skipped, a typed scalar is coerced.
+pub fn numbers(args: &[Arg]) -> Result<Vec<f64>, gridcraft_core::CellError> {
+    util::numbers(args)
+}
+
 /// An evaluated argument. Ranges arrive as `Value::Array` (blank cells = `Value::Empty`) with
 /// `from_ref = true`.
 #[derive(Clone, Debug)]
