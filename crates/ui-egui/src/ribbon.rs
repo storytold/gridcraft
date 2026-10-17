@@ -124,8 +124,13 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
-                let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, ch));
-                control_keytip(app, ui, &__k, "commandSearch");
+                let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands (Alt+Q)", vec2(28.0, ch));
+                // The search box's key tip shows with the tab badges, at the root level.
+                if app.keytips.prefix() == Some("") {
+                    for sequence in keytip_table::sequences_for("dialog:commandSearch").into_iter().filter(|s| s.len() == 1) {
+                        keytip(app, ui, sequence, __k.rect.center_bottom());
+                    }
+                }
                 if __k.clicked() {
                     app.open_dialog("commandSearch", json!({}));
                 }
@@ -2244,7 +2249,7 @@ fn automate(app: &mut SheetApp, ui: &mut Ui) {
         app.open_dialog("macros", json!({}));
     }
     let __k = big_button(ui, Icon::Script, "Command\nPalette", "Search and run any command", false);
-    control_keytip(app, ui, &__k, "commandSearch");
+    control_keytip(app, ui, &__k, "dialog:commandSearch");
     if __k.clicked() {
         app.open_dialog("commandSearch", json!({}));
     }

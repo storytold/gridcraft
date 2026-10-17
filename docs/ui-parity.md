@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (horizontal scrollbar in the sheet tab bar, #840) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (Alt+Q search box, #772) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -20,6 +20,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable tabs) | done; missing contextual tabs for pictures, shapes, sparklines, header/footer, slicers |
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing |
 | Key tips (Alt / F10 then letters) | yes, every ribbon control | **initial** (#43, 10-10): Alt or F10 shows key tips on Home for alignment, Paste Special and AutoFit plus legacy Alt sequences; other tabs and controls not yet (#33, #49) | 3–5 h |
+| Search box (Alt+Q, "Tell Me") | yes | yes (#772, 10-14): Alt+Q, the Alt then Q key tip and the title bar's search icon open it with the input focused; substring and fuzzy match over ribbon command names, ribbon paths, ids and shortcuts; first match highlighted, Up/Down move, Enter or a click runs it; empty input lists the commands recently run from it in this workbook; Esc or a click outside closes it. `ui.search {query}` returns the same list without opening it | no help articles, cell content or suggested actions; recents last for the session only; Alt+Q needs the grid focused and is Windows/Linux only (Excel for Mac has none) |
 | Formula bar with Name Box, expand, function hints | yes | yes | done |
 | Sheet tabs: rename, reorder, colour, hide, scroll | yes | yes | active tab revealed on navigation and resize (#681); manual wheel/trackpad browsing preserved; rename focus bug on macOS (#145) |
 | Status bar: Sum/Count/Average and more, view buttons, zoom | yes | yes | customizable statistics partial |
@@ -117,6 +118,7 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 | Ctrl+Alt+V | Cmd+Control+V, Cmd+Option+V | Paste Special | **added** |
 | Ctrl+Alt+= / Ctrl+Alt+- | — | zoom in / out (10% steps) | **added** |
 | Alt+=, Alt+Down, Alt+Page Down / Up | Option+Down, Option+Page Down / Up | AutoSum, drop-down list, one screen right / left | **added** |
+| Alt+Q (chord, or Alt then Q) | — | search box | **added** (#772) |
 | Alt+Down on a filter header | Option+Down | Open the existing AutoFilter popup; validation dropdowns keep priority | **added** (AutoFilter portion of #441; Ribbon dropdowns and column value picker are separate work) |
 | Alt+F1, Alt+Shift+F1, Shift+F11 | Shift+F11 | embedded chart, new sheet | **added** |
 | Shift+F2, Ctrl+Shift+F2 | Shift+F2, Cmd+Shift+F2 | note, threaded comment | **added** |
@@ -161,6 +163,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Search box (#772): Alt+Q and the Alt, Q key tip open the command search with the input focused; ranked substring/fuzzy matching on ribbon commands, recently used commands per workbook on empty input, click outside closes; it never lists itself; `ui.search` queries it without UI |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
 | 2026-10-12 | minor | Ctrl+wheel zoom steps along a ladder of percentages about 20% apart that never skips 100%, gliding to each step with animations on, so a notch out undoes a notch in (it drifted: 100 → 122 → 101); Excel steps 15 points, see decisions.md |

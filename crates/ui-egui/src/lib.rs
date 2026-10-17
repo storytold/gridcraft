@@ -10,6 +10,7 @@ pub mod backstage;
 mod border_preview;
 mod cell_pictures;
 pub mod chartview;
+pub mod command_search;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
@@ -262,6 +263,9 @@ pub struct SheetApp {
     /// text noted for an unpublished cut); `None` after a copy, or once the clipboard is seen
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
+    /// Commands run from the search box, most recent first, per workbook (doc uid). In memory
+    /// only: the search lists them while its input is empty.
+    recent_commands: HashMap<u64, Vec<String>>,
     pub started: f64,
 }
 
@@ -305,6 +309,7 @@ impl SheetApp {
             selected_chart: None,
             clipboard_text_at_copy: None,
             cut_text: None,
+            recent_commands: HashMap::new(),
             started: now_ms(),
         }
     }
@@ -571,8 +576,31 @@ impl SheetApp {
     }
 
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
+    /// The commands run from the search box in the active workbook, most recent first.
+    pub fn recent_commands(&self) -> &[String] {
+        let uid = self.session.active().map(|d| d.uid).unwrap_or_default();
+        self.recent_commands.get(&uid).map(Vec::as_slice).unwrap_or_default()
+    }
+
+    /// Notes `id` as just run from the search box in the active workbook.
+    pub(crate) fn remember_command(&mut self, id: &str) {
+        let uid = self.session.active().map(|d| d.uid).unwrap_or_default();
+        command_search::remember(self.recent_commands.entry(uid).or_default(), id);
+    }
+
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
         let r = match id {
+            // The search box's list without opening it: `{query}` gives the commands it shows
+            // for that text, best first; no query gives the recently used commands.
+            "ui.search" => {
+                let query = p.get("query").and_then(Json::as_str).unwrap_or("");
+                let hits = if query.trim().is_empty() {
+                    command_search::recent(&self.session, self.recent_commands())
+                } else {
+                    command_search::search(&self.session, query)
+                };
+                Ok(Json::Array(hits.iter().map(command_search::to_json).collect()))
+            }
             "ui.printSettings" => printing::settings(&mut self.printing, p, self.services.printers.as_ref()),
             "ui.printSubmit" => self.submit_print(p.clone()),
             "ui.ribbonTab" => {

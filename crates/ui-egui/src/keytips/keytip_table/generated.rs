@@ -369,5 +369,5 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("FN", Entry::Finish(Action::Command("file.new"))),    // Excel: New page; New page
     ("FO", Entry::Finish(Action::Command("file.open"))),   // Excel: Open page; fires immediately in Excel; deeper aliases dropped as unreachable
     ("FP", Entry::Finish(Action::Command("file.print"))),  // Excel: Print page; containment(Print)
-    ("Q", Entry::Finish(Action::Pending("ui.search"))),    // pending; Excel: Search / Tell Me; Alt+Q search box does not exist yet (issue #49)
+    ("Q", Entry::Finish(Action::Dialog("commandSearch"))), // Excel: Search / Tell Me; the search box; Alt+Q held as a chord opens it too (keymap)
 ];

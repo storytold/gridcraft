@@ -37,6 +37,7 @@ connection; nothing sent after it runs. Blank lines are skipped.
 | `ui.ribbon` | `{tab}` | Switch ribbon tab |
 | `ui.dialog` / `ui.dialog.set` / `ui.dialog.confirm` / `ui.dialog.cancel` | `{name}` / `{field, value}` | Open, fill in and confirm dialogs |
 | `ui.backstage` (via `engine.execute`) | `{page?: home\|new\|open\|info\|saveAs\|print\|export\|options\|close}` | Open the File tab's Backstage view on a page, or close it (`ui.inspect` reports the open page as `backstage`) |
+| `ui.search` (via `engine.execute`) | `{query?}` | The search box's (Alt+Q) matches for `query`, best first, as `[{id, label, menu, shortcut}]`; no query gives the commands recently run from it in the active workbook. Never opens the search box |
 | `ui.screenshot` | `{path?}` | PNG of the window (base64 when no path). Animations are settled first: the picture shows the final state |
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |

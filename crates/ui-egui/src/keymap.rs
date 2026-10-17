@@ -132,6 +132,8 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         ArrowDown if ctrl_alt && mac => borders("bottom"),
         // Alt / Option alone.
         Equals if alt && !s && !mac => run("formulas.autoSum"),
+        // Alt+Q held as a chord opens the search box; Alt released then Q is its key tip.
+        Q if alt && !s && !mac => Shortcut::Dialog("commandSearch", json!({})),
         ArrowDown if alt && !s => Shortcut::DropDown,
         PageDown if alt => Shortcut::ScreenRight,
         PageUp if alt => Shortcut::ScreenLeft,

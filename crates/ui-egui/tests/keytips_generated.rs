@@ -2733,10 +2733,7 @@ fn keytip_fp_() {
 fn keytip_q_() {
     let mut h = harness(blank());
     sequence(&mut h, "Q", false);
-    assert!(h.state().dialog.is_none(), "Q must not open a dialog");
-    assert!(h.state().message.is_none(), "Q must not open a message box");
-    assert!(h.state().toast.is_none(), "Q must not raise a toast");
-    assert!(h.state().session.journal.is_empty(), "Q must not journal");
+    assert!(h.state().dialog.is_some(), "Q must open the commandSearch dialog");
 }
 
 #[test]

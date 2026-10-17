@@ -2516,11 +2516,10 @@
   },
   {
    "seq": "Q",
-   "kind": "command",
-   "target": "ui.search",
-   "pending": true,
+   "kind": "dialog",
+   "target": "commandSearch",
    "excel": "Search / Tell Me",
-   "note": "Alt+Q search box does not exist yet (issue #49)"
+   "note": "the search box; Alt+Q held as a chord opens it too (keymap)"
   }
  ]
 }
