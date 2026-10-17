@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (horizontal scrollbar in the sheet tab bar, #840) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (number-format named and indexed colors render in grid and PDF, #1452) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -48,6 +48,7 @@ this logic, with one undo step.
 | Fill handle: drag to fill series, double-click to fill down, right-drag menu | fill done (Ctrl+drag swaps copy and series); right-drag menu missing |
 | Drag-move and drag-copy cells (border drag, Ctrl/Option, Shift to insert) | done (M3) |
 | In-cell editing, Enter/Tab movement, Alt/Option+Enter line breaks | done |
+| Number-format colors (`[Green]`, `[Color1]`–`[Color56]`) | Rendered in grid and PDF from shared RGB mappings (#1452) |
 | Point mode (click/drag/arrow references), reference colouring, F4 | done |
 | AutoComplete in columns, function autocomplete and argument tips | done; cell helpers clip to the worksheet and hide when the editor scrolls out (#200) |
 | Header resize and double-click AutoFit | done (#42, #88 for header dividers) |
@@ -161,6 +162,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Number-format named colors use their RGB values; indexed `[Color1]`–`[Color56]` resolve through the shared legacy palette in grid and PDF (#1452) |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
 | 2026-10-12 | minor | Ctrl+wheel zoom steps along a ladder of percentages about 20% apart that never skips 100%, gliding to each step with animations on, so a notch out undoes a notch in (it drifted: 100 → 122 → 101); Excel steps 15 points, see decisions.md |

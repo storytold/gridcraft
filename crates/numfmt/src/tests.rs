@@ -1,5 +1,18 @@
 use super::*;
 
+#[test]
+fn format_colors_resolve_named_and_indexed_rgb_safely() {
+    assert_eq!(FormatColor::Green.rgb(), Some([0, 255, 0]));
+    assert_eq!(FormatColor::Black.rgb(), Some([0, 0, 0]));
+    assert_eq!(FormatColor::Indexed(1).rgb(), Some([0, 0, 0]));
+    assert_eq!(FormatColor::Indexed(10).rgb(), Some([0, 128, 0]));
+    assert_eq!(FormatColor::Indexed(46).rgb(), Some([255, 102, 0]));
+    assert_eq!(FormatColor::Indexed(56).rgb(), Some([51, 51, 51]));
+    for index in [0, 57, 255] {
+        assert_eq!(FormatColor::Indexed(index).rgb(), None);
+    }
+}
+
 const S: DateSystem = DateSystem::D1900;
 
 fn f(code: &str, n: f64) -> String {

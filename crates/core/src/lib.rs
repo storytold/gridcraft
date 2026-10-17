@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod addr;
+pub mod color;
 pub mod date;
 pub mod parse;
 pub mod value;

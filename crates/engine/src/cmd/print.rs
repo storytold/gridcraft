@@ -604,20 +604,6 @@ fn rgb_of(c: Color, wb: &Workbook) -> Option<Rgb> {
     c.resolve(&wb.theme)
 }
 
-fn numfmt_rgb(c: gridcraft_numfmt::FormatColor) -> Rgb {
-    use gridcraft_numfmt::FormatColor as F;
-    match c {
-        F::Black | F::Indexed(_) => [0, 0, 0],
-        F::Blue => [0, 0, 255],
-        F::Cyan => [0, 255, 255],
-        F::Green => [0, 128, 0],
-        F::Magenta => [255, 0, 255],
-        F::Red => [255, 0, 0],
-        F::White => [255, 255, 255],
-        F::Yellow => [255, 255, 0],
-    }
-}
-
 fn blend(fg: [u8; 4]) -> Rgb {
     let a = fg[3] as u16;
     let mix = |c: u8| ((c as u16 * a + 255 * (255 - a)) / 255) as u8;
@@ -1061,7 +1047,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     let avail = (w - 2.0 * pad - indent).max(0.0);
     let code = st.num_fmt.as_str();
     let formatted = crate::display::format(&v, code, wb);
-    let mut color = formatted.color.map(numfmt_rgb).or_else(|| rgb_of(st.font.color, wb)).unwrap_or([0, 0, 0]);
+    let mut color = formatted.color.and_then(gridcraft_numfmt::FormatColor::rgb).or_else(|| rgb_of(st.font.color, wb)).unwrap_or([0, 0, 0]);
     if l.cf.as_ref().and_then(|x| x.style.as_ref()).is_some_and(|s| s.font.color != Color::Auto) {
         color = rgb_of(st.font.color, wb).unwrap_or(color);
     }
@@ -1930,6 +1916,16 @@ mod tests {
         assert_eq!(r.text, "P4/9 9:00 AM");
         assert_eq!(expand_header_footer("plain", &cx)[1].text, "plain");
         assert_eq!(expand_header_footer("&", &cx)[1].text, "");
+    }
+
+    #[test]
+    fn pdf_uses_indexed_number_format_palette_color() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "A1", "format": "[Color4]0"})).unwrap();
+        let (pdf, pages) = pdf_of(&mut s, json!({}));
+        assert_eq!(pages, 1);
+        assert!(contains(&pdf, "0 1 0 rg"), "expected indexed Color4 green in PDF text stream");
     }
 
     #[test]
