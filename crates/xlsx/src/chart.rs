@@ -236,7 +236,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         y_title: y_ax.and_then(|a| a.child("title")).and_then(rich_title),
         source: None,
         by_rows: false,
-        pivot: root.path(&["pivotSource", "name"]).map(|n| n.text.trim().to_string()).filter(|n| !n.is_empty()),
+        pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
     })
 }
 
@@ -610,17 +610,24 @@ fn axis_xml(a: &Ax<'_>) -> String {
     s
 }
 
+/// A PivotChart link without the workbook in brackets: `[Book.xlsx]Sheet2!PT` → `Sheet2!PT`.
+fn strip_book(link: &str) -> &str {
+    link.strip_prefix('[').and_then(|r| r.split_once(']')).map_or(link, |(_, rest)| rest)
+}
+
 /// Chart part XML for a model chart on sheet `si`.
-pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart) -> String {
+pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> String {
     let mut s = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><c:roundedCorners val=\"0\"/>",
     );
     if (1..=48).contains(&ch.style) {
         let _ = write!(s, "<c:style val=\"{}\"/>", ch.style);
     }
-    // A PivotChart names its PivotTable (`Sheet2!PivotTable1`).
+    // A PivotChart names its PivotTable behind the workbook in brackets (`[Book.xlsx]Sheet2!PivotTable1`);
+    // without the brackets Excel shows an ordinary chart.
     if let Some(link) = ch.pivot.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
-        let _ = write!(s, "<c:pivotSource><c:name>{}</c:name><c:fmtId val=\"0\"/></c:pivotSource>", esc(link));
+        let link = strip_book(link);
+        let _ = write!(s, "<c:pivotSource><c:name>[{}]{}</c:name><c:fmtId val=\"0\"/></c:pivotSource>", esc(book_name), esc(link));
     }
     s.push_str("<c:chart>");
     match &ch.title {

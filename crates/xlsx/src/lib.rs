@@ -138,6 +138,12 @@ pub fn write_xlsx_as(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> 
     write::write_xlsx(wb, kind)
 }
 
+/// Writes a workbook as the given member of the `.xlsx` family for the file `book_name` (a bare
+/// file name, used for the workbook in a PivotChart's link to its PivotTable).
+pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: &str) -> Result<Vec<u8>, IoError> {
+    write::write_xlsx_named(wb, kind, Some(book_name))
+}
+
 /// CSV import options.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CsvOptions {

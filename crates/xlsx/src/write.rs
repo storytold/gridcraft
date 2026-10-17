@@ -113,6 +113,8 @@ pub struct Out {
     pub sst: Sst,
     pub images: u32,
     pub charts: u32,
+    /// The workbook's file name, which a PivotChart's link to its PivotTable names in brackets.
+    pub book_name: String,
     /// References of chartex parts, defined as hidden `_xlchart.v1.N` names.
     pub chart_names: Vec<String>,
     pub drawings: u32,
@@ -185,7 +187,16 @@ fn check_sheet_names(wb: &Workbook) -> Result<(), IoError> {
     Ok(())
 }
 
+/// Workbook name written in a PivotChart's link when the file name isn't known.
+const DEFAULT_BOOK_NAME: &str = "Workbook.xlsx";
+
 pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
+    write_xlsx_named(wb, kind, None)
+}
+
+/// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
+/// PivotTable in Excel only when its link starts with the workbook in brackets.
+pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
     }
@@ -201,6 +212,7 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
         sst: Sst::default(),
         images: 0,
         charts: 0,
+        book_name: book_name.filter(|n| !n.is_empty() && !n.contains(['[', ']'])).unwrap_or(DEFAULT_BOOK_NAME).to_string(),
         chart_names: vec![],
         drawings: 0,
         tables: 0,

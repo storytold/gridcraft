@@ -139,8 +139,9 @@ fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
 fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let fmt = str_param(p, "format").unwrap_or("xlsx");
     let d = s.doc()?;
-    let bytes = crate::io::save_bytes(&d.wb, &format!("x.{fmt}"))?;
     let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
+    // The file name goes into a PivotChart's link to its PivotTable.
+    let bytes = crate::io::save_bytes(&d.wb, &name)?;
     Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len()}))
 }
 

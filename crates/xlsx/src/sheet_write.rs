@@ -522,7 +522,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
                 drels.add_uri(crate::chartex::REL_CHARTEX, &format!("../charts/chartEx{n}.xml"))
             } else {
                 let name = format!("xl/charts/chart{}.xml", out.charts);
-                out.part(&name, Some(CT_CHART), crate::chart::write_chart(wb, si, ch).into_bytes());
+                out.part(&name, Some(CT_CHART), crate::chart::write_chart(wb, si, ch, &out.book_name).into_bytes());
                 drels.add("chart", &format!("../charts/chart{}.xml", out.charts))
             };
             objs.push(Obj::Chart(ch, rid));
