@@ -380,6 +380,7 @@ fn sample() -> Workbook {
             color: Some(Color::Rgb(0xFF0000)),
             secondary: false,
             kind: None,
+            quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
         }],

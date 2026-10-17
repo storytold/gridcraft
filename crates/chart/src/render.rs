@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::f32::consts::{PI, TAU};
 
-use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, Theme, TrendlineKind};
+use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
@@ -1561,12 +1561,16 @@ fn radar(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
 
 // ---------------------------------------------------------------- box & whisker
 
-fn quantile(sorted: &[f64], q: f64) -> f64 {
+fn quantile(sorted: &[f64], q: f64, method: QuartileMethod) -> f64 {
     let n = sorted.len();
     if n == 0 {
         return 0.0;
     }
-    let pos = q * (n - 1) as f64;
+    // Clamp exclusive ranks for short samples so one or two points remain drawable.
+    let pos = match method {
+        QuartileMethod::Inclusive => q * (n - 1) as f64,
+        QuartileMethod::Exclusive => (q * (n as f64 + 1.0) - 1.0).clamp(0.0, (n - 1) as f64),
+    };
     let i = pos.floor() as usize;
     let frac = pos - i as f64;
     let a = sorted.get(i).copied().unwrap_or(0.0);
@@ -1593,7 +1597,8 @@ fn box_whisker(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             continue;
         }
         v.sort_by(f64::total_cmp);
-        let (q1, med, q3) = (quantile(&v, 0.25), quantile(&v, 0.5), quantile(&v, 0.75));
+        let method = chart.series.get(i).map(|s| s.quartiles).unwrap_or_default();
+        let (q1, med, q3) = (quantile(&v, 0.25, method), quantile(&v, 0.5, method), quantile(&v, 0.75, method));
         let iqr = q3 - q1;
         let (flo, fhi) = (q1 - 1.5 * iqr, q3 + 1.5 * iqr);
         let wlo = v.iter().copied().find(|x| *x >= flo).unwrap_or(q1);
@@ -1767,5 +1772,36 @@ mod smooth_tests {
         let out = smooth_run(pts, plot);
         assert!(out.len() > 5);
         assert!(out.iter().all(|p| (0.0..=300.0).contains(&p[0]) && (10.0..=110.0).contains(&p[1])));
+    }
+}
+
+#[cfg(test)]
+mod quartile_tests {
+    use super::*;
+
+    #[test]
+    fn box_whisker_default_quartiles_are_exclusive() {
+        let values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        assert_eq!(quantile(&values, 0.25, QuartileMethod::default()), 1.75);
+        assert_eq!(quantile(&values, 0.5, QuartileMethod::default()), 3.5);
+        assert_eq!(quantile(&values, 0.75, QuartileMethod::default()), 5.25);
+    }
+
+    #[test]
+    fn quartile_methods_and_short_samples() {
+        for (values, exclusive, inclusive) in [
+            (vec![1., 2., 3.], (1., 3.), (1.5, 2.5)),
+            (vec![1., 2., 3., 4.], (1.25, 3.75), (1.75, 3.25)),
+            (vec![1., 2., 3., 4., 5.], (1.5, 4.5), (2., 4.)),
+            (vec![1., 2., 3., 4., 5., 6., 7.], (2., 6.), (2.5, 5.5)),
+            (vec![1., 1., 2., 3., 5., 8.], (1., 5.75), (1.25, 4.5)),
+            (vec![1., 2.], (1., 2.), (1.25, 1.75)),
+            (vec![1.], (1., 1.), (1., 1.)),
+            (vec![], (0., 0.), (0., 0.)),
+        ] {
+            for (method, expected) in [(QuartileMethod::Exclusive, exclusive), (QuartileMethod::Inclusive, inclusive)] {
+                assert_eq!((quantile(&values, 0.25, method), quantile(&values, 0.75, method)), expected);
+            }
+        }
     }
 }

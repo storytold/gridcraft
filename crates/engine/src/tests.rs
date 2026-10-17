@@ -3282,3 +3282,30 @@ fn paste_special_validation_moves_relative_references() {
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
 }
+
+#[test]
+fn box_whisker_quartile_methods_survive_xlsx() {
+    use gridcraft_model::QuartileMethod;
+    let mut s = s();
+    chart_data(&mut s);
+    s.execute("insert.chart", json!({"range": "A1:C5", "type": "boxWhisker"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().charts[0].series[0].quartiles, QuartileMethod::Exclusive);
+    s.execute("chart.set", json!({"quartiles": "inclusive"})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().charts[0].series.iter().all(|s| s.quartiles == QuartileMethod::Inclusive));
+    for invalid in [json!("median"), json!(null), json!(1)] {
+        assert!(s.execute("chart.set", json!({"quartiles": invalid, "title": "Changed"})).is_err());
+    }
+    assert_ne!(s.doc().unwrap().wb.active().unwrap().charts[0].title.as_deref(), Some("Changed"));
+    // Imported series can differ; changing a chart's setting applies to all its series.
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    let sh = wb.sheet_mut(0).unwrap();
+    assert!(sh.charts[0].series.len() > 1);
+    sh.charts[0].series[1].quartiles = QuartileMethod::Exclusive;
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let (back, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    let series = &back.active().unwrap().charts[0].series;
+    assert_eq!(series[0].quartiles, QuartileMethod::Inclusive);
+    assert_eq!(series[1].quartiles, QuartileMethod::Exclusive);
+    s.execute("chart.set", json!({"quartiles": "exclusive"})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().charts[0].series.iter().all(|s| s.quartiles == QuartileMethod::Exclusive));
+}

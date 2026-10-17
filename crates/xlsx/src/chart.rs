@@ -106,6 +106,7 @@ fn read_series(s: &El) -> Series {
         color,
         secondary: false,
         kind: None,
+        quartiles: Default::default(),
         smooth: bool_val(s, "smooth"),
         trendlines: s.kids("trendline").filter_map(read_trendline).collect(),
     }

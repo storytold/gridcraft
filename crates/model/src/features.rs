@@ -406,6 +406,14 @@ pub enum LegendPos {
     Right,
 }
 
+/// Quartile calculation for a box & whisker series.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QuartileMethod {
+    #[default]
+    Exclusive,
+    Inclusive,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Series {
     /// Formula text for the series name (`Sheet1!$B$1`) or a literal.
@@ -421,6 +429,9 @@ pub struct Series {
     /// Draw line segments as a smoothed (spline) curve.
     #[serde(default)]
     pub smooth: bool,
+    /// Box & whisker quartiles; Excel defaults to exclusive.
+    #[serde(default)]
+    pub quartiles: QuartileMethod,
     /// Trendlines fitted to this series (Excel allows several per series).
     #[serde(default)]
     pub trendlines: Vec<Trendline>,

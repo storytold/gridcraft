@@ -227,6 +227,7 @@ fn resolve_from_workbook() {
             color: None,
             secondary: false,
             kind: None,
+            quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
         },
@@ -238,6 +239,7 @@ fn resolve_from_workbook() {
             color: Some(Color::rgb(1, 2, 3)),
             secondary: true,
             kind: None,
+            quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
         },
@@ -249,6 +251,7 @@ fn resolve_from_workbook() {
             color: None,
             secondary: false,
             kind: None,
+            quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
         },
@@ -287,6 +290,7 @@ fn resolve_from_workbook() {
             color: None,
             secondary: false,
             kind: None,
+            quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
         },
@@ -298,6 +302,7 @@ fn resolve_from_workbook() {
             color: None,
             secondary: true,
             kind: None,
+            quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
         },
@@ -314,6 +319,7 @@ fn resolve_from_workbook() {
         color: None,
         secondary: false,
         kind: None,
+        quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
     }];
@@ -331,6 +337,7 @@ fn resolve_from_workbook() {
         color: None,
         secondary: false,
         kind: None,
+        quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
     }];
@@ -1001,6 +1008,7 @@ fn pie_points_follow_workbook_theme() {
         color: None,
         secondary: false,
         kind: None,
+        quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
     }];
@@ -1056,4 +1064,28 @@ fn area_charts_draw_source_value_labels_only_when_enabled() {
         let first_label = on.iter().position(|p| matches!(p, Prim::Text { text, .. } if text == "$12,000"));
         assert!(first_label > last_poly, "{kind:?}: label drawn under a later area");
     }
+}
+
+#[test]
+fn box_whisker_draws_each_series_quartile_method() {
+    use gridcraft_model::QuartileMethod;
+    let mut c = chart(ChartKind::BoxWhisker);
+    c.legend = LegendPos::None;
+    c.series = vec![Series::default(), Series { quartiles: QuartileMethod::Inclusive, ..Default::default() }];
+    let color = [12, 34, 56, 255];
+    let d = ChartData {
+        series: vec![series("A", &[1., 2., 3., 4., 5., 6.], color, c.kind), series("B", &[1., 2., 3., 4., 5., 6.], color, c.kind)],
+        ..Default::default()
+    };
+    let prims = render(&c, &d, 640., 400., &ApproxMeasure);
+    let heights: Vec<f32> = prims
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Rect { h, fill, .. } if *fill == Some(color) => Some(*h),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(heights.len(), 2);
+    // The boxes span 3.5 and 2.5 data units on the same value axis.
+    assert!((heights[0] / heights[1] - 1.4).abs() < 0.001);
 }

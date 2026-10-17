@@ -90,7 +90,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart Properties",
             ["Chart Design"],
             None,
-            "{chart?: id, type?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
+            "{chart?: id, type?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, quartiles?: exclusive|inclusive, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
             has_doc,
             chart_set
         ),
@@ -603,6 +603,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 color: None,
                 secondary: false,
                 kind: None,
+                quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
             });
@@ -618,6 +619,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 color: None,
                 secondary: false,
                 kind: None,
+                quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
             });
@@ -788,11 +790,24 @@ fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
 fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ci) = find_chart(s, p)?;
     let at = cell_param_on(s, p, "at", si)?;
+    let quartiles = p
+        .get("quartiles")
+        .map(|v| match v.as_str() {
+            Some("exclusive") => Ok(gridcraft_model::QuartileMethod::Exclusive),
+            Some("inclusive") => Ok(gridcraft_model::QuartileMethod::Inclusive),
+            _ => Err(bad("quartiles", "expected exclusive or inclusive")),
+        })
+        .transpose()?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let Some(c) = sh.charts.get_mut(ci) else { return Ok(Json::Null) };
         if let Some(t) = str_param(p, "type") {
             c.kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
+        }
+        if let Some(method) = quartiles {
+            for series in &mut c.series {
+                series.quartiles = method;
+            }
         }
         if let Some(t) = p.get("title") {
             c.title = t.as_str().map(str::to_string);

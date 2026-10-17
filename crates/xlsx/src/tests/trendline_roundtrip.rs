@@ -47,6 +47,7 @@ fn chart(id: u32, kind: ChartKind, trendlines: Vec<Trendline>) -> Chart {
             color: Some(Color::Rgb(0x4472C4)),
             secondary: false,
             kind: None,
+            quartiles: Default::default(),
             smooth: false,
             trendlines,
         }],

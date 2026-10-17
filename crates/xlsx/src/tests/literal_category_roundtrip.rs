@@ -28,6 +28,7 @@ fn literal_category_with_separators_survives_save() {
             color: None,
             secondary: false,
             kind: None,
+            quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
         })
