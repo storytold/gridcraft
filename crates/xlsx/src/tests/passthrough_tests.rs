@@ -572,6 +572,7 @@ fn rebased(target: &str, from: &str, to: &str) -> String {
         content_type: String::new(),
         data: Arc::from(&b""[..]),
         rels: vec![link("externalLinkPath"), link("hyperlink")],
+        ..Default::default()
     };
     let mut wb = gridcraft_model::Workbook::new();
     wb.preserved = Some(Arc::new(gridcraft_model::Preserved { parts: vec![part], ..Default::default() }));
@@ -822,4 +823,247 @@ fn file_version_and_calc_features_survive_a_save() {
     // A workbook that had neither gets neither.
     let plain = Unpacked::new(&write_xlsx(&gridcraft_model::Workbook::new()).unwrap()).text("xl/workbook.xml");
     assert!(!plain.contains("fileVersion") && !plain.contains("extLst"), "{plain}");
+}
+
+// ---------------------------------------------------------------- PivotTables on another workbook
+
+const EXT_CACHE_RANGE: &str = r#"<worksheetSource ref="A1:B2" sheet="Src" r:id="rId2"/>"#;
+const EXT_CACHE_NAME: &str = r#"<worksheetSource name="SrcData" r:id="rId2"/>"#;
+const EXT_LINK_TARGET: &str = "file:///C:/data/source.xlsx";
+const EXT_RECORDS: &str = r#"<?xml version="1.0"?><pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1"><r><x v="0"/><n v="5"/></r></pivotCacheRecords>"#;
+/// Source styles: custom number format 170 and two differential formats (the second blue).
+const EXT_STYLES: &str = r#"<?xml version="1.0"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="170" formatCode="0.0%"/></numFmts><fonts count="1"><font/></fonts><fills count="1"><fill/></fills><borders count="1"><border/></borders><cellXfs count="1"><xf/></cellXfs><dxfs count="2"><dxf><font><b/></font></dxf><dxf><font><color rgb="FF0000FF"/></font></dxf></dxfs></styleSheet>"#;
+
+fn ext_cache(source: &str) -> String {
+    format!(
+        r#"<?xml version="1.0"?><pivotCacheDefinition xmlns="{NS_MAIN}" xmlns:r="{NS_R}" r:id="rId1" recordCount="1"><cacheSource type="worksheet">{source}</cacheSource><cacheFields count="2"><cacheField name="K" numFmtId="0"><sharedItems count="1"><s v="x"/></sharedItems></cacheField><cacheField name="V" numFmtId="0"><sharedItems containsNumber="1"/></cacheField></cacheFields></pivotCacheDefinition>"#
+    )
+}
+
+fn ext_table(name: &str, cache_id: u32) -> String {
+    format!(
+        r#"<?xml version="1.0"?><pivotTableDefinition xmlns="{NS_MAIN}" name="{name}" cacheId="{cache_id}" dataCaption="Values"><location ref="A3:B5" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/><pivotFields count="2"><pivotField axis="axisRow" showAll="0"><items count="2"><item x="0"/><item t="default"/></items></pivotField><pivotField dataField="1" showAll="0"/></pivotFields><rowFields count="1"><field x="0"/></rowFields><dataFields count="1"><dataField name="Sum of V" fld="1" baseField="0" baseItem="0" numFmtId="170"/></dataFields><formats count="1"><format dxfId="1"><pivotArea grandRow="1" outline="0" fieldPosition="0"/></format></formats></pivotTableDefinition>"#
+    )
+}
+
+/// Sheets "Report" and "More", each with a PivotTable on cache 1, whose source (a range, or a
+/// name with `by_name`) is in another workbook; with `shared` both use one cache, otherwise only
+/// "Report" has a PivotTable. `link_kind` is the type of the cache's relationship to the source.
+fn ext_pivot_package(by_name: bool, shared: bool, link_kind: &str) -> Vec<u8> {
+    let workbook = format!(
+        r#"<?xml version="1.0"?><workbook xmlns="{NS_MAIN}" xmlns:r="{NS_R}"><sheets><sheet name="Report" sheetId="1" r:id="rId1"/><sheet name="More" sheetId="2" r:id="rId2"/></sheets><pivotCaches><pivotCache cacheId="1" r:id="rId3"/></pivotCaches></workbook>"#
+    );
+    let ct = |part: &str, ty: &str| format!(r#"<Override PartName="/{part}" ContentType="{CT_PREFIX}.spreadsheetml.{ty}+xml"/>"#);
+    let content_types = format!(
+        r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>{}{}{}{}{}{}{}{}</Types>"#,
+        ct("xl/workbook.xml", "sheet.main"),
+        ct("xl/worksheets/sheet1.xml", "worksheet"),
+        ct("xl/worksheets/sheet2.xml", "worksheet"),
+        ct("xl/styles.xml", "styles"),
+        ct("xl/pivotTables/pivotTable1.xml", "pivotTable"),
+        ct("xl/pivotTables/pivotTable2.xml", "pivotTable"),
+        ct("xl/pivotCache/pivotCacheDefinition1.xml", "pivotCacheDefinition"),
+        ct("xl/pivotCache/pivotCacheRecords1.xml", "pivotCacheRecords"),
+    );
+    let sheet = |v: &str| {
+        format!(
+            r#"<?xml version="1.0"?><worksheet xmlns="{NS_MAIN}"><sheetData><row r="4"><c r="A4" t="inlineStr"><is><t>x</t></is></c><c r="B4"><v>{v}</v></c></row></sheetData></worksheet>"#
+        )
+    };
+    let (s1, s2) = (sheet("5"), sheet("6"));
+    let cache = ext_cache(if by_name { EXT_CACHE_NAME } else { EXT_CACHE_RANGE });
+    let (t1, t2) = (ext_table("Ext1", 1), ext_table("Ext2", 1));
+    let link = if link_kind.starts_with("http") { link_kind.to_string() } else { format!("{NS_R}/{link_kind}") };
+    let cache_rels = rels(&[("rId1", "pivotCacheRecords", "pivotCacheRecords1.xml"), ("rId2", &link, EXT_LINK_TARGET)]);
+    let table_rels = rels(&[("rId1", "pivotCacheDefinition", "../pivotCache/pivotCacheDefinition1.xml")]);
+    let wb_rels = rels(&[
+        ("rId1", "worksheet", "worksheets/sheet1.xml"),
+        ("rId2", "worksheet", "worksheets/sheet2.xml"),
+        ("rId3", "pivotCacheDefinition", "pivotCache/pivotCacheDefinition1.xml"),
+        ("rId4", "styles", "styles.xml"),
+    ]);
+    let s1_rels = rels(&[("rId1", "pivotTable", "../pivotTables/pivotTable1.xml")]);
+    let s2_rels = rels(&[("rId1", "pivotTable", "../pivotTables/pivotTable2.xml")]);
+    let mut parts: Vec<(&str, &[u8])> = vec![
+        ("[Content_Types].xml", content_types.as_bytes()),
+        ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+        ("xl/workbook.xml", workbook.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+        ("xl/styles.xml", EXT_STYLES.as_bytes()),
+        ("xl/worksheets/sheet1.xml", s1.as_bytes()),
+        ("xl/worksheets/sheet2.xml", s2.as_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels", s1_rels.as_bytes()),
+        ("xl/pivotTables/pivotTable1.xml", t1.as_bytes()),
+        ("xl/pivotTables/_rels/pivotTable1.xml.rels", table_rels.as_bytes()),
+        ("xl/pivotCache/pivotCacheDefinition1.xml", cache.as_bytes()),
+        ("xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels", cache_rels.as_bytes()),
+        ("xl/pivotCache/pivotCacheRecords1.xml", EXT_RECORDS.as_bytes()),
+    ];
+    if shared {
+        parts.push(("xl/worksheets/_rels/sheet2.xml.rels", s2_rels.as_bytes()));
+        parts.push(("xl/pivotTables/pivotTable2.xml", t2.as_bytes()));
+        parts.push(("xl/pivotTables/_rels/pivotTable2.xml.rels", table_rels.as_bytes()));
+    }
+    make_zip(&parts)
+}
+
+/// The written PivotTable parts of a sheet, through its relationships.
+fn written_pivot_tables(u: &Unpacked, sheet: &str) -> Vec<String> {
+    u.rels(&sheet_part(u, sheet)).into_iter().filter(|r| r.1.ends_with("/pivotTable")).map(|r| r.2).collect()
+}
+
+/// `<pivotCache>` entries of a written workbook: (cacheId, cache part).
+fn written_pivot_caches(u: &Unpacked) -> Vec<(String, String)> {
+    let wb = xml::parse(u.parts.get("xl/workbook.xml").unwrap()).unwrap();
+    wb.child("pivotCaches")
+        .map(|c| {
+            c.kids("pivotCache").map(|e| (e.attr("cacheId").unwrap().to_string(), u.target("xl/workbook.xml", e.attr("id").unwrap()).1)).collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The font colour of `<dxf>` number `dxf` and the code of number format `fmt` in written styles.
+fn written_style(u: &Unpacked, dxf: &str, fmt: &str) -> (String, String) {
+    let st = xml::parse(u.parts.get("xl/styles.xml").unwrap()).unwrap();
+    let d = st.child("dxfs").unwrap().kids("dxf").nth(dxf.parse().unwrap()).unwrap();
+    let color = d.child("font").and_then(|f| f.child("color")).and_then(|c| c.attr("rgb")).unwrap_or("").to_string();
+    let code = st.child("numFmts").unwrap().kids("numFmt").find(|n| n.attr("numFmtId") == Some(fmt)).unwrap().attr("formatCode").unwrap().to_string();
+    (color, code)
+}
+
+#[test]
+fn pivot_tables_on_another_workbook_survive_a_save() {
+    for by_name in [false, true] {
+        let src = ext_pivot_package(by_name, false, "externalLinkPath");
+        let (wb, rep) = read_xlsx(&src).unwrap();
+        // Not modelled (GridCraft can't refresh it), but said so.
+        assert!(wb.sheets.iter().all(|s| s.pivots.is_empty()));
+        assert!(rep.warnings.iter().any(|w| w.contains("Ext1") && w.contains("another workbook")), "{:?}", rep.warnings);
+        assert!(!rep.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep.warnings);
+        let cache_src = ext_cache(if by_name { EXT_CACHE_NAME } else { EXT_CACHE_RANGE });
+        // Twice: what the first save kept is read back and kept again.
+        let first = write_xlsx(&wb).unwrap();
+        let (again, _) = read_xlsx(&first).unwrap();
+        for saved in [first, write_xlsx(&again).unwrap()] {
+            let u = Unpacked::new(&saved);
+            u.assert_valid();
+            let caches = written_pivot_caches(&u);
+            assert_eq!(caches.len(), 1, "{caches:?}");
+            let (id, cache_part) = &caches[0];
+            assert_eq!(id, "1", "the kept table refers to its cache by this id");
+            assert_eq!(u.text(cache_part), cache_src);
+            let cache_rels = u.rels(cache_part);
+            let records = cache_rels.iter().find(|r| r.1.ends_with("/pivotCacheRecords")).unwrap();
+            assert_eq!(u.text(&records.2), EXT_RECORDS);
+            assert!(
+                cache_rels.iter().any(|r| r.0 == "rId2" && r.1.ends_with("/externalLinkPath") && r.2 == EXT_LINK_TARGET && r.3),
+                "{cache_rels:?}"
+            );
+            let tables = written_pivot_tables(&u, "Report");
+            assert_eq!(tables.len(), 1);
+            assert!(written_pivot_tables(&u, "More").is_empty());
+            let t = u.text(&tables[0]);
+            assert_eq!(u.rels(&tables[0]).iter().find(|r| r.1.ends_with("/pivotCacheDefinition")).unwrap().2, *cache_part);
+            // Style ids follow the rewritten styles part.
+            let (color, code) = written_style(&u, &attr_of(&t, "format", "dxfId"), &attr_of(&t, "dataField", "numFmtId"));
+            assert_eq!((color.as_str(), code.as_str()), ("FF0000FF", "0.0%"), "{t}");
+            assert!(t.contains(r#"name="Ext1" cacheId="1""#), "{t}");
+            // The report cells are plain cells and stay.
+            assert!(u.text(&sheet_part(&u, "Report")).contains("<v>5</v>"));
+        }
+    }
+}
+
+#[test]
+fn pivot_tables_sharing_a_cache_on_another_workbook_keep_one_cache() {
+    let (wb, _) = read_xlsx(&ext_pivot_package(false, true, "externalLinkPath")).unwrap();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    let caches = written_pivot_caches(&u);
+    assert_eq!(caches.len(), 1, "{caches:?}");
+    assert_eq!(u.find(ext_cache(EXT_CACHE_RANGE).as_bytes()).len(), 1, "the cache is written once");
+    for sheet in ["Report", "More"] {
+        let t = written_pivot_tables(&u, sheet);
+        assert_eq!(t.len(), 1, "{sheet}");
+        assert_eq!(u.rels(&t[0])[0].2, caches[0].1, "{sheet}");
+    }
+
+    // Deleting one sheet keeps the cache for the other; when no kept table is left, it goes.
+    let mut one = wb.clone();
+    one.sheets.remove(1);
+    let u = Unpacked::new(&write_xlsx(&one).unwrap());
+    u.assert_valid();
+    assert_eq!(written_pivot_caches(&u).len(), 1);
+    let mut none = wb.clone();
+    none.sheets.iter_mut().for_each(|s| Arc::make_mut(s).preserved = None);
+    let u = Unpacked::new(&write_xlsx(&none).unwrap());
+    u.assert_valid();
+    assert!(written_pivot_caches(&u).is_empty());
+    assert!(u.find(ext_cache(EXT_CACHE_RANGE).as_bytes()).is_empty() && u.find(EXT_RECORDS.as_bytes()).is_empty());
+    assert!(!u.text("xl/workbook.xml").contains("pivotCaches"));
+}
+
+#[test]
+fn written_pivot_caches_do_not_reuse_kept_cache_ids() {
+    use gridcraft_core::{CellRef, Value};
+    use gridcraft_model::{Cell, PivotField, PivotTable, PivotValue};
+    let (mut wb, _) = read_xlsx(&ext_pivot_package(false, false, "externalLinkPath")).unwrap();
+    // A PivotTable GridCraft models, on a list on "More".
+    {
+        let more = wb.sheet_mut(1).unwrap();
+        for (a, v) in [("D1", Value::text("K")), ("E1", Value::text("V")), ("D2", Value::text("a")), ("E2", Value::number(2.0))] {
+            more.cells.set(CellRef::parse(a).unwrap(), Cell::value(v));
+        }
+        more.pivots.push(PivotTable {
+            name: "Ours".into(),
+            source: "More!$D$1:$E$2".into(),
+            anchor: CellRef::parse("H3").unwrap(),
+            rows: vec![PivotField { source_col: "K".into(), ..Default::default() }],
+            values: vec![PivotValue { source_col: "V".into(), name: "Sum of V".into(), ..Default::default() }],
+            ..Default::default()
+        });
+    }
+    let saved = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&saved);
+    u.assert_valid();
+    let caches = written_pivot_caches(&u);
+    assert_eq!(caches.len(), 2, "{caches:?}");
+    assert_ne!(caches[0].0, caches[1].0, "{caches:?}");
+    let ours = written_pivot_tables(&u, "More");
+    assert_eq!(ours.len(), 1);
+    let id = attr_of(&u.text(&ours[0]), "pivotTableDefinition", "cacheId");
+    assert_ne!(id, "1");
+    assert!(caches.iter().any(|(i, part)| *i == id && *part == u.rels(&ours[0])[0].2), "{caches:?}");
+    let (back, _) = read_xlsx(&saved).unwrap();
+    assert_eq!(back.sheet(1).unwrap().pivots.len(), 1);
+    assert_eq!(written_pivot_tables(&Unpacked::new(&write_xlsx(&back).unwrap()), "Report").len(), 1);
+}
+
+#[test]
+fn a_pivot_cache_naming_no_linked_workbook_is_not_kept() {
+    // The source `r:id` resolves to something other than a link to a workbook's path.
+    for kind in ["hyperlink", "http://example.com/unknown"] {
+        let (wb, rep) = read_xlsx(&ext_pivot_package(false, false, kind)).unwrap();
+        assert!(wb.sheets.iter().all(|s| s.pivots.is_empty()));
+        assert!(rep.warnings.iter().any(|w| w.contains("another workbook") && w.contains("plain cells")), "{:?}", rep.warnings);
+        let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+        u.assert_valid();
+        assert!(written_pivot_caches(&u).is_empty() && written_pivot_tables(&u, "Report").is_empty());
+    }
+}
+
+#[test]
+fn a_kept_pivot_table_whose_cache_is_not_listed_is_dropped() {
+    // The workbook doesn't list the cache: the table can't be written back without it.
+    let src = ext_pivot_package(false, false, "externalLinkPath");
+    let mut parts = Unpacked::new(&src).parts;
+    let wbx = String::from_utf8(parts.remove("xl/workbook.xml").unwrap()).unwrap().replace(r#"<pivotCache cacheId="1" r:id="rId3"/>"#, "");
+    parts.insert("xl/workbook.xml".into(), wbx.into_bytes());
+    let list: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    let (wb, rep) = read_xlsx(&make_zip(&list)).unwrap();
+    assert!(rep.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep.warnings);
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    assert!(written_pivot_tables(&u, "Report").is_empty());
+    assert!(written_pivot_caches(&u).is_empty());
 }

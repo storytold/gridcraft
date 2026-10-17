@@ -227,12 +227,16 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
                 Sheet::new(name.clone())
             }
         };
+        let mut external_pivots = vec![];
         match crate::pivot::read_pivots(&mut cx, &mut pivot_caches, &rel.target, &name) {
-            Ok(p) => sheet.pivots = p,
+            Ok(p) => {
+                sheet.pivots = p.tables;
+                external_pivots = p.external;
+            }
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
         }
-        sheet.preserved = kept.sheet(&mut cx, &rel.target, &name);
+        sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &external_pivots);
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,
             Some("veryHidden") => Visibility::VeryHidden,

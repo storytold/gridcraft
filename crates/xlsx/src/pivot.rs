@@ -10,6 +10,11 @@
 //! Reading: the cache's source and field names plus the table's areas, functions, show-values-as,
 //! layout flags, grand totals and style become a model [`PivotTable`]. Anything we don't model
 //! (OLAP sources, calculated fields, numeric grouping…) becomes a warning.
+//!
+//! A PivotTable whose source is a range or name in another workbook (its cache's
+//! `worksheetSource` has an `r:id` to an `externalLinkPath` relationship) is not modelled:
+//! GridCraft never opens the other workbook, so it couldn't refresh it. [`read_pivots`] reports
+//! it instead, and `passthrough` keeps its PivotTable, cache and records parts unchanged.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -267,6 +272,11 @@ pub struct PivotWriter {
     caches: Vec<(u32, String)>,
     pending: Vec<Pending>,
     tables: u32,
+    /// Cache ids taken by kept pivot caches (PivotTables on another workbook).
+    reserved: Vec<u32>,
+    /// `<pivotCache>` entries of the kept caches.
+    kept_entries: String,
+    next_id: u32,
 }
 
 struct Pending {
@@ -278,6 +288,21 @@ struct Pending {
 }
 
 impl PivotWriter {
+    /// A writer whose caches don't reuse the kept caches' ids; `kept_entries` (their
+    /// `<pivotCache>` elements) are listed with the written ones.
+    pub fn new(reserved: Vec<u32>, kept_entries: String) -> PivotWriter {
+        PivotWriter { reserved, kept_entries, ..PivotWriter::default() }
+    }
+
+    fn next_cache_id(&mut self) -> u32 {
+        loop {
+            self.next_id = self.next_id.saturating_add(1);
+            if !self.reserved.contains(&self.next_id) || self.next_id == u32::MAX {
+                return self.next_id;
+            }
+        }
+    }
+
     /// Writes the caches of a sheet's PivotTables and adds the sheet's relationships to its
     /// PivotTable parts. Pivots whose source can't be resolved are not written.
     pub fn add_sheet(&mut self, wb: &Workbook, si: usize, out: &mut Out, rels: &mut Rels) {
@@ -285,6 +310,7 @@ impl PivotWriter {
         for (idx, pt) in sheet.pivots.iter().enumerate() {
             let Some(cache) = build_cache(wb, pt, si) else { continue };
             let n = self.caches.len() as u32 + 1;
+            let cache_id = self.next_cache_id();
             let cache_part = format!("xl/pivotCache/pivotCacheDefinition{n}.xml");
             let rec_rid = if let Some((count, xml)) = &cache.records {
                 let mut r = Rels::default();
@@ -297,24 +323,25 @@ impl PivotWriter {
                 None
             };
             out.part(&cache_part, Some(CT_PIVOT_CACHE_DEF), cache_xml(&cache, rec_rid.as_deref(), wb.date_system).into_bytes());
-            self.caches.push((n, format!("pivotCache/pivotCacheDefinition{n}.xml")));
+            self.caches.push((cache_id, format!("pivotCache/pivotCacheDefinition{n}.xml")));
             self.tables += 1;
             let t = self.tables;
             rels.add("pivotTable", &format!("../pivotTables/pivotTable{t}.xml"));
             let mut tr = Rels::default();
             tr.add("pivotCacheDefinition", &format!("../pivotCache/pivotCacheDefinition{n}.xml"));
             out.part(&format!("xl/pivotTables/_rels/pivotTable{t}.xml.rels"), None, tr.xml().into_bytes());
-            self.pending.push(Pending { part: format!("xl/pivotTables/pivotTable{t}.xml"), sheet: si, idx, cache_id: n, cache });
+            self.pending.push(Pending { part: format!("xl/pivotTables/pivotTable{t}.xml"), sheet: si, idx, cache_id, cache });
         }
     }
 
     /// Adds the workbook relationships to the caches; returns the `<pivotCaches>` element (empty
     /// when there are none).
     pub fn workbook_xml(&self, wb_rels: &mut Rels) -> String {
-        if self.caches.is_empty() {
+        if self.caches.is_empty() && self.kept_entries.is_empty() {
             return String::new();
         }
         let mut s = String::from("<pivotCaches>");
+        s.push_str(&self.kept_entries);
         for (id, target) in &self.caches {
             let rid = wb_rels.add("pivotCacheDefinition", target);
             let _ = write!(s, "<pivotCache cacheId=\"{id}\" r:id=\"{rid}\"/>");
@@ -1052,6 +1079,24 @@ impl FieldIn {
 struct CacheIn {
     source: String,
     fields: Vec<FieldIn>,
+    /// The source is in another workbook: the PivotTables on this cache are kept, not modelled.
+    external: bool,
+}
+
+/// A PivotTable whose source is in another workbook, kept unchanged for saving.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternalPivot {
+    /// The id of the sheet's relationship to the PivotTable part.
+    pub rel_id: String,
+    /// The pivot cache definition part it uses.
+    pub cache_part: String,
+}
+
+/// The PivotTables of a sheet: those modelled, and those kept as they are.
+#[derive(Debug, Default)]
+pub struct SheetPivots {
+    pub tables: Vec<PivotTable>,
+    pub external: Vec<ExternalPivot>,
 }
 
 /// Workbook-level pivot cache lookup, filled from `<pivotCaches>`; caches are parsed once.
@@ -1102,12 +1147,18 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
         return None;
     }
     let ws = src.and_then(|s| s.child("worksheetSource"));
+    // A source in another workbook: `r:id` names the cache's link to that workbook's path.
+    if let Some(rid) = ws.and_then(|w| w.attr("id")) {
+        let linked = cx.pkg.rels(part).ok().is_some_and(|rels| rels.iter().any(|r| r.id == rid && r.external && r.kind == "externalLinkPath"));
+        if !linked {
+            cx.warn("a PivotTable's source is in another workbook that its cache doesn't name; kept as plain cells");
+            return None;
+        }
+        return Some(CacheIn { source: String::new(), fields: vec![], external: true });
+    }
     let source = match ws {
         Some(w) if w.attr("name").is_some_and(|n| !n.trim().is_empty()) => w.attr("name").unwrap_or("").trim().to_string(),
         Some(w) => {
-            if w.attr("id").is_some() {
-                cx.warn("a PivotTable's source is in another workbook; its source reference may not resolve");
-            }
             let r = w.attr("ref").map(|r| r.replace('$', "")).and_then(|r| RangeRef::parse(&r));
             let Some(r) = r else {
                 cx.warn("a PivotTable's source reference is missing or invalid; kept as plain cells");
@@ -1151,13 +1202,14 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
         cx.warn("a PivotTable's cache has no fields; kept as plain cells");
         return None;
     }
-    Some(CacheIn { source, fields })
+    Some(CacheIn { source, fields, external: false })
 }
 
-/// Reads the PivotTables related to a worksheet part.
-pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sheet_name: &str) -> Result<Vec<PivotTable>, IoError> {
+/// Reads the PivotTables related to a worksheet part. Those whose source is in another workbook
+/// are listed in [`SheetPivots::external`] (with a warning), not modelled.
+pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sheet_name: &str) -> Result<SheetPivots, IoError> {
     let rels = cx.pkg.rels(sheet_part)?;
-    let mut out = Vec::new();
+    let mut out = SheetPivots::default();
     for rel in rels.iter().filter(|r| r.kind == "pivotTable" && !r.external) {
         let Some(x) = cx.optional_xml(&rel.target)? else { continue };
         if x.name != "pivotTableDefinition" {
@@ -1184,9 +1236,17 @@ pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sh
             }
         };
         let Some(cache) = cache else { continue };
+        if cache.external {
+            let name = x.attr("name").unwrap_or("");
+            cx.warn(format!(
+                "PivotTable \"{name}\" on sheet \"{sheet_name}\" gets its data from another workbook: it is kept for saving as it is, but can't be edited or refreshed here"
+            ));
+            out.external.push(ExternalPivot { rel_id: rel.id.clone(), cache_part });
+            continue;
+        }
         if let Some(pt) = read_table(cx, &x, &cache, caches.next_id) {
             caches.next_id = caches.next_id.saturating_add(1);
-            out.push(pt);
+            out.tables.push(pt);
         }
     }
     Ok(out)
