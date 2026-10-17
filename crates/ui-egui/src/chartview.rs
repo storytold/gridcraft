@@ -292,6 +292,100 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             ShapeKind::Triangle => {
                 p.add(PathShape::convex_polygon(vec![pos2(r.center().x, r.top()), r.right_bottom(), r.left_bottom()], fill, Stroke::new(1.0, line)));
             }
+            ShapeKind::RightTriangle => {
+                p.add(PathShape::convex_polygon(vec![r.left_bottom(), r.right_bottom(), r.left_top()], fill, Stroke::new(1.0, line)));
+            }
+            ShapeKind::Diamond => {
+                p.add(PathShape::convex_polygon(
+                    vec![pos2(r.center().x, r.top()), pos2(r.right(), r.center().y), pos2(r.center().x, r.bottom()), pos2(r.left(), r.center().y)],
+                    fill,
+                    Stroke::new(1.0, line),
+                ));
+            }
+            ShapeKind::Parallelogram => {
+                p.add(PathShape::convex_polygon(
+                    vec![
+                        pos2(r.left() + r.width() * 0.25, r.top()),
+                        pos2(r.right(), r.top()),
+                        pos2(r.right() - r.width() * 0.25, r.bottom()),
+                        pos2(r.left(), r.bottom()),
+                    ],
+                    fill,
+                    Stroke::new(1.0, line),
+                ));
+            }
+            ShapeKind::Trapezoid => {
+                p.add(PathShape::convex_polygon(
+                    vec![
+                        pos2(r.left() + r.width() * 0.2, r.top()),
+                        pos2(r.right() - r.width() * 0.2, r.top()),
+                        pos2(r.right(), r.bottom()),
+                        pos2(r.left(), r.bottom()),
+                    ],
+                    fill,
+                    Stroke::new(1.0, line),
+                ));
+            }
+            ShapeKind::Pentagon => {
+                let pts: Vec<Pos2> = (0..5)
+                    .map(|i| {
+                        let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::TAU / 5.0;
+                        pos2(r.center().x + r.width() / 2.0 * a.cos(), r.center().y + r.height() / 2.0 * a.sin())
+                    })
+                    .collect();
+                p.add(PathShape::convex_polygon(pts, fill, Stroke::new(1.0, line)));
+            }
+            ShapeKind::Hexagon => {
+                p.add(PathShape::convex_polygon(
+                    vec![
+                        pos2(r.left() + r.width() * 0.25, r.top()),
+                        pos2(r.right() - r.width() * 0.25, r.top()),
+                        pos2(r.right(), r.center().y),
+                        pos2(r.right() - r.width() * 0.25, r.bottom()),
+                        pos2(r.left() + r.width() * 0.25, r.bottom()),
+                        pos2(r.left(), r.center().y),
+                    ],
+                    fill,
+                    Stroke::new(1.0, line),
+                ));
+            }
+            ShapeKind::BlockArrow => {
+                let (w, h) = (r.width(), r.height());
+                p.add(PathShape {
+                    points: vec![
+                        pos2(r.left(), r.center().y - h * 0.22),
+                        pos2(r.left() + w * 0.62, r.center().y - h * 0.22),
+                        pos2(r.left() + w * 0.62, r.top()),
+                        pos2(r.right(), r.center().y),
+                        pos2(r.left() + w * 0.62, r.bottom()),
+                        pos2(r.left() + w * 0.62, r.center().y + h * 0.22),
+                        pos2(r.left(), r.center().y + h * 0.22),
+                    ],
+                    closed: true,
+                    fill,
+                    stroke: PathStroke::new(1.0, line),
+                });
+            }
+            ShapeKind::ArrowDouble => {
+                let (w, h) = (r.width(), r.height());
+                p.add(PathShape {
+                    points: vec![
+                        pos2(r.left(), r.center().y),
+                        pos2(r.left() + w * 0.22, r.top() + h * 0.18),
+                        pos2(r.left() + w * 0.22, r.center().y - h * 0.11),
+                        pos2(r.right() - w * 0.22, r.center().y - h * 0.11),
+                        pos2(r.right() - w * 0.22, r.top() + h * 0.18),
+                        pos2(r.right(), r.center().y),
+                        pos2(r.right() - w * 0.22, r.bottom() - h * 0.18),
+                        pos2(r.right() - w * 0.22, r.center().y + h * 0.11),
+                        pos2(r.left() + w * 0.22, r.center().y + h * 0.11),
+                        pos2(r.left() + w * 0.22, r.bottom() - h * 0.18),
+                    ],
+                    closed: true,
+                    fill,
+                    stroke: PathStroke::new(1.0, line),
+                });
+            }
             ShapeKind::Ink => {
                 let w = gridcraft_engine::cmd::draw::ink_width(sp) * geo.z;
                 let pts: Vec<Pos2> =

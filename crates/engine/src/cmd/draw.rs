@@ -4,6 +4,7 @@ use gridcraft_core::CellRef;
 use gridcraft_model::*;
 use serde_json::{Value as Json, json};
 
+use super::ink_shape::{InkShape, recognise};
 use super::*;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -20,7 +21,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Ink to Shape",
             ["Draw", "Convert"],
             None,
-            "{id?} converts an ink stroke (default: the last) into a rectangle, ellipse, triangle or line",
+            "{on?: bool} turns the conversion mode on or off; {id?} converts that ink stroke (default: the last)",
             has_doc,
             ink_to_shape
         ),
@@ -99,7 +100,13 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         cx.sheet_mut(si)?.shapes.push(shape);
         Ok(json!({"shape": id}))
-    })
+    })?;
+    // Draw ▸ Ink to Shape is on: convert each completed stroke, as Excel does while the mode is on.
+    if s.ink_to_shape {
+        let kind = convert_ink(s, Some(id))?;
+        return Ok(json!({"shape": id, "kind": format!("{kind:?}")}));
+    }
+    Ok(json!({"shape": id}))
 }
 
 /// Ink width is stored in the red channel of `fill` (shapes have no width field).
@@ -115,8 +122,22 @@ pub fn ink_points(sh: &Shape) -> Vec<[f32; 2]> {
 }
 
 fn ink_to_shape(s: &mut Session, p: &Json) -> Result<Json> {
+    if let Some(id) = u32_param(p, "id") {
+        let kind = convert_ink(s, Some(id))?;
+        return Ok(json!({"kind": format!("{kind:?}"), "on": s.ink_to_shape}));
+    }
+    if let Some(on) = bool_param(p, "on") {
+        s.ink_to_shape = on;
+        return Ok(json!({"on": on}));
+    }
+    // No parameters: convert the last stroke (the command's programmatic form).
+    let kind = convert_ink(s, None)?;
+    Ok(json!({"kind": format!("{kind:?}"), "on": s.ink_to_shape}))
+}
+
+/// Convert one ink stroke (by id, or the last one) to the nearest shape; returns the kind.
+fn convert_ink(s: &mut Session, id: Option<u32>) -> Result<ShapeKind> {
     let si = s.doc()?.wb.active_sheet;
-    let id = u32_param(p, "id");
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let idx = match id {
@@ -126,33 +147,96 @@ fn ink_to_shape(s: &mut Session, p: &Json) -> Result<Json> {
         .ok_or_else(|| bad("draw.inkToShape", "no ink stroke to convert"))?;
         let ink = sh.shapes.get_mut(idx).ok_or_else(|| bad("draw.inkToShape", "gone"))?;
         let pts = parse_points(&ink.text);
-        let (w, h) = (ink.anchor.width.max(1.0), ink.anchor.height.max(1.0));
-        let closed = match (pts.first(), pts.last()) {
-            (Some(a), Some(b)) => ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt() < 0.25 * w.max(h),
-            _ => false,
+        let Some(found) = recognise(&pts) else {
+            return Err(bad("draw.inkToShape", "the stroke is not a shape"));
         };
-        let kind = if !closed {
-            ShapeKind::Line
-        } else {
-            // Corners hugging the bounding box mean a rectangle; one apex at the top a triangle.
-            let near = |cx: f32, cy: f32| pts.iter().any(|q| ((q[0] - cx).powi(2) + (q[1] - cy).powi(2)).sqrt() < 0.15 * w.min(h).max(8.0));
-            let corners = [near(0.0, 0.0), near(w, 0.0), near(0.0, h), near(w, h)].iter().filter(|b| **b).count();
-            let apex = near(w / 2.0, 0.0);
-            if corners >= 3 {
-                ShapeKind::Rectangle
-            } else if apex && near(0.0, h) && near(w, h) {
-                ShapeKind::Triangle
-            } else {
-                ShapeKind::Ellipse
+        let [_, _, bw, bh] = found.bounds();
+        let kind = match &found {
+            InkShape::Line { .. } => ShapeKind::Line,
+            InkShape::Arrow { head_at_start, .. } => {
+                if *head_at_start {
+                    ShapeKind::ArrowDouble
+                } else {
+                    ShapeKind::Arrow
+                }
             }
+            InkShape::Rectangle { .. } => ShapeKind::Rectangle,
+            InkShape::Ellipse { .. } => ShapeKind::Ellipse,
+            InkShape::Polygon(c) => polygon_kind(c).ok_or_else(|| bad("draw.inkToShape", "the polygon has no GridCraft preset"))?,
         };
+        // Excel's square and circle are the same presets with equal sides: take the recogniser's
+        // snapped bounds so the converted shape reads as a square/circle.
+        if matches!(kind, ShapeKind::Rectangle | ShapeKind::Ellipse) {
+            ink.anchor.width = bw.max(1.0);
+            ink.anchor.height = bh.max(1.0);
+        }
         let color = ink.line;
         ink.kind = kind;
         ink.fill = if kind == ShapeKind::Line { color } else { Color::Auto };
         ink.text = String::new();
-        if kind == ShapeKind::Line && pts.first().zip(pts.last()).is_some_and(|(a, b)| a[1] > b[1]) {
-            // Lines are drawn top-left to bottom-right; keep the stroke direction simple.
-        }
-        Ok(json!({"kind": format!("{kind:?}")}))
+        Ok(kind)
     })
+}
+
+/// Map a recognised polygon onto GridCraft's preset shapes: triangles and quads use the same
+/// corner tests as before (right triangle; diamond/parallelogram/trapezoid), 5 and 6 sides are
+/// the pentagon/hexagon presets. Seven or eight corners have no preset.
+fn polygon_kind(c: &[[f32; 2]]) -> Option<ShapeKind> {
+    match c.len() {
+        3 => Some(triangle_kind(c)),
+        4 => Some(quad_kind(c)),
+        5 => Some(ShapeKind::Pentagon),
+        6 => Some(ShapeKind::Hexagon),
+        _ => None,
+    }
+}
+
+fn triangle_kind(p: &[[f32; 2]]) -> ShapeKind {
+    if p.len() != 3 {
+        return ShapeKind::Triangle;
+    }
+    let sides = [dist(p[0], p[1]), dist(p[1], p[2]), dist(p[2], p[0])];
+    let mut sorted = sides;
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let (a, b, c) = (sorted[0], sorted[1], sorted[2]);
+    // The right angle sits opposite the longest side.
+    if (a * a + b * b - c * c).abs() < 0.08 * c * c { ShapeKind::RightTriangle } else { ShapeKind::Triangle }
+}
+
+fn quad_kind(p: &[[f32; 2]]) -> ShapeKind {
+    if p.len() != 4 {
+        return ShapeKind::Rectangle;
+    }
+    let edge = |i: usize| sub(p[(i + 1) % 4], p[i]);
+    let e = [edge(0), edge(1), edge(2), edge(3)];
+    let parallel = |a: [f32; 2], b: [f32; 2]| {
+        let (na, nb) = (norm(a), norm(b));
+        na > 0.0 && nb > 0.0 && (a[0] * b[0] + a[1] * b[1]).abs() / (na * nb) > 0.94
+    };
+    let square = |a: [f32; 2], b: [f32; 2]| {
+        let (na, nb) = (norm(a), norm(b));
+        na > 0.0 && nb > 0.0 && (a[0] * b[0] + a[1] * b[1]).abs() / (na * nb) < 0.25
+    };
+    if square(e[0], e[1]) && square(e[1], e[2]) && square(e[2], e[3]) && square(e[3], e[0]) {
+        return ShapeKind::Rectangle;
+    }
+    let (p02, p13) = (parallel(e[0], e[2]), parallel(e[1], e[3]));
+    if p02 && p13 {
+        let sides = [norm(e[0]), norm(e[1]), norm(e[2]), norm(e[3])];
+        let mean = sides.iter().sum::<f32>() / 4.0;
+        return if mean > 0.0 && sides.iter().all(|s| (s - mean).abs() < 0.08 * mean) { ShapeKind::Diamond } else { ShapeKind::Parallelogram };
+    }
+    if p02 || p13 { ShapeKind::Trapezoid } else { ShapeKind::Rectangle }
+}
+
+fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+}
+
+fn sub(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
+fn norm(a: [f32; 2]) -> f32 {
+    (a[0] * a[0] + a[1] * a[1]).sqrt()
 }
