@@ -130,6 +130,10 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 ## Progress log
 
+2026-10-16: Linux desktop builds enable Adwaita vector window controls without
+bundling a title font. See README → Linux window controls for platform selection;
+full GTK theme parity is not claimed.
+
 | Date | What landed |
 |---|---|
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
