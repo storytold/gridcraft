@@ -949,13 +949,40 @@ fn validation(s: &mut Session, p: &Json) -> Result<Json> {
         "time" => ValidationKind::Time,
         "textLength" => ValidationKind::TextLength,
         "custom" => ValidationKind::Custom,
-        _ => ValidationKind::Any,
+        "any" => ValidationKind::Any,
+        // An unknown type used to give an "any value" rule, saved as `type="none"`: no validation.
+        other => return Err(bad("data.validation", format!("unknown type `{other}` (any, whole, decimal, list, date, time, textLength, custom)"))),
     };
+    const OPERATORS: [&str; 12] = [
+        "between",
+        "notBetween",
+        "equal",
+        "notEqual",
+        "greater",
+        "greaterThan",
+        "less",
+        "lessThan",
+        "greaterOrEqual",
+        "greaterThanOrEqual",
+        "lessOrEqual",
+        "lessThanOrEqual",
+    ];
+    if let Some(op) = str_param(p, "operator").filter(|op| !OPERATORS.contains(op)) {
+        return Err(bad("data.validation", format!("unknown operator `{op}` ({})", OPERATORS.join(", "))));
+    }
+    let error_style = match str_param(p, "errorStyle") {
+        None | Some("stop") => ErrorStyle::Stop,
+        Some("warning") => ErrorStyle::Warning,
+        Some("information") => ErrorStyle::Information,
+        Some(other) => return Err(bad("data.validation", format!("unknown errorStyle `{other}` (stop, warning, information)"))),
+    };
+    let f1 = str_param(p, "formula1").unwrap_or("");
+    let f1 = if kind == ValidationKind::List { list_source(f1) } else { f1.trim_start_matches('=').to_string() };
     let dv = Validation {
         ranges: ranges.clone(),
         kind,
         op: op_param(str_param(p, "operator")),
-        f1: str_param(p, "formula1").unwrap_or("").trim_start_matches('=').to_string(),
+        f1,
         f2: str_param(p, "formula2").map(|f| f.trim_start_matches('=').to_string()),
         allow_blank: bool_param(p, "ignoreBlank").unwrap_or(true),
         in_cell_dropdown: bool_param(p, "dropdown").unwrap_or(true),
@@ -964,11 +991,7 @@ fn validation(s: &mut Session, p: &Json) -> Result<Json> {
         show_input: true,
         error_title: str_param(p, "errorTitle").unwrap_or("").into(),
         error_message: str_param(p, "errorMessage").unwrap_or("").into(),
-        error_style: match str_param(p, "errorStyle") {
-            Some("warning") => ErrorStyle::Warning,
-            Some("information") => ErrorStyle::Information,
-            _ => ErrorStyle::Stop,
-        },
+        error_style,
         show_error: true,
     };
     edit(s, |cx| {
@@ -979,14 +1002,36 @@ fn validation(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Whether a list rule's source is a literal list (`"a,b"`, or `a,b` typed without quotes) rather
+/// than a reference or a name to evaluate.
+fn is_literal_list(f: &str) -> bool {
+    f.starts_with('"')
+        || (!f.contains('!')
+            && gridcraft_formula::parse(f).map(|e| !matches!(e, gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_))).unwrap_or(true))
+}
+
+/// A list rule's source as a file stores it. A literal list typed without quotes, as in Excel's
+/// Source box (`Open,In progress,Closed`), becomes the quoted string Excel saves
+/// (`"Open,In progress,Closed"`, inner quotes doubled); unquoted, the file would read it as a
+/// formula. A formula (`=…`), a reference, a name or an already quoted list is kept as before.
+fn list_source(f: &str) -> String {
+    let t = f.trim();
+    if t.is_empty() || t.starts_with('=') || t.starts_with('"') || !is_literal_list(t) {
+        return f.trim_start_matches('=').to_string();
+    }
+    format!("\"{}\"", t.replace('"', "\"\""))
+}
+
 /// List entries of a list validation (literal or from a range).
 pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
     let f = dv.f1.trim();
-    if f.starts_with('"')
-        || (!f.contains('!')
-            && gridcraft_formula::parse(f).map(|e| !matches!(e, gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_))).unwrap_or(true))
-    {
-        return f.trim_matches('"').split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
+    if is_literal_list(f) {
+        // A quoted list is a string literal: `""` inside stands for one `"`.
+        let items = match f.strip_prefix('"').and_then(|x| x.strip_suffix('"')) {
+            Some(body) => body.replace("\"\"", "\""),
+            None => f.trim_matches('"').to_string(),
+        };
+        return items.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
     }
     let at = dv.ranges.first().map(|r| r.start).unwrap_or_default();
     match gridcraft_calc::evaluate(wb, sheet, at, f) {
@@ -1498,5 +1543,91 @@ mod tests {
         assert_eq!(split_delimited("a,b,,c", &[','], false, '"'), ["a", "b", "", "c"]);
         assert_eq!(split_delimited("a,b,,c", &[','], true, '"'), ["a", "b", "c"]);
         assert_eq!(split_delimited("\"x,y\",z", &[','], false, '"'), ["x,y", "z"]);
+    }
+
+    #[test]
+    fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
+        // In a file an inline list is a string literal (`"a,b"`); unquoted it reads as a formula.
+        // References, names and formulas stay unquoted, and every rule survives a save and reopen.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "K1:K3", "values": [["Red"], ["Green"], ["Blue"]]})).unwrap();
+        s.execute("formulas.defineName", json!({"name": "Colors", "refersTo": "=Sheet1!$K$1:$K$3"})).unwrap();
+        let rules = [
+            ("A1", "Open,In progress,Closed", r#""Open,In progress,Closed""#),
+            ("B1", r#""Open,In progress,Closed""#, r#""Open,In progress,Closed""#),
+            ("C1", " 1,2,3 ", r#""1,2,3""#),
+            ("D1", r#"Say "hi",Bye"#, r#""Say ""hi"",Bye""#),
+            ("E1", "=$K$1:$K$3", "$K$1:$K$3"),
+            ("F1", "$K$1:$K$3", "$K$1:$K$3"),
+            ("G1", "=Colors", "Colors"),
+            ("H1", "Sheet1!$K$1:$K$3", "Sheet1!$K$1:$K$3"),
+            ("I1", "=OFFSET($K$1,0,0,3,1)", "OFFSET($K$1,0,0,3,1)"),
+        ];
+        for (cell, source, _) in rules {
+            s.execute("data.validation", json!({"range": cell, "type": "list", "formula1": source})).unwrap();
+        }
+        let accepted = [
+            ("A1", "In progress"),
+            ("B1", "Closed"),
+            ("C1", "2"),
+            ("D1", r#"Say "hi""#),
+            ("E1", "Green"),
+            ("F1", "Blue"),
+            ("G1", "Red"),
+            ("H1", "Green"),
+        ];
+        let check = |wb: &Workbook| {
+            for (cell, input) in accepted {
+                let at = CellRef::parse(cell).unwrap();
+                assert!(check_validation(wb, 0, at, input).is_none(), "{cell} refuses {input}");
+                assert!(check_validation(wb, 0, at, "Pending").is_some(), "{cell} accepts Pending");
+            }
+        };
+        let wb = s.doc().unwrap().wb.clone();
+        check(&wb);
+
+        let sheet_xml = |wb: &Workbook| {
+            let bytes = gridcraft_xlsx::write_xlsx(wb).unwrap();
+            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            let mut xml = String::new();
+            std::io::Read::read_to_string(&mut zip.by_name("xl/worksheets/sheet1.xml").unwrap(), &mut xml).unwrap();
+            xml
+        };
+        let xml = sheet_xml(&wb);
+        for (cell, _, saved) in rules {
+            assert!(xml.contains(&format!(r#"sqref="{cell}"><formula1>{saved}</formula1>"#)), "{cell}: {saved} missing from {xml}");
+        }
+        let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+        check(&reopened);
+        assert_eq!(sheet_xml(&reopened), xml, "a second save writes the same rules");
+    }
+
+    #[test]
+    fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
+        // A typo used to give a rule that validates nothing (`type="none"`) or the wrong check,
+        // with no error.
+        let mut s = Session::new();
+        s.new_workbook();
+        for params in [
+            json!({"range": "A1", "type": "lst", "formula1": "\"a,b\""}),
+            json!({"range": "A1", "type": "whole", "operator": "greaterthan", "formula1": "1"}),
+            json!({"range": "A1", "type": "whole", "operator": ">", "formula1": "1"}),
+            json!({"range": "A1", "type": "list", "formula1": "\"a,b\"", "errorStyle": "warn"}),
+        ] {
+            let e = s.execute("data.validation", params.clone()).unwrap_err().to_string();
+            assert!(e.contains("unknown"), "{params}: {e}");
+        }
+        assert!(s.doc().unwrap().wb.active().unwrap().validations.is_empty());
+        for params in [
+            json!({"range": "A1", "type": "any"}),
+            json!({"range": "A2", "type": "whole", "operator": "greaterThan", "formula1": "1"}),
+            json!({"range": "A3", "type": "list", "formula1": "\"a,b\"", "errorStyle": "warning"}),
+        ] {
+            s.execute("data.validation", params).unwrap();
+        }
+        let sh = s.doc().unwrap().wb.active().unwrap().clone();
+        assert_eq!(sh.validations.len(), 3);
+        assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
     }
 }
