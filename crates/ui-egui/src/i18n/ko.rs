@@ -106,6 +106,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Comment" => "댓글",
         "New\nComment" => "새 댓글",
         "New Note" => "새 메모",
+        "Edit Note" => "메모 편집",
         "Show/Hide Note" => "메모 표시/숨기기",
         "Header &\nFooter" => "머리글 및\n바닥글",
         "Text to\nColumns" => "텍스트\n나누기",

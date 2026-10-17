@@ -103,6 +103,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Comment" => "Komentář",
         "New\nComment" => "Nový\nkomentář",
         "New Note" => "Nová poznámka",
+        "Edit Note" => "Upravit poznámku",
         "Show/Hide Note" => "Zobrazit/skrýt poznámku",
         "Header &\nFooter" => "Záhlaví a\nzápatí",
         "Text to\nColumns" => "Text do\nsloupců",

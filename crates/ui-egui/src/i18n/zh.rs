@@ -106,6 +106,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Comment" => "批注",
         "New\nComment" => "新建\n批注",
         "New Note" => "新建备注",
+        "Edit Note" => "编辑备注",
         "Show/Hide Note" => "显示/隐藏备注",
         "Header &\nFooter" => "页眉和\n页脚",
         "Text to\nColumns" => "分列",

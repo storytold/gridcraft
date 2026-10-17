@@ -107,6 +107,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Comment" => "Comentário",
         "New\nComment" => "Novo\nComentário",
         "New Note" => "Nova Nota",
+        "Edit Note" => "Editar Nota",
         "Show/Hide Note" => "Mostrar/Ocultar Nota",
         "Header &\nFooter" => "Cabeçalho e\nRodapé",
         "Text to\nColumns" => "Texto para\nColunas",

@@ -339,11 +339,16 @@ impl Dialog {
                 let existing = app
                     .session
                     .active()
-                    .and_then(|d| d.wb.active().and_then(|s| s.comments.get(&d.selection.active).map(|c| c.text.clone())))
-                    .unwrap_or_default();
+                    .and_then(|d| d.wb.active().and_then(|s| s.comments.get(&d.selection.active).map(|c| (c.text.clone(), c.threaded))));
+                let title = match (threaded, &existing) {
+                    (true, _) => "New Comment",
+                    (false, Some((_, false))) => "Edit Note",
+                    (false, _) => "New Note",
+                };
+                let existing = existing.map(|(text, _)| text).unwrap_or_default();
                 Dialog::form(
                     if threaded { "comment" } else { "note" },
-                    if threaded { "New Comment" } else { "New Note" },
+                    title,
                     if threaded { "review.newComment" } else { "review.newNote" },
                     vec![Text { key: "text", label: if threaded { "Start a conversation:" } else { "Note:" } }],
                     json!({"text": existing}),
@@ -1408,6 +1413,11 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         };
                         if r.changed() {
                             d.values.insert(key.into(), json!(s));
+                        }
+                        // The field has already typed the new line: the same Enter must not also
+                        // press OK, so a note's editor stays open as in Excel (#1561).
+                        if multiline && r.has_focus() {
+                            ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { key: Key::Enter, .. })));
                         }
                     });
                 }

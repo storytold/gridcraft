@@ -107,6 +107,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Comment" => "Komentar",
         "New\nComment" => "Novi\nkomentar",
         "New Note" => "Nova beleška",
+        "Edit Note" => "Uredi belešku",
         "Show/Hide Note" => "Prikaži/sakrij belešku",
         "Header &\nFooter" => "Zaglavlje i\npodnožje",
         "Text to\nColumns" => "Tekst u\nkolone",

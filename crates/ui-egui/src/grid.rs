@@ -2863,6 +2863,10 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(200.0);
             let insert_copied = insert_copied_item(app);
+            let has_note = app
+                .session
+                .active()
+                .is_some_and(|d| d.wb.active().is_some_and(|sh| sh.comments.get(&d.selection.active).is_some_and(|c| !c.threaded)));
             let mut items: Vec<(&str, &str)> = vec![
                 ("Cut", "edit.cut"),
                 ("Copy", "edit.copy"),
@@ -2878,7 +2882,7 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                 ("Sort Z to A", "data.sortDescending"),
                 ("-", ""),
                 ("New Comment", "ui:newComment"),
-                ("New Note", "ui:newNote"),
+                (if has_note { "Edit Note" } else { "New Note" }, "ui:newNote"),
                 ("-", ""),
                 ("Format Cells…", "ui:formatCells"),
                 ("Pick From Drop-down List…", "ui:pickList"),

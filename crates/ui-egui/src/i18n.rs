@@ -281,6 +281,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Comment", "コメント"),
     ("New\nComment", "新しいコメント"),
     ("New Note", "新しいメモ"),
+    ("Edit Note", "メモの編集"),
     ("Show/Hide Note", "メモの表示/非表示"),
     ("Header &\nFooter", "ヘッダーとフッター"),
     ("Text to\nColumns", "区切り位置"),
