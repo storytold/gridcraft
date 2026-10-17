@@ -1,8 +1,15 @@
-//! Spelling: checks text cells against the system word list (`/usr/share/dict/words` on macOS
-//! and Linux; nothing is bundled) plus a user dictionary kept in the engine preferences.
+//! Spelling: checks text cells against a dictionary plus a user dictionary kept in the engine
+//! preferences. Nothing is bundled:
+//! - English (no `lang`, or an `en` tag) uses the system word list (`/usr/share/dict/words` on
+//!   macOS and Linux), as before;
+//! - any other language uses the Hunspell dictionary installed for it (OS packages, Homebrew,
+//!   LibreOffice, `GRIDCRAFT_DICTIONARIES` or [`set_dictionary_dir`]), read with `craft-proof`.
 
-use std::collections::HashSet;
-use std::sync::OnceLock;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+
+use craft_proof::AffixDict;
 
 use gridcraft_core::{RangeRef, Value};
 use serde_json::{Value as Json, json};
@@ -11,7 +18,7 @@ use super::*;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "review.spelling", "Spelling", ["Review", "Proofing"], Some("F7"), "{range?, sheet?} → misspelled words with cells and suggestions", has_doc, spelling),
+        cmd!(query "review.spelling", "Spelling", ["Review", "Proofing"], Some("F7"), "{range?, sheet?, lang?: BCP 47 tag (default English)} → misspelled words with cells and suggestions", has_doc, spelling),
         cmd!(noundo "review.addToDictionary", "Add to Dictionary", [], None, "{word}", has_doc, add_word),
         cmd!("review.changeSpelling", "Change", [], None, "{cell, word, to, all?: bool}", has_doc, change),
         cmd!(query "review.thesaurus", "Thesaurus", ["Review", "Proofing"], None, "{word} → related words (words sharing the stem in the dictionary)", has_doc, thesaurus),
@@ -121,8 +128,107 @@ fn suggestions(w: &str) -> Vec<String> {
         .collect()
 }
 
+/// A folder searched for Hunspell dictionaries before the system locations (a setting).
+static DICTIONARY_DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// Search `dir` for Hunspell dictionaries before the system locations; `None` clears it. Takes
+/// effect for languages not loaded yet.
+pub fn set_dictionary_dir(dir: Option<PathBuf>) {
+    *DICTIONARY_DIR.write().unwrap_or_else(|e| e.into_inner()) = dir;
+    hunspell_cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
+/// Loaded Hunspell dictionaries by file-name candidates, `None` when none is installed.
+fn hunspell_cache() -> &'static Mutex<HashMap<Vec<String>, Option<Arc<AffixDict>>>> {
+    static CACHE: OnceLock<Mutex<HashMap<Vec<String>, Option<Arc<AffixDict>>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Hunspell file names to try for a tag: `pl-PL` → `pl_PL`, `pl`; a bare `pl` → `pl_PL`, `pl`.
+fn hunspell_names(tag: &str) -> Vec<String> {
+    let Some(primary) = craft_proof::tag::primary_subtag(tag) else { return Vec::new() };
+    let region = craft_proof::tag::normalize_tag(tag)
+        .and_then(|t| t.split('-').skip(1).find(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_uppercase())).map(str::to_string));
+    let full = format!("{primary}_{}", region.unwrap_or_else(|| primary.to_ascii_uppercase()));
+    vec![full, primary]
+}
+
+/// The installed Hunspell dictionary for `tag`, loaded once.
+fn hunspell(tag: &str) -> Option<Arc<AffixDict>> {
+    let names = hunspell_names(tag);
+    if names.is_empty() {
+        return None;
+    }
+    let mut cache = hunspell_cache().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(d) = cache.get(&names) {
+        return d.clone();
+    }
+    let extra_dir = DICTIONARY_DIR.read().unwrap_or_else(|e| e.into_inner()).clone();
+    let search = craft_proof::hunspell::Search { extra_dir, ..craft_proof::hunspell::Search::for_app("GridCraft") };
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let loaded = search.find(&refs).and_then(|(aff, dic)| match craft_proof::hunspell::load(&aff, &dic) {
+        Ok(d) => Some(Arc::new(d)),
+        Err(e) => {
+            log::warn!("spelling dictionary {}: {e}", dic.display());
+            None
+        }
+    });
+    cache.insert(names, loaded.clone());
+    loaded
+}
+
+/// Is `w` correct in the affix dictionary, as typed or (sentence start, title case) lower-cased?
+fn affix_known(s: &Session, d: &AffixDict, w: &str) -> bool {
+    d.check(w) || d.check(&w.to_lowercase()) || s.prefs.user_dictionary.iter().any(|u| u.eq_ignore_ascii_case(w))
+}
+
+/// Up to six dictionary words one edit away, trying the dictionary's own `TRY` letters, with the
+/// word's capitalisation kept.
+fn affix_suggestions(d: &AffixDict, w: &str) -> Vec<String> {
+    let chars: Vec<char> = w.to_lowercase().chars().collect();
+    let letters: Vec<char> = d.try_chars().chars().filter(|c| c.is_alphabetic()).flat_map(char::to_lowercase).collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |cand: Vec<char>| {
+        let cand: String = cand.into_iter().collect();
+        if out.len() < 6 && !out.contains(&cand) && d.check(&cand) {
+            out.push(cand);
+        }
+    };
+    for i in 0..=chars.len() {
+        if i < chars.len() {
+            for &c in &letters {
+                let mut r = chars.clone();
+                r[i] = c;
+                push(r);
+            }
+            let mut del = chars.clone();
+            del.remove(i);
+            push(del);
+            if i + 1 < chars.len() {
+                let mut t = chars.clone();
+                t.swap(i, i + 1);
+                push(t);
+            }
+        }
+        for &c in &letters {
+            let mut ins = chars.clone();
+            ins.insert(i, c);
+            push(ins);
+        }
+    }
+    let cap = w.chars().next().is_some_and(char::is_uppercase);
+    out.into_iter().map(|s| if cap { craft_proof::affix::capitalize(&s) } else { s }).collect()
+}
+
 fn spelling(s: &mut Session, p: &Json) -> Result<Json> {
-    if dictionary().is_empty() {
+    let lang = str_param(p, "lang").filter(|t| craft_proof::tag::primary_subtag(t).is_some_and(|l| l != "en"));
+    let affix = match lang {
+        Some(tag) => Some(hunspell(tag).ok_or_else(|| {
+            EngineError::Other(format!("No {tag} spelling dictionary is installed (GridCraft reads installed Hunspell dictionaries)."))
+        })?),
+        None => None,
+    };
+    if affix.is_none() && dictionary().is_empty() {
         return Err(EngineError::Other("No dictionary is available on this system (GridCraft uses the system word list).".into()));
     }
     let si = target_sheet(s, p)?;
@@ -140,11 +246,22 @@ fn spelling(s: &mut Session, p: &Json) -> Result<Json> {
         let Value::Text(t) = &cell.value else { continue };
         for w in t.split(|ch: char| !(ch.is_alphabetic() || ch == '\'')) {
             let w = w.trim_matches('\'');
-            if w.chars().count() < 2 || w.chars().all(char::is_uppercase) || !w.is_ascii() {
+            if w.chars().count() < 2 || w.chars().all(char::is_uppercase) {
                 continue;
             }
-            if !known(s, w) {
-                issues.push(json!({"cell": c.a1(), "word": w, "suggestions": suggestions(w)}));
+            match &affix {
+                Some(d) => {
+                    if !affix_known(s, d, w) {
+                        issues.push(json!({"cell": c.a1(), "word": w, "suggestions": affix_suggestions(d, w)}));
+                    }
+                }
+                // The English word list is ASCII; other scripts aren't English misspellings.
+                None if !w.is_ascii() => {}
+                None => {
+                    if !known(s, w) {
+                        issues.push(json!({"cell": c.a1(), "word": w, "suggestions": suggestions(w)}));
+                    }
+                }
             }
         }
         if issues.len() >= 500 {

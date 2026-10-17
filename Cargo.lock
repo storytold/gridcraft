@@ -751,6 +751,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-proof"
+version = "0.1.0"
+source = "git+https://github.com/brzuchal/craft-libs?rev=20dfbeb48a2c001f5b5b1b2406ae7bcceacb7f0d#20dfbeb48a2c001f5b5b1b2406ae7bcceacb7f0d"
+dependencies = [
+ "miniz_oxide 0.8.9",
+]
+
+[[package]]
 name = "craft-ui"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d#d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d"
@@ -1565,6 +1573,7 @@ dependencies = [
 name = "gridcraft-engine"
 version = "0.7.0"
 dependencies = [
+ "craft-proof",
  "gridcraft-calc",
  "gridcraft-chart",
  "gridcraft-core",

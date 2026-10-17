@@ -203,6 +203,22 @@ fn czech_interface_retains_its_canonical_formula_fallback() {
 }
 
 #[test]
+fn polish_interface_retains_its_canonical_formula_fallback() {
+    // The Polish table translates interface labels only: formulas keep canonical English names,
+    // `,` separators and `.` decimals until a Polish formula locale exists.
+    let mut app = app();
+    app.run("app.language.set", json!({"code":"pl-PL"})).unwrap();
+    assert_eq!(app.ui.language, Language::Pl);
+    assert_eq!(app.ui.language.tr("Formulas"), "Formuły");
+    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
+    assert!(!enter(&mut app, "=SUMA(1;2)"));
+    let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
+    assert_eq!(restored.language, Language::Pl);
+}
+
+#[test]
 fn user_defined_prefix_is_hidden_while_editing_and_kept_on_commit() {
     // Excel shows `_xludf.EOMONTH()` as `=EOMONTH()`; the cell still holds the user-defined call
     // (#726), and committing the edit unchanged must not turn it into the built-in.

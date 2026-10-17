@@ -747,7 +747,8 @@ impl Dialog {
             }
             "spelling" => {
                 let mut d = Dialog::custom("spelling", "Spelling", json!({}));
-                d.result = Some(app.session.run("review.spelling", json!({})).unwrap_or_else(|e| json!({"error": e})));
+                let params = app.ui.language.spelling_tag().map_or_else(|| json!({}), |lang| json!({"lang": lang}));
+                d.result = Some(app.session.run("review.spelling", params).unwrap_or_else(|e| json!({"error": e})));
                 d
             }
             "chartTitle" => Dialog::form(

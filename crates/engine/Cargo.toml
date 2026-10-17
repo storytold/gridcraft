@@ -21,6 +21,9 @@ thiserror = { workspace = true }
 log = { workspace = true }
 gridcraft-xlsx = { workspace = true }
 gridcraft-chart = { workspace = true }
+# Hunspell dictionaries installed on the system (storytold/craft-libs#30). Pinned to the commit
+# of storytold/craft-libs#31 until it merges.
+craft-proof = { git = "https://github.com/brzuchal/craft-libs", rev = "20dfbeb48a2c001f5b5b1b2406ae7bcceacb7f0d" }
 gridcraft-pdf = { workspace = true }
 image = { workspace = true }
 
