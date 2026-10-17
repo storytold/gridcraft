@@ -2925,6 +2925,36 @@ fn notes_comments_and_links_survive_a_json_save() {
     assert_eq!(after.cells, before.cells);
 }
 
+/// A cut moves the block's notes, hyperlinks and merged areas with it. The source's cells and
+/// pictures were removed but the block's merges and notes were not, so one merged block became
+/// two (an empty one left at the old place) and a note ended up on both the old and the new
+/// cell. Hyperlinks were not transferred at all.
+#[test]
+fn a_cut_moves_the_sources_notes_hyperlinks_and_merges() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "y"})).unwrap();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "note", "author": "Example"})).unwrap();
+    s.execute("insert.link", json!({"cell": "A1", "target": "https://example.com"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let (a1, d1) = (CellRef::parse("A1").unwrap(), CellRef::parse("D1").unwrap());
+    assert_eq!(sh.merges, vec![gridcraft_core::RangeRef::parse("D1:E1").unwrap()], "the old merge must not stay behind");
+    assert!(!sh.comments.contains_key(&a1), "the note moved");
+    assert!(sh.comments.contains_key(&d1), "the note is at the new cell");
+    assert!(!sh.hyperlinks.contains_key(&a1), "the hyperlink moved");
+    assert!(sh.hyperlinks.contains_key(&d1), "the hyperlink is at the new cell");
+    // The cells themselves moved as before; E1 is covered by the pasted merge (merging
+    // A1:B1 cleared B1, so only the anchor's content travels).
+    assert_eq!(v(&s, "D1"), Value::text("x"));
+    assert!(v(&s, "A1").is_empty() && v(&s, "B1").is_empty());
+}
+
 /// Insert › Link sorts a target as Excel's dialog does: a sheet reference, a defined name or `#…` is
 /// a place in this document, anything else an existing file or web page. A file saved as a
 /// `location` opens nothing in Excel (#800).

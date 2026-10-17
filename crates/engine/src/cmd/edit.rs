@@ -769,6 +769,7 @@ enum What {
     Values,
     Formats,
     Comments,
+    Hyperlinks,
     Validation,
     AllExceptBorders,
     ColumnWidths,
@@ -903,6 +904,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         "values" => What::Values,
         "formats" => What::Formats,
         "comments" | "notes" => What::Comments,
+        "hyperlinks" | "links" => What::Hyperlinks,
         "validation" => What::Validation,
         "allExceptBorders" => What::AllExceptBorders,
         "columnWidths" => What::ColumnWidths,
@@ -952,6 +954,13 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             let source = cx.sheet_mut(clip.sheet)?;
             moved_pictures = source.cell_pictures.iter().filter(|(c, _)| src.contains(**c)).map(|(c, p)| (*c, p.clone())).collect();
             let taken = source.take_cells(src);
+            // Notes, hyperlinks and merged areas sit beside the cells, and a cut takes them
+            // with the block: the destination is written from the clipboard snapshot taken
+            // before the cut, so removing them here loses nothing and leaves the old place
+            // clean instead of leaving one merged block and one note behind.
+            source.comments.retain(|c, _| !src.contains(*c));
+            source.hyperlinks.retain(|c, _| !src.contains(*c));
+            source.merges.retain(|m| !src.contains_range(m));
             for (c, _) in &taken {
                 cx.touch(clip.sheet, *c);
             }
@@ -1048,7 +1057,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                     }
                                 }
                                 What::Formats => new.style = map_style(sc_cell.style, &mut cx.wb),
-                                What::Comments | What::Validation | What::ColumnWidths => {}
+                                What::Comments | What::Hyperlinks | What::Validation | What::ColumnWidths => {}
                             }
                             // Operations combine numbers with what is already there.
                             if op != "none"
@@ -1121,6 +1130,13 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                     cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
                                 }
                             }
+                            // A cut moves the block's hyperlinks with it, so they must reach the
+                            // destination too (only `edit.clear` touched them before).
+                            What::Hyperlinks => {
+                                if let Some(h) = src_sheet.hyperlinks.get(&sc).cloned() {
+                                    cx.sheet_mut(dest_sheet)?.hyperlinks.insert(dest, h);
+                                }
+                            }
                             What::ColumnWidths => {
                                 if let Some(info) = src_sheet.cols.get(&sc.col).copied() {
                                     cx.sheet_mut(dest_sheet)?.cols.insert(dest.col, info);
@@ -1129,6 +1145,9 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             What::All => {
                                 if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
                                     cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
+                                }
+                                if let Some(h) = src_sheet.hyperlinks.get(&sc).cloned() {
+                                    cx.sheet_mut(dest_sheet)?.hyperlinks.insert(dest, h);
                                 }
                                 cx.sheet_mut(dest_sheet)?.set_cell(dest, new);
                             }
