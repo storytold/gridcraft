@@ -696,6 +696,9 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
         v.window_corner_radius = egui::CornerRadius::same(10);
         v.menu_corner_radius = egui::CornerRadius::same(8);
         v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: t.shadow };
+        // One coverage curve serves all text. Cells are dark ink on white paper in both themes, and
+        // egui's dark-mode curve (2c - c²) thickens every glyph: cell text looked heavy and blurry (#1217).
+        v.text_options.color_transfer_function = egui::epaint::FontColorTransferFunction::LIGHT_MODE_DEFAULT;
         ctx.set_visuals_of(theme, v);
     }
     ctx.options_mut(|o| o.fallback_theme = egui::Theme::Light);
@@ -807,6 +810,20 @@ mod tests {
             assert!(at.is_some(), "{family:?} lacks the cell face: {chain:?}");
             let first_fb = chain.iter().position(|k| fb.contains(k)).unwrap_or(chain.len());
             assert!(at.unwrap_or(usize::MAX) < first_fb, "{family:?}: cell face must precede the script faces");
+        }
+    }
+
+    #[test]
+    fn cell_text_keeps_its_weight_in_the_dark_theme() {
+        // #1217: the dark theme must not swap in egui's dark-mode coverage curve, which thickens the
+        // dark-on-white cell text.
+        let ctx = egui::Context::default();
+        for dark in [false, true] {
+            apply(&ctx, dark);
+            for theme in [egui::Theme::Light, egui::Theme::Dark] {
+                let f = ctx.style_of(theme).visuals.text_options.color_transfer_function;
+                assert_eq!(f, egui::epaint::FontColorTransferFunction::LIGHT_MODE_DEFAULT, "{theme:?} (dark = {dark})");
+            }
         }
     }
 
