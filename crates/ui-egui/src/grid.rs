@@ -2681,7 +2681,9 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                     }
                     Key::F9 => app.run_or_alert("formulas.calculateNow", json!({})),
                     Key::F4 if !cmd => {}
-                    _ if cmd => crate::ribbon::shortcut(app, key, m),
+                    _ if cmd && !crate::keymap::altgr_text(ctx, m, ctx.os() == egui::os::OperatingSystem::Mac) => {
+                        crate::ribbon::shortcut(app, key, m)
+                    }
                     _ => {}
                 }
             }

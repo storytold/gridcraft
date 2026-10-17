@@ -162,12 +162,16 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
     })
 }
 
+/// AltGr arrives as Ctrl+Alt on Windows: a key that also typed a character (AltGr+= is `~` on a German
+/// layout; a user-defined Ctrl+Alt+A hotkey may type `ä`) is text, not a shortcut.
+pub(crate) fn altgr_text(ctx: &egui::Context, m: Modifiers, mac: bool) -> bool {
+    !mac && m.alt && m.ctrl && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_))))
+}
+
 /// Handles a key press in the grid. Returns whether it was a shortcut.
 pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physical: Option<Key>, m: Modifiers, geo: &Geo, sh: &Sheet) -> bool {
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
-    // AltGr arrives as Ctrl+Alt on Windows: a key that also typed a character (AltGr+= is `~`
-    // on a German layout) is text, not a shortcut.
-    if !mac && m.alt && m.ctrl && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_)))) {
+    if altgr_text(ctx, m, mac) {
         return false;
     }
     let Some(shortcut) = lookup(key, physical, m, mac) else { return false };
