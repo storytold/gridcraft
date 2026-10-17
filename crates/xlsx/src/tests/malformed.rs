@@ -229,12 +229,25 @@ fn hyperlinks_past_the_cell_cap_are_reported() {
 }
 
 /// Formula text built to overflow a recursive parser or tree walk (a million `%`, a 200,000-term
-/// sum): the cells keep their formula text and cached value, nothing overflows the stack.
+/// sum, 31,000 `%` through nested parentheses): the cells keep their formula text and cached
+/// value, and opening, saving and dropping the workbook fit in a 1 MiB stack. File text isn't
+/// held to the 8,192 characters a formula can be entered with, but to `MAX_FORMULA_BYTES`, the
+/// nesting limit and its operators. (A formula just within the operator limit, such as 4,096
+/// additions, can still overflow a stack this small; making the tree walks iterative is the
+/// follow-up in #1307.)
 #[test]
 fn hostile_formula_text_does_not_overflow_the_stack() {
     let percents = format!("1{}", "%".repeat(1_000_000));
     let chain = format!("1{}", "+1".repeat(100_000));
-    let body = format!(r#"<sheetData><row r="1"><c r="A1"><f>{percents}</f><v>3</v></c><c r="B1"><f>{chain}</f><v>4</v></c></row></sheetData>"#);
+    // `%` after each of 200 nested parentheses, as many as the nesting limit allows at each level.
+    let mut nested = format!("{}1{}", "(".repeat(200), "%".repeat(54));
+    for depth in (1..=200).rev() {
+        nested.push(')');
+        nested.push_str(&"%".repeat(255 - depth));
+    }
+    let body = format!(
+        r#"<sheetData><row r="1"><c r="A1"><f>{percents}</f><v>3</v></c><c r="B1"><f>{chain}</f><v>4</v></c><c r="C1"><f>{nested}</f><v>5</v></c></row></sheetData>"#
+    );
     let names = format!(r#"<definedNames><definedName name="Deep">{percents}</definedName></definedNames>"#);
     let bytes = minimal(&body, &[], "", &names);
     let handle = std::thread::Builder::new()
@@ -242,17 +255,17 @@ fn hostile_formula_text_does_not_overflow_the_stack() {
         .spawn(move || {
             let (wb, _) = read_xlsx(&bytes).expect("readable");
             let s = wb.sheet(0).expect("sheet");
-            let a1 = s.cell(gridcraft_core::CellRef::new(0, 0)).and_then(|c| c.formula.clone()).expect("formula kept");
-            let b1 = s.cell(gridcraft_core::CellRef::new(0, 1)).and_then(|c| c.formula.clone()).expect("formula kept");
-            let kept = (a1.expr.is_none(), b1.expr.is_none(), a1.text.len(), s.value(gridcraft_core::CellRef::new(0, 0)));
+            let formula = |col| s.cell(gridcraft_core::CellRef::new(0, col)).and_then(|c| c.formula.clone()).expect("formula kept");
+            let (a1, b1, c1) = (formula(0), formula(1), formula(2));
+            let kept = (a1.expr.is_none(), b1.expr.is_none(), c1.expr.is_none(), a1.text.len(), s.value(gridcraft_core::CellRef::new(0, 0)));
             assert_eq!(wb.names.first().map(|n| n.formula.len()), Some(1_000_001));
             let out = write_xlsx(&wb).expect("writable");
             drop(wb);
             (kept, !out.is_empty())
         })
         .expect("spawn");
-    let ((a_unparsed, b_unparsed, a_len, a_value), written) = handle.join().expect("no stack overflow");
-    assert!(a_unparsed && b_unparsed && written);
+    let ((a_unparsed, b_unparsed, c_unparsed, a_len, a_value), written) = handle.join().expect("no stack overflow");
+    assert!(a_unparsed && b_unparsed && c_unparsed && written);
     assert_eq!(a_len, 1_000_001);
     assert_eq!(a_value, gridcraft_core::Value::Number(3.0));
 }

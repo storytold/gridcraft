@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** trivial (formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; previously trivial: XLSX chart sheets are kept on save (#727)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** trivial (Excel's 8,192-character formula limit applies when a formula is entered, not to file text, whose `_xlfn.`/`_xlpm.` form can be several times as long; file text is held to 256 KiB and to its operators instead; previously trivial: formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -85,6 +85,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | trivial | Formula parser: the 8,192-character limit applies when a formula is entered (cell entry and the command API, localized formula input, a name's formula), not to formula text read from files. A formula's file form adds `_xlfn.`, `_xlpm.`, `_xlfn.ANCHORARRAY(…)` and `_xlfn.SINGLE(…)`, so a LET formula of about 4,000 typed characters takes about 16,000 in the file and, held to the limit, stopped calculating after a save and reopen. File text is held instead to 256 KiB, checked before it is tokenized (the file form of an enterable formula takes at most about 112 KiB), and refused when its operators alone would not fit in 8,192 typed characters, which keeps its tree about as deep as a typed formula's at most |
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |

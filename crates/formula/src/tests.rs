@@ -367,10 +367,27 @@ fn prints_long_flat_chain_without_deep_recursion() {
     assert_eq!(r1c1, text);
 }
 
+/// `%` after each of 200 nested parentheses, as many as the nesting limit allows at each level:
+/// about 31,000 operators along one path of the tree.
+fn percents_through_parentheses() -> String {
+    let levels: usize = 200;
+    let percents = |depth: usize| "%".repeat(255 - depth);
+    let mut f = "(".repeat(levels);
+    f.push('1');
+    f.push_str(&percents(levels + 1));
+    for depth in (1..=levels).rev() {
+        f.push(')');
+        f.push_str(&percents(depth));
+    }
+    f
+}
+
 #[test]
 fn hostile_formulas_are_errors_not_stack_overflows() {
-    // A small stack: parsing must fail cleanly instead of building trees deeper than the nesting
-    // limit, which dropping, printing and evaluating walk recursively.
+    // A small stack: parsing must fail cleanly instead of building trees deep enough to
+    // overflow it, which dropping, printing and evaluating walk recursively. File text isn't held
+    // to the 8,192 characters a formula can be entered with: the byte limit (a million `%`), the
+    // nesting limit and the operator count refuse these.
     let handle = std::thread::Builder::new()
         .stack_size(512 * 1024)
         .spawn(|| {
@@ -378,26 +395,80 @@ fn hostile_formulas_are_errors_not_stack_overflows() {
             let invokes = format!("LAMBDA(x,x)(1){}", "(1)".repeat(1_000));
             let long_chain = format!("1{}", "+1".repeat(100_000));
             let huge_percents = format!("1{}", "%".repeat(1_000_000));
-            (parse(&percents).is_err(), parse(&invokes).is_err(), parse(&long_chain).is_err(), parse(&huge_percents).is_err())
+            let nested_percents = percents_through_parentheses();
+            [&percents, &invokes, &long_chain, &huge_percents, &nested_percents].map(|f| parse(f).is_err())
         })
         .expect("spawn");
-    assert_eq!(handle.join().expect("parsing must not overflow the stack"), (true, true, true, true));
+    assert_eq!(handle.join().expect("parsing must not overflow the stack"), [true; 5]);
     // Within the limits these still parse.
     assert!(parse(&format!("1{}", "%".repeat(100))).is_ok());
     assert!(parse("LAMBDA(x,x)(1)(2)").is_ok());
 }
 
 #[test]
-fn formulas_longer_than_excel_allows_are_refused() {
+fn operators_are_limited_whatever_the_length() {
+    // Operators are counted at the fewest characters they take when typed, two for `+1`: 4,096
+    // additions fit in 8,192 characters, 4,097 don't. The text's length doesn't matter (up to
+    // `MAX_FORMULA_BYTES`).
+    let max = crate::MAX_FORMULA_LEN;
+    let chain = |n: usize| format!("1{}", "+1".repeat(n));
+    assert!(parse(&chain(max / 2)).is_ok());
+    let err = parse(&chain(max / 2 + 1)).unwrap_err();
+    assert!(err.msg.contains("more operators than fit in 8192 characters"), "{}", err.msg);
+    assert!(parse(&format!("SUM({})", vec!["A1"; max / 2].join("+"))).is_ok(), "longer operands don't count");
+    // Every operator counts, in whichever expression: one for `%`, two for calling a result
+    // (`(1)`), three for a trim range (`:.B2`), plus two for the `+` before them.
+    for (op, chars) in [("%", 1), ("+LAMBDA(x,x)(1)", 4), ("+SUM((A1):.B2)", 5)] {
+        let n = (max - chars) / 2;
+        assert!(parse(&format!("SUM({}){op}", chain(n))).is_ok(), "{op}");
+        assert!(parse(&format!("SUM({}){op}", chain(n + 1))).is_err(), "{op}");
+    }
+}
+
+#[test]
+fn formulas_longer_than_excel_allows_are_refused_when_entered() {
+    let entered = |src: &str| crate::parse_input(src, FormulaLocale::En, |_| false);
     let at_limit = format!("1{}", "+1".repeat((crate::MAX_FORMULA_LEN - 1) / 2));
     assert_eq!(at_limit.chars().count(), crate::MAX_FORMULA_LEN - 1);
-    assert!(parse(&at_limit).is_ok());
-    assert!(parse(&format!("={at_limit}")).is_ok(), "the leading = does not count");
+    assert!(entered(&at_limit).is_ok());
+    assert!(entered(&format!("={at_limit}")).is_ok(), "the leading = does not count");
     let over = format!("{at_limit}+1");
-    let err = parse(&over).unwrap_err();
-    assert!(err.msg.contains("8192"), "{}", err.msg);
+    let err = entered(&over).unwrap_err();
+    assert!(err.msg.contains("8192 characters"), "{}", err.msg);
+    assert_eq!(crate::check_entered_length(&over), Err(err));
+    assert!(crate::parse_input(&over, FormulaLocale::Es, |_| false).is_err());
     // Characters, not bytes: 8,000 two-byte characters in a text literal are within the limit.
     let text = format!("\"{}\"", "é".repeat(8_000));
     assert!(text.len() > crate::MAX_FORMULA_LEN);
-    assert!(parse(&text).is_ok());
+    assert!(entered(&text).is_ok());
+    // Text `parse` reads from files isn't held to the entry limit: a formula's file form is
+    // longer than what was typed (`LET(x,1,x+x)` is saved as `_xlfn.LET(_xlpm.x,1,_xlpm.x+_xlpm.x)`).
+    assert!(parse(&over).is_ok());
+    let typed = format!("LET(x,1,{})", vec![format!("SUM({})", vec!["x"; 250].join(",")); 8].join("+"));
+    let stored = format!("_xlfn.LET(_xlpm.x,1,{})", vec![format!("SUM({})", vec!["_xlpm.x"; 250].join(",")); 8].join("+"));
+    assert!(typed.len() < crate::MAX_FORMULA_LEN && stored.len() > crate::MAX_FORMULA_LEN);
+    assert!(entered(&typed).is_ok() && entered(&stored).is_err());
+    assert!(parse(&stored).is_ok());
+}
+
+#[test]
+fn formula_text_longer_than_the_byte_limit_is_refused_before_tokenizing() {
+    let max = crate::MAX_FORMULA_BYTES;
+    // A text literal of exactly the limit parses, one byte more doesn't; the leading `=` doesn't count.
+    let literal = |bytes: usize| format!("\"{}\"", "a".repeat(bytes - 2));
+    assert!(parse(&literal(max)).is_ok());
+    assert!(parse(&format!("={}", literal(max))).is_ok());
+    let err = parse(&literal(max + 1)).unwrap_err();
+    assert_eq!((err.msg.as_str(), err.pos), ("formula is longer than 262144 bytes", 0));
+    // Checked before tokenizing, which takes about 160 bytes per character: a million `%` is
+    // refused for its length, not after its tokens are built and its operators counted.
+    let err = parse(&format!("1{}", "%".repeat(1_000_000))).unwrap_err();
+    assert_eq!((err.msg.as_str(), err.pos), ("formula is longer than 262144 bytes", 0));
+    // The file form of any formula that can be entered fits. The longest rewrite is `@`, saved as
+    // `_xlfn.SINGLE(…)`: 8,183 typed characters, mostly `@`, take 111,143 bytes in a file.
+    let typed = vec![format!("SUM({}A1)", "@".repeat(240)); 33].join("+");
+    let stored = vec![format!("SUM({}A1{})", "_xlfn.SINGLE(".repeat(240), ")".repeat(240)); 33].join("+");
+    assert_eq!((typed.len(), stored.len()), (8_183, 111_143));
+    assert!(crate::parse_input(&typed, FormulaLocale::En, |_| false).is_ok());
+    assert_eq!(parse(&stored).map(|e| print(&e)), Ok(typed));
 }

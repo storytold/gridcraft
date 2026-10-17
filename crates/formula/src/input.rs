@@ -51,8 +51,11 @@ impl FormulaLocale {
 }
 
 /// Parses UI input using the selected function table and separators. Existing names and
-/// LET/LAMBDA bindings take precedence over aliases. File and API syntax uses [`crate::parse`].
+/// LET/LAMBDA bindings take precedence over aliases. Input longer than
+/// [`crate::MAX_FORMULA_LEN`] characters is refused, as Excel refuses it when typed. File and API
+/// syntax uses [`crate::parse`].
 pub fn parse_input(src: &str, locale: FormulaLocale, known_name: impl Fn(&str) -> bool) -> Result<Expr, ParseError> {
+    parser::check_entered_length(src)?;
     let mut expr = parser::parse_syntax(src, locale)?;
     if locale == FormulaLocale::Es {
         normalize(&mut expr, &known_name, &mut Vec::new(), 0, false)?;

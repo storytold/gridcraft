@@ -1069,6 +1069,54 @@ fn spill_references_roundtrip_through_xlsx() {
     assert_eq!((v(&s, "C1"), v(&s, "C2")), (Value::Number(10.0), Value::Number(4.0)));
 }
 
+/// The 8,192-character limit applies to a formula as it is entered, not to its file form: saved,
+/// `LET` becomes `_xlfn.LET` and every use of its name `_xlpm.x`, so a formula of about 4,000
+/// typed characters takes about 16,000 in the file. Reopened, it still parses and calculates
+/// (it used to keep only its file text and cached value).
+#[test]
+fn let_formula_longer_than_the_limit_in_its_file_form_calculates_after_reopening() {
+    use std::io::Read;
+    let mut s = s();
+    // Eight SUMs of 250 uses of `x`: within the 255-argument and nesting limits.
+    let sum = format!("SUM({})", vec!["x"; 250].join(","));
+    let typed = format!("=LET(x,A1,{})", vec![sum; 8].join("+"));
+    assert!(typed.len() < gridcraft_formula::MAX_FORMULA_LEN, "{}", typed.len());
+    s.execute("cell.set", json!({"cell": "A1", "input": 1})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": typed})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(2000.0));
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let bytes = crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    let mut xml = String::new();
+    zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap().by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut xml).unwrap();
+    let stored = xml.split_once("<f>").and_then(|(_, f)| f.split_once("</f>")).map(|(f, _)| f).unwrap();
+    assert!(stored.starts_with("_xlfn.LET(_xlpm.x,A1,SUM(_xlpm.x,"), "{stored:.40}");
+    assert!(stored.len() > gridcraft_formula::MAX_FORMULA_LEN, "{}", stored.len());
+    s.execute("file.open", json!({"name": "long-let.xlsx", "base64": saved["base64"]})).unwrap();
+    let reopened = s.execute("cell.get", json!({"cell": "B1"})).unwrap()["formula"].as_str().unwrap().to_string();
+    assert!(reopened == typed, "reopened as {reopened:.40}");
+    s.execute("cell.set", json!({"cell": "A1", "input": 3})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(6000.0));
+}
+
+/// Entering a formula longer than 8,192 characters is refused, as in Excel, in a cell or as a
+/// name's formula.
+#[test]
+fn entering_a_formula_longer_than_the_limit_is_refused() {
+    let mut s = s();
+    let at_limit = format!("=12{}", "+1".repeat((gridcraft_formula::MAX_FORMULA_LEN - 2) / 2));
+    assert_eq!(at_limit.len(), gridcraft_formula::MAX_FORMULA_LEN + 1, "with the `=`");
+    s.execute("cell.set", json!({"cell": "A1", "input": at_limit})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(4107.0));
+    let err = s.execute("cell.set", json!({"cell": "A2", "input": format!("{at_limit}1")})).unwrap_err().to_string();
+    assert!(err.contains("8192"), "{err}");
+    assert!(v(&s, "A2").is_empty());
+    s.execute("formulas.defineName", json!({"name": "AtLimit", "refersTo": at_limit})).unwrap();
+    let err = s.execute("formulas.defineName", json!({"name": "TooLong", "refersTo": format!("{at_limit}1")})).unwrap_err().to_string();
+    assert!(err.contains("8192"), "{err}");
+    let names = s.doc().unwrap().wb.names.iter().map(|n| n.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names, ["AtLimit"]);
+}
+
 /// Fixture for the open-time row fit (issue #833): `row_info` = (size, custom, hidden) for
 /// row 5 (index 4), `None` = no row entry at all. Cell A5 = "plain big bold" — whole-cell
 /// font 20pt with `big_font`, plain 11pt without (a tall plain row's fit removes its entry).

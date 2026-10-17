@@ -17,25 +17,60 @@ pub struct ParseError {
 
 pub(crate) const MAX_DEPTH: usize = 256;
 
-/// Longest formula accepted, in characters: Excel's limit for formula contents. It also bounds
-/// the depth of the trees long operator chains build (`1+1+…`), which dropping and evaluating
-/// walk recursively; without it a formula of a few hundred kilobytes in a file overflows the stack.
+/// Longest formula that can be entered, in characters (the leading `=` excluded): Excel's limit
+/// for formula contents, checked by [`check_entered_length`] where a formula is typed or set
+/// through the command API. Text that [`parse`] reads from files (and gets from its other
+/// callers) is not held to it: a formula's file form is longer than what was typed (`_xlfn.LET`,
+/// `_xlpm.x` for each use of a LET or LAMBDA name, `_xlfn.ANCHORARRAY(A1)` for `A1#`,
+/// `_xlfn.SINGLE(x)` for `@x`), so a formula entered near the limit can take several times as
+/// many characters on disk. Such text is held to [`MAX_FORMULA_BYTES`] instead.
+///
+/// Any formula text is also held to its operators. The parser applies operators in a loop, one
+/// tree level each (`1+1+…` nests a level per `+`), and dropping, cloning and walking the tree
+/// recurse through those levels. Each operator is counted at the fewest characters it takes when
+/// typed (see `Parser::operators`) and a formula whose operators alone would not fit in
+/// `MAX_FORMULA_LEN` characters is refused. With the nesting limit this keeps the tree of any
+/// formula text about as deep as one that can be typed at most (parentheses, calls and prefix
+/// operators are held to the nesting limit, not counted), and never refuses a formula that can
+/// be typed: its file form has the same operators.
 pub const MAX_FORMULA_LEN: usize = 8_192;
 
+/// Longest formula text [`parse`] accepts, in bytes (the leading `=` excluded): 256 KiB. It is
+/// checked before tokenizing, which takes about 160 bytes of memory per character, so formula
+/// text from a small, highly compressed file can't make each parse of it allocate gigabytes.
+///
+/// The file form of any formula that can be entered stays well under it. The longest rewrite is
+/// `@`, saved as `_xlfn.SINGLE(…)`: 14 bytes for each `@` typed, so a formula of 8,192 `@`
+/// and other characters takes at most about 112 KiB on disk (an entered character that is not
+/// rewritten takes at most 4 bytes).
+pub const MAX_FORMULA_BYTES: usize = 256 * 1024;
+
+/// Refuses formula text longer than can be entered ([`MAX_FORMULA_LEN`] characters, the leading
+/// `=` excluded), as Excel does when a formula is typed or set.
+pub fn check_entered_length(src: &str) -> Result<(), ParseError> {
+    let body = src.strip_prefix('=').unwrap_or(src);
+    if body.len() > MAX_FORMULA_LEN && body.chars().count() > MAX_FORMULA_LEN {
+        return Err(ParseError { msg: format!("formula is longer than {MAX_FORMULA_LEN} characters"), pos: 0 });
+    }
+    Ok(())
+}
+
 /// Parses formula text. A leading `=` (or `+`/`-` as Lotus users type) is accepted and skipped
-/// for `=`.
+/// for `=`. The text may be longer than [`MAX_FORMULA_LEN`], as a formula's file form is, up to
+/// [`MAX_FORMULA_BYTES`]; its nesting and the number of its operators are limited too.
 pub fn parse(src: &str) -> Result<Expr, ParseError> {
     parse_syntax(src, crate::FormulaLocale::En)
 }
 
 pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale) -> Result<Expr, ParseError> {
     let body = src.strip_prefix('=').unwrap_or(src);
-    if body.len() > MAX_FORMULA_LEN && body.chars().count() > MAX_FORMULA_LEN {
-        return Err(ParseError { msg: format!("formula is longer than {MAX_FORMULA_LEN} characters"), pos: 0 });
+    // Before tokenizing, whose memory grows with the text: the operator count comes after it.
+    if body.len() > MAX_FORMULA_BYTES {
+        return Err(ParseError { msg: format!("formula is longer than {MAX_FORMULA_BYTES} bytes"), pos: 0 });
     }
     let toks = tokenize_locale(body, locale).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
-    let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
+    let mut p = Parser { toks, i: 0, depth: 0, operators: 0, input: locale == crate::FormulaLocale::Es };
     let e = p.expr(0, false)?;
     match p.peek() {
         Tok::Eof => Ok(e),
@@ -75,6 +110,8 @@ struct Parser {
     toks: Vec<Token>,
     i: usize,
     depth: usize,
+    /// The operators applied so far, counted in typed characters (see [`Parser::operators`]).
+    operators: usize,
     input: bool,
 }
 
@@ -132,6 +169,18 @@ impl Parser {
     fn err(&self, msg: impl Into<String>) -> ParseError {
         ParseError { msg: msg.into(), pos: self.pos() }
     }
+    /// Counts an operator about to wrap the expression being built at the fewest characters it
+    /// takes when typed: one for `%`, two for a binary operator and its right operand or for
+    /// calling a result (`(…)`), three for a trim range (`:.` and its right operand). No two
+    /// operators share a character, so a formula that fits in [`MAX_FORMULA_LEN`] characters
+    /// never counts more than that.
+    fn operators(&mut self, chars: usize) -> Result<(), ParseError> {
+        self.operators += chars;
+        if self.operators > MAX_FORMULA_LEN {
+            return Err(self.err(format!("formula has more operators than fit in {MAX_FORMULA_LEN} characters")));
+        }
+        Ok(())
+    }
     fn expect(&mut self, t: Tok) -> Result<(), ParseError> {
         if *self.peek() == t {
             self.next();
@@ -168,8 +217,9 @@ impl Parser {
             return Err(self.err("formula is nested too deeply"));
         }
         let mut lhs = self.prefix(allow_union)?;
-        // Postfix operators (`%`, invoking a result) wrap `lhs` without recursing: they count
-        // towards the nesting limit, so `1%%%…` can't build a tree deeper than it.
+        // Operators wrap `lhs` in this loop without recursing, one tree level each: they are all
+        // counted (`operators`), and postfix ones (`%`, invoking a result) towards the nesting
+        // limit too, so `1%%%…` can't build a tree deeper than it.
         let mut postfix = 0;
         loop {
             if *self.peek() == Tok::Op("%") {
@@ -180,6 +230,7 @@ impl Parser {
                 if self.depth + postfix > MAX_DEPTH {
                     return Err(self.err("formula is nested too deeply"));
                 }
+                self.operators(1)?;
                 self.next();
                 lhs = Expr::Unary(UnOp::Percent, Box::new(lhs));
                 continue;
@@ -193,6 +244,7 @@ impl Parser {
                 if self.depth + postfix > MAX_DEPTH {
                     return Err(self.err("formula is nested too deeply"));
                 }
+                self.operators(2)?;
                 self.next();
                 let args = self.args()?;
                 lhs = Expr::Invoke(Box::new(lhs), args);
@@ -204,6 +256,7 @@ impl Parser {
                 if bp < min_bp {
                     break;
                 }
+                self.operators(3)?;
                 self.next();
                 let rhs = self.expr(bp + 1, allow_union)?;
                 lhs = Expr::Unary(UnOp::Trim(mode), Box::new(combine(BinOp::Range, lhs, rhs)));
@@ -214,6 +267,7 @@ impl Parser {
             if bp < min_bp {
                 break;
             }
+            self.operators(2)?;
             self.next();
             let rhs = self.expr(bp + 1, allow_union)?;
             lhs = combine(op, lhs, rhs);

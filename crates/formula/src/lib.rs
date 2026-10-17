@@ -12,7 +12,7 @@ pub mod printer;
 
 pub use ast::{Anchor, BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, TrimMode, UnOp};
 pub use input::{FormulaLocale, parse_input, print_input};
-pub use parser::{MAX_FORMULA_LEN, ParseError, normalize_function_name, parse};
+pub use parser::{MAX_FORMULA_BYTES, MAX_FORMULA_LEN, ParseError, check_entered_length, normalize_function_name, parse};
 pub use printer::{print, print_r1c1, quote_sheet};
 
 #[cfg(test)]

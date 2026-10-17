@@ -262,6 +262,10 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
         None | Some("Workbook") => None,
         Some(sh) => Some(d.wb.sheet_index(sh).ok_or_else(|| bad("formulas.defineName", "no such sheet"))?),
     };
+    if let Some(r) = str_param(p, "refersTo") {
+        // A name's formula is held to the 8,192-character entry limit, as a cell's is.
+        gridcraft_formula::check_entered_length(r).map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))?;
+    }
     let refers = match str_param(p, "refersTo") {
         // As in Excel, relative references are relative to the active cell; names keep them
         // relative to A1, as files do.

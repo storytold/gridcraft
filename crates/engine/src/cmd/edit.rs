@@ -138,6 +138,9 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
             && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('));
     if is_formula {
         let body = input.strip_prefix('=').unwrap_or(input);
+        // Excel refuses a formula longer than 8,192 characters when it's entered (its file form,
+        // with `_xlfn.`/`_xlpm.` prefixes, may be longer: files aren't held to this).
+        gridcraft_formula::check_entered_length(body).map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))?;
         // Excel closes missing parentheses for you.
         let mut text = body.to_string();
         let mut parsed = gridcraft_formula::parse(&text);
