@@ -1671,7 +1671,7 @@ pub(crate) fn paint_selection(
     }
     if let crate::grid::Drag::MoveCols { before: Some(before), .. } = &app.grid.drag {
         let x = geo.x(sh, *before);
-        p.line_segment([pos2(x, geo.rect.top()), pos2(x, geo.rect.bottom())], Stroke::new(3.0, t.accent));
+        p.line_segment([pos2(x, geo.rect.top()), pos2(x, geo.rect.bottom())], Stroke::new(3.0, t.editing_accent()));
     }
     // Marching ants around the copied range.
     if let Some(clip) = &app.session.clipboard
@@ -2461,7 +2461,7 @@ fn paint_freeze_handles(p: &Painter, geo: &Geo, sh: &Sheet, drag: &Drag, t: &Tok
     p.rect_filled(Rect::from_center_size(cols.center(), vec2(3.0, cols.height())), 1.0, bar);
     p.rect_filled(Rect::from_center_size(rows.center(), vec2(rows.width(), 3.0)), 1.0, bar);
     if let Drag::Freeze { cols, to: Some(to) } = *drag {
-        let stroke = Stroke::new(2.0, t.accent);
+        let stroke = Stroke::new(2.0, t.editing_accent());
         if cols {
             let x = geo.cells.left() + sh.col_left(to) as f32 * geo.z;
             p.line_segment([pos2(x, geo.head_top()), pos2(x, geo.cells.bottom())], stroke);
