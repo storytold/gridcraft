@@ -1266,3 +1266,56 @@ fn offset_extreme_arguments_return_ref() {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
     }
 }
+
+#[test]
+fn cell_accepts_the_german_info_types() {
+    // Excel translates `CELL`'s function name but not its first argument, so a German workbook
+    // arrives holding `CELL("Dateiname",A1)` and the localized names have to be understood as
+    // they stand (#1489). Values follow the reported fixture: A1 a date, A2 1234.5, A3 7, C1 3.
+    let mut t = T::new();
+    t.set("A2", "1234.5");
+    t.set("A3", "7");
+    t.set("C1", "3");
+
+    // Each German name gives what its English counterpart gives.
+    for (de, en) in [
+        ("adresse", "address"),
+        ("zeile", "row"),
+        ("spalte", "col"),
+        ("inhalt", "contents"),
+        ("typ", "type"),
+        ("breite", "width"),
+        ("schutz", "protect"),
+        ("format", "format"),
+        ("farbe", "color"),
+        ("klammern", "parentheses"),
+        ("präfix", "prefix"),
+    ] {
+        t.set("E1", &format!("=CELL(\"{de}\",A2)"));
+        t.set("E2", &format!("=CELL(\"{en}\",A2)"));
+        assert_eq!(t.get("E1"), t.get("E2"), "CELL(\"{de}\") should match CELL(\"{en}\")");
+        assert_ne!(t.get("E1"), Value::Error(CellError::Value), "CELL(\"{de}\") is still #VALUE!");
+    }
+
+    // The reported cells, by their German names.
+    t.set("B1", "=CELL(\"Adresse\",A1)");
+    assert_eq!(t.get("B1"), Value::from("$A$1"));
+    t.set("B2", "=CELL(\"Zeile\",C1)");
+    assert_eq!(t.get("B2"), Value::from(1.0));
+    t.set("B3", "=CELL(\"Spalte\",C1)");
+    assert_eq!(t.get("B3"), Value::from(3.0));
+    t.set("B4", "=CELL(\"Inhalt\",A2)");
+    assert_eq!(t.get("B4"), Value::from(1234.5));
+
+    // Upper case reaches the table through a Unicode lower-casing: `to_ascii_lowercase` would
+    // leave `PRÄFIX` as `prÄfix` and miss it.
+    t.set("E3", "=CELL(\"prefix\",A2)");
+    t.set("B5", "=CELL(\"PRÄFIX\",A2)");
+    assert_eq!(t.get("B5"), t.get("E3"), "PRÄFIX reaches the table through a Unicode lower-casing");
+    t.set("B6", "=CELL(\"präfix\",A2)");
+    assert_eq!(t.get("B6"), t.get("E3"), "and so does the lower-case spelling");
+
+    // An unknown type is still #VALUE!, so the aliases have not made CELL permissive.
+    t.set("B7", "=CELL(\"nonsense\",A2)");
+    assert_eq!(t.get("B7"), Value::Error(CellError::Value));
+}
