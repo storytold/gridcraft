@@ -939,7 +939,8 @@ fn data_validation_form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, o
 }
 
 /// Builds the command params from form values for dialogs that need translation.
-fn build_params(d: &Dialog) -> Json {
+/// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.
+pub(crate) fn build_params(d: &Dialog) -> Json {
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
         "dataValidation" => {
