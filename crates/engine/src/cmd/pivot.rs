@@ -2110,6 +2110,75 @@ mod tests {
     }
 
     #[test]
+    fn getpivotdata_reads_the_report() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+        assert_eq!(pt(&s).last_range.unwrap().a1(), "A3:E8");
+        let gp = |s: &mut Session, cell: &str, f: &str| {
+            s.execute("cell.set", json!({"cell": cell, "input": f})).unwrap();
+            val(s, cell)
+        };
+        // Item cell, row subtotal by any cell of the report, grand total; names and items ignore case.
+        assert_eq!(gp(&mut s, "G1", r#"=GETPIVOTDATA("Sales",$A$3,"Region","East","Product","Apples")"#), Value::Number(160.0));
+        assert_eq!(gp(&mut s, "G2", r#"=GETPIVOTDATA("sales",C6,"region","east")"#), Value::Number(415.0));
+        assert_eq!(gp(&mut s, "G3", r#"=GETPIVOTDATA("Sum of Sales",A3)"#), Value::Number(TOTAL));
+        assert_eq!(gp(&mut s, "G4", r#"=GETPIVOTDATA("Sales",A3,"Product","Pears")"#), Value::Number(270.0));
+        // Not in the report: unknown item, value field, field, unpaired field, not a pivot cell.
+        for (cell, f) in [
+            ("H1", r#"=GETPIVOTDATA("Sales",A3,"Region","South")"#),
+            ("H2", r#"=GETPIVOTDATA("Units",A3)"#),
+            ("H3", r#"=GETPIVOTDATA("Sales",A3,"Date","East")"#),
+            ("H4", r#"=GETPIVOTDATA("Sales",A3,"Region")"#),
+            ("H5", r#"=GETPIVOTDATA("Sales",Z99)"#),
+            ("H6", r#"=GETPIVOTDATA("Sales",A3,"Region","East","Region","East")"#),
+        ] {
+            assert_eq!(gp(&mut s, cell, f), Value::Error(CellError::Ref), "{f}");
+        }
+        assert_eq!(gp(&mut s, "H7", r#"=GETPIVOTDATA("Sales",A3,"Region",NA())"#), Value::Error(CellError::NA));
+        // A refresh after a source edit updates the result.
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        s.execute("cell.set", json!({"cell": "E2", "input": "1100"})).unwrap();
+        s.execute("data.refreshAll", json!({})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+        assert_eq!(val(&s, "G1"), Value::Number(1160.0));
+        // Opening a saved workbook rebuilds the index (files don't carry it).
+        let wb = (*s.doc().unwrap().wb).clone();
+        let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+        s.add_document(crate::DocState::new(back, None, "Reopened".into()));
+        let d = s.doc().unwrap();
+        let sh = d.wb.sheet(d.wb.sheet_index("Sheet2").unwrap()).unwrap();
+        assert!(!sh.pivots.first().unwrap().data_cells.is_empty());
+        assert_eq!(sh.value(CellRef::parse("G1").unwrap()), Value::Number(1160.0));
+        assert_eq!(sh.value(CellRef::parse("G3").unwrap()), Value::Number(TOTAL + 1000.0));
+    }
+
+    #[test]
+    fn getpivotdata_calculated_field() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+        s.execute("pivot.calculatedField", json!({"name": "Double", "formula": "=Sales*2"})).unwrap();
+        let at = pt(&s).last_range.unwrap().start.a1();
+        s.execute("cell.set", json!({"cell": "K1", "input": format!(r#"=GETPIVOTDATA("Double",{at},"Region","East")"#)})).unwrap();
+        assert_eq!(val(&s, "K1"), Value::Number(830.0));
+    }
+
+    #[test]
+    fn getpivotdata_report_filter() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Product"], "values": ["Sales"], "filters": ["Region"]})).unwrap();
+        let at = pt(&s).last_range.unwrap().start.a1();
+        let f = |region: &str| format!(r#"=GETPIVOTDATA("Sales",{at},"Region","{region}","Product","Apples")"#);
+        // With every item shown, naming the filter field is #REF!.
+        s.execute("cell.set", json!({"cell": "H1", "input": f("East")})).unwrap();
+        assert_eq!(val(&s, "H1"), Value::Error(CellError::Ref));
+        // Filtered to East: East matches, West doesn't.
+        s.execute("pivot.filter", json!({"field": "Region", "selected": ["East"]})).unwrap();
+        assert_eq!(val(&s, "H1"), Value::Number(160.0));
+        s.execute("cell.set", json!({"cell": "H2", "input": f("West")})).unwrap();
+        assert_eq!(val(&s, "H2"), Value::Error(CellError::Ref));
+    }
+
+    #[test]
     fn replace_protection() {
         let mut s = sales();
         s.execute("cell.set", json!({"cell": "H5", "input": "keep me"})).unwrap();

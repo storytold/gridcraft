@@ -196,6 +196,12 @@ pub fn function_list() -> Vec<Json> {
         ("SHEETS", "Information", "SHEETS([reference])", "Number of sheets."),
         ("AREAS", "Lookup", "AREAS(reference)", "Number of areas in a reference."),
         ("TRIMRANGE", "Lookup", "TRIMRANGE(range, [trim_rows], [trim_cols])", "A range or array without its blank outer rows and columns."),
+        (
+            "GETPIVOTDATA",
+            "Lookup",
+            "GETPIVOTDATA(data_field, pivot_table, [field1, item1], ...)",
+            "A value from a PivotTable report, by value field and items.",
+        ),
         ("ISOMITTED", "Information", "ISOMITTED(argument)", "TRUE when a LAMBDA argument was left out."),
     ];
     for (n, c, sig, d) in specials {

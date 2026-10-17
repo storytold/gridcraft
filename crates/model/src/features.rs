@@ -1,7 +1,7 @@
 //! Sheet features beyond cells: tables, conditional formatting, data validation, comments,
 //! hyperlinks, charts, images, autofilter, print settings.
 
-use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_core::{CellRef, RangeRef, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::style::{Color, Style};
@@ -1003,6 +1003,10 @@ pub struct PivotTable {
     pub last_range: Option<RangeRef>,
     /// Calculated fields, usable in the Values area by name.
     pub calculated_fields: Vec<PivotCalcField>,
+    /// Every value cell of the last computed report, for GETPIVOTDATA. Rebuilt on refresh and
+    /// when a workbook is opened; not saved.
+    #[serde(skip)]
+    pub data_cells: Vec<PivotDataCell>,
     /// The Σ Values pseudo-field (it exists with two or more value fields) sits in Rows rather
     /// than Columns (Excel's "values on rows").
     pub values_on_rows: bool,
@@ -1019,6 +1023,26 @@ pub struct PivotCalcField {
     pub name: String,
     /// Formula text, starting with `=`.
     pub formula: String,
+}
+
+/// One value cell of a computed PivotTable report: the value field, the row and column items
+/// that locate it (fewer for subtotals, none for the grand total) and the value shown.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PivotDataCell {
+    /// The value field's caption ("Sum of Sales").
+    pub data_field: String,
+    /// The value field's source column ("Sales").
+    pub source_col: String,
+    pub items: Vec<PivotItemRef>,
+    pub value: Value,
+}
+
+/// A row or column field item: the field's source column, the item's label and its value.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PivotItemRef {
+    pub field: String,
+    pub label: String,
+    pub value: Value,
 }
 
 impl Default for PivotTable {
@@ -1041,6 +1065,7 @@ impl Default for PivotTable {
             show_headers: true,
             last_range: None,
             calculated_fields: vec![],
+            data_cells: vec![],
             values_on_rows: false,
             values_position: None,
         }

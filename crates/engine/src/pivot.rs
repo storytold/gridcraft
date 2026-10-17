@@ -22,6 +22,8 @@ pub const MAX_OUTPUT_CELLS: u64 = 2_000_000;
 pub const MAX_AXIS_FIELDS: usize = 32;
 /// Most fields in the Values area.
 pub const MAX_VALUE_FIELDS: usize = 256;
+/// Most report value cells kept for GETPIVOTDATA (bigger reports aren't indexed).
+pub const MAX_INDEXED_CELLS: usize = 1_000_000;
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -511,6 +513,8 @@ pub struct Output {
     pub chart_cols: Vec<(u32, String)>,
     /// Grid column holding the innermost row labels (`None` without row fields).
     pub label_col: Option<u32>,
+    /// Every value cell with the items that locate it (for GETPIVOTDATA).
+    pub data: Vec<PivotDataCell>,
 }
 
 impl Output {
@@ -1057,6 +1061,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             chart_rows: vec![],
             chart_cols: vec![],
             label_col: None,
+            data: vec![],
         });
     }
 
@@ -1230,6 +1235,16 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     } else {
         Some(row_levels.saturating_sub(1) as u32)
     };
+    let item_refs = |fields: &[&PivotField], items: &[FieldItems], path: &[u32]| -> Vec<PivotItemRef> {
+        path.iter()
+            .enumerate()
+            .filter_map(|(d, it)| {
+                let (f, item) = (fields.get(d)?, items.get(d)?.get(*it)?);
+                Some(PivotItemRef { field: f.source_col.clone(), label: item.label.clone(), value: item.value.clone() })
+            })
+            .collect()
+    };
+    let mut data: Vec<PivotDataCell> = Vec::new();
     for line in &lines {
         let rk = match line.kind {
             LineKind::Item(b) => RowKind::Item(b),
@@ -1297,10 +1312,15 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
                     _ => raw,
                 },
             };
+            if data.len() < MAX_INDEXED_CELLS {
+                let mut items = item_refs(&ctx.rows, &ctx.row_items, rp);
+                items.extend(item_refs(&col_fields, &col_items, cp));
+                data.push(PivotDataCell { data_field: vdef.name.clone(), source_col: vdef.source_col.clone(), items, value: shown.clone() });
+            }
             g.set(r, l + j, shown, ck.1, 0, data_fmt.get(*vi).cloned().flatten());
         }
     }
-    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col })
+    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col, data })
 }
 
 // ---------------------------------------------------------------- styling and writing
@@ -1492,6 +1512,9 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     }
     let sheet_name = shm.name.clone();
     rebind_charts(wb, &sheet_name, &pt.name, origin, &out);
+    if let Some(p) = wb.sheet_mut(sheet).and_then(|s| s.pivots.get_mut(idx)) {
+        p.data_cells = out.data;
+    }
     Ok(area)
 }
 
@@ -1590,6 +1613,26 @@ fn rebind_charts(wb: &mut Workbook, sheet: &str, pivot: &str, origin: CellRef, o
     }
 }
 
+/// Rebuilds every PivotTable's GETPIVOTDATA index from its source without rewriting the
+/// report (after opening a workbook, whose files don't carry the index).
+pub fn index_all(wb: &mut Workbook) {
+    let mut found: Vec<(usize, usize, Vec<PivotDataCell>)> = Vec::new();
+    for (si, sh) in wb.sheets.iter().enumerate() {
+        for (pi, pt) in sh.pivots.iter().enumerate() {
+            if pt.last_range.is_none() {
+                continue;
+            }
+            let data = compute(wb, pt, si).map(|o| o.data).unwrap_or_default();
+            found.push((si, pi, data));
+        }
+    }
+    for (si, pi, data) in found {
+        if let Some(p) = wb.sheet_mut(si).and_then(|s| s.pivots.get_mut(pi)) {
+            p.data_cells = data;
+        }
+    }
+}
+
 /// Clears a pivot's last output area.
 pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
     let Some(shm) = wb.sheet_mut(sheet) else { return };
@@ -1597,6 +1640,7 @@ pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
     shm.take_cells(r);
     if let Some(p) = shm.pivots.get_mut(idx) {
         p.last_range = None;
+        p.data_cells.clear();
     }
 }
 

@@ -119,6 +119,7 @@ const UNDO_LIMIT: usize = 100;
 
 impl DocState {
     pub fn new(mut wb: Workbook, path: Option<String>, title: String) -> DocState {
+        pivot::index_all(&mut wb);
         let mut calc = Calc::new();
         calc.recalc_all(&mut wb);
         let wb = Arc::new(wb);

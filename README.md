@@ -198,7 +198,7 @@ egui frontend is a separate crate, so the UI can be swapped without touching the
 
 GridCraft is in **alpha**: the core workflow works end to end, but depth, fidelity and file
 compatibility are still rough. It covers 89% of the Excel ribbon commands in our catalog
-([`docs/parity-checklist.md`](docs/parity-checklist.md)) and 513 of Excel's 523 worksheet functions
+([`docs/parity-checklist.md`](docs/parity-checklist.md)) and 514 of Excel's 523 worksheet functions
 ([`docs/function-parity.md`](docs/function-parity.md)); weighted by what Excel users rely on, we
 estimate it is about 50% ready for real work. Next up: XLSX fidelity on real-world files, very large
 workbooks and multi-threaded recalc, chart depth, text in every script, and `.xls` import. Stage,

@@ -114,6 +114,7 @@ fn workbook() -> Workbook {
         show_headers: false,
         last_range: Some(rr("A2:H12")),
         calculated_fields: vec![],
+        data_cells: vec![],
         values_on_rows: false,
         values_position: None,
     };
@@ -173,6 +174,7 @@ fn workbook() -> Workbook {
         show_headers: true,
         last_range: Some(rr("K2:Z30")),
         calculated_fields: vec![],
+        data_cells: vec![],
         values_on_rows: false,
         values_position: None,
     };
