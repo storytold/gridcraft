@@ -76,10 +76,29 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     let nstyles = wb.styles.len() as u32;
     let sid = |s: gridcraft_model::StyleId| if s.0 < nstyles { s.0 } else { 0 };
 
+    // A table's dropdown filter is kept in `sheet.autofilter`, not in `Table::filter` (the
+    // engine's only live filter state, which the reader also fills). Where the two coincide,
+    // fold the sheet filter's criteria into the table so they reach the file: the stored
+    // `colId` offsets are relative to the range's first column, and both ranges start at the
+    // same column, so they carry over verbatim. A filter that only partially covers a table
+    // has nowhere valid to go, so it keeps being suppressed below.
+    let folded: Vec<Table> = match &sheet.autofilter {
+        Some(af) if !af.criteria.is_empty() => sheet
+            .tables
+            .iter()
+            .cloned()
+            .map(|mut t| {
+                if t.header_row && t.filter_button && t.filter.is_empty() && t.range.contains_range(&af.range) {
+                    t.filter = af.criteria.clone();
+                }
+                t
+            })
+            .collect(),
+        _ => sheet.tables.clone(),
+    };
     // Table header cells must hold the column names.
     let mut overrides: BTreeMap<CellRef, String> = BTreeMap::new();
-    let tables: Vec<(&Table, Vec<String>)> = sheet
-        .tables
+    let tables: Vec<(&Table, Vec<String>)> = folded
         .iter()
         .filter(|t| t.range.height() > t.header_row as u32 + t.totals_row as u32 || (t.header_row && t.range.height() > t.totals_row as u32))
         .map(|t| (t, table_columns(t)))
@@ -341,7 +360,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     s.push_str(&protected_ranges_xml(sheet));
     // autoFilter (a sheet filter overlapping a table would be invalid).
     if let Some(af) = &sheet.autofilter
-        && !sheet.tables.iter().any(|t| t.range.intersects(&af.range))
+        && !folded.iter().any(|t| t.range.contains_range(&af.range) && t.header_row && t.filter_button)
     {
         s.push_str(&autofilter_xml(af.range, &af.criteria, out));
     }

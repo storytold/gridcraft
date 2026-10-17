@@ -1164,3 +1164,60 @@ fn doc_props_keep_boundary_whitespace() {
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert_eq!(back.props, wb.props);
 }
+
+/// A table's dropdown filter lives in `sheet.autofilter` (the engine's only live filter state),
+/// not in `Table::filter`. Writing used to suppress the sheet `<autoFilter>` because a table
+/// intersects it and write the table part from `Table::filter`, which was empty: the criteria
+/// were lost on every save, leaving the rows hidden with no filter to clear on reopen.
+#[test]
+fn a_table_filter_criteria_survive_a_round_trip() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    for (r, v) in [(0u32, "Region"), (1, "East"), (2, "West"), (3, "East")] {
+        s.set_value(at(&format!("A{}", r + 1)), Value::text(v));
+    }
+    s.tables.push(Table {
+        id: 1,
+        name: "Sales".into(),
+        range: rr("A1:A4"),
+        header_row: true,
+        totals_row: false,
+        columns: vec![TableColumn {
+            name: "Region".into(),
+            totals: TotalsFn::None,
+            totals_label: None,
+            formula: None,
+            unique_name: None,
+            xml: None,
+        }],
+        style: "TableStyleMedium2".into(),
+        banded_rows: true,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: true,
+        filter: vec![],
+        table_type: None,
+        connection_id: None,
+    });
+    // The dropdown of a table's header cell installs the sheet AutoFilter over the table's
+    // range, and `data.filterBy` stores its criteria there.
+    s.autofilter = Some(AutoFilter {
+        range: rr("A1:A4"),
+        criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })],
+    });
+    s.rows.entry(1).or_default().hidden = true;
+
+    let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let b = back.sheet(0).unwrap();
+    let t = b.tables.first().expect("the table survived");
+    let (_, crit) = t.filter.first().expect("the table's filter criteria were kept on save");
+    assert!(
+        matches!(crit, FilterCriterion::Values { values, .. } if values == &["East".to_string()]),
+        "the criteria were dropped: {:?}",
+        t.filter
+    );
+    assert!(b.is_row_hidden(1), "the row the filter hid is still hidden");
+    assert!(b.autofilter.is_none(), "a table's filter belongs to the table part, not the sheet");
+}
