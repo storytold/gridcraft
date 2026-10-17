@@ -27,7 +27,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("view.headings", "Headings", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "headings")),
         cmd!("view.showZeros", "Show Zeros", [], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "zeros")),
         cmd!("view.rightToLeft", "Sheet Right-to-Left", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "rtl")),
-        cmd!("view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
+        cmd!(
+            "view.zoom",
+            "Zoom",
+            ["View", "Zoom"],
+            None,
+            r#"{percent: 10..400} | {preset: "fit", viewWidth?, viewHeight?} (Fit Selection: as view.zoomToSelection)"#,
+            has_doc,
+            zoom
+        ),
         cmd!("view.zoom100", "100%", ["View", "Zoom"], None, "{}", has_doc, |s, _| zoom(s, &json!({"percent": 100}))),
         cmd!(query "view.formulaBar", "Formula Bar", ["View", "Show"], None, "{on?: bool}", always, |s, p| {
             s.prefs.formula_bar = bool_param(p, "on").unwrap_or(!s.prefs.formula_bar);
@@ -153,6 +161,10 @@ fn sheet_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
 }
 
 fn zoom(s: &mut Session, p: &Json) -> Result<Json> {
+    // The Zoom dialog's Fit Selection choice.
+    if str_param(p, "preset") == Some("fit") {
+        return zoom_selection(s, p);
+    }
     let z = f64_param(p, "percent").ok_or_else(|| bad("view.zoom", "missing `percent`"))?.clamp(10.0, 400.0) as u16;
     let d = s.doc_mut()?;
     let dirty = d.is_dirty();
@@ -413,6 +425,21 @@ mod tests {
         s.execute("view.zoom", json!({"percent": 150})).unwrap();
         assert_eq!(s.execute("view.zoom100", json!({})).unwrap()["zoom"], 100);
         assert_eq!(s.doc().unwrap().wb.active().unwrap().zoom, 100);
+    }
+
+    #[test]
+    fn zoom_preset_fit_is_zoom_to_selection() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("edit.goTo", json!({"reference": "A1:D10"})).unwrap();
+        let fit = s.execute("view.zoom", json!({"preset": "fit", "viewWidth": 1000.0, "viewHeight": 600.0})).unwrap();
+        let direct = s.execute("view.zoomToSelection", json!({"viewWidth": 1000.0, "viewHeight": 600.0})).unwrap();
+        assert_eq!(fit, direct);
+        let z = fit["zoom"].as_u64().unwrap();
+        assert!(z != 100 && (10..=400).contains(&z), "{z}");
+        // A numeric preset or a percentage is not fit, and `fit` needs no percentage.
+        assert_eq!(s.execute("view.zoom", json!({"preset": "50", "percent": 50})).unwrap()["zoom"], 50);
+        assert!(s.execute("view.zoom", json!({"preset": "50"})).is_err());
     }
 
     #[test]

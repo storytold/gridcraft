@@ -55,6 +55,10 @@ impl Dialog {
         {
             self.values.insert("percent".into(), json!(p));
         }
+        // Typing a percentage chooses Custom, as in Excel's Zoom box.
+        if self.name == "zoom" && key == "percent" {
+            self.values.insert("preset".into(), json!("custom"));
+        }
         self.values.insert(key.into(), value);
     }
 
@@ -522,20 +526,20 @@ impl Dialog {
                 ],
                 json!({"groupBy": "A", "function": "sum"}),
             ),
-            "zoom" => Dialog::form(
-                "zoom",
-                "Zoom",
-                "view.zoom",
-                vec![
-                    Choice {
-                        key: "preset",
-                        label: "Magnification",
-                        options: vec![("200", "200%"), ("100", "100%"), ("75", "75%"), ("50", "50%"), ("25", "25%")],
-                    },
-                    Number { key: "percent", label: "Custom (%):" },
-                ],
-                json!({"percent": app.session.active().and_then(|d| d.wb.active().map(|s| s.zoom)).unwrap_or(100)}),
-            ),
+            "zoom" => {
+                // The choice matching the sheet's zoom is on; any other zoom is Custom, filled in.
+                let zoom = app.session.active().and_then(|d| d.wb.active().map(|s| s.zoom)).unwrap_or(100);
+                let preset = if ZOOM_PRESETS.contains(&zoom) { zoom.to_string() } else { "custom".to_string() };
+                // Fit Selection fits the selection to the visible grid.
+                let view = app.grid.cells_rect.map_or((1200.0, 700.0), |r| (r.width(), r.height()));
+                Dialog::form(
+                    "zoom",
+                    "Zoom",
+                    "view.zoom",
+                    vec![],
+                    json!({"percent": zoom, "preset": preset, "viewWidth": view.0, "viewHeight": view.1}),
+                )
+            }
             "defineName" => {
                 // Name Manager › Edit… passes the name being edited (`oldName`, `oldScope`) and
                 // its current fields; New… and Define Name start from the selection.
@@ -1033,6 +1037,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "zoom" => 260.0,
         _ => 380.0,
     };
     let window = egui::Window::new(app.ui.language.tr(&d.title))
@@ -1060,6 +1065,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
                 "solver" => solver(ui, &mut d, &mut confirm, &mut open),
+                "zoom" => zoom_body(ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {
@@ -1380,6 +1386,41 @@ fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
             *open = false;
         }
     });
+}
+
+/// The Magnification choices the Zoom dialog lists above Fit Selection and Custom.
+const ZOOM_PRESETS: [u16; 5] = [200, 100, 75, 50, 25];
+
+/// Excel's Zoom dialog: one column of choices, the current one on, Custom with its box beside it.
+fn zoom_body(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let cur = d.values.get("preset").and_then(Json::as_str).unwrap_or("custom").to_string();
+    ui.vertical(|ui| {
+        for p in ZOOM_PRESETS {
+            if ui.radio(cur == p.to_string(), format!("{p}%")).clicked() {
+                d.set_value("preset", json!(p.to_string()));
+            }
+        }
+        if ui.radio(cur == "fit", "Fit selection").clicked() {
+            d.set_value("preset", json!("fit"));
+        }
+        ui.horizontal(|ui| {
+            if ui.radio(cur == "custom", "Custom:").clicked() {
+                d.set_value("preset", json!("custom"));
+            }
+            let mut n = d.values.get("percent").and_then(Json::as_f64).unwrap_or(100.0).round().clamp(10.0, 400.0) as i32;
+            let r = ui.add(egui::DragValue::new(&mut n).range(10..=400).speed(1));
+            if r.changed() {
+                d.set_value("percent", json!(n));
+            } else if r.gained_focus() {
+                d.set_value("preset", json!("custom"));
+            }
+            ui.label("%");
+        });
+    });
+    // The button row takes only its own height; ok_cancel's right-to-left layout would claim the rest
+    // of the window and leave the dialog much taller than its content.
+    let row = vec2(ui.available_width(), ui.spacing().interact_size.y + 14.0);
+    ui.allocate_ui_with_layout(row, egui::Layout::top_down(egui::Align::Min), |ui| ok_cancel(ui, confirm, open));
 }
 
 fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
