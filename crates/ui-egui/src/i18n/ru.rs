@@ -410,6 +410,67 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Вычисления в книге",
         "Enable iterative calculation" => "Включить итеративные вычисления",
         "Calculation settings are saved with the workbook." => "Параметры вычислений сохраняются вместе с книгой.",
+        "Craft AI runs in the native app — it needs a local model runtime." => {
+            "Craft AI работает в нативном приложении — ему нужна локальная среда запуска моделей."
+        }
+        "Assistant" => "Ассистент",
+        "Looking for a local model runtime…" => "Идёт поиск локальной среды запуска моделей…",
+        "No local model runtime found." => "Локальная среда запуска моделей не найдена.",
+        "Craft AI talks to a model runtime on this machine — Ollama, LM Studio or llama.cpp's server — and never to a cloud service. Start one, then Refresh." => {
+            "Craft AI говорит со средой запуска моделей на этой машине — Ollama, LM Studio или сервером llama.cpp — и никогда с облачным сервисом. Запустите одну из них и нажмите «Обновить»."
+        }
+        "Runtime" => "Среда",
+        "Task" => "Задача",
+        "No model installed yet — see the Models tab." => "Модель ещё не установлена — см. вкладку «Модели».",
+        "Ask" => "Спросить",
+        "Thinking… {s}s" => "Думает… {s} с",
+        "This machine: {ram} GB RAM, {disk} GB free" => "Эта машина: ОЗУ {ram} ГБ, свободно {disk} ГБ",
+        "One download serves every ArtCraft app: the model lands in a shared folder all of them read." => {
+            "Одна загрузка обслуживает все приложения ArtCraft: модель попадает в общую папку, которую читают все."
+        }
+        "Disk {size}" => "Диск {size}",
+        "RAM {gb} GB" => "ОЗУ {gb} ГБ",
+        "Fits this machine" => "Подходит этой машине",
+        "Needs {ram} GB of RAM" => "Нужно {ram} ГБ ОЗУ",
+        "Needs {disk} GB of disk" => "Нужно {disk} ГБ на диске",
+        "Download with Ollama" => "Скачать через Ollama",
+        "Save model file" => "Сохранить файл модели",
+        "Delete file" => "Удалить файл",
+        "Downloading… {pct}% — {note}" => "Скачивание… {pct}% — {note}",
+        "Saving… {pct}%" => "Сохранение… {pct}%",
+        "Saved in the shared folder" => "Сохранено в общей папке",
+        "Local and private" => "Локально и приватно",
+        "Craft AI runs a local Gemma model on this machine. Nothing you write here leaves it: no account, no cloud service, no telemetry — the panel talks to a model runtime on 127.0.0.1." => {
+            "Craft AI запускает локальную модель Gemma прямо на этой машине. Написанное здесь никуда не уходит: ни аккаунта, ни облачного сервиса, ни телеметрии — панель говорит со средой запуска моделей на 127.0.0.1."
+        }
+        "Limits" => "Ограничения",
+        "A local model is not a frontier cloud model: it can be wrong, and a long answer takes its time on CPU. Check anything critical, and mind a model's size against this machine before downloading it." => {
+            "Локальная модель — не передовая облачная: она может ошибаться, и длинный ответ на процессоре занимает время. Проверяйте всё важное и соотносите размер модели с этой машиной до загрузки."
+        }
+        "The shared folder:" => "Общая папка:",
+        "Best for: everyday help on the lightest machines" => "Лучше всего для: повседневной помощи на самых слабых машинах",
+        "Best for: a step up in quality, still light" => "Лучше всего для: качество на ступень выше, по-прежнему лёгкий",
+        "Best for: balanced everyday and technical work" => "Лучше всего для: баланса повседневных и технических задач",
+        "Best for: near-flagship answers at MoE speed" => "Лучше всего для: ответов почти флагманского уровня на скорости MoE",
+        "Best for: the deepest reasoning this family has" => "Лучше всего для: самого глубокого рассуждения в этом семействе",
+        "Craft AI" => "Craft AI",
+        "Models" => "Модели",
+        "About" => "О программе",
+        "Model" => "Модель",
+        "Refresh" => "Обновить",
+        "Copy" => "Копировать",
+        "Ask anything" => "Спросите о чём угодно",
+        "Ask in any language" => "Спросите на любом языке",
+        "Explain a formula" => "Объяснить формулу",
+        "Paste the formula, or a cell like =B2*1.1" => "Вставьте формулу или ячейку вроде =B2*1.1",
+        "Build a formula" => "Составить формулу",
+        "What to compute, and where the numbers are" => "Что вычислить и где находятся числа",
+        "Clean or transform data" => "Очистить или преобразовать данные",
+        "Describe the data and the shape you want" => "Опишите данные и нужную форму",
+        "Chart and pivot advice" => "Совет по диаграммам и сводным таблицам",
+        "The data and the story it should tell" => "Данные и история, которую они должны рассказать",
+        "Function finder" => "Поиск функции",
+        "What you need, in plain words" => "Что вам нужно, простыми словами",
         _ => return None,
     })
 }

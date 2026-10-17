@@ -410,6 +410,67 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "통합 문서 계산",
         "Enable iterative calculation" => "반복 계산 사용",
         "Calculation settings are saved with the workbook." => "계산 설정은 통합 문서와 함께 저장됩니다.",
+        "Craft AI runs in the native app — it needs a local model runtime." => {
+            "Craft AI는 네이티브 앱에서 실행됩니다 — 로컬 모델 런타임이 필요합니다."
+        }
+        "Assistant" => "어시스턴트",
+        "Looking for a local model runtime…" => "로컬 모델 런타임을 찾는 중…",
+        "No local model runtime found." => "로컬 모델 런타임이 없습니다.",
+        "Craft AI talks to a model runtime on this machine — Ollama, LM Studio or llama.cpp's server — and never to a cloud service. Start one, then Refresh." => {
+            "Craft AI는 이 컴퓨터의 모델 런타임(Ollama, LM Studio, llama.cpp 서버)과만 통신하며 클라우드 서비스와는 절대 통신하지 않습니다. 하나를 실행한 뒤 새로 고침하세요."
+        }
+        "Runtime" => "런타임",
+        "Task" => "작업",
+        "No model installed yet — see the Models tab." => "설치된 모델이 아직 없습니다 — 모델 탭을 참고하세요.",
+        "Ask" => "묻기",
+        "Thinking… {s}s" => "생각 중… {s}초",
+        "This machine: {ram} GB RAM, {disk} GB free" => "이 컴퓨터: RAM {ram} GB, 여유 {disk} GB",
+        "One download serves every ArtCraft app: the model lands in a shared folder all of them read." => {
+            "한 번 내려받으면 모든 ArtCraft 앱에서 씁니다. 모델은 모든 앱이 읽는 공유 폴더에 저장됩니다."
+        }
+        "Disk {size}" => "디스크 {size}",
+        "RAM {gb} GB" => "RAM {gb} GB",
+        "Fits this machine" => "이 컴퓨터에 적합합니다",
+        "Needs {ram} GB of RAM" => "RAM {ram} GB가 필요합니다",
+        "Needs {disk} GB of disk" => "디스크 {disk} GB가 필요합니다",
+        "Download with Ollama" => "Ollama로 내려받기",
+        "Save model file" => "모델 파일 저장",
+        "Delete file" => "파일 삭제",
+        "Downloading… {pct}% — {note}" => "내려받는 중… {pct}% — {note}",
+        "Saving… {pct}%" => "저장하는 중… {pct}%",
+        "Saved in the shared folder" => "공유 폴더에 저장됨",
+        "Local and private" => "로컬이며 비공개",
+        "Craft AI runs a local Gemma model on this machine. Nothing you write here leaves it: no account, no cloud service, no telemetry — the panel talks to a model runtime on 127.0.0.1." => {
+            "Craft AI는 이 컴퓨터에서 로컬 Gemma 모델을 실행합니다. 여기에 쓴 내용은 밖으로 나가지 않습니다. 계정도, 클라우드 서비스도, 텔레메트리도 없으며 패널은 127.0.0.1의 모델 런타임과만 통신합니다."
+        }
+        "Limits" => "한계",
+        "A local model is not a frontier cloud model: it can be wrong, and a long answer takes its time on CPU. Check anything critical, and mind a model's size against this machine before downloading it." => {
+            "로컬 모델은 최첨단 클라우드 모델이 아닙니다. 틀릴 수 있고 긴 답변은 CPU에서 시간이 걸립니다. 중요한 내용은 반드시 확인하고, 내려받기 전에 모델 크기를 이 컴퓨터와 비교하세요."
+        }
+        "The shared folder:" => "공유 폴더:",
+        "Best for: everyday help on the lightest machines" => "이런 용도에 최적: 가장 가벼운 컴퓨터에서의 일상적인 도움",
+        "Best for: a step up in quality, still light" => "이런 용도에 최적: 한 단계 나은 품질, 여전히 가벼움",
+        "Best for: balanced everyday and technical work" => "이런 용도에 최적: 일상과 기술 작업의 균형",
+        "Best for: near-flagship answers at MoE speed" => "이런 용도에 최적: MoE 속도로 기함급에 가까운 답변",
+        "Best for: the deepest reasoning this family has" => "이런 용도에 최적: 이 패밀리에서 가장 깊은 추론",
+        "Craft AI" => "Craft AI",
+        "Models" => "모델",
+        "About" => "정보",
+        "Model" => "모델",
+        "Refresh" => "새로 고침",
+        "Copy" => "복사",
+        "Ask anything" => "무엇이든 물어보기",
+        "Ask in any language" => "어느 언어로든 물어볼 수 있습니다",
+        "Explain a formula" => "수식 설명",
+        "Paste the formula, or a cell like =B2*1.1" => "수식을 붙여넣거나 =B2*1.1 같은 셀을 입력하세요",
+        "Build a formula" => "수식 만들기",
+        "What to compute, and where the numbers are" => "무엇을 계산할지, 숫자가 어디에 있는지",
+        "Clean or transform data" => "데이터 정리 또는 변환",
+        "Describe the data and the shape you want" => "데이터와 원하는 형태를 설명하세요",
+        "Chart and pivot advice" => "차트 및 피벗 테이블 조언",
+        "The data and the story it should tell" => "데이터와 그것이 말해줘야 할 이야기",
+        "Function finder" => "함수 찾기",
+        "What you need, in plain words" => "필요한 것을 평범한 말로",
         _ => return None,
     })
 }

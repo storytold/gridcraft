@@ -411,6 +411,67 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Dunkel",
         "Sheet Options|View" => "Anzeige",
         "Print" => "Drucken",
+        "Craft AI runs in the native app — it needs a local model runtime." => {
+            "Craft AI läuft in der nativen App — es braucht eine lokale Modell-Laufzeit."
+        }
+        "Assistant" => "Assistent",
+        "Looking for a local model runtime…" => "Suche nach einer lokalen Modell-Laufzeit…",
+        "No local model runtime found." => "Keine lokale Modell-Laufzeit gefunden.",
+        "Craft AI talks to a model runtime on this machine — Ollama, LM Studio or llama.cpp's server — and never to a cloud service. Start one, then Refresh." => {
+            "Craft AI spricht mit einer Modell-Laufzeit auf diesem Rechner — Ollama, LM Studio oder llama.cpps Server — und nie mit einem Cloud-Dienst. Starten Sie eine und klicken Sie auf „Neu laden“."
+        }
+        "Runtime" => "Laufzeit",
+        "Task" => "Aufgabe",
+        "No model installed yet — see the Models tab." => "Noch kein Modell installiert — siehe Reiter „Modelle“.",
+        "Ask" => "Fragen",
+        "Thinking… {s}s" => "Denkt nach… {s} s",
+        "This machine: {ram} GB RAM, {disk} GB free" => "Dieser Rechner: {ram} GB RAM, {disk} GB frei",
+        "One download serves every ArtCraft app: the model lands in a shared folder all of them read." => {
+            "Ein Download reicht für alle ArtCraft-Apps: Das Modell landet in einem gemeinsamen Ordner, den alle lesen."
+        }
+        "Disk {size}" => "Speicher {size}",
+        "RAM {gb} GB" => "RAM {gb} GB",
+        "Fits this machine" => "Passt auf diesen Rechner",
+        "Needs {ram} GB of RAM" => "Braucht {ram} GB RAM",
+        "Needs {disk} GB of disk" => "Braucht {disk} GB Speicher",
+        "Download with Ollama" => "Mit Ollama laden",
+        "Save model file" => "Modelldatei speichern",
+        "Delete file" => "Datei löschen",
+        "Downloading… {pct}% — {note}" => "Wird geladen… {pct} % — {note}",
+        "Saving… {pct}%" => "Wird gespeichert… {pct} %",
+        "Saved in the shared folder" => "Im gemeinsamen Ordner gespeichert",
+        "Local and private" => "Lokal und privat",
+        "Craft AI runs a local Gemma model on this machine. Nothing you write here leaves it: no account, no cloud service, no telemetry — the panel talks to a model runtime on 127.0.0.1." => {
+            "Craft AI führt ein lokales Gemma-Modell auf diesem Rechner aus. Nichts, was Sie hier schreiben, verlässt ihn: kein Konto, kein Cloud-Dienst, keine Telemetrie — das Panel spricht mit einer Modell-Laufzeit auf 127.0.0.1."
+        }
+        "Limits" => "Grenzen",
+        "A local model is not a frontier cloud model: it can be wrong, and a long answer takes its time on CPU. Check anything critical, and mind a model's size against this machine before downloading it." => {
+            "Ein lokales Modell ist kein Spitzengroßmodell aus der Cloud: Es kann sich irren, und lange Antworten brauchen auf der CPU ihre Zeit. Prüfen Sie alles Entscheidende und bedenken Sie die Modellgröße gegen diesen Rechner vor dem Download."
+        }
+        "The shared folder:" => "Der gemeinsame Ordner:",
+        "Best for: everyday help on the lightest machines" => "Am besten für: alltägliche Hilfe auf den leichtesten Rechnern",
+        "Best for: a step up in quality, still light" => "Am besten für: eine Stufe mehr Qualität, weiterhin leicht",
+        "Best for: balanced everyday and technical work" => "Am besten für: die Balance aus Alltäglichem und Technischem",
+        "Best for: near-flagship answers at MoE speed" => "Am besten für: Antworten nahe der Spitzenklasse, mit MoE-Tempo",
+        "Best for: the deepest reasoning this family has" => "Am besten für: das tiefste Abwägen, das diese Familie hat",
+        "Craft AI" => "Craft AI",
+        "Models" => "Modelle",
+        "About" => "Über",
+        "Model" => "Modell",
+        "Refresh" => "Aktualisieren",
+        "Copy" => "Kopieren",
+        "Ask anything" => "Fragen Sie alles",
+        "Ask in any language" => "Fragen Sie in jeder Sprache",
+        "Explain a formula" => "Eine Formel erklären",
+        "Paste the formula, or a cell like =B2*1.1" => "Fügen Sie die Formel ein oder eine Zelle wie =B2*1.1",
+        "Build a formula" => "Eine Formel erstellen",
+        "What to compute, and where the numbers are" => "Was berechnen und wo die Zahlen stehen",
+        "Clean or transform data" => "Daten bereinigen oder umwandeln",
+        "Describe the data and the shape you want" => "Beschreiben Sie die Daten und die gewünschte Form",
+        "Chart and pivot advice" => "Tipps zu Diagrammen und Pivot-Tabellen",
+        "The data and the story it should tell" => "Die Daten und die Geschichte, die sie erzählen sollen",
+        "Function finder" => "Funktionssuche",
+        "What you need, in plain words" => "Was Sie brauchen, in einfachen Worten",
         _ => return None,
     })
 }

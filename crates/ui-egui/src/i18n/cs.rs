@@ -408,7 +408,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "More\nFunctions" => "Další\nfunkce",
         "Sheet Options|View" => "Zobrazit",
         "Print" => "Tisknout",
-
         // Additional runtime labels and tooltips, grouped by source file.
         // formula_bar.rs (alphabetical keys).
         "Cancel" => "Zrušit",
@@ -535,6 +534,66 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom Out" => "Oddálit",
         // widgets.rs (alphabetical keys).
         "Dismiss" => "Zavřít",
+        "Craft AI runs in the native app — it needs a local model runtime." => {
+            "Craft AI běží v nativní aplikaci — potřebuje místní běhové prostředí modelů."
+        }
+        "Assistant" => "Asistent",
+        "Looking for a local model runtime…" => "Hledá se místní běhové prostředí modelů…",
+        "No local model runtime found." => "Nenašlo se žádné místní běhové prostředí modelů.",
+        "Craft AI talks to a model runtime on this machine — Ollama, LM Studio or llama.cpp's server — and never to a cloud service. Start one, then Refresh." => {
+            "Craft AI mluví s běhovým prostředím modelů na tomto počítači — s Ollamou, LM Studio nebo serverem llama.cpp — a nikdy s cloudovou službou. Spusťte jedno z nich a obnovte."
+        }
+        "Runtime" => "Prostředí",
+        "Task" => "Úloha",
+        "No model installed yet — see the Models tab." => "Zatím není nainstalovaný žádný model — viz karta Modely.",
+        "Ask" => "Zeptat se",
+        "Thinking… {s}s" => "Přemýšlí… {s} s",
+        "This machine: {ram} GB RAM, {disk} GB free" => "Tento počítač: {ram} GB RAM, volných {disk} GB",
+        "One download serves every ArtCraft app: the model lands in a shared folder all of them read." => {
+            "Jedno stažení obslouží všechny aplikace ArtCraft: model přijde do sdílené složky, kterou všechny čtou."
+        }
+        "Disk {size}" => "Disk {size}",
+        "RAM {gb} GB" => "RAM {gb} GB",
+        "Fits this machine" => "Témuto stroji vyhovuje",
+        "Needs {ram} GB of RAM" => "Potřebuje {ram} GB RAM",
+        "Needs {disk} GB of disk" => "Potřebuje {disk} GB disku",
+        "Download with Ollama" => "Stáhnout přes Ollamu",
+        "Save model file" => "Uložit soubor modelu",
+        "Delete file" => "Smazat soubor",
+        "Downloading… {pct}% — {note}" => "Stahuje se… {pct} % — {note}",
+        "Saving… {pct}%" => "Ukládá se… {pct} %",
+        "Saved in the shared folder" => "Uloženo ve sdílené složce",
+        "Local and private" => "Místní a soukromé",
+        "Craft AI runs a local Gemma model on this machine. Nothing you write here leaves it: no account, no cloud service, no telemetry — the panel talks to a model runtime on 127.0.0.1." => {
+            "Craft AI provozuje místní model Gemma přímo na tomto počítači. Nic, co sem napíšete, ho neopustí: žádný účet, žádná cloudová služba, žádná telemetrie — panel mluví jen s běhovým prostředím modelů na 127.0.0.1."
+        }
+        "Limits" => "Meze",
+        "A local model is not a frontier cloud model: it can be wrong, and a long answer takes its time on CPU. Check anything critical, and mind a model's size against this machine before downloading it." => {
+            "Místní model není špičkový cloudový model: může se mýlit a dlouhá odpověď na procesoru chvíli trvá. Důležité si ověřte a před stažením si uvědomte velikost modelu proti tomuto počítači."
+        }
+        "The shared folder:" => "Sdílená složka:",
+        "Best for: everyday help on the lightest machines" => "Nejlepší pro: všední pomoc na nejlehčích strojích",
+        "Best for: a step up in quality, still light" => "Nejlepší pro: o stuňek lepší kvalitu, pořád lehčí",
+        "Best for: balanced everyday and technical work" => "Nejlepší pro: vyváženou všední i technickou práci",
+        "Best for: near-flagship answers at MoE speed" => "Nejlepší pro: odpovědi těsně pod vlajkovou lodí, rychlostí MoE",
+        "Best for: the deepest reasoning this family has" => "Nejlepší pro: nejhlubší uvažování, jaké tato rodina má",
+        "Craft AI" => "Craft AI",
+        "Models" => "Modely",
+        "About" => "O aplikaci",
+        "Model" => "Model",
+        "Refresh" => "Obnovit",
+        "Ask anything" => "Zeptejte se na cokoliv",
+        "Ask in any language" => "Zeptejte se v jakémkoli jazyce",
+        "Explain a formula" => "Vysvětlit vzorec",
+        "Paste the formula, or a cell like =B2*1.1" => "Vložte vzorec nebo buňku jako =B2*1.1",
+        "Build a formula" => "Sestavit vzorec",
+        "What to compute, and where the numbers are" => "Co spočítat a kde čísla jsou",
+        "Clean or transform data" => "Vyčistit nebo převést data",
+        "Describe the data and the shape you want" => "Popište data a podobu, jakou chcete",
+        "Chart and pivot advice" => "Rada k grafům a kontingenčním tabulkám",
+        "The data and the story it should tell" => "Data a příběh, který mají vyprávět",
+        "Function finder" => "Vyhledávač funkcí",
+        "What you need, in plain words" => "Co potřebujete, prostými slovy",
         _ => return None,
     })
 }

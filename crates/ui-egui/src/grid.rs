@@ -128,7 +128,7 @@ pub struct GridState {
     pub renaming_tab: Option<usize>,
     pub rename_text: String,
     pub list_picker: Option<CellRef>,
-    /// Open task pane: comments, watch, selection, formatChart.
+    /// Open task pane: comments, watch, selection, formatChart, craftAi.
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,

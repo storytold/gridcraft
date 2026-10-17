@@ -1855,6 +1855,12 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     if big_button(ui, Icon::Search, "Watch\nWindow", "Watch Window", false).clicked() {
         app.grid.pane = Some("watch".into());
     }
+    // Craft AI: the family's built-in local assistant, as a task pane beside Watch Window's.
+    ui.vertical(|ui| {
+        if small_button(ui, Icon::Script, "Craft AI", "Craft AI", false).clicked() {
+            app.grid.pane = Some(crate::craft_ai::ID.into());
+        }
+    });
     sep(ui);
     let co = big_button(ui, Icon::Calc, "Calculation\nOptions", "Calculation Options", true);
     for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["formulas.calculationOptions"]) {

@@ -410,6 +410,67 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Calcul du classeur",
         "Enable iterative calculation" => "Activer le calcul itératif",
         "Calculation settings are saved with the workbook." => "Les paramètres de calcul sont enregistrés avec le classeur.",
+        "Craft AI runs in the native app — it needs a local model runtime." => {
+            "Craft AI fonctionne dans l'application native — il lui faut un moteur de modèles local."
+        }
+        "Assistant" => "Assistant",
+        "Looking for a local model runtime…" => "Recherche d'un moteur de modèles local…",
+        "No local model runtime found." => "Aucun moteur de modèles local trouvé.",
+        "Craft AI talks to a model runtime on this machine — Ollama, LM Studio or llama.cpp's server — and never to a cloud service. Start one, then Refresh." => {
+            "Craft AI parle à un moteur de modèles sur cette machine — Ollama, LM Studio ou le serveur de llama.cpp — et jamais à un service cloud. Lancez-en un, puis Actualisez."
+        }
+        "Runtime" => "Moteur",
+        "Task" => "Tâche",
+        "No model installed yet — see the Models tab." => "Aucun modèle installé pour l'instant — voir l'onglet Modèles.",
+        "Ask" => "Demander",
+        "Thinking… {s}s" => "Réflexion… {s} s",
+        "This machine: {ram} GB RAM, {disk} GB free" => "Cette machine : {ram} Go de RAM, {disk} Go libres",
+        "One download serves every ArtCraft app: the model lands in a shared folder all of them read." => {
+            "Un seul téléchargement sert toutes les applications ArtCraft : le modèle arrive dans un dossier partagé qu'elles lisent toutes."
+        }
+        "Disk {size}" => "Disque {size}",
+        "RAM {gb} GB" => "RAM {gb} Go",
+        "Fits this machine" => "Convient à cette machine",
+        "Needs {ram} GB of RAM" => "Exige {ram} Go de RAM",
+        "Needs {disk} GB of disk" => "Exige {disk} Go de disque",
+        "Download with Ollama" => "Télécharger avec Ollama",
+        "Save model file" => "Enregistrer le fichier du modèle",
+        "Delete file" => "Supprimer le fichier",
+        "Downloading… {pct}% — {note}" => "Téléchargement… {pct} % — {note}",
+        "Saving… {pct}%" => "Enregistrement… {pct} %",
+        "Saved in the shared folder" => "Enregistré dans le dossier partagé",
+        "Local and private" => "Local et privé",
+        "Craft AI runs a local Gemma model on this machine. Nothing you write here leaves it: no account, no cloud service, no telemetry — the panel talks to a model runtime on 127.0.0.1." => {
+            "Craft AI exécute un modèle Gemma local sur cette machine. Rien de ce que vous écrivez ici n'en sort : pas de compte, pas de service cloud, pas de télémétrie — le panneau parle à un moteur de modèles sur 127.0.0.1."
+        }
+        "Limits" => "Limites",
+        "A local model is not a frontier cloud model: it can be wrong, and a long answer takes its time on CPU. Check anything critical, and mind a model's size against this machine before downloading it." => {
+            "Un modèle local n'est pas un modèle de pointe du cloud : il peut se tromper, et une longue réponse prend son temps sur le processeur. Vérifiez tout ce qui est critique, et pesez la taille du modèle face à cette machine avant de le télécharger."
+        }
+        "The shared folder:" => "Le dossier partagé :",
+        "Best for: everyday help on the lightest machines" => "Idéal pour : l'aide quotidienne sur les machines les plus légères",
+        "Best for: a step up in quality, still light" => "Idéal pour : un cran de plus en qualité, toujours léger",
+        "Best for: balanced everyday and technical work" => "Idéal pour : l'équilibre du quotidien et du technique",
+        "Best for: near-flagship answers at MoE speed" => "Idéal pour : des réponses presque de pointe à la vitesse MoE",
+        "Best for: the deepest reasoning this family has" => "Idéal pour : le raisonnement le plus profond de cette famille",
+        "Craft AI" => "Craft AI",
+        "Models" => "Modèles",
+        "About" => "À propos",
+        "Model" => "Modèle",
+        "Refresh" => "Actualiser",
+        "Copy" => "Copier",
+        "Ask anything" => "Posez n'importe quelle question",
+        "Ask in any language" => "Posez votre question dans n'importe quelle langue",
+        "Explain a formula" => "Expliquer une formule",
+        "Paste the formula, or a cell like =B2*1.1" => "Collez la formule, ou une cellule comme =B2*1.1",
+        "Build a formula" => "Construire une formule",
+        "What to compute, and where the numbers are" => "Quoi calculer, et où se trouvent les nombres",
+        "Clean or transform data" => "Nettoyer ou transformer des données",
+        "Describe the data and the shape you want" => "Décrivez les données et la forme voulue",
+        "Chart and pivot advice" => "Conseils graphiques et tableaux croisés dynamiques",
+        "The data and the story it should tell" => "Les données et l'histoire qu'elles doivent raconter",
+        "Function finder" => "Recherche de fonctions",
+        "What you need, in plain words" => "Ce qu'il vous faut, en mots simples",
         _ => return None,
     })
 }

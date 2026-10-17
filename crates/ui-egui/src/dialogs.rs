@@ -782,11 +782,12 @@ impl Dialog {
                 app.run_or_alert("review.showComments", json!({"on": true}));
                 return None;
             }
-            "watch" | "selectionPane" | "formatChart" => {
+            "watch" | "selectionPane" | "formatChart" | "craftAi" => {
                 app.grid.pane = Some(
                     match name {
                         "watch" => "watch",
                         "selectionPane" => "selection",
+                        "craftAi" => crate::craft_ai::ID,
                         _ => "formatChart",
                     }
                     .into(),

@@ -408,6 +408,67 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bottom Margin" => "Donja margina",
         "Header Margin" => "Margina zaglavlja",
         "Footer Margin" => "Margina podnožja",
+        "Craft AI runs in the native app — it needs a local model runtime." => {
+            "Craft AI radi u nativnoj aplikaciji — potreban mu je lokalni runtime za modele."
+        }
+        "Assistant" => "Asistent",
+        "Looking for a local model runtime…" => "Traži se lokalni runtime za modele…",
+        "No local model runtime found." => "Nije pronađen lokalni runtime za modele.",
+        "Craft AI talks to a model runtime on this machine — Ollama, LM Studio or llama.cpp's server — and never to a cloud service. Start one, then Refresh." => {
+            "Craft AI razgovara sa runtime-om za modele na ovom računaru — Ollama, LM Studio ili llama.cpp serverom — a nikada sa cloud uslugom. Pokrenite jedan, zatim Osveži."
+        }
+        "Runtime" => "Runtime",
+        "Task" => "Zadatak",
+        "No model installed yet — see the Models tab." => "Još nema instaliranog modela — vidite karticu Modeli.",
+        "Ask" => "Pitaj",
+        "Thinking… {s}s" => "Razmišljam… {s} s",
+        "This machine: {ram} GB RAM, {disk} GB free" => "Ovaj računar: {ram} GB RAM-a, {disk} GB slobodno",
+        "One download serves every ArtCraft app: the model lands in a shared folder all of them read." => {
+            "Jedno preuzimanje služi svakoj ArtCraft aplikaciji: model se nalazi u deljenoj fascikli koju sve čitaju."
+        }
+        "Disk {size}" => "Disk {size}",
+        "RAM {gb} GB" => "RAM {gb} GB",
+        "Fits this machine" => "Uklapa se na ovaj računar",
+        "Needs {ram} GB of RAM" => "Zahteva {ram} GB RAM-a",
+        "Needs {disk} GB of disk" => "Zahteva {disk} GB diska",
+        "Download with Ollama" => "Preuzmi pomoću Ollama",
+        "Save model file" => "Sačuvaj datoteku modela",
+        "Delete file" => "Izbriši datoteku",
+        "Downloading… {pct}% — {note}" => "Preuzimanje… {pct}% — {note}",
+        "Saving… {pct}%" => "Čuvanje… {pct}%",
+        "Saved in the shared folder" => "Sačuvano u deljenoj fascikli",
+        "Local and private" => "Lokalno i privatno",
+        "Craft AI runs a local Gemma model on this machine. Nothing you write here leaves it: no account, no cloud service, no telemetry — the panel talks to a model runtime on 127.0.0.1." => {
+            "Craft AI pokreće lokalni Gemma model na ovom računaru. Ništa što ovde napišete ne izlazi sa njega: bez naloga, bez cloud usluge, bez telemetrije — panel razgovara sa runtime-om za modele na 127.0.0.1."
+        }
+        "Limits" => "Ograničenja",
+        "A local model is not a frontier cloud model: it can be wrong, and a long answer takes its time on CPU. Check anything critical, and mind a model's size against this machine before downloading it." => {
+            "Lokalni model nije vodeći cloud model: može da pogreši, a duži odgovor traje na CPU-u. Proverite sve kritično, i obratite pažnju na veličinu modela prema ovom računaru pre preuzimanja."
+        }
+        "The shared folder:" => "Deljena fascikla:",
+        "Best for: everyday help on the lightest machines" => "Najbolji za: svakodnevnu pomoć na najslabijim računarima",
+        "Best for: a step up in quality, still light" => "Najbolji za: korak napred u kvalitetu, i dalje lak",
+        "Best for: balanced everyday and technical work" => "Najbolji za: ravnotežu svakodnevnog i tehničkog rada",
+        "Best for: near-flagship answers at MoE speed" => "Najbolji za: odgovore gotovo vodećeg nivoa uz MoE brzinu",
+        "Best for: the deepest reasoning this family has" => "Najbolji za: najdublje zaključivanje u ovoj porodici",
+        "Craft AI" => "Craft AI",
+        "Models" => "Modeli",
+        "About" => "O programu",
+        "Model" => "Model",
+        "Refresh" => "Osveži",
+        "Copy" => "Kopiraj",
+        "Ask anything" => "Pitajte bilo šta",
+        "Ask in any language" => "Pitajte na bilo kom jeziku",
+        "Explain a formula" => "Objasni formulu",
+        "Paste the formula, or a cell like =B2*1.1" => "Nalepite formulu ili ćeliju kao =B2*1.1",
+        "Build a formula" => "Napravi formulu",
+        "What to compute, and where the numbers are" => "Šta izračunati i gde su brojevi",
+        "Clean or transform data" => "Očisti ili preoblikuj podatke",
+        "Describe the data and the shape you want" => "Opišite podatke i oblik koji želite",
+        "Chart and pivot advice" => "Savet za grafikone i izvedene tabele",
+        "The data and the story it should tell" => "Podaci i priča koju treba da ispričaju",
+        "Function finder" => "Pretraga funkcija",
+        "What you need, in plain words" => "Šta vam treba, običnim rečima",
         _ => return None,
     })
 }

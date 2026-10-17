@@ -11,6 +11,7 @@ mod border_preview;
 mod cell_pictures;
 pub mod chartview;
 pub mod control;
+mod craft_ai;
 pub mod credits;
 pub mod dialogs;
 pub mod editor;
@@ -631,7 +632,9 @@ impl SheetApp {
                         self.ui.language = l;
                         Ok(json!({"language": l}))
                     }
-                    None => Err(format!("unknown language {code:?} (use \"en\", \"es\", \"zh\", \"ja\", \"ko\", \"ru\", \"pt\" or \"cs\")")),
+                    None => Err(format!(
+                        "unknown language {code:?} (use \"en\", \"es\", \"zh\", \"ja\", \"ko\", \"ru\", \"pt\", \"cs\", \"fr\" or \"ar\")"
+                    )),
                 }
             }
             "app.language.english" => {
@@ -641,6 +644,10 @@ impl SheetApp {
             "app.language.japanese" => {
                 self.ui.language = i18n::Language::Ja;
                 Ok(json!({"language": i18n::Language::Ja}))
+            }
+            "app.language.arabic" => {
+                self.ui.language = i18n::Language::Ar;
+                Ok(json!({"language": i18n::Language::Ar}))
             }
             "ui.backstage" => {
                 // `{"page": "info"}` opens File › Info; `{"page": "close"}` returns to the sheet.

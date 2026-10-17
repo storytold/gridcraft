@@ -27,6 +27,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 "watch" => "Watch Window",
                 "selection" => "Selection",
                 "formatChart" => "Format Chart Area",
+                "craftAi" => "Craft AI",
                 _ => "",
             };
             ui.label(egui::RichText::new(title).font(theme::ui_bold(15.0)));
@@ -45,6 +46,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             "watch" => watch(app, ui),
             "selection" => selection(app, ui),
             "formatChart" => format_chart(app, ui),
+            "craftAi" => crate::craft_ai::show(app, ui),
             _ => {}
         });
     });

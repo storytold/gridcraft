@@ -402,6 +402,65 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "工作簿计算",
         "Enable iterative calculation" => "启用迭代计算",
         "Calculation settings are saved with the workbook." => "计算设置随工作簿一起保存。",
+        "Craft AI runs in the native app — it needs a local model runtime." => "Craft AI 在原生应用中运行 — 需要本地模型运行环境。",
+        "Assistant" => "助手",
+        "Looking for a local model runtime…" => "正在寻找本地模型运行环境…",
+        "No local model runtime found." => "找不到本地模型运行环境。",
+        "Craft AI talks to a model runtime on this machine — Ollama, LM Studio or llama.cpp's server — and never to a cloud service. Start one, then Refresh." => {
+            "Craft AI 只与这台机器上的模型运行环境通信 — Ollama、LM Studio 或 llama.cpp 的服务器 — 绝不与云端服务通信。启动其中一个后点击“刷新”。"
+        }
+        "Runtime" => "运行环境",
+        "Task" => "任务",
+        "No model installed yet — see the Models tab." => "尚未安装模型 — 见“模型”标签页。",
+        "Ask" => "询问",
+        "Thinking… {s}s" => "思考中… {s} 秒",
+        "This machine: {ram} GB RAM, {disk} GB free" => "这台机器：{ram} GB 内存、{disk} GB 可用",
+        "One download serves every ArtCraft app: the model lands in a shared folder all of them read." => {
+            "下载一次即可供所有 ArtCraft 应用使用：模型放在所有应用共同读取的共享文件夹。"
+        }
+        "Disk {size}" => "磁盘 {size}",
+        "RAM {gb} GB" => "内存 {gb} GB",
+        "Fits this machine" => "适合这台机器",
+        "Needs {ram} GB of RAM" => "需要 {ram} GB 内存",
+        "Needs {disk} GB of disk" => "需要 {disk} GB 磁盘",
+        "Download with Ollama" => "用 Ollama 下载",
+        "Save model file" => "保存模型文件",
+        "Delete file" => "删除文件",
+        "Downloading… {pct}% — {note}" => "下载中… {pct}% — {note}",
+        "Saving… {pct}%" => "保存中… {pct}%",
+        "Saved in the shared folder" => "已存入共享文件夹",
+        "Local and private" => "本地且私有",
+        "Craft AI runs a local Gemma model on this machine. Nothing you write here leaves it: no account, no cloud service, no telemetry — the panel talks to a model runtime on 127.0.0.1." => {
+            "Craft AI 在这台机器上运行本地 Gemma 模型。你在这里写的任何内容都不会离开这台机器：没有账户、没有云端服务、没有遥测 — 面板只与 127.0.0.1 上的模型运行环境通信。"
+        }
+        "Limits" => "局限",
+        "A local model is not a frontier cloud model: it can be wrong, and a long answer takes its time on CPU. Check anything critical, and mind a model's size against this machine before downloading it." => {
+            "本地模型不是最先进的云端模型：它可能出错，较长的回答在处理器上需要时间。重要事项请务必核实，下载前也请留意模型大小与这台机器是否匹配。"
+        }
+        "The shared folder:" => "共享文件夹：",
+        "Best for: everyday help on the lightest machines" => "最适合：在最轻量的机器上处理日常事务",
+        "Best for: a step up in quality, still light" => "最适合：品质再上一阶，依然轻巧",
+        "Best for: balanced everyday and technical work" => "最适合：日常与技术工作并重",
+        "Best for: near-flagship answers at MoE speed" => "最适合：以 MoE 速度给出接近旗舰级的回答",
+        "Best for: the deepest reasoning this family has" => "最适合：这个系列中最深入的推理",
+        "Craft AI" => "Craft AI",
+        "Models" => "模型",
+        "About" => "关于",
+        "Model" => "模型",
+        "Refresh" => "刷新",
+        "Copy" => "复制",
+        "Ask anything" => "随意提问",
+        "Ask in any language" => "可以用任何语言提问",
+        "Explain a formula" => "解释公式",
+        "Paste the formula, or a cell like =B2*1.1" => "粘贴公式，或类似 =B2*1.1 的单元格",
+        "Build a formula" => "生成公式",
+        "What to compute, and where the numbers are" => "要计算什么，数字在哪里",
+        "Clean or transform data" => "清理或转换数据",
+        "Describe the data and the shape you want" => "描述数据和想要的结构",
+        "Chart and pivot advice" => "图表与数据透视表建议",
+        "The data and the story it should tell" => "数据和它应当讲述的故事",
+        "Function finder" => "函数查找",
+        "What you need, in plain words" => "你需要什么，用平实的话说",
         _ => return None,
     })
 }
