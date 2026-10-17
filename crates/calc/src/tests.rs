@@ -544,6 +544,25 @@ fn spills() {
 }
 
 #[test]
+fn an_anchor_given_a_formula_that_reads_its_old_spill_area_sees_it_empty() {
+    // The new formula was evaluated while the old array was still laid out, and only the
+    // anchor's dependents were evaluated again once it was gone.
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(3)");
+    assert_eq!(t.num("A3"), 3.0);
+    t.set("A1", "=SUM(A2:A3)+1");
+    assert_eq!((t.num("A1"), t.get("A3")), (1.0, Value::Empty));
+    // Still an array, now spilling elsewhere: it read A2 as 2 and spilled three columns.
+    t.set("A1", "=SEQUENCE(3)");
+    t.set("A1", "=SEQUENCE(1,A2+1)");
+    assert_eq!((t.num("A1"), t.get("B1"), t.get("A2")), (1.0, Value::Empty, Value::Empty));
+    // A smaller array inside the old area: it read A3 as 3 and spilled over A1:A2.
+    t.set("A1", "=SEQUENCE(3)");
+    t.set("A1", "=SEQUENCE(MAX(1,A3-1))");
+    assert_eq!((t.num("A1"), t.get("A2"), t.get("A3")), (1.0, Value::Empty, Value::Empty));
+}
+
+#[test]
 fn references_keep_their_size_past_the_used_range() {
     let mut t = T::new();
     t.set("A1", "5");
