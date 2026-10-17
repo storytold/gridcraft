@@ -1164,3 +1164,36 @@ fn doc_props_keep_boundary_whitespace() {
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert_eq!(back.props, wb.props);
 }
+
+#[test]
+fn ink_to_shape_presets_round_trip() {
+    let kinds = [
+        ShapeKind::Diamond,
+        ShapeKind::Parallelogram,
+        ShapeKind::Trapezoid,
+        ShapeKind::Pentagon,
+        ShapeKind::Hexagon,
+        ShapeKind::RightTriangle,
+        ShapeKind::BlockArrow,
+        ShapeKind::ArrowDouble,
+    ];
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        for (i, kind) in kinds.iter().enumerate() {
+            s.shapes.push(Shape {
+                id: i as u32 + 1,
+                kind: *kind,
+                anchor: Anchor { cell: at("A1"), dx: i as f32 * 80.0, dy: 0.0, width: 64.0, height: 40.0, mode: AnchorMode::Absolute },
+                fill: Color::Rgb(0x4472C4),
+                line: Color::Rgb(0x000000),
+                text: String::new(),
+                format: Default::default(),
+            });
+        }
+    }
+    let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let got: Vec<ShapeKind> = back.sheets[0].shapes.iter().map(|s| s.kind).collect();
+    assert_eq!(got, kinds);
+}

@@ -2388,6 +2388,23 @@ fn ink_strokes_and_ink_to_shape() {
 }
 
 #[test]
+fn ink_to_shape_mode_converts_every_stroke_and_snaps_squares() {
+    let mut s = s();
+    assert_eq!(s.execute("draw.inkToShape", json!({"on": true})).unwrap()["on"], true);
+    // A near-square: the converted rectangle gets equal sides, like Excel's square.
+    let r = s.execute("draw.stroke", json!({"points": [[100.0, 100.0], [180.0, 100.0], [180.0, 172.0], [100.0, 172.0], [100.0, 100.0]]})).unwrap();
+    assert_eq!(r["kind"], "Rectangle");
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert_eq!(sh.shapes[0].kind, gridcraft_model::ShapeKind::Rectangle);
+    assert_eq!(sh.shapes[0].anchor.width, sh.shapes[0].anchor.height);
+    // Mode off: strokes stay ink.
+    assert_eq!(s.execute("draw.inkToShape", json!({"on": false})).unwrap()["on"], false);
+    s.execute("draw.stroke", json!({"points": [[10.0, 10.0], [60.0, 10.0]]})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert_eq!(sh.shapes[1].kind, gridcraft_model::ShapeKind::Ink);
+}
+
+#[test]
 fn xlsb_import_keeps_cached_values_and_reports_limits() {
     let bytes = xlsb_fixture();
     assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Xlsb);

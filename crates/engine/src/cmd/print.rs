@@ -1297,6 +1297,53 @@ fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block) 
                 pg.polygon(&pts, fill, line);
             }
             ShapeKind::Triangle => pg.polygon(&[[x + w / 2.0, y], [x + w, y + h], [x, y + h]], fill, line),
+            ShapeKind::RightTriangle => pg.polygon(&[[x, y + h], [x + w, y + h], [x, y]], fill, line),
+            ShapeKind::Diamond => pg.polygon(&[[x + w / 2.0, y], [x + w, y + h / 2.0], [x + w / 2.0, y + h], [x, y + h / 2.0]], fill, line),
+            ShapeKind::Parallelogram => pg.polygon(&[[x + w / 4.0, y], [x + w, y], [x + 3.0 * w / 4.0, y + h], [x, y + h]], fill, line),
+            ShapeKind::Trapezoid => pg.polygon(&[[x + w / 5.0, y], [x + 4.0 * w / 5.0, y], [x + w, y + h], [x, y + h]], fill, line),
+            ShapeKind::Pentagon => {
+                let pts: Vec<[f32; 2]> = (0..5)
+                    .map(|i| {
+                        let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::TAU / 5.0;
+                        [x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()]
+                    })
+                    .collect();
+                pg.polygon(&pts, fill, line)
+            }
+            ShapeKind::Hexagon => pg.polygon(
+                &[[x + w / 4.0, y], [x + 3.0 * w / 4.0, y], [x + w, y + h / 2.0], [x + 3.0 * w / 4.0, y + h], [x + w / 4.0, y + h], [x, y + h / 2.0]],
+                fill,
+                line,
+            ),
+            ShapeKind::BlockArrow => pg.polygon(
+                &[
+                    [x, y + 0.28 * h],
+                    [x + 0.62 * w, y + 0.28 * h],
+                    [x + 0.62 * w, y],
+                    [x + w, y + h / 2.0],
+                    [x + 0.62 * w, y + h],
+                    [x + 0.62 * w, y + 0.72 * h],
+                    [x, y + 0.72 * h],
+                ],
+                fill,
+                line,
+            ),
+            ShapeKind::ArrowDouble => pg.polygon(
+                &[
+                    [x, y + h / 2.0],
+                    [x + 0.22 * w, y + 0.18 * h],
+                    [x + 0.22 * w, y + 0.39 * h],
+                    [x + 0.78 * w, y + 0.39 * h],
+                    [x + 0.78 * w, y + 0.18 * h],
+                    [x + w, y + h / 2.0],
+                    [x + 0.78 * w, y + 0.82 * h],
+                    [x + 0.78 * w, y + 0.61 * h],
+                    [x + 0.22 * w, y + 0.61 * h],
+                    [x + 0.22 * w, y + 0.82 * h],
+                ],
+                fill,
+                line,
+            ),
             ShapeKind::Line | ShapeKind::Arrow => {
                 let c = line.map(|l| l.0).or(fill).unwrap_or([0, 0, 0]);
                 pg.stroke_line(x, y, x + w, y + h, (1.0 * b.k).max(0.3), c);

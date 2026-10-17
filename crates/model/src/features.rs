@@ -522,6 +522,18 @@ pub enum ShapeKind {
     RoundedRectangle,
     Ellipse,
     Triangle,
+    /// A triangle with one right angle (DrawingML `rtTriangle`).
+    RightTriangle,
+    /// A four-sided polygon standing on a point (DrawingML `diamond`).
+    Diamond,
+    Parallelogram,
+    Trapezoid,
+    Pentagon,
+    Hexagon,
+    /// A block arrow pointing right (DrawingML `rightArrow`).
+    BlockArrow,
+    /// An arrow with a head at both ends (DrawingML `leftRightArrow`).
+    ArrowDouble,
     Line,
     Arrow,
     TextBox,

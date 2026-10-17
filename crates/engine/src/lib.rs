@@ -251,6 +251,8 @@ pub struct Session {
     pub draw_tool: String,
     pub draw_color: String,
     pub draw_width: f32,
+    /// Draw ▸ Ink to Shape is on: every completed stroke is converted to the nearest shape.
+    pub ink_to_shape: bool,
     /// Review › Show Comments: the Comments pane is open.
     pub comments_pane: bool,
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
