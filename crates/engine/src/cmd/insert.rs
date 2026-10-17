@@ -510,6 +510,19 @@ fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
+        let shadowed: Vec<_> = (0..cx.wb.sheets.len()).map(|i| cx.wb.name(&old, i).is_some()).collect();
+        crate::table_columns::rewrite_masters(&mut cx.wb, |i, _, expr| {
+            expr.map(&mut |x| match x {
+                gridcraft_formula::Expr::Struct(mut st) if st.table.eq_ignore_ascii_case(&old) => {
+                    st.table = name.clone();
+                    gridcraft_formula::Expr::Struct(st)
+                }
+                gridcraft_formula::Expr::Name(n) if !shadowed.get(i).copied().unwrap_or(true) && n.eq_ignore_ascii_case(&old) => {
+                    gridcraft_formula::Expr::Name(name.clone())
+                }
+                other => other,
+            })
+        });
         cx.structural = true;
         Ok(Json::Null)
     })

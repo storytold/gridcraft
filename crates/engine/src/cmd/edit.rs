@@ -10,6 +10,10 @@ use crate::{Clipboard, Session};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(noundo "options.fillTableFormulas", "Fill formulas in tables to create calculated columns", [], None, "{on?: bool} (toggles without it) → {on}", always, |s, p| {
+            s.prefs.fill_table_formulas = bool_param(p, "on").unwrap_or(!s.prefs.fill_table_formulas);
+            Ok(json!({"on":s.prefs.fill_table_formulas}))
+        }),
         cmd!("cell.set", "Enter Cell", [], None, "{cell?: \"B2\", input: \"text, number or =formula\", sheet?, array?: bool}", has_doc, cell_set),
         cmd!(
             "range.setValues",
@@ -231,6 +235,8 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other(m));
     }
     let active_sheet = s.doc()?.wb.active_sheet;
+    let fill_table_formulas = s.prefs.fill_table_formulas;
+    let previous_formula = d.wb.sheet(sheet).and_then(|sh| sh.cell(at)).and_then(|c| c.formula.clone());
     edit(s, |cx| {
         if array {
             // Legacy Ctrl+Shift+Enter array formula over the selection, when the selection holds
@@ -266,6 +272,9 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         cx.touch(sheet, at);
+        if fill_table_formulas {
+            crate::table_columns::fill_column(cx, sheet, at, previous_formula.as_deref())?;
+        }
         Ok(Json::Null)
     })?;
     let v = s.doc()?.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
@@ -1209,6 +1218,10 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
             }
         }
     }
+    let hosts: Vec<_> = wb.sheets.iter().map(|sh| sh.name.clone()).collect();
+    crate::table_columns::rewrite_masters(wb, |si, _, expr| {
+        gridcraft_formula::adjust::adjust(expr, hosts.get(si).map(String::as_str).unwrap_or_default(), target, e)
+    });
     for n in wb.names.iter_mut() {
         if let Ok(expr) = gridcraft_formula::parse(&n.formula) {
             // Names are workbook-level: unqualified refs don't occur; qualified ones adjust.

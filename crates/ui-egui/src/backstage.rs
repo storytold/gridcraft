@@ -967,6 +967,10 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut autocomplete, lang.tr("Enable AutoComplete for cell values")).changed() {
         app.run_or_alert("options.autoComplete", json!({"on": autocomplete}));
     }
+    let mut fill_table_formulas = app.session.prefs.fill_table_formulas;
+    if ui.checkbox(&mut fill_table_formulas, lang.tr("Fill formulas in tables to create calculated columns")).changed() {
+        app.run_or_alert("options.fillTableFormulas", json!({"on":fill_table_formulas}));
+    }
     ui.add_space(18.0);
     section(ui, lang, "Options|Save");
     let mut autosave = app.grid.autosave();

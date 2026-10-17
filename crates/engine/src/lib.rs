@@ -20,6 +20,7 @@ pub mod pivot;
 pub mod pivot_calc;
 pub mod sample;
 pub mod selection;
+mod table_columns;
 pub mod tables;
 
 use std::sync::Arc;
@@ -190,6 +191,8 @@ pub struct Prefs {
     /// After pressing Enter, move the selection: "down", "right", "up", "left", "none".
     pub enter_direction: String,
     pub autocomplete: bool,
+    /// AutoFormat: create calculated table columns and update their consistent formulas.
+    pub fill_table_formulas: bool,
     pub user_name: String,
     pub default_font: String,
     pub default_font_size: f32,
@@ -206,6 +209,7 @@ impl Default for Prefs {
         Prefs {
             enter_direction: "down".into(),
             autocomplete: true,
+            fill_table_formulas: true,
             user_name: "GridCraft User".into(),
             default_font: gridcraft_model::DEFAULT_FONT.into(),
             default_font_size: gridcraft_model::DEFAULT_FONT_SIZE,
