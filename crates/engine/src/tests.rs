@@ -254,6 +254,50 @@ fn undo_redo() {
 }
 
 #[test]
+fn bulk_formula_history_is_bounded_and_latest_edit_still_undoes() {
+    use std::sync::Arc;
+
+    use gridcraft_model::{Cell, Formula, Workbook};
+
+    let mut current = Arc::new(Workbook::new());
+    let mut history = Vec::new();
+    let budget = 64 * 1024;
+    for version in 0..5 {
+        let previous = current.clone();
+        let mut next = (*previous).clone();
+        let sheet = next.sheet_mut(0).unwrap();
+        for row in 0..128 {
+            sheet.cells.set(CellRef::new(row, 0), Cell::formula(Formula::new(&format!("=B{}+{}", row + 1, version))));
+        }
+        current = Arc::new(next);
+        crate::push_history_with_budget(&mut history, format!("edit {version}"), previous, &current, crate::Selection::default(), budget);
+    }
+    assert!(history.len() < 5, "bulk edits should evict old steps before reaching the count limit");
+    assert_eq!(history.last().unwrap().label, "edit 4");
+    assert!(history.len() == 1 || history.iter().map(|e| e.retained_bytes).sum::<usize>() <= budget);
+
+    let mut session = s();
+    let doc = session.doc_mut().unwrap();
+    doc.wb = current;
+    doc.undo = history;
+    session.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(session.doc().unwrap().wb.active().unwrap().cells.get(CellRef::new(0, 0)).unwrap().formula.as_ref().unwrap().text, "B1+3");
+    session.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(session.doc().unwrap().wb.active().unwrap().cells.get(CellRef::new(0, 0)).unwrap().formula.as_ref().unwrap().text, "B1+4");
+}
+
+#[test]
+fn small_edits_keep_the_full_undo_depth() {
+    let mut session = s();
+    for number in 0..100 {
+        session.execute("cell.set", json!({"cell": "A1", "input": number.to_string()})).unwrap();
+    }
+    assert_eq!(session.doc().unwrap().undo.len(), 100);
+    session.execute("edit.undo", json!({"steps": 100})).unwrap();
+    assert_eq!(v(&session, "A1"), Value::Empty);
+}
+
+#[test]
 fn shape_text_edit_undo_redo_and_noop() {
     let mut s = s();
     let id = s.execute("insert.textBox", json!({"at": "C4", "width": 210, "height": 90, "text": "Original"})).unwrap()["shape"].clone();

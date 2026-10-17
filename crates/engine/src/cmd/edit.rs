@@ -601,11 +601,12 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
     let now = d.wb.clone();
     for _ in 0..steps {
         let Some(e) = d.undo.pop() else { break };
-        let cur = crate::HistoryEntry { label: e.label.clone(), wb: d.wb.clone(), selection: d.selection.clone() };
-        d.redo.push(cur);
+        let cur_wb = d.wb.clone();
+        let cur_selection = d.selection.clone();
         label = e.label.clone();
         d.wb = e.wb;
         d.selection = e.selection;
+        crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
     d.calc.rebuild(&d.wb);
@@ -620,11 +621,12 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
     let now = d.wb.clone();
     for _ in 0..steps {
         let Some(e) = d.redo.pop() else { break };
-        let cur = crate::HistoryEntry { label: e.label.clone(), wb: d.wb.clone(), selection: d.selection.clone() };
-        d.undo.push(cur);
+        let cur_wb = d.wb.clone();
+        let cur_selection = d.selection.clone();
         label = e.label.clone();
         d.wb = e.wb;
         d.selection = e.selection;
+        crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
     d.calc.rebuild(&d.wb);

@@ -154,6 +154,55 @@ impl CellStore {
         }
         out
     }
+    /// Approximate heap storage kept alive by this snapshot's bands that `newer` no longer
+    /// shares. This is for bounding Undo history, not for reporting process memory: BTreeMap
+    /// nodes and allocator overhead vary by platform. Shared formulas and values are counted
+    /// only when the newer band no longer holds the same Arc.
+    pub fn retained_bytes_against(&self, newer: &CellStore) -> usize {
+        use std::mem::size_of;
+
+        let mut bytes = 0usize;
+        for (key, band) in &self.bands {
+            let next = newer.bands.get(key);
+            if next.is_some_and(|b| Arc::ptr_eq(b, band)) {
+                continue;
+            }
+            bytes = bytes.saturating_add(size_of::<Band>());
+            for (row, cols) in &band.rows {
+                bytes = bytes.saturating_add(size_of::<u32>() + 3 * size_of::<usize>());
+                for (col, cell) in cols {
+                    // Cells and BTreeMap nodes are duplicated with a cloned band even when
+                    // their formula/value Arcs are still shared with the next snapshot.
+                    bytes = bytes.saturating_add(size_of::<u32>() + size_of::<Cell>() + 3 * size_of::<usize>());
+                    let next_cell = next.and_then(|b| b.rows.get(row)).and_then(|r| r.get(col));
+                    if let Some(formula) = &cell.formula
+                        && !next_cell.and_then(|c| c.formula.as_ref()).is_some_and(|f| Arc::ptr_eq(f, formula))
+                    {
+                        bytes = bytes.saturating_add(size_of::<crate::cell::Formula>() + formula.text.len());
+                        if let Some(expr) = &formula.expr {
+                            expr.walk(&mut |_| bytes = bytes.saturating_add(size_of::<gridcraft_formula::Expr>()));
+                        }
+                    }
+                    match &cell.value {
+                        gridcraft_core::Value::Text(text)
+                            if !next_cell.and_then(|c| c.value.as_text()).is_some_and(|t| std::ptr::eq(t, text.as_ref())) =>
+                        {
+                            bytes = bytes.saturating_add(text.len());
+                        }
+                        gridcraft_core::Value::Array(array)
+                            if !next_cell.is_some_and(|c| matches!(&c.value, gridcraft_core::Value::Array(a) if Arc::ptr_eq(a, array))) =>
+                        {
+                            bytes = bytes.saturating_add(
+                                size_of::<gridcraft_core::Array>() + array.data.len().saturating_mul(size_of::<gridcraft_core::Value>()),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        bytes
+    }
     /// Removes every cell in `r` and returns them.
     pub fn take_range(&mut self, r: RangeRef) -> Vec<(CellRef, Cell)> {
         let keys: Vec<CellRef> = self.iter_range(r).map(|(c, _)| c).collect();
