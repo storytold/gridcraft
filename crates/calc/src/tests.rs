@@ -1266,3 +1266,20 @@ fn offset_extreme_arguments_return_ref() {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
     }
 }
+
+#[test]
+fn n_lifts_over_a_computed_array_but_reads_the_first_cell_of_a_range() {
+    let mut t = T::new();
+    t.set("B1", "0");
+    t.set("B2", "23850");
+    t.set("D2", "10%");
+    t.set("D3", "12%");
+    t.set("F1", "50000");
+    t.set("H1", "=SUMPRODUCT(D2:D3-D1:D2,F1-B1:B2,N(F1>B1:B2))");
+    assert!((t.num("H1") - 5523.0).abs() < 1e-9, "{:?}", t.get("H1"));
+    t.set("H2", "=SUMPRODUCT(N(B1:B2>0))");
+    assert_eq!(t.num("H2"), 1.0);
+    // A spill of N(D2:D3) would also show 10% in H3; summing it tells the two apart.
+    t.set("H3", "=SUM(N(D2:D3))");
+    assert!((t.num("H3") - 0.1).abs() < 1e-12, "{:?}", t.get("H3"));
+}

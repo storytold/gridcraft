@@ -89,7 +89,17 @@ fn na(_a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn n_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    match first(a) {
+    // N(range) reads the range's first cell, but a computed array (N(A1:A3>0), N({...})) is
+    // converted element by element, so N can stand in for `--` inside SUMPRODUCT.
+    if let Some(Arg { value: Value::Array(arr), from_ref: false }) = a.first() {
+        let data = arr.data.iter().map(|v| n_of(v.clone()).unwrap_or_else(Value::Error)).collect();
+        return Array::new(arr.rows, arr.cols, data).map(Value::from).ok_or(CellError::Calc);
+    }
+    n_of(first(a))
+}
+
+fn n_of(v: Value) -> R<Value> {
+    match v {
         Value::Number(n) => Ok(Value::Number(n)),
         Value::Bool(b) => Ok(Value::Number(if b { 1.0 } else { 0.0 })),
         Value::Error(e) => Err(e),
@@ -536,7 +546,9 @@ mod tests {
         close(ev("N", vec![b(true)]), 1.0);
         close(ev("N", vec![t("7")]), 0.0);
         is_err(ev("N", vec![e(CellError::Num)]), CellError::Num);
-        close(ev("N", vec![av(row(&[3.0, 4.0]))]), 3.0);
+        close(ev("N", vec![rf(row(&[3.0, 4.0]))]), 3.0);
+        let lifted = ev("N", vec![av(arr(vec![vec![Value::Bool(true), tv("x")], vec![Value::Error(CellError::Div0), nv(4.0)]]))]);
+        assert_eq!(rows_of(&lifted), vec![vec![nv(1.0), nv(0.0)], vec![Value::Error(CellError::Div0), nv(4.0)]]);
         is_text(ev("INFO", vec![t("RECALC")]), "Automatic");
         is_err(ev("INFO", vec![t("bogus")]), CellError::Value);
     }
