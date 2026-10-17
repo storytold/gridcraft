@@ -138,7 +138,15 @@ pub fn specs() -> Vec<CommandSpec> {
         )),
         cmd!("shape.setText", "Edit Text Box", [], None, "{id: textBox id, text: string}", has_doc, shape_set_text),
         cmd!("object.delete", "Delete Object", [], None, "{kind: chart|image|shape, id}", has_doc, delete_object),
-        cmd!("object.move", "Move Object", [], None, "{kind: chart|image|shape, id, at?: \"C3\", dx?, dy?, width?, height?}", has_doc, move_object),
+        cmd!(
+            "object.move",
+            "Move Object",
+            [],
+            None,
+            "{kind: chart|image|shape, id, at?: \"C3\", dx?, dy?, width?, height?, rotation?: degrees clockwise (shapes only)}",
+            has_doc,
+            move_object
+        ),
         cmd!(
             "object.setAnchorMode",
             "Object Properties",
@@ -1050,6 +1058,7 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         line,
         text: str_param(p, "text").unwrap_or("").into(),
         format: Default::default(),
+        rotation: 0.0,
     };
     let sheet = d.wb.active_sheet;
     edit(s, |cx| {
@@ -1110,6 +1119,10 @@ fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
     let kind = str_param(p, "kind").unwrap_or("").to_string();
     let sheet = s.doc()?.wb.active_sheet;
     let at = cell_param(s, p, "at")?;
+    let rotation = f64_param(p, "rotation").filter(|v| v.is_finite());
+    if rotation.is_some() && kind != "shape" {
+        return Err(bad("object.move", "only shapes rotate"));
+    }
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         let anchor = match kind.as_str() {
@@ -1134,6 +1147,11 @@ fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(v) = f64_param(p, "height") {
             a.height = v.clamp(0.0, 10000.0) as f32;
+        }
+        if let Some(r) = rotation
+            && let Some(shape) = sh.shapes.iter_mut().find(|c| c.id == id)
+        {
+            shape.rotation = r.rem_euclid(360.0) as f32;
         }
         Ok(Json::Null)
     })
@@ -1527,6 +1545,7 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
         line: Color::Auto,
         text: name,
         format: Default::default(),
+        rotation: 0.0,
     };
     let sheet = d.wb.active_sheet;
     edit(s, |cx| {

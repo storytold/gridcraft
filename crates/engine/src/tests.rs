@@ -3282,3 +3282,17 @@ fn paste_special_validation_moves_relative_references() {
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
 }
+
+#[test]
+fn object_move_rotates_shapes_only() {
+    let mut s = s();
+    let id = s.execute("insert.shape", json!({"kind": "rectangle"})).unwrap()["shape"].clone();
+    s.execute("object.move", json!({"kind": "shape", "id": id, "rotation": -30})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 330.0);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 0.0);
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    let chart = s.execute("insert.chart", json!({"type": "column"})).unwrap()["chart"].clone();
+    assert!(s.execute("object.move", json!({"kind": "chart", "id": chart, "rotation": 45})).is_err());
+}

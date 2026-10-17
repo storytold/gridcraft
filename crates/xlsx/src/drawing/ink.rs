@@ -148,7 +148,7 @@ pub(super) fn read(obj: &El, anchor: Anchor) -> Option<Shape> {
         }
         let _ = write!(text, "{},{}", x as f32, y as f32);
     }
-    Some(Shape { id: 0, kind: ShapeKind::Ink, anchor, fill: Color::Rgb((width as u32) << 16), line, text, format: Default::default() })
+    Some(Shape { id: 0, kind: ShapeKind::Ink, anchor, fill: Color::Rgb((width as u32) << 16), line, text, format: Default::default(), rotation: 0.0 })
 }
 
 /// Invalid/native out-of-range data uses the existing rectangle fallback. A successful

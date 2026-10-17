@@ -224,7 +224,9 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
         .unwrap_or_default();
     let mut format = read_text_format(obj.child("txBody"));
     format.no_line = ln.is_some_and(|l| l.child("noFill").is_some());
-    Some(Shape { id: 0, kind, anchor, fill, line, text, format })
+    let rotation =
+        sp.child("xfrm").and_then(|x| x.attr("rot")).and_then(|r| r.parse::<f64>().ok()).map_or(0.0, |r| ((r / 60000.0).rem_euclid(360.0)) as f32);
+    Some(Shape { id: 0, kind, anchor, fill, line, text, format, rotation })
 }
 
 /// A shape's text formatting: vertical anchor (`a:bodyPr anchor`), the first paragraph's
@@ -297,8 +299,15 @@ fn anchor_open(sheet: &Sheet, a: &Anchor) -> (String, &'static str) {
 }
 
 fn xfrm(a: &Anchor, tag: &str) -> String {
+    xfrm_rot(a, tag, 0.0)
+}
+
+/// `deg` is written as `rot`, in 60000ths of a degree.
+fn xfrm_rot(a: &Anchor, tag: &str, deg: f32) -> String {
     let e = |v: f32| ((v.max(0.0) as f64) * EMU_PER_PX).round() as i64;
-    format!("<{tag}><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{}\" cy=\"{}\"/></{tag}>", e(a.width), e(a.height))
+    let rot = (f64::from(deg.rem_euclid(360.0)) * 60000.0).round() as i64;
+    let rot = if rot > 0 { format!(" rot=\"{rot}\"") } else { String::new() };
+    format!("<{tag}{rot}><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{}\" cy=\"{}\"/></{tag}>", e(a.width), e(a.height))
 }
 
 pub fn srgb(c: &Color, theme: &Theme) -> Option<String> {
@@ -383,7 +392,7 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"Shape {}\"/><xdr:cNvSpPr{}/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"{prst}\"><a:avLst/></a:prstGeom>",
                     id - 1,
                     if tx { " txBox=\"1\"" } else { "" },
-                    xfrm(&sh.anchor, "a:xfrm")
+                    xfrm_rot(&sh.anchor, "a:xfrm", sh.rotation)
                 );
                 if let Some(c) = srgb(&sh.fill, theme) {
                     let _ = write!(s, "<a:solidFill>{c}</a:solidFill>");
