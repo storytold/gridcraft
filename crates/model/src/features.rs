@@ -641,24 +641,99 @@ pub struct AutoFilter {
     pub criteria: Vec<(u32, FilterCriterion)>,
 }
 
-/// A slicer: an on-sheet filter widget bound to one column of a table. Clicking its value tiles
-/// sets that column's `FilterCriterion::Values` in the sheet's [`AutoFilter`] and re-applies it,
-/// so a slicer is just a visual front-end over the existing filter machinery.
+/// A slicer: an on-sheet filter widget whose value tiles drive an existing filter, so a slicer is
+/// just a visual front-end over the filter machinery (see [`SlicerSource`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Slicer {
     pub id: u32,
-    /// Name of the table this slicer filters.
-    pub table: String,
-    /// Header name of the filtered column within the table.
-    pub column: String,
-    /// Caption shown in the slicer header (defaults to the column name).
+    /// What the slicer filters, and where its selection lives.
+    #[serde(flatten)]
+    pub source: SlicerSource,
+    /// Caption shown in the slicer header (defaults to the column or field name).
     pub caption: String,
     pub anchor: Anchor,
-    /// Selected display values. `None` means every value (no filter from this slicer); an empty
-    /// list means nothing is selected (all rows hidden), matching Excel's "clear all buttons".
-    pub selected: Option<Vec<String>>,
     /// Number of button columns in the layout (Excel default 1).
     pub columns: u32,
+    /// The slicer's name (unique in a workbook; Excel's Slicer Settings "Name"). Empty: derived
+    /// from the caption when saved.
+    #[serde(default)]
+    pub name: String,
+    /// Slicer style name (`SlicerStyleLight1`…). Empty: the default style.
+    #[serde(default)]
+    pub style: String,
+    /// Button height in pixels; `None` uses the default.
+    #[serde(default)]
+    pub row_height: Option<f32>,
+}
+
+impl Slicer {
+    /// The column or field the slicer filters.
+    pub fn field(&self) -> &str {
+        match &self.source {
+            SlicerSource::Table { column, .. } => column,
+            SlicerSource::Pivot { field, .. } => field,
+        }
+    }
+}
+
+/// What a slicer filters.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SlicerSource {
+    /// One column of a table: the selection is written as that column's
+    /// `FilterCriterion::Values` in the sheet's [`AutoFilter`] and re-applied.
+    Table {
+        /// Name of the table.
+        table: String,
+        /// Header name of the filtered column within the table.
+        column: String,
+        /// Selected display values. `None` means every value (no filter from this slicer); an
+        /// empty list means nothing is selected (all rows hidden), matching Excel's "clear all
+        /// buttons".
+        selected: Option<Vec<String>>,
+    },
+    /// One field of one or more PivotTables built from the same source. The selection is not
+    /// stored here: it is each PivotTable's [`PivotFilter`] on the field (its hidden items), so the
+    /// slicer and the PivotTables always agree.
+    Pivot {
+        /// The PivotTables it filters.
+        pivots: Vec<SlicerPivot>,
+        /// Source field (column header) name.
+        field: String,
+        /// Tile order: ascending, descending, or data source order (`PivotSort::None`).
+        #[serde(default)]
+        sort: PivotSort,
+        #[serde(default)]
+        cross_filter: SlicerCrossFilter,
+        /// Whether items no longer in the source are shown (Excel's "Show items deleted from the
+        /// data source"; kept for the file).
+        #[serde(default = "default_true")]
+        show_missing: bool,
+    },
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// A PivotTable a slicer filters: its sheet and name.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SlicerPivot {
+    pub sheet: String,
+    pub name: String,
+}
+
+/// How a slicer shows items that have no data under its PivotTables' other filters (Excel's
+/// "Visually indicate items with no data" options).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SlicerCrossFilter {
+    /// Items with no data aren't marked.
+    None,
+    /// Items with data first (the default).
+    #[default]
+    ShowItemsWithDataAtTop,
+    /// Items with no data stay in their place.
+    ShowItemsWithNoData,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -910,6 +985,19 @@ pub enum PivotDateGroup {
     Days,
 }
 
+impl PivotDateGroup {
+    /// Finest first: days, months, quarters, years, then ungrouped.
+    pub fn coarseness(self) -> u8 {
+        match self {
+            PivotDateGroup::Days => 0,
+            PivotDateGroup::Months => 1,
+            PivotDateGroup::Quarters => 2,
+            PivotDateGroup::Years => 3,
+            PivotDateGroup::None => 4,
+        }
+    }
+}
+
 /// A field placed in the Rows or Columns area.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -972,6 +1060,15 @@ pub struct PivotFilter {
     pub source_col: String,
     /// Item labels shown; `None` = all.
     pub selected: Option<Vec<String>>,
+    /// For a field outside Rows and Columns: it filters the PivotTable without being a report
+    /// filter (no filter cell above the table). Set by a slicer on a field the PivotTable doesn't
+    /// show, and read from files as hidden items of such a field.
+    pub hidden: bool,
+    /// The date grouping `selected` is in, when it isn't the first Rows/Columns field's on the
+    /// column (`None`): a field in no area keeps its cache field's grouping here (ECMA-376 puts
+    /// `fieldGroup` on the cache field), and on a field grouped at several levels it names the
+    /// level filtered. See [`PivotTable::filter_group`].
+    pub date_group: PivotDateGroup,
 }
 
 /// A PivotTable: its definition plus where its output was last written. The output itself is
@@ -1019,6 +1116,74 @@ pub struct PivotCalcField {
     pub name: String,
     /// Formula text, starting with `=`.
     pub formula: String,
+}
+
+impl PivotTable {
+    fn axis(&self) -> impl Iterator<Item = &PivotField> {
+        self.rows.iter().chain(self.columns.iter())
+    }
+
+    /// The grouping a filter on `col` gets when it names none: the first Rows/Columns field's.
+    pub fn implied_group(&self, col: &str) -> PivotDateGroup {
+        self.axis().find(|f| f.source_col.eq_ignore_ascii_case(col)).map(|f| f.date_group).unwrap_or_default()
+    }
+
+    /// The date grouping a filter's labels are in.
+    pub fn filter_group(&self, f: &PivotFilter) -> PivotDateGroup {
+        if f.date_group == PivotDateGroup::None { self.implied_group(&f.source_col) } else { f.date_group }
+    }
+
+    /// Clears each filter's `date_group` where the first Rows/Columns field implies it, so one
+    /// filter has one representation.
+    pub fn normalize_filter_groups(&mut self) {
+        let implied: Vec<PivotDateGroup> = self.filters.iter().map(|f| self.implied_group(&f.source_col)).collect();
+        for (f, g) in self.filters.iter_mut().zip(implied) {
+            if f.date_group == g {
+                f.date_group = PivotDateGroup::None;
+            }
+        }
+    }
+
+    /// The grouping of `col`'s base cache field: the finest of its Rows/Columns fields' and its
+    /// filter's, as a cache groups the base field by the finest level. A slicer on `col` lists
+    /// these items.
+    pub fn field_group(&self, col: &str) -> PivotDateGroup {
+        let filter = self.filters.iter().filter(|f| f.source_col.eq_ignore_ascii_case(col)).map(|f| self.filter_group(f));
+        let axis = self.axis().filter(|f| f.source_col.eq_ignore_ascii_case(col)).map(|f| f.date_group);
+        axis.chain(filter).min_by_key(|g| g.coarseness()).unwrap_or_default()
+    }
+
+    /// Sets the filter on `col` to `selected` (`None`: everything) with its labels in `group`,
+    /// adding a hidden filter for a field in no area. Clearing a filter removes it, except a
+    /// report filter and a filter that holds the field's grouping (none of its Rows/Columns
+    /// fields has it), which keep `selected: None`.
+    pub fn set_filter(&mut self, col: &str, selected: Option<Vec<String>>, group: PivotDateGroup) {
+        let on_axis = self.axis().any(|f| f.source_col.eq_ignore_ascii_case(col));
+        let date_group = if group == self.implied_group(col) { PivotDateGroup::None } else { group };
+        let i = self.filters.iter().position(|f| f.source_col.eq_ignore_ascii_case(col));
+        match (i, selected) {
+            (Some(i), None) => {
+                let Some(f) = self.filters.get(i) else { return };
+                let grouping = f.date_group != PivotDateGroup::None
+                    && !self.axis().any(|a| a.source_col.eq_ignore_ascii_case(col) && a.date_group == f.date_group);
+                if grouping || !(on_axis || f.hidden) {
+                    if let Some(f) = self.filters.get_mut(i) {
+                        f.selected = None;
+                    }
+                } else {
+                    self.filters.remove(i);
+                }
+            }
+            (Some(i), Some(sel)) => {
+                if let Some(f) = self.filters.get_mut(i) {
+                    f.selected = Some(sel);
+                    f.date_group = date_group;
+                }
+            }
+            (None, Some(sel)) => self.filters.push(PivotFilter { source_col: col.to_string(), selected: Some(sel), hidden: !on_axis, date_group }),
+            (None, None) => {}
+        }
+    }
 }
 
 impl Default for PivotTable {

@@ -175,6 +175,8 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                                 None => cx.warn(format!("chart {target} has no supported plot and was skipped")),
                             }
                         }
+                    } else if crate::slicer::read_frame(cx, &sheet.name, gd, anchor) {
+                        // A slicer: joined with its slicer part and cache once the sheets are read.
                     } else if uri.contains("chartex") || uri.contains("chartEx") {
                         cx.warn("a histogram, waterfall, treemap… chart without its chart part was skipped");
                     } else {
@@ -311,6 +313,8 @@ pub enum Obj<'a> {
     Image(&'a Image, String),
     Chart(&'a gridcraft_model::Chart, String),
     Shape(&'a Shape),
+    /// A PivotTable slicer and its (unique) name.
+    Slicer(&'a gridcraft_model::Slicer, String),
 }
 
 /// The drawing part for a sheet's objects (relationship ids already assigned).
@@ -358,6 +362,12 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     id - 1,
                     xfrm(&ch.anchor, "xdr:xfrm")
                 );
+            }
+            Obj::Slicer(sl, name) => {
+                let (open, close) = anchor_open(sheet, &sl.anchor);
+                close_tag = close;
+                s.push_str(&open);
+                s.push_str(&crate::slicer::frame_xml(id, name, &xfrm(&sl.anchor, "xdr:xfrm"), &xfrm(&sl.anchor, "a:xfrm")));
             }
             Obj::Shape(sh) => {
                 let (open, close) = anchor_open(sheet, &sh.anchor);

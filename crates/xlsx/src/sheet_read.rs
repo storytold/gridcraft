@@ -194,7 +194,10 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                     }
                 }
             }
-            "extLst" => read_ext(cx, e, &mut sheet),
+            "extLst" => {
+                read_ext(cx, e, &mut sheet);
+                crate::slicer::read_sheet_ext(cx, e, &rels, name);
+            }
             "protectedRanges" => read_protected_ranges(e, &mut sheet),
             _ => {}
         }

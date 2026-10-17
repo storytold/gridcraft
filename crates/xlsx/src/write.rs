@@ -126,6 +126,8 @@ pub struct Out {
     pub cell_pictures: crate::richdata::PicturesOut,
     /// Kept (pass-through) parts written so far.
     pub kept: crate::passthrough::KeptOut,
+    /// PivotTable slicers, planned before the sheets are written.
+    pub slicers: crate::slicer::SlicerWriter,
 }
 
 impl Out {
@@ -211,6 +213,7 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
         needs_calc: false,
         cell_pictures: Default::default(),
         kept: Default::default(),
+        slicers: crate::slicer::SlicerWriter::new(wb),
     };
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
     out.default_type("xml", "application/xml");
@@ -229,6 +232,8 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     let mut pivots = crate::pivot::PivotWriter::default();
     let mut sheets_xml = String::new();
     let mut sheet_id = 1usize;
+    // The `sheetId` of each model sheet: chart sheets kept between worksheets take ids too.
+    let mut sheet_ids: Vec<usize> = Vec::with_capacity(wb.sheets.len());
     for (i, sheet) in wb.sheets.iter().enumerate() {
         let (before, next) = kept.sheet_entries(i, false, sheet_id);
         sheets_xml.push_str(&before);
@@ -249,6 +254,7 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
         };
         let name: String = sheet.name.chars().take(31).collect();
         let _ = write!(sheets_xml, "<sheet name=\"{}\" sheetId=\"{sheet_id}\"{state} r:id=\"{rid}\"/>", esc_attr(&name));
+        sheet_ids.push(sheet_id);
         sheet_id += 1;
     }
     sheets_xml.push_str(&kept.sheet_entries(wb.sheets.len(), true, sheet_id).0);
@@ -257,7 +263,8 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     let mut names = String::new();
     let mut seen = std::collections::HashSet::new();
     for n in &wb.names {
-        if n.name.is_empty() || !seen.insert((n.name.to_ascii_lowercase(), n.scope)) {
+        // A slicer cache's name is written with its cache.
+        if n.name.is_empty() || (n.scope.is_none() && out.slicers.is_cache_name(&n.name)) || !seen.insert((n.name.to_ascii_lowercase(), n.scope)) {
             continue;
         }
         if let Some(sc) = n.scope
@@ -277,6 +284,7 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
         }
         let _ = write!(names, ">{}</definedName>", esc(&crate::fmla::text_to_file(&n.formula)));
     }
+    names.push_str(&out.slicers.defined_names());
     for (i, f) in out.chart_names.iter().enumerate() {
         let _ = write!(
             names,
@@ -351,9 +359,11 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     }
     w.push_str("/>");
     w.push_str(&pivots.workbook_xml(&mut wb_rels));
+    let slicers = std::mem::take(&mut out.slicers);
+    let slicer_ext = slicers.finish(wb, &sheet_ids, &pivots, &mut out, &mut wb_rels);
     let exts = crate::passthrough::workbook_elements(wb, "ext");
-    if !exts.is_empty() {
-        let _ = write!(w, "<extLst>{exts}</extLst>");
+    if !slicer_ext.is_empty() || !exts.is_empty() {
+        let _ = write!(w, "<extLst>{slicer_ext}{exts}</extLst>");
     }
     w.push_str("</workbook>");
 

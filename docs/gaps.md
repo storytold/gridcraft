@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-13 · **Change:** minor (§3, §8: PivotTable slicers landed) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -34,12 +34,12 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 25–40 h. [target-app-parity.md](target-app-parity.md#performance), [hardware-parity.md](hardware-parity.md)
 
 ### 3. Some unmodelled XLSX content is dropped on save (FF)
-- **Missing:** slicers and their caches, timelines, the data model, query tables attached to
+- **Missing:** table slicers and their caches (PivotTable slicers are read and written), timelines, the data model, query tables attached to
   tables, unmodelled `extLst` entries, chart details. Pass-through (#330) keeps custom XML,
   external links, connections, sheet query tables, printer settings, form and ActiveX controls,
   OLE objects and sheet backgrounds; never checked in Excel (repair prompts unknown).
 - **Evidence:** `crates/xlsx/src/passthrough.rs` (what is kept, and why the rest isn't).
-- **Impact:** open-edit-save still simplifies workbooks with slicers, timelines or Power Pivot.
+- **Impact:** open-edit-save still simplifies workbooks with table slicers, timelines or Power Pivot.
 - **Estimate:** 6–10 h. [file-format-parity.md](file-format-parity.md)
 
 ### 4. Charts lose type and options on round trip; shallow chart model (F, FF)
@@ -77,10 +77,16 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   routine in business.
 - **Estimate:** 14–21 h (`.xls` styles and objects 10–15, encryption 4–6). [file-format-parity.md](file-format-parity.md)
 
-### 8. PivotTables: no slicers, calculated items, PivotCharts; unverified in Excel (F)
+### 8. PivotTables: no calculated items, inserting slicers, timelines; unverified in Excel (F)
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
   `insert.pivotChart`, `table.insertSlicer`; calculated items and GETPIVOTDATA missing (calculated fields
   and values on rows done).
+  PivotTable slicers from files are shown, filter their PivotTables when clicked and are saved;
+  inserting one on a PivotTable, and slicer settings, are not done yet. A slicer connected to
+  PivotTables that can't share one pivot cache (different sources or calculated fields, or a
+  date field grouped differently) is saved connected to the first of them only. A slicer on a
+  coarser level of a date grouped at several levels (a Years slicer on a Date grouped by years
+  and months, which Excel keeps in its own cache field) is skipped with a warning on open.
 - **Impact:** pivots are the analyst's main tool.
 - **Estimate:** 20–30 h for beta (25–40 h full).
 
@@ -168,6 +174,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | §3, §8: PivotTable slicers read, shown, clickable and written |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
 | 2026-10-12 | minor | Page Layout view: dragging margins on the rulers (#792) removed from the §14 remainder |
 | 2026-10-12 | minor | §13: Forecast Sheet Forecast Start (hindcast) landed (#785) |

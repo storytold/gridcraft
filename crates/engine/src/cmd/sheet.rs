@@ -806,6 +806,14 @@ fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                     ch.pivot = Some(crate::pivot::chart_link(&name, &pivot));
                 }
             }
+            // So does a slicer.
+            for sl in sh.slicers.iter_mut() {
+                if let gridcraft_model::SlicerSource::Pivot { pivots, .. } = &mut sl.source {
+                    for p in pivots.iter_mut().filter(|p| p.sheet.eq_ignore_ascii_case(&old)) {
+                        p.sheet = name.clone();
+                    }
+                }
+            }
         }
         for n in cx.wb.names.iter_mut() {
             if let Ok(e) = gridcraft_formula::parse(&n.formula) {

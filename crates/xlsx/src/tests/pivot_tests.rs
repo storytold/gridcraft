@@ -104,7 +104,7 @@ fn workbook() -> Workbook {
                 ..PivotValue::default()
             },
         ],
-        filters: vec![PivotFilter { source_col: "Channel".into(), selected: Some(vec!["Online".into()]) }],
+        filters: vec![PivotFilter { source_col: "Channel".into(), selected: Some(vec!["Online".into()]), ..PivotFilter::default() }],
         layout: PivotLayout::Tabular,
         grand_totals_rows: false,
         grand_totals_cols: true,
@@ -161,8 +161,8 @@ fn workbook() -> Workbook {
             },
         ],
         filters: vec![
-            PivotFilter { source_col: "Region".into(), selected: Some(vec!["East".into(), "North".into()]) },
-            PivotFilter { source_col: "Product".into(), selected: Some(vec!["A".into(), "B".into()]) },
+            PivotFilter { source_col: "Region".into(), selected: Some(vec!["East".into(), "North".into()]), ..PivotFilter::default() },
+            PivotFilter { source_col: "Product".into(), selected: Some(vec!["A".into(), "B".into()]), ..PivotFilter::default() },
         ],
         layout: PivotLayout::Outline,
         grand_totals_rows: true,
@@ -184,7 +184,7 @@ fn workbook() -> Workbook {
         anchor: at("AB1"),
         rows: vec![field("Product")],
         values: vec![PivotValue { source_col: "Units".into(), func: PivotFunc::Product, name: "Product of Units".into(), ..PivotValue::default() }],
-        filters: vec![PivotFilter { source_col: "Channel".into(), selected: None }],
+        filters: vec![PivotFilter { source_col: "Channel".into(), ..PivotFilter::default() }],
         last_range: Some(rr("AB1:AC6")),
         ..PivotTable::default()
     };
@@ -589,4 +589,307 @@ fn data_on_rows_with_one_value_field_reads_without_warning() {
     assert_eq!(pt.values_position, None);
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert!(back.sheet(0).unwrap().pivots[0].values_on_rows);
+}
+
+/// `workbook()` plus a slicer on "Report" over the Product field of "Sales by Region", with
+/// "A" and "C" selected (Product is a column field, so the selection is its hidden items).
+fn slicer_workbook() -> Workbook {
+    let mut wb = workbook();
+    let report = wb.sheet_mut(1).unwrap();
+    let pi = report.pivots.iter().position(|p| p.name == "Sales by Region").unwrap();
+    report.pivots[pi].filters.push(PivotFilter {
+        source_col: "Product".into(),
+        selected: Some(vec!["A".into(), "C".into()]),
+        ..PivotFilter::default()
+    });
+    report.slicers.push(Slicer {
+        id: 1,
+        source: SlicerSource::Pivot {
+            pivots: vec![SlicerPivot { sheet: "Report".into(), name: "Sales by Region".into() }],
+            field: "Product".into(),
+            sort: PivotSort::Desc,
+            cross_filter: SlicerCrossFilter::ShowItemsWithNoData,
+            show_missing: false,
+        },
+        caption: "Pick a product".into(),
+        anchor: Anchor { cell: at("M3"), dx: 4.0, dy: 2.0, width: 180.0, height: 240.0, mode: AnchorMode::default() },
+        columns: 2,
+        name: "Product".into(),
+        style: "SlicerStyleDark1".into(),
+        row_height: Some(30.0),
+    });
+    wb
+}
+
+#[test]
+fn pivot_slicer_round_trips() {
+    let wb = slicer_workbook();
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let text = |k: &str| String::from_utf8(parts.get(k).unwrap_or_else(|| panic!("missing {k}")).clone()).unwrap();
+    let cache = text("xl/slicerCaches/slicerCache1.xml");
+    assert!(cache.contains("sourceName=\"Product\""), "{cache}");
+    assert!(cache.contains("name=\"Sales by Region\""), "{cache}");
+    assert!(cache.contains("<tabular pivotCacheId="), "{cache}");
+    assert!(cache.contains(" s=\"1\"") && cache.contains("sortOrder=\"descending\""), "{cache}");
+    let slicer = text("xl/slicers/slicer1.xml");
+    assert!(slicer.contains("caption=\"Pick a product\"") && slicer.contains("columnCount=\"2\""), "{slicer}");
+    let ct = text("[Content_Types].xml");
+    assert!(ct.contains("/xl/slicers/slicer1.xml") && ct.contains("/xl/slicerCaches/slicerCache1.xml"), "{ct}");
+    assert!(text("xl/workbook.xml").contains("slicerCaches"));
+    let ws = text("xl/worksheets/sheet2.xml");
+    assert!(ws.contains("x14:slicerList"), "{ws}");
+    let drawing =
+        parts.keys().filter(|k| k.starts_with("xl/drawings/drawing")).map(|k| text(k)).find(|d| d.contains("sle:slicer")).expect("slicer frame");
+    assert!(drawing.contains("mc:AlternateContent") && drawing.contains("mc:Fallback"), "{drawing}");
+
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.contains("slicer") && !w.contains("embedded object")), "{:?}", report.warnings);
+    let a = &wb.sheet(1).unwrap();
+    let b = &back.sheet(1).unwrap();
+    assert_eq!(b.slicers.len(), 1);
+    let (x, y) = (&a.slicers[0], &b.slicers[0]);
+    assert_eq!((&y.source, &y.caption, y.columns, &y.name, &y.style), (&x.source, &x.caption, x.columns, &x.name, &x.style));
+    assert_eq!(y.anchor.cell, x.anchor.cell);
+    assert!((y.anchor.width - x.anchor.width).abs() < 1.0 && (y.anchor.height - x.anchor.height).abs() < 1.0);
+    assert!(y.row_height.is_some_and(|h| (h - 30.0).abs() < 1.0), "{:?}", y.row_height);
+    let pa = a.pivots.iter().find(|p| p.name == "Sales by Region").unwrap();
+    let pb = b.pivots.iter().find(|p| p.name == "Sales by Region").unwrap();
+    assert_eq!(pa.filters, pb.filters, "the slicer's selection is the pivot's hidden items");
+    // A second save is stable.
+    let (again, _) = read_xlsx(&write_xlsx(&back).unwrap()).unwrap();
+    assert_eq!(again.sheet(1).unwrap().slicers, b.slicers);
+}
+
+/// A slicer on Product connected to "Sales by Region" and a second PivotTable on the same source
+/// that doesn't show Product (so its selection there is a hidden filter).
+#[test]
+fn pivot_slicer_keeps_every_connected_pivot_table() {
+    let mut wb = slicer_workbook();
+    let report = wb.sheet_mut(1).unwrap();
+    report.pivots.push(PivotTable {
+        id: 4,
+        name: "Units by Region".into(),
+        source: "Data!$A$1:$F$9".into(),
+        anchor: at("AF1"),
+        rows: vec![field("Region")],
+        values: vec![PivotValue { source_col: "Units".into(), func: PivotFunc::Sum, name: "Sum of Units".into(), ..PivotValue::default() }],
+        filters: vec![PivotFilter {
+            source_col: "Product".into(),
+            selected: Some(vec!["A".into(), "C".into()]),
+            hidden: true,
+            ..PivotFilter::default()
+        }],
+        ..PivotTable::default()
+    });
+    if let SlicerSource::Pivot { pivots, .. } = &mut report.slicers[0].source {
+        pivots.push(SlicerPivot { sheet: "Report".into(), name: "Units by Region".into() });
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let text = |k: &str| String::from_utf8(parts.get(k).unwrap_or_else(|| panic!("missing {k}")).clone()).unwrap();
+    let cache = text("xl/slicerCaches/slicerCache1.xml");
+    assert!(cache.contains("name=\"Sales by Region\"") && cache.contains("name=\"Units by Region\""), "{cache}");
+    // The connected PivotTables share one pivot cache, as Excel requires.
+    let cache_id = |name: &str| {
+        let t = parts
+            .keys()
+            .filter(|k| k.starts_with("xl/pivotTables/pivotTable"))
+            .map(|k| text(k))
+            .find(|t| t.contains(&format!("name=\"{name}\"")))
+            .unwrap();
+        t.split("cacheId=\"").nth(1).and_then(|s| s.split('"').next()).unwrap().to_string()
+    };
+    assert_eq!(cache_id("Sales by Region"), cache_id("Units by Region"));
+
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.contains("slicer")), "{:?}", report.warnings);
+    let (a, b) = (wb.sheet(1).unwrap(), back.sheet(1).unwrap());
+    assert_eq!(b.slicers.len(), 1);
+    assert_eq!(b.slicers[0].source, a.slicers[0].source);
+    for name in ["Sales by Region", "Units by Region", "Trend", "PivotTable3"] {
+        let pa = a.pivots.iter().find(|p| p.name == name).unwrap();
+        let pb = b.pivots.iter().find(|p| p.name == name).unwrap();
+        assert_eq!((&pa.rows, &pa.columns, &pa.filters), (&pb.rows, &pb.columns, &pb.filters), "{name}");
+    }
+}
+
+/// PivotTables a slicer connects share one cache only when they have the same calculated fields:
+/// a cache's calculated fields are read back into each of its tables, so sharing would add one
+/// table's calculated field to the other.
+#[test]
+fn pivot_slicer_shares_no_cache_across_calculated_fields() {
+    let mut wb = slicer_workbook();
+    let report = wb.sheet_mut(1).unwrap();
+    let pi = report.pivots.iter().position(|p| p.name == "Sales by Region").unwrap();
+    report.pivots[pi].calculated_fields.push(PivotCalcField { name: "Price".into(), formula: "=Sales/Units".into() });
+    report.pivots.push(PivotTable {
+        id: 4,
+        name: "Units by Region".into(),
+        source: "Data!$A$1:$F$9".into(),
+        anchor: at("AF1"),
+        rows: vec![field("Region")],
+        values: vec![PivotValue { source_col: "Units".into(), func: PivotFunc::Sum, name: "Sum of Units".into(), ..PivotValue::default() }],
+        filters: vec![PivotFilter {
+            source_col: "Product".into(),
+            selected: Some(vec!["A".into(), "C".into()]),
+            hidden: true,
+            ..PivotFilter::default()
+        }],
+        ..PivotTable::default()
+    });
+    if let SlicerSource::Pivot { pivots, .. } = &mut report.slicers[0].source {
+        pivots.push(SlicerPivot { sheet: "Report".into(), name: "Units by Region".into() });
+    }
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let calc = |name: &str| back.sheet(1).unwrap().pivots.iter().find(|p| p.name == name).unwrap().calculated_fields.clone();
+    assert_eq!(calc("Sales by Region"), vec![PivotCalcField { name: "Price".into(), formula: "=Sales/Units".into() }]);
+    assert_eq!(calc("Units by Region"), vec![]);
+
+    // With the same calculated fields they share one cache and stay connected.
+    let report = wb.sheet_mut(1).unwrap();
+    let units = report.pivots.iter().position(|p| p.name == "Units by Region").unwrap();
+    report.pivots[units].calculated_fields.push(PivotCalcField { name: "Price".into(), formula: "=Sales/Units".into() });
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheet(1).unwrap().slicers[0].source, wb.sheet(1).unwrap().slicers[0].source);
+}
+
+/// A slicer on a date field grouped by quarters lists the groups, in date order.
+#[test]
+fn pivot_slicer_on_grouped_dates_writes_the_groups() {
+    let mut wb = workbook();
+    let report = wb.sheet_mut(1).unwrap();
+    report.pivots.push(PivotTable {
+        id: 4,
+        name: "By Quarter".into(),
+        source: "Data!$A$1:$F$9".into(),
+        anchor: at("AF1"),
+        rows: vec![PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Quarters, ..PivotField::default() }],
+        values: vec![PivotValue { source_col: "Sales".into(), func: PivotFunc::Sum, name: "Sum of Sales".into(), ..PivotValue::default() }],
+        filters: vec![PivotFilter { source_col: "Date".into(), selected: Some(vec!["Qtr2".into()]), ..PivotFilter::default() }],
+        ..PivotTable::default()
+    });
+    report.slicers.push(Slicer {
+        id: 1,
+        source: SlicerSource::Pivot {
+            pivots: vec![SlicerPivot { sheet: "Report".into(), name: "By Quarter".into() }],
+            field: "Date".into(),
+            sort: PivotSort::Asc,
+            cross_filter: SlicerCrossFilter::ShowItemsWithDataAtTop,
+            show_missing: true,
+        },
+        caption: "Date".into(),
+        anchor: Anchor { cell: at("AJ1"), dx: 0.0, dy: 0.0, width: 180.0, height: 240.0, mode: AnchorMode::default() },
+        columns: 1,
+        name: "Date".into(),
+        style: String::new(),
+        row_height: None,
+    });
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let cache = String::from_utf8(parts["xl/slicerCaches/slicerCache1.xml"].clone()).unwrap();
+    // Items: <start, Qtr1..Qtr4, >end, listed in that order, with only Qtr2 selected.
+    let items = cache.split("<items").nth(1).unwrap();
+    let xs: Vec<&str> = items.split("<i x=\"").skip(1).map(|s| s.split('"').next().unwrap()).collect();
+    assert_eq!(xs, ["0", "1", "2", "3", "4", "5"], "{cache}");
+    assert!(items.contains("<i x=\"2\" s=\"1\"/>") && items.matches("s=\"1\"").count() == 1, "{cache}");
+
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let b = back.sheet(1).unwrap();
+    assert_eq!(b.slicers[0].source, wb.sheet(1).unwrap().slicers[0].source);
+    let pb = b.pivots.iter().find(|p| p.name == "By Quarter").unwrap();
+    assert_eq!(pb.filters, vec![PivotFilter { source_col: "Date".into(), selected: Some(vec!["Qtr2".into()]), ..PivotFilter::default() }]);
+}
+
+/// With a date grouped at several levels, Excel keeps each coarser level in its own cache field
+/// ("Years" over "Date"), and a slicer on that level names it as its source. Such a slicer is
+/// skipped with one warning that says so, and the PivotTable is kept.
+#[test]
+fn pivot_slicer_on_a_coarser_date_level_is_skipped_with_a_warning() {
+    let mut wb = workbook();
+    let report = wb.sheet_mut(1).unwrap();
+    report.pivots.push(PivotTable {
+        id: 4,
+        name: "By Year".into(),
+        source: "Data!$A$1:$F$9".into(),
+        anchor: at("AF1"),
+        rows: vec![
+            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Years, ..PivotField::default() },
+            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, ..PivotField::default() },
+        ],
+        values: vec![PivotValue { source_col: "Sales".into(), func: PivotFunc::Sum, name: "Sum of Sales".into(), ..PivotValue::default() }],
+        ..PivotTable::default()
+    });
+    report.slicers.push(Slicer {
+        id: 1,
+        source: SlicerSource::Pivot {
+            pivots: vec![SlicerPivot { sheet: "Report".into(), name: "By Year".into() }],
+            field: "Date".into(),
+            sort: PivotSort::Asc,
+            cross_filter: SlicerCrossFilter::ShowItemsWithDataAtTop,
+            show_missing: true,
+        },
+        caption: "Years".into(),
+        anchor: Anchor { cell: at("AJ1"), dx: 0.0, dy: 0.0, width: 180.0, height: 240.0, mode: AnchorMode::default() },
+        columns: 1,
+        name: "Years".into(),
+        style: String::new(),
+        row_height: None,
+    });
+    let mut parts = unzip(&write_xlsx(&wb).unwrap());
+    let defs: Vec<String> = parts
+        .iter()
+        .filter(|(k, _)| k.starts_with("xl/pivotCache/pivotCacheDefinition"))
+        .map(|(_, v)| String::from_utf8(v.clone()).unwrap())
+        .collect();
+    assert!(defs.iter().any(|d| d.contains("<cacheField name=\"Years\"") && d.contains("databaseField=\"0\"")), "{defs:?}");
+    let key = "xl/slicerCaches/slicerCache1.xml".to_string();
+    let cache = String::from_utf8(parts.remove(&key).unwrap()).unwrap();
+    let edited = cache.replace("sourceName=\"Date\"", "sourceName=\"Years\"");
+    assert_ne!(cache, edited);
+    parts.insert(key, edited.into_bytes());
+    let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    let (back, report) = read_xlsx(&super::make_zip(&refs)).unwrap();
+    let b = back.sheet(1).unwrap();
+    assert!(b.slicers.is_empty(), "{:?}", b.slicers);
+    let about: Vec<&String> = report.warnings.iter().filter(|w| w.contains("slicer")).collect();
+    assert_eq!(about.len(), 1, "{:?}", report.warnings);
+    assert!(about[0].contains("coarser date level of \"Date\""), "{about:?}");
+    let pb = b.pivots.iter().find(|p| p.name == "By Year").unwrap();
+    assert_eq!(pb.rows.iter().map(|f| f.date_group).collect::<Vec<_>>(), [PivotDateGroup::Years, PivotDateGroup::Months]);
+    let _ = write_xlsx(&back).unwrap();
+}
+
+#[test]
+fn hostile_slicer_parts_warn_not_panic() {
+    let bytes = write_xlsx(&slicer_workbook()).unwrap();
+    let cache = "xl/slicerCaches/slicerCache1.xml";
+    let edits: [(&str, &dyn Fn(&str) -> String); 7] = [
+        // The cache names a PivotTable that doesn't exist.
+        (cache, &|s| s.replace("name=\"Sales by Region\"", "name=\"Nowhere\"")),
+        (cache, &|s| s.replace("tabId=\"", "tabId=\"99")),
+        (cache, &|s| s.replace("pivotCacheId=\"", "pivotCacheId=\"77")),
+        (cache, &|s| s.replace("<i x=\"", "<i x=\"4294967")),
+        (cache, &|_| "garbage <<<".into()),
+        ("xl/slicers/slicer1.xml", &|s| s.replace("cache=\"", "cache=\"Other")),
+        ("xl/slicers/slicer1.xml", &|_| "<slicers/>".into()),
+    ];
+    for (part, f) in edits {
+        let mut parts = unzip(&bytes);
+        let old = String::from_utf8(parts.remove(part).unwrap()).unwrap();
+        let new = f(&old);
+        assert_ne!(old, new, "edit to {part} did nothing");
+        let mut list: Vec<(String, Vec<u8>)> = parts.into_iter().collect();
+        list.push((part.to_string(), new.into_bytes()));
+        let refs: Vec<(&str, &[u8])> = list.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+        let (wb, report) = read_xlsx(&super::make_zip(&refs)).unwrap();
+        let sh = wb.sheet(1).unwrap();
+        if sh.slicers.is_empty() {
+            // One warning names the dropped slicer, not a second one for its frame.
+            let about = report.warnings.iter().filter(|w| w.contains("\"Product\"")).count();
+            assert_eq!(about, 1, "after editing {part}: {:?}", report.warnings);
+        }
+        // Whatever was read saves again.
+        let _ = write_xlsx(&wb).unwrap();
+    }
 }

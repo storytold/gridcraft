@@ -1226,7 +1226,7 @@ fn slicer_filters_table() {
         let d = s.doc().unwrap();
         let sh = d.wb.active().unwrap();
         assert_eq!(sh.slicers.len(), 1);
-        assert_eq!(sh.slicers[0].column, "Region");
+        assert_eq!(sh.slicers[0].field(), "Region");
     }
 
     // Single-click "East": only the two East rows remain (West row 2 and North row 4 hidden).
@@ -1246,7 +1246,7 @@ fn slicer_filters_table() {
     // Clear restores everything.
     s.execute("slicer.clear", json!({"slicer": id})).unwrap();
     assert_eq!(hidden(&s), 0);
-    assert!(s.doc().unwrap().wb.active().unwrap().slicers[0].selected.is_none());
+    assert!(matches!(&s.doc().unwrap().wb.active().unwrap().slicers[0].source, gridcraft_model::SlicerSource::Table { selected: None, .. }));
 
     // Deleting the slicer drops it and clears its filter.
     s.execute("slicer.toggle", json!({"slicer": id, "value": "East"})).unwrap();

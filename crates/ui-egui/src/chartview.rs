@@ -399,11 +399,12 @@ pub struct SlicerLayout {
     pub tiles: Vec<Rect>,
 }
 
-pub fn slicer_layout(rect: Rect, z: f32, n: usize, columns: u32) -> SlicerLayout {
+/// `row_height`: the slicer's button height in pixels (`None`: the default).
+pub fn slicer_layout(rect: Rect, z: f32, n: usize, columns: u32, row_height: Option<f32>) -> SlicerLayout {
     let header_h = 26.0 * z;
     let pad = 6.0 * z;
     let gap = 3.0 * z;
-    let tile_h = 22.0 * z;
+    let tile_h = row_height.filter(|h| h.is_finite()).unwrap_or(22.0).clamp(8.0, 400.0) * z;
     let header = Rect::from_min_size(rect.min, vec2(rect.width(), header_h));
     let cb = 16.0 * z;
     let clear = Rect::from_min_size(pos2(header.right() - pad - cb, header.top() + (header_h - cb) / 2.0), vec2(cb, cb));
@@ -431,7 +432,7 @@ fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usiz
             continue;
         }
         let items = gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl);
-        let lay = slicer_layout(r, geo.z, items.len(), sl.columns);
+        let lay = slicer_layout(r, geo.z, items.len(), sl.columns, sl.row_height);
         let radius = 4.0 * geo.z;
         // Card + soft shadow.
         p.rect_filled(r.translate(vec2(0.0, 1.5)), radius, Color32::from_black_alpha(18));
@@ -440,22 +441,28 @@ fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usiz
         // Header.
         p.rect_filled(lay.header, radius, tk.accent_soft);
         p.rect_filled(Rect::from_min_max(pos2(lay.header.left(), lay.header.bottom() - radius), lay.header.max), 0.0, tk.accent_soft);
-        let cap = if sl.caption.is_empty() { sl.column.clone() } else { sl.caption.clone() };
+        let cap = if sl.caption.is_empty() { sl.field().to_string() } else { sl.caption.clone() };
         p.text(lay.header.left_center() + vec2(8.0 * geo.z, 0.0), Align2::LEFT_CENTER, cap, theme::ui_bold(12.5 * geo.z), tk.accent_dark);
         // Clear-filter button (tinted when a filter is active).
-        let filtered = sl.selected.is_some();
+        let filtered = items.iter().any(|t| !t.selected);
         if let Some(icon) = crate::icons::from_name("filter") {
             crate::icons::paint(p, lay.clear, icon, if filtered { tk.accent } else { tk.text_dim });
         }
         // Value tiles.
-        for ((val, on), tr) in items.iter().zip(&lay.tiles) {
+        for (tile, tr) in items.iter().zip(&lay.tiles) {
             if !r.contains(tr.left_top()) {
                 continue; // overflowed the card; skip (no scroll yet)
             }
-            let (fill, fg) = if *on { (tk.accent, Color32::WHITE) } else { (tk.hover, tk.text_dim) };
+            // Items with no data under the PivotTables' other filters are dimmed.
+            let (fill, fg) = match (tile.selected, tile.has_data) {
+                (true, true) => (tk.accent, Color32::WHITE),
+                (true, false) => (tk.accent_soft, tk.text_dim),
+                (false, true) => (tk.hover, tk.text_dim),
+                (false, false) => (tk.window, tk.text_dim),
+            };
             p.rect_filled(*tr, 3.0 * geo.z, fill);
             let cp = p.with_clip_rect(tr.intersect(p.clip_rect()));
-            cp.text(tr.left_center() + vec2(6.0 * geo.z, 0.0), Align2::LEFT_CENTER, val, theme::ui_font(12.0 * geo.z), fg);
+            cp.text(tr.left_center() + vec2(6.0 * geo.z, 0.0), Align2::LEFT_CENTER, &tile.label, theme::ui_font(12.0 * geo.z), fg);
         }
         if app.selected_chart == Some(sl.id) {
             selection_frame(p, r);
@@ -481,13 +488,13 @@ pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) ->
             continue;
         }
         let items = gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl);
-        let lay = slicer_layout(r, geo.z, items.len(), sl.columns);
+        let lay = slicer_layout(r, geo.z, items.len(), sl.columns, sl.row_height);
         if lay.clear.contains(p) {
             return Some((sl.id, SlicerAction::Clear));
         }
-        for ((val, _on), tr) in items.iter().zip(&lay.tiles) {
+        for (tile, tr) in items.iter().zip(&lay.tiles) {
             if r.contains(tr.left_top()) && tr.contains(p) {
-                return Some((sl.id, SlicerAction::Toggle(val.clone())));
+                return Some((sl.id, SlicerAction::Toggle(tile.key.clone())));
             }
         }
         return None; // inside this (topmost) slicer, but on its header/background → select/drag

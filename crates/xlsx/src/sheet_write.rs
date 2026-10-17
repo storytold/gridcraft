@@ -488,8 +488,9 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
     }
 
-    // Drawing: pictures, charts, shapes.
-    if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() {
+    // Drawing: pictures, charts, shapes, slicers.
+    let slicers = out.slicers.on_sheet(si);
+    if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() || !slicers.is_empty() {
         out.drawings += 1;
         let dn = out.drawings;
         let mut drels = Rels::default();
@@ -529,6 +530,11 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         for sh in &sheet.shapes {
             objs.push(Obj::Shape(sh));
+        }
+        for p in &slicers {
+            if let Some(sl) = sheet.slicers.get(p.slicer) {
+                objs.push(Obj::Slicer(sl, p.name.clone()));
+            }
         }
         out.part(&format!("xl/drawings/drawing{dn}.xml"), Some(CT_DRAWING), crate::drawing::write_drawing(sheet, &wb.theme, &objs).into_bytes());
         if !drels.is_empty() {
@@ -576,7 +582,8 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         let _ = write!(s, "<tableParts count=\"{}\">{parts}</tableParts>", tables.len());
     }
-    // Excel 2010 extensions: solid data bars, then sparklines.
+    // Excel 2010 extensions: solid data bars, sparklines, then slicers.
+    let slicer_ext = crate::slicer::SlicerWriter::sheet_part(sheet, &slicers, out, &mut rels);
     let solid_bars: Vec<(&CondFormat, u32)> = sheet
         .cond_formats
         .iter()
@@ -584,7 +591,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         .filter(|(_, cf)| !cf.ranges.is_empty() && matches!(cf.rule, CfRule::DataBar { gradient: false, .. }))
         .map(|(i, cf)| (cf, prio.get(i).copied().unwrap_or(1)))
         .collect();
-    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() {
+    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() || !slicer_ext.is_empty() {
         s.push_str("<extLst>");
     }
     if !solid_bars.is_empty() {
@@ -622,7 +629,8 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         s.push_str("</x14:sparklineGroups></ext>");
     }
-    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() {
+    s.push_str(&slicer_ext);
+    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() || !slicer_ext.is_empty() {
         s.push_str("</extLst>");
     }
     s.push_str("</worksheet>");
