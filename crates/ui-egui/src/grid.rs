@@ -16,8 +16,12 @@ use crate::editor::{EditState, REF_COLORS};
 use crate::theme::{self, Tokens};
 
 pub const COL_HEADER_H: f32 = 21.0;
-/// Sheet units are 96-dpi pixels (as in XLSX); on screen one unit is drawn at this many points,
-/// which matches desktop spreadsheet density (a default 20 px row is 16 pt tall).
+/// Sheet units are 96-dpi pixels (as in XLSX). On Linux, one sheet pixel maps to one logical
+/// screen point at 100% zoom; the desktop's DPI scale is applied by egui separately (#1185).
+/// Keep the existing density on other platforms until it is measured there.
+#[cfg(target_os = "linux")]
+pub const DISPLAY_SCALE: f32 = 1.0;
+#[cfg(not(target_os = "linux"))]
 pub const DISPLAY_SCALE: f32 = 0.8;
 
 /// The zoom percentages a Ctrl+wheel notch steps between: four per doubling (about 20% apart),
@@ -3335,6 +3339,25 @@ mod selection_fill_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_sheet_pixels_match_logical_pixels_at_the_requested_zoom() {
+        // The file's geometry is in 96-dpi pixels, not 80% of those pixels. Exercise the
+        // same cell/range geometry used to paint and hit-test, at several actual zooms.
+        let mut sh = Sheet::new("Scale");
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0));
+        for (zoom, column, row, picture) in [(50, 32.0, 10.0, 160.0), (100, 64.0, 20.0, 320.0), (150, 96.0, 30.0, 480.0)] {
+            sh.zoom = zoom;
+            let geo = Geo::new(&sh, rect, egui::Vec2::ZERO);
+            let a1 = geo.cell_rect(&sh, CellRef::new(0, 0));
+            assert!((a1.width() - column).abs() < 0.001);
+            assert!((a1.height() - row).abs() < 0.001);
+            let five = geo.range_rect(&sh, RangeRef::parse("A1:E1").unwrap());
+            assert!((five.width() - picture).abs() < 0.001, "a 320-pixel picture shares the sheet transform");
+            assert_eq!(geo.col_at(&sh, a1.right() + 1.0), 1, "hit-testing follows the calibrated geometry");
+        }
+    }
 
     #[test]
     fn wheel_zoom_steps_along_the_ladder_and_stops_at_100() {

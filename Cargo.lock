@@ -1651,6 +1651,7 @@ dependencies = [
  "toml",
  "web-sys",
  "zbus",
+ "zip",
 ]
 
 [[package]]
