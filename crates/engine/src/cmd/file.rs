@@ -55,30 +55,59 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Dialog("open".into(), json!({})));
         return ok();
     };
-    let encrypted = gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Encrypted;
-    let (mut wb, warnings) = crate::io::open_bytes_with_password(&name, &bytes, str_param(p, "password"))?;
+    open_bytes(s, &name, &bytes, p)
+}
+
+/// Binary counterpart of file.open for web file picker/host inboxes: no base64 JSON copy.
+/// Construct the new document before touching the previous one.
+pub struct PreparedImport {
+    doc: DocState,
+    warnings: Vec<String>,
+    cached: bool,
+}
+
+pub fn open_bytes(s: &mut Session, name: &str, bytes: &[u8], p: &Json) -> Result<Json> {
+    let prepared = gridcraft_core::work::run_ready(prepare_open(name, bytes, p, &mut gridcraft_core::work::Uninterrupted))
+        .ok_or_else(|| crate::EngineError::Internal("file.open".into(), "synchronous importer yielded".into()))??;
+    finish_open(s, prepared)
+}
+pub async fn prepare_open(name: &str, bytes: &[u8], p: &Json, control: &mut impl gridcraft_core::work::WorkControl) -> Result<PreparedImport> {
+    let encrypted = gridcraft_xlsx::sniff(bytes) == gridcraft_xlsx::Format::Encrypted;
+    let (mut wb, warnings) = crate::io::open_bytes_cooperative(name, bytes, str_param(p, "password"), control).await?;
     wb.source_dir = str_param(p, "path").and_then(crate::io::source_dir);
     let imported =
-        matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Ods | crate::io::FileKind::Xlsb | crate::io::FileKind::Xls))
-            || matches!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Ods | gridcraft_xlsx::Format::Xlsb | gridcraft_xlsx::Format::Xls);
+        matches!(crate::io::FileKind::from_path(name), Some(crate::io::FileKind::Ods | crate::io::FileKind::Xlsb | crate::io::FileKind::Xls))
+            || matches!(gridcraft_xlsx::sniff(bytes), gridcraft_xlsx::Format::Ods | gridcraft_xlsx::Format::Xlsb | gridcraft_xlsx::Format::Xls);
     let title = if imported {
-        format!("{} (imported).xlsx", std::path::Path::new(&name).file_stem().and_then(|n| n.to_str()).unwrap_or("Book"))
+        format!("{} (imported).xlsx", std::path::Path::new(name).file_stem().and_then(|n| n.to_str()).unwrap_or("Book"))
     } else {
-        std::path::Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or("Book").to_string()
+        std::path::Path::new(name).file_name().and_then(|n| n.to_str()).unwrap_or("Book").to_string()
     };
     // An import has no save target: ordinary Save must ask for a new destination. Neither does a
     // workbook decrypted with its password, so Save never replaces the encrypted original with
     // an unprotected copy.
     let path = str_param(p, "path").filter(|_| !imported && !encrypted).map(str::to_string);
-    // Replace an untouched blank Book1 like Excel does.
+    let cached = bytes.len() >= 20 * 1024 * 1024
+        && gridcraft_xlsx::sniff(bytes) == gridcraft_xlsx::Format::Xlsx
+        && !warnings.iter().any(|w| w == "Saved formula results are incomplete; an initial recalculation is required.")
+        && wb.sheets.iter().map(|sh| sh.cells.len()).sum::<usize>() >= 1_000_000;
+    let mut doc = DocState::with_calculation_cooperative(wb, path, title, cached, control).await?;
+    let mut warnings = warnings;
+    if cached {
+        warnings.push("Large workbook: showing saved formula results on open. Full recalculation was deferred; use Formulas > Calculate Now (F9) when needed. Edits still recalculate dependent formulas.".into());
+    }
+    if crate::io::FileKind::from_path(name).is_none() && gridcraft_xlsx::sniff(bytes) == gridcraft_xlsx::Format::Xlsx {
+        doc.content_kind = Some(crate::io::FileKind::Xlsx);
+    }
+    Ok(PreparedImport { doc, warnings, cached })
+}
+pub fn finish_open(s: &mut Session, prepared: PreparedImport) -> Result<Json> {
+    let PreparedImport { doc, warnings, cached } = prepared;
+    // Replace an untouched blank Book1 like Excel does, only after successful import.
     if s.documents().len() == 1
         && s.active().is_some_and(|d| d.path.is_none() && !d.is_dirty() && d.undo.is_empty() && d.wb.sheets.iter().all(|sh| sh.cells.is_empty()))
     {
         s.close_document(0);
-    }
-    let mut doc = DocState::new(wb, path, title);
-    if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
-        doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
     let i = s.add_document(doc);
     // The decrypted-workbook notice is for the info bar, not a message box.
@@ -92,7 +121,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let d = s.doc()?;
     Ok(
-        json!({"index": i, "title": d.display_title(), "sheets": d.wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(), "warnings": warnings}),
+        json!({"index": i, "title": d.display_title(), "sheets": d.wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(), "warnings": warnings, "cachedCalculation": cached}),
     )
 }
 

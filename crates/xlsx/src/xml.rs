@@ -153,6 +153,23 @@ pub fn parse(xml: &[u8]) -> Result<El, IoError> {
 /// Parses a part; complete elements named in `split` (below the root) are handed to `cb` and not
 /// kept in the returned tree.
 pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
+    gridcraft_core::work::run_ready(parse_streaming_cooperative(
+        xml,
+        split,
+        cb,
+        &mut gridcraft_core::work::Uninterrupted,
+        gridcraft_core::work::WorkStage::Worksheet,
+    ))
+    .ok_or_else(|| IoError::Format("synchronous XML parser yielded".into()))?
+}
+
+pub async fn parse_streaming_cooperative(
+    xml: &[u8],
+    split: &[&str],
+    cb: &mut dyn FnMut(El) -> Result<(), IoError>,
+    control: &mut impl gridcraft_core::work::WorkControl,
+    stage: gridcraft_core::work::WorkStage,
+) -> Result<El, IoError> {
     let data = to_utf8(xml);
     let mut reader = Reader::from_reader(data.as_ref());
     {
@@ -184,7 +201,12 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
         }
         Ok(())
     }
+    let mut events = 0u32;
     loop {
+        if events.is_multiple_of(2048) {
+            control.checkpoint(gridcraft_core::work::WorkProgress::new(stage, reader.buffer_position(), data.len() as u64)).await?;
+        }
+        events = events.wrapping_add(1);
         let ev = reader.read_event_into(&mut buf).map_err(|e| IoError::Xml(format!("{e} at byte {}", reader.buffer_position())))?;
         match ev {
             Event::Start(e) => {

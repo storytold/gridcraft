@@ -152,6 +152,26 @@ fn services() -> Services {
     let clipboard: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
     let (html_clipboard, text_clipboard) = (clipboard.clone(), clipboard.clone());
     Services {
+        start_import: Some(Box::new(|name, bytes, params| {
+            let (task, sender) = gridcraft_ui_egui::ImportTask::channel();
+            let mut control = NativeWork { cancelled: task.cancelled.clone(), progress: task.progress.clone() };
+            let spawn = std::thread::Builder::new().name("workbook-import".into()).spawn(move || {
+                let result = (|| {
+                    let bytes = match bytes {
+                        Some(bytes) => bytes,
+                        None => std::sync::Arc::new(std::fs::read(&name).map_err(|e| e.to_string())?),
+                    };
+                    gridcraft_core::work::run_ready(gridcraft_engine::cmd::file::prepare_open(&name, &bytes, &params, &mut control))
+                        .ok_or_else(|| "Native import unexpectedly yielded".to_string())?
+                        .map_err(|e| e.to_string())
+                })();
+                let _ = sender.send(result);
+            });
+            if let Err(error) = spawn {
+                log::error!("could not start workbook import: {error}");
+            }
+            task
+        })),
         copy_html: Some(Box::new(move |html, text| {
             let mut clipboard = clipboard.borrow_mut();
             if clipboard.is_none() {
@@ -382,6 +402,20 @@ fn main() -> eframe::Result<()> {
         return run(options);
     }
     result
+}
+
+struct NativeWork {
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    progress: std::sync::Arc<std::sync::Mutex<gridcraft_core::work::WorkProgress>>,
+}
+impl gridcraft_core::work::WorkControl for NativeWork {
+    fn checkpoint(
+        &mut self,
+        progress: gridcraft_core::work::WorkProgress,
+    ) -> impl std::future::Future<Output = Result<(), gridcraft_core::work::WorkCancelled>> {
+        *self.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = progress;
+        std::future::ready(if self.cancelled.load(std::sync::atomic::Ordering::Relaxed) { Err(gridcraft_core::work::WorkCancelled) } else { Ok(()) })
+    }
 }
 
 #[cfg(test)]

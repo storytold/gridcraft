@@ -1503,6 +1503,7 @@ dependencies = [
  "eframe",
  "egui",
  "fmv-macos-events",
+ "gridcraft-core",
  "gridcraft-engine",
  "gridcraft-ui-egui",
  "image",
@@ -1659,6 +1660,7 @@ version = "0.7.0"
 dependencies = [
  "eframe",
  "egui",
+ "gridcraft-core",
  "gridcraft-engine",
  "gridcraft-ui-egui",
  "js-sys",

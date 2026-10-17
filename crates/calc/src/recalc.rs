@@ -282,7 +282,11 @@ impl Graph {
     /// Tidies the range indexes changed by `insert`/`remove` (queries stay correct without it,
     /// just slower).
     fn settle(&mut self) {
+        let _ = gridcraft_core::work::run_ready(self.settle_cooperative(&mut gridcraft_core::work::Uninterrupted));
+    }
+    async fn settle_cooperative(&mut self, control: &mut impl gridcraft_core::work::WorkControl) -> Result<(), gridcraft_core::work::WorkCancelled> {
         for key in std::mem::take(&mut self.unsettled_cols) {
+            control.checkpoint(gridcraft_core::work::WorkProgress::new(gridcraft_core::work::WorkStage::Dependencies, 0, 0)).await?;
             if let Some(v) = self.col_deps.get_mut(&key) {
                 v.settle();
                 if v.is_empty() {
@@ -291,6 +295,7 @@ impl Graph {
             }
         }
         for key in std::mem::take(&mut self.unsettled_wide) {
+            control.checkpoint(gridcraft_core::work::WorkProgress::new(gridcraft_core::work::WorkStage::Dependencies, 0, 0)).await?;
             if let Some(v) = self.wide_deps.get_mut(&key) {
                 v.settle();
                 if v.is_empty() {
@@ -298,6 +303,7 @@ impl Graph {
                 }
             }
         }
+        Ok(())
     }
 
     /// Formulas that read cell `c` of `sheet`.
@@ -795,9 +801,24 @@ impl Calc {
 
     /// Rebuilds the graph from scratch.
     pub fn rebuild(&mut self, wb: &Workbook) {
+        // Uninterrupted cannot yield or cancel.
+        let _ = gridcraft_core::work::run_ready(self.rebuild_cooperative(wb, &mut gridcraft_core::work::Uninterrupted));
+    }
+    pub async fn rebuild_cooperative(
+        &mut self,
+        wb: &Workbook,
+        control: &mut impl gridcraft_core::work::WorkControl,
+    ) -> Result<(), gridcraft_core::work::WorkCancelled> {
+        use gridcraft_core::work::{WorkProgress, WorkStage};
+        let total = wb.sheets.iter().map(|sh| sh.cells.len() as u64).sum();
+        let mut completed = 0u64;
         self.graph = Graph::default();
         for (si, sheet) in wb.sheets.iter().enumerate() {
             for (c, cell) in sheet.cells.iter() {
+                if completed.is_multiple_of(1024) {
+                    control.checkpoint(WorkProgress::new(WorkStage::Dependencies, completed, total)).await?;
+                }
+                completed += 1;
                 if let Some(f) = &cell.formula
                     && let Some(e) = f.expr()
                 {
@@ -806,12 +827,21 @@ impl Calc {
                 }
             }
         }
-        self.graph.settle();
+        self.graph.settle_cooperative(control).await?;
+        control.checkpoint(WorkProgress::new(WorkStage::Dependencies, total, total)).await?;
+        Ok(())
     }
 
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
-        self.rebuild(wb);
+        let _ = gridcraft_core::work::run_ready(self.recalc_all_cooperative(wb, &mut gridcraft_core::work::Uninterrupted));
+    }
+    pub async fn recalc_all_cooperative(
+        &mut self,
+        wb: &mut Workbook,
+        control: &mut impl gridcraft_core::work::WorkControl,
+    ) -> Result<(), gridcraft_core::work::WorkCancelled> {
+        self.rebuild_cooperative(wb, control).await?;
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
         for i in 0..wb.sheets.len() {
@@ -823,7 +853,7 @@ impl Calc {
             }
         }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
-        self.run(wb, all, true);
+        self.run_cooperative(wb, all, true, control).await
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
@@ -948,7 +978,17 @@ impl Calc {
     }
 
     /// Evaluates the dirty set and writes results (and spills) back.
-    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
+    fn run(&mut self, wb: &mut Workbook, dirty: Vec<Key>, full: bool) {
+        let _ = gridcraft_core::work::run_ready(self.run_cooperative(wb, dirty, full, &mut gridcraft_core::work::Uninterrupted));
+    }
+    async fn run_cooperative(
+        &mut self,
+        wb: &mut Workbook,
+        mut dirty: Vec<Key>,
+        full: bool,
+        control: &mut impl gridcraft_core::work::WorkControl,
+    ) -> Result<(), gridcraft_core::work::WorkCancelled> {
+        use gridcraft_core::work::{WorkProgress, WorkStage};
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         for _round in 0..8 {
             if dirty.is_empty() {
@@ -957,7 +997,10 @@ impl Calc {
             // Row-major order is a good topological guess; on-demand evaluation fixes the rest.
             dirty.sort_by_key(|(s, c)| (*s, c.row, c.col));
             let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
-            for k in &dirty {
+            for (i, k) in dirty.iter().enumerate() {
+                if i.is_multiple_of(512) {
+                    control.checkpoint(WorkProgress::new(WorkStage::Calculation, i as u64, dirty.len() as u64)).await?;
+                }
                 if let Some(e) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc()) {
                     exprs.insert(*k, e);
                 }
@@ -968,7 +1011,8 @@ impl Calc {
             let (results, spills, cycles) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now);
                 host.iterate = wb.calc.iterative;
-                for k in &dirty {
+                for (i, k) in dirty.iter().enumerate() {
+                    control.checkpoint(WorkProgress::new(WorkStage::Calculation, i as u64, dirty.len() as u64)).await?;
                     host.compute(*k);
                 }
                 if host.iterate && !host.members.is_empty() {
@@ -989,7 +1033,10 @@ impl Calc {
             // Write back.
             let mut spill_changes: Vec<Key> = Vec::new();
             let mut freed: Vec<(usize, RangeRef)> = Vec::new();
-            for (k, v) in results {
+            for (i, (k, v)) in results.into_iter().enumerate() {
+                if i.is_multiple_of(1024) {
+                    control.checkpoint(WorkProgress::new(WorkStage::Finishing, i as u64, dirty.len() as u64)).await?;
+                }
                 let Some(sheet) = wb.sheet_mut(k.0) else { continue };
                 if let Some(cell) = sheet.cells.get_mut(k.1)
                     && cell.value != v
@@ -1075,6 +1122,7 @@ impl Calc {
             }
             dirty = self.dirty_closure(wb, &spill_changes);
         }
+        Ok(())
     }
 }
 

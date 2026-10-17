@@ -30,6 +30,7 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    pub sheet_scan: Option<(String, Option<crate::passthrough::SheetScan>)>,
 }
 
 impl Ctx<'_> {
@@ -67,10 +68,14 @@ pub fn find_rel<'r>(rels: &'r [Rel], kind: &str) -> Option<&'r Rel> {
 }
 
 pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
+    gridcraft_core::work::run_ready(read_xlsx_cooperative(bytes, &mut gridcraft_core::work::Uninterrupted))
+        .ok_or_else(|| IoError::Format("synchronous workbook parser yielded".into()))?
+}
+pub async fn read_xlsx_cooperative(bytes: &[u8], control: &mut impl gridcraft_core::work::WorkControl) -> Result<(Workbook, ReadReport), IoError> {
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
         pkg,
-        report: ReadReport::default(),
+        report: ReadReport { cached_results_complete: true, ..ReadReport::default() },
         sst: vec![],
         xf_map: vec![],
         dxfs: vec![],
@@ -82,6 +87,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        sheet_scan: None,
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -142,13 +148,23 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
     // Shared strings, streamed item by item.
     if let Some(r) = find_rel(&wb_rels, "sharedStrings").cloned() {
-        match cx.pkg.read(&r.target)? {
+        match cx.pkg.read_cooperative(&r.target, control).await? {
             Some(b) => {
                 let mut sst = Vec::new();
-                let res = xml::parse_streaming(&b, &["si"], &mut |si| {
-                    sst.push(Arc::from(xml::rich_text(&si)));
-                    Ok(())
-                });
+                let res = xml::parse_streaming_cooperative(
+                    &b,
+                    &["si"],
+                    &mut |si| {
+                        sst.push(Arc::from(xml::rich_text(&si)));
+                        Ok(())
+                    },
+                    control,
+                    gridcraft_core::work::WorkStage::SharedStrings,
+                )
+                .await;
+                if let Err(IoError::Cancelled(error)) = &res {
+                    return Err(IoError::Cancelled(*error));
+                }
                 if let Err(e) = res {
                     cx.warn(format!("shared strings are damaged ({e}); kept {} strings", sst.len()));
                 }
@@ -219,7 +235,14 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             continue;
         }
         let name = unique_name(&wb, &name, i);
-        let mut sheet = match crate::sheet_read::read_sheet(&mut cx, &rel.target, &name) {
+        let mut scope = gridcraft_core::work::ProgressScope {
+            control,
+            part: (i + 1) as u32,
+            parts: sheet_els.len() as u32,
+            sheet_name: Arc::from(name.as_str()),
+        };
+        let mut sheet = match crate::sheet_read::read_sheet_cooperative(&mut cx, &rel.target, &name, &mut scope).await {
+            Err(IoError::Cancelled(error)) => return Err(IoError::Cancelled(error)),
             Ok(s) => s,
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
             Err(e) => {

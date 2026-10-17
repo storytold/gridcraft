@@ -54,6 +54,8 @@ pub use xlsb::read_xlsb;
 /// Errors from reading or writing files.
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
+    #[error(transparent)]
+    Cancelled(#[from] gridcraft_core::work::WorkCancelled),
     #[error("the file is not a valid zip package: {0}")]
     Zip(String),
     #[error("the file contains invalid XML: {0}")]
@@ -67,6 +69,8 @@ pub enum IoError {
 /// What a lenient read skipped or repaired.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ReadReport {
+    /// True only when all imported formula results can be displayed without recalculation.
+    pub cached_results_complete: bool,
     pub warnings: Vec<String>,
 }
 
@@ -83,6 +87,10 @@ impl ReadReport {
 /// package relationships, so every main-part content type is accepted).
 pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     read::read_xlsx(bytes)
+}
+/// Cooperative reading. The caller chooses when checkpoints yield and whether to cancel.
+pub async fn read_xlsx_cooperative(bytes: &[u8], control: &mut impl gridcraft_core::work::WorkControl) -> Result<(Workbook, ReadReport), IoError> {
+    read::read_xlsx_cooperative(bytes, control).await
 }
 
 /// Which member of the SpreadsheetML family a package is saved as. Only the content type of the

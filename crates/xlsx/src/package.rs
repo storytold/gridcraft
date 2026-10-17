@@ -86,6 +86,40 @@ impl<'a> Package<'a> {
         Ok(Some(out))
     }
 
+    /// Decompress bounded chunks so browser callers can yield before allocating a whole large part.
+    pub async fn read_cooperative(&mut self, part: &str, control: &mut impl gridcraft_core::work::WorkControl) -> Result<Option<Vec<u8>>, IoError> {
+        use gridcraft_core::work::{WorkProgress, WorkStage};
+        let Some(&idx) = self.names.get(&normalize(part)) else { return Ok(None) };
+        let mut file = self.zip.by_index(idx).map_err(|e| IoError::Zip(format!("{part}: {e}")))?;
+        let total = file.size();
+        if total > MAX_PART {
+            return Err(IoError::TooLarge(format!("{part} expands to {total} bytes")));
+        }
+        let remaining = MAX_TOTAL.saturating_sub(self.total);
+        let limit = MAX_PART.min(remaining);
+        if total > limit {
+            return Err(IoError::TooLarge("package decompression limit exceeded".into()));
+        }
+        control.checkpoint(WorkProgress::new(WorkStage::Archive, 0, total)).await?;
+        // The declared size has passed both limits. Reserve once rather than repeatedly copying
+        // hundreds of megabytes as a large worksheet grows.
+        let mut output = Vec::with_capacity(total as usize);
+        let mut chunk = vec![0; 256 * 1024];
+        loop {
+            control.checkpoint(WorkProgress::new(WorkStage::Archive, output.len() as u64, total)).await?;
+            let count = file.read(&mut chunk).map_err(|e| IoError::Zip(format!("{part}: {e}")))?;
+            if count == 0 {
+                break;
+            }
+            if (output.len() as u64).saturating_add(count as u64) > limit {
+                return Err(IoError::TooLarge("package decompression limit exceeded".into()));
+            }
+            output.extend_from_slice(&chunk[..count]);
+        }
+        self.total = self.total.saturating_add(output.len() as u64);
+        Ok(Some(output))
+    }
+
     pub fn read_xml(&mut self, part: &str) -> Result<Option<El>, IoError> {
         match self.read(part)? {
             Some(b) => xml::parse(&b).map(Some).map_err(|e| prefix(part, e)),

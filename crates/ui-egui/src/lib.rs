@@ -189,6 +189,10 @@ pub struct Services {
     pub paste_text: Option<Box<dyn FnMut() -> Option<String>>>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Box<dyn Fn(&str, &[u8])>>,
+    /// Prepare an import without keeping the app's mutable Session borrowed across frames.
+    pub start_import: Option<StartImport>,
+    /// Reports actual inbox import completion, separately from web engine readiness.
+    pub opened: Option<Box<dyn Fn(&Result<Json, String>)>>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
     pub open_async: Option<Box<dyn Fn()>>,
     /// Files delivered asynchronously (name, bytes), opened on the next frame.
@@ -196,6 +200,25 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<Box<dyn Fn(&[u8])>>,
+}
+
+pub type StartImport = Box<dyn Fn(String, Option<std::sync::Arc<Vec<u8>>>, Json) -> ImportTask>;
+pub struct ImportTask {
+    pub receiver: std::sync::mpsc::Receiver<Result<gridcraft_engine::PreparedImport, String>>,
+    pub cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub progress: std::sync::Arc<std::sync::Mutex<gridcraft_engine::core::work::WorkProgress>>,
+}
+impl ImportTask {
+    pub fn channel() -> (Self, std::sync::mpsc::Sender<Result<gridcraft_engine::PreparedImport, String>>) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        (Self { receiver, cancelled: Default::default(), progress: Default::default() }, sender)
+    }
+}
+struct PendingImport {
+    task: ImportTask,
+    name: String,
+    bytes: Option<std::sync::Arc<Vec<u8>>>,
+    params: Json,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
@@ -223,6 +246,8 @@ pub struct SheetApp {
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
     pub services: Services,
+    pending_import: Option<PendingImport>,
+    queued_imports: std::collections::VecDeque<(String, Option<std::sync::Arc<Vec<u8>>>, Json)>,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per frame (drags need several frames).
@@ -279,6 +304,8 @@ impl SheetApp {
             toast: None,
             notice: None,
             services,
+            pending_import: None,
+            queued_imports: std::collections::VecDeque::new(),
             printing: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
@@ -340,6 +367,9 @@ impl SheetApp {
 
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        if self.is_importing() {
+            return Err("A workbook is opening; wait or cancel it first".into());
+        }
         let r = self.run_command(id, params);
         // This copy leaves the system clipboard alone: note what it holds, so Paste can tell
         // that GridCraft's copy is newer while that text is still there.
@@ -761,7 +791,75 @@ impl SheetApp {
         }
     }
 
+    pub fn is_importing(&self) -> bool {
+        self.pending_import.is_some()
+    }
+    fn begin_import(&mut self, name: String, bytes: Option<std::sync::Arc<Vec<u8>>>, params: Json) -> bool {
+        if self.services.start_import.is_none() {
+            return false;
+        }
+        if let Err(error) = self.commit_text_box_edit() {
+            self.message = Some(("GridCraft".into(), error));
+            return true;
+        }
+        let Some(start) = &self.services.start_import else { return false };
+        if self.pending_import.is_some() {
+            self.queued_imports.push_back((name, bytes, params));
+            return true;
+        }
+        if let Some(path) = params.get("path").and_then(Json::as_str)
+            && let Some(index) = self.session.documents().iter().position(|doc| doc.path.as_deref() == Some(path))
+        {
+            self.session.set_active(index);
+            return true;
+        }
+        let task = start(name.clone(), bytes.clone(), params.clone());
+        self.pending_import = Some(PendingImport { task, name, bytes, params });
+        true
+    }
+    fn poll_import(&mut self, ctx: &egui::Context) {
+        let Some(pending) = &self.pending_import else { return };
+        let result = match pending.task.receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("Workbook import worker stopped".into()),
+        };
+        let Some(pending) = self.pending_import.take() else { return };
+        let cancelled = pending.task.cancelled.load(std::sync::atomic::Ordering::Relaxed);
+        let result = if cancelled {
+            Err("Opening cancelled".into())
+        } else {
+            result.and_then(|prepared| self.session.finish_import(prepared).map_err(|e| e.to_string()))
+        };
+        if let Some(opened) = &self.services.opened {
+            opened(&result);
+        }
+        match result {
+            Ok(value) => self.after_open(pending.params.get("path").and_then(Json::as_str), &value),
+            Err(_) if cancelled => self.toast = Some(("Opening cancelled".into(), now_ms())),
+            Err(error) if error.contains(gridcraft_engine::io::PASSWORD_REQUIRED) => {
+                let mut params = pending.params;
+                if let Some(bytes) = pending.bytes {
+                    params = json!({"name":pending.name,"base64":gridcraft_engine::io::base64_encode(&bytes)});
+                }
+                self.open_dialog("openPassword", params);
+            }
+            Err(error) => self.message = Some(("GridCraft".into(), clean_error(&error))),
+        }
+        self.after_engine();
+        if cancelled {
+            self.queued_imports.clear();
+        }
+        if let Some((name, bytes, params)) = self.queued_imports.pop_front() {
+            self.begin_import(name, bytes, params);
+        }
+        ctx.request_repaint();
+    }
+
     pub fn open_path(&mut self, path: &str) {
+        if self.begin_import(path.to_string(), None, json!({"path":path})) {
+            return;
+        }
         match self.run("file.open", json!({"path": path})) {
             Ok(r) => self.after_open(Some(path), &r),
             // A password-protected workbook: ask for the password; the dialog opens it.
@@ -990,6 +1088,11 @@ impl SheetApp {
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        self.poll_import(ctx);
+        if self.is_importing() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(32));
+            return;
+        }
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
         self.ui.keytip_invoke = None;
@@ -1064,8 +1167,15 @@ impl SheetApp {
             .map(|i| std::mem::take(&mut *i.lock().unwrap_or_else(std::sync::PoisonError::into_inner)))
             .unwrap_or_default();
         for (name, bytes) in arrived {
-            let b64 = gridcraft_engine::io::base64_encode(&bytes);
-            match self.run("file.open", json!({"name": &name, "base64": &b64})) {
+            if self.services.start_import.is_some() {
+                self.begin_import(name, Some(std::sync::Arc::new(bytes)), json!({}));
+                continue;
+            }
+            let result = self.commit_text_box_edit().and_then(|()| self.session.open_bytes(&name, &bytes).map_err(|e| e.to_string()));
+            if let Some(opened) = &self.services.opened {
+                opened(&result);
+            }
+            match result {
                 // A file picked from File › Open (web) arrives here: show it, not the Backstage.
                 Ok(r) => {
                     self.backstage = None;
@@ -1073,7 +1183,7 @@ impl SheetApp {
                 }
                 Err(e) if e.contains(gridcraft_engine::io::PASSWORD_REQUIRED) => {
                     self.backstage = None;
-                    self.open_dialog("openPassword", json!({"name": name, "base64": b64}));
+                    self.open_dialog("openPassword", json!({"name": name, "base64": gridcraft_engine::io::base64_encode(&bytes)}));
                 }
                 Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
             }
@@ -1092,6 +1202,29 @@ impl SheetApp {
 
     /// Lays out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        if let Some(pending) = &self.pending_import {
+            let progress = pending.task.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+            let background = theme::Tokens::get(ui.ctx()).grid_bg;
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(background)).show(ui, |_| {});
+            egui::Window::new("Opening workbook").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO).show(
+                ui.ctx(),
+                |ui| {
+                    ui.label(format!("{:?}", progress.stage));
+                    if let Some(name) = &progress.sheet_name {
+                        ui.label(format!("Sheet {} / {}: {name}", progress.part, progress.parts));
+                    }
+                    if progress.total > 0 {
+                        ui.add(egui::ProgressBar::new((progress.completed as f64 / progress.total as f64).clamp(0.0, 1.0) as f32).show_percentage());
+                    } else {
+                        ui.spinner();
+                    }
+                    if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        pending.task.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                },
+            );
+            return;
+        }
         let ctx = ui.ctx().clone();
         self.poll_printing(&ctx);
         if !self.fonts_ready || self.fonts_rebind {
@@ -1258,4 +1391,12 @@ pub fn now_ms() -> f64 {
 
 pub fn cell(r: u32, c: u32) -> CellRef {
     CellRef::new(r, c)
+}
+
+impl Drop for SheetApp {
+    fn drop(&mut self) {
+        if let Some(pending) = &self.pending_import {
+            pending.task.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }

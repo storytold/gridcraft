@@ -43,7 +43,7 @@ pub fn start() {
                     } else if q.contains("sample") {
                         let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
                     }
-                    let mut services = services(inbox.clone(), cc.egui_ctx.clone());
+                    let mut services = services(inbox.clone(), cc.egui_ctx.clone(), app_bridge.clone());
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
@@ -127,10 +127,33 @@ impl eframe::App for WebShell {
     }
 }
 
-fn services(inbox: Inbox, ctx: egui::Context) -> Services {
+fn services(inbox: Inbox, ctx: egui::Context, bridge: Option<crate::host::Bridge>) -> Services {
+    let import_ctx = ctx.clone();
     let open_inbox = inbox.clone();
     let picture_ctx = ctx.clone();
     Services {
+        start_import: Some(Box::new(move |name, bytes, params| {
+            let (task, sender) = gridcraft_ui_egui::ImportTask::channel();
+            let mut control = BrowserWork {
+                cancelled: task.cancelled.clone(),
+                progress: task.progress.clone(),
+                ctx: import_ctx.clone(),
+                bridge: bridge.clone(),
+                last_yield: 0.0,
+            };
+            if let Some(bridge) = &bridge {
+                bridge.bind_import(task.cancelled.clone());
+            }
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = match bytes {
+                    Some(bytes) => gridcraft_engine::cmd::file::prepare_open(&name, &bytes, &params, &mut control).await.map_err(|e| e.to_string()),
+                    None => Err("No file bytes supplied".into()),
+                };
+                let _ = sender.send(result);
+                control.ctx.request_repaint();
+            });
+            task
+        })),
         copy_html: Some(Box::new(copy_html)),
         open_async: Some(Box::new(move || {
             let inbox = open_inbox.clone();
@@ -404,4 +427,49 @@ fn trigger_anchor_download(window: &web_sys::Window, name: &str, bytes: &[u8]) -
     });
     window.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 10_000).map_err(js)?;
     Ok(())
+}
+
+/// Yield to browser tasks (including painting and cancellation), not just the microtask queue.
+async fn browser_turn() -> Result<(), gridcraft_core::work::WorkCancelled> {
+    let channel = web_sys::MessageChannel::new().map_err(|_| gridcraft_core::work::WorkCancelled)?;
+    let promise = js_sys::Promise::new(&mut |resolve, reject| {
+        channel.port1().set_onmessage(Some(&resolve));
+        if let Err(error) = channel.port2().post_message(&JsValue::NULL) {
+            let _ = reject.call1(&JsValue::NULL, &error);
+        }
+    });
+    let result = wasm_bindgen_futures::JsFuture::from(promise).await;
+    channel.port1().set_onmessage(None);
+    channel.port1().close();
+    channel.port2().close();
+    result.map(|_| ()).map_err(|_| gridcraft_core::work::WorkCancelled)
+}
+struct BrowserWork {
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    progress: std::sync::Arc<std::sync::Mutex<gridcraft_core::work::WorkProgress>>,
+    ctx: egui::Context,
+    bridge: Option<crate::host::Bridge>,
+    last_yield: f64,
+}
+impl gridcraft_core::work::WorkControl for BrowserWork {
+    async fn checkpoint(&mut self, progress: gridcraft_core::work::WorkProgress) -> Result<(), gridcraft_core::work::WorkCancelled> {
+        use std::sync::atomic::Ordering;
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Err(gridcraft_core::work::WorkCancelled);
+        }
+        let now = js_sys::Date::now();
+        if now - self.last_yield >= 8.0 {
+            *self.progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = progress.clone();
+            if let Some(bridge) = &self.bridge {
+                bridge.post_progress(progress);
+            }
+            self.ctx.request_repaint();
+            browser_turn().await?;
+            self.last_yield = js_sys::Date::now();
+            if self.cancelled.load(Ordering::Relaxed) {
+                return Err(gridcraft_core::work::WorkCancelled);
+            }
+        }
+        Ok(())
+    }
 }

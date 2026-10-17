@@ -486,9 +486,12 @@ impl KeptReader {
     }
 
     fn sheet_elements(&mut self, cx: &mut Ctx<'_>, part: &str, name: &str, rels: &[PreservedRel], p: &mut Preserved, seen: &mut HashSet<String>) {
-        let scan = match cx.pkg.read(part) {
-            Ok(Some(bytes)) => scan_sheet(&bytes),
-            _ => None,
+        let scan = match cx.sheet_scan.take().filter(|(name, _)| name == part) {
+            Some((_, scan)) => scan,
+            None => match cx.pkg.read(part) {
+                Ok(Some(bytes)) => scan_sheet(&bytes),
+                _ => None,
+            },
         };
         let Some(scan) = scan else {
             cx.warn(format!("sheet \"{name}\": controls and embedded objects could not be read and were dropped"));
@@ -577,7 +580,7 @@ impl KeptReader {
 }
 
 /// What a sheet part holds for pass-through.
-struct SheetScan {
+pub(crate) struct SheetScan {
     /// (slot, XML with the namespace declarations it needs).
     fragments: Vec<(String, String)>,
     legacy_drawing: Option<String>,
@@ -588,62 +591,100 @@ struct SheetScan {
 /// Finds the sheet's `<picture>`, `<oleObjects>`, `<controls>` (also inside
 /// `<mc:AlternateContent>`) and the `<legacyDrawing>` id. `None` when the XML is damaged.
 fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
-    let data = xml::to_utf8(bytes);
-    let text = std::str::from_utf8(&data).ok()?;
-    let mut reader = Reader::from_str(text);
-    let mut decls: Vec<(String, String)> = vec![];
-    let mut out = SheetScan { fragments: vec![], legacy_drawing: None, page_setup: None };
-    let mut in_root = false;
-    loop {
-        let start = usize::try_from(reader.buffer_position()).ok()?;
-        match reader.read_event().ok()? {
-            Event::Eof => break,
-            Event::Start(e) if !in_root => {
-                in_root = true;
-                for a in e.attributes().with_checks(false).flatten() {
-                    if let Some(p) = a.key.as_ref().strip_prefix(b"xmlns:")
-                        && let (Ok(p), Ok(v)) = (std::str::from_utf8(p), std::str::from_utf8(&a.value))
-                        && !v.contains('"')
+    gridcraft_core::work::run_ready(scan_sheet_cooperative(bytes, &mut gridcraft_core::work::Uninterrupted)).and_then(Result::ok).flatten()
+}
+pub(crate) async fn scan_sheet_cooperative(
+    bytes: &[u8],
+    control: &mut impl gridcraft_core::work::WorkControl,
+) -> Result<Option<SheetScan>, crate::IoError> {
+    use gridcraft_core::work::{WorkProgress, WorkStage};
+    let mut cancelled = false;
+    let result = async {
+        let mut events = 0_u64;
+        let data = xml::to_utf8(bytes);
+        let text = std::str::from_utf8(&data).ok()?;
+        let mut reader = Reader::from_str(text);
+        let mut decls: Vec<(String, String)> = vec![];
+        let mut out = SheetScan { fragments: vec![], legacy_drawing: None, page_setup: None };
+        let mut in_root = false;
+        loop {
+            events += 1;
+            if events.is_multiple_of(2048)
+                && control.checkpoint(WorkProgress::new(WorkStage::Worksheet, reader.buffer_position(), bytes.len() as u64)).await.is_err()
+            {
+                cancelled = true;
+                return None;
+            }
+            let start = usize::try_from(reader.buffer_position()).ok()?;
+            match reader.read_event().ok()? {
+                Event::Eof => break,
+                Event::Start(e) if !in_root => {
+                    in_root = true;
+                    for a in e.attributes().with_checks(false).flatten() {
+                        if let Some(p) = a.key.as_ref().strip_prefix(b"xmlns:")
+                            && let (Ok(p), Ok(v)) = (std::str::from_utf8(p), std::str::from_utf8(&a.value))
+                            && !v.contains('"')
+                        {
+                            decls.push((p.to_string(), v.to_string()));
+                        }
+                    }
+                }
+                Event::Start(e) => {
+                    let local = e.local_name().as_ref().to_vec();
+                    match local.as_slice() {
+                        b"pageSetup" => out.page_setup = rel_id_attr(&e),
+                        b"legacyDrawing" => out.legacy_drawing = rel_id_attr(&e),
+                        _ => {}
+                    }
+                    let mut depth = 1_u32;
+                    while depth > 0 {
+                        events += 1;
+                        if events.is_multiple_of(2048)
+                            && control
+                                .checkpoint(WorkProgress::new(WorkStage::Worksheet, reader.buffer_position(), bytes.len() as u64))
+                                .await
+                                .is_err()
+                        {
+                            cancelled = true;
+                            return None;
+                        }
+                        match reader.read_event().ok()? {
+                            Event::Start(_) => depth = depth.saturating_add(1),
+                            Event::End(_) => depth = depth.saturating_sub(1),
+                            Event::Eof => return None,
+                            _ => {}
+                        }
+                    }
+                    let end = usize::try_from(reader.buffer_position()).ok()?;
+                    let wanted = matches!(local.as_slice(), b"picture" | b"oleObjects" | b"controls" | b"AlternateContent");
+                    if wanted && end.saturating_sub(start) <= MAX_FRAGMENT {
+                        let frag = text.get(start..end)?;
+                        push_fragment(&mut out, frag, &local, &decls);
+                    }
+                }
+                Event::Empty(e) if in_root => {
+                    let local = e.local_name().as_ref().to_vec();
+                    if local == b"legacyDrawing" || local == b"pageSetup" {
+                        let id = rel_id_attr(&e);
+                        if local == b"pageSetup" {
+                            out.page_setup = id;
+                        } else {
+                            out.legacy_drawing = id;
+                        }
+                    } else if local == b"picture"
+                        && let Some(frag) = text.get(start..usize::try_from(reader.buffer_position()).ok()?)
                     {
-                        decls.push((p.to_string(), v.to_string()));
+                        push_fragment(&mut out, frag, &local, &decls);
                     }
                 }
+                Event::End(_) => break,
+                _ => {}
             }
-            Event::Start(e) => {
-                let local = e.local_name().as_ref().to_vec();
-                match local.as_slice() {
-                    b"pageSetup" => out.page_setup = rel_id_attr(&e),
-                    b"legacyDrawing" => out.legacy_drawing = rel_id_attr(&e),
-                    _ => {}
-                }
-                reader.read_to_end(e.name()).ok()?;
-                let end = usize::try_from(reader.buffer_position()).ok()?;
-                let wanted = matches!(local.as_slice(), b"picture" | b"oleObjects" | b"controls" | b"AlternateContent");
-                if wanted && end.saturating_sub(start) <= MAX_FRAGMENT {
-                    let frag = text.get(start..end)?;
-                    push_fragment(&mut out, frag, &local, &decls);
-                }
-            }
-            Event::Empty(e) if in_root => {
-                let local = e.local_name().as_ref().to_vec();
-                if local == b"legacyDrawing" || local == b"pageSetup" {
-                    let id = rel_id_attr(&e);
-                    if local == b"pageSetup" {
-                        out.page_setup = id;
-                    } else {
-                        out.legacy_drawing = id;
-                    }
-                } else if local == b"picture"
-                    && let Some(frag) = text.get(start..usize::try_from(reader.buffer_position()).ok()?)
-                {
-                    push_fragment(&mut out, frag, &local, &decls);
-                }
-            }
-            Event::End(_) => break,
-            _ => {}
         }
+        Some(out)
     }
-    Some(out)
+    .await;
+    if cancelled { Err(crate::IoError::Cancelled(gridcraft_core::work::WorkCancelled)) } else { Ok(result) }
 }
 
 /// The `r:id` of an element (an `id` attribute with a namespace prefix).

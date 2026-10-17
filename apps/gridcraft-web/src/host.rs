@@ -37,6 +37,7 @@ pub struct Bridge {
     saved: Rc<RefCell<Vec<String>>>,
     /// The unsaved-changes state last reported to the parent.
     reported: Rc<Cell<Option<bool>>>,
+    importing: Rc<RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>>,
 }
 
 impl Bridge {
@@ -48,13 +49,24 @@ impl Bridge {
             return None;
         }
         let origin = window.location().origin().ok()?;
-        Some(Self { window, parent, origin, saved: Rc::default(), reported: Rc::default() })
+        Some(Self { window, parent, origin, saved: Rc::default(), reported: Rc::default(), importing: Rc::default() })
     }
 
     /// Send saved and exported files to the parent instead of downloading them, and hear files
     /// from it.
     pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
         self.listen(inbox, ctx);
+        let completion = self.clone();
+        services.opened = Some(Box::new(move |result| match result {
+            Ok(value) => {
+                let cached = value.get("cachedCalculation").and_then(serde_json::Value::as_bool).unwrap_or(false);
+                completion.send(&[("type", "gridcraft:loaded".into()), ("cachedCalculation", cached.into())]);
+            }
+            Err(error) if error == "Opening cancelled" => {
+                completion.send(&[("type", "gridcraft:cancelled".into())]);
+            }
+            Err(error) => completion.post_failed(error),
+        }));
         let bridge = self.clone();
         services.download = Some(Box::new(move |name: &str, bytes: &[u8]| {
             if let Err(e) = bridge.post_save(name, bytes) {
@@ -72,7 +84,29 @@ impl Bridge {
     }
 
     pub fn post_ready(&self) {
-        self.send(&[("type", "gridcraft:ready".into()), ("version", env!("CARGO_PKG_VERSION").into())]);
+        self.send(&[
+            ("type", "gridcraft:ready".into()),
+            ("version", env!("CARGO_PKG_VERSION").into()),
+            ("loadedEvent", true.into()),
+            ("cooperativeImport", true.into()),
+        ]);
+    }
+
+    pub fn bind_import(&self, cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        if let Some(previous) = self.importing.borrow_mut().replace(cancelled) {
+            previous.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    pub fn post_progress(&self, progress: gridcraft_core::work::WorkProgress) {
+        self.send(&[
+            ("type", "gridcraft:progress".into()),
+            ("stage", format!("{:?}", progress.stage).into()),
+            ("completed", (progress.completed as f64).into()),
+            ("total", (progress.total as f64).into()),
+            ("part", progress.part.into()),
+            ("parts", progress.parts.into()),
+            ("sheetName", progress.sheet_name.as_deref().unwrap_or("").into()),
+        ]);
     }
 
     pub fn post_failed(&self, error: &str) {
@@ -112,11 +146,18 @@ impl Bridge {
     fn listen(&self, inbox: Inbox, ctx: egui::Context) {
         let parent = self.parent.clone();
         let origin = self.origin.clone();
+        let importing = self.importing.clone();
         let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
             if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
                 return;
             }
             let data = event.data();
+            if string(&data, "type").as_deref() == Some("gridcraft:cancel") {
+                if let Some(cancelled) = importing.borrow().as_ref() {
+                    cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                return;
+            }
             if string(&data, "type").as_deref() != Some("gridcraft:open") {
                 return;
             }

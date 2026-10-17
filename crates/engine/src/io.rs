@@ -76,17 +76,55 @@ pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>
     Ok((wb, warnings))
 }
 
+/// Cooperatively open ordinary XLSX packages; native callers can also run legacy readers on a worker.
+pub async fn open_bytes_cooperative(
+    name: &str,
+    bytes: &[u8],
+    password: Option<&str>,
+    control: &mut impl gridcraft_core::work::WorkControl,
+) -> Result<(Workbook, Vec<String>)> {
+    if gridcraft_xlsx::sniff(bytes) != gridcraft_xlsx::Format::Xlsx {
+        return open_bytes_with_password(name, bytes, password);
+    }
+    let (mut wb, mut report) = gridcraft_xlsx::read_xlsx_cooperative(bytes, control).await.map_err(|error| match error {
+        gridcraft_xlsx::IoError::Cancelled(cancelled) => EngineError::Cancelled(cancelled),
+        other => EngineError::Other(format!("We can't open '{name}': {other}")),
+    })?;
+    if bytes.len() >= 20 * 1024 * 1024 && !report.cached_results_complete {
+        report.warnings.push("Saved formula results are incomplete; an initial recalculation is required.".into());
+    }
+    fit_imported_rows_cooperative(&mut wb, control).await?;
+    Ok((wb, report.warnings))
+}
+
 /// Excel auto-fits rows to their tallest font when opening a file: rows without a user-set
 /// height grow to fit their content. Rows the file made taller keep their height — our
 /// line-height estimate can differ from Excel's, and shrinking files that already look
 /// right would be a visible regression. Custom-height rows are left alone entirely.
 fn fit_imported_rows(wb: &mut Workbook) {
+    let _ = gridcraft_core::work::run_ready(fit_imported_rows_cooperative(wb, &mut gridcraft_core::work::Uninterrupted));
+}
+async fn fit_imported_rows_cooperative(wb: &mut Workbook, control: &mut impl gridcraft_core::work::WorkControl) -> Result<()> {
+    use gridcraft_core::work::{WorkControl as _, WorkProgress, WorkStage};
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheet(si) else { continue };
-        let mut rows: Vec<u32> = sh.cells.iter().map(|(c, _)| c.row).collect();
-        rows.sort_unstable();
-        rows.dedup();
-        for row in rows {
+        let sheet_name: std::sync::Arc<str> = std::sync::Arc::from(sh.name.as_str());
+        let mut scope = gridcraft_core::work::ProgressScope { control, part: si as u32 + 1, parts: wb.sheets.len() as u32, sheet_name };
+        // CellStore is row-major: retain one index per row rather than per cell.
+        let mut rows = Vec::new();
+        for (i, (c, _)) in sh.cells.iter().enumerate() {
+            if i.is_multiple_of(8192) {
+                scope.checkpoint(WorkProgress::new(WorkStage::RowHeights, i as u64, sh.cells.len() as u64)).await?;
+            }
+            if rows.last().copied() != Some(c.row) {
+                rows.push(c.row);
+            }
+        }
+        let row_count = rows.len();
+        for (i, row) in rows.into_iter().enumerate() {
+            if i.is_multiple_of(128) {
+                scope.checkpoint(WorkProgress::new(WorkStage::RowHeights, i as u64, row_count as u64)).await?;
+            }
             let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
             crate::cmd::auto_row_height(wb, si, row);
             let Some(before) = before else { continue };
@@ -98,6 +136,7 @@ fn fit_imported_rows(wb: &mut Workbook) {
             }
         }
     }
+    Ok(())
 }
 
 /// What to tell the user when an encrypted workbook can't be decrypted. Never quotes the password.
@@ -140,7 +179,10 @@ fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     }
     // Text named `.xlsx` is read as text.
     if sniffed == gridcraft_xlsx::Format::Xlsx || (kind == Some(FileKind::Xlsx) && sniffed != gridcraft_xlsx::Format::Csv) {
-        let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
+        let (wb, mut report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
+        if bytes.len() >= 20 * 1024 * 1024 && !report.cached_results_complete {
+            report.warnings.push("Saved formula results are incomplete; an initial recalculation is required.".into());
+        }
         return Ok((wb, report.warnings));
     }
     match kind {

@@ -30,6 +30,7 @@ use gridcraft_model::Workbook;
 use serde::Serialize;
 use serde_json::Value as Json;
 
+pub use cmd::file::PreparedImport;
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command, register_test_command};
 pub use gridcraft_calc as calc;
 pub use gridcraft_core as core;
@@ -40,6 +41,8 @@ pub use selection::Selection;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
+    #[error(transparent)]
+    Cancelled(#[from] gridcraft_core::work::WorkCancelled),
     #[error("unknown command `{0}`")]
     UnknownCommand(String),
     #[error("command `{0}` is not available right now: {1}")]
@@ -118,9 +121,36 @@ static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 const UNDO_LIMIT: usize = 100;
 
 impl DocState {
-    pub fn new(mut wb: Workbook, path: Option<String>, title: String) -> DocState {
+    pub fn new(wb: Workbook, path: Option<String>, title: String) -> DocState {
+        Self::with_calculation(wb, path, title, false)
+    }
+    /// Imported large workbooks initially retain the producer's saved values.
+    /// The complete dependency graph is still built, so edits recalculate dependents normally.
+    pub fn with_calculation(mut wb: Workbook, path: Option<String>, title: String, cached: bool) -> DocState {
         let mut calc = Calc::new();
-        calc.recalc_all(&mut wb);
+        if cached {
+            calc.rebuild(&wb);
+        } else {
+            calc.recalc_all(&mut wb);
+        }
+        Self::from_calculated(wb, path, title, calc)
+    }
+    pub async fn with_calculation_cooperative(
+        mut wb: Workbook,
+        path: Option<String>,
+        title: String,
+        cached: bool,
+        control: &mut impl gridcraft_core::work::WorkControl,
+    ) -> Result<DocState> {
+        let mut calc = Calc::new();
+        if cached {
+            calc.rebuild_cooperative(&wb, control).await?;
+        } else {
+            calc.recalc_all_cooperative(&mut wb, control).await?;
+        }
+        Ok(Self::from_calculated(wb, path, title, calc))
+    }
+    fn from_calculated(wb: Workbook, path: Option<String>, title: String, calc: Calc) -> DocState {
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
         DocState {
@@ -360,6 +390,20 @@ impl Session {
         result
     }
 
+    /// Open an inbox file without converting its bytes to a JSON string. Import is transactional:
+    /// the current document is not replaced until the new one is fully constructed.
+    pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Json> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cmd::file::open_bytes(self, name, bytes, &serde_json::json!({})))) {
+            Ok(result) => result,
+            Err(_) => Err(EngineError::Internal("file.open".into(), "Workbook import failed".into())),
+        }
+    }
+
+    /// Publish a fully prepared import in one synchronous, non-yielding step.
+    pub fn finish_import(&mut self, prepared: PreparedImport) -> Result<Json> {
+        cmd::file::finish_open(self, prepared)
+    }
+
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {
         self.execute(id, params).map_err(|e| e.to_string())
     }
@@ -399,3 +443,6 @@ pub fn cell(r: u32, c: u32) -> CellRef {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod large_workbook_tests;
