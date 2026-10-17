@@ -71,3 +71,18 @@ relative steps keep each notch feeling the same, and the doublings land on 25, 5
 400%. The status bar's Zoom In / Zoom Out buttons and Ctrl+Alt+= / Ctrl+Alt+- keep their 10%
 steps, so the wheel and the buttons now step differently. Whether they should share one ladder
 (this one, Excel's, or another) is left to the maintainers.
+
+## Increase/Decrease Font Size step along the Font Size list, and by one point below 8
+
+Home › Increase Font Size and Decrease Font Size (Ctrl+Shift+> / <) move the active cell's size to
+the next step on `SIZES` in `cmd/format.rs`: 1 to 8 one point at a time, then the Font Size list
+8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72. Neither goes past either end:
+Increase at 72 and Decrease at 1 leave the size as it is. A size off the list steps to its
+neighbour (10.5 → 11 or 10, 7.5 → 8 or 7), and a size typed above 72 steps down to 72. Before,
+Decrease jumped from 8 straight to 1 and Increase from 1 to 8, the shortcut skipped 22 and 26, and
+Increase went on past 72 to 96 and 409.
+
+Excel (observed: Microsoft 365, Windows) uses only the list: Increase stops at 72 and Decrease
+stops at 8, so text can't shrink to an unreadable size by accident; smaller sizes are typed into
+the Font Size box. The steps from 8 down to 1 are GridCraft's own; whether to keep them or stop at
+8 like Excel is left to the maintainers.
