@@ -1,5 +1,6 @@
 //! Original images and hand-written package metadata independent of the writer.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use gridcraft_core::{CellError, CellRef, RangeRef, Value};
@@ -269,4 +270,110 @@ fn picture_metadata_limits_and_relationship_read_errors_do_not_block_workbooks()
         assert_eq!(sh.value(at("C3")), Value::Number(42.0));
         assert!(report.warnings.iter().any(|w| w.contains("cell-picture data could not be read")), "{:?}", report.warnings);
     }
+}
+
+fn sheet_cell<'a>(sheet: &'a crate::xml::El, address: &str) -> &'a crate::xml::El {
+    sheet.child("sheetData").unwrap().kids("row").flat_map(|row| row.kids("c")).find(|c| c.attr("r") == Some(address)).unwrap()
+}
+
+/// #SPILL! and #CALC! (constants, as pasted values, and cached formula results) are saved the
+/// way Excel saves them: `#VALUE!` plus value metadata pointing at an `_error` rich value.
+#[test]
+fn newer_errors_are_saved_as_error_rich_values_and_read_back() {
+    for with_picture in [false, true] {
+        let mut wb = Workbook::new();
+        let s = wb.sheet_mut(0).unwrap();
+        s.set_value(at("A1"), Value::Error(CellError::Spill));
+        s.set_value(at("A2"), Value::Error(CellError::Calc));
+        s.set_value(at("A3"), Value::Error(CellError::Spill));
+        s.set_value(at("A4"), Value::Error(CellError::NA));
+        s.cells.set(at("C1"), Cell { value: Value::Error(CellError::Spill), ..Cell::formula(Formula::new("SEQUENCE(2)")) });
+        s.cells.set(at("C2"), Cell { value: Value::Error(CellError::Calc), ..Cell::formula(Formula::new("FILTER(A1:A3,A1:A3>5)")) });
+        if with_picture {
+            s.set_picture(at("E5"), Arc::new(picture(png(), "image/png", "green")));
+        }
+        let bytes = write_xlsx(&wb).unwrap();
+        let mut package = Package::open(&bytes).unwrap();
+        let sheet = package.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+        let mut vms = HashMap::new();
+        for (address, kind) in [("A1", "spill"), ("A2", "calc"), ("A3", "spill"), ("C1", "spill"), ("C2", "calc")] {
+            let cell = sheet_cell(&sheet, address);
+            assert_eq!(cell.attr("t"), Some("e"), "{address}");
+            assert_eq!(cell.child("v").unwrap().text, "#VALUE!", "{address}");
+            let vm = cell.attr("vm").unwrap().to_string();
+            assert_eq!(vms.entry(kind).or_insert_with(|| vm.clone()), &vm, "one rich value per kind");
+        }
+        assert_ne!(vms["spill"], vms["calc"]);
+        assert_eq!(sheet_cell(&sheet, "A4").attr("vm"), None);
+        assert_eq!(sheet_cell(&sheet, "A4").child("v").unwrap().text, "#N/A");
+        let structures = package.read_xml("xl/richData/rdrichvaluestructure.xml").unwrap().unwrap();
+        let error = structures.kids("s").position(|s| s.attr("t") == Some("_error")).unwrap();
+        let data = package.read_xml("xl/richData/rdrichvalue.xml").unwrap().unwrap();
+        let types: Vec<_> =
+            data.kids("rv").filter(|rv| rv.attr_u32("s") == Some(error as u32)).map(|rv| rv.child("v").unwrap().text.clone()).collect();
+        assert_eq!(types, ["8", "13"], "errorType is ERROR.TYPE minus one");
+        // Excel 16 refuses the whole file without `coerce` or with upper-case extension URIs.
+        let metadata = package.read_xml("xl/metadata.xml").unwrap().unwrap();
+        let rich_type = metadata.child("metadataTypes").unwrap().kids("metadataType").find(|t| t.attr("name") == Some("XLRICHVALUE")).unwrap();
+        assert_eq!(rich_type.attr("coerce"), Some("1"));
+        let mut uris = vec![];
+        for future in metadata.kids("futureMetadata") {
+            uris.extend(future.kids("bk").filter_map(|bk| bk.child("extLst")?.child("ext")?.attr("uri").map(str::to_string)));
+        }
+        assert!(!uris.is_empty() && uris.iter().all(|uri| *uri == uri.to_ascii_lowercase()), "{uris:?}");
+        let rels = package.rels("xl/workbook.xml").unwrap();
+        assert_eq!(rels.iter().any(|r| r.kind == "richValueRel"), with_picture);
+        assert_eq!(package.read_xml("xl/richData/richValueRel.xml").unwrap().is_some(), with_picture);
+
+        let (loaded, report) = read_xlsx(&bytes).unwrap();
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        let sh = loaded.sheet(0).unwrap();
+        for (address, error) in [
+            ("A1", CellError::Spill),
+            ("A2", CellError::Calc),
+            ("A3", CellError::Spill),
+            ("A4", CellError::NA),
+            ("C1", CellError::Spill),
+            ("C2", CellError::Calc),
+        ] {
+            assert_eq!(sh.value(at(address)), Value::Error(error), "{address}");
+        }
+        assert_eq!(sh.cells.get(at("C2")).unwrap().formula.as_ref().unwrap().text, "FILTER(A1:A3,A1:A3>5)");
+        assert_eq!(sh.cell_pictures.contains_key(&at("E5")), with_picture);
+    }
+}
+
+/// An Excel-shaped package: no image relationships, Excel's 4-key `_error` structure for a
+/// blocked spill and 2-key one for #CALC!, and an error kind GridCraft does not model.
+#[test]
+fn reads_error_rich_values_without_image_relationships() {
+    let rels = r#"<Relationship Id="m" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata" Target="metadata.xml"/><Relationship Id="v" Type="http://schemas.microsoft.com/office/2017/06/relationships/rdRichValue" Target="richData/rdrichvalue.xml"/><Relationship Id="s" Type="http://schemas.microsoft.com/office/2017/06/relationships/rdRichValueStructure" Target="richData/rdrichvaluestructure.xml"/>"#;
+    let future: String =
+        (0..3).map(|i| format!(r#"<bk><extLst><ext uri="{{3e2802c4-a4d2-4d8b-9148-e3be6c30e623}}"><x:rvb i="{i}"/></ext></extLst></bk>"#)).collect();
+    let metadata = format!(
+        r#"<metadata xmlns:x="http://schemas.microsoft.com/office/spreadsheetml/2017/richdata"><metadataTypes count="2"><metadataType name="XLDAPR"/><metadataType name="XLRICHVALUE"/></metadataTypes><futureMetadata name="XLDAPR" count="1"><bk/></futureMetadata><futureMetadata name="XLRICHVALUE" count="3">{future}</futureMetadata><cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata><valueMetadata count="3"><bk><rc t="2" v="0"/></bk><bk><rc t="2" v="1"/></bk><bk><rc t="2" v="2"/></bk></valueMetadata></metadata>"#
+    );
+    let values = r#"<rvData count="3"><rv s="0"><v>0</v><v>8</v><v>1</v><v>1</v></rv><rv s="1"><v>13</v><v>24</v></rv><rv s="1"><v>12</v><v>0</v></rv></rvData>"#;
+    let structures = r#"<rvStructures count="2"><s t="_error"><k n="colOffset" t="i"/><k n="errorType" t="i"/><k n="rwOffset" t="i"/><k n="subType" t="i"/></s><s t="_error"><k n="errorType" t="i"/><k n="subType" t="i"/></s></rvStructures>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1" t="e" vm="1"><v>#VALUE!</v></c><c r="B1" t="e" cm="1" vm="1"><f t="array" ref="B1">_xlfn.SEQUENCE(2)</f><v>#VALUE!</v></c><c r="C1" t="e" vm="2"><v>#VALUE!</v></c><c r="D1" t="e" vm="3"><v>#VALUE!</v></c></row><row r="2"><c r="B2" t="s"><v>0</v></c></row></sheetData>"#;
+    let bytes = super::minimal(
+        body,
+        &[
+            ("xl/metadata.xml", &metadata),
+            ("xl/richData/rdrichvalue.xml", values),
+            ("xl/richData/rdrichvaluestructure.xml", structures),
+            ("xl/sharedStrings.xml", r#"<sst><si><t>x</t></si></sst>"#),
+        ],
+        &format!(
+            r#"{rels}<Relationship Id="t" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>"#
+        ),
+        "",
+    );
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.value(at("A1")), Value::Error(CellError::Spill));
+    assert_eq!(sh.cells.get(at("B1")).unwrap().value, Value::Error(CellError::Spill));
+    assert_eq!(sh.value(at("C1")), Value::Error(CellError::Calc));
+    // #FIELD! (errorType 12) has no GridCraft kind: the cached #VALUE! stays.
+    assert_eq!(sh.value(at("D1")), Value::Error(CellError::Value));
 }

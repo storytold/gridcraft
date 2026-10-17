@@ -20,6 +20,17 @@ not interpreted as ink. This does not implement Office InkML or fix inserted ico
 Command and package tests cover repeated saves and unrelated cell edits; external Excel rendering
 and repair-free opening remain unverified.
 
+Error values: `#SPILL!` and `#CALC!` (formula results, and constants pasted as values) are saved
+as Excel saves them: a cached `#VALUE!` whose value metadata (`vm`) points at an `_error` rich
+value, `errorType` being `ERROR.TYPE` minus one (8 and 13). They read back as the same error,
+from GridCraft's files and from Excel's (which add sub-types and spill offsets we ignore). Excel's
+other newer errors (`#FIELD!` 12, and `#CONNECT!`, `#BLOCKED!`, `#UNKNOWN!`, `#BUSY!`,
+`#PYTHON!`) have no GridCraft kind and read as `#VALUE!`. Typed `#SPILL!`/`#CALC!` stay text, as
+in Excel (ft-3ir.10.25). The rich-value metadata type now carries `coerce="1"` and lower-case
+extension URIs: without them Excel 16.0 refused the whole file, cell pictures included. Checked
+in Excel 16.0 (build 20430) over COM: constants, cached formula results, with and without cell
+pictures, reopen with the same errors (`ERROR.TYPE` 9 and 14).
+
 | Format | Excel | GridCraft read | GridCraft write | Fidelity / notes | Tests |
 |---|---|---|---|---|---|
 | `.xlsx` Excel Workbook (transitional) | R/W, native | yes | yes | Cells, shared/array/dynamic formulas, styles, themes, merges, CF, validation, tables, comments and notes, hyperlinks, names, freeze panes, outline, print settings, pictures, shapes, charts (simplified, see [chart-parity.md](chart-parity.md)), sparklines, PivotTables (caches and tables), protection, calc settings. **Kept unchanged on save (pass-through, `passthrough.rs`):** custom document properties, ribbon customisation and add-in task panes, custom XML, links to external workbooks (never followed or refreshed), data connections, sheet query tables, printer settings (#324), form controls, ActiveX controls, OLE objects and sheet backgrounds (with their VML shapes), and chart sheets (#727: the sheet, drawing, chart, style and colour parts are written back unchanged in their place, and left out when a sheet they plot was deleted or renamed or a worksheet took their name; they can't be edited or created); dropped when their sheet is deleted or their parts point at content GridCraft rewrites. **Not preserved:** slicers and slicer caches, timelines, data model, query tables attached to tables, sheet and workbook `extLst` entries we don't model, chart details; Strict Open XML files keep nothing. Never checked in Excel across a corpus: repair prompts unknown. 100 MB files fail (#175) | `roundtrip.rs`, `fixtures.rs`, `malformed.rs`, `pivot_tests.rs` |
@@ -86,6 +97,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
+| 2026-10-15 | minor | XLSX: `#SPILL!`/`#CALC!` saved and read as `_error` rich values like Excel (they reopened as `#VALUE!`); typed `#SPILL!`/`#CALC!` stay text; rich-value metadata Excel accepts (`coerce`, lower-case URIs) |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |
 | 2026-10-12 | minor | `.xls` import reads the calculation settings (CalcMode, CalcIter, CalcCount, CalcDelta, CalcPrecision), so circular models calculate instead of showing `#CIRC!` (#724) |

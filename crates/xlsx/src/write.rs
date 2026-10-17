@@ -123,7 +123,7 @@ pub struct Out {
     pub table_id: u32,
     pub dynamic_arrays: bool,
     pub needs_calc: bool,
-    pub cell_pictures: crate::richdata::PicturesOut,
+    pub rich_values: crate::richdata::RichValuesOut,
     /// Kept (pass-through) parts written so far.
     pub kept: crate::passthrough::KeptOut,
 }
@@ -209,7 +209,7 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
         table_id: 0,
         dynamic_arrays: false,
         needs_calc: false,
-        cell_pictures: Default::default(),
+        rich_values: Default::default(),
         kept: Default::default(),
     };
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
@@ -380,7 +380,7 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     sst.push_str("</sst>");
     out.part("xl/sharedStrings.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"), sst.into_bytes());
     wb_rels.add("sharedStrings", "sharedStrings.xml");
-    if !out.cell_pictures.is_empty() {
+    if !out.rich_values.is_empty() {
         crate::richdata::write(&mut out, &mut wb_rels)?;
     } else if out.dynamic_arrays {
         out.part(
