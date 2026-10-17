@@ -273,12 +273,15 @@ impl Pattern {
             }
             Pattern::TextNum { prefix, suffix, last, first, step, width } => {
                 let base = if forward { *last } else { *first };
-                let n = base + step * k * sign;
+                // Text numbers come from input and can sit near i64::MAX (`X 9223372036854775807`):
+                // an overflowing series yields nothing — the cell keeps its source value — rather
+                // than wrapping in release or panicking in debug.
+                let n = step.checked_mul(k)?.checked_mul(sign)?.checked_add(base)?;
                 // `Qtr3`, `Quarter 3` wrap after 4 like `Q3`.
                 let quarter = suffix.is_empty()
                     && (1..=4).contains(&base)
                     && ["q", "qtr", "quarter"].contains(&prefix.trim_end().to_ascii_lowercase().as_str());
-                let n = if quarter { (n - 1).rem_euclid(4) + 1 } else { n.abs() };
+                let n = if quarter { n.checked_sub(1)?.rem_euclid(4) + 1 } else { n.checked_abs()? };
                 Some(Value::text(format!("{prefix}{n:0width$}{}", ordinal_suffix(n, suffix), width = *width)))
             }
             Pattern::List { list, last, first, step, upper, lower } => {
@@ -651,5 +654,19 @@ mod tests {
         let sh = d.wb.active().unwrap();
         let growth: Vec<String> = (1..6).map(|r| crate::display::cell_text(&d.wb, sh, CellRef::new(r, 0))).collect();
         assert_eq!(growth, ["2.5", "1.25", "", "", ""]);
+    }
+
+    #[test]
+    fn text_series_near_i64_max_neither_wraps_nor_panics() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", serde_json::json!({"cell": "A1", "input": "X 0"})).unwrap();
+        s.execute("cell.set", serde_json::json!({"cell": "A2", "input": "X 9223372036854775807"})).unwrap();
+        // The detected step is i64::MAX, so the next value overflows i64. The cell keeps its
+        // source value instead of panicking in debug or wrapping in release.
+        s.execute("edit.autoFill", serde_json::json!({"source": "A1:A2", "target": "A1:A3"})).unwrap();
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::new(2, 0)), "X 0");
     }
 }
