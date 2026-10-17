@@ -311,7 +311,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("AVV", Entry::Finish(Action::Command("data.validation"))),             // Excel: Data Validation
     ("AW", Entry::Continue),                                                // group: group: What-If (goalSeek/scenarioManager/dataTable)
     ("AWG", Entry::Finish(Action::Dialog("goalSeek"))),                     // Excel: Goal Seek
-    ("AWS", Entry::Finish(Action::Command("data.scenarioManager"))),        // Excel: Scenario Manager
+    ("AWS", Entry::Finish(Action::Dialog("scenarioManager"))),              // Excel: Scenario Manager
     ("AWT", Entry::Finish(Action::Command("data.dataTable"))),              // Excel: Data Table
     ("AX", Entry::Finish(Action::Pending("data.existingConnections"))), // pending; Excel: Existing Connections; gap #12; reserved until the command lands
     ("AY", Entry::Finish(Action::Command("data.reapply"))),             // Excel: Reapply Filter; containment(Reapply)

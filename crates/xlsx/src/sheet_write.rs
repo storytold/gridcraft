@@ -339,6 +339,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         s.push_str("/>");
     }
     s.push_str(&protected_ranges_xml(sheet));
+    s.push_str(&scenarios_xml(sheet));
     // autoFilter (a sheet filter overlapping a table would be invalid).
     if let Some(af) = &sheet.autofilter
         && !sheet.tables.iter().any(|t| t.range.intersects(&af.range))
@@ -1258,6 +1259,54 @@ fn protected_ranges_xml(sheet: &Sheet) -> String {
         s.push_str("/>");
     }
     if s.is_empty() { s } else { format!("<protectedRanges>{s}</protectedRanges>") }
+}
+
+fn scenarios_xml(sheet: &Sheet) -> String {
+    let sc = &sheet.scenarios;
+    if sc.items.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from("<scenarios");
+    if let Some(i) = sc.current.filter(|&i| i < sc.items.len()) {
+        let _ = write!(s, " current=\"{i}\"");
+    }
+    if let Some(i) = sc.shown.filter(|&i| i < sc.items.len()) {
+        let _ = write!(s, " show=\"{i}\"");
+    }
+    if !sc.result_cells.is_empty() {
+        let _ = write!(s, " sqref=\"{}\"", esc_attr(&sqref(&sc.result_cells)));
+    }
+    s.push('>');
+    for item in &sc.items {
+        let _ = write!(
+            s,
+            "<scenario name=\"{}\" locked=\"{}\" hidden=\"{}\" count=\"{}\"",
+            esc_attr(&encode_xstring(&item.name)),
+            u8::from(item.locked),
+            u8::from(item.hidden),
+            item.inputs.len()
+        );
+        if !item.user.is_empty() {
+            let _ = write!(s, " user=\"{}\"", esc_attr(&encode_xstring(&item.user)));
+        }
+        if !item.comment.is_empty() {
+            let _ = write!(s, " comment=\"{}\"", esc_attr(&encode_xstring(&item.comment)));
+        }
+        s.push('>');
+        for input in &item.inputs {
+            let _ = write!(s, "<inputCells r=\"{}\" val=\"{}\"", input.cell.a1(), esc_attr(&encode_xstring(&input.value)));
+            if let Some(id) = input.num_fmt_id {
+                let _ = write!(s, " numFmtId=\"{id}\"");
+            }
+            if input.deleted {
+                s.push_str(" deleted=\"1\"");
+            }
+            s.push_str("/>");
+        }
+        s.push_str("</scenario>");
+    }
+    s.push_str("</scenarios>");
+    s
 }
 
 /// Legacy VML shapes Excel uses to display notes.

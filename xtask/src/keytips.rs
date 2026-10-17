@@ -286,6 +286,10 @@ fn render_tests(entries: &[Entry], probe: &Probe) -> String {
                     id = e.target,
                 ),
             },
+            "dialog" if e.target == "scenarioManager" => format!(
+                "sequence(&mut h, {seq:?}, false);\n    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some(\"scenarioManager\"), \"{seq} must open the scenarioManager dialog\");",
+                seq = e.seq,
+            ),
             "dialog" => format!(
                 "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().dialog.is_some(), \"{seq} must open the {dialog} dialog\");",
                 seq = e.seq,

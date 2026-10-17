@@ -8,8 +8,8 @@ use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRe
 use gridcraft_formula::Expr;
 use gridcraft_model::{
     AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
-    Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation, ValidationKind,
-    XmlColumnPr,
+    Orientation, PasswordHash, Scenario, ScenarioInput, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation,
+    ValidationKind, XmlColumnPr,
 };
 
 use crate::IoError;
@@ -196,6 +196,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
             }
             "extLst" => read_ext(cx, e, &mut sheet),
             "protectedRanges" => read_protected_ranges(e, &mut sheet),
+            "scenarios" => read_scenarios(e, &mut sheet),
             _ => {}
         }
     }
@@ -220,6 +221,46 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
         }
     }
     Ok(sheet)
+}
+
+fn read_scenarios(e: &El, sheet: &mut Sheet) {
+    let collection = &mut sheet.scenarios;
+    collection.result_cells = e.attr("sqref").unwrap_or("").split_whitespace().take(255).filter_map(RangeRef::parse).collect();
+    let mut index_map = Vec::new();
+    for item in e.kids("scenario").take(1000) {
+        index_map.push(None);
+        let Some(name) = item.attr("name").filter(|s| !s.is_empty()) else { continue };
+        let inputs: Vec<ScenarioInput> = item
+            .kids("inputCells")
+            .take(33)
+            .filter_map(|input| {
+                Some(ScenarioInput {
+                    cell: CellRef::parse(input.attr("r")?)?,
+                    value: xml::decode_xstring(input.attr("val").unwrap_or("")),
+                    num_fmt_id: input.attr_u32("numFmtId"),
+                    deleted: input.flag("deleted", false),
+                })
+            })
+            .take(32)
+            .collect();
+        if inputs.is_empty() || item.kids("inputCells").count() > 32 {
+            continue;
+        }
+        if let Some(slot) = index_map.last_mut() {
+            *slot = Some(collection.items.len());
+        }
+        collection.items.push(Scenario {
+            name: xml::decode_xstring(name),
+            inputs,
+            comment: xml::decode_xstring(item.attr("comment").unwrap_or("")),
+            user: xml::decode_xstring(item.attr("user").unwrap_or("")),
+            locked: item.flag("locked", false),
+            hidden: item.flag("hidden", false),
+        });
+    }
+    let valid = |key: &str| e.attr_u32(key).and_then(|n| usize::try_from(n).ok()).and_then(|n| index_map.get(n).copied().flatten());
+    collection.current = valid("current");
+    collection.shown = valid("show");
 }
 
 /// A protection password hash: the iterated attributes (`algorithmName`, `hashValue`,

@@ -17,6 +17,81 @@ fn rr(a: &str) -> RangeRef {
     RangeRef::parse(a).unwrap()
 }
 
+#[test]
+fn scenarios_from_worksheet_xml_survive_round_trip() {
+    let file = super::minimal(
+        r#"<sheetData/><scenarios current="1" show="1" sqref="C28:C32"><scenario name="Base &amp; &quot;safe&quot;" locked="1" count="1" user="Analyst" comment="Base_x000A_case"><inputCells r="C4" val="10" numFmtId="37"/></scenario><scenario name="Best_x005F_x0041_" locked="0" hidden="1" count="2"><inputCells r="C4" val="100"/><inputCells r="D4" val="A &amp; B" deleted="1"/></scenario></scenarios>"#,
+        &[],
+        "",
+        "",
+    );
+    let (book, _) = read_xlsx(&file).unwrap();
+    let original = book.sheet(0).unwrap().scenarios.clone();
+    assert_eq!(original.items.len(), 2);
+    assert_eq!(original.current, Some(1));
+    assert_eq!(original.shown, Some(1));
+    assert_eq!(original.result_cells, vec![rr("C28:C32")]);
+    assert_eq!(original.items[0].name, "Base & \"safe\"");
+    assert_eq!(original.items[0].comment, "Base\ncase");
+    assert_eq!(original.items[1].name, "Best_x0041_");
+    assert_eq!(original.items[1].inputs[1].value, "A & B");
+    assert!(original.items[1].inputs[1].deleted);
+    assert_eq!(original.items[0].inputs[0].num_fmt_id, Some(37));
+    assert!(!original.items[1].locked && original.items[1].hidden);
+    let bytes = write_xlsx(&book).unwrap();
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheet(0).unwrap().scenarios, original);
+}
+
+#[test]
+fn scenario_locked_defaults_to_false_and_survives_saving() {
+    let file = super::minimal(
+        r#"<sheetData/><scenarios><scenario name="Default"><inputCells r="A1" val="10"/></scenario><scenario name="Locked" locked="1"><inputCells r="A1" val="20"/></scenario></scenarios>"#,
+        &[],
+        "",
+        "",
+    );
+    let (book, _) = read_xlsx(&file).unwrap();
+    assert!(!book.sheet(0).unwrap().scenarios.items[0].locked);
+    assert!(book.sheet(0).unwrap().scenarios.items[1].locked);
+    let (back, _) = read_xlsx(&write_xlsx(&book).unwrap()).unwrap();
+    assert_eq!(back.sheet(0).unwrap().scenarios, book.sheet(0).unwrap().scenarios);
+}
+
+#[test]
+fn malformed_and_oversized_scenario_inputs_are_ignored() {
+    let too_many = (0..33).map(|i| format!(r#"<inputCells r="A{}" val="1"/>"#, i + 1)).collect::<String>();
+    let file = super::minimal(
+        &format!(
+            r#"<sheetData/><scenarios current="99" show="99"><scenario name="Empty"/><scenario name="Huge">{too_many}</scenario><scenario name="Good"><inputCells r="B2" val="5"/></scenario></scenarios>"#
+        ),
+        &[],
+        "",
+        "",
+    );
+    let (book, _) = read_xlsx(&file).unwrap();
+    let sc = &book.sheet(0).unwrap().scenarios;
+    assert_eq!(sc.items.len(), 1);
+    assert_eq!(sc.items[0].name, "Good");
+    assert_eq!(sc.current, None);
+    assert_eq!(sc.shown, None);
+}
+
+#[test]
+fn scenario_indices_follow_valid_entries_when_invalid_ones_are_skipped() {
+    let file = super::minimal(
+        r#"<sheetData/><scenarios current="2" show="1"><scenario name="First"><inputCells r="A1" val="1"/></scenario><scenario name="Empty"/><scenario name="Third"><inputCells r="A1" val="3"/></scenario></scenarios>"#,
+        &[],
+        "",
+        "",
+    );
+    let (book, _) = read_xlsx(&file).unwrap();
+    let sc = &book.sheet(0).unwrap().scenarios;
+    assert_eq!(sc.items.len(), 2);
+    assert_eq!(sc.current, Some(1));
+    assert_eq!(sc.shown, None);
+}
+
 fn sample() -> Workbook {
     let mut wb = Workbook::new();
     wb.date_system = DateSystem::D1904;

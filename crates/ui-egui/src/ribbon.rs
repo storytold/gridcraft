@@ -1960,7 +1960,7 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
     sep(ui);
     let wi = big_button(ui, Icon::Calc, "What-If\nAnalysis", "What-If Analysis", true);
     for sequence in
-        keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["dialog:goalSeek", "data.scenarioManager", "data.dataTable"])
+        keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["dialog:goalSeek", "dialog:scenarioManager", "data.dataTable"])
     {
         keytip(app, ui, sequence, wi.rect.center_bottom());
     }
@@ -1970,7 +1970,7 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
             ui,
             &[
                 ("Goal Seek…", "dialog:goalSeek", json!({})),
-                ("Scenario Manager…", "data.scenarioManager", json!({})),
+                ("Scenario Manager…", "dialog:scenarioManager", json!({})),
                 ("Data Table…", "data.dataTable", json!({})),
             ],
         );

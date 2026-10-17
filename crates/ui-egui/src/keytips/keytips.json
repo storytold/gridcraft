@@ -2104,8 +2104,8 @@
   },
   {
    "seq": "AWS",
-   "kind": "command",
-   "target": "data.scenarioManager",
+   "kind": "dialog",
+   "target": "scenarioManager",
    "excel": "Scenario Manager",
    "note": ""
   },

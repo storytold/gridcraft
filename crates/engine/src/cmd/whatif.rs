@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use gridcraft_calc::Calc;
 use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::{CalcMode, Cell, DefinedName, Sheet, StyleId, Workbook};
+use gridcraft_model::{CalcMode, Cell, Scenario as SheetScenario, ScenarioInput, Sheet, StyleId, Workbook};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
@@ -340,7 +340,7 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- scenarios
 
-/// Hidden workbook-scope name holding the scenarios as a quoted JSON string.
+/// Legacy workbook-scope name used by earlier GridCraft versions. New scenarios live on sheets.
 pub(crate) const SCENARIO_NAME: &str = "_sc_scenarios";
 const MAX_SCENARIO_CELLS: usize = 32;
 const MAX_SCENARIOS: usize = 1000;
@@ -355,9 +355,50 @@ pub(crate) struct Scenario {
     pub comment: String,
 }
 
+/// Scenario input text uses spreadsheet values, not JSON string/object syntax.
+/// Whole floating-point numbers are written without a decimal suffix.
+pub fn scenario_value_input(value: &Json) -> String {
+    match value {
+        Json::Number(n) if n.is_f64() => n.as_f64().map(|n| n.to_string()).unwrap_or_else(|| n.to_string()),
+        _ => super::edit::json_to_input(value),
+    }
+}
+
+fn scenario_input_value(input: &str) -> Json {
+    if input.eq_ignore_ascii_case("true") {
+        Json::Bool(true)
+    } else if input.eq_ignore_ascii_case("false") {
+        Json::Bool(false)
+    } else {
+        serde_json::from_str::<serde_json::Number>(input).map(Json::Number).unwrap_or_else(|_| json!(input))
+    }
+}
+
 pub(crate) fn load_scenarios(wb: &Workbook) -> Vec<Scenario> {
-    let Some(n) = wb.names.iter().find(|n| n.scope.is_none() && n.name.eq_ignore_ascii_case(SCENARIO_NAME)) else { return vec![] };
-    serde_json::from_str(&string_literals(&n.formula)).unwrap_or_default()
+    let mut list = Vec::new();
+    for sheet in &wb.sheets {
+        for item in &sheet.scenarios.items {
+            let values = item.inputs.iter().filter(|input| !input.deleted).map(|input| scenario_input_value(&input.value)).collect();
+            list.push(Scenario {
+                name: item.name.clone(),
+                sheet: sheet.name.clone(),
+                changing: item.inputs.iter().filter(|input| !input.deleted).map(|input| input.cell.a1()).collect::<Vec<_>>().join(","),
+                values,
+                comment: item.comment.clone(),
+            });
+        }
+    }
+    if let Some(n) = wb.names.iter().find(|n| n.scope.is_none() && n.name.eq_ignore_ascii_case(SCENARIO_NAME)) {
+        let legacy: Vec<Scenario> = serde_json::from_str(&string_literals(&n.formula)).unwrap_or_default();
+        for item in legacy.into_iter().take(MAX_SCENARIOS) {
+            if wb.sheet_index(&item.sheet).is_some()
+                && !list.iter().any(|old| old.sheet.eq_ignore_ascii_case(&item.sheet) && old.name.eq_ignore_ascii_case(&item.name))
+            {
+                list.push(item);
+            }
+        }
+    }
+    list
 }
 
 /// Concatenates the string literals of a `"a"&"b""c"` formula.
@@ -388,24 +429,45 @@ fn string_literals(f: &str) -> String {
 
 fn store_scenarios(wb: &mut Workbook, list: &[Scenario]) {
     wb.names.retain(|n| !(n.scope.is_none() && n.name.eq_ignore_ascii_case(SCENARIO_NAME)));
-    if list.is_empty() {
-        return;
+    for sheet in &mut wb.sheets {
+        let sheet = std::sync::Arc::make_mut(sheet);
+        let old = sheet.scenarios.items.clone();
+        let current_name = sheet.scenarios.current.and_then(|i| old.get(i)).map(|s| s.name.clone());
+        let shown_name = sheet.scenarios.shown.and_then(|i| old.get(i)).map(|s| s.name.clone());
+        let mut items = Vec::new();
+        for sc in list.iter().filter(|sc| sc.sheet.eq_ignore_ascii_case(&sheet.name)).take(MAX_SCENARIOS) {
+            let mut inputs: Vec<ScenarioInput> = sc
+                .changing
+                .split(',')
+                .filter_map(CellRef::parse)
+                .zip(sc.values.iter())
+                .map(|(cell, value)| {
+                    let previous = old.iter().find(|item| item.name.eq_ignore_ascii_case(&sc.name));
+                    let num_fmt_id = previous
+                        .and_then(|item| item.inputs.iter().find(|input| input.cell == cell && !input.deleted))
+                        .and_then(|input| input.num_fmt_id);
+                    ScenarioInput { cell, value: scenario_value_input(value), num_fmt_id, deleted: false }
+                })
+                .collect();
+            let previous = old.iter().find(|item| item.name.eq_ignore_ascii_case(&sc.name));
+            if let Some(previous) = previous {
+                let room = 32usize.saturating_sub(inputs.len());
+                inputs.extend(previous.inputs.iter().filter(|input| input.deleted).take(room).cloned());
+            }
+            items.push(SheetScenario {
+                name: sc.name.clone(),
+                inputs,
+                comment: sc.comment.clone(),
+                user: previous.map(|x| x.user.clone()).unwrap_or_default(),
+                locked: previous.is_none_or(|x| x.locked),
+                hidden: previous.is_some_and(|x| x.hidden),
+            });
+        }
+        let find = |name: Option<String>| name.and_then(|name| items.iter().position(|s| s.name.eq_ignore_ascii_case(&name)));
+        sheet.scenarios.current = find(current_name);
+        sheet.scenarios.shown = find(shown_name);
+        sheet.scenarios.items = items;
     }
-    let text = serde_json::to_string(list).unwrap_or_else(|_| "[]".into());
-    wb.names.push(DefinedName {
-        name: SCENARIO_NAME.into(),
-        scope: None,
-        // Excel caps string literals at 255 characters: store `"…"&"…"` chunks.
-        formula: text
-            .chars()
-            .collect::<Vec<char>>()
-            .chunks(250)
-            .map(|c| format!("\"{}\"", c.iter().collect::<String>().replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join("&"),
-        comment: "GridCraft Scenario Manager data".into(),
-        hidden: true,
-    });
 }
 
 fn scenario_json(sc: &Scenario) -> Json {
@@ -454,7 +516,7 @@ fn scenario_add(s: &mut Session, p: &Json) -> Result<Json> {
         }
         Some(_) => return Err(EngineError::Other(format!("A scenario named '{name}' already exists on this sheet."))),
         None => {
-            if list.len() >= MAX_SCENARIOS {
+            if list.iter().filter(|item| item.sheet.eq_ignore_ascii_case(&sc.sheet)).count() >= MAX_SCENARIOS {
                 return Err(bad(CMD, "too many scenarios"));
             }
             list.push(sc.clone());
@@ -487,6 +549,12 @@ fn scenario_show(s: &mut Session, p: &Json) -> Result<Json> {
     let si = d.wb.sheet_index(&sc.sheet).ok_or_else(|| bad(CMD, format!("the scenario's sheet `{}` no longer exists", sc.sheet)))?;
     let (_, cells) = cell_list(&d.wb, &sc.changing, CMD, MAX_SCENARIO_CELLS)?;
     edit(s, |cx| {
+        store_scenarios(&mut cx.wb, &list);
+        if let Some(sheet) = cx.wb.sheet_mut(si) {
+            let index = sheet.scenarios.items.iter().position(|item| item.name.eq_ignore_ascii_case(&sc.name));
+            sheet.scenarios.current = index;
+            sheet.scenarios.shown = index;
+        }
         for (c, v) in cells.iter().zip(sc.values.iter()) {
             let input = super::edit::json_to_input(v);
             let cell = super::edit::input_to_cell(&input, si, *c, &mut cx.wb)?;
@@ -568,6 +636,11 @@ fn scenario_summary(s: &mut Session, p: &Json) -> Result<Json> {
         .unwrap_or_else(|| "Scenario Summary".into());
     let names: Vec<String> = scenarios.iter().map(|x| x.name.clone()).collect();
     let new_index = edit(s, |cx| {
+        let all = load_scenarios(&cx.wb);
+        store_scenarios(&mut cx.wb, &all);
+        if let Some(source) = cx.wb.sheet_mut(si) {
+            source.scenarios.result_cells = results.iter().copied().map(RangeRef::cell).collect();
+        }
         let bold = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.font.bold = true);
         let mut sheet = Sheet::new(name.clone());
         let put = |sheet: &mut Sheet, row: u32, col: u32, v: Value, style: StyleId| {
@@ -1120,7 +1193,7 @@ fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
 
 #[cfg(test)]
 mod tests {
-    use gridcraft_core::{CellRef, Value};
+    use gridcraft_core::{CellRef, RangeRef, Value};
     use serde_json::json;
 
     use crate::Session;
@@ -1215,14 +1288,14 @@ mod tests {
         assert_eq!(n(&s, "B10"), 300.0);
         s.execute("data.scenarioShow", json!({"name": "Base"})).unwrap();
         assert_eq!(n(&s, "B10"), 200.0);
-        // Stored in a hidden workbook name.
+        // Stored per sheet, in the representation Excel writes to XLSX.
         let d = s.doc().unwrap();
-        assert!(d.wb.names.iter().any(|n| n.name == super::SCENARIO_NAME && n.hidden));
+        assert_eq!(d.wb.sheet(0).unwrap().scenarios.items.len(), 2);
+        assert!(d.wb.names.iter().all(|n| n.name != super::SCENARIO_NAME));
+        assert_eq!(d.wb.sheet(0).unwrap().scenarios.current, Some(0));
         assert_eq!(super::load_scenarios(&d.wb).len(), 2);
-        // Long data is split into 250-character literals and survives an xlsx round trip.
+        // Long metadata survives an XLSX round trip as a worksheet attribute.
         s.execute("data.scenarioAdd", json!({"name": "Long", "changing": "B2", "values": [1], "comment": "x".repeat(600)})).unwrap();
-        let f = s.doc().unwrap().wb.names.iter().find(|n| n.name == super::SCENARIO_NAME).unwrap().formula.clone();
-        assert!(f.matches("\"&\"").count() >= 2, "{f}");
         let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
         s.execute("file.open", json!({"name": "sc.xlsx", "base64": b64})).unwrap();
         let l = s.execute("data.scenarioManager", json!({})).unwrap();
@@ -1239,11 +1312,84 @@ mod tests {
         assert_eq!(n(&s, "'Scenario Summary'!C8"), 200.0);
         assert_eq!(n(&s, "'Scenario Summary'!E8"), 300.0);
         s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().scenarios.result_cells, vec![RangeRef::cell(CellRef::parse("B10").unwrap())]);
         s.execute("data.scenarioDelete", json!({"name": "Best"})).unwrap();
         assert_eq!(s.execute("data.scenarioManager", json!({})).unwrap()["scenarios"].as_array().unwrap().len(), 1);
         s.execute("data.scenarioDelete", json!({"name": "Base"})).unwrap();
         assert!(s.doc().unwrap().wb.names.iter().all(|n| n.name != super::SCENARIO_NAME));
         assert!(s.execute("data.scenarioSummary", json!({})).is_err());
+    }
+
+    #[test]
+    fn legacy_hidden_scenarios_migrate_on_edit_without_duplicates() {
+        let mut s = s();
+        let old = json!([{"name":"Old","sheet":"Sheet1","changing":"B2","values":[7],"comment":"legacy"}]);
+        let text = old.to_string().replace('"', "\"\"");
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).names.push(gridcraft_model::DefinedName {
+            name: super::SCENARIO_NAME.into(),
+            scope: None,
+            formula: format!("\"{text}\""),
+            comment: String::new(),
+            hidden: true,
+        });
+        assert_eq!(s.execute("data.scenarioManager", json!({})).unwrap()["scenarios"].as_array().unwrap().len(), 1);
+        s.execute("data.scenarioAdd", json!({"name":"New","changing":"B3","values":[8]})).unwrap();
+        assert!(s.doc().unwrap().wb.names.iter().all(|n| n.name != super::SCENARIO_NAME));
+        assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().scenarios.items.len(), 2);
+    }
+
+    #[test]
+    fn imported_scenario_metadata_survives_show_and_replace() {
+        let mut s = s();
+        let input = |cell: &str, value: &str, deleted: bool| gridcraft_model::ScenarioInput {
+            cell: CellRef::parse(cell).unwrap(),
+            value: value.into(),
+            num_fmt_id: Some(37),
+            deleted,
+        };
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().scenarios.items.push(gridcraft_model::Scenario {
+            name: "Imported".into(),
+            inputs: vec![input("B2", "42", false), input("B3", "99", true)],
+            comment: "from Excel".into(),
+            user: "Analyst".into(),
+            locked: false,
+            hidden: true,
+        });
+        let list = s.execute("data.scenarioManager", json!({})).unwrap();
+        assert_eq!(list["scenarios"][0]["changing"], "B2");
+        s.execute("data.scenarioShow", json!({"name":"Imported"})).unwrap();
+        assert_eq!(n(&s, "B2"), 42.0);
+        assert_eq!(v(&s, "B3"), Value::Empty);
+        s.execute("data.scenarioAdd", json!({"name":"Imported","changing":"B2","values":[50],"replace":true})).unwrap();
+        let sc = &s.doc().unwrap().wb.sheet(0).unwrap().scenarios;
+        assert_eq!(sc.current, Some(0));
+        assert_eq!(sc.shown, Some(0));
+        assert_eq!(sc.items[0].user, "Analyst");
+        assert!(!sc.items[0].locked && sc.items[0].hidden);
+        assert_eq!(sc.items[0].inputs[0].num_fmt_id, Some(37));
+        assert!(sc.items[0].inputs[1].deleted);
+    }
+
+    #[test]
+    fn scenario_values_keep_text_and_write_whole_numbers_without_decimal_suffixes() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range":"B2", "values":[[10.0],[20.0],[0.125]]})).unwrap();
+        s.execute("data.scenarioAdd", json!({"name":"Numbers","changing":"B2:B4"})).unwrap();
+        let values: Vec<_> = s.doc().unwrap().wb.sheet(0).unwrap().scenarios.items[0].inputs.iter().map(|i| i.value.clone()).collect();
+        assert_eq!(values, ["10", "20", "0.125"]);
+        let text_values = ["null", "\"q\"", "[1]", "{\"a\":1}"];
+        s.execute("data.scenarioAdd", json!({"name":"Text","changing":"C2:C5","values":text_values})).unwrap();
+        // A save/open cycle must not reinterpret OOXML input text as JSON syntax.
+        let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+        let (book, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+        s.doc_mut().unwrap().wb = std::sync::Arc::new(book);
+        s.execute("data.scenarioShow", json!({"name":"Text"})).unwrap();
+        for (i, text) in text_values.iter().enumerate() {
+            assert_eq!(v(&s, &format!("C{}", i + 2)), Value::from(*text));
+        }
+        s.execute("data.scenarioAdd", json!({"name":"Extra","changing":"D1","values":[1]})).unwrap();
+        let text = &s.doc().unwrap().wb.sheet(0).unwrap().scenarios.items[1];
+        assert_eq!(text.inputs.iter().map(|i| i.value.as_str()).collect::<Vec<_>>(), text_values);
     }
 
     #[test]

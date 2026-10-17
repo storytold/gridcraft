@@ -6,6 +6,62 @@ use serde::{Deserialize, Serialize};
 
 use crate::style::{Color, Style};
 
+// ---------------------------------------------------------------- scenarios
+
+/// A cell and its stored input text in an Excel what-if scenario.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ScenarioInput {
+    pub cell: CellRef,
+    pub value: String,
+    /// Excel uses this only to format the cached value in the Scenario Values dialog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_fmt_id: Option<u32>,
+    /// A deleted input remains in the file but is not applied when the scenario is shown.
+    #[serde(default, skip_serializing_if = "scenario_false")]
+    pub deleted: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Scenario {
+    pub name: String,
+    pub inputs: Vec<ScenarioInput>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub comment: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub user: String,
+    #[serde(default = "scenario_locked", skip_serializing_if = "scenario_true")]
+    pub locked: bool,
+    #[serde(default, skip_serializing_if = "scenario_false")]
+    pub hidden: bool,
+}
+
+fn scenario_locked() -> bool {
+    true
+}
+fn scenario_true(value: &bool) -> bool {
+    *value
+}
+fn scenario_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ScenarioCollection {
+    pub items: Vec<Scenario>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shown: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub result_cells: Vec<RangeRef>,
+}
+
+impl ScenarioCollection {
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
 // ---------------------------------------------------------------- tables
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
