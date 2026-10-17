@@ -1812,7 +1812,12 @@ fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let mut with = d.values.get("with").and_then(Json::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
         ui.label("Find what:");
-        ui.add(egui::TextEdit::singleline(&mut what).desired_width(260.0));
+        let r = ui.add(egui::TextEdit::singleline(&mut what).desired_width(260.0));
+        // Like Excel, the cursor starts in "Find what" - asked for once, so clicking another field still works.
+        if !d.values.contains_key("focused") {
+            r.request_focus();
+            d.values.insert("focused".into(), json!(true));
+        }
     });
     if d.tab == "Replace" {
         ui.horizontal(|ui| {
