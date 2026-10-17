@@ -30,7 +30,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         ui.label(egui::RichText::new(lang.tr("Choose fields to add to report:")).small().color(t.text_dim));
         ui.add_space(4.0);
         let fields = info["fields"].as_array().cloned().unwrap_or_default();
-        egui::ScrollArea::vertical().max_height(220.0).id_salt("pv_fields").show(ui, |ui| {
+        egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).id_salt("pv_fields").show(ui, |ui| {
             for f in &fields {
                 let fname = f["name"].as_str().unwrap_or("").to_string();
                 let areas: Vec<String> =
