@@ -69,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Field",
             [],
             None,
-            "{pivot?, field, area: rows|columns|values|filters, func?: sum|count|average|max|min|product|countNumbers|stdDev|stdDevP|var|varP, name?, position?: index, replace?}",
+            "{pivot?, field, area: rows|columns|values|filters, func?: sum|count|average|max|min|product|countNumbers|stdDev|stdDevP|var|varP, name?, position?: index, valuesPosition?: final Σ Values slot in rows, replace?}",
             has_doc,
             add_field
         ),
@@ -87,7 +87,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Field",
             [],
             None,
-            "{pivot?, field (\"Σ Values\" moves the value fields between rows and columns; in columns it stays after the last field), from: rows|columns|values|filters, to: rows|columns|values|filters, position?: index, replace?}",
+            "{pivot?, field (\"Σ Values\" moves the value fields between rows and columns; in columns it stays after the last field), from: rows|columns|values|filters, to: rows|columns|values|filters, position?: index, valuesPosition?: final Σ Values slot in rows, replace?}",
             has_doc,
             move_field
         ),
@@ -830,6 +830,17 @@ fn position_param(p: &Json) -> Option<usize> {
     u32_param(p, "position").map(|v| v as usize)
 }
 
+/// A drop beside Σ Values needs both positions changed atomically, with one refresh/Undo.
+fn set_drop_values_position(cmd: &str, pt: &mut PivotTable, p: &Json, to: &str) -> Result<()> {
+    let Some(value) = p.get("valuesPosition") else { return Ok(()) };
+    let position = value.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(cmd, "invalid `valuesPosition`"))?;
+    if to != "rows" || !pt.values_on_rows || position > pt.rows.len() {
+        return Err(bad(cmd, "`valuesPosition` must name a slot in the Rows area containing Σ Values"));
+    }
+    pt.values_position = (position < pt.rows.len()).then_some(position);
+    Ok(())
+}
+
 fn add_field(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.addField";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
@@ -842,6 +853,7 @@ fn add_field(s: &mut Session, p: &Json) -> Result<Json> {
     let pos = position_param(p);
     update(s, p, |pt, src, _| {
         add_to_area(C, pt, src, &field, area, func, name.as_deref(), pos)?;
+        set_drop_values_position(C, pt, p, area)?;
         Ok(json!({"field": canonical_any(C, pt, src, &field)?, "area": area}))
     })
 }
@@ -949,6 +961,9 @@ fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
     let pos = position_param(p);
     update(s, p, |pt, src, _| {
         if is_values_field(src, &field) {
+            if p.get("valuesPosition").is_some() {
+                return Err(bad(C, "use `position` when moving Σ Values itself"));
+            }
             return move_values_field(C, pt, from, to, pos);
         }
         if from == to {
@@ -987,6 +1002,7 @@ fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
                     pt.filters.insert(at, f);
                 }
             }
+            set_drop_values_position(C, pt, p, to)?;
             return Ok(json!({}));
         }
         // Keep axis settings (sort, grouping) when moving between rows and columns.
@@ -1005,6 +1021,7 @@ fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
                 pt.filters.push(h);
             }
         }
+        set_drop_values_position(C, pt, p, to)?;
         Ok(json!({"field": src_field, "to": to}))
     })
 }
@@ -1794,6 +1811,39 @@ mod tests {
         assert_eq!(text(&s, "A5"), "North");
         s.execute("pivot.collapse", json!({"field": "Region", "collapse": false})).unwrap();
         assert_eq!(text(&s, "A5"), "Apples");
+    }
+
+    #[test]
+    fn explicit_values_drop_position_is_atomic_and_validated() {
+        for command in ["pivot.addField", "pivot.moveField"] {
+            let mut s = sales();
+            s.execute("insert.pivotTable", json!({"rows":["Region"],"columns":["Product"],"values":["Sales","Units"]})).unwrap();
+            s.execute("pivot.moveField", json!({"field":"Σ Values","from":"columns","to":"rows","position":0})).unwrap();
+            let before = serde_json::to_value(pt(&s)).unwrap();
+            let undo = s.active().unwrap().undo.len();
+            let params = json!({"field":"Product","area":"rows","from":"columns","to":"rows","position":0,"valuesPosition":0});
+            for invalid in [json!(-1), json!(999), json!("0"), json!(null), json!(u64::MAX)] {
+                let mut bad = params.clone();
+                bad["valuesPosition"] = invalid;
+                assert!(s.execute(command, bad).is_err());
+                assert_eq!(serde_json::to_value(pt(&s)).unwrap(), before);
+                assert_eq!(s.active().unwrap().undo.len(), undo);
+            }
+            let mut wrong_area = params.clone();
+            wrong_area["area"] = json!("columns");
+            wrong_area["to"] = json!("columns");
+            assert!(s.execute(command, wrong_area).is_err());
+            assert_eq!(serde_json::to_value(pt(&s)).unwrap(), before);
+            assert_eq!(s.active().unwrap().undo.len(), undo);
+            s.execute(command, params).unwrap();
+            assert_eq!(pt(&s).values_position, Some(0));
+            assert_eq!(pt(&s).rows.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), ["Product", "Region"]);
+            assert_eq!(s.active().unwrap().undo.len(), undo + 1);
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(serde_json::to_value(pt(&s)).unwrap(), before);
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(pt(&s).values_position, Some(0));
+        }
     }
 
     #[test]
