@@ -563,8 +563,10 @@ fn cfvo(e: &El) -> CfValueKind {
     let val = e.attr("val").unwrap_or("");
     let n = val.trim().parse::<f64>().ok().filter(|v| v.is_finite());
     match e.attr("type").unwrap_or("num") {
-        "min" | "autoMin" => CfValueKind::Min,
-        "max" | "autoMax" => CfValueKind::Max,
+        "min" => CfValueKind::Min,
+        "max" => CfValueKind::Max,
+        "autoMin" => CfValueKind::AutoMin,
+        "autoMax" => CfValueKind::AutoMax,
         "percent" => n.map(CfValueKind::Percent).unwrap_or_else(|| CfValueKind::Formula(from_file(val))),
         "percentile" => n.map(CfValueKind::Percentile).unwrap_or_else(|| CfValueKind::Formula(from_file(val))),
         "formula" => CfValueKind::Formula(from_file(val)),
@@ -983,9 +985,14 @@ fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
                     for r in c.kids("conditionalFormatting").flat_map(|f| f.kids("cfRule")) {
                         let idx = r.attr("id").and_then(|id| cx.cf_ext_ids.iter().find(|(i, _)| i == id)).map(|(_, n)| *n);
                         match (idx.and_then(|n| sheet.cond_formats.get_mut(n)), r.child("dataBar")) {
-                            (Some(CondFormat { rule: CfRule::DataBar { gradient, .. }, .. }), Some(db)) => {
+                            (Some(CondFormat { rule: CfRule::DataBar { min, max, gradient, .. }, .. }), Some(db)) => {
                                 *gradient = db.flag("gradient", true);
-                                // Only the fill style is modelled; borders, lengths, axis or negative colours are lost.
+                                // The main section writes Automatic as `min`/`max`; only the x14 bounds tell
+                                // it apart from Lowest/Highest Value.
+                                if let [lo, hi] = cfvos(db).as_slice() {
+                                    (*min, *max) = (lo.clone(), hi.clone());
+                                }
+                                // Only the fill style and bounds are modelled; borders, lengths, axis or negative colours are lost.
                                 skipped |= db.attrs.iter().any(|(k, _)| k != "gradient") || db.children.iter().any(|k| k.name != "cfvo");
                             }
                             _ => skipped = true,

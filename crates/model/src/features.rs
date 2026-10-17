@@ -131,12 +131,18 @@ pub enum CfOperator {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CfValueKind {
+    /// Lowest value.
     Min,
+    /// Highest value.
     Max,
     Number(f64),
     Percent(f64),
     Percentile(f64),
     Formula(String),
+    /// Data bars only: Excel's Automatic minimum, 0 or the lowest value when that is negative.
+    AutoMin,
+    /// Data bars only: Excel's Automatic maximum, the highest value.
+    AutoMax,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

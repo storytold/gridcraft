@@ -1150,6 +1150,61 @@ fn solid_data_bar_survives_with_sparklines_and_gradient_neighbours() {
     assert_eq!(b.sparklines.len(), 1);
 }
 
+/// Excel writes Automatic and Lowest/Highest Value data bars both as `min`/`max` in the main
+/// section; only the x14 rule tells them apart (#1159).
+#[test]
+fn data_bar_automatic_bounds_come_from_the_x14_rule() {
+    let bar = |sqref: &str, id: &str| {
+        format!(
+            r#"<conditionalFormatting sqref="{sqref}"><cfRule type="dataBar" priority="1"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar><extLst><ext uri="{{B025F937-C7B1-47D3-B67F-A62EFF666E3E}}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:id>{id}</x14:id></ext></extLst></cfRule></conditionalFormatting>"#
+        )
+    };
+    let x14 = |id: &str, sqref: &str, lo: &str, hi: &str| {
+        format!(
+            r#"<x14:conditionalFormatting><x14:cfRule type="dataBar" id="{id}"><x14:dataBar><x14:cfvo type="{lo}"/><x14:cfvo type="{hi}"/></x14:dataBar></x14:cfRule><xm:sqref>{sqref}</xm:sqref></x14:conditionalFormatting>"#
+        )
+    };
+    let (auto, lowest) = ("{00000000-0000-0000-0000-000000000001}", "{00000000-0000-0000-0000-000000000002}");
+    let body = format!(
+        r#"<sheetData/>{}{}<conditionalFormatting sqref="C1:C3"><cfRule type="dataBar" priority="3"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar></cfRule></conditionalFormatting><extLst><ext uri="{{78C0D931-6437-407d-A8A1-0F90B4350D7D}}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:conditionalFormattings>{}{}</x14:conditionalFormattings></ext></extLst>"#,
+        bar("A1:A3", auto),
+        bar("B1:B3", lowest),
+        x14(auto, "A1:A3", "autoMin", "autoMax"),
+        x14(lowest, "B1:B3", "min", "max"),
+    );
+    let (wb, rep) = read_xlsx(&super::minimal(&body, &[], "", "")).unwrap();
+    assert!(!rep.warnings.iter().any(|w| w.contains("conditional")), "{:?}", rep.warnings);
+    let bounds = |wb: &Workbook| -> Vec<(CfValueKind, CfValueKind)> {
+        wb.sheets[0]
+            .cond_formats
+            .iter()
+            .filter_map(|cf| match &cf.rule {
+                CfRule::DataBar { min, max, .. } => Some((min.clone(), max.clone())),
+                _ => None,
+            })
+            .collect()
+    };
+    let expected = vec![
+        (CfValueKind::AutoMin, CfValueKind::AutoMax),
+        (CfValueKind::Min, CfValueKind::Max),
+        // No x14 rule: Excel reads the main section's `min`/`max` as Lowest/Highest Value.
+        (CfValueKind::Min, CfValueKind::Max),
+    ];
+    assert_eq!(bounds(&wb), expected);
+
+    // Written back the way Excel does: never `autoMin` in the main section, Automatic in x14,
+    // and no x14 rule for the bars that do not need one.
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    let main = xml.split("<extLst><ext uri=\"{78C0D931").next().unwrap_or_default();
+    assert!(!main.contains("autoM"), "{xml}");
+    assert!(xml.contains("<x14:dataBar><x14:cfvo type=\"autoMin\"/><x14:cfvo type=\"autoMax\"/>"), "{xml}");
+    assert_eq!(xml.matches("<x14:cfRule type=\"dataBar\"").count(), 1, "{xml}");
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    assert_eq!(bounds(&back), expected);
+}
+
 #[test]
 fn doc_props_keep_boundary_whitespace() {
     let mut wb = Workbook::new();

@@ -78,6 +78,8 @@ fn threshold(wb: &Workbook, sheet: usize, at: CellRef, st: &RuleStats, k: &CfVal
         CfValueKind::Percent(p) => min + (max - min) * p / 100.0,
         CfValueKind::Percentile(p) => percentile(&st.sorted, *p),
         CfValueKind::Formula(f) => gridcraft_calc::evaluate(wb, sheet, at, f).to_number().unwrap_or(0.0),
+        CfValueKind::AutoMin => min.min(0.0),
+        CfValueKind::AutoMax => max,
     }
 }
 
@@ -242,7 +244,6 @@ impl CfCache {
                     if let Some(n) = v.as_f64() {
                         let lo = threshold(wb, sheet, c, &st, min);
                         let hi = threshold(wb, sheet, c, &st, max);
-                        let lo = if lo > 0.0 { 0.0 } else { lo };
                         let frac = if hi > lo { ((n - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 1.0 };
                         if out.bar.is_none() {
                             out.bar = Some((
@@ -409,5 +410,43 @@ mod tests {
         let mut cache = CfCache::new();
         let mut look = |a: &str| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.style).is_some();
         assert_eq!([look("A1"), look("A2")], [true, false]);
+    }
+
+    /// Automatic bars start at 0; Lowest Value gives the lowest value no bar (#1159).
+    #[test]
+    fn data_bar_automatic_and_lowest_value_bounds() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let values: Vec<_> = (10..=20).map(|n| json!([n, n])).collect();
+        s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A11", "rule": {"type": "dataBar"}})).unwrap();
+        let lowest = json!({"type": "dataBar", "min": {"type": "min"}, "max": {"type": "max"}});
+        s.execute("home.conditionalFormat", json!({"range": "B1:B11", "rule": lowest})).unwrap();
+        let d = s.doc().unwrap();
+        // New rules go first, so the default bar on A1:A11 is the second rule.
+        let rule = |i: usize| d.wb.sheets[0].cond_formats.get(i).map(|cf| cf.rule.clone());
+        assert!(matches!(rule(1), Some(CfRule::DataBar { min: CfValueKind::AutoMin, max: CfValueKind::AutoMax, .. })));
+        let mut cache = CfCache::new();
+        let mut bar = |a: &str| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.bar).map(|(len, ..)| len).unwrap();
+        // 10 is half of 20 (0.5, drawn after the 10 % head start); 20 is the full bar.
+        assert!((bar("A1") - 0.55).abs() < 1e-6, "{}", bar("A1"));
+        assert!((bar("A11") - 1.0).abs() < 1e-6);
+        assert_eq!(bar("B1"), 0.0);
+        assert!((bar("B6") - 0.55).abs() < 1e-6, "{}", bar("B6"));
+        assert!((bar("B11") - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn data_bar_automatic_minimum_follows_negative_values() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[-10], [0], [10]]})).unwrap();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "dataBar"}})).unwrap();
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::new();
+        let mut bar = |a: &str| cache.look(&d.wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.bar).map(|(len, ..)| len).unwrap();
+        assert_eq!(bar("A1"), 0.0);
+        assert!((bar("A2") - 0.55).abs() < 1e-6, "{}", bar("A2"));
+        assert!((bar("A3") - 1.0).abs() < 1e-6);
     }
 }

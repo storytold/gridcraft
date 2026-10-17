@@ -576,26 +576,27 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         let _ = write!(s, "<tableParts count=\"{}\">{parts}</tableParts>", tables.len());
     }
-    // Excel 2010 extensions: solid data bars, then sparklines.
-    let solid_bars: Vec<(&CondFormat, u32)> = sheet
+    // Excel 2010 extensions: data bars with a solid fill or Automatic bounds, then sparklines.
+    let x14_bars: Vec<(&CondFormat, u32)> = sheet
         .cond_formats
         .iter()
         .enumerate()
-        .filter(|(_, cf)| !cf.ranges.is_empty() && matches!(cf.rule, CfRule::DataBar { gradient: false, .. }))
+        .filter(|(_, cf)| !cf.ranges.is_empty() && bar_needs_x14(&cf.rule))
         .map(|(i, cf)| (cf, prio.get(i).copied().unwrap_or(1)))
         .collect();
-    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() {
+    if !x14_bars.is_empty() || !sheet.sparklines.is_empty() {
         s.push_str("<extLst>");
     }
-    if !solid_bars.is_empty() {
+    if !x14_bars.is_empty() {
         let _ = write!(
             s,
             "<ext uri=\"{{78C0D931-6437-407d-A8A1-0F90B4350D7D}}\" xmlns:x14=\"{X14_NS}\" xmlns:xm=\"{XM_NS}\"><x14:conditionalFormattings>"
         );
-        for (cf, p) in &solid_bars {
-            if let CfRule::DataBar { min, max, .. } = &cf.rule {
-                let (id, lo, hi) = (solid_bar_id(*p), x14_cfvo(min), x14_cfvo(max));
-                let _ = write!(s, "<x14:conditionalFormatting><x14:cfRule type=\"dataBar\" id=\"{id}\"><x14:dataBar gradient=\"0\">{lo}{hi}");
+        for (cf, p) in &x14_bars {
+            if let CfRule::DataBar { min, max, gradient, .. } = &cf.rule {
+                let (id, lo, hi) = (x14_bar_id(*p), x14_cfvo(min), x14_cfvo(max));
+                let fill = if *gradient { "" } else { " gradient=\"0\"" };
+                let _ = write!(s, "<x14:conditionalFormatting><x14:cfRule type=\"dataBar\" id=\"{id}\"><x14:dataBar{fill}>{lo}{hi}");
                 let _ = write!(s, "</x14:dataBar></x14:cfRule><xm:sqref>{}</xm:sqref></x14:conditionalFormatting>", sqref(&cf.ranges));
             }
         }
@@ -622,7 +623,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         s.push_str("</x14:sparklineGroups></ext>");
     }
-    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() {
+    if !x14_bars.is_empty() || !sheet.sparklines.is_empty() {
         s.push_str("</extLst>");
     }
     s.push_str("</worksheet>");
@@ -731,8 +732,9 @@ fn write_cell(
 
 fn cfvo_xml(v: &CfValueKind) -> String {
     match v {
-        CfValueKind::Min => "<cfvo type=\"min\"/>".into(),
-        CfValueKind::Max => "<cfvo type=\"max\"/>".into(),
+        // Excel writes Automatic as `min`/`max` here; the x14 rule carries `autoMin`/`autoMax`.
+        CfValueKind::Min | CfValueKind::AutoMin => "<cfvo type=\"min\"/>".into(),
+        CfValueKind::Max | CfValueKind::AutoMax => "<cfvo type=\"max\"/>".into(),
         CfValueKind::Number(n) => format!("<cfvo type=\"num\" val=\"{}\"/>", num(*n)),
         CfValueKind::Percent(n) => format!("<cfvo type=\"percent\" val=\"{}\"/>", num(*n)),
         CfValueKind::Percentile(n) => format!("<cfvo type=\"percentile\" val=\"{}\"/>", num(*n)),
@@ -747,14 +749,24 @@ fn quote(t: &str) -> String {
 const X14_NS: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
 const XM_NS: &str = "http://schemas.microsoft.com/office/excel/2006/main";
 
-/// The id linking a solid data bar's `cfRule` to its x14 extension; unique per sheet because priorities are.
-fn solid_bar_id(priority: u32) -> String {
+/// Whether a data bar needs an x14 rule: a solid fill or an Automatic bound only exist there.
+fn bar_needs_x14(rule: &CfRule) -> bool {
+    match rule {
+        CfRule::DataBar { min, max, gradient, .. } => {
+            !gradient || matches!(min, CfValueKind::AutoMin | CfValueKind::AutoMax) || matches!(max, CfValueKind::AutoMin | CfValueKind::AutoMax)
+        }
+        _ => false,
+    }
+}
+
+/// The id linking a data bar's `cfRule` to its x14 extension; unique per sheet because priorities are.
+fn x14_bar_id(priority: u32) -> String {
     format!("{{00000000-0000-0000-0000-{priority:012}}}")
 }
 
-/// The `cfRule` extension that points a solid data bar at its x14 rule.
-fn solid_bar_ext(priority: u32) -> String {
-    let id = solid_bar_id(priority);
+/// The `cfRule` extension that points a data bar at its x14 rule.
+fn x14_bar_ext(priority: u32) -> String {
+    let id = x14_bar_id(priority);
     format!("<extLst><ext uri=\"{{B025F937-C7B1-47D3-B67F-A62EFF666E3E}}\" xmlns:x14=\"{X14_NS}\"><x14:id>{id}</x14:id></ext></extLst>")
 }
 
@@ -763,6 +775,8 @@ fn x14_cfvo(v: &CfValueKind) -> String {
     let (ty, val) = match v {
         CfValueKind::Min => return "<x14:cfvo type=\"min\"/>".into(),
         CfValueKind::Max => return "<x14:cfvo type=\"max\"/>".into(),
+        CfValueKind::AutoMin => return "<x14:cfvo type=\"autoMin\"/>".into(),
+        CfValueKind::AutoMax => return "<x14:cfvo type=\"autoMax\"/>".into(),
         CfValueKind::Number(n) => ("num", num(*n)),
         CfValueKind::Percent(n) => ("percent", num(*n)),
         CfValueKind::Percentile(n) => ("percentile", num(*n)),
@@ -866,13 +880,13 @@ fn cf_rule_xml(cf: &CondFormat, priority: u32, out: &mut Out) -> String {
             b.push_str("</colorScale>");
             format!("<cfRule type=\"colorScale\" priority=\"{priority}\"{stop}>{b}</cfRule>")
         }
-        CfRule::DataBar { min, max, color, show_value, gradient } => format!(
+        CfRule::DataBar { min, max, color, show_value, .. } => format!(
             "<cfRule type=\"dataBar\" priority=\"{priority}\"{stop}><dataBar{}>{}{}<color {}/></dataBar>{}</cfRule>",
             if *show_value { "" } else { " showValue=\"0\"" },
             cfvo_xml(min),
             cfvo_xml(max),
             if *color == Color::Auto { "rgb=\"FF638EC6\"".to_string() } else { color_attrs(color) },
-            if *gradient { String::new() } else { solid_bar_ext(priority) }
+            if bar_needs_x14(&cf.rule) { x14_bar_ext(priority) } else { String::new() }
         ),
         CfRule::IconSet { set, thresholds, reverse, show_value } => {
             let mut b = format!("<iconSet iconSet=\"{}\"", esc_attr(set));

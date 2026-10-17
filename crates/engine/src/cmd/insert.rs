@@ -1358,6 +1358,8 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
                 match t {
                     "min" => CfValueKind::Min,
                     "max" => CfValueKind::Max,
+                    "autoMin" => CfValueKind::AutoMin,
+                    "autoMax" => CfValueKind::AutoMax,
                     "percent" => CfValueKind::Percent(val),
                     "percentile" => CfValueKind::Percentile(val),
                     "formula" => CfValueKind::Formula(o.get("value").and_then(Json::as_str).unwrap_or("").into()),
@@ -1428,8 +1430,9 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
             CfRule::ColorScale { stops }
         }
         "dataBar" => CfRule::DataBar {
-            min: value_kind(rule.get("min"), CfValueKind::Min),
-            max: value_kind(rule.get("max"), CfValueKind::Max),
+            // Automatic bounds, as Excel's Data Bars gallery.
+            min: value_kind(rule.get("min"), CfValueKind::AutoMin),
+            max: value_kind(rule.get("max"), CfValueKind::AutoMax),
             color: super::format::color_param(rule.get("color")).unwrap_or(Color::rgb(0x63, 0x8E, 0xC6)),
             gradient: rule.get("gradient").and_then(Json::as_bool).unwrap_or(true),
             show_value: true,
