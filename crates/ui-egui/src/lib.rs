@@ -81,6 +81,9 @@ pub struct UiState {
 pub const INTERFACE_SCALE_MIN: u16 = 75;
 pub const INTERFACE_SCALE_MAX: u16 = 200;
 
+/// How often the frame loop asks whether an open workbook's file was changed by another program.
+const EXTERNAL_CHECK_MS: f64 = 1000.0;
+
 /// A requested interface size, rounded and clamped to the supported range; `None` when it isn't
 /// a finite number.
 pub fn clamp_interface_scale(percent: f64) -> Option<u16> {
@@ -262,6 +265,8 @@ pub struct SheetApp {
     /// text noted for an unpublished cut); `None` after a copy, or once the clipboard is seen
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
+    /// When the file of an open workbook was last checked for changes made outside GridCraft.
+    external_check: f64,
     pub started: f64,
 }
 
@@ -305,6 +310,7 @@ impl SheetApp {
             selected_chart: None,
             clipboard_text_at_copy: None,
             cut_text: None,
+            external_check: 0.0,
             started: now_ms(),
         }
     }
@@ -489,6 +495,26 @@ impl SheetApp {
     /// this once — tests and embedders don't start the watcher thread).
     pub fn watch_desktop_theme(&mut self) {
         self.desktop_theme = desktop_theme::DesktopTheme::start();
+    }
+
+    /// Asks the engine which open workbooks' files were changed on disk by another program (a Git
+    /// checkout, an editor, a script) and opens the Save-versus-disk prompt for the first of them.
+    /// Called once a second from the frame loop; tests call it directly.
+    pub fn check_external_changes(&mut self) {
+        // Never interrupt an edit or another question: the next check catches up.
+        if self.dialog.is_some() || self.backstage.is_some() || self.editor.is_some() || self.text_box_editor.is_some() {
+            return;
+        }
+        let Ok(r) = self.run("file.externalChanges", json!({})) else { return };
+        let Some(changed) = r.get("documents").and_then(Json::as_array).and_then(|d| d.first()).cloned() else { return };
+        self.open_dialog("fileChanged", changed);
+    }
+
+    /// The "Keep Current Version" answer to the file-changed prompt: the workbook keeps what it
+    /// has, and the file's current contents are accepted so the change isn't asked about again.
+    /// Also what closing the prompt (✕, Escape, `ui.dialog.cancel`) means.
+    pub fn keep_external_version(&mut self, path: &str) {
+        let _ = self.run("file.ignoreExternalChange", json!({"path": path}));
     }
 
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
@@ -1082,6 +1108,16 @@ impl SheetApp {
         if self.session.active().is_none() {
             self.session.new_workbook();
         }
+        // A file another program rewrote: ask about it, at most once a second. While a workbook
+        // has a file, keep the frame loop alive so the question is asked without any input.
+        if self.session.documents().iter().any(|d| d.path.is_some()) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            let now = now_ms();
+            if now - self.external_check >= EXTERNAL_CHECK_MS {
+                self.external_check = now;
+                self.check_external_changes();
+            }
+        }
     }
 
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
@@ -1145,10 +1181,12 @@ impl SheetApp {
             }
         }
         self.perf.last = now;
-        // AutoSave: save workbooks that have a file shortly after they change.
+        // AutoSave: save workbooks that have a file shortly after they change. Not while the
+        // file-changed prompt is open: that would overwrite the version it is offering.
         if self.grid.autosave
             && self.editor.is_none()
             && self.text_box_editor.is_none()
+            && self.dialog.as_ref().is_none_or(|d| d.name != "fileChanged")
             && now - self.grid.last_autosave > 2000.0
             && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")))
         {

@@ -535,6 +535,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom Out" => "Oddálit",
         // widgets.rs (alphabetical keys).
         "Dismiss" => "Zavřít",
+        // A file another program rewrote (File Changed on Disk).
+        "File Changed on Disk" => "Soubor byl na disku změněn",
+        "{name} was changed on disk by another program (a Git checkout, another editor) since GridCraft read it." => {
+            "{name} byl změněn jiným programem (stažením z Gitu, jiným editorem) poté, co ho GridCraft načetl."
+        }
+        "Use the version on disk, or keep the version in GridCraft." => "Použít verzi na disku, nebo zachovat verzi v GridCraftu.",
+        "Use Disk Version" => "Použít verzi na disku",
+        "Keep Current Version" => "Zachovat aktuální verzi",
+        "The workbook has unsaved changes: the disk version discards them." => "Sešit obsahuje neuložené změny: verze na disku je zahodí.",
+        "Closing this prompt keeps the version in GridCraft." => "Zavřením této výzvy zachováte verzi v GridCraftu.",
         _ => return None,
     })
 }

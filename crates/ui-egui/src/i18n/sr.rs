@@ -408,6 +408,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bottom Margin" => "Donja margina",
         "Header Margin" => "Margina zaglavlja",
         "Footer Margin" => "Margina podnožja",
+        // A file another program rewrote (File Changed on Disk).
+        "File Changed on Disk" => "Datoteka je izmenjena na disku",
+        "{name} was changed on disk by another program (a Git checkout, another editor) since GridCraft read it." => {
+            "{name} je izmenio drugi program (Git preuzimanje, drugi uređivač) nakon što ga je GridCraft pročitao."
+        }
+        "Use the version on disk, or keep the version in GridCraft." => "Koristi verziju sa diska ili zadrži verziju u GridCraft-u.",
+        "Use Disk Version" => "Koristi verziju sa diska",
+        "Keep Current Version" => "Zadrži trenutnu verziju",
+        "The workbook has unsaved changes: the disk version discards them." => "Radna sveska ima nesačuvane izmene: verzija sa diska ih odbacuje.",
+        "Closing this prompt keeps the version in GridCraft." => "Zatvaranje ovog upozorenja zadržava verziju u GridCraft-u.",
         _ => return None,
     })
 }

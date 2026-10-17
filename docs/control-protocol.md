@@ -41,6 +41,7 @@ connection; nothing sent after it runs. Blank lines are skipped.
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
 | `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?}` | Files and lifetime. `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog) |
+| `file.externalChanges` / `file.reload` / `file.ignoreExternalChange` (commands) | `{}` / `{path?}` or `{name?, base64?}`, `{force?}` / `{path?}` | Files another program changed: what changed (`{changed, documents: [{index, uid, title, path, dirty}]}`), take the version on disk (replaces the workbook, keeps its window, active sheet, selection and scroll; refuses unsaved changes without `force`), or keep the version in GridCraft (settles the change until the file changes again) |
 
 Any other method name that is a command id (e.g. `home.bold`) runs that command.
 
@@ -69,6 +70,32 @@ the password, and never replaces the encrypted original.
 
 For a headless equivalent (no window), use `gridcraft-cli mcp` or `gridcraft-cli run`;
 see [`mcp.md`](mcp.md) and [`cli.md`](cli.md).
+
+### A file another program rewrote
+
+A workbook whose file is replaced underneath GridCraft (a Git checkout, another editor, a script)
+is noticed within a second. The window shows **File Changed on Disk** with **Use Disk Version** and
+**Keep Current Version**; closing that prompt (✕ or Escape) means keeping the version in GridCraft,
+and either answer settles the change until the file changes once more. Nothing is asked while a
+cell is being edited or another dialog is open, and a workbook that has no file (never saved, or
+opened from bytes in the browser) is never watched.
+
+`file.externalChanges` reports the same thing to an agent, and the change is answered without the
+prompt:
+
+```json
+{"id": 1, "method": "engine.execute", "params": {"command": "file.externalChanges"}}
+{"id": 1, "ok": true, "result": {"changed": true, "documents": [{"index": 0, "uid": 3, "title": "model.xlsx", "path": "/w/model.xlsx", "dirty": false}]}}
+```
+
+`file.reload {path}` takes the version on disk: the workbook is replaced in place, keeping its
+window, active sheet, selection and scroll, and its undo history starts over (the base those steps
+referred to is gone). A workbook with unsaved changes is refused unless `force: true` is given, so
+the interface's prompt passes it and a script says so on purpose. `file.ignoreExternalChange
+{path}` is the other answer: the version in GridCraft stays, and the file's stamp as it is now is
+accepted, so the change is not reported again. Both commands name a workbook by `path`
+(`file.reload` also accepts `{name, base64}`, which is how the browser's relay hands over a file it
+read) and otherwise act on the active one.
 
 ### Native printing
 

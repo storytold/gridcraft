@@ -776,6 +776,9 @@ impl Dialog {
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title")})),
+            "fileChanged" => {
+                Dialog::custom("fileChanged", "File Changed on Disk", json!({"path": p("path"), "title": p("title"), "dirty": p("dirty")}))
+            }
             "start" => Dialog::custom("start", "GridCraft", json!({})),
             "comments" => {
                 app.grid.pane = None;
@@ -1026,6 +1029,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let mut open = true;
     let mut win_open = true;
     let mut confirm = false;
+    // The file-changed prompt was answered by one of its buttons (so its ✕/Escape still has to
+    // mean "keep the version in GridCraft").
+    let mut answered = false;
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
@@ -1033,6 +1039,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        // Wider than the default: its two buttons are long in some languages
+        // (French "Utiliser la version du disque" / "Conserver la version actuelle").
+        "fileChanged" => 470.0,
         _ => 380.0,
     };
     let window = egui::Window::new(app.ui.language.tr(&d.title))
@@ -1181,6 +1190,45 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         }
                     }
                 }
+                "fileChanged" => {
+                    let lang = app.ui.language;
+                    let title = d.values.get("title").and_then(Json::as_str).unwrap_or("This workbook").to_string();
+                    let path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
+                    let dirty = d.values.get("dirty").and_then(Json::as_bool).unwrap_or(false);
+                    let changed = lang.tr("{name} was changed on disk by another program (a Git checkout, another editor) since GridCraft read it.");
+                    ui.label(changed.replace("{name}", &title));
+                    ui.add_space(2.0);
+                    ui.label(lang.tr("Use the version on disk, or keep the version in GridCraft."));
+                    if dirty {
+                        ui.add_space(2.0);
+                        let warning = lang.tr("The workbook has unsaved changes: the disk version discards them.");
+                        ui.label(egui::RichText::new(warning).color(theme::Tokens::get(ui.ctx()).danger));
+                    }
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(lang.tr("Use Disk Version")).clicked() {
+                            match app.run("file.reload", json!({"path": path, "force": true})) {
+                                Ok(r) => {
+                                    // The reloaded file's own warnings (kept macros, skipped
+                                    // parts) go on the info bar, as opening it would show them.
+                                    app.show_open_warnings(&r);
+                                    answered = true;
+                                    open = false;
+                                }
+                                // A file that can't be read (deleted, no permission): say so and
+                                // leave the question open.
+                                Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
+                            }
+                        }
+                        if ui.button(lang.tr("Keep Current Version")).clicked() {
+                            app.keep_external_version(&path);
+                            answered = true;
+                            open = false;
+                        }
+                    });
+                    ui.add_space(2.0);
+                    ui.label(egui::RichText::new(lang.tr("Closing this prompt keeps the version in GridCraft.")).small());
+                }
                 "saveChanges" => {
                     ui.label(format!("Do you want to save the changes you made to {}?", d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook")));
                     ui.horizontal(|ui| {
@@ -1281,6 +1329,12 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
     } else if confirm {
         open = false;
+    }
+    // The file-changed prompt closed without an answer (✕ or Escape): that keeps the version in
+    // GridCraft, exactly like its second button, and settles the change for good.
+    if !open && !answered && d.name == "fileChanged" {
+        let path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
+        app.keep_external_version(&path);
     }
     if let Some(child) = app.dialog.as_mut() {
         // The body opened another dialog (Name Manager › New…). It takes over; this one waits
