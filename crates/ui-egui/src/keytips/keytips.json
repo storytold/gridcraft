@@ -1965,8 +1965,8 @@
   },
   {
    "seq": "AQ",
-   "kind": "command",
-   "target": "data.advancedFilter",
+   "kind": "dialog",
+   "target": "advancedFilter",
    "excel": "Advanced Filter",
    "note": ""
   },

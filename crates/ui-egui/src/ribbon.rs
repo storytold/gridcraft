@@ -1925,6 +1925,11 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
         if __k.clicked() {
             act(app, "data.reapply", json!({}));
         }
+        let __k = small_button(ui, Icon::Filter, "Advanced", "Advanced Filter", false);
+        control_keytip(app, ui, &__k, "dialog:advancedFilter");
+        if __k.clicked() {
+            app.open_dialog("advancedFilter", json!({}));
+        }
     });
     sep(ui);
     let __k = big_button(ui, Icon::TextColumns, "Text to\nColumns", "Text to Columns", false);

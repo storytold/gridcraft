@@ -2149,7 +2149,7 @@ fn keytip_apt_() {
 fn keytip_aq_() {
     let mut h = harness(blank());
     sequence(&mut h, "AQ", false);
-    assert!(h.state().message.is_some() || h.state().toast.is_some(), "AQ must invoke data.advancedFilter and surface its missing-params error");
+    assert!(h.state().dialog.is_some(), "AQ must open the advancedFilter dialog");
 }
 
 #[test]

@@ -291,7 +291,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("APR", Entry::Finish(Action::Pending("data.recentSources"))),   // pending; Excel: Recent Sources; gap #12; reserved until the command lands
     ("APS", Entry::Finish(Action::Command("data.queriesConnections"))), // Excel: Show Queries
     ("APT", Entry::Finish(Action::Pending("data.fromTable"))),       // pending; Excel: From Table (query); gap #12; reserved until the command lands
-    ("AQ", Entry::Finish(Action::Command("data.advancedFilter"))),   // Excel: Advanced Filter
+    ("AQ", Entry::Finish(Action::Dialog("advancedFilter"))),         // Excel: Advanced Filter
     ("AR", Entry::Continue),                                         // group: group: Queries & Connections
     ("ARA", Entry::Finish(Action::Command("data.refreshAll"))),      // Excel: Refresh All
     ("ARC", Entry::Finish(Action::Pending("data.cancelRefresh"))),   // pending; Excel: Cancel Refresh; gap #12; reserved until the command lands

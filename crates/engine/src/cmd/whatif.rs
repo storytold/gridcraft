@@ -70,7 +70,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Advanced…",
             ["Data", "Sort & Filter"],
             None,
-            "{range? (list with headers; default current region), criteria: \"H1:I3\" (header row of field names; rows OR'ed, columns AND'ed; \">100\", \"=abc\", \"a*\", \"<>\"; blank-headed formula cells are computed criteria for the first data row), copyTo?: \"K1\" (else filter in place by hiding rows), unique?: bool}",
+            "{range? (list with headers; default current region), criteria?: \"H1:I3\" (omitted/blank matches all rows; header row of field names; rows OR'ed, columns AND'ed; \">100\", \"=abc\", \"a*\", \"<>\"; blank-headed formula cells are computed criteria for the first data row), copyTo?: \"K1\" (else filter in place by hiding rows), unique?: bool}",
             has_doc,
             advanced_filter
         ),
@@ -795,41 +795,45 @@ fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
             (d.wb.active_sheet, crate::selection::current_region(sh, d.selection.active))
         }
     };
-    let (csi, crit) = range_arg(s, p, "criteria", CMD)?;
+    let criteria = str_param(p, "criteria").filter(|t| !t.trim().is_empty()).map(|t| parse_range(&d.wb, t, CMD)).transpose()?;
     if list.height() < 1 || list.count() > 50_000_000 {
         return Err(bad(CMD, "the list range is too large"));
     }
-    if crit.width() > 1024 || crit.height() > 10_000 {
+    if let Some((_, crit)) = criteria
+        && (crit.width() > 1024 || crit.height() > 10_000)
+    {
         return Err(bad(CMD, "the criteria range is too large"));
     }
     let wb = &d.wb;
     let sh = wb.sheet(si).ok_or(EngineError::NoDocument)?;
-    let csh = wb.sheet(csi).ok_or(EngineError::NoDocument)?;
     let headers: Vec<String> =
         (list.start.col..=list.end.col).map(|c| crate::display::cell_text(wb, sh, CellRef::new(list.start.row, c)).trim().to_lowercase()).collect();
     let first_data = list.start.row + 1;
     // Criteria rows → conditions.
     let mut rows: Vec<Vec<Cond>> = Vec::new();
-    for cr in crit.start.row + 1..=crit.end.row {
-        let mut conds = Vec::new();
-        for cc in crit.start.col..=crit.end.col {
-            let at = CellRef::new(cr, cc);
-            let cell = csh.cell(at);
-            let v = csh.value(at);
-            let formula = cell.and_then(|c| c.formula.as_ref());
-            if v.is_empty() && formula.is_none() {
-                continue;
+    if let Some((csi, crit)) = criteria {
+        let csh = wb.sheet(csi).ok_or(EngineError::NoDocument)?;
+        for cr in crit.start.row + 1..=crit.end.row {
+            let mut conds = Vec::new();
+            for cc in crit.start.col..=crit.end.col {
+                let at = CellRef::new(cr, cc);
+                let cell = csh.cell(at);
+                let v = csh.value(at);
+                let formula = cell.and_then(|c| c.formula.as_ref());
+                if v.is_empty() && formula.is_none() {
+                    continue;
+                }
+                let head = crate::display::cell_text(wb, csh, CellRef::new(crit.start.row, cc)).trim().to_lowercase();
+                match headers.iter().position(|h| !head.is_empty() && *h == head) {
+                    Some(off) => conds.push(Cond::Compare(off as u32, v)),
+                    None => match formula.and_then(|f| f.expr()) {
+                        Some(e) => conds.push(Cond::Computed(e, at)),
+                        None => return Err(EngineError::Other(format!("The criteria label `{head}` doesn't match a column of the list."))),
+                    },
+                }
             }
-            let head = crate::display::cell_text(wb, csh, CellRef::new(crit.start.row, cc)).trim().to_lowercase();
-            match headers.iter().position(|h| !head.is_empty() && *h == head) {
-                Some(off) => conds.push(Cond::Compare(off as u32, v)),
-                None => match formula.and_then(|f| f.expr()) {
-                    Some(e) => conds.push(Cond::Computed(e, at)),
-                    None => return Err(EngineError::Other(format!("The criteria label `{head}` doesn't match a column of the list."))),
-                },
-            }
+            rows.push(conds);
         }
-        rows.push(conds);
     }
     let matches_row = |row: u32| -> bool {
         if rows.is_empty() {
@@ -845,7 +849,7 @@ fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
                 }
                 Cond::Computed(e, at) => {
                     let shifted = gridcraft_formula::adjust::shift_relative(e.clone(), row as i64 - first_data as i64, 0);
-                    let v = gridcraft_calc::recalc::evaluate_expr(wb, csi, *at, &shifted);
+                    let v = gridcraft_calc::recalc::evaluate_expr(wb, criteria.map(|(si, _)| si).unwrap_or(si), *at, &shifted);
                     matches!(v.scalar().to_bool(), Ok(true))
                 }
             })
@@ -867,28 +871,30 @@ fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
     if let Some(t) = str_param(p, "copyTo") {
         let (dsi, dest) = parse_range(wb, t, CMD)?;
         let dest = dest.start;
-        let extract = RangeRef::new(dest, dest.offset_clamped(list.height() as i64 - 1, list.width() as i64 - 1));
-        if dsi == si && extract.intersects(&list) {
-            return Err(EngineError::Other("The extract range can't overlap the list range.".into()));
-        }
         let mut rows_out: Vec<u32> = vec![list.start.row];
         rows_out.extend(keep.iter().filter(|(_, k)| *k).map(|(r, _)| *r));
+        let end =
+            dest.offset(rows_out.len() as i64 - 1, list.width() as i64 - 1).ok_or_else(|| bad(CMD, "the extract range exceeds the worksheet"))?;
+        let out_range = RangeRef::new(dest, end);
+        if dsi == si && out_range.intersects(&list) {
+            return Err(EngineError::Other("The extract range can't overlap the list range.".into()));
+        }
         let cells: Vec<(CellRef, Cell)> = rows_out
             .iter()
             .enumerate()
             .flat_map(|(i, row)| {
-                (list.start.col..=list.end.col).filter_map(move |c| {
+                (list.start.col..=list.end.col).map(move |c| {
                     let src = CellRef::new(*row, c);
-                    let to = dest.offset(i as i64, (c - list.start.col) as i64)?;
+                    // The full output footprint was checked above.
+                    let to = CellRef::new(dest.row + i as u32, dest.col + c - list.start.col);
                     let style = sh.style_id(src);
-                    Some((to, Cell { value: sh.value(src), formula: None, style }))
+                    (to, Cell { value: sh.value(src), formula: None, style })
                 })
             })
             .collect();
-        let out_range = RangeRef::new(dest, dest.offset_clamped(rows_out.len() as i64 - 1, list.width() as i64 - 1));
         edit(s, |cx| {
             let shm = cx.sheet_mut(dsi)?;
-            let old: Vec<CellRef> = shm.cells.iter_range(extract).map(|(c, _)| c).collect();
+            let old: Vec<CellRef> = shm.cells.iter_range(out_range).map(|(c, _)| c).collect();
             for c in &old {
                 shm.remove_cell(*c);
             }
@@ -1315,6 +1321,52 @@ mod tests {
         assert_eq!(r["matched"], 4);
         // Overlap is rejected.
         assert!(s.execute("data.advancedFilter", json!({"range": "A1:B6", "criteria": "H1:I3", "copyTo": "B2"})).is_err());
+    }
+
+    #[test]
+    fn advanced_filter_copy_preserves_cells_beyond_result() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["A", 1], ["B", 2], ["C", 3]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "H1", "values": [["Name"], ["B"]]})).unwrap();
+        s.execute("cell.set", json!({"cell": "K4", "input": "Keep me"})).unwrap();
+        let r = s.execute("data.advancedFilter", json!({"range": "A1:B4", "criteria": "H1:H2", "copyTo": "K1"})).unwrap();
+        assert_eq!(r["range"], "K1:L2");
+        assert_eq!(v(&s, "K2"), Value::from("B"));
+        assert_eq!(v(&s, "K4"), Value::from("Keep me"));
+    }
+
+    #[test]
+    fn advanced_filter_copy_rejects_overflow_without_mutation() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["A", 1]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "H1", "values": [["Name"], ["A"]]})).unwrap();
+        for dest in ["XFD1", "K1048576"] {
+            s.execute("cell.set", json!({"cell": dest, "input": "Keep me"})).unwrap();
+            assert!(s.execute("data.advancedFilter", json!({"range": "A1:B2", "criteria": "H1:H2", "copyTo": dest})).is_err());
+            assert_eq!(v(&s, dest), Value::from("Keep me"));
+        }
+    }
+
+    #[test]
+    fn advanced_filter_copy_allows_output_above_source_when_only_old_clear_area_overlaps() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "C4", "values": [["Name", "Score"], ["A", 1], ["B", 2], ["C", 3]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "H1", "values": [["Name"], ["A"]]})).unwrap();
+        let r = s.execute("data.advancedFilter", json!({"range": "C4:D7", "criteria": "H1:H2", "copyTo": "B1"})).unwrap();
+        assert_eq!(r["range"], "B1:C2");
+        assert_eq!(v(&s, "C4"), Value::from("Name"));
+        assert_eq!(v(&s, "C2"), Value::Number(1.0));
+    }
+
+    #[test]
+    fn advanced_filter_unique_without_criteria() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["A"], ["A"], ["B"]]})).unwrap();
+        let r = s.execute("data.advancedFilter", json!({"range": "A1:A4", "copyTo": "C1", "unique": true})).unwrap();
+        assert_eq!(r["matched"], 2);
+        assert_eq!(r["range"], "C1:C3");
+        assert_eq!(v(&s, "C2"), Value::from("A"));
+        assert_eq!(v(&s, "C3"), Value::from("B"));
     }
 
     #[test]

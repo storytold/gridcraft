@@ -437,6 +437,26 @@ impl Dialog {
                 vec![Check { key: "header", label: "My data has headers" }, Text { key: "columnsText", label: "Columns (blank = all, e.g. A,C):" }],
                 json!({"header": true}),
             ),
+            "advancedFilter" => {
+                let list = app
+                    .session
+                    .active()
+                    .and_then(|d| d.wb.active().map(|sh| gridcraft_engine::selection::current_region(sh, d.selection.active).a1()))
+                    .unwrap_or(sel.clone());
+                let mut d = Dialog::form(
+                    "advancedFilter",
+                    "Advanced Filter",
+                    "data.advancedFilter",
+                    vec![],
+                    json!({"action": "inPlace", "range": list, "criteria": "", "copyTo": "", "unique": false}),
+                );
+                for key in ["action", "range", "criteria", "copyTo", "unique"] {
+                    if let Some(value) = params.get(key) {
+                        d.set_value(key, value.clone());
+                    }
+                }
+                d
+            }
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
             "forecastSheet" => Dialog::form(
                 "forecastSheet",
@@ -938,10 +958,43 @@ fn data_validation_form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, o
     ok_cancel(ui, confirm, open);
 }
 
+fn advanced_filter_form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    use Field::*;
+    let copy = d.values.get("action").and_then(Json::as_str) == Some("copy");
+    d.fields = vec![
+        Choice {
+            key: "action",
+            label: "Action",
+            options: vec![("inPlace", "Show matching rows in place"), ("copy", "Copy matching rows elsewhere")],
+        },
+        Text { key: "range", label: "List range:" },
+        Text { key: "criteria", label: "Criteria range (optional):" },
+    ];
+    if copy {
+        d.fields.push(Text { key: "copyTo", label: "Copy to:" });
+    }
+    d.fields.push(Check { key: "unique", label: "Unique rows only" });
+    form_fields(ui, d);
+    // Constrain the button row: the shared right-to-left layout otherwise
+    // consumes the window's remaining height instead of fitting the buttons.
+    ui.allocate_ui(vec2(ui.available_width(), ui.spacing().interact_size.y + 8.0), |ui| ok_cancel(ui, confirm, open));
+}
+
 /// Builds the command params from form values for dialogs that need translation.
-fn build_params(d: &Dialog) -> Json {
+pub(crate) fn build_params(d: &Dialog) -> Json {
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
+        "advancedFilter" => {
+            if let Some(m) = v.as_object_mut() {
+                m.remove("action");
+                if d.values.get("action").and_then(Json::as_str) != Some("copy") {
+                    m.remove("copyTo");
+                }
+                if m.get("criteria").and_then(Json::as_str).is_some_and(|s| s.trim().is_empty()) {
+                    m.remove("criteria");
+                }
+            }
+        }
         "dataValidation" => {
             let kind = d.values.get("type").and_then(Json::as_str).unwrap_or("any");
             let operator = d.values.get("operator").and_then(Json::as_str).unwrap_or("between");
@@ -1042,12 +1095,17 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         .default_width(width)
         .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -40.0))
         .open(&mut win_open);
-    let window = if d.name == "insertPicture" { window.default_height(240.0) } else { window };
+    let window = match d.name.as_str() {
+        "insertPicture" => window.default_height(240.0),
+        "advancedFilter" => window.default_height(0.0),
+        _ => window,
+    };
     window.show(ctx, |ui| {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
+                "advancedFilter" => advanced_filter_form(ui, &mut d, &mut confirm, &mut open),
                 "insertFunction" => insert_function(app, ui, &mut d, &mut confirm),
                 "find" => find(app, ui, &mut d),
                 "goTo" => go_to(app, ui, &mut d, &mut confirm),
