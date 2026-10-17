@@ -1151,6 +1151,26 @@ fn open_leaves_plain_workbooks_untouched() {
 }
 
 #[test]
+fn open_fits_big_font_rows_from_the_font_not_the_sheet_default() {
+    // Excel saves a sheet whose rows hold 16pt text with a 21pt (28px) default row height and no
+    // `ht` on rows of that height. Those rows already fit their font: they open at about 28px,
+    // not scaled up again by 16/11 to 41px.
+    let mut wb = gridcraft_model::Workbook::new();
+    let big = wb.styles.derive(gridcraft_model::StyleId::DEFAULT, |s| s.font.size = 16.0);
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.default_row_height = 28.0;
+    sh.set_value(CellRef::new(4, 0), Value::text("SANTANDER"));
+    sh.set_style(CellRef::new(4, 0), big);
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "tall-default.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.default_row_height, 28.0);
+    let h = sh.row_height(4);
+    assert!((28.0..30.0).contains(&h), "a 16pt row on a 28px-default sheet opens at about 28px, got {h}");
+}
+
+#[test]
 fn tables_and_structured_refs() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty"], ["x", 2], ["y", 5]]})).unwrap();

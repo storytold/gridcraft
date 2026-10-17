@@ -484,7 +484,9 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
     for (c, cell) in sh.cells.row(row, 0, gridcraft_core::MAX_COLS - 1) {
         let st = wb.styles.get(cell.style);
         let size = st.font.size;
-        let line = (size * 1.8).round().max(default * size / gridcraft_model::DEFAULT_FONT_SIZE);
+        // Scaled from an 11pt row's height, not the sheet's default: a sheet whose default
+        // already fits a bigger font (21pt rows for 16pt text) would otherwise scale it twice.
+        let line = (size * 1.8).round().max(gridcraft_model::DEFAULT_ROW_HEIGHT * size / gridcraft_model::DEFAULT_FONT_SIZE);
         let mut lines = 1.0f32;
         if !cell.value.is_empty() || cell.formula.is_some() {
             let text = crate::display::cell_text(wb, sh, CellRef::new(row, c));
