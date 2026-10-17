@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 mod cs;
 mod de;
+mod el;
 mod es;
 mod fr;
 mod ko;
@@ -25,6 +26,7 @@ pub enum Language {
     #[default]
     En,
     Es,
+    El,
     Zh,
     Ja,
     Ko,
@@ -38,13 +40,15 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Self; 11] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr];
+    pub const ALL: [Self; 12] =
+        [Self::En, Self::Es, Self::El, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
             Self::Es => "Español",
+            Self::El => "Ελληνικά",
             Self::Zh => "简体中文",
             Self::Ja => "日本語",
             Self::Ko => "한국어",
@@ -62,6 +66,7 @@ impl Language {
         match self {
             Self::En => "en",
             Self::Es => "es",
+            Self::El => "el",
             Self::Zh => "zh",
             Self::Ja => "ja",
             Self::Ko => "ko",
@@ -82,6 +87,7 @@ impl Language {
         match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
             "en" => Some(Self::En),
             "es" => Some(Self::Es),
+            "el" => Some(Self::El),
             "zh" => Some(Self::Zh),
             "ja" => Some(Self::Ja),
             "ko" => Some(Self::Ko),
@@ -120,6 +126,7 @@ impl Language {
         let translated = match self {
             Self::En => None,
             Self::Es => es::translate(text),
+            Self::El => el::translate(text),
             Self::Ja => JAPANESE.iter().find(|(english, _)| *english == text).map(|(_, translated)| *translated),
             Self::Zh => zh::translate(text),
             Self::Ko => ko::translate(text),
@@ -607,6 +614,7 @@ mod tests {
             assert!(ru::translate(english).is_some_and(|text| !text.is_empty()), "missing Russian: {english}");
             assert!(pt::translate(english).is_some_and(|text| !text.is_empty()), "missing Portuguese: {english}");
             assert!(es::translate(english).is_some_and(|text| !text.is_empty()), "missing Spanish: {english}");
+            assert!(el::translate(english).is_some_and(|text| !text.is_empty()), "missing Greek: {english}");
             assert!(de::translate(english).is_some_and(|text| !text.is_empty()), "missing German: {english}");
             assert!(cs::translate(english).is_some_and(|text| !text.is_empty()), "missing Czech: {english}");
             assert!(fr::translate(english).is_some_and(|text| !text.is_empty()), "missing French: {english}");
@@ -618,6 +626,10 @@ mod tests {
         assert_eq!(Language::Ru.tr("Data"), "Данные");
         assert_eq!(Language::PtBr.tr("Data"), "Dados");
         assert_eq!(Language::Es.tr("Data"), "Datos");
+        assert_eq!(Language::El.tr("Data"), "Δεδομένα");
+        assert_eq!(Language::El.tr("Page Layout|Orientation"), "Προσανατολισμός σελίδας");
+        assert_eq!(Language::El.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(Language::El.tr("Page {page} of {pages}"), "Σελίδα {page} από {pages}");
         assert_eq!(Language::Es.tr("Freeze Panes"), "Inmovilizar paneles");
         assert_eq!(Language::Es.tr("Sheet1!A1"), "Sheet1!A1");
         assert_eq!(Language::De.tr("Data"), "Daten");
@@ -667,6 +679,9 @@ mod tests {
         assert_eq!(Language::from_tag("ja-JP"), Some(Language::Ja));
         assert_eq!(Language::from_tag("en_US"), Some(Language::En));
         assert_eq!(Language::from_tag("es_MX"), Some(Language::Es));
+        assert_eq!(Language::from_tag("el-GR"), Some(Language::El));
+        assert_eq!(Language::from_tag("el_GR.UTF-8"), Some(Language::El));
+        assert_eq!(Language::parse("el"), Some(Language::El));
         assert_eq!(Language::from_tag("zh-Hans-CN"), Some(Language::Zh));
         assert_eq!(Language::from_tag("ko-KR"), Some(Language::Ko));
         assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
