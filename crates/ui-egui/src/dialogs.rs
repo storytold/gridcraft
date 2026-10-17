@@ -434,8 +434,12 @@ impl Dialog {
                 "removeDuplicates",
                 "Remove Duplicates",
                 "data.removeDuplicates",
-                vec![Check { key: "header", label: "My data has headers" }, Text { key: "columnsText", label: "Columns (blank = all, e.g. A,C):" }],
-                json!({"header": true}),
+                vec![
+                    Text { key: "range", label: "Range:" },
+                    Check { key: "header", label: "My data has headers" },
+                    Text { key: "columnsText", label: "Columns (blank = all, e.g. A,C):" },
+                ],
+                json!({"range": sel, "header": true}),
             ),
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
             "forecastSheet" => Dialog::form(
@@ -2710,6 +2714,20 @@ mod data_validation_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remove_duplicates_prefills_the_selection_and_submits_the_edited_range() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        session.execute("selection.set", json!({"range": "B2:C5"})).unwrap();
+        let mut app = SheetApp::new(session, Default::default());
+        let mut dialog = Dialog::open(&mut app, "removeDuplicates", json!({})).unwrap();
+        assert_eq!(dialog.values.get("range"), Some(&json!("B2:C5")));
+        assert!(dialog.fields.iter().any(|field| matches!(field, Field::Text { key: "range", .. })));
+        assert_eq!(build_params(&dialog)["range"], "B2:C5");
+        dialog.set_value("range", json!("D2:E6"));
+        assert_eq!(build_params(&dialog)["range"], "D2:E6");
+    }
 
     #[test]
     fn data_validation_opens_on_the_rule_of_the_active_cell() {
