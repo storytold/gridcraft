@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use gridcraft_core::parse::parse_input;
+use gridcraft_core::parse::parse_input_with;
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, Value};
 use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
 
@@ -161,7 +161,7 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
             }
             let pos = CellRef::new(row, col as u32);
             let cell = if opts.parse_values {
-                let p = parse_input(&f, opts.date_system);
+                let p = parse_input_with(&f, opts.date_system, &opts.conversion);
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
                         Some((_, id)) => *id,

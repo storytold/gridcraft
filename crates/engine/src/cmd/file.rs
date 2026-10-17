@@ -21,9 +21,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Options",
             ["File"],
             None,
-            "{} → {calculation: {mode, iterative, maxIterations, maxChange}} for the active workbook (the interface opens File › Options; change settings with their own commands, e.g. formulas.calculationOptions, view.theme, app.language.set)",
+            "{} → {calculation: {mode, iterative, maxIterations, maxChange}, dataConversion} for the active workbook (the interface opens File › Options; change settings with their own commands, e.g. formulas.calculationOptions, app.dataConversion, view.theme, app.language.set)",
             always,
             options
+        ),
+        cmd!(
+            query "app.dataConversion",
+            "Automatic Data Conversion",
+            [],
+            None,
+            "{all?: bool, removeLeadingZeros?: bool, keepFirst15Digits?: bool, longNumberDigits?: 1..15, digitsAroundE?: bool, removeTrailingZeros?: bool} → the settings (File › Options › Data; for typing, pasting and opening CSV/text files; {} only reports). keepFirst15Digits:false keeps numbers with more than longNumberDigits digits as text (default 11: only what General shows exactly as written converts), remembered; longNumberDigits without keepFirst15Digits also unchecks it; removeTrailingZeros (GridCraft's addition, default on): off gives 720.0 the format 0.0 so it shows and saves as written; all sets the four checkboxes",
+            always,
+            data_conversion
         ),
         cmd!(noundo "window.activate", "Switch Window", ["Window"], None, "{index}", has_doc, activate_window),
     ]
@@ -56,7 +65,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         return ok();
     };
     let encrypted = gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Encrypted;
-    let (mut wb, warnings) = crate::io::open_bytes_with_password(&name, &bytes, str_param(p, "password"))?;
+    let (mut wb, warnings) = crate::io::open_bytes_converting(&name, &bytes, str_param(p, "password"), &s.prefs.data_conversion)?;
     wb.source_dir = str_param(p, "path").and_then(crate::io::source_dir);
     let imported =
         matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Ods | crate::io::FileKind::Xlsb | crate::io::FileKind::Xls))
@@ -201,7 +210,70 @@ fn options(s: &mut Session, _: &Json) -> Result<Json> {
         };
         json!({"mode": mode, "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change})
     });
-    Ok(json!({"calculation": calculation}))
+    Ok(json!({"calculation": calculation, "dataConversion": data_conversion_json(&s.prefs.data_conversion)}))
+}
+
+/// File › Options › Data › Automatic Data Conversion. Every parameter is checked before anything
+/// changes; `all` (Excel's "Enable all default data conversions") applies first, then the single
+/// checkboxes. The digit limit is remembered whether or not its checkbox is on.
+fn data_conversion(s: &mut Session, p: &Json) -> Result<Json> {
+    use gridcraft_core::parse::MAX_LONG_NUMBER_DIGITS;
+    const CMD: &str = "app.dataConversion";
+    let flag = |key: &str| -> Result<Option<bool>> {
+        match p.get(key) {
+            None | Some(Json::Null) => Ok(None),
+            Some(Json::Bool(b)) => Ok(Some(*b)),
+            Some(v) => Err(bad(CMD, format!("`{key}` must be true or false, not {v}"))),
+        }
+    };
+    let digits = match p.get("longNumberDigits") {
+        None | Some(Json::Null) => None,
+        Some(v) => match v.as_u64().filter(|n| (1..=u64::from(MAX_LONG_NUMBER_DIGITS)).contains(n)).and_then(|n| u8::try_from(n).ok()) {
+            Some(n) => Some(n),
+            None => return Err(bad(CMD, format!("`longNumberDigits` must be a whole number from 1 to {MAX_LONG_NUMBER_DIGITS}, not {v}"))),
+        },
+    };
+    let all = flag("all")?;
+    let zeros = flag("removeLeadingZeros")?;
+    let keep15 = flag("keepFirst15Digits")?;
+    let e = flag("digitsAroundE")?;
+    let trailing = flag("removeTrailingZeros")?;
+    let c = &mut s.prefs.data_conversion;
+    if let Some(on) = all {
+        c.remove_leading_zeros = on;
+        c.keep_first_15_digits = on;
+        c.digits_around_e = on;
+        c.remove_trailing_zeros = on;
+    }
+    if let Some(on) = zeros {
+        c.remove_leading_zeros = on;
+    }
+    if let Some(on) = e {
+        c.digits_around_e = on;
+    }
+    if let Some(n) = digits {
+        c.long_number_digits = n;
+        // Giving a limit means using it, unless the box is set explicitly too.
+        c.keep_first_15_digits = false;
+    }
+    if let Some(on) = keep15 {
+        c.keep_first_15_digits = on;
+    }
+    if let Some(on) = trailing {
+        c.remove_trailing_zeros = on;
+    }
+    Ok(data_conversion_json(c))
+}
+
+fn data_conversion_json(c: &gridcraft_core::parse::DataConversion) -> Json {
+    json!({
+        "all": c.all(),
+        "removeLeadingZeros": c.remove_leading_zeros,
+        "keepFirst15Digits": c.keep_first_15_digits,
+        "longNumberDigits": c.long_number_digits,
+        "digitsAroundE": c.digits_around_e,
+        "removeTrailingZeros": c.remove_trailing_zeros,
+    })
 }
 
 fn activate_window(s: &mut Session, p: &Json) -> Result<Json> {

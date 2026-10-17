@@ -94,7 +94,8 @@ fn auto_sum(s: &mut Session, p: &Json) -> Result<Json> {
         let sheet = d.wb.active_sheet;
         edit(s, |cx| {
             for (c, f) in &writes {
-                let cell = super::edit::input_to_cell(f, sheet, *c, &mut cx.wb)?.unwrap_or_default();
+                // Formulas only: the data conversion options have nothing to decide.
+                let cell = super::edit::input_to_cell(f, sheet, *c, &mut cx.wb, &Default::default())?.unwrap_or_default();
                 cx.sheet_mut(sheet)?.set_cell(*c, cell);
                 cx.touch(sheet, *c);
             }

@@ -120,8 +120,15 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
 /// format). Inherits the destination's cell, row or column style, including its number
-/// format, before parsing. Errors when the formula can't be parsed.
-pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gridcraft_model::Workbook) -> Result<Option<Cell>> {
+/// format, before parsing. `conv` (the Automatic Data Conversion options) decides which
+/// number-like text becomes a number. Errors when the formula can't be parsed.
+pub(crate) fn input_to_cell(
+    input: &str,
+    sheet: usize,
+    at: CellRef,
+    wb: &mut gridcraft_model::Workbook,
+    conv: &gridcraft_core::parse::DataConversion,
+) -> Result<Option<Cell>> {
     let style = wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
     if input.is_empty() {
         let c = Cell { value: Value::Empty, formula: None, style };
@@ -176,7 +183,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         }
         return Ok(Some(cell));
     }
-    let parsed = gridcraft_core::parse::parse_input(input, wb.date_system);
+    let parsed = gridcraft_core::parse::parse_input_with(input, wb.date_system, conv);
     let mut style = style;
     if let Some(code) = parsed.format {
         let cur = wb.styles.get(style).num_fmt.as_str().to_string();
@@ -230,6 +237,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     {
         return Err(EngineError::Other(m));
     }
+    let conv = s.prefs.data_conversion;
     let active_sheet = s.doc()?.wb.active_sheet;
     edit(s, |cx| {
         if array {
@@ -241,7 +249,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             if !range.is_single() && cx.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.range.intersects(&range))) {
                 return Err(EngineError::Other("Multi-cell array formulas aren't allowed in tables.".into()));
             }
-            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
+            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb, &conv)?.unwrap_or_default();
             if let Some(f) = cell.formula.as_mut() {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
@@ -257,7 +265,7 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             cx.touch(sheet, range.start);
             return Ok(Json::Null);
         }
-        let cell = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+        let cell = input_to_cell(&input, sheet, at, &mut cx.wb, &conv)?;
         let sh = cx.sheet_mut(sheet)?;
         match cell {
             Some(c) => sh.set_cell(at, c),
@@ -296,6 +304,7 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("range.setValues", "too many rows"));
     }
     let mut count = 0;
+    let conv = s.prefs.data_conversion;
     edit(s, |cx| {
         for (ri, row) in rows.iter().enumerate() {
             let cols: Vec<&Json> = match row.as_array() {
@@ -314,7 +323,7 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                     Json::Bool(b) => {
                         Some(Cell { value: Value::Bool(*b), formula: None, style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default() })
                     }
-                    _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,
+                    _ => input_to_cell(&input, sheet, at, &mut cx.wb, &conv)?,
                 };
                 let sh = cx.sheet_mut(sheet)?;
                 match cell {
@@ -337,8 +346,9 @@ fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let ranges = target_ranges(s, p)?;
     let input = str_param(p, "input").unwrap_or("").to_string();
     let origin = s.doc()?.selection.active;
+    let conv = s.prefs.data_conversion;
     edit(s, |cx| {
-        let base = input_to_cell(&input, sheet, origin, &mut cx.wb)?;
+        let base = input_to_cell(&input, sheet, origin, &mut cx.wb, &conv)?;
         for r in &ranges {
             if r.count() > 2_000_000 {
                 return Err(bad("range.fill", "range too large"));
@@ -797,11 +807,12 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
     let html = str_param(p, "html").map(crate::clip_html::table_cells).unwrap_or_default();
     let h = rows.len();
     let w = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let conv = s.prefs.data_conversion;
     edit(s, |cx| {
         for (ri, row) in rows.iter().enumerate() {
             for (ci, v) in row.iter().enumerate() {
                 let Some(c) = at.offset(ri as i64, ci as i64) else { continue };
-                let mut cell = input_to_cell(v, sheet, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
+                let mut cell = input_to_cell(v, sheet, c, &mut cx.wb, &conv).unwrap_or_else(|_| Some(Cell::value(Value::text(v.as_str()))));
                 if let Some(cl) = cell.as_mut() {
                     numeric_from_html(cl, v, html.get(ri).and_then(|r| r.get(ci)), &mut cx.wb);
                 }
@@ -828,10 +839,16 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
 /// source recorded for it in its HTML, with a format that shows the same text when one can be
 /// inferred and the cell has none. The HTML cell must show the same text as the tab-separated
 /// field, so HTML that belongs to another copy (or a table laid out differently) changes nothing.
+/// Nor does it override the Automatic Data Conversion options: text they keep as text (`0042`, a
+/// long code) stays text, whatever number the source recorded for it.
 fn numeric_from_html(cell: &mut Cell, field: &str, html: Option<&crate::clip_html::HtmlCell>, wb: &mut gridcraft_model::Workbook) {
     let Some(hc) = html else { return };
     let Some(n) = hc.num else { return };
     if cell.formula.is_some() || !matches!(cell.value, Value::Text(_)) || wb.styles.get(cell.style).num_fmt.as_str() == "@" {
+        return;
+    }
+    // Text that converts with every option on was kept as text by the person's options.
+    if !matches!(gridcraft_core::parse::parse_input(field, wb.date_system).value, Value::Text(_)) {
         return;
     }
     if crate::clip_html::normalized(&hc.text) != crate::clip_html::normalized(field) {
@@ -1509,6 +1526,7 @@ fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     let all = bool_param(p, "all").unwrap_or(true);
     let workbook = str_param(p, "within") == Some("workbook");
     let active = s.doc()?.selection.active;
+    let conv = s.prefs.data_conversion;
     let n = edit(s, |cx| {
         let sheets: Vec<usize> = if workbook { (0..cx.wb.sheets.len()).collect() } else { vec![cx.wb.active_sheet] };
         let mut n = 0;
@@ -1529,7 +1547,7 @@ fn replace(s: &mut Session, p: &Json) -> Result<Json> {
                 } else {
                     replace_ci(&text, &what, &with)
                 };
-                let cell = input_to_cell(&new, si, c, &mut cx.wb).unwrap_or_else(|_| Some(Cell::value(Value::text(new.as_str()))));
+                let cell = input_to_cell(&new, si, c, &mut cx.wb, &conv).unwrap_or_else(|_| Some(Cell::value(Value::text(new.as_str()))));
                 let sh = cx.sheet_mut(si)?;
                 match cell {
                     Some(cell) => sh.set_cell(c, cell),
