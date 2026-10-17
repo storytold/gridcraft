@@ -442,13 +442,13 @@ pub fn flash_fill(cx: &mut Ctx, sheet: usize, at: CellRef) -> Result<usize> {
     // Header row: skip a first row whose target is text and source looks like a header? Keep simple.
     let mut examples = Vec::new();
     let mut todo = Vec::new();
+    // Flash Fill works on the text cells show (a date as formatted, not its serial number).
     for r in top..=bottom {
-        let src = sh.value(CellRef::new(r, src_col)).display();
-        let dst = sh.value(CellRef::new(r, at.col));
-        if dst.is_empty() {
+        let src = crate::display::cell_text(&cx.wb, sh, CellRef::new(r, src_col));
+        if sh.value(CellRef::new(r, at.col)).is_empty() {
             todo.push((r, src));
         } else {
-            examples.push((src, dst.display()));
+            examples.push((src, crate::display::cell_text(&cx.wb, sh, CellRef::new(r, at.col))));
         }
     }
     if examples.is_empty() {
@@ -602,6 +602,18 @@ fn synthesize(src: &str, dst: &str) -> Vec<Program> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flash_fill_reads_shown_text() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let values = serde_json::json!([["2024-01-15", "15/01/2024"], ["2023-12-03", null]]);
+        s.execute("range.setValues", serde_json::json!({"range": "A1", "values": values})).unwrap();
+        s.execute("selection.set", serde_json::json!({"cell": "B2"})).unwrap();
+        s.execute("data.flashFill", serde_json::json!({})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert_eq!(sh.value(CellRef::new(1, 1)), Value::from("03/12/2023"));
+    }
 
     #[test]
     fn flash_programs() {
