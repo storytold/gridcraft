@@ -286,7 +286,10 @@ fn weekend_mask(v: Option<&Arg>) -> R<[bool; 7]> {
         Value::Empty if !arg.from_ref => Ok([true, false, false, false, false, false, true]),
         Value::Text(t) => {
             let b = t.as_bytes();
-            if b.len() != 7 || !b.iter().all(|c| *c == b'0' || *c == b'1') || b.iter().all(|c| *c == b'1') {
+            // All seven days marked as the weekend is a valid string: Microsoft documents
+            // NETWORKDAYS.INTL as "Using 1111111 will always return 0" and WORKDAY.INTL as
+            // rejecting it, which `workday_core`'s `per_week == 0` guard already implements.
+            if b.len() != 7 || !b.iter().all(|c| *c == b'0' || *c == b'1') {
                 return Err(CellError::Value);
             }
             // String order is Monday..Sunday.
@@ -766,7 +769,10 @@ mod tests {
         close(ev("NETWORKDAYS.INTL", vec![n(d(2006.0, 1.0, 1.0)), n(d(2006.0, 2.0, 1.0)), n(7.0)]), 24.0);
         close(ev("NETWORKDAYS.INTL", vec![n(d(2006.0, 1.0, 1.0)), n(d(2006.0, 2.0, 1.0)), t("0000110")]), 24.0);
         close(ev("NETWORKDAYS.INTL", vec![n(d(2006.0, 1.0, 1.0)), n(d(2006.0, 1.0, 31.0)), n(11.0)]), 26.0);
-        is_err(ev("NETWORKDAYS.INTL", vec![n(1.0), n(10.0), t("1111111")]), CellError::Value);
+        // An all-weekend string is valid: no day is a workday, so the count is 0.
+        close(ev("NETWORKDAYS.INTL", vec![n(1.0), n(10.0), t("1111111")]), 0.0);
+        // WORKDAY.INTL rejects it (there is no working day to move to).
+        is_err(ev("WORKDAY.INTL", vec![n(1.0), n(10.0), t("1111111")]), CellError::Value);
         is_err(ev("NETWORKDAYS.INTL", vec![n(1.0), n(10.0), n(8.0)]), CellError::Num);
         // WORKDAY
         close(ev("WORKDAY", vec![n(d(2008.0, 10.0, 1.0)), n(151.0)]), d(2009.0, 4.0, 30.0));
