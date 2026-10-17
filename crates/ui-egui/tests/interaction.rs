@@ -892,3 +892,299 @@ fn rotated_wrapped_text_is_drawn_rotated_inside_its_cell() {
         assert!(clip.width() < 70.0, "clip spans one 6-character column, got {clip:?}");
     }
 }
+
+#[test]
+fn conditional_format_custom_editor_returns_to_rule_and_round_trips() {
+    use gridcraft_engine::model::{BorderLine, BorderStyle, Color, Fill, NumFmt, Style, StyleProperty};
+    let mut h = harness(blank());
+    h.state_mut().run("cell.set", json!({"cell":"A1", "input":"42"})).unwrap();
+    h.state_mut().run("home.bold", json!({"range":"A1"})).unwrap();
+    h.state_mut().open_dialog("cfQuick", json!({"type":"expression", "title":"New Formatting Rule"}));
+    h.run_steps(3);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("formula".into(), json!("=A1>10"));
+    h.get_by_label("Format with").click();
+    h.run_steps(2);
+    h.get_by_label("Custom Format…").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().unwrap().name(), "cfFormat");
+    for tab in ["Number", "Border", "Fill", "Font"] {
+        h.get_by_label(tab).click();
+        h.run_steps(2);
+        assert_eq!(h.state().dialog.as_ref().unwrap().tab, tab);
+    }
+    // Explicit off survives; every other font property and a clear border are also intentional.
+    let mut custom = Style::default();
+    custom.font.name = "Arial".into();
+    custom.font.size = 18.0;
+    custom.font.bold = false;
+    custom.font.italic = true;
+    custom.font.underline = gridcraft_engine::model::Underline::Double;
+    custom.font.strike = true;
+    custom.font.vert = gridcraft_engine::model::VertAlign::Superscript;
+    custom.font.color = Color::rgb(25, 60, 120);
+    custom.fill = Fill::solid(Color::rgb(220, 235, 250));
+    custom.borders.bottom = BorderLine { style: BorderStyle::Double, color: Color::rgb(70, 90, 120) };
+    custom.num_fmt = NumFmt::new("0.00");
+    custom.specified = Some(
+        [
+            StyleProperty::FontName,
+            StyleProperty::FontSize,
+            StyleProperty::Bold,
+            StyleProperty::Italic,
+            StyleProperty::Underline,
+            StyleProperty::Strike,
+            StyleProperty::FontColor,
+            StyleProperty::FontVertical,
+            StyleProperty::Fill,
+            StyleProperty::BottomBorder,
+            StyleProperty::TopBorder,
+            StyleProperty::NumberFormat,
+        ]
+        .into(),
+    );
+    h.state_mut().dialog.as_mut().unwrap().values.insert("style".into(), serde_json::to_value(&custom).unwrap());
+    h.run_steps(1);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().dialog.as_ref().unwrap().name(), "cfQuick");
+    assert!(h.state().session.active().unwrap().wb.active().unwrap().cond_formats.is_empty());
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["preset"], "custom");
+
+    // A second visit can be cancelled without replacing the previously accepted format.
+    h.get_by_label("Edit Custom Format…").click();
+    h.run_steps(3);
+    h.get_by_label("Clear custom formatting").click();
+    h.run_steps(2);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["style"], serde_json::to_value(&custom).unwrap());
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    let wb = &h.state().session.active().unwrap().wb;
+    assert_eq!(wb.active().unwrap().cond_formats.len(), 1);
+    let mut effective = wb.styles.get(wb.active().unwrap().style_id(CellRef::new(0, 0))).clone();
+    let mut cache = gridcraft_engine::cf::CfCache::new();
+    effective.apply_differential(&cache.look(wb, 0, CellRef::new(0, 0)).unwrap().style.unwrap());
+    assert!(!effective.font.bold);
+    assert_eq!(effective.font.name, "Arial");
+    assert_eq!(effective.font.size, 18.0);
+    assert_eq!(effective.num_fmt.as_str(), "0.00");
+    let bytes = gridcraft_xlsx::write_xlsx(wb).unwrap();
+    let (read, report) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert_eq!(read.active().unwrap().cond_formats, wb.active().unwrap().cond_formats);
+    let bytes2 = gridcraft_xlsx::write_xlsx(&read).unwrap();
+    assert_eq!(gridcraft_xlsx::read_xlsx(&bytes2).unwrap().0.active().unwrap().cond_formats, read.active().unwrap().cond_formats);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert!(h.state().session.active().unwrap().wb.active().unwrap().cond_formats.is_empty());
+}
+
+#[test]
+fn conditional_format_cancel_and_preset_ignore_saved_custom_style() {
+    let mut h = harness(blank());
+    h.state_mut().open_dialog("cfQuick", json!({"type":"expression"}));
+    h.run_steps(3);
+    h.get_by_label("Format with").click();
+    h.run_steps(2);
+    h.get_by_label("Custom Format…").click();
+    h.run_steps(3);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["preset"], "lightRedFillDarkRedText");
+    let d = h.state_mut().dialog.as_mut().unwrap();
+    d.values.insert("style".into(), json!({"font":{"bold":true}}));
+    d.values.insert("formula".into(), json!("=TRUE"));
+    d.values.insert("preset".into(), json!("redText"));
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    let wb = &h.state().session.active().unwrap().wb;
+    let st = gridcraft_engine::cf::CfCache::new().look(wb, 0, CellRef::new(0, 0)).unwrap().style.unwrap();
+    assert!(!st.font.bold);
+    assert_eq!(st.font.color, gridcraft_engine::model::Color::rgb(0x9C, 0, 6));
+}
+
+#[test]
+fn custom_color_control_and_existing_rule_editor_keep_changes_in_the_draft() {
+    let mut h = harness(blank());
+    h.state_mut().run("cell.set", json!({"cell":"A1", "input":"42"})).unwrap();
+    h.state_mut().run("home.conditionalFormat", json!({"rule":{"type":"expression", "formula":"A1>10", "preset":"redText"}})).unwrap();
+    h.state_mut().open_dialog("manageRules", json!({}));
+    h.run_steps(4);
+    h.get_by_label("Format…").click();
+    h.run_steps(3);
+    let original = h.state().session.active().unwrap().wb.active().unwrap().cond_formats.clone();
+    h.get_by_label("Color hex").click();
+    h.run_steps(2);
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    text(&mut h, "#123456");
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["style"]["font"]["color"], json!({"Rgb":0x123456}));
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().cond_formats, original);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().dialog.as_ref().unwrap().name(), "manageRules");
+    let wb = &h.state().session.active().unwrap().wb;
+    let st = gridcraft_engine::cf::CfCache::new().look(wb, 0, CellRef::new(0, 0)).unwrap().style.unwrap();
+    assert_eq!(st.font.color, gridcraft_engine::model::Color::rgb(0x12, 0x34, 0x56));
+    assert_eq!(wb.active().unwrap().cond_formats.len(), 1);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().cond_formats, original);
+}
+
+#[test]
+fn format_cells_uses_the_shared_font_color_control() {
+    let mut h = harness(blank());
+    h.state_mut().open_dialog("formatCells", json!({"tab":"Font"}));
+    h.run_steps(4);
+    h.get_by_label("Color hex").click();
+    h.run_steps(2);
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    text(&mut h, "#2468AC");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    let wb = &h.state().session.active().unwrap().wb;
+    let st = wb.styles.get(wb.active().unwrap().style_id(CellRef::new(0, 0)));
+    assert_eq!(st.font.color, gridcraft_engine::model::Color::rgb(0x24, 0x68, 0xAC));
+}
+
+#[test]
+fn inherited_controls_use_the_cell_font_and_color_drafts_belong_to_the_dialog() {
+    let mut h = harness(blank());
+    h.state_mut()
+        .run("home.formatCells", json!({"range":"A1","style":{"font":{"name":"Times New Roman","size":22.0,"color":{"Rgb":0x123456}}}}))
+        .unwrap();
+    h.state_mut().open_dialog("cfFormat", json!({}));
+    h.run_steps(3);
+    h.get_by_label("Font family").click();
+    h.run_steps(2);
+    h.get_by_label("Font size").click();
+    h.run_steps(2);
+    let draft = &h.state().dialog.as_ref().unwrap().values["style"];
+    assert_eq!(draft["font"]["name"], "Times New Roman");
+    assert_eq!(draft["font"]["size"], 22.0);
+    h.get_by_label("Font color").click();
+    h.run_steps(2);
+    assert_eq!(h.get_by_label("Color hex").value().as_deref(), Some("#123456"));
+    h.get_by_label("Color hex").click();
+    h.run_steps(2);
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    text(&mut h, "invalid");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    h.state_mut().open_dialog("cfFormat", json!({}));
+    h.run_steps(3);
+    h.get_by_label("Font color").click();
+    h.run_steps(2);
+    assert_eq!(h.get_by_label("Color hex").value().as_deref(), Some("#123456"));
+}
+
+#[test]
+fn conditional_format_remembers_its_range_and_rejects_another_worksheet() {
+    use gridcraft_ui_egui::control::{self, Outcome};
+    let mut h = harness(blank());
+    h.state_mut().open_dialog("cfQuick", json!({"type":"expression"}));
+    h.run_steps(3);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("formula".into(), json!("=TRUE"));
+    h.state_mut().run("selection.set", json!({"range":"B3"})).unwrap();
+    h.state_mut().run("home.insertSheet", json!({"name":"Other"})).unwrap();
+    h.state_mut().run("sheet.activate", json!({"sheet":"Other"})).unwrap();
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().dialog.as_ref().unwrap().name(), "cfQuick");
+    assert!(h.state().session.active().unwrap().wb.active().unwrap().cond_formats.is_empty());
+    h.state_mut().message = None;
+    let context = egui::Context::default();
+    let Outcome::Done(response) = control::handle(h.state_mut(), &context, "ui.dialog.confirm", &json!({})) else {
+        panic!("expected command result")
+    };
+    assert_eq!(response["ok"], false);
+    h.state_mut().run("sheet.activate", json!({"sheet":"Sheet1"})).unwrap();
+    let Outcome::Done(response) = control::handle(h.state_mut(), &context, "ui.dialog.confirm", &json!({})) else {
+        panic!("expected command result")
+    };
+    assert_eq!(response["ok"], true);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().cond_formats[0].ranges[0].a1(), "A1");
+}
+
+#[test]
+fn explicit_resets_patterned_fills_and_theme_font_colors_round_trip() {
+    use gridcraft_engine::model::*;
+    let mut reset = Style { specified: Some(StyleProperty::ALL.into()), ..Style::default() };
+    reset.fill.fg = Color::rgb(20, 40, 60);
+    reset.borders.top.color = Color::rgb(70, 90, 110);
+    let mut pattern = Style::default();
+    pattern.fill = Fill { pattern: PatternType::LightGrid, fg: Color::rgb(20, 40, 60), bg: Color::Theme(2, 0) };
+    pattern.align.wrap = true;
+    pattern.protection.locked = false;
+    let mut theme = Style::default();
+    theme.font.color = Color::Theme(1, 0);
+    for style in [reset, pattern, theme] {
+        let mut session = blank();
+        session.execute("home.conditionalFormat", json!({"rule":{"type":"expression","formula":"TRUE","style":style}})).unwrap();
+        let wb = &session.active().unwrap().wb;
+        let (read, report) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(wb).unwrap()).unwrap();
+        assert!(report.warnings.is_empty());
+        assert_eq!(read.active().unwrap().cond_formats, wb.active().unwrap().cond_formats);
+    }
+}
+
+#[test]
+fn conditional_number_format_and_font_color_are_actually_painted() {
+    let mut session = blank();
+    session.execute("cell.set", json!({"cell":"A1","input":"42"})).unwrap();
+    session.execute("home.columnWidth", json!({"range":"A1","width":200})).unwrap();
+    session
+        .execute(
+            "home.conditionalFormat",
+            json!({"rule":{"type":"expression","formula":"TRUE","style":{"num_fmt":"[Red]0.00","font":{"color":{"Rgb":0x123456}}}}}),
+        )
+        .unwrap();
+    let h = harness(session);
+    let shape = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text == "42.00" => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(shape.galley.job.sections[0].format.color, egui::Color32::from_rgb(0x12, 0x34, 0x56));
+}
+
+#[test]
+fn invalid_custom_color_cannot_confirm_and_a_valid_replacement_can() {
+    let mut h = harness(blank());
+    h.state_mut().open_dialog("cfQuick", json!({"type":"expression"}));
+    h.run_steps(3);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("formula".into(), json!("=TRUE"));
+    h.get_by_label("Format with").click();
+    h.run_steps(2);
+    h.get_by_label("Custom Format…").click();
+    h.run_steps(3);
+    h.get_by_label("Color hex").click();
+    h.run_steps(2);
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    text(&mut h, "invalid");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().dialog.as_ref().unwrap().name(), "cfFormat");
+    assert!(h.state().message.is_some());
+    assert!(h.state().session.active().unwrap().wb.active().unwrap().cond_formats.is_empty());
+    h.state_mut().message = None;
+    h.run_steps(2);
+    h.get_by_label("Color hex").click();
+    h.run_steps(2);
+    key(&mut h, Key::A, Modifiers::COMMAND);
+    text(&mut h, "#123456");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().dialog.as_ref().unwrap().name(), "cfQuick");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().cond_formats.len(), 1);
+}
+
+#[test]
+fn shared_font_controls_keep_translations_in_both_format_editors() {
+    let mut h = harness(blank());
+    h.state_mut().run("app.language.set", json!({"language": "de"})).unwrap();
+    for dialog in ["formatCells", "cfFormat"] {
+        h.state_mut().dialog = None;
+        h.state_mut().open_dialog(dialog, json!({"tab": "Font"}));
+        h.run_steps(2);
+        assert!(h.query_by_label("Größe").is_some(), "{dialog} translates font size");
+        assert!(h.query_by_label("Unterstrichen").is_some(), "{dialog} translates underline");
+        assert!(h.query_by_label("Font size").is_none(), "{dialog} keeps the localized label");
+    }
+}

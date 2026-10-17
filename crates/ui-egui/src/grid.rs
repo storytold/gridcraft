@@ -431,7 +431,7 @@ fn col32(c: Color, wb: &Workbook, default: Color32) -> Color32 {
     c.resolve(&wb.theme).map(theme::color32).unwrap_or(default)
 }
 
-fn numfmt_color(c: gridcraft_engine::numfmt::FormatColor) -> Color32 {
+pub(crate) fn numfmt_color(c: gridcraft_engine::numfmt::FormatColor) -> Color32 {
     use gridcraft_engine::numfmt::FormatColor as F;
     match c {
         F::Black => Color32::BLACK,
@@ -461,37 +461,8 @@ fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (
         style = gridcraft_engine::tables::table_cell_style(wb, si, t, c);
     }
     let cfl = cf.look(wb, si, c);
-    if let Some(l) = &cfl
-        && let Some(st) = &l.style
-    {
-        if st.fill.pattern != PatternType::None {
-            style.fill = st.fill;
-        }
-        if st.font.color != Color::Auto {
-            style.font.color = st.font.color;
-        }
-        if st.font.bold {
-            style.font.bold = true;
-        }
-        if st.font.italic {
-            style.font.italic = true;
-        }
-        if st.font.underline != Underline::None {
-            style.font.underline = st.font.underline;
-        }
-        if st.font.strike {
-            style.font.strike = true;
-        }
-        for (dst, src) in [
-            (&mut style.borders.left, st.borders.left),
-            (&mut style.borders.right, st.borders.right),
-            (&mut style.borders.top, st.borders.top),
-            (&mut style.borders.bottom, st.borders.bottom),
-        ] {
-            if !src.is_none() {
-                *dst = src;
-            }
-        }
+    if let Some(st) = cfl.as_ref().and_then(|l| l.style.as_ref()) {
+        style.apply_differential(st);
     }
     let mut fill = match style.fill.pattern {
         PatternType::None => None,
@@ -1153,7 +1124,8 @@ pub(crate) fn paint_quadrant(
         let text_rect = Rect::from_min_max(rect.min, pos2((rect.right() - filter_space).max(rect.left()), rect.bottom()));
         let rect = &text_rect;
         let st = &lk.style;
-        let size = st.font.size * 96.0 / 72.0 * z;
+        let script = st.font.vert != gridcraft_engine::model::VertAlign::Baseline;
+        let size = st.font.size * 96.0 / 72.0 * z * if script { 0.67 } else { 1.0 };
         let fam = theme::cell_family(&st.font.name, st.font.bold, st.font.italic);
         let font = FontId::new(size, fam);
         // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
@@ -1166,7 +1138,11 @@ pub(crate) fn paint_quadrant(
         if text.is_empty() {
             continue;
         }
-        let color = ncolor.unwrap_or(lk.text_color);
+        let color = if cfl.as_ref().and_then(|l| l.style.as_ref()).is_some_and(|s| s.sets(gridcraft_engine::model::StyleProperty::FontColor)) {
+            lk.text_color
+        } else {
+            ncolor.unwrap_or(lk.text_color)
+        };
         let halign = match st.align.h {
             HAlign::General => match v {
                 Value::Number(_) => HAlign::Right,
@@ -1194,7 +1170,10 @@ pub(crate) fn paint_quadrant(
                 HAlign::Right => rect.right() - pad,
                 _ => text_left + pad + indent,
             };
-            let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
+            let gh = galley.size().y;
+            let normal_h = if script { gh / 0.67 } else { gh };
+            let y = wrapped_cell_text_y(st.align.v, *rect, normal_h, z)
+                + if st.font.vert == gridcraft_engine::model::VertAlign::Subscript { normal_h - gh } else { 0.0 };
             p.with_clip_rect(rect.intersect(p.clip_rect())).galley(pos2(x, y), galley, color);
             continue;
         }
@@ -1281,7 +1260,13 @@ pub(crate) fn paint_quadrant(
             _ => text_left + pad + indent,
         };
         let gh = galley.size().y;
-        let y = cell_text_y(st.align.v, *rect, gh, z);
+        let normal_h = if script { gh / 0.67 } else { gh };
+        let y = cell_text_y(st.align.v, *rect, normal_h, z)
+            + match st.font.vert {
+                gridcraft_engine::model::VertAlign::Superscript => 0.0,
+                gridcraft_engine::model::VertAlign::Subscript => normal_h - gh,
+                _ => 0.0,
+            };
         let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
         if rotated {
             let angle = -(st.align.rotation as f32).to_radians();

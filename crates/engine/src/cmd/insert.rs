@@ -188,7 +188,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conditional Formatting",
             ["Home", "Styles"],
             None,
-            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font..fill..}|preset: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}}",
+            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font..fill..borders..num_fmt, specified?: [StyleProperty names]}|preset: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}}",
             has_doc,
             add_cf
         ),
@@ -198,7 +198,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Manage Rules…",
             ["Home", "Styles", "Conditional Formatting"],
             None,
-            "{delete?: index, moveUp?: index, moveDown?: index}",
+            "{delete?: index, moveUp?: index, moveDown?: index, format?: index, style?: differential style, expected?: rules entry}",
             has_doc,
             manage_cf
         ),
@@ -1309,7 +1309,28 @@ fn insert_symbol(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- conditional formatting
 
-fn preset_style(name: &str) -> Style {
+/// Validated differential style shared by rule creation, rule editing and the UI draft.
+pub fn conditional_style(patch: &Json) -> Result<Style> {
+    if !patch.is_object() {
+        return Err(bad("home.conditionalFormat", "style must be an object"));
+    }
+    let base = serde_json::to_value(Style::default()).map_err(|e| EngineError::Other(e.to_string()))?;
+    let mut style: Style =
+        serde_json::from_value(super::format::merge_json(base, patch)).map_err(|e| bad("home.conditionalFormat", e.to_string()))?;
+    style.normalize_differential();
+    if !style.font.size.is_finite() || !(1.0..=409.0).contains(&style.font.size) {
+        return Err(bad("home.conditionalFormat", "font size must be between 1 and 409 points"));
+    }
+    if style.font.name.trim().is_empty() {
+        return Err(bad("home.conditionalFormat", "font name must not be empty"));
+    }
+    if style.sets(StyleProperty::DiagonalDown) && style.sets(StyleProperty::DiagonalUp) && style.borders.diag_down != style.borders.diag_up {
+        return Err(bad("home.conditionalFormat", "the two diagonal borders must share a style and color for XLSX"));
+    }
+    Ok(style)
+}
+
+pub fn preset_style(name: &str) -> Style {
     let mut s = Style::default();
     match name {
         "redText" => s.font.color = Color::rgb(0x9C, 0x00, 0x06),
@@ -1343,11 +1364,8 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let g = |k: &str| rule.get(k).and_then(Json::as_str).map(str::to_string);
     let style = Box::new(match rule.get("style") {
-        Some(st) if st.is_object() => {
-            let base = serde_json::to_value(Style::default()).map_err(|e| EngineError::Other(e.to_string()))?;
-            serde_json::from_value(super::format::merge_json(base, st)).map_err(|e| bad("home.conditionalFormat", e.to_string()))?
-        }
-        _ => preset_style(g("preset").as_deref().unwrap_or("lightRedFillDarkRedText")),
+        Some(st) => conditional_style(st)?,
+        None => preset_style(g("preset").as_deref().unwrap_or("lightRedFillDarkRedText")),
     });
     let kind = g("type").unwrap_or_else(|| "cellIs".into());
     let value_kind = |v: Option<&Json>, default: CfValueKind| -> CfValueKind {
@@ -1475,7 +1493,7 @@ fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
-    if p.get("delete").is_none() && p.get("moveUp").is_none() && p.get("moveDown").is_none() {
+    if p.get("delete").is_none() && p.get("moveUp").is_none() && p.get("moveDown").is_none() && p.get("format").is_none() {
         let list: Vec<Json> = s
             .doc()?
             .wb
@@ -1486,8 +1504,28 @@ fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
             .unwrap_or_default();
         return Ok(json!({"rules": list}));
     }
+    let replacement = if p.get("format").is_some() {
+        let index = u32_param(p, "format").ok_or_else(|| bad("home.manageRules", "missing or invalid rule index"))? as usize;
+        let patch = p.get("style").ok_or_else(|| bad("home.manageRules", "missing style"))?;
+        let style = conditional_style(patch)?;
+        Some((index, style))
+    } else {
+        None
+    };
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
+        if let Some((index, style)) = &replacement {
+            let rule = sh.cond_formats.get_mut(*index).ok_or_else(|| bad("home.manageRules", "rule no longer exists"))?;
+            if let Some(expected) = p.get("expected").filter(|v| !v.is_null()) {
+                let current = json!({"ranges": rule.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": rule.rule});
+                if expected != &current {
+                    return Err(bad("home.manageRules", "rule changed while the format editor was open; reopen it"));
+                }
+            }
+            let destination =
+                rule.rule.style_mut().ok_or_else(|| bad("home.manageRules", "this rule uses a scale, bar or icon set instead of a cell format"))?;
+            *destination = style.clone();
+        }
         // The count is taken again after each step: a delete shortens the list.
         if let Some(i) = u32_param(p, "delete").map(|v| v as usize)
             && i < sh.cond_formats.len()
@@ -1505,8 +1543,10 @@ fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
         {
             sh.cond_formats.swap(i, i + 1);
         }
-        for (k, cf) in sh.cond_formats.iter_mut().enumerate() {
-            cf.priority = k as u32 + 1;
+        if p.get("delete").is_some() || p.get("moveUp").is_some() || p.get("moveDown").is_some() {
+            for (k, cf) in sh.cond_formats.iter_mut().enumerate() {
+                cf.priority = k as u32 + 1;
+            }
         }
         Ok(Json::Null)
     })

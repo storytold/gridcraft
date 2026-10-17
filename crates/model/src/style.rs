@@ -330,8 +330,33 @@ impl Default for Protection {
     }
 }
 
+/// Properties explicitly set by a conditional format. An absent property inherits the cell's
+/// format; an explicit default (for example `Bold` with false) overrides it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum StyleProperty {
+    FontName,
+    FontSize,
+    Bold,
+    Italic,
+    Underline,
+    Strike,
+    FontColor,
+    FontVertical,
+    Fill,
+    LeftBorder,
+    RightBorder,
+    TopBorder,
+    BottomBorder,
+    DiagonalDown,
+    DiagonalUp,
+    NumberFormat,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Style {
+    /// Differential formats only. Missing in older JSON workbooks: non-default parts are set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specified: Option<std::collections::BTreeSet<StyleProperty>>,
     pub font: Font,
     pub fill: Fill,
     pub borders: Borders,
@@ -339,6 +364,142 @@ pub struct Style {
     /// Number format code; "General" by default.
     pub num_fmt: NumFmt,
     pub protection: Protection,
+}
+
+impl StyleProperty {
+    pub const ALL: [Self; 16] = [
+        Self::FontName,
+        Self::FontSize,
+        Self::Bold,
+        Self::Italic,
+        Self::Underline,
+        Self::Strike,
+        Self::FontColor,
+        Self::FontVertical,
+        Self::Fill,
+        Self::LeftBorder,
+        Self::RightBorder,
+        Self::TopBorder,
+        Self::BottomBorder,
+        Self::DiagonalDown,
+        Self::DiagonalUp,
+        Self::NumberFormat,
+    ];
+}
+
+impl Style {
+    /// Backwards-compatible interpretation of the old default-as-unset differential styles.
+    pub fn differential_properties(&self) -> std::collections::BTreeSet<StyleProperty> {
+        if let Some(set) = &self.specified {
+            return set.clone();
+        }
+        self.non_default_properties()
+    }
+
+    /// Checks presence without allocating in worksheet and print rendering.
+    pub fn sets(&self, property: StyleProperty) -> bool {
+        self.specified.as_ref().map_or_else(|| self.is_non_default(property), |set| set.contains(&property))
+    }
+
+    fn is_non_default(&self, property: StyleProperty) -> bool {
+        match property {
+            StyleProperty::FontName => self.font.name != crate::DEFAULT_FONT,
+            StyleProperty::FontSize => self.font.size != crate::DEFAULT_FONT_SIZE,
+            StyleProperty::Bold => self.font.bold,
+            StyleProperty::Italic => self.font.italic,
+            StyleProperty::Underline => self.font.underline != Underline::None,
+            StyleProperty::Strike => self.font.strike,
+            StyleProperty::FontColor => self.font.color != Color::Auto,
+            StyleProperty::FontVertical => self.font.vert != VertAlign::Baseline,
+            StyleProperty::Fill => self.fill != Fill::default(),
+            StyleProperty::LeftBorder => self.borders.left != BorderLine::default(),
+            StyleProperty::RightBorder => self.borders.right != BorderLine::default(),
+            StyleProperty::TopBorder => self.borders.top != BorderLine::default(),
+            StyleProperty::BottomBorder => self.borders.bottom != BorderLine::default(),
+            StyleProperty::DiagonalDown => self.borders.diag_down != BorderLine::default(),
+            StyleProperty::DiagonalUp => self.borders.diag_up != BorderLine::default(),
+            StyleProperty::NumberFormat => self.num_fmt.as_str() != "General",
+        }
+    }
+
+    fn non_default_properties(&self) -> std::collections::BTreeSet<StyleProperty> {
+        StyleProperty::ALL.into_iter().filter(|&p| self.is_non_default(p)).collect()
+    }
+
+    /// Keep the old representation whenever it describes exactly the same overrides.
+    pub fn normalize_differential(&mut self) {
+        if let Some(fields) = self.specified.clone() {
+            let mut canonical = Self { align: self.align, protection: self.protection, ..Self::default() };
+            for property in &fields {
+                canonical.copy_property(self, *property);
+            }
+            canonical.specified = Some(fields);
+            *self = canonical;
+        }
+        // Unused fill/border colors have no XML representation when their pattern/style is none.
+        if self.fill.pattern == PatternType::None {
+            self.fill = Fill::default();
+        } else if self.fill.pattern == PatternType::Solid {
+            self.fill.bg = Color::Auto;
+        }
+        for line in [
+            &mut self.borders.left,
+            &mut self.borders.right,
+            &mut self.borders.top,
+            &mut self.borders.bottom,
+            &mut self.borders.diag_down,
+            &mut self.borders.diag_up,
+        ] {
+            if line.is_none() {
+                *line = BorderLine::default();
+            }
+        }
+        if self.specified.as_ref() == Some(&self.non_default_properties()) {
+            self.specified = None;
+        }
+    }
+
+    pub fn copy_property(&mut self, source: &Style, property: StyleProperty) {
+        match property {
+            StyleProperty::FontName => self.font.name = source.font.name.clone(),
+            StyleProperty::FontSize => self.font.size = source.font.size,
+            StyleProperty::Bold => self.font.bold = source.font.bold,
+            StyleProperty::Italic => self.font.italic = source.font.italic,
+            StyleProperty::Underline => self.font.underline = source.font.underline,
+            StyleProperty::Strike => self.font.strike = source.font.strike,
+            StyleProperty::FontColor => self.font.color = source.font.color,
+            StyleProperty::FontVertical => self.font.vert = source.font.vert,
+            StyleProperty::Fill => self.fill = source.fill,
+            StyleProperty::LeftBorder => self.borders.left = source.borders.left,
+            StyleProperty::RightBorder => self.borders.right = source.borders.right,
+            StyleProperty::TopBorder => self.borders.top = source.borders.top,
+            StyleProperty::BottomBorder => self.borders.bottom = source.borders.bottom,
+            StyleProperty::DiagonalDown => self.borders.diag_down = source.borders.diag_down,
+            StyleProperty::DiagonalUp => self.borders.diag_up = source.borders.diag_up,
+            StyleProperty::NumberFormat => self.num_fmt = source.num_fmt.clone(),
+        }
+    }
+
+    /// Applies only the properties a conditional format sets, including explicit defaults.
+    pub fn apply_differential(&mut self, source: &Style) {
+        for property in StyleProperty::ALL {
+            if source.sets(property) {
+                self.copy_property(source, property);
+            }
+        }
+    }
+
+    /// Fill gaps from a lower-priority rule without overwriting a higher-priority choice.
+    pub fn differential_under(&mut self, lower: &Style) {
+        let mut set = self.differential_properties();
+        for property in lower.differential_properties() {
+            if set.insert(property) {
+                self.copy_property(lower, property);
+            }
+        }
+        self.specified = Some(set);
+        self.normalize_differential();
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -10,7 +10,6 @@ use crate::icons::{self, Icon};
 use serde_json::{Map, Value as Json, json};
 
 use crate::SheetApp;
-use crate::theme;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
@@ -38,8 +37,10 @@ pub struct Dialog {
     pub show_password: bool,
     picture_inbox: Option<crate::Inbox>,
     picture_target: Option<(u64, usize)>,
+    format_target: Option<(u64, String)>,
+    pub(crate) color_drafts: crate::format_editor::ColorDrafts,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
-    back: Option<Box<Dialog>>,
+    pub(crate) back: Option<Box<Dialog>>,
 }
 
 impl Dialog {
@@ -72,6 +73,8 @@ impl Dialog {
             show_password: false,
             picture_inbox: None,
             picture_target: None,
+            format_target: None,
+            color_drafts: Default::default(),
             back: None,
         }
     }
@@ -90,8 +93,38 @@ impl Dialog {
             show_password: false,
             picture_inbox: None,
             picture_target: None,
+            format_target: None,
+            color_drafts: Default::default(),
             back: None,
         }
+    }
+
+    fn format_view(app: &SheetApp) -> Option<(u64, String)> {
+        let (document, _) = app.view_key()?;
+        app.session.active()?.wb.active().map(|sheet| (document, sheet.name.clone()))
+    }
+
+    pub(crate) fn validate_confirmation(&self, app: &SheetApp) -> Result<(), String> {
+        if self.format_target.is_some() && self.format_target != Self::format_view(app) {
+            return Err("Return to the original worksheet to apply this conditional format.".into());
+        }
+        crate::format_editor::validate_colors(self)
+    }
+
+    pub(crate) fn confirm_custom_format(&mut self, app: &mut SheetApp) -> Result<(), String> {
+        self.validate_confirmation(app)?;
+        if self.values.contains_key("ruleIndex") {
+            app.run(
+                "home.manageRules",
+                json!({"format": self.values.get("ruleIndex"), "style": self.values.get("style"), "expected": self.values.get("expected")}),
+            )?;
+        } else if let Some(back) = self.back.as_mut() {
+            if let Some(style) = self.values.get("style").cloned() {
+                back.values.insert("style".into(), style);
+            }
+            back.values.insert("preset".into(), json!("custom"));
+        }
+        Ok(())
     }
 
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
@@ -609,6 +642,7 @@ impl Dialog {
                         ("lightRedFill", "Light Red Fill"),
                         ("redText", "Red Text"),
                         ("redBorder", "Red Border"),
+                        ("custom", "Custom Format…"),
                     ],
                 });
                 let mut d = Dialog::form(
@@ -620,6 +654,26 @@ impl Dialog {
                 );
                 d.values.insert("type".into(), json!(ty));
                 d.values.insert("operator".into(), p("operator"));
+                d.values.insert("range".into(), json!(sel));
+                d.format_target = Self::format_view(app);
+                d
+            }
+            "cfFormat" => {
+                let patch = if p("style").is_null() { json!({}) } else { p("style") };
+                let style = match gridcraft_engine::cmd::insert::conditional_style(&patch) {
+                    Ok(style) => style,
+                    Err(e) => {
+                        app.message = Some(("Custom Conditional Format".into(), e.to_string()));
+                        return None;
+                    }
+                };
+                let mut d = Dialog::custom("cfFormat", "Custom Conditional Format", json!({"style": style}));
+                d.tab = p("tab").as_str().unwrap_or("Font").into();
+                d.format_target = Self::format_view(app);
+                if !p("ruleIndex").is_null() {
+                    d.values.insert("ruleIndex".into(), p("ruleIndex"));
+                    d.values.insert("expected".into(), p("expected"));
+                }
                 d
             }
             "formatCells" => {
@@ -670,7 +724,11 @@ impl Dialog {
             ),
             "sort" => Dialog::custom("sort", "Sort", json!({"header": true, "levels": [{"column": "A", "order": "asc"}]})),
             "nameManager" => Dialog::custom("nameManager", "Name Manager", json!({})),
-            "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
+            "manageRules" => {
+                let mut d = Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({}));
+                d.format_target = Self::format_view(app);
+                d
+            }
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),
             "about" => {
@@ -939,7 +997,7 @@ fn data_validation_form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, o
 }
 
 /// Builds the command params from form values for dialogs that need translation.
-fn build_params(d: &Dialog) -> Json {
+pub(crate) fn build_params(d: &Dialog) -> Json {
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
         "dataValidation" => {
@@ -995,7 +1053,11 @@ fn build_params(d: &Dialog) -> Json {
             for (k, val) in &d.values {
                 rule.insert(k.clone(), val.clone());
             }
-            v = json!({"rule": Json::Object(rule)});
+            if rule.get("preset").and_then(Json::as_str) != Some("custom") {
+                rule.remove("style");
+            }
+            let range = rule.remove("range");
+            v = json!({"range": range, "rule": Json::Object(rule)});
         }
         "series" => {
             if let Some(s) = d.values.get("stop").and_then(Json::as_str).and_then(|s| s.parse::<f64>().ok()) {
@@ -1028,6 +1090,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let mut confirm = false;
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
+        "cfFormat" => 680.0,
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
         "recommendedCharts" => 600.0,
@@ -1046,6 +1109,27 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     window.show(ctx, |ui| {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
+                "cfQuick" => {
+                    form_fields(ui, &mut d);
+                    let custom = d.values.remove("openCustom").and_then(|v| v.as_bool()) == Some(true);
+                    let edit_custom = d.values.get("preset").and_then(Json::as_str) == Some("custom") && ui.button("Edit Custom Format…").clicked();
+                    if custom || edit_custom {
+                        let style = d.values.get("style").cloned().unwrap_or_else(|| {
+                            let preset = d.values.get("preset").and_then(Json::as_str).unwrap_or("lightRedFillDarkRedText");
+                            serde_json::to_value(gridcraft_engine::cmd::insert::preset_style(preset)).unwrap_or(Json::Null)
+                        });
+                        app.open_dialog("cfFormat", json!({"style": style}));
+                    }
+                    if d.values.get("preset").and_then(Json::as_str) == Some("custom")
+                        && let Some(style) = d.values.get("style").and_then(|v| serde_json::from_value(v.clone()).ok()) {
+                        crate::format_editor::preview(app, ui, &style);
+                    }
+                    ok_cancel(ui, &mut confirm, &mut open);
+                }
+                "cfFormat" => {
+                    crate::format_editor::editor(app, ui, &mut d);
+                    ok_cancel(ui, &mut confirm, &mut open);
+                }
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
                 "insertFunction" => insert_function(app, ui, &mut d, &mut confirm),
@@ -1256,6 +1340,19 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
     }
+    if confirm && let Err(e) = d.validate_confirmation(app) {
+        ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
+        app.message = Some((d.title.clone(), e));
+        confirm = false;
+    }
+    if confirm
+        && d.name == "cfFormat"
+        && let Err(e) = d.confirm_custom_format(app)
+    {
+        ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+        confirm = false;
+    }
     if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
         match app.run(cmd, params) {
@@ -1287,6 +1384,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         // behind it and comes back when it closes, as Excel returns to the Name Manager. Go To
         // hands over to Go To Special for good, as in Excel.
         if open && d.name != "goTo" {
+            if matches!(d.name.as_str(), "cfQuick" | "manageRules") {
+                child.format_target = d.format_target.clone();
+            }
             child.back = Some(Box::new(d));
         } else if child.back.is_none() {
             child.back = d.back.take();
@@ -1435,7 +1535,20 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                     ui.vertical(|ui| {
                         ui.label(egui::RichText::new(label).strong());
                         let cur = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
-                        if d.name == "dataValidation" {
+                        if d.name == "cfQuick" && key == "preset" {
+                            let selected = options.iter().find(|(v, _)| *v == cur).map(|(_, t)| *t).unwrap_or("Custom Format…");
+                            egui::ComboBox::from_label("Format with").selected_text(selected).show_ui(ui, |ui| {
+                                for (val, text) in options {
+                                    if ui.selectable_label(cur == val, text).clicked() {
+                                        if val == "custom" {
+                                            d.values.insert("openCustom".into(), json!(true));
+                                        } else {
+                                            d.values.insert(key.into(), json!(val));
+                                        }
+                                    }
+                                }
+                            });
+                        } else if d.name == "dataValidation" {
                             let selected = options.iter().find(|(val, _)| *val == cur).map(|(_, text)| *text).unwrap_or("");
                             egui::ComboBox::from_id_salt(("dataValidation", key)).selected_text(selected).width(300.0).show_ui(ui, |ui| {
                                 for (val, text) in options {
@@ -1542,51 +1655,8 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
     });
     ui.separator();
     let mut st: gridcraft_engine::model::Style = d.values.get("style").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
-    let sample = app.session.active().and_then(|doc| doc.wb.active().map(|s| s.value(doc.selection.active))).unwrap_or_default();
     match d.tab.as_str() {
-        "Number" => {
-            let mut code = st.num_fmt.as_str().to_string();
-            ui.columns(2, |cols| {
-                cols[0].label(egui::RichText::new(lang.tr("Category:")).strong());
-                for name in
-                    ["General", "Number", "Currency", "Accounting", "Short Date", "Long Date", "Time", "Percentage", "Fraction", "Scientific", "Text"]
-                {
-                    let c = gridcraft_engine::cmd::format::format_code_for(name).to_string();
-                    if cols[0].selectable_label(code == c, lang.tr(name)).clicked() {
-                        code = c;
-                    }
-                }
-                cols[1].label(egui::RichText::new(lang.tr("Sample")).strong());
-                let preview = app.session.active().map(|doc| gridcraft_engine::display::format(&sample, &code, &doc.wb).text).unwrap_or_default();
-                cols[1].label(egui::RichText::new(preview).font(theme::ui_font(15.0)));
-                cols[1].add_space(8.0);
-                cols[1].label(lang.tr("Type (custom format code):"));
-                cols[1].text_edit_singleline(&mut code);
-                for c in [
-                    "0",
-                    "0.00",
-                    "#,##0",
-                    "#,##0.00",
-                    "#,##0;[Red]-#,##0",
-                    "0%",
-                    "0.00%",
-                    "0.00E+00",
-                    "# ?/?",
-                    "m/d/yyyy",
-                    "d-mmm-yy",
-                    "mmmm d, yyyy",
-                    "h:mm AM/PM",
-                    "h:mm:ss",
-                    "[h]:mm:ss",
-                    "@",
-                ] {
-                    if cols[1].small_button(c).clicked() {
-                        code = c.to_string();
-                    }
-                }
-            });
-            st.num_fmt = gridcraft_engine::model::NumFmt::new(&code);
-        }
+        "Number" | "Font" | "Border" | "Fill" => crate::format_editor::options(app, ui, &mut st, &d.tab, None, &mut d.color_drafts),
         "Alignment" => {
             use gridcraft_engine::model::{HAlign, VAlign};
             ui.label(egui::RichText::new(lang.tr("Horizontal")).strong());
@@ -1625,100 +1695,6 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
             ui.checkbox(&mut st.align.wrap, lang.tr("Wrap text"));
             ui.checkbox(&mut st.align.shrink, lang.tr("Shrink to fit"));
         }
-        "Font" => {
-            egui::ComboBox::from_label(lang.tr("Font")).selected_text(st.font.name.clone()).show_ui(ui, |ui| {
-                for f in crate::fonts::families() {
-                    ui.selectable_value(&mut st.font.name, f.clone(), f.clone());
-                }
-            });
-            ui.add(egui::Slider::new(&mut st.font.size, 6.0..=72.0).text(lang.tr("Size")));
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut st.font.bold, lang.tr("Bold"));
-                ui.checkbox(&mut st.font.italic, lang.tr("Italic"));
-                ui.checkbox(&mut st.font.strike, lang.tr("Strikethrough"));
-            });
-            use gridcraft_engine::model::{Underline, VertAlign};
-            ui.horizontal(|ui| {
-                for (u, n) in [
-                    (Underline::None, "None"),
-                    (Underline::Single, "Single"),
-                    (Underline::Double, "Double"),
-                    (Underline::SingleAccounting, "Single Accounting"),
-                    (Underline::DoubleAccounting, "Double Accounting"),
-                ] {
-                    ui.radio_value(&mut st.font.underline, u, lang.tr(n));
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.radio_value(&mut st.font.vert, VertAlign::Baseline, lang.tr("Normal"));
-                ui.radio_value(&mut st.font.vert, VertAlign::Superscript, lang.tr("Superscript"));
-                ui.radio_value(&mut st.font.vert, VertAlign::Subscript, lang.tr("Subscript"));
-            });
-            ui.label(lang.tr("Color:"));
-            let colors = app.session.active().map(|doc| doc.wb.theme.colors).unwrap_or_default();
-            if let Some(c) = crate::widgets::color_palette(ui, &colors, lang.tr("Automatic")) {
-                st.font.color =
-                    if c == "none" { gridcraft_engine::model::Color::Auto } else { gridcraft_engine::model::Color::from_hex(&c).unwrap_or_default() };
-            }
-        }
-        "Border" => {
-            use gridcraft_engine::model::{BorderLine, BorderStyle};
-            let line = BorderLine { style: BorderStyle::Thin, color: gridcraft_engine::model::Color::Auto };
-            ui.horizontal(|ui| {
-                if ui.button(lang.tr("None")).clicked() {
-                    st.borders = Default::default();
-                }
-                if ui.button(lang.tr("Outline")).clicked() {
-                    st.borders.top = line;
-                    st.borders.bottom = line;
-                    st.borders.left = line;
-                    st.borders.right = line;
-                }
-            });
-            for (n, slot) in [
-                ("Top", &mut st.borders.top),
-                ("Bottom", &mut st.borders.bottom),
-                ("Left", &mut st.borders.left),
-                ("Right", &mut st.borders.right),
-                ("Diagonal ↘", &mut st.borders.diag_down),
-                ("Diagonal ↗", &mut st.borders.diag_up),
-            ] {
-                let n = lang.tr(n);
-                ui.horizontal(|ui| {
-                    ui.label(format!("{n}:"));
-                    for (s, label) in [
-                        (BorderStyle::None, "none"),
-                        (BorderStyle::Thin, "thin"),
-                        (BorderStyle::Medium, "medium"),
-                        (BorderStyle::Thick, "thick"),
-                        (BorderStyle::Dashed, "dashed"),
-                        (BorderStyle::Dotted, "dotted"),
-                        (BorderStyle::Double, "double"),
-                    ] {
-                        let label = lang.tr(label);
-                        let response = ui.selectable_label(slot.style == s, label);
-                        response
-                            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, ui.is_enabled(), format!("{n} {label}")));
-                        if response.clicked() {
-                            slot.style = s;
-                        }
-                    }
-                });
-            }
-            let theme = app.session.active().map(|doc| &doc.wb.theme).cloned().unwrap_or_default();
-            crate::border_preview::sample(ui, &st.borders, &theme);
-        }
-        "Fill" => {
-            let colors = app.session.active().map(|doc| doc.wb.theme.colors).unwrap_or_default();
-            ui.label(lang.tr("Background Color:"));
-            if let Some(c) = crate::widgets::color_palette(ui, &colors, lang.tr("No Color")) {
-                st.fill = if c == "none" {
-                    Default::default()
-                } else {
-                    gridcraft_engine::model::Fill::solid(gridcraft_engine::model::Color::from_hex(&c).unwrap_or_default())
-                };
-            }
-        }
         "Protection" => {
             ui.checkbox(&mut st.protection.locked, lang.tr("Locked"));
             ui.checkbox(&mut st.protection.hidden, lang.tr("Hidden"));
@@ -1736,8 +1712,19 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
     }
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
-    if *confirm && let Some(style) = d.values.get("style").cloned() {
-        app.run_or_alert("home.formatCells", json!({"style": style}));
+    if *confirm {
+        match crate::format_editor::validate_colors(d) {
+            Ok(()) => {
+                if let Some(style) = d.values.get("style").cloned() {
+                    app.run_or_alert("home.formatCells", json!({"style":style}));
+                }
+            }
+            Err(e) => {
+                ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
+                app.message = Some((d.title.clone(), e));
+                *confirm = false;
+            }
+        }
     }
     if !open {
         app.dialog = None;
@@ -2230,6 +2217,10 @@ fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
             }
             if ui.small_button("▼").clicked() {
                 app.run_or_alert("home.manageRules", json!({"moveDown": i}));
+            }
+            let style = r["rule"].as_object().and_then(|o| o.values().next()).and_then(|v| v.get("style")).cloned();
+            if ui.add_enabled(style.is_some(), egui::Button::new("Format…").small()).clicked() {
+                app.open_dialog("cfFormat", json!({"style": style, "ruleIndex": i, "expected": r}));
             }
             if ui.small_button("Delete").clicked() {
                 app.run_or_alert("home.manageRules", json!({"delete": i}));

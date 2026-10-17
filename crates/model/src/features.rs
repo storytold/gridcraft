@@ -224,6 +224,29 @@ pub enum CfRule {
     },
 }
 
+impl CfRule {
+    pub fn style_mut(&mut self) -> Option<&mut Style> {
+        match self {
+            Self::CellIs { style, .. }
+            | Self::Expression { style, .. }
+            | Self::ContainsText { style, .. }
+            | Self::NotContainsText { style, .. }
+            | Self::BeginsWith { style, .. }
+            | Self::EndsWith { style, .. }
+            | Self::Blanks { style, .. }
+            | Self::NoBlanks { style, .. }
+            | Self::Errors { style, .. }
+            | Self::NoErrors { style, .. }
+            | Self::Duplicate { style, .. }
+            | Self::Unique { style, .. }
+            | Self::Top10 { style, .. }
+            | Self::AboveAverage { style, .. }
+            | Self::TimePeriod { style, .. } => Some(style),
+            _ => None,
+        }
+    }
+}
+
 /// Number of icons in an icon set (`3Arrows` → 3, `5Quarters` → 5), always 3 to 5.
 pub fn icon_count(set: &str) -> usize {
     set.chars().next().and_then(|c| c.to_digit(10)).unwrap_or(3).clamp(3, 5) as usize

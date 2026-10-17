@@ -304,34 +304,7 @@ impl CfCache {
 /// Adds the parts `lower` sets that `style` leaves unset (differential styles: default parts
 /// are unset).
 fn layer_under(style: &mut Style, lower: &Style) {
-    if style.fill.pattern == PatternType::None {
-        style.fill = lower.fill;
-    }
-    if style.font.color == Color::Auto {
-        style.font.color = lower.font.color;
-    }
-    style.font.bold |= lower.font.bold;
-    style.font.italic |= lower.font.italic;
-    style.font.strike |= lower.font.strike;
-    if style.font.underline == Underline::None {
-        style.font.underline = lower.font.underline;
-    }
-    let b = &mut style.borders;
-    for (dst, src) in [
-        (&mut b.left, lower.borders.left),
-        (&mut b.right, lower.borders.right),
-        (&mut b.top, lower.borders.top),
-        (&mut b.bottom, lower.borders.bottom),
-        (&mut b.diag_down, lower.borders.diag_down),
-        (&mut b.diag_up, lower.borders.diag_up),
-    ] {
-        if dst.is_none() {
-            *dst = src;
-        }
-    }
-    if style.num_fmt.as_str() == "General" {
-        style.num_fmt = lower.num_fmt.clone();
-    }
+    style.differential_under(lower);
 }
 
 /// Shifts a rule formula written for the top-left cell of the range to `c`.
@@ -352,6 +325,76 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn editing_format_preserves_rule_metadata_and_rejects_stale_or_invalid_changes() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        for preset in ["redText", "lightRedFill"] {
+            s.execute("home.conditionalFormat", json!({"range":"A1:A3", "rule":{"type":"expression", "formula":"TRUE", "preset":preset}})).unwrap();
+        }
+        {
+            let rules = &mut std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().cond_formats;
+            rules[0].priority = 7;
+            rules[0].stop_if_true = true;
+            rules[1].priority = 2;
+        }
+        let before = s.doc().unwrap().wb.active().unwrap().cond_formats.clone();
+        let expected = s.execute("home.manageRules", json!({})).unwrap()["rules"][0].clone();
+        s.execute("home.manageRules", json!({"format":0,"expected":expected,"style":{"font":{"bold":false},"specified":["Bold"]}})).unwrap();
+        let after = s.doc().unwrap().wb.active().unwrap().cond_formats.clone();
+        assert_eq!(after[0].priority, 7);
+        assert!(after[0].stop_if_true);
+        assert_eq!(after[0].ranges, before[0].ranges);
+        assert_eq!(after[1], before[1]);
+        assert!(s.execute("home.manageRules", json!({"format":0,"expected":expected,"style":{"font":{"italic":true}}})).is_err());
+        for size in [-1.0, 0.0, 410.0, 1e100] {
+            assert!(s.execute("home.manageRules", json!({"format":0,"style":{"font":{"size":size}}})).is_err());
+        }
+        assert!(s.execute("home.manageRules", json!({"format":99,"style":{}})).is_err());
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().cond_formats, after);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().cond_formats, before);
+    }
+
+    #[test]
+    fn explicit_defaults_win_priority_and_leave_other_properties_unchanged() {
+        use gridcraft_model::StyleProperty::*;
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell":"A1", "input":"42"})).unwrap();
+        s.execute(
+            "home.conditionalFormat",
+            json!({"rule":{"type":"expression", "formula":"TRUE", "style": {
+                "specified":["Bold", "FontColor", "Fill", "NumberFormat", "LeftBorder"],
+                "font":{"bold":false,"color":"Auto"}, "num_fmt":"General"
+            }}}),
+        )
+        .unwrap();
+        s.execute(
+            "home.conditionalFormat",
+            json!({"rule":{"type":"expression", "formula":"TRUE", "style": {
+                "font":{"bold":true,"italic":true}, "fill":{"pattern":"Solid","fg":{"Rgb":12345}}, "num_fmt":"0.00"
+            }}}),
+        )
+        .unwrap();
+        s.execute("home.manageRules", json!({"moveUp":1})).unwrap();
+        let d = s.doc().unwrap();
+        let st = CfCache::new().look(&d.wb, 0, CellRef::new(0, 0)).unwrap().style.unwrap();
+        assert!(!st.font.bold);
+        assert!(st.font.italic);
+        assert_eq!(st.fill.pattern, PatternType::None);
+        assert_eq!(st.num_fmt.as_str(), "General");
+        let mut base = Style::default();
+        base.font.bold = true;
+        base.font.strike = true;
+        base.borders.left = BorderLine::thin();
+        base.apply_differential(&st);
+        assert!(!base.font.bold);
+        assert!(base.font.strike);
+        assert!(base.borders.left.is_none());
+        assert!(st.differential_properties().contains(&Bold));
+    }
 
     #[test]
     fn every_matching_rule_applies() {
