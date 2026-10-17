@@ -210,6 +210,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Formula Bar" => "编辑栏",
         "Gridlines" => "网格线",
         "Headings" => "标题",
+        "Focus Cell" => "聚焦单元格",
         "Zoom" => "缩放",
         "100%" => "100%",
         "Zoom to\nSelection" => "缩放到\n所选内容",

@@ -107,13 +107,52 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
 /// A split button: main part runs the default action, the arrow opens a menu.
 /// Returns (main clicked, arrow response).
 pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str) -> (bool, Response) {
+    let (main, arrow) = split_button_state(ui, icon, accent, false, tip);
+    (main.clicked(), arrow)
+}
+
+/// The named split button: the label sits inside the button, as the ribbon's other named controls
+/// draw it. A click on the body runs the toggle, and the arrow opens the caller's menu. It hands back
+/// both responses, so a caller can hang a key tip on the body.
+pub fn split_toggle(ui: &mut Ui, icon: Icon, accent: Option<Color32>, on: bool, tip: &str) -> (Response, Response) {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::ui_font(12.5);
+    let label = tr(ui, tip);
+    let text_w = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
+    let main_w = (24.0 + text_w + 6.0).max(34.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(main_w + 13.0, 23.0), Sense::hover());
+    let main = Rect::from_min_size(rect.min, vec2(main_w, 23.0));
+    let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
+    let m = ui.interact(main, ui.id().with((tip, "main")), Sense::click());
+    let a = ui.interact(arrow, ui.id().with((tip, "arrow")), Sense::click());
+    if on {
+        ui.painter().rect_filled(rect, 4.0, t.pressed);
+        ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
+    } else if m.hovered() || a.hovered() {
+        ui.painter().rect_filled(rect, 4.0, t.hover);
+        ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(main.left() + 12.0, main.center().y), vec2(16.0, 16.0)), icon, t.text);
+    ui.painter().text(pos2(main.left() + 24.0, main.center().y), Align2::LEFT_CENTER, label, font, t.text);
+    if let Some(c) = accent {
+        // The colour in force, as the Fill Color button shows its own.
+        ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 6.0, main.bottom() - 3.0), vec2(12.0, 2.5)), 0.0, c);
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(arrow.center().x, arrow.center().y + 1.0), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
+    (m.on_hover_text(label), a)
+}
+
+fn split_button_state(ui: &mut Ui, icon: Icon, accent: Option<Color32>, on: bool, tip: &str) -> (Response, Response) {
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(38.0, 24.0), Sense::hover());
     let main = Rect::from_min_size(rect.min, vec2(25.0, 24.0));
     let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
     let m = ui.interact(main, ui.id().with((tip, "main")), Sense::click());
     let a = ui.interact(arrow, ui.id().with((tip, "arrow")), Sense::click());
-    if m.hovered() || a.hovered() {
+    if on {
+        ui.painter().rect_filled(rect, 4.0, t.pressed);
+        ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
+    } else if m.hovered() || a.hovered() {
         ui.painter().rect_filled(rect, 4.0, t.hover);
         ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
     }
@@ -122,7 +161,7 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
         ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 4.0, main.bottom() - 5.0), vec2(17.0, 3.0)), 0.0, c);
     }
     icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
-    (m.on_hover_text(tr(ui, tip)).clicked(), a)
+    (m.on_hover_text(tr(ui, tip)), a)
 }
 
 /// A one-line text field for a value stored in the workbook, which callers reload every frame. The text being typed is

@@ -70,7 +70,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 }
                 fit_to_page = e.child("pageSetUpPr").is_some_and(|p| p.flag("fitToPage", false));
             }
-            "sheetViews" => read_views(e, &mut sheet),
+            "sheetViews" => read_views(cx, e, &mut sheet),
             "sheetFormatPr" => {
                 if let Some(h) = e.attr_f64("defaultRowHeight") {
                     let px = pt_to_px(h);
@@ -265,7 +265,7 @@ fn read_protected_ranges(e: &El, sheet: &mut Sheet) {
     }
 }
 
-fn read_views(e: &El, sheet: &mut Sheet) {
+fn read_views(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet) {
     let Some(v) = e.child("sheetView") else { return };
     sheet.show_gridlines = v.flag("showGridLines", true);
     sheet.show_headings = v.flag("showRowColHeaders", true);
@@ -297,6 +297,14 @@ fn read_views(e: &El, sheet: &mut Sheet) {
     let sel = v.kids("selection").find(|s| s.attr("pane") == active_pane).or_else(|| v.kids("selection").last());
     if let Some(c) = sel.and_then(|s| s.attr("activeCell")).and_then(CellRef::parse) {
         sheet.view_active = c;
+    }
+    // Focus Cell: GridCraft's own sheet-view extension (see `sheet_write.rs`).
+    for ext in v.child("extLst").map(|l| l.kids("ext").collect::<Vec<_>>()).unwrap_or_default() {
+        for c in ext.children.iter().filter(|c| c.name == "focusCell") {
+            sheet.focus_cell = c.flag("on", false);
+            let has_color = c.attr("rgb").is_some() || c.attr("theme").is_some() || c.attr("indexed").is_some();
+            sheet.focus_cell_color = has_color.then(|| read_color(c, &cx.palette));
+        }
     }
 }
 

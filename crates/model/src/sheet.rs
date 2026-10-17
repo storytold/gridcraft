@@ -77,6 +77,12 @@ pub struct Sheet {
     pub show_formulas: bool,
     pub show_zeros: bool,
     pub right_to_left: bool,
+    /// Focus Cell: tint the active cell's whole row and column.
+    #[serde(default)]
+    pub focus_cell: bool,
+    /// The Focus Cell tint. `None` uses the theme's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus_cell_color: Option<Color>,
     pub zoom: u16,
     pub cond_formats: Vec<CondFormat>,
     pub validations: Vec<Validation>,
@@ -144,6 +150,8 @@ impl Sheet {
             show_formulas: false,
             show_zeros: true,
             right_to_left: false,
+            focus_cell: false,
+            focus_cell_color: None,
             zoom: 100,
             cond_formats: vec![],
             validations: vec![],

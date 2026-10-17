@@ -210,6 +210,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Formula Bar" => "Строка формул",
         "Gridlines" => "Сетка",
         "Headings" => "Заголовки",
+        "Focus Cell" => "Фокус на ячейке",
         "Zoom" => "Масштаб",
         "100%" => "100%",
         "Zoom to\nSelection" => "Масштаб по\nвыделению",

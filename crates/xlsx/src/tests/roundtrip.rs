@@ -1164,3 +1164,19 @@ fn doc_props_keep_boundary_whitespace() {
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert_eq!(back.props, wb.props);
 }
+
+#[test]
+fn focus_cell_and_its_color_roundtrip() {
+    let mut wb = Workbook::new();
+    let mut on = Sheet::new("Data");
+    on.focus_cell = true;
+    on.focus_cell_color = Some(Color::Rgb(0x5FC8D8));
+    wb.sheets[0] = Arc::new(on);
+    wb.sheets.push(Arc::new(Sheet::new("Plain")));
+    let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    assert!(back.sheets[0].focus_cell, "Focus Cell survives");
+    assert_eq!(back.sheets[0].focus_cell_color, Some(Color::Rgb(0x5FC8D8)), "the color survives");
+    assert!(!back.sheets[1].focus_cell, "the other sheet stays off");
+    assert_eq!(back.sheets[1].focus_cell_color, None, "and keeps the theme default");
+}

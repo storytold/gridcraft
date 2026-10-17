@@ -97,6 +97,8 @@ pub enum Icon {
     Lock,
     Spell,
     Freeze,
+    /// Focus Cell: a grid whose middle row and column carry a tint.
+    FocusCell,
     Zoom,
     Gridlines,
     Theme,
@@ -589,6 +591,19 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.rect(2.0, 2.5, 3.5, 11.0, Some(Color32::from_rgb(0xD6, 0xE6, 0xF7)), None);
             g.line(&[(2.0, 5.5), (14.0, 5.5)], BLUE, 1.2);
             g.line(&[(5.5, 2.5), (5.5, 13.5)], BLUE, 1.2);
+        }
+        Icon::FocusCell => {
+            // A 4 x 4 grid. The second row and column carry the tint, and the cell where they meet
+            // takes the outline: the reading aid the command draws on the sheet.
+            let band = Color32::from_rgba_unmultiplied(0xE8, 0x9A, 0x2B, 0xB0);
+            for x in [1.0, 4.5, 8.0, 11.5] {
+                for y in [1.0, 4.5, 8.0, 11.5] {
+                    g.rect(x, y, 3.5, 3.5, None, Some(light));
+                }
+            }
+            g.rect(1.0, 4.5, 14.0, 3.5, Some(band), None);
+            g.rect(4.5, 1.0, 3.5, 14.0, Some(band), None);
+            g.rect(4.5, 4.5, 3.5, 3.5, None, Some(c));
         }
         Icon::Theme => {
             g.rect(2.0, 2.0, 5.5, 5.5, Some(BLUE), None);

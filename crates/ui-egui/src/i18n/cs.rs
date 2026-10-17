@@ -191,6 +191,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Formula Bar" => "Řádek vzorců",
         "Gridlines" => "Mřížka",
         "Headings" => "Záhlaví",
+        "Focus Cell" => "Zaostřit buňku",
         "Zoom" => "Lupa",
         "Forecast\nSheet" => "List\nprognózy",
         "Add footer" => "Přidat zápatí",

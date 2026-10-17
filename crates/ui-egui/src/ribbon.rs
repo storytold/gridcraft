@@ -8,7 +8,7 @@ use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Tokens};
-use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, split_toggle, toggle_button};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -2147,6 +2147,27 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
         if resp.changed() {
             act(app, "view.headings", json!({"on": h}));
         }
+    });
+    ui.add_space(6.0);
+    // Focus Cell: the tint over the active cell's row and column. The click toggles, as the arrow
+    // opens the shared colour palette.
+    ui.vertical(|ui| {
+        // A third column of the group, level with the first checkbox row.
+        let (on, color) = app.session.active().and_then(|d| d.wb.active().map(|s| (s.focus_cell, s.focus_cell_color))).unwrap_or((false, None));
+        let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
+        let accent = color.and_then(|c| c.resolve(&theme)).map(theme::color32);
+        let (toggle, arrow) = split_toggle(ui, Icon::FocusCell, accent, on, "Focus Cell");
+        toggle.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, lang.tr("Focus Cell")));
+        control_keytip(app, ui, &toggle, "view.focusCell");
+        if toggle.clicked() {
+            act(app, "view.focusCell", json!({"on": !on}));
+        }
+        egui::Popup::menu(&arrow).show(|ui| {
+            if let Some(c) = color_palette(ui, &theme_colors(app), "Default") {
+                act(app, "view.focusCellColor", json!({"color": if c == "none" { "default".to_string() } else { c }}));
+                ui.close();
+            }
+        });
     });
     sep(ui);
     let __k = big_button(ui, Icon::Zoom, "Zoom", "Zoom…", false);

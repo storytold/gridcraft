@@ -35,6 +35,9 @@ pub struct Tokens {
     pub header_sel_text: Color32,
     pub header_all_bg: Color32,
     pub sel_fill: Color32,
+    /// The Focus Cell bands over the active cell's row and column, when the sheet has no color
+    /// of its own.
+    pub focus_cell: Color32,
     pub sel_border: Color32,
     pub input_bg: Color32,
     pub input_border: Color32,
@@ -78,6 +81,7 @@ impl Tokens {
             header_sel_text: Color32::from_rgb(0x10, 0x7C, 0x41),
             header_all_bg: Color32::from_rgb(0xC8, 0xE6, 0xD3),
             sel_fill: Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x1C),
+            focus_cell: Color32::from_rgba_unmultiplied(0xE8, 0x9A, 0x2B, 0x24),
             sel_border: Color32::from_rgb(0x10, 0x7C, 0x41),
             input_bg: Color32::WHITE,
             input_border: Color32::from_rgb(0xD1, 0xD1, 0xD1),
@@ -120,6 +124,7 @@ impl Tokens {
             header_sel_text: Color32::from_rgb(0x5C, 0xC5, 0x87),
             header_all_bg: Color32::from_rgb(0x2E, 0x55, 0x3E),
             sel_fill: Color32::from_rgba_unmultiplied(0x10, 0x7C, 0x41, 0x24),
+            focus_cell: Color32::from_rgba_unmultiplied(0xFF, 0xC4, 0x5E, 0x24),
             sel_border: Color32::from_rgb(0x10, 0x7C, 0x41),
             input_bg: Color32::from_rgb(0x1F, 0x1F, 0x1F),
             input_border: Color32::from_rgb(0x50, 0x50, 0x50),

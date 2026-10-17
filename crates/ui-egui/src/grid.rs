@@ -737,7 +737,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
     // Headers.
     if sh.show_headings {
-        paint_headers(&painter, &geo, sh, &sel, &t, &quads);
+        paint_headers(&painter, &geo, &wb, sh, &sel, &t, &quads);
         paint_freeze_handles(&painter, &geo, sh, &app.grid.drag, &t);
     }
     crate::outline::paint(&painter, &geo, sh, &t);
@@ -804,7 +804,7 @@ fn paint_panes(
             continue;
         }
         let p = painter.with_clip_rect(*clip);
-        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t);
+        paint_quadrant(&p, geo, wb, si, sh, sel.active, *rows, *cols, cf, t);
         paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols);
     }
     // Freeze lines.
@@ -1026,6 +1026,7 @@ pub(crate) fn paint_quadrant(
     wb: &Workbook,
     si: usize,
     sh: &Sheet,
+    active: CellRef,
     rows: (u32, u32),
     cols: (u32, u32),
     cf: &mut CfCache,
@@ -1088,6 +1089,14 @@ pub(crate) fn paint_quadrant(
             p.rect_filled(rect.shrink(0.5), 0.0, Color32::WHITE);
         }
         looks.push((anchor, rect, lk, cfl));
+    }
+    // Focus Cell: the active cell's row and column, over the fills and under the text.
+    if sh.focus_cell {
+        let (col, row) = focus_bands(geo, sh, active, rows, cols);
+        let tint = focus_tint(sh, wb, t);
+        for band in col.into_iter().chain(row) {
+            p.rect_filled(band, 0.0, tint);
+        }
     }
     // Text and per-cell decorations.
     for (c, rect, lk, cfl) in &looks {
@@ -1530,6 +1539,32 @@ fn active_rect(geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::Selection) -> Rect
     }
 }
 
+/// Focus Cell: the band over the active cell's column and the band over its row, inside one
+/// quadrant (`rows` x `cols`). A band is absent when its line sits outside the quadrant, or when
+/// the line is hidden.
+pub fn focus_bands(geo: &Geo, sh: &Sheet, active: CellRef, rows: (u32, u32), cols: (u32, u32)) -> (Option<Rect>, Option<Rect>) {
+    let (top, bottom) = (geo.y(sh, rows.0), geo.y(sh, rows.1 + 1));
+    let (left, right) = (geo.x(sh, cols.0), geo.x(sh, cols.1 + 1));
+    let in_cols = active.col >= cols.0 && active.col <= cols.1 && sh.col_width(active.col) > 0.0;
+    let in_rows = active.row >= rows.0 && active.row <= rows.1 && sh.row_height(active.row) > 0.0;
+    let band = |a: f32, b: f32, lo: f32, hi: f32| Rect::from_min_max(pos2(a, lo), pos2(b, hi));
+    (
+        in_cols.then(|| band(geo.x(sh, active.col), geo.x(sh, active.col + 1), top, bottom)),
+        in_rows.then(|| band(left, right, geo.y(sh, active.row), geo.y(sh, active.row + 1))),
+    )
+}
+
+/// The alpha of the Focus Cell tint. The selection fill's own alpha, so the two read alike.
+const FOCUS_ALPHA: u8 = 0x24;
+
+/// The tint of the Focus Cell bands: the sheet's chosen color, or the theme's own.
+fn focus_tint(sh: &Sheet, wb: &Workbook, t: &Tokens) -> Color32 {
+    match sh.focus_cell_color.and_then(|c| c.resolve(&wb.theme)) {
+        Some([r, g, b]) => Color32::from_rgba_unmultiplied(r, g, b, FOCUS_ALPHA),
+        None => t.focus_cell,
+    }
+}
+
 /// The rectangles shaded for a selection: every area except the active cell, which stays clear so
 /// it is plain where typing goes. A single selected cell has no fill. `outline` is where the
 /// current area is drawn this frame: it glides to a new selection, and its fill with it.
@@ -1692,6 +1727,7 @@ pub(crate) fn paint_selection(
 pub(crate) fn paint_headers(
     p: &Painter,
     geo: &Geo,
+    wb: &Workbook,
     sh: &Sheet,
     sel: &gridcraft_engine::Selection,
     t: &Tokens,
@@ -1710,6 +1746,8 @@ pub(crate) fn paint_headers(
     let full_col = |c: u32| sel.ranges.iter().any(|x| x.is_full_cols() && c >= x.start.col && c <= x.end.col);
     let full_row = |rr: u32| sel.ranges.iter().any(|x| x.is_full_rows() && rr >= x.start.row && rr <= x.end.row);
     let _ = bounds;
+    // Focus Cell marks the active cell's own header, as Excel does.
+    let focus = (sh.focus_cell).then(|| focus_tint(sh, wb, t));
     let mut done_cols = std::collections::HashSet::new();
     let mut done_rows = std::collections::HashSet::new();
     for (rows, cols, clip) in quads {
@@ -1725,6 +1763,11 @@ pub(crate) fn paint_headers(
                 }
                 let x = geo.x(sh, c);
                 let cr = Rect::from_min_size(pos2(x, top.top()), vec2(w, top.height()));
+                if c == sel.active.col
+                    && let Some(focus) = focus
+                {
+                    pc.rect_filled(cr, 0.0, focus);
+                }
                 if col_sel(c) {
                     pc.rect_filled(cr, 0.0, if full_col(c) { t.header_all_bg } else { t.header_sel_bg });
                     pc.line_segment([pos2(cr.left(), cr.bottom() - 1.0), pos2(cr.right(), cr.bottom() - 1.0)], Stroke::new(2.0, t.accent));
@@ -1746,6 +1789,11 @@ pub(crate) fn paint_headers(
                 }
                 let y = geo.y(sh, rr);
                 let cr = Rect::from_min_size(pos2(left.left(), y), vec2(left.width(), h));
+                if rr == sel.active.row
+                    && let Some(focus) = focus
+                {
+                    pr.rect_filled(cr, 0.0, focus);
+                }
                 if row_sel(rr) {
                     pr.rect_filled(cr, 0.0, if full_row(rr) { t.header_all_bg } else { t.header_sel_bg });
                     pr.line_segment([pos2(cr.right() - 1.0, cr.top()), pos2(cr.right() - 1.0, cr.bottom())], Stroke::new(2.0, t.accent));

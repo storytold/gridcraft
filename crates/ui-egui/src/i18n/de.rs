@@ -191,6 +191,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Formula Bar" => "Formelleiste",
         "Gridlines" => "Gitternetzlinien",
         "Headings" => "Überschriften",
+        "Focus Cell" => "Zellfokus",
         "Zoom" => "Zoom",
         "Forecast\nSheet" => "Prognose-\nblatt",
         "Add footer" => "Fußzeile hinzufügen",

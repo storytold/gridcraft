@@ -1,7 +1,7 @@
 //! View tab (sheet view state that's saved with the file) and Page Layout settings.
 
 use gridcraft_core::{CellRef, RangeRef};
-use gridcraft_model::Orientation;
+use gridcraft_model::{Color, Orientation};
 use serde_json::{Value as Json, json};
 
 use super::*;
@@ -26,6 +26,16 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("view.gridlines", "Gridlines", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "gridlines")),
         cmd!("view.headings", "Headings", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "headings")),
         cmd!("view.showZeros", "Show Zeros", [], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "zeros")),
+        cmd!("view.focusCell", "Focus Cell", ["View", "Show", "Focus Cell"], None, "{on?}", has_doc, focus_cell),
+        cmd!(
+            "view.focusCellColor",
+            "Focus Cell Color",
+            ["View", "Show", "Focus Cell", "Focus Cell Color"],
+            None,
+            "{color: \"#RRGGBB\" | \"default\"}",
+            has_doc,
+            focus_cell_color
+        ),
         cmd!("view.rightToLeft", "Sheet Right-to-Left", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "rtl")),
         cmd!("view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
         cmd!("view.zoom100", "100%", ["View", "Zoom"], None, "{}", has_doc, |s, _| zoom(s, &json!({"percent": 100}))),
@@ -149,6 +159,32 @@ fn sheet_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
         };
         *slot = bool_param(p, "on").unwrap_or(!*slot);
         Ok(json!({"on": *slot}))
+    })
+}
+
+/// Focus Cell: tint the active cell's whole row and column.
+fn focus_cell(s: &mut Session, p: &Json) -> Result<Json> {
+    edit(s, |cx| {
+        let si = cx.sheet_index();
+        let sh = cx.sheet_mut(si)?;
+        sh.focus_cell = bool_param(p, "on").unwrap_or(!sh.focus_cell);
+        Ok(json!({"on": sh.focus_cell}))
+    })
+}
+
+/// The Focus Cell tint. `"default"` clears the custom color back to the theme's.
+fn focus_cell_color(s: &mut Session, p: &Json) -> Result<Json> {
+    let color = match p.get("color") {
+        Some(Json::String(v)) if v.eq_ignore_ascii_case("default") => None,
+        Some(Json::String(v)) => Some(Color::from_hex(v).ok_or_else(|| bad("view.focusCellColor", "`color` takes \"#RRGGBB\" or \"default\""))?),
+        _ => return Err(bad("view.focusCellColor", "`color` takes \"#RRGGBB\" or \"default\"")),
+    };
+    edit(s, |cx| {
+        let si = cx.sheet_index();
+        let sh = cx.sheet_mut(si)?;
+        sh.focus_cell_color = color;
+        let hex = color.and_then(|c| c.hex(&cx.wb.theme)).unwrap_or_else(|| "default".into());
+        Ok(json!({"color": hex}))
     })
 }
 

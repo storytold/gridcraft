@@ -210,6 +210,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Formula Bar" => "수식 입력줄",
         "Gridlines" => "눈금선",
         "Headings" => "머리글",
+        "Focus Cell" => "셀 포커스",
         "Zoom" => "확대/축소",
         "100%" => "100%",
         "Zoom to\nSelection" => "선택 영역에\n맞춤",

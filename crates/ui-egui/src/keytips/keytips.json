@@ -2384,9 +2384,8 @@
    "seq": "WVC",
    "kind": "command",
    "target": "view.focusCell",
-   "pending": true,
    "excel": "Focus Cell Menu",
-   "note": "Focus Cell; reserved until the command lands"
+   "note": "Focus Cell; toggles the tint on the active sheet"
   },
   {
    "seq": "WVF",
