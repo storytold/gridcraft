@@ -161,6 +161,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | major | Ribbon groups: every cluster is a real group with Excel's caption under it, controls packed top-left over a caption band, and Excel's dialog launcher in the group's corner where Excel has one; the card grows to fit the band, and groups are content-sized so a missing feature takes no space (regression-tested) |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
 | 2026-10-12 | minor | Ctrl+wheel zoom steps along a ladder of percentages about 20% apart that never skips 100%, gliding to each step with animations on, so a notch out undoes a notch in (it drifted: 100 → 122 → 101); Excel steps 15 points, see decisions.md |
