@@ -1266,3 +1266,91 @@ fn offset_extreme_arguments_return_ref() {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
     }
 }
+
+/// A formula reading one further down (or on a later sheet) is calculated on demand, inside the
+/// formula that reads it. Chains of thousands of such formulas, common in financial models, used
+/// to overflow the stack (or give `#CIRC!` past 2,000 levels); they now calculate in full.
+#[test]
+fn long_dependency_chains_against_row_order_calculate() {
+    const N: u32 = 20_000;
+    let mut t = T::new();
+    {
+        let sh = t.wb.sheet_mut(0).unwrap();
+        for r in 1..N {
+            sh.cells.set(c(&format!("A{r}")), Cell::formula(Formula::new(&format!("=A{}+1", r + 1))));
+        }
+        sh.cells.set(c(&format!("A{N}")), Cell::value(Value::Number(1.0)));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1"), N as f64);
+    assert_eq!(t.num("A2"), (N - 1) as f64);
+    assert!(t.calc.circular.is_empty());
+    // An edit at the far end recalculates the whole chain.
+    t.set(&format!("A{N}"), "10");
+    assert_eq!(t.num("A1"), (N + 9) as f64);
+    assert!(t.calc.circular.is_empty());
+
+    // Hopping between two sheets at every step, through a range read (SUM) as well.
+    let mut t = T::new();
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
+    for r in 1..N {
+        t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("A{r}")), Cell::formula(Formula::new(&format!("=Data!A{r}+1"))));
+        let next = format!("=SUM(Sheet1!A{}:A{})", r + 1, r + 1);
+        t.wb.sheet_mut(1).unwrap().cells.set(c(&format!("A{r}")), Cell::formula(Formula::new(&next)));
+    }
+    t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("A{N}")), Cell::value(Value::Number(0.0)));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1"), (N - 1) as f64);
+    assert_eq!(t.wb.sheet(1).unwrap().value(c("A1")), Value::Number((N - 2) as f64));
+    assert!(t.calc.circular.is_empty());
+}
+
+/// A loop longer than the on-demand nesting limit is still a circular reference (and still ends).
+#[test]
+fn long_circular_chain_is_circular() {
+    const N: u32 = 5_000;
+    let mut t = T::new();
+    {
+        let sh = t.wb.sheet_mut(0).unwrap();
+        for r in 1..N {
+            sh.cells.set(c(&format!("A{r}")), Cell::formula(Formula::new(&format!("=A{}+1", r + 1))));
+        }
+        sh.cells.set(c(&format!("A{N}")), Cell::formula(Formula::new("=A1+1")));
+        sh.cells.set(c("B1"), Cell::formula(Formula::new("=1+2")));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Circ));
+    assert_eq!(t.get(&format!("A{N}")), Value::Error(CellError::Circ));
+    assert_eq!(t.num("B1"), 3.0);
+    assert!(!t.calc.circular.is_empty());
+    // Each formula is listed once at most.
+    let mut seen = t.calc.circular.clone();
+    seen.sort_by_key(|(s, c)| (*s, c.row, c.col));
+    seen.dedup();
+    assert_eq!(seen.len(), t.calc.circular.len());
+    // With iterative calculation the loop settles to numbers instead (no hang, no crash).
+    t.wb.calc.iterative = true;
+    t.wb.calc.max_iterations = 3;
+    t.calc.recalc_all(&mut t.wb);
+    assert!(t.get("A1").as_f64().is_some());
+}
+
+/// A loop closing back into the middle of a chain deeper than the on-demand nesting limit is found
+/// where calculating it in one go finds it: at the formula read while it was being calculated.
+#[test]
+fn deep_loop_is_found_where_it_closes() {
+    let mut t = T::new();
+    {
+        let sh = t.wb.sheet_mut(0).unwrap();
+        for r in 1..300 {
+            sh.cells.set(c(&format!("A{r}")), Cell::formula(Formula::new(&format!("=A{}+1", r + 1))));
+        }
+        sh.cells.set(c("A300"), Cell::formula(Formula::new("=A30+1")));
+        // Reads the loop through IFERROR, so its value shows where the loop was cut.
+        sh.cells.set(c("B1"), Cell::formula(Formula::new("=IFERROR(A1,-1)")));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.calc.circular, vec![(0, c("A30"))]);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Circ));
+    assert_eq!(t.num("B1"), -1.0);
+}

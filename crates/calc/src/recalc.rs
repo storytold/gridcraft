@@ -60,6 +60,12 @@ const WIDE: u32 = 64;
 /// Insertions an [`Intervals`] keeps aside (scanned by every query) before merging them in.
 const PENDING: usize = 32;
 
+/// Formulas a formula may calculate on demand one inside the other (each needing one another's
+/// value before it is done). Each level takes stack, so a chain deeper than this is suspended and
+/// calculated from the top instead (see [`PassHost::calculate`]): long dependency chains calculate
+/// whatever order they come in, with bounded stack.
+const MAX_NESTED: usize = 64;
+
 /// Formula evaluations iterative calculation may spend on one recalculation (passes × formulas
 /// evaluated again), however high Maximum Iterations is.
 const MAX_ITERATION_WORK: usize = 10_000_000;
@@ -395,6 +401,17 @@ struct PassHost<'a> {
     cycle: bool,
     cycles: Vec<Key>,
     depth: usize,
+    /// A formula needed at [`MAX_NESTED`] levels deep: the evaluations in progress are abandoned
+    /// and it is calculated first.
+    suspend: Option<Key>,
+    /// Formulas whose evaluation was abandoned for another one, to be calculated again after it.
+    /// They all need it, so reading one of them while it is calculated is a circular reference,
+    /// as reading a formula in progress is.
+    waiting: HashSet<Key>,
+    /// The formulas abandoned since the last suspension.
+    abandoned: Vec<Key>,
+    /// The formulas in `cycles`.
+    cycle_seen: HashSet<Key>,
     /// Iterative calculation: a circular reference reads the cell's previous value instead of
     /// giving `#CIRC!`.
     iterate: bool,
@@ -425,6 +442,10 @@ impl<'a> PassHost<'a> {
             cycle: false,
             cycles: vec![],
             depth: 0,
+            suspend: None,
+            waiting: HashSet::default(),
+            abandoned: Vec::new(),
+            cycle_seen: HashSet::default(),
             iterate: false,
             prev: HashMap::default(),
             stack: Vec::new(),
@@ -457,6 +478,36 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
 }
 
 impl PassHost<'_> {
+    /// Calculates `k` (and the formulas it reads) with bounded stack: when [`Self::compute`] would
+    /// go deeper than [`MAX_NESTED`], it suspends what is in progress, the formula it needed is
+    /// calculated from here, then the suspended ones again (reading the results kept so far).
+    fn calculate(&mut self, k: Key) {
+        // Formulas to calculate, innermost last, each with the ones abandoned to calculate the
+        // next.
+        let mut work: Vec<(Key, Vec<Key>)> = vec![(k, Vec::new())];
+        while let Some(&(top, _)) = work.last() {
+            self.compute(top);
+            match self.suspend.take() {
+                Some(next) => {
+                    let held = std::mem::take(&mut self.abandoned);
+                    self.waiting.extend(held.iter().copied());
+                    if let Some(entry) = work.last_mut() {
+                        entry.1 = held;
+                    }
+                    work.push((next, Vec::new()));
+                }
+                None => {
+                    work.pop();
+                    if let Some(entry) = work.last_mut() {
+                        for a in entry.1.drain(..) {
+                            self.waiting.remove(&a);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn compute(&mut self, k: Key) -> Value {
         if let Some(v) = self.results.get(&k) {
             let v = v.clone();
@@ -468,13 +519,24 @@ impl PassHost<'_> {
         let Some(expr) = self.exprs.get(&k) else {
             return self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
         };
-        if self.in_progress.contains(&k) || self.depth > 2000 {
+        if self.suspend.is_some() {
+            // Unwinding to `calculate`: the value is thrown away.
+            return Value::Error(CellError::Calc);
+        }
+        if self.in_progress.contains(&k) || self.waiting.contains(&k) {
             self.cycle = true;
             if self.iterate {
                 return self.circular_read(k);
             }
-            self.cycles.push(k);
+            // Once each, though a suspended evaluation meets it again.
+            if self.cycle_seen.insert(k) {
+                self.cycles.push(k);
+            }
             return Value::Error(CellError::Circ);
+        }
+        if self.depth >= MAX_NESTED {
+            self.suspend = Some(k);
+            return Value::Error(CellError::Calc);
         }
         self.in_progress.insert(k);
         self.depth += 1;
@@ -487,6 +549,17 @@ impl PassHost<'_> {
             let mut ev = Evaluator::new(self, k.0, k.1);
             ev.value(&expr)
         };
+        if self.suspend.is_some() {
+            // Abandoned: `calculate` evaluates this formula again once the one it needs is done.
+            self.depth -= 1;
+            self.in_progress.remove(&k);
+            self.abandoned.push(k);
+            if self.iterate {
+                self.stack.pop();
+            }
+            self.taint = outer_taint;
+            return Value::Error(CellError::Calc);
+        }
         // A legacy array formula fills the range it was entered in.
         let legacy = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
         let v = match legacy {
@@ -577,7 +650,7 @@ impl PassHost<'_> {
             self.pending = set.clone();
             self.spills.retain(|a, _| !set.contains(a));
             for k in &again {
-                self.compute(*k);
+                self.calculate(*k);
             }
             passes += 1;
         }
@@ -969,7 +1042,7 @@ impl Calc {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now);
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
-                    host.compute(*k);
+                    host.calculate(*k);
                 }
                 if host.iterate && !host.members.is_empty() {
                     let passes = host.iterate_loops(&dirty, wb.calc.max_iterations, wb.calc.max_change);
