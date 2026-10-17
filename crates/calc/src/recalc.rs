@@ -517,9 +517,11 @@ impl PassHost<'_> {
                     let data = a.data.iter().map(|x| if matches!(x, Value::Empty) { Value::Number(0.0) } else { x.clone() }).collect();
                     Array::new(a.rows, a.cols, data).map(std::sync::Arc::new).unwrap_or(a)
                 };
-                if a.rows > 1 || a.cols > 1 {
-                    self.spills.insert(k, a.clone());
-                }
+                // A dynamic-array formula anchors a spill range even while its result is one
+                // value -- a FILTER matching one row, a SORT or UNIQUE over one item -- so `C1#`
+                // is the 1 x 1 range and `ROWS(C1#)` is 1, as in Excel (#1491). A formula that
+                // returns a scalar never reaches this arm, so it does not become an anchor.
+                self.spills.insert(k, a.clone());
                 a.data.first().cloned().unwrap_or_default()
             }
             Value::Empty => Value::Number(0.0),

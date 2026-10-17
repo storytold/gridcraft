@@ -1266,3 +1266,41 @@ fn offset_extreme_arguments_return_ref() {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
     }
 }
+
+#[test]
+fn a_dynamic_array_of_one_value_still_anchors_a_spill() {
+    // In Excel a dynamic-array formula anchors a spill range even while its result is a single
+    // value, so `C1#` is the 1 x 1 range and ROWS/SUM/COUNT of it work. GridCraft gave #REF!
+    // (and COUNT 0), so every formula counting a filtered list broke the moment the list had
+    // exactly one entry (#1491). Values and cells follow the reported fixture.
+    let mut t = T::new();
+    for i in 1..=5 {
+        t.set(&format!("A{i}"), &i.to_string());
+        t.set(&format!("B{i}"), "7");
+    }
+    t.set("C1", "=FILTER(A1:A5,A1:A5>4)");
+    t.set("C3", "=SORT(FILTER(A1:A5,A1:A5=3))");
+    t.set("C5", "=UNIQUE(B1:B5)");
+    // Control: the same FILTER matching two rows, which worked before.
+    t.set("C9", "=FILTER(A1:A5,A1:A5>3)");
+
+    t.set("E1", "=ROWS(C1#)");
+    t.set("E2", "=SUM(C1#)");
+    t.set("E3", "=ROWS(C3#)");
+    t.set("E5", "=COUNT(C5#)");
+    t.set("E9", "=ROWS(C9#)");
+    assert_eq!(t.get("E1"), Value::from(1.0));
+    assert_eq!(t.get("E2"), Value::from(5.0));
+    assert_eq!(t.get("E3"), Value::from(1.0));
+    assert_eq!(t.get("E5"), Value::from(1.0));
+    assert_eq!(t.get("E9"), Value::from(2.0), "a spilling array is unchanged");
+
+    // The anchors still show their first value, as they did.
+    assert_eq!(t.get("C1"), Value::from(5.0));
+    assert_eq!(t.get("C5"), Value::from(7.0));
+
+    // A formula whose result is a scalar never becomes an anchor: `#` on it is still #REF!.
+    t.set("D1", "=1+1");
+    t.set("E11", "=ROWS(D1#)");
+    assert_eq!(t.get("E11"), Value::Error(CellError::Ref));
+}
