@@ -1,9 +1,9 @@
 //! Financial functions: time value of money, cash-flow analysis, depreciation and securities.
 //!
 //! Sign convention follows Excel: money paid out is negative, money received is positive.
-//! Date arguments are serial numbers (truncated) in the 1900 date system.
+//! Date arguments are serial numbers (truncated) in the workbook's date system.
 
-use gridcraft_core::date::{datetime_from_serial, days_in_month, serial_from_ymd};
+use gridcraft_core::date::{datetime_from_serial, days_in_month, is_leap, max_serial, serial_from_ymd};
 use gridcraft_core::{CellError, DateSystem, Value};
 
 use crate::util::{R, S, array_numbers, as_array, flatten, has, num, num_val, numbers, opt_bool, opt_num, round_half_away, text, to_sig_digits};
@@ -526,13 +526,12 @@ fn vdb(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 fn amorlinc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (cost, purchased, first, salvage) = (num(a, 0)?, date(a, 1)?, date(a, 2)?, num(a, 3)?);
     let (period, rate, basis) = (num(a, 4)?.trunc(), num(a, 5)?, basis_arg(a, 6)?);
-    let _ = c;
     if cost < 0.0 || salvage < 0.0 || salvage > cost || period < 0.0 || rate <= 0.0 || first < purchased {
         return Err(CellError::Num);
     }
     let full = cost * rate;
     let limit = cost - salvage;
-    let dep0 = (full * year_frac(purchased, first, basis)?).min(limit);
+    let dep0 = (full * year_frac(c.date_system(), purchased, first, basis)?).min(limit);
     if period == 0.0 {
         return num_val(dep0);
     }
@@ -543,7 +542,6 @@ fn amorlinc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 fn amordegrc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (cost, purchased, first, salvage) = (num(a, 0)?, date(a, 1)?, date(a, 2)?, num(a, 3)?);
     let (period, rate, basis) = (num(a, 4)?.trunc(), num(a, 5)?, basis_arg(a, 6)?);
-    let _ = c;
     if cost < 0.0 || salvage < 0.0 || salvage > cost || period < 0.0 || rate <= 0.0 || first < purchased || period > 1e6 {
         return Err(CellError::Num);
     }
@@ -559,7 +557,7 @@ fn amordegrc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     };
     let r = rate * coef;
     let mut book = cost;
-    let mut dep = (year_frac(purchased, first, basis)? * r * cost).round();
+    let mut dep = (year_frac(c.date_system(), purchased, first, basis)? * r * cost).round();
     if period == 0.0 {
         return num_val(dep);
     }
@@ -592,13 +590,13 @@ fn date(a: &[Arg], i: usize) -> R<f64> {
     Ok(d)
 }
 
-fn ymd(s: f64) -> R<(i32, u32, u32)> {
-    let dt = datetime_from_serial(DateSystem::D1900, s.trunc()).ok_or(CellError::Num)?;
+fn ymd(sys: DateSystem, s: f64) -> R<(i32, u32, u32)> {
+    let dt = datetime_from_serial(sys, s.trunc()).ok_or(CellError::Num)?;
     Ok((dt.year, dt.month, dt.day.max(1)))
 }
 
-fn serial(y: i32, m: u32, d: u32) -> R<f64> {
-    serial_from_ymd(DateSystem::D1900, y as i64, m as i64, d as i64).ok_or(CellError::Num)
+fn serial(sys: DateSystem, y: i32, m: u32, d: u32) -> R<f64> {
+    serial_from_ymd(sys, y as i64, m as i64, d as i64).ok_or(CellError::Num)
 }
 
 fn basis_arg(a: &[Arg], i: usize) -> R<u32> {
@@ -617,14 +615,10 @@ fn freq_arg(a: &[Arg], i: usize) -> R<f64> {
     Ok(f)
 }
 
-fn is_leap(y: i32) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
-}
-
 /// 30/360 day count (US/NASD when `us`, European otherwise).
-fn days360(s1: f64, s2: f64, us: bool) -> R<f64> {
-    let (y1, m1, mut d1) = ymd(s1)?;
-    let (y2, m2, mut d2) = ymd(s2)?;
+fn days360(sys: DateSystem, s1: f64, s2: f64, us: bool) -> R<f64> {
+    let (y1, m1, mut d1) = ymd(sys, s1)?;
+    let (y2, m2, mut d2) = ymd(sys, s2)?;
     if us {
         let feb_end1 = m1 == 2 && d1 >= days_in_month(y1, 2);
         let feb_end2 = m2 == 2 && d2 >= days_in_month(y2, 2);
@@ -648,25 +642,25 @@ fn days360(s1: f64, s2: f64, us: bool) -> R<f64> {
 }
 
 /// Days between two dates under a basis.
-fn day_count(s1: f64, s2: f64, basis: u32) -> R<f64> {
+fn day_count(sys: DateSystem, s1: f64, s2: f64, basis: u32) -> R<f64> {
     match basis {
-        0 => days360(s1, s2, true),
-        4 => days360(s1, s2, false),
+        0 => days360(sys, s1, s2, true),
+        4 => days360(sys, s1, s2, false),
         _ => Ok(s2 - s1),
     }
 }
 
 /// Year fraction between two dates under a basis (YEARFRAC semantics).
-fn year_frac(s1: f64, s2: f64, basis: u32) -> R<f64> {
+fn year_frac(sys: DateSystem, s1: f64, s2: f64, basis: u32) -> R<f64> {
     let (s1, s2) = if s1 <= s2 { (s1, s2) } else { (s2, s1) };
     match basis {
-        0 => Ok(days360(s1, s2, true)? / 360.0),
+        0 => Ok(days360(sys, s1, s2, true)? / 360.0),
         2 => Ok((s2 - s1) / 360.0),
         3 => Ok((s2 - s1) / 365.0),
-        4 => Ok(days360(s1, s2, false)? / 360.0),
+        4 => Ok(days360(sys, s1, s2, false)? / 360.0),
         _ => {
-            let (y1, m1, d1) = ymd(s1)?;
-            let (y2, m2, d2) = ymd(s2)?;
+            let (y1, m1, d1) = ymd(sys, s1)?;
+            let (y2, m2, d2) = ymd(sys, s2)?;
             let days = s2 - s1;
             if y1 == y2 {
                 return Ok(days / if is_leap(y1) { 366.0 } else { 365.0 });
@@ -678,8 +672,8 @@ fn year_frac(s1: f64, s2: f64, basis: u32) -> R<f64> {
                 let denom = if feb29_1 || feb29_2 { 366.0 } else { 365.0 };
                 return Ok(days / denom);
             }
-            let start = serial(y1, 1, 1)?;
-            let end = serial(y2 + 1, 1, 1).unwrap_or(2_958_466.0);
+            let start = serial(sys, y1, 1, 1)?;
+            let end = serial(sys, y2 + 1, 1, 1).unwrap_or(max_serial(sys) as f64 + 1.0);
             let avg = (end - start) / (y2 - y1 + 1) as f64;
             Ok(days / avg)
         }
@@ -687,12 +681,12 @@ fn year_frac(s1: f64, s2: f64, basis: u32) -> R<f64> {
 }
 
 /// Days in a year for discount securities.
-fn year_basis(basis: u32, s: f64) -> R<f64> {
+fn year_basis(sys: DateSystem, basis: u32, s: f64) -> R<f64> {
     Ok(match basis {
         0 | 2 | 4 => 360.0,
         3 => 365.0,
         _ => {
-            if is_leap(ymd(s)?.0) {
+            if is_leap(ymd(sys, s)?.0) {
                 366.0
             } else {
                 365.0
@@ -702,7 +696,7 @@ fn year_basis(basis: u32, s: f64) -> R<f64> {
 }
 
 /// Date `months` months before/after an anchor date, keeping end-of-month alignment.
-fn shift_months(anchor: (i32, u32, u32), months: i64, eom: bool) -> R<f64> {
+fn shift_months(sys: DateSystem, anchor: (i32, u32, u32), months: i64, eom: bool) -> R<f64> {
     let (y, m, d) = anchor;
     let total = y as i64 * 12 + (m as i64 - 1) + months;
     let ny = total.div_euclid(12);
@@ -712,7 +706,7 @@ fn shift_months(anchor: (i32, u32, u32), months: i64, eom: bool) -> R<f64> {
     }
     let dim = days_in_month(ny as i32, nm);
     let nd = if eom { dim } else { d.min(dim) };
-    serial(ny as i32, nm, nd)
+    serial(sys, ny as i32, nm, nd)
 }
 
 struct Coupon {
@@ -721,27 +715,27 @@ struct Coupon {
     num: f64,
 }
 
-fn coupons(settle: f64, mat: f64, freq: f64) -> R<Coupon> {
+fn coupons(sys: DateSystem, settle: f64, mat: f64, freq: f64) -> R<Coupon> {
     if settle >= mat {
         return Err(CellError::Num);
     }
-    let anchor = ymd(mat)?;
+    let anchor = ymd(sys, mat)?;
     let eom = anchor.2 == days_in_month(anchor.0, anchor.1);
     let step = (12.0 / freq) as i64;
     // Estimate the count from the span, then adjust.
     let mut k = (((mat - settle) / 365.25 * freq).floor() as i64).max(1);
-    while k > 1 && shift_months(anchor, -(k - 1) * step, eom)? <= settle {
+    while k > 1 && shift_months(sys, anchor, -(k - 1) * step, eom)? <= settle {
         k -= 1;
     }
     let mut guard = 0;
-    while shift_months(anchor, -k * step, eom)? > settle {
+    while shift_months(sys, anchor, -k * step, eom)? > settle {
         k += 1;
         guard += 1;
         if guard > 100_000 {
             return Err(CellError::Num);
         }
     }
-    Ok(Coupon { pcd: shift_months(anchor, -k * step, eom)?, ncd: shift_months(anchor, -(k - 1) * step, eom)?, num: k as f64 })
+    Ok(Coupon { pcd: shift_months(sys, anchor, -k * step, eom)?, ncd: shift_months(sys, anchor, -(k - 1) * step, eom)?, num: k as f64 })
 }
 
 fn coup_days(c: &Coupon, freq: f64, basis: u32) -> f64 {
@@ -752,56 +746,57 @@ fn coup_days(c: &Coupon, freq: f64, basis: u32) -> f64 {
     }
 }
 
-fn coup_daybs(c: &Coupon, settle: f64, basis: u32) -> R<f64> {
-    day_count(c.pcd, settle, basis)
+fn coup_daybs(sys: DateSystem, c: &Coupon, settle: f64, basis: u32) -> R<f64> {
+    day_count(sys, c.pcd, settle, basis)
 }
 
-fn coup_daysnc(c: &Coupon, settle: f64, freq: f64, basis: u32) -> R<f64> {
+fn coup_daysnc(sys: DateSystem, c: &Coupon, settle: f64, freq: f64, basis: u32) -> R<f64> {
     match basis {
-        0 | 4 => Ok(coup_days(c, freq, basis) - coup_daybs(c, settle, basis)?),
+        0 | 4 => Ok(coup_days(c, freq, basis) - coup_daybs(sys, c, settle, basis)?),
         _ => Ok(c.ncd - settle),
     }
 }
 
 /// settlement, maturity, frequency, basis at positions 0..=3 for the COUP* functions.
-fn coup_args(a: &[Arg]) -> R<(f64, f64, f64, u32, Coupon)> {
+fn coup_args(a: &[Arg], sys: DateSystem) -> R<(f64, f64, f64, u32, Coupon)> {
     let (s, m, f, b) = (date(a, 0)?, date(a, 1)?, freq_arg(a, 2)?, basis_arg(a, 3)?);
-    let c = coupons(s, m, f)?;
+    let c = coupons(sys, s, m, f)?;
     Ok((s, m, f, b, c))
 }
 
-fn coupdaybs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (s, _, _, b, c) = coup_args(a)?;
-    num_val(coup_daybs(&c, s, b)?)
+fn coupdaybs(a: &[Arg], cx: &mut dyn Ctx) -> R<Value> {
+    let (s, _, _, b, c) = coup_args(a, cx.date_system())?;
+    num_val(coup_daybs(cx.date_system(), &c, s, b)?)
 }
 
-fn coupdays(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (_, _, f, b, c) = coup_args(a)?;
+fn coupdays(a: &[Arg], cx: &mut dyn Ctx) -> R<Value> {
+    let (_, _, f, b, c) = coup_args(a, cx.date_system())?;
     num_val(coup_days(&c, f, b))
 }
 
-fn coupdaysnc(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (s, _, f, b, c) = coup_args(a)?;
-    num_val(coup_daysnc(&c, s, f, b)?)
+fn coupdaysnc(a: &[Arg], cx: &mut dyn Ctx) -> R<Value> {
+    let (s, _, f, b, c) = coup_args(a, cx.date_system())?;
+    num_val(coup_daysnc(cx.date_system(), &c, s, f, b)?)
 }
 
-fn coupncd(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(coup_args(a)?.4.ncd)
+fn coupncd(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(coup_args(a, c.date_system())?.4.ncd)
 }
 
-fn couppcd(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(coup_args(a)?.4.pcd)
+fn couppcd(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(coup_args(a, c.date_system())?.4.pcd)
 }
 
-fn coupnum(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(coup_args(a)?.4.num)
+fn coupnum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(coup_args(a, c.date_system())?.4.num)
 }
 
 // ---------------------------------------------------------------------------------------------
 // Securities
 // ---------------------------------------------------------------------------------------------
 
-fn accrint(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn accrint(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let sys = c.date_system();
     let (issue, first, settle, rate) = (date(a, 0)?, date(a, 1)?, date(a, 2)?, num(a, 3)?);
     let par = if has(a, 4) { num(a, 4)? } else { 1000.0 };
     let freq = freq_arg(a, 5)?;
@@ -810,10 +805,10 @@ fn accrint(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if issue >= settle || rate <= 0.0 || par <= 0.0 {
         return Err(CellError::Num);
     }
-    let anchor = ymd(first)?;
+    let anchor = ymd(sys, first)?;
     let eom = anchor.2 == days_in_month(anchor.0, anchor.1);
     let step = (12.0 / freq) as i64;
-    let cd = |j: i64| shift_months(anchor, j * step, eom);
+    let cd = |j: i64| shift_months(sys, anchor, j * step, eom);
     // Coupon index of the period containing a date: cd(j) <= date < cd(j+1).
     let index_of = |d: f64| -> R<i64> {
         let mut j = (((d - first) / 365.25 * freq).floor() as i64).clamp(-200_000, 200_000);
@@ -851,7 +846,7 @@ fn accrint(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
                 3 => 365.0 / freq,
                 _ => 360.0 / freq,
             };
-            sum += day_count(from, to, basis)? / nl;
+            sum += day_count(sys, from, to, basis)? / nl;
         }
         j += 1;
         guard += 1;
@@ -862,14 +857,14 @@ fn accrint(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(par * rate / freq * sum)
 }
 
-fn accrintm(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn accrintm(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (issue, settle, rate) = (date(a, 0)?, date(a, 1)?, num(a, 2)?);
     let par = if has(a, 3) { num(a, 3)? } else { 1000.0 };
     let basis = basis_arg(a, 4)?;
     if issue >= settle || rate <= 0.0 || par <= 0.0 {
         return Err(CellError::Num);
     }
-    num_val(par * rate * year_frac(issue, settle, basis)?)
+    num_val(par * rate * year_frac(c.date_system(), issue, settle, basis)?)
 }
 
 /// settlement, maturity, value, value, [basis] for discount securities.
@@ -881,55 +876,55 @@ fn disc_args(a: &[Arg]) -> R<(f64, f64, f64, f64, u32)> {
     Ok((s, m, x, y, b))
 }
 
-fn disc_frac(s: f64, m: f64, b: u32) -> R<f64> {
-    Ok(day_count(s, m, b)? / year_basis(b, s)?)
+fn disc_frac(sys: DateSystem, s: f64, m: f64, b: u32) -> R<f64> {
+    Ok(day_count(sys, s, m, b)? / year_basis(sys, b, s)?)
 }
 
-fn disc(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn disc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (s, m, pr, red, b) = disc_args(a)?;
-    num_val((1.0 - pr / red) / disc_frac(s, m, b)?)
+    num_val((1.0 - pr / red) / disc_frac(c.date_system(), s, m, b)?)
 }
 
-fn pricedisc(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn pricedisc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (s, m, d, red, b) = disc_args(a)?;
-    num_val(red - d * red * disc_frac(s, m, b)?)
+    num_val(red - d * red * disc_frac(c.date_system(), s, m, b)?)
 }
 
-fn yielddisc(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn yielddisc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (s, m, pr, red, b) = disc_args(a)?;
-    num_val((red / pr - 1.0) / disc_frac(s, m, b)?)
+    num_val((red / pr - 1.0) / disc_frac(c.date_system(), s, m, b)?)
 }
 
-fn intrate(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn intrate(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (s, m, inv, red, b) = disc_args(a)?;
-    num_val((red - inv) / inv / disc_frac(s, m, b)?)
+    num_val((red - inv) / inv / disc_frac(c.date_system(), s, m, b)?)
 }
 
-fn received(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn received(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (s, m, inv, d, b) = disc_args(a)?;
-    let denom = 1.0 - d * disc_frac(s, m, b)?;
+    let denom = 1.0 - d * disc_frac(c.date_system(), s, m, b)?;
     if denom <= 0.0 {
         return Err(CellError::Num);
     }
     num_val(inv / denom)
 }
 
-fn tbill_args(a: &[Arg]) -> R<(f64, f64)> {
+fn tbill_args(a: &[Arg], sys: DateSystem) -> R<(f64, f64)> {
     let (s, m, x) = (date(a, 0)?, date(a, 1)?, num(a, 2)?);
     if s >= m || x <= 0.0 {
         return Err(CellError::Num);
     }
     // At most one year after settlement.
-    let (y, mo, d) = ymd(s)?;
-    let limit = shift_months((y, mo, d), 12, false)?;
+    let (y, mo, d) = ymd(sys, s)?;
+    let limit = shift_months(sys, (y, mo, d), 12, false)?;
     if m > limit {
         return Err(CellError::Num);
     }
     Ok((m - s, x))
 }
 
-fn tbillprice(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (dsm, d) = tbill_args(a)?;
+fn tbillprice(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (dsm, d) = tbill_args(a, c.date_system())?;
     let p = 100.0 * (1.0 - d * dsm / 360.0);
     if p <= 0.0 {
         return Err(CellError::Num);
@@ -937,13 +932,13 @@ fn tbillprice(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(p)
 }
 
-fn tbillyield(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (dsm, pr) = tbill_args(a)?;
+fn tbillyield(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (dsm, pr) = tbill_args(a, c.date_system())?;
     num_val((100.0 - pr) / pr * 360.0 / dsm)
 }
 
-fn tbilleq(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (dsm, d) = tbill_args(a)?;
+fn tbilleq(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (dsm, d) = tbill_args(a, c.date_system())?;
     if dsm <= 182.0 {
         return num_val(365.0 * d / (360.0 - d * dsm));
     }
@@ -960,24 +955,24 @@ fn tbilleq(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 /// settlement, maturity, issue, rate, value, [basis].
-fn mat_terms(a: &[Arg]) -> R<(f64, f64, f64, f64, f64)> {
+fn mat_terms(a: &[Arg], sys: DateSystem) -> R<(f64, f64, f64, f64, f64)> {
     let (s, m, issue, rate, x, b) = (date(a, 0)?, date(a, 1)?, date(a, 2)?, num(a, 3)?, num(a, 4)?, basis_arg(a, 5)?);
     if s >= m || issue >= s || rate < 0.0 || x < 0.0 {
         return Err(CellError::Num);
     }
-    let dim = year_frac(issue, m, b)?;
-    let dsm = year_frac(s, m, b)?;
-    let ai = year_frac(issue, s, b)?;
+    let dim = year_frac(sys, issue, m, b)?;
+    let dsm = year_frac(sys, s, m, b)?;
+    let ai = year_frac(sys, issue, s, b)?;
     Ok((dim, dsm, ai, rate, x))
 }
 
-fn pricemat(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (dim, dsm, ai, rate, yld) = mat_terms(a)?;
+fn pricemat(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (dim, dsm, ai, rate, yld) = mat_terms(a, c.date_system())?;
     num_val((100.0 + dim * rate * 100.0) / (1.0 + dsm * yld) - ai * rate * 100.0)
 }
 
-fn yieldmat(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (dim, dsm, ai, rate, pr) = mat_terms(a)?;
+fn yieldmat(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (dim, dsm, ai, rate, pr) = mat_terms(a, c.date_system())?;
     if pr <= 0.0 || dsm == 0.0 {
         return Err(CellError::Num);
     }
@@ -993,11 +988,11 @@ struct Bond {
     freq: f64,
 }
 
-fn bond(settle: f64, mat: f64, freq: f64, basis: u32) -> R<Bond> {
-    let c = coupons(settle, mat, freq)?;
+fn bond(sys: DateSystem, settle: f64, mat: f64, freq: f64, basis: u32) -> R<Bond> {
+    let c = coupons(sys, settle, mat, freq)?;
     let e = coup_days(&c, freq, basis);
-    let a = coup_daybs(&c, settle, basis)?;
-    let dsc = coup_daysnc(&c, settle, freq, basis)?;
+    let a = coup_daybs(sys, &c, settle, basis)?;
+    let dsc = coup_daysnc(sys, &c, settle, freq, basis)?;
     if e <= 0.0 {
         return Err(CellError::Num);
     }
@@ -1022,23 +1017,23 @@ fn bond_price(b: &Bond, rate: f64, yld: f64, red: f64) -> f64 {
     sum - accrued
 }
 
-fn price(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn price(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (s, m, rate, yld, red) = (date(a, 0)?, date(a, 1)?, num(a, 2)?, num(a, 3)?, num(a, 4)?);
     let (f, basis) = (freq_arg(a, 5)?, basis_arg(a, 6)?);
     if rate < 0.0 || yld < 0.0 || red <= 0.0 {
         return Err(CellError::Num);
     }
-    let b = bond(s, m, f, basis)?;
+    let b = bond(c.date_system(), s, m, f, basis)?;
     num_val(bond_price(&b, rate, yld, red))
 }
 
-fn yield_(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn yield_(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (s, m, rate, pr, red) = (date(a, 0)?, date(a, 1)?, num(a, 2)?, num(a, 3)?, num(a, 4)?);
     let (f, basis) = (freq_arg(a, 5)?, basis_arg(a, 6)?);
     if rate < 0.0 || pr <= 0.0 || red <= 0.0 {
         return Err(CellError::Num);
     }
-    let b = bond(s, m, f, basis)?;
+    let b = bond(c.date_system(), s, m, f, basis)?;
     if b.n == 1.0 {
         let base = pr / 100.0 + b.a / b.e * rate / f;
         return num_val(((red / 100.0 + rate / f) - base) / base * f * b.e / b.dsc);
@@ -1065,13 +1060,13 @@ fn yield_(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(0.5 * (lo + hi))
 }
 
-fn duration_calc(a: &[Arg]) -> R<(f64, f64, f64)> {
+fn duration_calc(a: &[Arg], sys: DateSystem) -> R<(f64, f64, f64)> {
     let (s, m, coupon, yld) = (date(a, 0)?, date(a, 1)?, num(a, 2)?, num(a, 3)?);
     let (f, basis) = (freq_arg(a, 4)?, basis_arg(a, 5)?);
     if coupon < 0.0 || yld < 0.0 {
         return Err(CellError::Num);
     }
-    let b = bond(s, m, f, basis)?;
+    let b = bond(sys, s, m, f, basis)?;
     let c = coupon * 100.0 / f;
     let y = 1.0 + yld / f;
     let frac = b.dsc / b.e;
@@ -1091,12 +1086,12 @@ fn duration_calc(a: &[Arg]) -> R<(f64, f64, f64)> {
     Ok((wsum / psum / f, yld, f))
 }
 
-fn duration(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(duration_calc(a)?.0)
+fn duration(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(duration_calc(a, c.date_system())?.0)
 }
 
-fn mduration(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (d, y, f) = duration_calc(a)?;
+fn mduration(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (d, y, f) = duration_calc(a, c.date_system())?;
     num_val(d / (1.0 + y / f))
 }
 
@@ -1122,8 +1117,8 @@ fn normal_length(start: f64, end: f64, freq: f64, basis: u32) -> f64 {
 }
 
 /// Days of `[from, to]` under a basis, or 0 when the span is empty.
-fn span(from: f64, to: f64, basis: u32) -> R<f64> {
-    if to > from { day_count(from, to, basis) } else { Ok(0.0) }
+fn span(sys: DateSystem, from: f64, to: f64, basis: u32) -> R<f64> {
+    if to > from { day_count(sys, from, to, basis) } else { Ok(0.0) }
 }
 
 /// The odd-first-period terms that ODDFPRICE and ODDFYIELD share.
@@ -1141,14 +1136,14 @@ struct OddFirst {
     freq: f64,
 }
 
-fn odd_first(settle: f64, mat: f64, issue: f64, first: f64, freq: f64, basis: u32) -> R<OddFirst> {
+fn odd_first(sys: DateSystem, settle: f64, mat: f64, issue: f64, first: f64, freq: f64, basis: u32) -> R<OddFirst> {
     if !(mat > first && first > settle && settle > issue) {
         return Err(CellError::Num);
     }
-    let anchor = ymd(first)?;
+    let anchor = ymd(sys, first)?;
     let eom = anchor.2 == days_in_month(anchor.0, anchor.1);
     let step = (12.0 / freq) as i64;
-    let quasi = |k: i64| shift_months(anchor, -k * step, eom);
+    let quasi = |k: i64| shift_months(sys, anchor, -k * step, eom);
     let (mut dc, mut acc) = (0.0, 0.0);
     let (mut nq, mut frac) = (None, 0.0);
     // Walk back from the first coupon: period k runs from quasi(k + 1) to quasi(k).
@@ -1163,11 +1158,11 @@ fn odd_first(settle: f64, mat: f64, issue: f64, first: f64, freq: f64, basis: u3
             return Err(CellError::Num);
         }
         let from = start.max(issue);
-        dc += span(from, end, basis)? / nl;
-        acc += span(from, settle.min(end), basis)? / nl;
+        dc += span(sys, from, end, basis)? / nl;
+        acc += span(sys, from, settle.min(end), basis)? / nl;
         if start <= settle && settle < end {
             nq = Some(k as f64);
-            frac = span(settle, end, basis)? / nl;
+            frac = span(sys, settle, end, basis)? / nl;
         }
         if start <= issue {
             break;
@@ -1175,7 +1170,7 @@ fn odd_first(settle: f64, mat: f64, issue: f64, first: f64, freq: f64, basis: u3
         k += 1;
     }
     let nq = nq.ok_or(CellError::Num)?;
-    let n = coupons(first, mat, freq)?.num;
+    let n = coupons(sys, first, mat, freq)?.num;
     Ok(OddFirst { n, nq, frac, dc, acc, freq })
 }
 
@@ -1193,26 +1188,26 @@ fn odd_first_price(t: &OddFirst, rate: f64, yld: f64, red: f64) -> f64 {
 }
 
 /// settlement, maturity, issue, first_coupon, rate, yld/pr, redemption, frequency, [basis].
-fn odd_first_args(a: &[Arg]) -> R<(OddFirst, f64, f64, f64)> {
+fn odd_first_args(a: &[Arg], sys: DateSystem) -> R<(OddFirst, f64, f64, f64)> {
     let (s, m, issue, first) = (date(a, 0)?, date(a, 1)?, date(a, 2)?, date(a, 3)?);
     let (rate, x, red) = (num(a, 4)?, num(a, 5)?, num(a, 6)?);
     let (f, basis) = (freq_arg(a, 7)?, basis_arg(a, 8)?);
     if rate < 0.0 || red <= 0.0 {
         return Err(CellError::Num);
     }
-    Ok((odd_first(s, m, issue, first, f, basis)?, rate, x, red))
+    Ok((odd_first(sys, s, m, issue, first, f, basis)?, rate, x, red))
 }
 
-fn oddfprice(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (t, rate, yld, red) = odd_first_args(a)?;
+fn oddfprice(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (t, rate, yld, red) = odd_first_args(a, c.date_system())?;
     if yld < 0.0 {
         return Err(CellError::Num);
     }
     num_val(odd_first_price(&t, rate, yld, red))
 }
 
-fn oddfyield(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (t, rate, pr, red) = odd_first_args(a)?;
+fn oddfyield(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (t, rate, pr, red) = odd_first_args(a, c.date_system())?;
     if pr <= 0.0 {
         return Err(CellError::Num);
     }
@@ -1240,11 +1235,11 @@ fn oddfyield(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 /// Σ DCi/NLi, Σ Ai/NLi and Σ DSCi/NLi over an odd last period.
-fn odd_last(settle: f64, mat: f64, last: f64, freq: f64, basis: u32) -> R<(f64, f64, f64)> {
+fn odd_last(sys: DateSystem, settle: f64, mat: f64, last: f64, freq: f64, basis: u32) -> R<(f64, f64, f64)> {
     if !(mat > settle && settle > last) {
         return Err(CellError::Num);
     }
-    let anchor = ymd(last)?;
+    let anchor = ymd(sys, last)?;
     let eom = anchor.2 == days_in_month(anchor.0, anchor.1);
     let step = (12.0 / freq) as i64;
     let (mut dc, mut acc, mut dsc) = (0.0, 0.0, 0.0);
@@ -1255,15 +1250,15 @@ fn odd_last(settle: f64, mat: f64, last: f64, freq: f64, basis: u32) -> R<(f64, 
         if k > MAX_QUASI {
             return Err(CellError::Num);
         }
-        let end = shift_months(anchor, k * step, eom)?;
+        let end = shift_months(sys, anchor, k * step, eom)?;
         let nl = normal_length(start, end, freq, basis);
         if nl <= 0.0 {
             return Err(CellError::Num);
         }
         let stop = end.min(mat);
-        dc += span(start, stop, basis)? / nl;
-        acc += span(start, settle.min(stop), basis)? / nl;
-        dsc += span(settle.max(start), stop, basis)? / nl;
+        dc += span(sys, start, stop, basis)? / nl;
+        acc += span(sys, start, settle.min(stop), basis)? / nl;
+        dsc += span(sys, settle.max(start), stop, basis)? / nl;
         if end >= mat {
             break;
         }
@@ -1274,18 +1269,18 @@ fn odd_last(settle: f64, mat: f64, last: f64, freq: f64, basis: u32) -> R<(f64, 
 }
 
 /// settlement, maturity, last_interest, rate, yld/pr, redemption, frequency, [basis].
-fn odd_last_args(a: &[Arg]) -> R<((f64, f64, f64), f64, f64, f64, f64)> {
+fn odd_last_args(a: &[Arg], sys: DateSystem) -> R<((f64, f64, f64), f64, f64, f64, f64)> {
     let (s, m, last) = (date(a, 0)?, date(a, 1)?, date(a, 2)?);
     let (rate, x, red) = (num(a, 3)?, num(a, 4)?, num(a, 5)?);
     let (f, basis) = (freq_arg(a, 6)?, basis_arg(a, 7)?);
     if rate < 0.0 || red <= 0.0 {
         return Err(CellError::Num);
     }
-    Ok((odd_last(s, m, last, f, basis)?, rate, x, red, f))
+    Ok((odd_last(sys, s, m, last, f, basis)?, rate, x, red, f))
 }
 
-fn oddlprice(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let ((dc, acc, dsc), rate, yld, red, f) = odd_last_args(a)?;
+fn oddlprice(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let ((dc, acc, dsc), rate, yld, red, f) = odd_last_args(a, c.date_system())?;
     if yld < 0.0 {
         return Err(CellError::Num);
     }
@@ -1293,8 +1288,8 @@ fn oddlprice(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val((red + dc * coupon) / (1.0 + dsc * yld / f) - acc * coupon)
 }
 
-fn oddlyield(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let ((dc, acc, dsc), rate, pr, red, f) = odd_last_args(a)?;
+fn oddlyield(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let ((dc, acc, dsc), rate, pr, red, f) = odd_last_args(a, c.date_system())?;
     if pr <= 0.0 {
         return Err(CellError::Num);
     }
@@ -2018,5 +2013,32 @@ mod tests {
         assert_eq!(rows_of(&v), vec![vec![nv(10.0), nv(20.0)]]);
         is_err(ev("PMT", vec![t("abc"), n(1.0), n(1.0)]), CellError::Value);
         is_err(ev("PMT", vec![e(CellError::NA), n(1.0), n(1.0)]), CellError::NA);
+    }
+
+    #[test]
+    fn securities_read_dates_in_the_1904_system() {
+        let d4 = |y, m, dd| n(serial_from_ymd(DateSystem::D1904, y, m, dd).unwrap());
+        let ev4 = |name: &str, args: Vec<Arg>| {
+            let mut ctx = TestCtx { sys: DateSystem::D1904, ..TestCtx::default() };
+            crate::call(crate::lookup(name).unwrap(), &args, &mut ctx)
+        };
+        let (s, m) = (d4(2011, 3, 15), d4(2011, 11, 30));
+        close(ev4("COUPNCD", vec![s.clone(), m.clone(), n(2.0)]), 39232.0);
+        close(ev4("COUPPCD", vec![s.clone(), m.clone(), n(4.0), n(0.0)]), 39140.0);
+        close(ev4("COUPDAYBS", vec![s.clone(), m.clone(), n(4.0), n(0.0)]), 15.0);
+        let accrint = vec![d4(2008, 3, 1), d4(2008, 8, 31), d4(2008, 5, 1), n(0.1), n(1000.0), n(2.0), n(1.0)];
+        close_tol(ev4("ACCRINT", accrint), 16.576086956522, 1e-9);
+        // Results that already matched Excel keep matching.
+        let semi = |name| ev4(name, vec![s.clone(), m.clone(), n(2.0), n(0.0)]);
+        close(semi("COUPPCD"), 39050.0);
+        close(semi("COUPDAYS"), 180.0);
+        close(semi("COUPDAYBS"), 105.0);
+        close(semi("COUPDAYSNC"), 75.0);
+        close(semi("COUPNUM"), 2.0);
+        let price = vec![s.clone(), m.clone(), n(0.0575), n(0.065), n(100.0), n(2.0), n(0.0)];
+        close_tol(ev4("PRICE", price), 99.47768286339101, 1e-9);
+        close_tol(ev4("DURATION", vec![s, m, n(0.08), n(0.09), n(2.0), n(0.0)]), 0.6890136809022, 1e-9);
+        let odd = vec![d4(2008, 11, 11), d4(2021, 3, 1), d4(2008, 10, 15), d4(2009, 3, 1), n(0.0785), n(0.0625), n(100.0), n(2.0), n(1.0)];
+        close_tol(ev4("ODDFPRICE", odd), 113.597717474079, 1e-9);
     }
 }
