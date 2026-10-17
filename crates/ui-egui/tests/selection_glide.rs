@@ -35,6 +35,7 @@ fn harness() -> Harness {
 /// The harness turns egui's animations off (and the glide follows that switch); this turns them on.
 fn animated() -> Harness {
     let mut h = harness();
+    h.state_mut().ui.animations = true;
     h.ctx.all_styles_mut(|s| s.animation_time = 0.1);
     h.step();
     h
@@ -161,15 +162,15 @@ fn a_screenshot_never_catches_the_outline_in_flight() {
 }
 
 #[test]
-fn animations_are_on_until_turned_off_and_the_choice_is_saved() {
-    assert!(UiState::default().animations);
-    // A `ui.json` written before the setting existed leaves them on.
+fn animations_are_off_until_turned_on_and_the_choice_is_saved() {
+    assert!(!UiState::default().animations);
+    // A `ui.json` written before the setting existed follows the safe default.
     let old: UiState = serde_json::from_str(r#"{"dark": true, "ribbonTab": "View"}"#).unwrap();
-    assert!(old.animations && old.dark);
-    let off: UiState = serde_json::from_value(json!({"animations": false})).unwrap();
-    let saved = serde_json::to_value(&off).unwrap();
-    assert_eq!(saved["animations"], json!(false));
-    assert!(!serde_json::from_value::<UiState>(saved).unwrap().animations);
+    assert!(!old.animations && old.dark);
+    let on: UiState = serde_json::from_value(json!({"animations": true})).unwrap();
+    let saved = serde_json::to_value(&on).unwrap();
+    assert_eq!(saved["animations"], json!(true));
+    assert!(serde_json::from_value::<UiState>(saved).unwrap().animations);
 }
 
 #[test]
@@ -192,7 +193,7 @@ fn agents_find_run_and_read_the_setting_over_the_control_channel() {
     let ctx = egui::Context::default();
     let found = reply(control::handle(&mut a, &ctx, "engine.commands", &json!({"search": "animations"})));
     let entry = found["result"].as_array().and_then(|all| all.iter().find(|c| c["id"] == "view.animations")).cloned().unwrap();
-    assert_eq!((&entry["label"], &entry["ui"]), (&json!("Animations"), &json!(true)));
+    assert_eq!((&entry["label"], &entry["ui"]), (&json!("Animations"), &json!(false)));
     assert!(entry["params"].as_str().is_some_and(|doc| doc.contains("on")), "{entry}");
     let ran = reply(control::handle(&mut a, &ctx, "engine.execute", &json!({"command": "view.animations", "params": {"on": false}})));
     assert_eq!(ran, json!({"ok": true, "result": {"on": false}}));

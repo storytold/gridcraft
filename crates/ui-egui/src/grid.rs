@@ -710,7 +710,12 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         view: geo.cells,
         now,
         frame_nr: ui.ctx().cumulative_frame_nr(),
-        animate: app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight(),
+        // A pointer drag must track the pointer. Retargeting the 120 ms glide on every movement
+        // makes the outline trail indefinitely; keep the glide for discrete clicks and keys.
+        animate: app.ui.animations
+            && !matches!(app.grid.drag, Drag::Select)
+            && ui.ctx().global_style().animation_time > 0.0
+            && !app.shots.in_flight(),
     });
     if app.grid.glide.is_gliding() {
         ui.ctx().request_repaint();
