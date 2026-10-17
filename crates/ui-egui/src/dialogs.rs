@@ -47,13 +47,28 @@ impl Dialog {
         &self.name
     }
 
-    /// Sets a form value. In Zoom, a Magnification choice is also the percentage `view.zoom` stores.
+    /// Sets a form value. In Zoom, a Magnification choice is also the percentage `view.zoom`
+    /// stores, a typed percentage selects Custom, and Fit selection makes OK run
+    /// `view.zoomToSelection` (its view size was captured when the dialog opened).
     pub(crate) fn set_value(&mut self, key: &str, value: Json) {
-        if self.name == "zoom"
-            && key == "preset"
-            && let Some(p) = value.as_str().and_then(|s| s.parse::<f64>().ok())
-        {
-            self.values.insert("percent".into(), json!(p));
+        if self.name == "zoom" {
+            match key {
+                "preset" => match value.as_str() {
+                    Some("fit") => self.command = Some("view.zoomToSelection"),
+                    Some(s) => {
+                        self.command = Some("view.zoom");
+                        if let Ok(p) = s.parse::<f64>() {
+                            self.values.insert("percent".into(), json!(p));
+                        }
+                    }
+                    None => {}
+                },
+                "percent" => {
+                    self.command = Some("view.zoom");
+                    self.values.insert("preset".into(), json!(zoom_preset(value.as_f64().unwrap_or(0.0))));
+                }
+                _ => {}
+            }
         }
         self.values.insert(key.into(), value);
     }
@@ -522,20 +537,19 @@ impl Dialog {
                 ],
                 json!({"groupBy": "A", "function": "sum"}),
             ),
-            "zoom" => Dialog::form(
-                "zoom",
-                "Zoom",
-                "view.zoom",
-                vec![
-                    Choice {
-                        key: "preset",
-                        label: "Magnification",
-                        options: vec![("200", "200%"), ("100", "100%"), ("75", "75%"), ("50", "50%"), ("25", "25%")],
-                    },
-                    Number { key: "percent", label: "Custom (%):" },
-                ],
-                json!({"percent": app.session.active().and_then(|d| d.wb.active().map(|s| s.zoom)).unwrap_or(100)}),
-            ),
+            "zoom" => {
+                // The current zoom is pre-selected (Custom when it matches no preset). Fit
+                // selection needs the grid's size, so it is captured here for `view.zoomToSelection`.
+                let zoom = app.session.active().and_then(|d| d.wb.active().map(|s| s.zoom)).unwrap_or(100);
+                let view = app.grid.cells_rect.unwrap_or(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(1200.0, 700.0)));
+                Dialog::form(
+                    "zoom",
+                    "Zoom",
+                    "view.zoom",
+                    vec![],
+                    json!({"percent": zoom, "preset": zoom_preset(zoom as f64), "viewWidth": view.width(), "viewHeight": view.height()}),
+                )
+            }
             "defineName" => {
                 // Name Manager › Edit… passes the name being edited (`oldName`, `oldScope`) and
                 // its current fields; New… and Define Name start from the selection.
@@ -983,13 +997,6 @@ fn build_params(d: &Dialog) -> Json {
                 }
             }
         }
-        "zoom" => {
-            if let Some(p) = d.values.get("preset").and_then(Json::as_str)
-                && d.values.get("percent").is_none()
-            {
-                v["percent"] = json!(p.parse::<f64>().unwrap_or(100.0));
-            }
-        }
         "cfQuick" => {
             let mut rule = Map::new();
             for (k, val) in &d.values {
@@ -1033,6 +1040,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        "zoom" => 220.0,
         _ => 380.0,
     };
     let window = egui::Window::new(app.ui.language.tr(&d.title))
@@ -1051,6 +1059,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "insertFunction" => insert_function(app, ui, &mut d, &mut confirm),
                 "find" => find(app, ui, &mut d),
                 "goTo" => go_to(app, ui, &mut d, &mut confirm),
+                "zoom" => zoom(ui, &mut d, &mut confirm, &mut open),
                 "sort" => sort(app, ui, &mut d, &mut confirm),
                 "nameManager" => name_manager(app, ui, &mut d, &mut open),
                 "manageRules" => manage_rules(app, ui),
@@ -1888,6 +1897,43 @@ fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
             }
         });
     }
+}
+
+/// Zoom's Magnification presets, as `preset` values and labels, in Excel's order.
+const ZOOM_PRESETS: [(&str, &str); 5] = [("200", "200%"), ("100", "100%"), ("75", "75%"), ("50", "50%"), ("25", "25%")];
+
+/// The `preset` that shows a zoom percentage: its Magnification entry, or Custom.
+fn zoom_preset(percent: f64) -> &'static str {
+    ZOOM_PRESETS.iter().map(|(val, _)| *val).find(|val| val.parse::<f64>().ok() == Some(percent)).unwrap_or("custom")
+}
+
+/// View › Zoom, laid out as Excel's: one Magnification column of 200% to 25%, Fit selection and
+/// Custom with its percentage box. The current zoom is pre-selected; typing a percentage
+/// selects Custom; Fit selection zooms so the selected cells fill the grid.
+fn zoom(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let lang = crate::i18n::current(ui.ctx());
+    let cur = d.values.get("preset").and_then(Json::as_str).unwrap_or("custom").to_string();
+    ui.label(egui::RichText::new(lang.tr("Magnification")).strong());
+    for (val, text) in ZOOM_PRESETS {
+        if ui.radio(cur == val, text).clicked() {
+            d.set_value("preset", json!(val));
+        }
+    }
+    if ui.radio(cur == "fit", lang.tr("Fit selection")).clicked() {
+        d.set_value("preset", json!("fit"));
+    }
+    ui.horizontal(|ui| {
+        if ui.radio(cur == "custom", format!("{}:", lang.tr("Custom"))).clicked() {
+            d.set_value("preset", json!("custom"));
+        }
+        // Whole percentages, as Excel shows them; the engine clamps to 10..400 as well.
+        let mut percent = d.values.get("percent").and_then(Json::as_f64).unwrap_or(100.0).round() as i64;
+        if ui.add(egui::DragValue::new(&mut percent).range(10..=400).speed(1.0)).changed() {
+            d.set_value("percent", json!(percent));
+        }
+        ui.label("%");
+    });
+    ok_cancel(ui, confirm, open);
 }
 
 fn go_to(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {

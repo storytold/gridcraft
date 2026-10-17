@@ -211,6 +211,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Gridlines" => "网格线",
         "Headings" => "标题",
         "Zoom" => "缩放",
+        "Magnification" => "缩放比例",
+        "Fit selection" => "恰好容纳选定区域",
         "100%" => "100%",
         "Zoom to\nSelection" => "缩放到\n所选内容",
         "Freeze\nPanes" => "冻结\n窗格",

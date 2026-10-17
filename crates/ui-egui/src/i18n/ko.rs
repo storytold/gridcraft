@@ -211,6 +211,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Gridlines" => "눈금선",
         "Headings" => "머리글",
         "Zoom" => "확대/축소",
+        "Magnification" => "배율",
+        "Fit selection" => "선택 영역에 맞춤",
         "100%" => "100%",
         "Zoom to\nSelection" => "선택 영역에\n맞춤",
         "Freeze\nPanes" => "틀\n고정",

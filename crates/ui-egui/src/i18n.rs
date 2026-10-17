@@ -386,6 +386,8 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Gridlines", "目盛線"),
     ("Headings", "見出し"),
     ("Zoom", "ズーム"),
+    ("Magnification", "倍率"),
+    ("Fit selection", "選択範囲に合わせる"),
     ("100%", "100%"),
     ("Zoom to\nSelection", "選択範囲を拡大"),
     ("Freeze\nPanes", "ウィンドウ枠の固定"),

@@ -206,6 +206,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Gridlines" => "Linije mreže",
         "Headings" => "Zaglavlja",
         "Zoom" => "Uvećanje",
+        "Magnification" => "Uvećanje",
+        "Fit selection" => "Uklopi izbor",
         "100%" => "100%",
         "Zoom to\nSelection" => "Uvećaj na\nselekciju",
         "Freeze\nPanes" => "Zamrzni\nokna",

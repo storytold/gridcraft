@@ -212,6 +212,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Gridlines" => "Linhas de Grade",
         "Headings" => "Títulos",
         "Zoom" => "Zoom",
+        "Fit selection" => "Ajustar seleção",
         "100%" => "100%",
         "Zoom to\nSelection" => "Zoom na\nSeleção",
         "Freeze\nPanes" => "Congelar\nPainéis",

@@ -192,6 +192,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Gridlines" => "Mřížka",
         "Headings" => "Záhlaví",
         "Zoom" => "Lupa",
+        "Magnification" => "Měřítko",
+        "Fit selection" => "Přizpůsobit výběru",
         "Forecast\nSheet" => "List\nprognózy",
         "Add footer" => "Přidat zápatí",
         "Add header" => "Přidat záhlaví",

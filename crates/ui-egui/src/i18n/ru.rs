@@ -211,6 +211,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Gridlines" => "Сетка",
         "Headings" => "Заголовки",
         "Zoom" => "Масштаб",
+        "Magnification" => "Масштаб",
+        "Fit selection" => "По выделению",
         "100%" => "100%",
         "Zoom to\nSelection" => "Масштаб по\nвыделению",
         "Freeze\nPanes" => "Закрепить\nобласти",

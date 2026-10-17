@@ -214,6 +214,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Gridlines" => "Quadrillage",
         "Headings" => "En-têtes",
         "Zoom" => "Zoom",
+        "Magnification" => "Zoom",
+        "Fit selection" => "Ajuster la sélection",
         "100%" => "100 %",
         "Zoom to\nSelection" => "Zoom sur la\nsélection",
         "Freeze\nPanes" => "Figer les\nvolets",

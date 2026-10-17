@@ -83,3 +83,65 @@ fn a_custom_percentage_after_a_magnification_wins_and_an_unedited_ok_keeps_the_z
     control(&mut h, "ui.dialog.confirm", json!({}));
     assert_eq!(zoom(&h), 225);
 }
+
+#[test]
+fn the_current_zoom_is_preselected_as_its_magnification_or_as_custom() {
+    let mut h = harness();
+    h.state_mut().open_dialog("zoom", json!({}));
+    h.run_steps(2);
+    let d = h.state().dialog.clone().unwrap();
+    assert_eq!(d.values["preset"], json!("100"));
+    assert_eq!(d.values["percent"], json!(100));
+    control(&mut h, "ui.dialog.cancel", json!({}));
+    h.state_mut().run("view.zoom", json!({"percent": 130})).unwrap();
+    h.state_mut().open_dialog("zoom", json!({}));
+    h.run_steps(2);
+    let d = h.state().dialog.clone().unwrap();
+    assert_eq!(d.values["preset"], json!("custom"));
+    assert_eq!(d.values["percent"], json!(130));
+    // An unedited OK keeps the zoom.
+    let r = control(&mut h, "ui.dialog.confirm", json!({}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert_eq!(zoom(&h), 130);
+}
+
+#[test]
+fn a_typed_percentage_selects_custom_and_sets_that_zoom() {
+    let mut h = harness();
+    control(&mut h, "ui.dialog", json!({"name": "zoom"}));
+    control(&mut h, "ui.dialog.set", json!({"field": "preset", "value": "fit"}));
+    control(&mut h, "ui.dialog.set", json!({"field": "percent", "value": 150}));
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["preset"], json!("custom"));
+    let r = control(&mut h, "ui.dialog.confirm", json!({}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert_eq!(zoom(&h), 150);
+}
+
+#[test]
+fn fit_selection_zooms_so_the_selected_cells_fill_the_grid() {
+    let mut h = harness();
+    h.state_mut().run("selection.set", json!({"range": "A1:J40"})).unwrap();
+    h.run_steps(2);
+    let view = h.state().grid.cells_rect.unwrap();
+    h.state_mut().open_dialog("zoom", json!({}));
+    h.run_steps(6);
+    h.get_by_label("Fit selection").click();
+    h.run_steps(6);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(6);
+    assert!(h.state().dialog.is_none());
+    // The same answer the ribbon's Zoom to Selection gives for this grid.
+    let mut expected = Session::new();
+    expected.new_workbook();
+    expected.execute("selection.set", json!({"range": "A1:J40"})).unwrap();
+    let r = expected.execute("view.zoomToSelection", json!({"viewWidth": view.width(), "viewHeight": view.height()})).unwrap();
+    assert_eq!(json!(zoom(&h)), r["zoom"]);
+    assert!(zoom(&h) > 10 && zoom(&h) < 100, "{}", zoom(&h));
+    // Fit selection over the control channel, before any frame is drawn, uses the grid size captured on opening.
+    h.state_mut().run("selection.set", json!({"range": "A1"})).unwrap();
+    control(&mut h, "ui.dialog", json!({"name": "zoom"}));
+    control(&mut h, "ui.dialog.set", json!({"field": "preset", "value": "fit"}));
+    let r = control(&mut h, "ui.dialog.confirm", json!({}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert_eq!(zoom(&h), 400);
+}

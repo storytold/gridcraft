@@ -192,6 +192,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Gridlines" => "Gitternetzlinien",
         "Headings" => "Überschriften",
         "Zoom" => "Zoom",
+        "Magnification" => "Vergrößerung",
+        "Fit selection" => "An Markierung anpassen",
         "Forecast\nSheet" => "Prognose-\nblatt",
         "Add footer" => "Fußzeile hinzufügen",
         "Add header" => "Kopfzeile hinzufügen",

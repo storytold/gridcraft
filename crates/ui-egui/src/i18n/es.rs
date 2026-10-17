@@ -193,6 +193,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Gridlines" => "Líneas de cuadrícula",
         "Headings" => "Encabezados",
         "Zoom" => "Zoom",
+        "Magnification" => "Ampliación",
+        "Fit selection" => "Ajustar la selección",
         "Forecast\nSheet" => "Hoja de\npronóstico",
         "Add footer" => "Agregar pie de página",
         "Add header" => "Agregar encabezado",
