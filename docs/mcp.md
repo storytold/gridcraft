@@ -61,6 +61,9 @@ Results are one text block holding pretty JSON; failures set `isError: true` wit
 missing required arguments and wrong argument types are JSON-RPC `-32602` errors; malformed JSON is `-32700`; unknown
 methods `-32601`.
 
+`execute_command` preserves commands' data results. When a successful command returns no data, it returns
+`{"ok": true}` instead of `null`. This acknowledges success but does not imply that workbook state changed.
+
 ## Resources
 
 - `gridcraft://workbook` — `document.inspect` of the active workbook.
