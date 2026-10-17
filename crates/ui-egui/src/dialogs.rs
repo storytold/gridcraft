@@ -36,6 +36,9 @@ pub struct Dialog {
     pub result: Option<Json>,
     /// "Show password" is ticked: password fields show their text.
     pub show_password: bool,
+    /// The first text or number field still has to take keyboard focus (set when a form opens,
+    /// used once): like Excel, Column Width opens ready to type, its value selected.
+    focus_first_field: bool,
     picture_inbox: Option<crate::Inbox>,
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
@@ -70,6 +73,7 @@ impl Dialog {
             list_index: 0,
             result: None,
             show_password: false,
+            focus_first_field: true,
             picture_inbox: None,
             picture_target: None,
             back: None,
@@ -88,6 +92,7 @@ impl Dialog {
             list_index: 0,
             result: None,
             show_password: false,
+            focus_first_field: false,
             picture_inbox: None,
             picture_target: None,
             back: None,
@@ -1387,6 +1392,28 @@ fn form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) 
     ok_cancel(ui, confirm, open);
 }
 
+/// Gives keyboard focus to the first text or number field the first time a form is drawn. A
+/// focused number field is in typing mode with its value selected, so Alt+H, O, W then 12 and
+/// Enter sets the width, as in Excel.
+/// Keeps asking until the field really has focus: a new window's first frame is an invisible
+/// sizing pass where a focus request is ignored.
+fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
+    if !d.focus_first_field {
+        return;
+    }
+    if !r.has_focus() {
+        r.request_focus();
+        return;
+    }
+    // Focus has landed, and the field is now a text box: select its whole value so typing
+    // replaces it (the field's own select-on-focus fired before it was a text box).
+    let mut state = egui::text_edit::TextEditState::load(&r.ctx, r.id).unwrap_or_default();
+    let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(usize::MAX / 2));
+    state.cursor.set_char_range(Some(all));
+    state.store(&r.ctx, r.id);
+    d.focus_first_field = false;
+}
+
 /// Draws a dialog's `fields`, editing its values.
 fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
     egui::Grid::new("form").num_columns(1).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
@@ -1406,6 +1433,7 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         } else {
                             ui.add(egui::TextEdit::singleline(&mut s).desired_width(320.0))
                         };
+                        take_first_focus(d, &r);
                         if r.changed() {
                             d.values.insert(key.into(), json!(s));
                         }
@@ -1426,7 +1454,11 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                     ui.horizontal(|ui| {
                         ui.label(label);
                         let mut n = d.values.get(key).and_then(Json::as_f64).unwrap_or(0.0);
-                        if ui.add(egui::DragValue::new(&mut n).speed(0.5)).changed() {
+                        // Typed values count straight away: otherwise Enter or OK in the same frame
+                        // confirms the old value, because a number field only commits when it loses focus.
+                        let r = ui.add(egui::DragValue::new(&mut n).speed(0.5).update_while_editing(true));
+                        take_first_focus(d, &r);
+                        if r.changed() {
                             d.values.insert(key.into(), json!(n));
                         }
                     });
