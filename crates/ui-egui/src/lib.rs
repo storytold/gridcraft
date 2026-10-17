@@ -1243,17 +1243,8 @@ pub fn clean_error(e: &str) -> String {
     e.to_string()
 }
 
-#[allow(clippy::disallowed_methods)] // the clock is read only off wasm
 pub fn now_ms() -> f64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        0.0
-    }
+    gridcraft_engine::core::date::unix_now_ms().unwrap_or(0.0)
 }
 
 pub fn cell(r: u32, c: u32) -> CellRef {
