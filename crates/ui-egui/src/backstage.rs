@@ -73,19 +73,6 @@ impl Page {
             Page::Options => "Options",
         }
     }
-
-    fn icon(self) -> Icon {
-        match self {
-            Page::Home => Icon::Home,
-            Page::New => Icon::NewFile,
-            Page::Open => Icon::OpenFolder,
-            Page::Info => Icon::Info,
-            Page::SaveAs => Icon::Save,
-            Page::Print => Icon::Print,
-            Page::Export => Icon::Share,
-            Page::Options => Icon::Settings,
-        }
-    }
 }
 
 /// Document properties shown on the Info page: (`file.properties` key, label).
@@ -116,10 +103,16 @@ pub struct Backstage {
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
+    /// Open: the folder This computer is showing; `None` while Recent is chosen.
+    local: Option<craft_ui::places::local::LocalFolder>,
 }
 
 /// Save As file types: (extension, label). The first is the workbook itself; the others are
 /// exports that leave the workbook's own file and unsaved state alone.
+/// The kinds of file This computer lists on the Open page: the ones the system dialog's
+/// Spreadsheets filter offers (`apps/gridcraft/src/main.rs`).
+const OPEN_KINDS: [&str; 9] = ["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"];
+
 pub const SAVE_TYPES: [(&str, &str); 4] =
     [("xlsx", "Excel Workbook (*.xlsx)"), ("csv", "CSV UTF-8 (Comma delimited) (*.csv)"), ("html", "Web Page (*.html)"), ("pdf", "PDF (*.pdf)")];
 
@@ -134,6 +127,7 @@ impl Backstage {
             preview: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
+            local: None,
         }
     }
 }
@@ -156,47 +150,57 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let mut out = Outcome::default();
     let (nav_bg, nav_text, nav_sel) =
         if t.dark { (t.accent_soft, t.text, Color32::from_white_alpha(30)) } else { (t.accent, Color32::WHITE, Color32::from_black_alpha(46)) };
-    egui::Panel::left("backstage_nav")
-        .exact_size(NAV_W)
-        .resizable(false)
-        .frame(egui::Frame::NONE.fill(nav_bg).inner_margin(egui::Margin { left: 0, right: 0, top: 10, bottom: 10 }))
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            if nav_item(ui, Icon::Back, lang.tr("Back"), false, nav_text, nav_sel).clicked() {
-                out.close = true;
-            }
-            ui.add_space(10.0);
-            for page in [Page::Home, Page::New, Page::Open] {
-                if nav_item(ui, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
-                    out.page = Some(page);
-                }
-            }
-            nav_separator(ui, nav_text);
-            if nav_item(ui, Page::Info.icon(), lang.tr("Info"), bs.page == Page::Info, nav_text, nav_sel).clicked() {
-                out.page = Some(Page::Info);
-            }
-            if nav_item(ui, Icon::Save, lang.tr("Save"), false, nav_text, nav_sel).clicked() {
-                save(app, &mut out);
-            }
-            for page in [Page::SaveAs, Page::Print, Page::Export] {
-                if nav_item(ui, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
-                    out.page = Some(page);
-                }
-            }
-            if nav_item(ui, Icon::Close, lang.tr("Close"), false, nav_text, nav_sel).clicked() {
+    // The column is the shared one (storytold/craft-libs#53): a labelled Back, the pages in groups,
+    // Options at the foot. GridCraft supplies the entries, their wording, icons and colours.
+    egui::Panel::left("backstage_nav").exact_size(NAV_W).resizable(false).frame(egui::Frame::NONE.fill(nav_bg)).show(ui, |ui| {
+        use craft_ui::file_nav::{FileNav, FileNavAction, FileNavItem, FileNavStyle};
+        let style = FileNavStyle {
+            fill: nav_bg,
+            text: nav_text,
+            selected: nav_sel,
+            hover: nav_sel.gamma_multiply(0.55),
+            mark: nav_text,
+            rule: nav_text.gamma_multiply(0.35),
+            width: NAV_W,
+            font: theme::ui_font(14.0),
+            selected_font: theme::ui_font(14.0),
+            foot_font: theme::ui_font(13.0),
+            ..FileNavStyle::on_accent(nav_bg)
+        };
+        let item = |key: &'static str, label: &'static str| FileNavItem { key, label: lang.tr(label) };
+        let top = [Page::Home, Page::New, Page::Open].map(|page| item(page.id(), page.label()));
+        // Save and Close act at once; the others are pages.
+        let rest = [
+            item("info", "Info"),
+            item("save", "Save"),
+            item("saveAs", "Save As"),
+            item("print", "Print"),
+            item("export", "Export"),
+            item("close", "Close"),
+        ];
+        let foot = [item("options", "Options")];
+        let paint = |key: Option<&str>, p: &egui::Painter, r: Rect, c: Color32| icons::paint(p, r, nav_icon(key), c);
+        match FileNav::new(lang.tr("Back"), &[&top, &rest], Some(bs.page.id()), &style, &paint).foot(&foot).show(ui).action {
+            Some(FileNavAction::Back) => out.close = true,
+            Some(FileNavAction::Choose("save")) => save(app, &mut out),
+            Some(FileNavAction::Choose("close")) => {
                 // A cell still being edited is part of the workbook; Close keeps the unsaved prompt.
                 if app.commit_edit(0, 0, false, false) {
                     app.run_or_alert("file.close", json!({}));
                     out.close = true;
                 }
             }
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                if nav_item(ui, Page::Options.icon(), lang.tr("Options"), bs.page == Page::Options, nav_text, nav_sel).clicked() {
-                    out.page = Some(Page::Options);
-                }
-            });
-        });
+            Some(FileNavAction::Choose(page)) => out.page = Page::parse(page),
+            Some(FileNavAction::DragWindow) | None => {}
+        }
+    });
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon)).show(ui, |ui| {
+        // Open is the places panel from edge to edge, with its own scrolling: the column already
+        // says "Open", so the page needs no heading of its own.
+        if bs.page == Page::Open {
+            open_page(app, ui, &mut bs, &mut out);
+            return;
+        }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             egui::Frame::NONE.inner_margin(egui::Margin { left: 44, right: 32, top: 26, bottom: 32 }).show(ui, |ui| {
                 ui.set_max_width(CONTENT_W);
@@ -250,25 +254,20 @@ fn save(app: &mut SheetApp, out: &mut Outcome) {
 
 // ---------------------------------------------------------------- navigation
 
-fn nav_item(ui: &mut Ui, icon: Icon, label: &str, selected: bool, text: Color32, sel: Color32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(NAV_W, 38.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label));
-    let p = ui.painter();
-    if selected {
-        p.rect_filled(rect, 0.0, sel);
-        p.rect_filled(Rect::from_min_size(rect.min, vec2(4.0, rect.height())), 0.0, text);
-    } else if resp.hovered() {
-        p.rect_filled(rect, 0.0, sel.gamma_multiply(0.55));
+/// GridCraft's icon for an entry of the File page's column; `None` is Back.
+fn nav_icon(key: Option<&str>) -> Icon {
+    match key {
+        None => Icon::Back,
+        Some("home") => Icon::Home,
+        Some("new") => Icon::NewFile,
+        Some("open") => Icon::OpenFolder,
+        Some("save" | "saveAs") => Icon::Save,
+        Some("print") => Icon::Print,
+        Some("export") => Icon::Share,
+        Some("close") => Icon::Close,
+        Some("options") => Icon::Settings,
+        Some(_) => Icon::Info,
     }
-    icons::paint(p, Rect::from_center_size(pos2(rect.left() + 30.0, rect.center().y), vec2(17.0, 17.0)), icon, text);
-    p.text(pos2(rect.left() + 50.0, rect.center().y), Align2::LEFT_CENTER, label, theme::ui_font(14.0), text);
-    resp
-}
-
-fn nav_separator(ui: &mut Ui, text: Color32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(NAV_W, 17.0), Sense::hover());
-    let y = rect.center().y;
-    ui.painter().line_segment([pos2(rect.left() + 20.0, y), pos2(rect.right() - 20.0, y)], Stroke::new(1.0, text.gamma_multiply(0.35)));
 }
 
 // ---------------------------------------------------------------- shared pieces
@@ -552,19 +551,132 @@ fn new_page(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
     new_tiles(app, ui, out);
 }
 
+/// File › Open: the shared places panel (storytold/craft-libs#49). Recent lists the workbooks
+/// opened lately, each with its folder and when it was last changed; This computer lists folders
+/// and workbooks right here, starting from the home folder, through craft-ui's `LocalFolder`;
+/// Browse shows the system's dialog. Remote storage adds one place per account; there is none yet.
 fn open_page(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
+    use craft_ui::places::local::{LocalFolder, LocalLabels, LocalOutcome};
+    use craft_ui::places::{
+        Place, PlaceEntry, PlaceKind, PlacesAction, PlacesContent, PlacesIcon, PlacesLabels, PlacesNotice, PlacesPanel, PlacesStyle,
+    };
     let lang = app.ui.language;
-    if square_button(ui, Icon::OpenFolder, lang.tr("Browse…")).clicked() {
+    let t = Tokens::get(ui.ctx());
+    let style = PlacesStyle {
+        fill: t.ribbon,
+        border: t.separator,
+        text: t.text,
+        weak: t.text_dim,
+        hover: t.hover,
+        selected: t.accent_soft,
+        accent: t.accent,
+        // The File page's own scale: its column is set in 14 pt on 38 pt rows.
+        rail_width: 250.0,
+        row_height: 36.0,
+        font: 14.0,
+        small_font: 12.0,
+        ..PlacesStyle::from_visuals(ui.visuals())
+    };
+    let labels =
+        PlacesLabels { places: lang.tr("Places"), add_place: lang.tr("Add a place"), browse: lang.tr("Browse…"), loading: lang.tr("Loading…") };
+    let mut places = vec![Place { kind: PlaceKind::Recent, label: lang.tr("Recent"), detail: None }];
+    // The browser has no folders to list, so there the system's picker is the only way in.
+    if cfg!(not(target_arch = "wasm32")) {
+        places.push(Place { kind: PlaceKind::Local, label: lang.tr("This computer"), detail: None });
+    }
+    // Desktop pickers return at once; the web picker delivers later (see `SheetApp::logic`).
+    let browse = |app: &mut SheetApp, out: &mut Outcome| {
         let before = app.session.active().map(|d| d.uid);
         app.open_dialog("open", json!({}));
-        // Desktop pickers return at once; the web picker delivers later (see `SheetApp::logic`).
         if app.session.active().map(|d| d.uid) != before {
             out.close = true;
         }
+    };
+    let open = |app: &mut SheetApp, out: &mut Outcome, path: &str| {
+        app.open_path(path);
+        if app.session.active().and_then(|d| d.path.as_deref()) == Some(path) {
+            out.close = true;
+        }
+    };
+
+    // This computer is showing a folder: the shared helper lists it and says what a choice means.
+    if let Some(folder) = bs.local.as_mut() {
+        // A folder the system keeps closed (macOS guards Documents, Desktop and Downloads) still
+        // opens through Browse: a workbook the user picks there is theirs to open. macOS asks once
+        // whether the app may read such a folder, and stays silent after a No.
+        let no_access = lang.tr("GridCraft has no permission to read this folder. Use Browse to open a workbook from it.");
+        let denied = if cfg!(target_os = "macos") {
+            format!("{no_access} {}", lang.tr("To list it here, allow GridCraft in System Settings, under Privacy & Security, Files and Folders."))
+        } else {
+            no_access.to_string()
+        };
+        let words = LocalLabels {
+            empty: lang.tr("This folder is empty."),
+            no_access: lang.tr("No access to this folder"),
+            no_access_detail: &denied,
+            browse: lang.tr("Browse…"),
+            gone: lang.tr("This folder is no longer there."),
+            gone_detail: lang.tr("It may have been moved or deleted."),
+            unreadable: lang.tr("This folder can't be read."),
+        };
+        let entries = folder.entries();
+        let crumbs = folder.crumbs(lang.tr("This computer"));
+        let crumbs: Vec<&str> = crumbs.iter().map(String::as_str).collect();
+        let action = PlacesPanel::new(&places, Some(1), folder.content(&entries, words), &style, labels).crumbs(&crumbs).show(ui).action;
+        match action {
+            Some(PlacesAction::Select(0)) => bs.local = None,
+            Some(action) => match folder.act(action) {
+                LocalOutcome::Open(path) => open(app, out, &path.to_string_lossy()),
+                LocalOutcome::Browse => browse(app, out),
+                LocalOutcome::Stay => {}
+            },
+            None => {}
+        }
+        return;
     }
-    ui.add_space(22.0);
-    section(ui, lang, "Recent");
-    recent_list(app, ui, bs, out, usize::MAX);
+
+    // Recent. What the file system has said so far; the rest arrives in later frames (see
+    // `RecentFiles`).
+    let known = bs.recent.known(ui.ctx(), &app.ui.recent);
+    let now = crate::now_ms() / 1000.0;
+    // Each workbook: its path, name, "folder · when it was last changed", and whether it is away.
+    let recent: Vec<(String, String, String, bool)> = app
+        .ui
+        .recent
+        .iter()
+        .map(|path| {
+            let (name, folder) = split_path(path);
+            let (when, away) = match known.get(path) {
+                Some(Modified::At(seconds)) => (age(lang, now - seconds), false),
+                Some(Modified::Unknown) => (lang.tr("Not available").to_string(), true),
+                None => (String::new(), false),
+            };
+            let detail = if when.is_empty() || folder.is_empty() { format!("{folder}{when}") } else { format!("{folder} · {when}") };
+            (path.clone(), name, detail, away)
+        })
+        .collect();
+    let entries: Vec<PlaceEntry<'_>> =
+        recent.iter().map(|(_, name, detail, away)| PlaceEntry { name, folder: false, detail, attention: *away, remote: false }).collect();
+    let content = if entries.is_empty() {
+        PlacesContent::Notice(PlacesNotice { icon: PlacesIcon::Recent, title: lang.tr("No recent workbooks yet."), body: "", action: None })
+    } else {
+        PlacesContent::Entries(&entries)
+    };
+    let crumbs = [lang.tr("Recent")];
+    match PlacesPanel::new(&places, Some(0), content, &style, labels).crumbs(&crumbs).show(ui).action {
+        Some(PlacesAction::Activate(i)) => {
+            if let Some((path, ..)) = recent.get(i) {
+                open(app, out, path);
+            }
+        }
+        Some(PlacesAction::Select(1)) => {
+            if let Some(home) = LocalFolder::home() {
+                bs.local = Some(LocalFolder::open(home, &OPEN_KINDS));
+            }
+        }
+        Some(PlacesAction::Browse) => browse(app, out),
+        _ => {}
+    }
 }
 
 /// Review › Protect Workbook and File › Info › Protect Workbook: the protect dialog (with an
@@ -999,6 +1111,70 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn file_page(page: Page, recent: &[&str]) -> egui_kittest::Harness<'static, SheetApp> {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.ui.recent = recent.iter().map(|path| (*path).to_string()).collect();
+        app.open_backstage(page);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h
+    }
+
+    /// File › Open is the shared places panel: Recent lists the workbooks opened lately and
+    /// Browse leads to the system's dialog.
+    #[test]
+    fn open_page_lists_recent_workbooks_and_browse() {
+        use egui_kittest::kittest::Queryable;
+        let h = file_page(Page::Open, &["/home/ada/Budget.xlsx", "/home/ada/Sales/Forecast.xlsx"]);
+        assert!(h.query_by_label("Browse…").is_some());
+        // The name is announced with its folder, and with its age once the file system answers.
+        for name in ["Budget.xlsx, /home/ada", "Forecast.xlsx, /home/ada/Sales"] {
+            assert!(h.query_by_label_contains(name).is_some(), "{name} is on the Open page");
+        }
+        assert!(h.query_by_label("Add a place").is_none(), "there is no remote storage to add yet");
+    }
+
+    /// This computer lists folders in the page, through the shared helper, and opens no dialog.
+    #[test]
+    fn this_computer_lists_a_folder_in_the_page() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = file_page(Page::Open, &["/home/ada/Budget.xlsx"]);
+        h.get_by_label("This computer").click();
+        h.run_steps(4);
+        let showing = |h: &egui_kittest::Harness<'_, SheetApp>| h.state().backstage.as_ref().is_some_and(|b| b.local.is_some());
+        assert!(showing(&h), "This computer shows a folder");
+        assert!(h.state().dialog.is_none(), "and opens no dialog, unlike Browse");
+        assert!(h.query_by_label_contains("Budget.xlsx").is_none(), "the recent workbooks made way for the folder");
+        h.get_by_label("Recent").click();
+        h.run_steps(4);
+        assert!(!showing(&h) && h.query_by_label_contains("Budget.xlsx").is_some(), "Recent comes back");
+    }
+
+    /// The File page's column (storytold/craft-libs#53): every page is one click away, Options
+    /// sits at the foot and Back leaves the page.
+    #[test]
+    fn the_column_reaches_every_page_and_back_leaves() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = file_page(Page::Home, &[]);
+        for page in [Page::Options, Page::Open, Page::Info, Page::Export, Page::SaveAs, Page::New] {
+            h.get_by_label(page.label()).click();
+            h.run_steps(4);
+            assert_eq!(h.state().backstage.as_ref().map(|b| b.page), Some(page), "{} shows its page", page.label());
+        }
+        h.get_by_label("Back").click();
+        h.run_steps(4);
+        assert!(h.state().backstage.is_none(), "Back leaves the File page");
+    }
 
     #[test]
     fn ages_are_told_in_words() {
