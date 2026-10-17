@@ -178,6 +178,12 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             for (id, label, params) in [
                 ("ui.ribbonTab", "Ribbon Tab", ""),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
+                (
+                    "ui.customizeRibbon",
+                    "Customize the Ribbon",
+                    "{layout?: {order?: [tab], hidden?: [tab], tabs?: [{key: \"customN\", label}], groups?: [{tab, label, commands: [id]}], qat?: [id]}, reset?: bool} → {layout, tabs}; {} reads it. Unknown tabs and commands are left out",
+                ),
+                ("ui.quickAccessToolbar", "Quick Access Toolbar", "{commands?: [id], add?: id, remove?: id, reset?: bool} → {commands}; {} reads it"),
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),

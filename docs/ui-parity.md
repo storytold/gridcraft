@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (horizontal scrollbar in the sheet tab bar, #840) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (Customize the Ribbon and the Quick Access Toolbar) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -16,9 +16,9 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 |---|---|---|---|
 | Title bar, Quick Access Toolbar, AutoSave toggle | yes | yes | done; macOS window controls misaligned (#170), Dock icon size (#169) |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable, Header & Footer tabs) | done; missing contextual tabs for pictures, shapes, sparklines, slicers |
-| Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing (File ▸ Options is the one missing File command) |
+| Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | yes (2026-10-16): Customize Ribbon and Toolbar dialog (Ribbon and Quick Access Toolbar pages): show, hide and reorder tabs; tabs and groups of the user's own holding any commands; rename; Reset. The toolbar's … menu ticks common commands on and off; right-click any ribbon button to add it to the toolbar (or remove it), and the ribbon or a tab to customise either; saved in `ui.json`; `ui.customizeRibbon` and `ui.quickAccessToolbar` for agents | no simplified ribbon; the toolbar can't go below the ribbon; no import/export of a customisation file; no KeyTips on the toolbar |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable tabs) | done; missing contextual tabs for pictures, shapes, sparklines, header/footer, slicers |
-| Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing |
+| Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | yes (2026-10-16): Customize Ribbon and Toolbar dialog (Ribbon and Quick Access Toolbar pages): show, hide and reorder tabs; tabs and groups of the user's own holding any commands; rename; Reset. The toolbar's … menu ticks common commands on and off; right-click any ribbon button to add it to the toolbar (or remove it), and the ribbon or a tab to customise either; saved in `ui.json`; `ui.customizeRibbon` and `ui.quickAccessToolbar` for agents | no simplified ribbon; the toolbar can't go below the ribbon; no import/export of a customisation file; no KeyTips on the toolbar |
 | Key tips (Alt / F10 then letters) | yes, every ribbon control | **initial** (#43, 10-10): Alt or F10 shows key tips on Home for alignment, Paste Special and AutoFit plus legacy Alt sequences; other tabs and controls not yet (#33, #49) | 3–5 h |
 | Formula bar with Name Box, expand, function hints | yes | yes | done |
 | Sheet tabs: rename, reorder, colour, hide, scroll | yes | yes | active tab revealed on navigation and resize (#681); manual wheel/trackpad browsing preserved; rename focus bug on macOS (#145) |
@@ -154,13 +154,14 @@ by rule and will never match Office's, by design.
 ## Work (50–80 h)
 
 Key tips 3–5 · remaining shortcuts with their features 2–4 · context menus and Quick Analysis 5–8 · Page Layout view
-8–12 · Options dialog and ribbon/QAT customization 6–10 · accessibility 12–18 · selection and
+8–12 · Options dialog 4–6 · accessibility 12–18 · selection and
 scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Customize the Ribbon and the Quick Access Toolbar: dialog, right-click menus, the toolbar's … menu, agents' commands |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
 | 2026-10-12 | minor | Ctrl+wheel zoom steps along a ladder of percentages about 20% apart that never skips 100%, gliding to each step with animations on, so a notch out undoes a notch in (it drifted: 100 → 122 → 101); Excel steps 15 points, see decisions.md |
