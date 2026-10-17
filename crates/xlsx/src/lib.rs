@@ -47,6 +47,7 @@ use gridcraft_model::Workbook;
 pub use crypto::{DecryptError, check_encryption, decrypt};
 pub use csv::{MAX_CSV_BYTES, read_csv, write_csv, write_csv_limited};
 pub use ods::read_ods;
+pub use package::MAX_PART;
 pub use passthrough::rebase_links;
 pub use xls::read_xls;
 pub use xlsb::read_xlsb;
@@ -83,6 +84,12 @@ impl ReadReport {
 /// package relationships, so every main-part content type is accepted).
 pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     read::read_xlsx(bytes)
+}
+
+/// The part of a zip package that declares more than [`MAX_PART`] unpacked bytes, with that size:
+/// what an [`IoError::TooLarge`] from reading the package is about when one part is too large.
+pub fn oversized_part(bytes: &[u8]) -> Option<(String, u64)> {
+    package::oversized_part(bytes)
 }
 
 /// Which member of the SpreadsheetML family a package is saved as. Only the content type of the

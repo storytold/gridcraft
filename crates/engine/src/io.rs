@@ -140,7 +140,12 @@ fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     }
     // Text named `.xlsx` is read as text.
     if sniffed == gridcraft_xlsx::Format::Xlsx || (kind == Some(FileKind::Xlsx) && sniffed != gridcraft_xlsx::Format::Csv) {
-        let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
+        let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| {
+            EngineError::Other(match (&e, gridcraft_xlsx::oversized_part(bytes)) {
+                (gridcraft_xlsx::IoError::TooLarge(_), Some((part, size))) => part_too_large_message(name, &part, size),
+                _ => format!("We can't open '{name}': {e}"),
+            })
+        })?;
         return Ok((wb, report.warnings));
     }
     match kind {
@@ -167,6 +172,25 @@ fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
             Ok((wb, vec![]))
         }
     }
+}
+
+/// What to tell the user when one part of an XLSX package unpacks to more than the reader's
+/// per-part limit: the sizes, why the limit is there, and what gets the data in. The limit is
+/// per part, so smaller sheets fit; the shared strings are one part for every sheet, so only a
+/// CSV, which has no parts, helps there.
+fn part_too_large_message(name: &str, part: &str, size: u64) -> String {
+    let limit = gridcraft_xlsx::MAX_PART >> 20;
+    let mb = size >> 20;
+    let size = if mb > limit { format!("{mb} MB") } else { format!("more than {limit} MB") };
+    let remedy = if part.contains("worksheets/") {
+        "To open it, split the data across several sheets, since the limit applies to each part, or save the sheet as CSV, which keeps only its values."
+    } else {
+        "To open it, save the data as CSV, which keeps only its values."
+    };
+    format!(
+        "We can't open '{name}': its part {part} unpacks to {size}, over GridCraft's limit of {limit} MB for one part \
+         (a guard against damaged or malicious files). {remedy}"
+    )
 }
 
 /// A CSV opens as a sheet named after the file (like Excel).
@@ -723,6 +747,54 @@ mod tests {
             ),
             "{types}"
         );
+    }
+
+    /// Where `part`'s entry starts in the central directory of `package`.
+    fn central_entry(package: &[u8], part: &str) -> usize {
+        let mut at = 0;
+        while let Some(i) = package.get(at..).and_then(|rest| rest.windows(4).position(|w| w == b"PK\x01\x02")) {
+            let entry = at + i;
+            let len = u16::from_le_bytes([package[entry + 28], package[entry + 29]]) as usize;
+            if &package[entry + 46..entry + 46 + len] == part.as_bytes() {
+                return entry;
+            }
+            at = entry + 46;
+        }
+        panic!("{part} is not in the package");
+    }
+
+    /// `package` with `part` declaring `size` unpacked bytes: the reader refuses the part on the
+    /// declared size, so no real 512 MB part has to be built.
+    fn declaring(mut package: Vec<u8>, part: &str, size: u32) -> Vec<u8> {
+        let at = central_entry(&package, part);
+        package[at + 24..at + 28].copy_from_slice(&size.to_le_bytes());
+        package
+    }
+
+    #[test]
+    fn a_part_over_the_size_limit_says_how_to_get_the_data_in() {
+        let mut wb = Workbook::new();
+        wb.sheet_mut(0).unwrap().set_value(CellRef::new(0, 0), gridcraft_core::Value::text("big"));
+        let package = save_bytes(&wb, "big.xlsx").unwrap();
+        // The size reported in storytold/gridcraft#1242.
+        let msg = open_bytes("big.xlsx", &declaring(package.clone(), "xl/worksheets/sheet1.xml", 540_278_731)).unwrap_err().to_string();
+        assert!(msg.starts_with("We can't open 'big.xlsx': "), "{msg}");
+        assert!(msg.contains("xl/worksheets/sheet1.xml") && msg.contains("515 MB") && msg.contains("512 MB"), "{msg}");
+        assert!(msg.contains("several sheets") && msg.contains("CSV"), "{msg}");
+        assert!(!msg.contains("bytes"), "{msg}");
+        // Splitting sheets doesn't shrink the shared strings, which every sheet uses: only CSV helps.
+        let msg = open_bytes("big.xlsx", &declaring(package.clone(), "xl/sharedStrings.xml", 540_278_731)).unwrap_err().to_string();
+        assert!(msg.contains("xl/sharedStrings.xml") && msg.contains("515 MB") && msg.contains("CSV"), "{msg}");
+        assert!(!msg.contains("several sheets"), "{msg}");
+        // Just over the limit never reads as a size equal to it.
+        let msg = open_bytes("big.xlsx", &declaring(package, "xl/worksheets/sheet1.xml", 512 * 1024 * 1024 + 1)).unwrap_err().to_string();
+        assert!(msg.contains("more than 512 MB"), "{msg}");
+        // A package that fails for another reason keeps its own error, oversized part or not.
+        let mut broken = declaring(save_bytes(&wb, "big.xlsx").unwrap(), "xl/worksheets/sheet1.xml", 540_278_731);
+        let at = central_entry(&broken, "xl/workbook.xml");
+        broken[at + 46 + "xl/workbook.xml".len() - 1] = b'x';
+        let msg = open_bytes("big.xlsx", &broken).unwrap_err().to_string();
+        assert!(msg.starts_with("We can't open 'big.xlsx': ") && !msg.contains("unpacks"), "{msg}");
     }
 
     #[test]
