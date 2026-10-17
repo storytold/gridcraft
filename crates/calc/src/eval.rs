@@ -733,7 +733,7 @@ impl<'h> Evaluator<'h> {
             "XLOOKUP" => self.xlookup(args),
             "CELL" => self.cell_info(args),
             "TRIMRANGE" => self.trimrange(args),
-            "SUBTOTAL" | "AGGREGATE" => self.subtotal(name, args),
+            "SUBTOTAL" | "AGGREGATE" => self.subtotal(name, args, MAX_CELLS),
             "TEXT" => {
                 if args.len() != 2 {
                     return err(CellError::Value);
@@ -1386,7 +1386,7 @@ impl<'h> Evaluator<'h> {
         }
     }
 
-    fn subtotal(&mut self, name: &str, args: &[Expr]) -> Ev {
+    fn subtotal(&mut self, name: &str, args: &[Expr], mut remaining: u64) -> Ev {
         // SUBTOTAL needs function_num and ref1; AGGREGATE needs function_num, options and ref1.
         let min_args = if name == "AGGREGATE" { 3 } else { 2 };
         if args.len() < min_args {
@@ -1427,6 +1427,10 @@ impl<'h> Evaluator<'h> {
                 Ev::R(areas) => {
                     for a in areas {
                         let range = self.trim(&a);
+                        // Bound total scan work, not just retained values: hidden rows, errors
+                        // and nested totals still cost work even when they are skipped.
+                        let Some(left) = remaining.checked_sub(range.count()) else { return err(CellError::Num) };
+                        remaining = left;
                         for c in range.iter() {
                             let (hidden, nested) = {
                                 let wb = self.host.workbook();
@@ -1451,14 +1455,23 @@ impl<'h> Evaluator<'h> {
                         }
                     }
                 }
-                Ev::V(Value::Array(a)) => values.extend(a.data.iter().filter(|v| !(skip_errors && v.is_error())).cloned()),
-                Ev::V(v) => values.push(v),
+                Ev::V(v) => {
+                    let count = match &v {
+                        Value::Array(a) => a.data.len() as u64,
+                        _ => 1,
+                    };
+                    let Some(left) = remaining.checked_sub(count) else { return err(CellError::Num) };
+                    remaining = left;
+                    match v {
+                        Value::Array(a) => values.extend(a.data.iter().filter(|v| !(skip_errors && v.is_error())).cloned()),
+                        v => values.push(v),
+                    }
+                }
                 Ev::L(_) => return err(CellError::Value),
             }
         }
         if let Some(k) = k {
-            values.push(Value::Empty);
-            return Ev::V(gridcraft_functions::aggregate_values_k(func, &values[..values.len() - 1], &k));
+            return Ev::V(gridcraft_functions::aggregate_values_k(func, &values, &k));
         }
         Ev::V(gridcraft_functions::aggregate_values(func, &values))
     }
@@ -1870,3 +1883,102 @@ pub fn is_known_function(n: &str) -> bool {
 
 #[allow(dead_code)]
 fn unused(_: RefKind) {}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod aggregate_budget_tests {
+    use super::*;
+    use gridcraft_model::{Cell, Formula, LineInfo};
+
+    struct TestHost {
+        wb: Workbook,
+        reads: usize,
+    }
+
+    impl Host for TestHost {
+        fn workbook(&self) -> &Workbook {
+            &self.wb
+        }
+        fn cell_value(&mut self, sheet: usize, cell: CellRef) -> Value {
+            self.reads += 1;
+            self.wb.sheet(sheet).unwrap().value(cell)
+        }
+        fn now_serial(&self) -> f64 {
+            0.0
+        }
+        fn random(&mut self) -> f64 {
+            0.0
+        }
+    }
+
+    fn workbook() -> Workbook {
+        let mut wb = Workbook::new();
+        for row in 0..4 {
+            wb.sheet_mut(0).unwrap().set_cell(CellRef::new(row, 0), Cell::value(Value::Number(f64::from(row + 1))));
+        }
+        wb
+    }
+
+    fn evaluate(wb: &Workbook, formula: &str, limit: u64) -> (Value, usize) {
+        let Expr::Call(name, args) = gridcraft_formula::parse(formula).unwrap() else { panic!("expected a function call") };
+        let mut host = TestHost { wb: wb.clone(), reads: 0 };
+        let Ev::V(value) = Evaluator::new(&mut host, 0, CellRef::new(0, 1)).subtotal(&name, &args, limit) else { panic!("expected a value") };
+        (value, host.reads)
+    }
+
+    #[test]
+    fn aggregate_input_budget_is_shared_by_references_and_union_areas() {
+        let wb = workbook();
+        for formula in ["=SUBTOTAL(9,A1:A2,A3:A4)", "=SUBTOTAL(9,(A1:A2,A3:A4))", "=AGGREGATE(9,4,A1:A2,A3:A4)", "=AGGREGATE(9,4,(A1:A2,A3:A4))"] {
+            let (value, reads) = evaluate(&wb, formula, 3);
+            assert_eq!(value, Value::Error(CellError::Num), "{formula}");
+            assert!(reads <= 2, "the second block must be refused before its values are read: {formula}");
+            assert_eq!(evaluate(&wb, formula, 4), (Value::Number(10.0), 4), "{formula}");
+        }
+    }
+
+    #[test]
+    fn aggregate_input_budget_counts_arrays_and_scalars_but_not_k() {
+        let wb = workbook();
+        for (formula, expected) in [
+            ("=SUBTOTAL(9,{1,2},3,4)", 10.0),
+            ("=AGGREGATE(9,4,{1,2},3,4)", 10.0),
+            ("=AGGREGATE(9,6,{#N/A,#N/A},3,4)", 7.0),
+            ("=AGGREGATE(14,6,{4,1,3,2},2)", 3.0),
+        ] {
+            assert_eq!(evaluate(&wb, formula, 3), (Value::Error(CellError::Num), 0), "{formula}");
+            assert_eq!(evaluate(&wb, formula, 4), (Value::Number(expected), 0), "{formula}");
+        }
+    }
+
+    #[test]
+    fn skipped_cells_still_count_toward_the_aggregate_scan_budget() {
+        for (formula, skipped) in [
+            ("=SUBTOTAL(109,A1:A2,A3:A4)", "hidden"),
+            ("=AGGREGATE(9,7,A1:A2,A3:A4)", "hidden"),
+            ("=AGGREGATE(9,6,A1:A2,A3:A4)", "errors"),
+            ("=SUBTOTAL(9,A1:A2,A3:A4)", "nested"),
+            ("=SUBTOTAL(9,A1:A2,A3:A4)", "blank"),
+        ] {
+            let mut wb = workbook();
+            let sh = wb.sheet_mut(0).unwrap();
+            for row in 0..2 {
+                let cell = CellRef::new(row, 0);
+                match skipped {
+                    "hidden" => {
+                        sh.rows.insert(row, LineInfo { hidden: true, ..LineInfo::default() });
+                    }
+                    "errors" => sh.set_cell(cell, Cell::value(Value::Error(CellError::NA))),
+                    "nested" => sh.set_cell(cell, Cell::formula(Formula::new("=SUBTOTAL(9,Z1)"))),
+                    _ => {
+                        sh.remove_cell(cell);
+                    }
+                }
+            }
+            let (value, reads) = evaluate(&wb, formula, 3);
+            assert_eq!(value, Value::Error(CellError::Num), "{skipped}: {formula}");
+            assert!(reads <= 2, "{skipped}: {formula}");
+            assert_eq!(evaluate(&wb, formula, 4).0, Value::Number(7.0), "{skipped}: {formula}");
+        }
+    }
+}
