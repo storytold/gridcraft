@@ -2925,6 +2925,50 @@ fn notes_comments_and_links_survive_a_json_save() {
     assert_eq!(after.cells, before.cells);
 }
 
+/// Sorting and removing duplicates rewrite the rows of a range. The cells, pictures, row heights
+/// and anchors travel with them, but the notes and hyperlinks hung off their old cells: a note
+/// describing one record ended up annotating whatever landed on that row, and on a removed row it
+/// annotated blank cells.
+#[test]
+fn sort_and_remove_duplicates_move_the_rows_notes_and_links() {
+    fn setup(values: [&str; 5]) -> Session {
+        let mut s = s();
+        for (row, text) in values.iter().enumerate() {
+            s.execute("cell.set", json!({"cell": format!("A{}", row + 1), "input": text})).unwrap();
+        }
+        s.execute("review.newNote", json!({"cell": "B5", "text": "late", "author": "Example"})).unwrap();
+        s.execute("insert.link", json!({"cell": "B4", "target": "https://example.com/4"})).unwrap();
+        s
+    }
+    let notes_and_links = |s: &Session| {
+        let sh = s.doc().unwrap().wb.active().unwrap().clone();
+        let cells = ["B2", "B3", "B4", "B5"].map(|c| CellRef::parse(c).unwrap());
+        (
+            cells.map(|c| sh.comments.get(&c).map(|m| m.text.clone())),
+            cells.map(|c| sh.hyperlinks.get(&c).map(|h| h.target.clone())),
+        )
+    };
+
+    // Sort ascending with unique keys d,a,e,b,c: the order becomes a(2), b(4), c(5), d(1), e(3).
+    // The note on B5 describes row 5's record ("c"), which lands on row 3; the link on B4
+    // describes row 4's record ("b"), which lands on row 2. Both must travel with their record.
+    let mut s = setup(["d", "a", "e", "b", "c"]);
+    s.execute("data.sort", json!({"range": "A1:B5", "keys": [{"column": "A"}]})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::text("c"));
+    assert_eq!(v(&s, "A5"), Value::text("e"));
+    let (notes, links) = notes_and_links(&s);
+    assert_eq!(notes[1], Some("late".to_string()), "the note moved with its record: {notes:?}");
+    assert_eq!(links[0], Some("https://example.com/4".to_string()), "the link moved with its record: {links:?}");
+
+    // Remove duplicates keeps the first of each value: rows 3 and 5 go, and row 4's record moves
+    // to row 3. The note on B5 described row 5 and goes with it.
+    let mut s = setup(["a", "b", "a", "c", "a"]);
+    s.execute("data.removeDuplicates", json!({"range": "A1:B5"})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::text("c"));
+    let (notes, _) = notes_and_links(&s);
+    assert!(notes.iter().all(Option::is_none), "a note on a removed row goes with it: {notes:?}");
+}
+
 /// Insert › Link sorts a target as Excel's dialog does: a sheet reference, a defined name or `#…` is
 /// a place in this document, anything else an existing file or web page. A file saved as a
 /// `location` opens nothing in Excel (#800).

@@ -295,6 +295,21 @@ fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_co
         }
         // Move whole lines (cells with formulas adjusted for relative references).
         let lanes: Vec<u32> = if by_cols { (body.start.row..=body.end.row).collect() } else { (body.start.col..=body.end.col).collect() };
+        // Notes and hyperlinks hang off a cell, not a row, so they travel with the row they
+        // describe — the way cell pictures and row heights do. Collect them before inserting,
+        // so a swap can't resurrect one from a destination that is also a source.
+        let side: Vec<(CellRef, Comment)> = order
+            .iter()
+            .enumerate()
+            .flat_map(|(dst_i, &src_i)| lanes.iter().map(move |&k| (src_i, dst_i as u32, k)))
+            .filter_map(|(src_i, dst_i, k)| sh.comments.get(&line(src_i, k)).map(|cm| (line(dst_i, k), cm.clone())))
+            .collect();
+        let links: Vec<(CellRef, Hyperlink)> = order
+            .iter()
+            .enumerate()
+            .flat_map(|(dst_i, &src_i)| lanes.iter().map(move |&k| (src_i, dst_i as u32, k)))
+            .filter_map(|(src_i, dst_i, k)| sh.hyperlinks.get(&line(src_i, k)).map(|h| (line(dst_i, k), h.clone())))
+            .collect();
         let mut moved: Vec<(CellRef, Option<Cell>)> = Vec::with_capacity(body.count() as usize);
         let mut pictures = Vec::new();
         for (dst_i, &src_i) in order.iter().enumerate() {
@@ -353,6 +368,18 @@ fn do_sort(s: &mut Session, r: RangeRef, header: bool, keys: Vec<SortKey>, by_co
                     shm.remove_cell(*c);
                 }
             }
+        }
+        // Every cell of the body is the destination of exactly one source cell, so clearing the
+        // body and inserting the permuted entries is the same permutation the cells went through.
+        for c in body.iter() {
+            shm.comments.remove(&c);
+            shm.hyperlinks.remove(&c);
+        }
+        for (at, cm) in side {
+            shm.comments.insert(at, cm);
+        }
+        for (at, h) in links {
+            shm.hyperlinks.insert(at, h);
         }
         shm.cell_pictures.extend(pictures);
         for (i, h) in heights.into_iter().enumerate() {
@@ -774,12 +801,37 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
                     .filter_map(move |col| sh.cell_pictures.get(&CellRef::new(*row, col)).map(|p| (CellRef::new(start + i as u32, col), p.clone())))
             })
             .collect();
+        // Rows a filter keeps are compacted to `start + i`, so the notes and hyperlinks that
+        // describe them move with them; the ones on removed rows are dropped with the row.
+        let notes: Vec<_> = keep
+            .iter()
+            .enumerate()
+            .flat_map(|(i, row)| {
+                (r.start.col..=r.end.col)
+                    .filter_map(move |col| sh.comments.get(&CellRef::new(*row, col)).map(|cm| (CellRef::new(start + i as u32, col), cm.clone())))
+            })
+            .collect();
+        let links: Vec<_> = keep
+            .iter()
+            .enumerate()
+            .flat_map(|(i, row)| {
+                (r.start.col..=r.end.col)
+                    .filter_map(move |col| sh.hyperlinks.get(&CellRef::new(*row, col)).map(|h| (CellRef::new(start + i as u32, col), h.clone())))
+            })
+            .collect();
         let rows: Vec<Vec<Option<Cell>>> =
             keep.iter().map(|row| (r.start.col..=r.end.col).map(|c| sh.cell(CellRef::new(*row, c)).cloned()).collect()).collect();
         let shm = cx.sheet_mut(sheet)?;
         for row in start..=r.end.row {
             for c in r.start.col..=r.end.col {
                 shm.remove_cell(CellRef::new(row, c));
+            }
+        }
+        for row in start..=r.end.row {
+            for c in r.start.col..=r.end.col {
+                let at = CellRef::new(row, c);
+                shm.comments.remove(&at);
+                shm.hyperlinks.remove(&at);
             }
         }
         for (i, cells) in rows.into_iter().enumerate() {
@@ -790,6 +842,12 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         shm.cell_pictures.extend(pictures);
+        for (at, cm) in notes {
+            shm.comments.insert(at, cm);
+        }
+        for (at, h) in links {
+            shm.hyperlinks.insert(at, h);
+        }
         for c in RangeRef::new(CellRef::new(start, r.start.col), r.end).iter() {
             cx.changed.push((sheet, c));
         }
