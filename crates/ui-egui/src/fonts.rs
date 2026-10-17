@@ -15,9 +15,10 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// A font file is skipped by the scan past this size: a catalog only needs each face's name, and a
-/// damaged or enormous file must not turn startup into a long read.
+/// damaged or enormous file must not turn startup into a long read. Stock macOS PingFang.ttc is
+/// 78,222,888 bytes, so the previous 64 MiB limit excluded a valid installed CJK collection.
 #[cfg(not(target_arch = "wasm32"))]
-const MAX_FONT_FILE: u64 = 64 << 20;
+const MAX_FONT_FILE: u64 = 128 << 20;
 
 /// One face of one installed font file.
 #[derive(Clone, Debug)]
@@ -49,6 +50,10 @@ pub fn system_font_dirs() -> Vec<PathBuf> {
             if let Some(h) = &home {
                 dirs.push(h.join("Library/Fonts"));
             }
+            dirs.extend(macos_asset_font_dirs(&[
+                "/System/Library/AssetsV2".into(),
+                "/System/Library/AssetsV2/PreinstalledAssetsV2/InstallWithOs".into(),
+            ]));
         } else if cfg!(windows) {
             let root = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
             dirs.push(root.join("Fonts"));
@@ -64,6 +69,58 @@ pub fn system_font_dirs() -> Vec<PathBuf> {
         }
         dirs
     }
+}
+
+/// macOS stores fonts such as PingFang inside versioned MobileAsset font folders. Select only
+/// those folders, rather than recursively scanning unrelated assets under the two asset roots.
+#[cfg(not(target_arch = "wasm32"))]
+fn macos_asset_font_dirs(parents: &[PathBuf]) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for parent in parents {
+        let Ok(entries) = std::fs::read_dir(parent) else { continue };
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with("com_apple_MobileAsset_Font") && entry.path().is_dir() {
+                dirs.push(entry.path());
+            }
+        }
+    }
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+/// Read only the installed PingFang collection for the interface fallback, without waiting for
+/// the full background catalog. Cache its bytes so theme changes do not reread the collection.
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_chinese_fallback() -> Option<std::sync::Arc<egui::FontData>> {
+    static FACE: OnceLock<Option<std::sync::Arc<egui::FontData>>> = OnceLock::new();
+    FACE.get_or_init(|| {
+        let mut paths = vec![PathBuf::from("/System/Library/Fonts/PingFang.ttc")];
+        for dir in macos_asset_font_dirs(&["/System/Library/AssetsV2".into(), "/System/Library/AssetsV2/PreinstalledAssetsV2/InstallWithOs".into()]) {
+            let Ok(entries) = std::fs::read_dir(dir) else { continue };
+            paths.extend(entries.flatten().map(|entry| entry.path().join("AssetData/PingFang.ttc")));
+        }
+        paths.sort();
+        for path in paths {
+            if std::fs::metadata(&path).map(|m| m.len() > MAX_FONT_FILE).unwrap_or(true) {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(path) else { continue };
+            let index = file_faces(&bytes)
+                .into_iter()
+                .find(|(_, family, style)| family == "PingFang SC" && !style_italic(style) && (style_weight(style) - 400.0).abs() < 1.0)
+                .map(|(index, _, _)| index);
+            let Some(index) = index else { continue };
+            if !crate::theme::font_parses(&bytes, index) {
+                continue;
+            }
+            let mut data = egui::FontData::from_owned(bytes);
+            data.index = index;
+            return Some(std::sync::Arc::new(data));
+        }
+        None
+    })
+    .clone()
 }
 
 /// Weight implied by a style name (`"Bold"` → 700, `"Light"` → 300).
@@ -329,6 +386,63 @@ pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn macos_asset_roots_select_only_font_directories() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-fonts-assets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let preinstalled = dir.join("PreinstalledAssetsV2/InstallWithOs");
+        let downloaded = dir.join("com_apple_MobileAsset_Font8");
+        let shipped = preinstalled.join("com_apple_MobileAsset_Font7");
+        std::fs::create_dir_all(&downloaded).expect("downloaded assets");
+        std::fs::create_dir_all(&shipped).expect("preinstalled assets");
+        std::fs::create_dir_all(dir.join("com_apple_MobileAsset_Other")).expect("unrelated assets");
+        std::fs::write(dir.join("com_apple_MobileAsset_Font-not-a-folder"), b"ignore").expect("file");
+        let mut expected = vec![downloaded, shipped];
+        expected.sort();
+        assert_eq!(macos_asset_font_dirs(&[dir.clone(), preinstalled, dir.join("missing"), dir.clone()]), expected);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn valid_fonts_above_64_mib_are_cataloged_but_enormous_files_are_skipped() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-fonts-large-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("large.ttf");
+        std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT).expect("font");
+        let file = std::fs::OpenOptions::new().write(true).open(&path).expect("open");
+        // A sparse padded open font exercises the stock PingFang size without a binary fixture.
+        file.set_len(78_222_888).expect("pad font");
+        let faces = scan_dirs(std::slice::from_ref(&dir));
+        assert_eq!(faces.len(), 1);
+        assert_eq!(faces[0].family, "Ubuntu");
+        file.set_len(MAX_FONT_FILE + 1).expect("oversized font");
+        assert!(scan_dirs(std::slice::from_ref(&dir)).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_asset_pingfang_is_cataloged_when_installed() {
+        let installed = ["/System/Library/AssetsV2", "/System/Library/AssetsV2/PreinstalledAssetsV2/InstallWithOs"]
+            .into_iter()
+            .filter_map(|parent| std::fs::read_dir(parent).ok())
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("com_apple_MobileAsset_Font"))
+            .filter_map(|entry| std::fs::read_dir(entry.path()).ok())
+            .flatten()
+            .flatten()
+            .any(|entry| entry.path().join("AssetData/PingFang.ttc").is_file());
+        if !installed {
+            return; // This optional platform check needs Apple's locally installed font.
+        }
+        let faces = scan_dirs(&system_font_dirs());
+        assert!(faces.iter().any(|face| face.family == "PingFang SC"), "installed PingFang SC must be cataloged");
+    }
 
     #[test]
     fn style_names_map_to_weight_and_slant() {

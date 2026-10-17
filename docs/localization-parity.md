@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Format Cells dialog looks its labels up in the catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (macOS asset fonts enter the installed-font catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -33,6 +33,14 @@ right-to-left sheets and full complex-script support. Part of
   arrow keys, editor, popups and floating objects follow; text stays left-to-right inside its box
   (no bidi), and the sheet tabs, horizontal scrollbar and printing/PDF are not mirrored yet. IME input goes
   through egui/winit and is unverified for Chinese, Japanese and Korean.
+- **Installed macOS fonts.** The font catalog includes the versioned MobileAsset font directories
+  under `AssetsV2` and `PreinstalledAssetsV2/InstallWithOs`. Its bounded file limit is 128 MiB,
+  admitting the stock 78,222,888-byte PingFang collection. The Chinese interface fallback also
+  loads the installed PingFang SC Regular face from these assets, resolving the collection index
+  from metadata and sharing cached bytes across theme rebuilds; the existing fallback remains
+  when PingFang is unavailable. Application font-picker integration is separate;
+  starting that scan in the actual application and offering it in the Home font list remain
+  tracked by PRs #974 and #1179. No system-font files are bundled.
 - **PDF export** uses only the 14 standard PDF fonts: non-Latin text cannot export.
 
 ## Languages
@@ -78,6 +86,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Installed-font discovery scans macOS MobileAsset folders and admits stock PingFang above 64 MiB; the Chinese UI fallback loads and caches its SC Regular face at the metadata-selected index; synthetic catalog tests and optional installed-face coverage checks |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |

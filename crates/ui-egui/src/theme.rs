@@ -454,6 +454,14 @@ fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder) -> Vec<String> {
     // Hebrew), so loading it again for a later script would only duplicate tens of MB in memory.
     let mut loaded: Vec<String> = Vec::new();
     for (key, cands) in fallback_faces(han) {
+        #[cfg(target_os = "macos")]
+        if key == "sys-cjk-han-zh"
+            && let Some(face) = crate::fonts::macos_chinese_fallback()
+        {
+            fonts.font_data.insert(key.to_string(), face);
+            keys.push(key.to_string());
+            continue;
+        }
         for (path, index) in &cands {
             if loaded.contains(path) {
                 break; // a face loaded for an earlier script already covers this one
@@ -807,6 +815,32 @@ mod tests {
             assert!(at.is_some(), "{family:?} lacks the cell face: {chain:?}");
             let first_fb = chain.iter().position(|k| fb.contains(k)).unwrap_or(chain.len());
             assert!(at.unwrap_or(usize::MAX) < first_fb, "{family:?}: cell face must precede the script faces");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn installed_pingfang_covers_recent_chinese_filenames() {
+        let installed = crate::fonts::system_font_dirs().iter().any(|dir| {
+            std::fs::read_dir(dir).is_ok_and(|entries| entries.flatten().any(|entry| entry.path().join("AssetData/PingFang.ttc").is_file()))
+        });
+        if !installed {
+            return;
+        }
+        let fonts = font_definitions_for_language(Language::Zh);
+        let chinese = fonts.font_data.get("sys-cjk-han-zh").expect("installed Chinese fallback must be bound");
+        use skrifa::string::StringId;
+        let face = skrifa::FontRef::from_index(&chinese.font, chinese.index).expect("valid Chinese face");
+        use skrifa::MetadataProvider;
+        assert!(
+            face.localized_strings(StringId::TYPOGRAPHIC_FAMILY_NAME).any(|s| s.to_string() == "PingFang SC"),
+            "UI should use the installed Simplified Chinese PingFang face"
+        );
+        for ch in "新托福口语题库规划记录最近学习过程".chars() {
+            assert!(face.charmap().map(ch).is_some(), "Chinese fallback lacks {ch}");
+        }
+        for family in [FontFamily::Proportional, FontFamily::Name(UI.into()), FontFamily::Name(UI_BOLD.into())] {
+            assert!(fonts.families.get(&family).is_some_and(|chain| chain.iter().any(|key| key == "sys-cjk-han-zh")));
         }
     }
 
