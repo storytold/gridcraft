@@ -17,6 +17,7 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod print;
+mod window;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -25,19 +26,26 @@ use gridcraft_engine::Session;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
-struct App(SheetApp, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+struct App(
+    SheetApp,
+    window::WindowState,
+    #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let zoom = ctx.zoom_factor();
+        ctx.input(|input| self.1.update(input.viewport(), zoom));
         #[cfg(target_os = "macos")]
         {
-            if self.1.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
-                self.1 = Some(native_menu::NativeMenu::install(ctx));
+            if self.2.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
+                self.2 = Some(native_menu::NativeMenu::install(ctx));
             }
-            if let Some(m) = &self.1 {
+            if let Some(m) = &self.2 {
                 m.poll(&mut self.0, ctx);
             }
-            apple_events::poll(&self.2, &mut self.0, ctx);
+            apple_events::poll(&self.3, &mut self.0, ctx);
         }
         self.0.logic(ctx);
         self.0.poll_printing(ctx);
@@ -59,7 +67,7 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
-        save_prefs(&self.0);
+        save_prefs(&self.0, &self.1);
         // macOS (#117): end the process here, before eframe tears the window down. AccessKit's
         // macOS adapter subclasses the window's content view and restores its class on teardown;
         // AppKit's Touch Bar support observes that view (KVO), so in the next display cycle
@@ -97,15 +105,15 @@ fn log_dir() -> Option<std::path::PathBuf> {
     Some(config_dir()?.join("logs"))
 }
 
-fn load_prefs(app: &mut SheetApp) {
+fn load_prefs(app: &mut SheetApp) -> window::WindowState {
     if !prefs_enabled() {
-        return;
+        return window::WindowState::default();
     }
     // First run (or a ui.json without a usable language): follow the desktop's language.
     app.ui.language = gridcraft_ui_egui::i18n::Language::system();
     // ...and its light or dark appearance (#239), until a theme is chosen and saved in ui.json.
     app.ui.system_theme = true;
-    let Some(dir) = config_dir() else { return };
+    let Some(dir) = config_dir() else { return window::WindowState::default() };
     if let Ok(b) = std::fs::read(dir.join("ui.json"))
         && let Ok(ui) = serde_json::from_slice::<gridcraft_ui_egui::UiState>(&b)
     {
@@ -115,13 +123,18 @@ fn load_prefs(app: &mut SheetApp) {
         app.ui.language = language;
     }
     if let Ok(b) = std::fs::read(dir.join("prefs.json"))
-        && let Ok(p) = serde_json::from_slice(&b)
+        && let Ok(p) = serde_json::from_slice::<serde_json::Value>(&b)
     {
-        app.session.prefs = p;
+        let window = window::WindowState::from_prefs(&p);
+        if let Ok(prefs) = serde_json::from_value(p) {
+            app.session.prefs = prefs;
+        }
+        return window;
     }
+    window::WindowState::default()
 }
 
-fn save_prefs(app: &SheetApp) {
+fn save_prefs(app: &SheetApp, window: &window::WindowState) {
     if !prefs_enabled() {
         return;
     }
@@ -130,8 +143,11 @@ fn save_prefs(app: &SheetApp) {
     if let Ok(b) = serde_json::to_vec_pretty(&app.ui) {
         let _ = std::fs::write(dir.join("ui.json"), b);
     }
-    if let Ok(b) = serde_json::to_vec_pretty(&app.session.prefs) {
-        let _ = std::fs::write(dir.join("prefs.json"), b);
+    if let Ok(mut prefs) = serde_json::to_value(&app.session.prefs) {
+        window.store(&mut prefs);
+        if let Ok(b) = serde_json::to_vec_pretty(&prefs) {
+            let _ = std::fs::write(dir.join("prefs.json"), b);
+        }
     }
 }
 
@@ -301,7 +317,7 @@ fn main() -> eframe::Result<()> {
     app.watch_desktop_theme();
     app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;
-    load_prefs(&mut app);
+    let window = load_prefs(&mut app);
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open
     // opens them: a password-protected one asks for its password, and errors are shown, not
     // only logged. Each replaces the untouched blank Book1, as a file opened from Finder does.
@@ -320,7 +336,7 @@ fn main() -> eframe::Result<()> {
     if let Some(i) = icon() {
         viewport = viewport.with_icon(i);
     }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let options = eframe::NativeOptions { viewport: window.apply(viewport), ..Default::default() };
     // Before eframe creates the wgpu instance: Windows starts on DirectX 12, or OpenGL when
     // DirectX 12 has no GPU driver, and never touches Vulkan unless asked (see graphics.rs).
     #[cfg(target_os = "windows")]
@@ -359,6 +375,7 @@ fn main() -> eframe::Result<()> {
                 }
                 Ok(Box::new(App(
                     app,
+                    window,
                     #[cfg(target_os = "macos")]
                     None,
                     #[cfg(target_os = "macos")]
