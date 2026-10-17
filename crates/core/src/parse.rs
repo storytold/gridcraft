@@ -146,14 +146,28 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
     Some((n, fmt))
 }
 
+/// A plain ASCII number: digits, with an optional `.digits` fraction when `frac` is set. Rejects
+/// `nan`, `inf`, signs and exponents that `f64::from_str` would accept.
+fn plain_number(s: &str, frac: bool) -> Option<f64> {
+    let (int, dec) = match s.split_once('.') {
+        Some((i, d)) if frac => (i, Some(d)),
+        _ => (s, None),
+    };
+    let digits = |x: &str| !x.is_empty() && x.bytes().all(|c| c.is_ascii_digit());
+    if !digits(int) || dec.is_some_and(|d| !digits(d)) {
+        return None;
+    }
+    s.parse().ok()
+}
+
 /// `1/2` (only with a whole part, else it's a date), `1 1/2`, `0 3/4`.
 fn parse_fraction(t: &str) -> Option<f64> {
     let (whole, frac) = t.split_once(' ')?;
     let neg = whole.starts_with('-');
-    let w: f64 = whole.trim_start_matches('-').parse().ok()?;
+    let w = plain_number(whole.trim_start_matches('-'), false)?;
     let (a, b) = frac.trim().split_once('/')?;
-    let a: f64 = a.parse().ok()?;
-    let b: f64 = b.parse().ok()?;
+    let a = plain_number(a, false)?;
+    let b = plain_number(b, false)?;
     if b == 0.0 || !w.is_finite() {
         return None;
     }
@@ -187,9 +201,9 @@ fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
     if parts.len() > 3 || parts.iter().any(|p| p.is_empty()) {
         return None;
     }
-    let mut h: f64 = parts.first()?.parse().ok()?;
-    let m: f64 = parts.get(1).map_or(Some(0.0), |p| p.parse().ok())?;
-    let s: f64 = parts.get(2).map_or(Some(0.0), |p| p.parse().ok())?;
+    let mut h = plain_number(parts.first()?, false)?;
+    let m = parts.get(1).map_or(Some(0.0), |p| plain_number(p, false))?;
+    let s = parts.get(2).map_or(Some(0.0), |p| plain_number(p, true))?;
     if m >= 60.0 || s >= 60.0 || h < 0.0 || m < 0.0 || s < 0.0 {
         return None;
     }
@@ -324,6 +338,13 @@ mod tests {
 
     fn p(s: &str) -> Parsed {
         parse_input(s, DateSystem::D1900)
+    }
+
+    #[test]
+    fn non_digit_time_and_fraction_parts_stay_text() {
+        for s in ["1:nan", "nan:30", "1:30:NaN", "1 nan/2", "1 1/nan", "inf:00", "1e1:00", "+5:00"] {
+            assert_eq!(p(s).value, Value::text(s), "{s}");
+        }
     }
 
     #[test]
