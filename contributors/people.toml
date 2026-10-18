@@ -65,3 +65,8 @@ sync_github_name = true
 [people.Silvertree2010]
 display_name = "Netter"
 sync_github_name = false
+
+[people.lukasz-sklad]
+real_name = "Lukasz Kalinowski"
+display_name = "Lucas Kalinowski"
+sync_github_name = true
