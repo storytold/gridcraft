@@ -691,8 +691,9 @@ fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
     })
 }
 
-/// Distinct display values of a filter column (for the dropdown list).
-pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool)> {
+/// Distinct display values, checked state and row counts for the dropdown list.
+/// Counts include all data rows in the filter range, even rows hidden by another filter.
+pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool, u32)> {
     let Some(sh) = wb.sheet(sheet) else { return vec![] };
     let Some(af) = &sh.autofilter else { return vec![] };
     let off = col.saturating_sub(af.range.start.col);
@@ -712,9 +713,10 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
             }
             _ => true,
         };
-        seen.entry((sort_key(&v), t)).or_insert(on);
+        let entry = seen.entry((sort_key(&v), t)).or_insert((on, 0));
+        entry.1 += 1;
     }
-    seen.into_iter().map(|((_, t), on)| (t, on)).collect()
+    seen.into_iter().map(|((_, t), (on, count))| (t, on, count)).collect()
 }
 
 /// Case-sensitive tie-break for text that is equal ignoring case: as in Excel, lowercase sorts
@@ -1312,6 +1314,28 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_values_count_repeated_values_and_blanks_even_when_filtered() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute(
+            "range.setValues",
+            json!({"range": "B2", "values": [
+                ["Payment", "Region"], ["Card", "East"], ["Cash", "East"],
+                ["Card", "West"], [null, "East"], [null, "West"], ["Card", "East"]
+            ]}),
+        )
+        .unwrap();
+        s.execute("cell.set", json!({"cell": "B9", "input": "Outside"})).unwrap();
+        s.execute("data.filter", json!({"range": "B2:C8"})).unwrap();
+        let counts = |s: &Session| filter_values(&s.doc().unwrap().wb, 0, 1);
+        assert_eq!(counts(&s), vec![("Card".into(), true, 3), ("Cash".into(), true, 1), ("(Blanks)".into(), true, 2)]);
+
+        s.execute("data.filterBy", json!({"column": "C", "values": ["East"]})).unwrap();
+        s.execute("data.filterBy", json!({"column": "B", "values": ["Cash"], "blanks": false})).unwrap();
+        assert_eq!(counts(&s), vec![("Card".into(), false, 3), ("Cash".into(), true, 1), ("(Blanks)".into(), false, 2)]);
+    }
 
     #[test]
     fn filter_by_huge_numeric_column_is_rejected_not_overflowed() {

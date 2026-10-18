@@ -2796,7 +2796,7 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             }
             ui.separator();
             ui.label(egui::RichText::new("Filter").strong());
-            let mut checks: Vec<(String, bool)> = ui.ctx().data_mut(|d| d.get_temp::<Vec<(String, bool)>>(key)).unwrap_or(values.clone());
+            let mut checks: Vec<(String, bool, u32)> = ui.ctx().data_mut(|d| d.get_temp(key)).unwrap_or(values.clone());
             // A search narrows the list; Select All and Apply then only cover the matches.
             let mut search: String = ui.ctx().data_mut(|d| d.get_temp(search_key)).unwrap_or_default();
             let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search").desired_width(f32::INFINITY));
@@ -2805,26 +2805,56 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             }
             let needle = search.trim().to_lowercase();
             let matches = |v: &str| needle.is_empty() || v.to_lowercase().contains(&needle);
-            let all = checks.iter().filter(|(v, _)| matches(v)).all(|(_, b)| *b);
+            let all = checks.iter().filter(|(v, _, _)| matches(v)).all(|(_, b, _)| *b);
             let mut all_new = all;
             let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
             if ui.checkbox(&mut all_new, label).changed() {
-                for c in checks.iter_mut().filter(|(v, _)| matches(v)) {
+                for c in checks.iter_mut().filter(|(v, _, _)| matches(v)) {
                     c.1 = all_new;
                 }
             }
             // Full width: shrunk to the longest value, the scroll bar sat mid-menu and the wheel only
             // worked over the values themselves (#432).
+            // "Only" filters to one value in a click (as in WPS), without unticking (Select All) first.
+            // It shows on the hovered row and keeps its space on the others, so labels don't reflow.
+            let mut only = None;
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
-                for (v, on) in checks.iter_mut().filter(|(v, _)| matches(v)) {
-                    ui.checkbox(on, v.as_str());
+                for (v, on, count) in checks.iter_mut().filter(|(v, _, _)| matches(v)) {
+                    ui.allocate_ui_with_layout(
+                        vec2(ui.available_width(), ui.spacing().interact_size.y),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            let hovered = ui.rect_contains_pointer(ui.max_rect());
+                            if ui.add_visible(hovered, egui::Button::new("Only").small()).clicked() {
+                                only = Some(v.clone());
+                            }
+                            ui.label(egui::RichText::new(count.to_string()).color(Tokens::get(ui.ctx()).text_dim));
+                            ui.allocate_ui_with_layout(
+                                vec2(ui.available_width(), ui.spacing().interact_size.y),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                                    ui.checkbox(on, v.as_str());
+                                },
+                            );
+                        },
+                    );
                 }
             });
+            if let Some(v) = only {
+                let p = if v == "(Blanks)" {
+                    json!({"column": col_to_letters(col), "values": [], "blanks": true})
+                } else {
+                    json!({"column": col_to_letters(col), "values": [v], "blanks": false})
+                };
+                let _ = app.run("data.filterBy", p);
+                close = true;
+            }
             ui.ctx().data_mut(|d| {
                 d.insert_temp(key, checks.clone());
                 d.insert_temp(search_key, search.clone());
             });
-            let checks: Vec<(String, bool)> = checks.iter().map(|(v, on)| (v.clone(), *on && matches(v))).collect();
+            let checks: Vec<(String, bool)> = checks.iter().map(|(v, on, _)| (v.clone(), *on && matches(v))).collect();
             ui.separator();
             ui.horizontal(|ui| {
                 let clear = ui.button("Clear Filter");
@@ -2852,7 +2882,7 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
     });
     if close || popup_dismissed(&response.response, was_open) {
         ui.ctx().data_mut(|d| {
-            d.remove::<Vec<(String, bool)>>(key);
+            d.remove::<Vec<(String, bool, u32)>>(key);
             d.remove::<String>(search_key);
             d.remove::<Vec<egui::Id>>(buttons_key);
         });
