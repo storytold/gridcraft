@@ -418,7 +418,7 @@ impl ValAxis<'_> {
 }
 
 /// Draws gridlines, axis labels and the category axis line; returns the plot rectangle.
-fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis>, horizontal: bool, grid: bool) -> Bx {
+fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis>, horizontal: bool, grid: bool, cat_rev: bool, val_rev: bool) -> Bx {
     let ls = LABEL_SIZE;
     let lh = ls * 1.4;
     let ylabels = y.labels();
@@ -439,8 +439,10 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
         if !plot.ok() {
             return plot;
         }
+        // `orientation="maxMin"` mirrors the scale (#1687).
+        let yf = |v: f64| if val_rev { 1.0 - y.scale.frac(v) } else { y.scale.frac(v) };
         for (v, t) in &ylabels {
-            let yy = plot.bottom() - y.scale.frac(*v) * plot.h;
+            let yy = plot.bottom() - yf(*v) * plot.h;
             if grid {
                 ctx.hline(plot.x, plot.right(), yy, GRID, 0.75);
             }
@@ -453,7 +455,7 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
             }
         }
         let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
-        let y0 = plot.bottom() - y.scale.frac(zero) * plot.h;
+        let y0 = plot.bottom() - yf(zero) * plot.h;
         ctx.hline(plot.x, plot.right(), y0, AXIS, 0.75);
         match cat {
             CatAxis::Labels(l, outer) => {
@@ -462,20 +464,23 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
                 let lw = l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
                 let k = (((lw + 6.0) / cw.max(1e-3)).ceil() as usize).clamp(1, n);
                 for (j, t) in l.iter().enumerate().step_by(k) {
+                    let jr = if cat_rev { n - 1 - j } else { j };
                     let t = ctx.fit(t, ls, cw * k as f32 - 2.0);
-                    ctx.text(plot.x + (j as f32 + 0.5) * cw, plot.bottom() + 3.0, &t, ls, TEXT, HAlign::Center, VAlign::Top);
+                    ctx.text(plot.x + (jr as f32 + 0.5) * cw, plot.bottom() + 3.0, &t, ls, TEXT, HAlign::Center, VAlign::Top);
                 }
                 // Outer levels, one row each below the labels: a group's name centred under its
                 // categories, and a separator at each group boundary down through the rows.
                 for (i, level) in outer.iter().enumerate() {
                     let top = plot.bottom() + 3.0 + lh * (i as f32 + 1.0);
                     for (first, end) in level_groups(level, n) {
-                        let (x0, x1) = (plot.x + first as f32 * cw, plot.x + end as f32 * cw);
+                        // A reversed axis mirrors the groups with their categories (#1687).
+                        let (a, b) = if cat_rev { (n - end, n - first) } else { (first, end) };
+                        let (x0, x1) = (plot.x + a as f32 * cw, plot.x + b as f32 * cw);
                         if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
                             let t = ctx.fit(t, ls, x1 - x0 - 2.0);
                             ctx.text((x0 + x1) / 2.0, top, &t, ls, TEXT, HAlign::Center, VAlign::Top);
                         }
-                        if first > 0 {
+                        if a > 0 {
                             ctx.vline(x0, plot.bottom(), top + lh - 2.0, AXIS, 0.75);
                         }
                     }
@@ -488,12 +493,13 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
                 let lw = labels.iter().map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
                 let slot = plot.w / ticks.len().max(1) as f32;
                 let k = (((lw + 6.0) / slot.max(1e-3)).ceil() as usize).max(1);
+                let cf = |v: f64| if cat_rev { 1.0 - s.frac(v) } else { s.frac(v) };
                 for (v, t) in ticks.iter().zip(&labels).step_by(k) {
-                    let xx = plot.x + s.frac(*v) * plot.w;
+                    let xx = plot.x + cf(*v) * plot.w;
                     ctx.text(xx, plot.bottom() + 3.0, t, ls, TEXT, HAlign::Center, VAlign::Top);
                 }
                 if s.min <= 0.0 && s.max >= 0.0 {
-                    let xx = plot.x + s.frac(0.0) * plot.w;
+                    let xx = plot.x + cf(0.0) * plot.w;
                     ctx.vline(xx, plot.y, plot.bottom(), AXIS, 0.75);
                 }
             }
@@ -517,8 +523,9 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
         let vw = maxw(ctx, &ylabels);
         let slot = plot.w / ylabels.len().max(1) as f32;
         let k = (((vw + 6.0) / slot.max(1e-3)).ceil() as usize).max(1);
+        let yf = |v: f64| if val_rev { 1.0 - y.scale.frac(v) } else { y.scale.frac(v) };
         for (i, (v, t)) in ylabels.iter().enumerate() {
-            let xx = plot.x + y.scale.frac(*v) * plot.w;
+            let xx = plot.x + yf(*v) * plot.w;
             if grid {
                 ctx.vline(xx, plot.y, plot.bottom(), GRID, 0.75);
             }
@@ -527,14 +534,15 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
             }
         }
         let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
-        let x0 = plot.x + y.scale.frac(zero) * plot.w;
+        let x0 = plot.x + yf(zero) * plot.w;
         ctx.vline(x0, plot.y, plot.bottom(), AXIS, 0.75);
         let n = labels.len().max(1);
         let ch = plot.h / n as f32;
         let k = ((lh / ch.max(1e-3)).ceil() as usize).clamp(1, n);
         for (j, t) in labels.iter().enumerate().step_by(k) {
+            let jr = if cat_rev { n - 1 - j } else { j };
             let t = ctx.fit(t, ls, lw - 6.0);
-            ctx.text(plot.x - 4.0, plot.bottom() - (j as f32 + 0.5) * ch, &t, ls, TEXT, HAlign::Right, VAlign::Middle);
+            ctx.text(plot.x - 4.0, plot.bottom() - (jr as f32 + 0.5) * ch, &t, ls, TEXT, HAlign::Right, VAlign::Middle);
         }
         // Outer levels: a group's name centred beside its categories, separators at the
         // boundaries running right to the axis.
@@ -542,12 +550,13 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
         for (level, w) in outer.iter().zip(&level_w) {
             let x0 = x1 - w;
             for (first, end) in level_groups(level, n) {
-                let (y0, y1) = (plot.bottom() - end as f32 * ch, plot.bottom() - first as f32 * ch);
+                let (a, b) = if cat_rev { (n - end, n - first) } else { (first, end) };
+                let (y0, y1) = (plot.bottom() - b as f32 * ch, plot.bottom() - a as f32 * ch);
                 if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
                     let t = ctx.fit(t, ls, w - 4.0);
                     ctx.text((x0 + x1) / 2.0, (y0 + y1) / 2.0, &t, ls, TEXT, HAlign::Center, VAlign::Middle);
                 }
-                if first > 0 {
+                if a > 0 {
                     ctx.hline(x0, plot.x, y1, AXIS, 0.75);
                 }
             }
@@ -1003,15 +1012,21 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
     // Outer levels padded to the slots (forecast slots stay in the last group).
     let outer: Vec<Vec<String>> =
         data.category_levels.iter().map(|l| (0..ncat_slots).map(|j| l.get(j).cloned().unwrap_or_default()).collect()).collect();
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &outer), &y1, y2.as_ref(), horizontal, chart.gridlines);
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &outer), &y1, y2.as_ref(), horizontal, chart.gridlines, chart.cat_reverse, chart.val_reverse);
     if !plot.ok() {
         return;
     }
     let scale_of = |i: usize| -> Scale { if sec.get(i).copied().unwrap_or(false) { y2.as_ref().map(|a| a.scale).unwrap_or(*s1) } else { *s1 } };
     let cat_len = if horizontal { plot.h } else { plot.w };
     let cw = cat_len / ncat_slots as f32;
-    let center = |j: usize| if horizontal { plot.bottom() - (j as f32 + 0.5) * cw } else { plot.x + (j as f32 + 0.5) * cw };
-    let vpos = |v: f64, sc: &Scale| if horizontal { plot.x + sc.frac(v) * plot.w } else { plot.bottom() - sc.frac(v) * plot.h };
+    let center = |j: usize| {
+        let jr = if chart.cat_reverse { ncat_slots - 1 - j } else { j };
+        if horizontal { plot.bottom() - (jr as f32 + 0.5) * cw } else { plot.x + (jr as f32 + 0.5) * cw }
+    };
+    let vpos = |v: f64, sc: &Scale| {
+        let f = if chart.val_reverse { 1.0 - sc.frac(v) } else { sc.frac(v) };
+        if horizontal { plot.x + f * plot.w } else { plot.bottom() - f * plot.h }
+    };
 
     // Column slots: each clustered series gets one, each stack group shares one.
     let mut slot_keys: Vec<(bool, Fam, usize)> = Vec::new();
@@ -1161,6 +1176,9 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         let pts: Vec<(f64, f64)> = s.values.iter().take(ncat).enumerate().filter_map(|(j, v)| v.map(|v| ((j + 1) as f64, v))).collect();
         let frac = |x: f64, y: f64| ((x - 0.5) / ncat_slots as f64, (y - sc.min) / (sc.max - sc.min));
         let px = |(fx, fy): (f64, f64)| {
+            // Mirrored axes swap the ends of the fitted segment (#1687).
+            let fx = if chart.cat_reverse { 1.0 - fx } else { fx };
+            let fy = if chart.val_reverse { 1.0 - fy } else { fy };
             if horizontal {
                 [plot.x + fy as f32 * plot.w, plot.bottom() - fx as f32 * plot.h]
             } else {
@@ -1205,11 +1223,14 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let ys = nice_scale(ylo, yhi, false);
     let fx = Fmt::new("General");
     let fy = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
-    let plot = frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy }, None, false, chart.gridlines);
+    let plot = frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy }, None, false, chart.gridlines, false, chart.val_reverse);
     if !plot.ok() {
         return;
     }
-    let map = |(x, y): (f64, f64)| [plot.x + xs.frac(x) * plot.w, plot.bottom() - ys.frac(y) * plot.h];
+    let map = |(x, y): (f64, f64)| {
+        let fy = if chart.val_reverse { 1.0 - ys.frac(y) } else { ys.frac(y) };
+        [plot.x + xs.frac(x) * plot.w, plot.bottom() - fy * plot.h]
+    };
     let bubble = chart.kind == ChartKind::Bubble;
     let rmax = plot.w.min(plot.h) * 0.12;
     for (s, pts) in data.series.iter().zip(&all) {
@@ -1260,7 +1281,10 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         }
         let pts: Vec<(f64, f64)> = pts.iter().flatten().copied().collect();
         let frac = |x: f64, y: f64| ((x - xs.min) / (xs.max - xs.min), (y - ys.min) / (ys.max - ys.min));
-        let px = |(fx, fy): (f64, f64)| [plot.x + fx as f32 * plot.w, plot.bottom() - fy as f32 * plot.h];
+        let px = |(fx, fy): (f64, f64)| {
+            let fy = if chart.val_reverse { 1.0 - fy } else { fy };
+            [plot.x + fx as f32 * plot.w, plot.bottom() - fy as f32 * plot.h]
+        };
         draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (xs.min, xs.max));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
@@ -1301,14 +1325,16 @@ fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let maxc = counts.iter().copied().max().unwrap_or(0) as f64;
     let ys = nice_scale(0.0, maxc, true);
     let fc = Fmt::new("General");
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &fc }, None, false, chart.gridlines);
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &fc }, None, false, chart.gridlines, chart.cat_reverse, chart.val_reverse);
     if !plot.ok() {
         return;
     }
     let cw = plot.w / bins as f32;
     for (b, c) in counts.iter().enumerate() {
-        let top = plot.bottom() - ys.frac(*c as f64) * plot.h;
-        let x = plot.x + b as f32 * cw;
+        let fr = if chart.val_reverse { 1.0 - ys.frac(*c as f64) } else { ys.frac(*c as f64) };
+        let top = plot.bottom() - fr * plot.h;
+        let bi = if chart.cat_reverse { bins - 1 - b } else { b };
+        let x = plot.x + bi as f32 * cw;
         ctx.rect(x, top, cw, plot.bottom() - top, s.color, Some((WHITE, 0.75)));
         if chart.data_labels {
             ctx.text(x + cw / 2.0, top - 2.0, &c.to_string(), LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
@@ -1353,24 +1379,32 @@ fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let (lo, hi) = value_range(bars.iter().flat_map(|(b, t, _)| [*b, *t])).unwrap_or((0.0, 0.0));
     let ys = nice_scale(lo, hi, true);
     let f = Fmt::new(&s.number_format);
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines, chart.cat_reverse, chart.val_reverse);
     if !plot.ok() {
         return;
     }
     let cw = plot.w / ncat as f32;
     let bw = cw / 1.5;
-    let vy = |v: f64| plot.bottom() - ys.frac(v) * plot.h;
+    let vy = |v: f64| {
+        let fr = if chart.val_reverse { 1.0 - ys.frac(v) } else { ys.frac(v) };
+        plot.bottom() - fr * plot.h
+    };
     for (j, (b, t, kind)) in bars.iter().enumerate() {
         let color = match kind {
             1 => UP,
             2 => DOWN,
             _ => s.color,
         };
-        let x = plot.x + (j as f32 + 0.5) * cw - bw / 2.0;
+        let jr = if chart.cat_reverse { ncat - 1 - j } else { j };
+        let x = plot.x + (jr as f32 + 0.5) * cw - bw / 2.0;
         let (yb, yt) = (vy(*b), vy(*t));
         ctx.rect(x, yb.min(yt), bw, (yb - yt).abs().max(0.5), color, None);
         if j + 1 < bars.len() && ncat <= 500 {
-            ctx.out.push(Prim::Line { pts: vec![[x + bw, yt], [x + cw, yt]], color: AXIS, width: 0.75, dash: true });
+            // Link this bar to the next one in display order: to its right normally, to its left when reversed.
+            let jr2 = if chart.cat_reverse { ncat - 2 - j } else { j + 1 };
+            let x2 = plot.x + (jr2 as f32 + 0.5) * cw - bw / 2.0;
+            let (a, e) = if chart.cat_reverse { (x, x2 + bw) } else { (x + bw, x2) };
+            ctx.out.push(Prim::Line { pts: vec![[a, yt], [e, yt]], color: AXIS, width: 0.75, dash: true });
         }
         if chart.data_labels && ncat <= MAX_LABELS {
             let v = if *kind == 0 { *t } else { t - b };
@@ -1648,14 +1682,17 @@ fn box_whisker(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let Some((lo, hi)) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())) else { return };
     let ys = nice_scale(lo, hi, false);
     let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines, chart.cat_reverse, chart.val_reverse);
     if !plot.ok() {
         return;
     }
     let n = data.series.len().max(1);
     let cw = plot.w / n as f32;
     let bw = (cw * 0.4).min(80.0);
-    let vy = |v: f64| plot.bottom() - ys.frac(v) * plot.h;
+    let vy = |v: f64| {
+        let fr = if chart.val_reverse { 1.0 - ys.frac(v) } else { ys.frac(v) };
+        plot.bottom() - fr * plot.h
+    };
     for (i, s) in data.series.iter().enumerate() {
         let mut v: Vec<f64> = s.values.iter().flatten().copied().collect();
         if v.is_empty() {
@@ -1669,7 +1706,8 @@ fn box_whisker(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         let wlo = v.iter().copied().find(|x| *x >= flo).unwrap_or(q1);
         let whi = v.iter().rev().copied().find(|x| *x <= fhi).unwrap_or(q3);
         let mean = v.iter().sum::<f64>() / v.len() as f64;
-        let c = plot.x + (i as f32 + 0.5) * cw;
+        let ir = if chart.cat_reverse { n - 1 - i } else { i };
+        let c = plot.x + (ir as f32 + 0.5) * cw;
         ctx.vline(c, vy(whi), vy(q3), s.color, 1.25);
         ctx.vline(c, vy(q1), vy(wlo), s.color, 1.25);
         ctx.hline(c - bw / 4.0, c + bw / 4.0, vy(whi), s.color, 1.25);
@@ -1697,7 +1735,7 @@ fn stock(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let Some((lo, hi)) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())) else { return };
     let ys = nice_scale(lo, hi, false);
     let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
-    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
+    let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines, chart.cat_reverse, chart.val_reverse);
     if !plot.ok() {
         return;
     }
@@ -1712,9 +1750,13 @@ fn stock(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let get = |s: Option<&SeriesData>, j: usize| s.and_then(|s| s.values.get(j).copied().flatten());
     let cw = plot.w / ncat as f32;
     let tick = (cw * 0.25).max(1.0);
-    let vy = |v: f64| plot.bottom() - ys.frac(v) * plot.h;
+    let vy = |v: f64| {
+        let fr = if chart.val_reverse { 1.0 - ys.frac(v) } else { ys.frac(v) };
+        plot.bottom() - fr * plot.h
+    };
     for j in 0..ncat {
-        let c = plot.x + (j as f32 + 0.5) * cw;
+        let jr = if chart.cat_reverse { ncat - 1 - j } else { j };
+        let c = plot.x + (jr as f32 + 0.5) * cw;
         if let (Some(h), Some(l)) = (get(high, j), get(low, j)) {
             ctx.vline(c, vy(h), vy(l), STOCK, 1.25);
         }

@@ -49,6 +49,8 @@ fn chart(kind: ChartKind) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        cat_reverse: false,
+        val_reverse: false,
     }
 }
 
@@ -1214,4 +1216,42 @@ fn box_whisker_draws_each_series_quartile_method() {
     assert_eq!(heights.len(), 2);
     // The boxes span 3.5 and 2.5 data units on the same value axis.
     assert!((heights[0] / heights[1] - 1.4).abs() < 0.001);
+}
+
+#[test]
+fn mirrored_axes_flip_the_frame() {
+    let d = sample(ChartKind::ColumnClustered);
+    let mut c = chart(ChartKind::ColumnClustered);
+    let normal = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    c.cat_reverse = true;
+    c.val_reverse = true;
+    let mirrored = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let pos = |p: &[Prim], t: &str| {
+        p.iter()
+            .find_map(|q| match q {
+                Prim::Text { text, x, y, .. } if text == t => Some((*x, *y)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {t} label"))
+    };
+    // The category axis runs right to left (#1687).
+    let (x1, _) = pos(&normal, "Q1");
+    let (x6, _) = pos(&normal, "Q6");
+    assert!(x1 < x6, "normal order: {x1} then {x6}");
+    let (rx1, _) = pos(&mirrored, "Q1");
+    let (rx6, _) = pos(&mirrored, "Q6");
+    assert!(rx1 > rx6, "mirrored order: {rx1} then {rx6}");
+    // The value axis runs top to bottom: zero leaves the baseline.
+    let (_, y0) = pos(&normal, "$0");
+    let (_, ry0) = pos(&mirrored, "$0");
+    assert!(ry0 < y0, "mirrored value axis: {ry0} vs {y0}");
+    // Reversing one axis leaves the other alone.
+    c.cat_reverse = false;
+    c.val_reverse = true;
+    let val_only = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let (ox1, _) = pos(&val_only, "Q1");
+    let (ox6, _) = pos(&val_only, "Q6");
+    assert!(ox1 < ox6, "value-only reversal moved the categories");
+    assert_sane(&mirrored, 640.0, 400.0);
+    assert_sane(&normal, 640.0, 400.0);
 }

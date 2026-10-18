@@ -2831,6 +2831,27 @@ fn every_chart_kind_survives_xlsx() {
 }
 
 #[test]
+fn mirrored_axes_survive_set_and_xlsx() {
+    let mut s = s();
+    chart_data(&mut s);
+    s.execute("insert.chart", json!({"type": "column", "range": "A1:E7"})).unwrap();
+    s.execute("chart.set", json!({"catReverse": true, "valReverse": true})).unwrap();
+    {
+        let c = &s.doc().unwrap().wb.active().unwrap().charts[0];
+        assert!(c.cat_reverse && c.val_reverse);
+    }
+    reopen(&mut s);
+    let c = &s.doc().unwrap().wb.active().unwrap().charts[0];
+    assert!(c.cat_reverse, "category axis direction lost on save");
+    assert!(c.val_reverse, "value axis direction lost on save");
+    // Switching both directions back also survives a round trip.
+    s.execute("chart.set", json!({"catReverse": false, "valReverse": false})).unwrap();
+    reopen(&mut s);
+    let c = &s.doc().unwrap().wb.active().unwrap().charts[0];
+    assert!(!c.cat_reverse && !c.val_reverse, "reversed axes stuck after save");
+}
+
+#[test]
 fn scatter_of_two_columns_is_one_series_with_the_first_as_x() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["X", "Y"], [1, 10], [2, 20], [3, 30]]})).unwrap();

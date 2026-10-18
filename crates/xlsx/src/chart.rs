@@ -258,6 +258,8 @@ pub fn read_chart(root: &El) -> Option<Chart> {
             _ => LegendPos::Right,
         },
     };
+    // `orientation="maxMin"` on an axis means it runs backwards (#1687).
+    let reversed = |a: Option<&El>| a.is_some_and(|a| a.child("scaling").and_then(|s| s.child_val("orientation")) == Some("maxMin"));
     Some(Chart {
         id: 0,
         kind,
@@ -273,6 +275,8 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         source: None,
         by_rows: false,
         pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
+        cat_reverse: reversed(cat_ax),
+        val_reverse: reversed(y_ax),
     })
 }
 
@@ -702,13 +706,16 @@ struct Ax<'a> {
     grid: bool,
     title: Option<&'a str>,
     crosses_max: bool,
+    /// `orientation="maxMin"` in `<c:scaling>`: the axis runs backwards (#1687).
+    reverse: bool,
 }
 
 fn axis_xml(a: &Ax<'_>) -> String {
     let mut s = format!(
-        "<c:{0}><c:axId val=\"{1}\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"{2}\"/><c:axPos val=\"{3}\"/>",
+        "<c:{0}><c:axId val=\"{1}\"/><c:scaling><c:orientation val=\"{2}\"/></c:scaling><c:delete val=\"{3}\"/><c:axPos val=\"{4}\"/>",
         if a.cat { "catAx" } else { "valAx" },
         a.id,
+        if a.reverse { "maxMin" } else { "minMax" },
         a.delete as u8,
         a.pos
     );
@@ -805,6 +812,8 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: false,
                 title: ch.x_title.as_deref(),
                 crosses_max: false,
+                // A scatter has no category axis; keep the scale it was saved with (#1687).
+                reverse: false,
             }));
             s.push_str(&axis_xml(&Ax {
                 cat: false,
@@ -815,6 +824,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,
+                reverse: ch.val_reverse,
             }));
         }
         G::Bar { bar: true, .. } => {
@@ -827,6 +837,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: false,
                 title: ch.x_title.as_deref(),
                 crosses_max: false,
+                reverse: ch.cat_reverse,
             }));
             s.push_str(&axis_xml(&Ax {
                 cat: false,
@@ -837,6 +848,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,
+                reverse: ch.val_reverse,
             }));
         }
         _ => {
@@ -849,6 +861,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: false,
                 title: ch.x_title.as_deref(),
                 crosses_max: false,
+                reverse: ch.cat_reverse,
             }));
             s.push_str(&axis_xml(&Ax {
                 cat: false,
@@ -859,12 +872,33 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,
+                reverse: ch.val_reverse,
             }));
         }
     }
     if secondary.is_some() {
-        s.push_str(&axis_xml(&Ax { cat: true, id: 3, cross: 4, pos: "b", delete: true, grid: false, title: None, crosses_max: false }));
-        s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: "r", delete: false, grid: false, title: None, crosses_max: true }));
+        s.push_str(&axis_xml(&Ax {
+            cat: true,
+            id: 3,
+            cross: 4,
+            pos: "b",
+            delete: true,
+            grid: false,
+            title: None,
+            crosses_max: false,
+            reverse: false,
+        }));
+        s.push_str(&axis_xml(&Ax {
+            cat: false,
+            id: 4,
+            cross: 3,
+            pos: "r",
+            delete: false,
+            grid: false,
+            title: None,
+            crosses_max: true,
+            reverse: false,
+        }));
     }
     s.push_str("</c:plotArea>");
     let pos = match ch.legend {

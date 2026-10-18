@@ -48,6 +48,8 @@ fn workbook(categories: &str, values: &str) -> Workbook {
         source: None,
         by_rows: false,
         pivot: None,
+        cat_reverse: false,
+        val_reverse: false,
     });
     Workbook { sheets: vec![Arc::new(s)], ..Workbook::default() }
 }

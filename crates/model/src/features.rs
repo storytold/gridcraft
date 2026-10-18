@@ -553,6 +553,15 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+    /// The category axis runs backwards: `<c:scaling><c:orientation val="maxMin"/>`, Excel's
+    /// "Categories in reverse order". The first category draws at the top of a bar chart, and a
+    /// save keeps the setting (#1687).
+    #[serde(default)]
+    pub cat_reverse: bool,
+    /// The value axis runs backwards (`orientation="maxMin"` on `<c:valAx>`): the low end at the
+    /// top of the plot (#1687).
+    #[serde(default)]
+    pub val_reverse: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

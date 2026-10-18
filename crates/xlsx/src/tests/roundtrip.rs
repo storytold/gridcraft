@@ -414,6 +414,8 @@ fn sample() -> Workbook {
         source: None,
         by_rows: false,
         pivot: None,
+        cat_reverse: false,
+        val_reverse: false,
     };
     for kind in [
         ChartKind::ColumnClustered,
@@ -1456,4 +1458,69 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     let t = b.tables.first().expect("the table survived");
     assert!(t.filter.is_empty(), "the criteria landed on the wrong table column: {:?}", t.filter);
     assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
+}
+
+
+#[test]
+fn mirrored_axis_orientation_round_trips() {
+    let mk = |id: u32, kind: ChartKind, cell: &str, cat: bool, val: bool| Chart {
+        id,
+        kind,
+        anchor: Anchor { cell: at(cell), width: 480.0, height: 300.0, ..Anchor::default() },
+        title: None,
+        series: vec![Series {
+            name: Some("Data!$B$1".into()),
+            categories: Some("Data!$A$1:$A$2".into()),
+            values: "Data!$B$1:$B$2".into(),
+            bubble_sizes: None,
+            color: None,
+            secondary: false,
+            kind: None,
+            smooth: false,
+            trendlines: Vec::new(),
+            quartiles: Default::default(),
+        }],
+        legend: LegendPos::Bottom,
+        data_labels: false,
+        gridlines: true,
+        style: 2,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+        pivot: None,
+        cat_reverse: cat,
+        val_reverse: val,
+    };
+    let mut wb = Workbook::new();
+    let mut s = Sheet::new("Data");
+    s.set_value(at("A1"), Value::text("Q1"));
+    s.set_value(at("A2"), Value::text("Q2"));
+    s.set_value(at("B1"), Value::Number(10.0));
+    s.set_value(at("B2"), Value::Number(20.0));
+    // A column chart mirrors both axes; a scatter has no category axis, only its y axis (#1687).
+    s.charts.push(mk(1, ChartKind::ColumnClustered, "F2", true, true));
+    s.charts.push(mk(2, ChartKind::Scatter, "F20", false, true));
+    wb.sheets = vec![Arc::new(s)];
+    let bytes = write_xlsx(&wb).unwrap();
+
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+    let mut part = |n: &str| {
+        let mut out = String::new();
+        std::io::Read::read_to_string(&mut z.by_name(n).unwrap_or_else(|_| panic!("{n}")), &mut out).unwrap();
+        out
+    };
+    let col = part("xl/charts/chart1.xml");
+    assert_eq!(col.matches("orientation val=\"maxMin\"").count(), 2, "{col}");
+    assert!(!col.contains("orientation val=\"minMax\""), "{col}");
+    let sc = part("xl/charts/chart2.xml");
+    assert_eq!(sc.matches("orientation val=\"maxMin\"").count(), 1, "{sc}");
+    assert_eq!(sc.matches("orientation val=\"minMax\"").count(), 1, "{sc}");
+
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let charts = &back.sheets[0].charts;
+    assert_eq!(charts.len(), 2);
+    assert!(charts.iter().any(|c| c.kind == ChartKind::ColumnClustered && c.cat_reverse && c.val_reverse), "both directions lost");
+    assert!(charts.iter().any(|c| c.kind == ChartKind::Scatter && !c.cat_reverse && c.val_reverse), "scatter y direction lost");
 }
