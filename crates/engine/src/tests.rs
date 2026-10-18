@@ -1723,6 +1723,45 @@ fn saving_an_opened_semicolon_csv_keeps_semicolons() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Saving records who saved the workbook and when, like Excel: `modified` and `lastModifiedBy`
+/// change on every save, `created` is set once, and the other properties are left alone.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn saving_records_the_save_time_and_the_user() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-props-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let path = dir.join("book.xlsx");
+    let mut s = s();
+    s.prefs.user_name = "Saver".into();
+    s.execute("file.properties", json!({"title": "Plan", "author": "Writer"})).unwrap();
+    s.doc_mut().unwrap().calc.fixed_now = Some(46307.5); // 2026-10-12 12:00 UTC
+    s.execute("file.save", json!({"path": path})).unwrap();
+    let props = s.doc().unwrap().wb.props.clone();
+    assert_eq!((props.created.as_str(), props.modified.as_str()), ("2026-10-12T12:00:00Z", "2026-10-12T12:00:00Z"));
+    assert_eq!((props.title.as_str(), props.author.as_str(), props.last_modified_by.as_str()), ("Plan", "Writer", "Saver"));
+    assert!(!s.doc().unwrap().is_dirty());
+
+    // Reopened by someone else and saved a day later: `created` stays.
+    let mut s2 = Session::new();
+    s2.prefs.user_name = "Editor".into();
+    s2.execute("file.open", json!({"path": path})).unwrap();
+    assert_eq!(s2.doc().unwrap().wb.props, props, "the file holds what the session recorded");
+    s2.doc_mut().unwrap().calc.fixed_now = Some(46308.25); // 2026-10-13 06:00 UTC
+    s2.execute("file.save", json!({})).unwrap();
+    s2.execute("file.open", json!({"path": path})).unwrap();
+    let back = &s2.doc().unwrap().wb.props;
+    assert_eq!((back.created.as_str(), back.modified.as_str()), ("2026-10-12T12:00:00Z", "2026-10-13T06:00:00Z"));
+    assert_eq!((back.author.as_str(), back.last_modified_by.as_str()), ("Writer", "Editor"));
+
+    // Exporting a CSV writes no properties and changes none.
+    let before = s2.doc().unwrap().wb.props.clone();
+    s2.execute("file.save", json!({"path": dir.join("book.csv")})).unwrap();
+    assert_eq!(s2.doc().unwrap().wb.props, before);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A workbook whose B1 is `=[1]Sheet1!A1`, linked to `link` (an external relationship target).
 fn linked_workbook(link: &str) -> Vec<u8> {
     use std::io::{Cursor, Write};

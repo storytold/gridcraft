@@ -557,6 +557,7 @@ pub fn round_trip(wb: &Workbook, source: &[u8], opts: &Options) -> RoundTrip {
     };
     let mut categories = diff_workbooks(wb, &back, opts);
     categories.push(package.done());
+    categories.push(diff_core_properties(source, &bytes, opts.max_report));
     RoundTrip { error: None, categories }
 }
 
@@ -841,6 +842,112 @@ fn full_calc_on_load(bytes: &[u8]) -> bool {
         .into_iter()
         .flatten()
         .any(|(e, a)| e == "calcPr" && attr(&a, "fullCalcOnLoad").is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true")))
+}
+
+/// The `docProps/core.xml` properties GridCraft keeps (`DocProps`), as Excel writes them.
+const CORE_PROPERTIES: [&str; 15] = [
+    "dc:title",
+    "dc:subject",
+    "dc:creator",
+    "cp:keywords",
+    "dc:description",
+    "cp:lastModifiedBy",
+    "cp:lastPrinted",
+    "dcterms:created",
+    "dcterms:modified",
+    "cp:category",
+    "cp:contentStatus",
+    "cp:revision",
+    "cp:version",
+    "dc:identifier",
+    "dc:language",
+];
+
+/// The `properties` category: every property of [`CORE_PROPERTIES`] the source sets must come back
+/// with the same text. `property dcterms:created lost`, `property cp:lastModifiedBy changed: "A" → "B"`.
+fn diff_core_properties(source: &[u8], written: &[u8], max: usize) -> Category {
+    let mut d = Diffs::new("properties", max);
+    match (core_properties(source), core_properties(written)) {
+        (Ok(before), Ok(after)) => {
+            for name in CORE_PROPERTIES {
+                let local = name.rsplit(':').next().unwrap_or(name);
+                let Some(was) = before.get(local).filter(|v| !v.is_empty()) else { continue };
+                match after.get(local).filter(|v| !v.is_empty()) {
+                    None => d.push(|| format!("property {name} lost")),
+                    Some(now) if now != was => {
+                        let quoted = |v: &String| serde_json::to_string(v).unwrap_or_default();
+                        d.push(|| format!("property {name} changed: {} → {}", quoted(was), quoted(now)))
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        // An unreadable source part has nothing to compare; an unreadable written one is a loss.
+        (Ok(before), Err(e)) if !before.is_empty() => d.push(|| format!("core properties unreadable after the save: {e}")),
+        _ => {}
+    }
+    d.done()
+}
+
+/// The text of each element under the root of the package's core-properties part (found through
+/// `_rels/.rels`), by local name. Empty when the package has none.
+fn core_properties(bytes: &[u8]) -> Result<BTreeMap<String, String>, String> {
+    use quick_xml::events::Event;
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a zip package: {e}"))?;
+    let names = zip_names(&mut zip);
+    let find = |key: &str| names.iter().find(|n| part_key(n) == key).cloned();
+    let Some(rels) = find("_rels/.rels") else { return Ok(BTreeMap::new()) };
+    let rels = xml_elements(&read_zip_part(&mut zip, &rels)?)?;
+    let target = rels
+        .iter()
+        .find(|(e, a)| e == "Relationship" && attr(a, "Type").is_some_and(|t| t.ends_with("/core-properties")))
+        .and_then(|(_, a)| attr(a, "Target"));
+    let Some(name) = target.and_then(|t| find(&part_key(&resolve_target("", t)))) else { return Ok(BTreeMap::new()) };
+    let xml = read_zip_part(&mut zip, &name)?;
+    let mut reader = quick_xml::Reader::from_reader(xml.as_slice());
+    let (mut buf, mut out, mut depth, mut current) = (Vec::new(), BTreeMap::new(), 0usize, None::<String>);
+    loop {
+        match reader.read_event_into(&mut buf).map_err(|e| format!("{name}: invalid XML: {e}"))? {
+            Event::Start(e) => {
+                depth += 1;
+                if depth == 2 {
+                    let local = String::from_utf8_lossy(local_name(e.name().as_ref())).into_owned();
+                    out.entry(local.clone()).or_insert_with(String::new);
+                    current = Some(local);
+                }
+            }
+            Event::End(_) => {
+                if depth == 2 {
+                    current = None;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Text(t) => {
+                if let Some(v) = current.as_ref().and_then(|c| out.get_mut(c)) {
+                    v.push_str(&t.xml_content(quick_xml::XmlVersion::Explicit1_0).map_err(|e| format!("{name}: {e}"))?);
+                }
+            }
+            Event::GeneralRef(r) => {
+                if let Some(v) = current.as_ref().and_then(|c| out.get_mut(c)) {
+                    let named = match r.as_ref() {
+                        b"amp" => Some('&'),
+                        b"lt" => Some('<'),
+                        b"gt" => Some('>'),
+                        b"quot" => Some('"'),
+                        b"apos" => Some('\''),
+                        _ => None,
+                    };
+                    if let Some(c) = r.resolve_char_ref().ok().flatten().or(named) {
+                        v.push(c);
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(out)
 }
 
 /// Problems Excel would repair in a written package: parts without a content type, content-type
@@ -1428,6 +1535,68 @@ mod tests {
         assert!(rt.categories.iter().any(|c| c.name == "package"));
     }
 
+    /// A one-sheet package whose `docProps/core.xml` holds `props` (inside `<cp:coreProperties>`).
+    fn book_with_core(props: &str) -> Vec<u8> {
+        let core = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">{props}</cp:coreProperties>"#
+        );
+        zip_of(&[
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>"#,
+            ),
+            (
+                "_rels/.rels",
+                r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>"#,
+            ),
+            ("docProps/core.xml", &core),
+            (
+                "xl/workbook.xml",
+                r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#,
+            ),
+        ])
+    }
+
+    const ALL_CORE_PROPERTIES: &str = r#"<dc:title>Title &amp; more</dc:title><dc:subject>Subject</dc:subject><dc:creator>Author A</dc:creator><cp:keywords>k1; k2</cp:keywords><dc:description>Description</dc:description><cp:lastModifiedBy>Author B</cp:lastModifiedBy><cp:lastPrinted>2025-06-01T08:00:00Z</cp:lastPrinted><dcterms:created xsi:type="dcterms:W3CDTF">2024-01-15T09:30:00Z</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">2025-06-30T17:45:00Z</dcterms:modified><cp:category>Configuration</cp:category><cp:contentStatus>Draft</cp:contentStatus><cp:revision>7</cp:revision><cp:version>1.0</cp:version><dc:identifier>id-1</dc:identifier><dc:language>en-US</dc:language>"#;
+
+    #[test]
+    fn round_trip_keeps_every_core_property() {
+        let r = check_bytes("props.xlsx", &book_with_core(ALL_CORE_PROPERTIES), &Options::default());
+        assert_eq!(r.error, None);
+        let props = r.round_trip.categories.iter().find(|c| c.name == "properties").unwrap();
+        assert_eq!((props.diffs, &props.examples), (0, &vec![]), "{:?}", r.round_trip);
+        assert_eq!(core_properties(&book_with_core(ALL_CORE_PROPERTIES)).unwrap().len(), CORE_PROPERTIES.len());
+    }
+
+    #[test]
+    fn a_core_property_lost_or_changed_is_reported() {
+        let source = book_with_core(ALL_CORE_PROPERTIES);
+        let written = book_with_core(
+            &ALL_CORE_PROPERTIES
+                .replace(r#"<dcterms:created xsi:type="dcterms:W3CDTF">2024-01-15T09:30:00Z</dcterms:created>"#, "")
+                .replace("<cp:lastModifiedBy>Author B</cp:lastModifiedBy>", "<cp:lastModifiedBy>Someone</cp:lastModifiedBy>")
+                .replace("<cp:category>Configuration</cp:category>", "<cp:category></cp:category>"),
+        );
+        let c = diff_core_properties(&source, &written, 20);
+        assert_eq!(
+            c.examples,
+            ["property cp:lastModifiedBy changed: \"Author B\" → \"Someone\"", "property dcterms:created lost", "property cp:category lost",]
+        );
+        // A property the source doesn't set, or a source with no core part, isn't a difference.
+        assert_eq!(diff_core_properties(&book_with_core(""), &written, 20).diffs, 0);
+        assert_eq!(diff_core_properties(&zip_of(&[("a.xml", "<a/>")]), &written, 20).diffs, 0);
+        // The output losing its whole core part is reported property by property.
+        assert_eq!(diff_core_properties(&source, &zip_of(&[("a.xml", "<a/>")]), 20).diffs, CORE_PROPERTIES.len());
+    }
+
     #[test]
     fn diff_detects_lost_features() {
         let mut a = book(&[("A1", "2", n(2.0)), ("B1", "=A1*3", n(6.0))]);
@@ -1654,7 +1823,8 @@ mod tests {
                 "comments",
                 "hyperlinks",
                 "pivots",
-                "package"
+                "package",
+                "properties"
             ])
         );
         assert_eq!(keys(&f["roundTrip"]["categories"]["values"]), set(&["equal", "diffs", "examples"]));

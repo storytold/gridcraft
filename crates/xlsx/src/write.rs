@@ -419,9 +419,21 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
         ("dc:creator", &p.author),
         ("cp:keywords", &p.keywords),
         ("dc:description", &p.description),
+        ("cp:lastModifiedBy", &p.last_modified_by),
+        ("cp:lastPrinted", &p.last_printed),
+        ("dcterms:created", &p.created),
+        ("dcterms:modified", &p.modified),
+        ("cp:category", &p.category),
+        ("cp:contentStatus", &p.content_status),
+        ("cp:revision", &p.revision),
+        ("cp:version", &p.version),
+        ("dc:identifier", &p.identifier),
+        ("dc:language", &p.language),
     ] {
         if !v.is_empty() {
-            let _ = write!(core, "<{tag}>{}</{tag}>", esc(v));
+            // The schema types the Dublin Core dates by attribute (`xsi:type`), not by element.
+            let ty = if tag.starts_with("dcterms:") { " xsi:type=\"dcterms:W3CDTF\"" } else { "" };
+            let _ = write!(core, "<{tag}{ty}>{}</{tag}>", esc(v));
         }
     }
     core.push_str("</cp:coreProperties>");

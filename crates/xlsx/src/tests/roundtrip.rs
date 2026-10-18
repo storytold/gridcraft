@@ -30,6 +30,16 @@ fn sample() -> Workbook {
         company: "Co".into(),
         keywords: "k".into(),
         description: "d".into(),
+        last_modified_by: "You".into(),
+        created: "2024-01-15T09:30:00Z".into(),
+        modified: "2025-06-30T17:45:00Z".into(),
+        last_printed: "2025-06-01T08:00:00Z".into(),
+        category: "C".into(),
+        content_status: "Draft".into(),
+        revision: "7".into(),
+        version: "1.0".into(),
+        identifier: "id-1".into(),
+        language: "en-US".into(),
     };
     wb.theme.colors[4] = 0x112233;
     wb.theme.minor_font = "Aptos".into();
@@ -1080,6 +1090,53 @@ fn package_kind_sets_workbook_content_type() {
     assert_eq!(crate::XlsxKind::from_path("noext"), crate::XlsxKind::Workbook);
 }
 
+/// Every property of `docProps/core.xml` that Excel shows or writes survives an open and save, with
+/// the dates typed `dcterms:W3CDTF` as the schema requires.
+#[test]
+fn core_properties_survive_save() {
+    let core = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>Title</dc:title><dc:creator>Author A</dc:creator><cp:lastModifiedBy>Author B</cp:lastModifiedBy><cp:lastPrinted>2025-06-01T08:00:00Z</cp:lastPrinted><dcterms:created xsi:type="dcterms:W3CDTF">2024-01-15T09:30:00Z</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">2025-06-30T17:45:00Z</dcterms:modified><cp:category>Configuration</cp:category><cp:contentStatus>Draft</cp:contentStatus><cp:revision>7</cp:revision><cp:version>1.0</cp:version><dc:identifier>id-1</dc:identifier><dc:language>en-US</dc:language></cp:coreProperties>"#;
+    let root_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>"#;
+    let wb_xml = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
+    let wb_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+    let sheet = r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
+    let source = super::make_zip(&[
+        ("[Content_Types].xml", super::CT.as_bytes()),
+        ("_rels/.rels", root_rels.as_bytes()),
+        ("docProps/core.xml", core.as_bytes()),
+        ("xl/workbook.xml", wb_xml.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+    ]);
+    let written_core = |bytes: &[u8]| {
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut s = String::new();
+        z.by_name("docProps/core.xml").unwrap().read_to_string(&mut s).unwrap();
+        s
+    };
+    let (wb, _) = read_xlsx(&source).unwrap();
+    let saved = write_xlsx(&wb).unwrap();
+    let xml = written_core(&saved);
+    for element in [
+        "<dc:title>Title</dc:title>",
+        "<dc:creator>Author A</dc:creator>",
+        "<cp:lastModifiedBy>Author B</cp:lastModifiedBy>",
+        "<cp:lastPrinted>2025-06-01T08:00:00Z</cp:lastPrinted>",
+        r#"<dcterms:created xsi:type="dcterms:W3CDTF">2024-01-15T09:30:00Z</dcterms:created>"#,
+        r#"<dcterms:modified xsi:type="dcterms:W3CDTF">2025-06-30T17:45:00Z</dcterms:modified>"#,
+        "<cp:category>Configuration</cp:category>",
+        "<cp:contentStatus>Draft</cp:contentStatus>",
+        "<cp:revision>7</cp:revision>",
+        "<cp:version>1.0</cp:version>",
+        "<dc:identifier>id-1</dc:identifier>",
+        "<dc:language>en-US</dc:language>",
+    ] {
+        assert!(xml.contains(element), "{element} missing from the saved core.xml: {xml}");
+    }
+    // A second open and save writes the same part.
+    let (again, _) = read_xlsx(&saved).unwrap();
+    assert_eq!(written_core(&write_xlsx(&again).unwrap()), xml);
+}
+
 /// The workbook's default font (`fonts[0]`, the Normal style's) is what every default-formatted
 /// cell shows, typed or empty; saving keeps it instead of resetting it to Calibri 11 (#805).
 #[test]
@@ -1160,6 +1217,7 @@ fn doc_props_keep_boundary_whitespace() {
         company: " Co ".into(),
         keywords: " a, b ".into(),
         description: "\n  d\n".into(),
+        ..Default::default()
     };
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert_eq!(back.props, wb.props);
