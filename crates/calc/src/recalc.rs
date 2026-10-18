@@ -812,6 +812,14 @@ impl Calc {
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
         self.rebuild(wb);
+        self.recalc_after_visibility_change(wb);
+    }
+
+    /// Re-evaluate all formulas using the existing graph after row visibility changes.
+    /// Caller must ensure formula positions, expressions, names and table references have
+    /// not changed. This preserves full evaluation (including volatile/visibility-sensitive
+    /// functions and spills), but avoids parsing and indexing unchanged dependencies.
+    pub fn recalc_after_visibility_change(&mut self, wb: &mut Workbook) {
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
         for i in 0..wb.sheets.len() {

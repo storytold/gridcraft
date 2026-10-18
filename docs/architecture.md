@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (bounded navigation caches and dependency reuse for filters) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -40,6 +40,12 @@ including tests, 2026-10-10.
    `#SPILL!`/cycles. Volatile functions are always dirty.
 4. **Rendering**: the egui grid reads display values (number formats applied in `engine/display.rs`)
    for the visible window only; charts render through `crates/chart` primitives.
+   Used cell bounds are cached per store; geometry indexes are reused for one immutable sheet
+   snapshot through weak identity. Conditional-format statistics are borrowed per cell and
+   skipped for rules that need no range aggregates. Filter-only edits reuse the dependency
+   graph while still evaluating every formula; table workbooks keep the full rebuild.
+   See [large-workbook-performance.md](large-workbook-performance.md) for measurements and
+   cache invalidation contracts.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
    dispatches to `crates/xlsx`; imports that lose data return warnings shown to the user.
 
@@ -68,4 +74,5 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Bounded used-range/geometry caches, prepared filter predicates, borrowed conditional-format statistics and graph reuse for visibility-only edits; reproducible large-workbook benchmarks. |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |
