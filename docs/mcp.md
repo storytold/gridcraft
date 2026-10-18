@@ -9,7 +9,7 @@ Two backends:
 | Mode | Command | What it drives |
 |---|---|---|
 | Headless (default) | `gridcraft-cli mcp [--in book.xlsx \| --sample budget]` | An in-process engine session — no window. |
-| Remote | `gridcraft-cli mcp --connect 7979` | A running app started with `gridcraft --control 7979` (TCP JSON lines on `127.0.0.1`). |
+| Remote | `gridcraft-cli mcp --connect 7979` | A running app started with `gridcraft --control 7979` (TCP on `127.0.0.1`, token-authenticated). |
 
 ## Claude Code
 
@@ -55,6 +55,8 @@ with a file open.
 | `open_workbook` / `save_workbook` / `new_workbook` | `path` / `path?` / `sample?` | Files (`.xlsx`, `.csv`, `.tsv`, `.json`, `.html`). |
 | `undo` / `redo` | `steps?` | History. |
 | `screenshot` | `path` | PNG of the window (Remote only). |
+| `wait_for_request` | `timeout_s?`, `agent?` | Wait for an Ask Agent request from the desktop app (Remote only). |
+| `reply_to_request` | `id`, `text`, `done?`, `error?` | Send progress or final answer for an Ask Agent request. |
 | `list_functions` | `search?`, `category?` | Worksheet functions with signatures. |
 
 Results are one text block holding pretty JSON; failures set `isError: true` with a readable message. Unknown tools,
@@ -85,3 +87,10 @@ methods `-32601`.
 `Server::new(Box::new(Remote::connect(&control_addr("7979"))?))`, then `Server::serve(stdin, stdout)` or
 `Server::handle_line(line) -> Option<String>`. Implement the `Backend` trait (`call(method, params)`) to drive another
 host.
+
+## Ask Agent
+
+Connect an external agent to a running desktop app with `gridcraft-cli mcp --connect 7979`.
+- `wait_for_request` claims the user's active request (instruction, selection, document).
+- Edit directly with standard MCP tools; all changes form ONE undo group.
+- `reply_to_request` updates the review bubble with progress notes or the final response.

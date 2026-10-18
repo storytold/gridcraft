@@ -535,6 +535,23 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom Out" => "Oddálit",
         // widgets.rs (alphabetical keys).
         "Dismiss" => "Zavřít",
+        "Ask Agent" => "Zeptat se agenta",
+        "Ask\nAgent" => "Zeptat se\nagenta",
+        "Waiting for an agent…" => "Čekání na agenta…",
+        "Working on it…" => "Pracuji na tom…",
+        "Keep" => "Ponechat",
+        "Undo" => "Zpět",
+        "Reply to refine…" => "Odpovědět a upřesnit…",
+        "What should the agent do?" => "Co má agent udělat?",
+        "Send" => "Odeslat",
+        "Any" => "Jakýkoli",
+        "Conversation" => "Konverzace",
+        "You" => "Vy",
+        "Agent" => "Agent",
+        "Current instruction" => "Aktuální instrukce",
+        "Undo all of the agent's edits" => "Vrátit všechny úpravy agenta",
+        "Actions" => "Akce",
+        "Choose a starting instruction, then edit and send" => "Vyberte výchozí instrukci, upravte a odešlete",
         _ => return None,
     })
 }

@@ -15,6 +15,9 @@
 //! - `ui.screenshot {path?}` — PNG of the window (base64 when no path); animations are settled
 //! - `ui.resize {width, height}`, `ui.set {dark?, formulaBar?, ribbonCollapsed?, animations?}`
 //! - `app.open {path, password?}`, `app.save {path?}`, `app.quit`
+//!
+//! Ask Agent's `agent.listen` / `agent.reply` are answered by the host's transport from
+//! [`crate::ask_agent::AgentHub`], never here on the UI thread.
 
 use std::sync::mpsc::Sender;
 
@@ -88,6 +91,7 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "documents": app.session.documents().iter().map(|d| json!({"title": d.display_title(), "dirty": d.is_dirty()})).collect::<Vec<_>>(),
         "activeDocument": app.session.active_index(),
         "perf": {"frameMs": app.perf.frame_ms, "gridMs": app.perf.grid_ms, "fps": app.perf.fps},
+        "askAgent": app.ask_agent.inspect(),
     })
 }
 
@@ -164,14 +168,25 @@ fn filter_commands(commands: Vec<Json>, search: Option<&str>) -> Vec<Json> {
     commands.into_iter().filter(|c| has(c, "id") || has(c, "label") || in_menu(c)).collect()
 }
 
+fn run_command(app: &mut SheetApp, command: &str, params: Json, context: &Json) -> Result<Json, String> {
+    if let Some(request) = context.get("request").and_then(Json::as_u64) {
+        let conn = context.get("_agentConnection").and_then(Json::as_u64).ok_or("Ask Agent commands need an authenticated connection")?;
+        crate::ask_agent::run_for(app, conn, request, command, params)
+    } else {
+        app.run(command, params)
+    }
+}
+
 pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -> Outcome {
     let s = |k: &str| p.get(k).and_then(Json::as_str);
     let f = |k: &str| p.get(k).and_then(Json::as_f64).unwrap_or(0.0) as f32;
     let out = match method {
+        "ui.askAgent" => wrap(crate::ask_agent::command(app, p)),
         "engine.execute" | "command" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
-            wrap(app.run(id, if params.is_null() { json!({}) } else { params }))
+            let params = if params.is_null() { json!({}) } else { params };
+            wrap(run_command(app, id, params, p))
         }
         "engine.commands" => {
             let mut v: Vec<Json> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
@@ -198,13 +213,20 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("app.language.set", "Interface Language", "{language: \"en\"|\"zh\"|\"ja\"|\"ko\"|\"ru\"|\"pt\"|\"de\"|\"cs\"} (alias: code)"),
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),
+                ("ui.askAgent", "Ask Agent", "{} opens bubble; {instruction: text} queues request; {close: true}"),
             ] {
                 v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
             }
             ok(Json::Array(filter_commands(v, s("search"))))
         }
         "engine.journal" => ok(json!(app.session.journal.iter().map(|(id, p)| json!({"command": id, "params": p})).collect::<Vec<_>>())),
-        "document.inspect" | "sheet.read" | "cell.get" | "selection.stats" => wrap(app.session.run(method, p.clone())),
+        "document.inspect" | "sheet.read" | "cell.get" | "selection.stats" => {
+            if let (Some(id), Some(conn)) = (p["request"].as_u64(), p["_agentConnection"].as_u64()) {
+                wrap(crate::ask_agent::read_for(app, conn, id, method, p.clone()))
+            } else {
+                wrap(app.session.run(method, p.clone()))
+            }
+        }
         "ui.inspect" => ok(inspect(app, ctx)),
         "ui.ribbon" => {
             app.ui.ribbon_tab = s("tab").unwrap_or("Home").to_string();
@@ -381,7 +403,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             ok(Json::Null)
         }
         // Anything else that names a command runs it.
-        other if gridcraft_engine::find_command(other).is_some() => wrap(app.run(other, p.clone())),
+        other if gridcraft_engine::find_command(other).is_some() => wrap(run_command(app, other, p.clone(), p)),
         other => err(format!("unknown method `{other}`")),
     };
     ctx.request_repaint();

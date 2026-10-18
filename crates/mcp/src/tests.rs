@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::disallowed_methods)] // native socket timing tests
 
 use std::io::{BufRead, BufReader, Write};
 
@@ -366,6 +366,11 @@ fn remote_backend_over_tcp() {
             let stream = stream.unwrap();
             let mut w = stream.try_clone().unwrap();
             let mut r = BufReader::new(stream);
+            // Every connection starts with the token, as the app requires.
+            let mut first = String::new();
+            r.read_line(&mut first).unwrap();
+            let hello = crate::control_auth::check_first_line(&first, "secret-token-0123456789").unwrap();
+            w.write_all(format!("{hello}\n").as_bytes()).unwrap();
             loop {
                 let mut line = String::new();
                 if r.read_line(&mut line).unwrap_or(0) == 0 {
@@ -385,7 +390,7 @@ fn remote_backend_over_tcp() {
     });
     let addr = control_addr(&port.to_string());
     assert_eq!(addr, format!("127.0.0.1:{port}"));
-    let mut s = Server::new(Box::new(Remote::connect(&addr).unwrap()));
+    let mut s = Server::new(Box::new(Remote::connect_with_token(&addr, "secret-token-0123456789".into()).unwrap()));
     assert_eq!(ok(&mut s, "evaluate_formula", json!({"formula": "=1+1"}))["result"], json!(2.0));
     // Second call reconnects transparently.
     ok(&mut s, "set_cell", json!({"cell": "A1", "input": "7"}));
@@ -394,7 +399,49 @@ fn remote_backend_over_tcp() {
     assert!(msg.contains("unknown command"), "{msg}");
     drop(s);
     handle.join().unwrap();
-    assert!(Remote::connect("127.0.0.1:1").is_err());
+    assert!(Remote::connect_with_token("127.0.0.1:1", "x".into()).is_err());
+}
+
+#[test]
+fn control_auth_handshake_and_compare() {
+    use crate::control_auth::{auth_line, check_first_line, constant_time_eq, hex};
+    let token = "0123456789abcdef0123456789abcdef";
+    let ok = check_first_line(&auth_line(7, token), token).unwrap();
+    assert_eq!((ok["id"].clone(), ok["ok"].clone()), (json!(7), json!(true)));
+    // Wrong or missing token, another method, and non-JSON are all refused the same way.
+    let wrong = check_first_line(&auth_line(1, "0123456789abcdef0123456789abcdee"), token).unwrap_err();
+    for bad in [
+        auth_line(1, ""),
+        r#"{"id":1,"method":"auth","params":{}}"#.into(),
+        r#"{"id":1,"method":"app.save","params":{"path":"/tmp/x","token":"0123456789abcdef0123456789abcdef"}}"#.into(),
+        "POST / HTTP/1.1".into(),
+        String::new(),
+    ] {
+        assert_eq!(check_first_line(&bad, token).unwrap_err(), wrong, "{bad}");
+    }
+    // An empty configured token never matches an empty given one.
+    assert!(check_first_line(&auth_line(1, ""), "").is_err());
+    assert!(constant_time_eq(b"abc", b"abc"));
+    assert!(!constant_time_eq(b"abc", b"abd"));
+    assert!(!constant_time_eq(b"abc", b"abcd"));
+    assert_eq!(hex(&[0x00, 0xab, 0xff]), "00abff");
+}
+
+#[cfg(unix)]
+#[test]
+fn control_token_file_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    // Unique port per run so parallel tests don't share a file; the folder is the real one.
+    let port = 40_000 + (std::process::id() % 20_000) as u16;
+    let path = crate::control_auth::write_token_file(port, "tok-0123456789abcdef").unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
+    // A looser leftover is replaced, not reused.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+    crate::control_auth::write_token_file(port, "tok-1123456789abcdef").unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), "tok-1123456789abcdef");
+    std::fs::remove_file(&path).unwrap();
 }
 
 #[test]
@@ -519,6 +566,168 @@ fn text_to_columns_destination_follows_its_sheet() {
     // An unparsable destination and a prefix that contradicts the command's sheet are errors, not A1.
     cmd_fails(&mut s, "data.textToColumns", json!({"range": "Other!A1", "delimiters": [","], "destination": "D0"}));
     cmd_fails(&mut s, "data.textToColumns", json!({"range": "Other!A1", "delimiters": [","], "destination": "Sheet1!D1"}));
+}
+
+// ---------- Ask Agent ----------
+
+#[test]
+fn ask_agent_tools_are_listed_and_need_the_app() {
+    let mut s = server();
+    let v = rpc(&mut s, 1, "tools/list", json!({}));
+    let names: Vec<&str> = v["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"wait_for_request") && names.contains(&"reply_to_request"), "{names:?}");
+    // Headless: there is no window to ask from, and the error says how to start one.
+    for (tool, args) in [("wait_for_request", json!({"timeout_s": 1})), ("reply_to_request", json!({"id": 1, "text": "Done"}))] {
+        let msg = fails(&mut s, tool, args);
+        assert!(msg.contains("no window") && msg.contains("gridcraft-cli mcp --connect 7979"), "{tool}: {msg}");
+    }
+    let e = Headless::new().call("agent.listen", json!({})).unwrap_err();
+    assert!(e.contains("gridcraft --control 7979"), "{e}");
+    // `id` and `text` are required; `id` is a whole number.
+    assert_eq!(err_code(&rpc(&mut s, 2, "tools/call", json!({"name": "reply_to_request", "arguments": {"id": 1}}))), -32602);
+    assert_eq!(err_code(&rpc(&mut s, 3, "tools/call", json!({"name": "reply_to_request", "arguments": {"id": "one", "text": "x"}}))), -32602);
+}
+
+#[test]
+fn ask_agent_tools_reach_the_app_with_bounded_waits() {
+    // A fake app that records what it is asked and answers like GridCraft's control server.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut w = stream.try_clone().unwrap();
+        let mut r = BufReader::new(stream);
+        let mut first = String::new();
+        r.read_line(&mut first).unwrap();
+        let hello = crate::control_auth::check_first_line(&first, "secret-token-0123456789").unwrap();
+        w.write_all(format!("{hello}\n").as_bytes()).unwrap();
+        let mut asked = Vec::new();
+        loop {
+            let mut line = String::new();
+            if r.read_line(&mut line).unwrap_or(0) == 0 {
+                break;
+            }
+            let req: Value = serde_json::from_str(&line).unwrap();
+            let result = match req["method"].as_str().unwrap() {
+                "agent.listen" => {
+                    json!({"id": 7, "instruction": "explain this formula", "selection": {"sheet": "Sheet1", "range": "C5"}, "document": {"title": "Book1", "saved": false}})
+                }
+                "agent.reply" => json!({"id": req["params"]["id"], "shown": true, "done": req["params"]["done"]}),
+                other => json!(other),
+            };
+            asked.push((req["method"].as_str().unwrap().to_string(), req["params"].clone()));
+            w.write_all(format!("{}\n", json!({"id": req["id"], "ok": true, "result": result})).as_bytes()).unwrap();
+        }
+        asked
+    });
+    let addr = control_addr(&port.to_string());
+    let mut s = Server::new(Box::new(Remote::connect_with_token(&addr, "secret-token-0123456789".into()).unwrap()));
+    let got = ok(&mut s, "wait_for_request", json!({}));
+    assert_eq!((got["id"].clone(), got["selection"]["range"].clone()), (json!(7), json!("C5")));
+    ok(&mut s, "wait_for_request", json!({"timeout_s": 2.5}));
+    ok(&mut s, "wait_for_request", json!({"timeout_s": 3600}));
+    assert_eq!(ok(&mut s, "reply_to_request", json!({"id": 7, "text": "Reading it", "done": false}))["done"], false);
+    ok(&mut s, "set_cell", json!({"cell":"C5","input":"=SUM(C3:C4)"}));
+    assert_eq!(ok(&mut s, "reply_to_request", json!({"id": 7, "text": "It adds C3:C4."}))["done"], true);
+    drop(s);
+    let asked = handle.join().unwrap();
+    assert_eq!(asked.iter().find(|(m, _)| m == "engine.execute").unwrap().1["request"], 7);
+    let waits: Vec<Value> = asked.iter().filter(|(m, _)| m == "agent.listen").map(|(_, p)| p["timeoutMs"].clone()).collect();
+    assert_eq!(waits, vec![json!(30_000), json!(2_500), json!(60_000)], "default 30 s, at most 60 s");
+    let replies: Vec<&Value> = asked.iter().filter(|(m, _)| m == "agent.reply").map(|(_, p)| p).collect();
+    assert_eq!(*replies[0], json!({"id": 7, "text": "Reading it", "done": false}));
+    assert_eq!(*replies[1], json!({"id": 7, "text": "It adds C3:C4.", "done": true}));
+    // The bridge waits for a listen longer than its usual read timeout, never less than asked.
+    use std::time::Duration;
+    assert_eq!(crate::backend::read_timeout("agent.listen", &json!({"timeoutMs": 60_000})), Duration::from_secs(90));
+    assert_eq!(crate::backend::read_timeout("agent.listen", &json!({"timeoutMs": 1e12})), Duration::from_secs(90));
+    assert_eq!(crate::backend::read_timeout("agent.listen", &json!({})), Duration::from_secs(60));
+    assert_eq!(crate::backend::read_timeout("sheet.read", &json!({"timeoutMs": 60_000})), Duration::from_secs(30));
+}
+
+#[test]
+fn lost_request_bound_reply_is_not_replayed_on_a_new_connection() {
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let peer = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        writer.write_all(b"{\"id\":0,\"ok\":true}\n").unwrap();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let req: Value = serde_json::from_str(&line).unwrap();
+        writer.write_all(format!("{}\n", json!({"id":req["id"],"ok":true,"result":{"id":17}})).as_bytes()).unwrap();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let edit: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(edit["params"]["request"], 17);
+        drop(reader);
+        drop(writer); // The write may have run, but its reply was lost.
+        listener.set_nonblocking(true).unwrap();
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(500) {
+            assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock), "unexpected reconnect/replay");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+    let mut remote = Remote::connect_with_token(&addr, "synthetic-token-for-test".into()).unwrap();
+    remote.call("agent.listen", json!({"timeoutMs":0})).unwrap();
+    assert_eq!(remote.request, Some(17));
+    let error = remote.call("engine.execute", json!({"command":"cell.set","params":{"cell":"A1","input":"7"}})).unwrap_err();
+    assert!(error.contains("not retried"), "{error}");
+    assert_eq!(remote.request, None);
+    peer.join().unwrap();
+}
+
+#[test]
+fn remote_clears_stale_request_on_empty_listen_or_error() {
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let peer = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        writer.write_all(b"{\"id\":0,\"ok\":true}\n").unwrap();
+
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let req: Value = serde_json::from_str(&line).unwrap();
+        writer.write_all(format!("{}\n", json!({"id":req["id"],"ok":true,"result":{"id":42}})).as_bytes()).unwrap();
+
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let req: Value = serde_json::from_str(&line).unwrap();
+        writer.write_all(format!("{}\n", json!({"id":req["id"],"ok":true,"result":{"none":true}})).as_bytes()).unwrap();
+
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let req: Value = serde_json::from_str(&line).unwrap();
+        writer.write_all(format!("{}\n", json!({"id":req["id"],"ok":true,"result":{"id":43}})).as_bytes()).unwrap();
+
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let req: Value = serde_json::from_str(&line).unwrap();
+        writer.write_all(format!("{}\n", json!({"id":req["id"],"ok":false,"errorCode":"NO_REQUEST","error":"no request"})).as_bytes()).unwrap();
+    });
+    let mut remote = Remote::connect_with_token(&addr, "synthetic-token-for-test".into()).unwrap();
+    remote.call("agent.listen", json!({"timeoutMs":0})).unwrap();
+    assert_eq!(remote.request, Some(42));
+    remote.call("agent.listen", json!({"timeoutMs":0})).unwrap();
+    assert_eq!(remote.request, None);
+    remote.call("agent.listen", json!({"timeoutMs":0})).unwrap();
+    assert_eq!(remote.request, Some(43));
+    let err = remote.call("engine.execute", json!({"command":"cell.set","params":{"cell":"A1","input":"7"}})).unwrap_err();
+    assert!(err.contains("NO_REQUEST"), "{err}");
+    assert_eq!(remote.request, None);
+    peer.join().unwrap();
 }
 
 #[test]

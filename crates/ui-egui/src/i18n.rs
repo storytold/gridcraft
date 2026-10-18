@@ -588,6 +588,23 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Workbook calculation", "ブックの計算"),
     ("Enable iterative calculation", "反復計算を行う"),
     ("Calculation settings are saved with the workbook.", "計算の設定はブックと共に保存されます。"),
+    ("Ask Agent", "エージェントに依頼"),
+    ("Ask\nAgent", "エージェント\nに依頼"),
+    ("Waiting for an agent…", "エージェントを待っています…"),
+    ("Working on it…", "作業中…"),
+    ("Keep", "保持"),
+    ("Undo", "元に戻す"),
+    ("Reply to refine…", "返信して調整…"),
+    ("What should the agent do?", "エージェントに何をしてもらいますか?"),
+    ("Send", "送信"),
+    ("Any", "指定なし"),
+    ("Conversation", "会話"),
+    ("You", "あなた"),
+    ("Agent", "エージェント"),
+    ("Current instruction", "現在の指示"),
+    ("Undo all of the agent's edits", "エージェントの編集をすべて元に戻す"),
+    ("Actions", "アクション"),
+    ("Choose a starting instruction, then edit and send", "最初の指示を選択し、編集して送信"),
 ];
 
 #[cfg(test)]

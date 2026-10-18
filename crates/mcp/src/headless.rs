@@ -9,6 +9,10 @@ use crate::backend::Backend;
 pub(crate) const NO_UI: &str = "no UI in headless mode: start the app with `gridcraft --control 7979` and run the MCP server \
 with `gridcraft-cli mcp --connect 7979`";
 
+/// Ask Agent without a window.
+pub(crate) const ASK_NEEDS_APP: &str = "Ask Agent requests come from the GridCraft window, and this server has no window \
+(headless): start `gridcraft --control 7979`, then run `gridcraft-cli mcp --connect 7979`";
+
 /// Headless backend: a [`Session`] with one blank workbook to start with.
 pub struct Headless {
     pub session: Session,
@@ -73,6 +77,7 @@ impl Backend for Headless {
             "engine.commands" => Ok(self.commands(&params)),
             "engine.journal" => Ok(Value::Array(self.session.journal.iter().map(|(id, p)| json!({"command": id, "params": p})).collect())),
             m if m.starts_with("ui.") || m.starts_with("app.screenshot") => Err(format!("{m}: {NO_UI}")),
+            m if m.starts_with("agent.") => Err(ASK_NEEDS_APP.to_string()),
             // Read-only engine methods (`document.inspect`, `sheet.read`, `cell.get`, …) are
             // commands with the same id.
             m if gridcraft_engine::find_command(m).is_some() => self.execute(m, params),

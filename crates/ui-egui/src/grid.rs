@@ -1611,6 +1611,12 @@ pub(crate) fn paint_selection(
     rows: (u32, u32),
     cols: (u32, u32),
 ) {
+    // Ask Agent: cells an agent is working on, outlined in its colour.
+    for (sheet, range, [r, g, b]) in crate::ask_agent::held_ranges(app) {
+        if sheet == sh.name && range_in_pane(range, rows, cols) {
+            p.rect_stroke(geo.range_rect(sh, range), 0.0, egui::Stroke::new(2.0, egui::Color32::from_rgb(r, g, b)), egui::StrokeKind::Inside);
+        }
+    }
     // Fill all areas except the active cell.
     for rect in selection_fill_where(geo, sh, sel, outline, |r| range_in_pane(*r, rows, cols)) {
         p.rect_filled(rect, 0.0, t.sel_fill);
@@ -2892,6 +2898,10 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
             if let Some(item) = insert_copied {
                 items.insert(6, item);
             }
+            // With a control channel: hand the selected cells to the agent the person connected.
+            if app.ask_agent.hub.is_some() {
+                items.extend([("-", ""), ("Ask Agent…", "ui:askAgent")]);
+            }
             let lang = crate::i18n::current(ui.ctx());
             for (label, id) in items {
                 if label == "-" {
@@ -2911,6 +2921,7 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                         "ui:defineName" => app.open_dialog("defineName", json!({})),
                         "ui:insertLink" => app.open_dialog("insertLink", json!({})),
                         "ui:pickList" => app.open_dialog("pickList", json!({})),
+                        "ui:askAgent" => crate::ask_agent::open_from_ui(app),
                         "ui:filterValue" => {
                             if let Some(d) = app.session.active() {
                                 let a = d.selection.active;
