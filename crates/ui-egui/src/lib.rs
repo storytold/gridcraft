@@ -1281,7 +1281,9 @@ impl SheetApp {
             ctx.request_repaint();
         }
         // Animation effects: the host is asked every frame (it answers from memory), so a change
-        // made in the system's settings is followed while the app runs.
+        // made in the system's settings is followed while the app runs. An idle window isn't woken
+        // to ask: nothing moves until the next frame, and that frame asks before it draws. (The
+        // Linux/BSD watcher hears of a change by itself, and repaints the window.)
         self.read_system_animations();
         motion::apply(ctx, self.animations_on(), &mut self.egui_motion);
         control::poll(self, ctx);
