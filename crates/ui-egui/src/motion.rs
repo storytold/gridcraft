@@ -113,19 +113,20 @@ impl EguiMotion {
 }
 
 /// Switches egui's own motion (fading menus, tooltips and dialogs, gliding scroll areas) off, or
-/// back to what it was. Called every frame: `held` remembers the settings to put back, so a
-/// context that never animated (the headless harness) is left that way.
-pub fn apply(ctx: &egui::Context, on: bool, held: &mut Option<EguiMotion>) {
+/// back to what it was. Called every frame. `saved` keeps the settings to put back while motion is
+/// off, so a context that never animated (the headless harness) is left that way.
+pub fn apply(ctx: &egui::Context, on: bool, saved: &mut Option<EguiMotion>) {
     if on {
-        if let Some(was) = held.take() {
+        if let Some(was) = saved.take() {
             was.set(ctx);
         }
         return;
     }
     let now = EguiMotion::of(ctx);
     if now != EguiMotion::none() {
-        // Kept from the first time only: a later one is these settings coming back by themselves.
-        held.get_or_insert(now);
+        // Saved the first time only: seen again later, these are the settings coming back by
+        // themselves (a theme change), not the ones to restore.
+        saved.get_or_insert(now);
         EguiMotion::none().set(ctx);
     }
 }
@@ -278,29 +279,29 @@ mod tests {
         let ctx = egui::Context::default();
         let before = EguiMotion::of(&ctx);
         assert!(before.animation_time > 0.0);
-        let mut held = None;
+        let mut saved = None;
         // On from the start: nothing to do.
-        apply(&ctx, true, &mut held);
-        assert_eq!((EguiMotion::of(&ctx), held), (before, None));
+        apply(&ctx, true, &mut saved);
+        assert_eq!((EguiMotion::of(&ctx), saved), (before, None));
         // Off: both styles (light and dark) stand still, every frame.
-        apply(&ctx, false, &mut held);
-        apply(&ctx, false, &mut held);
+        apply(&ctx, false, &mut saved);
+        apply(&ctx, false, &mut saved);
         assert_eq!(EguiMotion::of(&ctx), EguiMotion::none());
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             assert_eq!(ctx.style_of(theme).animation_time, 0.0);
         }
         // Something sets a style's animations again while they are off: off they stay.
         ctx.all_styles_mut(|style| style.animation_time = 0.5);
-        apply(&ctx, false, &mut held);
+        apply(&ctx, false, &mut saved);
         assert_eq!(EguiMotion::of(&ctx), EguiMotion::none());
         // On again: as they were before the first Off.
-        apply(&ctx, true, &mut held);
-        assert_eq!((EguiMotion::of(&ctx), held), (before, None));
+        apply(&ctx, true, &mut saved);
+        assert_eq!((EguiMotion::of(&ctx), saved), (before, None));
         // A context that never animated (the headless harness) is left alone both ways.
         EguiMotion::none().set(&ctx);
-        apply(&ctx, false, &mut held);
-        assert_eq!(held, None);
-        apply(&ctx, true, &mut held);
+        apply(&ctx, false, &mut saved);
+        assert_eq!(saved, None);
+        apply(&ctx, true, &mut saved);
         assert_eq!(EguiMotion::of(&ctx), EguiMotion::none());
     }
 }

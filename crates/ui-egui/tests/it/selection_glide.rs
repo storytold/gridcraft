@@ -213,18 +213,21 @@ fn agents_find_run_and_read_the_setting_over_the_control_channel() {
     let ctx = egui::Context::default();
     let found = reply(control::handle(&mut a, &ctx, "engine.commands", &json!({"search": "animations"})));
     let entry = found["result"].as_array().and_then(|all| all.iter().find(|c| c["id"] == "view.animations")).cloned().unwrap();
-    assert_eq!((&entry["label"], &entry["ui"]), (&json!("Animation Effects"), &json!(true)));
+    assert_eq!((&entry["label"], &entry["ui"]), (&json!("Animations"), &json!(true)));
     assert!(entry["params"].as_str().is_some_and(|doc| doc.contains("mode") && doc.contains("on")), "{entry}");
     let ran = reply(control::handle(&mut a, &ctx, "engine.execute", &json!({"command": "view.animations", "params": {"on": false}})));
     assert_eq!(ran, json!({"ok": true, "result": {"mode": "off", "on": false, "system": null}}));
+    // What agents read before the setting had three values is still there: `ui.animations`, a
+    // boolean, now whether animations run. `ui.animationEffects` is the choice.
     let seen = reply(control::handle(&mut a, &ctx, "ui.inspect", &json!({})));
-    assert_eq!((&seen["result"]["ui"]["animationEffects"], &seen["result"]["animationsOn"]), (&json!("off"), &json!(false)));
-    // `ui.set` takes the setting's three values, and the checkbox's true and false.
+    assert_eq!((&seen["result"]["ui"]["animations"], &seen["result"]["ui"]["animationEffects"]), (&json!(false), &json!("off")));
+    // `ui.set` takes the checkbox's true and false, and the setting's three values.
     let set = reply(control::handle(&mut a, &ctx, "ui.set", &json!({"animations": true})));
-    assert_eq!(set["result"]["animationEffects"], json!("on"));
+    assert_eq!((&set["result"]["animations"], &set["result"]["animationEffects"]), (&json!(true), &json!("on")));
     assert_eq!(a.ui.animations, Animations::On);
     let set = reply(control::handle(&mut a, &ctx, "ui.set", &json!({"animations": "system"})));
-    assert_eq!(set["result"]["animationEffects"], json!("system"));
+    // Following a system that says nothing: animations run.
+    assert_eq!((&set["result"]["animations"], &set["result"]["animationEffects"]), (&json!(true), &json!("system")));
     let set = reply(control::handle(&mut a, &ctx, "ui.set", &json!({"animations": "sideways"})));
     assert_eq!(set["ok"], json!(false), "{set}");
     assert_eq!(a.ui.animations, Animations::System, "a value that isn't one of the three changes nothing");

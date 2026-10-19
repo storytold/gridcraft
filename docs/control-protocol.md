@@ -58,11 +58,12 @@ appear without fading. System, the default, follows the system's own setting whi
 (Windows: Settings ▸ Accessibility ▸ Visual effects ▸ Animation effects; macOS: Reduce motion;
 Linux and the BSDs: the desktop's animations setting, from the settings portal or, without one,
 KDE's `kdeglobals` and GTK's `settings.ini`; the web: `prefers-reduced-motion`) and animates where
-the system says nothing. `{on: bool}` is the View ▸ Animations checkbox's form (on or off), and
-without parameters the command toggles what shows. It answers `{mode, on, system}`: the saved
-choice, whether animations run now, and what the system says (`null` when it doesn't).
-`ui.inspect` reports the same as `ui.animationEffects` and `animationsOn`. The choice is saved in
-`ui.json` as `animationEffects`; the `animations` boolean older versions wrote is still read.
+the system says nothing. `{on: bool}` is the View ▸ Animations checkbox's form (on or off), as
+before, and without parameters the command toggles what shows. It answers `{on, mode, system}`:
+whether animations run now (the `on` it always answered), the saved choice, and what the system
+says (`null` when it doesn't). `ui.inspect` and `ui.set` report `ui.animations`, as before a
+boolean, now whether animations run, and the choice as `ui.animationEffects`. The choice is saved
+in `ui.json` as `animationEffects`; the `animations` boolean older versions wrote is still read.
 
 `{command: "app.language.set", params: {language: "ja"}}` switches the interface language
 (`code` is accepted as an alias for `language`); `app.language.english` and

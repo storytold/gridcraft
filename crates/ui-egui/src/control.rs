@@ -105,13 +105,22 @@ fn run(app: &mut SheetApp, id: &str, params: Json) -> Result<Json, String> {
     r
 }
 
+/// The UI preferences as `ui.inspect` and `ui.set` report them: the saved [`crate::UiState`],
+/// plus `animations`, whether animations run right now. Agents read that boolean before Animation
+/// effects had three values, so it stays; `animationEffects` is the choice itself.
+fn ui_preferences(app: &SheetApp) -> Json {
+    let mut ui = serde_json::to_value(&app.ui).unwrap_or_default();
+    if let Some(fields) = ui.as_object_mut() {
+        fields.insert("animations".into(), json!(app.animations_on()));
+    }
+    ui
+}
+
 pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
     let r = ctx.content_rect();
     let v = app.view();
     json!({
-        "ui": serde_json::to_value(&app.ui).unwrap_or_default(),
-        // What the Animation effects preference comes to right now (`ui.animationEffects` may be "system").
-        "animationsOn": app.animations_on(),
+        "ui": ui_preferences(app),
         "window": [r.width(), r.height()],
         "grid": app.grid.cells_rect.map(|c| json!([c.left(), c.top(), c.width(), c.height()])),
         "scroll": [v.scroll.x, v.scroll.y],
@@ -235,11 +244,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),
-                (
-                    "view.animations",
-                    "Animation Effects",
-                    "{mode?: \"system\"|\"on\"|\"off\"} or {on?: bool} (toggles without either) → {mode, on, system}",
-                ),
+                ("view.animations", "Animations", "{on?: bool} or {mode?: \"system\"|\"on\"|\"off\"} (toggles without either) → {on, mode, system}"),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
@@ -293,7 +298,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 }
                 _ => {}
             }
-            let mut out = serde_json::to_value(&app.ui).unwrap_or_default();
+            let mut out = ui_preferences(app);
             if let Some(o) = out.as_object_mut() {
                 o.insert("formulaBar".into(), json!(app.session.prefs.formula_bar));
             }
