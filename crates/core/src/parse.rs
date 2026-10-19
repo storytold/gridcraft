@@ -436,6 +436,15 @@ mod tests {
     }
 
     #[test]
+    fn fraction_rejects_signed_parts() {
+        for s in ["1 -1/2", "1 1/-2", "--1 1/2", "1 +1/2", "1 1e0/2"] {
+            assert_eq!(parse_fraction(s), None, "{s}");
+        }
+        assert_eq!(parse_fraction("1 1/2"), Some(1.5));
+        assert_eq!(parse_fraction("-1 1/2"), Some(-1.5));
+    }
+
+    #[test]
     fn month_name_short_year() {
         for s in ["Mar 4, 26", "Mar 4 26", "March 4 26", "4 March 26", "Mar 4, 2026"] {
             assert_eq!(p(s).value, Value::Number(46085.0), "{s}");
