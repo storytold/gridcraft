@@ -853,6 +853,16 @@ mod tests {
         assert!(!sjis.windows(2).any(|w| w == b"&#"), "never an HTML character reference: {sjis:?}");
     }
 
+    /// An Arabic *Unicode Text* file (UTF-16LE, tab-delimited) is saved back as UTF-16LE, not UTF-8.
+    #[test]
+    fn unicode_text_save_keeps_utf16() {
+        let bytes: Vec<u8> = [0xFF, 0xFE].into_iter().chain("الاسم\tالمدينة\r\nسارة\tعمّان\r\n".encode_utf16().flat_map(u16::to_le_bytes)).collect();
+        let (wb, _) = open_bytes("عملاء.txt", &bytes).unwrap();
+        assert_eq!(wb.csv_encoding, Some(CsvEncoding::Utf16Le));
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(1, 1)), gridcraft_core::Value::text("عمّان"));
+        assert_eq!(save_bytes(&wb, "عملاء.txt").unwrap(), bytes);
+    }
+
     #[test]
     fn csv_save_of_a_workbook_not_read_from_csv_uses_commas() {
         let mut wb = Workbook::new();

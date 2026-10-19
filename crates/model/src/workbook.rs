@@ -85,11 +85,14 @@ pub enum CsvEncoding {
     ShiftJis,
     /// Windows-1252 (Microsoft code page 1252), Excel's Western ANSI code page.
     Windows1252,
+    /// UTF-16 little-endian with a byte order mark (`FF FE`): Excel's *Unicode Text*, which keeps
+    /// Arabic and any other script whatever the reader's code page.
+    Utf16Le,
 }
 
 impl CsvEncoding {
     /// The spelling used by the file commands and the CLI: `auto`, `utf-8`, `utf-8-bom`,
-    /// `shift_jis` or `windows-1252`.
+    /// `shift_jis`, `windows-1252` or `utf-16le`.
     pub fn as_str(self) -> &'static str {
         match self {
             CsvEncoding::Auto => "auto",
@@ -97,6 +100,7 @@ impl CsvEncoding {
             CsvEncoding::Utf8Bom => "utf-8-bom",
             CsvEncoding::ShiftJis => "shift_jis",
             CsvEncoding::Windows1252 => "windows-1252",
+            CsvEncoding::Utf16Le => "utf-16le",
         }
     }
 }
@@ -105,7 +109,7 @@ impl std::str::FromStr for CsvEncoding {
     type Err = String;
 
     /// Parses [`CsvEncoding::as_str`]'s spellings, case-insensitively, with `cp932` accepted as
-    /// an alias of `shift_jis`.
+    /// an alias of `shift_jis` and `utf-16` or `unicode` of `utf-16le`.
     fn from_str(s: &str) -> Result<CsvEncoding, String> {
         match s.to_ascii_lowercase().as_str() {
             "auto" => Ok(CsvEncoding::Auto),
@@ -113,7 +117,8 @@ impl std::str::FromStr for CsvEncoding {
             "utf-8-bom" => Ok(CsvEncoding::Utf8Bom),
             "shift_jis" | "cp932" => Ok(CsvEncoding::ShiftJis),
             "windows-1252" => Ok(CsvEncoding::Windows1252),
-            _ => Err(format!("unknown encoding `{s}`: use auto, utf-8, utf-8-bom, shift_jis (cp932) or windows-1252")),
+            "utf-16le" | "utf-16" | "unicode" => Ok(CsvEncoding::Utf16Le),
+            _ => Err(format!("unknown encoding `{s}`: use auto, utf-8, utf-8-bom, shift_jis (cp932), windows-1252 or utf-16le")),
         }
     }
 }

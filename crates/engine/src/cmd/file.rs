@@ -13,7 +13,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open…",
             ["File"],
             Some("Cmd+O"),
-            "{path} | {name, base64}, plus {password} for a password-protected workbook, {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion, and {encoding} for a CSV/TSV (auto, utf-8, utf-8-bom, shift_jis/cp932, windows-1252: xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)",
+            "{path} | {name, base64}, plus {password} for a password-protected workbook, {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion, and {encoding} for a CSV/TSV (auto, utf-8, utf-8-bom, shift_jis/cp932, windows-1252, utf-16le: xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)",
             always,
             open
         ),

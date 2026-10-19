@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** minor (Japanese: Excel-compatible Shift-JIS (CP932) CSV import and export, with a UTF-8/BOM choice) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** minor (Japanese: Excel-compatible Shift-JIS (CP932) CSV import and export, with a UTF-8/BOM choice; Arabic Unicode Text files stay UTF-16 on save) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -83,6 +83,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Arabic: a *Unicode Text* file (UTF-16LE, how Excel exports Arabic text that any reader can open) is saved back as UTF-16LE instead of UTF-8, and `encoding: "utf-16le"` writes one from any workbook |
 | 2026-10-20 | minor | Japanese: Excel-compatible CSV — Shift-JIS (CP932) import and export with an encoding choice (`auto`, `utf-8`, `utf-8-bom`, `shift_jis`/`cp932`, `windows-1252`) on open, save, Save As, Save Bytes and Export as CSV. `auto` picks Shift-JIS only for a clean CP932 decode holding kana or two consecutive double-byte characters with no private-use characters, so a Windows-1252 file with `ß`/`Ä`/`é` is not mistaken for Japanese; UTF-8 without a BOM stays the default. The interface has no encoding picker yet, and IME input and CJK PDF export are unchanged |
 | 2026-10-19 | minor | Defined-name length counts characters, not bytes: Arabic names up to 255 letters are accepted, and Create from Selection keeps long Arabic headers |
 | 2026-10-19 | minor | Table names are limited to 255 Unicode characters |

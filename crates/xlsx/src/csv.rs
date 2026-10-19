@@ -85,8 +85,9 @@ fn decode_utf8(bytes: &[u8]) -> String {
 
 /// UTF-16 with the given endianness, malformed units replaced by `U+FFFD`.
 fn decode_utf16(bytes: &[u8], le: bool) -> String {
-    let units = bytes.as_chunks::<2>().0.iter().map(|c| if le { u16::from_le_bytes(*c) } else { u16::from_be_bytes(*c) });
-    char::decode_utf16(units).map(|r| r.unwrap_or('\u{FFFD}')).collect()
+    let (pairs, odd_byte) = bytes.as_chunks::<2>();
+    let units = pairs.iter().map(|c| if le { u16::from_le_bytes(*c) } else { u16::from_be_bytes(*c) });
+    char::decode_utf16(units).map(|r| r.unwrap_or('\u{FFFD}')).chain((!odd_byte.is_empty()).then_some('\u{FFFD}')).collect()
 }
 
 /// [`CsvEncoding::Auto`]: UTF-8/UTF-16 BOMs, else UTF-8, else Shift-JIS when the decoded text
@@ -96,10 +97,10 @@ fn decode_auto(bytes: &[u8]) -> (String, Option<CsvEncoding>) {
     if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
         return (String::from_utf8_lossy(rest).into_owned(), Some(CsvEncoding::Utf8Bom));
     }
-    // UTF-16 has no CSV encoding to write back: saving such a workbook writes UTF-8.
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
-        return (decode_utf16(rest, true), None);
+        return (decode_utf16(rest, true), Some(CsvEncoding::Utf16Le));
     }
+    // Big-endian UTF-16 has no CSV encoding to write back: saving such a workbook writes UTF-8.
     if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
         return (decode_utf16(rest, false), None);
     }
@@ -128,13 +129,14 @@ pub fn decode_text(bytes: &[u8]) -> String {
 
 /// [`decode_text`] with the code page chosen (or detected for [`CsvEncoding::Auto`]), and the
 /// encoding the bytes turned out to be in — what the workbook remembers for saving. `None` means
-/// the bytes were UTF-16: there is no CSV encoding that writes them back, so saving uses UTF-8.
+/// the bytes were big-endian UTF-16: there is no CSV encoding that writes them back, so saving uses UTF-8.
 pub fn decode_text_as(bytes: &[u8], encoding: CsvEncoding) -> (String, Option<CsvEncoding>) {
     match encoding {
         CsvEncoding::Auto => decode_auto(bytes),
         CsvEncoding::Utf8 | CsvEncoding::Utf8Bom => (decode_utf8(bytes), Some(encoding)),
         CsvEncoding::ShiftJis => (decode_shift_jis(bytes), Some(CsvEncoding::ShiftJis)),
         CsvEncoding::Windows1252 => (decode_cp1252(bytes), Some(CsvEncoding::Windows1252)),
+        CsvEncoding::Utf16Le => (decode_utf16(bytes.strip_prefix(&[0xFF, 0xFE]).unwrap_or(bytes), true), Some(CsvEncoding::Utf16Le)),
     }
 }
 
@@ -193,6 +195,7 @@ pub(crate) fn encode_text(text: &str, encoding: CsvEncoding) -> Vec<u8> {
         }
         CsvEncoding::ShiftJis => encode_legacy(&cp932_text(text), encoding_rs::SHIFT_JIS),
         CsvEncoding::Windows1252 => encode_legacy(text, encoding_rs::WINDOWS_1252),
+        CsvEncoding::Utf16Le => [0xFF, 0xFE].into_iter().chain(text.encode_utf16().flat_map(u16::to_le_bytes)).collect(),
     }
 }
 
@@ -361,12 +364,13 @@ pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, cell_text: 
 
 /// [`write_csv`] in `encoding`: [`CsvEncoding::Utf8Bom`] writes `EF BB BF` before the UTF-8 bytes,
 /// [`CsvEncoding::ShiftJis`] and [`CsvEncoding::Windows1252`] encode in that code page (a character
-/// it cannot map becomes `?`), and [`CsvEncoding::Auto`] writes UTF-8 without a BOM.
+/// it cannot map becomes `?`), [`CsvEncoding::Utf16Le`] writes `FF FE` and UTF-16LE, and
+/// [`CsvEncoding::Auto`] writes UTF-8 without a BOM.
 pub fn write_csv_encoded(sheet: &Sheet, delimiter: u8, encoding: CsvEncoding, cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
     write_csv_in(sheet, delimiter, encoding, MAX_CSV_BYTES, cell_text)
 }
 
-fn write_csv_in(
+pub(crate) fn write_csv_in(
     sheet: &Sheet,
     delimiter: u8,
     encoding: CsvEncoding,
@@ -405,8 +409,12 @@ fn write_csv_in(
             return Err(too_large(format!("more than {} MiB (stopped at row {})", limit >> 20, row + 1)));
         }
     }
-    // UTF-8 is the widest of the encodings here, so the check above is the conservative one; this
-    // exact check catches the BOM pushing a just-under-the-limit export over it.
+    // UTF-8 is the widest of the code pages here, so the check above is the conservative one for
+    // them; UTF-16 can double the text, so its size is counted before it is encoded. The exact
+    // check after encoding catches a BOM pushing a just-under-the-limit export over it.
+    if encoding == CsvEncoding::Utf16Le && out.encode_utf16().count().saturating_mul(2).saturating_add(2) > limit {
+        return Err(too_large(format!("more than {} MiB when encoded as {}", limit >> 20, encoding.as_str())));
+    }
     let bytes = encode_text(&out, encoding);
     if bytes.len() > limit {
         return Err(too_large(format!("more than {} MiB when encoded as {}", limit >> 20, encoding.as_str())));

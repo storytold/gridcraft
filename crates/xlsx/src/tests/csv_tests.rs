@@ -257,6 +257,44 @@ fn csv_export_encodings_round_trip() {
     assert_eq!(write_csv_encoded(sh, b',', CsvEncoding::Windows1252, text_of(sh)).unwrap(), b"???,??,??,\"a,b\"\r\n");
 }
 
+fn utf16le_with_bom(text: &str) -> Vec<u8> {
+    [0xFF, 0xFE].into_iter().chain(text.encode_utf16().flat_map(u16::to_le_bytes)).collect()
+}
+
+/// Excel's *Unicode Text* is UTF-16LE with a BOM. An Arabic file in it is remembered as UTF-16LE
+/// and written back byte for byte, whether detected or named on open.
+#[test]
+fn utf16le_arabic_round_trips() {
+    let bytes = utf16le_with_bom("مرحبا,عالم\r\n١٢٣,\"أ,ب\"\r\n");
+    let wb = read_csv(&bytes, &CsvOptions::default()).unwrap();
+    assert_eq!(wb.csv_encoding, Some(CsvEncoding::Utf16Le));
+    assert_eq!((v(&wb, 0, 0), v(&wb, 0, 1), v(&wb, 1, 1)), (Value::text("مرحبا"), Value::text("عالم"), Value::text("أ,ب")));
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(write_csv_encoded(sh, b',', CsvEncoding::Utf16Le, text_of(sh)).unwrap(), bytes);
+    let named = read_csv(&bytes, &CsvOptions { encoding: CsvEncoding::Utf16Le, ..Default::default() }).unwrap();
+    assert_eq!(v(&named, 0, 0), Value::text("مرحبا"));
+    let without_bom = bytes.get(2..).unwrap();
+    assert_eq!(decode_text_as(without_bom, CsvEncoding::Utf16Le), ("مرحبا,عالم\r\n١٢٣,\"أ,ب\"\r\n".to_string(), Some(CsvEncoding::Utf16Le)));
+    for spelling in ["utf-16le", "UTF-16", "unicode"] {
+        assert_eq!(spelling.parse::<CsvEncoding>(), Ok(CsvEncoding::Utf16Le), "{spelling}");
+    }
+    assert_eq!(CsvEncoding::Utf16Le.as_str(), "utf-16le");
+    let mut truncated = utf16le_with_bom("مرحبا");
+    truncated.push(0x41);
+    assert_eq!(decode_text(&truncated), "مرحبا\u{FFFD}", "a dangling last byte is a replacement character, not dropped");
+}
+
+/// UTF-16 doubles ASCII text, so an export under the cap in UTF-8 can pass it in UTF-16; it is
+/// refused, not written.
+#[test]
+fn utf16le_export_respects_the_size_cap() {
+    let mut wb = Workbook::new();
+    wb.sheet_mut(0).unwrap().set_value(CellRef::new(0, 0), Value::text("a".repeat(600)));
+    let sh = wb.sheet(0).unwrap();
+    assert!(write_csv_limited(sh, b',', 1000, text_of(sh)).is_ok());
+    assert!(matches!(crate::csv::write_csv_in(sh, b',', CsvEncoding::Utf16Le, 1000, text_of(sh)), Err(IoError::TooLarge(_))));
+}
+
 /// Microsoft CP932 has a byte for the wave dash and the double vertical line that WHATWG
 /// `shift_jis` only maps when decoding: Excel writes `1〜5` as `1 0x81 0x60 5`, so they are encoded
 /// through their CP932 equivalents instead of becoming `?`.
