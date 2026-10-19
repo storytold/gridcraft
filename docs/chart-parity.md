@@ -42,9 +42,9 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Legend | position, overlay, formatting, per-entry delete | position only |
 | Data labels | value, category, series, percentage, from cells, callouts, position | one on/off flag |
 | Gridlines | major/minor per axis, formatting | one on/off flag |
-| Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | **missing** (auto only; direction is kept: `orientation="maxMin"` read, written and drawn, `chart.set` `catReverse`/`valReverse`) |
+| Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | **missing** (auto only; primary-axis direction is kept: `orientation="maxMin"` read, written and drawn, `chart.set` `catReverse`/`valReverse`; a reversed secondary axis is not kept — see Secondary axis) |
 | Multi-level category axis (a category range two or more columns wide beside the values: year beside month) | the outer levels grouped under the labels with separators | read (`multiLvlStrRef`), drawn (rows under the labels; columns beside them in bar charts; up to three outer levels), written back with Excel's level caches |
-| Secondary axis | any series | line series in combo charts |
+| Secondary axis | any series | line series in combo charts; a reversed secondary axis is not kept on save: direction is modelled for the primary axes only, the secondary axes (ids 3 and 4) are always written forward |
 | Trendlines | linear, exponential, logarithmic, polynomial, power, moving average, equation and R² | all six types, several per series, name, forward/backward forecast, set intercept, equation and R² label, line colour/width/dash; read, written and drawn on 2-D column, bar, line, area, scatter and bubble series; `chart.addElement` `trendline` adds/removes them. No Format Trendline pane, label position/number format not kept |
 | Error bars | fixed, %, standard deviation/error, custom | **missing** |
 | Up/down bars, high-low lines, drop lines, series lines | yes | **missing** |
@@ -64,8 +64,10 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 ## XLSX round-trip
 
 Charts are read from and written to DrawingML chart parts, but only the fields the model holds
-survive: anything else (axis scaling, label options, error bars, per-point formats, chartex
-extensions) is lost when GridCraft saves a workbook it opened. That is the main reason charts are
+survive: anything else (axis scaling, secondary-axis direction, label options, error bars,
+per-point formats, chartex extensions) is lost when GridCraft saves a workbook it opened.
+Primary-axis direction does survive: the reader takes it from the first `catAx`/`valAx`, while the
+secondary axes are always written with their default direction. That is the main reason charts are
 **~30% ready**: a user who opens an Excel workbook with charts and saves it gets simpler charts
 back.
 
@@ -90,7 +92,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-18 | minor | Axis direction (`orientation="maxMin"`) read, written and drawn; `chart.set` gains `catReverse`/`valReverse` (#1687); a reversed category axis mirrors the series order within a cluster |
+| 2026-10-18 | minor | Axis direction (`orientation="maxMin"`) read, written and drawn; `chart.set` gains `catReverse`/`valReverse` (#1687); a reversed category axis mirrors the series order within a cluster; secondary-axis direction documented as not kept (review #1895) |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
 | 2026-10-16 | minor | Box & whisker quartiles default to exclusive, honor each series on draw and XLSX round-trip; `chart.set {quartiles}` changes the method (#1453) |

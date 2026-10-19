@@ -877,6 +877,8 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         }
     }
     if secondary.is_some() {
+        // The model holds one direction pair, for the primary axes: a file's reversed secondary
+        // axis is read into nothing and so written forward (#1687).
         s.push_str(&axis_xml(&Ax {
             cat: true,
             id: 3,
