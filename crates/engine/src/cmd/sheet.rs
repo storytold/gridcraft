@@ -378,6 +378,11 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
     }
     check_lines_protection(s, &json!({"cols": RangeRef::cols(before, before).a1()}), Axis::Cols, true)?;
     check_lines_protection(s, &json!({"cols": RangeRef::cols(from, end - 1).a1()}), Axis::Cols, false)?;
+    // A move isn't the deletion the permission grants: the columns keep their cells, so locked
+    // ones still can't be relocated.
+    if lines_hold_locked_cells(s, sheet, from, count)? {
+        return Err(EngineError::Other(PROTECTED.into()));
+    }
 
     let moved_from = if before <= from { from + count } else { from };
     if moved_from.checked_add(count).is_none_or(|end| end > MAX_COLS) {
@@ -694,6 +699,24 @@ fn check_lines_protection(s: &Session, p: &Json, axis: Axis, insert: bool) -> Re
         return Err(EngineError::Other(PROTECTED.into()));
     }
     Ok(())
+}
+
+/// Whether the columns hold locked cells, or carry a locked column format of their own (the
+/// default format isn't one: an unstyled column is simply unstyled). Row and column deletion is
+/// exempt (the permission removes them, see `check_lines_protection`), but `sheet.moveColumns`
+/// relocates them, which the delete permission doesn't cover.
+fn lines_hold_locked_cells(s: &Session, sheet: usize, at: u32, count: u32) -> Result<bool> {
+    let wb = &s.doc()?.wb;
+    let Some(sh) = wb.sheet(sheet) else { return Ok(false) };
+    if sh.protection.is_none() {
+        return Ok(false);
+    }
+    let locked = |st: gridcraft_model::StyleId| wb.styles.get(st).protection.locked;
+    let end = at.saturating_add(count - 1).min(MAX_COLS - 1);
+    if (at..=end).any(|i| sh.cols.get(&i).and_then(|x| x.style).is_some_and(locked)) {
+        return Ok(true);
+    }
+    Ok(sh.cells.iter_range(RangeRef::cols(at, end)).any(|(_, cell)| locked(cell.style)))
 }
 
 fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {

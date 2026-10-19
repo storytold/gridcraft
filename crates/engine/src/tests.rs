@@ -994,6 +994,17 @@ fn protection_allows_permitted_row_and_column_edits() {
 }
 
 #[test]
+fn protection_still_refuses_moving_locked_columns() {
+    // A move isn't a delete: the columns keep their cells, so the delete permission doesn't
+    // cover relocating locked content.
+    let mut s = protected(json!({"insertColumns": true, "deleteColumns": true}));
+    assert!(s.execute("sheet.moveColumns", json!({"cols": "A:A", "before": 3})).is_err());
+    // An unlocked column moves.
+    s.execute("sheet.moveColumns", json!({"cols": "D:D", "before": 0})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(10.0));
+}
+
+#[test]
 fn protection_allows_a_permitted_column_deletion() {
     let mut s = protected(json!({"deleteColumns": true}));
     s.execute("home.deleteColumns", json!({"cols": "A:A"})).unwrap();
