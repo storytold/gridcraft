@@ -221,8 +221,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark Mode" => "Chế độ tối",
         "Display theme" => "Chủ đề hiển thị",
         "Animations" => "Hiệu ứng động",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Trượt khung vùng chọn tới ô bạn di chuyển đến thay vì nhảy ngay tới đó"
+        "Animation effects" => "Hiệu ứng hoạt ảnh",
+        "Use system setting" => "Dùng cài đặt hệ thống",
+        "Animation effects|On" => "Bật",
+        "Animation effects|Off" => "Tắt",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Cuộn và thu phóng mượt mà, khung vùng chọn trượt tới ô bạn di chuyển đến"
         }
         "System" => "Hệ thống",
         "Light" => "Sáng",

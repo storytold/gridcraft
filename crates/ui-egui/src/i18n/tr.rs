@@ -219,8 +219,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sheet Name" => "Sayfa Adı",
         "Sheet\nName" => "Sayfa\nAdı",
         "Animations" => "Animasyonlar",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Seçim çerçevesini atlamak yerine taşındığınız hücreye kaydırarak hareket ettir"
+        "Animation effects" => "Animasyon efektleri",
+        "Use system setting" => "Sistem ayarını kullan",
+        "Animation effects|On" => "Açık",
+        "Animation effects|Off" => "Kapalı",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Yumuşak kaydırma ve yakınlaştırma; seçim çerçevesi taşındığınız hücreye kayarak gider"
         }
         "Insert Copied Cells" => "Kopyalanan Hücreleri Ekle",
         "Insert Copied Cells…" => "Kopyalanan Hücreleri Ekle…",
