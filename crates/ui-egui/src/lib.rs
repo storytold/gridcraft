@@ -57,12 +57,10 @@ pub struct UiState {
     pub ribbon_collapsed: bool,
     pub formula_bar_expanded: bool,
     pub status_bar: bool,
-    /// Animation effects (File ▸ Options, View ▸ Animations): smooth scrolling and zooming, the
-    /// gliding selection outline and egui's own fades are on, off, or follow the system's setting
-    /// (see [`motion`]). Saved as `animationEffects`: `"system"`, `"on"` or `"off"`. The
-    /// checkbox this used to be was saved as `animations`, a boolean, which is still read (Off
-    /// when it was unticked) but no longer written: a `ui.json` shared with an older GridCraft
-    /// stays readable there, where a string under the old name would lose every preference.
+    /// Animation effects (File ▸ Options, View ▸ Animations): on, off, or following the system's
+    /// setting (see [`motion`]). Saved as `animationEffects`. The checkbox this replaced saved a
+    /// boolean under `animations`; that is still read (unticked means Off) but no longer written,
+    /// so an older GridCraft sharing `ui.json` can still read the file.
     #[serde(rename = "animationEffects", alias = "animations", deserialize_with = "motion::lenient")]
     pub animations: motion::Animations,
     /// Enable AutoComplete for cell values (File ▸ Options ▸ Editing): typed text is completed
@@ -216,11 +214,10 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<Box<dyn Fn(&[u8])>>,
-    /// Whether the system has animation effects on (Windows: Animation effects; macOS: Reduce
-    /// motion off; Linux and the BSDs: the desktop's animations setting; the web: no
-    /// `prefers-reduced-motion`), `None` when it doesn't say. What Animation effects ▸ Use system
-    /// setting follows ([`motion::Animations`]). Asked every frame, so the host answers from
-    /// memory and does any slow asking elsewhere. Without the hook, animations stay on.
+    /// Whether the system has animation effects on, or `None` when it doesn't say: Windows'
+    /// Animation effects, macOS' Reduce motion, the Linux/BSD desktop's setting, the browser's
+    /// `prefers-reduced-motion`. Animation effects ▸ Use system setting follows it. Asked every
+    /// frame, so the host answers from memory. Without the hook, animations stay on.
     pub animations_enabled: Option<Box<dyn Fn() -> Option<bool>>>,
 }
 
@@ -685,18 +682,18 @@ impl SheetApp {
                 Ok(json!({"mode": self.ui.theme_mode()}))
             }
             "view.animations" => {
-                // `{"mode": "system" | "on" | "off"}`, or the checkbox's `{"on": bool}`; without
-                // either it toggles what shows now.
+                // `{"mode": "system" | "on" | "off"}`, or the checkbox's `{"on": bool}`. Without
+                // either, it toggles what shows now.
                 self.read_system_animations();
-                let mode = match (p.get("mode").filter(|mode| !mode.is_null()), p.get("on").and_then(Json::as_bool)) {
-                    (Some(mode), _) => match mode.as_str().and_then(motion::Animations::parse) {
+                let mode = if let Some(mode) = p.get("mode").filter(|mode| !mode.is_null()) {
+                    match mode.as_str().and_then(motion::Animations::parse) {
                         Some(mode) => mode,
                         None => return Some(Err("animations mode must be system, on, or off".into())),
-                    },
-                    (None, Some(true)) => motion::Animations::On,
-                    (None, Some(false)) => motion::Animations::Off,
-                    (None, None) if self.animations_on() => motion::Animations::Off,
-                    (None, None) => motion::Animations::On,
+                    }
+                } else if p.get("on").and_then(Json::as_bool).unwrap_or(!self.animations_on()) {
+                    motion::Animations::On
+                } else {
+                    motion::Animations::Off
                 };
                 self.ui.animations = mode;
                 Ok(json!({"mode": mode.code(), "on": self.animations_on(), "system": self.system_animations}))

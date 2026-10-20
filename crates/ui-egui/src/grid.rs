@@ -608,10 +608,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         }
         Geo::new(sh, rect, scroll)
     };
-    // Scrolling. With Animation effects off a wheel notch arrives whole, not eased in over the
-    // next frames: the scroll delta has been put right for the whole window already
-    // (`SheetApp::ui`), and the zoom ladder below gets its notch in one piece, so it steps in the
-    // frame the wheel turned.
+    // Scrolling. With Animation effects off, a wheel notch arrives whole instead of easing in:
+    // `SheetApp::ui` has already replaced the scroll delta for the whole window, and the zoom
+    // ladder below is given the whole notch, so it steps in the same frame.
     let animate = app.animations_on();
     let wheel = ui.ctx().options(|o| o.input_options);
     let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| {
@@ -835,13 +834,15 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // takes its colour too instead of showing a light square in dark mode.
     ui.painter().rect_filled(Rect::from_min_max(pos2(track_x.0, rect.top()), pos2(track_x.1, rect.bottom())), 0.0, t.tab_bar);
     vertical_scrollbar(app, ui, sh, &geo, track_x, max_y, &t);
-    if app.session.clipboard.is_some() && animate {
-        // By the clock, not per frame: a gliding outline repaints more often than the ants step.
-        app.grid.marching_phase = crate::selection_glide::ants_phase(now);
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
-    } else {
-        // Animation effects off: the dashes round a copied range stand still.
-        app.grid.marching_phase = 0.0;
+    if app.session.clipboard.is_some() {
+        if animate {
+            // By the clock, not per frame: a gliding outline repaints more often than the ants step.
+            app.grid.marching_phase = crate::selection_glide::ants_phase(now);
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+        } else {
+            // Animation effects off: the dashes round the copied range stand still.
+            app.grid.marching_phase = 0.0;
+        }
     }
 }
 
