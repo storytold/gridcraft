@@ -6,7 +6,8 @@ use std::fmt::Write as _;
 
 use gridcraft_model::style::Protection;
 use gridcraft_model::{
-    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, Style, Underline, VAlign, VertAlign, Workbook,
+    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, ReadingOrder, Style, Underline, VAlign, VertAlign,
+    Workbook,
 };
 
 use crate::tables::{INDEXED, builtin_format, builtin_id};
@@ -251,6 +252,12 @@ fn read_alignment(a: &El) -> Alignment {
         shrink: a.flag("shrinkToFit", false),
         indent: a.attr_u32("indent").unwrap_or(0).min(250) as u8,
         rotation: 0,
+        reading_order: match a.attr_u32("readingOrder") {
+            Some(0) => Some(ReadingOrder::Context),
+            Some(1) => Some(ReadingOrder::LeftToRight),
+            Some(2) => Some(ReadingOrder::RightToLeft),
+            _ => None,
+        },
     };
     if let Some(r) = a.attr_i64("textRotation") {
         al.rotation = match r {
@@ -534,6 +541,12 @@ fn alignment_xml(a: &Alignment) -> Option<String> {
     if a.shrink {
         s.push_str(" shrinkToFit=\"1\"");
     }
+    match a.reading_order {
+        None => {}
+        Some(ReadingOrder::Context) => s.push_str(" readingOrder=\"0\""),
+        Some(ReadingOrder::LeftToRight) => s.push_str(" readingOrder=\"1\""),
+        Some(ReadingOrder::RightToLeft) => s.push_str(" readingOrder=\"2\""),
+    }
     s.push_str("/>");
     Some(s)
 }
@@ -730,4 +743,51 @@ pub fn dxf_id(dxfs: &mut Vec<Style>, s: &Style) -> u32 {
     }
     dxfs.push(s.clone());
     (dxfs.len() - 1) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_or_invalid_reading_order_is_unspecified() {
+        for attribute in ["", " readingOrder=\"3\"", " readingOrder=\"-1\"", " readingOrder=\"rtl\"", " readingOrder=\"4294967296\""] {
+            let xml = format!("<alignment{attribute}/>");
+            let align = read_alignment(&crate::xml::parse(xml.as_bytes()).unwrap());
+            assert_eq!(align, Alignment::default(), "{attribute}");
+            assert_eq!(alignment_xml(&align), None);
+        }
+    }
+
+    #[test]
+    fn reading_order_survives_cell_named_and_differential_style_roundtrips() {
+        for order in [0, 1, 2] {
+            let xml = format!(
+                r#"<styleSheet><cellXfs><xf/><xf><alignment readingOrder="{order}"/></xf></cellXfs>
+                <cellStyleXfs><xf><alignment readingOrder="{order}"/></xf></cellStyleXfs>
+                <cellStyles><cellStyle name="Directional" xfId="0"/></cellStyles>
+                <dxfs><dxf><alignment readingOrder="{order}"/></dxf></dxfs></styleSheet>"#
+            );
+            let styles = read_styles(&crate::xml::parse(xml.as_bytes()).unwrap(), &[]);
+            let mut wb = Workbook::new();
+            wb.styles.intern(styles.xfs[1].clone());
+            wb.cell_styles = styles.named.clone();
+            let (xml, _) = write_styles(&wb, &styles.dxfs, &[]);
+            let root = crate::xml::parse(xml.as_bytes()).unwrap();
+            for section in ["dxfs", "cellXfs", "cellStyleXfs"] {
+                let orders: Vec<_> = root
+                    .child(section)
+                    .unwrap()
+                    .children
+                    .iter()
+                    .filter_map(|style| style.child("alignment").and_then(|a| a.attr_u32("readingOrder")))
+                    .collect();
+                assert_eq!(orders, [order], "{section}");
+            }
+            let reopened = read_styles(&root, &[]);
+            assert_eq!(reopened.xfs[1].align, styles.xfs[1].align);
+            assert_eq!(reopened.named, styles.named);
+            assert_eq!(reopened.dxfs, styles.dxfs);
+        }
+    }
 }

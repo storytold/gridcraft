@@ -31,6 +31,7 @@ pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;
 pub mod text_box;
+mod text_direction;
 pub mod theme;
 pub mod widgets;
 

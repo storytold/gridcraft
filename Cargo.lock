@@ -907,8 +907,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 [[package]]
 name = "ecolor"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0656a7530b9e2841ee7a5f983965bdd9840c32f4012f759cfd44b912cced6b34"
+source = "git+https://github.com/Mouhand-Kaddo/egui?rev=fb94971f4ffb192f36c4a1aee868fc36fdd29caa#fb94971f4ffb192f36c4a1aee868fc36fdd29caa"
 dependencies = [
  "bytemuck",
  "emath",
@@ -952,8 +951,7 @@ dependencies = [
 [[package]]
 name = "egui"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc938cc27cd911415e1e4d151bc56ff9df063d8db081374e87aeb805ea74b2ba"
+source = "git+https://github.com/Mouhand-Kaddo/egui?rev=fb94971f4ffb192f36c4a1aee868fc36fdd29caa#fb94971f4ffb192f36c4a1aee868fc36fdd29caa"
 dependencies = [
  "accesskit",
  "ahash",
@@ -1054,8 +1052,7 @@ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 [[package]]
 name = "emath"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52c8d4141cf0f60fb2f7aefaf352d3ffa5171ef0ab09731c64391801e95e48f1"
+source = "git+https://github.com/Mouhand-Kaddo/egui?rev=fb94971f4ffb192f36c4a1aee868fc36fdd29caa#fb94971f4ffb192f36c4a1aee868fc36fdd29caa"
 dependencies = [
  "bytemuck",
 ]
@@ -1090,8 +1087,7 @@ dependencies = [
 [[package]]
 name = "epaint"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0ec0308dc23130fc1a7d4623a8534c2ed069c6dc84e258ee4f3de99615aa1a3"
+source = "git+https://github.com/Mouhand-Kaddo/egui?rev=fb94971f4ffb192f36c4a1aee868fc36fdd29caa#fb94971f4ffb192f36c4a1aee868fc36fdd29caa"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1107,7 +1103,9 @@ dependencies = [
  "self_cell",
  "skrifa",
  "smallvec",
+ "unicode-bidi",
  "unicode-general-category",
+ "unicode-script",
  "unicode-segmentation",
  "vello_cpu",
 ]
@@ -1115,8 +1113,7 @@ dependencies = [
 [[package]]
 name = "epaint_default_fonts"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "773fa9c96dd0dbef887e39d0ed6177f141cce4d68e6041df77570aa3702dfa13"
+source = "git+https://github.com/Mouhand-Kaddo/egui?rev=fb94971f4ffb192f36c4a1aee868fc36fdd29caa#fb94971f4ffb192f36c4a1aee868fc36fdd29caa"
 
 [[package]]
 name = "equivalent"
@@ -1649,6 +1646,7 @@ dependencies = [
  "skrifa",
  "sys-locale",
  "toml",
+ "unicode-bidi",
  "web-sys",
  "zbus",
 ]
@@ -3597,6 +3595,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "unicode-bidi"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
+
+[[package]]
 name = "unicode-general-category"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3607,6 +3611,12 @@ name = "unicode-ident"
 version = "1.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
+
+[[package]]
+name = "unicode-script"
+version = "0.5.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "383ad40bb927465ec0ce7720e033cb4ca06912855fc35db31b5755d0de75b1ee"
 
 [[package]]
 name = "unicode-segmentation"
