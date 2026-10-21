@@ -102,6 +102,14 @@ sheet's rules in priority order, priority numbers aside), `validations`, `charts
 `hyperlinks`, `pivots`. `#SPILL!`/`#CALC!` compare equal to `#VALUE!` and `#CIRC!` to 0, as
 that's what the file format stores.
 
+**Hyperlinks.** This category compares each linked cell's destination, internal/external routing
+and tooltip. Each added, removed or changed cell counts once; moving a link counts as a removal
+and an addition. Only the writer's target whitespace, internal leading `#`, inferred external
+routing and empty external-fragment conventions are normalized. URL case, encoding and nonempty
+fragments remain significant. `--max-report` caps examples, not the difference count. This compares
+the imported model with the saved/reopened model; it cannot detect links lost during initial import.
+Validation, comment and PivotTable comparisons still check counts only.
+
 Files that fail to open are reported with GridCraft's error and don't stop the run. Exit code: 0 when every file
 opened with no mismatch and no round-trip difference, 1 otherwise, 2 on a usage error. `--max-report` caps the
 examples listed per file and category (counts are always complete).

@@ -599,6 +599,52 @@ fn diff_count(d: &mut Diffs, sheet: &str, a: usize, b: usize) {
     }
 }
 
+/// Match the XLSX writer's spelling/routing conventions, without URL decoding, case folding
+/// or resolving relative paths. In particular, a bare file name can also be an internal name.
+fn hyperlink_key(link: &gridcraft_engine::model::Hyperlink) -> (&str, bool, Option<&str>) {
+    let mut target = link.target.trim();
+    let external = link.external
+        || target.contains("://")
+        || target.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("mailto:"))
+        || target.starts_with("\\\\")
+        || target.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("file:"));
+    if !external {
+        target = target.trim_start_matches('#');
+    } else if let Some((url, "")) = target.split_once('#')
+        && !url.is_empty()
+    {
+        // An empty location attribute is omitted when reading an external relationship.
+        target = url;
+    }
+    (target, external, link.tooltip.as_deref())
+}
+
+fn hyperlink_description(link: Option<(&str, bool, Option<&str>)>) -> String {
+    match link {
+        Some((target, external, tooltip)) => {
+            let route = if external { "external" } else { "internal" };
+            format!("{route} {target:?}, tooltip {tooltip:?}")
+        }
+        None => "(none)".into(),
+    }
+}
+
+fn diff_hyperlinks(d: &mut Diffs, sheet: &str, a: &Sheet, b: &Sheet) {
+    let mut compare = |cell: &CellRef| {
+        let before = a.hyperlinks.get(cell).map(hyperlink_key);
+        let after = b.hyperlinks.get(cell).map(hyperlink_key);
+        if before != after {
+            d.push(|| format!("{sheet}!{}: {} → {}", cell.a1(), hyperlink_description(before), hyperlink_description(after)));
+        }
+    };
+    for cell in a.hyperlinks.keys() {
+        compare(cell);
+    }
+    for cell in b.hyperlinks.keys().filter(|cell| !a.hyperlinks.contains_key(cell)) {
+        compare(cell);
+    }
+}
+
 /// A value as the file format can hold it: `#SPILL!`/`#CALC!` are cached as `#VALUE!` and an
 /// unresolved circular reference as 0 (what Excel writes), so those aren't round-trip losses.
 fn as_cached(v: Value) -> Value {
@@ -681,7 +727,7 @@ pub fn diff_workbooks(a: &Workbook, b: &Workbook, opts: &Options) -> Vec<Categor
             charts.push(|| format!("{name}: {ca:?} → {cb:?}"));
         }
         diff_count(&mut comments, &name, sa.comments.len(), sb.comments.len());
-        diff_count(&mut hyperlinks, &name, sa.hyperlinks.len(), sb.hyperlinks.len());
+        diff_hyperlinks(&mut hyperlinks, &name, sa, sb);
         diff_count(&mut pivots, &name, sa.pivots.len(), sb.pivots.len());
     }
     let mut names = Diffs::new("names", m);
@@ -1680,3 +1726,6 @@ mod tests {
         assert_eq!(keys(&v["functions"][0]), set(&["name", "checked", "mismatched", "primary"]));
     }
 }
+
+#[cfg(test)]
+mod hyperlink_tests;
