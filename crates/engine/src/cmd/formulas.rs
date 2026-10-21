@@ -92,7 +92,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Calculation Options",
             ["Formulas", "Calculation"],
             None,
-            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
+            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001), maxWorkers?: 1–8 | null (native threads for independent formula waves; null follows the machine, clamped to 1–8; ignored on the web build; not stored in the file)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
             has_doc,
             calc_options
         ),
@@ -872,6 +872,17 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(v) = f64_param(p, "maxChange") {
             cx.wb.calc.set_max_change(v);
         }
+        // null clears the cap (the machine default). A number is clamped to 1–8. The cap does
+        // not change results, so it does not force a recalculation by itself.
+        match p.get("maxWorkers") {
+            Some(Json::Null) => cx.wb.calc.max_workers = None,
+            Some(v) => {
+                if let Some(n) = v.as_u64() {
+                    cx.wb.calc.set_max_workers(u8::try_from(n).unwrap_or(u8::MAX));
+                }
+            }
+            None => {}
+        }
         let c = &cx.wb.calc;
         // Switching to automatic, or changing how circular references are calculated outside
         // manual mode, recalculates the workbook.
@@ -879,7 +890,13 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
         if mode == Some(CalcMode::Automatic) || (iteration_changed && c.mode != CalcMode::Manual) {
             cx.structural = true;
         }
-        Ok(json!({"mode": format!("{:?}", c.mode), "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change}))
+        Ok(json!({
+            "mode": format!("{:?}", c.mode),
+            "iterative": c.iterative,
+            "maxIterations": c.max_iterations,
+            "maxChange": c.max_change,
+            "maxWorkers": c.max_workers,
+        }))
     })
 }
 

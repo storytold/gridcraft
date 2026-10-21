@@ -215,6 +215,16 @@ impl<'h> Evaluator<'h> {
 
     /// Evaluates to a value (references are dereferenced; multi-cell → array).
     pub fn value(&mut self, e: &Expr) -> Value {
+        // A single cell on this sheet is its value. Kept off the reference vector so `A1+1` does
+        // not allocate. Ranges stay references until something dereferences them (`SUM(A1:A3)`).
+        if let Expr::Ref(r) = e
+            && matches!(r.sheet, SheetSel::Current)
+        {
+            let range = r.range();
+            if range.is_single() {
+                return self.host.cell_value(self.sheet, range.start);
+            }
+        }
         let ev = self.eval(e);
         self.deref(ev)
     }
@@ -233,7 +243,10 @@ impl<'h> Evaluator<'h> {
 
     pub fn reference_areas(&self, r: &Reference) -> Result<Vec<Area>, CellError> {
         let range = r.range();
-        Ok(self.resolve_sheet(&r.sheet)?.into_iter().map(|sheet| Area { sheet, range }).collect())
+        match &r.sheet {
+            SheetSel::Current => Ok(vec![Area { sheet: self.sheet, range }]),
+            other => Ok(self.resolve_sheet(other)?.into_iter().map(|sheet| Area { sheet, range }).collect()),
+        }
     }
 
     /// Dereferences: one cell → its value; a block → an array; several areas → `#VALUE!`.
@@ -592,6 +605,12 @@ impl<'h> Evaluator<'h> {
             _ => {
                 // A long chain such as A1+A2+…+A500 nests to the left: fold it in a loop instead
                 // of one level of recursion per operator (past the depth limit it was an error).
+                // One operator, the common case, does not allocate that buffer.
+                if !matches!(a, Expr::Binary(o, _, _) if !matches!(o, BinOp::Range | BinOp::Union | BinOp::Intersect)) {
+                    let x = self.value(a);
+                    let y = self.value(b);
+                    return Ev::V(binary_values(op, &x, &y, self.host.workbook().date_system));
+                }
                 let mut rest = vec![(op, b)];
                 let mut left = a;
                 while let Expr::Binary(o, l, r) = left

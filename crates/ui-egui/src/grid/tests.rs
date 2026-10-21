@@ -304,3 +304,18 @@ fn upward_text_with_middle_align_is_centred_in_a_merged_block() {
     assert!((bb.center().y - rect.center().y).abs() < 0.01, "{bb:?} not centred in {rect:?}");
     assert!((bb.center().x - rect.center().x).abs() < 0.01, "{bb:?} not centred in {rect:?}");
 }
+
+#[test]
+fn scrolled_to_the_last_row_asks_only_for_visible_rows() {
+    // `paint_panes` paints `scroll_rows`: the window that fits the viewport, not the sheet.
+    let sh = Sheet::new("S");
+    let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 600.0));
+    let parked = Geo::new(&sh, rect, vec2(0.0, 0.0));
+    let top = parked.scroll_top_of(&sh, MAX_ROWS - 1);
+    let geo = Geo::new(&sh, rect, vec2(0.0, top));
+    let (r0, r1) = geo.scroll_rows(&sh);
+    assert!(r0 < MAX_ROWS && r1 == MAX_ROWS - 1, "last row is in the window {r0}..={r1}");
+    let span = r1 - r0 + 1;
+    assert!(span < 80, "the grid asked for {span} rows");
+    assert!(r0 + 200 > MAX_ROWS, "the window starts near the end (row {r0})");
+}

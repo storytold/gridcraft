@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_core::{CellRef, RangeRef, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::cell::Cell;
@@ -49,6 +49,43 @@ impl CellStore {
             return None;
         }
         Arc::make_mut(band).rows.get_mut(&c.row)?.get_mut(&c.col)
+    }
+    /// Writes `updates` into cells that are already stored. Missing addresses stay missing, and
+    /// formulas on those cells stay. `updates` is sorted here. Each stored band is copied at most once;
+    /// a band shared with a snapshot is copied only when a stored value changes.
+    pub fn assign_existing(&mut self, updates: &mut [(CellRef, Value)]) {
+        updates.sort_unstable_by_key(|(c, _)| (c.row, c.col));
+        let mut i = 0;
+        while i < updates.len() {
+            let band_key = updates[i].0.row / BAND;
+            let end = updates[i..].iter().position(|(c, _)| c.row / BAND != band_key).map_or(updates.len(), |p| i + p);
+            let group = &updates[i..end];
+            if self.bands.get(&band_key).is_some() {
+                let needs_write = group.iter().any(|(c, v)| self.get(*c).is_some_and(|cell| cell.value != *v));
+                if needs_write
+                    && let (Some(r0), Some(r1)) = (group.first().map(|(c, _)| c.row), group.last().map(|(c, _)| c.row))
+                    && let Some(band) = self.bands.get_mut(&band_key)
+                {
+                    let band = Arc::make_mut(band);
+                    let mut gi = 0;
+                    for (row, cols) in band.rows.range_mut(r0..=r1) {
+                        while gi < group.len() && group[gi].0.row < *row {
+                            gi += 1;
+                        }
+                        while gi < group.len() && group[gi].0.row == *row {
+                            let (c, v) = &group[gi];
+                            if let Some(cell) = cols.get_mut(&c.col)
+                                && cell.value != *v
+                            {
+                                cell.value = v.clone();
+                            }
+                            gi += 1;
+                        }
+                    }
+                }
+            }
+            i = end;
+        }
     }
     /// Stores a cell; a default (empty, unstyled) cell is removed instead.
     pub fn set(&mut self, c: CellRef, cell: Cell) {
@@ -324,6 +361,42 @@ impl CellStore {
 mod tests {
     use super::*;
     use gridcraft_core::Value;
+
+    #[test]
+    fn assign_existing_updates_stored_cells_in_any_order() {
+        let mut store = CellStore::new();
+        store.set(c(0, 0), crate::cell::Cell::value(Value::Number(1.0)));
+        store.set(c(70, 1), crate::cell::Cell::value(Value::Number(2.0)));
+        let mut updates = vec![(c(70, 1), Value::Number(5.0)), (c(0, 0), Value::Number(4.0)), (c(3, 3), Value::Number(9.0))];
+        store.assign_existing(&mut updates);
+        assert_eq!(store.get(c(0, 0)).map(|cell| cell.value.clone()), Some(Value::Number(4.0)));
+        assert_eq!(store.get(c(70, 1)).map(|cell| cell.value.clone()), Some(Value::Number(5.0)));
+        assert!(store.get(c(3, 3)).is_none());
+        assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn assign_existing_copy_on_write_per_band() {
+        let mut store = CellStore::new();
+        store.set(c(0, 0), crate::cell::Cell::value(Value::Number(1.0)));
+        store.set(c(70, 1), crate::cell::Cell::value(Value::Number(2.0)));
+        let snap = store.clone();
+        let b0 = 0 / BAND;
+        let b1 = 70 / BAND;
+        let snap_b0 = snap.bands.get(&b0).unwrap();
+        let snap_b1 = snap.bands.get(&b1).unwrap();
+
+        let mut same = vec![(c(0, 0), Value::Number(1.0)), (c(70, 1), Value::Number(2.0))];
+        store.assign_existing(&mut same);
+        assert!(Arc::ptr_eq(store.bands.get(&b0).unwrap(), snap_b0));
+        assert!(Arc::ptr_eq(store.bands.get(&b1).unwrap(), snap_b1));
+
+        let mut one = vec![(c(0, 0), Value::Number(9.0))];
+        store.assign_existing(&mut one);
+        assert!(!Arc::ptr_eq(store.bands.get(&b0).unwrap(), snap_b0));
+        assert!(Arc::ptr_eq(store.bands.get(&b1).unwrap(), snap_b1));
+        assert_eq!(store.get(c(0, 0)).map(|cell| cell.value.clone()), Some(Value::Number(9.0)));
+    }
 
     fn c(r: u32, col: u32) -> CellRef {
         CellRef::new(r, col)

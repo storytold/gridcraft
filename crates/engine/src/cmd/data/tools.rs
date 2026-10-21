@@ -25,7 +25,22 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("data.removeDuplicates", "`columns` must name at least one column of the range"));
     }
     let start = r.start.row + header as u32;
+    let tall = r.height() > 10_000;
+    let scan_rows: Vec<u32> = if tall {
+        let mut rows = Vec::new();
+        let mut last = None;
+        for (c, _) in sh.cells.iter_range(r) {
+            if c.row >= start && last != Some(c.row) {
+                rows.push(c.row);
+                last = Some(c.row);
+            }
+        }
+        rows
+    } else {
+        (start..=r.end.row).collect()
+    };
     let mut removed = 0;
+    let mut remaining = 0usize;
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
         let mut seen = std::collections::HashSet::new();
@@ -33,7 +48,7 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         // Cells are compared by the text they show, as in Excel: the same date in two formats
         // isn't a duplicate, while 1.01 and 1.02 shown as 1.0 are.
         let shown = |c: CellRef| crate::display::format(&sh.value(c), cx.wb.styles.get(sh.style_id(c)).num_fmt.as_str(), &cx.wb).text;
-        for row in start..=r.end.row {
+        for &row in &scan_rows {
             let key: Vec<String> = cols.iter().map(|c| shown(CellRef::new(row, *c)).to_lowercase()).collect();
             if seen.insert(key) {
                 keep.push(row);
@@ -69,15 +84,28 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
             .collect();
         let rows: Vec<Vec<Option<Cell>>> =
             keep.iter().map(|row| (r.start.col..=r.end.col).map(|c| sh.cell(CellRef::new(*row, c)).cloned()).collect()).collect();
+        let dest_end = start.saturating_add(keep.len().saturating_sub(1) as u32);
+        let rows_to_clear: Vec<u32> = if tall {
+            let mut touched = std::collections::BTreeSet::new();
+            for &row in &scan_rows {
+                touched.insert(row);
+            }
+            for row in start..=dest_end {
+                touched.insert(row);
+            }
+            touched.into_iter().collect()
+        } else {
+            (start..=r.end.row).collect()
+        };
         let shm = cx.sheet_mut(sheet)?;
-        for row in start..=r.end.row {
+        for row in &rows_to_clear {
             for c in r.start.col..=r.end.col {
-                shm.remove_cell(CellRef::new(row, c));
+                shm.remove_cell(CellRef::new(*row, c));
             }
         }
-        for row in start..=r.end.row {
+        for row in &rows_to_clear {
             for c in r.start.col..=r.end.col {
-                let at = CellRef::new(row, c);
+                let at = CellRef::new(*row, c);
                 shm.comments.remove(&at);
                 shm.hyperlinks.remove(&at);
             }
@@ -96,12 +124,20 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         for (at, h) in links {
             shm.hyperlinks.insert(at, h);
         }
-        for c in RangeRef::new(CellRef::new(start, r.start.col), r.end).iter() {
-            cx.changed.push((sheet, c));
+        if tall {
+            for row in &rows_to_clear {
+                for c in r.start.col..=r.end.col {
+                    cx.changed.push((sheet, CellRef::new(*row, c)));
+                }
+            }
+        } else {
+            for c in RangeRef::new(CellRef::new(start, r.start.col), r.end).iter() {
+                cx.changed.push((sheet, c));
+            }
         }
+        remaining = if tall { keep.len() } else { (r.end.row + 1 - start) as usize - removed };
         Ok(())
     })?;
-    let remaining = (r.end.row + 1 - start) as usize - removed;
     Ok(json!({"removed": removed, "remaining": remaining}))
 }
 

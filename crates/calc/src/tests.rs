@@ -1750,7 +1750,7 @@ fn sum_count_average_follow_edits_inside_the_range() {
 }
 
 #[test]
-fn visit_range_declines_when_a_formula_in_the_block_spills_into_it() {
+fn visit_range_includes_a_spill_inside_the_block() {
     // The sheet: D1 = SEQUENCE(3) and D4 = 10, and D1 has not been calculated yet when the
     // block D1:D5 is read.
     let mut wb = Workbook::new();
@@ -1759,13 +1759,11 @@ fn visit_range_declines_when_a_formula_in_the_block_spills_into_it() {
     sh.cells.set(c("D4"), Cell::value(Value::Number(10.0)));
     let block = gridcraft_core::RangeRef::parse("D1:D5").unwrap();
 
-    // Reading the block calculates D1, which spills over D2:D3. A walk over the stored cells
-    // would never see 2 and 3, so the host must decline and leave the block to `range_values`.
-    // (`Calc` recalculates a pass that produced new spills, so final results are right either
-    // way; only this direct call shows the host's contract.)
+    // Reading the block calculates D1, which spills over D2:D3. The walk includes those numbers
+    // (the anchor once) so a huge aggregate does not have to build the rectangle.
     let walked = crate::recalc::tests::probe_visit_range(&wb, &[("D1", "=SEQUENCE(3)")], block);
 
-    assert_eq!(walked, None, "walked a block holding a spill it can't see");
+    assert_eq!(walked, Some(vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0), Value::Number(10.0)]), "spill cells inside the block");
 }
 
 /// Trim references evaluate as `TRIMRANGE(range, code, code)`.

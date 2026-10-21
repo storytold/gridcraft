@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (automation: macro interface; earlier: catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (automation: macro interface; large-workbook streaming and parallel recalc landed, historical bench only; earlier: catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -20,7 +20,7 @@ generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 | **Mainstream practitioner** | **~50%** | estimated; [method](#mainstream-practitioner) (69.5 depth × 0.90 × 0.92 × 0.88 = 50.6) |
 | **Essentials user** | **~63%** | estimated; [method](#essentials-user) (80.2 depth × 0.92 × 0.95 × 0.90 = 63.1) |
 | Stage | **alpha** | see [Stage](#stage) |
-| Remaining to beta | **~160–240 Opus 5.5 agent-hours** | estimated; [roadmap.md](roadmap.md#beta-gates) |
+| Remaining to beta | **~135–200 Opus 5.5 agent-hours** | estimated; [roadmap.md](roadmap.md#beta-gates) |
 | Remaining to full parity | **~700–1,100 Opus 5.5 agent-hours** | estimated; sum of the rows below |
 
 ### Readiness by audience
@@ -79,7 +79,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 
 | Area | Weight | Breadth | Ready | Hours | Evidence |
 |---|---|---|---|---|---|
-| Formula language and calculation | 18 | ~92% | ~72% | 20–30 | A1/R1C1 parser, reference adjustment, dependency-graph recalc, dynamic arrays and `#SPILL!`, `A1#`, LET/LAMBDA and helpers, structured references, names, 3-D references. Open correctness bugs: 15-digit equality (#57), stale spills after structural edits and cleared blockers (#133, #139), 3-D span endpoint deletion (#140), sheet rename and qualified names (#134). Single-threaded |
+| Formula language and calculation | 18 | ~92% | ~72% | 20–30 | A1/R1C1 parser, reference adjustment, dependency-graph recalc, dynamic arrays and `#SPILL!`, `A1#`, LET/LAMBDA and helpers, structured references, names, 3-D references. Open correctness bugs: 15-digit equality (#57), stale spills after structural edits and cleared blockers (#133, #139), 3-D span endpoint deletion (#140), sheet rename and qualified names (#134). Native independent-wave recalc on up to 8 threads (`formulas.calculationOptions` `maxWorkers`, default the machine, clamped 1–8). Release bench, Intel Xeon E5-2680 v3 @ 2.50GHz, default cap 8: median 46.373 ms (100k independent dependents) and 61.866 ms (100k same-row SUM). Dynamic formulas, iterative calculation, cycles and WASM stay on one thread |
 | Worksheet functions | 12 | 98.1% (measured) | ~82% | 16–26 | 513 / 523 names, 504 working. Missing: GETPIVOTDATA, IMAGE plus cloud functions. No conformance suite against Excel-computed oracles; edge-case bugs keep surfacing (#137, #138). [function-parity.md](function-parity.md) |
 | Editing, navigation, clipboard, fill | 12 | ~90% | ~70% | 15–25 | Point mode, F4, AutoComplete, Paste Special, AutoFill, Flash Fill, Find/Replace, Go To Special. Bugs: rectangular drag-select (#28), monthly fill (#132), cut across sheets (#128), Insert Copied Cells missing (#21), key tips only on part of the Home tab (#43; #33, #49). [ui-parity.md](ui-parity.md) |
 | Cell formatting, styles, conditional formatting | 10 | ~95% | ~80% | 8–14 | Full number-format language, borders, 47 cell styles, 60 table styles, all CF rule kinds including data bars, colour scales and icon sets. Gaps: font weights beyond regular/bold (#168), system fonts list (#4), themes |
@@ -101,12 +101,12 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 | Dimension | Weight | Ready | Hours | Evidence |
 |---|---|---|---|---|
 | Features | 45 | ~59% | 300–485 | Table above |
-| File formats | 15 | ~50% | 80–120 | XLSX read/write is broad but unproven on a real corpus and in Excel; XLSB and ODS are values-only import; no XLS, XML Spreadsheet 2003, SYLK, DIF, PRN; VBA dropped; 100 MB XLSX fails (#175). [file-format-parity.md](file-format-parity.md) |
+| File formats | 15 | ~50% | 80–120 | XLSX read/write is broad but unproven on a real corpus and in Excel; XLSB and ODS are values-only import; no XLS, XML Spreadsheet 2003, SYLK, DIF, PRN; VBA dropped; a synthetic ≥100 MiB shared-string part streams open; a synthetic styles part of at least 100 MiB opens (kept parts stay buffered, and a kept part past 512 MB is still refused) (#175). [file-format-parity.md](file-format-parity.md) |
 | UI/UX fidelity | 12 | ~55% | 50–80 | Excel-style ribbon, galleries, dialogs, formula bar, status bar; 59 commands with shortcuts vs Excel's 200+; key tips on part of the Home tab only; short context menu; a native window per workbook window on the desktop (one on the web). [ui-parity.md](ui-parity.md) |
 | Performance | 8 | ~35% | 35–55 | [Performance](#performance) |
 | Stability | 8 | ~60% | 15–25 | Never-crash rules enforced by lint, every command fuzzed with hostile params, random command sequences fuzzed against undo/redo, XLSX round-trip and full-recalc invariants, last-resort guard in `Session::execute`. Field reports: Windows Intel GPU crash (#120), error on close (#117), freeze opening from Finder (#166), screen flashing (#76) |
 | Localization | 4 | ~10% | 100–165 | Ribbon-only catalog in five languages (ja, zh, ko, pt-BR, ru; ~12% of strings each), CJK/Thai/Hebrew font fallback, no shaping or RTL. [localization-parity.md](localization-parity.md) |
-| Hardware | 2 | ~40% | 25–40 | GPU UI via wgpu; single-threaded calc; no pen pressure; a native window per workbook window, Arrange All on one monitor. [hardware-parity.md](hardware-parity.md) |
+| Hardware | 2 | ~40% | 25–40 | GPU UI via wgpu; native independent-wave recalc (up to 8 threads; `formulas.calculationOptions` `maxWorkers`; WASM one thread); no pen pressure; a native window per workbook window, Arrange All on one monitor. [hardware-parity.md](hardware-parity.md) |
 | Platforms | 2 | ~80% | 30–60 | [Platforms](#platforms) |
 | Ecosystem / add-ins | 2 | ~10% | 25–40 | [Ecosystem and AI](#ecosystem-and-ai) |
 | AI features | 2 | ~15% | 30–50 | [Ecosystem and AI](#ecosystem-and-ai) |
@@ -146,7 +146,7 @@ Discounts for what still stops real work:
 |---|---|---|
 | Interaction fidelity | × 0.90 | 59 command shortcuts vs Excel's 200+; key tips only on part of the Home tab (#43); rectangular selection bug (#28); charts can't be resized (#190); missing horizontal scrollbar report (#176) |
 | Stability on real machines | × 0.92 | Never-crash lints, fuzzed commands and the `Session::execute` guard; but field reports of a startup crash on Intel UHD (#120), an error on close (#117), a freeze opening from Finder (#166) and screen flashing (#76) |
-| File exchange with Excel users | × 0.88 | Excel opening our output is unverified across features; unmodelled parts dropped on save; advanced chart kinds lose their type; 100 MB files fail (#175); `.xls` and encrypted files are refused with a clear message (#17) rather than opened. Harsher than a drawing app's discount because spreadsheets are exchanged constantly |
+| File exchange with Excel users | × 0.88 | Excel opening our output is unverified across features; unmodelled parts dropped on save; advanced chart kinds lose their type; a synthetic ≥100 MiB shared-string part opens; a synthetic styles part of at least 100 MiB opens (kept parts stay buffered, and a kept part past 512 MB is still refused) (#175); `.xls` and encrypted files are refused with a clear message (#17) rather than opened. Harsher than a drawing app's discount because spreadsheets are exchanged constantly |
 
 **Mainstream practitioner: 69.5 × 0.90 × 0.92 × 0.88 = 50.6 → ~50%** (estimated). Unlike most
 apps it is not higher than the full number: GridCraft's breadth is wide (functions, formatting,
@@ -203,15 +203,16 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 | Measure | GridCraft | Excel | Kind |
 |---|---|---|---|
 | Sheet size limits | 1,048,576 × 16,384 | same | measured (`crates/core/src/addr.rs`) |
-| Recalc threads | 1 | all cores | measured (no threading in `crates/calc`) |
-| Edit → recalc, 100k dependents | ~0.4 s (2026-10-07), target < 100 ms | tens of ms | measured on the owner's machine; #66 since made range-formula recalc linear, not re-timed |
-| Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
-| Open a ~100 MB XLSX | fails (#175) | opens | user report |
-| Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
+| Recalc threads | up to 8 native waves; `formulas.calculationOptions` `maxWorkers` (default the machine, clamped 1–8) | all cores, configurable | measured: distinct thread ids in `crates/calc` tests; cap 1 matches serial RAND, iterative calculation and cycles. WASM stays on the caller and ignores the setting |
+| Edit → recalc, 100k dependents | median 46.373 ms independent, 61.866 ms same-row SUM (5 runs, release, Intel Xeon E5-2680 v3 @ 2.50GHz, default cap 8). Serial chain 230.038 ms, recorded only | tens of ms | `cargo xtask bench` (`crates/calc/examples/bench_100k.rs`), 2026-10-21 |
+| Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code. Scrolled to the last row, the grid asks for fewer than 80 rows (`scrolled_to_the_last_row_asks_only_for_visible_rows`) |
+| Open a ~100 MB XLSX | synthetic ≥100 MiB shared-string part streams open; a synthetic styles part of at least 100 MiB opens | opens | `crates/xlsx/src/tests/large_stream.rs`. Styles stay buffered. A kept part past 512 MB is still refused. Not a measured customer file. A pivot cache of that size was not measured |
+| 1,048,576-row sheet | a code-built sheet opens, recalculates and samples row 1 and row 1,048,576 with fewer than 64 stored cells | usable | `last_row_opens_recalculates_and_samples_both_ends` |
+| Whole-sheet operations | `edit.fillDown`, `data.removeDuplicates` and `selection.currentRegion` finish on a whole-column or 12,000-row sparse fixture without storing a height×width rectangle | fine | `whole_column_fill_remove_duplicates_and_current_region_stay_sparse` |
 
-Work: streaming XLSX reader with shared-string and style dedup, multi-threaded recalc of
-independent chains (native only; WASM stays single-threaded), whole-column reference
-clamping, a `cargo xtask bench` with fixed workbooks so the numbers become measured.
+Measured on 2026-10-21: the 100k edit (both medians under 100 ms), the 1,048,576-row sheet, whole-column Fill / Remove Duplicates / current region, and the worker cap. Worksheet and shared-string XML stream (duplicate shared strings share one allocation). A styles part of at least 100 MiB opens and stays buffered. Dynamic formulas, iterative calculation, cycles and WASM stay on the caller. Outside this measurement: GPU calc, a worker cap above 8, streaming XLSX write, and a customer file of about 100 MB. Performance readiness stays ~35% (35–55 h); that estimate covers those remaining items.
+
+On a whole column, Fill Down (Ctrl+D) fills only the first contiguous block of cells; cells outside that block are left unchanged. Excel fills the entire column.
 
 ## Platforms
 
@@ -242,9 +243,9 @@ Linux, BSD and RISC-V, where Excel doesn't run.
 
 **Alpha.** All six core workflows in the [alpha gate](roadmap.md#alpha-gate) pass end to end on macOS with save and reopen (two pass with non-blocking fidelity loss). Core workflows exist end to end, but depth, fidelity and file compatibility are rough
 (ready ~50%, inside the 40–75% alpha band). Not beta: the main format, XLSX, has not been proven
-on real-world files or confirmed to open in Excel without repair, large files fail, `.xls` is
+on real-world files or confirmed to open in Excel without repair, a synthetic ≥100 MiB shared-string part streams open and a synthetic styles part of at least 100 MiB opens (kept parts stay buffered, and a kept part past 512 MB is still refused), a code-built 1,048,576-row sheet opens and recalculates, `.xls` is
 missing and text in several scripts doesn't render. Distance to beta: ~25 points of readiness and
-~160–240 h, itemized in [roadmap.md](roadmap.md#beta-gates).
+~135–200 h, itemized in [roadmap.md](roadmap.md#beta-gates).
 
 ## Effort and calibration
 
@@ -327,7 +328,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 - Pixel comparison against Excel screenshots (planned; screenshots stay in `plan/excel/`).
 - Function results against Excel-computed oracles (a corpus repo is the planned home).
-- Recalc and open-time benchmarks on fixed workbooks (no `cargo xtask bench` yet).
+- Open-time benchmarks on customer workbooks. `cargo xtask bench` times a 100,000-dependent edit; a synthetic shared-string part and a synthetic styles part are covered by tests.
 - Whether Excel opens our XLSX output without repair, across features.
 
 ## Revision history
@@ -338,6 +339,9 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 | 2026-10-25 | trivial | Catalog count 276 / 292 in the summary table and the method, as `cargo xtask parity` measures (no score change) |
 | 2026-10-22 | minor | Several windows on the desktop: a native window per workbook window, New Window on the same workbook, Switch Windows and Arrange All; "one window" removed from UI/UX fidelity, Hardware and the interaction-fidelity discount; no score change |
 | 2026-10-21 | minor | Page Setup paper sizes: `B4`/`B5`/`B6` are the JIS sizes Japanese Excel uses (ISO B4/B5/B6 by name), and Japanese Postcard, Japanese Double Postcard, the chou/kaku envelopes and A6 are added; PDF MediaBox and `file.print` follow, and the Size menu lists them |
+| 2026-10-21 | minor | Later the same day, no hot-path change: release bench on the same Intel Xeon E5-2680 v3 @ 2.50GHz, cap 8, median 48.043 ms and 71.120 ms. Serial chain 265.927 ms, recorded only. The 46.373 ms and 61.866 ms line stands. Scores unchanged |
+| 2026-10-21 | minor | Performance measured: release bench on an Intel Xeon E5-2680 v3 @ 2.50GHz, default cap 8, median 46.373 ms and 61.866 ms. 1,048,576-row sheet, whole-column Fill / Remove Duplicates / current region, and a styles part of at least 100 MiB are covered by tests. Scores unchanged. Distance to beta ~135–200 h |
+| 2026-10-21 | minor | Performance, earlier the same day: a synthetic ≥100 MiB shared-string part streams open; native independent-wave recalc uses up to 8 threads. Scores unchanged. The 100 ms edit and the 1,048,576-row sheet were measured later the same day |
 | 2026-10-18 | trivial | Stale chart notes: all chart kinds survive XLSX round-trip (PRs #158, #161) and trendlines landed |
 | 2026-10-16 | minor | Advanced Filter copy-to clears only its actual output and rejects overflow without changing cells (#1031) |
 | 2026-10-15 | minor | Row auto-fit: line breaks count only in wrapping cells (Excel: wrap off shows one line, AutoFit gives one line); unwrapped multi-line cells from files no longer grow rows on open (no score change) |

@@ -1,5 +1,6 @@
 //! Reading the workbook part and everything hanging off it.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
@@ -32,6 +33,9 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// Cells stored so far, across every sheet. Capped so a streamed part cannot build an
+    /// unbounded grid.
+    pub cells: u64,
 }
 
 impl Ctx<'_> {
@@ -96,36 +100,50 @@ pub fn find_rel<'r>(rels: &'r [Rel], kind: &str) -> Option<&'r Rel> {
     rels.iter().find(|r| r.kind == kind)
 }
 
+fn intern_shared(index: &mut HashSet<Arc<str>>, text: &str) -> Arc<str> {
+    if let Some(existing) = index.get(text) {
+        return Arc::clone(existing);
+    }
+    let arc: Arc<str> = Arc::from(text);
+    index.insert(Arc::clone(&arc));
+    arc
+}
+
 fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError> {
     // Shared strings, streamed item by item. Phonetic (furigana) runs are kept next to the text
     // they annotate, so an open + save does not delete them.
+    const MAX_SHARED_STRINGS: usize = 50_000_000;
     if let Some(r) = find_rel(wb_rels, "sharedStrings").cloned() {
-        match cx.pkg.read(&r.target)? {
-            Some(b) => {
-                let mut sst = Vec::new();
-                let mut phonetics = Vec::new();
-                let mut dropped = 0usize;
-                let res = xml::parse_streaming(&b, &["si"], &mut |si| {
-                    let text = xml::rich_text(&si);
-                    let raw = si.kids("rPh").count();
-                    let (runs, props) = xml::phonetic_data(&si, &text);
-                    dropped += raw.saturating_sub(runs.len());
-                    if !runs.is_empty() || props.is_some() {
-                        phonetics.push(PhoneticString { text: text.clone(), runs, props });
-                    }
-                    sst.push(Arc::from(text));
-                    Ok(())
-                });
-                if let Err(e) = res {
-                    cx.warn(format!("shared strings are damaged ({e}); kept {} strings", sst.len()));
-                }
-                if dropped > 0 {
-                    cx.warn(format!("shared strings: {dropped} phonetic runs were dropped (bad sb/eb or no reading)"));
-                }
-                cx.sst = sst;
-                cx.keep_phonetics(phonetics);
+        let mut sst = Vec::new();
+        let mut intern = HashSet::new();
+        let mut phonetics = Vec::new();
+        let mut dropped = 0usize;
+        let res = cx.pkg.parse_xml_streaming(&r.target, &["si"], &mut |si| {
+            if sst.len() >= MAX_SHARED_STRINGS {
+                return Err(IoError::TooLarge(format!("more than {MAX_SHARED_STRINGS} shared strings")));
             }
-            None => cx.warn(format!("missing part {}", r.target)),
+            let text = xml::rich_text(&si);
+            let raw = si.kids("rPh").count();
+            let (runs, props) = xml::phonetic_data(&si, &text);
+            dropped += raw.saturating_sub(runs.len());
+            if !runs.is_empty() || props.is_some() {
+                phonetics.push(PhoneticString { text: text.clone(), runs, props });
+            }
+            sst.push(intern_shared(&mut intern, &text));
+            Ok(())
+        });
+        match res {
+            Ok(None) => cx.warn(format!("missing part {}", r.target)),
+            Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
+            Err(ref e) => cx.warn(format!("shared strings are damaged ({e}); kept {} strings", sst.len())),
+            Ok(Some(_)) => {}
+        }
+        if !matches!(res, Ok(None)) {
+            if dropped > 0 {
+                cx.warn(format!("shared strings: {dropped} phonetic runs were dropped (bad sb/eb or no reading)"));
+            }
+            cx.sst = sst;
+            cx.keep_phonetics(phonetics);
         }
     }
 
@@ -238,6 +256,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        cells: 0,
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());

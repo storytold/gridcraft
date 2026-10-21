@@ -1,6 +1,7 @@
 use super::RangeRef;
 use crate::eval::Area;
 use gridcraft_core::CellRef;
+use gridcraft_formula::Expr;
 use std::collections::BTreeSet;
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -38,6 +39,12 @@ pub type Key = (usize, CellRef);
 pub(super) struct Node {
     pub(super) areas: Vec<Area>,
     pub(super) dynamic: bool,
+    /// Parsed formula, so a recalc does not parse it again.
+    pub(super) expr: Option<std::sync::Arc<Expr>>,
+    /// Legacy array range (`Formula::array`). `None` for an ordinary formula.
+    /// The parallel wave reads it on native; wasm does not build that wave.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) legacy: Option<RangeRef>,
 }
 
 /// Ranges wider than this many columns go to the per-sheet wide index instead of per-column ones.

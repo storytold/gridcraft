@@ -1,8 +1,8 @@
 # GridCraft roadmap
 
-**Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
+**Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~135–200 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; earlier: macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right, and fills a selection's empty last row and column; large-workbook streaming and parallel recalc landed, historical bench only; earlier: macro engine and `macro.*` commands; macro interface on the Automate tab) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -26,7 +26,7 @@ This page is the summary. The detail is in:
 | **Ready for real work** | **~50%** | estimated from written weights (51.6); [target-app-parity.md](docs/target-app-parity.md) |
 | **Mainstream practitioner** | **~50%** | estimated: typical analyst/finance user, weekly features, × 0.90 interaction × 0.92 stability × 0.88 file exchange; [method](docs/target-app-parity.md#mainstream-practitioner) |
 | **Essentials user** | **~63%** | estimated: core features only, × 0.92 launch/stability × 0.95 clarity × 0.90 opening sent files; [method](docs/target-app-parity.md#essentials-user) |
-| Remaining to **beta** | **~160–240 Opus 5.5 agent-hours** | estimated; itemized in [roadmap.md](docs/roadmap.md#beta-gates) |
+| Remaining to **beta** | **~135–200 Opus 5.5 agent-hours** | estimated; itemized in [roadmap.md](docs/roadmap.md#beta-gates) |
 | Remaining to **full parity** | **~700–1,100 Opus 5.5 agent-hours** | estimated; sum of the dimension rows below |
 
 | Audience | Ready % | Opus 5.5 agent wall-clock hours to ~95% | Work that dominates |
@@ -43,7 +43,7 @@ long `.xls` track, so about half parallelizes (≈30–50 wall-clock hours with 
 
 Why alpha: all six core workflows in the [alpha gate](docs/roadmap.md#alpha-gate) pass end to end on macOS with save and reopen, and the core workflow works end to end (open an XLSX, enter formulas and data, format, sort
 and filter, chart, pivot, print to PDF, save XLSX), but users still hit blocking gaps on real
-files: 100 MB workbooks don't open (#175), there's no `.xls` (#121), Arabic and Devanagari text
+files: a synthetic ≥100 MiB shared-string part streams open, a synthetic styles part of at least 100 MiB opens, and a code-built 1,048,576-row sheet recalculates in tests, but a kept part past 512 MB is still refused (#175), there's no `.xls` (#121), Arabic and Devanagari text
 isn't shaped (Chinese text still reported in #142), charts lose their type and options on round trip, and
 nobody has yet confirmed that Excel opens our output without a repair prompt across a real
 corpus. Beta needs those closed (see [beta gates](docs/roadmap.md#beta-gates)).
@@ -125,11 +125,10 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
    correctness, chart kind round-trip, CJK font fallback, macOS Finder open, German and Chinese
    UI). Review and merge: 8–15 h.
 2. **XLSX fidelity on a real-world corpus**, with Excel opening our output without repair: 25–35 h.
-3. **Large workbooks and recalc speed**: 100 MB XLSX, 1M rows, multi-threaded recalc: 40–60 h.
-4. **Charts depth**: kinds and options round-trip, axes, trendlines, error bars: 25–35 h.
-5. **Text in every script** (CJK, Thai, Arabic, Devanagari) in cells and PDF: 12–20 h.
-6. **Legacy `.xls` import and password-protected workbooks**: 20–30 h.
-7. **Localization**: extend the catalog past the ribbon, then the twelve languages: 100–165 h.
+3. **Charts depth**: kinds and options round-trip, axes, trendlines, error bars: 25–35 h.
+4. **Text in every script** (CJK, Thai, Arabic, Devanagari) in cells and PDF: 12–20 h.
+5. **Legacy `.xls` import and password-protected workbooks**: 20–30 h.
+6. **Localization**: extend the catalog past the ribbon, then the twelve languages: 100–165 h.
 
 ## Progress log
 
@@ -153,6 +152,9 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-22 | View › New Window opens a second window on the same workbook (it used to open a copy whose Save overwrote the original): each window has its own selection, active sheet and scroll, titles read "Book1:1" / "Book1:2", and Switch Windows, Hide, Unhide and Close act per window. The control channel, CLI `send` and MCP tools take an optional `window` or `doc` id and default to the active window; `window.list` (MCP `list_windows`) lists the windows |
 | 2026-10-22 | Typing in a cell and then choosing File › New no longer strands the first workbook: the entry is committed into its own workbook before any File or window command (a refused entry stays open and stops the command), View › Switch Windows and the macOS Window menu list the open workbooks with unsaved markers, `view.switchWindows {doc}` switches by a stable workbook id, and the macOS Quit item asks about unsaved workbooks |
 | 2026-10-21 | Page Setup paper sizes match Japanese Excel: `B4`/`B5`/`B6` are the JIS sizes (ISO B4/B5/B6 stay reachable by name), so a Japanese B5 worksheet prints at 182×257 mm; Japanese Postcard (100×148 mm), Double Postcard (148×200 mm), Envelope #3/#4 (120×235/90×205 mm), Kaku #2/#3 (240×332/216×277 mm) and A6 are added, both sizes reach the PDF page (`file.exportPdf`/`file.print` MediaBox) and the size survives an XLSX round-trip; the Page Layout Size menu lists them. `B4`/`B5` used to be the ISO sizes, which is changed here |
+| 2026-10-21 | Later the same day, no hot-path change: release bench on the same Intel Xeon E5-2680 v3 @ 2.50GHz, default cap 8, median 48.043 ms (100k independent dependents) and 71.120 ms (100k same-row SUM). Serial chain 265.927 ms, recorded only. The 46.373 ms and 61.866 ms row stands |
+| 2026-10-21 | Large workbooks (gap #2): release bench on an Intel Xeon E5-2680 v3 @ 2.50GHz, default cap 8, median 46.373 ms (100k independent dependents) and 61.866 ms (100k same-row SUM). Serial chain 230.038 ms, recorded only. A code-built 1,048,576-row sheet opens, recalculates and samples both ends. Whole-column Fill, Remove Duplicates and current region stay sparse. `SUM(A:P)` keeps 70 plus spilled numbers when `SEQUENCE` intersects the range. A synthetic styles part of at least 100 MiB opens (buffered). `formulas.calculationOptions` `maxWorkers` sets the native cap. A kept part past 512 MB is still refused |
+| 2026-10-21 | Large workbooks, earlier the same day: worksheet and shared-string XML stream from the zip, and a synthetic shared-string part of at least 100 MiB opens. Native recalc runs independent formula waves on up to 8 threads. Dynamic formulas, iterative calculation, cycles and WASM stay on one thread. The 100 ms edit and the 1,048,576-row sheet were measured later the same day |
 | 2026-10-20 | Japanese interface catalog covers every key the Brazilian Portuguese catalog translates: the 398-label shared core plus 545 dialog, message, Backstage and menu strings (943 total, ~43% of ~2,200). A test parses `pt.rs`'s source, so the two catalogs stay in step |
 | 2026-10-20 | Interface translated into Dutch (518 labels: ribbon, context menus, File view, dialog titles, Options); `nl`, `nl-NL`, `nl-BE` locale tags resolve to Dutch |
 | 2026-10-19 | Long flat operator chains (`=A1+A2+…`) up to Excel's 8,192-character limit (4,096 operands): entering, filling, inserting rows, undo, Evaluate Formula and XLSX save no longer overflow the stack; chains past 64 operands are saved as plain formulas, not dynamic arrays; Spanish formula entry accepts chains past 256 operands (#916) |
@@ -255,6 +257,9 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-22 | minor | Progress log: New Window shares the workbook; window ids for scripts and MCP |
 | 2026-10-22 | minor | Progress log: drafts stay in their workbook, Switch Windows, macOS Quit asks to save |
 | 2026-10-21 | minor | Page Setup paper sizes: JIS B4/B5/B6 (ISO by name), Japanese postcards and envelopes, A6; PDF page size follows, XLSX round-trips |
+| 2026-10-21 | minor | Later the same day, no hot-path change: bench median 48.043 ms and 71.120 ms on the same Xeon, cap 8. Serial chain 265.927 ms, recorded only. The 46.373 ms and 61.866 ms line stands. Scores unchanged (breadth ~75%, ready ~50%, performance ~35%, hardware ~40%, file formats ~50%). Remaining to beta ~135–200 h |
+| 2026-10-21 | minor | Gap #2 done. Remaining to beta ~135–200 h. Scores unchanged (breadth ~75%, ready ~50%, performance ~35%, hardware ~40%, file formats ~50%). Bench median 46.373 ms and 61.866 ms |
+| 2026-10-21 | minor | Gap #2, earlier the same day: streamed worksheet and shared-string reads; native independent-wave recalc. The 100 ms edit and the 1,048,576-row sheet were measured later the same day |
 | 2026-10-20 | minor | Dutch (nl) listed under other shipped languages; progress log row |
 | 2026-10-19 | minor | Progress log: long flat operator chains (#916) |
 | 2026-10-19 | trivial | Progress log: desktop theme portal read timeout |

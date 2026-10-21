@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** trivial (the hidden names that hold macros; earlier: macro engine on the engine building blocks) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** trivial (the hidden names that hold macros; large-workbook streaming and parallel recalc landed, historical bench only; earlier: macro engine on the engine building blocks) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -17,7 +17,7 @@ including tests, 2026-10-10.
 | L1 | `formula` | ~1.7k | Tokenizer, parser, AST, printer (A1 and R1C1), reference adjustment for copy, fill and structural edits |
 | L1 | `functions` | ~13.4k | The function library: `FnSpec` registry (name, arity, category, scalar args, signature, description) and pure implementations; automatic array lifting |
 | L2 | `model` | ~2.2k | Workbook, sheets, copy-on-write cell store (64-row bands behind `Arc`), interned styles, names, tables, CF, validation, comments, charts, shapes, images, sparklines, print settings, protection |
-| L2 | `calc` | ~2.9k | Evaluator (references, names, tables, LET/LAMBDA, special forms like OFFSET/INDIRECT/SUBTOTAL) and dependency-graph recalculation with dynamic arrays, spills and cycle detection; single-threaded |
+| L2 | `calc` | ~2.9k | Evaluator (references, names, tables, LET/LAMBDA, special forms like OFFSET/INDIRECT/SUBTOTAL) and dependency-graph recalculation with dynamic arrays, spills and cycle detection. Native builds evaluate independent formula waves on up to 8 threads (`formulas.calculationOptions` `maxWorkers`, default the machine); dynamic formulas, iterative calculation, cycles and WASM stay on the caller |
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
 | L2 | `pdf` | ~1k | Small PDF 1.7 writer (14 standard fonts, vectors, images) for print and export |
 | L3 | `chart` | ~2.9k | Toolkit-free chart layout to drawing primitives, a rasterizer, sparklines |
@@ -25,7 +25,7 @@ including tests, 2026-10-10.
 | L6 | `ui-egui` | ~11.6k | Excel-style UI (title bar, QAT, ribbon, formula bar, virtualised grid, editor, tabs, status bar, dialogs, task panes, chart view) and the control channel |
 | L6 | `mcp` | ~1.4k | MCP server over stdio (hand-written JSON-RPC), headless or bridged to a running app |
 | L7 | `apps/gridcraft`, `apps/gridcraft-cli`, `apps/gridcraft-web` | ~2.2k | Desktop (eframe/wgpu), CLI (`info`, `convert`, `eval`, `cat`, `run`, `commands`, `functions`, `mcp`, `send`), web (WASM via trunk) |
-| — | `xtask` | — | `ci`, `parity`, `assets`, `layers`, `wasm`, `version`, `stats` |
+| — | `xtask` | — | `ci`, `bench`, `parity`, `assets`, `layers`, `wasm`, `version`, `stats` |
 
 ## Data flow
 
@@ -42,8 +42,10 @@ including tests, 2026-10-10.
    exceeds 128 MiB. The newest step remains undoable even if that step alone exceeds the budget.
    The estimate is a history policy, not a measure or hard cap of process memory.
 3. **Recalc** marks dependents of changed cells dirty through the dependency graph (with range
-   nodes for range dependents), evaluates in topological order, spills dynamic arrays and reports
-   `#SPILL!`/cycles. Volatile functions are always dirty.
+   nodes for range dependents). On native builds, a wave of independent non-dynamic formulas runs
+   on `std::thread::scope` (threshold 64, cap 1–8). Dynamic formulas, iterative calculation, cycles
+   and WASM stay on the caller. Spills, `#SPILL!` and cycles are reported as before. Volatile
+   functions are always dirty.
 4. **Rendering**: the egui grid reads display values (number formats applied in `engine/display.rs`)
    for the visible window only; charts render through `crates/chart` primitives.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
@@ -150,9 +152,9 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 ## Known architectural gaps
 
-- No threading in calc (see [hardware-parity.md](hardware-parity.md)).
+- Calc threads independent formula waves on native builds. `formulas.calculationOptions` `maxWorkers` sets the cap (null follows the machine, clamped to 1–8). Dynamic formulas, iterative calculation, cycles and WASM stay on one thread (see [hardware-parity.md](hardware-parity.md)). `cargo xtask bench` on an Intel Xeon E5-2680 v3 @ 2.50GHz, default cap 8: median 46.373 ms for 100,000 independent dependents and 61.866 ms for 100,000 same-row SUMs. A 100,000-step serial chain took 230.038 ms and is recorded only.
 - No string catalog or text shaping (see [localization-parity.md](localization-parity.md)).
-- XLSX reader builds the whole workbook in memory; no streaming (#175).
+- Worksheet and shared-string parts are parsed from the zip inflate and are not kept as a second buffer. Duplicate shared strings share one allocation. Other parts stay fully buffered (512 MB each, 1 GB kept per package). Streamed parts are capped at 2 GB each and 4 GB streamed per package. A styles part of at least 100 MiB opens through `read_xlsx` (still buffered; a pivot cache of that size was not measured). A kept part past 512 MB, and a streamed part past 2 GB, are refused (#175). A workbook past 50 million stored cells is refused.
 - Unmodelled XLSX parts are not carried through a save.
 
 ## Revision history
@@ -163,4 +165,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
+| 2026-10-21 | minor | Later the same day, no hot-path change: release bench on the same Intel Xeon E5-2680 v3 @ 2.50GHz, cap 8, median 48.043 ms and 71.120 ms. Serial chain 265.927 ms, recorded only. The 46.373 ms and 61.866 ms line stands |
+| 2026-10-21 | minor | `formulas.calculationOptions` `maxWorkers` sets the native cap. Release bench on an Intel Xeon E5-2680 v3 @ 2.50GHz, default cap 8: median 46.373 ms and 61.866 ms. A styles part of at least 100 MiB opens; it stays buffered. A pivot cache of that size was not measured |
+| 2026-10-21 | minor | Native calc runs independent formula waves on up to 8 threads. Worksheet and shared-string XML stream from the zip. Dynamic formulas, iterative calculation, cycles and WASM stay single-threaded. Kept parts remain buffered |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

@@ -7,18 +7,18 @@ use gridcraft_core::date::{serial_from_ymd, time_fraction};
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{
-    AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
-    NoteBox, NoteCorner, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation,
-    ValidationKind, XmlColumnPr,
+    AutoFilter, Cell, CellPicture, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink,
+    LineInfo, NoteBox, NoteCorner, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, StyleId, Table, TableColumn,
+    TotalsFn, Validation, ValidationKind, XmlColumnPr,
 };
 
-use crate::IoError;
 use crate::fmla::from_file;
 use crate::package::Rel;
 use crate::read::Ctx;
 use crate::styles::read_color;
 use crate::tables::{col_width_to_px, paper_name, pt_to_px};
 use crate::xml::{self, El};
+use crate::{IoError, ReadReport};
 
 mod parts;
 mod rules;
@@ -96,6 +96,8 @@ const MAX_DYNAMIC_CHECKS: u64 = 16_000_000;
 /// Most conditional-format range cells one sheet keeps, over all rules of an element: every
 /// rule copies its element's whole range list, so rules × ranges must stay bounded.
 const MAX_COND_CELLS: u64 = 4_000_000;
+/// Cells stored from one workbook. Past this the open fails instead of growing without a bound.
+pub(crate) const MAX_XLSX_CELLS: u64 = 50_000_000;
 
 fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     if let Some(h) = e.attr_f64("defaultRowHeight") {
@@ -115,26 +117,38 @@ fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     }
 }
 
+/// Fields a row needs while the worksheet part is streaming. The package stays borrowed by the
+/// inflate reader, so this is everything else.
+struct Import<'a> {
+    report: &'a mut ReadReport,
+    sst: &'a [Arc<str>],
+    xf_map: &'a [StyleId],
+    date_system: DateSystem,
+    cell_pictures: &'a [Option<Arc<CellPicture>>],
+    cells: &'a mut u64,
+}
+
+impl Import<'_> {
+    fn warn(&mut self, m: impl Into<String>) {
+        self.report.warn(m);
+    }
+    fn style(&self, xf: Option<u32>) -> StyleId {
+        xf.and_then(|i| self.xf_map.get(i as usize).copied()).unwrap_or_default()
+    }
+    fn count_cell(&mut self) -> Result<(), IoError> {
+        *self.cells = self.cells.saturating_add(1);
+        if *self.cells > MAX_XLSX_CELLS { Err(IoError::TooLarge(format!("more than {MAX_XLSX_CELLS} cells"))) } else { Ok(()) }
+    }
+}
+
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
-    let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
     let mut st = RowState::default();
-    let res = xml::parse_streaming(&bytes, &["row"], &mut |row| {
-        read_row(cx, &mut sheet, &mut st, &row);
-        Ok(())
-    });
-    let root = match res {
-        Ok(r) => r,
-        Err(e) => {
-            cx.warn(format!("sheet \"{name}\" is damaged ({e}); kept {} rows", st.rows));
-            El::default()
-        }
-    };
+    let root = read_sheet_rows(cx, part, name, &mut sheet, &mut st)?;
     if st.dropped > 0 {
         cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
     }
-    drop(bytes);
 
     let mut fit_to_page = false;
     let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
@@ -288,6 +302,30 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     Ok(sheet)
 }
 
+fn read_sheet_rows(cx: &mut Ctx<'_>, part: &str, name: &str, sheet: &mut Sheet, st: &mut RowState) -> Result<El, IoError> {
+    let res = {
+        let pkg = &mut cx.pkg;
+        let mut import = Import {
+            report: &mut cx.report,
+            sst: cx.sst.as_slice(),
+            xf_map: cx.xf_map.as_slice(),
+            date_system: cx.date_system,
+            cell_pictures: cx.cell_pictures.as_slice(),
+            cells: &mut cx.cells,
+        };
+        pkg.parse_xml_streaming(part, &["row"], &mut |row| read_row(&mut import, sheet, st, &row))
+    };
+    match res {
+        Ok(Some(root)) => Ok(root),
+        Ok(None) => Err(IoError::Format(format!("missing part {part}"))),
+        Err(IoError::TooLarge(m)) => Err(IoError::TooLarge(m)),
+        Err(e) => {
+            cx.warn(format!("sheet \"{name}\" is damaged ({e}); kept {} rows", st.rows));
+            Ok(El::default())
+        }
+    }
+}
+
 /// A protection password hash: the iterated attributes (`algorithmName`, `hashValue`,
 /// `saltValue`, `spinCount`) or the legacy 16-bit `password`, each name preceded by `prefix`
 /// (`workbook` gives `workbookHashValue`…). One that can't be read keeps a hash that never
@@ -407,19 +445,19 @@ fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Re
     Ok(())
 }
 
-fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
+fn read_row(cx: &mut Import<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) -> Result<(), IoError> {
     st.rows += 1;
     let r = match row.attr_u32("r") {
         Some(r) if r >= 1 => r - 1,
         Some(_) => {
             st.dropped += 1;
-            return;
+            return Ok(());
         }
         None => st.next_row,
     };
     if r >= MAX_ROWS {
         st.dropped += 1;
-        return;
+        return Ok(());
     }
     st.next_row = r + 1;
     let mut info = LineInfo::default();
@@ -458,11 +496,12 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
             continue;
         }
         next_col = pos.col + 1;
-        read_cell(cx, sheet, st, c, pos);
+        read_cell(cx, sheet, st, c, pos)?;
     }
+    Ok(())
 }
 
-fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos: CellRef) {
+fn read_cell(cx: &mut Import<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos: CellRef) -> Result<(), IoError> {
     let style = cx.style(c.attr_u32("s"));
     let v = c.child("v").map(|v| v.text.as_str());
     let value = match c.attr("t").unwrap_or("n") {
@@ -518,22 +557,28 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         if c.child("f").is_some() {
             cx.warn("formula-generated cell pictures were imported as static pictures; their formulas were not retained");
         }
+        cx.count_cell()?;
         sheet.set_picture(pos, picture);
         sheet.set_style(pos, style);
-        return;
+        return Ok(());
     }
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     let value = if formula.is_none() && in_dynamic(st, pos) { Value::Empty } else { value };
-    sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
+    let cell = Cell { value, formula: formula.map(Arc::new), style };
+    if !cell.is_blank() {
+        cx.count_cell()?;
+    }
+    sheet.cells.set(pos, cell);
+    Ok(())
 }
 
-fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
+fn read_formula(cx: &mut Import<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
     // Keep the file's dynamic-array mark, so saving never turns the formula into a legacy one.
     read_formula_text(cx, st, f, pos, dynamic).map(|fm| Formula { dynamic, ..fm })
 }
 
-fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
+fn read_formula_text(cx: &mut Import<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
     let model = from_file(f.text.trim());
     let text = model.as_str();
     match f.attr("t").unwrap_or("normal") {

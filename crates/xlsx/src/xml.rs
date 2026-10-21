@@ -2,6 +2,7 @@
 //! shared strings) so large parts never need a full tree, plus escaping helpers for writing.
 
 use std::fmt::Write as _;
+use std::io::BufRead;
 
 use gridcraft_model::{PhoneticProps, PhoneticRun, PhoneticString};
 use quick_xml::Reader;
@@ -9,6 +10,9 @@ use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
 
 use crate::IoError;
+
+/// Marker in an I/O error when a streaming reader hits its decompression cap.
+pub(crate) const PART_LIMIT_MARK: &str = "GRIDCRAFT_PART_LIMIT";
 
 /// Maximum element nesting accepted in any part.
 pub const MAX_DEPTH: usize = 256;
@@ -217,15 +221,36 @@ pub fn parse(xml: &[u8]) -> Result<El, IoError> {
 /// kept in the returned tree.
 pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
     let data = to_utf8(xml);
-    let mut reader = Reader::from_reader(data.as_ref());
-    {
-        let cfg = reader.config_mut();
-        cfg.check_end_names = false;
-        cfg.allow_unmatched_ends = true;
-        cfg.allow_dangling_amp = true;
-        cfg.trim_text_start = false;
-        cfg.trim_text_end = false;
+    parse_bufread(std::io::Cursor::new(data.as_ref()), split, cb)
+}
+
+/// Parses XML from a buffered reader (a zip inflate stream). UTF-8, with an optional BOM.
+/// UTF-16 is not detected here: callers that see a UTF-16 BOM decode it first.
+pub(crate) fn parse_bufread<R: BufRead>(mut read: R, split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
+    let bom = read.fill_buf().map_err(io_xml)?.starts_with(&[0xEF, 0xBB, 0xBF]);
+    if bom {
+        read.consume(3);
     }
+    let mut reader = Reader::from_reader(read);
+    drive(&mut reader, split, cb)
+}
+
+fn configure<R>(reader: &mut Reader<R>) {
+    let cfg = reader.config_mut();
+    cfg.check_end_names = false;
+    cfg.allow_unmatched_ends = true;
+    cfg.allow_dangling_amp = true;
+    cfg.trim_text_start = false;
+    cfg.trim_text_end = false;
+}
+
+fn io_xml(e: std::io::Error) -> IoError {
+    let s = e.to_string();
+    if s.contains(PART_LIMIT_MARK) { IoError::TooLarge("a part expands past the decompression limit".into()) } else { IoError::Xml(s) }
+}
+
+fn drive<R: BufRead>(reader: &mut Reader<R>, split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
+    configure(reader);
     let mut stack: Vec<El> = Vec::new();
     let mut root: Option<El> = None;
     let mut buf = Vec::new();
@@ -262,7 +287,10 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
         Ok(())
     }
     loop {
-        let ev = reader.read_event_into(&mut buf).map_err(|e| IoError::Xml(format!("{e} at byte {}", reader.buffer_position())))?;
+        let ev = reader.read_event_into(&mut buf).map_err(|e| match io_xml(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())) {
+            IoError::TooLarge(m) => IoError::TooLarge(m),
+            _ => IoError::Xml(format!("{e} at byte {}", reader.buffer_position())),
+        })?;
         match ev {
             Event::Start(e) => {
                 if stack.len() >= MAX_DEPTH {

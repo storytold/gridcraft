@@ -17,7 +17,7 @@ pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
     exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
     pub(super) results: HashMap<Key, Value>,
-    pending: HashSet<Key>,
+    pub(super) pending: HashSet<Key>,
     in_progress: HashSet<Key>,
     /// New spills found during the pass: anchor → array.
     pub(super) spills: HashMap<Key, std::sync::Arc<Array>>,
@@ -103,15 +103,14 @@ impl<'a> PassHost<'a> {
 /// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
 /// overlaps merged cells, holds other cells, or another formula's spill (unless that formula is
 /// recalculated in this pass, and so may spill elsewhere now).
-fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
-    let Some(sh) = host.wb.sheet(sheet) else { return false };
+fn spill_blocked(wb: &Workbook, exprs: &HashMap<Key, std::sync::Arc<Expr>>, (sheet, anchor): Key, a: &Array) -> bool {
+    let Some(sh) = wb.sheet(sheet) else { return false };
     let end =
         CellRef::new(anchor.row.saturating_add((a.rows as u32).saturating_sub(1)), anchor.col.saturating_add((a.cols as u32).saturating_sub(1)));
     let range = RangeRef::new(anchor, end);
     let own = sh.spill_ranges.get(&anchor);
     let spilled_over = |c: CellRef| {
-        !own.is_some_and(|o| o.contains(c))
-            && sh.spill_ranges.iter().any(|(o, r)| *o != anchor && r.contains(c) && !host.exprs.contains_key(&(sheet, *o)))
+        !own.is_some_and(|o| o.contains(c)) && sh.spill_ranges.iter().any(|(o, r)| *o != anchor && r.contains(c) && !exprs.contains_key(&(sheet, *o)))
     };
     end.row >= gridcraft_core::MAX_ROWS
         || end.col >= gridcraft_core::MAX_COLS
@@ -119,6 +118,96 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
         || sh.tables.iter().any(|t| t.range.contains(anchor))
         || sh.cells.iter_range(range).any(|(c, cell)| c != anchor && (!cell.value.is_empty() || cell.formula.is_some()))
         || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c) && spilled_over(*c))
+}
+
+/// Spill cells inside `range`, excluding each array's anchor (that cell is stored and visited
+/// with the formula). Sheet spills are filled first; a spill computed in this pass overwrites
+/// them. `None` when an array is too large to enumerate: the caller then takes the dense path.
+pub(super) fn spill_cells_in_range(
+    sheet: usize,
+    range: RangeRef,
+    stored: &std::collections::BTreeMap<CellRef, Value>,
+    spills: &HashMap<Key, std::sync::Arc<Array>>,
+) -> Option<Vec<(CellRef, Value)>> {
+    if stored.is_empty() && spills.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut out: std::collections::BTreeMap<CellRef, Value> = std::collections::BTreeMap::new();
+    for (c, v) in stored.range(range.start..=range.end) {
+        if range.contains(*c) {
+            out.insert(*c, v.clone());
+        }
+    }
+    for (anchor, arr) in spills {
+        if anchor.0 != sheet {
+            continue;
+        }
+        let n = (arr.rows as u64).checked_mul(arr.cols as u64)?;
+        if n > crate::eval::MAX_CELLS {
+            return None;
+        }
+        for r in 0..arr.rows {
+            for cc in 0..arr.cols {
+                let c = CellRef::new(anchor.1.row.saturating_add(r as u32), anchor.1.col.saturating_add(cc as u32));
+                if c == anchor.1 || !range.contains(c) {
+                    continue;
+                }
+                out.insert(c, arr.get(r, cc).cloned().unwrap_or_default());
+            }
+        }
+        if out.len() as u64 > crate::eval::MAX_CELLS {
+            return None;
+        }
+    }
+    if out.len() as u64 > crate::eval::MAX_CELLS {
+        return None;
+    }
+    Some(out.into_iter().collect())
+}
+
+pub(super) fn stored_legacy(wb: &Workbook, k: Key) -> Option<RangeRef> {
+    wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.array)
+}
+
+pub(super) fn finish_formula(
+    wb: &Workbook,
+    exprs: &HashMap<Key, std::sync::Arc<Expr>>,
+    k: Key,
+    expr: &Expr,
+    v: Value,
+    legacy: Option<RangeRef>,
+    block_spills: bool,
+) -> (Value, Option<std::sync::Arc<Array>>) {
+    let v = match legacy {
+        Some(range) => fit_to_range(v, range),
+        None => v,
+    };
+    let keep_blanks = matches!(expr, Expr::Call(n, _) if matches!(n.as_str(), "GROUPBY" | "PIVOTBY"));
+    let (v, spill) = match v {
+        Value::Array(a) => {
+            let a = if keep_blanks || !a.data.iter().any(|x| matches!(x, Value::Empty)) {
+                a
+            } else {
+                let data = a.data.iter().map(|x| if matches!(x, Value::Empty) { Value::Number(0.0) } else { x.clone() }).collect();
+                Array::new(a.rows, a.cols, data).map(std::sync::Arc::new).unwrap_or(a)
+            };
+            // A dynamic-array formula anchors a spill range even while its result is one
+            // value -- a FILTER matching one row, a SORT or UNIQUE over one item -- so `C1#`
+            // is the 1 x 1 range and `ROWS(C1#)` is 1, as in Excel (#1491). A formula that
+            // returns a scalar never reaches this arm, so it does not become an anchor.
+            let spill = Some(a.clone());
+            (a.data.first().cloned().unwrap_or_default(), spill)
+        }
+        Value::Empty => (Value::Number(0.0), None),
+        v => (v, None),
+    };
+    if !block_spills {
+        return (v, spill);
+    }
+    match spill {
+        Some(a) if spill_blocked(wb, exprs, k, &a) => (Value::Error(CellError::Spill), None),
+        other => (v, other),
+    }
 }
 
 /// Whether `arr`, anchored at `anchor`, would spill exactly what the sheet already holds over
@@ -253,12 +342,6 @@ impl PassHost<'_> {
             self.taint = outer_taint;
             return Value::Error(CellError::Calc);
         }
-        // A legacy array formula fills the range it was entered in.
-        let legacy = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
-        let v = match legacy {
-            Some(range) => fit_to_range(v, range),
-            None => v,
-        };
         self.depth -= 1;
         self.in_progress.remove(&k);
         self.pending.remove(&k);
@@ -271,36 +354,11 @@ impl PassHost<'_> {
             }
         }
         self.taint |= outer_taint;
-        // A blank cell shows as 0 in a formula's result, inside an array as well (`=A1:A3`,
-        // FILTER or SORT of a range with blanks). GROUPBY and PIVOTBY lay out blank cells
-        // of their own, which stay blank.
-        let keep_blanks = matches!(&*expr, Expr::Call(n, _) if matches!(n.as_str(), "GROUPBY" | "PIVOTBY"));
-        let v = match v {
-            Value::Array(a) => {
-                let a = if keep_blanks || !a.data.iter().any(|x| matches!(x, Value::Empty)) {
-                    a
-                } else {
-                    let data = a.data.iter().map(|x| if matches!(x, Value::Empty) { Value::Number(0.0) } else { x.clone() }).collect();
-                    Array::new(a.rows, a.cols, data).map(std::sync::Arc::new).unwrap_or(a)
-                };
-                // A dynamic-array formula anchors a spill range even while its result is one
-                // value -- a FILTER matching one row, a SORT or UNIQUE over one item -- so `C1#`
-                // is the 1 x 1 range and `ROWS(C1#)` is 1, as in Excel (#1491). A formula that
-                // returns a scalar never reaches this arm, so it does not become an anchor.
-                self.spills.insert(k, a.clone());
-                a.data.first().cloned().unwrap_or_default()
-            }
-            Value::Empty => Value::Number(0.0),
-            v => v,
-        };
-        // An array that can't spill is #SPILL! for the formulas evaluated after it in this pass too.
-        let v = match self.spills.get(&k) {
-            Some(a) if spill_blocked(self, k, a) => {
-                self.spills.remove(&k);
-                Value::Error(CellError::Spill)
-            }
-            _ => v,
-        };
+        let legacy = stored_legacy(self.wb, k);
+        let (v, spill) = finish_formula(self.wb, self.exprs, k, &expr, v, legacy, true);
+        if let Some(a) = spill {
+            self.spills.insert(k, a);
+        }
         self.results.insert(k, v.clone());
         v
     }
@@ -517,23 +575,45 @@ impl Host for PassHost<'_> {
         let wb = self.wb;
         let Some(sh) = wb.sheet(sheet) else { return false };
         // Formula cells first, in row-major order like `range_values`: reading one calculates it
-        // and the pass remembers the value, so the walk below gets the same value again without
-        // this method holding any.
+        // and the pass remembers the value and any spill, so the walk below sees both.
         for (c, cell) in sh.cells.iter_range(range) {
             if cell.formula.is_some() {
                 let _ = self.cell_value(sheet, c);
             }
         }
-        // Spilled values sit between the stored cells (and the formulas just calculated may have
-        // produced some): leave such blocks to `range_values`.
-        if self.spills.keys().any(|a| a.0 == sheet) || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c)) {
+        let Some(extras) = spill_cells_in_range(sheet, range, &sh.spill, &self.spills) else {
             return false;
-        }
+        };
+        let mut i = 0;
         for (c, cell) in sh.cells.iter_range(range) {
-            let go = if cell.formula.is_some() { f(&self.cell_value(sheet, c)) } else { f(&cell.value) };
-            if !go {
-                break;
+            while i < extras.len() && extras[i].0 < c {
+                if !f(&extras[i].1) {
+                    return true;
+                }
+                i += 1;
             }
+            let go = if cell.formula.is_some() {
+                if i < extras.len() && extras[i].0 == c {
+                    i += 1;
+                }
+                let v = self.cell_value(sheet, c);
+                f(&v)
+            } else if i < extras.len() && extras[i].0 == c {
+                let v = extras[i].1.clone();
+                i += 1;
+                f(&v)
+            } else {
+                f(&cell.value)
+            };
+            if !go {
+                return true;
+            }
+        }
+        while i < extras.len() {
+            if !f(&extras[i].1) {
+                return true;
+            }
+            i += 1;
         }
         true
     }

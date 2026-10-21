@@ -36,6 +36,11 @@ commands:
                   regenerate crates/ui-egui/src/keytips/generated.rs from keytips.json (--check: fail if stale)
   version [set X.Y.Z[-pre]]
                   print or set the workspace version ([workspace.package] in Cargo.toml)
+  bench           release timing of a 100_000-dependent edit (cargo run --release -p gridcraft-calc
+                  --example bench_100k) and of general formulas through Session::execute
+                  (cargo run --release -p gridcraft-engine --example bench_general). Not part of ci.
+                  The two calc medians exit non-zero when they are not under 100 ms. The general
+                  scenario prints its median and does not fail the bench for being slow.
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
@@ -56,6 +61,7 @@ fn main() -> ExitCode {
         Some("keytips") => keytips::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
+        Some("bench") => cmd_bench(),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -192,6 +198,18 @@ fn cmd_doctest() -> Result<(), String> {
     let mut c = cargo();
     c.args(["test", "--workspace", "--doc"]);
     run(c, "cargo test --workspace --doc")
+}
+
+/// Release bench for a 100_000-dependent edit, then general formulas through `Session::execute`.
+/// Not part of `ci`: a miss on the two calc medians stays visible here without turning the debug
+/// suite red. The general scenario prints its median and does not fail this command for being slow.
+fn cmd_bench() -> Result<(), String> {
+    let mut calc = cargo();
+    calc.args(["run", "--release", "-p", "gridcraft-calc", "--example", "bench_100k"]);
+    run(calc, "cargo run --release -p gridcraft-calc --example bench_100k")?;
+    let mut general = cargo();
+    general.args(["run", "--release", "-p", "gridcraft-engine", "--example", "bench_general"]);
+    run(general, "cargo run --release -p gridcraft-engine --example bench_general")
 }
 
 fn cmd_ci() -> Result<(), String> {

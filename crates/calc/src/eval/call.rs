@@ -2,6 +2,7 @@ use super::array::{Acc, Agg, zip2, zip3};
 use super::format::same_kind;
 use super::special::{ev_shape, resized_sum_range, resizes_sum_range};
 use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, Lambda, Pipe, Value, compare, err};
+use gridcraft_formula::SheetSel;
 use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
@@ -129,6 +130,19 @@ impl<'h> Evaluator<'h> {
             "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" => {
                 self.host.note_volatile();
                 self.builtin(name, args)
+            }
+            // Built-ins that fold ranges. Matched here so a column of `SUM` does not allocate a
+            // name lookup. Arity matches the registry (at least one argument, no maximum).
+            "SUM" | "COUNT" | "AVERAGE" => {
+                if args.is_empty() {
+                    return err(CellError::Value);
+                }
+                let kind = match name {
+                    "COUNT" => Agg::Count,
+                    "AVERAGE" => Agg::Average,
+                    _ => Agg::Sum,
+                };
+                self.aggregate(kind, args)
             }
             _ => self.builtin(name, args),
         }
@@ -360,21 +374,46 @@ impl<'h> Evaluator<'h> {
     /// Performs aggregation operations without copying its ranges: blocks are folded over the stored
     /// cells, so no array is built and there is no `MAX_CELLS` limit. Arguments are evaluated and read one
     /// after another, as the array path does, so volatile formulas (like `RAND`) see the same order.
-    /// Only `SUM`, `COUNT` and `AVG` are supported currently.
+    /// Only `SUM`, `COUNT` and `AVERAGE` are supported currently.
     fn aggregate(&mut self, kind: Agg, args: &[Expr]) -> Ev {
+        // `SUM(E1:J1)` is a current-sheet reference. Fold it without building a reference vector.
+        if args.iter().all(|a| matches!(a, Expr::Ref(r) if matches!(r.sheet, SheetSel::Current))) {
+            let mut acc = Acc::default();
+            let mut first_error = None;
+            for a in args {
+                let Expr::Ref(r) = a else { return err(CellError::Value) };
+                let area = Area { sheet: self.sheet, range: r.range() };
+                if let Err(e) = self.aggregate_area(kind, &area, &mut acc)
+                    && first_error.is_none()
+                {
+                    first_error = Some(e);
+                }
+            }
+            return first_error.unwrap_or_else(|| Ev::V(acc.finish(kind)));
+        }
         let mut acc = Acc::default();
         let mut first_error = None;
         for a in args {
             let ev = self.eval(a);
-            let steps = match ev {
-                Ev::R(areas) => areas.iter().map(|area| self.aggregate_area(kind, area, &mut acc)).collect(),
+            let step = match ev {
+                Ev::R(areas) => {
+                    let mut bad = None;
+                    for area in &areas {
+                        if let Err(e) = self.aggregate_area(kind, area, &mut acc)
+                            && bad.is_none()
+                        {
+                            bad = Some(e);
+                        }
+                    }
+                    bad
+                }
                 ev => {
                     let value = self.deref(ev);
-                    vec![self.aggregate_value(kind, value, false, &mut acc)]
+                    self.aggregate_value(kind, value, false, &mut acc).err()
                 }
             };
             if first_error.is_none() {
-                first_error = steps.into_iter().find_map(Result::err);
+                first_error = step;
             }
         }
         first_error.unwrap_or_else(|| Ev::V(acc.finish(kind)))

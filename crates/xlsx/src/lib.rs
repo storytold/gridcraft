@@ -6,8 +6,11 @@
 //!
 //! Reading is lenient: unsupported or broken optional parts are skipped and reported in
 //! [`ReadReport::warnings`]; only a missing/invalid package or workbook part is an error. Hostile
-//! input is bounded: decompressed parts are capped at 512 MB (1 GB per package), cells outside
-//! Excel's grid are dropped and XML nesting is limited.
+//! input is bounded: parts that are kept are capped at 512 MB (1 GB per package). Worksheet and
+//! shared-string parts are parsed from the inflate stream (2 GB per part, 4 GB streamed per
+//! package) and are not held as a second buffer. Duplicate shared strings share one allocation.
+//! A workbook is refused past 50 million cells. Cells outside Excel's grid are dropped and XML
+//! nesting is limited.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 

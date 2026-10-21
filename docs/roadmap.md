@@ -1,6 +1,6 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (test command) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (test command; large-workbook streaming and parallel recalc landed, historical bench only) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
@@ -14,7 +14,6 @@ list is [`gaps.md`](gaps.md); numbers and method are in
    15-digit comparison (#187). 8–15 h. Language work should extend the new `i18n` catalog past the
    ribbon rather than add scattered literals.
 2. **XLSX on real files** (gaps #1, #3): corpus run plus Excel opening our output.
-3. **Large workbooks and multi-threaded recalc** (gap #2).
 
 ## Alpha gate
 
@@ -25,14 +24,14 @@ workflow, would make GridCraft pre-alpha.
 | Core workflow | Works end to end? | Evidence | Hours to pass |
 |---|---|---|---|
 | Build a model: enter data and formulas, recalc, save XLSX, reopen | yes | 492 working functions, dynamic arrays, LET/LAMBDA, names, tables; XLSX round-trip tests (`crates/xlsx/src/tests/roundtrip.rs`). Edge-case bugs (#57 15-digit equality, stale spills #133/#139) give wrong results in specific cases, not in the workflow | 0 (fixes are beta work, gap #6) |
-| Open a colleague's XLSX, edit, save, hand it back | partial, not blocking | Typical workbooks open and save with cells, styles, CF, validation, tables, names and pivots; unmodelled parts are dropped with a warning (gap #3); Excel-side repair prompts unverified (gap #1); ~100 MB files fail (#175) | 0 for alpha (gaps #1–#3 are beta gates) |
+| Open a colleague's XLSX, edit, save, hand it back | partial, not blocking | Typical workbooks open and save with cells, styles, CF, validation, tables, names and pivots; unmodelled parts are dropped with a warning (gap #3); Excel-side repair prompts unverified (gap #1); a synthetic ≥100 MiB shared-string part streams open and a synthetic styles part of at least 100 MiB opens; a code-built 1,048,576-row sheet opens and recalculates; a kept part past 512 MB is still refused (#175) | 0 for alpha (gaps #1 and #3 are beta gates) |
 | Format and present: number formats, styles, conditional formatting, print or PDF | yes | Full number-format language, 47 cell styles, all CF kinds, Page Break Preview, PDF export and printing. PDF can't carry non-Latin text (gap #5) | 0 |
 | Analyze: sort, filter, tables, PivotTable | yes | Multi-level sort, AutoFilter, tables with totals, PivotTables with field list, layouts, grouping, refresh and XLSX round-trip. Calculated fields done; slicers missing (gap #8) | 0 |
 | Chart the data | partial, not blocking | Column, bar, line, pie, area, scatter, combo, histogram, box, waterfall, funnel, treemap, sunburst and stock charts are created, edited and survive save and reopen; trendlines are drawn; no axis options (gap #4) | 0 for alpha |
 | Import and export CSV | yes | Encoding and delimiter detection on read, CSV/TSV write; exports raw rather than displayed values (gap #19) | 0 |
 
 **Passes:** every core workflow works end to end on macOS with save and reopen; the two partial
-rows lose fidelity only on less common content (very large files, unmodelled parts, advanced
+rows lose fidelity only on less common content (kept parts past 512 MB, unmodelled parts, advanced
 chart kinds), which are beta gates, not alpha blockers. Ready for real work ~50% is inside the
 40–75% alpha band.
 
@@ -45,7 +44,7 @@ and edge features. Each gate links its gap.
 |---|---|---|
 | XLSX proven on a real-world corpus; Excel opens our output without repair | #1 | 15–25 |
 | Unmodelled XLSX parts preserved on save | #3 | 10–15 |
-| 100 MB workbooks open; 1M rows usable; multi-threaded recalc; 100k-edit recalc < 100 ms | #2 | 25–40 |
+| 1M rows usable; 100k-edit recalc < 100 ms (landed: bench median 46.373 ms and 61.866 ms on an Intel Xeon E5-2680 v3 @ 2.50GHz, default cap 8) | #2 | 0 |
 | Charts: kinds and options survive round trip; axes, trendlines, error bars | #4 | 25–35 |
 | Text in every script renders and exports | #5 | 12–20 |
 | Calculation correctness bugs closed; iterative calculation | #6 | 10–15 |
@@ -53,7 +52,7 @@ and edge features. Each gate links its gap.
 | PivotTables: slicers, calculated fields, PivotCharts, verified in Excel | #8 | 20–30 |
 | Keyboard: key tips, shortcut audit, context menus | #9 | 12–20 |
 | Field crashes and freezes closed; autosave/recovery soak | #10 | 8–12 |
-| **Total** | | **~165–255 (≈160–240 after overlap with the PR queue)** |
+| **Total** | | **~140–215 (≈135–200 after overlap with the PR queue)** |
 
 With 4–5 agents and an integrator, about 40–60 wall-clock hours. Needs the owner: running Excel
 to check our files, and Windows machines with the reported GPU drivers.
@@ -74,9 +73,9 @@ to check our files, and Windows machines with the reported GPU drivers.
 | M9 | Page layout & print | most; Page Layout view remains |
 | M10 | PivotTables, Solver, Analysis ToolPak | PivotTables in; slicers, Solver, ToolPak remain |
 | M11 | Automation (record actions, scripts) | done |
-| M12 | Performance, accessibility, i18n | partial; i18n not started |
+| M12 | Performance, accessibility, i18n | partial; 100k edit and 1,048,576-row sheet measured; i18n not started |
 | M13 | Release & polish | releases shipping (v0.2.0–v0.4.0, signed) |
-| M14 | **Beta gates** (table above) | not started as a milestone; parts in open PRs |
+| M14 | **Beta gates** (table above) | gap #2 done; the rest not started as a milestone |
 | M15 | Localization infrastructure and the twelve languages | started: ribbon catalog in ja, zh, ko, pt-BR, ru (#31, #104, #82); German in PR #163 |
 | M16 | Get & Transform, data model | not started |
 
@@ -107,13 +106,16 @@ to check our files, and Windows machines with the reported GPU drivers.
 - Function coverage: the script method in [function-parity.md](function-parity.md). A
   `cargo xtask functions` that diffs the registry against a checked-in Excel name list would make
   it a CI number (1–2 h).
-- No `cargo xtask scorecard` or `bench` yet.
+- No `cargo xtask scorecard` yet. `cargo xtask bench` times a 100,000-dependent edit in a release build and exits 0 when both medians are under 100 ms (100k independent dependents and 100k same-row SUM); a serial chain is recorded and is not a pass. `cargo xtask bench` is not part of `cargo xtask ci`. On 2026-10-21, an Intel Xeon E5-2680 v3 @ 2.50GHz at the default cap of 8 measured 46.373 ms and 61.866 ms.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-23 | minor | Measuring: tests run through `cargo xtask test` |
+| 2026-10-21 | minor | Later the same day, no hot-path change: release bench on the same Intel Xeon E5-2680 v3 @ 2.50GHz, cap 8, median 48.043 ms and 71.120 ms. Serial chain 265.927 ms, recorded only. The 46.373 ms and 61.866 ms line stands. Hours and scores unchanged |
+| 2026-10-21 | minor | Gap #2 done. Beta-gate row set to 0 h. Table total ~140–215 (≈135–200 after the same overlap). Release bench median 46.373 ms and 61.866 ms |
+| 2026-10-21 | minor | Gap #2, earlier the same day: streamed worksheet and shared-string reads, native independent-wave recalc. The 100 ms edit and the 1,048,576-row sheet were measured later the same day |
 | 2026-10-11 | minor | PivotTable calculated fields landed |
 | 2026-10-10 | minor | Current focus and M15 updated for the 10-10 merges |
 | 2026-10-10 | minor | Added the alpha gate table (six core workflows; passes, stays alpha) |

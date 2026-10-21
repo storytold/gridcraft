@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (§8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (§8: PivotTable Enable show details; large-workbook streaming and parallel recalc landed, historical bench only; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -25,13 +25,41 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Impact:** the main format; a repair prompt or silent loss destroys trust.
 - **Estimate:** 15–25 h, plus owner time in Excel. [file-format-parity.md](file-format-parity.md)
 
-### 2. Large workbooks don't open; recalc is single-threaded (P, H)
-- **Missing:** streaming read for ~100 MB XLSX; multi-threaded recalc; 100k-dependent edit under
-  100 ms (was ~0.4 s); whole-sheet operations bounded.
-- **Evidence:** #175; no threading in `crates/calc`; PR #152 (whole-sheet Fill/Remove Duplicates
-  out of memory), PR #151 (current region past 10,000 rows).
-- **Impact:** finance and data users routinely have big workbooks.
-- **Estimate:** 25–40 h. [target-app-parity.md](target-app-parity.md#performance), [hardware-parity.md](hardware-parity.md)
+### 2. Large workbooks and multi-threaded recalc (P, H) — done
+- **Landed:** worksheet and shared-string parts are parsed from the zip inflate and are not kept
+  as a second XML buffer. A synthetic shared-string part of at least 100 MiB opens with the sampled
+  cells, strings and formulas (`crates/xlsx/src/tests/large_stream.rs`). Duplicate shared strings
+  share one allocation. A streamed part whose declared size is past 2 GB (4 GB streamed per package), or a kept part past
+  512 MB (1 GB of kept parts per package), is refused. A workbook past 50 million stored cells is refused; that is about 2 GB of cell records (40 bytes each: a value, a style and an optional formula) before row-map overhead, and several gigabytes to a few tens of gigabytes of workbook memory once sparse rows and formula text are included. A styles part of at least 100 MiB opens through `read_xlsx`
+  (`hundred_mib_styles_part_opens_with_sampled_cells`); styles stay buffered, and
+  `declared_styles_over_the_cap_is_an_error` returns an error. A pivot cache of that size was not
+  measured separately.
+  On native builds, independent formula waves (a second wave may depend on the first) run on
+  `std::thread::scope` (threshold 64, at most 8 threads); a worker panic is evaluated again on the
+  caller. Dynamic formulas (`INDIRECT`, `OFFSET`, `RAND`), iterative calculation, cycles and WASM
+  stay on one thread. `formulas.calculationOptions` `maxWorkers` sets the cap: null follows the
+  machine, clamped to 1–8, and is not written into the file. Cap 1 matches serial `RAND`, iterative
+  calculation and cycles. WASM ignores the setting.
+  `cargo xtask bench` (`crates/calc/examples/bench_100k.rs`), median of 5 runs, Intel Xeon
+  E5-2680 v3 @ 2.50GHz, default cap 8: 46.373 ms for 100,000 independent dependents and 61.866 ms
+  for 100,000 same-row `SUM`s. A 100,000-step serial chain took 230.038 ms and is not the pass
+  condition.
+  A code-built sheet with cells on row 1 and row 1,048,576, plus a whole-column formula, opens,
+  recalculates and samples both ends with fewer than 64 stored cells
+  (`last_row_opens_recalculates_and_samples_both_ends`). Scrolled to the last row, the grid asks
+  for fewer than 80 rows (`scrolled_to_the_last_row_asks_only_for_visible_rows`). `edit.fillDown`,
+  `data.removeDuplicates` and `selection.currentRegion` finish on a whole-column or 12,000-row
+  selection without storing a height×width rectangle
+  (`whole_column_fill_remove_duplicates_and_current_region_stay_sparse`).
+  `SUM(A:P)` with `P1048576` filled stores 70, plus the spilled numbers when `SEQUENCE` covers a
+  cell inside A:P, and does not become `#NUM!`. `recalc_all` in
+  `second_wave_sum_adds_a_spill_inside_the_range` stores 76 on the parallel path (80 sums) and on
+  a book under the parallel threshold (8 sums).
+- **Missing:** nothing in this gap. A kept part past 512 MB, and a streamed part past 2 GB, are
+  still refused (#175).
+- **Evidence:** the tests named above. Bench log 2026-10-21, exit 0.
+- **Estimate:** 0.
+  [target-app-parity.md](target-app-parity.md#performance), [hardware-parity.md](hardware-parity.md)
 
 ### 3. Some unmodelled XLSX content is dropped on save (FF)
 - **Missing:** slicers and their caches, timelines, the data model, query tables attached to
@@ -186,6 +214,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
+| 2026-10-21 | minor | Later the same day, no hot-path change: release bench on the same Intel Xeon E5-2680 v3 @ 2.50GHz, cap 8, median 48.043 ms (100k independent dependents) and 71.120 ms (100k same-row SUM). Serial chain 265.927 ms, recorded only. The 46.373 ms and 61.866 ms line stands |
+| 2026-10-21 | minor | Gap #2 done. Release bench on an Intel Xeon E5-2680 v3 @ 2.50GHz, default cap 8: median 46.373 ms (100k independent dependents) and 61.866 ms (100k same-row SUM). Serial chain 230.038 ms, recorded only. 1,048,576-row sheet, whole-column Fill / Remove Duplicates / current region, intersecting spill and a ≥100 MiB styles part are covered by tests. `formulas.calculationOptions` `maxWorkers` sets the native cap |
+| 2026-10-21 | minor | Gap #2, earlier the same day: worksheet and shared-string XML stream from the zip; native independent-wave recalc on up to 8 threads. A second-wave `SUM` keeps the sparse total when a spill on the same sheet misses the range. The 100 ms edit, the 1,048,576-row sheet and the whole-sheet bounds were measured later the same day |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
 | 2026-10-15 | minor | §6: Maximum Iterations and Maximum Change in File › Options › Formulas; dropped the stale "no Options dialog yet" |

@@ -3017,7 +3017,7 @@ fn calculation_options_enable_iterative_calculation() {
     assert!(!s.doc().unwrap().calc.circular.is_empty());
     // Switching it on recalculates the loop.
     let r = s.execute("formulas.calculationOptions", json!({"iterative": true})).unwrap();
-    assert_eq!(r, json!({"mode": "Automatic", "iterative": true, "maxIterations": 100, "maxChange": 0.001}));
+    assert_eq!(r, json!({"mode": "Automatic", "iterative": true, "maxIterations": 100, "maxChange": 0.001, "maxWorkers": null}));
     near(&s, "A1", 10.0);
     near(&s, "A2", 10.0);
     assert!(s.doc().unwrap().calc.circular.is_empty());
@@ -3183,6 +3183,171 @@ fn whole_columns_and_rows_ignore_merges_but_cell_ranges_take_them_whole() {
     assert_eq!(sel(&mut s, "3:3"), "3:3");
     assert_eq!(sel(&mut s, "B1:B3"), "A1:C3");
     assert_eq!(sel(&mut s, "E3"), "E2:E4");
+}
+
+#[test]
+fn last_row_opens_recalculates_and_samples_both_ends() {
+    // Built in code: one populated column that reaches the last row, plus a whole-column formula.
+    // Opening and recalculating must not materialise a 1,048,576×16,384 grid.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1048576", "input": "4"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=SUM(A:A)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1048576", "input": "=A1048576*2"})).unwrap();
+    let n = s.doc().unwrap().wb.active().unwrap().cells.len();
+    assert!(n < 64, "the sheet was stored dense ({n} cells)");
+    reopen(&mut s);
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(3.0));
+    assert_eq!(v(&s, "A1048576"), Value::Number(4.0));
+    assert_eq!(v(&s, "B1"), Value::Number(7.0));
+    assert_eq!(v(&s, "B1048576"), Value::Number(8.0));
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert_eq!(sh.used_range().map(|u| u.end.row), Some(gridcraft_core::MAX_ROWS - 1));
+    assert!(sh.cells.len() < 64, "open or recalc stored the sheet dense ({} cells)", sh.cells.len());
+}
+
+#[test]
+fn whole_column_fill_remove_duplicates_and_current_region_stay_sparse() {
+    {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A2", "input": "0"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A3", "input": "0"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1048576", "input": "4"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1048576", "input": "9"})).unwrap();
+        s.execute("edit.fillDown", json!({"range": "A:A"})).unwrap();
+        assert_eq!(v(&s, "A2"), Value::Number(10.0));
+        assert_eq!(v(&s, "A3"), Value::Number(10.0));
+        assert_eq!(v(&s, "A1048576"), Value::Number(4.0));
+        assert_eq!(v(&s, "B1048576"), Value::Number(9.0));
+        let n = s.doc().unwrap().wb.active().unwrap().cells.len();
+        assert!(n < 64, "fill allocated the column ({n} cells)");
+    }
+    {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "a"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A2", "input": "a"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A3", "input": "b"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1048576", "input": "c"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1048576", "input": "keep"})).unwrap();
+        let r = s.execute("data.removeDuplicates", json!({"range": "A:A", "header": false})).unwrap();
+        assert_eq!((r["removed"].clone(), r["remaining"].clone()), (json!(1), json!(3)));
+        let mut got = vec![v(&s, "A1"), v(&s, "A2"), v(&s, "A3")];
+        got.sort_by_key(|a| a.display());
+        assert_eq!(got, vec![Value::text("a"), Value::text("b"), Value::text("c")]);
+        assert!(v(&s, "A1048576").is_empty());
+        assert_eq!(v(&s, "B1048576"), Value::text("keep"));
+        let n = s.doc().unwrap().wb.active().unwrap().cells.len();
+        assert!(n < 64, "remove duplicates allocated the column ({n} cells)");
+    }
+    // Past the old 10_000-row stop, through the shipped command.
+    let mut s = s();
+    let rows: Vec<serde_json::Value> = (0..12_000).map(|_| json!([1, 2])).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("selection.set", json!({"range": "A100"})).unwrap();
+    let r = s.execute("selection.currentRegion", json!({})).unwrap();
+    assert_eq!(r["selection"], "A1:B12000");
+    let n = s.doc().unwrap().wb.active().unwrap().cells.len();
+    assert_eq!(n, 24_000);
+}
+
+#[test]
+fn calculation_options_sets_the_worker_cap() {
+    let mut s = s();
+    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": 1})).unwrap();
+    assert_eq!(r["maxWorkers"], 1);
+    assert_eq!(s.doc().unwrap().wb.calc.max_workers, Some(1));
+    assert!(s.take_ui_requests().is_empty(), "the command does not open a dialog");
+    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": serde_json::Value::Null})).unwrap();
+    assert!(r["maxWorkers"].is_null());
+    assert_eq!(s.doc().unwrap().wb.calc.max_workers, None);
+    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": 100})).unwrap();
+    assert_eq!(r["maxWorkers"], 8);
+    assert_eq!(s.doc().unwrap().wb.calc.max_workers, Some(8));
+    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": 1000})).unwrap();
+    assert_eq!(r["maxWorkers"], 8);
+    assert_eq!(s.doc().unwrap().wb.calc.max_workers, Some(8));
+    let r = s.execute("formulas.calculationOptions", json!({"maxWorkers": 0})).unwrap();
+    assert_eq!(r["maxWorkers"], 1);
+    assert_eq!(s.doc().unwrap().wb.calc.max_workers, Some(1));
+    let r = s.execute("formulas.calculationOptions", json!({})).unwrap();
+    assert_eq!(r["maxWorkers"], 1);
+    assert!(s.take_ui_requests().is_empty());
+}
+
+#[test]
+fn whole_row_fill_down_copies_every_column_of_the_row_above() {
+    // Ctrl+D on a whole row copies the row above across every column, not just the first
+    // contiguous block, and overwrites what the destination row already holds.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A4", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B4", "input": "2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C4", "input": "=A4+B4"})).unwrap();
+    s.execute("cell.set", json!({"cell": "X4", "input": "7"})).unwrap();
+    s.execute("edit.fillDown", json!({"range": "5:5"})).unwrap();
+    assert_eq!(v(&s, "A5"), Value::Number(1.0));
+    assert_eq!(v(&s, "B5"), Value::Number(2.0));
+    assert_eq!(formula_at(&s, "C5").as_deref(), Some("A5+B5"));
+    assert_eq!(v(&s, "C5"), Value::Number(3.0));
+    assert_eq!(v(&s, "X5"), Value::Number(7.0), "a cell outside the first block is still copied");
+    assert_eq!(v(&s, "D5"), Value::Empty);
+    let n = s.doc().unwrap().wb.active().unwrap().cells.len();
+    assert!(n < 64, "fill allocated the row ({n} cells)");
+
+    s.execute("cell.set", json!({"cell": "A5", "input": "9"})).unwrap();
+    s.execute("edit.fillDown", json!({"range": "5:5"})).unwrap();
+    assert_eq!(v(&s, "A5"), Value::Number(1.0), "an existing destination cell is overwritten");
+    assert_eq!(v(&s, "X5"), Value::Number(7.0));
+}
+
+#[test]
+fn whole_column_fill_right_copies_the_column_to_the_left() {
+    // Ctrl+R on a whole column copies the column to the left down the whole column, including a
+    // cell past the first contiguous block, and overwrites what the destination already holds.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "=A1+A2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1048576", "input": "4"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "9"})).unwrap();
+    s.execute("edit.fillRight", json!({"range": "B:B"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(1.0), "the existing value is overwritten");
+    assert_eq!(v(&s, "B2"), Value::Number(2.0));
+    assert_eq!(formula_at(&s, "B3").as_deref(), Some("B1+B2"));
+    assert_eq!(v(&s, "B3"), Value::Number(3.0));
+    assert_eq!(v(&s, "B1048576"), Value::Number(4.0), "a cell far down the source column is copied");
+    assert_eq!(v(&s, "A1048576"), Value::Number(4.0));
+    assert_eq!(v(&s, "B4"), Value::Empty);
+    let n = s.doc().unwrap().wb.active().unwrap().cells.len();
+    assert!(n < 64, "fill allocated the column ({n} cells)");
+}
+
+#[test]
+fn whole_column_fill_down_single_cell_block_is_not_cleared() {
+    // The sparse block is one cell: do not pull in the row above (that would wipe it) and do not
+    // fill the cell that sits outside the block.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A5", "input": "5"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1048576", "input": "4"})).unwrap();
+    s.execute("edit.fillDown", json!({"range": "A:A"})).unwrap();
+    assert_eq!(v(&s, "A5"), Value::Number(5.0));
+    assert_eq!(v(&s, "A4"), Value::Empty);
+    assert_eq!(v(&s, "A1048576"), Value::Number(4.0));
+    let n = s.doc().unwrap().wb.active().unwrap().cells.len();
+    assert!(n < 64, "fill allocated the column ({n} cells)");
+}
+
+#[test]
+fn whole_row_fill_right_single_cell_block_is_not_cleared() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "C5", "input": "5"})).unwrap();
+    s.execute("edit.fillRight", json!({"range": "5:5"})).unwrap();
+    assert_eq!(v(&s, "C5"), Value::Number(5.0));
+    assert_eq!(v(&s, "B5"), Value::Empty);
+    assert_eq!(v(&s, "D5"), Value::Empty);
+    let n = s.doc().unwrap().wb.active().unwrap().cells.len();
+    assert!(n < 64, "fill allocated the row ({n} cells)");
 }
 
 #[test]
