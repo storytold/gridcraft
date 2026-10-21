@@ -1,8 +1,20 @@
+use egui::Modifiers;
+
 use super::show::ok_cancel;
 use super::{Dialog, Json, Key, SheetApp, json};
 
 /// Draws the Find/Replace form with case, whole-cell and workbook options, requests field focus once, and runs find/replace with the current parameters.
 pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
+    // The dialog stays open over the sheet, so Undo and Redo reach the workbook (a Replace All
+    // is undone without closing it first); inside a text box they edit the typed text instead.
+    if !ui.ctx().egui_wants_keyboard_input() {
+        let redo = ui.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z) || i.consume_key(Modifiers::COMMAND, Key::Y));
+        if redo {
+            app.run_or_alert("edit.redo", json!({}));
+        } else if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Z)) {
+            app.run_or_alert("edit.undo", json!({}));
+        }
+    }
     ui.horizontal(|ui| {
         for tab in ["Find", "Replace"] {
             if ui.selectable_label(d.tab == tab, tab).clicked() {
