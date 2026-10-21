@@ -101,7 +101,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Calculation Options",
             ["Formulas", "Calculation"],
             None,
-            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001), precisionAsDisplayed?: bool (Set precision as displayed: numbers are stored as their format shows them; turning it on rounds every number constant permanently)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
+            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001), precisionAsDisplayed?: bool (Set precision as displayed: numbers are stored as their format shows them; turning it on rounds every number constant permanently), maxWorkers?: 1–8 | null (native threads for independent formula waves; null follows the machine, clamped to 1–8; ignored on the web build; not stored in the file)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
             has_doc,
             calc_options
         ),
@@ -958,6 +958,17 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
                 crate::cmd::round_all_constants_as_displayed(&mut cx.wb);
             }
         }
+        // null clears the cap (the machine default). A number is clamped to 1–8. The cap does
+        // not change results, so it does not force a recalculation by itself.
+        match p.get("maxWorkers") {
+            Some(Json::Null) => cx.wb.calc.max_workers = None,
+            Some(v) => {
+                if let Some(n) = v.as_u64() {
+                    cx.wb.calc.set_max_workers(u8::try_from(n).unwrap_or(u8::MAX));
+                }
+            }
+            None => {}
+        }
         let c = &cx.wb.calc;
         // Switching to automatic, or changing how circular references are calculated outside
         // manual mode, recalculates the workbook.
@@ -974,6 +985,7 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
             "maxIterations": c.max_iterations,
             "maxChange": c.max_change,
             "precisionAsDisplayed": c.precision_as_displayed,
+            "maxWorkers": c.max_workers,
         }))
     })
 }

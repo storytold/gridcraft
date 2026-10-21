@@ -251,6 +251,23 @@ fn hyperlinks_past_the_cell_cap_are_reported() {
     assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
 }
 
+#[test]
+fn duplicate_shared_strings_share_one_allocation() {
+    let sst = r#"<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2"><si><t>Hello</t></si><si><t>Hello</t></si></sst>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row></sheetData>"#;
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>"#;
+    let (wb, rep) = read_xlsx(&minimal(body, &[("xl/sharedStrings.xml", sst)], rels, "")).unwrap();
+    assert!(rep.warnings.iter().all(|w| w == "no styles part"), "{:?}", rep.warnings);
+    let sh = wb.sheet(0).unwrap();
+    let (gridcraft_core::Value::Text(a), gridcraft_core::Value::Text(b)) =
+        (sh.value(gridcraft_core::CellRef::parse("A1").unwrap()), sh.value(gridcraft_core::CellRef::parse("B1").unwrap()))
+    else {
+        panic!("expected text");
+    };
+    assert_eq!(&*a, "Hello");
+    assert!(std::sync::Arc::ptr_eq(&a, &b));
+}
+
 /// Formula text built to overflow a recursive parser or tree walk (a million `%`, a 200,000-term
 /// sum): the cells keep their formula text and cached value, nothing overflows the stack.
 #[test]

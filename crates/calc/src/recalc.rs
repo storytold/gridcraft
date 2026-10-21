@@ -30,6 +30,7 @@ fn index_spills<'a>(batch: usize, on_sheet: usize, areas: impl ExactSizeIterator
 }
 
 mod graph;
+mod parallel;
 mod pass_host;
 
 #[cfg(test)]
@@ -235,16 +236,17 @@ impl Calc {
                     self.spill_errors.insert((si, c));
                 }
                 if let Some(f) = &cell.formula
-                    && let Some((areas, dynamic)) = f.with_expr(|e| precedents(wb, si, e))
+                    && let Some(e) = f.expr_arc()
                 {
-                    self.graph.insert((si, c), Node { areas, dynamic });
+                    let (areas, dynamic) = precedents(wb, si, &e);
+                    self.graph.insert((si, c), Node { areas, dynamic, expr: Some(e), legacy: f.array });
                     if cell.value == Value::Error(CellError::Circ) {
                         circ.push((si, c));
                     }
                 } else if cell.py.is_some() {
                     // A Python cell lays out its kept result, so it is calculated like a formula
                     // that reads nothing: its spill is blocked and unblocked like a formula's.
-                    self.graph.insert((si, c), Node { areas: Vec::new(), dynamic: false });
+                    self.graph.insert((si, c), Node { areas: Vec::new(), dynamic: false, expr: None, legacy: None });
                 }
             }
         }
@@ -344,19 +346,24 @@ impl Calc {
             } else {
                 self.spill_errors.remove(&k);
             }
-            let precedent =
-                wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.with_expr(|e| precedents(wb, k.0, e)));
-            let py = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref());
-            let python = py.is_some();
-            // A Python cell whose result (if any) is not an array spills nothing.
-            let spills = py.and_then(|p| p.result_value()).is_some_and(|v| matches!(v, Value::Array(_)));
+            let (precedent, expr, legacy, python, spills) = {
+                let cell = wb.sheet(k.0).and_then(|s| s.cell(k.1));
+                let precedent = cell.and_then(|c| c.formula.as_ref()).and_then(|f| f.with_expr(|e| precedents(wb, k.0, e)));
+                let expr = cell.and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc());
+                let legacy = cell.and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
+                let py = cell.and_then(|c| c.py.as_ref());
+                let python = py.is_some();
+                // A Python cell whose result (if any) is not an array spills nothing.
+                let spills = py.and_then(|p| p.result_value()).is_some_and(|v| matches!(v, Value::Array(_)));
+                (precedent, expr, legacy, python, spills)
+            };
             match precedent {
                 Some((areas, dynamic)) => {
-                    self.graph.insert(k, Node { areas, dynamic });
+                    self.graph.insert(k, Node { areas, dynamic, expr, legacy });
                 }
                 // See `rebuild`: its spill is laid out again from its result when it is calculated.
                 None if python => {
-                    self.graph.insert(k, Node { areas: Vec::new(), dynamic: false });
+                    self.graph.insert(k, Node { areas: Vec::new(), dynamic: false, expr: None, legacy: None });
                     // New code has no result yet: the spill the cell had (its old result's, or a
                     // formula's) goes, and what read it is recalculated, as for a formula
                     // replaced by a constant.
@@ -467,7 +474,7 @@ impl Calc {
         let t1 = prof_now();
         let n = dirty.len();
         self.run(wb, dirty, false);
-        if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
+        if profile_enabled() {
             eprintln!("recalc: {} seeds, closure {} cells {:.1} ms, run {:.1} ms", seeds.len(), n, t1 - t0, prof_now() - t1);
         }
     }
@@ -562,36 +569,95 @@ impl Calc {
             let now = self.now();
             let mut rng = self.rng;
             let tp = prof_now();
+            let flat = if wb.calc.iterative { None } else { parallel::eval_flat_wave(wb, &self.graph, &dirty, now, wb.calc.max_workers) };
+            if let Some(wave) = flat.as_ref()
+                && wave.spills.is_empty()
+                && wave.pairs.len() == dirty.len()
+                && !sheets_have_spills(wb)
+            {
+                let n = wave.pairs.len();
+                let tw = prof_now();
+                for (key, value) in &wave.pairs {
+                    if let Some(cell) = wb.sheet_mut(key.0).and_then(|s| s.cells.get_mut(key.1))
+                        && cell.value != *value
+                    {
+                        cell.value = value.clone();
+                    }
+                }
+                self.rng = rng;
+                self.last_recalc_cells += n;
+                if !self.circular.is_empty() {
+                    let evaluated: HashSet<Key> = dirty.iter().copied().collect();
+                    self.circular.retain(|k| !evaluated.contains(k));
+                }
+                if profile_enabled() {
+                    eprintln!("  flat-write {:.1} ms ({} cells)", prof_now() - tw, n);
+                }
+                break;
+            }
+            let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
+            for k in &dirty {
+                if let Some(e) = self.graph.nodes.get(k).and_then(|n| n.expr.clone()) {
+                    exprs.insert(*k, e);
+                } else if let Some(e) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc()) {
+                    exprs.insert(*k, e);
+                }
+            }
             let (results, spills, cycles) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
                 host.standing = Some(&self.standing);
                 host.iterate = wb.calc.iterative;
-                for k in &dirty {
-                    host.calculate(*k);
+                if let Some(wave) = flat {
+                    for (k, v) in wave.pairs {
+                        host.pending.remove(&k);
+                        host.results.insert(k, v);
+                    }
+                    host.spills = wave.spills;
+                    for k in &dirty {
+                        if !host.results.contains_key(k) {
+                            host.calculate(*k);
+                        }
+                    }
+                } else {
+                    let scheduled =
+                        if host.iterate { None } else { parallel::eval_independent(wb, &self.graph, &exprs, &dirty, now, wb.calc.max_workers) };
+                    if let Some(batch) = scheduled {
+                        for (k, v) in &batch.values {
+                            host.results.insert(*k, v.clone());
+                            host.pending.remove(k);
+                        }
+                        host.spills = batch.spills;
+                        for k in &dirty {
+                            if !batch.done.contains(k) {
+                                host.calculate(*k);
+                            }
+                        }
+                    } else {
+                        for k in &dirty {
+                            host.calculate(*k);
+                        }
+                    }
                 }
                 if host.iterate && !host.members.is_empty() {
                     let passes = host.iterate_loops(&dirty, wb.calc.max_iterations, wb.calc.max_change);
-                    if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
+                    if profile_enabled() {
                         eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
                     }
                 }
                 (host.results, host.spills, host.cycles)
             };
             self.rng = rng;
-            if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
+            if profile_enabled() {
                 eprintln!("  eval {} formulas {:.1} ms", results.len(), prof_now() - tp);
             }
             let tw = prof_now();
             self.last_recalc_cells += results.len();
-            // The loops this round finds replace the ones listed for the formulas it evaluated.
             if !self.circular.is_empty() {
                 let evaluated: HashSet<Key> = dirty.iter().copied().collect();
                 self.circular.retain(|k| !evaluated.contains(k));
             }
             self.circular.extend(cycles);
             let mut spill_changes = self.write_back(wb, &dirty, results, &spills);
-            // Formulas with references only known while evaluating (INDIRECT, OFFSET) may have read
-            // a spill area before it was laid out: they are evaluated once more.
             if dynamic_again && !spills.is_empty() {
                 dynamic_again = false;
                 spill_changes.extend(self.graph.dynamic.iter().copied());
@@ -599,7 +665,7 @@ impl Calc {
             if full {
                 // Everything was already evaluated once; spill dependents need another pass.
             }
-            if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
+            if profile_enabled() {
                 eprintln!("  write-back {:.1} ms", prof_now() - tw);
             }
             spill_changes.sort_by_key(|(s, c)| (*s, c.row, c.col));
@@ -609,8 +675,6 @@ impl Calc {
             }
             dirty = self.dirty_closure(wb, &spill_changes, &[]);
         }
-        // Loops among formulas the run did not evaluate stay listed while they are still formulas.
-        // Iterative calculation reports none.
         if wb.calc.iterative {
             self.circular.clear();
         } else {
@@ -751,6 +815,10 @@ fn spill_is_blocked(sheet: &gridcraft_model::Sheet, anchor: Key, range: RangeRef
         || sheet.tables.iter().any(|table| table.range.contains(anchor.1))
 }
 
+fn sheets_have_spills(wb: &Workbook) -> bool {
+    wb.sheets.iter().any(|s| !s.spill.is_empty() || !s.spill_ranges.is_empty())
+}
+
 fn fill_spill(sheet: &mut gridcraft_model::Sheet, anchor: CellRef, range: RangeRef, array: &Array) {
     for (index, cell) in range.iter().enumerate() {
         if cell != anchor {
@@ -783,8 +851,13 @@ pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> V
     ev.value(expr)
 }
 
-fn prof_now() -> f64 {
+pub(super) fn prof_now() -> f64 {
     gridcraft_core::date::unix_now_ms().unwrap_or(0.0)
+}
+
+pub(super) fn profile_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("GRIDCRAFT_PROFILE").is_some())
 }
 
 #[cfg(test)]
@@ -1042,7 +1115,7 @@ pub(crate) mod tests {
                 if let Some(sh) = wb.sheet_mut(0) {
                     sh.cells.set(k.1, Cell::formula(Formula::new("=1")));
                 }
-                calc.graph.insert(k, Node { areas, dynamic: false });
+                calc.graph.insert(k, Node { areas, dynamic: false, expr: None, legacy: None });
                 keys.push(k);
                 if rng(&mut s).is_multiple_of(7) {
                     calc.graph.settle();
@@ -1277,5 +1350,78 @@ pub(crate) mod tests {
             true
         })
         .then_some(seen)
+    }
+
+    fn snapshot(wb: &Workbook) -> (Vec<(usize, u32, u32, Value)>, Vec<(usize, CellRef, Value)>) {
+        let mut cells = Vec::new();
+        let mut spill_vals = Vec::new();
+        for (si, sheet) in wb.sheets.iter().enumerate() {
+            for (c, _cell) in sheet.cells.iter() {
+                cells.push((si, c.row, c.col, sheet.value(c)));
+            }
+            for (c, v) in &sheet.spill {
+                spill_vals.push((si, *c, v.clone()));
+            }
+        }
+        cells.sort_by_key(|(s, r, c, _)| (*s, *r, *c));
+        spill_vals.sort_by_key(|(s, c, _)| (*s, c.row, c.col));
+        (cells, spill_vals)
+    }
+
+    #[test]
+    fn serial_and_parallel_paths_agree_on_a_mixed_workbook() {
+        fn build(wb: &mut Workbook) {
+            let sh = wb.sheet_mut(0).unwrap();
+            sh.cells.set(CellRef::parse("Z1").unwrap(), Cell::value(Value::Number(10.0)));
+            for r in 0..80 {
+                sh.cells.set(CellRef::new(r, 2), Cell::formula(Formula::new(&format!("=$Z$1+{r}"))));
+            }
+            for r in 0..80 {
+                let row = r + 1;
+                for c in 4..10 {
+                    sh.cells.set(CellRef::new(r, c), Cell::value(Value::Number(f64::from(r + 1))));
+                }
+                sh.cells.set(CellRef::new(r, 10), Cell::formula(Formula::new(&format!("=SUM(E{row}:J{row})+$Z$1"))));
+            }
+            sh.cells.set(CellRef::parse("A1").unwrap(), Cell::formula(Formula::new("=SEQUENCE(5)")));
+            sh.cells.set(CellRef::parse("B1").unwrap(), Cell::formula(Formula::new("=SUM(A2:A5)")));
+            sh.cells.set(CellRef::parse("F1").unwrap(), Cell::formula(Formula::new("=INDIRECT(\"A4\")")));
+            sh.cells.set(CellRef::parse("F2").unwrap(), Cell::formula(Formula::new("=OFFSET(A1,3,0)")));
+            sh.cells.set(CellRef::parse("D1").unwrap(), Cell::value(Value::Number(5.0)));
+            sh.cells.set(CellRef::parse("D2").unwrap(), Cell::formula(Formula::new("=D1*2")));
+            wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Sheet2")));
+            let sh2 = wb.sheet_mut(1).unwrap();
+            sh2.cells.set(CellRef::parse("A1").unwrap(), Cell::formula(Formula::new("=Sheet1!D2+3")));
+            sh2.cells.set(CellRef::parse("B1").unwrap(), Cell::formula(Formula::new("=A1+Sheet1!B1")));
+        }
+        let mut one = Workbook::new();
+        build(&mut one);
+        one.calc.set_max_workers(1);
+        let mut calc_one = Calc::new();
+        calc_one.recalc_all(&mut one);
+
+        let mut eight = Workbook::new();
+        build(&mut eight);
+        eight.calc.set_max_workers(8);
+        let mut calc_eight = Calc::new();
+        calc_eight.recalc_all(&mut eight);
+
+        assert_eq!(snapshot(&one), snapshot(&eight));
+        let sh = eight.sheet(0).unwrap();
+        assert_eq!(sh.value(CellRef::parse("A1").unwrap()), Value::Number(1.0));
+        assert_eq!(sh.value(CellRef::parse("A5").unwrap()), Value::Number(5.0));
+        assert_eq!(sh.value(CellRef::parse("B1").unwrap()), Value::Number(14.0));
+        assert_eq!(sh.value(CellRef::parse("F1").unwrap()), Value::Number(4.0));
+        assert_eq!(sh.value(CellRef::parse("F2").unwrap()), Value::Number(4.0));
+        assert_eq!(eight.sheet(1).unwrap().value(CellRef::parse("A1").unwrap()), Value::Number(13.0));
+        assert_eq!(eight.sheet(1).unwrap().value(CellRef::parse("B1").unwrap()), Value::Number(27.0));
+
+        let c1 = CellRef::parse("C1").unwrap();
+        one.sheet_mut(0).unwrap().cells.set(c1, Cell::value(Value::Number(50.0)));
+        eight.sheet_mut(0).unwrap().cells.set(c1, Cell::value(Value::Number(50.0)));
+        let key = (0, c1);
+        calc_one.cells_changed(&mut one, &[key]);
+        calc_eight.cells_changed(&mut eight, &[key]);
+        assert_eq!(snapshot(&one), snapshot(&eight));
     }
 }

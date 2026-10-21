@@ -1,13 +1,13 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** trivial (Intel Mac start-up) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** trivial (Intel Mac start-up; large-workbook streaming and parallel recalc landed, historical bench only) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 The hardware Excel uses, per platform, against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Hardware: ~40% ready, 25–40 h** (estimated).
 
 | Hardware feature | Excel | GridCraft (macOS · Windows · Linux · BSD · web) | Gap and estimate |
 |---|---|---|---|
-| Multi-core recalculation | Multi-threaded recalculation on all cores (Windows and Mac), configurable thread count | Single-threaded everywhere (no threading in `crates/calc`) | Parallel recalc of independent dependency chains on native builds; WASM stays single-threaded or uses workers later: 12–18 h |
+| Multi-core recalculation | Multi-threaded recalculation on all cores (Windows and Mac), configurable thread count | Independent formula waves on up to 8 native threads. Dynamic formulas, iterative calculation, cycles and WASM stay on one thread. `formulas.calculationOptions` `maxWorkers` sets the cap (null follows the machine, clamped to 1–8; ignored on the web; not stored in the file). Release bench on an Intel Xeon E5-2680 v3 @ 2.50GHz, default cap 8: median 46.373 ms (100k independent dependents) and 61.866 ms (100k same-row SUM). A 100k-step serial chain took 230.038 ms and is not the pass | Cap is 8, not every core. WASM stays on the caller. Cap 1 matches serial RAND, iterative calculation and cycles |
 | GPU rendering of the grid and charts | DirectX / Metal accelerated drawing | wgpu: Metal (Intel Macs skip wgpu's indirect-call validation shaders, which Metal's Intel compiler aborts on, #2812) · DirectX 12 (default since 10-08; OpenGL when DirectX 12 has no GPU driver or fails to start; Vulkan only on request, so the Intel UHD `igvk64.dll` crash (#120) can't happen; shaders compiled with FXC, so no DXC runtime is needed, #339) · Vulkan/GL · Vulkan/GL · WebGPU or WebGL2 | At parity in kind. Driver problems: screen flashing on Windows 11 (#76): 2–4 h |
 | Pen and touch (Draw tab) | Pen pressure and tilt, eraser end, touch mode, Ink to Shape, ink replay | Pen, highlighter, eraser, Ink to Shape with mouse/pen input; **no pressure or tilt**, no touch mode | Pressure-sensitive strokes where winit reports force; touch-friendly ribbon spacing: 4–6 h |
 | Trackpad and mouse | Smooth scrolling, pinch zoom, horizontal scroll, Magic Mouse | Smooth scrolling and zoom via egui | Verify pinch zoom on each platform: 1–2 h |
@@ -23,7 +23,10 @@ The hardware Excel uses, per platform, against GridCraft. Part of
 | 2026-10-31 | trivial | macOS: Intel Macs skip wgpu's indirect-call validation shaders, so they no longer exit on Metal's compiler error there (#2812). Macs run with OpenCore Legacy Patcher on macOS 15 can still fail earlier, on the MSL version (#1116). |
 | 2026-10-22 | minor | View › Arrange All over the main window's monitor. |
 | 2026-10-22 | minor | Multiple windows: each workbook window is a native window of its own (desktop). |
+| 2026-10-21 | minor | Later the same day, after the wasm calc warning fix and the bench CPU fallback, no hot-path change: same Intel Xeon E5-2680 v3 @ 2.50GHz, cap 8, median 48.043 ms and 71.120 ms. Serial chain 265.927 ms, recorded only. The 46.373 ms and 61.866 ms line stands. Hardware readiness stays ~40% |
+| 2026-10-21 | minor | Release bench on an Intel Xeon E5-2680 v3 @ 2.50GHz, default cap 8: median 46.373 ms (100k independent dependents) and 61.866 ms (100k same-row SUM). Serial chain 230.038 ms, recorded only. `formulas.calculationOptions` `maxWorkers` sets the native cap (1–8). WASM stays on the caller. Hardware readiness stays ~40% |
+| 2026-10-21 | minor | Earlier the same day: native recalc runs independent formula waves on up to 8 threads. Dynamic formulas, iterative calculation, cycles and WASM stay on one thread. The user thread cap and the 100 ms edit were measured later the same day |
 | 2026-10-12 | minor | Desktop File > Print now discovers printers and submits PDF jobs through pinned craft-print with printer choice, copies, duplex and grayscale; browser printing and PDF export remain available. Remaining print parity includes page ranges and driver-specific tray/options UI; physical printer fidelity needs hardware validation. |
 | 2026-10-11 | trivial | Windows: DirectX 12 shaders compiled with FXC, no DXC runtime needed (#339, #354) |
 | 2026-10-11 | trivial | Windows: OpenGL fallback when DirectX 12 has no GPU or fails to start; Vulkan never by default (#120) |
-| 2026-10-10 | major | Created: single-threaded calc, wgpu rendering, no pen pressure, single window |
+| 2026-10-10 | major | Created. Calc threading landed on 2026-10-21; this snapshot recorded wgpu rendering, no pen pressure, and a single window |
