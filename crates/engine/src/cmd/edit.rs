@@ -676,7 +676,7 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
     // The HTML rendering is for the host clipboard (UI); it can reach 4 MB, so agents and
     // scripts get it only when they ask for it.
     let html = if p.get("html").and_then(Json::as_bool) == Some(true) { crate::io::range_html(&wb, sheet, range, &text) } else { None };
-    let clip = Clipboard { wb, sheet, range, cut, doc_uid: d.uid, text: text.clone(), areas, selected };
+    let clip = Clipboard { wb, sheet, range, cut, doc_uid: d.uid, text: text.clone(), areas, selected, trust: d.trust };
     s.clipboard = Some(clip);
     let mut result = json!({"range": range.a1(), "text": text});
     if let Some(html) = html {
@@ -1183,6 +1183,15 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         *cx.sel = crate::Selection { active: at, anchor: at, ranges: vec![RangeRef::new(at, end)] };
         Ok(())
     })?;
+    // Formulas and validation from an untrusted file leave the destination untrusted; plain values,
+    // formats (cell styles and merged areas, no conditional formats), column widths and notes
+    // carry nothing active (a linked paste of values still writes formulas).
+    let passive =
+        matches!(what, What::Formats | What::ColumnWidths | What::Comments) || (!link && matches!(what, What::Values | What::ValuesAndNumberFormats));
+    if !same_doc && !passive {
+        let d = s.doc_mut()?;
+        d.trust = d.trust.receive(clip.trust);
+    }
     if cut_move {
         s.clipboard = None;
     }

@@ -782,6 +782,7 @@ fn new_window(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?.clone();
     let mut copy = crate::DocState::new((*d.wb).clone(), d.path.clone(), format!("{}:2", d.display_title()));
     copy.selection = d.selection.clone();
+    copy.trust = d.trust;
     let i = s.add_document(copy);
     Ok(json!({"index": i}))
 }
@@ -996,6 +997,23 @@ fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
         n += 1;
     }
     Ok(json!({"ran": n}))
+}
+
+/// The command steps of the Automate script called `name`, as `automate.runScript` runs them
+/// (steps that run other scripts are left out), or `None` when there is no such script.
+pub(crate) fn script_steps(wb: &Workbook, name: &str) -> Option<Vec<(String, Json)>> {
+    let all = stash_get(wb, SCRIPTS_NAME);
+    let steps = all.get(name)?.as_array()?;
+    Some(
+        steps
+            .iter()
+            .take(100_000)
+            .filter_map(|st| {
+                let id = st["command"].as_str()?;
+                (!id.starts_with("automate.")).then(|| (id.to_string(), st["params"].clone()))
+            })
+            .collect(),
+    )
 }
 
 fn delete_script(s: &mut Session, p: &Json) -> Result<Json> {

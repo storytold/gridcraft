@@ -554,11 +554,15 @@ fn insert_copied_cells(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let revision = d.revision;
     let before = (d.wb.clone(), d.selection.clone());
+    // Inside an undo group the nested steps add no undo entries of their own.
+    let nested_entries = !s.in_group(d.uid);
     let result = insert_copied_steps(s, &clip, sheet, at, shift, cut);
     let d = s.doc_mut()?;
     // The nested steps collapse into this command's single undo step.
-    for _ in 0..d.revision.saturating_sub(revision) {
-        d.undo.pop();
+    if nested_entries {
+        for _ in 0..d.revision.saturating_sub(revision) {
+            d.undo.pop();
+        }
     }
     match result {
         Ok((final_range, out)) => {

@@ -12,7 +12,7 @@ use gridcraft_engine::model::{BorderLine, BorderStyle, Color, HAlign, LineIndex,
 use serde_json::json;
 
 use crate::SheetApp;
-use crate::editor::{EditState, REF_COLORS};
+use crate::editor::EditState;
 use crate::theme::{self, Tokens};
 
 pub const COL_HEADER_H: f32 = 21.0;
@@ -151,6 +151,8 @@ pub struct GridState {
     pub wheel_zoom: Option<WheelZoom>,
     /// A one-finger touch drag in progress: it pans the sheet instead of selecting.
     pub touch_pan: bool,
+    /// What the macro step editor shows on the grid (Check, debugging).
+    pub macro_overlay: Option<crate::macro_editor::MacroOverlay>,
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and
@@ -1171,7 +1173,7 @@ pub(crate) fn paint_quadrant(
                 StrokeKind::Inside,
             );
             if on {
-                crate::icons::paint(p, b.shrink(1.5), crate::icons::Icon::Check, Color32::WHITE);
+                crate::icons::paint_on_sheet(p, b.shrink(1.5), crate::icons::Icon::Check, Color32::WHITE);
             }
             continue;
         }
@@ -1418,9 +1420,11 @@ pub(crate) fn paint_quadrant(
             continue;
         }
         let r = filter_button_rect(geo, sh, c);
-        p.rect_filled(r, 2.0, Color32::from_gray(250));
-        p.rect_stroke(r, 2.0, Stroke::new(1.0, Color32::from_gray(170)), StrokeKind::Inside);
-        crate::icons::paint(p, r.shrink(1.5), if active { crate::icons::Icon::Filter } else { crate::icons::Icon::Chevron }, Color32::from_gray(70));
+        let t = Tokens::get(p.ctx());
+        p.rect_filled(r, 2.0, t.sheet_control_bg);
+        p.rect_stroke(r, 2.0, Stroke::new(1.0, t.sheet_control_border), StrokeKind::Inside);
+        let icon = if active { crate::icons::Icon::Filter } else { crate::icons::Icon::Chevron };
+        crate::icons::paint_on_sheet(p, r.shrink(1.5), icon, t.sheet_control_text);
     }
 }
 
@@ -1658,7 +1662,7 @@ pub(crate) fn paint_selection(
                 continue;
             }
             let rr = geo.range_rect(sh, r);
-            let col = REF_COLORS[idx];
+            let col = Tokens::get(p.ctx()).ref_color(idx, true);
             p.rect_filled(rr, 0.0, col.gamma_multiply(0.12));
             p.rect_stroke(rr, 0.0, Stroke::new(1.5, col), StrokeKind::Inside);
             for corner in [rr.left_top(), rr.right_top(), rr.left_bottom(), rr.right_bottom()] {
@@ -2605,7 +2609,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     }
     let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
     // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
-    if editing || app.dialog.is_some() || other_focus || app.message.is_some() || app.grid.filter_menu.is_some() {
+    if editing || app.dialog.is_some() || other_focus || app.message.is_some() || app.grid.filter_menu.is_some() || app.macros.question.is_some() {
         return;
     }
     if ctx.memory(|m| m.focused()).is_none() {
@@ -2712,6 +2716,8 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                     }
                     Key::F9 => app.run_or_alert("formulas.calculateNow", json!({})),
                     Key::F4 if !cmd => {}
+                    // Ctrl+Shift+letter (⌘⇧letter) runs the macro with that shortcut, unless GridCraft uses it.
+                    _ if cmd && shift && !m.alt && crate::macro_ui::run_shortcut(app, key) => {}
                     _ if cmd => crate::ribbon::shortcut(app, key, m),
                     _ => {}
                 }
@@ -2736,8 +2742,10 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
     let text_w = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size().x;
     let lines = ed.text.lines().count().max(1) as f32 + if ed.text.ends_with('\n') { 1.0 } else { 0.0 };
+    // Grows with the text up to five lines, then scrolls (like the formula bar).
+    let shown = lines.min(crate::formula_bar::MAX_LINES as f32);
     let w = (text_w + 14.0).max(rect.width()).min(geo.cells.right() - rect.left());
-    let h = (size * 1.3 * lines + 4.0).max(rect.height());
+    let h = (size * 1.3 * shown + 4.0).max(rect.height());
     // Grows to the left on a right-to-left sheet.
     let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
     let fill = match st.fill.pattern {
@@ -2756,7 +2764,8 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let id = egui::Id::new("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
     child.set_clip_rect(clip);
-    crate::formula_bar::editor_widget(app, &mut child, id, font, false, erect.width() - 4.0);
+    crate::formula_bar::editor_widget(app, &mut child, id, font, false, erect.width() - 4.0, erect.height() - 2.0);
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("gridcraft.cell_editor.rect"), erect));
 }
 
 /// Test the popup itself, not whether the pointer is over any part of the app.
@@ -3023,9 +3032,10 @@ pub(crate) fn paint_overlays(
     if app.editor.is_none()
         && let Some(r) = validation_arrow(sh, geo, sel.active)
     {
-        p.rect_filled(r, 2.0, Color32::from_gray(245));
-        p.rect_stroke(r, 2.0, Stroke::new(1.0, Color32::from_gray(160)), StrokeKind::Inside);
-        crate::icons::paint(p, r.shrink(3.0), crate::icons::Icon::Chevron, Color32::from_gray(60));
+        let t = Tokens::get(p.ctx());
+        p.rect_filled(r, 2.0, t.sheet_control_bg);
+        p.rect_stroke(r, 2.0, Stroke::new(1.0, t.sheet_control_border), StrokeKind::Inside);
+        crate::icons::paint_on_sheet(p, r.shrink(3.0), crate::icons::Icon::Chevron, t.sheet_control_text);
     }
     // Input message of the active cell's validation, hidden while its list is open: it would cover the items.
     if app.editor.is_none()
@@ -3085,6 +3095,9 @@ pub(crate) fn paint_overlays(
         egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("link_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(tip);
         });
+    }
+    if let Some(o) = &app.grid.macro_overlay {
+        crate::macro_editor::paint_overlay(p, geo, sh, o);
     }
     // Trace precedents / dependents arrows.
     if let Some(trace) = app.grid.trace.clone()

@@ -410,6 +410,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Вычисления в книге",
         "Enable iterative calculation" => "Включить итеративные вычисления",
         "Calculation settings are saved with the workbook." => "Параметры вычислений сохраняются вместе с книгой.",
+        "Macros" => "Макросы",
+        "Record Macro" => "Запись макроса",
+        "Stop Recording" => "Остановить запись",
+        "Use Relative References" => "Относительные ссылки",
+        "Run\nMacro" => "Выполнить макрос",
+        "Macros…" => "Макросы…",
+        "Recording" => "Запись",
+        "Stop" => "Остановить",
+        "New Macro" => "Новый макрос",
+        "Show" => "Показать",
         _ => return None,
     })
 }

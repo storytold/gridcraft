@@ -408,6 +408,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bottom Margin" => "Donja margina",
         "Header Margin" => "Margina zaglavlja",
         "Footer Margin" => "Margina podnožja",
+        "Macros" => "Makroi",
+        "Record Macro" => "Snimi makro",
+        "Stop Recording" => "Zaustavi snimanje",
+        "Use Relative References" => "Koristi relativne reference",
+        "Run\nMacro" => "Pokreni makro",
+        "Macros…" => "Makroi…",
+        "Recording" => "Snimanje",
+        "Stop" => "Zaustavi",
+        "New Macro" => "Novi makro",
+        "Show" => "Prikaži",
         _ => return None,
     })
 }

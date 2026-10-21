@@ -10,9 +10,11 @@ pub mod backstage;
 mod border_preview;
 mod cell_pictures;
 pub mod chartview;
+pub mod code_editor;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
+pub mod dnd;
 pub mod editor;
 pub mod fonts;
 pub mod formula_bar;
@@ -22,6 +24,8 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+pub mod macro_editor;
+pub mod macro_ui;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -284,6 +288,8 @@ pub struct SheetApp {
     /// text noted for an unpublished cut); `None` after a copy, or once the clipboard is seen
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
+    /// Automate › Macros: relative recording, recent macros, a macro's question.
+    pub macros: macro_ui::MacroUi,
     pub started: f64,
 }
 
@@ -328,6 +334,7 @@ impl SheetApp {
             selected_chart: None,
             clipboard_text_at_copy: None,
             cut_text: None,
+            macros: macro_ui::MacroUi::default(),
             started: now_ms(),
         }
     }
@@ -768,6 +775,9 @@ impl SheetApp {
                 let page = params.get("page").and_then(Json::as_str).and_then(backstage::Page::parse).unwrap_or(backstage::Page::Home);
                 self.open_backstage(page);
             }
+            // The macro step editor stays until it closes itself (its draft, overlays and debug
+            // run go with it), so another dialog can't replace it.
+            _ if self.dialog.as_ref().is_some_and(|d| d.name == "macroEditor") => {}
             other => self.dialog = dialogs::Dialog::open(self, other, params),
         }
     }
@@ -1173,6 +1183,7 @@ impl SheetApp {
             });
         }
         dialogs::show(self, &ctx);
+        macro_ui::question_box(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
         control::issue_screenshots(self, &ctx);
@@ -1215,6 +1226,7 @@ impl SheetApp {
         let enabled = self.editor.is_none()
             && self.dialog.is_none()
             && self.message.is_none()
+            && self.macros.question.is_none()
             && self.name_box.is_none()
             && !ctx.text_edit_focused()
             && self.grid.context_menu.is_none()

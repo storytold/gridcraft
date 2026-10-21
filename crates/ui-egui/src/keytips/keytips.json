@@ -2318,17 +2318,17 @@
   },
   {
    "seq": "WMR",
-   "kind": "command",
-   "target": "view.macros",
+   "kind": "dialog",
+   "target": "recordMacro",
    "excel": "Record Macro",
-   "note": "Record Macro (macros menu)"
+   "note": "Record Macro dialog (stops recording while recording)"
   },
   {
    "seq": "WMV",
-   "kind": "command",
-   "target": "view.macros",
+   "kind": "dialog",
+   "target": "macros",
    "excel": "View Macros",
-   "note": "containment(Macros)"
+   "note": "containment(Macros): the Macros dialog"
   },
   {
    "seq": "WN",

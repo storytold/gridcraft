@@ -535,6 +535,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom Out" => "Oddálit",
         // widgets.rs (alphabetical keys).
         "Dismiss" => "Zavřít",
+        "Record Macro" => "Záznam makra",
+        "Stop Recording" => "Zastavit záznam",
+        "Use Relative References" => "Použít relativní odkazy",
+        "Run\nMacro" => "Spustit makro",
+        "Macros…" => "Makra…",
+        "Recording" => "Záznam",
+        "Stop" => "Zastavit",
+        "New Macro" => "Nové makro",
+        "Show" => "Zobrazit",
         _ => return None,
     })
 }

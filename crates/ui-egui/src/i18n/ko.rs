@@ -410,6 +410,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "통합 문서 계산",
         "Enable iterative calculation" => "반복 계산 사용",
         "Calculation settings are saved with the workbook." => "계산 설정은 통합 문서와 함께 저장됩니다.",
+        "Macros" => "매크로",
+        "Record Macro" => "매크로 기록",
+        "Stop Recording" => "기록 중지",
+        "Use Relative References" => "상대 참조로 기록",
+        "Run\nMacro" => "매크로 실행",
+        "Macros…" => "매크로…",
+        "Recording" => "기록 중",
+        "Stop" => "중지",
+        "New Macro" => "새 매크로",
+        "Show" => "표시",
         _ => return None,
     })
 }

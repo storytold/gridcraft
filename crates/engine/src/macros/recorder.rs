@@ -1,0 +1,417 @@
+//! Turning a recording into a macro.
+//!
+//! The recording buffer (`crate::record`) holds the top-level commands run while recording, each
+//! with the sheet and selection it ran in. When recording stops:
+//!
+//! - commands a macro may not run (saving, opening files…) and other macros' commands are left
+//!   out; a macro run while recording is replaced by its steps when it has no inputs, no output
+//!   and only plain commands (otherwise it is left out), and an Automate script run while
+//!   recording by the script's steps, leaving out the steps a macro may not run;
+//! - a `sheet.activate` or `selection.set` step is added where the sheet or selection changed
+//!   between commands without one, and runs of `selection.set` collapse to the last;
+//! - with relative references (the default), the selection when recording started is the example
+//!   input: references on its sheet in, next to or near it become tokens (`Input.col(2)`,
+//!   `Input.below`, `Input.cell(1,4)`), also inside formulas (`{{Input.col(2)}}`), and the input's
+//!   shape, header and column types are inferred from it.
+
+use gridcraft_core::{CellRef, RangeRef, Value};
+use gridcraft_model::{ColType, InputKind, Macro, NamedInput, Step, StepKind, Workbook};
+use serde_json::{Map, Value as Json, json};
+
+use super::policy::{Policy, macro_policy};
+use crate::Selection;
+use crate::record::RecordedStep;
+
+/// How far outside the example input a reference may be and still be made relative to it.
+const NEAR_ROWS: u32 = 50;
+const NEAR_COLS: u32 = 26;
+
+/// Where recording started, kept beside the buffer, with the name, shortcut and description the
+/// macro is to be saved with (from the Record Macro dialog), applied when recording stops.
+#[derive(Clone, Debug)]
+pub struct RecordingStart {
+    pub doc: u64,
+    pub sheet: usize,
+    pub sheet_name: String,
+    pub selection: Selection,
+    pub relative: bool,
+    pub name: Option<String>,
+    pub shortcut: Option<String>,
+    pub description: Option<String>,
+}
+
+/// A recording turned into a macro, with what was left out.
+pub struct Converted {
+    pub mac: Macro,
+    /// Commands left out (ids), in order.
+    pub skipped: Vec<String>,
+}
+
+/// Builds a macro called `name` from the recorded steps.
+pub fn convert(name: &str, start: &RecordingStart, steps: &[RecordedStep], wb: &Workbook) -> Converted {
+    let mut skipped = Vec::new();
+    // Commands as they'll be played back: (id, params, sheet before, selection before, whether
+    // they came from another macro and stay as written).
+    let mut cmds: Vec<(String, Json, usize, String, Selection, bool)> = Vec::new();
+    let refused = |id: &str, params: &Json| matches!(macro_policy(id, params, crate::Trust::Local), Policy::Deny(_) | Policy::NeedsPermission(_));
+    for st in steps.iter().filter(|st| st.doc == start.doc) {
+        let id = st.id.as_str();
+        if id == "macro.run" {
+            // Another macro's steps, when they stand on their own: no inputs, no output and only
+            // plain commands (a Repeat, If or Stop means nothing outside its macro).
+            let inner = st.params.get("name").and_then(Json::as_str).and_then(|n| super::find(wb, n)).and_then(|i| wb.macros.get(i));
+            match inner {
+                Some(m) if m.inputs.is_empty() && m.output.anchor.is_none() && m.steps.iter().all(|x| matches!(x.kind, StepKind::Command { .. })) => {
+                    for x in m.steps.iter().filter(|x| x.enabled) {
+                        let StepKind::Command { id: cid, params } = &x.kind else { continue };
+                        if refused(cid, params) {
+                            skipped.push(cid.clone());
+                            continue;
+                        }
+                        cmds.push((cid.clone(), params.clone(), st.sheet, st.sheet_name.clone(), st.selection.clone(), true));
+                    }
+                }
+                _ => skipped.push(id.to_string()),
+            }
+            continue;
+        }
+        if id == "automate.runScript" {
+            // An Automate script's steps, as the script runs them.
+            match st.params.get("name").and_then(Json::as_str).and_then(|n| crate::cmd::extra::script_steps(wb, n)) {
+                Some(steps) => {
+                    for (cid, params) in steps {
+                        if refused(&cid, &params) {
+                            skipped.push(cid);
+                            continue;
+                        }
+                        cmds.push((cid, params, st.sheet, st.sheet_name.clone(), st.selection.clone(), true));
+                    }
+                }
+                None => skipped.push(id.to_string()),
+            }
+            continue;
+        }
+        if refused(id, &st.params) {
+            skipped.push(id.to_string());
+            continue;
+        }
+        cmds.push((id.to_string(), st.params.clone(), st.sheet, st.sheet_name.clone(), st.selection.clone(), false));
+    }
+
+    // Sheet and selection changes made without a command: where a command ran on another sheet,
+    // or with another selection, than the one before it, say so (a command that moved the
+    // selection itself does it again when played back, so the extra step is harmless).
+    // Each step keeps the name of the sheet it runs on.
+    let mut out: Vec<(String, Json, String, bool)> = Vec::new();
+    let (mut sheet, mut sel) = (start.sheet, start.selection.clone());
+    for (id, params, at_sheet, sheet_name, at_sel, kept) in cmds {
+        if at_sheet != sheet {
+            out.push(("sheet.activate".into(), json!({"sheet": sheet_name}), sheet_name.clone(), false));
+        }
+        // A recorded selection.set just before already put the selection there.
+        let selected = matches!(out.last(), Some((last, ..)) if last == "selection.set");
+        if (at_sel != sel || at_sheet != sheet) && !selected {
+            out.push(("selection.set".into(), selection_params(&at_sel), sheet_name.clone(), false));
+        }
+        (sheet, sel) = (at_sheet, at_sel);
+        out.push((id, params, sheet_name, kept));
+    }
+    // Runs of selection.set (or sheet.activate): the last one wins.
+    let mut collapsed: Vec<(String, Json, String, bool)> = Vec::new();
+    for (id, params, on, kept) in out {
+        if matches!(id.as_str(), "selection.set" | "sheet.activate")
+            && let Some((last, ..)) = collapsed.last()
+            && *last == id
+        {
+            collapsed.pop();
+        }
+        collapsed.push((id, params, on, kept));
+    }
+
+    // Relative references. Only references on the input's sheet become tokens: on another sheet
+    // `C4` is that sheet's C4.
+    let example = start.selection.current();
+    let mut used_input = false;
+    let steps: Vec<Step> = collapsed
+        .into_iter()
+        .map(|(id, params, on, kept)| {
+            let here = on.eq_ignore_ascii_case(&start.sheet_name);
+            let params = if start.relative && !kept { relative(&params, example, &start.sheet_name, here, &mut used_input, None) } else { params };
+            Step::command(id, params)
+        })
+        .collect();
+    let mut mac = Macro { name: name.to_string(), steps, ..Macro::default() };
+    if start.relative && used_input {
+        mac.inputs = vec![infer_input(wb, start.sheet, example)];
+    }
+    Converted { mac, skipped }
+}
+
+fn selection_params(sel: &Selection) -> Json {
+    let ranges: Vec<String> = sel.ranges.iter().map(RangeRef::a1).collect();
+    json!({"range": ranges.join(","), "active": sel.active.a1()})
+}
+
+/// `params` with references near `example` (on `sheet`) made into tokens; `here` says whether the
+/// step runs on that sheet, so its unqualified references are on it.
+fn relative(v: &Json, example: RangeRef, sheet: &str, here: bool, used: &mut bool, key: Option<&str>) -> Json {
+    match v {
+        Json::Object(o) => {
+            let mut out = Map::new();
+            for (k, x) in o {
+                out.insert(k.clone(), relative(x, example, sheet, here, used, Some(k)));
+            }
+            Json::Object(out)
+        }
+        Json::Array(a) => Json::Array(a.iter().map(|x| relative(x, example, sheet, here, used, key)).collect()),
+        Json::String(t) if key.is_some_and(super::resolve::is_ref_key) => {
+            // A list of areas ("A1:B2,D4") stays as it is unless every part has a token.
+            let parts: Option<Vec<String>> = t.split(',').map(|part| ref_token(part, example, sheet, here)).collect();
+            match parts {
+                Some(p) if p.len() == 1 => {
+                    *used = true;
+                    json!(p.join(""))
+                }
+                _ => v.clone(),
+            }
+        }
+        Json::String(t) if here && t.starts_with('=') && example.count() > 1 => {
+            let (f, changed) = formula_tokens(t, example);
+            *used |= changed;
+            json!(f)
+        }
+        other => other.clone(),
+    }
+}
+
+/// The token for an A1 reference on the example's sheet near the example input. `here` says whether
+/// an unqualified reference is on that sheet.
+fn ref_token(text: &str, example: RangeRef, sheet: &str, here: bool) -> Option<String> {
+    let (on, body) = crate::cmd::split_sheet(text.trim());
+    match on {
+        Some(on) if !on.eq_ignore_ascii_case(sheet) => return None,
+        None if !here => return None,
+        _ => {}
+    }
+    let t = RangeRef::parse(body)?;
+    if t.is_full_cols() || t.is_full_rows() {
+        return None;
+    }
+    token(t, example)
+}
+
+/// `t` as a token relative to `r`.
+fn token(t: RangeRef, r: RangeRef) -> Option<String> {
+    if t == r {
+        return Some("Input".into());
+    }
+    let rel_row = |row: u32| i64::from(row) - i64::from(r.start.row) + 1;
+    let rel_col = |col: u32| i64::from(col) - i64::from(r.start.col) + 1;
+    let cols = |a: u32, b: u32| if a == b { format!("col({})", rel_col(a)) } else { format!("cols({}..{})", rel_col(a), rel_col(b)) };
+    if r.contains_range(&t) {
+        let full_rows = t.start.row == r.start.row && t.end.row == r.end.row;
+        let full_cols = t.start.col == r.start.col && t.end.col == r.end.col;
+        return Some(if full_rows {
+            format!("Input.{}", cols(t.start.col, t.end.col))
+        } else if full_cols && t.start.row == t.end.row {
+            format!("Input.row({})", rel_row(t.start.row))
+        } else if full_cols && t.end.row == r.end.row {
+            format!("Input.rows({}..)", rel_row(t.start.row))
+        } else if full_cols {
+            format!("Input.rows({}..{})", rel_row(t.start.row), rel_row(t.end.row))
+        } else if t.is_single() {
+            format!("Input.cell({},{})", rel_row(t.start.row), rel_col(t.start.col))
+        } else {
+            format!("Input.cell({},{}).resize({},{})", rel_row(t.start.row), rel_col(t.start.col), t.height(), t.width())
+        });
+    }
+    let near = t.start.row.saturating_add(NEAR_ROWS) >= r.start.row
+        && t.end.row <= r.end.row.saturating_add(NEAR_ROWS)
+        && t.start.col.saturating_add(NEAR_COLS) >= r.start.col
+        && t.end.col <= r.end.col.saturating_add(NEAR_COLS);
+    if !near {
+        return None;
+    }
+    // Just below the input, in its columns: follows the input's length.
+    if t.start.row == r.end.row + 1 && t.start.col >= r.start.col && t.end.col <= r.end.col {
+        let base = if t.start.col == r.start.col && t.end.col == r.end.col {
+            "Input".to_string()
+        } else {
+            format!("Input.{}", cols(t.start.col, t.end.col))
+        };
+        return Some(if t.height() == 1 { format!("{base}.below") } else { format!("{base}.below({})", t.height()) });
+    }
+    // Just right of the input, in its rows: follows its width.
+    if t.start.col == r.end.col + 1 && t.start.row >= r.start.row && t.end.row <= r.end.row {
+        let base = if t.start.row == r.start.row && t.end.row == r.end.row {
+            "Input".to_string()
+        } else if t.start.row == t.end.row {
+            format!("Input.row({})", rel_row(t.start.row))
+        } else {
+            format!("Input.rows({}..{})", rel_row(t.start.row), rel_row(t.end.row))
+        };
+        return Some(if t.width() == 1 { format!("{base}.right") } else { format!("{base}.right({})", t.width()) });
+    }
+    let cell = format!("Input.cell({},{})", rel_row(t.start.row), rel_col(t.start.col));
+    Some(if t.is_single() { cell } else { format!("{cell}.resize({},{})", t.height(), t.width()) })
+}
+
+/// Replaces references in a formula that are exactly the example input, one of its columns or
+/// rows, or a column without its first row, with `{{token}}`.
+fn formula_tokens(f: &str, r: RangeRef) -> (String, bool) {
+    let mut candidates: Vec<(String, String)> = vec![(r.a1(), "Input".into())];
+    for (i, col) in (r.start.col..=r.end.col).enumerate() {
+        let n = i + 1;
+        candidates.push((RangeRef::new(CellRef::new(r.start.row, col), CellRef::new(r.end.row, col)).a1(), format!("Input.col({n})")));
+        if r.height() > 2 {
+            candidates
+                .push((RangeRef::new(CellRef::new(r.start.row + 1, col), CellRef::new(r.end.row, col)).a1(), format!("Input.rows(2..).col({n})")));
+        }
+    }
+    if r.width() > 1 {
+        for (i, row) in (r.start.row..=r.end.row).enumerate() {
+            candidates.push((RangeRef::new(CellRef::new(row, r.start.col), CellRef::new(row, r.end.col)).a1(), format!("Input.row({})", i + 1)));
+        }
+    }
+    // Longest first, so `B2:B10` isn't taken for a `B2` cell reference.
+    candidates.sort_by_key(|(a1, _)| std::cmp::Reverse(a1.len()));
+    let mut out = String::with_capacity(f.len());
+    let mut changed = false;
+    let (mut i, mut in_text) = (0, false);
+    let bytes = f.as_bytes();
+    while i < f.len() {
+        let Some(rest) = f.get(i..) else { break };
+        let ch = rest.chars().next().unwrap_or(' ');
+        if ch == '"' {
+            in_text = !in_text;
+        }
+        let prev_ok = i == 0 || !bytes.get(i - 1).is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b'$' | b'!' | b'_' | b'.' | b':'));
+        if !in_text && prev_ok {
+            let hit = candidates.iter().find(|(a1, _)| {
+                rest.starts_with(a1.as_str())
+                    && !rest
+                        .get(a1.len()..)
+                        .and_then(|x| x.chars().next())
+                        .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '!' | '(' | '_'))
+            });
+            if let Some((a1, tok)) = hit {
+                out.push_str("{{");
+                out.push_str(tok);
+                out.push_str("}}");
+                i += a1.len();
+                changed = true;
+                continue;
+            }
+        }
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    (out, changed)
+}
+
+/// The example input's shape: a header when the first row is all text over other kinds of
+/// values, and each column's type when all its values agree.
+fn infer_input(wb: &Workbook, sheet: usize, r: RangeRef) -> NamedInput {
+    let mut input = NamedInput::default();
+    if r.is_single() {
+        input.kind = InputKind::Cell;
+        input.rows = [1, 1];
+        input.cols = [1, 1];
+        return input;
+    }
+    input.cols = [r.width(), r.width()];
+    let Some(sh) = wb.sheet(sheet) else { return input };
+    if r.count() > 100_000 {
+        return input;
+    }
+    let kind = |c: CellRef| -> Option<ColType> {
+        let v = sh.value(c);
+        Some(match v {
+            Value::Empty => return None,
+            Value::Text(t) if t.is_empty() => return None,
+            Value::Number(_) if crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).is_date() => ColType::Date,
+            Value::Number(_) => ColType::Number,
+            Value::Text(_) => ColType::Text,
+            Value::Bool(_) => ColType::Bool,
+            _ => ColType::Any,
+        })
+    };
+    let column = |col: u32, from: u32| -> ColType {
+        let mut seen: Option<ColType> = None;
+        for row in from..=r.end.row {
+            match (seen, kind(CellRef::new(row, col))) {
+                (_, None) => {}
+                (None, k) => seen = k,
+                (Some(a), Some(b)) if a != b => return ColType::Any,
+                _ => {}
+            }
+        }
+        seen.unwrap_or(ColType::Any)
+    };
+    let first_text = (r.start.col..=r.end.col).all(|c| kind(CellRef::new(r.start.row, c)) == Some(ColType::Text));
+    let below = (r.start.col..=r.end.col).map(|c| column(c, r.start.row + 1)).collect::<Vec<_>>();
+    input.header = r.height() > 1 && first_text && below.iter().any(|k| !matches!(k, ColType::Text | ColType::Any));
+    input.col_types = if input.header { below } else { (r.start.col..=r.end.col).map(|c| column(c, r.start.row)).collect() };
+    if input.col_types.iter().all(|k| *k == ColType::Any) {
+        input.col_types.clear();
+    }
+    input.rows = [1, 0];
+    input
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn r(a1: &str) -> RangeRef {
+        RangeRef::parse(a1).unwrap()
+    }
+
+    #[test]
+    fn references_near_the_example_become_tokens() {
+        let ex = r("B2:D11");
+        for (t, want) in [
+            ("B2:D11", Some("Input")),
+            ("C2:C11", Some("Input.col(2)")),
+            ("C2:D11", Some("Input.cols(2..3)")),
+            ("B2:D2", Some("Input.row(1)")),
+            ("B3:D11", Some("Input.rows(2..)")),
+            ("B3:D5", Some("Input.rows(2..4)")),
+            ("C4", Some("Input.cell(3,2)")),
+            ("C4:D5", Some("Input.cell(3,2).resize(2,2)")),
+            ("B12:D12", Some("Input.below")),
+            ("C12", Some("Input.col(2).below")),
+            ("C12:C13", Some("Input.col(2).below(2)")),
+            ("E2:E11", Some("Input.right")),
+            ("E5", Some("Input.row(4).right")),
+            ("E3:F4", Some("Input.rows(2..3).right(2)")),
+            ("G2", Some("Input.cell(1,6)")),
+            ("A1", Some("Input.cell(0,0)")),
+            ("Z500", None),
+            ("A:A", None),
+        ] {
+            assert_eq!(ref_token(t, ex, "Sheet1", true).as_deref(), want, "{t}");
+        }
+        assert_eq!(ref_token("Sheet1!C4", ex, "Sheet1", true).as_deref(), Some("Input.cell(3,2)"));
+        assert_eq!(ref_token("Other!C4", ex, "Sheet1", true), None);
+        // On another sheet only a reference qualified with the input's sheet is on it.
+        assert_eq!(ref_token("C4", ex, "Sheet1", false), None);
+        assert_eq!(ref_token("Sheet1!C4", ex, "Sheet1", false).as_deref(), Some("Input.cell(3,2)"));
+    }
+
+    #[test]
+    fn formulas_get_tokens_for_exact_references() {
+        let ex = r("B2:C5");
+        for (f, want) in [
+            ("=SUM(C3:C5)", "=SUM({{Input.rows(2..).col(2)}})"),
+            ("=SUM(C2:C5)+COUNT(B2:C5)", "=SUM({{Input.col(2)}})+COUNT({{Input}})"),
+            ("=SUM($C$3:$C$5)", "=SUM($C$3:$C$5)"),
+            ("=SUM(Other!C3:C5)", "=SUM(Other!C3:C5)"),
+            ("=\"C3:C5\"&C3:C5", "=\"C3:C5\"&{{Input.rows(2..).col(2)}}"),
+            ("=SUM(AC3:C5)", "=SUM(AC3:C5)"),
+            ("=B2", "=B2"),
+        ] {
+            assert_eq!(formula_tokens(f, ex).0, want, "{f}");
+        }
+    }
+}

@@ -1,65 +1,134 @@
 //! The formula bar (Name Box, ✕ ✓ fx, formula field) and the shared cell editor widget.
 
-use egui::{Color32, FontId, Key, Rect, Sense, Stroke, StrokeKind, TextEdit, pos2, vec2};
+use egui::{FontId, Key, Rect, Sense, Stroke, StrokeKind, TextEdit, pos2, vec2};
 use serde_json::json;
 
 use crate::SheetApp;
-use crate::editor::{REF_COLORS, formula_refs};
+use crate::editor::formula_refs;
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens};
 
+/// Lines the formula bar (and the in-cell editor) grows to before it scrolls.
+pub const MAX_LINES: usize = 5;
+/// The bar's height at one line.
+const ONE_LINE: f32 = 30.0;
+/// How long the bar takes to grow or shrink to a new line count.
+const EASE_SECONDS: f32 = 0.12;
+
+/// Where the formula bar put its parts last frame (for tests).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BarLayout {
+    pub name_box: Rect,
+    /// ✕ ✓ fx.
+    pub buttons: Rect,
+    pub field: Rect,
+    pub height: f32,
+    /// Laid-out lines of the content (wrapped to the field), and how many show without scrolling.
+    pub lines: usize,
+    pub visible_lines: usize,
+    /// The caret while editing in the bar.
+    pub caret: Option<Rect>,
+}
+
+impl Default for BarLayout {
+    fn default() -> Self {
+        BarLayout { name_box: Rect::NOTHING, buttons: Rect::NOTHING, field: Rect::NOTHING, height: 0.0, lines: 1, visible_lines: 1, caret: None }
+    }
+}
+
+impl BarLayout {
+    pub fn id() -> egui::Id {
+        egui::Id::new("formula_bar.layout")
+    }
+
+    /// Last frame's layout.
+    pub fn get(ctx: &egui::Context) -> BarLayout {
+        ctx.data(|d| d.get_temp(Self::id())).unwrap_or_default()
+    }
+}
+
+/// What the editor widget laid out: its line count and caret.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EditorInfo {
+    pub lines: usize,
+    pub caret: Option<Rect>,
+}
+
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let expanded = app.ui.formula_bar_expanded;
-    let h = if expanded { 72.0 } else { 30.0 };
+    let font = theme::ui_font(13.0);
+    let row_h = ui.ctx().fonts_mut(|f| f.row_height(&font));
+    let last = BarLayout::get(ui.ctx());
+    // Height follows the content's line count (last frame's), 1 to MAX_LINES; the chevron pins it
+    // at MAX_LINES. It eases only when that target changes.
+    let lines = if app.ui.formula_bar_expanded { MAX_LINES } else { last.lines.clamp(1, MAX_LINES) };
+    let target = ONE_LINE + (lines - 1) as f32 * row_h;
+    let h = ui.ctx().animate_value_with_time(egui::Id::new("formula_bar.height"), target, EASE_SECONDS);
+    let mut layout = BarLayout { height: h, ..Default::default() };
     egui::Panel::top("formula_bar")
         .exact_size(h)
         .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 8, right: 8, top: 3, bottom: 3 }))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
+            // Top-aligned: the Name Box and buttons stay on the first line as the field grows.
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                name_box(app, ui, &t);
+                layout.name_box = name_box(app, ui, &t);
                 ui.add_space(4.0);
                 let editing = app.editor.is_some();
                 let c = if editing { t.text } else { t.text_disabled };
-                if crate::widgets::icon_button(ui, Icon::Close, c, "Cancel", vec2(22.0, 22.0)).clicked() && editing {
+                let cancel = crate::widgets::icon_button(ui, Icon::Close, c, "Cancel", vec2(22.0, 24.0));
+                if cancel.clicked() && editing {
                     app.cancel_edit();
                 }
-                if crate::widgets::icon_button(ui, Icon::Check, c, "Enter", vec2(22.0, 22.0)).clicked() && editing {
+                if crate::widgets::icon_button(ui, Icon::Check, c, "Enter", vec2(22.0, 24.0)).clicked() && editing {
                     app.commit_edit(0, 0, false, false);
                 }
-                if crate::widgets::icon_button(ui, Icon::Fx, t.text, "Insert Function", vec2(26.0, 22.0)).clicked() {
+                let fx = crate::widgets::icon_button(ui, Icon::Fx, t.text, "Insert Function", vec2(26.0, 24.0));
+                if fx.clicked() {
                     app.open_dialog("insertFunction", json!({}));
                 }
+                layout.buttons = cancel.rect.union(fx.rect);
                 ui.add_space(4.0);
-                // The formula field.
+                // The formula field fills the rest, as tall as the bar.
                 let avail = ui.available_width() - 24.0;
-                let field = Rect::from_min_size(ui.cursor().min, vec2(avail, h - 6.0));
+                let field = Rect::from_min_size(ui.cursor().min, vec2(avail, ui.available_height()));
                 ui.painter().rect_filled(field, 4.0, t.input_bg);
                 ui.painter().rect_stroke(field, 4.0, Stroke::new(1.0, t.input_border), StrokeKind::Inside);
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field.shrink2(vec2(6.0, 3.0))));
+                let inner = field.shrink2(vec2(6.0, 3.0));
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner));
                 let id = egui::Id::new("gridcraft.formula_bar");
-                let editing_here = app.editor.as_ref().is_some_and(|e| e.from_formula_bar);
-                if app.editor.is_some() {
-                    editor_widget(app, &mut child, id, theme::ui_font(13.0), expanded, field.width() - 12.0);
+                let info = if app.editor.is_some() {
+                    editor_widget(app, &mut child, id, font.clone(), true, inner.width(), inner.height())
                 } else {
                     // Show the active cell's content; clicking starts editing in the bar.
                     let text = active_input(app);
-                    let resp = child
-                        .add(egui::Label::new(egui::RichText::new(text).font(theme::ui_font(13.0)).color(t.text)).truncate().sense(Sense::click()));
-                    let click = child.interact(field, id.with("click"), Sense::click());
-                    if resp.clicked() || click.clicked() {
+                    let galley = child.painter().layout(text, font.clone(), t.text, inner.width());
+                    let lines = galley.rows.len();
+                    egui::ScrollArea::vertical().id_salt(id.with("view")).max_height(inner.height()).auto_shrink([false, true]).show(
+                        &mut child,
+                        |ui| {
+                            if ui.add(egui::Label::new(galley).sense(Sense::click())).clicked() {
+                                app.begin_edit(None, true);
+                            }
+                        },
+                    );
+                    if ui.interact(field, id.with("click"), Sense::click()).clicked() {
                         app.begin_edit(None, true);
                     }
-                }
-                let _ = editing_here;
-                ui.allocate_space(vec2(avail, h - 6.0));
-                let chevron = if expanded { Icon::ChevronUp } else { Icon::Chevron };
-                if crate::widgets::icon_button(ui, chevron, t.text_dim, "Expand formula bar", vec2(20.0, 22.0)).clicked() {
+                    EditorInfo { lines, caret: None }
+                };
+                layout.field = field;
+                layout.lines = info.lines.max(1);
+                layout.visible_lines = ((inner.height() / row_h).floor() as usize).max(1);
+                layout.caret = info.caret;
+                ui.allocate_space(vec2(avail, field.height()));
+                let chevron = if app.ui.formula_bar_expanded { Icon::ChevronUp } else { Icon::Chevron };
+                if crate::widgets::icon_button(ui, chevron, t.text_dim, "Expand formula bar", vec2(20.0, 24.0)).clicked() {
                     app.ui.formula_bar_expanded = !app.ui.formula_bar_expanded;
                 }
             });
         });
+    ui.ctx().data_mut(|d| d.insert_temp(BarLayout::id(), layout));
 }
 
 fn active_input(app: &SheetApp) -> String {
@@ -95,7 +164,7 @@ fn active_input(app: &SheetApp) -> String {
     String::new()
 }
 
-fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) {
+fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
     let id = egui::Id::new("gridcraft.name_box");
     let shown = app.name_box_text();
     let mut text = app.name_box.clone().unwrap_or(shown.clone());
@@ -152,11 +221,13 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) {
             }
         }
     });
+    rect
 }
 
-/// The text editor used in the cell and in the formula bar (they share `app.editor`).
-pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32) {
-    let Some(mut ed) = app.editor.take() else { return };
+/// The text editor used in the cell and in the formula bar (they share `app.editor`). It shows
+/// `max_height` of text and scrolls beyond that, keeping the caret in view.
+pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32, max_height: f32) -> EditorInfo {
+    let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };
     let mine = ed.from_formula_bar == (id == egui::Id::new("gridcraft.formula_bar"));
     // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
     let focused = ui.ctx().memory(|m| m.focused());
@@ -258,8 +329,9 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     }
     // The text widget.
     let refs = formula_refs(&ed.text);
-    let text_color = Tokens::get(ui.ctx()).text;
-    let cell_text_color = if id == egui::Id::new("gridcraft.cell_editor") { Color32::BLACK } else { text_color };
+    let t = Tokens::get(ui.ctx());
+    let on_sheet = id == egui::Id::new("gridcraft.cell_editor");
+    let cell_text_color = if on_sheet { t.cell_text } else { t.text };
     let font2 = font.clone();
     let mut layouter = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let s = buf.as_str();
@@ -272,25 +344,38 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
                 continue;
             }
             job.append(s.get(pos..a).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), cell_text_color));
-            job.append(s.get(a..b).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), REF_COLORS[idx]));
+            job.append(s.get(a..b).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), t.ref_color(idx, on_sheet)));
             pos = b;
         }
         job.append(s.get(pos..).unwrap_or(""), 0.0, egui::TextFormat::simple(font2.clone(), cell_text_color));
         job.wrap.max_width = if multiline { wrap_width } else { f32::INFINITY };
         ui.fonts_mut(|f| f.layout_job(job))
     };
-    let edit = if multiline || ed.text.contains('\n') { TextEdit::multiline(&mut ed.text) } else { TextEdit::singleline(&mut ed.text) };
-    let mut output = edit
-        .id(id)
-        .frame(egui::Frame::NONE)
-        .font(font)
-        .desired_width(width)
-        .layouter(&mut layouter)
-        .lock_focus(true)
-        .event_filter(egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
-        .show(ui);
-    let resp = output.response.clone();
     let synced = mine && (ed.request_focus || ed.sync_caret);
+    let edit = if multiline || ed.text.contains('\n') { TextEdit::multiline(&mut ed.text) } else { TextEdit::singleline(&mut ed.text) };
+    let caret_index = ed.caret;
+    let scrolled =
+        egui::ScrollArea::vertical().id_salt(id.with("scroll")).max_height(max_height.max(1.0)).auto_shrink([false, true]).show(ui, |ui| {
+            let output = edit
+                .id(id)
+                .frame(egui::Frame::NONE)
+                .font(font)
+                .desired_width(width)
+                .desired_rows(1)
+                .layouter(&mut layouter)
+                .lock_focus(true)
+                .event_filter(egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
+                .show(ui);
+            // A caret moved by our own keys (Alt+Enter, F4, point mode) isn't the TextEdit's doing,
+            // so it doesn't scroll to it itself.
+            if synced {
+                let caret = output.galley.pos_from_cursor(egui::text::CCursor::new(caret_index)).translate(output.galley_pos.to_vec2());
+                ui.scroll_to_rect(caret.expand(2.0), None);
+            }
+            output
+        });
+    let mut output = scrolled.inner;
+    let resp = output.response.clone();
     if synced {
         if ed.request_focus {
             resp.request_focus();
@@ -342,11 +427,11 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         let g = ui.painter().layout_no_wrap(
             rest.to_string(),
             output.galley.job.sections.first().map(|s| s.format.font_id.clone()).unwrap_or_default(),
-            Color32::WHITE,
+            t.on_accent,
         );
         let r = egui::Rect::from_min_size(pos, g.size());
-        ui.painter().rect_filled(r, 0.0, Color32::from_rgb(0x2E, 0x6F, 0xD8));
-        ui.painter().galley(pos, g, Color32::WHITE);
+        ui.painter().rect_filled(r, 0.0, t.accent);
+        ui.painter().galley(pos, g, t.on_accent);
     }
     // Autocomplete list and argument hint under the editor.
     if mine && ui.is_rect_visible(resp.rect) && (!ed.autocomplete.is_empty() || ed.current_function().is_some()) {
@@ -409,12 +494,15 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             });
         });
     }
+    let lines = output.galley.rows.len().max(1);
+    let caret = Some(output.galley.pos_from_cursor(egui::text::CCursor::new(ed.caret)).translate(output.galley_pos.to_vec2()));
     app.editor = Some(ed);
     if cancel {
         app.cancel_edit();
     } else if let Some((dr, dc, array, fill)) = action {
         app.commit_edit(dr, dc, array, fill);
     }
+    EditorInfo { lines, caret }
 }
 
 fn cycle_anchor(ed: &mut crate::editor::EditState) {

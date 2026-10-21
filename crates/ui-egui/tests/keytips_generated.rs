@@ -2527,14 +2527,14 @@ fn keytip_wm_() {
 fn keytip_wmr_() {
     let mut h = harness(blank());
     sequence(&mut h, "WMR", false);
-    assert!(h.state().message.is_none() && h.state().toast.is_none(), "WMR must run view.macros cleanly");
+    assert!(h.state().dialog.is_some(), "WMR must open the recordMacro dialog");
 }
 
 #[test]
 fn keytip_wmv_() {
     let mut h = harness(blank());
     sequence(&mut h, "WMV", false);
-    assert!(h.state().message.is_none() && h.state().toast.is_none(), "WMV must run view.macros cleanly");
+    assert!(h.state().dialog.is_some(), "WMV must open the macros dialog");
 }
 
 #[test]

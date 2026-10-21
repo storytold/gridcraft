@@ -76,7 +76,7 @@ impl Dialog {
         }
     }
 
-    fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
+    pub(crate) fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
             title: title.into(),
@@ -720,11 +720,9 @@ impl Dialog {
                 )
             }
             "journal" => Dialog::custom("journal", "Action Journal", json!({})),
-            "macros" => {
-                let mut d = Dialog::custom("macros", "Macros", json!({}));
-                d.result = app.session.run("view.macros", json!({})).ok();
-                d
-            }
+            "macros" => crate::macro_ui::open_dialog(app, &params),
+            "recordMacro" => return crate::macro_ui::open_record(app, &params),
+            "macroEditor" => return crate::macro_editor::open(app, &params),
             "statistics" => {
                 let mut d = Dialog::custom("statistics", "Workbook Statistics", json!({}));
                 d.result = app.session.run("review.workbookStatistics", json!({})).ok();
@@ -1020,6 +1018,18 @@ fn build_params(d: &Dialog) -> Json {
 
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
+    // The macro step editor is a large resizable window of its own.
+    if d.name == "macroEditor" {
+        let mut open = true;
+        crate::macro_editor::window(app, ctx, &mut d, &mut open);
+        if open {
+            app.dialog = Some(d);
+        } else {
+            app.macros.editor = None;
+            app.grid.macro_overlay = None;
+        }
+        return;
+    }
     if d.name == "pasteSpecial" {
         paste_special_shortcuts(&mut d, ctx);
     }
@@ -1029,7 +1039,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
+        "macros" => 480.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
@@ -1077,7 +1088,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         }
                     });
                 }
-                "macros" => macros(ui, &mut d),
+                "macros" => crate::macro_ui::macros_dialog(app, ui, &mut d, &mut open),
+                "recordMacro" => crate::macro_ui::record_dialog(app, ui, &mut d, &mut open),
                 "statistics" | "accessibility" | "errorChecking" | "evaluateFormula" | "comments" => {
                     let r = if d.name == "comments" {
                         app.session.active().and_then(|doc| doc.wb.active().map(|s| json!(s.comments.iter().map(|(c, m)| json!({"cell": c.a1(), "author": m.author, "text": m.text})).collect::<Vec<_>>())))
@@ -1369,10 +1381,8 @@ fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let lang = crate::i18n::current(ui.ctx());
-        let ok = ui.add(
-            egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(Color32::WHITE))
-                .fill(crate::theme::Tokens::get(ui.ctx()).accent),
-        );
+        let t = crate::theme::Tokens::get(ui.ctx());
+        let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
         if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
             *confirm = true;
         }
@@ -1491,34 +1501,6 @@ fn about(ui: &mut egui::Ui, d: &mut Dialog) {
             ui.hyperlink_to("Join the ArtCraft Discord", "https://discord.gg/artcraft");
         }
     }
-}
-
-/// The Macros dialog: lists GridCraft's own recorded scripts and (if the file carries one) the
-/// preserved VBA project. Mirrors Excel's Developer ▸ Macros list, but is honest that VBA is
-/// preserved and not executed.
-fn macros(ui: &mut egui::Ui, d: &mut Dialog) {
-    ui.label("Automation in this workbook. GridCraft runs its own scripts; a file's VBA project is preserved but not executed.");
-    ui.add_space(6.0);
-    let items: Vec<Json> = d.result.as_ref().and_then(Json::as_array).cloned().unwrap_or_default();
-    if items.is_empty() {
-        ui.weak("This workbook has no scripts or macros.");
-        return;
-    }
-    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-        for it in &items {
-            let name = it.get("name").and_then(Json::as_str).unwrap_or("(unnamed)");
-            let is_vba = it.get("kind").and_then(Json::as_str) == Some("vba");
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(name).strong());
-                if is_vba {
-                    ui.weak("— VBA project (preserved, not run)");
-                } else {
-                    let steps = it.get("steps").and_then(Json::as_u64).unwrap_or(0);
-                    ui.weak(format!("— {steps} step{}", if steps == 1 { "" } else { "s" }));
-                }
-            });
-        }
-    });
 }
 
 fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
@@ -2550,8 +2532,8 @@ fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool
     );
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let solve =
-            ui.add(egui::Button::new(egui::RichText::new("  Solve  ").color(Color32::WHITE)).fill(crate::theme::Tokens::get(ui.ctx()).accent));
+        let t = crate::theme::Tokens::get(ui.ctx());
+        let solve = ui.add(egui::Button::new(egui::RichText::new("  Solve  ").color(t.on_accent)).fill(t.accent));
         if solve.clicked() && !text(d, "objective").trim().is_empty() {
             *confirm = true;
         }
@@ -2626,7 +2608,7 @@ fn spelling(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bo
     let word = it["word"].as_str().unwrap_or("").to_string();
     let cell = it["cell"].as_str().unwrap_or("").to_string();
     ui.label(format!("Not in Dictionary ({cell}):"));
-    ui.label(egui::RichText::new(&word).strong().color(Color32::from_rgb(0xC4, 0x2B, 0x1C)));
+    ui.label(egui::RichText::new(&word).strong().color(crate::theme::Tokens::get(ui.ctx()).danger));
     let sugg: Vec<String> =
         it["suggestions"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
     ui.label("Suggestions:");

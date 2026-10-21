@@ -423,6 +423,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Link…" => "Link…",
         "Hide" => "Ausblenden",
         "Unhide" => "Einblenden",
+        "Macros" => "Makros",
+        "Record Macro" => "Makro aufzeichnen",
+        "Stop Recording" => "Aufzeichnung beenden",
+        "Use Relative References" => "Relative Verweise verwenden",
+        "Run\nMacro" => "Makro ausführen",
+        "Macros…" => "Makros…",
+        "Recording" => "Aufzeichnung",
+        "Stop" => "Beenden",
+        "New Macro" => "Neues Makro",
+        "Show" => "Anzeigen",
         _ => return None,
     })
 }
