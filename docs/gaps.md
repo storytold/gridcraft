@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (§8: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (legacy-array spill invalidation) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -66,6 +66,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   structural edits and cleared blockers (#133, #139; PRs #148, #157), 3-D span deletion (#140),
   and qualified names after a sheet rename (#134). Iterative calculation for circular references
   landed too (no Options dialog yet, which is §13's).
+- **Evidence:** legacy-array entry now registers cleared content cells with recalculation,
+  removing stale results from deleted spill anchors (#2053); a copied-sheet command sequence
+  checks full-recalculation parity, source isolation and undo/redo.
 - **Impact:** wrong numbers are worse than missing features, so this entry is kept until the
   oracle suite of §15 can say the category is clear rather than only these five reports being so.
 - **Estimate:** — [function-parity.md](function-parity.md#formula-language)
@@ -179,6 +182,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | §6: legacy-array entry invalidates cleared content cells, including removed spill anchors (#2053); copied-sheet regression checks recalculation parity, source isolation and undo/redo |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
