@@ -2040,7 +2040,7 @@ fn data(app: &mut SheetApp, ui: &mut Ui) {
     let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
     control_keytip(app, ui, &gd, "data.getData");
     if gd.clicked() {
-        app.open_dialog("open", json!({}));
+        app.open_dialog("importText", json!({}));
     }
     sep(ui);
     ui.vertical(|ui| {
