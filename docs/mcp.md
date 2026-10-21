@@ -42,7 +42,7 @@ with a file open.
 | `execute_command` | `command`, `params?` | Runs **any** engine command (`cell.set`, `home.bold`, `data.removeDuplicates`, …). |
 | `list_commands` | `search?` | Command ids, labels, ribbon paths, shortcuts and parameter docs. |
 | `inspect_workbook` | — | Sheets, used ranges, tables, charts, names, selection, history. |
-| `read_range` | `range?`, `sheet?`, `formulas?`, `formatted?` | Rows of values (default: the used range). |
+| `read_range` | `range?`, `sheet?`, `formulas?`, `formatted?`, `maxCells?` | Rows of values (default: the used range), in pages of whole rows up to `maxCells` cells (positive integer, default 5,000): a cut range adds `truncated: true`, `totalRows` and `next`, the range to read next. |
 | `write_range` | `range`, `values` (2-D) | `range.setValues`; strings starting with `=` are formulas. |
 | `set_cell` / `get_cell` | `cell`, `input` / `cell` | Enter one cell / read value, formula, display text, style. |
 | `evaluate_formula` | `formula`, `cell?` | Evaluates without changing the sheet. |
@@ -57,7 +57,7 @@ with a file open.
 | `screenshot` | `path` | PNG of the window (Remote only). |
 | `list_functions` | `search?`, `category?` | Worksheet functions with signatures. |
 
-Results are one text block holding pretty JSON; failures set `isError: true` with a readable message. Unknown tools,
+Results are one text block holding compact JSON (one line); failures set `isError: true` with a readable message. Unknown tools,
 missing required arguments and wrong argument types are JSON-RPC `-32602` errors; malformed JSON is `-32700`; unknown
 methods `-32601`.
 
