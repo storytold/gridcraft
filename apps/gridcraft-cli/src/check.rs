@@ -21,7 +21,7 @@ use gridcraft_engine::calc::{Calc, Key};
 use gridcraft_engine::cmd::inspect::value_json;
 use gridcraft_engine::core::{CellError, CellRef, Value};
 use gridcraft_engine::formula::{Expr, quote_sheet};
-use gridcraft_engine::model::{Cell, Sheet, Workbook};
+use gridcraft_engine::model::{Cell, Comment, Sheet, Workbook};
 use serde_json::{Value as Json, json};
 
 use super::{Args, USAGE, number_text, pretty};
@@ -599,6 +599,37 @@ fn diff_count(d: &mut Diffs, sheet: &str, a: usize, b: usize) {
     }
 }
 
+fn canonical_comment(c: &Comment) -> Comment {
+    let mut c = c.clone();
+    // Missing timestamps and trailing unknown timestamps both read back as an absent suffix.
+    // Interior gaps identify the reply a later timestamp belongs to, so retain those slots.
+    while c.dates.last().is_some_and(String::is_empty) {
+        c.dates.pop();
+    }
+    c
+}
+
+fn diff_comments(d: &mut Diffs, sheet: &str, a: &Sheet, b: &Sheet) {
+    let mut compare = |cell: &CellRef| {
+        let (before, after) = (a.comments.get(cell), b.comments.get(cell));
+        if before == after {
+            return;
+        }
+        if let (Some(x), Some(y)) = (before, after)
+            && canonical_comment(x) == canonical_comment(y)
+        {
+            return;
+        }
+        d.push(|| format!("{sheet}!{}: {before:?} → {after:?}", cell.a1()));
+    };
+    for cell in a.comments.keys() {
+        compare(cell);
+    }
+    for cell in b.comments.keys().filter(|cell| !a.comments.contains_key(cell)) {
+        compare(cell);
+    }
+}
+
 /// A value as the file format can hold it: `#SPILL!`/`#CALC!` are cached as `#VALUE!` and an
 /// unresolved circular reference as 0 (what Excel writes), so those aren't round-trip losses.
 fn as_cached(v: Value) -> Value {
@@ -680,7 +711,7 @@ pub fn diff_workbooks(a: &Workbook, b: &Workbook, opts: &Options) -> Vec<Categor
         if ca != cb {
             charts.push(|| format!("{name}: {ca:?} → {cb:?}"));
         }
-        diff_count(&mut comments, &name, sa.comments.len(), sb.comments.len());
+        diff_comments(&mut comments, &name, sa, sb);
         diff_count(&mut hyperlinks, &name, sa.hyperlinks.len(), sb.hyperlinks.len());
         diff_count(&mut pivots, &name, sa.pivots.len(), sb.pivots.len());
     }
@@ -1680,3 +1711,6 @@ mod tests {
         assert_eq!(keys(&v["functions"][0]), set(&["name", "checked", "mismatched", "primary"]));
     }
 }
+
+#[cfg(test)]
+mod comment_tests;
