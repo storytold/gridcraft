@@ -558,14 +558,15 @@ fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
 /// field given is the grouping.
 fn date_item_param(j: &Json) -> Result<DateGroupItem> {
     let err = || bad("data.filterBy", "a `dates` entry needs a year and valid month, day, hour, minute and second");
-    let field = |name: &str, max: u64| -> Result<Option<u32>> {
+    // Months and days start at 1; hours, minutes and seconds at 0.
+    let field = |name: &str, min: u64, max: u64| -> Result<Option<u32>> {
         match j.get(name) {
             None => Ok(None),
-            Some(v) => v.as_u64().filter(|n| *n <= max).map(|n| Some(n as u32)).ok_or_else(err),
+            Some(v) => v.as_u64().filter(|n| (min..=max).contains(n)).map(|n| Some(n as u32)).ok_or_else(err),
         }
     };
-    let year = field("year", 9999)?.ok_or_else(err)?;
-    let fields = [field("month", 12)?, field("day", 31)?, field("hour", 23)?, field("minute", 59)?, field("second", 59)?];
+    let year = field("year", 0, 9999)?.ok_or_else(err)?;
+    let fields = [field("month", 1, 12)?, field("day", 1, 31)?, field("hour", 0, 23)?, field("minute", 0, 59)?, field("second", 0, 59)?];
     // Each field needs the ones above it (a day without a month means nothing).
     let depth = fields.iter().take_while(|f| f.is_some()).count();
     if fields.iter().skip(depth).any(Option::is_some) {
@@ -1613,8 +1614,15 @@ mod tests {
     #[test]
     fn filter_by_rejects_malformed_dates() {
         let mut s = dated_session();
-        for bad in [json!([{"month": 3}]), json!([{"year": 2026, "day": 5}]), json!([{"year": 2026, "month": 13}]), json!({"year": 2026}), json!([3])]
-        {
+        for bad in [
+            json!([{"month": 3}]),
+            json!([{"year": 2026, "day": 5}]),
+            json!([{"year": 2026, "month": 13}]),
+            json!([{"year": 2026, "month": 0}]),
+            json!([{"year": 2026, "month": 3, "day": 0}]),
+            json!({"year": 2026}),
+            json!([3]),
+        ] {
             let err = s.execute("data.filterBy", json!({"column": "A", "dates": bad.clone()})).unwrap_err();
             assert!(err.to_string().contains("dates"), "{bad}: {err}");
         }

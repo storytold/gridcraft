@@ -761,21 +761,22 @@ fn filter_op(s: Option<&str>) -> &'static str {
 /// are ignored, a missing or out-of-range one drops the item.
 fn read_date_group_item(e: &El) -> Option<DateGroupItem> {
     let grouping = DateGrouping::from_xml(e.attr("dateTimeGrouping")?)?;
-    let field = |name: &str, g: DateGrouping, max: u32| -> Option<u32> {
+    // Months and days start at 1; hours, minutes and seconds at 0.
+    let field = |name: &str, g: DateGrouping, min: u32, max: u32| -> Option<u32> {
         if grouping < g {
             return Some(0);
         }
-        e.attr_u32(name).filter(|v| *v <= max)
+        e.attr_u32(name).filter(|v| (min..=max).contains(v))
     };
     let year = e.attr_u32("year").filter(|y| *y <= 9999)? as i32;
     Some(DateGroupItem {
         grouping,
         year,
-        month: field("month", DateGrouping::Month, 12)?,
-        day: field("day", DateGrouping::Day, 31)?,
-        hour: field("hour", DateGrouping::Hour, 23)?,
-        minute: field("minute", DateGrouping::Minute, 59)?,
-        second: field("second", DateGrouping::Second, 59)?,
+        month: field("month", DateGrouping::Month, 1, 12)?,
+        day: field("day", DateGrouping::Day, 1, 31)?,
+        hour: field("hour", DateGrouping::Hour, 0, 23)?,
+        minute: field("minute", DateGrouping::Minute, 0, 59)?,
+        second: field("second", DateGrouping::Second, 0, 59)?,
     })
 }
 

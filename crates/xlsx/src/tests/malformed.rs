@@ -256,3 +256,14 @@ fn hostile_formula_text_does_not_overflow_the_stack() {
     assert_eq!(a_len, 1_000_001);
     assert_eq!(a_value, gridcraft_core::Value::Number(3.0));
 }
+
+#[test]
+fn out_of_range_date_group_items_are_dropped() {
+    // Month 0, day 0, hour 24 and a missing year match no date: they are dropped, the valid item stays.
+    let body = r#"<sheetData/><autoFilter ref="A1:A5"><filterColumn colId="0"><filters><dateGroupItem year="2026" month="0" dateTimeGrouping="month"/><dateGroupItem year="2026" month="3" day="0" dateTimeGrouping="day"/><dateGroupItem year="2026" month="3" day="5" hour="24" dateTimeGrouping="hour"/><dateGroupItem month="3" dateTimeGrouping="month"/><dateGroupItem year="2026" month="3" day="5" dateTimeGrouping="day"/></filters></filterColumn></autoFilter>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let af = wb.sheets[0].autofilter.as_ref().unwrap();
+    let Some((_, gridcraft_model::FilterCriterion::Values { dates, .. })) = af.criteria.first() else { panic!("{:?}", af.criteria) };
+    assert_eq!(dates.len(), 1);
+    assert_eq!((dates[0].year, dates[0].month, dates[0].day), (2026, 3, 5));
+}
