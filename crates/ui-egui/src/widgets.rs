@@ -362,3 +362,22 @@ pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
         app.notice = None;
     }
 }
+
+/// The colours of the shared slider (`craft_ui::slider`): track, accent fill and thumb from the
+/// GridCraft tokens.
+pub fn slider_style(t: &Tokens) -> craft_ui::slider::SliderStyle {
+    craft_ui::slider::SliderStyle {
+        track: t.separator,
+        fill: t.accent,
+        thumb: t.window,
+        thumb_stroke: Stroke::new(1.0, t.separator),
+        dot: t.accent,
+        mark: t.text_dim,
+        focus_stroke: Stroke::new(1.0, t.accent),
+    }
+}
+
+/// The shared zoom bar's colours (`craft_ui::slider::ZoomBar`) from the GridCraft tokens.
+pub fn zoom_bar_style(t: &Tokens) -> craft_ui::slider::ZoomBarStyle {
+    craft_ui::slider::ZoomBarStyle { slider: slider_style(t), icon: t.text_dim, hover: t.hover, text: t.text_dim, font: 12.5 }
+}

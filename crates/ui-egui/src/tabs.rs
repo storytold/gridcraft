@@ -262,31 +262,24 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Zoom percentage and slider.
+                    // Zoom: `−`, slider, `+` and the percentage, the shared Office-style zoom bar.
                     let zoom = app.session.active().and_then(|d| d.wb.active().map(|s| s.zoom)).unwrap_or(100);
-                    let zl = ui.add(
-                        egui::Label::new(egui::RichText::new(format!("{zoom}%")).font(theme::ui_font(12.5)).color(t.text_dim)).sense(Sense::click()),
-                    );
-                    if zl.clicked() {
+                    let mut z = f64::from(zoom);
+                    let style = crate::widgets::zoom_bar_style(&t);
+                    let lang = app.ui.language;
+                    let labels =
+                        craft_ui::slider::ZoomBarLabels { zoom: lang.tr("Zoom"), zoom_in: lang.tr("Zoom In"), zoom_out: lang.tr("Zoom Out") };
+                    let bar = craft_ui::slider::ZoomBar::new(&mut z, 10.0..=400.0, labels, &style).show(ui);
+                    if bar.percent_clicked {
                         app.open_dialog("zoom", json!({}));
                     }
-                    ui.add_space(4.0);
-                    if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, "Zoom In", vec2(18.0, 18.0)).clicked() {
-                        let z = ((zoom as f32 / 10.0).floor() * 10.0 + 10.0).min(400.0);
-                        app.run_or_alert("view.zoom", json!({"percent": z}));
-                    }
-                    let mut z = zoom as f32;
-                    let slider = ui.add(egui::Slider::new(&mut z, 10.0..=400.0).show_value(false).logarithmic(true));
-                    if slider.changed() {
-                        let _ = app.session.run("view.zoom", json!({"percent": z.round()}));
-                    }
-                    if crate::widgets::icon_button(ui, Icon::Minus, t.text_dim, "Zoom Out", vec2(18.0, 18.0)).clicked() {
-                        let z = ((zoom as f32 / 10.0).ceil() * 10.0 - 10.0).max(10.0);
-                        app.run_or_alert("view.zoom", json!({"percent": z}));
+                    if bar.changed {
+                        app.run_or_alert("view.zoom", json!({"percent": z.round()}));
                     }
                     ui.add_space(10.0);
+                    // Tips use the View tab's labels, so they are translated like the ribbon.
                     for (icon, tip, mode, cmd) in [
-                        (Icon::PageBreak, "Page Break Preview", "pageBreakPreview", "view.pageBreakPreview"),
+                        (Icon::PageBreak, "Page Break\nPreview", "pageBreakPreview", "view.pageBreakPreview"),
                         (Icon::PageLayout, "Page Layout", "pageLayout", "view.pageLayout"),
                         (Icon::Normal, "Normal", "normal", "view.normal"),
                     ] {
@@ -298,7 +291,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                             ui.painter().rect_filled(r, 3.0, t.hover);
                         }
                         icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.text_dim);
-                        if resp.on_hover_text(tip).clicked() {
+                        if resp.on_hover_text(app.ui.language.tr(tip).replace('\n', " ")).clicked() {
                             app.run_or_alert(cmd, json!({}));
                         }
                     }
