@@ -801,18 +801,14 @@ impl SheetApp {
                 }
             }
             // Data › Get Data: pick a text file, then map its columns. A workbook picked here
-            // opens as File › Open would; the web shell has no path picker and opens it that way too.
+            // opens as File › Open would (the dialog tells by content); the web shell has no path
+            // picker and opens the file that way too.
             "importText" if ["path", "text", "base64"].iter().all(|k| params.get(*k).is_none()) => {
                 if self.services.pick_open.is_none() {
                     return self.open_dialog("open", params);
                 }
                 let Some(path) = self.services.pick_open.as_ref().and_then(|pick| pick()) else { return };
-                let ext = std::path::Path::new(&path).extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
-                if matches!(ext.as_str(), "xlsx" | "xlsm" | "xls" | "xlsb" | "ods") {
-                    self.open_path(&path);
-                } else {
-                    self.dialog = dialogs::Dialog::open(self, "importText", json!({"path": path}));
-                }
+                self.dialog = dialogs::Dialog::open(self, "importText", json!({"path": path}));
             }
             // File › Options (`file.options`) and the File tab itself open the Backstage view.
             "options" => self.open_backstage(backstage::Page::Options),

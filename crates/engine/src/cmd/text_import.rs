@@ -14,6 +14,9 @@ const MAX_PREVIEW_ROWS: usize = 200;
 const KIND_SAMPLE_ROWS: usize = 200;
 /// The most rows an import takes (a sheet's height).
 const MAX_IMPORT_ROWS: usize = 1_048_576;
+/// The error a workbook (XLSX, XLS, XLSB, ODS, templates…) gets from the text import: the UI opens
+/// it as File › Open would.
+pub const WORKBOOK_NOT_TEXT: &str = "This file is a workbook, not text. Open it with File > Open.";
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -97,13 +100,25 @@ fn delimiter_param(p: &Json) -> Option<u8> {
     }
 }
 
+/// A JSON array of objects, the one JSON shape Get Data reads; anything else is delimited text
+/// (a CSV whose first field is `[tag]` starts with `[` too).
+fn json_objects(text: &str) -> Option<Vec<Json>> {
+    if !text.trim_start().starts_with('[') {
+        return None;
+    }
+    serde_json::from_str::<Vec<Json>>(text).ok().filter(|arr| !arr.is_empty() && arr.iter().all(Json::is_object))
+}
+
 /// Reads the file into records: a JSON array of objects (keys are the header), else delimited
-/// text, every field kept as text so the mapping decides the types.
-fn read_records(cmd: &str, bytes: &[u8], p: &Json) -> Result<Records> {
+/// text, every field kept as text so the mapping decides the types. A workbook (by its content,
+/// whatever its name) is refused with [`WORKBOOK_NOT_TEXT`] so the caller can open it instead.
+fn read_records(bytes: &[u8], p: &Json) -> Result<Records> {
+    if !matches!(gridcraft_xlsx::sniff(bytes), gridcraft_xlsx::Format::Csv | gridcraft_xlsx::Format::Unknown) {
+        return Err(EngineError::Other(WORKBOOK_NOT_TEXT.into()));
+    }
     let header_row = bool_param(p, "header").unwrap_or(true);
     let text = String::from_utf8_lossy(bytes);
-    let (delimiter, mut all) = if text.trim_start().starts_with('[') {
-        let arr: Vec<Json> = serde_json::from_str(&text).map_err(|e| bad(cmd, e.to_string()))?;
+    let (delimiter, mut all) = if let Some(arr) = json_objects(&text) {
         let mut keys: Vec<String> = Vec::new();
         for o in &arr {
             if let Some(m) = o.as_object() {
@@ -279,7 +294,7 @@ fn delimiter_name(d: char) -> String {
 
 fn preview_text(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(bytes) = source_bytes("data.previewText", p)? else { return Err(bad("data.previewText", "missing `path`, `text` or `base64`")) };
-    let rec = read_records("data.previewText", &bytes, p)?;
+    let rec = read_records(&bytes, p)?;
     let sys = date_system(s);
     let limit = u32_param(p, "limit").map_or(20, |n| n as usize).min(MAX_PREVIEW_ROWS);
     let columns: Vec<Json> = rec
@@ -365,7 +380,7 @@ pub(crate) fn from_text(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Dialog("importText".into(), json!({})));
         return ok();
     };
-    let rec = read_records("data.fromTextCsv", &bytes, p)?;
+    let rec = read_records(&bytes, p)?;
     if rec.rows.len() >= MAX_IMPORT_ROWS {
         return Err(EngineError::Other("The file has more rows than a sheet holds.".into()));
     }
@@ -521,6 +536,28 @@ mod tests {
         assert_eq!(kind(&mut s, "rows200"), "number");
         assert_eq!(kind(&mut s, "all"), "text");
         assert_eq!(kind(&mut s, "none"), "text");
+    }
+
+    #[test]
+    fn only_an_array_of_objects_is_read_as_json() {
+        let mut s = session();
+        // A CSV whose first field starts with `[` is still CSV.
+        let r = s.execute("data.previewText", json!({"text": "[tag],value\n[a],1\n"})).unwrap();
+        assert_eq!(r["columns"][0]["name"], "[tag]");
+        assert_eq!(r["columns"][1]["type"], "number");
+        let r = s.execute("data.previewText", json!({"text": "[1,2]\n"})).unwrap();
+        assert_eq!(r["columns"].as_array().unwrap().len(), 2);
+        let r = s.execute("data.previewText", json!({"text": r#"[{"a": 1, "b": "x"}, {"a": 2}]"#})).unwrap();
+        assert_eq!(r["columns"][0]["name"], "a");
+        assert_eq!(r["preview"][0], json!(["1", "x"]));
+    }
+
+    #[test]
+    fn a_workbook_is_refused_by_content_whatever_its_name() {
+        let mut s = session();
+        let xlsx = crate::io::save_bytes(&s.doc().unwrap().wb, "book.xlsx").unwrap();
+        let err = s.execute("data.previewText", json!({"base64": crate::io::base64_encode(&xlsx)})).unwrap_err();
+        assert!(err.to_string().contains(WORKBOOK_NOT_TEXT), "{err}");
     }
 
     #[test]

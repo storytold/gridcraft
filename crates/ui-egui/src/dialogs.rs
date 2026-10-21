@@ -862,7 +862,10 @@ impl Dialog {
                 }
                 d.command = Some("data.fromTextCsv");
                 if let Err(e) = import_preview(app, &mut d) {
-                    app.message = Some((d.title.clone(), crate::clean_error(&e)));
+                    match d.values.get("path").and_then(Json::as_str) {
+                        Some(path) if e.contains(gridcraft_engine::cmd::text_import::WORKBOOK_NOT_TEXT) => app.open_path(path),
+                        _ => app.message = Some((d.title.clone(), crate::clean_error(&e))),
+                    }
                     return None;
                 }
                 d
@@ -3382,6 +3385,22 @@ mod tests {
         let at = gridcraft_engine::core::CellRef::new(0, 0);
         assert!(gridcraft_engine::cmd::data::check_validation(&doc.wb, 0, at, "6").is_none());
         assert!(gridcraft_engine::cmd::data::check_validation(&doc.wb, 0, at, "4").is_some());
+    }
+
+    #[test]
+    fn import_text_opens_a_picked_workbook_instead() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        // A template (or any workbook) named whatever: told apart by content.
+        let bytes = gridcraft_engine::io::save_bytes(&app.session.active().unwrap().wb, "book.xlsx").unwrap();
+        let path = std::env::temp_dir().join(format!("gridcraft-import-{}.xltx", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        let path = path.to_string_lossy().into_owned();
+        assert!(Dialog::open(&mut app, "importText", json!({"path": path})).is_none());
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some(path.as_str()));
+        assert!(app.message.is_none(), "{:?}", app.message);
     }
 
     #[test]
