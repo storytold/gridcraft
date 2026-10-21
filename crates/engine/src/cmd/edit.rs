@@ -1708,4 +1708,44 @@ mod tests {
     fn replace_case_insensitive() {
         assert_eq!(replace_ci("Apple apple APPLE", "apple", "pear"), "pear pear pear");
     }
+
+    #[test]
+    fn cell_set_input_value_primitives_null_and_missing() {
+        let mut s = Session::new();
+        s.new_workbook();
+
+        // Primitive number in input
+        s.execute("cell.set", json!({"cell": "A1", "input": 42})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["value"], json!(42.0));
+
+        // Primitive boolean in input
+        s.execute("cell.set", json!({"cell": "A2", "input": true})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "A2"})).unwrap()["value"], true);
+
+        // Primitive number in value
+        s.execute("cell.set", json!({"cell": "A3", "value": 99})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "A3"})).unwrap()["value"], json!(99.0));
+
+        // String in value
+        s.execute("cell.set", json!({"cell": "A4", "value": "hello"})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "A4"})).unwrap()["value"], "hello");
+
+        // Missing both input and value is an error
+        let err1 = s.execute("cell.set", json!({"cell": "B1"}));
+        assert!(err1.is_err(), "cell.set without input or value must fail");
+        let err2 = s.execute("cell.set", json!({}));
+        assert!(err2.is_err(), "cell.set with empty params must fail");
+
+        // Explicit empty string clears the cell
+        s.execute("cell.set", json!({"cell": "A1", "input": ""})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["value"], json!(null));
+
+        // Null in input clears the cell
+        s.execute("cell.set", json!({"cell": "A3", "input": null})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "A3"})).unwrap()["value"], json!(null));
+
+        // Null in value clears the cell
+        s.execute("cell.set", json!({"cell": "A4", "value": null})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "A4"})).unwrap()["value"], json!(null));
+    }
 }
