@@ -1645,7 +1645,7 @@ pub(crate) fn paint_border(p: &Painter, pts: [Pos2; 2], style: BorderStyle, col:
     }
 }
 
-fn paint_cf_icon(p: &Painter, r: Rect, set: &str, idx: usize) {
+pub(crate) fn paint_cf_icon(p: &Painter, r: Rect, set: &str, idx: usize) {
     let n = gridcraft_engine::cf::icon_count(set);
     let palette3 = [Color32::from_rgb(0xD1, 0x3B, 0x2F), Color32::from_rgb(0xF2, 0xB8, 0x2E), Color32::from_rgb(0x2E, 0x9E, 0x4F)];
     let col = if n <= 3 {
