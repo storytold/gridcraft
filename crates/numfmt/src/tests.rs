@@ -864,3 +864,62 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(f("0\\[0", 5.0), "0[5");
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
 }
+
+const JAN_1_2001: f64 = 36892.0;
+
+#[test]
+fn b1_prefix_is_hidden_and_gregorian() {
+    assert_eq!(f("B1dd/mm/yyyy", 46314.0), "19/10/2026");
+    assert_eq!(f("b1dddd, mmmm d, yyyy", 46314.0), "Monday, October 19, 2026");
+    assert_eq!(f("B1yyyy-mm-dd hh:mm", 46314.5), "2026-10-19 12:00");
+}
+
+#[test]
+fn b2_prefix_renders_hijri_date() {
+    assert_eq!(f("B2dd/mm/yyyy", JAN_1_2001), "06/10/1421");
+    assert_eq!(f("b2d/m/yy", JAN_1_2001), "6/10/21");
+    assert_eq!(f("B2dddd dd/mm/yyyy hh:mm", JAN_1_2001 + 0.75), "Monday 06/10/1421 18:00");
+    assert_eq!(text_function(&Value::Number(46314.0), "B2dd/mm/yyyy", S).as_deref(), Ok("08/05/1448"));
+}
+
+#[test]
+fn b2_prefix_names_hijri_months() {
+    assert_eq!(f("B2d mmmm yyyy", JAN_1_2001), "6 شوال 1421");
+    assert_eq!(f("B2mmm", 37034.0), "ربيع الأول");
+    assert_eq!(f("B2mmmm", JAN_1_2001 + 23.0), "شوال");
+    assert_eq!(f("B2mmmm", JAN_1_2001 + 24.0), "ذو القعدة");
+    assert_eq!(f("B2mmmmm", JAN_1_2001 + 24.0), "ذ");
+}
+
+#[test]
+fn b2_month_and_year_rollover() {
+    assert_eq!(f("B2dd/mm/yyyy", 36915.0), "29/10/1421");
+    assert_eq!(f("B2dd/mm/yyyy", 36916.0), "01/11/1421");
+    assert_eq!(f("B2dd/mm/yyyy", 36974.0), "29/12/1421");
+    assert_eq!(f("B2dd/mm/yyyy", 36975.0), "01/01/1422");
+    assert_eq!(f("B2dd/mm/yyyy", 37683.0), "30/12/1423");
+    assert_eq!(f("B2dd/mm/yyyy", 37684.0), "01/01/1424");
+}
+
+#[test]
+fn calendar_prefix_after_locale_tag() {
+    assert_eq!(f("[$-401]B2dd/mm/yyyy", JAN_1_2001), "06/10/1421");
+    assert_eq!(f("[Red][$-401]B1dd/mm/yyyy", JAN_1_2001), "01/01/2001");
+    assert_eq!(f("[<0]0;B2dd/mm/yyyy", JAN_1_2001), "06/10/1421");
+    assert_eq!(f("dd \"B2\" yyyy", JAN_1_2001), "01 B2 2001");
+    assert_eq!(f("B3dd", JAN_1_2001), "B301");
+}
+
+#[test]
+fn b2_before_epoch_does_not_panic() {
+    for v in [-1.0, 0.0, 60.0, 2958465.0, 2958466.0, 1e300, f64::NAN] {
+        let _ = f("B2dd/mm/yyyy mmmm", v);
+    }
+    assert_eq!(f("B2dd/mm/yyyy", -1.0), f("dd/mm/yyyy", -1.0));
+    assert_eq!(f("B2dd/mm/yyyy", 2958466.0), f("dd/mm/yyyy", 2958466.0));
+    assert_eq!(f("B2dd/mm/yyyy", 1.0), "29/08/1317");
+    assert_eq!(f("B2dd/mm/yyyy", 2958465.0), "03/04/9666");
+    let before_epoch = gridcraft_core::date::DateTime { year: 600, month: 3, day: 9, ..Default::default() };
+    let shown = calendar::Calendar::Hijri.date(&before_epoch);
+    assert_eq!((shown.year, shown.month, shown.day, shown.month_name), (600, 3, 9, "March"));
+}

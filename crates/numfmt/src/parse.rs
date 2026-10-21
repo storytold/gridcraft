@@ -1,6 +1,7 @@
 //! Format code parsing: sections, bracket tags and tokens.
 
 use crate::FormatColor;
+use crate::calendar::Calendar;
 
 /// At most this many sections are honoured (`pos;neg;zero;text`); extra ones are ignored.
 const MAX_SECTIONS: usize = 4;
@@ -122,6 +123,7 @@ pub(crate) struct Section {
     pub fraction: bool,
     pub currency: bool,
     pub fill: bool,
+    pub calendar: Calendar,
 }
 
 /// Splits a code into sections at unquoted, unescaped, unbracketed semicolons.
@@ -251,17 +253,36 @@ struct Raw {
     color: Option<FormatColor>,
     cond: Option<Cond>,
     currency: bool,
+    calendar: Calendar,
+}
+
+/// Where a section's body starts: after its leading `[...]` tags, read as `tokenize` reads them.
+fn after_leading_brackets(cs: &[char]) -> usize {
+    let mut i = 0usize;
+    while cs.get(i) == Some(&'[') {
+        match cs.get(i + 1..).and_then(|r| r.iter().position(|&d| d == ']')) {
+            Some(p) => i += p + 2,
+            None => break,
+        }
+    }
+    i
 }
 
 fn tokenize(src: &str) -> Raw {
     let cs: Vec<char> = src.chars().collect();
-    let mut raw = Raw { toks: Vec::new(), color: None, cond: None, currency: false };
+    let mut raw = Raw { toks: Vec::new(), color: None, cond: None, currency: false, calendar: Calendar::Gregorian };
     let toks = &mut raw.toks;
     // With no `]` at or after a `[`, that `[` is a literal; checking this once keeps the scan linear.
     let last_close = cs.iter().rposition(|&c| c == ']');
+    let body_start = after_leading_brackets(&cs);
     let mut i = 0usize;
     while let Some(&c) = cs.get(i) {
         match c {
+            'B' | 'b' if i == body_start && matches!(cs.get(i + 1), Some('1' | '2')) => {
+                raw.calendar = if cs.get(i + 1) == Some(&'2') { Calendar::Hijri } else { Calendar::Gregorian };
+                i += 2;
+                continue;
+            }
             '"' => {
                 let mut s = String::new();
                 i += 1;
@@ -438,7 +459,7 @@ fn date_part(t: &Tok) -> Option<DatePart> {
 }
 
 fn analyze(raw: Raw) -> Section {
-    let Raw { mut toks, color, cond, currency } = raw;
+    let Raw { mut toks, color, cond, currency, calendar } = raw;
     let is_date = toks.iter().any(|t| matches!(t, Tok::Date(_)));
     let has_general = toks.iter().any(|t| matches!(t, Tok::General));
     let mut sec = Section {
@@ -455,6 +476,7 @@ fn analyze(raw: Raw) -> Section {
         fraction: false,
         currency,
         fill: toks.iter().any(|t| matches!(t, Tok::Fill(_))),
+        calendar,
     };
     if is_date {
         sec.kind = SecKind::Date;

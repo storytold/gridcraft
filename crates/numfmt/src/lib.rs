@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod builtin;
+mod calendar;
 mod decimal;
 mod parse;
 mod render;
