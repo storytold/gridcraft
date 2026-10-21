@@ -758,15 +758,19 @@ fn filter_op(s: Option<&str>) -> &'static str {
 }
 
 /// `<dateGroupItem year="2026" month="3" dateTimeGrouping="month"/>`; fields below the grouping
-/// are ignored, a missing or out-of-range one drops the item.
+/// are ignored.
 fn read_date_group_item(e: &El) -> Option<DateGroupItem> {
     let grouping = DateGrouping::from_xml(e.attr("dateTimeGrouping")?)?;
-    // Months and days start at 1; hours, minutes and seconds at 0.
+    // Months and days start at 1; hours, minutes and seconds at 0. An omitted field takes its
+    // lowest value, as Excel reads it (MS-OI29500 §18.3.2.4); a present one out of range drops the item.
     let field = |name: &str, g: DateGrouping, min: u32, max: u32| -> Option<u32> {
         if grouping < g {
             return Some(0);
         }
-        e.attr_u32(name).filter(|v| (min..=max).contains(v))
+        match e.attr(name) {
+            None => Some(min),
+            Some(_) => e.attr_u32(name).filter(|v| (min..=max).contains(v)),
+        }
     };
     let year = e.attr_u32("year").filter(|y| *y <= 9999)? as i32;
     Some(DateGroupItem {
