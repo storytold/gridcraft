@@ -68,6 +68,14 @@ Server, Access, ODBC, …), web pages, SharePoint and online services, through P
 GridCraft imports CSV/TSV, JSON and HTML tables only, with no query editor, no connections and no
 refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
+## Drawing-loss checks
+
+The CLI checker compares source and saved DrawingML object counts per worksheet, including
+pictures, charts and shapes nested in groups. A retained object cannot mask another lost
+occurrence. Ambiguous or incomplete inspection prevents a clean result. This is not a geometry
+or styling comparison; chart sheets, VML and non-XLSX inventories remain outside this check.
+See [CLI documentation](cli.md) for the report contract.
+
 ## Work (76–114 h)
 
 | Work | Hours |
@@ -92,6 +100,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-18 | trivial | XLSX PivotTables: `rowGrandTotals` is the Grand Total row and `colGrandTotals` the Grand Total column. Both were read and written the other way round, which a GridCraft round trip hid, so an Excel file with only one grand total opened showing the other |
 | 2026-10-19 | minor | HTML (Save as Web Page and clipboard) marks right-to-left sheets and right-to-left cell text with `dir` |
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
+| 2026-10-13 | minor | Document the per-worksheet DrawingML occurrence-loss check and its limits |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |
 | 2026-10-12 | minor | `.xls` import reads the calculation settings (CalcMode, CalcIter, CalcCount, CalcDelta, CalcPrecision), so circular models calculate instead of showing `#CIRC!` (#724) |
