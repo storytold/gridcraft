@@ -616,7 +616,11 @@ fn freq_arg(a: &[Arg], i: usize) -> R<f64> {
 }
 
 /// 30/360 day count (US/NASD when `us`, European otherwise).
-fn days360(sys: DateSystem, s1: f64, s2: f64, us: bool) -> R<f64> {
+///
+/// US counts as YEARFRAC's basis 0 does: a 31st end date moves to the 30th only after a 30th or
+/// 31st start, so 28 Feb to 31 Mar is 31 days. With `feb_end_caps_31`, an end-of-February start
+/// moves it to the 30th as well (30 days).
+fn days360(sys: DateSystem, s1: f64, s2: f64, us: bool, feb_end_caps_31: bool) -> R<f64> {
     let (y1, m1, mut d1) = ymd(sys, s1)?;
     let (y2, m2, mut d2) = ymd(sys, s2)?;
     if us {
@@ -625,13 +629,10 @@ fn days360(sys: DateSystem, s1: f64, s2: f64, us: bool) -> R<f64> {
         if feb_end1 && feb_end2 {
             d2 = 30;
         }
-        if feb_end1 {
-            d1 = 30;
-        }
-        if d2 == 31 && d1 >= 30 {
+        if d2 == 31 && (d1 >= 30 || (feb_end1 && feb_end_caps_31)) {
             d2 = 30;
         }
-        if d1 == 31 {
+        if feb_end1 || d1 == 31 {
             d1 = 30;
         }
     } else {
@@ -644,20 +645,26 @@ fn days360(sys: DateSystem, s1: f64, s2: f64, us: bool) -> R<f64> {
 /// Days between two dates under a basis.
 fn day_count(sys: DateSystem, s1: f64, s2: f64, basis: u32) -> R<f64> {
     match basis {
-        0 => days360(sys, s1, s2, true),
-        4 => days360(sys, s1, s2, false),
+        0 => days360(sys, s1, s2, true, false),
+        4 => days360(sys, s1, s2, false, false),
         _ => Ok(s2 - s1),
     }
+}
+
+/// `day_count` for the coupon periods of ACCRINT and the odd-period functions, which keep
+/// moving a 31st end date to the 30th after an end-of-February start under basis 0.
+fn period_day_count(sys: DateSystem, s1: f64, s2: f64, basis: u32) -> R<f64> {
+    if basis == 0 { days360(sys, s1, s2, true, true) } else { day_count(sys, s1, s2, basis) }
 }
 
 /// Year fraction between two dates under a basis (YEARFRAC semantics).
 fn year_frac(sys: DateSystem, s1: f64, s2: f64, basis: u32) -> R<f64> {
     let (s1, s2) = if s1 <= s2 { (s1, s2) } else { (s2, s1) };
     match basis {
-        0 => Ok(days360(sys, s1, s2, true)? / 360.0),
+        0 => Ok(days360(sys, s1, s2, true, false)? / 360.0),
         2 => Ok((s2 - s1) / 360.0),
         3 => Ok((s2 - s1) / 365.0),
-        4 => Ok(days360(sys, s1, s2, false)? / 360.0),
+        4 => Ok(days360(sys, s1, s2, false, false)? / 360.0),
         _ => {
             let (y1, m1, d1) = ymd(sys, s1)?;
             let (y2, m2, d2) = ymd(sys, s2)?;
@@ -846,7 +853,7 @@ fn accrint(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
                 3 => 365.0 / freq,
                 _ => 360.0 / freq,
             };
-            sum += day_count(sys, from, to, basis)? / nl;
+            sum += period_day_count(sys, from, to, basis)? / nl;
         }
         j += 1;
         guard += 1;
@@ -1118,7 +1125,7 @@ fn normal_length(start: f64, end: f64, freq: f64, basis: u32) -> f64 {
 
 /// Days of `[from, to]` under a basis, or 0 when the span is empty.
 fn span(sys: DateSystem, from: f64, to: f64, basis: u32) -> R<f64> {
-    if to > from { day_count(sys, from, to, basis) } else { Ok(0.0) }
+    if to > from { period_day_count(sys, from, to, basis) } else { Ok(0.0) }
 }
 
 /// The odd-first-period terms that ODDFPRICE and ODDFYIELD share.
@@ -1909,6 +1916,20 @@ mod tests {
             _ => panic!(),
         };
         close_tol(ev("YIELD", vec![d(2008, 2, 15), d(2008, 6, 15), n(0.05), n(pv), n(100.0), n(2.0)]), 0.04, 1e-9);
+    }
+
+    #[test]
+    fn basis_0_after_end_of_february() {
+        // 30/360 from the end of February to a 31st is 31 days, as in YEARFRAC (values observed
+        // in Excel).
+        close(ev("COUPDAYBS", vec![d(2008, 3, 31), d(2011, 2, 28), n(1.0), n(0.0)]), 31.0);
+        close(ev("COUPDAYSNC", vec![d(2008, 3, 31), d(2011, 2, 28), n(1.0), n(0.0)]), 329.0);
+        close_tol(ev("PRICE", vec![d(2008, 3, 31), d(2011, 2, 28), n(0.0575), n(0.065), n(100.0), n(1.0), n(0.0)]), 98.05145955, 1e-9);
+        close_tol(ev("ACCRINTM", vec![d(2007, 2, 28), d(2007, 3, 31), n(0.1), n(1000.0), n(0.0)]), 8.611111111, 1e-9);
+        close_tol(ev("DISC", vec![d(2007, 2, 28), d(2011, 3, 31), n(97.975), n(100.0), n(0.0)]), 0.004955812373, 1e-9);
+        close_tol(ev("PRICEMAT", vec![d(2008, 2, 29), d(2009, 8, 31), d(2007, 2, 28), n(0.061), n(0.061), n(0.0)]), 99.48777204, 1e-9);
+        // ACCRINT's coupon periods keep the 30-day count: 28 Feb to 31 Aug is half a year.
+        close_tol(ev("ACCRINT", vec![d(2007, 2, 28), d(2008, 8, 31), d(2008, 2, 29), n(0.1), n(1000.0), n(4.0), n(0.0)]), 99.72222222, 1e-9);
     }
 
     fn number(v: Value) -> f64 {
