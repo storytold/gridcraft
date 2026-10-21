@@ -15,6 +15,10 @@ Then send newline-delimited JSON to `127.0.0.1:7979`. Every request line gets on
 
 Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 
+A line that is not a JSON object with a string `method` (an HTTP request, text that isn't JSON,
+bytes that aren't UTF-8, a line over 64 MiB) gets one error reply and the server closes the
+connection; nothing sent after it runs. Blank lines are skipped.
+
 ## Methods
 
 | Method | Params | What it does |

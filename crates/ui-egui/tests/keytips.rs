@@ -267,6 +267,80 @@ fn mouse_press_and_window_focus_loss_cancel_keytips() {
     assert!(h.state().editor.is_none());
 }
 
+fn alt_down(h: &mut Harness, alt: Key) {
+    events(h, [Event::ModifiersChanged(Modifiers::ALT), key_event(alt, true, Modifiers::ALT)]);
+}
+
+fn alt_up(h: &mut Harness, alt: Key) {
+    events(h, [Event::ModifiersChanged(Modifiers::NONE), key_event(alt, false, Modifiers::NONE)]);
+}
+
+fn alt_letter(h: &mut Harness, key: Key) {
+    events(h, [key_event(key, true, Modifiers::ALT), key_event(key, false, Modifiers::ALT)]);
+}
+
+fn line_size(h: &Harness, cols: bool) -> Option<f32> {
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    if cols { &sh.cols } else { &sh.rows }.get(&0).and_then(|e| e.size)
+}
+
+#[test]
+fn letters_typed_with_alt_held_run_autofit_sequences() {
+    // #1846: Excel accepts Alt+H, O, A with Alt still held for the first letter (or all of them).
+    for os in [OperatingSystem::Windows, OperatingSystem::Nix] {
+        let mut s = blank();
+        s.execute("cell.set", json!({"cell": "A1", "input": "a much longer piece of text than the column"})).unwrap();
+        s.execute("home.fontSize", json!({"range": "A1", "size": 28})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "1:1", "height": 10})).unwrap();
+        s.execute("selection.set", json!({"cell": "A1"})).unwrap();
+        let mut h = harness_on(s, os);
+
+        // Alt held through H, O and I: AutoFit Column Width.
+        alt_down(&mut h, Key::AltLeft);
+        alt_letter(&mut h, Key::H);
+        assert_eq!(h.state().keytips.prefix(), Some("H"), "{os:?}: Alt+H opens the Home keytips");
+        alt_letter(&mut h, Key::O);
+        alt_letter(&mut h, Key::I);
+        alt_up(&mut h, Key::AltLeft);
+        assert_eq!(h.state().keytips.prefix(), None, "{os:?}");
+        assert!(line_size(&h, true).is_some_and(|w| w > 100.0), "{os:?}: column A was autofitted");
+
+        // Alt released after H: AutoFit Row Height.
+        alt_down(&mut h, Key::AltLeft);
+        alt_letter(&mut h, Key::H);
+        alt_up(&mut h, Key::AltLeft);
+        assert_eq!(h.state().keytips.prefix(), Some("H"), "{os:?}: releasing Alt keeps the level");
+        letter(&mut h, Key::O, false);
+        letter(&mut h, Key::A, false);
+        assert!(line_size(&h, false).is_some_and(|r| r > 10.0), "{os:?}: row 1 was autofitted");
+        assert_eq!(value(&h, "A1"), Value::Text("a much longer piece of text than the column".into()));
+        assert!(h.state().editor.is_none(), "{os:?}: no letter reached the grid");
+    }
+}
+
+#[test]
+fn alt_combinations_outside_a_sequence_still_cancel_keytips() {
+    let mut h = harness_on(blank(), OperatingSystem::Windows);
+    alt_down(&mut h, Key::AltLeft);
+    alt_letter(&mut h, Key::X);
+    alt_up(&mut h, Key::AltLeft);
+    assert_eq!(h.state().keytips.prefix(), None, "X starts no sequence");
+
+    // AltGr types characters (and is Ctrl+Alt on Windows): it never starts keytips.
+    let mut h = harness_on(blank(), OperatingSystem::Nix);
+    alt_down(&mut h, Key::AltRight);
+    alt_letter(&mut h, Key::H);
+    alt_up(&mut h, Key::AltRight);
+    assert_eq!(h.state().keytips.prefix(), None);
+
+    // macOS: Option is a text modifier (see #1864).
+    let mut h = harness_on(blank(), OperatingSystem::Mac);
+    alt_down(&mut h, Key::AltLeft);
+    alt_letter(&mut h, Key::H);
+    alt_up(&mut h, Key::AltLeft);
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
 #[test]
 fn held_keys_do_not_toggle_twice_or_leak_repeated_letters() {
     let mut h = harness(blank());

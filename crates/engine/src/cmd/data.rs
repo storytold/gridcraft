@@ -614,6 +614,8 @@ fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
     let num = gridcraft_core::parse::parse_number_text(crit);
     let cmp = match (v.as_f64(), num) {
         (Some(a), Some(b)) => a.partial_cmp(&b),
+        // A numeric ordering comparison only matches numbers; blanks and text never do.
+        (None, Some(_)) if matches!(op, "<" | "<=" | ">" | ">=") => None,
         _ => Some(gridcraft_core::compare_text(text, crit)),
     };
     let wild = || super::edit::wildcard(&text.to_lowercase(), &crit.to_lowercase());
@@ -1408,7 +1410,7 @@ fn detail(s: &mut Session, p: &Json, hide: bool) -> Result<Json> {
                 .collect();
             for i in g.start..=g.end {
                 if let Some(e) = map.get_mut(&i) {
-                    e.hidden = hide || inner.iter().any(|o| o.contains(i));
+                    set_hidden(e, hide || inner.iter().any(|o| o.contains(i)));
                 }
             }
             if hide {
@@ -1420,6 +1422,16 @@ fn detail(s: &mut Session, p: &Json, hide: bool) -> Result<Json> {
         cx.structural = true;
         Ok(Json::Null)
     })
+}
+
+/// Hides or shows an outline line. A line shown with a zero size (files that hide columns as
+/// `width="0" hidden="1"`) gets the default size back, as Unhide does; otherwise + would mark the
+/// group expanded and leave it invisible (#1714).
+fn set_hidden(e: &mut LineInfo, hidden: bool) {
+    e.hidden = hidden;
+    if !hidden && e.size == Some(0.0) {
+        e.size = None;
+    }
 }
 
 /// The outline's level buttons: show rows / columns down to outline level `n` (1 = only the
@@ -1440,7 +1452,7 @@ fn show_levels(s: &mut Session, p: &Json) -> Result<Json> {
             let Some(n) = n else { continue };
             let groups = outline::groups(map);
             for e in map.values_mut().filter(|e| e.outline > 0) {
-                e.hidden = e.outline >= n;
+                set_hidden(e, e.outline >= n);
             }
             // Inner groups come first, so a summary line shared with the group around it ends up
             // as that outer group says.
@@ -1660,6 +1672,31 @@ mod tests {
         }
         assert!(ok(&mut s, "B1", "5"));
         assert!(!ok(&mut s, "B1", "150"));
+    }
+
+    #[test]
+    fn showing_detail_gives_zero_width_columns_their_width_back() {
+        // #1714: templates hide grouped columns as `width="0" hidden="1"`; + must show them.
+        let mut s = Session::new();
+        s.new_workbook();
+        let hidden = LineInfo { size: Some(0.0), hidden: true, outline: 1, ..LineInfo::default() };
+        let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        for c in 2..=4 {
+            sh.cols.insert(c, hidden);
+        }
+        sh.cols.insert(5, LineInfo { collapsed: true, ..LineInfo::default() });
+        s.execute("data.showDetail", json!({"cols": "C:E", "level": 1})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        for c in 2..=4 {
+            assert_eq!(sh.col_width(c), sh.default_col_width, "column {c}");
+        }
+        // Hiding again hides them; the level buttons show zero-width columns too.
+        s.execute("data.hideDetail", json!({"cols": "C:E", "level": 1})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().col_width(2), 0.0);
+        Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().cols.insert(3, hidden);
+        s.execute("data.showLevels", json!({"cols": 2})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert_eq!((sh.col_width(2), sh.col_width(3)), (sh.default_col_width, sh.default_col_width));
     }
 
     #[test]

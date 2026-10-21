@@ -355,6 +355,10 @@ fn pivot_xml_details() {
     let t2 = String::from_utf8(parts.get("xl/pivotTables/pivotTable2.xml").unwrap().clone()).unwrap();
     assert!(t2.contains("pivotShowAs=\"rankDescending\""));
     assert!(t2.contains("showDataAs=\"runTotal\""));
+    // Pivot 1 has no Grand Total column (`colGrandTotals`), pivot 2 no Grand Total row
+    // (`rowGrandTotals`).
+    assert!(t1.contains(" colGrandTotals=\"0\"") && !t1.contains("rowGrandTotals"), "{t1}");
+    assert!(t2.contains(" rowGrandTotals=\"0\"") && !t2.contains("colGrandTotals"), "{t2}");
     // The custom value format is registered in the styles part.
     let styles = String::from_utf8(parts.get("xl/styles.xml").unwrap().clone()).unwrap();
     assert!(styles.contains("formatCode=\"0.0&quot; u&quot;\""));
@@ -400,6 +404,67 @@ fn large_cache_is_written_without_records() {
     assert!(c.contains("<sharedItems containsSemiMixedTypes=\"0\" containsString=\"0\" containsNumber=\"1\" containsInteger=\"1\" minValue=\"0\" maxValue=\"2\" count=\"3\">"), "{}", &c[..c.len().min(2000)]);
     let (back, _) = read_xlsx(&bytes).unwrap();
     assert_eq!(back.sheet(0).unwrap().pivots.len(), 1);
+}
+
+/// #1447 item 1: Excel counts booleans and errors as strings in `<sharedItems>`; writing
+/// `containsString="0"` for them makes a file Excel can't open.
+#[test]
+fn boolean_and_error_cache_flags_match_excel() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    let na = || Value::Error(gridcraft_core::CellError::NA);
+    let cols: [(&str, [Value; 3]); 7] = [
+        ("K", [Value::text("a"), Value::text("b"), Value::text("a")]),
+        ("BoolOnly", [Value::Bool(true), Value::Bool(false), Value::Bool(true)]),
+        ("NumBool", [Value::number(1.0), Value::Bool(true), Value::number(2.5)]),
+        ("ErrOnly", [na(), na(), na()]),
+        ("NumErr", [Value::number(1.0), na(), Value::number(3.0)]),
+        ("TextBool", [Value::text("x"), Value::Bool(true), Value::text("y")]),
+        ("BoolBlank", [Value::Bool(true), Value::Empty, Value::Bool(false)]),
+    ];
+    for (c, (h, vals)) in cols.iter().enumerate() {
+        s.cells.set(CellRef::new(0, c as u32), Cell::value(Value::text(*h)));
+        for (r, v) in vals.iter().enumerate() {
+            if !matches!(v, Value::Empty) {
+                s.cells.set(CellRef::new(r as u32 + 1, c as u32), Cell::value(v.clone()));
+            }
+        }
+    }
+    s.pivots.push(PivotTable {
+        id: 1,
+        source: "Sheet1!$A$1:$G$4".into(),
+        anchor: at("J1"),
+        rows: vec![field("K")],
+        values: vec![PivotValue { source_col: "NumBool".into(), name: "Sum of NumBool".into(), ..PivotValue::default() }],
+        last_range: Some(rr("J1:K4")),
+        ..PivotTable::default()
+    });
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let c = String::from_utf8(parts.get("xl/pivotCache/pivotCacheDefinition1.xml").unwrap().clone()).unwrap();
+    let start = |name: &str| -> String {
+        let i = c.find(&format!("<cacheField name=\"{name}\"")).unwrap();
+        let j = i + c[i..].find("<sharedItems").unwrap();
+        let k = j + c[j..].find('>').unwrap();
+        c[j..=k].trim_end_matches('>').trim_end_matches('/').to_string()
+    };
+    let flags = |name: &str| -> String {
+        let t = start(name);
+        // Drop the trailing count attribute, which depends on itemization.
+        match t.find(" count=") {
+            Some(i) => t[..i].to_string(),
+            None => t,
+        }
+    };
+    assert_eq!(flags("BoolOnly"), "<sharedItems");
+    assert_eq!(flags("NumBool"), "<sharedItems containsMixedTypes=\"1\" containsNumber=\"1\" minValue=\"1\" maxValue=\"2.5\"");
+    assert_eq!(flags("ErrOnly"), "<sharedItems");
+    assert_eq!(flags("NumErr"), "<sharedItems containsMixedTypes=\"1\" containsNumber=\"1\" containsInteger=\"1\" minValue=\"1\" maxValue=\"3\"");
+    assert_eq!(flags("TextBool"), "<sharedItems");
+    assert_eq!(flags("BoolBlank"), "<sharedItems containsBlank=\"1\"");
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheet(0).unwrap().pivots.len(), 1);
+    assert!(!report.warnings.iter().any(|w| w.to_lowercase().contains("pivot")), "{:?}", report.warnings);
 }
 
 const PT_RELS: &str = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable" Target="../pivotTables/pivotTable1.xml"/></Relationships>"#;
@@ -577,6 +642,25 @@ fn values_ahead_of_column_fields_read_last() {
     assert_eq!((pt.columns.len(), pt.values.len()), (1, 2));
     assert!(!pt.values_on_rows);
     assert_eq!(pt.values_position, None);
+}
+
+// As Excel saves them: `rowGrandTotals="0"` drops the Grand Total row under the report (leaving
+// Excel's "On for Rows Only"), `colGrandTotals="0"` the Grand Total column at its right ("On for
+// Columns Only"). LibreOffice's Pivot2_Row_Subtotals.xlsx (`rowGrandTotals="0"`) shows no Grand
+// Total row; ClosedXML's TemplateWithTableSourcePivotTables.xlsx pivotTable5 (`colGrandTotals="0"`,
+// row and column fields) shows a Grand Total row and no Grand Total column.
+#[test]
+fn grand_totals_read_in_excel_direction() {
+    let table = |attr: &str| {
+        format!(
+            r#"<pivotTableDefinition name="GT" cacheId="1" {attr}><location ref="C1:F4"/><pivotFields><pivotField axis="axisRow"><items><item x="0"/><item x="1"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><rowFields><field x="0"/></rowFields><dataFields><dataField name="Sum of V" fld="1"/></dataFields></pivotTableDefinition>"#
+        )
+    };
+    for (attr, rows, cols) in [("rowGrandTotals=\"0\"", true, false), ("colGrandTotals=\"0\"", false, true), ("", true, true)] {
+        let (wb, _) = read_xlsx(&with_pivot(&table(attr), Some(GOOD_CACHE))).unwrap();
+        let pt = &wb.sheet(0).unwrap().pivots[0];
+        assert_eq!((pt.grand_totals_rows, pt.grand_totals_cols), (rows, cols), "{attr}");
+    }
 }
 
 #[test]

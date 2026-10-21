@@ -338,20 +338,31 @@ fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let input = str_param(p, "input").unwrap_or("").to_string();
     let origin = s.doc()?.selection.active;
     edit(s, |cx| {
-        let base = input_to_cell(&input, sheet, origin, &mut cx.wb)?;
+        // Each cell gets what typing the input there gives: the automatic number format where
+        // it's General, its own format otherwise, text where it's Text. That depends only on
+        // the cell's style, so the input is parsed once per style.
+        let mut by_style: std::collections::HashMap<StyleId, Option<Cell>> = std::collections::HashMap::new();
         for r in &ranges {
             if r.count() > 2_000_000 {
                 return Err(bad("range.fill", "range too large"));
             }
             for at in r.iter() {
-                let mut cell = base.clone().unwrap_or_default();
+                let style = cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
+                let base = match by_style.get(&style) {
+                    Some(c) => c.clone(),
+                    None => {
+                        let c = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+                        by_style.insert(style, c.clone());
+                        c
+                    }
+                };
+                let mut cell = base.unwrap_or_default();
                 if let Some(f) = &cell.formula
                     && let Some(e) = f.expr()
                 {
                     let shifted = gridcraft_formula::adjust::shift_relative(e, at.row as i64 - origin.row as i64, at.col as i64 - origin.col as i64);
                     cell.formula = Some(std::sync::Arc::new(Formula::from_expr(shifted)));
                 }
-                cell.style = cx.wb.sheet(sheet).and_then(|sh| sh.cell(at)).map(|c| c.style).unwrap_or(cell.style);
                 cx.sheet_mut(sheet)?.set_cell(at, cell);
                 cx.touch(sheet, at);
             }
@@ -601,7 +612,8 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
     let now = d.wb.clone();
     for _ in 0..steps {
         let Some(e) = d.undo.pop() else { break };
-        let cur = crate::HistoryEntry { label: e.label.clone(), wb: d.wb.clone(), selection: d.selection.clone() };
+        // Redo goes back to the undone edit's cells, not wherever the user clicked before undoing (#1855).
+        let cur = crate::HistoryEntry { label: e.label.clone(), wb: d.wb.clone(), selection: e.selection.clone() };
         d.redo.push(cur);
         label = e.label.clone();
         d.wb = e.wb;

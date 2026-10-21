@@ -466,10 +466,11 @@ fn table_style(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// Table names follow the Microsoft name rules, as the xlsx writer does: letters, digits, `_` and `.`,
-/// starting with a letter, `_` or `\`. Anything else (a hyphen, say) would read as an operator inside a
-/// structured reference, and the writer would rename the table on save.
+/// starting with a letter, `_` or `\`, and at most 255 characters. Anything else (a hyphen, say) would
+/// read as an operator inside a structured reference, and the writer would rename the table on save.
 fn valid_table_name(name: &str) -> bool {
-    name.starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '\\')
+    name.chars().count() <= 255
+        && name.starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '\\')
         && CellRef::parse(name).is_none()
         && name.chars().enumerate().all(|(i, c)| c.is_alphanumeric() || c == '_' || c == '.' || (i == 0 && c == '\\'))
 }

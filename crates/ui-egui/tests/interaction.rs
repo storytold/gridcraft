@@ -892,3 +892,22 @@ fn rotated_wrapped_text_is_drawn_rotated_inside_its_cell() {
         assert!(clip.width() < 70.0, "clip spans one 6-character column, got {clip:?}");
     }
 }
+
+#[test]
+fn undo_after_backspace_restores_the_cleared_cell() {
+    // #1855: Backspace clears the cell and opens an empty editor; committing it must not add a
+    // second, empty undo step, so one Ctrl+Z brings the value back and leaves other edits alone.
+    let mut h = harness(blank());
+    text(&mut h, "3200");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    click_cell(&mut h, "C5");
+    text(&mut h, "11750");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    click_cell(&mut h, "A1");
+    key(&mut h, Key::Backspace, Modifiers::NONE);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(value(&h, "A1"), Value::Empty);
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(value(&h, "A1"), Value::Number(3200.0));
+    assert_eq!(value(&h, "C5"), Value::Number(11750.0));
+}

@@ -55,8 +55,15 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
 /// [`open_bytes`], first decrypting a password-protected workbook with `password`. Errors never
 /// quote the password.
 pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>) -> Result<(Workbook, Vec<String>)> {
+    open_bytes_with(name, bytes, password, false)
+}
+
+/// [`open_bytes_with_password`], and with `csv_as_text` a CSV/TSV/TXT file keeps every field as
+/// the text it holds, with no number, date or boolean conversion (identifiers such as GTINs, SKUs
+/// and ZIP codes survive). It does not apply to other formats.
+pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
     if gridcraft_xlsx::sniff(bytes) != gridcraft_xlsx::Format::Encrypted {
-        let (mut wb, warnings) = open_plain(name, bytes)?;
+        let (mut wb, warnings) = open_plain(name, bytes, csv_as_text)?;
         fit_imported_rows(&mut wb);
         return Ok((wb, warnings));
     }
@@ -70,7 +77,7 @@ pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>
     if gridcraft_xlsx::sniff(&plain) == gridcraft_xlsx::Format::Encrypted {
         return Err(EngineError::Other(format!("We can't open '{name}': the encrypted file is damaged (it holds another encrypted file).")));
     }
-    let (mut wb, mut warnings) = open_plain(name, &plain)?;
+    let (mut wb, mut warnings) = open_plain(name, &plain, csv_as_text)?;
     fit_imported_rows(&mut wb);
     warnings.insert(0, DECRYPTED_NOTICE.into());
     Ok((wb, warnings))
@@ -112,7 +119,7 @@ fn decrypt_message(name: &str, e: gridcraft_xlsx::DecryptError) -> String {
 }
 
 /// Parses bytes that aren't encrypted.
-fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
+fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
     if sniffed == gridcraft_xlsx::Format::Xls {
@@ -153,7 +160,7 @@ fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
             Ok((wb, vec![]))
         }
         Some(FileKind::Tsv) => {
-            let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', ..Default::default() };
+            let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, ..Default::default() };
             let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             // Tab is what makes it a .tsv/.txt; saved as .csv it gets the CSV default.
             wb.csv_delimiter = None;
@@ -161,7 +168,7 @@ fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
             Ok((wb, vec![]))
         }
         _ => {
-            let opts = gridcraft_xlsx::CsvOptions { delimiter: 0, ..Default::default() };
+            let opts = gridcraft_xlsx::CsvOptions { delimiter: 0, parse_values: !csv_as_text, ..Default::default() };
             let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             rename_first_sheet(&mut wb, name);
             Ok((wb, vec![]))
@@ -251,7 +258,7 @@ fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef) -> String {
+fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef, dir: CellDir) -> String {
     let st = wb.styles.get(sh.style_id(c));
     let mut css = String::new();
     if st.font.bold {
@@ -270,14 +277,57 @@ fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef) -> String {
     }
     let v = sh.value(c);
     let align = match st.align.h {
-        gridcraft_model::HAlign::Center => "center",
-        gridcraft_model::HAlign::Right => "right",
-        gridcraft_model::HAlign::Left => "left",
-        _ if v.is_number() => "right",
-        _ => "left",
+        gridcraft_model::HAlign::Center => Some("center"),
+        gridcraft_model::HAlign::Right => Some("right"),
+        gridcraft_model::HAlign::Left => Some("left"),
+        _ if v.is_number() => Some(if sh.right_to_left { "left" } else { "right" }),
+        _ if dir == CellDir::Auto => None,
+        _ => Some("left"),
     };
-    let _ = write!(css, "text-align:{align};");
+    if let Some(align) = align {
+        let _ = write!(css, "text-align:{align};");
+    }
     css
+}
+
+/// How a cell marks its direction in HTML. Text on a right-to-left sheet, or text with
+/// right-to-left letters, follows its first strong character (`dir="auto"`), so General
+/// alignment puts Arabic and Hebrew on the right. Numbers on a right-to-left sheet stay left to
+/// right so `-5` doesn't read `5-`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CellDir {
+    Inherit,
+    Auto,
+    Ltr,
+}
+
+impl CellDir {
+    fn of(sh: &Sheet, c: CellRef, text: &str) -> CellDir {
+        if sh.value(c).is_number() {
+            if sh.right_to_left { CellDir::Ltr } else { CellDir::Inherit }
+        } else if sh.right_to_left || text.chars().any(is_right_to_left_letter) {
+            CellDir::Auto
+        } else {
+            CellDir::Inherit
+        }
+    }
+
+    fn attr(self) -> &'static str {
+        match self {
+            CellDir::Inherit => "",
+            CellDir::Auto => " dir=\"auto\"",
+            CellDir::Ltr => " dir=\"ltr\"",
+        }
+    }
+}
+
+/// Hebrew, Arabic, Syriac, Thaana, N'Ko and their presentation forms.
+fn is_right_to_left_letter(c: char) -> bool {
+    matches!(c, '\u{0590}'..='\u{08FF}' | '\u{FB1D}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')
+}
+
+fn table_dir(sh: &Sheet) -> &'static str {
+    if sh.right_to_left { " dir=\"rtl\"" } else { "" }
 }
 
 const CLIPBOARD_HTML_MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -292,7 +342,7 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
     }
     let sh = wb.sheet(sheet)?;
     let mut out = ClipboardHtml(String::new());
-    out.write_str("<table style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\">").ok()?;
+    write!(out, "<table{} style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\">", table_dir(sh)).ok()?;
     for row in r.start.row..=r.end.row {
         if sh.is_row_hidden(row) {
             continue;
@@ -310,11 +360,12 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
             } else {
                 String::new()
             };
-            let css = html_cell_css(wb, sh, c);
-            write!(out, "<td style=\"border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;{css}\"{span}>").ok()?;
             // Use the visible selected cell, even when the merge's original anchor
             // is outside the range or hidden. This matches the plain-text copy.
             let text = crate::display::cell_text(wb, sh, c);
+            let dir = CellDir::of(sh, c, &text);
+            let css = html_cell_css(wb, sh, c, dir);
+            write!(out, "<td style=\"border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;{css}\"{}{span}>", dir.attr()).ok()?;
             let mut chars = text.chars().peekable();
             while let Some(ch) = chars.next() {
                 match ch {
@@ -363,8 +414,9 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
     let mut out = String::new();
     let _ = write!(
         out,
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title><style>table{{border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt}}td{{border:1px solid #d4d4d4;padding:2px 4px;white-space:nowrap}}</style></head><body><table>",
-        esc(&sh.name)
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title><style>table{{border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt}}td{{border:1px solid #d4d4d4;padding:2px 4px;white-space:nowrap}}</style></head><body><table{}>",
+        esc(&sh.name),
+        table_dir(sh)
     );
     if let Some(r) = sh.used_range() {
         if r.height() > HTML_EXPORT_MAX_ROWS {
@@ -383,14 +435,16 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                 if sh.merges.iter().any(|m| m.contains(c) && m.start != c) {
                     continue;
                 }
-                let css = html_cell_css(wb, sh, c);
+                let text = crate::display::cell_text(wb, sh, c);
+                let dir = CellDir::of(sh, c, &text);
+                let css = html_cell_css(wb, sh, c, dir);
                 let span = sh
                     .merges
                     .iter()
                     .find(|m| m.start == c)
                     .map(|m| format!(" rowspan=\"{}\" colspan=\"{}\"", m.height(), m.width()))
                     .unwrap_or_default();
-                let _ = write!(out, "<td style=\"{css}\"{span}>{}</td>", esc(&crate::display::cell_text(wb, sh, c)));
+                let _ = write!(out, "<td style=\"{css}\"{}{span}>{}</td>", dir.attr(), esc(&text));
             }
             out.push_str("</tr>");
         }
@@ -499,6 +553,108 @@ pub fn image_size(data: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn book(rtl: bool, cells: &[(&str, gridcraft_core::Value, gridcraft_model::HAlign)]) -> Workbook {
+        let mut wb = Workbook::new();
+        let ids: Vec<_> = cells.iter().map(|(_, _, h)| wb.styles.derive(gridcraft_model::StyleId::DEFAULT, |st| st.align.h = *h)).collect();
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.right_to_left = rtl;
+        for ((at, value, _), id) in cells.iter().zip(ids) {
+            let c = CellRef::parse(at).unwrap();
+            sh.set_value(c, value.clone());
+            sh.set_style(c, id);
+        }
+        wb
+    }
+
+    fn copied(wb: &Workbook, range: &str) -> String {
+        let r = RangeRef::parse(range).unwrap();
+        range_html(wb, 0, r, &crate::display::range_text(wb, 0, r)).unwrap()
+    }
+
+    #[test]
+    fn html_export_marks_right_to_left_sheets() {
+        use gridcraft_core::Value;
+        use gridcraft_model::HAlign;
+        let wb = book(true, &[("A1", Value::text("Hello!"), HAlign::General), ("B1", Value::Number(-5.0), HAlign::General)]);
+        let html = to_html(&wb, 0).unwrap();
+        assert!(html.contains("<body><table dir=\"rtl\">"), "{html}");
+        assert!(html.contains("<td style=\"\" dir=\"auto\">Hello!</td>"), "Latin text keeps its own direction: {html}");
+        assert!(
+            html.contains("<td style=\"text-align:left;\" dir=\"ltr\">-5</td>"),
+            "numbers mirror to the left and keep their sign in front: {html}"
+        );
+        let clip = copied(&wb, "A1:B1");
+        assert!(clip.starts_with("<table dir=\"rtl\" style="), "{clip}");
+        assert_eq!(clip.matches("dir=\"auto\"").count(), 1, "{clip}");
+        assert!(clip.contains("text-align:left;\" dir=\"ltr\">-5</td>"), "{clip}");
+
+        let ltr = book(false, &[("A1", Value::text("Hello!"), HAlign::General)]);
+        assert!(to_html(&ltr, 0).unwrap().contains("<body><table><tr>"));
+        assert!(copied(&ltr, "A1").starts_with("<table style="));
+    }
+
+    #[test]
+    fn html_export_lets_arabic_general_text_align_by_direction() {
+        use gridcraft_core::Value;
+        use gridcraft_model::HAlign;
+        let wb = book(
+            false,
+            &[
+                ("A1", Value::text("مرحبا!"), HAlign::General),
+                ("B1", Value::text("שלום"), HAlign::Left),
+                ("C1", Value::text("مرحبا"), HAlign::Center),
+                ("D1", Value::text("Hello"), HAlign::General),
+            ],
+        );
+        let html = to_html(&wb, 0).unwrap();
+        assert!(html.contains("<td style=\"\" dir=\"auto\">مرحبا!</td>"), "General Arabic text aligns by its direction: {html}");
+        assert!(html.contains("<td style=\"text-align:left;\" dir=\"auto\">שלום</td>"), "explicit alignment stays: {html}");
+        assert!(html.contains("<td style=\"text-align:center;\" dir=\"auto\">مرحبا</td>"), "{html}");
+        assert!(html.contains("<td style=\"text-align:left;\">Hello</td>"), "{html}");
+        assert!(html.contains("<body><table><tr>"), "a left-to-right sheet has no table direction: {html}");
+
+        let clip = copied(&wb, "A1:D1");
+        let cells: Vec<&str> = clip.split("<td ").skip(1).collect();
+        assert_eq!(cells.len(), 4, "{clip}");
+        assert!(cells[0].contains("dir=\"auto\"") && !cells[0].contains("text-align"), "{clip}");
+        assert!(cells[1].contains("text-align:left;") && cells[1].contains("dir=\"auto\""), "{clip}");
+        assert!(cells[3].contains("text-align:left;") && !cells[3].contains("dir="), "{clip}");
+    }
+
+    #[test]
+    fn html_export_of_latin_ltr_sheet_is_unchanged() {
+        use gridcraft_core::Value;
+        use gridcraft_model::HAlign;
+        let mut wb = book(
+            false,
+            &[
+                ("A1", Value::text("Name"), HAlign::General),
+                ("B1", Value::text("Qty"), HAlign::Center),
+                ("A2", Value::text("Apples & <pears>"), HAlign::General),
+                ("B2", Value::Number(3.0), HAlign::General),
+                ("A3", Value::text("Total"), HAlign::Right),
+            ],
+        );
+        wb.sheet_mut(0).unwrap().merges.push(RangeRef::parse("A3:B3").unwrap());
+        assert_eq!(
+            to_html(&wb, 0).unwrap(),
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>Sheet1</title><style>table{border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt}td{border:1px solid #d4d4d4;padding:2px 4px;white-space:nowrap}</style></head><body><table>\
+             <tr><td style=\"text-align:left;\">Name</td><td style=\"text-align:center;\">Qty</td></tr>\
+             <tr><td style=\"text-align:left;\">Apples &amp; &lt;pears&gt;</td><td style=\"text-align:right;\">3</td></tr>\
+             <tr><td style=\"text-align:right;\" rowspan=\"1\" colspan=\"2\">Total</td></tr>\
+             </table></body></html>"
+        );
+        let cell = "border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;";
+        assert_eq!(
+            copied(&wb, "A1:B2"),
+            format!(
+                "<table style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\">\
+                 <tr><td style=\"{cell}text-align:left;\">Name</td><td style=\"{cell}text-align:center;\">Qty</td></tr>\
+                 <tr><td style=\"{cell}text-align:left;\">Apples &amp; &lt;pears&gt;</td><td style=\"{cell}text-align:right;\">3</td></tr></table>"
+            )
+        );
+    }
 
     #[test]
     fn html_export_fails_instead_of_dropping_cells_past_the_row_limit() {

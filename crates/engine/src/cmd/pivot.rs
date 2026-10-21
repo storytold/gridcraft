@@ -675,7 +675,13 @@ fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
                     Json::String(n) => add_to_area("insert.pivotTable", pt, &src, n, area, None, None, None)?,
                     Json::Object(_) => {
                         let n = str_param(f, "field").ok_or_else(|| bad("insert.pivotTable", "a field object needs `field`"))?;
-                        add_to_area("insert.pivotTable", pt, &src, n, area, func_param(str_param(f, "func")), str_param(f, "name"), None)?;
+                        let func = match str_param(f, "func") {
+                            Some(fname) => {
+                                Some(func_param(Some(fname)).ok_or_else(|| bad("insert.pivotTable", format!("unknown function `{fname}`")))?)
+                            }
+                            None => None,
+                        };
+                        add_to_area("insert.pivotTable", pt, &src, n, area, func, str_param(f, "name"), None)?;
                         let by = group_param(str_param(f, "group"));
                         if let Some(by) = by.filter(|b| *b != PivotDateGroup::None)
                             && matches!(area, "rows" | "columns")

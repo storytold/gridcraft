@@ -176,7 +176,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     ui.add_space(8.0);
-                    file_menu(app, ui);
+                    if app.chrome.file_tab {
+                        file_menu(app, ui);
+                    }
                     let mut tabs: Vec<&str> = TABS.to_vec();
                     let ctx_tabs = contextual_tabs(app);
                     tabs.extend(ctx_tabs.iter());
@@ -2452,14 +2454,25 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         Key::Num9 => Some(("home.hideRows", json!({}))),
         Key::Num0 if shift => Some(("home.unhideColumns", json!({}))),
         Key::Num0 => Some(("home.hideColumns", json!({}))),
-        Key::Minus => {
-            app.open_dialog("deleteCells", json!({}));
-            None
-        }
-        Key::Plus | Key::Equals if shift => {
-            app.open_dialog("insertCells", json!({}));
-            None
-        }
+        // As in Excel: with whole rows or whole columns selected, Ctrl+Shift+= / Ctrl+- insert or
+        // delete them at once; any other selection asks which way to shift.
+        Key::Minus => match whole_lines(app) {
+            Some(true) => Some(("home.deleteRows", json!({}))),
+            Some(false) => Some(("home.deleteColumns", json!({}))),
+            None => {
+                app.open_dialog("deleteCells", json!({}));
+                None
+            }
+        },
+        // Insert works on one area at a time, so several areas still go through the dialog.
+        Key::Plus | Key::Equals if shift => match whole_lines(app).filter(|_| single_area(app)) {
+            Some(true) => Some(("home.insertRows", json!({}))),
+            Some(false) => Some(("home.insertColumns", json!({}))),
+            None => {
+                app.open_dialog("insertCells", json!({}));
+                None
+            }
+        },
         Key::Semicolon => {
             // Insert today's date.
             let text = app
@@ -2512,5 +2525,25 @@ mod checkbox_on_tests {
         // Key tip: the bool still holds the current setting, so toggle it.
         assert!(checkbox_on(false, false));
         assert!(!checkbox_on(false, true));
+    }
+}
+
+/// Whether the selection is a single area.
+fn single_area(app: &SheetApp) -> bool {
+    app.session.active().is_some_and(|d| d.selection.ranges.len() == 1)
+}
+
+/// `Some(true)` when every selected area is whole rows, `Some(false)` when every one is whole
+/// columns, `None` otherwise (including the whole sheet).
+fn whole_lines(app: &SheetApp) -> Option<bool> {
+    let sel = &app.session.active()?.selection;
+    let rows = sel.ranges.iter().all(|r| r.is_full_rows() && !r.is_full_cols());
+    let cols = sel.ranges.iter().all(|r| r.is_full_cols() && !r.is_full_rows());
+    if rows {
+        Some(true)
+    } else if cols {
+        Some(false)
+    } else {
+        None
     }
 }

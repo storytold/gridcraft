@@ -1,95 +1,27 @@
 # Builds and tests the workspace on FreeBSD, inside a FreeBSD VM on a Linux runner
 # (GitHub has no FreeBSD runners). GPU tests skip themselves when the VM has no adapter.
-# Test builds run only from the `release` branch (a manual run from any other branch is skipped).
-# Packaging runs (release.yml calls it that way) run from any branch, so a release.yml dry run
-# from a branch builds the tarball too; they need no secrets.
-#
-# With `package: true` (release.yml calls it that way, or a manual run) it instead builds the
-# release binaries and uploads `gridcraft-<version>-freebsd-x86_64.tar.gz` as the
-# `release-freebsd` artifact (packaging/freebsd/package.sh), which release.yml attaches to the
-# draft GitHub Release.
 name: FreeBSD
 
 on:
+  push:
+    branches: [release]
+  pull_request:
+    paths:
+      - .github/workflows/freebsd.yml
+      - packaging/freebsd/**
+      - packaging/env.sh
   workflow_dispatch:
-    inputs:
-      package:
-        description: "Build the release tarball instead of running the tests"
-        type: boolean
-        default: false
-  workflow_call:
-    inputs:
-      version:
-        description: "Version for the artifact name (empty: Cargo.toml)"
-        type: string
-        default: ""
-      version_override:
-        description: "Also write the version into Cargo.toml before building (test runs)"
-        type: boolean
-        default: false
-      package:
-        type: boolean
-        default: false
 
 concurrency:
-  # Called from release.yml, github.workflow is the caller's name; keep the groups apart.
-  group: freebsd-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.workflow == 'FreeBSD' }}
+  group: freebsd-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   freebsd:
-    name: FreeBSD 14 (${{ inputs.package && 'package' || 'build + test' }})
-    if: github.ref == 'refs/heads/release' || inputs.package
-    runs-on: ubuntu-latest
-    timeout-minutes: 300
-    env:
-      GRIDCRAFT_VERSION: ${{ inputs.version }}
-      GRIDCRAFT_VERSION_OVERRIDE: ${{ inputs.version_override && '1' || '' }}
-      GRIDCRAFT_PACKAGE: ${{ inputs.package && '1' || '' }}
-      GRIDCRAFT_BUILD_SHA: ${{ github.sha }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Check out craft-fonts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: storytold/craft-fonts
-          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
-          path: craft-fonts
-      - name: Build in a FreeBSD VM
-        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
-        with:
-          release: "14.3"
-          usesh: true
-          cpu: 4
-          mem: 12288
-          envs: "GRIDCRAFT_VERSION GRIDCRAFT_VERSION_OVERRIDE GRIDCRAFT_PACKAGE GRIDCRAFT_BUILD_SHA"
-          # Only the packaging run brings files back (dist/release). The target dir lives outside
-          # the synced checkout, because copying it out of the VM fails on large builds.
-          copyback: ${{ inputs.package }}
-          prepare: |
-            pkg install -y bash git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2
-            curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
-          run: |
-            . "$HOME/.cargo/env"
-            # The checkout is synced in under another owner; let tests that call git read it.
-            git config --global --add safe.directory "*"
-            export CARGO_TARGET_DIR=/var/tmp/gridcraft-target CARGO_PROFILE_DEV_DEBUG=0
-            rustc --version
-            if [ -n "$GRIDCRAFT_PACKAGE" ]; then
-              if [ -n "$GRIDCRAFT_VERSION_OVERRIDE" ]; then
-                cargo run -q -p xtask --no-default-features -- version set "$GRIDCRAFT_VERSION"
-              fi
-              CRAFT_FONTS_DIR="$PWD/craft-fonts" CRAFT_FONTS_REQUIRED=1 bash packaging/freebsd/package.sh
-            else
-              cargo build --workspace --all-targets --locked
-              CRAFT_FONTS_DIR="$PWD/craft-fonts" cargo test --workspace --locked
-            fi
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: inputs.package
-        with:
-          name: release-freebsd
-          path: dist/release/*
-          if-no-files-found: error
+    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
+    uses: storytold/craft-common-actions/.github/workflows/freebsd.yml@main
+    with:
+      craft-fonts-ref: abb83316d96aa59c1cf64784289e378fe9fa5695

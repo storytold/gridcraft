@@ -505,16 +505,33 @@ fn delimiters(v: &Value) -> R<Vec<Vec<char>>> {
     as_array(v).iter().map(|d| d.to_text().map(|s| chars(&s))).collect()
 }
 
-/// Non-overlapping delimiter matches (start, end) in char positions, scanning left to right and
-/// preferring the longest delimiter at each position. Empty delimiters are ignored unless all
+/// Non-overlapping delimiter matches (start, end) in char positions, in ascending order. Scans left
+/// to right preferring the longest delimiter starting at each position, or (`from_end`) right to
+/// left preferring the longest delimiter ending at each position. Empty delimiters are ignored unless all
 /// delimiters are empty, in which case every position matches with zero length.
-fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool) -> Vec<(usize, usize)> {
+fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end: bool) -> Vec<(usize, usize)> {
     let t = if insensitive { fold(text) } else { text.to_vec() };
     let ds: Vec<Vec<char>> = delims.iter().filter(|d| !d.is_empty()).map(|d| if insensitive { fold(d) } else { d.clone() }).collect();
     if ds.is_empty() {
         return (0..=t.len()).map(|i| (i, i)).collect();
     }
     let mut out = Vec::new();
+    if from_end {
+        let mut j = t.len();
+        while j > 0 {
+            let best =
+                ds.iter().filter(|d| j.checked_sub(d.len()).and_then(|st| t.get(st..j)).is_some_and(|w| w == d.as_slice())).map(|d| d.len()).max();
+            match best {
+                Some(l) => {
+                    out.push((j - l, j));
+                    j -= l;
+                }
+                None => j -= 1,
+            }
+        }
+        out.reverse();
+        return out;
+    }
     let mut i = 0;
     while i < t.len() {
         let best = ds.iter().filter(|d| t.get(i..i + d.len()).is_some_and(|w| w == d.as_slice())).map(|d| d.len()).max();
@@ -538,7 +555,7 @@ fn text_before_after(a: &[Arg], before: bool) -> R<Value> {
     if !(0..=1).contains(&mode) || inst == 0 || inst.unsigned_abs() as usize > s.len().max(1) {
         return Err(CellError::Value);
     }
-    let mut m = find_matches(&s, &delims, mode == 1);
+    let mut m = find_matches(&s, &delims, mode == 1, inst < 0);
     if match_end {
         if inst > 0 {
             if m.last().is_none_or(|x| x.0 != s.len()) {
@@ -573,7 +590,7 @@ fn split_by(s: &[char], delims: &[Vec<char>], insensitive: bool) -> Vec<Vec<char
     }
     let mut out = Vec::new();
     let mut last = 0;
-    for (st, en) in find_matches(s, delims, insensitive) {
+    for (st, en) in find_matches(s, delims, insensitive, false) {
         out.push(s[last..st].to_vec());
         last = en;
     }
@@ -1127,6 +1144,12 @@ mod tests {
         is_err(ev("TEXTBEFORE", vec![t("abc"), t("b"), n(0.0)]), CellError::Value);
         is_text(ev("TEXTBEFORE", vec![t("abc"), t("")]), "");
         is_text(ev("TEXTAFTER", vec![t("abc"), t("")]), "abc");
+        // Negative instances search from the end, so overlapping delimiters match differently.
+        is_text(ev("TEXTBEFORE", vec![t("aaa"), t("aa"), n(-1.0)]), "a");
+        is_text(ev("TEXTAFTER", vec![t("aaa"), t("aa"), n(-1.0)]), "");
+        is_text(ev("TEXTBEFORE", vec![t("aaaa"), t("aa"), n(-2.0)]), "");
+        is_text(ev("TEXTBEFORE", vec![t("AaA"), t("aa"), n(-1.0), n(1.0)]), "A");
+        is_text(ev("TEXTAFTER", vec![t("aaa"), t("aa"), n(1.0)]), "a");
     }
 
     #[test]

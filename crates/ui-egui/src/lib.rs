@@ -209,9 +209,31 @@ pub struct Perf {
     last: f64,
 }
 
+/// Which parts of the app's own window chrome are drawn. Everything is on by default; a host
+/// that embeds the sheet in its own window (and owns files itself) can turn off the title bar
+/// and the File tab, whose Backstage view then never opens. Not persisted: it describes the
+/// host, not a user preference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Chrome {
+    /// The title bar: AutoSave, Home, Save, Undo/Redo, the file name, Comments, Share, Search and
+    /// the theme switch.
+    pub title_bar: bool,
+    /// The ribbon's File tab and the Backstage view it opens (also reached by keyboard and
+    /// commands such as `ui.backstage`).
+    pub file_tab: bool,
+}
+
+impl Default for Chrome {
+    fn default() -> Self {
+        Chrome { title_bar: true, file_tab: true }
+    }
+}
+
 pub struct SheetApp {
     pub session: Session,
     pub ui: UiState,
+    /// The window chrome to draw (see [`Chrome`]).
+    pub chrome: Chrome,
     pub views: HashMap<(u64, usize), SheetView>,
     pub editor: Option<editor::EditState>,
     pub text_box_editor: Option<text_box::EditState>,
@@ -270,6 +292,7 @@ impl SheetApp {
         SheetApp {
             session,
             ui: UiState::default(),
+            chrome: Chrome::default(),
             views: HashMap::new(),
             editor: None,
             text_box_editor: None,
@@ -752,6 +775,9 @@ impl SheetApp {
     /// Opens the File tab's Backstage view on `page`, committing a cell still being edited first
     /// (File actions work on the whole workbook). A draft that can't be committed keeps the sheet.
     pub fn open_backstage(&mut self, page: backstage::Page) {
+        if !self.chrome.file_tab {
+            return;
+        }
         if !self.commit_edit(0, 0, false, false) {
             return;
         }
@@ -929,7 +955,19 @@ impl SheetApp {
             }
             self.toast = Some((msg, now_ms()));
         }
-        let r = if fill_selection {
+        // Committing nothing into an empty cell changes nothing: no undo step (#1855, Backspace has
+        // already cleared the cell as its own step).
+        let unchanged = !fill_selection
+            && !array
+            && text.is_empty()
+            && self
+                .session
+                .active()
+                .and_then(|d| d.wb.sheet(ed.sheet))
+                .is_some_and(|sh| sh.cell(ed.cell).is_none_or(|c| c.formula.is_none() && c.value == gridcraft_engine::core::Value::Empty));
+        let r = if unchanged {
+            Ok(json!({}))
+        } else if fill_selection {
             self.session.run("range.fill", json!({"input": text}))
         } else {
             self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
@@ -1103,10 +1141,16 @@ impl SheetApp {
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
         let t = theme::Tokens::get(&ctx);
+        // A host can turn the File tab off while Backstage is already open: close it.
+        if !self.chrome.file_tab {
+            self.backstage = None;
+        }
         if self.backstage.is_none() {
             self.ribbon_keys(&ctx);
         }
-        ribbon::title_bar(self, ui);
+        if self.chrome.title_bar {
+            ribbon::title_bar(self, ui);
+        }
         if self.backstage.is_some() {
             // File tab: the Backstage view replaces everything below the title bar.
             backstage::show(self, ui);

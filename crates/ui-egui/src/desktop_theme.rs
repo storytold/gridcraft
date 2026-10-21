@@ -16,7 +16,7 @@ const POLL: Duration = Duration::from_secs(4);
 /// there is no session bus or no portal to ask (a bare X server, a container), so the caller
 /// keeps whatever it chose itself.
 pub fn prefers_dark() -> Option<bool> {
-    read()
+    read(&mut Link::default())
 }
 
 /// Watches the desktop and reports its choice when it changes. [`prefers_dark`] covers the
@@ -33,13 +33,14 @@ impl DesktopTheme {
     pub fn start() -> Self {
         let (tx, rx) = channel();
         let started = std::thread::Builder::new().name("gridcraft-desktop-theme".into()).spawn(move || {
-            let mut last = read();
+            let mut link = Link::default();
+            let mut last = read(&mut link);
             if tx.send(last).is_err() {
                 return;
             }
             loop {
                 std::thread::sleep(POLL);
-                let now = read();
+                let now = read(&mut link);
                 if now != last {
                     last = now;
                     if tx.send(now).is_err() {
@@ -66,17 +67,32 @@ impl DesktopTheme {
     }
 }
 
-/// Ask the portal once. D-Bus calls block, so this belongs off the UI thread: the watcher's
-/// thread is its only caller.
+/// The session-bus connection the watcher keeps between reads, opened on first use.
 #[cfg(target_os = "linux")]
-fn read() -> Option<bool> {
+type Link = Option<zbus::blocking::Connection>;
+#[cfg(not(target_os = "linux"))]
+type Link = ();
+
+/// Ask the portal once, over `link`'s connection (opened if absent, dropped if the bus went
+/// away). D-Bus calls block, so this belongs off the UI thread: the watcher's thread is its
+/// only repeated caller.
+#[cfg(target_os = "linux")]
+fn read(link: &mut Link) -> Option<bool> {
     const PORTAL: &str = "org.freedesktop.portal.Desktop";
     const SETTINGS: &str = "org.freedesktop.portal.Settings";
     const SCHEMAS: [(&str, &str); 2] = [("org.gnome.desktop.interface", "color-scheme"), ("org.freedesktop.interface.color-scheme", "color-scheme")];
-    let connection = zbus::blocking::Connection::session().ok()?;
+    if link.is_none() {
+        *link = Some(zbus::blocking::Connection::session().ok()?);
+    }
+    let connection = link.as_ref()?;
     for (schema, key) in SCHEMAS {
-        let Ok(reply) = connection.call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), "ReadOne", &(schema, key)) else {
-            continue;
+        let reply = match connection.call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), "ReadOne", &(schema, key)) {
+            Ok(reply) => reply,
+            Err(zbus::Error::InputOutput(_)) => {
+                *link = None;
+                return None;
+            }
+            Err(_) => continue,
         };
         let Ok((answer,)) = reply.body().deserialize::<(zbus::zvariant::OwnedValue,)>() else { continue };
         if let Ok(scheme) = String::try_from(&*answer) {
@@ -99,7 +115,7 @@ fn parse(scheme: &str) -> Option<bool> {
 
 /// macOS and Windows answer through winit, which the caller already has.
 #[cfg(not(target_os = "linux"))]
-fn read() -> Option<bool> {
+fn read(_: &mut Link) -> Option<bool> {
     None
 }
 

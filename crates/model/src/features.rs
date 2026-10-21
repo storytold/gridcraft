@@ -565,7 +565,7 @@ pub enum ShapeTextAnchor {
 }
 
 /// How a shape's outline and text look. The text properties apply to the whole text (the first
-/// run's properties when a file has several).
+/// paragraph's and first run's properties when a file has several).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShapeFormat {
@@ -585,6 +585,8 @@ pub struct ShapeFormat {
     pub align: Option<ShapeTextAlign>,
     /// `None`: the shape's default (top for text boxes, middle for other shapes).
     pub anchor: Option<ShapeTextAnchor>,
+    /// Paragraphs run right to left (`a:pPr rtl`).
+    pub rtl: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

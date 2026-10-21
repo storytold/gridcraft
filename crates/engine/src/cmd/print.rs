@@ -650,6 +650,10 @@ fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<c
         if st.font.underline != Underline::None {
             style.font.underline = st.font.underline;
         }
+        // In a differential style General means "not set" (#1163).
+        if st.num_fmt.as_str() != "General" {
+            style.num_fmt = st.num_fmt.clone();
+        }
         for (dst, src) in [
             (&mut style.borders.left, st.borders.left),
             (&mut style.borders.right, st.borders.right),
@@ -1076,7 +1080,8 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         let max_chars = (avail / digit).floor().max(1.0) as usize;
         gridcraft_numfmt::format_general_fit(n, max_chars.min(11)).unwrap_or_else(|| "#".repeat(max_chars.min(255)))
     } else {
-        crate::display::cell_text(wb, sh, c)
+        // The look's code, which a conditional format can override (#1163).
+        crate::display::value_text_as(wb, &v, code)
     };
     if !wrap {
         text = text.replace(['\n', '\r'], " ");
@@ -1930,6 +1935,21 @@ mod tests {
         assert_eq!(r.text, "P4/9 9:00 AM");
         assert_eq!(expand_header_footer("plain", &cx)[1].text, "plain");
         assert_eq!(expand_header_footer("&", &cx)[1].text, "");
+    }
+
+    #[test]
+    fn conditional_number_format_prints() {
+        // #1163: a rule's number format replaces the cell's own, whether that is General or not;
+        // cells the rule doesn't match keep theirs.
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1], [3], [4]]})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "A3", "code": "0.0"})).unwrap();
+        let rule = json!({"type": "cellIs", "operator": "greater", "value": "2", "style": {"num_fmt": "0.00"}});
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": rule})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        assert!(contains(&pdf, "(1) Tj"), "an unmatched cell keeps General");
+        assert!(contains(&pdf, "(3.00) Tj") && !contains(&pdf, "(3) Tj"), "General cell under the rule");
+        assert!(contains(&pdf, "(4.00) Tj") && !contains(&pdf, "(4.0) Tj"), "formatted cell under the rule");
     }
 
     #[test]

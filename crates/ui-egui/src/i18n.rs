@@ -648,6 +648,59 @@ mod tests {
     }
 
     #[test]
+    fn german_cell_and_header_context_menus_are_fully_translated() {
+        for label in [
+            "Cut",
+            "Copy",
+            "Paste",
+            "Paste Special…",
+            "Insert…",
+            "Delete…",
+            "Clear Contents",
+            "Filter by Selected Cell's Value",
+            "Sort A to Z",
+            "Sort Z to A",
+            "New Comment",
+            "New Note",
+            "Format Cells…",
+            "Pick From Drop-down List…",
+            "Define Name…",
+            "Insert Copied Cells",
+            "Insert Copied Cells…",
+            "Insert Cut Cells",
+            "Insert",
+            "Delete",
+            "Row Height…",
+            "AutoFit Row Height",
+            "Column Width…",
+            "AutoFit Column Width",
+            "Hide",
+            "Unhide",
+            "Group",
+        ] {
+            assert_ne!(Language::De.tr(label), label, "German context menu label missing: {label}");
+        }
+    }
+
+    #[test]
+    fn translations_never_show_the_context_prefix() {
+        // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its
+        // value shows it on screen (File › Options read "Options|Général" in French).
+        for language in Language::ALL {
+            for (english, _) in JAPANESE {
+                let shown = language.tr(english);
+                assert!(!shown.contains('|'), "{} shows a context prefix for {english}: {shown}", language.code());
+            }
+        }
+        assert_eq!(Language::Fr.tr("Options|General"), "Général");
+        assert_eq!(Language::Fr.tr("Options|Save"), "Enregistrer");
+        assert_eq!(Language::Fr.tr("Sheet Options|View"), "Affichage");
+        assert_eq!(Language::Sr.tr("Options|General"), "Opšte");
+        assert_eq!(Language::Sr.tr("Options|Save"), "Sačuvaj");
+        assert_eq!(Language::Sr.tr("Sheet Options|View"), "Prikaz");
+    }
+
+    #[test]
     fn unknown_saved_language_keeps_the_other_preferences() {
         let ui: crate::UiState = serde_json::from_str(r#"{"dark": true, "language": "xx"}"#).unwrap();
         assert!(ui.dark);

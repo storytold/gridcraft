@@ -238,6 +238,13 @@ pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, 
     out
 }
 
+/// Whether a reference of the formula being edited belongs on the sheet shown: a reference with a
+/// sheet name is on that sheet, one without is on the sheet the edit started on, even while
+/// pointing at another sheet.
+pub fn ref_is_on_sheet(ref_sheet: Option<&str>, origin: &str, shown: &str) -> bool {
+    ref_sheet.unwrap_or(origin).eq_ignore_ascii_case(shown)
+}
+
 /// Excel-style AutoComplete: the one distinct text entry in the same column (contiguous data
 /// above and below) that starts with `typed` (case-insensitive). `None` when ambiguous.
 pub fn column_completion(sheet: &gridcraft_engine::model::Sheet, at: CellRef, typed: &str) -> Option<String> {
@@ -328,5 +335,15 @@ mod tests {
         assert_eq!(r[0].4, r[2].4); // A1 and a1 share a colour
         assert_eq!(r[1].2.a1(), "B2:C3");
         assert_eq!(r[3].3.as_deref(), Some("Sheet2"));
+    }
+
+    #[test]
+    fn refs_are_outlined_on_their_own_sheet_only() {
+        // Pointing at Sheet2 while the edit started on Sheet1: `A1` stays on Sheet1, `Sheet2!B2` shows on Sheet2.
+        assert!(ref_is_on_sheet(None, "Sheet1", "Sheet1"));
+        assert!(!ref_is_on_sheet(None, "Sheet1", "Sheet2"));
+        assert!(ref_is_on_sheet(Some("Sheet2"), "Sheet1", "Sheet2"));
+        assert!(!ref_is_on_sheet(Some("Sheet2"), "Sheet1", "Sheet1"));
+        assert!(ref_is_on_sheet(Some("sheet2"), "Sheet1", "Sheet2"), "sheet names compare ignoring case");
     }
 }

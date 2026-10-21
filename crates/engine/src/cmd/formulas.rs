@@ -229,7 +229,7 @@ fn valid_name(n: &str) -> bool {
     if !(first.is_alphabetic() || first == '_' || first == '\\') {
         return false;
     }
-    if n.len() > 255 || CellRef::parse(n).is_some() || is_r1c1(n) {
+    if n.chars().count() > 255 || CellRef::parse(n).is_some() || is_r1c1(n) {
         return false;
     }
     n.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '\\' | '?'))
@@ -609,5 +609,19 @@ mod tests {
         // Absolute references are kept as they are.
         let r = s.execute("formulas.defineName", json!({"name": "First", "refersTo": "=Sheet1!$A$1"})).unwrap();
         assert_eq!(r["refersTo"], "=Sheet1!$A$1");
+    }
+
+    #[test]
+    fn arabic_defined_names_count_characters_not_bytes() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let arabic = |n: usize| "س".repeat(n);
+        for ok in [200, 255] {
+            s.execute("formulas.defineName", json!({"name": arabic(ok), "refersTo": "=1"})).unwrap();
+        }
+        assert!(s.execute("formulas.defineName", json!({"name": arabic(256), "refersTo": "=1"})).is_err());
+        s.execute("range.setValues", json!({"range": "A1", "values": [[format!("ع{}", arabic(199))], [1]]})).unwrap();
+        let r = s.execute("formulas.createFromSelection", json!({"range": "A1:A2", "top": true})).unwrap();
+        assert_eq!(r["created"], 1);
     }
 }
