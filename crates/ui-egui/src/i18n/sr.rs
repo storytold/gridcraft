@@ -1,5 +1,6 @@
 //! Serbian (Latin script, ekavian) translations for the interface strings in i18n.rs.
 
+/// Returns Serbian interface text for known keys; unknown keys use the shared English fallback.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Nalepi",
@@ -383,6 +384,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Entire Workbook" => "Štampaj celu radnu svesku",
         "Fit Sheet on One Page" => "Uklopi list na jednu stranicu",
         "Page Setup…" => "Podešavanje stranice…",
+        "Page {page}" => "Stranica {page}",
         "Page {page} of {pages}" => "Stranica {page} od {pages}",
         "Nothing to print." => "Nema ničega za štampu.",
         "Previous page" => "Prethodna stranica",

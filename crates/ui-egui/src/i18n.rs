@@ -569,6 +569,7 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Print Entire Workbook", "ブック全体を印刷"),
     ("Fit Sheet on One Page", "シートを 1 ページに印刷"),
     ("Page Setup…", "ページ設定…"),
+    ("Page {page}", "{page} ページ"),
     ("Page {page} of {pages}", "{page} / {pages} ページ"),
     ("Nothing to print.", "印刷する内容がありません。"),
     ("Previous page", "前のページ"),

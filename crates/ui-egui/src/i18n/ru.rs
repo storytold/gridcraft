@@ -1,5 +1,6 @@
 //! Russian translations for the interface strings in i18n.rs.
 
+/// Returns Russian interface text for known keys; unknown keys use the shared English fallback.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Вставить",
@@ -391,6 +392,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Entire Workbook" => "Напечатать всю книгу",
         "Fit Sheet on One Page" => "Вписать лист на одну страницу",
         "Page Setup…" => "Параметры страницы…",
+        "Page {page}" => "Страница {page}",
         "Page {page} of {pages}" => "Страница {page} из {pages}",
         "Nothing to print." => "Нечего печатать.",
         "Previous page" => "Предыдущая страница",

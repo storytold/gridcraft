@@ -1,6 +1,7 @@
 //! German translations for the interface strings in i18n.rs. Labels follow the wording German
 //! spreadsheet users know; anything absent falls back to English.
 
+/// Returns German interface text for known keys; unknown keys use the shared English fallback.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Einfügen",
@@ -305,6 +306,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Entire Workbook" => "Gesamte Arbeitsmappe drucken",
         "Fit Sheet on One Page" => "Blatt auf einer Seite darstellen",
         "Page Setup…" => "Seite einrichten…",
+        "Page {page}" => "Seite {page}",
         "Page {page} of {pages}" => "Seite {page} von {pages}",
         "Nothing to print." => "Nichts zu drucken.",
         "Previous page" => "Vorherige Seite",

@@ -3238,6 +3238,7 @@ fn is_checkbox(sh: &Sheet, app: &SheetApp) -> bool {
     d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str() == "checkbox"
 }
 
+/// Paints cached page ranges, page labels and the print-area frame in the active sheet view.
 fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
     let Some(d) = app.session.active() else { return };
     let key = (d.uid, d.revision, d.wb.active_sheet);
@@ -3294,7 +3295,7 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
         p.text(
             rr.center(),
             Align2::CENTER_CENTER,
-            format!("Page {n}"),
+            app.ui.language.tr("Page {page}").replace("{page}", &n.to_string()),
             theme::ui_bold((rr.height().min(rr.width()) / 6.0).clamp(14.0, 72.0)),
             Color32::from_black_alpha(45),
         );

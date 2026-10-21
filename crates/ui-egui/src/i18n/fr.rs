@@ -1,5 +1,6 @@
 //! French translations for the interface strings in i18n.rs.
 
+/// Returns French interface text for known keys; unknown keys use the shared English fallback.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Different First Page" => "Première page différente",
@@ -389,6 +390,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Entire Workbook" => "Imprimer tout le classeur",
         "Fit Sheet on One Page" => "Ajuster la feuille sur une page",
         "Page Setup…" => "Mise en page…",
+        "Page {page}" => "Page {page}",
         "Page {page} of {pages}" => "Page {page} sur {pages}",
         "Nothing to print." => "Rien à imprimer.",
         "Previous page" => "Page précédente",

@@ -1,5 +1,6 @@
 //! Czech translations for the interface strings in i18n.rs.
 
+/// Returns Czech interface text for known keys; unknown keys use the shared English fallback.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Vložit",
@@ -305,6 +306,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Entire Workbook" => "Vytisknout celý sešit",
         "Fit Sheet on One Page" => "Přizpůsobit list na jednu stránku",
         "Page Setup…" => "Vzhled stránky…",
+        "Page {page}" => "Stránka {page}",
         "Page {page} of {pages}" => "Stránka {page} z {pages}",
         "Nothing to print." => "Není co tisknout.",
         "Previous page" => "Předchozí stránka",

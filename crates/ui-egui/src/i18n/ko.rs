@@ -1,5 +1,6 @@
 //! Korean translations for the interface strings in i18n.rs.
 
+/// Returns Korean interface text for known keys; unknown keys use the shared English fallback.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "붙여넣기",
@@ -391,6 +392,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Entire Workbook" => "전체 통합 문서 인쇄",
         "Fit Sheet on One Page" => "한 페이지에 시트 맞추기",
         "Page Setup…" => "페이지 설정…",
+        "Page {page}" => "{page} 페이지",
         "Page {page} of {pages}" => "{page}/{pages} 페이지",
         "Nothing to print." => "인쇄할 내용이 없습니다.",
         "Previous page" => "이전 페이지",

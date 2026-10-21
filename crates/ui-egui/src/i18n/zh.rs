@@ -1,5 +1,6 @@
 //! Simplified Chinese translations for the interface strings in i18n.rs.
 
+/// Returns Simplified Chinese interface text for known keys; unknown keys use the shared English fallback.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "粘贴",
@@ -383,6 +384,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print Entire Workbook" => "打印整个工作簿",
         "Fit Sheet on One Page" => "将工作表调整为一页",
         "Page Setup…" => "页面设置…",
+        "Page {page}" => "第 {page} 页",
         "Page {page} of {pages}" => "第 {page} 页，共 {pages} 页",
         "Nothing to print." => "没有可打印的内容。",
         "Previous page" => "上一页",
