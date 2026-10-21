@@ -19,6 +19,7 @@ mod smooth_roundtrip;
 mod trendline_roundtrip;
 mod xls_tests;
 mod xlsb_tests;
+mod xml_table_tests;
 
 use std::io::Write;
 

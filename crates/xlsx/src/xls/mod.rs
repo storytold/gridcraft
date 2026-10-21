@@ -130,6 +130,10 @@ struct Globals {
     precision_as_displayed: bool,
 }
 
+/// The overview every `.xls` import starts its warnings with. It describes the import as a
+/// whole, so the app shows it in the info bar and not in a message box.
+pub const IMPORT_NOTICE: &str = "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, number formats, merged cells, column widths, row heights and defined names were read. Fonts, fills, borders, charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.";
+
 /// Reads an Excel 97-2003 workbook. Inspect the report's warnings for what was skipped.
 pub fn read_xls(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     read_xls_with(bytes, Budget::default())
@@ -200,10 +204,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     defined_names(&g, &model_index, &mut wb, &mut report);
     wb.active_sheet = wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0);
     // The overview comes first.
-    report.warnings.insert(
-        0,
-        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, number formats, merged cells, column widths, row heights and defined names were read. Fonts, fills, borders, charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
-    );
+    report.warnings.insert(0, IMPORT_NOTICE.into());
     Ok((wb, report))
 }
 

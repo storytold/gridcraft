@@ -1,4 +1,4 @@
-//! Opening and saving files: XLSX, legacy XLS import, XLSB and ODS data import, CSV/TSV, JSON (debug), HTML export.
+//! Opening and saving files: XLSX, legacy XLS import, XLSB and ODS data import, XML import as a table, CSV/TSV, JSON (debug), HTML export.
 
 use std::fmt::Write as _;
 
@@ -17,6 +17,8 @@ pub enum FileKind {
     Ods,
     Csv,
     Tsv,
+    /// Any XML document, opened as a table (import only).
+    Xml,
     Json,
     Html,
 }
@@ -31,6 +33,7 @@ impl FileKind {
             "ods" => FileKind::Ods,
             "csv" => FileKind::Csv,
             "tsv" | "tab" | "txt" => FileKind::Tsv,
+            "xml" => FileKind::Xml,
             "json" | "scjson" => FileKind::Json,
             "html" | "htm" => FileKind::Html,
             _ => return None,
@@ -151,6 +154,10 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
         return Ok((wb, report.warnings));
     }
     match kind {
+        Some(FileKind::Xml) => {
+            let (wb, report) = gridcraft_xlsx::read_xml_table(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
+            Ok((wb, report.warnings))
+        }
         Some(FileKind::Json) => {
             let mut wb: Workbook = serde_json::from_slice(bytes).map_err(|e| EngineError::Other(format!("not a GridCraft JSON workbook: {e}")))?;
             wb.styles.rebuild_index();
@@ -214,6 +221,7 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
         FileKind::Xlsb => Err(EngineError::Other("XLSB is supported for data import only. Save as .xlsx or another supported export format.".into())),
         FileKind::Ods => Err(EngineError::Other("ODS is supported for data import only. Save as .xlsx or another supported export format.".into())),
         // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
+        FileKind::Xml => Err(EngineError::Other("XML is supported for import only. Save as .xlsx or another supported export format.".into())),
         FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','))).transpose().map(Option::unwrap_or_default),
         FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t')).transpose().map(Option::unwrap_or_default),
         FileKind::Json => serde_json::to_vec_pretty(wb).map_err(|e| EngineError::Other(e.to_string())),
@@ -654,6 +662,19 @@ mod tests {
                  <tr><td style=\"{cell}text-align:left;\">Apples &amp; &lt;pears&gt;</td><td style=\"{cell}text-align:right;\">3</td></tr></table>"
             )
         );
+    }
+
+    #[test]
+    fn xml_opens_as_a_table_not_as_csv_text() {
+        let xml = "<?xml version=\"1.0\"?><list><item id=\"1\"><name>a,b</name></item><item id=\"2\"><name>c</name></item></list>";
+        let (wb, _) = open_bytes("notes.xml", xml.as_bytes()).unwrap();
+        let sh = wb.sheet(0).unwrap();
+        assert_eq!(sh.value(CellRef::new(0, 0)), gridcraft_core::Value::text("id"));
+        assert_eq!(sh.value(CellRef::new(1, 1)), gridcraft_core::Value::text("a,b"));
+        assert_eq!(sh.value(CellRef::new(2, 0)), gridcraft_core::Value::Number(2.0));
+        assert_eq!(sh.tables.len(), 1);
+        // Import only: saving under an .xml name is refused rather than written as something else.
+        assert!(save_bytes(&wb, "notes.xml").is_err());
     }
 
     #[test]
