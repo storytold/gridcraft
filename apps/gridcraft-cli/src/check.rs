@@ -21,7 +21,7 @@ use gridcraft_engine::calc::{Calc, Key};
 use gridcraft_engine::cmd::inspect::value_json;
 use gridcraft_engine::core::{CellError, CellRef, Value};
 use gridcraft_engine::formula::{Expr, quote_sheet};
-use gridcraft_engine::model::{Cell, Sheet, Workbook};
+use gridcraft_engine::model::{Cell, CfOperator, Sheet, Validation, ValidationKind, Workbook};
 use serde_json::{Value as Json, json};
 
 use super::{Args, USAGE, number_text, pretty};
@@ -599,6 +599,68 @@ fn diff_count(d: &mut Diffs, sheet: &str, a: usize, b: usize) {
     }
 }
 
+/// The writer/reader canonicalize formula syntax, but literal list contents are data.
+fn validation_formula(f: &str) -> String {
+    let f = f.trim();
+    if f.starts_with('"') {
+        return f.to_owned();
+    }
+    let f = f.strip_prefix('=').unwrap_or(f).trim();
+    gridcraft_engine::formula::parse(f)
+        .map(|e| {
+            // The XLSX writer spells trim references as equivalent TRIMRANGE calls.
+            // Normalize inside expressions too, without equating different trim modes.
+            use gridcraft_engine::formula::{Expr, UnOp};
+            let e = e.map(&mut |e| match e {
+                Expr::Unary(UnOp::Trim(mode), range) => {
+                    let code = Expr::Number(f64::from(mode.code()));
+                    Expr::Call("TRIMRANGE".into(), vec![*range, code.clone(), code])
+                }
+                other => other,
+            });
+            gridcraft_engine::formula::print(&e)
+        })
+        .unwrap_or_else(|_| f.to_owned())
+}
+
+fn canonical_validation(v: &Validation) -> Validation {
+    let mut v = v.clone();
+    v.f1 = validation_formula(&v.f1);
+    v.f2 = v.f2.as_deref().map(validation_formula).filter(|f| !f.is_empty());
+    // These validation kinds do not use an operator, and the XLSX writer omits it.
+    if matches!(v.kind, ValidationKind::Any | ValidationKind::List | ValidationKind::Custom) {
+        v.op = CfOperator::Between;
+    }
+    v
+}
+
+fn validation_description(v: Option<&Validation>) -> String {
+    match v {
+        Some(v) => {
+            let ranges = v.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(" ");
+            format!("[{ranges}] {v:?}")
+        }
+        None => "(none)".into(),
+    }
+}
+
+fn diff_validations(d: &mut Diffs, sheet: &str, a: &[Validation], b: &[Validation]) {
+    // The first matching rule wins, and the first range anchors relative formulas. Keep both
+    // orders and compare range metadata directly, never the potentially billions of cells.
+    for i in 0..a.len().max(b.len()) {
+        let (before, after) = (a.get(i), b.get(i));
+        if before == after {
+            continue;
+        }
+        if let (Some(x), Some(y)) = (before, after)
+            && canonical_validation(x) == canonical_validation(y)
+        {
+            continue;
+        }
+        d.push(|| format!("{sheet}: validation {}: {} → {}", i + 1, validation_description(before), validation_description(after)));
+    }
+}
+
 /// A value as the file format can hold it: `#SPILL!`/`#CALC!` are cached as `#VALUE!` and an
 /// unresolved circular reference as 0 (what Excel writes), so those aren't round-trip losses.
 fn as_cached(v: Value) -> Value {
@@ -674,7 +736,7 @@ pub fn diff_workbooks(a: &Workbook, b: &Workbook, opts: &Options) -> Vec<Categor
         } else if let Some((x, y)) = cfa.iter().zip(&cfb).find(|(x, y)| x != y) {
             cond_formats.push(|| format!("{name}: {x} → {y}"));
         }
-        diff_count(&mut validations, &name, sa.validations.len(), sb.validations.len());
+        diff_validations(&mut validations, &name, &sa.validations, &sb.validations);
         let chart_list = |s: &Sheet| s.charts.iter().map(|c| format!("{:?} ({} series)", c.kind, c.series.len())).collect::<Vec<_>>();
         let (ca, cb) = (chart_list(sa), chart_list(sb));
         if ca != cb {
@@ -1680,3 +1742,6 @@ mod tests {
         assert_eq!(keys(&v["functions"][0]), set(&["name", "checked", "mismatched", "primary"]));
     }
 }
+
+#[cfg(test)]
+mod validation_tests;

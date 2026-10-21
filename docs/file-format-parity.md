@@ -11,6 +11,16 @@ documentation (the Office bundle is off limits under this repo's clean-room rule
 support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and the tests in
 `crates/xlsx/src/tests/` (round-trip, fixtures, malformed input, CSV, ODS, XLSB, XLS, PivotTables).
 
+## Validation fidelity checks
+
+`gridcraft-cli check` compares validation ranges, constraints, formulas, messages and flags after
+saving and reopening. Ordered rule comparison preserves first-match precedence and relative-formula
+anchors. It normalizes ordinary formula spelling, trim references written as equivalent `TRIMRANGE`
+calls, and writer-omitted operators, without expanding
+whole-sheet ranges. Regression controls cover actual XLSX save/reopen and report limits. This is
+checker coverage for the validation portion of #1052, not evidence of a new serializer defect or
+external Excel validation; initial-import loss remains outside the model comparison.
+
 ## Workbook formats
 
 Ink created with Draw is written as standard, unfilled DrawingML polylines, without visible point
@@ -92,6 +102,8 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-18 | trivial | XLSX PivotTables: `rowGrandTotals` is the Grand Total row and `colGrandTotals` the Grand Total column. Both were read and written the other way round, which a GridCraft round trip hid, so an Excel file with only one grand total opened showing the other |
 | 2026-10-19 | minor | HTML (Save as Web Page and clipboard) marks right-to-left sheets and right-to-left cell text with `dir` |
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
+| 2026-10-14 | minor | Validation comparisons accept writer-equivalent trim references while retaining differences between trim modes (#1081) |
+| 2026-10-13 | minor | Validation-content comparisons and regression controls in the CLI fidelity checker (#1052, validation portion) |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |
 | 2026-10-12 | minor | `.xls` import reads the calculation settings (CalcMode, CalcIter, CalcCount, CalcDelta, CalcPrecision), so circular models calculate instead of showing `#CIRC!` (#724) |
