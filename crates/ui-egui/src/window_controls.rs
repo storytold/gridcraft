@@ -234,6 +234,35 @@ fn cursor(direction: ResizeDirection) -> CursorIcon {
     }
 }
 
+/// Each window's own grab: a release owed to one window must not reach another.
+fn grab_id(viewport: egui::ViewportId) -> egui::Id {
+    egui::Id::unique("window_controls_desktop_grab").with(viewport)
+}
+
+/// Hand the pointer to the desktop to move or resize the window. On Wayland the compositor keeps
+/// the button's release and winit reports only that the pointer left, which egui doesn't take as a
+/// release: the button would stay down and the next drag on an edge never start. The release comes
+/// back on the next input (`release_after_desktop_grab`).
+pub fn desktop_grab(ctx: &egui::Context, command: egui::ViewportCommand) {
+    ctx.send_viewport_cmd(command);
+    let id = grab_id(ctx.viewport_id());
+    ctx.data_mut(|d| d.insert_temp(id, ()));
+    ctx.request_repaint();
+}
+
+/// After `desktop_grab`, add the primary button's release to the next input, unless it brings one.
+pub fn release_after_desktop_grab(ctx: &egui::Context, raw: &mut egui::RawInput) {
+    let id = grab_id(ctx.viewport_id());
+    if ctx.data_mut(|d| d.remove_temp::<()>(id)).is_none() {
+        return;
+    }
+    let released = raw.events.iter().any(|e| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. }));
+    if !released {
+        let (pos, modifiers) = ctx.input(|i| (i.pointer.interact_pos().unwrap_or_default(), i.modifiers));
+        raw.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
+    }
+}
+
 /// Resize zones along the window's edges and a hairline border, while the window is neither
 /// maximized nor full screen. The zones sit above everything else (in the foreground order), so a
 /// press there resizes instead of reaching the scrollbar or sheet tab under it.
@@ -258,7 +287,7 @@ pub fn resize_edges(ctx: &egui::Context) {
                 let response = ui.interact(rect, ui.scope_id().with(("edge", n)), Sense::drag()).on_hover_cursor(cursor(direction));
                 // Sensing only drags, a drag starts on the press itself.
                 if response.drag_started() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+                    desktop_grab(ui.ctx(), egui::ViewportCommand::BeginResize(direction));
                 }
             }
             // Without the desktop's frame or shadow, a hairline keeps the window apart from
@@ -274,8 +303,38 @@ pub fn resize_edges(ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Button, Layout, ResizeDirection, zones};
+    use super::{Button, Layout, ResizeDirection, desktop_grab, release_after_desktop_grab, zones};
     use egui::{Pos2, Rect};
+
+    fn releases(raw: &egui::RawInput) -> usize {
+        raw.events.iter().filter(|e| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. })).count()
+    }
+
+    #[test]
+    fn a_desktop_grab_gives_the_button_release_back() {
+        let ctx = egui::Context::default();
+        let mut raw = egui::RawInput::default();
+        release_after_desktop_grab(&ctx, &mut raw);
+        assert_eq!(releases(&raw), 0, "no grab, no release");
+
+        desktop_grab(&ctx, egui::ViewportCommand::StartDrag);
+        release_after_desktop_grab(&ctx, &mut raw);
+        assert_eq!(releases(&raw), 1, "one release after a grab");
+        let mut next = egui::RawInput::default();
+        release_after_desktop_grab(&ctx, &mut next);
+        assert_eq!(releases(&next), 0, "only once");
+
+        desktop_grab(&ctx, egui::ViewportCommand::BeginResize(ResizeDirection::East));
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::PointerButton {
+            pos: Pos2::ZERO,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        release_after_desktop_grab(&ctx, &mut raw);
+        assert_eq!(releases(&raw), 1, "not doubled when the input brings its own");
+    }
 
     #[test]
     fn gnome_button_layouts_parse() {

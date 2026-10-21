@@ -40,7 +40,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
         // Dragging the empty title area moves the window.
         let bg = ui.interact(rect, ui.scope_id().with("drag_title"), Sense::click_and_drag());
         if bg.drag_started() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            window_controls::desktop_grab(ui.ctx(), egui::ViewportCommand::StartDrag);
         }
         if bg.double_clicked() {
             let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
