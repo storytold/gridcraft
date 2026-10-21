@@ -323,19 +323,32 @@ pub fn compare_numbers(a: f64, b: f64) -> Ordering {
     round15(a).partial_cmp(&round15(b)).unwrap_or(Ordering::Equal)
 }
 
-/// Case-insensitive text order (Unicode lowercase).
+/// Case-insensitive text order in two levels, as Excel's collation sorts: first by letters and
+/// digits alone (Arabic vowel marks, tatweel and invisible direction marks skipped, Arabic-Indic
+/// digits read as digits), then, to break a tie, by every character (Unicode lowercase). Only text
+/// that is equal at the second level compares equal.
 pub fn compare_text(a: &str, b: &str) -> Ordering {
-    let mut ai = a.chars().flat_map(char::to_lowercase);
-    let mut bi = b.chars().flat_map(char::to_lowercase);
-    loop {
-        match (ai.next(), bi.next()) {
-            (None, None) => return Ordering::Equal,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) if x != y => return x.cmp(&y),
-            _ => {}
+    if !(a.is_ascii() && b.is_ascii()) {
+        let primary = primary_chars(a).cmp(primary_chars(b));
+        if primary != Ordering::Equal {
+            return primary;
         }
     }
+    lowercase_chars(a).cmp(lowercase_chars(b))
+}
+
+fn lowercase_chars(s: &str) -> impl Iterator<Item = char> + '_ {
+    s.chars().flat_map(char::to_lowercase)
+}
+
+/// The characters that decide text order before any tie-break.
+fn primary_chars(s: &str) -> impl Iterator<Item = char> + '_ {
+    lowercase_chars(s).filter_map(|c| match c {
+        '\u{064B}'..='\u{065F}' | '\u{0670}' | '\u{0640}' | '\u{200C}'..='\u{200F}' | '\u{061C}' => None,
+        '\u{0660}'..='\u{0669}' => char::from_u32(u32::from(c) - 0x0660 + u32::from('0')),
+        '\u{06F0}'..='\u{06F9}' => char::from_u32(u32::from(c) - 0x06F0 + u32::from('0')),
+        c => Some(c),
+    })
 }
 
 /// Sorting order used by Sort (ascending): numbers, text, booleans, errors, then blanks last.
@@ -421,6 +434,82 @@ mod tests {
         assert_eq!(compare(&Value::from("z"), &Value::Bool(false)), Ordering::Less);
         assert_eq!(compare(&Value::Empty, &Value::Number(0.0)), Ordering::Equal);
         assert_eq!(sort_compare(&Value::Empty, &Value::Number(1.0)), Ordering::Greater);
+    }
+
+    #[test]
+    fn arabic_diacritics_sort_with_their_base_letter() {
+        assert_eq!(compare_text("بَاب", "بيت"), Ordering::Less);
+        assert_eq!(compare_text("بيت", "بَاب"), Ordering::Greater);
+        assert_eq!(compare_text("كِتاب", "كتب"), Ordering::Less);
+        assert_eq!(compare_text("رحمٰن", "رحمي"), Ordering::Less);
+        assert_eq!(compare(&Value::from("بَاب"), &Value::from("بيت")), Ordering::Less);
+    }
+
+    #[test]
+    fn arabic_indic_digits_sort_with_digits() {
+        assert_eq!(compare_text("١٢", "ب"), Ordering::Less);
+        assert_eq!(compare_text("۱۲", "ب"), Ordering::Less);
+        assert_eq!(compare_text("١", "a"), Ordering::Less);
+        assert_eq!(compare_text("١٢", "13"), Ordering::Less);
+        assert_eq!(compare_text("۱۴", "13"), Ordering::Greater);
+    }
+
+    #[test]
+    fn tatweel_and_bidi_marks_do_not_move_sort_order() {
+        assert_eq!(compare_text("بـاب", "بت"), Ordering::Less);
+        assert_eq!(compare_text("\u{200F}apple", "banana"), Ordering::Less);
+        assert_eq!(compare_text("\u{200E}zebra", "apple"), Ordering::Greater);
+        assert_eq!(compare_text("\u{061C}a", "b"), Ordering::Less);
+        assert_eq!(compare_text("a\u{200C}b", "ac"), Ordering::Less);
+        assert_eq!(compare_text("a\u{200D}b", "ac"), Ordering::Less);
+    }
+
+    #[test]
+    fn primary_ties_keep_equality_unchanged() {
+        assert_eq!(compare_text("ABC", "abc"), Ordering::Equal);
+        assert_eq!(compare_text("باب", "بَاب"), Ordering::Less);
+        assert_eq!(compare_text("12", "١٢"), Ordering::Less);
+        assert_eq!(compare_text("a", "\u{200F}a"), Ordering::Less);
+        let samples = [
+            "",
+            "abc",
+            "ABC",
+            "abd",
+            "ab",
+            "باب",
+            "بَاب",
+            "بِاب",
+            "بـاب",
+            "بيت",
+            "١٢",
+            "۱۲",
+            "12",
+            "\u{200F}12",
+            "\u{200F}a",
+            "a",
+            "A\u{200C}",
+            "a\u{200F}",
+            "b",
+            "Straße",
+            "STRASSE",
+            "ΣΑΣ",
+            "σας",
+            "İ",
+            "i̇",
+        ];
+        let lowered = |s: &str| s.chars().flat_map(char::to_lowercase).collect::<String>();
+        for a in samples {
+            for b in samples {
+                let order = compare_text(a, b);
+                assert_eq!(order.is_eq(), lowered(a) == lowered(b), "{a:?} vs {b:?}");
+                assert_eq!(order, compare_text(b, a).reverse(), "{a:?} vs {b:?}");
+                for c in samples {
+                    if order.is_le() && compare_text(b, c).is_le() {
+                        assert!(compare_text(a, c).is_le(), "{a:?} <= {b:?} <= {c:?}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

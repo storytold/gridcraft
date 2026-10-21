@@ -1044,6 +1044,15 @@ fn case_sensitive_sort_puts_lowercase_first() {
 }
 
 #[test]
+fn data_sort_orders_vowelled_arabic_by_letters() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["بيت"], ["بَاب"], ["تمر"], ["\u{200F}بحر"]]})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A4", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    let col: Vec<Value> = (1..=4).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, ["بَاب", "\u{200F}بحر", "بيت", "تمر"].map(Value::from));
+}
+
+#[test]
 fn remove_duplicates_compares_shown_text() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Date", "Price"], ["2006-03-08", 1.01], ["2006-03-08", 1.02]]})).unwrap();

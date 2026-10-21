@@ -716,7 +716,11 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
         };
         seen.entry((sort_key(&v), t)).or_insert(on);
     }
-    seen.into_iter().map(|((_, t), on)| (t, on)).collect()
+    let mut values: Vec<_> = seen.into_iter().collect();
+    values.sort_by(|((a, ta), _), ((b, tb), _)| {
+        a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then_with(|| gridcraft_core::compare_text(&a.2, &b.2)).then_with(|| ta.cmp(tb))
+    });
+    values.into_iter().map(|((_, t), on)| (t, on)).collect()
 }
 
 /// Case-sensitive tie-break for text that is equal ignoring case: as in Excel, lowercase sorts
@@ -1324,6 +1328,17 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_list_orders_arabic_like_sort() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["H"], ["بج"], ["بُت"], ["\u{200F}بب"]]})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:A4"})).unwrap();
+        let doc = s.doc().unwrap();
+        let list: Vec<String> = filter_values(&doc.wb, 0, 0).into_iter().map(|(t, _)| t).collect();
+        assert_eq!(list, ["\u{200F}بب", "بُت", "بج"]);
+    }
 
     #[test]
     fn filter_by_huge_numeric_column_is_rejected_not_overflowed() {

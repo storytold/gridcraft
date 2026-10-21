@@ -208,7 +208,7 @@ struct FieldItems {
 }
 
 fn cmp_items(a: &Item, b: &Item) -> Ordering {
-    a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| a.text.cmp(&b.text))
+    a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| gridcraft_core::compare_text(&a.text, &b.text))
 }
 
 /// (identity key, item) for a source value under a field's date grouping.
