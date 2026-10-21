@@ -71,7 +71,8 @@ impl DesktopTheme {
 #[cfg(target_os = "linux")]
 type Link = Option<zbus::blocking::Connection>;
 #[cfg(not(target_os = "linux"))]
-type Link = ();
+#[derive(Default)]
+struct Link {}
 
 /// Ask the portal once, over `link`'s connection (opened if absent, dropped if the bus went
 /// away). D-Bus calls block, so this belongs off the UI thread: the watcher's thread is its

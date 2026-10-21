@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (Ctrl+Enter fill gives each cell the automatic number format typing gives it; keytip letters typed with Alt held, #1846) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (draggable print-area borders and page breaks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -9,6 +9,8 @@ separately in [parity-checklist.md](parity-checklist.md) (274 / 290).
 Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes),
 `crates/engine/src/cmd` (shortcuts in command specs), the owner's black-box notes
 (`plan/excel/observed-ui.md`, local only) and user issues.
+
+Page Break Preview: drag the blue outer frame to resize the print area, or drag an internal line to move a manual or automatic break. Changes snap to cells and undo in one step; Escape cancels. An outward break move reduces print scale when needed (minimum 10%). The gesture supports zoom, scrolling and right-to-left sheets. The command is `pageLayout.movePageBreak`; cell contents are preserved. Moving a fitted break switches to a fixed scale and discards inactive stored breaks on both axes, so hidden breaks do not become active.
 
 ## Window and chrome
 
@@ -161,6 +163,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | minor | Page Break Preview: draggable print-area frame and internal page breaks, cell snapping, cancellation and one-step undo; outward moves fit the preceding band by reducing print scale |
 | 2026-10-19 | minor | Ctrl+Enter (`range.fill`) gives each cell what typing the input there gives: a General cell gets the automatic number format (`5%`, `$5`, `3/4/2026`, `=TODAY()`) even when it already held a value, and a cell with its own format, a formatted row or column, or Text keeps it. Cells that held a value used to keep General (`5%` showed 0.05), and empty cells took the active cell's format |
 | 2026-10-18 | minor | Keytip letters typed with left Alt held continue the sequence (Alt+H, O, A / Alt+H, O, I ran nothing before: Alt+letter cancelled keytips); other Alt combinations, AltGr and macOS Option are unchanged (#1846) |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |

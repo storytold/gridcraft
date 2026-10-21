@@ -16,8 +16,18 @@ use serde_json::{Value as Json, json};
 
 use super::*;
 
+/// Registers print commands and the undoable Page Break Preview boundary move.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(
+            "pageLayout.movePageBreak",
+            "Move Page Break",
+            ["Page Layout", "Page Setup"],
+            None,
+            "{sheet?, axis: row|column, from, to} — move a visible internal break before the given 1-based row/column. Reduces print scale when needed; moving outside the print area removes a manual break.",
+            has_doc,
+            move_page_break
+        ),
         cmd!(
             noundo "file.exportPdf",
             "Export as PDF",
@@ -1588,6 +1598,91 @@ fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"pages": n, "pageList": list}))
 }
 
+/// Moves a visible page boundary in one undoable edit, preserving unrelated active breaks and settings.
+/// An outward move lowers the scale enough to keep the preceding band on one page, including
+/// repeated titles and headings. Destinations requiring less than 10% are rejected atomically.
+/// Fitted layouts discard inactive stored breaks on both axes when switching to a fixed scale.
+fn move_page_break(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "pageLayout.movePageBreak";
+    let si = target_sheet(s, p)?;
+    let rows = match str_param(p, "axis") {
+        Some("row") => true,
+        Some("column") => false,
+        _ => return Err(bad(CMD, "axis must be row or column")),
+    };
+    let limit = if rows { MAX_ROWS } else { MAX_COLS };
+    let line = |key: &str| -> Result<u32> {
+        p.get(key)
+            .and_then(Json::as_u64)
+            .filter(|v| (1..=u64::from(limit) + 1).contains(v))
+            .map(|v| (v - 1) as u32)
+            .ok_or_else(|| bad(CMD, format!("{key} must be a 1-based sheet boundary")))
+    };
+    let (from, to) = (line("from")?, line("to")?);
+    let wb = &s.doc()?.wb;
+    let sh = wb.sheet(si).ok_or_else(|| bad(CMD, "no such sheet"))?;
+    let lay = layout_sheet(wb, si, &PrintOptions::default(), None).ok_or_else(|| bad(CMD, "no print layout"))?;
+    let bands = if rows { &lay.row_bands } else { &lay.col_bands };
+    let start = bands
+        .iter()
+        .find(|(_, end)| end.saturating_add(1) == from)
+        .map(|(start, _)| *start)
+        .ok_or_else(|| bad(CMD, "from must be a visible internal break"))?;
+    let (lo, hi) = if rows { (lay.area.start.row, lay.area.end.row) } else { (lay.area.start.col, lay.area.end.col) };
+    if from > hi {
+        return Err(bad(CMD, "the outer border changes the print area"));
+    }
+    if from == to {
+        return Ok(json!(sh.print));
+    }
+    // Fitted pagination ignores stored breaks; keep the result consistent with the visible preview.
+    let mut breaks = if !lay.manual_breaks {
+        vec![]
+    } else if rows {
+        sh.print.row_breaks.clone()
+    } else {
+        sh.print.col_breaks.clone()
+    };
+    let manual = lay.manual_breaks && breaks.contains(&from);
+    breaks.retain(|b| *b != from);
+    let inside = to > lo && to <= hi;
+    if !inside && !manual {
+        return Err(bad(CMD, "only a manual break can be removed outside the print area"));
+    }
+    let mut params = json!({"sheet": si});
+    if inside {
+        breaks.push(to);
+        breaks.sort_unstable();
+        breaks.dedup();
+        if breaks.len() > 1026 {
+            return Err(bad(CMD, "too many manual page breaks"));
+        }
+        // A surviving manual break crossed by the gesture starts the preceding page.
+        let start = breaks.iter().copied().filter(|b| *b > start && *b < to).max().unwrap_or(start);
+        // Prefix offsets avoid iterating over a possibly whole-sheet destination.
+        let offset = |i| if rows { sh.row_top(i) } else { sh.col_left(i) };
+        let titles = if rows { lay.title_rows } else { lay.title_cols };
+        let repeat = titles.filter(|(a, _)| *a < start).map_or(0.0, |(a, b)| offset((b + 1).min(start)) - offset(a));
+        let heading = if rows { lay.heading_h } else { lay.heading_w };
+        let size = offset(to) - offset(start) + repeat + f64::from(heading);
+        let (aw, ah) = lay.avail();
+        let room = if rows { ah } else { aw };
+        let fit = (f64::from(room) / (size.max(1.0) * f64::from(PX_TO_PT)) * 100.0).floor();
+        if fit < 10.0 {
+            return Err(bad(CMD, "destination cannot fit at the minimum print scale (10%)"));
+        }
+        let scale =
+            if lay.manual_breaks { u32::from(lay.settings.scale.clamp(10, 400)) } else { (lay.scale * 100.0).floor().clamp(10.0, 400.0) as u32 };
+        params["scale"] = json!(scale.min(fit.min(400.0) as u32));
+        if !lay.manual_breaks {
+            params[if rows { "colBreaks" } else { "rowBreaks" }] = json!([]);
+        }
+    }
+    params[if rows { "rowBreaks" } else { "colBreaks" }] = json!(breaks.iter().map(|b| b + 1).collect::<Vec<_>>());
+    page_setup(s, &params)
+}
+
+/// Validates and applies only the supplied print settings as one undoable sheet edit.
 fn page_setup(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "pageLayout.pageSetup";
     let si = target_sheet(s, p)?;

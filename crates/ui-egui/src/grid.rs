@@ -103,6 +103,8 @@ pub enum Drag {
 #[derive(Default)]
 pub struct GridState {
     pub drag: Drag,
+    /// Captured print-boundary gesture; commits once on release.
+    pub page_break_drag: Option<crate::page_breaks::BoundaryDrag>,
     pub ensure_visible: bool,
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
     /// (Shift/Ctrl+Shift+arrows keep the active cell on the anchor while the far corner moves).
@@ -133,7 +135,7 @@ pub struct GridState {
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
-    pub pages: Option<((u64, u64, usize), Vec<(RangeRef, u32)>)>,
+    pub pages: Option<crate::page_breaks::PageCache>,
     pub header_menu: Option<(Pos2, bool)>,
     /// Page Layout view pagination, cached per (doc uid, revision, sheet, rows, columns).
     pub paper: Option<crate::paper_view::PaperCache>,
@@ -558,6 +560,7 @@ fn display_text(
     (f.text, f.color.map(numfmt_color), f.numeric, f.fill)
 }
 
+/// Paints the active sheet and routes gestures to overlays before ordinary cell selection.
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let available = ui.available_rect_before_wrap();
@@ -778,9 +781,11 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         if !resp.dragged() {
             app.grid.touch_pan = false;
         }
-    } else {
+    } else if !crate::page_breaks::interact(app, ui, &resp, &geo, sh) {
         crate::paper_view::interact(app, ui, &resp, &geo, sh, &wb);
         interact(app, ui, &resp, &geo, sh, &wb);
+    } else if app.grid.page_break_drag.is_none() {
+        keyboard(app, ui.ctx(), &resp, &geo, sh);
     }
     crate::text_box::show(app, ui, &geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
@@ -3238,10 +3243,11 @@ fn is_checkbox(sh: &Sheet, app: &SheetApp) -> bool {
     d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str() == "checkbox"
 }
 
+/// Paints cached page ranges, page labels and the print-area frame in the active sheet view.
 fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
     let Some(d) = app.session.active() else { return };
     let key = (d.uid, d.revision, d.wb.active_sheet);
-    if app.grid.pages.as_ref().is_none_or(|(k, _)| *k != key) {
+    if app.grid.pages.as_ref().is_none_or(|cache| cache.key != key) {
         let pages: Vec<(RangeRef, u32)> = app
             .session
             .run("file.printPreview", json!({}))
@@ -3255,17 +3261,16 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
                 })
             })
             .unwrap_or_default();
-        app.grid.pages = Some((key, pages));
+        let area = gridcraft_engine::cmd::print::print_range(sh).unwrap_or(RangeRef::cell(CellRef::new(0, 0)));
+        app.grid.pages = Some(crate::page_breaks::PageCache { key, pages, area });
     }
-    let Some((_, pages)) = &app.grid.pages else { return };
+    let Some(cache) = &app.grid.pages else { return };
+    let pages = &cache.pages;
     if pages.is_empty() {
         return;
     }
     // Grey everything, then clear the printed pages.
-    let mut printed = pages[0].0;
-    for (r, _) in pages {
-        printed = printed.union(r);
-    }
+    let printed = cache.area;
     let pr = geo.range_rect(sh, printed);
     let grey = Color32::from_black_alpha(70);
     let c = p.clip_rect();
