@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (MEDIAN and AGGREGATE median avoid intermediate overflow) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-18 · **Change:** minor (DATEVALUE and TIMEVALUE use the shared regional parser) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -83,6 +83,7 @@ PIVOTBY, REGEXTEST…) are all present.
 | Iterative calculation for circular references | done: with Enable Iterative Calculation on (`formulas.calculationOptions` `{iterative, maxIterations, maxChange}`, saved as `<calcPr iterate iterateCount iterateDelta>`), loops are evaluated again from their previous values (blank = 0) until no cell on a loop changes by Maximum Change or Maximum Iterations is reached; off, cycles give `#CIRC!`. Differences: no Options dialog yet (command only); GridCraft recalculates on open, so a loop that never settles (`=A1+1`) advances again each time the file is opened |
 | 15-significant-digit comparison semantics | **missing** (#57: `=0.1+0.2=0.3` is FALSE) |
 | External workbook references (`[Book.xlsx]Sheet1!A1`) | parsed; links dropped on open, no update |
+| Regional date-text formulas | `DATEVALUE` and `TIMEVALUE` use `Workbook.region` and the shared `parse_input_in` parser: MDY, DMY and YMD, regional month names and AM/PM, with the workbook's 1900/1904 date system. The default context is en-US. Numeric text coercion in other functions remains en-US. |
 | Localized function names and `;` separators | **missing** (#45); en-US only |
 | Error values | the seven classic errors plus `#SPILL!`, `#CALC!`, `#GETTING_DATA` done; `#FIELD!`, `#BLOCKED!`, `#CONNECT!`, `#BUSY!`, `#UNKNOWN!`, `#PYTHON!` missing (minor: they come from data types, cloud and Python features) |
 
@@ -114,6 +115,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | minor | DATEVALUE/TIMEVALUE use the shared Region parser through the calculation context; regressions cover date orders, both date systems, regional names and unchanged generic coercion |
 | 2026-10-15 | minor | MEDIAN and AGGREGATE median use an overflow-safe midpoint (#1579); regressions cover finite extremes, tiny values and dependent recalculation |
 | 2026-10-13 | minor | Clear reports changed stored cells sparsely, including those beyond the first million coordinates; dependent formulas and removed spills update, while clearing empty merges still unblocks spills (#1032) |
 | 2026-10-12 | minor | USDOLLAR added as a Compatibility function (not on Microsoft's list, so the counts don't change); MIRR with no positive flow is -1, COUNTIF's bare `"<="` / `">="` skip empty strings, INDIRECT with `a1` = FALSE gives `#REF!` for A1-style text (#738) |

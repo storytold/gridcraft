@@ -70,6 +70,28 @@ the password, and never replaces the encrypted original.
 For a headless equivalent (no window), use `gridcraft-cli mcp` or `gridcraft-cli run`;
 see [`mcp.md`](mcp.md) and [`cli.md`](cli.md).
 
+### Region and date-text recalculation
+
+Start with `gridcraft --region it-IT --control 7979 book.xlsx` to select the region
+before the first recalculation. `app.region` queries or changes the same preference:
+
+```json
+{"id": 2, "method": "engine.execute", "params": {"command": "app.region", "params": {"region": "it-IT"}}}
+```
+
+Empty params or `{"region":null}` query it. The result contains `region`, `name`,
+`decimal`, `group`, `dateOrder` (`MDY`, `DMY`, `YMD`), `shortDate`, `longDate` and
+`available` tags. Unknown tags or non-string values return an error without changing it.
+
+Changing it recalculates `DATEVALUE`, `TIMEVALUE` and their dependents in every open
+document. It preserves each document's clean/dirty state and is not an undoable edit;
+undo/redo retains the current session region. It does not refresh PivotTables: execute
+`data.refreshAll` separately to rebuild reports from the recalculated source formulas.
+
+This bridge uses the shared Region/parser from #1524 and `region-typed-input`. It does
+not enable regional display or change programmatic `cell.set`/`range.setValues` input,
+which remains canonical en-US. The default region is en-US, independent of UI language.
+
 ### Native printing
 
 Desktop `engine.commands {"search":"print"}` (and connected MCP `list_commands`)

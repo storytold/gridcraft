@@ -285,7 +285,7 @@ pub(crate) fn to_sig_digits(x: f64, sig: usize) -> f64 {
 
 #[cfg(test)]
 pub(crate) mod testutil {
-    use gridcraft_core::{Array, CellError, DateSystem, Value};
+    use gridcraft_core::{Array, CellError, DateSystem, Region, Value};
 
     use crate::{Arg, Ctx};
 
@@ -293,15 +293,19 @@ pub(crate) mod testutil {
     pub struct TestCtx {
         pub state: u64,
         pub sys: DateSystem,
+        pub region: &'static Region,
     }
     impl Default for TestCtx {
         fn default() -> Self {
-            TestCtx { state: 0x2545_F491_4F6C_DD1D, sys: DateSystem::D1900 }
+            TestCtx { state: 0x2545_F491_4F6C_DD1D, sys: DateSystem::D1900, region: gridcraft_core::region::default_region() }
         }
     }
     impl Ctx for TestCtx {
         fn date_system(&self) -> DateSystem {
             self.sys
+        }
+        fn region(&self) -> &Region {
+            self.region
         }
         fn now_serial(&self) -> f64 {
             46302.5

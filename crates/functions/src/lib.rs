@@ -101,6 +101,11 @@ impl Arg {
 /// Services a function may need from the host.
 pub trait Ctx {
     fn date_system(&self) -> DateSystem;
+    /// The regional format for date text consumed by DATEVALUE and TIMEVALUE. Other worksheet
+    /// functions keep their existing canonical en-US text-to-number coercion.
+    fn region(&self) -> &gridcraft_core::Region {
+        gridcraft_core::region::default_region()
+    }
     /// Current local date-time serial.
     fn now_serial(&self) -> f64;
     /// Uniform in [0, 1).

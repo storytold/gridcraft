@@ -1,6 +1,10 @@
 //! GridCraft desktop app.
 //!
-//! Usage: `gridcraft [--control <port>] [--sample <name>] [files…]`
+//! Usage: `gridcraft [--control <port>] [--sample <name>] [--region <tag>] [files…]`
+//!
+//! `--region <tag>` (or `--region=<tag>`) overrides the saved region for DATEVALUE and
+//! TIMEVALUE before the first workbook recalculation. The default is en-US; this choice
+//! is independent of interface language and does not change canonical command input.
 //!
 //! `--control <port>` (or `GRIDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control
 //! server: `{"id":1,"method":"ui.inspect","params":{}}` → `{"id":1,"ok":true,"result":…}`.
@@ -115,9 +119,11 @@ fn load_prefs(app: &mut SheetApp) {
         app.ui.language = language;
     }
     if let Ok(b) = std::fs::read(dir.join("prefs.json"))
-        && let Ok(p) = serde_json::from_slice(&b)
+        && let Ok(p) = serde_json::from_slice::<gridcraft_engine::Prefs>(&b)
     {
         app.session.prefs = p;
+        // Preference files may predate regions or contain an unsupported tag.
+        app.session.prefs.region = app.session.region().tag.into();
     }
 }
 
@@ -229,6 +235,28 @@ fn icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+/// Removes and validates the region override before any workbook is created or opened.
+/// Other startup arguments retain their existing interpretation; tags use canonical spelling.
+fn region_args(args: &[String]) -> Result<(Vec<String>, Option<String>), String> {
+    let mut remaining = Vec::new();
+    let mut region = None;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let value = if arg == "--region" {
+            Some(it.next().ok_or("--region needs a tag such as en-GB or it-IT")?.as_str())
+        } else {
+            arg.strip_prefix("--region=")
+        };
+        if let Some(value) = value {
+            let found = gridcraft_engine::find_region(value).map_err(|e| format!("--region: {e}"))?;
+            region = Some(found.tag.to_string());
+        } else {
+            remaining.push(arg.clone());
+        }
+    }
+    Ok((remaining, region))
+}
+
 fn main() -> eframe::Result<()> {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -255,6 +283,13 @@ fn main() -> eframe::Result<()> {
         println!("GridCraft {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    let (args, region) = match region_args(&args) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            eprintln!("gridcraft: {e}");
+            std::process::exit(2);
+        }
+    };
     let mut control_port: Option<u16> = std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut sample: Option<String> = None;
     let mut files: Vec<String> = Vec::new();
@@ -288,20 +323,24 @@ fn main() -> eframe::Result<()> {
             None => logger.no_file(),
         }
     }
-    let mut session = Session::new();
+    let mut app = SheetApp::new(Session::new(), services());
+    app.watch_desktop_theme();
+    // Load the saved region and then the explicit override before a sample, blank workbook
+    // or command-line file can perform its first recalculation.
+    load_prefs(&mut app);
+    if let Some(region) = region {
+        app.session.prefs.region = region;
+    }
     if let Some(s) = &sample
-        && let Err(e) = session.execute("file.new", json!({"sample": s}))
+        && let Err(e) = app.session.execute("file.new", json!({"sample": s}))
     {
         log::warn!("sample {s}: {e}");
     }
-    if session.documents().is_empty() {
-        session.new_workbook();
+    if app.session.documents().is_empty() {
+        app.session.new_workbook();
     }
-    let mut app = SheetApp::new(session, services());
-    app.watch_desktop_theme();
     app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;
-    load_prefs(&mut app);
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open
     // opens them: a password-protected one asks for its password, and errors are shown, not
     // only logged. Each replaces the untouched blank Book1, as a file opened from Finder does.
@@ -382,6 +421,37 @@ fn main() -> eframe::Result<()> {
         return run(options);
     }
     result
+}
+
+#[cfg(test)]
+mod region_tests {
+    use super::region_args;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn region_override_preserves_other_startup_arguments() {
+        let (remaining, region) = region_args(&args(&["--control", "7979", "--region", "it-IT", "--sample", "sales", "book.xlsx"])).unwrap();
+        assert_eq!(remaining, args(&["--control", "7979", "--sample", "sales", "book.xlsx"]));
+        assert_eq!(region.as_deref(), Some("it-IT"));
+        assert_eq!(region_args(&args(&["book.xlsx"])).unwrap(), (args(&["book.xlsx"]), None));
+    }
+
+    #[test]
+    fn region_override_accepts_both_forms_and_canonicalizes_tags() {
+        assert_eq!(region_args(&args(&["--region=en_gb"])).unwrap(), (vec![], Some("en-GB".into())));
+        assert_eq!(region_args(&args(&["--region", "IT_it"])).unwrap(), (vec![], Some("it-IT".into())));
+        assert_eq!(region_args(&args(&["--region=ja-JP"])).unwrap(), (vec![], Some("ja-JP".into())));
+    }
+
+    #[test]
+    fn region_override_rejects_missing_and_unsupported_tags() {
+        for values in [&["--region"][..], &["--region", "--sample"], &["--region="], &["--region=unknown"], &["--region=42"]] {
+            assert!(region_args(&args(values)).is_err(), "{values:?}");
+        }
+    }
 }
 
 #[cfg(test)]

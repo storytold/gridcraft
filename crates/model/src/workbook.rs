@@ -120,6 +120,11 @@ pub struct Workbook {
     /// `preserved` are relative to. Saving into another folder rewrites them from there. Not in JSON.
     #[serde(skip)]
     pub source_dir: Option<std::path::PathBuf>,
+    /// The region whose formats this workbook is typed and shown in (Options › Region). A runtime
+    /// setting of the application, not of the file: it is not saved, and the engine session sets
+    /// it on every document it holds. en-US until then.
+    #[serde(skip, default = "gridcraft_core::region::default_region")]
+    pub region: &'static gridcraft_core::Region,
 }
 
 impl Default for Workbook {
@@ -148,6 +153,7 @@ impl Workbook {
             csv_delimiter: None,
             preserved: None,
             source_dir: None,
+            region: gridcraft_core::region::default_region(),
         }
     }
     pub fn sheet(&self, i: usize) -> Option<&Sheet> {

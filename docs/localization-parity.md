@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (defined-name length limit counts characters, so long Arabic names are accepted; Table names are limited to 255 characters; right-to-left sheets in `.xls` files open right-to-left; text boxes and shapes keep right-to-left paragraph direction through XLSX save; Save as Web Page and copied HTML keep right-to-left; French and Serbian `context|label` translations no longer show the context) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (regional date formulas and recalculation integrated with v0.9.0, retaining CSV text-only import and the release's Unicode names, right-to-left import/export and translation fixes) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -21,10 +21,19 @@ right-to-left sheets and full complex-script support. Part of
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so each shipped language covers **~12%** (measured
   count / estimated total).
-- **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
+- **en-US formula syntax and display formats.** Function names, `,` argument separator, `.` decimal
   separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
   localized function names and `;` separators (#45). German with localized numbers and formulas
   is in PR #163 (open).
+- **Regional date-text formulas.** `DATEVALUE` and `TIMEVALUE` use the shared
+  `Workbook.region` / `parse_input_in` parser from #1524 and `region-typed-input`.
+  The `--region TAG` native/CLI flag applies before the first calculation; `app.region`
+  changes it in open documents, recalculating dependents while preserving dirty state
+  and undo history. MDY, DMY, YMD and regional month/AM-PM names are covered. The
+  default is en-US, independent of UI language; the preference is not stored in XLSX.
+  This bridge does not enable regional cell display, localized formula names/separators,
+  or regional programmatic input. Those remain separate work in the regional stack;
+  API input and generic numeric text coercion retain their canonical en-US contracts.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). There is no complex-text shaping: Arabic and
   Devanagari don't join or reorder, and there is no bidirectional layout. **Sheet Right-to-Left**
@@ -83,12 +92,14 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | minor | Integrate regional date formulas with v0.9.0's file-opening API; CSV text-only import still preserves identifiers and date text before regional formula evaluation. |
 | 2026-10-19 | minor | Defined-name length counts characters, not bytes: Arabic names up to 255 letters are accepted, and Create from Selection keeps long Arabic headers |
 | 2026-10-19 | minor | Table names are limited to 255 Unicode characters |
 | 2026-10-19 | minor | Right-to-left sheets in legacy `.xls` files (common in older Arabic workbooks) open right-to-left |
 | 2026-10-19 | trivial | Text boxes and shapes keep right-to-left paragraph direction (`a:pPr rtl`) on XLSX save, so Excel-authored Arabic and Hebrew text boxes reopen right to left |
 | 2026-10-19 | minor | Save as Web Page and copied HTML mark right-to-left sheets `dir="rtl"`, let General-aligned Arabic and Hebrew text align by its own direction (`dir="auto"`), and keep numbers on right-to-left sheets left to right and on the left |
 | 2026-10-19 | minor | French and Serbian kept the context in three `context\|label` translations ("Options\|Général", "Opcije\|Opšte" for `Options\|General`; also `Options\|Save`, `Sheet Options\|View`). `tr` shows a found translation as it is, so File › Options headings and the Sheet Options "View" checkboxes showed the prefix. Fixed; a test checks that no catalog shows a `\|` |
+| 2026-10-18 | minor | DATEVALUE/TIMEVALUE share Region; pre-open flags and runtime recalculation preserve clean/dirty and undo state. Regional display and input remain separate work. |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |
 | 2026-10-11 | minor | German ribbon catalog (`i18n/de.rs`, 266 labels, ~12%); `de` locale tags (de-DE, de-AT, de-CH…) resolve to German. PR #163 (localized German formulas/numbers) still open |

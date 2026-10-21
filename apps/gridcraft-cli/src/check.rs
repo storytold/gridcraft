@@ -19,7 +19,7 @@ use std::process::ExitCode;
 
 use gridcraft_engine::calc::{Calc, Key};
 use gridcraft_engine::cmd::inspect::value_json;
-use gridcraft_engine::core::{CellError, CellRef, Value};
+use gridcraft_engine::core::{CellError, CellRef, Region, Value};
 use gridcraft_engine::formula::{Expr, quote_sheet};
 use gridcraft_engine::model::{Cell, Sheet, Workbook};
 use serde_json::{Value as Json, json};
@@ -49,11 +49,13 @@ pub struct Options {
     pub tolerance: f64,
     /// Most examples listed per file and category.
     pub max_report: usize,
+    /// The runtime regional format, applied before formula recalculation and round-trip comparison.
+    pub region: &'static Region,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { tolerance: 1e-9, max_report: 20 }
+        Options { tolerance: 1e-9, max_report: 20, region: gridcraft_engine::core::region::default_region() }
     }
 }
 
@@ -177,14 +179,15 @@ impl Diffs {
 
 // ---------------------------------------------------------------- entry point
 
-/// `check <file-or-dir>... [--json] [--tolerance X] [--max-report N]`. Exit 0 when every file opens,
+/// `check <file-or-dir>... [--json] [--tolerance X] [--max-report N] [--region TAG]`.
+/// Exit 0 when every file opens,
 /// every checked formula matches and every round trip is clean; 1 otherwise; 2 on a usage error.
 pub fn main(args: &[String]) -> ExitCode {
     let usage = |e: String| {
         eprintln!("gridcraft-cli: {e}\n{USAGE}");
         ExitCode::from(2)
     };
-    let a = match Args::parse(args, &["tolerance", "max-report"], &["json"]) {
+    let a = match Args::parse(args, &["tolerance", "max-report", "region"], &["json"]) {
         Ok(a) => a,
         Err(e) => return usage(e),
     };
@@ -192,6 +195,11 @@ pub fn main(args: &[String]) -> ExitCode {
         return usage("missing <file-or-dir>".into());
     }
     let mut opts = Options::default();
+    match a.region() {
+        Ok(Some(region)) => opts.region = region,
+        Ok(None) => {}
+        Err(e) => return usage(e),
+    }
     if let Some(t) = a.opt("tolerance") {
         match t.parse::<f64>() {
             Ok(t) if t.is_finite() && t >= 0.0 => opts.tolerance = t,
@@ -280,13 +288,14 @@ pub fn check_bytes(path: &str, bytes: &[u8], opts: &Options) -> FileReport {
 
 fn check_inner(path: &str, bytes: &[u8], opts: &Options) -> FileReport {
     let mut report = FileReport { path: path.to_string(), ..Default::default() };
-    let (cached, warnings) = match gridcraft_engine::io::open_bytes(path, bytes) {
+    let (mut cached, warnings) = match gridcraft_engine::io::open_bytes(path, bytes) {
         Ok(x) => x,
         Err(e) => {
             report.error = Some(e.to_string());
             return report;
         }
     };
+    cached.region = opts.region;
     report.warnings = warnings.len();
     let mut fresh = cached.clone();
     let mut calc = Calc::new();
@@ -551,10 +560,11 @@ pub fn round_trip(wb: &Workbook, source: &[u8], opts: &Options) -> RoundTrip {
             }
         }
     }
-    let back = match gridcraft_engine::io::open_bytes("roundtrip.xlsx", &bytes) {
+    let mut back = match gridcraft_engine::io::open_bytes("roundtrip.xlsx", &bytes) {
         Ok((b, _)) => b,
         Err(e) => return RoundTrip { error: Some(format!("reading the written file failed: {e}")), categories: vec![package.done()] },
     };
+    back.region = opts.region;
     let mut categories = diff_workbooks(wb, &back, opts);
     categories.push(package.done());
     RoundTrip { error: None, categories }
@@ -1306,6 +1316,20 @@ mod tests {
         assert_eq!(r.error, None);
         assert_eq!((r.calc.formula_cells, r.calc.checked, r.calc.matched, r.calc.mismatched), (3, 3, 3, 0));
         assert!(r.is_clean(), "{r:?}");
+    }
+
+    #[test]
+    fn region_is_applied_before_oracle_recalculation() {
+        for (tag, text) in [("en-GB", "13/01/2026"), ("ja-JP", "26/01/13")] {
+            let formula = format!("=DATEVALUE(\"{text}\")");
+            let wb = book(&[("A1", &formula, n(46035.0)), ("B1", "=MONTH(A1)", n(1.0))]);
+            let selected = check(&wb, &Options { region: gridcraft_engine::find_region(tag).unwrap(), ..Default::default() });
+            assert_eq!((selected.calc.checked, selected.calc.matched, selected.calc.mismatched), (2, 2, 0));
+            assert!(selected.is_clean(), "{selected:?}");
+            let default = check(&wb, &Options::default());
+            assert_eq!(default.calc.mismatched, 2);
+            assert_eq!(default.calc.mismatches[0].actual, Value::Error(CellError::Value));
+        }
     }
 
     #[test]

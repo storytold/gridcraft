@@ -1,7 +1,7 @@
 //! Date and time functions.
 
 use gridcraft_core::date::{DateTime, datetime_from_serial, days_in_month, is_leap, serial_from_ymd, serial_in_system};
-use gridcraft_core::parse::parse_input;
+use gridcraft_core::parse::parse_input_in;
 use gridcraft_core::{CellError, DateSystem, Value};
 
 use crate::util::{R, S, arg, as_array, has, num, num_val, opt_bool, opt_num, scalar, text, to_int};
@@ -219,6 +219,7 @@ fn datedif(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     num_val(r as f64)
 }
 
+/// Reads date or time text with the same parser and region as regional cell entry.
 fn parsed_text(a: &[Arg], c: &mut dyn Ctx) -> R<(f64, &'static str)> {
     let v = scalar(arg(a, 0)?);
     let Value::Text(t) = v else {
@@ -227,7 +228,7 @@ fn parsed_text(a: &[Arg], c: &mut dyn Ctx) -> R<(f64, &'static str)> {
             _ => CellError::Value,
         });
     };
-    let p = parse_input(&t, c.date_system());
+    let p = parse_input_in(&t, c.date_system(), c.region());
     match (p.value, p.format) {
         (Value::Number(n), Some(f)) if f.contains(['d', 'y', 'h']) => Ok((n, f)),
         _ => Err(CellError::Value),
@@ -831,5 +832,79 @@ mod tests {
         let spec = crate::lookup("DATEVALUE").unwrap();
         close(crate::call(spec, &[t("2/29/1904")], &mut ctx), 59.0);
         is_err(crate::call(spec, &[t("2/29/1900")], &mut ctx), CellError::Value);
+    }
+
+    #[test]
+    fn datevalue_uses_the_context_region() {
+        let spec = crate::lookup("DATEVALUE").unwrap();
+        let mut ctx = TestCtx { region: gridcraft_core::region::find("en-GB").unwrap(), ..TestCtx::default() };
+        close(crate::call(spec, &[t("13/01/2026")], &mut ctx), d(2026.0, 1.0, 13.0));
+        close(crate::call(spec, &[t("02/01/2026")], &mut ctx), d(2026.0, 1.0, 2.0));
+        close(crate::call(spec, &[t("02/01/26 18:00")], &mut ctx), d(2026.0, 1.0, 2.0));
+        close(crate::call(spec, &[t("2026-01-13")], &mut ctx), d(2026.0, 1.0, 13.0));
+        close(crate::call(spec, &[t("13-Jan-2026")], &mut ctx), d(2026.0, 1.0, 13.0));
+        close(crate::call(spec, &[t("29/02/1900")], &mut ctx), 60.0);
+        for invalid in ["01/13/2026", "31/04/2026", "29/02/2025", "123", "£3"] {
+            is_err(crate::call(spec, &[t(invalid)], &mut ctx), CellError::Value);
+        }
+        is_err(crate::call(spec, &[n(46035.0)], &mut ctx), CellError::Value);
+        is_err(crate::call(spec, &[e(CellError::Ref)], &mut ctx), CellError::Ref);
+
+        // Contexts that do not select a region retain the existing en-US interpretation.
+        close(ev("DATEVALUE", vec![t("02/01/2026")]), d(2026.0, 2.0, 1.0));
+        is_err(ev("DATEVALUE", vec![t("13/01/2026")]), CellError::Value);
+    }
+
+    #[test]
+    fn regional_datevalue_and_timevalue_respect_the_date_system() {
+        let date = crate::lookup("DATEVALUE").unwrap();
+        let time = crate::lookup("TIMEVALUE").unwrap();
+        for sys in [gridcraft_core::DateSystem::D1900, gridcraft_core::DateSystem::D1904] {
+            for (region, leap_day, january, invalid) in [
+                ("en-US", "02/29/1904", "01/13/2026", "04/31/2026"),
+                ("en-GB", "29/02/1904", "13/01/2026", "31/04/2026"),
+                ("ja-JP", "1904/02/29", "2026/01/13", "2026/04/31"),
+            ] {
+                let mut ctx = TestCtx { sys, region: gridcraft_core::region::find(region).unwrap(), ..TestCtx::default() };
+                close(crate::call(date, &[t(leap_day)], &mut ctx), gridcraft_core::date::serial_from_ymd(sys, 1904, 2, 29).unwrap());
+                close(crate::call(time, &[t(&format!("{january} 18:00"))], &mut ctx), 0.75);
+                close(crate::call(time, &[t("6:00 PM")], &mut ctx), 0.75);
+                is_err(crate::call(time, &[t(&format!("{invalid} 18:00"))], &mut ctx), CellError::Value);
+            }
+        }
+        let mut ctx =
+            TestCtx { sys: gridcraft_core::DateSystem::D1904, region: gridcraft_core::region::find("en-GB").unwrap(), ..TestCtx::default() };
+        close(crate::call(date, &[t("01/01/1904")], &mut ctx), 0.0);
+        is_err(crate::call(date, &[t("29/02/1900")], &mut ctx), CellError::Value);
+        is_err(ev("TIMEVALUE", vec![t("13/01/2026 18:00")]), CellError::Value);
+    }
+
+    #[test]
+    fn date_text_functions_share_regional_names_and_year_first_order() {
+        let date = crate::lookup("DATEVALUE").unwrap();
+        let time = crate::lookup("TIMEVALUE").unwrap();
+        for (region, input) in
+            [("it-IT", "13 gennaio 2026"), ("fr-FR", "13 janvier 2026"), ("de-DE", "13. Januar 2026"), ("ja-JP", "26/01/13"), ("ja-JP", "2026/01/13")]
+        {
+            let mut ctx = TestCtx { region: gridcraft_core::region::find(region).unwrap(), ..TestCtx::default() };
+            close(crate::call(date, &[t(input)], &mut ctx), d(2026.0, 1.0, 13.0));
+            close(crate::call(time, &[t(&format!("{input} 18:00"))], &mut ctx), 0.75);
+        }
+        let mut ctx = TestCtx { region: gridcraft_core::region::find("ja-JP").unwrap(), ..TestCtx::default() };
+        close(crate::call(date, &[t("26/01/02")], &mut ctx), d(2026.0, 1.0, 2.0));
+        close(crate::call(time, &[t("午後3:30")], &mut ctx), 15.5 / 24.0);
+        close(crate::call(time, &[t("午前3:30")], &mut ctx), 3.5 / 24.0);
+        is_err(crate::call(date, &[t("13/01/2026")], &mut ctx), CellError::Value);
+        is_err(crate::call(time, &[t("午後13:30")], &mut ctx), CellError::Value);
+    }
+
+    #[test]
+    fn regional_date_text_does_not_change_other_functions_text_coercion() {
+        let mut ctx = TestCtx { region: gridcraft_core::region::find("it-IT").unwrap(), ..TestCtx::default() };
+        let date = crate::lookup("DATEVALUE").unwrap();
+        close(crate::call(date, &[t("02/01/2026")], &mut ctx), d(2026.0, 1.0, 2.0));
+        close(crate::call(crate::lookup("VALUE").unwrap(), &[t("1,234")], &mut ctx), 1234.0);
+        close(crate::call(crate::lookup("VALUE").unwrap(), &[t("1.234")], &mut ctx), 1.234);
+        close(crate::call(crate::lookup("MONTH").unwrap(), &[t("02/01/2026")], &mut ctx), 2.0);
     }
 }
