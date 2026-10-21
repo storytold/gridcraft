@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** minor (defined-name length limit counts characters, so long Arabic names are accepted; Table names are limited to 255 characters; right-to-left sheets in `.xls` files open right-to-left; text boxes and shapes keep right-to-left paragraph direction through XLSX save; Save as Web Page and copied HTML keep right-to-left; French and Serbian `context|label` translations no longer show the context) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-20 · **Change:** minor (Japanese: Excel-compatible Shift-JIS (CP932) CSV import and export, with a UTF-8/BOM choice; Arabic Unicode Text files stay UTF-16 on save) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -56,7 +56,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
 | Portuguese | pt-BR | 923 (~42%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
-| Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display | no | menus only | 8–12 h |
+| Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display; Excel-compatible Shift-JIS (CP932) CSV import/export (`shift_jis`/`cp932`), UTF-8 with or without BOM | no | menus only | 8–12 h |
 | German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
@@ -83,6 +83,8 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | minor | Arabic: a *Unicode Text* file (UTF-16LE, how Excel exports Arabic text that any reader can open) is saved back as UTF-16LE instead of UTF-8, and `encoding: "utf-16le"` writes one from any workbook |
+| 2026-10-20 | minor | Japanese: Excel-compatible CSV — Shift-JIS (CP932) import and export with an encoding choice (`auto`, `utf-8`, `utf-8-bom`, `shift_jis`/`cp932`, `windows-1252`) on open, save, Save As, Save Bytes and Export as CSV. `auto` picks Shift-JIS only for a clean CP932 decode holding kana or two consecutive double-byte characters with no private-use characters, so a Windows-1252 file with `ß`/`Ä`/`é` is not mistaken for Japanese; UTF-8 without a BOM stays the default. The interface has no encoding picker yet, and IME input and CJK PDF export are unchanged |
 | 2026-10-19 | minor | Defined-name length counts characters, not bytes: Arabic names up to 255 letters are accepted, and Create from Selection keeps long Arabic headers |
 | 2026-10-19 | minor | Table names are limited to 255 Unicode characters |
 | 2026-10-19 | minor | Right-to-left sheets in legacy `.xls` files (common in older Arabic workbooks) open right-to-left |
