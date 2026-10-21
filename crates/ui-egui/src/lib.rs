@@ -654,7 +654,14 @@ impl SheetApp {
                         self.ui.language = l;
                         Ok(json!({"language": l}))
                     }
-                    None => Err(format!("unknown language {code:?} (use \"en\", \"es\", \"zh\", \"ja\", \"ko\", \"ru\", \"pt\" or \"cs\")")),
+                    //None => Err(format!("unknown language {code:?} (use \"en\", \"es\", \"zh\", \"ja\", \"ko\", \"ru\", \"pt\" or \"cs\")")),
+                    None => {
+                        // Build the list of valid language codes from Language::ALL so the
+                        // error message stays in sync when new languages are added.
+                        let supported = i18n::Language::ALL.iter().map(|l| l.code()).collect::<Vec<_>>().join(", ");
+
+                        Err(format!("unknown language {code:?} (use one of: {supported})"))
+                    }
                 }
             }
             "app.language.english" => {
@@ -1018,7 +1025,7 @@ impl SheetApp {
         else {
             return;
         };
-        let text = printing::feedback(&message, |label| self.ui.language.tr(label).to_owned());
+        let text = printing::feedback(&message, self.ui.language, |label| self.ui.language.tr(label).to_owned());
         if matches!(message, printing::Feedback::Submitted(_)) {
             self.toast = Some((text, now_ms()));
         } else {

@@ -13,6 +13,7 @@ mod cs;
 mod de;
 mod es;
 mod fr;
+mod it;
 mod ko;
 mod pt;
 mod ru;
@@ -35,10 +36,12 @@ pub enum Language {
     Cs,
     Fr,
     Sr,
+    It,
 }
 
 impl Language {
-    pub const ALL: [Self; 11] = [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr];
+    pub const ALL: [Self; 12] =
+        [Self::En, Self::Es, Self::Zh, Self::Ja, Self::Ko, Self::Ru, Self::PtBr, Self::De, Self::Cs, Self::Fr, Self::Sr, Self::It];
 
     /// The language's own name, shown in the switcher.
     pub fn name(self) -> &'static str {
@@ -54,6 +57,7 @@ impl Language {
             Self::Cs => "Čeština",
             Self::Fr => "Français",
             Self::Sr => "Srpski",
+            Self::It => "Italiano",
         }
     }
 
@@ -71,6 +75,7 @@ impl Language {
             Self::Cs => "cs",
             Self::Fr => "fr",
             Self::Sr => "sr",
+            Self::It => "it",
         }
     }
 
@@ -91,6 +96,7 @@ impl Language {
             "cs" => Some(Self::Cs),
             "fr" => Some(Self::Fr),
             "sr" => Some(Self::Sr),
+            "it" => Some(Self::It),
             _ => None,
         }
     }
@@ -129,8 +135,18 @@ impl Language {
             Self::Cs => cs::translate(text),
             Self::Fr => fr::translate(text),
             Self::Sr => sr::translate(text),
+            Self::It => it::translate(text),
         };
         translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+    }
+
+    pub(crate) fn tr_error(self, message: &str) -> String {
+        let message = if message.starts_with("command `") { crate::clean_error(message) } else { message.to_owned() };
+
+        let translated = self.tr(&message);
+        let fallback = message.rsplit_once('|').map_or(message.as_str(), |(_, label)| label);
+
+        if translated == fallback { message } else { translated.to_owned() }
     }
 }
 
@@ -617,6 +633,10 @@ mod tests {
         assert_eq!(Language::Ko.tr("Data"), "데이터");
         assert_eq!(Language::Ru.tr("Data"), "Данные");
         assert_eq!(Language::PtBr.tr("Data"), "Dados");
+        assert_eq!(Language::PtBr.tr_error("Select a chart first."), "Selecione um gráfico primeiro.");
+        assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
+        assert_eq!(Language::PtBr.tr_error("command `chart`: Select a chart first."), "Selecione um gráfico primeiro.");
+        assert_eq!(Language::PtBr.tr_error("Printer Office: permission denied"), "Printer Office: permission denied");
         assert_eq!(Language::Es.tr("Data"), "Datos");
         assert_eq!(Language::Es.tr("Freeze Panes"), "Inmovilizar paneles");
         assert_eq!(Language::Es.tr("Sheet1!A1"), "Sheet1!A1");
@@ -645,6 +665,11 @@ mod tests {
         assert_eq!(Language::Sr.tr("Page Layout|Orientation"), "Orijentacija");
         assert_eq!(Language::Sr.tr("Orientation"), "Orijentacija");
         assert_eq!(Language::parse("xx"), None);
+        assert_eq!(Language::It.tr("Data"), "Dati");
+        assert_eq!(Language::It.tr("Freeze Panes"), "Blocca riquadri");
+        assert_eq!(Language::It.tr("Sheet1!A1"), "Sheet1!A1");
+        assert_eq!(Language::It.tr("Page Layout|Orientation"), "Orientamento");
+        assert_eq!(Language::It.tr_error("Select a chart first."), "Seleziona prima un grafico.");
     }
 
     #[test]
@@ -738,6 +763,9 @@ mod tests {
         assert_eq!(Language::from_tag("sr-Latn-RS"), Some(Language::Sr));
         assert_eq!(Language::from_tag("sr-RS"), Some(Language::Sr));
         assert_eq!(Language::parse("sr"), Some(Language::Sr));
+        assert_eq!(Language::from_tag("it-IT"), Some(Language::It));
+        assert_eq!(Language::from_tag("it_IT"), Some(Language::It));
+        assert_eq!(Language::parse("it"), Some(Language::It));
     }
 
     #[test]

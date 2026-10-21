@@ -2612,7 +2612,7 @@ fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &
 fn spelling(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bool) {
     let r = d.result.clone().unwrap_or(Json::Null);
     if let Some(e) = r.get("error").and_then(Json::as_str) {
-        ui.label(crate::clean_error(e));
+        ui.label(app.ui.language.tr_error(e));
         return;
     }
     let issues = r["issues"].as_array().cloned().unwrap_or_default();

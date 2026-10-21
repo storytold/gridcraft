@@ -17,7 +17,7 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, translate
     };
     state.show(ui, egui::Id::new("gridcraft_print_settings"), discover, &labels);
     if let Some(message) = &state.message {
-        ui.label(feedback(message, translate));
+        ui.label(feedback(message, crate::i18n::current(ui.ctx()), translate));
     }
 }
 
@@ -84,7 +84,7 @@ pub fn settings(state: &mut State, params: &serde_json::Value, discover: Option<
     }))
 }
 
-pub fn feedback(message: &Feedback, translate: impl Fn(&str) -> String) -> String {
+pub fn feedback(message: &Feedback, language: crate::i18n::Language, translate: impl Fn(&str) -> String) -> String {
     match message {
         Feedback::FindingPrinters => translate("Finding printers…"),
         Feedback::NoPrinters => translate("No printers found. Configure a system printer or export a PDF."),
@@ -92,7 +92,7 @@ pub fn feedback(message: &Feedback, translate: impl Fn(&str) -> String) -> Strin
         Feedback::Submitting => translate("Submitting print job…"),
         Feedback::Submitted(receipt) if receipt.trim().is_empty() => translate("Print job submitted."),
         Feedback::Submitted(receipt) => translate("Print job submitted: {receipt}").replace("{receipt}", receipt),
-        Feedback::Failed(error) => translate("Print failed: {error}").replace("{error}", error),
+        Feedback::Failed(error) => translate("Print failed: {error}").replace("{error}", &language.tr_error(error)),
         Feedback::WorkerStopped => translate("Print failed: the printing worker stopped."),
     }
 }
