@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Canonical: {}", print_query(&query));
         }
         Err(query_error) => {
-            if starts_with_evaluate(text) {
+            if starts_as_query(text) {
                 return Err(query_error.into());
             }
             let expr = parse_expression(text)?;
@@ -38,6 +38,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn starts_with_evaluate(text: &str) -> bool {
-    tokenize(text).is_ok_and(|tokens| matches!(tokens.first().map(|token| &token.kind), Some(TokenKind::Evaluate)))
+/// Whether the input starts with a query-only keyword. A malformed `DEFINE` block must report
+/// the query parser's error instead of falling back to an expression parse.
+fn starts_as_query(text: &str) -> bool {
+    tokenize(text).is_ok_and(|tokens| match tokens.first().map(|token| &token.kind) {
+        Some(TokenKind::Evaluate) => true,
+        Some(TokenKind::Ident(word)) => word.eq_ignore_ascii_case("DEFINE"),
+        _ => false,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_only_keywords_stay_on_the_query_parser() {
+        assert!(starts_as_query("EVALUATE Sales"));
+        assert!(starts_as_query("DEFINE MEASURE Sales[M] = 1 EVALUATE Sales"));
+        assert!(starts_as_query("  define measure Sales[M] = 1"));
+        assert!(!starts_as_query("SUM(Sales[Amount])"));
+    }
 }
