@@ -112,12 +112,12 @@ fn binary_operators_associate_left_except_exponentiation() {
     let (op, left, right) = binary(&expr);
     assert_eq!(*op, BinaryOp::Sub);
     assert!(matches!(&left.kind, ExprKind::Binary { op: BinaryOp::Sub, .. }));
-    assert!(matches!(&right.kind, ExprKind::Literal(Literal::Number(n)) if *n == 3.0));
+    assert!(matches!(&right.kind, ExprKind::Literal(Literal::Integer(n)) if *n == 3));
 
     let expr = expression("2 ^ 3 ^ 2");
     let (op, left, right) = binary(&expr);
     assert_eq!(*op, BinaryOp::Pow);
-    assert!(matches!(&left.kind, ExprKind::Literal(Literal::Number(n)) if *n == 2.0));
+    assert!(matches!(&left.kind, ExprKind::Literal(Literal::Integer(n)) if *n == 2));
     assert!(matches!(&right.kind, ExprKind::Binary { op: BinaryOp::Pow, .. }));
 
     let expr = expression("1 / 2 / 3");
@@ -234,13 +234,13 @@ fn in_operator_with_lists_and_table_expressions() {
     let expr = expression("2 ^ 3 IN { 8 }");
     let (op, left, right) = binary(&expr);
     assert_eq!(*op, BinaryOp::Pow);
-    assert!(matches!(&left.kind, ExprKind::Literal(Literal::Number(n)) if *n == 2.0));
+    assert!(matches!(&left.kind, ExprKind::Literal(Literal::Integer(n)) if *n == 2));
     assert!(matches!(&right.kind, ExprKind::Binary { op: BinaryOp::In, .. }));
 
     let expr = expression("1 + 2 IN { 3 }");
     let (op, left, right) = binary(&expr);
     assert_eq!(*op, BinaryOp::Add);
-    assert!(matches!(&left.kind, ExprKind::Literal(Literal::Number(n)) if *n == 1.0));
+    assert!(matches!(&left.kind, ExprKind::Literal(Literal::Integer(n)) if *n == 1));
     assert!(matches!(&right.kind, ExprKind::Binary { op: BinaryOp::In, .. }));
 
     let expr = expression("1 IN { 1 } = TRUE");
@@ -290,10 +290,10 @@ fn strings_numbers_booleans_and_calls() {
         ("1", "1"),
         ("1.5", "1.5"),
         (".5", "0.5"),
-        ("1.", "1"),
-        ("1e3", "1000"),
+        ("1.", "1.0"),
+        ("1e3", "1000.0"),
         ("1.5E-3", "0.0015"),
-        ("0.000001", "0.000001"),
+        ("0.000001", "1e-6"),
         ("0", "0"),
         ("1000", "1000"),
         ("SUM()", "SUM()"),

@@ -72,7 +72,9 @@ fn ensure_depth(expr: &Expr) -> Result<(), ParseError> {
 
 fn describe(kind: &TokenKind) -> String {
     match kind {
-        TokenKind::Number(n) => format!("number `{n}`"),
+        TokenKind::Integer(n) => format!("integer literal `{n}`"),
+        TokenKind::Decimal(n) => format!("decimal literal `{n}`"),
+        TokenKind::DateTime(value) => format!("date/time literal `dt\"{value}\"`"),
         TokenKind::String(_) => "string literal".into(),
         TokenKind::Ident(s) => format!("`{s}`"),
         TokenKind::QuotedIdent(_) => "quoted identifier".into(),
@@ -208,7 +210,9 @@ impl Parser {
     fn prefix(&mut self) -> Result<Expr, ParseError> {
         let token = self.next();
         match token.kind {
-            TokenKind::Number(n) => Ok(Expr::literal(Literal::Number(n), token.span)),
+            TokenKind::Integer(n) => Ok(Expr::literal(Literal::Integer(n), token.span)),
+            TokenKind::Decimal(n) => Ok(Expr::literal(Literal::Decimal(n), token.span)),
+            TokenKind::DateTime(value) => Ok(Expr::literal(Literal::DateTime(value), token.span)),
             TokenKind::String(s) => Ok(Expr::literal(Literal::String(s), token.span)),
             TokenKind::Ident(word) => self.prefix_ident(word, token.span),
             TokenKind::QuotedIdent(word) => {

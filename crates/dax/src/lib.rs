@@ -1,8 +1,9 @@
-//! The DAX language: tokenizer, syntax tree, Pratt parser and canonical printer.
+//! The DAX language: tokenizer, syntax tree, Pratt parser, canonical printer and static types.
 //!
-//! This crate covers the DAX expression grammar, the aggregation function catalog and static
-//! call validation, and for now the query form `EVALUATE <expression>`. The data-type and
-//! statement PRs add type coercion and extend [`Query`] with `DEFINE`/`VAR` clauses.
+//! This crate covers the DAX expression grammar, the aggregation function catalog with static
+//! call validation, the static type surface (literal classification, inference and the documented
+//! operator result tables) and, for now, the query form `EVALUATE <expression>`. It does not
+//! evaluate expressions. Later PRs extend [`Query`] with `DEFINE`/`VAR` clauses.
 //!
 //! ```
 //! use gridcraft_dax::{parse_expression, print_expression};
@@ -19,9 +20,10 @@ pub mod functions;
 pub mod lexer;
 pub mod parser;
 pub mod printer;
+pub mod types;
 pub mod validate;
 
-pub use ast::{BinaryOp, Call, Expr, ExprKind, Literal, Name, NameRef, NameStyle, Query, Span, UnaryOp};
+pub use ast::{BinaryOp, Call, DateTimeLiteral, Expr, ExprKind, Literal, Name, NameRef, NameStyle, Query, Span, UnaryOp};
 pub use functions::{
     BlankPolicy, CATALOG, FunctionCategory, FunctionFlags, FunctionSpec, Overload, ParamKind, Parameter, ReturnType, catalog, lookup,
 };

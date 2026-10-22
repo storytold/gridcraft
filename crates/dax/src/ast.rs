@@ -35,10 +35,52 @@ impl Span {
     }
 }
 
+/// A `dt"..."` date/time literal.
+///
+/// Components are validated when the literal is lexed. The `has_time` flag distinguishes
+/// `dt"2023-05-19"` from `dt"2023-05-19T00:00:00"`, which are different literal forms even
+/// though they denote the same serial value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DateTimeLiteral {
+    pub year: u32,
+    pub month: u32,
+    pub day: u32,
+    pub hour: u32,
+    pub minute: u32,
+    pub second: u32,
+    pub has_time: bool,
+}
+
+impl DateTimeLiteral {
+    /// Canonical `YYYY-MM-DD` / `YYYY-MM-DDThh:mm:ss` text, without the `dt` prefix or quotes.
+    pub fn canonical(self) -> String {
+        format!("{self}")
+    }
+}
+
+impl std::fmt::Display for DateTimeLiteral {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:04}-{:02}-{:02}", self.year, self.month, self.day)?;
+        if self.has_time {
+            write!(f, "T{:02}:{:02}:{:02}", self.hour, self.minute, self.second)?;
+        }
+        Ok(())
+    }
+}
+
 /// A DAX literal value.
+///
+/// Integer and Decimal are distinct literal kinds (not one numeric kind): `42` is an
+/// [`Literal::Integer`] and `42.0`, `42e0` are [`Literal::Decimal`] values. The sign of a
+/// negative number is the unary `-` operator, never part of the literal.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Literal {
-    Number(f64),
+    /// A 64-bit signed integer literal such as `42`.
+    Integer(i64),
+    /// An IEEE-754 double literal written with a decimal point or exponent: `3.14`, `.5`, `1e3`.
+    Decimal(f64),
+    /// A `dt"..."` literal.
+    DateTime(DateTimeLiteral),
     String(String),
     Boolean(bool),
 }

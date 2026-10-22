@@ -1,8 +1,9 @@
 # gridcraft-dax
 
 The DAX language for GridCraft: a tokenizer, a Pratt parser, a syntax tree, a canonical printer
-and the aggregation function catalog with static call validation. This crate is the foundation
-for later DAX PRs (data types and statements). It has no evaluator and no engine dependency.
+the aggregation function catalog with static call validation, and the static type surface
+(types, literals, inference and operator result tables). This crate is the foundation for the
+statement PR. It has no evaluator and no engine dependency.
 
 ```rust
 use gridcraft_dax::{parse_expression, print_expression};
@@ -25,11 +26,13 @@ assert_eq!(gridcraft_dax::print_query(&query), "EVALUATE SUM('Sales'[Amount])");
 | `print_query(&Query) -> String` | Canonical query text. |
 | `tokenize(&str) -> Result<Vec<Token>, LexError>` | Tokens with byte spans, including `Eof`. |
 | `ParseError { message, span }` / `LexError { message, span }` | `Display + std::error::Error`; the lexer error converts with `From`. |
-| `ast::{Expr, ExprKind, Literal, Name, NameRef, NameStyle, Call, UnaryOp, BinaryOp, Span, Query}` | Syntax tree. |
+| `ast::{Expr, ExprKind, Literal, DateTimeLiteral, Name, NameRef, NameStyle, Call, UnaryOp, BinaryOp, Span, Query}` | Syntax tree. |
 | `functions::{catalog, lookup}` | The 22 aggregation functions, looked up case-insensitively. |
 | `functions::{FunctionSpec, FunctionCategory, ParamKind, ReturnType, BlankPolicy, FunctionFlags, Parameter, Overload}` | Catalog record types. |
 | `validate_call(&Call) -> Vec<ValidationError>` | Arity/kind checks for one call; empty for valid or unknown functions. |
 | `validate_expression(&Expr) -> Vec<ValidationError>` | Walks the tree and reports every invalid known-function call with its span. |
+| `types::{DataType, PseudoType, InferredType, TypeMetadata, TypeError}` | The eight DAX types, the BLANK/Table pseudo-types, inference results and static type errors. |
+| `types::{literal_type, infer_type, unary_type, binary_type, arithmetic_type, comparison_coercion, comparison_compatible, comparison_type}` | Literal classification, static inference and the documented operator/coercion tables. |
 | `MAX_INPUT_LEN` (8192 bytes) / `MAX_DEPTH` (256) | Limits enforced with errors. |
 
 ### Syntax tree
@@ -37,7 +40,9 @@ assert_eq!(gridcraft_dax::print_query(&query), "EVALUATE SUM('Sales'[Amount])");
 ```text
 Expr { kind: ExprKind, span: Span }
 ExprKind =
-    Literal(Literal)                     Number(f64) | String(String) | Boolean(bool)
+    Literal(Literal)                     Integer(i64) | Decimal(f64)
+                                         | DateTime(DateTimeLiteral)
+                                         | String(String) | Boolean(bool)
   | Name(NameRef)                        table: Option<Name>, name: Name
   | Call(Call)                           name: Name, args: Vec<Expr>
   | Unary { op, expr }                   op: UnaryOp (Plus | Neg | Not)
@@ -63,7 +68,8 @@ Parentheses are grouping, not AST nodes. A parenthesised comma list is a `Tuple`
 ```text
 expression   := prefix (binary_operator prefix)*        -- precedence-climbing, see the table
 prefix       := "+" prefix | "-" prefix | NOT prefix | primary
-primary      := NUMBER | STRING | TRUE | FALSE
+primary      := INTEGER | DECIMAL | STRING | TRUE | FALSE
+              | dt STRING                            -- validated date/time literal
               | name
               | name "(" [ expression ("," expression)* ] ")"
               | table-qualified-name
@@ -88,7 +94,19 @@ table below rather than a fixed grammar cascade.
 - Single-quoted table identifiers double an embedded quote: `'It''s'`.
 - Bracketed columns double an embedded `]`: `[A]]B]`.
 - String literals double an embedded quote: `"a""b"`.
-- Number literals: `1`, `1.5`, `.5`, `1.`, and exponents `1e3`, `1.5E-3`. Values must be finite.
+- Number literals are typed: a digit-only literal is an `Integer` (`42`, parsed as `i64`), while
+  a decimal point or exponent is a `Decimal` (`3.14`, `.5`, `1.`, `1e3`, `1.5E-3`, parsed as
+  `f64`). The sign is the unary operator, never part of the token. Values must be finite; an
+  integer that does not fit `i64`, or a decimal that overflows `f64`, is a lexer error with a
+  span. `Decimal` printing always keeps a decimal point or exponent (`1000.0`, `1e-6`) so the
+  text re-lexes as a `Decimal`.
+- Date/time literals are `dt"YYYY-MM-DD"`, `dt"YYYY-MM-DDThh:mm:ss"` and
+  `dt"YYYY-MM-DD hh:mm:ss"`. The `dt` prefix is matched case-insensitively but must be adjacent
+  to the quote; the printer emits lowercase `dt` and padded components. Unpadded month/day/time
+  components are accepted (`dt"2015-1-9T2:3:0"`). Timezone offsets, fractional seconds,
+  time-only forms, wrong-case `t`, and invalid calendar dates (including non-leap `1900-02-29`)
+  are lexer errors.
+- `BLANK` is an ordinary identifier. `BLANK()` is a zero-argument call; there is no BLANK literal.
 - Comments: `// line`, `-- line`, and `/* block */` (blocks do not nest).
 
 ## Operators
@@ -117,13 +135,52 @@ Excel evaluates `2^3^2` as `512` (`2^(3^2)`), so `^` is right-associative even t
 DAX Guide note says operators of equal precedence go left to right. Unary minus binds looser than
 `^`: `-2^2` parses as `-(2^2)`.
 
+## Data types and static inference
+
+`types::DataType` is exactly the eight dax.guide types: `Binary`, `Boolean`, `Currency`,
+`DateTime`, `Decimal`, `Integer`, `String`, `Variant`. `PseudoType` adds the two Microsoft DAX
+types that are not in that list, `Blank` and `Table`; they are inference results, not
+`DataType` variants. Each type (including the pseudo-types) has a `TypeMetadata` row with its
+internal representation, literal syntax (or `None`), range, precision and notes. Literal
+availability is `Boolean`, `DateTime`, `Decimal`, `Integer`, `String`; `Binary`, `Currency` and
+`Variant` have no literal, and neither does BLANK (`BLANK()` is a function).
+
+`literal_type(&Literal)` maps a literal to its `DataType`. `infer_type(&Expr) ->
+Result<InferredType, TypeError>` infers literals, unary `+`/`-`/`NOT`, binary operators,
+`TRUE()`/`FALSE()`/`BLANK()` calls, and table constructors. Name references and other function
+calls return `InferredType::Unknown` because they need the model or a function catalog. `Unknown`
+is not a DAX type; it is the absence of static information.
+
+The arithmetic and comparison result tables are transcribed from the published DAX operator
+reference for `Integer`, `Currency`, `Decimal` ("Real") and `DateTime`:
+`arithmetic_type` implements `+`, `-`, `*`, `/` and `^` (a double). The quirks are preserved
+rather than normalised: `Integer * DateTime -> Integer`, `Currency * Currency -> Decimal`,
+`DateTime - DateTime -> DateTime`, and a `DateTime` on the left of `*` has no published row and is
+a `TypeError`. `&` yields `String`; `&&`, `||`, comparisons and `IN` yield `Boolean`; unary `+`
+and `-` preserve the numeric type. `Variant` propagates, and BLANK stays polymorphic (for example
+`BLANK() + 5` is `Integer` while `BLANK() * 5` is `Blank`).
+
+`comparison_coercion` models `=`, `<>` and ordering: BLANK is coerced to `0`, `""` or `FALSE` for
+the other operand's type, and String/Boolean compared with a numeric type is a `TypeError` (the
+engine errors; dax.guide also documents a conflicting type rank). `comparison_compatible` and
+`comparison_type` also cover `==`, which is strict and does not coerce BLANK. Excel's embedded
+engine rejects `==` altogether, but dax.guide documents it and this crate parses it.
+
+This is static typing only. Text-to-number/date/Boolean parsing, BLANK substitution and truth
+tables, `5/BLANK()` (Infinity), `0/BLANK()` (NaN), Currency rounding, runtime integer overflow,
+IEEE equality and string collation belong to the evaluator. The module documentation lists the
+documented conflicts (Currency/Integer endpoints, the DateTime minimum, mixed-type comparisons,
+and `dt` literal engine support) instead of hiding them behind one total order.
+
 ## Limits, errors and printing
 
 Input is capped at 8192 bytes and expression nesting at 256 levels; both produce an error, never a
 stack overflow. The printer and `Expr::walk` use explicit stacks, and the parser's binary loop is
 iterative for left-associated chains.
 
-Errors carry `message` and a byte `span`; `Display` includes both. The canonical printer uses
+Numeric literal overflow (an integer outside `i64`, or a decimal outside finite `f64`) and invalid
+date/time literals are lexer errors with the literal's span. Errors carry `message` and a byte
+`span`; `Display` includes both. The canonical printer uses
 spaces around binary operators, `, ` between arguments/items, and adds parentheses only where
 precedence or associativity requires them. Re-parsing canonical text yields the same AST.
 
@@ -201,6 +258,8 @@ recorded for documentation and future type checking, so the third `Variant` argu
 - The lexer already emits `=>` (`TokenKind::Arrow`) for user-defined functions.
 - `Call`, `NameRef` and `NameStyle` keep spelling/quoting so catalog and type work can resolve
   names without re-lexing.
+- `types::infer_type` deliberately knows only `TRUE()`, `FALSE()` and `BLANK()`. The function
+  PR supplies signatures for everything else; `InferredType::Unknown` marks those calls today.
 
 ## Example
 

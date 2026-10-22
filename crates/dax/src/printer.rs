@@ -61,8 +61,16 @@ fn write_name_ref(out: &mut String, name: &NameRef) {
 
 fn write_literal(out: &mut String, literal: &Literal) {
     match literal {
-        Literal::Number(n) => {
+        Literal::Integer(n) => {
             let _ = write!(out, "{n}");
+        }
+        Literal::Decimal(n) => {
+            // `Debug` keeps a decimal point (`1000.0`) or an exponent (`1e300`) for every finite
+            // value, so the printed text re-lexes as a Decimal instead of an Integer.
+            let _ = write!(out, "{n:?}");
+        }
+        Literal::DateTime(value) => {
+            let _ = write!(out, "dt\"{value}\"");
         }
         Literal::String(s) => write_quoted(out, s, '"'),
         Literal::Boolean(true) => out.push_str("TRUE"),
