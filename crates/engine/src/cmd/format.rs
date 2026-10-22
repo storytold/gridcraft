@@ -1123,7 +1123,8 @@ fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(si) else { return Ok(Json::Null) };
         let mut widths = Vec::new();
-        let mut measured: std::collections::HashMap<StyleId, std::collections::HashMap<String, f32>> = Default::default();
+        // Keyed by style and boldness: a table's style can make a cell bold (its header row).
+        let mut measured: std::collections::HashMap<(StyleId, bool), std::collections::HashMap<String, f32>> = Default::default();
         let mut distinct = 0usize;
         let used = sh.used_range();
         for (a, b) in lines {
@@ -1137,22 +1138,26 @@ fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
                     }
                     let id = sh.style_id(cell);
                     let st = cx.wb.styles.get(id);
+                    // The font as the grid draws the cell: in a table, the table style's (a bold
+                    // header row), not only the cell's own.
+                    let table_font = sh.table_at(cell).map(|t| crate::tables::table_cell_style(&cx.wb, si, t, cell).font);
+                    let font = table_font.as_ref().unwrap_or(&st.font);
                     let text = crate::display::cell_text(&cx.wb, sh, cell);
                     for line in text.lines() {
                         let w = match &measure {
                             Some(m) => {
-                                let known = measured.entry(id).or_default();
+                                let known = measured.entry((id, font.bold)).or_default();
                                 match known.get(line) {
                                     Some(w) => *w,
                                     None => {
-                                        let w = m(line, &st.font, distinct < EXACT_TEXT_WIDTHS);
+                                        let w = m(line, font, distinct < EXACT_TEXT_WIDTHS);
                                         known.insert(line.to_owned(), w);
                                         distinct += 1;
                                         w
                                     }
                                 }
                             }
-                            None => approx_text_width(line, st.font.size, st.font.bold),
+                            None => approx_text_width(line, font.size, font.bold),
                         };
                         max = max.max(w + 6.0 + st.align.indent as f32 * 9.0 + sh.filter_button_space(cell));
                     }
@@ -1272,6 +1277,20 @@ mod tests {
         // The style's own snake_case keys keep working.
         s.execute("home.formatCells", json!({"range": "A1", "style": {"num_fmt": "0.00"}})).unwrap();
         assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["num_fmt"], "0.00");
+    }
+
+    /// A table draws its header row bold; AutoFit measures that, not the cell's own plain font.
+    #[test]
+    fn autofit_measures_a_table_header_in_the_table_style_font() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let heading = "Quarterly Revenue by Region";
+        s.execute("range.setValues", json!({"range": "A1", "values": [[heading, heading], [1, 1]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:A2", "header": true})).unwrap();
+        s.execute("home.autofitColumnWidth", json!({"cols": "A:B"})).unwrap();
+        let sh = s.active().unwrap().wb.active().unwrap();
+        let (table, plain) = (sh.col_width(0) - sh.filter_button_space(CellRef::new(0, 0)), sh.col_width(1));
+        assert!(table > plain, "the bold table header is wider than the same plain text: {table} vs {plain}");
     }
 
     #[test]
