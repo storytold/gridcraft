@@ -171,10 +171,8 @@ pub(crate) fn edate(serial: f64, months: i64) -> f64 {
 
 /// The local date as an Excel serial (TODAY).
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(clippy::disallowed_methods)] // wasm has no clock; this branch never compiles for it
 pub(crate) fn today_serial() -> f64 {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();
-    (now / 86_400.0).floor() + 25569.0
+    now_serial().floor()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -185,15 +183,47 @@ pub(crate) fn today_serial() -> f64 {
 
 /// The local date and time as an Excel serial (NOW).
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(clippy::disallowed_methods)]
 pub(crate) fn now_serial() -> f64 {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();
-    now / 86_400.0 + 25569.0
+    use chrono::{Datelike, Timelike};
+    let now = chrono::Local::now();
+    date_serial(
+        i64::from(now.year()),
+        i64::from(now.month()),
+        i64::from(now.day()),
+        i64::from(now.hour()),
+        i64::from(now.minute()),
+        i64::from(now.second()),
+    ) + f64::from(now.nanosecond()) / 86_400_000_000_000.0
 }
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn now_serial() -> f64 {
     25569.0
+}
+
+/// The UTC date and time as an Excel serial (UTCNOW).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn utc_now_serial() -> f64 {
+    use chrono::{Datelike, Timelike};
+    let now = chrono::Utc::now();
+    date_serial(
+        i64::from(now.year()),
+        i64::from(now.month()),
+        i64::from(now.day()),
+        i64::from(now.hour()),
+        i64::from(now.minute()),
+        i64::from(now.second()),
+    ) + f64::from(now.nanosecond()) / 86_400_000_000_000.0
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn utc_now_serial() -> f64 {
+    25569.0
+}
+
+/// The UTC date at midnight as an Excel serial (UTCTODAY).
+pub(crate) fn utc_today_serial() -> f64 {
+    utc_now_serial().floor()
 }
 
 pub(crate) fn round_to(value: f64, digits: i32) -> f64 {

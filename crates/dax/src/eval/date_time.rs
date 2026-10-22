@@ -421,37 +421,25 @@ fn holiday_days(table: &TableValue) -> Result<BTreeSet<i64>, EvalError> {
 // Clock
 // ---------------------------------------------------------------------------------------------
 
-/// `NOW ()` — the current date and time. The clock is read once per evaluation.
-///
-/// The crate has no timezone database (and forbids `unsafe` FFI), so the host clock is the only
-/// source of wall-clock time: `NOW` and `UTCNOW` agree, and differ only where the host process
-/// supplies a local offset.
+/// `NOW ()` — the current date and time. The clock is read once per evaluation and uses the
+/// host's local timezone, as Excel does.
 fn now() -> Result<Scalar, EvalError> {
     Ok(Scalar::DateTime(support::now_serial()))
 }
 
-/// `TODAY ()` — the current date at midnight.
+/// `TODAY ()` — the current local date at midnight.
 fn today() -> Result<Scalar, EvalError> {
     Ok(Scalar::DateTime(support::today_serial()))
 }
 
 /// `UTCNOW ()` — the current Coordinated Universal Time date and time.
 fn utc_now() -> Result<Scalar, EvalError> {
-    Ok(Scalar::DateTime(epoch_day_fraction()))
+    Ok(Scalar::DateTime(support::utc_now_serial()))
 }
 
 /// `UTCTODAY ()` — the current UTC date at midnight.
 fn utc_today() -> Result<Scalar, EvalError> {
-    Ok(Scalar::DateTime(epoch_day_fraction().floor()))
-}
-
-/// Seconds since the Unix epoch as an Excel serial (25569 days from 1899-12-30 to 1970-01-01).
-// The system clock is the only time source: the crate has no timezone database and forbids
-// `unsafe` FFI, so the host clock is read directly here (as `support` does for NOW/TODAY).
-#[allow(clippy::disallowed_methods)]
-fn epoch_day_fraction() -> f64 {
-    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|duration| duration.as_secs_f64()).unwrap_or(0.0);
-    seconds / 86_400.0 + 25_569.0
+    Ok(Scalar::DateTime(support::utc_today_serial()))
 }
 
 // ---------------------------------------------------------------------------------------------

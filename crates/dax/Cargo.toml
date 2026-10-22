@@ -13,5 +13,10 @@ quick-xml = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 
+# NOW/TODAY need the host's local offset. The web build has no clock and uses the fixed fallback
+# in `eval/support.rs`, so the dependency is native-only.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
 [dev-dependencies]
 serde_json = { workspace = true }
