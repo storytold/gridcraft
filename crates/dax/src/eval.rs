@@ -765,7 +765,26 @@ impl<'a> Evaluator<'a> {
                 }
                 Ok(())
             }
-            BoundExpr::Call { spec, .. } if spec.name == "KEEPFILTERS" => Ok(()),
+            BoundExpr::Call { spec, args } if spec.name == "KEEPFILTERS" => {
+                // KEEPFILTERS intersects its filter with the filters already in context instead of
+                // replacing them; dropping the argument silently would ignore the filter.
+                let Some(inner) = args.first() else {
+                    return Err(EvalError::new("KEEPFILTERS needs a filter"));
+                };
+                let mut narrowed = filters.clone();
+                self.apply_filter(inner, &mut narrowed, ctx)?;
+                for (key, keys) in narrowed.filters {
+                    let merged = match filters.filters.get(&key) {
+                        Some(existing) => existing.intersection(&keys).cloned().collect(),
+                        None => keys,
+                    };
+                    filters.set(key.0, key.1, merged);
+                }
+                for (key, state) in narrowed.relationships {
+                    filters.relationships.insert(key, state);
+                }
+                Ok(())
+            }
             _ => {
                 // A table expression filter replaces the existing filters on its table (that is
                 // what makes `CALCULATE(expr, PREVIOUSMONTH(Date[Date]))` override a Month

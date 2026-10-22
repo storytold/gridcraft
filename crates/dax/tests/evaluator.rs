@@ -142,6 +142,7 @@ fn calculate_accepts_filter_table_arguments() {
     assert_eq!(eval("CALCULATE([Total Sales], Sales[Amount] >= 20)"), Scalar::Decimal(50.0));
     assert_eq!(eval("CALCULATE([Total Sales], 20 <= Sales[Amount])"), Scalar::Decimal(50.0));
     assert_eq!(eval("CALCULATE([Total Sales], Sales[Amount] < 20)"), Scalar::Decimal(10.0));
+    assert_eq!(eval("CALCULATE([Total Sales], KEEPFILTERS(Sales[Region] = \"East\"))"), Scalar::Decimal(40.0));
 }
 
 #[test]
