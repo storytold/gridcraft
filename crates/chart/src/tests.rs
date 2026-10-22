@@ -1360,6 +1360,42 @@ fn a_combo_charts_secondary_series_keep_the_forward_axes() {
 }
 
 #[test]
+fn reversed_categories_keep_a_combo_primary_bar_off_the_secondary_slot() {
+    let (cp, cs) = ([20, 96, 130, 255], [200, 80, 40, 255]);
+    let d = ChartData {
+        palette: vec![],
+        category_levels: vec![],
+        categories: ["Q1", "Q2", "Q3"].map(String::from).to_vec(),
+        series: vec![
+            series("North", &[12000.0, 23000.0, 18000.0], cp, ChartKind::ColumnClustered),
+            SeriesData { secondary: true, ..series("East", &[9000.0, 11000.0, 8000.0], cs, ChartKind::ColumnClustered) },
+        ],
+    };
+    let mut c = chart(ChartKind::Combo);
+    c.data_labels = false;
+    c.cat_reverse = true;
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    // The bars, left to right per fill: wide rects only, the legend swatches are small.
+    let bars = |color: Rgba| -> Vec<(f32, f32)> {
+        prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Rect { x, w, fill, .. } if *fill == Some(color) && *w > 20.0 => Some((*x, *x + *w)),
+                _ => None,
+            })
+            .collect()
+    };
+    let (p, s) = (bars(cp), bars(cs));
+    assert_eq!(p.len(), 3, "primary bars: {p:?}");
+    assert_eq!(s.len(), 3, "secondary bars: {s:?}");
+    // A mirrored primary slot must stay its own: the secondary slot is not free to land on.
+    for (j, (a, b)) in p.iter().zip(&s).enumerate() {
+        assert!(a.1 <= b.0 + 0.01 || b.1 <= a.0 + 0.01, "category {j}: bars overlap: {a:?} and {b:?}");
+    }
+    assert_sane(&prims, 640.0, 400.0);
+}
+
+#[test]
 fn reversed_area_labels_sit_outside_the_area() {
     let d = ChartData {
         palette: vec![],

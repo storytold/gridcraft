@@ -1053,6 +1053,10 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         }
     }
     let nslots = slot_keys.len().max(1) as f32;
+    // A cluster's slots mirror with the categories, but only the primary ones: the secondary axes are
+    // read and written forward, so flipping across every slot would put a primary bar on top of a
+    // secondary one instead of beside it (#1895 review).
+    let prim_slots: Vec<usize> = (0..slot_keys.len()).filter(|k| !slot_keys[*k].0).collect();
     let bw = cw / (nslots + 1.5);
     let labels_on = chart.data_labels && ncat <= MAX_LABELS;
     // Area labels wait until every area is filled, so a later (stacked) area can't paint over them.
@@ -1117,8 +1121,11 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                 1 => {
                     // A reversed category axis mirrors the whole frame, so a cluster's slots flip too:
                     // Excel draws the second series left of the first (#1895 review).
-                    let k = slot_of.get(i).copied().unwrap_or(0) as f32;
-                    let k = if rev_cat { nslots - 1.0 - k } else { k };
+                    let k = slot_of.get(i).copied().unwrap_or(0);
+                    // The mirrored slot is the one opposite it among the primary slots, not the one
+                    // opposite it among all of them (#1895 review).
+                    let k =
+                        if rev_cat { prim_slots.iter().position(|s| *s == k).map_or(k, |p| prim_slots[prim_slots.len() - 1 - p]) } else { k } as f32;
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
                         let (pb, pt) = (vpos(*b, &sc, rev), vpos(*t, &sc, rev));
