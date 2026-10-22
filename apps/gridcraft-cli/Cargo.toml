@@ -21,3 +21,6 @@ log = { workspace = true }
 # `check`: validating the packages GridCraft writes (content types, relationships).
 zip = { workspace = true }
 quick-xml = { workspace = true }
+
+[dev-dependencies]
+gridcraft-odbc = { workspace = true }

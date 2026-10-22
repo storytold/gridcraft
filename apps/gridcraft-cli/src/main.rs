@@ -151,7 +151,32 @@ impl Args {
 // ---------------------------------------------------------------- helpers
 
 fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
-    let r = s.execute_headless(id, params).map_err(|e| e.to_string());
+    let mut r = s.execute_headless(id, params).map_err(|e| e.to_string());
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::disallowed_methods)] // Native-only CLI polling uses a monotonic deadline.
+    if matches!(id, "data.fromOdbc" | "data.odbcPreview" | "data.odbcTest" | "data.refreshQuery" | "data.refreshAll")
+        && let Ok(result) = &r
+        && let Some(job) = result.get("jobId").and_then(Value::as_str).map(str::to_string)
+    {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(if id == "data.refreshAll" { 64 * 90 } else { 300 });
+        r = loop {
+            let status = s.execute_headless("data.odbcStatus", json!({"jobId":job})).map_err(|e| e.to_string())?;
+            match status["state"].as_str().unwrap_or("") {
+                "ready" => break s.execute_headless("data.odbcApply", json!({"jobId":job})).map_err(|e| e.to_string()),
+                "completed" => break Ok(status),
+                "failed" => break Err(status["error"].as_str().unwrap_or("ODBC query failed.").to_string()),
+                "cancelled" => break Err("ODBC query was cancelled.".into()),
+                "running" => {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = s.execute_headless("data.odbcCancel", json!({"jobId":job}));
+                        break Err("ODBC driver timed out; cancellation was requested.".into());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                _ => break Err("ODBC job returned an invalid status.".into()),
+            }
+        };
+    }
     if id == "file.open"
         && let Ok(value) = &r
         && let Some(warnings) = value.get("warnings").and_then(Value::as_array)
@@ -555,6 +580,36 @@ fn send(args: &[String]) -> Result<(), String> {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn odbc_cli_finishes_the_import_before_the_workbook_is_saved() {
+        use gridcraft_odbc::*;
+        struct Database;
+        impl Backend for Database {
+            fn sources(&self) -> Result<Sources, OdbcError> {
+                Ok(Sources { data_sources: vec![], drivers: vec![] })
+            }
+            fn test(&self, _: &Connection) -> Result<(), OdbcError> {
+                Ok(())
+            }
+            fn query(&self, _: &Connection, _: &str, _: Limits, _: bool, _: &std::sync::atomic::AtomicBool) -> Result<DataSet, OdbcError> {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                Ok(DataSet {
+                    columns: vec![Column { name: "Value".into(), kind: ColumnKind::Text }],
+                    rows: vec![vec![gridcraft_engine::core::Value::text("=1")]],
+                    truncated: false,
+                })
+            }
+        }
+        let mut session = blank();
+        session.odbc = gridcraft_engine::odbc::OdbcManager::new(std::sync::Arc::new(Database));
+        let result = exec(&mut session, "data.fromOdbc", json!({"dsn":"Postgres", "sql":"SELECT 1"})).unwrap();
+        assert_eq!(result["rows"], 1);
+        assert!(result.get("jobId").is_none());
+        let saved = exec(&mut session, "file.saveBytes", json!({"format":"xlsx"})).unwrap();
+        assert!(saved["base64"].as_str().is_some_and(|s| !s.is_empty()));
+        assert_eq!(session.doc().unwrap().wb.active().unwrap().tables[0].range.a1(), "A1:A2");
+    }
 
     #[test]
     fn parses_commands() {

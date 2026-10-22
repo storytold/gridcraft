@@ -97,7 +97,7 @@ impl Dialog {
         }
     }
 
-    fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
+    pub(crate) fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
             title: title.into(),
@@ -123,6 +123,8 @@ impl Dialog {
         let p = |k: &str| params.get(k).cloned().unwrap_or(Json::Null);
         use Field::*;
         let d = match name {
+            "odbc" => crate::odbc::dialog(app, params.clone()),
+            "queriesConnections" => Dialog::custom("queriesConnections", "Queries & Connections", json!({})),
             "insertCells" => Dialog::form(
                 "insertCells",
                 "Insert",
@@ -1148,6 +1150,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
+        "odbc" | "queriesConnections" => 620.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
@@ -1173,6 +1176,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     window.show(ctx, |ui| {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
+                "odbc" => crate::odbc::show(app, ui, &mut d, &mut open),
+                "queriesConnections" => crate::odbc::connections(app, ui),
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
                 "advancedFilter" => advanced_filter_form(ui, &mut d, &mut confirm, &mut open),
@@ -1399,6 +1404,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
     if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {
         open = false;
+    }
+    if !open && matches!(d.name.as_str(), "odbc" | "queriesConnections") {
+        crate::odbc::cancel(app);
     }
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));

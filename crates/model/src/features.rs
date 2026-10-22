@@ -93,6 +93,45 @@ pub struct Table {
     /// The connection (`xl/connections.xml`) an XML table is bound through.
     #[serde(default)]
     pub connection_id: Option<u32>,
+    /// GridCraft's refresh definition; opening a workbook never executes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<QuerySource>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuerySource {
+    pub dsn: Option<String>,
+    pub connection_ref: String,
+    pub sql: String,
+    pub max_rows: u32,
+    pub fingerprint: String,
+    #[serde(default)]
+    pub column_types: Vec<String>,
+}
+
+impl QuerySource {
+    pub const EXTENSION_URI: &'static str = "{6CCD98E4-6E9C-4F4A-9C93-B1DA490DC66F}";
+    pub fn valid(&self) -> bool {
+        !self.sql.trim().is_empty()
+            && self.sql.len() <= 1_000_000
+            && !self.sql.chars().any(|c| c.is_control() && !matches!(c, '\r' | '\n' | '\t'))
+            && !self.connection_ref.is_empty()
+            && self.connection_ref.len() <= 128
+            && self.connection_ref.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            && self.max_rows > 0
+            && self.max_rows <= 100_000
+            && self.fingerprint.len() <= 32
+            && self.fingerprint.bytes().all(|b| b.is_ascii_hexdigit())
+            && self.dsn.as_ref().is_none_or(|s| {
+                !s.trim().is_empty()
+                    && s.trim() == s
+                    && s.encode_utf16().count() <= 32
+                    && !s.chars().any(|c| c.is_control() || "[]{}(),;?*=!@\\".contains(c))
+            })
+            && self.column_types.len() <= 256
+            && self.column_types.iter().all(|s| matches!(s.as_str(), "Text" | "Integer" | "Decimal" | "Float" | "Boolean" | "Temporal"))
+    }
 }
 
 impl Table {

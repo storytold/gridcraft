@@ -340,6 +340,7 @@ fn sample() -> Workbook {
         ],
         table_type: None,
         connection_id: None,
+        query: None,
     });
     let png = b"\x89PNG\r\n\x1a\n0000IHDRfake".to_vec();
     s.images.push(Image {
@@ -837,6 +838,7 @@ fn writing_repairs_invalid_models() {
         filter: vec![],
         table_type: None,
         connection_id: None,
+        query: None,
     });
     s.cells.set(at("B2"), Cell { value: Value::Number(1.0), formula: None, style: StyleId(9999) });
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
@@ -1116,6 +1118,7 @@ fn table_newline_column_and_backslash_name_survive() {
         filter: vec![],
         table_type: None,
         connection_id: None,
+        query: None,
     });
     s.cells.set(at("D1"), Cell::formula(Formula::new("COUNTA(\\_Prime.1[Name])")));
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
@@ -1159,6 +1162,7 @@ fn header_and_totals_table_without_data_row_survives() {
         filter: vec![],
         table_type: None,
         connection_id: None,
+        query: None,
     });
     let (back, report) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);

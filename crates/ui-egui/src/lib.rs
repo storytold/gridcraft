@@ -23,6 +23,7 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+mod odbc;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -293,6 +294,7 @@ pub struct SheetApp {
     /// Enter on that cell goes to the next row in the starting column, as in Excel (#911).
     tab_run: Option<(u64, usize, u32, CellRef)>,
     pub started: f64,
+    pub(crate) odbc: odbc::State,
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
@@ -341,6 +343,7 @@ impl SheetApp {
             cut_text: None,
             tab_run: None,
             started: now_ms(),
+            odbc: Default::default(),
             allow_close: false,
         }
     }
@@ -417,6 +420,9 @@ impl SheetApp {
             return r;
         }
         let r = self.session.run(id, params);
+        if let Ok(result) = &r {
+            odbc::track_job(self, id, result);
+        }
         self.after_engine();
         // The new chart is selected, as after inserting any object, so Delete removes it, not its data.
         if id == "insert.chart"
@@ -1146,6 +1152,7 @@ impl SheetApp {
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        odbc::poll(self, ctx);
         if self.session.text_width.is_none() {
             let ctx = ctx.clone();
             self.session.text_width = Some(std::sync::Arc::new(move |text, font, exact| theme::cell_text_width(&ctx, text, font, exact)));

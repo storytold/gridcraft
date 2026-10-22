@@ -113,7 +113,7 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "grid": app.grid.cells_rect.map(|c| json!([c.left(), c.top(), c.width(), c.height()])),
         "scroll": [v.scroll.x, v.scroll.y],
         "editor": app.editor.as_ref().map(|e| json!({"cell": e.cell.a1(), "text": e.text, "formulaBar": e.from_formula_bar, "point": e.can_point()})),
-        "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": d.values, "tab": d.tab})),
+        "dialog": app.dialog.as_ref().map(|d| json!({"name": d.name, "title": d.title, "values": gridcraft_engine::cmd::journal_params(&Json::Object(d.values.clone())), "tab": d.tab})),
         "backstage": app.backstage.as_ref().map(|b| b.page.id()),
         "message": app.message.as_ref().map(|(t, m)| json!({"title": t, "text": m})),
         "selectedChart": app.selected_chart,
@@ -297,7 +297,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 } else {
                     d.set_value(field, p.get("value").cloned().unwrap_or(Json::Null));
                 }
-                ok(json!(d.values))
+                ok(gridcraft_engine::cmd::journal_params(&Json::Object(d.values.clone())))
             }
             None => err("no dialog is open"),
         },
@@ -319,6 +319,9 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             None => err("no dialog is open"),
         },
         "ui.dialog.cancel" => {
+            if app.dialog.as_ref().is_some_and(|d| matches!(d.name.as_str(), "odbc" | "queriesConnections")) {
+                crate::odbc::cancel(app);
+            }
             app.dialog = None;
             ok(Json::Null)
         }

@@ -101,6 +101,8 @@
   Flash Fill, data validation, outlining and subtotals.
 - **Fast.** Copy-on-write workbooks (undo snapshots are nearly free), incremental recalculation,
   and a virtualised grid that only lays out what's on screen.
+- **Database imports.** On Windows, load PostgreSQL, SQL Server, MySQL, MariaDB, Oracle and SQLite queries through ODBC, preview results and
+  manually refresh query tables. See [ODBC setup and commands](docs/odbc.md).
 - **Agent-native.** Every ribbon button, menu item, dialog, keystroke and mouse gesture is a
   command that agents can run over a JSON control channel, an **MCP server**, or the CLI.
 - **Everywhere.** One Rust codebase for desktop and the web. No subscription, no licence server,
@@ -191,7 +193,7 @@ egui frontend is a separate crate, so the UI can be swapped without touching the
 |---|---|
 | L0 | `core` (addresses, values, errors, dates, input parsing) · `numfmt` (number format codes) |
 | L1 | `formula` (lexer, parser, printer, reference adjustment) · `functions` (worksheet function library) |
-| L2 | `model` (workbook, sheets, copy-on-write cells, styles, tables, charts…) · `calc` (dependency graph, evaluator, dynamic arrays) · `xlsx` (XLSX, CSV, plus XLSB and ODS data import) |
+| L2 | `model` (workbook, sheets, copy-on-write cells, styles, tables, charts…) · `calc` (dependency graph, evaluator, dynamic arrays) · `xlsx` (XLSX, CSV, plus XLSB and ODS data import) · `odbc` (bounded database imports on Windows) |
 | L3 | `chart` (toolkit-free chart layout and rendering) |
 | L5 | `engine` (session, commands, history, clipboard, fill, sort, filter, file I/O) |
 | L6 | `ui-egui` (spreadsheet UI, control channel) · `mcp` (MCP server) |

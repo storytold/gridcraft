@@ -1,0 +1,21 @@
+[package]
+name = "gridcraft-odbc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bounded, toolkit-independent ODBC data imports"
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-core = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+odbc-api = { version = "29.2", default-features = false, features = ["odbc_version_3_80", "wide"] }
+sqlparser = { version = "0.63", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
