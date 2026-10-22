@@ -273,8 +273,11 @@ impl<'a> Evaluator<'a> {
                 continue;
             };
             // Recurse when the related table is filtered directly or through a further
-            // relationship; the visited set keeps cycles bounded.
-            if visited.contains(&other) || !self.table_has_filter(other, filters, &mut BTreeSet::new()) {
+            // relationship; the visited set keeps cycles bounded. Seed the reachability probe
+            // with the current path so a bidirectional link cannot treat this table's own filter
+            // as a filter on the related table (that would drop orphan keys).
+            let mut probe = visited.clone();
+            if visited.contains(&other) || !self.table_has_filter(other, filters, &mut probe) {
                 continue;
             }
             let (Some(self_col), Some(other_col)) = (self.model.column_index(table, self_column), self.model.column_index(other, other_column))

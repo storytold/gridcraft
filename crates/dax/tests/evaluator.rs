@@ -288,6 +288,46 @@ fn filters_propagate_across_several_relationships() {
 }
 
 #[test]
+fn bidirectional_filters_keep_orphan_rows() {
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) },
+                    ModelColumn { name: "Product".into(), data_type: Some("String".into()) },
+                    ModelColumn { name: "Region".into(), data_type: Some("String".into()) },
+                ],
+                rows: vec![
+                    vec![Scalar::Integer(10), Scalar::String("A".into()), Scalar::String("East".into())],
+                    // No matching Products row: a bidirectional relationship must keep it.
+                    vec![Scalar::Integer(20), Scalar::String("Orphan".into()), Scalar::String("East".into())],
+                ],
+            },
+            ModelTable {
+                name: "Products".into(),
+                columns: vec![ModelColumn { name: "Product".into(), data_type: Some("String".into()) }],
+                rows: vec![vec![Scalar::String("A".into())]],
+            },
+        ],
+        relationships: vec![Relationship {
+            from_table: "Sales".into(),
+            from_column: "Product".into(),
+            to_table: "Products".into(),
+            to_column: "Product".into(),
+            bidirectional: true,
+            inactive: false,
+        }],
+        measures: vec![Measure { name: "Total".into(), formula: "SUM(Sales[Amount])".into(), table: Some("Sales".into()), format: None, expr: None }],
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expr = parse_expression("CALCULATE([Total], Sales[Region] = \"East\")").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    assert_eq!(evaluator.evaluate(&bound).expect("bidirectional filter"), Scalar::Decimal(30.0));
+}
+
+#[test]
 fn userelationship_selects_the_matching_relationship_by_column() {
     let mut model = DataModel {
         tables: vec![

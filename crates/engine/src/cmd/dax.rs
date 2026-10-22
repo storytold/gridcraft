@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use gridcraft_dax::{Binder, DataModel, Evaluator, Measure, Relationship, parse_expression, pivot_cross, pivot_fields};
+use gridcraft_dax::{Binder, DataModel, Evaluator, Expr, ExprKind, Measure, Relationship, parse_expression, pivot_cross, pivot_fields};
 use serde_json::{Value as Json, json};
 
 use super::*;
@@ -214,14 +214,44 @@ fn measure_or_error(model: &DataModel, cmd: &str, name: &str) -> Result<usize> {
 /// leave those references pointing at an unknown name (which the binder would otherwise read as
 /// an unqualified column), so edits must be rejected while dependents exist.
 fn dependents(model: &DataModel, cmd: &str, target: &str) -> Result<BTreeSet<String>> {
-    let graph = Binder::new(model).dependency_graph().map_err(|error| bad(cmd, error.to_string()))?;
-    Ok(graph
-        .into_iter()
-        .filter(|(name, dependencies)| {
-            !name.eq_ignore_ascii_case(target) && dependencies.iter().any(|dependency| dependency.eq_ignore_ascii_case(target))
-        })
-        .map(|(name, _)| name)
-        .collect())
+    let binder = Binder::new(model);
+    let mut found = BTreeSet::new();
+    for measure in &model.measures {
+        if measure.name.eq_ignore_ascii_case(target) {
+            continue;
+        }
+        match binder.bind_measure(&measure.name) {
+            Ok(bound) => {
+                if bound.dependencies.iter().any(|dependency| dependency.eq_ignore_ascii_case(target)) {
+                    found.insert(measure.name.clone());
+                }
+            }
+            Err(_) => {
+                // A broken formula can still contain `[Target]` after the error point. Scan the
+                // parsed AST so a rename/delete cannot leave a dangling reference behind, while
+                // an unrelated broken measure does not block the edit.
+                if measure.expr.as_ref().is_some_and(|expr| references_measure(expr, target)) {
+                    found.insert(measure.name.clone());
+                }
+            }
+        }
+    }
+    let _ = cmd;
+    Ok(found)
+}
+
+/// Whether a parsed expression contains `[name]` as an unqualified measure reference.
+fn references_measure(expr: &Expr, name: &str) -> bool {
+    let mut found = false;
+    expr.walk(&mut |node| {
+        if let ExprKind::Name(reference) = &node.kind
+            && reference.table.is_none()
+            && reference.name.text.eq_ignore_ascii_case(name)
+        {
+            found = true;
+        }
+    });
+    found
 }
 
 fn dangling_reference_error(cmd: &str, action: &str, target: &str, dependent: &BTreeSet<String>) -> EngineError {
@@ -593,6 +623,33 @@ mod tests {
             .is_ok()
         );
         assert!(s.execute("dataModel.status", json!({})).expect("status")["relationships"].as_array().expect("relationships").is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn broken_formulas_still_protect_their_references() {
+        let json = r#"{
+            "tables": [{"name":"Sales","columns":[{"name":"Region"},{"name":"Amount"}],
+                        "rows":[["East",10]]}],
+            "relationships": [],
+            "measures": [
+                {"name":"Total","formula":"SUM(Sales[Amount])","table":"Sales"},
+                {"name":"Broken","formula":"Missing[Value] + [Total]","table":"Sales"},
+                {"name":"Unrelated","formula":"SUM(Sales[Amount])","table":"Sales"}
+            ]
+        }"#;
+        let (path, dir) = write_model("broken-reference", json);
+        let mut s = Session::new();
+        s.execute("dataModel.load", json!({"path": path.to_string_lossy()})).expect("load");
+
+        // The broken formula never binds, but it still contains `[Total]`.
+        assert!(s.execute("dataModel.updateMeasure", json!({"name":"Total","new_name":"Renamed"})).is_err());
+        assert!(s.execute("dataModel.deleteMeasure", json!({"name":"Total"})).is_err());
+        // An unrelated broken measure does not block deleting another measure.
+        assert!(s.execute("dataModel.deleteMeasure", json!({"name":"Unrelated"})).is_ok());
+        // Removing the broken formula releases the reference.
+        assert!(s.execute("dataModel.deleteMeasure", json!({"name":"Broken"})).is_ok());
+        assert!(s.execute("dataModel.updateMeasure", json!({"name":"Total","new_name":"Renamed"})).is_ok());
         let _ = std::fs::remove_dir_all(dir);
     }
 
