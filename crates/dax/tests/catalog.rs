@@ -69,7 +69,8 @@ fn catalogued_zero_argument_functions_expose_their_return_type() {
         let expr = parse_expression(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
         let expected = match spec.return_type {
             ReturnType::Integer => InferredType::Data(DataType::Integer),
-            ReturnType::Numeric | ReturnType::Decimal => InferredType::Data(DataType::Decimal),
+            ReturnType::Decimal => InferredType::Data(DataType::Decimal),
+            ReturnType::Numeric => InferredType::Unknown,
             ReturnType::Currency => InferredType::Data(DataType::Currency),
             ReturnType::Boolean => InferredType::Data(DataType::Boolean),
             ReturnType::DateTime => InferredType::Data(DataType::DateTime),

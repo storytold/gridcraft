@@ -12,7 +12,7 @@ fn text_catalog() -> Vec<&'static FunctionSpec> {
 const FUNCTIONS: [(&str, usize, usize); 23] = [
     ("COMBINEVALUES", 3, usize::MAX),
     ("CONCATENATE", 2, 2),
-    ("CONCATENATEX", 2, 5),
+    ("CONCATENATEX", 2, usize::MAX),
     ("EXACT", 2, 2),
     ("FIND", 2, 4),
     ("FIXED", 1, 3),
@@ -133,8 +133,8 @@ fn every_record_has_consistent_signature_and_metadata() {
             assert_eq!(arities.iter().min().copied(), Some(spec.min_args), "{} overload min", spec.name);
             assert_eq!(arities.iter().max().copied(), Some(spec.max_args), "{} overload max", spec.name);
         } else {
-            let overload = spec.overload_for(spec.min_args).expect("variadic minimum arity");
-            assert!(overload.variadic, "{} minimum arity is variadic", spec.name);
+            let overload = spec.overloads.iter().find(|overload| overload.variadic).expect("variadic overload");
+            assert!(overload.variadic, "{} has a variadic overload", spec.name);
             assert!(spec.overload_for(spec.min_args + 7).is_some(), "{} accepts long calls", spec.name);
             assert_eq!(spec.params.len(), spec.min_args, "{} variadic descriptive params", spec.name);
         }
@@ -165,11 +165,10 @@ fn documented_parameter_kinds_and_overloads() {
         Some(vec![ParamKind::Table, ParamKind::Expression, ParamKind::Text, ParamKind::Expression, ParamKind::Logical,])
     );
     let concatenatex = spec("CONCATENATEX");
-    assert!(concatenatex.overloads.iter().all(|overload| !overload.variadic), "CONCATENATEX uses fixed overloads");
-    assert_eq!(concatenatex.params[2].name, "Delimiter");
-    assert_eq!(concatenatex.params[3].name, "OrderBy_Expression");
-    assert_eq!(concatenatex.params[4].name, "Order");
-    assert!(concatenatex.params[2..].iter().all(|param| param.optional));
+    assert!(concatenatex.overload_for(8).is_some_and(|overload| overload.variadic), "CONCATENATEX accepts repeated order pairs");
+    assert_eq!(concatenatex.overload_for(8).map(|overload| overload.kind_at(5)), Some(Some(ParamKind::Expression)));
+    assert_eq!(concatenatex.params.len(), 2);
+    assert!(concatenatex.params.iter().all(|param| !param.optional));
 
     for name in ["FIND", "SEARCH"] {
         assert_eq!(overload_kinds(spec(name), 2), Some(vec![ParamKind::Text, ParamKind::Text]));
@@ -353,7 +352,6 @@ fn arity_boundaries_accept_and_reject_the_right_calls() {
         "CONCATENATE ( \"a\", \"b\", \"c\" )",
         "CONCATENATEX ( )",
         "CONCATENATEX ( Sales )",
-        "CONCATENATEX ( Sales, Sales[Product], \", \", Sales[Amount], TRUE, FALSE )",
         "EXACT ( \"a\" )",
         "EXACT ( \"a\", \"b\", \"c\" )",
         "FIND ( \"a\" )",

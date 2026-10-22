@@ -361,7 +361,7 @@ fn literal_operator_inference() {
         ("1 + dt\"2023-05-19\"", data(DataType::DateTime)),
         ("dt\"2023-05-19\" - 1", data(DataType::DateTime)),
         ("dt\"2023-05-19\" - dt\"2023-05-20\"", data(DataType::DateTime)),
-        ("SUM(1, 2)", data(DataType::Decimal)),
+        ("SUM(1, 2)", InferredType::Unknown),
         ("VALUES(T[Col])", InferredType::Table),
     ] {
         assert_eq!(infer(src), Ok(expected), "{src}");
@@ -528,7 +528,7 @@ fn variant_and_binary_have_no_literals_or_operators() {
     assert!(infer("SUM(1 + { 2 })").is_err());
     assert!(infer("VAR x = 1 + { 2 } RETURN 1").is_err());
     // Catalogued functions expose their documented return type; unknown names stay unknown.
-    assert_eq!(infer("SUM(Sales[Amount])"), Ok(data(DataType::Decimal)));
+    assert_eq!(infer("SUM(Sales[Amount])"), Ok(InferredType::Unknown));
     assert_eq!(infer("NOT_A_DAX_FUNCTION(1)"), Ok(InferredType::Unknown));
     assert!(matches!(parse("BINARY").kind, ExprKind::Name(_)));
     assert_eq!(infer("VARIANT"), Ok(InferredType::Unknown));

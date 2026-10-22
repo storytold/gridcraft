@@ -38,6 +38,12 @@ impl From<LexError> for ParseError {
 /// Parses a DAX expression. A single leading `=` (as typed in some editors) is accepted and
 /// ignored.
 pub fn parse_expression(src: &str) -> Result<Expr, ParseError> {
+    if src.len() > crate::MAX_INPUT_LEN {
+        return Err(ParseError::new(
+            format!("input is too long ({} bytes, limit {})", src.len(), crate::MAX_INPUT_LEN),
+            crate::Span::new(0, src.len()),
+        ));
+    }
     let tokens = tokenize(src)?;
     let mut parser = Parser { tokens, i: 0, depth: 0 };
     if matches!(parser.peek(), TokenKind::Eq) {
@@ -61,6 +67,12 @@ pub fn parse_expression(src: &str) -> Result<Expr, ParseError> {
 /// expected. Definition bounds and statement bounds therefore come from those keywords, never
 /// from newlines.
 pub fn parse_query(src: &str) -> Result<Query, ParseError> {
+    if src.len() > crate::MAX_QUERY_LEN {
+        return Err(ParseError::new(
+            format!("query is too long ({} bytes, limit {})", src.len(), crate::MAX_QUERY_LEN),
+            crate::Span::new(0, src.len()),
+        ));
+    }
     let tokens = tokenize(src)?;
     let mut parser = Parser { tokens, i: 0, depth: 0 };
     let query = parser.query()?;

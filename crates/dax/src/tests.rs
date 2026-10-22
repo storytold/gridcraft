@@ -1,6 +1,6 @@
 use crate::ast::*;
 use crate::lexer::TokenKind;
-use crate::{MAX_DEPTH, MAX_INPUT_LEN, parse_expression, parse_query, print_expression, print_query, tokenize};
+use crate::{MAX_DEPTH, MAX_INPUT_LEN, MAX_QUERY_LEN, parse_expression, parse_query, print_expression, print_query, tokenize};
 
 fn expression(src: &str) -> Expr {
     match parse_expression(src) {
@@ -412,6 +412,14 @@ fn nesting_and_input_length_are_bounded() {
     let long = "1".repeat(MAX_INPUT_LEN + 1);
     let error = parse_expression(&long).unwrap_err();
     assert!(error.message.contains("too long"), "{}", error.message);
+    // Tokenizing itself is unbounded; only the expression/query entrypoints apply limits.
+    assert!(tokenize(&" ".repeat(MAX_INPUT_LEN + 1)).is_ok());
+
+    let long_query = format!("EVALUATE ROW({})", vec!["\"A\", 1"; 1_200].join(", "));
+    assert!(long_query.len() > MAX_INPUT_LEN && long_query.len() < MAX_QUERY_LEN);
+    assert!(parse_query(&long_query).is_ok(), "queries may exceed the expression limit");
+    let huge_query = " ".repeat(MAX_QUERY_LEN + 1);
+    assert!(parse_query(&huge_query).unwrap_err().message.contains("query is too long"));
 
     let chain = vec!["1"; 1_000].join(" + ");
     assert!(chain.len() < MAX_INPUT_LEN);

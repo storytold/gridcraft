@@ -18,9 +18,14 @@
 
 use crate::ast::{DateTimeLiteral, Span};
 
-/// Longest input accepted, in bytes. Mirrors DAX's expression limit and bounds the size of the
-/// tree a long operator chain can build.
+/// Longest expression accepted by [`crate::parse_expression`], in bytes. Mirrors DAX's
+/// expression limit and bounds the size of the tree a long operator chain can build.
 pub const MAX_INPUT_LEN: usize = 8_192;
+
+/// Longest query accepted by [`crate::parse_query`], in bytes. A query has no documented length
+/// limit comparable to the expression bound, so it gets a larger, independent ceiling that still
+/// bounds memory for `DEFINE` blocks and repeated `EVALUATE` statements.
+pub const MAX_QUERY_LEN: usize = 1_048_576;
 
 /// A lexical token.
 #[derive(Clone, Debug, PartialEq)]
@@ -100,10 +105,6 @@ impl LexError {
 /// Whitespace is insignificant and comments (`//`, `--` to end of line, and `/* ... */`) are
 /// skipped. A block comment does not nest.
 pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
-    if src.len() > MAX_INPUT_LEN {
-        return Err(LexError::new(format!("input is too long ({} bytes, limit {MAX_INPUT_LEN})", src.len()), Span::new(0, src.len())));
-    }
-
     let chars: Vec<(usize, char)> = src.char_indices().collect();
     let n = chars.len();
     let ch = |i: usize| chars.get(i).map(|(_, c)| *c);

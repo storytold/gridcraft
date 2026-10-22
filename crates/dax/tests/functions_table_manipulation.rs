@@ -209,7 +209,7 @@ fn overloads_model_the_documented_signatures() {
     assert_eq!(overload_kinds(spec("GROUPBY"), 2), Some(vec![ParamKind::Table, ParamKind::Column]));
     assert!(spec("GROUPBY").overload_for(6).is_some_and(|overload| overload.variadic));
 
-    assert_eq!(overload_kinds(spec("ROLLUPADDISSUBTOTAL"), 2), Some(vec![ParamKind::Column, ParamKind::Text]));
+    assert_eq!(overload_kinds(spec("ROLLUPADDISSUBTOTAL"), 2), Some(vec![ParamKind::Any, ParamKind::Any]));
     assert!(spec("ROLLUPADDISSUBTOTAL").overload_for(5).is_some_and(|overload| overload.variadic));
 
     // The variadic model repeats the last kind, so a fourth `ROW` argument reports `Any`.
@@ -410,6 +410,9 @@ fn companion_functions_are_valid_only_in_their_documented_position() {
     for src in [
         "GROUPBY ( Sales, Sales[Region], \"Amount\", SUMX ( CURRENTGROUP (), Sales[Amount] ) )",
         "SUMMARIZE ( Sales, ROLLUP ( Sales[Country], Sales[City] ), \"Amount\", SUM ( Sales[Amount] ) )",
+        "SUMMARIZE ( Sales, ROLLUP ( ROLLUPGROUP ( Sales[Country], Sales[City] ) ), \"Amount\", SUM ( Sales[Amount] ) )",
+        "SUMMARIZECOLUMNS ( ROLLUPADDISSUBTOTAL ( ROLLUPGROUP ( Sales[Country], Sales[City] ), \"IsGrandTotal\" ), \"Amount\", SUM ( Sales[Amount] ) )",
+        "SUMMARIZECOLUMNS ( ROLLUPADDISSUBTOTAL ( Sales[Country], \"IsA\", Sales[City], \"IsB\" ), \"Amount\", SUM ( Sales[Amount] ) )",
         "SUMMARIZE ( Sales, ROLLUPGROUP ( Sales[Country], Sales[City] ), \"Amount\", SUM ( Sales[Amount] ) )",
         "SUMMARIZECOLUMNS ( ROLLUPADDISSUBTOTAL ( Sales[Country], \"IsSubtotal\" ), \"Amount\", SUM ( Sales[Amount] ) )",
         "SUMMARIZECOLUMNS ( Sales[Region], IGNORE ( [Sales Amount] ) )",

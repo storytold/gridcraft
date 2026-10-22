@@ -1,7 +1,7 @@
 //! The DAX language: tokenizer, syntax tree, Pratt parser, canonical printer and static types.
 //!
-//! This crate covers the DAX expression grammar, the aggregation function catalog with static
-//! call validation, the static type surface (literal classification, inference and the documented
+//! This crate covers the DAX expression grammar, the function catalog for every dax.guide category
+//! with static call validation, the static type surface (literal classification, inference and the documented
 //! operator result tables) and the DAX query statements: `DEFINE` (`MEASURE`, `COLUMN`, `TABLE`,
 //! `VAR`, `FUNCTION`, `MPARAMETER`), `EVALUATE`, `ORDER BY`, `START AT`, expression-level
 //! `VAR ... RETURN`, and `WITH VISUAL SHAPE` (`AXIS`, `GROUP`, `TOTAL`, `DENSIFY`). It also
@@ -44,7 +44,7 @@ pub use ast::{
 pub use binder::{BindError, Binder, BoundExpr, BoundMeasure, BoundVariable, bind_formula};
 pub use eval::{Evaluator, FilterContext};
 pub use functions::{BlankPolicy, FunctionCategory, FunctionFlags, FunctionSpec, Overload, ParamKind, Parameter, ReturnType, catalog, lookup};
-pub use lexer::{LexError, MAX_INPUT_LEN, Token, TokenKind, tokenize};
+pub use lexer::{LexError, MAX_INPUT_LEN, MAX_QUERY_LEN, Token, TokenKind, tokenize};
 pub use model::{DataModel, Measure, ModelColumn, ModelError, ModelTable, Relationship, parse_measure};
 pub use model_file::{ModelFileError, ModelMeasure, read_measures, write_measures};
 pub use parser::{MAX_DEPTH, ParseError, parse_expression, parse_query};

@@ -234,7 +234,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         &[
             overload(&[ParamKind::Table]),
             overload(&[ParamKind::Table, ParamKind::Column]),
-            variadic(&[ParamKind::Table, ParamKind::Column, ParamKind::Any]),
+            variadic(&[ParamKind::Table, ParamKind::Any, ParamKind::Any]),
         ],
         ReturnType::Table,
         STANDARD,
@@ -334,7 +334,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
         1,
         usize::MAX,
         &[required("GroupBy_ColumnName", ParamKind::Column)],
-        &[variadic(&[ParamKind::Column])],
+        &[variadic(&[ParamKind::Any])],
         ReturnType::Blank,
         STANDARD,
         "Identifies the SUMMARIZE group-by columns that also produce subtotal rows. The \
@@ -353,11 +353,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
             required("Name", ParamKind::Text),
             optional("GroupLevelFilter", ParamKind::Table),
         ],
-        &[
-            overload(&[ParamKind::Column, ParamKind::Text]),
-            overload(&[ParamKind::Any, ParamKind::Column, ParamKind::Text]),
-            variadic(&[ParamKind::Any, ParamKind::Column, ParamKind::Text, ParamKind::Any]),
-        ],
+        &[variadic(&[ParamKind::Any, ParamKind::Any])],
         ReturnType::Blank,
         STANDARD,
         "Identifies the SUMMARIZECOLUMNS group-by columns that produce subtotals and adds a \
@@ -391,11 +387,7 @@ pub static FUNCTIONS: &[FunctionSpec] = &[
             required("IsSubtotal_ColumnName", ParamKind::Text),
             optional("GroupLevelFilter", ParamKind::Table),
         ],
-        &[
-            overload(&[ParamKind::Column, ParamKind::Text]),
-            overload(&[ParamKind::Any, ParamKind::Column, ParamKind::Text]),
-            variadic(&[ParamKind::Any, ParamKind::Column, ParamKind::Text, ParamKind::Any]),
-        ],
+        &[variadic(&[ParamKind::Any, ParamKind::Any])],
         ReturnType::Blank,
         STANDARD,
         "Pairs the subtotal columns created by ROLLUPADDISSUBTOTAL with their group-by columns \

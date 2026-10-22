@@ -390,7 +390,8 @@ fn call_type(call: &Call) -> InferredType {
     };
     match spec.return_type {
         crate::functions::ReturnType::Integer => InferredType::Data(DataType::Integer),
-        crate::functions::ReturnType::Numeric | crate::functions::ReturnType::Decimal => InferredType::Data(DataType::Decimal),
+        crate::functions::ReturnType::Decimal => InferredType::Data(DataType::Decimal),
+        crate::functions::ReturnType::Numeric => InferredType::Unknown,
         crate::functions::ReturnType::Currency => InferredType::Data(DataType::Currency),
         crate::functions::ReturnType::Boolean => InferredType::Data(DataType::Boolean),
         crate::functions::ReturnType::DateTime => InferredType::Data(DataType::DateTime),

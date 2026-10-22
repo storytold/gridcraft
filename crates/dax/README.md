@@ -139,7 +139,7 @@ column_ref   := "[" name "]" | table "[" name "]"
 Statement keywords are matched case-insensitively. There are no statement terminators in the
 documented grammar: `MEASURE`, `COLUMN`, `TABLE`, `VAR`, `FUNCTION`, `MPARAMETER` and the
 `EVALUATE` token bound definition bodies and separate statements, so no newline is needed.
-A single trailing `;` is accepted as a recovery extension. The `DEFINE` block is optional but
+One or more trailing `;` are accepted as a recovery extension. The `DEFINE` block is optional but
 requires at least one entry and must be followed by at least one `EVALUATE`. Duplicate definition
 names and forward/backward references are accepted; resolution is a semantic concern.
 
