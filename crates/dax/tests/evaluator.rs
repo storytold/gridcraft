@@ -186,6 +186,19 @@ fn bidirectional_filters_do_not_recurse() {
 }
 
 #[test]
+fn relationship_modifiers_apply_inside_calculate() {
+    // The fixture's Sales[Region] -> Date[Date] relationship is active; both modifiers are valid
+    // inside the filter list and must not be treated as table filters.
+    assert_eq!(eval("COUNTROWS(CALCULATETABLE(Sales, CROSSFILTER(Sales[Region], Date[Date], BOTH)))"), Scalar::Integer(3));
+    assert_eq!(eval("COUNTROWS(CALCULATETABLE(Sales, USERELATIONSHIP(Sales[Region], Date[Date])))"), Scalar::Integer(3));
+    let model = model();
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expr = parse_expression("USERELATIONSHIP(Sales[Region], Date[Date])").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    assert!(evaluator.evaluate(&bound).is_err(), "a modifier cannot be a standalone scalar");
+}
+
+#[test]
 fn unbounded_scalar_functions_return_errors() {
     for formula in ["FACT(171)", "REPT(\"x\", 100000)"] {
         let model = model();

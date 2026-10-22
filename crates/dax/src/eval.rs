@@ -38,6 +38,9 @@ use support::*;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FilterContext {
     pub filters: BTreeMap<(usize, usize), BTreeSet<ScalarKey>>,
+    /// Relationship behaviour set by `USERELATIONSHIP`/`CROSSFILTER` inside CALCULATE:
+    /// `(from_table, to_table) -> (active, bidirectional)`.
+    pub relationships: BTreeMap<(usize, usize), (bool, bool)>,
 }
 
 impl FilterContext {
@@ -255,15 +258,17 @@ impl<'a> Evaluator<'a> {
         // filtered can restrict this one, and a table already on the current propagation path is
         // skipped.
         for relationship in &self.model.relationships {
-            if relationship.inactive {
-                continue;
-            }
             let (Some(from), Some(to)) = (self.model.table_index(&relationship.from_table), self.model.table_index(&relationship.to_table)) else {
                 continue;
             };
+            let (active, bidirectional) =
+                filters.relationships.get(&(from, to)).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
+            if !active {
+                continue;
+            }
             let (other, self_column, other_column) = if from == table {
                 (to, &relationship.from_column, &relationship.to_column)
-            } else if relationship.bidirectional && to == table {
+            } else if bidirectional && to == table {
                 (from, &relationship.to_column, &relationship.from_column)
             } else {
                 continue;
@@ -412,7 +417,9 @@ impl<'a> Evaluator<'a> {
             }
             "RELATED" => return self.related(args.first(), ctx),
             "RELATEDTABLE" => return Err(EvalError::new("RELATEDTABLE returns a table and cannot be used as a scalar")),
-            "USERELATIONSHIP" | "CROSSFILTER" => return Ok(Scalar::Blank),
+            "USERELATIONSHIP" | "CROSSFILTER" => {
+                return Err(EvalError::new(format!("{name} is only valid as a CALCULATE modifier")));
+            }
             "SUM" | "AVERAGE" | "COUNT" | "COUNTA" | "COUNTBLANK" | "MIN" | "MAX" | "PRODUCT" | "DISTINCTCOUNT" | "APPROXIMATEDISTINCTCOUNT" => {
                 return self.aggregate(name, args, ctx);
             }
@@ -504,14 +511,20 @@ impl<'a> Evaluator<'a> {
                     }
                     let from = self.model.table_index(&relationship.from_table);
                     let to = self.model.table_index(&relationship.to_table);
-                    if from == Some(frame_table) && to == Some(lineage) {
-                        let from_col =
-                            self.model.column_index(frame_table, &relationship.from_column).ok_or_else(|| EvalError::new("bad relationship"))?;
-                        let to_col = self.model.column_index(lineage, &relationship.to_column).ok_or_else(|| EvalError::new("bad relationship"))?;
-                        let key = frame.get(from_col).cloned().ok_or_else(|| EvalError::new("row is out of range"))?;
-                        let rows = table.rows.iter().filter(|row| row.get(to_col).is_some_and(|value| value.strict_eq(&key))).cloned().collect();
-                        return Ok(TableValue::new(table.columns, rows).with_lineage(lineage));
-                    }
+                    // Many-to-one (`Sales` row -> `Products`) and one-to-many (`Products` row ->
+                    // `Sales`) both use RELATEDTABLE, so either end can be the current frame.
+                    let (key_column, row_column) = if from == Some(frame_table) && to == Some(lineage) {
+                        (&relationship.from_column, &relationship.to_column)
+                    } else if to == Some(frame_table) && from == Some(lineage) {
+                        (&relationship.to_column, &relationship.from_column)
+                    } else {
+                        continue;
+                    };
+                    let key_col = self.model.column_index(frame_table, key_column).ok_or_else(|| EvalError::new("bad relationship"))?;
+                    let row_col = self.model.column_index(lineage, row_column).ok_or_else(|| EvalError::new("bad relationship"))?;
+                    let key = frame.get(key_col).cloned().ok_or_else(|| EvalError::new("row is out of range"))?;
+                    let rows = table.rows.iter().filter(|row| row.get(row_col).is_some_and(|value| value.strict_eq(&key))).cloned().collect();
+                    return Ok(TableValue::new(table.columns, rows).with_lineage(lineage));
                 }
                 Err(EvalError::new("no active relationship for RELATEDTABLE"))
             }
@@ -740,6 +753,10 @@ impl<'a> Evaluator<'a> {
                 filters.set(table, column, keys);
                 Ok(())
             }
+            BoundExpr::Call { spec, args } if spec.name == "USERELATIONSHIP" || spec.name == "CROSSFILTER" => {
+                self.apply_relationship_modifier(spec.name, args, filters)?;
+                Ok(())
+            }
             BoundExpr::Call { spec, args } if spec.name == "ALL" || spec.name == "REMOVEFILTERS" => {
                 if let Some(BoundExpr::Column { table, .. }) = args.first() {
                     filters.remove_table(*table);
@@ -765,6 +782,52 @@ impl<'a> Evaluator<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// `USERELATIONSHIP` and `CROSSFILTER` change how a relationship filters for the duration
+    /// of the surrounding CALCULATE.
+    fn apply_relationship_modifier(&self, name: &str, args: &[BoundExpr], filters: &mut FilterContext) -> Result<(), EvalError> {
+        let column = |expr: Option<&BoundExpr>| match expr {
+            Some(BoundExpr::Column { table, column }) => Ok((*table, *column)),
+            _ => Err(EvalError::new(format!("{name} needs two column references"))),
+        };
+        let (table_a, column_a) = column(args.first())?;
+        let (table_b, column_b) = column(args.get(1))?;
+        let relationship = self.model.relationships.iter().find(|candidate| {
+            let from = self.model.table_index(&candidate.from_table);
+            let to = self.model.table_index(&candidate.to_table);
+            match (from, to) {
+                (Some(from), Some(to)) => (from == table_a && to == table_b) || (from == table_b && to == table_a),
+                _ => false,
+            }
+        });
+        let relationship = relationship.ok_or_else(|| EvalError::new(format!("{name} needs an existing relationship")))?;
+        let from = self.model.table_index(&relationship.from_table).ok_or_else(|| EvalError::new("bad relationship"))?;
+        let to = self.model.table_index(&relationship.to_table).ok_or_else(|| EvalError::new("bad relationship"))?;
+        let (from_column, to_column) = (
+            self.model.column_index(from, &relationship.from_column).ok_or_else(|| EvalError::new("bad relationship"))?,
+            self.model.column_index(to, &relationship.to_column).ok_or_else(|| EvalError::new("bad relationship"))?,
+        );
+        let matches = |table: usize, col: usize| (table == from && col == from_column) || (table == to && col == to_column);
+        if !matches(table_a, column_a) || !matches(table_b, column_b) || (table_a == table_b) {
+            return Err(EvalError::new(format!("{name} columns do not belong to one relationship")));
+        }
+        let state = if name.eq_ignore_ascii_case("USERELATIONSHIP") {
+            (true, relationship.bidirectional)
+        } else {
+            let direction = match args.get(2) {
+                Some(BoundExpr::Keyword(word)) | Some(BoundExpr::Literal(Literal::String(word))) => word.to_ascii_uppercase(),
+                _ => return Err(EvalError::new("CROSSFILTER needs ONE, BOTH or NONE")),
+            };
+            match direction.as_str() {
+                "ONE" | "ONEWAY" => (true, false),
+                "BOTH" | "TWOWAY" => (true, true),
+                "NONE" => (false, false),
+                _ => return Err(EvalError::new("CROSSFILTER direction must be ONE, BOTH or NONE")),
+            }
+        };
+        filters.relationships.insert((from, to), state);
+        Ok(())
     }
 
     fn related(&self, arg: Option<&BoundExpr>, ctx: &mut Context) -> Result<Scalar, EvalError> {

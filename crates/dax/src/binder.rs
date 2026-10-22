@@ -243,6 +243,8 @@ impl<'a> Binder<'a> {
                 "CONVERT" if index == 1 => keyword_name(arg),
                 // RANKX's Ties argument is documented as `Dense` but catalogued as a Scalar.
                 "RANKX" if index == 4 => keyword_name(arg),
+                "DATEDIFF" if index == 2 => keyword_name(arg),
+                "CROSSFILTER" if index == 2 => clause_keyword(arg, &["ONE", "BOTH", "NONE"]),
                 // Window/relation clauses take bare enum words: `ORDERBY(x, DESC)`,
                 // `WINDOW(1, ABS, 1, ABS, ...)`, `INDEX(..., KEEP, PARTITIONBY(...))`, and the
                 // LOOKUP associated-columns behaviour (`INFERRED`).
