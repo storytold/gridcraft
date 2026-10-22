@@ -1,5 +1,8 @@
 //! Programmatic control of the running app (agents, tests, MCP).
 //!
+//! The host's transport authenticates each connection before any request reaches [`poll`] (the
+//! desktop app's `{"auth": token}` handshake and connection cap, #2174).
+//!
 //! Methods (JSON lines over the host's transport, see `docs/control-protocol.md`):
 //! - `engine.execute {command, params}` — run any engine or UI command
 //! - `engine.commands {search?}` — every command with enablement and params docs

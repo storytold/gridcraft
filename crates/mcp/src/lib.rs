@@ -6,7 +6,8 @@
 //!
 //! - [`Remote`] talks to a running desktop app through its loopback JSON-lines control channel
 //!   (`gridcraft --control 7979`): one `{"id","method","params"}` line in, one
-//!   `{"id","ok","result"|"error"}` line out (see `docs/control-protocol.md`).
+//!   `{"id","ok","result"|"error"}` line out, after an `{"auth": token}` handshake
+//!   ([`control_auth`]; see `docs/control-protocol.md`).
 //! - [`Headless`] hosts an in-process [`gridcraft_engine::Session`] and implements the
 //!   engine-level control-channel methods itself, so agents can build workbooks without a window.
 //!
@@ -15,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 mod backend;
+pub mod control_auth;
 mod headless;
 mod server;
 mod tools;

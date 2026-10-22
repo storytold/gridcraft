@@ -6,18 +6,53 @@ Start the desktop app with a control port:
 gridcraft --control 7979            # or GRIDCRAFT_CONTROL_PORT=7979
 ```
 
-Then send newline-delimited JSON to `127.0.0.1:7979`. Every request line gets one reply line:
+Then send newline-delimited JSON to `127.0.0.1:7979`. The first line of every connection is the
+token (see [Authentication](#authentication)); after it, every request line gets one reply line:
 
 ```json
+{"auth": "<token>"}
+{"ok": true, "result": {"authenticated": true}}
 {"id": 1, "method": "engine.execute", "params": {"command": "cell.set", "params": {"cell": "B2", "input": "=SUM(A1:A9)"}}}
 {"id": 1, "ok": true, "result": {"cell": "B2", "value": "45"}}
 ```
 
 Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 
+`gridcraft-cli send 7979 <method> '<json>'` and `gridcraft-cli mcp --connect 7979` do the
+handshake for you.
+
 A line that is not a JSON object with a string `method` (an HTTP request, text that isn't JSON,
-bytes that aren't UTF-8, a line over 64 MiB) gets one error reply and the server closes the
+bytes that aren't UTF-8, a line over 16 MiB) gets one error reply and the server closes the
 connection; nothing sent after it runs. Blank lines are skipped.
+
+## Authentication
+
+A loopback port is reachable by every process of every user on the machine (and by more peers
+with WSL2 mirrored networking or containers sharing the host network), so the app serves only
+connections that prove they belong to the user who started it.
+
+- **The token.** At start the app makes 256 random bits (64 hex digits) and writes them to
+  `control/<port>.token` in its settings folder: `~/Library/Application Support/GridCraft` on
+  macOS, `%APPDATA%\GridCraft` on Windows, `$XDG_CONFIG_HOME/gridcraft` (else
+  `~/.config/gridcraft`) elsewhere. On Unix the folder is mode 0700 and the file 0600; on Windows
+  the file inherits the settings folder's per-user ACL. A leftover file is replaced at each start;
+  the token is never logged (the log names the file). When the file can't be written the control
+  channel doesn't start.
+- **Your own token.** Set `GRIDCRAFT_CONTROL_TOKEN` (16 to 1024 characters) before starting the app
+  and it uses that instead, writing no file; give clients the same variable. There is no
+  command-line flag for it, because other users can read a process's arguments.
+- **The handshake.** The first line must be `{"auth": "<token>"}` (an `"id"` is optional and is
+  echoed back). The reply is `{"ok": true, "result": {"authenticated": true}}`. Anything else first
+  (a request, a wrong or missing token, HTTP, a blank line, a line over 4 KiB) or nothing within
+  10 seconds gets one `{"ok": false, "error": "authentication required: …"}` line, the same
+  whatever was wrong, and the connection is closed; nothing sent after it runs.
+- **Clients.** `gridcraft-cli` and `gridcraft_mcp::Remote::connect` use `GRIDCRAFT_CONTROL_TOKEN`
+  when it is set, else read the token file for the port they connect to;
+  `Remote::connect_with_token` takes a token directly. A script reads the file itself, e.g.
+  `printf '{"auth":"%s"}\n' "$(cat ~/.config/gridcraft/control/7979.token)"`.
+- **Connection cap.** At most 8 connections are open at once, authenticated or not; another one
+  gets `{"ok": false, "error": "too many control connections are open; …"}` and is closed. Close
+  connections you no longer need.
 
 ## Methods
 

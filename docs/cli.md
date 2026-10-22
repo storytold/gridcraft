@@ -31,7 +31,7 @@ cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- 
 | `commands [--json] [--search X]` | `gridcraft-cli commands --search border` — every command with its parameter docs. |
 | `functions [--json] [--search X] [--category C]` | `gridcraft-cli functions --search lookup` |
 | `mcp [--connect PORT] [--in FILE \| --sample NAME]` | MCP server on stdio ([mcp.md](mcp.md)). |
-| `send <port> <method> [json]` | `gridcraft-cli send 7979 engine.execute '{"command":"home.bold","params":{"range":"A1:C1"}}'` — one control-channel request to a running app (`gridcraft --control 7979`). |
+| `send <port> <method> [json]` | `gridcraft-cli send 7979 engine.execute '{"command":"home.bold","params":{"range":"A1:C1"}}'` — one control-channel request to a running app (`gridcraft --control 7979`); authenticates with `GRIDCRAFT_CONTROL_TOKEN` or the app's token file ([control-protocol.md](control-protocol.md#authentication)). |
 | `version` | Prints `gridcraft-cli <version>`. |
 
 ## `run`

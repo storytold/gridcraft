@@ -354,6 +354,8 @@ fn cell_set_without_input_is_error() {
     assert_eq!(ok(&mut s, "get_cell", json!({"cell": "B2"}))["text"], "");
 }
 
+const REMOTE_TOKEN: &str = "remote-test-token-0123456789";
+
 #[test]
 fn remote_backend_over_tcp() {
     // A fake app: answers engine.execute by running a headless session; closes after the first
@@ -366,6 +368,18 @@ fn remote_backend_over_tcp() {
             let stream = stream.unwrap();
             let mut w = stream.try_clone().unwrap();
             let mut r = BufReader::new(stream);
+            // Every connection opens with the token, as the app requires (#2174).
+            let mut first = String::new();
+            r.read_line(&mut first).unwrap();
+            let hello = crate::control_auth::check_auth_line(first.as_bytes(), REMOTE_TOKEN).unwrap();
+            w.write_all(
+                format!(
+                    "{hello}
+"
+                )
+                .as_bytes(),
+            )
+            .unwrap();
             loop {
                 let mut line = String::new();
                 if r.read_line(&mut line).unwrap_or(0) == 0 {
@@ -385,7 +399,7 @@ fn remote_backend_over_tcp() {
     });
     let addr = control_addr(&port.to_string());
     assert_eq!(addr, format!("127.0.0.1:{port}"));
-    let mut s = Server::new(Box::new(Remote::connect(&addr).unwrap()));
+    let mut s = Server::new(Box::new(Remote::connect_with_token(&addr, REMOTE_TOKEN.into()).unwrap()));
     assert_eq!(ok(&mut s, "evaluate_formula", json!({"formula": "=1+1"}))["result"], json!(2.0));
     // Second call reconnects transparently.
     ok(&mut s, "set_cell", json!({"cell": "A1", "input": "7"}));
@@ -394,7 +408,34 @@ fn remote_backend_over_tcp() {
     assert!(msg.contains("unknown command"), "{msg}");
     drop(s);
     handle.join().unwrap();
-    assert!(Remote::connect("127.0.0.1:1").is_err());
+    assert!(Remote::connect_with_token("127.0.0.1:1", REMOTE_TOKEN.into()).is_err());
+}
+
+/// A client with the wrong token is told so, instead of a confusing closed connection later.
+#[test]
+fn remote_with_a_wrong_token_is_refused() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = control_addr(&listener.local_addr().unwrap().port().to_string());
+    let handle = std::thread::spawn(move || {
+        let stream = listener.incoming().next().unwrap().unwrap();
+        let mut w = stream.try_clone().unwrap();
+        let mut first = String::new();
+        BufReader::new(stream).read_line(&mut first).unwrap();
+        assert!(crate::control_auth::check_auth_line(first.as_bytes(), REMOTE_TOKEN).is_err());
+        w.write_all(
+            format!(
+                "{}
+",
+                json!({"ok": false, "error": crate::control_auth::REFUSED})
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    });
+    let Err(e) = Remote::connect_with_token(&addr, "not-the-token-0123456789".into()) else { panic!("a wrong token connected") };
+    assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied, "{e}");
+    assert!(e.to_string().contains("authentication required"), "{e}");
+    handle.join().unwrap();
 }
 
 #[test]

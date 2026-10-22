@@ -13,6 +13,10 @@ workspace = true
 [dependencies]
 gridcraft-engine = { workspace = true }
 gridcraft-ui-egui = { workspace = true }
+# The control channel's token handshake and token file, shared with its client (`Remote`).
+gridcraft-mcp = { workspace = true }
+# The control channel's random token (OS random numbers); already in the tree via tempfile.
+getrandom = "0.4"
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
