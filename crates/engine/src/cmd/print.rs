@@ -50,7 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Page Setup…",
             ["Page Layout", "Page Setup"],
             None,
-            "{sheet?, orientation?: portrait|landscape, paper?: Letter|Legal|A4|A3|A5|Tabloid|Executive|Ledger|B5, margins?: {left,right,top,bottom,header,footer} (inches; also accepted as top-level keys), scale?: 10..400, fitWidth?, fitHeight? (pages; 0 = automatic), fitToPage?: bool, centerH?, centerV?, gridlines?, headings?, header?: \"&L&A&RPage &P of &N\", footer?, printArea?: \"A1:F50\" (\"\" clears), titleRows?: \"1:2\", titleCols?: \"A:A\", rowBreaks?: [46, 91], colBreaks?: [\"K\"]} → the sheet's print settings",
+            "{sheet?, orientation?: portrait|landscape, paper?: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes), margins?: {left,right,top,bottom,header,footer} (inches; also accepted as top-level keys), scale?: 10..400, fitWidth?, fitHeight? (pages; 0 = automatic), fitToPage?: bool, centerH?, centerV?, gridlines?, headings?, header?: \"&L&A&RPage &P of &N\", footer?, printArea?: \"A1:F50\" (\"\" clears), titleRows?: \"1:2\", titleCols?: \"A:A\", rowBreaks?: [46, 91], colBreaks?: [\"K\"]} → the sheet's print settings",
             has_doc,
             page_setup
         ),
@@ -71,19 +71,36 @@ pub fn paper_size(name: &str) -> (f32, f32) {
     known_paper(name).unwrap_or((612.0, 792.0))
 }
 
+/// Paper sizes in points, portrait. `B4`/`B5`/`B6` are the **JIS** sizes Japanese Excel and its
+/// e-mail attachments use (257×364, 182×257 and 128×182 mm); the ISO B series stays reachable as
+/// `B4 (ISO)`/`B5 (ISO)`/`B6 (ISO)`. The Japanese postcards and envelopes are the JIS ones too.
 fn known_paper(name: &str) -> Option<(f32, f32)> {
-    let n = name.trim().to_ascii_lowercase().replace([' ', '-', '_'], "");
+    // Spaces, hyphens, underscores and parentheses don't matter: `B5 (JIS)`, `b5-jis` and `b5`
+    // are one name.
+    let n = name.trim().to_ascii_lowercase().replace([' ', '-', '_', '(', ')'], "");
     Some(match n.as_str() {
         "letter" | "usletter" => (612.0, 792.0),
         "legal" | "uslegal" => (612.0, 1008.0),
         "a4" => (595.28, 841.89),
         "a3" => (841.89, 1190.55),
         "a5" => (419.53, 595.28),
+        "a6" => (297.64, 419.53),
         "tabloid" | "11x17" => (792.0, 1224.0),
         "ledger" => (1224.0, 792.0),
         "executive" => (522.0, 756.0),
-        "b5" => (498.9, 708.66),
-        "b4" => (708.66, 1000.63),
+        "b4" | "b4jis" => (728.50, 1031.81),
+        "b5" | "b5jis" => (515.91, 728.50),
+        "b6" | "b6jis" => (362.83, 515.91),
+        "b4iso" => (708.66, 1000.63),
+        "b5iso" => (498.90, 708.66),
+        "b6iso" => (354.33, 498.90),
+        "japanesepostcard" | "postcard" => (283.46, 419.53),
+        "japanesedoublepostcard" | "doublepostcard" => (419.53, 566.93),
+        "japaneseenvelope#3" | "chou#3" => (340.16, 666.14),
+        // 長形4号 is 90×205 mm; 90×225 mm is 長形40号, a different envelope, so it stays out.
+        "japaneseenvelope#4" | "chou#4" => (255.12, 581.10),
+        "japaneseenvelopekaku#2" | "kaku#2" => (680.31, 941.10),
+        "japaneseenvelopekaku#3" | "kaku#3" => (612.28, 785.20),
         _ => return None,
     })
 }
@@ -604,20 +621,6 @@ fn rgb_of(c: Color, wb: &Workbook) -> Option<Rgb> {
     c.resolve(&wb.theme)
 }
 
-fn numfmt_rgb(c: gridcraft_numfmt::FormatColor) -> Rgb {
-    use gridcraft_numfmt::FormatColor as F;
-    match c {
-        F::Black | F::Indexed(_) => [0, 0, 0],
-        F::Blue => [0, 0, 255],
-        F::Cyan => [0, 255, 255],
-        F::Green => [0, 128, 0],
-        F::Magenta => [255, 0, 255],
-        F::Red => [255, 0, 0],
-        F::White => [255, 255, 255],
-        F::Yellow => [255, 255, 0],
-    }
-}
-
 fn blend(fg: [u8; 4]) -> Rgb {
     let a = fg[3] as u16;
     let mix = |c: u8| ((c as u16 * a + 255 * (255 - a)) / 255) as u8;
@@ -1000,6 +1003,62 @@ fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::
     pg.restore();
 }
 
+struct PendingPdfLink {
+    page: usize,
+    sheet: usize,
+    rect: (f32, f32, f32, f32),
+    target: String,
+}
+
+struct PrintedBlock {
+    page: usize,
+    sheet: usize,
+    rows: (u32, u32),
+    cols: (u32, u32),
+    x: f32,
+    y: f32,
+    k: f32,
+}
+
+/// PDF annotations are not affected by graphics clipping, so intersect each cell with its page
+/// block before adding a clickable rectangle. A repeated print-title cell may appear on several
+/// pages and receives one annotation on each of them.
+fn draw_block_links(pg: &mut Page, b: &Block, page: usize, pending: &mut Vec<PendingPdfLink>) {
+    let range = b.range();
+    let (Some(&bx), Some(&by), Some(&right), Some(&bottom)) = (b.xs.first(), b.ys.first(), b.xs.last(), b.ys.last()) else { return };
+    for (cell, link) in b.sh.hyperlinks.range(range.start..=range.end) {
+        if !range.contains(*cell) {
+            continue;
+        }
+        let cell_range = b.sh.merges.iter().find(|m| m.start == *cell).copied().unwrap_or(RangeRef::cell(*cell));
+        let (x, y, w, h) = b.rect(cell_range);
+        let (x0, y0, x1, y1) = (x.max(bx), y.max(by), (x + w).min(right), (y + h).min(bottom));
+        if x1 <= x0 || y1 <= y0 {
+            continue;
+        }
+        let rect = (x0, y0, x1 - x0, y1 - y0);
+        match crate::links::classify(&link.target) {
+            crate::links::LinkKind::External(uri) => pg.link_uri(rect.0, rect.1, rect.2, rect.3, &uri),
+            crate::links::LinkKind::Internal(target) if !link.external => {
+                pending.push(PendingPdfLink { page, sheet: b.si, rect, target });
+            }
+            _ => {}
+        }
+    }
+}
+
+fn printed_target(wb: &Workbook, blocks: &[PrintedBlock], source_sheet: usize, target: &str) -> Option<(usize, f32, f32)> {
+    let target = target.trim().trim_start_matches('#').trim_start_matches('=');
+    let (sheet_name, range) = split_sheet(target);
+    let sheet = sheet_name.map_or(Some(source_sheet), |name| wb.sheet_index(&name))?;
+    let cell = RangeRef::parse(&range.replace('$', ""))?.start;
+    let sh = wb.sheet(sheet)?;
+    let block = blocks.iter().find(|b| b.sheet == sheet && (b.rows.0..=b.rows.1).contains(&cell.row) && (b.cols.0..=b.cols.1).contains(&cell.col))?;
+    let x = block.x + (sh.col_left(cell.col) - sh.col_left(block.cols.0)) as f32 * block.k;
+    let y = block.y + (sh.row_top(cell.row) - sh.row_top(block.rows.0)) as f32 * block.k;
+    Some((block.page, x, y))
+}
+
 /// Cell pictures fit the current cell (or merged-cell) rectangle without changing aspect ratio.
 fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
     let (x, y, w, h) = rect;
@@ -1065,7 +1124,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     let avail = (w - 2.0 * pad - indent).max(0.0);
     let code = st.num_fmt.as_str();
     let formatted = crate::display::format(&v, code, wb);
-    let mut color = formatted.color.map(numfmt_rgb).or_else(|| rgb_of(st.font.color, wb)).unwrap_or([0, 0, 0]);
+    let mut color = formatted.color.and_then(gridcraft_numfmt::FormatColor::rgb).or_else(|| rgb_of(st.font.color, wb)).unwrap_or([0, 0, 0]);
     if l.cf.as_ref().and_then(|x| x.style.as_ref()).is_some_and(|s| s.font.color != Color::Auto) {
         color = rgb_of(st.font.color, wb).unwrap_or(color);
     }
@@ -1467,6 +1526,8 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     let total: usize = layouts.iter().map(|l| l.pages.len()).sum();
     let (date, time) = hf_date_time(wb);
     let mut page_no = 0usize;
+    let mut pending_links = Vec::new();
+    let mut printed_blocks = Vec::new();
     for lay in layouts {
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
         let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
@@ -1481,6 +1542,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
             let content_h = (lay.heading_h + rsegs.iter().map(|s| seg_size(sh, *s, true)).sum::<f32>()) * k;
             let ox = lay.margins[0] + if lay.settings.center_h { ((aw - content_w) / 2.0).max(0.0) } else { 0.0 };
             let oy = lay.margins[2] + if lay.settings.center_v { ((ah - content_h) / 2.0).max(0.0) } else { 0.0 };
+            let page_index = doc.page_count();
             let pg = doc.add_page(lay.page_w, lay.page_h);
             let mut y = oy + lay.heading_h * k;
             let mut body: Option<Block> = None;
@@ -1489,6 +1551,8 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                 for (csi, cs) in csegs.iter().enumerate() {
                     let b = make_block(wb, lay.sheet, sh, *rs, *cs, x, y, lay);
                     draw_block(pg, &b, lay.settings.gridlines, &mut cf);
+                    draw_block_links(pg, &b, page_index, &mut pending_links);
+                    printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: *rs, cols: *cs, x, y, k });
                     if lay.settings.headings {
                         draw_headings(pg, &b, rsi == 0, csi == 0, (ox, oy), (lay.heading_w * k, lay.heading_h * k));
                     }
@@ -1517,6 +1581,14 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                 time: time.clone(),
             };
             draw_header_footer(pg, lay, lay.settings.hf_page(pi == 0, page_no), &cx);
+        }
+    }
+    for link in pending_links {
+        if let Some((target_page, x, y)) = printed_target(wb, &printed_blocks, link.sheet, &link.target)
+            && let Some(page) = doc.page_mut(link.page)
+        {
+            let (lx, ly, w, h) = link.rect;
+            page.link_page(lx, ly, w, h, target_page, x, y);
         }
     }
     let n = doc.page_count();
@@ -1765,6 +1837,29 @@ mod tests {
     }
 
     #[test]
+    fn pdf_export_keeps_safe_links_on_their_printed_pages() {
+        let mut s = s();
+        s.execute("insert.link", json!({"cell": "A1", "target": "https://example.org/report"})).unwrap();
+        s.execute("insert.link", json!({"cell": "A2", "target": "Sheet1!A60"})).unwrap();
+        s.execute("insert.link", json!({"cell": "A3", "target": "file:///private/report"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A60", "input": "Destination"})).unwrap();
+        let (pdf, pages) = pdf_of(&mut s, json!({}));
+        assert_eq!(pages, 2);
+        let text = String::from_utf8_lossy(&pdf);
+        assert_eq!(text.matches("/Subtype /Link").count(), 2);
+        assert!(text.contains("/URI (https://example.org/report)"));
+        assert!(text.contains("/Dest [") && text.contains("/XYZ "));
+        assert!(!text.contains("/URI (file:"));
+
+        // A link to a cell omitted by the selected print range must not point to a nonexistent
+        // destination. The external link in the selected range remains clickable.
+        let (cropped, _) = pdf_of(&mut s, json!({"range": "A1:A3"}));
+        let cropped = String::from_utf8_lossy(&cropped);
+        assert_eq!(cropped.matches("/Subtype /Link").count(), 1);
+        assert!(!cropped.contains("/Dest ["));
+    }
+
+    #[test]
     fn header_sections_split_join_and_field_names() {
         let spec = "&L&\"Arial,Bold\"Sales &&Co&CPage &P of &N&R&D";
         let parts = split_header_footer(spec);
@@ -1900,6 +1995,16 @@ mod tests {
     }
 
     #[test]
+    fn pdf_prints_cjk_text_instead_of_question_marks() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["签字清单", 2]]})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        assert!(!contains(&pdf, "(????) Tj"), "CJK cell printed as (????) Tj");
+        assert!(contains(&pdf, "<7B7E5B576E055355> Tj"));
+        assert!(contains(&pdf, "(2) Tj"));
+    }
+
+    #[test]
     fn pdf_contains_text_and_header_codes_expand() {
         let mut s = s();
         s.execute("range.setValues", json!({"range": "A1", "values": [["Quarterly Report", null], ["Total", 1234.5]]})).unwrap();
@@ -1950,6 +2055,16 @@ mod tests {
         assert!(contains(&pdf, "(1) Tj"), "an unmatched cell keeps General");
         assert!(contains(&pdf, "(3.00) Tj") && !contains(&pdf, "(3) Tj"), "General cell under the rule");
         assert!(contains(&pdf, "(4.00) Tj") && !contains(&pdf, "(4.0) Tj"), "formatted cell under the rule");
+    }
+
+    #[test]
+    fn pdf_uses_indexed_number_format_palette_color() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "A1", "format": "[Color4]0"})).unwrap();
+        let (pdf, pages) = pdf_of(&mut s, json!({}));
+        assert_eq!(pages, 1);
+        assert!(contains(&pdf, "0 1 0 rg"), "expected indexed Color4 green in PDF text stream");
     }
 
     #[test]
@@ -2020,7 +2135,7 @@ mod tests {
         wb.sheet_mut(0).unwrap().images.push(Image {
             id,
             anchor: Anchor { cell: CellRef::new(5, 5), dx: 0.0, dy: 0.0, width: 40.0, height: 40.0, mode: gridcraft_model::AnchorMode::MoveAndSize },
-            data: png,
+            data: png.into(),
             mime: "image/png".into(),
             alt: String::new(),
         });
@@ -2059,6 +2174,81 @@ mod tests {
         // Undoable as one step.
         s.execute("edit.undo", json!({})).unwrap();
         assert!(s.doc().unwrap().wb.active().unwrap().print.print_area.is_some());
+    }
+
+    /// The Japanese paper sizes are the JIS ones: `B4`/`B5`/`B6` changed meaning from ISO, and the
+    /// ISO B series stays reachable by name. The postcards and envelopes are the JIS sizes too.
+    #[test]
+    fn japanese_paper_sizes_are_jis() {
+        for (name, w, h) in [
+            ("A4", 595.28, 841.89), // unchanged
+            ("B4", 728.50, 1031.81),
+            ("B5", 515.91, 728.50),
+            ("B6", 362.83, 515.91),
+            ("B4 (JIS)", 728.50, 1031.81),
+            ("b5-jis", 515.91, 728.50),
+            ("B4 (ISO)", 708.66, 1000.63),
+            ("B5 (ISO)", 498.90, 708.66),
+            ("B6 (ISO)", 354.33, 498.90),
+            ("A6", 297.64, 419.53),
+            ("Japanese Postcard", 283.46, 419.53),
+            ("japanese double postcard", 419.53, 566.93),
+            ("Japanese Envelope #3", 340.16, 666.14),
+            ("chou #4", 255.12, 581.10),
+            ("Japanese Envelope Kaku #2", 680.31, 941.10),
+            ("kaku #3", 612.28, 785.20),
+        ] {
+            let got = paper_size(name);
+            assert!((got.0 - w).abs() < 0.01 && (got.1 - h).abs() < 0.01, "{name}: {got:?}");
+        }
+        // 長形4号 is 90×205 mm (90×225 mm is 長形40号), so its height is 205 mm = 581.10 pt — not the
+        // 225 mm it once had.
+        let chou4 = paper_size("Japanese Envelope #4");
+        assert_eq!((chou4.0, chou4.1), (255.12, 581.10));
+        assert_eq!(chou4, paper_size("chou #4"));
+        // Unknown names keep the old Letter fallback.
+        assert_eq!(paper_size("Napkin"), (612.0, 792.0));
+    }
+
+    /// Page Setup's paper reaches the PDF page: the MediaBox is the paper's, A4 is unchanged, B5 is
+    /// JIS B5, and the Japanese postcard prints at 283.46×419.53 pt. Landscape swaps the sides and
+    /// fit-to-page keeps the paper size.
+    #[test]
+    fn page_setup_paper_sizes_reach_the_pdf_page() {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["x"]]})).unwrap();
+        let close = |v: &Json, want: f64| (v.as_f64().unwrap() - want).abs() < 0.01;
+        for (paper, w, h) in [
+            ("A4", 595.28f64, 841.89f64),
+            ("B5", 515.91, 728.50),
+            ("Japanese Postcard", 283.46, 419.53),
+            ("Japanese Double Postcard", 419.53, 566.93),
+            ("Japanese Envelope Kaku #2", 680.31, 941.10),
+        ] {
+            s.execute("pageLayout.pageSetup", json!({"paper": paper, "orientation": "portrait"})).unwrap();
+            let pv = s.execute("file.printPreview", json!({})).unwrap();
+            let page = &pv["pageList"][0];
+            assert_eq!(page["paper"], paper);
+            assert!(close(&page["width"], w) && close(&page["height"], h), "{paper}: {page}");
+            let (pdf, pages) = pdf_of(&mut s, json!({}));
+            assert_eq!(pages, 1);
+            let want = format!("/MediaBox [0 0 {w} {h}]");
+            assert!(contains(&pdf, &want), "{paper}: wanted {want}");
+        }
+        // Landscape swaps the sides, and fit-to-page does not change the paper.
+        s.execute("pageLayout.pageSetup", json!({"paper": "B5", "orientation": "landscape"})).unwrap();
+        let (pdf, pages) = pdf_of(&mut s, json!({}));
+        assert_eq!(pages, 1);
+        assert!(contains(&pdf, "/MediaBox [0 0 728.5 515.91]"));
+        s.execute("pageLayout.pageSetup", json!({"paper": "B5", "orientation": "portrait"})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({"fitToPage": true}));
+        assert!(contains(&pdf, "/MediaBox [0 0 515.91 728.5]"));
+        // `pageLayout.size` still takes any name, and an unknown one prints on Letter as before.
+        s.execute("pageLayout.size", json!({"paper": "Napkin"})).unwrap();
+        let pv = s.execute("file.printPreview", json!({})).unwrap();
+        assert!(close(&pv["pageList"][0]["width"], 612.0) && close(&pv["pageList"][0]["height"], 792.0));
+        // Page Setup refuses an unknown name.
+        assert!(s.execute("pageLayout.pageSetup", json!({"paper": "Napkin"})).is_err());
     }
 
     #[test]

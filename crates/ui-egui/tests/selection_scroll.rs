@@ -1,10 +1,12 @@
 //! Extending the selection from the keyboard scrolls its moving end into view, not the anchor.
+//! Go To and Select over the control channel scroll the active cell into view.
 
 use egui::{Event, Key, Modifiers};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, RangeRef};
+use gridcraft_ui_egui::control::{Outcome, handle};
 use gridcraft_ui_egui::{SheetApp, grid::Geo};
-use serde_json::json;
+use serde_json::{Value as Json, json};
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
@@ -103,4 +105,40 @@ fn ctrl_shift_home_and_end_scroll_the_moving_end_into_view() {
     assert!(!visible(&h, "A1"));
     key(&mut h, Key::Home, CTRL_SHIFT);
     assert_extended(&h, "CV200", "A1");
+}
+
+fn control(h: &mut Harness, method: &str, params: Json) -> Json {
+    let ctx = h.ctx.clone();
+    let out = match handle(h.state_mut(), &ctx, method, &params) {
+        Outcome::Done(v) => v,
+        Outcome::Screenshot { .. } => json!(null),
+    };
+    h.run_steps(2);
+    out
+}
+
+fn active(h: &Harness) -> CellRef {
+    h.state().session.active().unwrap().selection.active
+}
+
+#[test]
+fn go_to_over_the_control_channel_scrolls_the_target_into_view() {
+    let mut h = harness();
+    assert!(!visible(&h, "Z300"));
+    let r = control(&mut h, "engine.execute", json!({"command": "edit.goTo", "params": {"reference": "Z300"}}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert_eq!(active(&h), CellRef::parse("Z300").unwrap());
+    assert!(visible(&h, "Z300"), "Go To scrolls Z300 into view");
+    assert!(!visible(&h, "A1"));
+    // A command named as the method runs the same way.
+    control(&mut h, "edit.goTo", json!({"reference": "A1"}));
+    assert!(visible(&h, "A1") && !visible(&h, "Z300"));
+}
+
+#[test]
+fn select_over_the_control_channel_scrolls_the_active_cell_into_view() {
+    let mut h = harness();
+    control(&mut h, "engine.execute", json!({"command": "selection.set", "params": {"range": "BZ150:CA160"}}));
+    assert_eq!(active(&h), CellRef::parse("BZ150").unwrap());
+    assert!(visible(&h, "BZ150") && !visible(&h, "A1"), "selecting a far range scrolls its active cell into view");
 }

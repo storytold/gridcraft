@@ -409,10 +409,11 @@ const THAI_DIGITS: [&str; 10] = ["ศูนย์", "หนึ่ง", "สอ�
 const THAI_PLACES: [&str; 6] = ["", "สิบ", "ร้อย", "พัน", "หมื่น", "แสน"];
 
 /// Thai words for a group of up to six decimal digits (most significant first); empty for zero.
-/// One in the tens is สิบ, two is ยี่สิบ, and a final one after higher digits is เอ็ด.
-fn thai_group(digits: &[u8]) -> String {
+/// One in the tens is สิบ, two is ยี่สิบ, and a final one after higher digits is เอ็ด; `after`
+/// says the number already has a non-zero digit in a higher group (so 1,000,001 ends in เอ็ด).
+fn thai_group(digits: &[u8], after: bool) -> String {
     let n = digits.len();
-    let higher = digits.iter().take(n.saturating_sub(1)).any(|d| *d != 0);
+    let higher = after || digits.iter().take(n.saturating_sub(1)).any(|d| *d != 0);
     let mut out = String::new();
     for (i, &d) in digits.iter().enumerate() {
         let place = n - 1 - i;
@@ -445,7 +446,7 @@ fn thai_number(digits: &str) -> String {
     let mut start = 0;
     let mut len = first;
     while let Some(group) = d.get(start..start + len) {
-        out.push_str(&thai_group(group));
+        out.push_str(&thai_group(group, start > 0));
         start += len;
         len = 6;
         if start < d.len() {
@@ -976,6 +977,17 @@ mod tests {
         is_text(bt(1.999), "สองบาทถ้วน");
         is_text(bt(0.005), "หนึ่งสตางค์");
         is_text(bt(-0.001), "ศูนย์บาทถ้วน");
+        // A final one is เอ็ด after higher digits in any group, millions included (#1234).
+        is_text(bt(21_000_001.0), "ยี่สิบเอ็ดล้านเอ็ดบาทถ้วน");
+        is_text(bt(1_000_001.0), "หนึ่งล้านเอ็ดบาทถ้วน");
+        is_text(bt(1_000_001_000_000.0), "หนึ่งล้านเอ็ดล้านบาทถ้วน");
+        is_text(bt(1001.0), "หนึ่งพันเอ็ดบาทถ้วน");
+        is_text(bt(11.0), "สิบเอ็ดบาทถ้วน");
+        is_text(bt(1.0), "หนึ่งบาทถ้วน");
+        is_text(bt(0.01), "หนึ่งสตางค์");
+        is_text(bt(0.21), "ยี่สิบเอ็ดสตางค์");
+        is_text(bt(1250.5), "หนึ่งพันสองร้อยห้าสิบบาทห้าสิบสตางค์");
+        is_text(bt(0.25), "ยี่สิบห้าสตางค์");
         is_err(ev("BAHTTEXT", vec![t("abc")]), CellError::Value);
         // Huge numbers give text (or #NUM! where rounding overflows), never a panic.
         assert!(matches!(bt(-1e300), Value::Text(_)));

@@ -1863,13 +1863,11 @@ fn limits_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Result<Lines> {
     Ok(out)
 }
 
-/// Writes the reports on new sheets ("Answer Report 1"…) before the model's sheet, in one step;
-/// the model's sheet stays active. Returns the new sheets' names.
-fn write_reports(s: &mut Session, kinds: &[ReportKind], inp: &ReportInput) -> Result<Vec<String>> {
+/// Builds every report before the solution or saved model can change.
+fn prepare_reports(d: &DocState, kinds: &[ReportKind], inp: &ReportInput) -> Result<Vec<(String, Lines)>> {
     if kinds.is_empty() {
         return Ok(Vec::new());
     }
-    let d = s.doc()?;
     if d.wb.protected_structure {
         return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
     }
@@ -1886,41 +1884,48 @@ fn write_reports(s: &mut Session, kinds: &[ReportKind], inp: &ReportInput) -> Re
             .ok_or_else(|| EngineError::Other("Too many report sheets.".into()))?;
         built.push((name, lines));
     }
+    Ok(built)
+}
+
+/// Inserts prepared reports before the model's sheet, which stays active.
+fn write_reports(cx: &mut Ctx, at: usize, built: Vec<(String, Lines)>) -> Vec<String> {
     let names: Vec<String> = built.iter().map(|(n, _)| n.clone()).collect();
-    let at = inp.model.sheet;
     let count = built.len();
-    edit(s, |cx| {
-        let bold = cx.wb.styles.derive(gridcraft_model::StyleId::DEFAULT, |st| st.font.bold = true);
-        for (i, (name, lines)) in built.into_iter().enumerate() {
-            let mut sheet = Sheet::new(name);
-            for (r, c, v, b) in lines {
-                let style = if b { bold } else { gridcraft_model::StyleId::DEFAULT };
-                sheet.set_cell(CellRef::new(r, c), Cell { value: v, formula: None, style });
-            }
-            for (c, w) in [(0u32, 14.0f32), (1, 110.0), (2, 140.0), (3, 120.0), (4, 120.0), (5, 120.0), (6, 120.0), (7, 120.0)] {
-                sheet.cols.insert(c, gridcraft_model::LineInfo { size: Some(w), ..Default::default() });
-            }
-            cx.wb.sheets.insert(at + i, std::sync::Arc::new(sheet));
+    if count == 0 {
+        return names;
+    }
+    let bold = cx.wb.styles.derive(gridcraft_model::StyleId::DEFAULT, |st| st.font.bold = true);
+    for (i, (name, lines)) in built.into_iter().enumerate() {
+        let mut sheet = Sheet::new(name);
+        for (r, c, v, b) in lines {
+            let style = if b { bold } else { gridcraft_model::StyleId::DEFAULT };
+            sheet.set_cell(CellRef::new(r, c), Cell { value: v, formula: None, style });
         }
-        for nm in cx.wb.names.iter_mut() {
-            if let Some(sc) = nm.scope.as_mut()
-                && *sc >= at
-            {
-                *sc += count;
-            }
+        for (c, w) in [(0u32, 14.0f32), (1, 110.0), (2, 140.0), (3, 120.0), (4, 120.0), (5, 120.0), (6, 120.0), (7, 120.0)] {
+            sheet.cols.insert(c, gridcraft_model::LineInfo { size: Some(w), ..Default::default() });
         }
-        if cx.wb.active_sheet >= at {
-            cx.wb.active_sheet += count;
+        cx.wb.sheets.insert(at + i, std::sync::Arc::new(sheet));
+    }
+    for nm in cx.wb.names.iter_mut() {
+        if let Some(sc) = nm.scope.as_mut()
+            && *sc >= at
+        {
+            *sc += count;
         }
-        cx.structural = true;
-        Ok(())
-    })?;
+    }
+    if cx.wb.active_sheet >= at {
+        cx.wb.active_sheet += count;
+    }
+    cx.structural = true;
+    names
+}
+
+fn insert_report_selections(s: &mut Session, at: usize, count: usize) {
     if let Ok(d) = s.doc_mut() {
         for i in 0..count {
             d.sheet_selections.insert((at + i).min(d.sheet_selections.len()), crate::Selection::default());
         }
     }
-    Ok(names)
 }
 
 /// `data.solverReport`: reports for a solution of the sheet's saved model.
@@ -1973,7 +1978,9 @@ fn report(s: &mut Session, p: &Json) -> Result<Json> {
         .map_or(DEFAULT_EVALS, |v| (v as u64).min(MAX_EVALS));
     let message = str_param(p, "message").unwrap_or("").chars().take(500).collect();
     let inp = ReportInput { model: &model, prob: &prob, original, solution, message, budget };
-    let sheets = write_reports(s, &kinds, &inp)?;
+    let built = prepare_reports(s.doc()?, &kinds, &inp)?;
+    let sheets = edit(s, |cx| Ok(write_reports(cx, model.sheet, built)))?;
+    insert_report_selections(s, model.sheet, sheets.len());
     Ok(json!({"sheets": sheets}))
 }
 
@@ -2068,41 +2075,53 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let original: serde_json::Map<String, Json> = model.vars.iter().zip(&x0).map(|(c, v)| (c.a1(), json!(v))).collect();
     let changed = keep && solution.is_some();
-    if changed || save {
-        let sheet = model.sheet;
-        let vars = model.vars.clone();
-        let m = model.clone();
-        edit(s, |cx| {
-            if changed && let Some(x) = &solution {
-                let sh = cx.sheet_mut(sheet)?;
-                for (c, v) in vars.iter().zip(x) {
-                    let style = sh.style_id(*c);
-                    sh.set_cell(*c, Cell { value: Value::number(*v), formula: None, style });
-                }
-                for c in &vars {
-                    cx.touch(sheet, *c);
-                }
-            }
-            if save {
-                save_model(&mut cx.wb, &m);
-            }
-            Ok(())
-        })?;
-    }
+    let built = match (&reports, &solution) {
+        (Some(kinds), Some(x)) => {
+            let inp = ReportInput { model: &model, prob: &prob, original: x0, solution: x.clone(), message: message.to_string(), budget };
+            prepare_reports(s.doc()?, kinds, &inp)?
+        }
+        _ => Vec::new(),
+    };
+    let count = built.len();
+    let before = s.doc()?.wb.clone();
     let mut out = json!({
         "status": status,
         "message": message,
         "objective": objective,
         "values": values,
         "original": original,
-        "model": model_params(&s.doc()?.wb, &model),
+        "model": model_params(&before, &model),
         "evaluations": evaluations,
         "changed": changed,
     });
-    // Reports describe a solution; they are part of the solve's undo step.
-    if let (Some(kinds), Some(x)) = (reports, solution) {
-        let inp = ReportInput { model: &model, prob: &prob, original: x0, solution: x, message: message.to_string(), budget };
-        out["reports"] = json!(write_reports(s, &kinds, &inp)?);
+    let names = if changed || save || count > 0 {
+        let sheet = model.sheet;
+        edit(s, |cx| {
+            if changed && let Some(x) = &solution {
+                let sh = cx.sheet_mut(sheet)?;
+                for (c, v) in model.vars.iter().zip(x) {
+                    let style = sh.style_id(*c);
+                    sh.set_cell(*c, Cell { value: Value::number(*v), formula: None, style });
+                }
+                for c in &model.vars {
+                    cx.touch(sheet + count, *c);
+                }
+            }
+            if save {
+                save_model(&mut cx.wb, &model);
+            }
+            if count > 0 {
+                // Inserting sheets makes this structural, so retain the variable edit's array check.
+                check_arrays(&before, &cx.wb)?;
+            }
+            Ok(write_reports(cx, sheet, built))
+        })?
+    } else {
+        Vec::new()
+    };
+    insert_report_selections(s, model.sheet, count);
+    if reports.is_some() && solution.is_some() {
+        out["reports"] = json!(names);
     }
     Ok(out)
 }
@@ -2388,6 +2407,132 @@ mod tests {
         assert_eq!(s.execute("data.solverReport", p).unwrap()["sheets"], json!(["Answer Report 1"]));
         let r = row_of(&s, "Answer Report 1", "$B$2") + 1;
         assert_eq!(at(&s, "Answer Report 1", &format!("E{r}")), Value::number(2.0));
+    }
+
+    #[test]
+    fn refused_solver_reports_preserve_the_document_and_history() {
+        for (protected, method, constraints, reports, error) in [
+            (true, "simplex", json!(["A1 <= 4"]), json!(["answer"]), "workbook is protected"),
+            (false, "simplex", json!(["A1 <= 4", "A1 int"]), json!(["answer", "limits"]), "integer or binary"),
+            (false, "evolutionary", json!(["A1 <= 4"]), json!(["answer", "limits"]), "Simplex LP and GRG"),
+        ] {
+            for (keep, save) in [(true, true), (false, true), (true, false), (false, false)] {
+                let mut s = s();
+                set(&mut s, &[("A1", "1"), ("B1", "=2*A1")]);
+                s.execute(
+                    "data.solver",
+                    json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 2"], "method": "simplex", "keep": false}),
+                )
+                .unwrap();
+                set(&mut s, &[("C1", "redo")]);
+                s.execute("edit.undo", json!({})).unwrap();
+                let d = s.doc_mut().unwrap();
+                std::sync::Arc::make_mut(&mut d.wb).protected_structure = protected;
+                d.saved = d.wb.clone();
+                let before = d.clone();
+                let journal = s.journal.clone();
+                let err = s
+                    .execute(
+                        "data.solver",
+                        json!({"objective": "B1", "variables": "A1", "constraints": constraints, "method": method,
+                            "reports": reports, "keep": keep, "saveModel": save}),
+                    )
+                    .unwrap_err();
+                assert!(err.to_string().contains(error), "{err}");
+                let d = s.doc().unwrap();
+                assert!(std::sync::Arc::ptr_eq(&d.wb, &before.wb), "{method}: keep={keep}, save={save}: {err}");
+                assert!(!d.is_dirty());
+                assert_eq!(d.revision, before.revision);
+                assert_eq!(d.selection, before.selection);
+                assert_eq!(d.sheet_selections, before.sheet_selections);
+                for (after, before) in [(&d.undo, &before.undo), (&d.redo, &before.redo)] {
+                    assert_eq!(after.len(), before.len());
+                    for (a, b) in after.iter().zip(before) {
+                        assert!(std::sync::Arc::ptr_eq(&a.wb, &b.wb));
+                        assert_eq!((&a.label, &a.selection), (&b.label, &b.selection));
+                    }
+                }
+                assert_eq!(s.journal, journal);
+            }
+        }
+    }
+
+    #[test]
+    fn solver_reports_and_optional_solution_and_model_share_one_undo() {
+        for (keep, save) in [(true, true), (false, true), (true, false), (false, false)] {
+            let mut s = s();
+            set(&mut s, &[("A1", "1"), ("B1", "=2*A1")]);
+            let before = s.doc().unwrap().clone();
+            let out = s
+                .execute(
+                    "data.solver",
+                    json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4"], "method": "simplex",
+                        "reports": ["answer"], "keep": keep, "saveModel": save}),
+                )
+                .unwrap();
+            assert_eq!(out["status"], "optimal");
+            assert_eq!(out["reports"], json!(["Answer Report 1"]));
+            assert_eq!(out["model"]["objective"], "Sheet1!B1");
+            assert_eq!(n(&s, "A1"), if keep { 4.0 } else { 1.0 });
+            assert_eq!(saved(&s), if save { "solver_opt" } else { "" });
+            assert_eq!(s.doc().unwrap().undo.len(), before.undo.len() + 1);
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().name, "Sheet1");
+            let r = row_of(&s, "Answer Report 1", "$A$1") + 1;
+            assert_eq!(at(&s, "Answer Report 1", &format!("E{r}")), Value::number(4.0));
+            s.execute("edit.undo", json!({})).unwrap();
+            assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before.wb));
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(s.doc().unwrap().wb.sheets.len(), 2);
+            assert_eq!(n(&s, "A1"), if keep { 4.0 } else { 1.0 });
+        }
+    }
+
+    #[test]
+    fn solver_reports_keep_row_autofit_on_the_model_sheet() {
+        let mut s = s();
+        set(&mut s, &[("A1", "1"), ("B1", "=2*A1")]);
+        s.execute("home.columnWidth", json!({"cols": "A:A", "width": 30})).unwrap();
+        s.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
+        let before = s.doc().unwrap().wb.active().unwrap().row_height(0);
+        s.execute(
+            "data.solver",
+            json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 1000000"], "method": "simplex", "reports": ["answer"]}),
+        )
+        .unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert_eq!(sh.name, "Sheet1");
+        assert_eq!(sh.value(CellRef::new(0, 0)), Value::number(1_000_000.0));
+        assert!(sh.row_height(0) > before, "the solved wrapped number must re-fit its row after the report shifts its sheet");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().row_height(0), before);
+    }
+
+    #[test]
+    fn solver_report_insertion_keeps_variable_edit_guards() {
+        for array in [false, true] {
+            let mut s = s();
+            set(&mut s, &[("A2", "1"), ("B1", "=2*A2")]);
+            let error = if array {
+                s.execute("selection.set", json!({"range": "A1:A2"})).unwrap();
+                s.execute("cell.set", json!({"input": "=1", "array": true})).unwrap();
+                "part of an array"
+            } else {
+                s.execute("review.protectSheet", json!({})).unwrap();
+                "protected sheet"
+            };
+            let before = s.doc().unwrap().clone();
+            let err = s
+                .execute(
+                    "data.solver",
+                    json!({"objective": "B1", "variables": "A2", "constraints": ["A2 <= 4"], "method": "simplex", "reports": ["answer"]}),
+                )
+                .unwrap_err();
+            assert!(err.to_string().contains(error), "{err}");
+            let d = s.doc().unwrap();
+            assert!(std::sync::Arc::ptr_eq(&d.wb, &before.wb));
+            assert_eq!(d.undo.len(), before.undo.len());
+            assert_eq!(d.sheet_selections, before.sheet_selections);
+        }
     }
 
     #[test]

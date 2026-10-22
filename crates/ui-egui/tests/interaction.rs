@@ -177,7 +177,8 @@ fn keyboard_navigation_does_not_replay_the_last_pointer_click() {
         (Key::Enter, Modifiers::NONE, "B5"),
         (Key::Enter, Modifiers::SHIFT, "B4"),
         (Key::Tab, Modifiers::NONE, "C4"),
-        (Key::Enter, Modifiers::NONE, "C5"),
+        // #911: Enter after a Tab goes back to the column the Tab started from.
+        (Key::Enter, Modifiers::NONE, "B5"),
     ] {
         key(&mut h, key_code, modifiers);
         let selection = &h.state().session.active().unwrap().selection;
@@ -228,6 +229,19 @@ fn name_box_enter_goes_to_the_typed_cell_not_the_one_below() {
 }
 
 #[test]
+fn name_box_shows_a_name_defined_on_a_sheet_with_an_apostrophe() {
+    // #1458: the quotes of `'Bob''s'!$A$1:$B$2` were taken off without reading `''` as `'`.
+    let mut h = harness(blank());
+    let session = &mut h.state_mut().session;
+    session.run("home.insertSheet", json!({"name": "Bob's"})).unwrap();
+    session.run("sheet.activate", json!({"sheet": "Bob's"})).unwrap();
+    session.run("formulas.defineName", json!({"name": "Box", "refersTo": "='Bob''s'!$A$1:$B$2"})).unwrap();
+    session.run("selection.set", json!({"range": "A1:B2"})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().name_box_text(), "Box");
+}
+
+#[test]
 fn typing_enters_values_and_moves_down() {
     let mut h = harness(blank());
     text(&mut h, "42");
@@ -239,6 +253,50 @@ fn typing_enters_values_and_moves_down() {
     assert_eq!(value(&h, "A2"), Value::Number(84.0));
     let active = h.state().session.active().map(|d| d.selection.active.a1());
     assert_eq!(active.as_deref(), Some("B2"));
+}
+
+#[test]
+fn enter_after_tabs_returns_to_the_column_where_the_tabs_started() {
+    // #911: Excel moves to the next row in the column the run of Tabs started from.
+    let mut h = harness(blank());
+    for t in ["a", "b"] {
+        text(&mut h, t);
+        key(&mut h, Key::Tab, Modifiers::NONE);
+    }
+    text(&mut h, "c");
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(value(&h, "C1"), Value::from("c"));
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A2");
+    // The next Enter is an ordinary one again.
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A3");
+}
+
+#[test]
+fn moving_with_an_arrow_ends_the_run_of_tabs() {
+    let mut h = harness(blank());
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "C2");
+}
+
+#[test]
+fn an_arrow_that_commits_typing_ends_the_run_of_tabs() {
+    // Excel 365 from B2: the arrow is an ordinary move, neither one more Tab (Right) nor an Enter
+    // back to the starting column (Down).
+    for (arrow, after_enter) in [(Key::ArrowRight, "D3"), (Key::ArrowDown, "C4")] {
+        let mut s = blank();
+        s.execute("selection.set", json!({"cell": "B2"})).unwrap();
+        let mut h = harness(s);
+        text(&mut h, "a");
+        key(&mut h, Key::Tab, Modifiers::NONE);
+        text(&mut h, "b");
+        key(&mut h, arrow, Modifiers::NONE);
+        assert_eq!(value(&h, "C2"), Value::from("b"), "{arrow:?}");
+        key(&mut h, Key::Enter, Modifiers::NONE);
+        assert_eq!(h.state().session.active().unwrap().selection.active.a1(), after_enter, "{arrow:?}");
+    }
 }
 
 #[test]
@@ -364,6 +422,9 @@ fn language_switch_translates_the_ribbon_and_persists() {
         (Language::Ru, "Данные"),
         (Language::PtBr, "Dados"),
         (Language::De, "Daten"),
+        (Language::Fr, "Données"),
+        (Language::Tr, "Veri"),
+        (Language::It, "Dati"),
     ] {
         h.state_mut().run("app.language.set", json!({"language": language.code()})).unwrap();
         h.run_steps(2); // every locale renders the ribbon without panicking
@@ -401,6 +462,28 @@ fn pivot_fields_pane_follows_the_interface_language() {
         assert!(h.query_by_label(label).is_some(), "the field menu shows `{label}`");
     }
     assert!(h.query_by_label("Remove Field").is_none());
+}
+
+#[test]
+fn pivot_fields_pane_reuses_its_field_list_until_the_workbook_changes() {
+    // #2113: the pane ran `pivot.fields`, a scan of the whole source list, on every frame.
+    let mut h = harness(blank());
+    h.state_mut().run("range.setValues", json!({"range": "A1:B3", "values": [["Region", "Sales"], ["North", 10], ["South", 20]]})).unwrap();
+    h.state_mut().run("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$3", "rows": ["Region"], "destination": "Sheet1!D1"})).unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label("Sales").is_some(), "the pane lists the source fields");
+    let (key, mut info) = h.state().grid.pivot_fields.clone().expect("the pane keeps its field list");
+    info["fields"][1]["name"] = json!("Cached");
+    h.state_mut().grid.pivot_fields = Some((key, info));
+    h.run_steps(2);
+    assert!(h.query_by_label("Cached").is_some(), "repaints reuse the kept list instead of scanning the source again");
+    h.state_mut().run("cell.set", json!({"cell": "B1", "input": "Revenue"})).unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label("Cached").is_none(), "an edit drops the kept list");
+    assert!(h.query_by_label("Revenue").is_some(), "the pane shows the edited source");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label("Sales").is_some(), "undo brings the previous field list back");
 }
 
 #[test]
@@ -483,6 +566,19 @@ fn recommended_charts_dialog_inserts_the_chosen_chart() {
     h.state_mut().open_dialog("recommendedCharts", json!({}));
     assert!(h.state().dialog.is_none());
     assert!(h.state().message.is_some());
+}
+
+#[test]
+fn recommended_charts_command_without_a_type_opens_the_dialog() {
+    // #1399: the ribbon button and the NR keytip ran the command directly and inserted the first
+    // recommendation (a scatter plot) instead of showing the chart picker.
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3], ["Plums", 2]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().run_or_alert("insert.recommendedCharts", json!({}));
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("recommendedCharts"));
+    assert!(h.state().session.active().unwrap().wb.active().unwrap().charts.is_empty(), "no chart is inserted before one is picked");
 }
 
 #[test]
@@ -750,7 +846,7 @@ fn column_autocomplete_can_be_turned_off() {
 /// An .xlsm carrying a VBA project, saved to bytes.
 fn macro_workbook_bytes() -> Vec<u8> {
     let mut wb = gridcraft_engine::model::Workbook::new();
-    wb.vba_project = Some(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 fake OLE2 vbaProject".to_vec());
+    wb.vba_project = Some(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 fake OLE2 vbaProject".to_vec().into());
     gridcraft_engine::io::save_bytes(&wb, "macros.xlsm").unwrap()
 }
 
@@ -782,6 +878,19 @@ fn opening_a_macro_workbook_shows_a_notice() {
 }
 
 #[test]
+fn dropped_macro_warning_never_promises_to_keep_macros() {
+    let mut h = harness(blank());
+    for w in ["macros (VBA project) reference a missing part and were dropped", "macros (VBA project) could not be read and were dropped: bad zip"] {
+        h.state_mut().show_open_warnings(&json!({"warnings": [w]}));
+        let n = h.state().notice.clone().unwrap();
+        assert_eq!(n.kind, gridcraft_ui_egui::NoticeKind::Warning);
+        assert!(n.text.contains("dropped") && !n.text.contains("keeps them"), "{}", n.text);
+    }
+    h.state_mut().show_open_warnings(&json!({"warnings": ["macros (VBA project) were kept but not executed"]}));
+    assert!(h.state().notice.clone().unwrap().text.contains("keeps them when you save as .xlsm"));
+}
+
+#[test]
 fn plain_open_warning_becomes_an_info_notice() {
     let mut h = harness(blank());
     h.state_mut().show_open_warnings(&json!({"warnings": ["links to external workbooks are not supported"]}));
@@ -798,7 +907,7 @@ fn plain_open_warning_becomes_an_info_notice() {
 fn macros_dialog_lists_vba_and_scripts() {
     let mut s = blank();
     let mut wb = gridcraft_engine::model::Workbook::new();
-    wb.vba_project = Some(vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    wb.vba_project = Some(vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1].into());
     s.active_mut().unwrap().wb = std::sync::Arc::new(wb);
     let mut h = harness(s);
     h.state_mut().open_dialog("macros", json!({}));
@@ -814,7 +923,7 @@ fn macros_dialog_lists_vba_and_scripts() {
 fn status_bar_shows_macro_badge() {
     let mut s = blank();
     let mut wb = gridcraft_engine::model::Workbook::new();
-    wb.vba_project = Some(vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    wb.vba_project = Some(vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1].into());
     s.active_mut().unwrap().wb = std::sync::Arc::new(wb);
     // Rendering the status bar must not panic with a VBA project present.
     let mut h = harness(s);
@@ -910,4 +1019,22 @@ fn undo_after_backspace_restores_the_cleared_cell() {
     key(&mut h, Key::Z, Modifiers::COMMAND);
     assert_eq!(value(&h, "A1"), Value::Number(3200.0));
     assert_eq!(value(&h, "C5"), Value::Number(11750.0));
+}
+
+#[test]
+fn header_footer_dialog_opens_on_the_saved_header_and_footer() {
+    // #523: the dialog started from a fixed empty header and `&CPage &P of &N`, so OK replaced the sheet's text.
+    let mut s = blank();
+    s.execute("pageLayout.headerFooter", json!({"header": "&LLeft", "footer": "&CConfidential"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("headerFooter", json!({}));
+    h.run_steps(2);
+    let d = h.state_mut().dialog.as_mut().unwrap();
+    assert_eq!(d.values["header"], json!("&LLeft"));
+    assert_eq!(d.values["footer"], json!("&CConfidential"));
+    d.values.insert("header".into(), json!("&CNew"));
+    let vals = json!(d.values.clone());
+    h.state_mut().run("pageLayout.headerFooter", vals).unwrap();
+    let pr = &h.state().session.active().unwrap().wb.active().unwrap().print;
+    assert_eq!((pr.header.as_str(), pr.footer.as_str()), ("&CNew", "&CConfidential"));
 }

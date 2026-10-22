@@ -29,12 +29,35 @@ pub struct ControlRequest {
     pub method: String,
     pub params: Json,
     pub reply: Sender<ControlResponse>,
+    /// Who has the request: [`PENDING`], [`TAKEN`] (the app runs it) or [`ABANDONED`] (the sender
+    /// gave up waiting, so the app must not run it late: a client told its request timed out had
+    /// it applied anyway on the next UI pass, and an agent that retried ran it twice (#1914).
+    pub state: std::sync::Arc<std::sync::atomic::AtomicU8>,
 }
+
+/// Queued, not yet run.
+pub const PENDING: u8 = 0;
+/// The app has started it: it will answer.
+pub const TAKEN: u8 = 1;
+/// Its sender gave up waiting (the reply timeout expired): it is dropped unrun.
+pub const ABANDONED: u8 = 2;
 
 impl ControlRequest {
     pub fn new(method: impl Into<String>, params: Json) -> (Self, std::sync::mpsc::Receiver<ControlResponse>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx }, rx)
+        (Self { method: method.into(), params, reply: tx, state: Default::default() }, rx)
+    }
+
+    /// Claim the request for running; false when its sender already gave up on it.
+    pub fn take(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.state.compare_exchange(PENDING, TAKEN, Ordering::SeqCst, Ordering::SeqCst).is_ok() || self.state.load(Ordering::SeqCst) == TAKEN
+    }
+
+    /// Give up on the request; false when the app has already started it (it will answer).
+    pub fn abandon(state: &std::sync::atomic::AtomicU8) -> bool {
+        use std::sync::atomic::Ordering;
+        state.compare_exchange(PENDING, ABANDONED, Ordering::SeqCst, Ordering::SeqCst).is_ok() || state.load(Ordering::SeqCst) == ABANDONED
     }
 }
 
@@ -69,6 +92,16 @@ fn wrap(r: Result<Json, String>) -> Outcome {
         Ok(v) => ok(v),
         Err(e) => err(e),
     }
+}
+
+/// Runs a command for an agent. Commands that move the selection scroll the active cell into
+/// view, as the Go To dialog, the Name Box and the arrow keys do.
+fn run(app: &mut SheetApp, id: &str, params: Json) -> Result<Json, String> {
+    let r = app.run(id, params);
+    if r.is_ok() && matches!(id, "edit.goTo" | "edit.goToSpecial" | "selection.set" | "selection.move") {
+        app.grid.ensure_visible = true;
+    }
+    r
 }
 
 pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
@@ -133,24 +166,42 @@ fn cell_center(app: &SheetApp, c: CellRef) -> Option<egui::Pos2> {
     Some(geo.screen_cell_rect(sh, c).center())
 }
 
-fn push_click(app: &mut SheetApp, pos: egui::Pos2, button: egui::PointerButton, count: u32, m: egui::Modifiers) {
+/// Most synthetic pointer events a control client may keep queued at once (the queue drains one batch per frame).
+const MAX_QUEUED_POINTER_EVENTS: usize = 10_000;
+
+/// Refuses a request that would push the queued pointer events past [`MAX_QUEUED_POINTER_EVENTS`]; the queue is left unchanged.
+fn pointer_budget(app: &SheetApp, extra: usize) -> Result<(), String> {
+    let queued: usize = app.synthetic.iter().map(Vec::len).sum();
+    if queued.saturating_add(extra) > MAX_QUEUED_POINTER_EVENTS {
+        return Err(format!("too many pointer events (limit {MAX_QUEUED_POINTER_EVENTS} queued at once)"));
+    }
+    Ok(())
+}
+
+fn push_click(app: &mut SheetApp, pos: egui::Pos2, button: egui::PointerButton, count: u32, m: egui::Modifiers) -> Result<(), String> {
+    let count = count.max(1) as usize;
+    pointer_budget(app, count.saturating_mul(2).saturating_add(1))?;
     app.synthetic.push_back(vec![egui::Event::PointerMoved(pos)]);
-    let mut batch = Vec::new();
-    for _ in 0..count.max(1) {
+    let mut batch = Vec::with_capacity(count * 2);
+    for _ in 0..count {
         batch.push(egui::Event::PointerButton { pos, button, pressed: true, modifiers: m });
         batch.push(egui::Event::PointerButton { pos, button, pressed: false, modifiers: m });
     }
     app.synthetic.push_back(batch);
+    Ok(())
 }
 
-fn push_drag(app: &mut SheetApp, a: egui::Pos2, b: egui::Pos2, steps: usize, m: egui::Modifiers) {
+fn push_drag(app: &mut SheetApp, a: egui::Pos2, b: egui::Pos2, steps: usize, m: egui::Modifiers) -> Result<(), String> {
+    let steps = steps.max(1);
+    pointer_budget(app, steps.saturating_add(3))?;
     app.synthetic.push_back(vec![egui::Event::PointerMoved(a)]);
     app.synthetic.push_back(vec![egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: m }]);
-    for i in 1..=steps.max(1) {
-        let t = i as f32 / steps.max(1) as f32;
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
         app.synthetic.push_back(vec![egui::Event::PointerMoved(a + (b - a) * t)]);
     }
     app.synthetic.push_back(vec![egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: m }]);
+    Ok(())
 }
 
 /// Keeps the commands whose id, label or ribbon path contains `search` (case-insensitive); `None` keeps all.
@@ -171,10 +222,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         "engine.execute" | "command" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
-            wrap(app.run(id, if params.is_null() { json!({}) } else { params }))
+            wrap(run(app, id, if params.is_null() { json!({}) } else { params }))
         }
         "engine.commands" => {
             let mut v: Vec<Json> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
+            let language_params = format!("{{language: {}}} (alias: code)", crate::i18n::Language::code_list("|"));
             for (id, label, params) in [
                 ("ui.ribbonTab", "Ribbon Tab", ""),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
@@ -184,7 +236,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
-                ("ui.backstage", "File (Backstage view)", "{page?: home|new|open|info|saveAs|print|export|options|close}"),
+                ("ui.backstage", "File (Backstage view)", "{page?: home|new|open|info|saveAs|print|export|options|account|close}"),
                 (
                     "ui.printSettings",
                     "Print Settings",
@@ -195,7 +247,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                     "Submit Print Job",
                     "existing file.print sheet/pagination params → {printing,bytes,pending}; submits without opening a dialog",
                 ),
-                ("app.language.set", "Interface Language", "{language: \"en\"|\"zh\"|\"ja\"|\"ko\"|\"ru\"|\"pt\"|\"de\"|\"cs\"} (alias: code)"),
+                ("app.language.set", "Interface Language", language_params.as_str()),
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),
             ] {
@@ -252,7 +304,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         "ui.dialog.confirm" => match app.dialog.take() {
             Some(d) => match d.command {
                 Some(cmd) => {
-                    let params = Json::Object(d.values.clone());
+                    let params = crate::dialogs::build_params(&d);
                     let r = app.run(cmd, params);
                     if r.is_err() {
                         app.dialog = Some(d);
@@ -323,33 +375,38 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         }
         "ui.click" => {
             let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
-            push_click(app, egui::pos2(f("x"), f("y")), button, p.get("count").and_then(Json::as_u64).unwrap_or(1) as u32, modifiers(p));
-            ok(Json::Null)
+            let count = p.get("count").and_then(Json::as_u64).unwrap_or(1).min(u64::from(u32::MAX)) as u32;
+            match push_click(app, egui::pos2(f("x"), f("y")), button, count, modifiers(p)) {
+                Ok(()) => ok(Json::Null),
+                Err(e) => err(e),
+            }
         }
         "ui.drag" => {
-            push_drag(
-                app,
-                egui::pos2(f("x"), f("y")),
-                egui::pos2(f("toX"), f("toY")),
-                p.get("steps").and_then(Json::as_u64).unwrap_or(8) as usize,
-                modifiers(p),
-            );
-            ok(Json::Null)
+            let steps = p.get("steps").and_then(Json::as_u64).unwrap_or(8).min(u64::from(u32::MAX)) as usize;
+            match push_drag(app, egui::pos2(f("x"), f("y")), egui::pos2(f("toX"), f("toY")), steps, modifiers(p)) {
+                Ok(()) => ok(Json::Null),
+                Err(e) => err(e),
+            }
         }
         "ui.cell.click" => {
             let Some(c) = s("cell").and_then(CellRef::parse) else { return err("missing `cell`") };
             let Some(pos) = cell_center(app, c) else { return err("no grid yet") };
             let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
-            push_click(app, pos, button, p.get("count").and_then(Json::as_u64).unwrap_or(1) as u32, modifiers(p));
-            ok(json!({"x": pos.x, "y": pos.y}))
+            let count = p.get("count").and_then(Json::as_u64).unwrap_or(1).min(u64::from(u32::MAX)) as u32;
+            match push_click(app, pos, button, count, modifiers(p)) {
+                Ok(()) => ok(json!({"x": pos.x, "y": pos.y})),
+                Err(e) => err(e),
+            }
         }
         "ui.cell.drag" => {
             let (Some(a), Some(b)) = (s("from").and_then(CellRef::parse), s("to").and_then(CellRef::parse)) else {
                 return err("missing `from`/`to`");
             };
             let (Some(pa), Some(pb)) = (cell_center(app, a), cell_center(app, b)) else { return err("no grid yet") };
-            push_drag(app, pa, pb, 8, modifiers(p));
-            ok(Json::Null)
+            match push_drag(app, pa, pb, 8, modifiers(p)) {
+                Ok(()) => ok(Json::Null),
+                Err(e) => err(e),
+            }
         }
         "ui.resize" => {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(f("width").max(400.0), f("height").max(300.0))));
@@ -377,11 +434,13 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         }
         "app.save" => wrap(app.run("file.save", json!({"path": s("path")}))),
         "app.quit" => {
+            // Programmatic calls never open dialogs: quitting from here doesn't ask about unsaved work.
+            app.allow_close = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             ok(Json::Null)
         }
         // Anything else that names a command runs it.
-        other if gridcraft_engine::find_command(other).is_some() => wrap(app.run(other, p.clone())),
+        other if gridcraft_engine::find_command(other).is_some() => wrap(run(app, other, p.clone())),
         other => err(format!("unknown method `{other}`")),
     };
     ctx.request_repaint();
@@ -391,6 +450,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
 pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(rx) = app.control_rx.take() else { return };
     while let Ok(req) = rx.try_recv() {
+        // A request whose sender stopped waiting is dropped unrun: running it would apply a
+        // command the client was told had failed, and its reply would go nowhere (#1914).
+        if !req.take() {
+            continue;
+        }
         let outcome = handle(app, ctx, &req.method, &req.params);
         match outcome {
             Outcome::Done(v) => {
@@ -506,6 +570,33 @@ mod tests {
         assert_eq!(filter_commands(sample(), None).len(), 3);
     }
 
+    fn test_app() -> SheetApp {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        SheetApp::new(session, crate::Services::default())
+    }
+
+    #[test]
+    fn oversized_pointer_requests_are_refused_and_leave_the_queue_alone() {
+        let mut app = test_app();
+        let p = egui::pos2(20.0, 20.0);
+        let m = egui::Modifiers::NONE;
+        let btn = egui::PointerButton::Primary;
+        assert!(push_click(&mut app, p, btn, 2, m).is_ok());
+        assert_eq!(app.synthetic.iter().map(Vec::len).sum::<usize>(), 5);
+        assert!(push_click(&mut app, p, btn, u32::MAX, m).is_err());
+        assert!(push_drag(&mut app, p, p, usize::MAX, m).is_err());
+        assert!(push_drag(&mut app, p, p, MAX_QUEUED_POINTER_EVENTS, m).is_err());
+        assert_eq!(app.synthetic.len(), 2);
+        assert_eq!(app.synthetic.iter().map(Vec::len).sum::<usize>(), 5);
+        // Already queued input counts toward the budget.
+        assert!(push_click(&mut app, p, btn, (MAX_QUEUED_POINTER_EVENTS / 2) as u32, m).is_err());
+        assert_eq!(app.synthetic.len(), 2);
+        // Normal requests still queue in full.
+        assert!(push_drag(&mut app, p, p + egui::vec2(40.0, 40.0), 3, m).is_ok());
+        assert_eq!(app.synthetic.len(), 8);
+    }
+
     #[test]
     fn print_command_discovery_documents_settings_and_submission() {
         let mut session = gridcraft_engine::Session::new();
@@ -529,5 +620,20 @@ mod tests {
         }
         assert!(!app.printing.busy(), "discovery must not submit a job");
         assert!(app.backstage.is_none(), "discovery must not open settings");
+    }
+
+    #[test]
+    fn language_command_docs_list_every_language() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, crate::Services::default());
+        let Outcome::Done(reply) = handle(&mut app, &egui::Context::default(), "engine.commands", &json!({"search":"language"})) else {
+            panic!("command discovery must return immediately");
+        };
+        let commands = reply["result"].as_array().unwrap();
+        let docs = commands.iter().find(|c| c["id"] == "app.language.set").unwrap()["params"].as_str().unwrap();
+        for l in crate::i18n::Language::ALL {
+            assert!(docs.contains(&format!("\"{}\"", l.code())), "app.language.set docs miss {:?}: {docs}", l.code());
+        }
     }
 }

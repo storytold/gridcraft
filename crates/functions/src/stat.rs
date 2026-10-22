@@ -534,6 +534,25 @@ fn strict_num(v: &Value) -> R<f64> {
     }
 }
 
+/// Most predictor columns LINEST, LOGEST, TREND and GROWTH accept. The normal equations are a
+/// k×k matrix inverted in O(k³), so an unbounded k (one `SEQUENCE(1,16384)` argument) allocated
+/// gigabytes and could abort the process.
+const MAX_REGRESSORS: usize = 255;
+/// Most multiply-adds (rows × k²) a regression may spend building its normal equations.
+const MAX_REGRESSION_WORK: usize = 1_000_000_000;
+
+/// Rejects regressions too large to fit: more than [`MAX_REGRESSORS`] predictors is `#VALUE!`,
+/// more than [`MAX_REGRESSION_WORK`] multiply-adds is `#NUM!`.
+fn check_regression_size(n: usize, k: usize) -> R<()> {
+    if k > MAX_REGRESSORS {
+        return Err(CellError::Value);
+    }
+    match n.checked_mul(k).and_then(|nk| nk.checked_mul(k)) {
+        Some(work) if work <= MAX_REGRESSION_WORK => Ok(()),
+        _ => Err(CellError::Num),
+    }
+}
+
 fn parse_xy(y: &Value, x: Option<&Value>) -> R<Xy> {
     let ya = as_array(y);
     let n = ya.data.len();
@@ -546,12 +565,14 @@ fn parse_xy(y: &Value, x: Option<&Value>) -> R<Xy> {
             if xa.rows == ya.rows && xa.cols == ya.cols {
                 (xa.data.iter().map(|v| strict_num(v).map(|f| vec![f])).collect::<R<Vec<_>>>()?, 1)
             } else if !y_is_row && xa.rows == n {
+                check_regression_size(n, xa.cols)?;
                 let mut rows = Vec::with_capacity(n);
                 for r in 0..n {
                     rows.push((0..xa.cols).map(|c| strict_num(xa.get(r, c).unwrap_or(&Value::Empty))).collect::<R<Vec<_>>>()?);
                 }
                 (rows, xa.cols)
             } else if y_is_row && xa.cols == n {
+                check_regression_size(n, xa.rows)?;
                 let mut rows = Vec::with_capacity(n);
                 for c in 0..n {
                     rows.push((0..xa.rows).map(|r| strict_num(xa.get(r, c).unwrap_or(&Value::Empty))).collect::<R<Vec<_>>>()?);
@@ -638,6 +659,7 @@ fn regress(y: &[f64], x: &[Vec<f64>], k: usize, constant: bool) -> R<Fit> {
     if n == 0 || x.len() != n {
         return Err(CellError::Value);
     }
+    check_regression_size(n, k)?;
     let nf = n as f64;
     let (xm, ym) = if constant {
         let xm: Vec<f64> = (0..k).map(|j| x.iter().map(|r| r.get(j).copied().unwrap_or(0.0)).sum::<f64>() / nf).collect();
@@ -1243,6 +1265,10 @@ fn binom_inv(a: &[Arg], _: C) -> R<Value> {
     }
     while hi - lo > 1.0 {
         let mid = ((lo + hi) / 2.0).floor();
+        // Above 2^53 adjacent f64 values are more than 1 apart, so the gap can stop shrinking.
+        if mid <= lo || mid >= hi {
+            break;
+        }
         if binom_cdf(mid, n, p) >= alpha {
             hi = mid;
         } else {
@@ -2245,7 +2271,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
 
 #[cfg(test)]
 mod tests {
-    use super::{aggregate_values, aggregate_values_k};
+    use super::{MAX_REGRESSORS, aggregate_values, aggregate_values_k, check_regression_size};
     use crate::util::testutil::*;
     use gridcraft_core::{CellError, Value};
 
@@ -2531,6 +2557,28 @@ mod tests {
         is_err(ev("LINEST", vec![c(&[1.0, 2.0]), c(&[1.0, 2.0, 3.0])]), CellError::Ref);
     }
 
+    // #2177: one predictor row of 16,384 columns built three 16,384² matrices (6 GB) and an O(k³)
+    // inversion; a wider TOROW aborted the process. It is now refused before allocating.
+    #[test]
+    fn linest_family_caps_regressor_count() {
+        let wide = |k: usize| av(arr(vec![(0..k).map(|i| nv(i as f64)).collect()]));
+        let tall = |k: usize| av(arr((0..k).map(|i| vec![nv(i as f64), nv(1.0)]).collect()));
+        for f in ["LINEST", "LOGEST", "TREND", "GROWTH"] {
+            // y is one cell, so every column of x is a predictor.
+            is_err(ev(f, vec![n(1.0), wide(16_384)]), CellError::Value);
+            // y is a row, so every row of x is a predictor.
+            is_err(ev(f, vec![av(arr(vec![vec![nv(1.0), nv(2.0)]])), tall(16_384)]), CellError::Value);
+        }
+        is_err(ev("LINEST", vec![n(1.0), wide(MAX_REGRESSORS + 1)]), CellError::Value);
+        // At the cap the fit still runs (one observation: coefficients are zero, not an error).
+        assert_eq!(rows_of(&ev("LINEST", vec![n(1.0), wide(MAX_REGRESSORS)]))[0].len(), MAX_REGRESSORS + 1);
+        // The rows × k² work bound.
+        assert_eq!(check_regression_size(1_000, MAX_REGRESSORS), Ok(()));
+        assert_eq!(check_regression_size(1_000_000, 100), Err(CellError::Num));
+        assert_eq!(check_regression_size(usize::MAX, 2), Err(CellError::Num));
+        assert_eq!(check_regression_size(10_000_000, 1), Ok(()));
+    }
+
     #[test]
     fn frequency_prob() {
         let f = ev("FREQUENCY", vec![c(&[79.0, 85.0, 78.0, 85.0, 50.0, 81.0, 95.0, 88.0, 97.0]), c(&[70.0, 79.0, 89.0])]);
@@ -2622,6 +2670,24 @@ mod tests {
         close_tol(ev("F.TEST", vec![c(&[6.0, 7.0, 9.0, 15.0, 21.0]), c(&[20.0, 28.0, 31.0, 38.0, 40.0])]), 0.64831785, D7);
         close_tol(ev("FTEST", vec![c(&[6.0, 7.0, 9.0, 15.0, 21.0]), c(&[20.0, 28.0, 31.0, 38.0, 40.0])]), 0.64831785, D7);
         is_err(ev("F.DIST", vec![n(1.0), n(0.0), n(4.0), b(true)]), CellError::Num);
+    }
+
+    #[test]
+    fn binom_inv_huge_trials_returns() {
+        // Above 2^53 neighbouring f64 values are more than 1 apart; the bisection must still end.
+        let cases: [(&str, f64, f64, f64); 3] = [("BINOM.INV", 1e17, 0.5, 0.5), ("CRITBINOM", 1e300, 1.0, 0.5), ("BINOM.INV", 1e300, 0.5, 0.5)];
+        for (name, trials, p, alpha) in cases {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let r = ev(name, vec![n(trials), n(p), n(alpha)]);
+                let _ = tx.send(r);
+            });
+            match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                Ok(Value::Number(_)) | Ok(Value::Error(CellError::Num)) => {}
+                Ok(other) => panic!("{name}({trials},{p},{alpha}) returned {other:?}"),
+                Err(_) => panic!("{name}({trials},{p},{alpha}) did not return within 5 s"),
+            }
+        }
     }
 
     #[test]

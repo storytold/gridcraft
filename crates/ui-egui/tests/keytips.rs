@@ -391,6 +391,25 @@ fn tab_letters_switch_to_their_ribbon_tabs() {
 }
 
 #[test]
+fn f_opens_the_file_view_and_its_letters_still_run() {
+    use gridcraft_ui_egui::backstage::Page;
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::F], false);
+    assert_eq!(h.state().backstage.as_ref().map(|b| b.page), Some(Page::Home), "F opens the File view on Home");
+    assert_eq!(h.state().keytips.prefix(), Some("F"));
+    // Esc backs out one level: the File view closes and the tab letters show again.
+    key(&mut h, Key::Escape);
+    assert!(h.state().backstage.is_none());
+    assert_eq!(h.state().keytips.prefix(), Some(""));
+    letter(&mut h, Key::F, false);
+    assert!(h.state().backstage.is_some());
+    letter(&mut h, Key::N, false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "file.new"), "F, N still runs New");
+    assert!(h.state().backstage.is_none(), "the command runs on the sheet, as before the view opened");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
 fn view_gridlines_sequence_runs_end_to_end() {
     let mut h = harness(blank());
     let gridlines = |h: &Harness| h.state().session.active().unwrap().wb.active().unwrap().show_gridlines;
@@ -569,7 +588,10 @@ fn editable_combos_filter_by_typing_and_move_by_arrows() {
     key(&mut h, Key::Enter);
     h.run_steps(3);
     assert!(h.state().message.is_none() && h.state().toast.is_none(), "custom sizes must apply");
-    assert_eq!(h.query_all_by_label("13.5").count(), 1, "the button must show the custom size");
+    assert!(
+        h.get_all_by_role(egui::accesskit::Role::TextInput).any(|n| n.value().as_deref() == Some("13.5")),
+        "the size box must show the custom size"
+    );
 
     // Closing without applying (Escape) and reopening must reset the filter to the full list.
     let mut h = harness(blank());
@@ -623,4 +645,38 @@ fn every_sequence_terminates_without_panicking() {
         // A finish/tab/dialog/wait state is all fine; the point is nothing panics.
     }
     assert_eq!(SEQUENCES.len(), SEQUENCES.len(), "every sequence ran");
+}
+
+/// The font list's highlight is a position in the filtered rows (#1365): with "ar" typed the rows
+/// are Aptos Narrow, Arial, Candara, Garamond, and the highlight starts on the current font's
+/// row (index 3, clamped to the filtered list). Down twice lands on the second row, Arial. Clearing
+/// the filter brings the other fonts back.
+#[test]
+fn font_dropdown_highlight_follows_the_filtered_rows() {
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::H, Key::F, Key::F], false);
+    h.run_steps(3);
+    events(&mut h, [Event::Text("ar".into())]);
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Georgia").count(), 0, "typing must narrow the list");
+    key(&mut h, Key::ArrowDown);
+    key(&mut h, Key::ArrowDown);
+    key(&mut h, Key::Enter);
+    h.run_steps(3);
+    let d = h.state().session.active().unwrap();
+    let sh = d.wb.active().unwrap();
+    let name = d.wb.styles.get(sh.style_id(CellRef::parse("A1").unwrap())).font.name.clone();
+    assert_eq!(name, "Arial", "the highlight is the second filtered row, not a full-list index");
+
+    // Clearing the filter shows the whole list again.
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::H, Key::F, Key::F], false);
+    h.run_steps(3);
+    events(&mut h, [Event::Text("ar".into())]);
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Georgia").count(), 0);
+    key(&mut h, Key::Backspace);
+    key(&mut h, Key::Backspace);
+    h.run_steps(3);
+    assert!(h.query_all_by_label("Georgia").count() >= 1, "an emptied filter lists every font again");
 }

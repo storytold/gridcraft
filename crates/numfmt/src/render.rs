@@ -466,20 +466,26 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
     let has_q = |idx: &[usize]| idx.iter().any(|&i| toks.get(i) == Some(&Tok::Digit('?')));
     let has_whole = !whole_idx.is_empty();
     let (mut whole, f) = if has_whole { (x.floor(), x - x.floor()) } else { (0.0, x) };
-    let (mut num, den) = match fixed_den {
-        Some(d) => ((f * d as f64).round() as u64, d),
+    // Without a whole part the numerator carries the whole value and can pass u64::MAX, so it
+    // stays an f64 (a float-to-u64 cast saturates).
+    let (mut num, den): (f64, u64) = match fixed_den {
+        Some(d) => ((f * d as f64).round(), d),
+        None if f >= 1e15 => (f.round(), 1),
         None => {
             let digits = den_idx.len().clamp(1, 7) as u32;
-            approximate(f, 10u64.pow(digits) - 1)
+            let (n, d) = approximate(f, 10u64.pow(digits) - 1);
+            (n as f64, d)
         }
     };
-    if has_whole && num >= den && den > 0 {
-        whole += (num / den) as f64;
-        num %= den;
+    if has_whole && num >= den as f64 && den > 0 {
+        // The fractional part is below 1, so the numerator is at most the denominator here.
+        let n = num as u64;
+        whole += (n / den) as f64;
+        num = (n % den) as f64;
     }
     let whole_s = if whole >= 1.0 { fixed(whole, 0).0 } else { String::new() };
     let num_zero_ph = num_idx.iter().any(|&i| toks.get(i) == Some(&Tok::Digit('0')));
-    if has_whole && num == 0 && !num_zero_ph {
+    if has_whole && num == 0.0 && !num_zero_ph {
         fill_int(toks, &whole_idx, &whole_s, sec.thousands, true, pieces);
         let spaces = has_q(&whole_idx) || has_q(&num_idx) || has_q(&den_idx);
         blank_range(toks, sep_start..den_end, spaces, pieces, lits);
@@ -488,7 +494,7 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
     if has_whole {
         // A zero value shows `0` in a `?` or `0` units place, nothing in a `#` one.
         let units_hash = whole_idx.last().is_some_and(|&i| toks.get(i) == Some(&Tok::Digit('#')));
-        let force = whole_s.is_empty() && num == 0 && !units_hash;
+        let force = whole_s.is_empty() && num == 0.0 && !units_hash;
         fill_int(toks, &whole_idx, &whole_s, sec.thousands, force, pieces);
         let whole_shown = whole_idx.iter().any(|&i| pieces.get(i).is_some_and(|p| p.chars().any(|c| c.is_ascii_digit())));
         if !whole_shown {
@@ -496,7 +502,8 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
             blank_range(toks, sep_start..num_start, spaces, pieces, lits);
         }
     }
-    fill_int(toks, &num_idx, &num.to_string(), false, true, pieces);
+    let num_s = if num < 1e15 { (num as u64).to_string() } else { fixed(num, 0).0 };
+    fill_int(toks, &num_idx, &num_s, false, true, pieces);
     if let Some(p) = pieces.get_mut(slash) {
         *p = "/".into();
     }

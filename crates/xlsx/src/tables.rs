@@ -52,20 +52,12 @@ pub fn builtin_id(code: &str) -> Option<u32> {
     BUILTIN_FORMATS.iter().find(|(i, c)| *c == code && !(5..=8).contains(i)).map(|(i, _)| *i)
 }
 
-/// The 64-entry legacy palette (`indexed` colours), RRGGBB.
-pub const INDEXED: [u32; 64] = [
-    0x000000, 0xFFFFFF, 0xFF0000, 0x00FF00, 0x0000FF, 0xFFFF00, 0xFF00FF, 0x00FFFF, // 0-7
-    0x000000, 0xFFFFFF, 0xFF0000, 0x00FF00, 0x0000FF, 0xFFFF00, 0xFF00FF, 0x00FFFF, // 8-15
-    0x800000, 0x008000, 0x000080, 0x808000, 0x800080, 0x008080, 0xC0C0C0, 0x808080, // 16-23
-    0x9999FF, 0x993366, 0xFFFFCC, 0xCCFFFF, 0x660066, 0xFF8080, 0x0066CC, 0xCCCCFF, // 24-31
-    0x000080, 0xFF00FF, 0xFFFF00, 0x00FFFF, 0x800080, 0x800000, 0x008080, 0x0000FF, // 32-39
-    0x00CCFF, 0xCCFFFF, 0xCCFFCC, 0xFFFF99, 0x99CCFF, 0xFF99CC, 0xCC99FF, 0xFFCC99, // 40-47
-    0x3366FF, 0x33CCCC, 0x99CC00, 0xFFCC00, 0xFF9900, 0xFF6600, 0x666699, 0x969696, // 48-55
-    0x003366, 0x339966, 0x003300, 0x333300, 0x993300, 0x993366, 0x333399, 0x333333, // 56-63
-];
+pub use gridcraft_core::color::INDEXED;
 
-/// Paper sizes (`pageSetup paperSize`) we name.
-const PAPERS: [(u32, &str); 14] = [
+/// Paper sizes (`pageSetup paperSize`) we name. ID 12/13 are the JIS B4/B5 that
+/// `pageLayout.pageSetup` calls `B4`/`B5`; 42 is ISO B4, and 43–88 are the Japanese postcards,
+/// envelopes and B6. The engine's `known_paper` uses the same names and sizes.
+const PAPERS: [(u32, &str); 23] = [
     (1, "Letter"),
     (3, "Tabloid"),
     (4, "Ledger"),
@@ -80,14 +72,40 @@ const PAPERS: [(u32, &str); 14] = [
     (20, "Envelope #10"),
     (27, "Envelope DL"),
     (34, "Envelope B5"),
+    (42, "B4 (ISO)"),
+    (43, "Japanese Postcard"),
+    (69, "Japanese Double Postcard"),
+    (70, "A6"),
+    (71, "Japanese Envelope Kaku #2"),
+    (72, "Japanese Envelope Kaku #3"),
+    (73, "Japanese Envelope #3"),
+    (74, "Japanese Envelope #4"),
+    (88, "B6"),
 ];
 
 pub fn paper_name(id: u32) -> Option<&'static str> {
     PAPERS.iter().find(|(i, _)| *i == id).map(|(_, n)| *n)
 }
 
+/// The file ID for a paper name. Spelling is loose like `known_paper`'s — spaces, hyphens,
+/// underscores and parentheses don't matter, and the JIS/ISO and Japanese-envelope spellings the
+/// page-setup commands take are folded onto the name in [`PAPERS`].
 pub fn paper_id(name: &str) -> Option<u32> {
-    PAPERS.iter().find(|(_, n)| n.eq_ignore_ascii_case(name.trim())).map(|(i, _)| *i)
+    let norm = |s: &str| s.trim().to_ascii_lowercase().replace([' ', '-', '_', '(', ')'], "");
+    let normalized = norm(name);
+    let alias = match normalized.as_str() {
+        "b4jis" => "b4",
+        "b5jis" => "b5",
+        "b6jis" => "b6",
+        "postcard" => "japanesepostcard",
+        "doublepostcard" => "japanesedoublepostcard",
+        "chou#3" => "japaneseenvelope#3",
+        "chou#4" => "japaneseenvelope#4",
+        "kaku#2" => "japaneseenvelopekaku#2",
+        "kaku#3" => "japaneseenvelopekaku#3",
+        other => other,
+    };
+    PAPERS.iter().find(|(_, n)| norm(n) == alias).map(|(i, _)| *i)
 }
 
 /// Functions introduced after Excel 2007 that files store with the `_xlfn.` prefix. Entries with
@@ -339,5 +357,26 @@ mod tests {
         assert_eq!(builtin_id(builtin_format(5).unwrap()), None);
         assert_eq!(paper_name(9), Some("A4"));
         assert_eq!(paper_id("a4"), Some(9));
+        // 12/13 are the JIS B4/B5 Japanese Excel uses; 42 is ISO B4.
+        assert_eq!(paper_name(12), Some("B4"));
+        assert_eq!(paper_id("b5"), Some(13));
+        assert_eq!(paper_id("B5 (JIS)"), Some(13));
+        assert_eq!(paper_id("B4 (ISO)"), Some(42));
+        // The Japanese papers page setup names.
+        assert_eq!(paper_name(43), Some("Japanese Postcard"));
+        assert_eq!(paper_name(88), Some("B6"));
+        for (name, id) in [
+            ("Japanese Postcard", 43),
+            ("japanese double postcard", 69),
+            ("A6", 70),
+            ("Japanese Envelope Kaku #2", 71),
+            ("kaku #3", 72),
+            ("Japanese Envelope #3", 73),
+            ("chou #4", 74),
+            ("B6 (JIS)", 88),
+        ] {
+            assert_eq!(paper_id(name), Some(id), "{name}");
+        }
+        assert_eq!(paper_id("Napkin"), None);
     }
 }

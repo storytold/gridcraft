@@ -36,7 +36,7 @@ use serde_json::{Value, json};
 
 const USAGE: &str = "usage:
   gridcraft-cli info <file> [--json]                      sheets, used ranges, tables, charts, names
-  gridcraft-cli convert <in> <out> [--sheet NAME]         xlsx/csv/tsv/json/html by extension
+  gridcraft-cli convert <in> <out> [--sheet NAME]         xlsx/csv/tsv/json/html/pdf by extension
   gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
   gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
   gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
@@ -271,11 +271,17 @@ fn convert(args: &[String]) -> Result<(), String> {
     let input = a.pos(0, "<in>")?;
     let out = a.pos(1, "<out>")?;
     a.no_extra(2)?;
-    if gridcraft_engine::io::FileKind::from_path(out).is_none() {
-        return Err(format!("{out}: unknown output format (use .xlsx, .csv, .tsv, .json or .html)"));
+    let pdf = out.to_ascii_lowercase().ends_with(".pdf");
+    if !pdf && gridcraft_engine::io::FileKind::from_path(out).is_none() {
+        return Err(format!("{out}: unknown output format (use .xlsx, .csv, .tsv, .json, .html or .pdf)"));
     }
     let mut s = open(input)?;
     activate_sheet(&mut s, a.opt("sheet"))?;
+    if pdf {
+        let result = exec(&mut s, "file.exportPdf", json!({"path": out}))?;
+        eprintln!("wrote {out} ({} bytes, {} pages)", result["bytes"], result["pages"]);
+        return Ok(());
+    }
     let d = s.doc().map_err(|e| e.to_string())?;
     let bytes = gridcraft_engine::io::save_file_bytes(&d.wb, out).map_err(|e| e.to_string())?;
     gridcraft_engine::io::write_file(out, &bytes).map_err(|e| e.to_string())?;
@@ -582,5 +588,22 @@ mod tests {
         assert!(a.has("csv"));
         assert!(Args::parse(&["--nope".to_string()], &[], &[]).is_err());
         assert!(Args::parse(&["--range".to_string()], &["range"], &[]).is_err());
+    }
+
+    #[test]
+    fn convert_xlsx_to_pdf_keeps_links() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-cli-pdf-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("links.xlsx");
+        let output = dir.join("links.pdf");
+        let mut s = blank();
+        s.execute("insert.link", json!({"cell": "A1", "target": "https://example.org"})).unwrap();
+        let bytes = gridcraft_engine::io::save_file_bytes(&s.doc().unwrap().wb, input.to_str().unwrap()).unwrap();
+        gridcraft_engine::io::write_file(input.to_str().unwrap(), &bytes).unwrap();
+        convert(&[input.to_string_lossy().into_owned(), output.to_string_lossy().into_owned()]).unwrap();
+        let pdf = std::fs::read(&output).unwrap();
+        assert!(pdf.starts_with(b"%PDF-"));
+        assert!(pdf.windows(b"/URI (https://example.org)".len()).any(|w| w == b"/URI (https://example.org)"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

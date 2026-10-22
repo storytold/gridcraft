@@ -86,8 +86,11 @@ fn key_of(v: &Value) -> String {
 fn row_key(r: &[Value]) -> String {
     let mut s = String::new();
     for v in r {
-        s.push_str(&key_of(v));
-        s.push('\u{1}');
+        let k = key_of(v);
+        // Length prefix keeps the encoding unambiguous even when a text value contains the separator.
+        s.push_str(&k.len().to_string());
+        s.push(':');
+        s.push_str(&k);
     }
     s
 }
@@ -573,6 +576,23 @@ fn parse_agg(v: &Value) -> R<Agg> {
     }
 }
 
+/// The function argument of GROUPBY/PIVOTBY: a built-in aggregation, or `None` for a LAMBDA (called
+/// through the context).
+fn agg_arg(args: &[Arg], i: usize, c: &dyn Ctx) -> R<Option<Agg>> {
+    if c.has_lambda() { Ok(None) } else { parse_agg(&arg(args, i)?.value).map(Some) }
+}
+
+/// Aggregates one group with `f`, or with the LAMBDA (given the group's values as a column) when `None`.
+fn aggregate_with(f: Option<Agg>, vals: &[&Value], c: &mut dyn Ctx) -> Value {
+    match f {
+        Some(f) => aggregate(f, vals),
+        None => {
+            let col = Value::from(Array::column(vals.iter().map(|v| (*v).clone()).collect()));
+            c.call_lambda(col).unwrap_or(Value::Error(CellError::Calc))
+        }
+    }
+}
+
 fn aggregate(f: Agg, vals: &[&Value]) -> Value {
     if f == Agg::CountA {
         return Value::Number(vals.iter().filter(|v| !matches!(v, Value::Empty)).count() as f64);
@@ -732,10 +752,10 @@ fn opt_arr(args: &[Arg], i: usize) -> R<Option<Array>> {
     if has(args, i) { Ok(Some(arr_arg(args, i)?)) } else { Ok(None) }
 }
 
-fn groupby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn groupby(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let rf = arr_arg(args, 0)?;
     let vals = arr_arg(args, 1)?;
-    let f = parse_agg(&arg(args, 2)?.value)?;
+    let f = agg_arg(args, 2, c)?;
     let fh = opt_count(args, 3)?;
     let total = opt_count(args, 4)?.unwrap_or(1);
     let sort = opt_count(args, 5)?.unwrap_or(1);
@@ -748,11 +768,11 @@ fn groupby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     let sort_in_keys = if sort.unsigned_abs() as usize <= rf.cols { sort } else { 0 };
     let mut ordered = distinct_keys(&keys, sort_in_keys);
-    let agg_row = |rows: &[usize]| -> Vec<Value> {
+    let mut agg_row = |rows: &[usize]| -> Vec<Value> {
         (0..vals.cols)
-            .map(|c| {
-                let vs: Vec<&Value> = rows.iter().filter_map(|&r| vals.get(r, c)).collect();
-                aggregate(f, &vs)
+            .map(|col| {
+                let vs: Vec<&Value> = rows.iter().filter_map(|&r| vals.get(r, col)).collect();
+                aggregate_with(f, &vs, c)
             })
             .collect()
     };
@@ -798,11 +818,11 @@ fn pivot_dims(header_rows: usize, body_rows: usize, col_keys: usize, value_cols:
     (header_rows.saturating_add(body_rows), col_keys.saturating_mul(value_cols).saturating_add(lead))
 }
 
-fn pivotby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn pivotby(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     let rf = arr_arg(args, 0)?;
     let cf = arr_arg(args, 1)?;
     let vals = arr_arg(args, 2)?;
-    let f = parse_agg(&arg(args, 3)?.value)?;
+    let f = agg_arg(args, 3, ctx)?;
     let fh = opt_count(args, 4)?;
     let row_total = opt_count(args, 5)?.unwrap_or(1);
     let row_sort = opt_count(args, 6)?.unwrap_or(1);
@@ -818,12 +838,12 @@ fn pivotby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     for ((r, c), &i) in rkeys.iter().zip(ckeys.iter()).zip(p.rows.iter()) {
         cell.entry((row_key(r), row_key(c))).or_default().push(i);
     }
-    let agg = |rows: &[usize], c: usize| -> Value {
+    let mut agg = |rows: &[usize], c: usize| -> Value {
         if rows.is_empty() {
             return Value::Empty;
         }
         let vs: Vec<&Value> = rows.iter().filter_map(|&r| vals.get(r, c)).collect();
-        aggregate(f, &vs)
+        aggregate_with(f, &vs, ctx)
     };
     let rows_for = |r: Option<&Vec<Value>>, c: Option<&Vec<Value>>| -> Vec<usize> {
         let rkey = r.map(|k| row_key(k));
@@ -873,7 +893,7 @@ fn pivotby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         }
         out.push(line);
     }
-    let body_line = |r: Option<&Vec<Value>>| -> Vec<Value> {
+    let mut body_line = |r: Option<&Vec<Value>>| -> Vec<Value> {
         let mut line: Vec<Value> = match r {
             Some(k) => k.clone(),
             None => {
@@ -1100,6 +1120,12 @@ mod tests {
         assert_eq!(rows_of(&r), vec![vec![nv(2.0), nv(1.0)]]);
         is_err(ev("SORTBY", vec![av(col(&[1.0, 2.0, 3.0])), av(col(&[1.0, 2.0]))]), CellError::Value);
         is_err(ev("SORTBY", vec![av(col(&[1.0, 2.0])), av(col(&[1.0, 2.0])), n(0.0)]), CellError::Value);
+    }
+
+    #[test]
+    fn unique_keeps_rows_containing_separator_apart() {
+        let m = arr(vec![vec![tv("a"), tv("b\u{1}tc")], vec![tv("a\u{1}tb"), tv("c")]]);
+        assert_eq!(rows_of(&ev("UNIQUE", vec![av(m)])).len(), 2);
     }
 
     #[test]

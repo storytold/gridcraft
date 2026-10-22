@@ -130,7 +130,7 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
         "text": crate::display::cell_text(&d.wb, sh, c),
         "input": sh.input_text(c),
         "picture": sh.cell_pictures.get(&c).map(|picture| json!({"mime": picture.mime, "alt": picture.alt, "bytes": picture.data.len()})),
-        "spilledFrom": sh.spill_ranges.iter().find(|(a, r)| **a != c && r.contains(c)).map(|(a, _)| a.a1()),
+        "spilledFrom": sh.spill_anchor(c).map(|a| a.a1()),
         "spill": sh.spill_ranges.get(&c).map(|r| r.a1()),
         "style": style,
         "merge": sh.merge_at(c).map(|m| m.a1()),

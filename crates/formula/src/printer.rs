@@ -6,22 +6,7 @@ use gridcraft_core::{CellRef, col_to_letters, number_to_text};
 
 use crate::ast::*;
 
-/// Whether a sheet name needs quotes in a reference.
-pub fn needs_quotes(name: &str) -> bool {
-    if name.is_empty() {
-        return true;
-    }
-    let first = name.chars().next().unwrap_or('_');
-    if first.is_ascii_digit() || name.chars().any(|c| !(c.is_alphanumeric() || c == '_' || c == '.')) {
-        return true;
-    }
-    // Looks like a cell ref (`A1`, `R1C1`) or a boolean.
-    gridcraft_core::CellRef::parse(name).is_some() || name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE")
-}
-
-pub fn quote_sheet(name: &str) -> String {
-    if needs_quotes(name) { format!("'{}'", name.replace('\'', "''")) } else { name.to_string() }
-}
+pub use gridcraft_core::{quote_sheet, sheet_needs_quotes as needs_quotes};
 
 fn sheet_prefix(s: &SheetSel) -> String {
     match s {

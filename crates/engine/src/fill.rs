@@ -19,7 +19,17 @@ pub enum FillMode {
     Alternate,
     Copy,
     Formats,
+    /// Fill Without Formatting: extends like a plain drag, the targets keep their formats.
     ValuesOnly,
+    /// Fill Series from the right-drag menu: extends like a plain drag, and a lone number counts up.
+    Extend,
+}
+
+impl FillMode {
+    /// The modes that continue the source's series rather than copy it.
+    fn extends_series(self) -> bool {
+        matches!(self, FillMode::Series | FillMode::Extend | FillMode::ValuesOnly)
+    }
 }
 
 /// Built-in custom lists.
@@ -35,6 +45,18 @@ fn lists() -> Vec<Vec<String>> {
     ]
 }
 
+/// The most cells one fill may write: the size cap the fill commands put on their ranges.
+pub const MAX_FILL_CELLS: u64 = 5_000_000;
+
+/// Whether `target` is a shape Excel's AutoFill accepts for `src`: it contains the source and the
+/// source sits in one of its corners. Excel refuses a target that doesn't contain the source
+/// (`2:3` into `A:A`, `H4:H9` into `D:F`) or holds it away from every corner (`H4:H9` into `H:H`).
+pub fn holds_source_in_corner(src: RangeRef, target: RangeRef) -> bool {
+    target.contains_range(&src)
+        && (target.start.row == src.start.row || target.end.row == src.end.row)
+        && (target.start.col == src.start.col || target.end.col == src.end.col)
+}
+
 /// Fills `target` (which contains `src` at one edge) from the pattern in `src`.
 pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: FillMode) -> Result<()> {
     let custom = cx.wb.custom_lists.clone();
@@ -46,6 +68,18 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
     } else {
         target.end.col > src.end.col || target.start.col == src.start.col
     };
+    // Every source lane writes one cell per step past the source: bound that product, not the
+    // source and target separately (whole rows into whole columns was ~17 billion writes).
+    let (lane_count, steps) = if vertical {
+        let steps = if forward { target.end.row.saturating_sub(src.end.row) } else { src.start.row.saturating_sub(target.start.row) };
+        (src.width(), steps)
+    } else {
+        let steps = if forward { target.end.col.saturating_sub(src.end.col) } else { src.start.col.saturating_sub(target.start.col) };
+        (src.height(), steps)
+    };
+    if u64::from(lane_count).saturating_mul(u64::from(steps)) > MAX_FILL_CELLS {
+        return Err(crate::EngineError::Other("The fill is too large.".into()));
+    }
     let lanes: Vec<u32> = if vertical { (src.start.col..=src.end.col).collect() } else { (src.start.row..=src.end.row).collect() };
     let src_len = if vertical { src.height() } else { src.width() };
     let mut writes: Vec<(CellRef, Option<Cell>)> = Vec::new();
@@ -67,15 +101,18 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
             cols.into_iter().map(|c| CellRef::new(lane, c)).collect()
         };
         let fmt = |c: &(CellRef, Option<Cell>)| cx.wb.styles.get(c.1.as_ref().map(|c| c.style).unwrap_or_default()).num_fmt.as_str();
-        let pattern = if matches!(mode, FillMode::Series | FillMode::Alternate) {
+        let pattern = if mode.extends_series() || mode == FillMode::Alternate {
             let detected = Pattern::detect(&src_cells, &custom, cx.wb.date_system, src_cells.first().map(fmt).unwrap_or_default());
-            if mode == FillMode::Alternate { detected.alternate(&src_cells) } else { detected }
+            match (mode, detected) {
+                (FillMode::Alternate, p) | (FillMode::Extend, p @ Pattern::Copy) => p.alternate(&src_cells),
+                (_, p) => p,
+            }
         } else {
             Pattern::Copy
         };
         // A source with no common pattern (`Product 1`, `On backorder`): each cell continues its
         // own series, one step per repeat of the source.
-        let per_cell: Vec<Pattern> = if mode == FillMode::Series && matches!(pattern, Pattern::Copy) && src_cells.len() > 1 {
+        let per_cell: Vec<Pattern> = if mode.extends_series() && matches!(pattern, Pattern::Copy) && src_cells.len() > 1 {
             src_cells.iter().map(|c| Pattern::detect(std::slice::from_ref(c), &custom, cx.wb.date_system, fmt(c))).collect()
         } else {
             Vec::new()
@@ -93,7 +130,7 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                     writes.push((*t, Some(existing)));
                     continue;
                 }
-                FillMode::ValuesOnly | FillMode::Series | FillMode::Alternate | FillMode::Copy => {
+                FillMode::ValuesOnly | FillMode::Series | FillMode::Alternate | FillMode::Copy | FillMode::Extend => {
                     let style = if mode == FillMode::ValuesOnly { sh.cell(*t).map(|c| c.style).unwrap_or_default() } else { cell.style };
                     if let Some(f) = &cell.formula {
                         if let Some(e) = f.expr() {
@@ -165,6 +202,7 @@ enum Pattern {
         last: f64,
         first: f64,
         months: i64,
+        sys: gridcraft_core::DateSystem,
     },
 }
 
@@ -199,7 +237,7 @@ impl Pattern {
                     && (a.month != b.month || a.year != b.year)
                 {
                     let months = (b.year as i64 - a.year as i64) * 12 + b.month as i64 - a.month as i64;
-                    return Pattern::Months { last, first, months };
+                    return Pattern::Months { last, first, months, sys };
                 }
             }
             // Least-squares step for 2+ values (Excel uses a linear trend).
@@ -273,12 +311,15 @@ impl Pattern {
             }
             Pattern::TextNum { prefix, suffix, last, first, step, width } => {
                 let base = if forward { *last } else { *first };
-                let n = base + step * k * sign;
+                // Text numbers come from input and can sit near i64::MAX (`X 9223372036854775807`):
+                // an overflowing series yields nothing — the cell keeps its source value — rather
+                // than wrapping in release or panicking in debug.
+                let n = step.checked_mul(k)?.checked_mul(sign)?.checked_add(base)?;
                 // `Qtr3`, `Quarter 3` wrap after 4 like `Q3`.
                 let quarter = suffix.is_empty()
                     && (1..=4).contains(&base)
                     && ["q", "qtr", "quarter"].contains(&prefix.trim_end().to_ascii_lowercase().as_str());
-                let n = if quarter { (n - 1).rem_euclid(4) + 1 } else { n.abs() };
+                let n = if quarter { n.checked_sub(1)?.rem_euclid(4) + 1 } else { n.checked_abs()? };
                 Some(Value::text(format!("{prefix}{n:0width$}{}", ordinal_suffix(n, suffix), width = *width)))
             }
             Pattern::List { list, last, first, step, upper, lower } => {
@@ -297,9 +338,9 @@ impl Pattern {
                     s
                 }))
             }
-            Pattern::Months { last, first, months } => {
+            Pattern::Months { last, first, months, sys } => {
                 let base = if forward { *last } else { *first };
-                let s = add_months_clamped(gridcraft_core::DateSystem::D1900, base, months.checked_mul(k * sign)?)?;
+                let s = add_months_clamped(*sys, base, months.checked_mul(k * sign)?)?;
                 Some(Value::number(s))
             }
         }
@@ -442,13 +483,13 @@ pub fn flash_fill(cx: &mut Ctx, sheet: usize, at: CellRef) -> Result<usize> {
     // Header row: skip a first row whose target is text and source looks like a header? Keep simple.
     let mut examples = Vec::new();
     let mut todo = Vec::new();
+    // Flash Fill works on the text cells show (a date as formatted, not its serial number).
     for r in top..=bottom {
-        let src = sh.value(CellRef::new(r, src_col)).display();
-        let dst = sh.value(CellRef::new(r, at.col));
-        if dst.is_empty() {
+        let src = crate::display::cell_text(&cx.wb, sh, CellRef::new(r, src_col));
+        if sh.value(CellRef::new(r, at.col)).is_empty() {
             todo.push((r, src));
         } else {
-            examples.push((src, dst.display()));
+            examples.push((src, crate::display::cell_text(&cx.wb, sh, CellRef::new(r, at.col))));
         }
     }
     if examples.is_empty() {
@@ -604,6 +645,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn flash_fill_reads_shown_text() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let values = serde_json::json!([["2024-01-15", "15/01/2024"], ["2023-12-03", null]]);
+        s.execute("range.setValues", serde_json::json!({"range": "A1", "values": values})).unwrap();
+        s.execute("selection.set", serde_json::json!({"cell": "B2"})).unwrap();
+        s.execute("data.flashFill", serde_json::json!({})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert_eq!(sh.value(CellRef::new(1, 1)), Value::from("03/12/2023"));
+    }
+
+    #[test]
     fn flash_programs() {
         let p = learn(&[("John Smith".into(), "Smith, John".into())]).unwrap();
         assert_eq!(p.apply("Ada Lovelace").as_deref(), Some("Lovelace, Ada"));
@@ -651,5 +704,57 @@ mod tests {
         let sh = d.wb.active().unwrap();
         let growth: Vec<String> = (1..6).map(|r| crate::display::cell_text(&d.wb, sh, CellRef::new(r, 0))).collect();
         assert_eq!(growth, ["2.5", "1.25", "", "", ""]);
+    }
+
+    #[test]
+    fn text_series_near_i64_max_neither_wraps_nor_panics() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", serde_json::json!({"cell": "A1", "input": "X 0"})).unwrap();
+        s.execute("cell.set", serde_json::json!({"cell": "A2", "input": "X 9223372036854775807"})).unwrap();
+        // The detected step is i64::MAX, so the next value overflows i64. The cell keeps its
+        // source value instead of panicking in debug or wrapping in release.
+        s.execute("edit.autoFill", serde_json::json!({"source": "A1:A2", "target": "A1:A3"})).unwrap();
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert_eq!(crate::display::cell_text(&d.wb, sh, CellRef::new(2, 0)), "X 0");
+    }
+
+    #[test]
+    fn autofill_refuses_targets_that_do_not_extend_the_source() {
+        // Whole rows into whole columns once filled every source column down the whole sheet
+        // (~17 billion writes) and aborted the process on a 24-51 GB allocation (fuzz seeds 1064,
+        // 1114, 1775). Excel refuses every one of these shapes.
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", serde_json::json!({"range": "A2", "values": [[1, "Item 1"], [2, "Item 2"]]})).unwrap();
+        s.execute("range.setValues", serde_json::json!({"range": "H4", "values": [[10], [20]]})).unwrap();
+        let before = s.doc().unwrap().wb.active().unwrap().cells.len();
+        for (mode, source, target) in [
+            ("series", "2:3", "A:A"),
+            ("alternate", "2:3", "A:A"),
+            ("series", "8:10", "C:E"),
+            ("copy", "24:24", "B:D"),
+            ("values", "H4:H9", "D:F"),
+            ("series", "H4:H9", "H:H"),
+            ("series", "A2:A3", "A1:A5"),
+            ("series", "A2:A6", "A2:A4"),
+            ("series", "B2:B3", "A2:A3"),
+        ] {
+            let r = s.execute("edit.autoFill", serde_json::json!({"mode": mode, "source": source, "target": target}));
+            assert!(r.is_err(), "{source} -> {target} should be refused");
+        }
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().cells.len(), before, "a refused fill writes nothing");
+        // Targets holding the source in a corner still fill, whole rows and diagonal drags included.
+        s.execute("edit.autoFill", serde_json::json!({"source": "2:3", "target": "2:6"})).unwrap();
+        s.execute("edit.autoFill", serde_json::json!({"source": "A2:A3", "target": "A1:A3"})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        let text = |a: &str| crate::display::cell_text(&s.doc().unwrap().wb, sh, CellRef::parse(a).unwrap());
+        assert_eq!([text("A1"), text("A6"), text("B6")], ["0", "5", "Item 5"]);
+        assert!(holds_source_in_corner(RangeRef::parse("B5").unwrap(), RangeRef::parse("B3:B5").unwrap()));
+        assert!(holds_source_in_corner(RangeRef::parse("A:A").unwrap(), RangeRef::parse("A:C").unwrap()));
+        assert!(holds_source_in_corner(RangeRef::parse("B5:C9").unwrap(), RangeRef::parse("B5:D13").unwrap()));
+        assert!(holds_source_in_corner(RangeRef::parse("B1:B2").unwrap(), RangeRef::parse("A1:B4").unwrap()));
+        assert!(!holds_source_in_corner(RangeRef::parse("A:A").unwrap(), RangeRef::parse("1:1").unwrap()));
     }
 }

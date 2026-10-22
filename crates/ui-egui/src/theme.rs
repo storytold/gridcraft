@@ -45,6 +45,10 @@ pub struct Tokens {
     pub menu_bg: Color32,
     pub shadow: Color32,
     pub danger: Color32,
+    /// Background error checking: the corner triangle, and the warning button's diamond and mark.
+    pub error_check_green: Color32,
+    pub warning_fill: Color32,
+    pub warning_ink: Color32,
     /// Info-bar (notice strip) fills, by severity.
     pub notice_warn_bg: Color32,
     pub notice_warn_border: Color32,
@@ -88,6 +92,9 @@ impl Tokens {
             menu_bg: Color32::WHITE,
             shadow: Color32::from_black_alpha(40),
             danger: Color32::from_rgb(0xC4, 0x2B, 0x1C),
+            error_check_green: Color32::from_rgb(0x1E, 0x8E, 0x3E),
+            warning_fill: Color32::from_rgb(0xF2, 0xB7, 0x05),
+            warning_ink: Color32::BLACK,
             notice_warn_bg: Color32::from_rgb(0xFF, 0xF4, 0xCE),
             notice_warn_border: Color32::from_rgb(0xF0, 0xC3, 0x6E),
             notice_info_bg: Color32::from_rgb(0xEA, 0xF2, 0xFB),
@@ -130,6 +137,9 @@ impl Tokens {
             menu_bg: Color32::from_rgb(0x30, 0x30, 0x30),
             shadow: Color32::from_black_alpha(90),
             danger: Color32::from_rgb(0xF1, 0x70, 0x5F),
+            error_check_green: Color32::from_rgb(0x4C, 0xC2, 0x6B),
+            warning_fill: Color32::from_rgb(0xF2, 0xB7, 0x05),
+            warning_ink: Color32::BLACK,
             notice_warn_bg: Color32::from_rgb(0x4A, 0x3F, 0x1E),
             notice_warn_border: Color32::from_rgb(0x7A, 0x67, 0x30),
             notice_info_bg: Color32::from_rgb(0x24, 0x33, 0x44),
@@ -192,6 +202,30 @@ pub fn cell_family(name: &str, bold: bool, italic: bool) -> FontFamily {
     )
 }
 
+/// Width in points, at 100% zoom, of one line of cell text drawn as the grid draws it: in the
+/// face [`cell_family`] picks, which on a machine without the named font is a wider or narrower
+/// substitute (#1316). A family the active font set doesn't have yet (bound fonts apply from the
+/// next frame) falls back to the engine's estimate rather than letting egui panic on it.
+///
+/// `exact` lays the text out (a galley kept until the end of the frame); otherwise the glyph
+/// advances are summed without kerning, which is cheap and never narrower. This takes the
+/// Context lock (`fonts_mut`): never call it, or run a command, while an egui lock is held.
+pub fn cell_text_width(ctx: &egui::Context, text: &str, font: &gridcraft_engine::model::Font, exact: bool) -> f32 {
+    let family = cell_family(&font.name, font.bold, font.italic);
+    let id = FontId::new(font.size * 96.0 / 72.0, family);
+    ctx.fonts_mut(|f| {
+        f.families().contains(&id.family).then(|| {
+            if exact {
+                f.layout_no_wrap(text.to_owned(), id, Color32::PLACEHOLDER).size().x
+            } else {
+                // Half a point covers the galley's rounding of its width up to the pixel grid.
+                text.chars().map(|c| f.glyph_width(&id, c)).sum::<f32>() + 0.5
+            }
+        })
+    })
+    .unwrap_or_else(|| gridcraft_engine::cmd::format::approx_text_width(text, font.size, font.bold))
+}
+
 /// Whether epaint can open face `index` of this font file and it maps characters to glyphs.
 /// epaint panics (in `Context::set_fonts`, i.e. on startup) on a face it can't open, so every font
 /// file we did not ship is checked first with the same parser and the same call epaint makes
@@ -209,17 +243,37 @@ pub(crate) fn font_parses(bytes: &[u8], index: u32) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 fn try_load(paths: &[(&str, u32)]) -> Option<FontData> {
     for (p, index) in paths {
-        if let Ok(bytes) = std::fs::read(p) {
-            if !font_parses(&bytes, *index) {
-                log::warn!("skipping font {p} (face {index}): not a font file egui can read");
-                continue;
-            }
-            let mut fd = FontData::from_owned(bytes);
+        if let Some(bytes) = font_file(p, *index) {
+            let mut fd = FontData::from_static(bytes);
             fd.index = *index;
             return Some(fd);
         }
     }
     None
+}
+
+/// The interface and script fallback font files, each read once per run and kept for the rest of
+/// it. egui copies an owned font's bytes into its text engine and keeps the original too
+/// (`epaint`'s `blob_from_font_data`), so every one of these files was in memory twice, about
+/// 100 MB on a Mac; bytes it borrows for `'static` it shares instead. These faces are loaded by
+/// every font rebuild for as long as the app runs, so keeping them costs nothing, and rebuilds no
+/// longer read them from disk again. Only a file that parses is kept: a missing or broken one is
+/// looked for again next time.
+#[cfg(not(target_arch = "wasm32"))]
+fn font_file(path: &str, index: u32) -> Option<&'static [u8]> {
+    static FILES: std::sync::Mutex<std::collections::BTreeMap<String, &'static [u8]>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+    let mut files = FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(&bytes) = files.get(path) {
+        return font_parses(bytes, index).then_some(bytes);
+    }
+    let bytes = std::fs::read(path).ok()?;
+    if !font_parses(&bytes, index) {
+        log::warn!("skipping font {path} (face {index}): not a font file egui can read");
+        return None;
+    }
+    let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+    files.insert(path.to_string(), bytes);
+    Some(bytes)
 }
 
 /// Last line of defence before [`FontDefinitions`] reach egui: drops every face epaint could not
@@ -326,6 +380,8 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
                 add(format!("{d}/crosextra/{carlito}"), 0);
                 add(format!("{d}/carlito/{carlito}"), 0);
             }
+            // Fedora keeps each family in its own package folder, as for the UI fonts (#54).
+            add(format!("/usr/share/fonts/google-carlito-fonts/{carlito}"), 0);
             add(home_fonts(carlito), 0);
             add(format!("{mac_sup}/{arial_mac}"), 0);
             add(format!("{win}\\{arial_win}"), 0);
@@ -333,6 +389,8 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
                 add(format!("{d}/liberation/{lib}"), 0);
                 add(format!("{d}/dejavu/{dejavu}"), 0);
             }
+            add(format!("/usr/share/fonts/liberation-sans-fonts/{lib}"), 0);
+            add(format!("/usr/share/fonts/dejavu-sans-fonts/{dejavu}"), 0);
         }
         "serif" => {
             add(format!("{mac_sup}/Times New Roman.ttf"), 0);
@@ -341,6 +399,8 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
                 add(format!("{d}/liberation/LiberationSerif-Regular.ttf"), 0);
                 add(format!("{d}/dejavu/DejaVuSerif.ttf"), 0);
             }
+            add("/usr/share/fonts/liberation-serif-fonts/LiberationSerif-Regular.ttf".into(), 0);
+            add("/usr/share/fonts/dejavu-serif-fonts/DejaVuSerif.ttf".into(), 0);
         }
         "mono" => {
             add(format!("{mac_sys}/SFNSMono.ttf"), 0);
@@ -349,6 +409,14 @@ fn candidates(role: &str) -> Vec<(String, u32)> {
             for d in lin {
                 add(format!("{d}/dejavu/DejaVuSansMono.ttf"), 0);
             }
+            add("/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf".into(), 0);
+            // Fedora installs DejaVu Sans Mono only on request. Liberation Mono comes with LibreOffice
+            // (in Workstation and KDE by default), Noto Sans Mono (variable, Regular by default) always.
+            for d in lin {
+                add(format!("{d}/liberation/LiberationMono-Regular.ttf"), 0);
+            }
+            add("/usr/share/fonts/liberation-mono-fonts/LiberationMono-Regular.ttf".into(), 0);
+            add("/usr/share/fonts/google-noto-vf/NotoSansMono[wght].ttf".into(), 0);
         }
         _ => {}
     }
@@ -398,7 +466,12 @@ pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -
         let paths = candidates(role);
         let refs: Vec<(&str, u32)> = paths.iter().map(|(p, i)| (p.as_str(), *i)).collect();
         let mut chain: Vec<String> = Vec::new();
-        if let Some(fd) = try_load(&refs) {
+        if let Some(mut fd) = try_load(&refs) {
+            // Helvetica Neue Bold's own TrueType hints close Cyrillic е into ө at 13 pt on a Retina
+            // screen (#1184). Core Text never runs them, so this draws it the way macOS does.
+            if cfg!(target_os = "macos") && role == UI_BOLD {
+                fd.tweak.hinting = Some(false);
+            }
             let key = format!("sys-{role}");
             fonts.font_data.insert(key.clone(), Arc::new(fd));
             chain.push(key);
@@ -492,6 +565,7 @@ fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u32)>)> {
         second,
         ("sys-cjk-hangul", cjk_hangul()),
         ("sys-thai", thai()),
+        ("sys-lao", lao()),
         ("sys-hebrew", hebrew()),
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
@@ -500,9 +574,23 @@ fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u32)>)> {
 
 /// Linux directories that hold CJK fonts across distributions: Debian/Ubuntu (`opentype/noto`,
 /// `truetype/wqy`), Fedora (`google-noto-cjk`), Arch (`noto-cjk`, `wenquanyi`), ChromeOS's Linux
-/// container (`chromeos/notocjk`, #1762), plus local and flat layouts.
+/// container (`chromeos/notocjk`, #1762), plus local and
+/// flat layouts. Flatpak exposes the same host layouts through read-only font mounts.
 #[cfg(not(target_arch = "wasm32"))]
-const LINUX_CJK_DIRS: [&str; 11] = [
+const LINUX_CJK_DIRS: [&str; 22] = [
+    // Flatpak mounts host fonts here without a broad filesystem permission. Keep the same
+    // distribution layouts as below; /usr/share/fonts inside the sandbox belongs to the runtime.
+    "/run/host/fonts/opentype/noto",
+    "/run/host/fonts/google-noto-cjk",
+    "/run/host/fonts/noto-cjk",
+    "/run/host/fonts/truetype/noto",
+    "/run/host/fonts/noto",
+    "/run/host/fonts/truetype",
+    "/run/host/fonts/TTF",
+    "/run/host/fonts",
+    "/run/host/local-fonts",
+    "/run/host/local-fonts/noto-cjk",
+    "/run/host/user-fonts",
     "/usr/share/fonts/opentype/noto",
     "/usr/share/fonts/google-noto-cjk",
     "/usr/share/fonts/noto-cjk",
@@ -601,6 +689,28 @@ fn thai() -> Vec<(String, u32)> {
         v.push((format!("{d}/tlwg/Garuda.ttf"), 0));
         v.push((format!("{d}/garuda/Garuda.ttf"), 0));
     }
+    // Fedora ships the variable Noto Sans Thai; its default instance is Regular.
+    v.push(("/usr/share/fonts/google-noto-vf/NotoSansThai[wght].ttf".into(), 0));
+    v
+}
+
+/// Lao faces. Windows ships Leelawadee UI (and DokChampa on older versions); macOS has Lao Sangam
+/// MN and Lao MN; Linux usually has Noto Sans Lao or Phetsarath OT.
+#[cfg(not(target_arch = "wasm32"))]
+fn lao() -> Vec<(String, u32)> {
+    let mac_sup = "/System/Library/Fonts/Supplemental";
+    let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
+    let lin = ["/usr/share/fonts/truetype/noto", "/usr/share/fonts/opentype/noto", "/usr/share/fonts/truetype", "/usr/share/fonts"];
+    let mut v: Vec<(String, u32)> = Vec::new();
+    v.push((format!("{win}\\LeelawUI.ttf"), 0)); // Leelawadee UI
+    v.push((format!("{win}\\dokchamp.ttf"), 0)); // DokChampa
+    v.push((format!("{mac_sup}/Lao Sangam MN.ttf"), 0));
+    v.push((format!("{mac_sup}/Lao MN.ttc"), 0));
+    for d in lin {
+        v.push((format!("{d}/NotoSansLao-Regular.ttf"), 0));
+        v.push((format!("{d}/lao/Phetsarath_OT.ttf"), 0));
+        v.push((format!("{d}/Phetsarath_OT.ttf"), 0));
+    }
     v
 }
 
@@ -633,6 +743,7 @@ fn hebrew() -> Vec<(String, u32)> {
         v.push((format!("{d}/dejavu/DejaVuSans.ttf"), 0));
         v.push((format!("{d}/freefont/FreeSans.ttf"), 0));
     }
+    v.push(("/usr/share/fonts/google-noto-vf/NotoSansHebrew[wght].ttf".into(), 0));
     v
 }
 
@@ -830,16 +941,43 @@ mod tests {
         let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
         assert_eq!(
             keys(HanOrder::Japanese),
-            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
         );
         assert_eq!(
             keys(HanOrder::Chinese),
-            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
         );
         assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
-        for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs] {
+        for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs, Language::Fr, Language::Tr] {
             assert_eq!(HanOrder::of(l), HanOrder::Chinese, "{l:?} shares the default order (no font rebuild)");
         }
+    }
+
+    #[test]
+    fn cjk_fallback_probes_flatpak_fonts_with_the_correct_locale_faces() {
+        // Exercise the candidates the fallback loader actually consumes, not just the directory
+        // constant. This must work on CI without an installed CJK font or a Flatpak runtime.
+        for (candidates, face) in [(cjk_han_japanese(), 0), (cjk_han_simplified(), 2), (cjk_hangul(), 1)] {
+            for directory in [
+                "/run/host/fonts/opentype/noto",
+                "/run/host/fonts/google-noto-cjk",
+                "/run/host/fonts/noto-cjk",
+                "/run/host/fonts/truetype/noto",
+                "/run/host/fonts/noto",
+                "/run/host/fonts/truetype",
+                "/run/host/fonts/TTF",
+                "/run/host/fonts",
+                "/run/host/local-fonts",
+                "/run/host/local-fonts/noto-cjk",
+                "/run/host/user-fonts",
+            ] {
+                let path = format!("{directory}/NotoSansCJK-Regular.ttc");
+                assert!(candidates.contains(&(path.clone(), face)), "missing Flatpak CJK candidate {path}, face {face}");
+            }
+        }
+        let chinese = cjk_han_simplified();
+        assert!(chinese.contains(&("/run/host/fonts/truetype/wqy/wqy-microhei.ttc".into(), 0)));
+        assert!(chinese.contains(&("/run/host/fonts/wenquanyi/wqy-microhei.ttc".into(), 0)));
     }
 
     #[test]
@@ -863,11 +1001,12 @@ mod tests {
         // Real render check, per script: the proportional family (what cells and the UI use) must
         // resolve a sample string to a real glyph, not the tofu replacement char. Skips a script
         // whose face is absent (a minimal machine) and fails if a face is present but not wired in.
-        let cases: [(&str, Vec<(String, u32)>, &str); 7] = [
+        let cases: [(&str, Vec<(String, u32)>, &str); 8] = [
             ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
             ("sys-cjk-han-zh", cjk_han_simplified(), "页面布局 客户端配置"),
             ("sys-cjk-hangul", cjk_hangul(), "한글"),
             ("sys-thai", thai(), "ทดสอบ"),
+            ("sys-lao", lao(), "ພາສາລາວ"),
             ("sys-hebrew", hebrew(), "עברית"),
             ("ui", candidates(UI), "Русский"),
             // Czech interface labels: every Czech accented letter, in both cases.
@@ -964,5 +1103,73 @@ mod tests {
         let loaded = try_load(&[(bad_s.as_str(), 0), (good_s.as_str(), 0)]);
         assert_eq!(loaded.map(|fd| fd.font.len()), Some(real.len()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn interface_fonts_are_read_once_and_shared_with_egui() {
+        // egui copies owned font bytes into its text engine and keeps the original too; borrowed
+        // bytes it shares. A rebuild of the font set reuses the file read the first time.
+        let path = std::env::temp_dir().join(format!("gridcraft-font-shared-{}.ttf", std::process::id()));
+        std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT).unwrap();
+        let p = path.to_string_lossy().into_owned();
+        let first = try_load(&[(p.as_str(), 0)]).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let second = try_load(&[(p.as_str(), 0)]).expect("kept from the first read");
+        let (std::borrow::Cow::Borrowed(a), std::borrow::Cow::Borrowed(b)) = (&first.font, &second.font) else {
+            panic!("interface font bytes must be borrowed, so egui shares them instead of copying");
+        };
+        assert!(std::ptr::eq(*a, *b));
+        assert_eq!(*a, epaint_default_fonts::UBUNTU_LIGHT);
+        assert!(try_load(&[(p.as_str(), 3)]).is_none(), "a face the kept file doesn't have is still refused");
+    }
+
+    #[test]
+    fn macos_bold_interface_face_is_drawn_unhinted() {
+        // #1184: Helvetica Neue Bold's own TrueType hints close Cyrillic е into ө at 13 pt on a
+        // Retina screen. Core Text never runs them, so on macOS the face goes unhinted like every
+        // other app draws it; the regular face and the other platforms keep egui's default.
+        let fonts = font_definitions_for_language(Language::En);
+        let hinting = |key: &str| fonts.font_data.get(key).map(|fd| fd.tweak.hinting);
+        if let Some(bold) = hinting(&format!("sys-{UI_BOLD}")) {
+            assert_eq!(bold, if cfg!(target_os = "macos") { Some(false) } else { None });
+        }
+        if let Some(regular) = hinting(&format!("sys-{UI}")) {
+            assert_eq!(regular, None, "only the bold face is affected");
+        }
+    }
+
+    #[test]
+    fn fedora_package_folders_are_searched_after_the_other_linux_layouts() {
+        // #1694: Fedora keeps each font family in its own package folder, so without these entries
+        // no cell face is found there and bold and italic cells draw as regular text. Each comes
+        // after the existing Linux folders for the same font, so wherever one of those matched,
+        // nothing changes.
+        let paths = |cands: Vec<(String, u32)>| cands.into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+        let cases: [(&str, Vec<String>, &str, &str); 9] = [
+            (CELL, paths(candidates(CELL)), "google-carlito-fonts/Carlito-Regular.ttf", "/carlito/Carlito-Regular.ttf"),
+            (CELL_BOLD, paths(candidates(CELL_BOLD)), "google-carlito-fonts/Carlito-Bold.ttf", "/carlito/Carlito-Bold.ttf"),
+            (CELL_ITALIC, paths(candidates(CELL_ITALIC)), "google-carlito-fonts/Carlito-Italic.ttf", "/carlito/Carlito-Italic.ttf"),
+            (CELL_BOLD_ITALIC, paths(candidates(CELL_BOLD_ITALIC)), "google-carlito-fonts/Carlito-BoldItalic.ttf", "/carlito/Carlito-BoldItalic.ttf"),
+            (CELL_BOLD, paths(candidates(CELL_BOLD)), "liberation-sans-fonts/LiberationSans-Bold.ttf", "/liberation/LiberationSans-Bold.ttf"),
+            (SERIF, paths(candidates(SERIF)), "liberation-serif-fonts/LiberationSerif-Regular.ttf", "/liberation/LiberationSerif-Regular.ttf"),
+            (MONO, paths(candidates(MONO)), "liberation-mono-fonts/LiberationMono-Regular.ttf", "/dejavu/DejaVuSansMono.ttf"),
+            ("thai", paths(thai()), "google-noto-vf/NotoSansThai[wght].ttf", "/NotoSansThai-Regular.ttf"),
+            ("hebrew", paths(hebrew()), "google-noto-vf/NotoSansHebrew[wght].ttf", "/NotoSansHebrew-Regular.ttf"),
+        ];
+        for (role, list, fedora_file, earlier) in &cases {
+            let at = list.iter().position(|p| *p == format!("/usr/share/fonts/{fedora_file}"));
+            let last_earlier = list.iter().rposition(|p| p.ends_with(earlier));
+            assert!(at.is_some(), "{role}: Fedora's {fedora_file} is not a candidate");
+            assert!(last_earlier.is_some(), "{role}: no existing {earlier} candidate to compare with");
+            assert!(at > last_earlier, "{role}: {fedora_file} must come after every existing {earlier}");
+        }
+        // Liberation Mono only stands in for DejaVu Sans Mono, wherever that is installed.
+        let mono = paths(candidates(MONO));
+        let first_liberation = mono.iter().position(|p| p.ends_with("LiberationMono-Regular.ttf"));
+        let last_dejavu = mono.iter().rposition(|p| p.ends_with("DejaVuSansMono.ttf"));
+        assert!(first_liberation.is_some() && first_liberation > last_dejavu, "Liberation Mono must follow DejaVu Sans Mono: {mono:?}");
+        let noto = mono.iter().position(|p| p == "/usr/share/fonts/google-noto-vf/NotoSansMono[wght].ttf");
+        assert!(noto.is_some() && noto.unwrap_or(0) + 1 == mono.len(), "Fedora's default Noto Sans Mono must be the last resort: {mono:?}");
     }
 }

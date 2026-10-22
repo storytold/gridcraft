@@ -58,6 +58,13 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     let encrypted = gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Encrypted;
     let (mut wb, warnings) = crate::io::open_bytes_with(&name, &bytes, str_param(p, "password"), bool_param(p, "csvAsText").unwrap_or(false))?;
     wb.source_dir = str_param(p, "path").and_then(crate::io::source_dir);
+    // What `CELL("filename")` reports (#1489). A workbook opened from bytes knows its name but
+    // never a folder, so it reports `[name]Sheet` with none; an import reports the file it came
+    // from, as Excel does, even though Save must still ask where to put the .xlsx.
+    wb.source_path = match str_param(p, "path") {
+        Some(path) => crate::io::source_path(path),
+        None => Some(std::path::PathBuf::from(&name)),
+    };
     let imported =
         matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Ods | crate::io::FileKind::Xlsb | crate::io::FileKind::Xls))
             || matches!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Ods | gridcraft_xlsx::Format::Xlsb | gridcraft_xlsx::Format::Xls);
@@ -122,6 +129,13 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     crate::io::write_file(&path, &bytes)?;
     // Only a full-fidelity format clears the dirty flag and becomes the document's file.
     if matches!(kind, Some(crate::io::FileKind::Xlsx | crate::io::FileKind::Json)) {
+        // The new file is the workbook's own now, so `CELL("filename")` reports it (#1489). Set
+        // before the `saved` snapshot, or the workbook would read as dirty the moment it was
+        // saved; and only when it changes, so an ordinary Save does not clone the workbook.
+        let file = crate::io::source_path(&path);
+        if d.wb.source_path != file {
+            std::sync::Arc::make_mut(&mut d.wb).source_path = file;
+        }
         d.saved = d.wb.clone();
         d.path = Some(path.clone());
     }
@@ -139,8 +153,9 @@ fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
 fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let fmt = str_param(p, "format").unwrap_or("xlsx");
     let d = s.doc()?;
-    let bytes = crate::io::save_bytes(&d.wb, &format!("x.{fmt}"))?;
     let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
+    // The file name goes into a PivotChart's link to its PivotTable.
+    let bytes = crate::io::save_bytes(&d.wb, &name)?;
     Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len()}))
 }
 

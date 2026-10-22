@@ -14,6 +14,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod editor;
+mod floating_pictures;
 pub mod fonts;
 pub mod formula_bar;
 mod formula_locale;
@@ -60,6 +61,9 @@ pub struct UiState {
     /// Enable AutoComplete for cell values (File ▸ Options ▸ Editing): typed text is completed
     /// from the one matching entry in the same column.
     pub autocomplete: bool,
+    /// AutoSave (the title-bar switch): save saved-to-file .xlsx workbooks shortly after every
+    /// change. A preference like the rest of this struct — it stays on across restarts (#1901).
+    pub autosave: bool,
     pub recent: Vec<String>,
     /// One-shot keytip request for a ribbon control: set when a keytip action resolves to
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
@@ -103,6 +107,7 @@ impl Default for UiState {
             status_bar: true,
             animations: true,
             autocomplete: true,
+            autosave: false,
             recent: vec![],
             keytip_invoke: None,
             language: i18n::Language::En,
@@ -284,7 +289,13 @@ pub struct SheetApp {
     /// text noted for an unpublished cut); `None` after a copy, or once the clipboard is seen
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
+    /// A run of Tabs: (doc uid, sheet, column it started in, cell the last Tab landed on).
+    /// Enter on that cell goes to the next row in the starting column, as in Excel (#911).
+    tab_run: Option<(u64, usize, u32, CellRef)>,
     pub started: f64,
+    /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
+    /// window close goes through.
+    pub allow_close: bool,
 }
 
 impl SheetApp {
@@ -328,7 +339,9 @@ impl SheetApp {
             selected_chart: None,
             clipboard_text_at_copy: None,
             cut_text: None,
+            tab_run: None,
             started: now_ms(),
+            allow_close: false,
         }
     }
 
@@ -528,6 +541,11 @@ impl SheetApp {
         if id == "file.exportPdf" && self.services.pick_save.is_some() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
             return self.export_pdf_with_picker(params);
         }
+        // Recommended Charts with no chart type named (ribbon button, keytip, command search) asks
+        // which chart to insert; programmatic callers of `run` still get the first recommendation.
+        if id == "insert.recommendedCharts" && params.get("type").is_none() {
+            return self.open_dialog("recommendedCharts", json!({}));
+        }
         if let Err(e) = self.run(id, params) {
             self.alert(e);
         }
@@ -654,7 +672,7 @@ impl SheetApp {
                         self.ui.language = l;
                         Ok(json!({"language": l}))
                     }
-                    None => Err(format!("unknown language {code:?} (use \"en\", \"es\", \"zh\", \"ja\", \"ko\", \"ru\", \"pt\" or \"cs\")")),
+                    None => Err(format!("unknown language {code:?} (use one of {})", i18n::Language::code_list(", "))),
                 }
             }
             "app.language.english" => {
@@ -731,9 +749,29 @@ impl SheetApp {
         }
     }
 
+    /// Whether the active sheet of the active document is protected (drives the Protect/Unprotect
+    /// Sheet labels and actions).
+    pub fn active_sheet_protected(&self) -> bool {
+        self.session.active().and_then(|d| d.wb.active().map(|s| s.is_protected())).unwrap_or(false)
+    }
+
     pub fn open_dialog(&mut self, name: &str, params: Json) {
         if let Err(e) = self.commit_text_box_edit() {
             self.message = Some(("Text Box".into(), clean_error(&e)));
+            return;
+        }
+        // Every Protect Sheet entry point (ribbon menus, keytips, tab menu) becomes Unprotect Sheet
+        // on a protected sheet. A sheet without a password is unprotected straight away.
+        let name = if name == "protectSheet" && self.active_sheet_protected() { "unprotectSheet" } else { name };
+        if name == "unprotectSheet"
+            && self
+                .session
+                .active()
+                .and_then(|d| d.wb.active())
+                .and_then(|s| s.protection.as_ref())
+                .is_some_and(|p| p.password.is_none() && p.legacy_password_hash.is_none())
+        {
+            self.run_or_alert("review.unprotectSheet", json!({}));
             return;
         }
         match name {
@@ -826,11 +864,14 @@ impl SheetApp {
         }
         let vba: Vec<&str> = msgs.iter().copied().filter(|m| m.to_lowercase().contains("macro") || m.contains("VBA")).collect();
         if !vba.is_empty() {
-            self.notice = Some(Notice {
-                text: "This workbook contains VBA macros. GridCraft keeps them intact when you save, but does not run them.".into(),
-                kind: NoticeKind::Warning,
-                action: Some(("What this means".into(), "macros".into())),
-            });
+            // The reader says "dropped" when the VBA project was missing or unreadable; never promise to keep it then.
+            let dropped = vba.iter().any(|m| m.contains("dropped"));
+            let text = if dropped {
+                "This workbook's VBA macros could not be loaded and were dropped, so they will not be in the saved file. Keep the original file."
+            } else {
+                "This workbook contains VBA macros. GridCraft keeps them when you save as .xlsm, but does not run them."
+            };
+            self.notice = Some(Notice { text: text.into(), kind: NoticeKind::Warning, action: Some(("What this means".into(), "macros".into())) });
         } else {
             let text = if msgs.len() == 1 {
                 msgs[0].to_string()
@@ -889,6 +930,11 @@ impl SheetApp {
 
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
+        // The source formula is display-only on spill children. Grid replacement keeps its
+        // existing behavior, but no formula-bar entry path may edit that displayed formula.
+        if from_formula_bar && formula_bar::active_spill_anchor(self).is_some() {
+            return;
+        }
         if let Err(e) = self.commit_text_box_edit() {
             self.message = Some(("Text Box".into(), clean_error(&e)));
             return;
@@ -955,6 +1001,15 @@ impl SheetApp {
             }
             self.toast = Some((msg, now_ms()));
         }
+        // Point mode can leave another sheet active; the edit belongs to the sheet it started on.
+        if self.session.active().is_some_and(|d| d.wb.active_sheet != ed.sheet)
+            && let Err(e) = self.session.run("sheet.activate", json!({"sheet": ed.sheet}))
+        {
+            self.message = Some(("GridCraft".into(), clean_error(&e)));
+            self.editor = Some(ed);
+            self.session.mode = gridcraft_engine::Mode::Edit;
+            return false;
+        }
         // Committing nothing into an empty cell changes nothing: no undo step (#1855, Backspace has
         // already cleared the cell as its own step).
         let unchanged = !fill_selection
@@ -989,6 +1044,15 @@ impl SheetApp {
         }
     }
 
+    /// Commits the edit with an arrow key. The arrow is an ordinary move, so it ends a run of Tabs
+    /// instead of continuing it (Right) or going back to its column like Enter (Down), as in Excel.
+    pub fn commit_edit_arrow(&mut self, dr: i64, dc: i64) -> bool {
+        let run = self.tab_run.take();
+        let ok = self.commit_edit(dr, dc, false, false);
+        self.tab_run = if ok { None } else { run };
+        ok
+    }
+
     pub fn cancel_edit(&mut self) {
         self.editor = None;
         self.session.mode = gridcraft_engine::Mode::Ready;
@@ -997,11 +1061,26 @@ impl SheetApp {
     /// Enter/Tab move inside a multi-cell selection, otherwise to the next cell.
     pub fn move_after_enter(&mut self, dr: i64, dc: i64) {
         let multi = self.session.active().is_some_and(|d| !d.selection.is_single_cell());
+        // Any other move (arrows, clicks, another sheet) leaves the selection off the cell the
+        // last Tab landed on, which ends the run.
+        let here = self.session.active().map(|d| (d.uid, d.wb.active_sheet, d.selection.active));
+        let run = self.tab_run.take().filter(|&(uid, sheet, _, at)| here == Some((uid, sheet, at)));
         if multi {
             let fwd = dr > 0 || dc > 0;
             let _ = self.session.run("selection.next", json!({"forward": fwd, "byRow": dc != 0}));
+        } else if let (Some((_, _, col, at)), 1, 0) = (run, dr, dc) {
+            let back = i64::from(col) - i64::from(at.col);
+            let _ = self.session.run("selection.move", json!({"dr": 1, "dc": back}));
         } else {
             let _ = self.session.run("selection.move", json!({"dr": dr, "dc": dc}));
+            if dr == 0 && dc != 0 {
+                let start = run.map(|r| r.2);
+                self.tab_run = self.session.active().and_then(|d| {
+                    let (uid, sheet) = (d.uid, d.wb.active_sheet);
+                    let col = start.or(here.map(|h| h.2.col))?;
+                    Some((uid, sheet, col, d.selection.active))
+                });
+            }
         }
         self.grid.ensure_visible = true;
     }
@@ -1018,7 +1097,7 @@ impl SheetApp {
         else {
             return;
         };
-        let text = printing::feedback(&message, |label| self.ui.language.tr(label).to_owned());
+        let text = printing::feedback(&message, self.ui.language, |label| self.ui.language.tr(label).to_owned());
         if matches!(message, printing::Feedback::Submitted(_)) {
             self.toast = Some((text, now_ms()));
         } else {
@@ -1026,11 +1105,57 @@ impl SheetApp {
         }
     }
 
+    /// Holds back a window close (the close button, Alt+F4, the OS quitting the app) while a
+    /// workbook has unsaved changes, and asks about them first.
+    fn guard_window_close(&mut self, ctx: &egui::Context) {
+        if self.allow_close || !ctx.input(|i| i.viewport().close_requested()) {
+            return;
+        }
+        // A cell still being edited is part of the workbook, as for File › Close.
+        if !self.commit_edit(0, 0, false, false) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            return;
+        }
+        if !self.session.documents().iter().any(|d| d.is_dirty()) {
+            return;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        match self.dialog.as_mut() {
+            // Already asking about a workbook (File › Close): answering it now goes on to quit.
+            Some(d) if d.name() == "saveChanges" => {
+                d.values.insert("quit".into(), json!(true));
+            }
+            _ => self.continue_quit(ctx),
+        }
+    }
+
+    /// Asks about the next unsaved workbook before quitting, or closes the window once none is left.
+    pub(crate) fn continue_quit(&mut self, ctx: &egui::Context) {
+        match self.session.documents().iter().position(|d| d.is_dirty()) {
+            Some(i) => {
+                self.session.set_active(i);
+                let title = self.session.active().map(|d| d.display_title()).unwrap_or_default();
+                self.open_dialog("saveChanges", json!({"title": title, "quit": true}));
+            }
+            None => {
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        if self.session.text_width.is_none() {
+            let ctx = ctx.clone();
+            self.session.text_width = Some(std::sync::Arc::new(move |text, font, exact| theme::cell_text_width(&ctx, text, font, exact)));
+        }
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
         self.ui.keytip_invoke = None;
+        // Floating pictures' textures go with their workbook, even when no sheet is painted.
+        let open: Vec<u64> = self.session.documents().iter().map(|d| d.uid).collect();
+        floating_pictures::forget_closed(ctx, &open);
         if self.fonts_han.is_some_and(|han| han != theme::HanOrder::of(self.ui.language)) {
             self.fonts_ready = false;
             self.fonts_set = false;
@@ -1088,12 +1213,19 @@ impl SheetApp {
         if ctx.options(|o| o.zoom_with_keyboard) {
             ctx.options_mut(|o| o.zoom_with_keyboard = false);
         }
+        // egui closes the window on Ctrl+Q (and with Shift or Alt held too) without asking to save
+        // (#1443). Excel for Windows has no such key (Ctrl+Q is Quick Analysis); macOS keeps Cmd+Q,
+        // the app's Quit there.
+        if ctx.os() != egui::os::OperatingSystem::Mac && ctx.options(|o| !o.quit_shortcuts.is_empty()) {
+            ctx.options_mut(|o| o.quit_shortcuts.clear());
+        }
         let zoom = self.ui.zoom_factor();
         if (ctx.zoom_factor() - zoom).abs() > 0.001 {
             ctx.set_zoom_factor(zoom);
             ctx.request_repaint();
         }
         control::poll(self, ctx);
+        self.guard_window_close(ctx);
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
             .services
@@ -1128,6 +1260,12 @@ impl SheetApp {
         }
     }
 
+    /// Flip AutoSave (title-bar switch / Options ▸ Save). Persisted with the other UI
+    /// preferences, so it stays as the user left it across restarts (#1901).
+    pub fn toggle_autosave(&mut self) {
+        self.ui.autosave = !self.ui.autosave;
+    }
+
     /// Lays out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
@@ -1145,7 +1283,8 @@ impl SheetApp {
         if !self.chrome.file_tab {
             self.backstage = None;
         }
-        if self.backstage.is_none() {
+        // Keytips opened the File view (Alt, F): its letters keep working there.
+        if self.backstage.is_none() || self.keytips.prefix().is_some() {
             self.ribbon_keys(&ctx);
         }
         if self.chrome.title_bar {
@@ -1190,7 +1329,7 @@ impl SheetApp {
         }
         self.perf.last = now;
         // AutoSave: save workbooks that have a file shortly after they change.
-        if self.grid.autosave
+        if self.ui.autosave
             && self.editor.is_none()
             && self.text_box_editor.is_none()
             && now - self.grid.last_autosave > 2000.0
@@ -1218,18 +1357,26 @@ impl SheetApp {
             && self.name_box.is_none()
             && !ctx.text_edit_focused()
             && self.grid.context_menu.is_none()
+            && self.grid.object_menu.is_none()
             && self.grid.header_menu.is_none()
+            && self.grid.fill_menu.is_none()
             && self.grid.filter_menu.is_none()
             && self.grid.list_picker.is_none()
             && self.grid.renaming_tab.is_none()
             && (before.is_some() || !egui::Popup::is_any_open(ctx));
         let actions = self.keytips.process(ctx, enabled);
+        // Backing out of F to the tab letters, or finishing an F sequence, closes the File view
+        // that Alt, F opened: the command runs on the sheet, as it did without the view.
+        if self.backstage.is_some() && before.is_some() && (self.keytips.prefix() == Some("") || !actions.is_empty()) {
+            self.backstage = None;
+        }
         if before.is_some() && before.as_deref() != self.keytips.prefix() && !ctx.input(|i| i.pointer.any_pressed()) {
             // Leave pointer cancellation to the popup so clicking a menu item still works.
             egui::Popup::close_all(ctx);
         }
         for action in actions {
             match action {
+                keytips::Action::Tab("File") => self.open_backstage(backstage::Page::Home),
                 keytips::Action::Tab(tab) => {
                     self.run_or_alert("ui.ribbonTab", json!({"tab": tab}));
                     self.ui.ribbon_collapsed = false;
@@ -1264,7 +1411,7 @@ impl SheetApp {
             for n in &d.wb.names {
                 let target = n.formula.replace('$', "");
                 let (sheet, body) = match target.rsplit_once('!') {
-                    Some((s, b)) => (Some(s.trim_matches('\'').to_string()), b.to_string()),
+                    Some((s, b)) => (Some(gridcraft_engine::core::unquote_sheet(s)), b.to_string()),
                     None => (None, target.clone()),
                 };
                 if sheet.as_deref().is_none_or(|s| s.eq_ignore_ascii_case(&sh.name)) && RangeRef::parse(&body) == Some(cur) {
@@ -1287,17 +1434,8 @@ pub fn clean_error(e: &str) -> String {
     e.to_string()
 }
 
-#[allow(clippy::disallowed_methods)] // the clock is read only off wasm
 pub fn now_ms() -> f64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        0.0
-    }
+    gridcraft_engine::core::date::unix_now_ms().unwrap_or(0.0)
 }
 
 pub fn cell(r: u32, c: u32) -> CellRef {

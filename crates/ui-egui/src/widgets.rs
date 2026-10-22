@@ -14,6 +14,41 @@ fn tr<'a>(ui: &Ui, text: &'a str) -> &'a str {
     i18n::current(ui.ctx()).tr(text)
 }
 
+/// Keyboard shortcuts shown after a ribbon tooltip's command name: Excel for Mac's on macOS,
+/// Excel for Windows' elsewhere (each one GridCraft binds). Only the name is translated.
+const TOOLTIP_SHORTCUTS: &[(&str, &str, &str)] = &[
+    ("Save", "⌘S", "Ctrl+S"),
+    ("Undo", "⌘Z", "Ctrl+Z"),
+    ("Redo", "⌘Y", "Ctrl+Y"),
+    ("Paste", "⌘V", "Ctrl+V"),
+    ("Cut", "⌘X", "Ctrl+X"),
+    ("Copy", "⌘C", "Ctrl+C"),
+    ("Bold", "⌘B", "Ctrl+B"),
+    ("Italic", "⌘I", "Ctrl+I"),
+    ("Underline", "⌘U", "Ctrl+U"),
+    ("AutoSum", "⌘⇧T", "Alt+="),
+    ("Table", "⌘T", "Ctrl+T"),
+    ("Insert Link", "⌘K", "Ctrl+K"),
+    ("Filter", "⌘⇧F", "Ctrl+Shift+L"),
+    ("Flash Fill", "⌘E", "Ctrl+E"),
+];
+
+/// The shortcut a ribbon tooltip shows after `tip`, for this platform (`mac`).
+pub fn tooltip_shortcut(tip: &str, mac: bool) -> Option<&'static str> {
+    TOOLTIP_SHORTCUTS.iter().find(|(name, _, _)| *name == tip).map(|(_, m, other)| if mac { *m } else { *other })
+}
+
+/// A ribbon tooltip: the translated command name, then its shortcut for this platform, as Excel
+/// shows them ("Bold (Ctrl+B)" on Windows, "Bold (⌘B)" on macOS).
+fn tip_text(ui: &Ui, tip: &str) -> String {
+    // A name shared with a two-line ribbon label (Czech "Automatický\nsoučet") reads as one line.
+    let name = tr(ui, tip).replace('\n', " ");
+    match tooltip_shortcut(tip, cfg!(target_os = "macos")) {
+        Some(keys) => format!("{name} ({keys})"),
+        None => name.to_string(),
+    }
+}
+
 /// A flat square icon button with hover highlight and tooltip.
 pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egui::Vec2) -> Response {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -24,7 +59,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, color: Color32, tip: &str, size: egu
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, color);
-    resp.on_hover_text(tr(ui, tip))
+    resp.on_hover_text(tip_text(ui, tip))
 }
 
 /// A toggle-able small button (e.g. Bold) showing a checked state.
@@ -38,7 +73,7 @@ pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, t.text);
-    resp.on_hover_text(tr(ui, tip))
+    resp.on_hover_text(tip_text(ui, tip))
 }
 
 /// Large ribbon button: 32px icon over a one- or two-line label.
@@ -73,7 +108,7 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
             );
         }
     }
-    resp.on_hover_text(tr(ui, tip))
+    resp.on_hover_text(tip_text(ui, tip))
 }
 
 /// Small ribbon button: 16px icon with optional label to the right.
@@ -101,7 +136,7 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: b
             t.text_dim,
         );
     }
-    resp.on_hover_text(tr(ui, tip))
+    resp.on_hover_text(tip_text(ui, tip))
 }
 
 /// A split button: main part runs the default action, the arrow opens a menu.
@@ -122,7 +157,7 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
         ui.painter().rect_filled(Rect::from_min_size(pos2(main.left() + 4.0, main.bottom() - 5.0), vec2(17.0, 3.0)), 0.0, c);
     }
     icons::paint(ui.painter(), Rect::from_center_size(arrow.center(), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
-    (m.on_hover_text(tr(ui, tip)).clicked(), a)
+    (m.on_hover_text(tip_text(ui, tip)).clicked(), a)
 }
 
 /// A one-line text field for a value stored in the workbook, which callers reload every frame. The text being typed is
@@ -144,23 +179,84 @@ pub fn committed_text(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f3
     None
 }
 
-/// Our colour palette (theme row + tints + standard colours), returns a picked hex colour,
-/// `Some("none")` for No Fill/Automatic. Arrow keys move a highlight through the swatches and
-/// Enter applies; the key events are stripped so the grid behind the popup does not also react.
+/// How many custom colours the palette's Recent Colors row remembers.
+pub const RECENT_COLORS: usize = 10;
+
+/// `#RRGGBB` for a colour.
+pub fn hex_of(rgb: [u8; 3]) -> String {
+    format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
+}
+
+/// A colour typed as `#RRGGBB`, `RRGGBB`, `#RGB` or `RGB` (any case, spaces around it ignored).
+pub fn parse_hex(text: &str) -> Option<[u8; 3]> {
+    let t = text.trim();
+    let t = t.strip_prefix('#').unwrap_or(t);
+    let digits: Vec<u32> = t.chars().map(|c| c.to_digit(16)).collect::<Option<_>>()?;
+    let byte = |hi: u32, lo: u32| u8::try_from(hi * 16 + lo).ok();
+    match digits[..] {
+        [r, g, b] => Some([byte(r, r)?, byte(g, g)?, byte(b, b)?]),
+        [r1, r2, g1, g2, b1, b2] => Some([byte(r1, r2)?, byte(g1, g2)?, byte(b1, b2)?]),
+        _ => None,
+    }
+}
+
+/// Puts `hex` first in the recent colours, once, keeping at most [`RECENT_COLORS`].
+pub fn remember_color(recent: &mut Vec<String>, hex: &str) {
+    let hex = hex.to_ascii_uppercase();
+    recent.retain(|h| *h != hex);
+    recent.insert(0, hex);
+    recent.truncate(RECENT_COLORS);
+}
+
+fn recent_colors_id() -> egui::Id {
+    egui::Id::new("gridcraft.recent_colors")
+}
+
+/// The More Colors… picker's state while it is open in a palette.
+#[derive(Clone)]
+struct MoreColors {
+    hsva: egui::ecolor::Hsva,
+    hex: String,
+}
+
+impl MoreColors {
+    fn new(rgb: [u8; 3]) -> Self {
+        Self { hsva: egui::ecolor::Hsva::from_srgb(rgb), hex: hex_of(rgb) }
+    }
+}
+
+/// Our colour palette (theme row + tints + standard colours, then Recent Colors and More Colors…),
+/// returns a picked hex colour, `Some("none")` for No Fill/Automatic. Arrow keys move a highlight
+/// through the swatches and Enter applies; the key events are stripped so the grid behind the popup
+/// does not also react (not while More Colors… is open, whose boxes take the keys).
 pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {
+    palette(ui, theme_colors, none_label, true)
+}
+
+/// [`color_palette`] without More Colors…, for a menu that closes on any click inside it (a sub-menu
+/// of a context menu), where the picker would vanish as soon as it is used. Recent Colors stays.
+pub fn color_palette_fixed(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {
+    palette(ui, theme_colors, none_label, false)
+}
+
+fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors: bool) -> Option<String> {
     let mut picked = None;
     const ROWS: usize = 7; // 6 tint rows + 1 standard row
     const COLS: usize = 10;
     let pal_id = ui.id().with("__color_palette");
     let mut cur: Option<(usize, usize)> = ui.data_mut(|d| d.get_temp(pal_id)).unwrap_or(None);
+    let more_id = pal_id.with("more");
+    let mut more: Option<MoreColors> = ui.data_mut(|d| d.get_temp(more_id)).unwrap_or(None);
     let (mut dl, mut dr, mut du, mut dd, mut ent) = (false, false, false, false, false);
-    ui.input(|i| {
-        dl = i.key_pressed(egui::Key::ArrowLeft);
-        dr = i.key_pressed(egui::Key::ArrowRight);
-        du = i.key_pressed(egui::Key::ArrowUp);
-        dd = i.key_pressed(egui::Key::ArrowDown);
-        ent = i.key_pressed(egui::Key::Enter);
-    });
+    if more.is_none() {
+        ui.input(|i| {
+            dl = i.key_pressed(egui::Key::ArrowLeft);
+            dr = i.key_pressed(egui::Key::ArrowRight);
+            du = i.key_pressed(egui::Key::ArrowUp);
+            dd = i.key_pressed(egui::Key::ArrowDown);
+            ent = i.key_pressed(egui::Key::Enter);
+        });
+    }
     if dl || dr || du || dd {
         cur = match cur {
             None => Some((
@@ -266,12 +362,81 @@ pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) ->
             }
         }
     });
+    // Recent Colors: the custom colours picked below, newest first.
+    let mut recent: Vec<String> = ui.ctx().data(|d| d.get_temp(recent_colors_id())).unwrap_or_default();
+    if !recent.is_empty() {
+        ui.label(egui::RichText::new("Recent Colors").small());
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for hex in &recent {
+                let c = parse_hex(hex).map_or(Color32::BLACK, |c| Color32::from_rgb(c[0], c[1], c[2]));
+                let (r, resp) = ui.allocate_exact_size(vec2(16.0, 14.0), Sense::click());
+                ui.painter().rect_filled(r, 1.0, c);
+                ui.painter().rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_gray(200)), StrokeKind::Inside);
+                if resp.hovered() {
+                    ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, Color32::from_rgb(0xE8, 0x7D, 0x2B)), StrokeKind::Outside);
+                }
+                if resp.on_hover_text(hex).clicked() {
+                    picked = Some(hex.clone());
+                }
+            }
+        });
+    }
+    if more_colors {
+        ui.separator();
+    }
+    if more_colors && ui.button("More Colors…").clicked() {
+        let start = recent.first().and_then(|h| parse_hex(h)).unwrap_or([0x44, 0x72, 0xC4]);
+        more = Some(MoreColors::new(start));
+    }
+    if let Some(m) = more.as_mut() {
+        let mut done = false;
+        // The saturation / value area with its hue bar and egui's red-green-blue boxes, then the hex
+        // box with the new colour beside it.
+        if egui::color_picker::color_picker_hsva_2d(ui, &mut m.hsva, egui::color_picker::Alpha::Opaque) {
+            m.hex = hex_of(m.hsva.to_srgb());
+        }
+        ui.horizontal(|ui| {
+            let label = ui.label("Hex");
+            let r = ui.add(egui::TextEdit::singleline(&mut m.hex).desired_width(72.0).char_limit(7)).labelled_by(label.id);
+            if r.changed()
+                && let Some(c) = parse_hex(&m.hex)
+            {
+                m.hsva = egui::ecolor::Hsva::from_srgb(c);
+            }
+            let c = m.hsva.to_srgb();
+            let (sw, _) = ui.allocate_exact_size(vec2(36.0, 18.0), Sense::hover());
+            ui.painter().rect_filled(sw, 1.0, Color32::from_rgb(c[0], c[1], c[2]));
+            ui.painter().rect_stroke(sw, 1.0, Stroke::new(1.0, Color32::from_gray(160)), StrokeKind::Inside);
+            ui.label(egui::RichText::new("New").small());
+        });
+        ui.horizontal(|ui| {
+            if ui.button("  OK  ").clicked() {
+                // A hex still being typed that is not a colour falls back to the picker's.
+                let c = parse_hex(&m.hex).unwrap_or_else(|| m.hsva.to_srgb());
+                let hex = hex_of(c);
+                remember_color(&mut recent, &hex);
+                picked = Some(hex);
+                done = true;
+            }
+            if ui.button("Cancel").clicked() {
+                done = true;
+            }
+        });
+        if done {
+            more = None;
+        }
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(recent_colors_id(), recent));
+    ui.data_mut(|d| d.insert_temp(more_id, more));
     ui.data_mut(|d| d.insert_temp(pal_id, cur));
     picked
 }
 
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((title, msg)) = app.message.clone() else { return };
+    let title = app.ui.language.tr(&title).to_owned();
+    let msg = app.ui.language.tr_error(&msg);
     let mut close = false;
     egui::Modal::new(egui::Id::new("message_box")).show(ctx, |ui| {
         ui.set_width(380.0);
@@ -293,6 +458,11 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
     });
     if close {
         app.message = None;
+        // Back to the entry the message was about (a validation alert, a formula error), so it can
+        // be fixed from the keyboard without clicking the cell again.
+        if let Some(ed) = &mut app.editor {
+            ed.request_focus = true;
+        }
     }
 }
 
@@ -302,6 +472,7 @@ pub fn toast(app: &mut SheetApp, ctx: &egui::Context) {
         app.toast = None;
         return;
     }
+    let msg = app.ui.language.tr_error(&msg);
     let Some(rect) = app.grid.rect else { return };
     egui::Area::new(egui::Id::new("toast")).fixed_pos(pos2(rect.center().x - 160.0, rect.bottom() - 48.0)).order(egui::Order::Tooltip).show(
         ctx,
@@ -360,5 +531,57 @@ pub fn notice_bar(app: &mut SheetApp, ui: &mut Ui) {
     }
     if dismiss {
         app.notice = None;
+    }
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    #[test]
+    fn hex_is_read_in_the_forms_people_type() {
+        assert_eq!(parse_hex("#1A2b3C"), Some([0x1A, 0x2B, 0x3C]));
+        assert_eq!(parse_hex(" 1a2b3c "), Some([0x1A, 0x2B, 0x3C]));
+        assert_eq!(parse_hex("#f80"), Some([0xFF, 0x88, 0x00]));
+        for bad in ["", "#", "#12", "#1234", "#12345", "#1234567", "#12345G", "##123456", "é12345"] {
+            assert_eq!(parse_hex(bad), None, "{bad:?}");
+        }
+        assert_eq!(hex_of([0, 10, 255]), "#000AFF");
+    }
+
+    #[test]
+    fn recent_colours_keep_the_newest_first_once_each_and_at_most_ten() {
+        let mut r = Vec::new();
+        for i in 0..12u8 {
+            remember_color(&mut r, &hex_of([i, 0, 0]));
+        }
+        assert_eq!(r.len(), RECENT_COLORS);
+        assert_eq!(r[0], "#0B0000");
+        remember_color(&mut r, "#050000");
+        remember_color(&mut r, "#0b0000");
+        assert_eq!(&r[..2], ["#0B0000", "#050000"]);
+        assert_eq!(r.iter().filter(|h| *h == "#050000").count(), 1);
+        assert_eq!(r.len(), RECENT_COLORS);
+    }
+}
+
+#[cfg(test)]
+mod tooltip_shortcut_tests {
+    use super::tooltip_shortcut;
+
+    #[test]
+    fn tooltips_show_each_platforms_own_shortcut() {
+        // #1191: Windows and Linux show Excel for Windows' shortcuts, never the Mac ⌘ ones.
+        assert_eq!(tooltip_shortcut("Bold", false), Some("Ctrl+B"));
+        assert_eq!(tooltip_shortcut("AutoSum", false), Some("Alt+="));
+        assert_eq!(tooltip_shortcut("Filter", false), Some("Ctrl+Shift+L"));
+        assert_eq!(tooltip_shortcut("Bold", true), Some("⌘B"));
+        assert_eq!(tooltip_shortcut("Filter", true), Some("⌘⇧F"));
+        // Search commands has no shortcut of its own (Ctrl+Shift+Space selects all).
+        assert_eq!(tooltip_shortcut("Search commands", false), None);
+        for (name, mac, other) in super::TOOLTIP_SHORTCUTS {
+            assert!(!other.contains(['⌘', '⇧', '⌥']), "{name}: {other}");
+            assert!(mac.starts_with('⌘'), "{name}: {mac}");
+        }
     }
 }

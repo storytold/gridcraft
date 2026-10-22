@@ -68,3 +68,22 @@ fn protect_and_unprotect_sheet_mask_the_password() {
     h.run_steps(3);
     assert!(h.state().session.active().unwrap().wb.active().unwrap().protection.is_none());
 }
+
+#[test]
+fn protect_sheet_entry_unprotects_a_protected_sheet() {
+    // No password: the Protect Sheet entry points (Home > Format, HOP, RPS, tab menu) unprotect straight away.
+    let mut h = harness();
+    h.state_mut().run("review.protectSheet", json!({})).unwrap();
+    assert!(h.state().active_sheet_protected());
+    h.state_mut().open_dialog("protectSheet", json!({}));
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "no password: no dialog");
+    assert!(!h.state().active_sheet_protected());
+
+    // With a password the Unprotect dialog asks for it, and a wrong one leaves the sheet protected.
+    h.state_mut().run("review.protectSheet", json!({"password": SECRET})).unwrap();
+    h.state_mut().open_dialog("protectSheet", json!({}));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("unprotectSheet"));
+    assert!(h.state().active_sheet_protected());
+}

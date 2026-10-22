@@ -12,6 +12,13 @@
  ],
  "sequences": [
   {
+   "seq": "F",
+   "kind": "tab",
+   "target": "File",
+   "excel": "File tab (Backstage view)",
+   "note": "Opens the File view on Home; its letters below still run their commands."
+  },
+  {
    "seq": "H",
    "kind": "tab",
    "target": "Home"
@@ -1965,8 +1972,8 @@
   },
   {
    "seq": "AQ",
-   "kind": "command",
-   "target": "data.advancedFilter",
+   "kind": "dialog",
+   "target": "advancedFilter",
    "excel": "Advanced Filter",
    "note": ""
   },

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
-use gridcraft_model::{CalcMode, CellPicture, DefinedName, Sheet, Style, StyleId, StyleTable, Visibility, Workbook};
+use gridcraft_model::{CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook};
 
 use crate::package::{Package, Rel};
 use crate::styles::{StylesIn, read_styles};
@@ -15,6 +15,8 @@ pub struct Ctx<'a> {
     pub pkg: Package<'a>,
     pub report: ReadReport,
     pub sst: Vec<Arc<str>>,
+    /// Phonetic (furigana) data of the shared strings, one entry per base text.
+    pub phonetics: Vec<PhoneticString>,
     /// Cell format index → model style.
     pub xf_map: Vec<StyleId>,
     pub dxfs: Vec<Style>,
@@ -35,6 +37,34 @@ pub struct Ctx<'a> {
 impl Ctx<'_> {
     pub fn warn(&mut self, m: impl Into<String>) {
         self.report.warn(m);
+    }
+    /// Stores the phonetic data read from `xl/sharedStrings.xml`.
+    ///
+    /// One entry per base text: the writer rebuilds the shared string table from the values the
+    /// sheets use and holds each text once (the format's `uniqueCount`), so only one reading can be
+    /// written per text. A later `<si>` with a text that is already there is dropped — with a
+    /// warning when its data differs, so nothing is lost silently.
+    pub fn keep_phonetics(&mut self, list: Vec<PhoneticString>) {
+        let mut kept: Vec<PhoneticString> = Vec::new();
+        let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut conflicts = 0usize;
+        for p in list {
+            match index.get(p.text.as_str()) {
+                Some(&i) => {
+                    if kept.get(i).is_some_and(|k| *k != p) {
+                        conflicts += 1;
+                    }
+                }
+                None => {
+                    index.insert(p.text.clone(), kept.len());
+                    kept.push(p);
+                }
+            }
+        }
+        if conflicts > 0 {
+            self.warn(format!("shared strings: {conflicts} phonetic readings were dropped because another <si> with the same text already had one"));
+        }
+        self.phonetics = kept;
     }
     /// A fresh id for a chart, picture, shape or table.
     pub fn next_object_id(&mut self) -> u32 {
@@ -72,6 +102,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         pkg,
         report: ReadReport::default(),
         sst: vec![],
+        phonetics: vec![],
         xf_map: vec![],
         dxfs: vec![],
         palette: crate::tables::INDEXED.to_vec(),
@@ -123,9 +154,11 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         if let Some(x) = cx.optional_xml(&r.target)? {
             let StylesIn { xfs, dxfs, palette, named, num_fmts } = read_styles(&x, &checkboxes);
             cx.num_fmts = num_fmts;
-            // Cell format 0 is the Normal style: its font is what every unformatted cell shows.
+            // Cell format 0 is the Normal cell format: everything on it (font, number format,
+            // fill, borders, alignment, protection) is what a cell without its own format shows
+            // (#1013).
             if let Some(normal) = xfs.first() {
-                cx.styles = StyleTable::with_default(Style { font: normal.font.clone(), ..Style::default() });
+                cx.styles = StyleTable::with_default(normal.clone());
             }
             cx.xf_map = xfs.into_iter().enumerate().map(|(i, s)| if i == 0 { StyleId::DEFAULT } else { cx.styles.intern(s) }).collect();
             cx.dxfs = dxfs;
@@ -140,19 +173,33 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     {
         wb.theme = crate::theme::read_theme(&x);
     }
-    // Shared strings, streamed item by item.
+    // Shared strings, streamed item by item. Phonetic (furigana) runs are kept next to the text
+    // they annotate, so an open + save does not delete them.
     if let Some(r) = find_rel(&wb_rels, "sharedStrings").cloned() {
         match cx.pkg.read(&r.target)? {
             Some(b) => {
                 let mut sst = Vec::new();
+                let mut phonetics = Vec::new();
+                let mut dropped = 0usize;
                 let res = xml::parse_streaming(&b, &["si"], &mut |si| {
-                    sst.push(Arc::from(xml::rich_text(&si)));
+                    let text = xml::rich_text(&si);
+                    let raw = si.kids("rPh").count();
+                    let (runs, props) = xml::phonetic_data(&si, &text);
+                    dropped += raw.saturating_sub(runs.len());
+                    if !runs.is_empty() || props.is_some() {
+                        phonetics.push(PhoneticString { text: text.clone(), runs, props });
+                    }
+                    sst.push(Arc::from(text));
                     Ok(())
                 });
                 if let Err(e) = res {
                     cx.warn(format!("shared strings are damaged ({e}); kept {} strings", sst.len()));
                 }
+                if dropped > 0 {
+                    cx.warn(format!("shared strings: {dropped} phonetic runs were dropped (bad sb/eb or no reading)"));
+                }
                 cx.sst = sst;
+                cx.keep_phonetics(phonetics);
             }
             None => cx.warn(format!("missing part {}", r.target)),
         }
@@ -169,10 +216,15 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
 
     // Workbook properties.
-    if let Some(p) = wb_xml.child("workbookPr")
-        && p.flag("date1904", false)
-    {
-        cx.date_system = DateSystem::D1904;
+    if let Some(p) = wb_xml.child("workbookPr") {
+        if p.flag("date1904", false) {
+            cx.date_system = DateSystem::D1904;
+        }
+        wb.show_objects = match p.attr("showObjects") {
+            Some("none") => ShowObjects::None,
+            Some("placeholders") => ShowObjects::Placeholders,
+            _ => ShowObjects::All,
+        };
     }
     wb.date_system = cx.date_system;
     if let Some(c) = wb_xml.child("calcPr") {
@@ -265,7 +317,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
                 continue;
             }
             if lname.starts_with("_xlchart.") {
-                chart_names.push((lname, crate::fmla::from_file(text)));
+                chart_names.push((lname, crate::fmla::from_file(&crate::chart::chart_ref_from_file(text))));
                 continue;
             }
             if lname == "_xlnm.print_area" || lname == "_xlnm.print_titles" {
@@ -331,7 +383,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     if let Some(r) = find_rel(&wb_rels, "vbaProject").cloned() {
         match cx.pkg.read(&r.target) {
             Ok(Some(data)) => {
-                wb.vba_project = Some(data);
+                wb.vba_project = Some(data.into());
                 cx.warn("macros (VBA project) were kept but not executed");
             }
             Ok(None) => cx.warn("macros (VBA project) reference a missing part and were dropped"),
@@ -343,6 +395,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     // Calls of LAMBDA names are spelled like the names (the parser upper-cases them).
     wb.apply_name_call_case();
     wb.styles = cx.styles;
+    wb.phonetics = cx.phonetics;
     Ok((wb, cx.report))
 }
 

@@ -122,7 +122,7 @@ cd apps/gridcraft-web && trunk build --release     # → dist/web (serve it with
 cd apps/gridcraft-web && trunk serve --release     # http://127.0.0.1:8771  (?sample=sales opens a sample)
 ```
 
-You need [trunk](https://trunkrs.dev) and the `wasm32-unknown-unknown` target. Open uses the
+You need [trunk](https://trunk-rs.github.io/trunk/) and the `wasm32-unknown-unknown` target. Open uses the
 browser's file picker (dropping files works too) and Save downloads the workbook.
 
 ### Ribbon access keys

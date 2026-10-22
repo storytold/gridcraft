@@ -49,22 +49,40 @@ pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error>
     decode(&s).ok_or_else(|| serde::de::Error::custom("invalid base64"))
 }
 
-/// Base64 for optional byte blobs (VBA projects): `null`/missing stays `None`.
+/// Base64 for byte blobs shared through `Arc` (floating pictures), so copies of a workbook, such as
+/// its undo steps, share one payload.
+pub mod shared {
+    use std::sync::Arc;
+
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &Arc<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        super::serialize(v, s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Arc<Vec<u8>>, D::Error> {
+        super::deserialize(d).map(Arc::new)
+    }
+}
+
+/// Base64 for optional shared byte blobs (VBA projects): `null`/missing stays `None`.
 pub mod opt {
+    use std::sync::Arc;
+
     use serde::{Deserialize, Deserializer, Serializer};
 
-    pub fn serialize<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(v: &Option<Arc<Vec<u8>>>, s: S) -> Result<S::Ok, S::Error> {
         match v {
             Some(data) => s.serialize_str(&super::encode(data)),
             None => s.serialize_none(),
         }
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Arc<Vec<u8>>>, D::Error> {
         let s = Option::<String>::deserialize(d)?;
         match s {
             None => Ok(None),
-            Some(s) => super::decode(&s).map(Some).ok_or_else(|| serde::de::Error::custom("invalid base64")),
+            Some(s) => super::decode(&s).map(|v| Some(Arc::new(v))).ok_or_else(|| serde::de::Error::custom("invalid base64")),
         }
     }
 }

@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (bound Undo's retained cell storage) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -35,6 +35,9 @@ including tests, 2026-10-10.
    `data.sortAscending`) plus primitives (`cell.set`, `selection.set`, `range.setValues`).
    `Session::execute` catches escaped panics and restores the workbook (never-crash guard).
 2. **Edits** change the model through copy-on-write bands; undo keeps the previous snapshot.
+   Undo retains at most 100 steps and trims older steps when its estimated retained cell storage
+   exceeds 128 MiB. The newest step remains undoable even if that step alone exceeds the budget.
+   The estimate is a history policy, not a measure or hard cap of process memory.
 3. **Recalc** marks dependents of changed cells dirty through the dependency graph (with range
    nodes for range dependents), evaluates in topological order, spills dynamic arrays and reports
    `#SPILL!`/cycles. Volatile functions are always dirty.
@@ -68,4 +71,5 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

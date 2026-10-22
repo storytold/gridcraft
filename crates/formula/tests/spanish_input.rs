@@ -1,4 +1,4 @@
-use gridcraft_formula::{FormulaLocale, parse, parse_input, print, print_input};
+use gridcraft_formula::{Expr, FormulaLocale, parse, parse_input, print, print_input};
 
 fn input(src: &str) -> String {
     print(&parse_input(src, FormulaLocale::Es, |_| false).unwrap())
@@ -15,6 +15,11 @@ fn spanish_aliases_and_argument_separators() {
         ("CONTAR.SI(A1:A10;\">0\")", "COUNTIF(A1:A10,\">0\")"),
         ("BUSCARV(A2;D:E;2;FALSO)", "VLOOKUP(A2,D:E,2,FALSE)"),
         ("HOY()", "TODAY()"),
+        ("VNA(0,1;A1:A5)", "NPV(0.1,A1:A5)"),
+        ("TIR(A1:A5;0,1)", "IRR(A1:A5,0.1)"),
+        ("PAGO(0,08/12;10;10000)", "PMT(0.08/12,10,10000)"),
+        ("VA(0,05;12;100)", "PV(0.05,12,100)"),
+        ("VF(0,05;12;100)", "FV(0.05,12,100)"),
         ("=verdadero", "TRUE"),
         ("=falso", "FALSE"),
         ("VERDADERO()", "TRUE()"),
@@ -45,10 +50,31 @@ fn spanish_input_preserves_reference_and_array_syntax() {
     assert_eq!(print(&parse("SUMA(1,2)+FALSO").unwrap()), "SUMA(1,2)+FALSO");
     assert!(parse("SUM(1;2)").is_err());
     assert!(parse("{VERDADERO}").is_err());
-    // Pratt parsing can produce a deep left-hand AST without deep parser recursion.
-    let long_chain = "FALSO+".repeat(300) + "VERDADERO";
-    assert!(parse_input(&long_chain, FormulaLocale::Es, |_| false).is_err());
-    assert!(print_input(&parse(&long_chain).unwrap(), FormulaLocale::Es, |_| false).is_err());
+    // Real nesting past the parser's limit is still refused.
+    let nested = "(".repeat(300) + "1" + &")".repeat(300);
+    assert!(parse_input(&nested, FormulaLocale::Es, |_| false).is_err());
+    let deep = (0..300).fold(Expr::Number(1.0), |e, _| Expr::Paren(Box::new(e)));
+    assert!(print_input(&deep, FormulaLocale::Es, |_| false).is_err());
+}
+
+#[test]
+fn spanish_input_accepts_flat_chains_as_long_as_excel() {
+    // A flat chain nests on its left without nesting in the text. Excel accepts 4,096
+    // operands (8,192 characters); Spanish entry refused more than 256 (#916). On a 1 MiB
+    // stack, as on the Windows main thread.
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let long_chain = "FALSO+".repeat(1360) + "VERDADERO";
+            let english = "FALSE+".repeat(1360) + "TRUE";
+            assert_eq!(input(&long_chain), english);
+            assert_eq!(print_input(&parse(&english).unwrap(), FormulaLocale::Es, |_| false).unwrap(), long_chain);
+            let sums = vec!["SUMA(1;2)"; 800].join("+");
+            assert_eq!(input(&sums), vec!["SUM(1,2)"; 800].join("+"));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]
@@ -97,4 +123,18 @@ fn spanish_display_round_trips_text_containing_separators() {
     let shown = print_input(&expr, es, |_| false).unwrap();
     assert_eq!(shown, r#"SI(A1="a,b;c";CONCAT("1.5";",";";");SUMA(0,25;A1:A3 B2))"#);
     assert_eq!(print(&parse_input(&shown, es, |_| false).unwrap()), print(&expr));
+}
+
+#[test]
+fn local_names_match_aliases_in_any_case_like_the_evaluator() {
+    // `ſi` (long s) is `SI` case-insensitively, so the call is the LAMBDA, not IF.
+    assert_eq!(input("LET(ſi;LAMBDA(x;x*2);SI(3))"), "LET(ſi,LAMBDA(x,x*2),SI(3))");
+    assert!(gridcraft_formula::same_name("ß", "ẞ"));
+    assert!(gridcraft_formula::same_name("dług", "DŁUG"));
+    assert!(gridcraft_formula::same_name("ſi", "SI"));
+    assert!(gridcraft_formula::same_name("σοφός", "ΣΟΦΌΣ"));
+    // Dotless ı is its own letter outside Turkic languages.
+    assert!(!gridcraft_formula::same_name("ı", "i"));
+    assert!(!gridcraft_formula::same_name("ı", "I"));
+    assert!(!gridcraft_formula::same_name("a", "b"));
 }

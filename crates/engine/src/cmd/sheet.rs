@@ -63,7 +63,7 @@ pub fn specs() -> Vec<CommandSpec> {
 fn lines(s: &Session, p: &Json, axis: Axis) -> Result<(u32, u32)> {
     let key = if axis == Axis::Rows { "rows" } else { "cols" };
     let r = match str_param(p, key).or_else(|| str_param(p, "range")) {
-        Some(t) => RangeRef::parse(t).ok_or_else(|| bad(key, format!("not a range: {t}")))?,
+        Some(t) => parse_lines(t).ok_or_else(|| bad(key, format!("not a range: {t}")))?,
         None => s.doc()?.selection.current(),
     };
     let (a, b) = if axis == Axis::Rows { (r.start.row, r.end.row) } else { (r.start.col, r.end.col) };
@@ -211,10 +211,19 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     if let Some(pa) = sh.print.print_area {
         sh.print.print_area = map_range(pa);
     }
+    // PivotTables follow their report cells. A deleted anchor line collapses onto the line that
+    // takes its place; a report deleted entirely has no last area until the next refresh.
+    for pt in sh.pivots.iter_mut() {
+        pt.anchor = map_cell(pt.anchor).unwrap_or_else(|| match axis {
+            Axis::Rows => CellRef::new(at, pt.anchor.col),
+            Axis::Cols => CellRef::new(pt.anchor.row, at),
+        });
+        pt.last_range = pt.last_range.and_then(map_range);
+    }
 }
 
 /// Rewrites every formula reference (and chart series) for a structural edit on `target`.
-fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit) {
+pub(super) fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit) {
     super::edit::rewrite_all_formulas(wb, target, e);
     for si in 0..wb.sheets.len() {
         let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
@@ -226,6 +235,8 @@ fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit) {
             }
         };
         for ch in sh.charts.iter_mut() {
+            // The source block moves with its cells; one that was deleted is dropped.
+            ch.source = ch.source.as_deref().map(fix).filter(|s| !s.contains("#REF!"));
             for se in ch.series.iter_mut() {
                 se.values = fix(&se.values);
                 se.categories = se.categories.as_deref().map(fix);
@@ -234,6 +245,18 @@ fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit) {
         }
         for sp in sh.sparklines.iter_mut() {
             sp.source = fix(&sp.source);
+        }
+        // PivotTable sources (a range, table or defined name) are only rewritten when the edit
+        // moves them, so table and name sources keep their text.
+        for pt in sh.pivots.iter_mut() {
+            let body = pt.source.trim().trim_start_matches('=');
+            if let Ok(expr) = gridcraft_formula::parse(body) {
+                let before = gridcraft_formula::print(&expr);
+                let after = gridcraft_formula::print(&gridcraft_formula::adjust::adjust(expr, &host, target, e));
+                if after != before {
+                    pt.source = after;
+                }
+            }
         }
     }
 }
@@ -306,7 +329,7 @@ fn delete_areas(s: &Session, p: &Json, axis: Axis) -> Result<Vec<(u32, u32)>> {
     } else if let Some(t) = str_param(p, key).or_else(|| str_param(p, "range")) {
         t.split(',')
             .map(|part| {
-                let r = RangeRef::parse(part).ok_or_else(|| bad(key, format!("not a range: {part}")))?;
+                let r = parse_lines(part).ok_or_else(|| bad(key, format!("not a range: {part}")))?;
                 Ok(if axis == Axis::Rows { (r.start.row, r.end.row) } else { (r.start.col, r.end.col) })
             })
             .collect::<Result<_>>()?
@@ -469,6 +492,15 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     if let Some(sh) = s.doc()?.wb.sheet(sheet) {
         check_table_shift(sh, &e)?;
+        // Refuse to push data off the sheet: cells in the last `width`/`height` positions would be dropped.
+        let doomed = if shift == "right" {
+            RangeRef::new(CellRef::new(r.start.row, r.start.col.max(MAX_COLS.saturating_sub(r.width()))), CellRef::new(r.end.row, MAX_COLS - 1))
+        } else {
+            RangeRef::new(CellRef::new(r.start.row.max(MAX_ROWS.saturating_sub(r.height())), r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col))
+        };
+        if sh.cells.iter_range(doomed).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
+            return Err(EngineError::Other("To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet.".into()));
+        }
     }
     let right = shift == "right";
     let out = edit(s, |cx| {
@@ -746,7 +778,7 @@ fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 *sc -= 1;
             }
             // Names referring to the sheet become #REF!.
-            if let Ok(e) = gridcraft_formula::parse(&n.formula) {
+            if let Ok(e) = gridcraft_formula::parse_name(&n.formula) {
                 let ne = gridcraft_formula::adjust::delete_sheet(e.clone(), &name, &order);
                 if ne != e {
                     n.formula = gridcraft_formula::print(&ne);
@@ -767,6 +799,9 @@ fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
+    if s.doc()?.wb.protected_structure {
+        return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
+    }
     let i = target_sheet(s, p)?;
     let Some(name) = str_param(p, "name").map(|n| n.trim().to_string()) else { return Err(bad("sheet.rename", "missing `name`")) };
     s.doc()?.wb.check_sheet_name(&name, Some(i)).map_err(EngineError::Other)?;
@@ -808,7 +843,7 @@ fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         for n in cx.wb.names.iter_mut() {
-            if let Ok(e) = gridcraft_formula::parse(&n.formula) {
+            if let Ok(e) = gridcraft_formula::parse_name(&n.formula) {
                 n.formula = gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet(e, &old, &name));
             }
         }
@@ -818,6 +853,9 @@ fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
+    if s.doc()?.wb.protected_structure {
+        return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
+    }
     let i = target_sheet(s, p)?;
     let copy = bool_param(p, "copy").unwrap_or(false);
     let to = p.get("to").and_then(Json::as_u64).map(|v| v as usize).ok_or_else(|| bad("sheet.move", "missing `to`"))?;
@@ -847,7 +885,7 @@ fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 .iter()
                 .filter(|nm| nm.scope == Some(i))
                 .map(|nm| {
-                    let formula = gridcraft_formula::parse(&nm.formula)
+                    let formula = gridcraft_formula::parse_name(&nm.formula)
                         .map(|e| gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet(e, &base, &sh.name)))
                         .unwrap_or_else(|_| nm.formula.clone());
                     gridcraft_model::DefinedName { scope: Some(at), formula, ..nm.clone() }
@@ -895,6 +933,9 @@ fn tab_color(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn hide_sheet(s: &mut Session, p: &Json) -> Result<Json> {
+    if s.doc()?.wb.protected_structure {
+        return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
+    }
     let i = target_sheet(s, p)?;
     if s.doc()?.wb.sheets.iter().filter(|s| s.visibility == Visibility::Visible).count() <= 1 {
         return Err(EngineError::Other("A workbook must contain at least one visible worksheet.".into()));
@@ -909,6 +950,9 @@ fn hide_sheet(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn unhide_sheet(s: &mut Session, p: &Json) -> Result<Json> {
+    if s.doc()?.wb.protected_structure {
+        return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
+    }
     if p.get("sheet").is_none() {
         let hidden: Vec<String> = s.doc()?.wb.sheets.iter().filter(|s| s.visibility != Visibility::Visible).map(|s| s.name.clone()).collect();
         if hidden.is_empty() {
@@ -932,17 +976,18 @@ fn activate(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"sheet": i, "name": d.wb.active().map(|s| s.name.clone())}))
 }
 
-fn step_sheet(s: &mut Session, dir: i64) -> Result<Json> {
+fn step_sheet(s: &mut Session, dir: isize) -> Result<Json> {
     let d = s.doc()?;
-    let n = d.wb.sheets.len() as i64;
-    let mut i = d.wb.active_sheet as i64;
-    for _ in 0..n {
-        i = (i + dir).clamp(0, n - 1);
-        if d.wb.sheet(i as usize).is_some_and(|s| s.visibility == Visibility::Visible) {
-            break;
+    let mut i = d.wb.active_sheet;
+    while let Some(next) = i.checked_add_signed(dir) {
+        let Some(sheet) = d.wb.sheet(next) else { break };
+        if sheet.visibility == Visibility::Visible {
+            s.doc_mut()?.wb_switch_sheet(next);
+            return ok();
         }
+        i = next;
     }
-    s.doc_mut()?.wb_switch_sheet(i as usize);
+    // No visible sheet in this direction: keep the current sheet and its selection.
     ok()
 }
 
@@ -963,7 +1008,7 @@ pub(crate) fn map_range(r: RangeRef, e: &Edit) -> Option<RangeRef> {
 
 /// Shifts what Insert/Delete Cells moves along with the cells: merged areas, conditional
 /// format, validation, table, filter and print-area ranges, notes, links and sparklines.
-fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
+pub(super) fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
     let map_cell = |c: CellRef| map_range(RangeRef::cell(c), e).map(|r| r.start);
     sh.merges = sh.merges.iter().filter_map(|m| map_range(*m, e)).filter(|m| !m.is_single()).collect();
     for cf in sh.cond_formats.iter_mut() {

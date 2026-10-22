@@ -60,6 +60,14 @@ fn sequence(h: &mut Harness, seq: &str, text_first: bool) {
 }
 
 #[test]
+fn keytip_f_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "F", false);
+    assert!(h.state().backstage.is_some(), "F must open the File view");
+    assert_eq!(h.state().keytips.prefix(), Some("F"));
+}
+
+#[test]
 fn keytip_h_() {
     let mut h = harness(blank());
     sequence(&mut h, "H", false);
@@ -1275,8 +1283,14 @@ fn keytip_nq_() {
 #[test]
 fn keytip_nr_() {
     let mut h = harness(blank());
+    // The dialog previews chart types for the selected data, so the sheet needs some.
+    h.state_mut()
+        .session
+        .execute("range.setValues", serde_json::json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]}))
+        .unwrap();
+    h.state_mut().session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
     sequence(&mut h, "NR", false);
-    assert!(h.state().message.is_some() || h.state().toast.is_some(), "NR must invoke insert.recommendedCharts and surface its missing-params error");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("recommendedCharts"), "NR must open the recommendedCharts dialog");
 }
 
 #[test]
@@ -2149,7 +2163,7 @@ fn keytip_apt_() {
 fn keytip_aq_() {
     let mut h = harness(blank());
     sequence(&mut h, "AQ", false);
-    assert!(h.state().message.is_some() || h.state().toast.is_some(), "AQ must invoke data.advancedFilter and surface its missing-params error");
+    assert!(h.state().dialog.is_some(), "AQ must open the advancedFilter dialog");
 }
 
 #[test]
@@ -2741,7 +2755,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 364;
+    const EXPECTED: usize = 365;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 

@@ -1,5 +1,14 @@
 # Decisions
 
+## Bound repeated XLSX column expansion (#1022)
+
+Limit each worksheet to 1,000,000 nondefault column assignments across all `<cols>` blocks.
+This allows more than 60 full-grid passes while bounding repeated work on overlapping spans;
+counting only the final map size would not limit that work. Charge each clipped span before
+inserting it, after the existing default-record skip. Exceeding the limit returns the existing
+`IoError::TooLarge`, which aborts the import instead of silently dropping a partially read sheet.
+Keep the current last-wins semantics rather than introduce interval storage or normalization.
+
 ## Formula localization uses the existing interface preference
 
 PR #98 builds on the persisted `UiState.language` introduced by #31 and extended by #104.

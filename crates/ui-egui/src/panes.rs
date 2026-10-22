@@ -241,7 +241,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
                 ui.label(&name);
                 ui.label(egui::RichText::new(&s.values).small().color(Color32::from_gray(110)));
                 ui.menu_button("Fill…", |ui| {
-                    if let Some(c) = crate::widgets::color_palette(ui, &theme.colors, "Automatic") {
+                    if let Some(c) = crate::widgets::color_palette_fixed(ui, &theme.colors, "Automatic") {
                         app.run_or_alert(
                             "chart.formatSelection",
                             json!({"chart": id, "series": i, "color": if c == "none" { Json::Null } else { json!(c) }}),

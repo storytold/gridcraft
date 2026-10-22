@@ -17,6 +17,7 @@ fn smooth_line_setting_round_trips() {
         color: Some(Color::Rgb(0x4472C4)),
         secondary: false,
         kind: None,
+        quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
     };

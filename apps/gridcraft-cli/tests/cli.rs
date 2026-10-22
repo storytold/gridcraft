@@ -174,3 +174,35 @@ fn check_exit_codes_and_json() {
     assert_eq!(run(&["check", book_s, "--tolerance", "x"]).status.code(), Some(2));
     assert_eq!(run(&["check", book_s, "--bogus"]).status.code(), Some(2));
 }
+
+#[test]
+fn check_rejects_an_empty_scan() {
+    let dir = tmpdir("check-empty");
+    std::fs::write(dir.join("notes.txt"), "not a workbook").unwrap();
+    std::fs::write(dir.join(".hidden.xlsx"), "ignored").unwrap();
+    std::fs::write(dir.join("~$locked.xlsx"), "ignored").unwrap();
+    let out = run(&["check", dir.to_str().unwrap(), "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(report["files"][0]["error"].as_str().unwrap().contains("no workbook files"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn check_reports_a_depth_limited_scan_while_checking_readable_files() {
+    let dir = tmpdir("check-depth");
+    let book = dir.join("readable.xlsx");
+    ok(&["run", "--out", book.to_str().unwrap(), "--quiet"]);
+    let mut deep = dir.clone();
+    for _ in 0..34 {
+        deep.push("d");
+    }
+    std::fs::create_dir_all(&deep).unwrap();
+    std::fs::write(deep.join("skipped.xlsx"), "not reached").unwrap();
+    let out = run(&["check", dir.to_str().unwrap(), "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["totals"]["opened"], 1);
+    assert!(report["files"].as_array().unwrap().iter().any(|r| r["error"].as_str().is_some_and(|e| e.contains("depth limit"))));
+    let _ = std::fs::remove_dir_all(dir);
+}
