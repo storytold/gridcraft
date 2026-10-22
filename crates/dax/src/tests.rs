@@ -416,6 +416,12 @@ fn nesting_and_input_length_are_bounded() {
     assert!(parse_expression(&chain).is_err(), "a 1,000-term chain exceeds the nesting limit");
     let short = vec!["1"; 200].join(" + ");
     assert_eq!(round_trip(&short), short);
+    // A flat list of sibling expressions must not accumulate the depth of their internal
+    // binary folds.
+    let args = (0..300).map(|i| format!("{i} + 1")).collect::<Vec<_>>().join(", ");
+    let call = format!("ROW({args})");
+    assert!(call.len() < MAX_INPUT_LEN);
+    assert!(parse_expression(&call).is_ok());
 }
 
 #[test]

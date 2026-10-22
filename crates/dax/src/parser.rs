@@ -171,6 +171,7 @@ impl Parser {
 
     fn expr(&mut self, min_bp: u8) -> Result<Expr, ParseError> {
         self.enter()?;
+        let mut folded = 0usize;
         let mut lhs = self.prefix()?;
         while let Some(op) = self.binary_op() {
             let bp = op.precedence();
@@ -181,12 +182,16 @@ impl Parser {
             // The folded node adds a level to the tree, so it counts against the nesting limit
             // even though the loop itself does not recurse.
             self.enter()?;
+            folded += 1;
             // `^` is right-associative; every other binary operator is left-associative.
             let next_min = if op.is_right_associative() { bp } else { bp + 1 };
             let rhs = self.expr(next_min)?;
             let span = lhs.span.to(rhs.span);
             lhs = Expr::new(ExprKind::Binary { op, left: Box::new(lhs), right: Box::new(rhs) }, span);
         }
+        // The folds built a deeper tree, but those levels must not leak into sibling
+        // expressions parsed by the caller.
+        self.depth = self.depth.saturating_sub(folded);
         self.leave();
         Ok(lhs)
     }
