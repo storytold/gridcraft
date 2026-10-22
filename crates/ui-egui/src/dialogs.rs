@@ -1047,49 +1047,70 @@ impl Dialog {
                 dialog
             }
             "powerPivot" => {
-                // Excel's Power Pivot window: the loaded data model on the left, DAX evaluation
-                // and a pivot preview on the right. The model lives in the engine session, so
-                // the dialog reads it back through `dataModel.status`.
+                // Excel's Power Pivot window: the File/Home/Design/Advanced tab strip, the
+                // Data View or Diagram View canvas, and floating dialogs for the commands that
+                // Excel opens from the ribbon. The model lives in the engine session, so the
+                // dialog reads it back through `dataModel.status`.
                 let status = app.session.run("dataModel.status", json!({})).unwrap_or(Json::Null);
                 let mut dialog = Dialog::custom(
                     "powerPivot",
                     "Power Pivot",
                     json!({
                         "tab": "Home",
+                        "view": "Data",
+                        "overlay": "",
                         "path": p("path").as_str().unwrap_or_default(),
                         "formula": "",
-                        "table": false,
-                        "measure": "",
-                        "rows": "",
-                        "columns": "",
+                        "column": "",
+                        "columnIndex": 0,
+                        "measureIndex": -1,
+                        "filterColumn": "",
+                        "filterValue": "",
+                        "calcArea": true,
+                        "calcMode": "Automatic",
+                        "showHidden": false,
+                        "showImplicit": false,
+                        "resultKind": "",
+                        "resultText": "",
                         "error": "",
-                        "pivotError": "",
-                        "pivotNote": "",
                         "model": status,
-                        "draftName": "",
-                        "draftFormula": "",
-                        "draftIndex": -1,
                         "diagramZoom": 1.0,
                         "diagramFit": false,
                         "tableIndex": 0,
-                        "showPivot": false,
                         "showFunctions": false,
                         "fnCategory": "All",
                         "fnSearch": "",
-                        "showRelationships": false,
+                        "measureDialogMode": "Add",
+                        "newMeasureName": "",
+                        "newMeasureTable": "",
+                        "newMeasureFormula": "",
+                        "newMeasureFormat": "",
+                        "relIndex": -1,
+                        "relFromTable": "",
+                        "relFromColumn": "",
+                        "relToTable": "",
+                        "relToColumn": "",
+                        "relBidirectional": false,
                     }),
                 );
                 // Excel's Data View shows the selected table's rows; status only carries counts,
-                // so fetch the first table as a table expression.
-                if let Some(table) = status
-                    .get("tables")
-                    .and_then(Json::as_array)
-                    .and_then(|tables| tables.first())
-                    .and_then(|table| table.get("name"))
-                    .and_then(Json::as_str)
-                    && let Ok(data) = app.session.run("dataModel.evaluate", json!({"formula": table, "table": true}))
-                {
-                    dialog.values.insert("tableData".into(), data);
+                // so fetch the first table as a table expression and select its first column.
+                if let Some(table) = status.get("tables").and_then(Json::as_array).and_then(|tables| tables.first()) {
+                    if let Some(column) = table
+                        .get("columns")
+                        .and_then(Json::as_array)
+                        .and_then(|columns| columns.first())
+                        .and_then(|column| column.get("name"))
+                        .and_then(Json::as_str)
+                    {
+                        dialog.values.insert("column".into(), json!(column));
+                    }
+                    if let Some(table_name) = table.get("name").and_then(Json::as_str) {
+                        dialog.values.insert("newMeasureTable".into(), json!(table_name));
+                        if let Ok(data) = app.session.run("dataModel.evaluate", json!({"formula": table_name, "table": true})) {
+                            dialog.values.insert("tableData".into(), data);
+                        }
+                    }
                 }
                 dialog
             }

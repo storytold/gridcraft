@@ -156,7 +156,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "solver" => 460.0,
         "zoom" => 220.0,
         "pasteSpecial" => 480.0,
-        "powerPivot" => 920.0,
+        "powerPivot" => 1320.0,
         _ => 380.0,
     };
     let window = egui::Window::new(app.ui.language.tr(&d.title))
@@ -171,7 +171,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let window = match d.name.as_str() {
         "insertPicture" => window.default_height(240.0),
         "advancedFilter" => window.default_height(0.0),
-        "powerPivot" => window.default_height(780.0),
+        "powerPivot" => window.default_height(740.0),
         _ => window,
     };
     window.show(ctx, |ui| {
@@ -196,7 +196,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
                 "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
-                "powerPivot" => power_pivot(app, ui, &mut d),
+                "powerPivot" => power_pivot(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");

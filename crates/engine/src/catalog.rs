@@ -229,6 +229,11 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("dataModel.status", "Data", "Data Model", "Data Model"),
     ("dataModel.evaluate", "Data", "Data Model", "Evaluate DAX"),
     ("dataModel.pivot", "Data", "Data Model", "Data Model Pivot"),
+    ("dataModel.addMeasure", "Data", "Data Model", "Add Measure"),
+    ("dataModel.updateMeasure", "Data", "Data Model", "Update Measure"),
+    ("dataModel.deleteMeasure", "Data", "Data Model", "Delete Measure"),
+    ("dataModel.addRelationship", "Data", "Data Model", "Create Relationship"),
+    ("dataModel.deleteRelationship", "Data", "Data Model", "Delete Relationship"),
     // Review
     ("review.spelling", "Review", "Proofing", "Spelling"),
     ("review.thesaurus", "Review", "Proofing", "Thesaurus"),
