@@ -57,7 +57,7 @@ impl fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
-/// Validates one call against the aggregation catalog.
+/// Validates one call against the function catalog.
 ///
 /// Returns every error the call contains, or an empty vector for a valid call and for a function
 /// that is not in the catalog. Because [`Call`] does not carry its own span, arity errors use
@@ -88,7 +88,7 @@ fn validate_call_at(call: &Call, call_span: Span) -> Vec<ValidationError> {
     if arity < spec.min_args || arity > spec.max_args {
         return vec![arity_error(spec, arity, call_span)];
     }
-    let matching: Vec<&Overload> = spec.overloads.iter().filter(|overload| overload.arity() == arity).collect();
+    let matching: Vec<&Overload> = spec.overloads.iter().filter(|overload| overload.matches(arity)).collect();
     if matching.is_empty() {
         return vec![arity_error(spec, arity, call_span)];
     }
@@ -119,8 +119,8 @@ fn arity_error(spec: &FunctionSpec, arity: usize, span: Span) -> ValidationError
 }
 
 fn overload_accepts(overload: &Overload, index: usize, argument: &Expr) -> bool {
-    match overload.params.get(index) {
-        Some(kind) => accepts(*kind, argument),
+    match overload.kind_at(index) {
+        Some(kind) => accepts(kind, argument),
         None => true,
     }
 }
@@ -128,7 +128,7 @@ fn overload_accepts(overload: &Overload, index: usize, argument: &Expr) -> bool 
 fn expected_kinds(overloads: &[&Overload], index: usize) -> String {
     let mut expected: Vec<&'static str> = Vec::new();
     for overload in overloads {
-        let Some(kind) = overload.params.get(index) else {
+        let Some(kind) = overload.kind_at(index) else {
             continue;
         };
         let description = kind.description();
@@ -144,7 +144,18 @@ fn accepts(kind: ParamKind, argument: &Expr) -> bool {
     match kind {
         ParamKind::Column => is_column_reference(argument),
         ParamKind::Table => !is_obvious_scalar(argument) && !is_column_reference(argument),
-        ParamKind::Expression | ParamKind::Scalar | ParamKind::Logical | ParamKind::Any => true,
+        ParamKind::Expression
+        | ParamKind::Scalar
+        | ParamKind::Logical
+        | ParamKind::Any
+        | ParamKind::Date
+        | ParamKind::Text
+        | ParamKind::Number
+        | ParamKind::Boolean
+        | ParamKind::Function
+        | ParamKind::Reference
+        | ParamKind::Json
+        | ParamKind::Variant => true,
     }
 }
 

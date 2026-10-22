@@ -1,7 +1,7 @@
 # gridcraft-dax
 
 The DAX language for GridCraft: a tokenizer, a Pratt parser, a syntax tree, a canonical printer,
-the aggregation function catalog with static call validation, the static type surface (types,
+the function catalog for every dax.guide category with static call validation, the static type surface (types,
 literals, inference and operator result tables) and the full DAX statement/query grammar. This
 crate has no evaluator and no engine dependency.
 
@@ -33,7 +33,7 @@ assert!(gridcraft_dax::print_query(&query).starts_with("DEFINE\n    MEASURE Sale
 | `ast::{Evaluate, OrderItem, StartValue, SortDirection}` | `EVALUATE`, `ORDER BY` and `START AT`. |
 | `ast::{FunctionParam, ParameterType, ParameterSubtype, PassingMode}` | `FUNCTION` parameters and annotations. |
 | `ast::{VisualShape, Axis, AxisKind, AxisGroup, AxisOrderItem}` | `WITH VISUAL SHAPE`, `AXIS`, `GROUP`, `TOTAL`. |
-| `functions::{catalog, lookup}` | The 22 aggregation functions, looked up case-insensitively. |
+| `functions::{catalog, lookup}` | Every catalogued function, looked up case-insensitively. |
 | `functions::{FunctionSpec, FunctionCategory, ParamKind, ReturnType, BlankPolicy, FunctionFlags, Parameter, Overload}` | Catalog record types. |
 | `validate_call(&Call) -> Vec<ValidationError>` | Arity/kind checks for one call; empty for valid or unknown functions. |
 | `validate_expression(&Expr) -> Vec<ValidationError>` | Walks the tree and reports every invalid known-function call with its span. |
@@ -223,9 +223,10 @@ availability is `Boolean`, `DateTime`, `Decimal`, `Integer`, `String`; `Binary`,
 
 `literal_type(&Literal)` maps a literal to its `DataType`. `infer_type(&Expr) ->
 Result<InferredType, TypeError>` infers literals, unary `+`/`-`/`NOT`, binary operators,
-`TRUE()`/`FALSE()`/`BLANK()` calls, and table constructors. Name references and other function
-calls return `InferredType::Unknown` because they need the model or a function catalog. `Unknown`
-is not a DAX type; it is the absence of static information.
+`TRUE()`/`FALSE()`/`BLANK()` calls, table constructors, and every catalogued function's documented
+`ReturnType` (`Table` for table functions, `Blank` for BLANK, `Unknown` for `Any`/unknown names).
+Name references still return `InferredType::Unknown` because they need the model. `Unknown` is not
+a DAX type; it is the absence of static information.
 
 The arithmetic and comparison result tables are transcribed from the published DAX operator
 reference for `Integer`, `Currency`, `Decimal` ("Real") and `DateTime`:
@@ -267,15 +268,35 @@ indented under their `TABLE`. The simple `EVALUATE <expression>` form stays on o
 `VAR ... RETURN ...` prints on one line and is parenthesised when it is an operand, because it
 binds looser than every operator. All printing remains iterative.
 
-## Aggregation function catalog
+## Function catalog
 
-`functions::catalog()` returns the 22 functions of
-[dax.guide/functions/aggregation](https://dax.guide/functions/aggregation/), in that order.
-`functions::lookup(name)` is case-insensitive. Each record carries its descriptive signature
-(`params`, with `optional` markers), exact `overloads`, `return_type`, `flags`
-(`iterator`, `not_recommended`, `excel_compatible`, `direct_query_limited`), `sugar_of`,
-`blank_policy`, `description` and `examples`. Every example in the catalog parses with
-`parse_expression` and validates.
+`functions::catalog()` returns every function of every
+[dax.guide function category](https://dax.guide/functions/), in category order. Each
+`FunctionSpec` records the exact arity, parameter kinds, overloads (including variadic
+functions), return type, iterator/volatile/not-recommended/Excel flags, description and
+parseable examples. Each record carries its descriptive signature (`params`, with `optional`
+markers), exact `overloads` (fixed or variadic), `return_type`, `flags` (`iterator`, `volatile`,
+`not_recommended`, `excel_compatible`, `direct_query_limited`), `sugar_of`, `blank_policy`,
+`description` and `examples`. Every example in the catalog parses with `parse_expression`.
+
+| Category | Functions |
+| --- | ---: |
+| Aggregation | 22 |
+| Date and Time | 24 |
+| Filter | 29 |
+| Financial | 51 |
+| Information | 114 |
+| Logical | 13 |
+| Math and Trig | 49 |
+| Other | 16 |
+| Parent-child | 5 |
+| Relationship management | 4 |
+| Statistical | 43 |
+| Table manipulation | 35 |
+| Text | 23 |
+| Time Intelligence | 45 |
+| Visual calculations | 11 |
+| **Total** | **484** |
 
 | Function | Arity | Iterator | Sugar of | Blank | Excel | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -330,9 +351,11 @@ A `ParamKind::Column` argument must be a bracketed `NameRef` (`Sales[Amount]` or
 when it is certainly scalar — a literal or an operator expression — so `COUNTROWS ( 1 )` fails
 while `COUNTROWS ( DISTINCT ( Sales[Region] ) )`, table variables and `{ 1, 2 }` are accepted.
 `COUNTROWS ()` is valid in the catalog (the Excel limitation is recorded on the function, not
-enforced here). `Expression`, `Scalar`, `Logical` and `Any` are not statically decidable and are
-recorded for documentation and future type checking, so the third `Variant` argument of
-`MAXX`/`MINX` accepts any expression.
+enforced here). `Date`, `Text`, `Number`, `Boolean`, `Function`, `Reference`, `Json`, `Variant`,
+`Expression`, `Scalar`, `Logical` and `Any` are not statically decidable: DAX's implicit
+coercions need the model, so they are recorded for documentation and future type checking only.
+Variadic overloads repeat their last parameter kind for every additional argument; the third
+`Variant` argument of `MAXX`/`MINX` accepts any expression.
 
 ## Extending in later PRs
 

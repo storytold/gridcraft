@@ -3,6 +3,10 @@
 use gridcraft_dax::functions::{BlankPolicy, FunctionCategory, FunctionSpec, ParamKind, ReturnType, catalog, lookup};
 use gridcraft_dax::{Expr, ExprKind, ValidationError, ValidationErrorKind, parse_expression, validate_call, validate_expression};
 
+fn aggregation_catalog() -> Vec<&'static FunctionSpec> {
+    catalog().iter().filter(|spec| spec.category == FunctionCategory::Aggregation).collect()
+}
+
 const FUNCTIONS: [(&str, usize, usize); 22] = [
     ("APPROXIMATEDISTINCTCOUNT", 1, 1),
     ("AVERAGE", 1, 1),
@@ -72,11 +76,11 @@ fn overload_kinds(spec: &FunctionSpec, arity: usize) -> Option<Vec<ParamKind>> {
 
 #[test]
 fn catalog_has_every_aggregation_function_exactly_once_with_documented_arity() {
-    let specs = catalog();
+    let specs = aggregation_catalog();
     assert_eq!(specs.len(), FUNCTIONS.len());
 
     for (name, min_args, max_args) in FUNCTIONS {
-        let matches: Vec<&FunctionSpec> = specs.iter().filter(|spec| spec.name == name).collect();
+        let matches: Vec<&FunctionSpec> = specs.iter().copied().filter(|spec| spec.name == name).collect();
         assert_eq!(matches.len(), 1, "{name} should appear exactly once");
         assert_eq!(matches[0].min_args, min_args, "{name} min arity");
         assert_eq!(matches[0].max_args, max_args, "{name} max arity");
@@ -103,7 +107,7 @@ fn lookup_is_case_insensitive() {
 
 #[test]
 fn every_record_has_consistent_signature_and_metadata() {
-    for spec in catalog() {
+    for spec in aggregation_catalog() {
         assert!(!spec.description.is_empty(), "{} description", spec.name);
         assert!(!spec.examples.is_empty(), "{} examples", spec.name);
         assert_eq!(spec.params.len(), spec.max_args, "{} descriptive params", spec.name);
@@ -131,7 +135,7 @@ fn every_record_has_consistent_signature_and_metadata() {
 #[test]
 fn iterator_and_sugar_metadata() {
     let iterators = ["AVERAGEX", "COUNTAX", "COUNTX", "MAXX", "MINX", "PRODUCTX", "SUMX"];
-    for spec in catalog() {
+    for spec in aggregation_catalog() {
         assert_eq!(spec.flags.iterator, iterators.contains(&spec.name), "{} iterator flag", spec.name);
         assert_eq!(spec.is_iterator(), spec.flags.iterator, "{} is_iterator", spec.name);
     }
@@ -234,14 +238,14 @@ fn compatibility_flags_are_honest() {
     assert!(!spec("APPROXIMATEDISTINCTCOUNT").flags.excel_compatible);
     assert!(!spec("DISTINCTCOUNTNOBLANK").flags.excel_compatible);
     assert!(spec("COUNTROWS").flags.excel_compatible);
-    for spec in catalog() {
+    for spec in aggregation_catalog() {
         if spec.name != "APPROXIMATEDISTINCTCOUNT" && spec.name != "DISTINCTCOUNTNOBLANK" {
             assert!(spec.flags.excel_compatible, "{} should be Excel compatible", spec.name);
         }
         assert!(spec.flags.direct_query_limited, "{} DirectQuery note", spec.name);
     }
 
-    let not_recommended: Vec<&str> = catalog().iter().filter(|spec| spec.flags.not_recommended).map(|spec| spec.name).collect();
+    let not_recommended: Vec<&str> = aggregation_catalog().iter().filter(|spec| spec.flags.not_recommended).map(|spec| spec.name).collect();
     assert_eq!(not_recommended, ["AVERAGEA"]);
 
     // COUNTROWS () is in the catalog even though Excel's embedded engine rejects that form.
@@ -318,7 +322,7 @@ fn arity_boundaries_accept_and_reject_the_right_calls() {
 
 #[test]
 fn every_documented_arity_boundary_is_enforced() {
-    for spec in catalog() {
+    for spec in aggregation_catalog() {
         for arity in 0..=4usize {
             let arguments = vec!["1"; arity].join(", ");
             let src = format!("{} ( {arguments} )", spec.name);
@@ -464,7 +468,7 @@ fn maxx_and_minx_accept_the_optional_variant_argument() {
 
 #[test]
 fn every_catalog_example_parses_and_validates() {
-    for spec in catalog() {
+    for spec in aggregation_catalog() {
         assert!(!spec.examples.is_empty(), "{} has no examples", spec.name);
         for example in spec.examples {
             let expr = parse(example);

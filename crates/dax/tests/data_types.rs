@@ -304,10 +304,11 @@ fn boolean_literals_are_distinct_from_boolean_calls() {
         }
     }
 
-    // `TRUE(1)` is still a call and is not a literal; its type is outside this crate's catalog.
+    // `TRUE(1)` is still a call and is not a literal; the catalog return type is Boolean even
+    // though arity validation rejects the call.
     assert!(matches!(parse("TRUE(1)").kind, ExprKind::Call(_)));
-    assert_eq!(infer("TRUE(1)"), Ok(InferredType::Unknown));
-    assert_eq!(infer("FALSE(1)"), Ok(InferredType::Unknown));
+    assert_eq!(infer("TRUE(1)"), Ok(data(DataType::Boolean)));
+    assert_eq!(infer("FALSE(1)"), Ok(data(DataType::Boolean)));
 }
 
 #[test]
@@ -360,11 +361,13 @@ fn literal_operator_inference() {
         ("1 + dt\"2023-05-19\"", data(DataType::DateTime)),
         ("dt\"2023-05-19\" - 1", data(DataType::DateTime)),
         ("dt\"2023-05-19\" - dt\"2023-05-20\"", data(DataType::DateTime)),
+        ("SUM(1, 2)", data(DataType::Decimal)),
+        ("VALUES(T[Col])", InferredType::Table),
     ] {
         assert_eq!(infer(src), Ok(expected), "{src}");
     }
 
-    for src in ["[Amount]", "SUM(1, 2)", "VALUES(T[Col])", "\"22\" + 22", "[Amount] + 1", "[Amount] - 1"] {
+    for src in ["[Amount]", "\"22\" + 22", "[Amount] + 1", "[Amount] - 1"] {
         assert_eq!(infer(src), Ok(InferredType::Unknown), "{src}");
     }
 }
@@ -524,6 +527,9 @@ fn variant_and_binary_have_no_literals_or_operators() {
     assert!(infer("(1 + { 2 })").is_err());
     assert!(infer("SUM(1 + { 2 })").is_err());
     assert!(infer("VAR x = 1 + { 2 } RETURN 1").is_err());
+    // Catalogued functions expose their documented return type; unknown names stay unknown.
+    assert_eq!(infer("SUM(Sales[Amount])"), Ok(data(DataType::Decimal)));
+    assert_eq!(infer("NOT_A_DAX_FUNCTION(1)"), Ok(InferredType::Unknown));
     assert!(matches!(parse("BINARY").kind, ExprKind::Name(_)));
     assert_eq!(infer("VARIANT"), Ok(InferredType::Unknown));
     assert_eq!(infer("BINARY"), Ok(InferredType::Unknown));

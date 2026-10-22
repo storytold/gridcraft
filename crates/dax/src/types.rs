@@ -372,8 +372,10 @@ pub fn infer_type(expr: &Expr) -> Result<InferredType, TypeError> {
     }
 }
 
-/// `TRUE()`, `FALSE()` and `BLANK()` are inferable without a function catalog. Everything else
-/// returns [`InferredType::Unknown`]; function signatures are owned by the functions PR.
+/// The documented return type of a catalogued function, mapped onto the static type model.
+///
+/// `Numeric` is mapped to Decimal because DAX has no separate "numeric" storage type and most
+/// numeric functions produce a double; `Any`/unknown signatures stay [`InferredType::Unknown`].
 fn call_type(call: &Call) -> InferredType {
     if call.args.is_empty() {
         if call.name.text.eq_ignore_ascii_case("TRUE") || call.name.text.eq_ignore_ascii_case("FALSE") {
@@ -383,7 +385,21 @@ fn call_type(call: &Call) -> InferredType {
             return InferredType::Blank;
         }
     }
-    InferredType::Unknown
+    let Some(spec) = crate::functions::lookup(&call.name.text) else {
+        return InferredType::Unknown;
+    };
+    match spec.return_type {
+        crate::functions::ReturnType::Integer => InferredType::Data(DataType::Integer),
+        crate::functions::ReturnType::Numeric | crate::functions::ReturnType::Decimal => InferredType::Data(DataType::Decimal),
+        crate::functions::ReturnType::Currency => InferredType::Data(DataType::Currency),
+        crate::functions::ReturnType::Boolean => InferredType::Data(DataType::Boolean),
+        crate::functions::ReturnType::DateTime => InferredType::Data(DataType::DateTime),
+        crate::functions::ReturnType::String => InferredType::Data(DataType::String),
+        crate::functions::ReturnType::Variant => InferredType::Data(DataType::Variant),
+        crate::functions::ReturnType::Table => InferredType::Table,
+        crate::functions::ReturnType::Blank => InferredType::Blank,
+        crate::functions::ReturnType::Any => InferredType::Unknown,
+    }
 }
 
 /// Infers the result type of a unary operator. `+` and `-` preserve the numeric type (DateTime

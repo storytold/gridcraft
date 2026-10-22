@@ -30,9 +30,7 @@ pub use ast::{
     FunctionParam, Literal, MParameterDef, MeasureDef, Name, NameRef, NameStyle, OrderItem, ParameterSubtype, ParameterType, PassingMode, Query,
     SortDirection, Span, StartValue, TableDef, UnaryOp, VarDecl, VarDef, VisualShape,
 };
-pub use functions::{
-    BlankPolicy, CATALOG, FunctionCategory, FunctionFlags, FunctionSpec, Overload, ParamKind, Parameter, ReturnType, catalog, lookup,
-};
+pub use functions::{BlankPolicy, FunctionCategory, FunctionFlags, FunctionSpec, Overload, ParamKind, Parameter, ReturnType, catalog, lookup};
 pub use lexer::{LexError, MAX_INPUT_LEN, Token, TokenKind, tokenize};
 pub use parser::{MAX_DEPTH, ParseError, parse_expression, parse_query};
 pub use printer::{print_expression, print_query};

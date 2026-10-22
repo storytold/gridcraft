@@ -1,19 +1,73 @@
-//! Semantic catalog of the DAX aggregation functions.
+//! Semantic catalog of the DAX functions.
 //!
-//! The catalog records the documented signature of every function in
-//! <https://dax.guide/functions/aggregation/> — arity, parameter kinds, overloads, return type,
-//! iterator behaviour, syntax-sugar relationships, blank handling and host-compatibility flags.
-//! It is static metadata: the parser already accepts these calls, and [`crate::validate`] uses
-//! the records to reject statically impossible arguments.
+//! The catalog records the documented signature of every function in every
+//! <https://dax.guide/functions/> category — arity, parameter kinds, overloads, return type,
+//! iterator/volatile behaviour, syntax-sugar relationships, blank handling and host-compatibility
+//! flags. It is static metadata: the parser already accepts these calls, and [`crate::validate`]
+//! uses the records to reject statically impossible arguments.
 //!
 //! Documentation conflicts (for example whether `COUNTBLANK` returns 0 when rows exist but no
 //! cell is blank) are recorded as [`BlankPolicy::Unspecified`] instead of silently picking one
 //! source. See the crate README for the per-function notes.
 
-/// The function family. This PR ships the aggregation family only.
+/// The function family, matching dax.guide's category pages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FunctionCategory {
     Aggregation,
+    DateAndTime,
+    Filter,
+    Financial,
+    Information,
+    Logical,
+    MathAndTrig,
+    Other,
+    ParentChild,
+    RelationshipManagement,
+    Statistical,
+    TableManipulation,
+    Text,
+    TimeIntelligence,
+    VisualCalculations,
+}
+
+impl FunctionCategory {
+    pub const ALL: [FunctionCategory; 15] = [
+        FunctionCategory::Aggregation,
+        FunctionCategory::DateAndTime,
+        FunctionCategory::Filter,
+        FunctionCategory::Financial,
+        FunctionCategory::Information,
+        FunctionCategory::Logical,
+        FunctionCategory::MathAndTrig,
+        FunctionCategory::Other,
+        FunctionCategory::ParentChild,
+        FunctionCategory::RelationshipManagement,
+        FunctionCategory::Statistical,
+        FunctionCategory::TableManipulation,
+        FunctionCategory::Text,
+        FunctionCategory::TimeIntelligence,
+        FunctionCategory::VisualCalculations,
+    ];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            FunctionCategory::Aggregation => "Aggregation",
+            FunctionCategory::DateAndTime => "Date and Time",
+            FunctionCategory::Filter => "Filter",
+            FunctionCategory::Financial => "Financial",
+            FunctionCategory::Information => "Information",
+            FunctionCategory::Logical => "Logical",
+            FunctionCategory::MathAndTrig => "Math and Trig",
+            FunctionCategory::Other => "Other",
+            FunctionCategory::ParentChild => "Parent-child",
+            FunctionCategory::RelationshipManagement => "Relationship management",
+            FunctionCategory::Statistical => "Statistical",
+            FunctionCategory::TableManipulation => "Table manipulation",
+            FunctionCategory::Text => "Text",
+            FunctionCategory::TimeIntelligence => "Time Intelligence",
+            FunctionCategory::VisualCalculations => "Visual calculations",
+        }
+    }
 }
 
 /// What an argument position accepts.
@@ -34,6 +88,22 @@ pub enum ParamKind {
     Logical,
     /// Any expression.
     Any,
+    /// A date/time value.
+    Date,
+    /// A text value.
+    Text,
+    /// A numeric value.
+    Number,
+    /// A Boolean value.
+    Boolean,
+    /// A function or lambda reference.
+    Function,
+    /// A table or column reference.
+    Reference,
+    /// A JSON value.
+    Json,
+    /// A value whose type is decided at run time.
+    Variant,
 }
 
 impl ParamKind {
@@ -46,6 +116,14 @@ impl ParamKind {
             ParamKind::Scalar => "a scalar expression",
             ParamKind::Logical => "a logical expression",
             ParamKind::Any => "any expression",
+            ParamKind::Date => "a date/time expression",
+            ParamKind::Text => "a text expression",
+            ParamKind::Number => "a numeric expression",
+            ParamKind::Boolean => "a Boolean expression",
+            ParamKind::Function => "a function reference",
+            ParamKind::Reference => "a table or column reference",
+            ParamKind::Json => "a JSON value",
+            ParamKind::Variant => "a value of any type",
         }
     }
 }
@@ -62,6 +140,27 @@ pub enum ReturnType {
     Boolean,
     DateTime,
     String,
+    Table,
+    Blank,
+    Variant,
+}
+
+impl ReturnType {
+    pub const fn name(self) -> &'static str {
+        match self {
+            ReturnType::Integer => "Integer",
+            ReturnType::Numeric => "Numeric",
+            ReturnType::Currency => "Currency",
+            ReturnType::Decimal => "Decimal",
+            ReturnType::Any => "Any",
+            ReturnType::Boolean => "Boolean",
+            ReturnType::DateTime => "DateTime",
+            ReturnType::String => "String",
+            ReturnType::Table => "Table",
+            ReturnType::Blank => "Blank",
+            ReturnType::Variant => "Variant",
+        }
+    }
 }
 
 /// What the function returns when there is nothing to aggregate.
@@ -93,6 +192,8 @@ impl BlankPolicy {
 pub struct FunctionFlags {
     /// The function is an iterator: it evaluates a second argument once per row of a table.
     pub iterator: bool,
+    /// The function may return a different value on every call (`NOW`, `RAND`, ...).
+    pub volatile: bool,
     /// dax.guide marks the function as not recommended.
     pub not_recommended: bool,
     /// The function is available to Excel's embedded DAX engine.
@@ -102,8 +203,8 @@ pub struct FunctionFlags {
 }
 
 impl FunctionFlags {
-    pub const fn new(iterator: bool, not_recommended: bool, excel_compatible: bool, direct_query_limited: bool) -> Self {
-        FunctionFlags { iterator, not_recommended, excel_compatible, direct_query_limited }
+    pub const fn new(iterator: bool, volatile: bool, not_recommended: bool, excel_compatible: bool, direct_query_limited: bool) -> Self {
+        FunctionFlags { iterator, volatile, not_recommended, excel_compatible, direct_query_limited }
     }
 }
 
@@ -128,16 +229,32 @@ const fn optional(name: &'static str, kind: ParamKind) -> Parameter {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Overload {
     pub params: &'static [ParamKind],
+    /// When true, the last parameter kind repeats for every additional argument.
+    pub variadic: bool,
 }
 
 impl Overload {
     pub const fn arity(self) -> usize {
         self.params.len()
     }
+
+    /// Whether this overload accepts exactly `arity` arguments.
+    pub const fn matches(self, arity: usize) -> bool {
+        if self.variadic { arity >= self.params.len() } else { arity == self.params.len() }
+    }
+
+    /// The parameter kind at `index`; a variadic overload repeats its last kind.
+    pub fn kind_at(self, index: usize) -> Option<ParamKind> {
+        self.params.get(index).copied().or_else(|| if self.variadic { self.params.last().copied() } else { None })
+    }
 }
 
-const fn overload(params: &'static [ParamKind]) -> Overload {
-    Overload { params }
+pub const fn overload(params: &'static [ParamKind]) -> Overload {
+    Overload { params, variadic: false }
+}
+
+pub const fn variadic(params: &'static [ParamKind]) -> Overload {
+    Overload { params, variadic: true }
 }
 
 /// A complete catalog record.
@@ -168,16 +285,47 @@ impl FunctionSpec {
 
     /// The overload accepting exactly `arity` arguments, if any.
     pub fn overload_for(&self, arity: usize) -> Option<&Overload> {
-        self.overloads.iter().find(|overload| overload.arity() == arity)
+        self.overloads.iter().find(|overload| overload.matches(arity))
     }
 }
 
-const fn standard(iterator: bool) -> FunctionFlags {
-    FunctionFlags::new(iterator, false, true, true)
+/// Builds a catalog record with no syntax-sugar link and an unspecified blank policy. Most
+/// functions use this; aggregation records spell out the extra fields.
+#[allow(clippy::too_many_arguments)]
+pub const fn spec(
+    name: &'static str,
+    category: FunctionCategory,
+    min_args: usize,
+    max_args: usize,
+    params: &'static [Parameter],
+    overloads: &'static [Overload],
+    return_type: ReturnType,
+    flags: FunctionFlags,
+    description: &'static str,
+    examples: &'static [&'static str],
+) -> FunctionSpec {
+    FunctionSpec {
+        name,
+        category,
+        min_args,
+        max_args,
+        params,
+        overloads,
+        return_type,
+        flags,
+        sugar_of: None,
+        blank_policy: BlankPolicy::Unspecified,
+        description,
+        examples,
+    }
+}
+
+pub const fn standard(iterator: bool) -> FunctionFlags {
+    FunctionFlags::new(iterator, false, false, true, true)
 }
 
 /// All aggregation functions, in the order listed by dax.guide.
-pub static CATALOG: [FunctionSpec; 22] = [
+pub static AGGREGATION: [FunctionSpec; 22] = [
     FunctionSpec {
         name: "APPROXIMATEDISTINCTCOUNT",
         category: FunctionCategory::Aggregation,
@@ -186,7 +334,7 @@ pub static CATALOG: [FunctionSpec; 22] = [
         params: &[required("ColumnName", ParamKind::Column)],
         overloads: &[overload(&[ParamKind::Column])],
         return_type: ReturnType::Integer,
-        flags: FunctionFlags::new(false, false, false, true),
+        flags: FunctionFlags::new(false, false, false, false, true),
         sugar_of: None,
         blank_policy: BlankPolicy::BlankWhenEmpty,
         description: "Approximates the number of distinct values in a column. DirectQuery models \
@@ -219,7 +367,7 @@ pub static CATALOG: [FunctionSpec; 22] = [
         params: &[required("ColumnName", ParamKind::Column)],
         overloads: &[overload(&[ParamKind::Column])],
         return_type: ReturnType::Numeric,
-        flags: FunctionFlags::new(false, true, true, true),
+        flags: FunctionFlags::new(false, false, true, true, true),
         sugar_of: None,
         blank_policy: BlankPolicy::Unspecified,
         description: "Averages a column, counting TRUE as 1, FALSE as 0 and any text as 0. \
@@ -359,7 +507,7 @@ pub static CATALOG: [FunctionSpec; 22] = [
         params: &[required("ColumnName", ParamKind::Column)],
         overloads: &[overload(&[ParamKind::Column])],
         return_type: ReturnType::Integer,
-        flags: FunctionFlags::new(false, false, false, true),
+        flags: FunctionFlags::new(false, false, false, false, true),
         sugar_of: Some("DISTINCTCOUNT"),
         blank_policy: BlankPolicy::Unspecified,
         description: "Counts distinct values in a column, excluding BLANK. Syntax sugar for \
@@ -532,7 +680,43 @@ pub static CATALOG: [FunctionSpec; 22] = [
     },
 ];
 
-/// Every aggregation function, in dax.guide order.
+pub mod date_time;
+pub mod filter;
+pub mod financial;
+pub mod information;
+pub mod logical;
+pub mod math_trig;
+pub mod other;
+pub mod parent_child;
+pub mod relationships;
+pub mod statistical;
+pub mod table_manipulation;
+pub mod text;
+pub mod time_intelligence;
+pub mod visual_calculations;
+
+/// Every function from every category, in dax.guide category order.
+static CATALOG: std::sync::LazyLock<Vec<FunctionSpec>> = std::sync::LazyLock::new(|| {
+    let mut all = Vec::with_capacity(600);
+    all.extend_from_slice(&AGGREGATION);
+    all.extend_from_slice(date_time::FUNCTIONS);
+    all.extend_from_slice(filter::FUNCTIONS);
+    all.extend_from_slice(financial::FUNCTIONS);
+    all.extend_from_slice(information::FUNCTIONS);
+    all.extend_from_slice(logical::FUNCTIONS);
+    all.extend_from_slice(math_trig::FUNCTIONS);
+    all.extend_from_slice(other::FUNCTIONS);
+    all.extend_from_slice(parent_child::FUNCTIONS);
+    all.extend_from_slice(relationships::FUNCTIONS);
+    all.extend_from_slice(statistical::FUNCTIONS);
+    all.extend_from_slice(table_manipulation::FUNCTIONS);
+    all.extend_from_slice(text::FUNCTIONS);
+    all.extend_from_slice(time_intelligence::FUNCTIONS);
+    all.extend_from_slice(visual_calculations::FUNCTIONS);
+    all
+});
+
+/// Every catalogued function.
 pub fn catalog() -> &'static [FunctionSpec] {
     &CATALOG
 }
