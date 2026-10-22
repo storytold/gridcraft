@@ -33,6 +33,7 @@ pub mod tabs;
 pub mod text_box;
 pub mod theme;
 pub mod widgets;
+pub mod window_controls;
 
 use std::collections::HashMap;
 
@@ -76,6 +77,9 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
+    /// Options ▸ Use system title bar: where the desktop leaves the window frame to the app
+    /// ([`SheetApp::window_controls`]), keep winit's frame instead of drawing the header bar.
+    pub system_title_bar: bool,
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
@@ -107,6 +111,7 @@ impl Default for UiState {
             keytip_invoke: None,
             language: i18n::Language::En,
             interface_scale: 100,
+            system_title_bar: false,
         }
     }
 }
@@ -270,6 +275,11 @@ pub struct SheetApp {
     desktop_theme: desktop_theme::DesktopTheme,
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
     desktop_dark: Option<bool>,
+    /// Set when the desktop leaves the window frame to the app (GNOME on Wayland): the title bar
+    /// carries these window buttons and the window's edges resize it.
+    pub window_controls: Option<window_controls::Layout>,
+    /// Whether the window currently has the app's header bar (`None` until the first frame).
+    app_frame_shown: Option<bool>,
     pub name_box: Option<String>,
     /// Transient ribbon keyboard navigation; never saved with UI preferences.
     pub keytips: keytips::KeyTips,
@@ -322,6 +332,8 @@ impl SheetApp {
             effective_dark: false,
             desktop_theme: desktop_theme::DesktopTheme::default(),
             desktop_dark: None,
+            window_controls: None,
+            app_frame_shown: None,
             name_box: None,
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
@@ -630,6 +642,10 @@ impl SheetApp {
             "options.autoComplete" => {
                 self.ui.autocomplete = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autocomplete);
                 Ok(json!({"on": self.ui.autocomplete}))
+            }
+            "view.systemTitleBar" => {
+                self.ui.system_title_bar = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.system_title_bar);
+                Ok(json!({"on": self.ui.system_title_bar, "appDrawsFrame": self.draws_window_frame()}))
             }
             "view.interfaceScale" => {
                 // `{"percent": 125}` or `{"percent": "auto"}`; out-of-range values are clamped.
@@ -1122,9 +1138,33 @@ impl SheetApp {
         }
     }
 
-    pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
+    pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        window_controls::release_after_desktop_grab(ctx, raw);
         if let Some(mut batch) = self.synthetic.pop_front() {
             raw.events.append(&mut batch);
+        }
+    }
+
+    /// Whether the app draws the window's title-bar buttons and resize edges: the desktop leaves
+    /// the frame to the app and Use system title bar is off.
+    pub fn draws_window_frame(&self) -> bool {
+        self.window_controls.is_some() && !self.ui.system_title_bar
+    }
+
+    /// Follow Use system title bar at once: the window starts without winit's frame wherever the
+    /// app may draw its own, and gets it back (or loses it again) when the preference changes.
+    fn sync_window_frame(&mut self, ctx: &egui::Context) {
+        if self.window_controls.is_none() {
+            return;
+        }
+        let app_frame = self.draws_window_frame();
+        if self.app_frame_shown != Some(app_frame) {
+            // The window opens as the preference says (see the desktop app's `main`), so only a
+            // later change needs a command.
+            if self.app_frame_shown.is_some() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!app_frame));
+            }
+            self.app_frame_shown = Some(app_frame);
         }
     }
 
@@ -1148,7 +1188,12 @@ impl SheetApp {
         if self.backstage.is_none() {
             self.ribbon_keys(&ctx);
         }
-        if self.chrome.title_bar {
+        self.sync_window_frame(&ctx);
+        if self.draws_window_frame() {
+            window_controls::resize_edges(&ctx);
+        }
+        // The title bar carries the window buttons when the app draws the frame.
+        if self.chrome.title_bar || self.draws_window_frame() {
             ribbon::title_bar(self, ui);
         }
         if self.backstage.is_some() {

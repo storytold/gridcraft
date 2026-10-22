@@ -4,11 +4,11 @@ use egui::{Align2, Color32, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui,
 use gridcraft_engine::model::{HAlign, Style, VAlign};
 use serde_json::json;
 
-use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Tokens};
 use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::{SheetApp, window_controls};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -43,14 +43,22 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
         // Dragging the empty title area moves the window.
         let bg = ui.interact(rect, ui.id().with("drag_title"), Sense::click_and_drag());
         if bg.drag_started() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            window_controls::desktop_grab(ui.ctx(), egui::ViewportCommand::StartDrag);
         }
         if bg.double_clicked() {
             let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
         }
+        // GNOME on Wayland: the title bar is the header bar, with the window buttons at its ends
+        // (`window_controls`), in the desktop's order; hidden in full screen.
+        let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+        let controls = app.window_controls.clone().filter(|_| app.draws_window_frame() && !fullscreen).unwrap_or_else(window_controls::Layout::none);
         ui.horizontal_centered(|ui| {
             ui.add_space(TITLE_LEFT_PAD);
+            if !controls.left.is_empty() {
+                ui.scope(|ui| window_controls::buttons(ui, &controls.left));
+                ui.add_space(window_controls::SIDE_GAP);
+            }
             // AutoSave toggle (saves after each change when the workbook has a file).
             ui.label(egui::RichText::new("AutoSave").font(theme::ui_font(12.5)).color(t.text_dim));
             let on = app.grid.autosave();
@@ -124,6 +132,15 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
+                if !controls.right.is_empty() {
+                    // Laid out left to right inside the right-to-left run, so they read in the
+                    // desktop's order.
+                    let size = vec2(window_controls::width(&controls.right), window_controls::BUTTON);
+                    ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        window_controls::buttons(ui, &controls.right);
+                    });
+                    ui.add_space(window_controls::SIDE_GAP);
+                }
                 let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands (⌘⇧Space)", vec2(28.0, ch));
                 control_keytip(app, ui, &__k, "commandSearch");
                 if __k.clicked() {

@@ -410,6 +410,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "통합 문서 계산",
         "Enable iterative calculation" => "반복 계산 사용",
         "Calculation settings are saved with the workbook." => "계산 설정은 통합 문서와 함께 저장됩니다.",
+        "Minimize" => "최소화",
+        "Maximize" => "최대화",
+        "Restore" => "이전 크기로 복원",
+        "Use system title bar" => "시스템 제목 표시줄 사용",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "GridCraft 제목 표시줄 위에 창 단추가 있는 기본 제목 표시줄을 표시합니다. GNOME은 앱의 제목 표시줄을 그리지 않으므로 이 표시줄은 테마를 따르지 않습니다."
+        }
         _ => return None,
     })
 }

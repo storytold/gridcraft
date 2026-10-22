@@ -410,6 +410,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Вычисления в книге",
         "Enable iterative calculation" => "Включить итеративные вычисления",
         "Calculation settings are saved with the workbook." => "Параметры вычислений сохраняются вместе с книгой.",
+        "Minimize" => "Свернуть",
+        "Maximize" => "Развернуть",
+        "Restore" => "Восстановить",
+        "Use system title bar" => "Использовать системный заголовок окна",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Показывать простой заголовок окна с кнопками окна над заголовком GridCraft. GNOME не рисует заголовки для приложений, поэтому он не следует теме оформления."
+        }
         _ => return None,
     })
 }

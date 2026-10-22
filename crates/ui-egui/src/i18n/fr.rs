@@ -410,6 +410,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Calcul du classeur",
         "Enable iterative calculation" => "Activer le calcul itératif",
         "Calculation settings are saved with the workbook." => "Les paramètres de calcul sont enregistrés avec le classeur.",
+        "Minimize" => "Réduire",
+        "Maximize" => "Agrandir",
+        "Restore" => "Restaurer",
+        "Use system title bar" => "Utiliser la barre de titre du système",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Affiche une barre de titre simple pour les boutons de la fenêtre au-dessus de celle de GridCraft. GNOME ne dessine pas de barre de titre pour les applications, elle ne suit donc pas son thème."
+        }
         _ => return None,
     })
 }

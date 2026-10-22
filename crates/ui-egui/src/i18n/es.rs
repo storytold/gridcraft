@@ -440,6 +440,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Compact" => "Compacto",
         "Outline" => "Esquema",
         "Tabular" => "Tabular",
+        "Minimize" => "Minimizar",
+        "Maximize" => "Maximizar",
+        "Restore" => "Restaurar",
+        "Use system title bar" => "Usar la barra de título del sistema",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Muestra una barra de título básica para los botones de la ventana encima de la de GridCraft. GNOME no dibuja barras de título para las aplicaciones, así que esta no sigue su tema."
+        }
         _ => return None,
     })
 }

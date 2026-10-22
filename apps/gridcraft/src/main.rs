@@ -11,6 +11,7 @@
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
+mod decorations;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
@@ -45,8 +46,8 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
     }
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.0.raw_input_hook(raw);
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.0.raw_input_hook(ctx, raw);
         // Files dropped on the window open as workbooks.
         for f in std::mem::take(&mut raw.dropped_files) {
             if let Some(p) = f.path().to_str().map(str::to_string).filter(|p| !p.is_empty()) {
@@ -316,6 +317,12 @@ fn main() -> eframe::Result<()> {
         .with_drag_and_drop(true);
     if cfg!(target_os = "macos") {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
+    }
+    // GNOME on Wayland leaves the window frame to the app (decorations.rs): the title bar carries
+    // the window buttons instead.
+    app.window_controls = decorations::app_drawn();
+    if app.draws_window_frame() {
+        viewport = viewport.with_decorations(false);
     }
     if let Some(i) = icon() {
         viewport = viewport.with_icon(i);

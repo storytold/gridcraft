@@ -961,6 +961,15 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut formula_bar, lang.tr("Show formula bar")).changed() {
         app.run_or_alert("view.formulaBar", json!({"on": formula_bar}));
     }
+    // Only where the app draws the title bar's window buttons (GNOME on Wayland); elsewhere the
+    // desktop draws the frame.
+    if app.window_controls.is_some() {
+        let mut system = app.ui.system_title_bar;
+        let hint = lang.tr("Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.");
+        if ui.checkbox(&mut system, lang.tr("Use system title bar")).on_hover_text(hint).changed() {
+            app.run_or_alert("view.systemTitleBar", json!({"on": system}));
+        }
+    }
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
     let mut autocomplete = app.ui.autocomplete;

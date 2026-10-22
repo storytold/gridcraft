@@ -402,6 +402,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "工作簿计算",
         "Enable iterative calculation" => "启用迭代计算",
         "Calculation settings are saved with the workbook." => "计算设置随工作簿一起保存。",
+        "Minimize" => "最小化",
+        "Maximize" => "最大化",
+        "Restore" => "还原",
+        "Use system title bar" => "使用系统标题栏",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "在 GridCraft 自己的标题栏上方显示带窗口按钮的基本标题栏。GNOME 不为应用绘制标题栏，因此它不跟随 GNOME 的主题。"
+        }
         _ => return None,
     })
 }

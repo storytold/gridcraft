@@ -588,6 +588,14 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Workbook calculation", "ブックの計算"),
     ("Enable iterative calculation", "反復計算を行う"),
     ("Calculation settings are saved with the workbook.", "計算の設定はブックと共に保存されます。"),
+    ("Minimize", "最小化"),
+    ("Maximize", "最大化"),
+    ("Restore", "元に戻す (縮小)"),
+    ("Use system title bar", "システムのタイトル バーを使う"),
+    (
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.",
+        "GridCraft のタイトル バーの上に、ウィンドウ ボタン付きの基本的なタイトル バーを表示します。GNOME はアプリのタイトル バーを描画しないため、このバーはテーマに従いません。",
+    ),
 ];
 
 #[cfg(test)]

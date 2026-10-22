@@ -535,6 +535,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom Out" => "Oddálit",
         // widgets.rs (alphabetical keys).
         "Dismiss" => "Zavřít",
+        "Minimize" => "Minimalizovat",
+        "Maximize" => "Maximalizovat",
+        "Restore" => "Obnovit",
+        "Use system title bar" => "Použít systémové záhlaví okna",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Zobrazí jednoduché záhlaví okna s tlačítky okna nad záhlavím GridCraftu. GNOME aplikacím záhlaví nekreslí, takže toto nesleduje jeho motiv."
+        }
         _ => return None,
     })
 }

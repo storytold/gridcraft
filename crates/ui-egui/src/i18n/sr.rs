@@ -408,6 +408,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bottom Margin" => "Donja margina",
         "Header Margin" => "Margina zaglavlja",
         "Footer Margin" => "Margina podnožja",
+        "Minimize" => "Umanji",
+        "Maximize" => "Uvećaj",
+        "Restore" => "Vrati",
+        "Use system title bar" => "Koristi sistemsku naslovnu traku",
+        "Show a basic title bar for the window buttons above GridCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme." => {
+            "Prikazuje jednostavnu naslovnu traku za dugmad prozora iznad GridCraftove. GNOME ne crta naslovne trake za aplikacije, pa ova ne prati njegovu temu."
+        }
         _ => return None,
     })
 }

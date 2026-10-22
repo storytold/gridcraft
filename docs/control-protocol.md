@@ -54,6 +54,13 @@ The saved choice remains System; new users still start in Light. The legacy
 outline then jumps to a new selection instead of gliding there); without `on` it toggles. It is
 the View ▸ Animations checkbox, saved with the other UI preferences and on by default.
 
+`{command: "view.systemTitleBar", params: {on: true}}` is File ▸ Options ▸ Use system title bar:
+where the desktop leaves the window frame to the app (GNOME on Wayland, whose compositor offers no
+`zxdg_decoration_manager_v1`), it gives the window back winit's frame instead of drawing the
+window buttons in GridCraft's title bar, at once. Without `on` it toggles; the answer's
+`appDrawsFrame` says whether GridCraft now draws them. Elsewhere it is saved but changes nothing.
+On Linux, `GRIDCRAFT_TITLEBAR=app` or `=system` overrides the compositor detection at start-up.
+
 `{command: "app.language.set", params: {language: "ja"}}` switches the interface language
 (`code` is accepted as an alias for `language`); `app.language.english` and
 `app.language.japanese` are shortcuts. Only interface chrome is translated, never command ids or
