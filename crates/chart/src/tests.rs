@@ -1334,13 +1334,12 @@ fn reversed_bars_put_their_labels_past_the_tip() {
 }
 
 #[test]
-fn a_combo_charts_secondary_series_keep_the_forward_axis() {
+fn a_combo_charts_secondary_series_keep_the_forward_axes() {
     let d = sample(ChartKind::Combo);
     let mut c = chart(ChartKind::Combo);
     let plain = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
-    c.val_reverse = true;
-    let flipped = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
-    // The secondary axis has no direction of its own, so its line keeps its place (#1895 review).
+    // The secondary axes have no direction of their own: they are read and written forward, so
+    // neither reversing the categories nor the values moves that series (#1895 review).
     let lines = |p: &[Prim]| -> Vec<Vec<[f32; 2]>> {
         p.iter()
             .filter_map(|q| match q {
@@ -1349,10 +1348,49 @@ fn a_combo_charts_secondary_series_keep_the_forward_axis() {
             })
             .collect()
     };
-    let (a, b) = (lines(&plain), lines(&flipped));
-    assert!(!a.is_empty(), "no secondary line");
-    assert_eq!(a, b, "reversing the primary axis moved the secondary series");
-    assert_sane(&flipped, 640.0, 400.0);
+    let plain_lines = lines(&plain);
+    assert!(!plain_lines.is_empty(), "no secondary line");
+    for (cat_reverse, val_reverse) in [(true, false), (false, true), (true, true)] {
+        c.cat_reverse = cat_reverse;
+        c.val_reverse = val_reverse;
+        let flipped = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        assert_eq!(plain_lines, lines(&flipped), "cat_reverse={cat_reverse} val_reverse={val_reverse} moved the secondary series");
+        assert_sane(&flipped, 640.0, 400.0);
+    }
+}
+
+#[test]
+fn reversed_area_labels_sit_outside_the_area() {
+    let d = ChartData {
+        palette: vec![],
+        categories: vec!["Q1".into(), "Q2".into(), "Q3".into()],
+        series: vec![series("North", &[12000.0, 38000.0, 9000.0], [20, 96, 130, 255], ChartKind::Area)],
+        category_levels: vec![],
+    };
+    let mut c = chart(ChartKind::Area);
+    c.val_reverse = true;
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let poly: Vec<[f32; 2]> = prims
+        .iter()
+        .find_map(|p| match p {
+            Prim::Polygon { pts, .. } => Some(pts.clone()),
+            _ => None,
+        })
+        .expect("no area drawn");
+    let labels: Vec<(f32, f32)> = prims
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Text { text, x, y, align, .. } if text.starts_with('$') && *align == HAlign::Center => Some((*x, *y)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels.len(), 3, "one label per point: {labels:?}");
+    for (x, y) in labels {
+        // The fill runs from the reversed baseline down to the series' edge at this x.
+        let edge = poly.iter().filter(|q| (q[0] - x).abs() <= 2.0).map(|q| q[1]).fold(f32::MIN, f32::max);
+        assert!(y > edge, "label at ({x}, {y}) sits inside the area, whose edge is {edge}");
+    }
+    assert_sane(&prims, 640.0, 400.0);
 }
 
 #[test]

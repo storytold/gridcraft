@@ -1020,8 +1020,8 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
     let scale_of = |i: usize| -> Scale { if sec.get(i).copied().unwrap_or(false) { y2.as_ref().map(|a| a.scale).unwrap_or(*s1) } else { *s1 } };
     let cat_len = if horizontal { plot.h } else { plot.w };
     let cw = cat_len / ncat_slots as f32;
-    let center = |j: usize| {
-        let jr = if chart.cat_reverse { ncat_slots - 1 - j } else { j };
+    let center = |j: usize, rev: bool| {
+        let jr = if rev { ncat_slots - 1 - j } else { j };
         if horizontal { plot.bottom() - (jr as f32 + 0.5) * cw } else { plot.x + (jr as f32 + 0.5) * cw }
     };
     // Only the primary axes carry a direction: the secondary ones are read and written forward,
@@ -1071,7 +1071,8 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                 continue;
             }
             let sc = scale_of(i);
-            let rev = chart.val_reverse && !sec.get(i).copied().unwrap_or(false);
+            let secondary = sec.get(i).copied().unwrap_or(false);
+            let (rev, rev_cat) = (chart.val_reverse && !secondary, chart.cat_reverse && !secondary);
             let fmt = Fmt::new(&s.number_format);
             let row = match spans.get(i) {
                 Some(r) => r,
@@ -1083,15 +1084,19 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                     let mut base = Vec::with_capacity(ncat);
                     for (j, sp) in row.iter().enumerate() {
                         let (b, t) = sp.unwrap_or((0.0, 0.0));
-                        let c = center(j);
+                        let c = center(j, rev_cat);
                         top.push([c, vpos(t, &sc, rev)]);
                         base.push([c, vpos(b, &sc, rev)]);
-                        // Source values (not stack totals), just above the top edge like the line labels.
+                        // Source values (not stack totals), just past the edge like the line labels,
+                        // on the side the value axis runs (#1895 review).
                         if labels_on
                             && sp.is_some()
                             && let Some(v) = s.values.get(j).copied().flatten()
                         {
-                            area_labels.push((c, vpos(t, &sc, rev) - 5.0, fmt.format(v, None)));
+                            let (y, above) = (vpos(t, &sc, rev), vpos(b, &sc, rev));
+                            let below = y > above;
+                            let off = if below { 5.0 } else { -5.0 };
+                            area_labels.push((c, y + off, fmt.format(v, None), below));
                         }
                     }
                     if top.len() == 1 {
@@ -1113,11 +1118,11 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                     // A reversed category axis mirrors the whole frame, so a cluster's slots flip too:
                     // Excel draws the second series left of the first (#1895 review).
                     let k = slot_of.get(i).copied().unwrap_or(0) as f32;
-                    let k = if chart.cat_reverse { nslots - 1.0 - k } else { k };
+                    let k = if rev_cat { nslots - 1.0 - k } else { k };
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
                         let (pb, pt) = (vpos(*b, &sc, rev), vpos(*t, &sc, rev));
-                        let c = center(j);
+                        let c = center(j, rev_cat);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
                         if horizontal {
@@ -1154,7 +1159,8 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                     }
                 }
                 _ => {
-                    let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc, rev)])).collect();
+                    let pts: Vec<Option<[f32; 2]>> =
+                        row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j, rev_cat), vpos(t, &sc, rev)])).collect();
                     draw_runs(ctx, &pts, s.color, 2.25, s.smooth.then_some(plot));
                     let k = kinds.get(i).copied().unwrap_or(ChartKind::Line);
                     if k == ChartKind::LineMarkers && cw >= 3.0 {
@@ -1170,8 +1176,9 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                 }
             }
         }
-        for (x, y, t) in area_labels.drain(..) {
-            ctx.text(x, y, &t, LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
+        for (x, y, t, below) in area_labels.drain(..) {
+            let va = if below { VAlign::Top } else { VAlign::Bottom };
+            ctx.text(x, y, &t, LABEL_SIZE, TEXT, HAlign::Center, va);
         }
     }
     // Trendlines on top: x is the category number 1..n.
@@ -1185,8 +1192,9 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         let frac = |x: f64, y: f64| ((x - 0.5) / ncat_slots as f64, (y - sc.min) / (sc.max - sc.min));
         let px = |(fx, fy): (f64, f64)| {
             // Mirrored axes swap the ends of the fitted segment (#1687).
-            let fx = if chart.cat_reverse { 1.0 - fx } else { fx };
-            let fy = if chart.val_reverse && !sec.get(i).copied().unwrap_or(false) { 1.0 - fy } else { fy };
+            let secondary = sec.get(i).copied().unwrap_or(false);
+            let fx = if chart.cat_reverse && !secondary { 1.0 - fx } else { fx };
+            let fy = if chart.val_reverse && !secondary { 1.0 - fy } else { fy };
             if horizontal {
                 [plot.x + fy as f32 * plot.w, plot.bottom() - fx as f32 * plot.h]
             } else {
