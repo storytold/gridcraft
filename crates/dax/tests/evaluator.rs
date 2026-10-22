@@ -96,13 +96,13 @@ fn tables_filters_and_values() {
 }
 
 #[test]
-fn unsupported_functions_are_explicit() {
+fn documented_keyword_arguments_bind() {
     let model = model();
-    let evaluator = Evaluator::new(&model).expect("evaluator");
-    let expr = parse_expression("NORM.DIST(1, 0, 1, TRUE)").expect("parse");
-    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
-    let error = evaluator.evaluate(&bound).expect_err("unsupported");
-    assert!(error.message.contains("not implemented"), "{error:?}");
+    let binder = Binder::new(&model);
+    for src in ["DATEADD('Date'[Date], -1, MONTH)", "CONVERT(1, INTEGER)"] {
+        let expr = parse_expression(src).expect("parse");
+        binder.bind_expression(&expr).expect("bind keyword argument");
+    }
 }
 
 #[test]

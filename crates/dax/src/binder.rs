@@ -234,9 +234,14 @@ impl<'a> Binder<'a> {
         }
         let mut args = Vec::with_capacity(call.args.len());
         for (index, arg) in call.args.iter().enumerate() {
+            // Documented enum parameters (intervals, ties, blanks, text type names) are written
+            // as bare names. The parser cannot tell them from table/measure names, but the
+            // catalog's parameter kind can: a Text position only accepts a literal or a keyword.
+            let expected = spec.overload_for(call.args.len()).and_then(|overload| overload.params.get(index)).copied();
             let keyword = match spec.name {
-                "DATEDIFF" if index == 2 => keyword_name(arg),
                 "DATATABLE" if index % 2 == 1 => keyword_name(arg),
+                "CONVERT" if index == 1 => keyword_name(arg),
+                _ if matches!(expected, Some(ParamKind::Text)) => keyword_name(arg),
                 _ => None,
             };
             if let Some(keyword) = keyword {
