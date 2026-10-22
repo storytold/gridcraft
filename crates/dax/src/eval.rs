@@ -750,11 +750,14 @@ impl<'a> Evaluator<'a> {
             }
             BoundExpr::Call { spec, .. } if spec.name == "KEEPFILTERS" => Ok(()),
             _ => {
-                // A table expression filter: use its distinct rows to restrict matching columns.
+                // A table expression filter replaces the existing filters on its table (that is
+                // what makes `CALCULATE(expr, PREVIOUSMONTH(Date[Date]))` override a Month
+                // slicer); filters on other tables keep applying.
                 let table = self.eval_table(expr, ctx)?;
                 let Some(table_index) = table.lineage else {
                     return Err(EvalError::new("CALCULATE table filter has no source table"));
                 };
+                filters.remove_table(table_index);
                 for (column, _) in table.columns.iter().enumerate() {
                     let keys: BTreeSet<ScalarKey> = table.rows.iter().filter_map(|row| row.get(column)).map(ScalarKey::from).collect();
                     filters.set(table_index, column, keys);

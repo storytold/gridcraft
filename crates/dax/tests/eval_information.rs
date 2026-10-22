@@ -244,11 +244,11 @@ fn user_and_connection_functions_return_defaults() {
     // USERNAME/USERPRINCIPALNAME report the host identity; on a test host without a user they
     // are empty, otherwise they mirror the operating system's user and domain.
     let host_user = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default();
-    assert_eq!(eval("USERNAME()"), Ok(Scalar::String(host_user.clone())));
     let principal = match std::env::var("USERDOMAIN") {
         Ok(domain) if !domain.is_empty() && !host_user.is_empty() => format!("{domain}\\{host_user}"),
         _ => host_user,
     };
+    assert_eq!(eval("USERNAME()"), Ok(Scalar::String(principal.clone())));
     assert_eq!(eval("USERPRINCIPALNAME()"), Ok(Scalar::String(principal)));
 }
 

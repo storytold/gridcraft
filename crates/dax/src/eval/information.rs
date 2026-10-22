@@ -21,7 +21,8 @@ pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut
         "CONTAINSROW" => contains_row(ev, args, ctx),
         "CONTAINSSTRING" => contains_string(ev, args, ctx, false),
         "CONTAINSSTRINGEXACT" => contains_string(ev, args, ctx, true),
-        "USERNAME" => Ok(Scalar::String(host_user())),
+        // Excel's embedded engine reports the qualified identity for both functions.
+        "USERNAME" => Ok(Scalar::String(host_principal())),
         "USERPRINCIPALNAME" => Ok(Scalar::String(host_principal())),
         // Connection objects and security-object IDs are not available offline.
         "CUSTOMDATA" | "USEROBJECTID" => Ok(Scalar::String(String::new())),
