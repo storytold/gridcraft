@@ -523,6 +523,7 @@ fn variant_and_binary_have_no_literals_or_operators() {
     assert!(infer("{ 1 + { 2 } }").is_err());
     assert!(infer("(1 + { 2 })").is_err());
     assert!(infer("SUM(1 + { 2 })").is_err());
+    assert!(infer("VAR x = 1 + { 2 } RETURN 1").is_err());
     assert!(matches!(parse("BINARY").kind, ExprKind::Name(_)));
     assert_eq!(infer("VARIANT"), Ok(InferredType::Unknown));
     assert_eq!(infer("BINARY"), Ok(InferredType::Unknown));

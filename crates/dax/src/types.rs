@@ -361,8 +361,14 @@ pub fn infer_type(expr: &Expr) -> Result<InferredType, TypeError> {
             Ok(InferredType::Table)
         }
         // Variable references are names, so their values are unknown without an environment; the
-        // block's type is the type of its `RETURN` expression.
-        ExprKind::VarReturn { body, .. } => infer_type(body),
+        // block's type is the type of its `RETURN` expression. Every declaration still has to
+        // type-check, even when the body does not use it.
+        ExprKind::VarReturn { vars, body } => {
+            for var in vars {
+                infer_type(&var.expr)?;
+            }
+            infer_type(body)
+        }
     }
 }
 
