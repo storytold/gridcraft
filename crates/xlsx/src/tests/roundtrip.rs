@@ -103,7 +103,8 @@ fn sample() -> Workbook {
     s.spill.insert(at("H3"), Value::Number(3.0));
 
     s.cols.insert(0, LineInfo { size: Some(100.0), ..Default::default() });
-    s.cols.insert(1, LineInfo { size: Some(100.0), ..Default::default() });
+    // Column B was sized by hand (customWidth), A widened by itself; both come back as they were.
+    s.cols.insert(1, LineInfo { size: Some(100.0), custom: true, ..Default::default() });
     s.cols.insert(3, LineInfo { hidden: true, outline: 1, ..Default::default() });
     s.cols.insert(5, LineInfo { style: Some(money), ..Default::default() });
     s.rows.insert(0, LineInfo { size: Some(30.0), ..Default::default() });

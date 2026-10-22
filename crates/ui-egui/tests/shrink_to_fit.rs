@@ -15,6 +15,8 @@ fn harness() -> Harness {
     s.execute("cell.set", json!({"cell": "A1", "input": "Executive Producer"})).unwrap();
     s.execute("home.formatCells", json!({"range": "A1", "style": shrink})).unwrap();
     s.execute("cell.set", json!({"cell": "A2", "input": "Control Producer"})).unwrap();
+    // Column A's width set by hand (to the default), so the numbers formatted below keep it.
+    s.execute("home.columnWidth", json!({"cols": "A:A", "width": 64})).unwrap();
     s.execute("cell.set", json!({"cell": "A4", "input": "123456789012"})).unwrap();
     s.execute("home.formatCells", json!({"range": "A4", "style": {"num_fmt": "#,##0", "align": {"shrink": true}}})).unwrap();
     s.execute("cell.set", json!({"cell": "A5", "input": "123456789012"})).unwrap();

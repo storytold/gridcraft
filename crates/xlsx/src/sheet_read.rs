@@ -314,6 +314,9 @@ fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Re
         // A width without `customWidth` that equals the default is just the default.
         if let Some(w) = c.attr_f64("width") {
             let px = col_width_to_px(w);
+            // Excel writes customWidth for every width it stores, and bestFit as well for one that
+            // AutoFit or a number format sized: only customWidth without bestFit was set by hand.
+            info.custom = c.flag("customWidth", false) && !c.flag("bestFit", false);
             if c.flag("customWidth", false) || px != sheet.default_col_width {
                 info.size = Some(px);
             }

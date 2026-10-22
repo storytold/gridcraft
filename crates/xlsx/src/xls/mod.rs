@@ -698,6 +698,7 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
             }
             let mut info = LineInfo::default();
             let px = col_width_to_px(f64::from(width) / 256.0);
+            info.custom = flags & 0x0002 != 0 && flags & 0x0004 == 0; // fUserSet without fBestFit
             if flags & 0x0002 != 0 || px != st.sheet.default_col_width {
                 info.size = Some(px);
             }

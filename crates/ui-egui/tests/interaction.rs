@@ -963,6 +963,39 @@ fn general_numbers_fit_by_the_cells_own_font() {
     assert_eq!(texts.iter().filter(|t| t.starts_with('#')).count(), 1, "{texts:?}");
 }
 
+/// #1077: after Increase Decimal and the other ribbon number formats the column widens enough for
+/// the real font, so the number is drawn instead of ####, at the default size and a large bold one.
+#[test]
+fn ribbon_number_formats_widen_the_column_enough_to_draw_the_number() {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1.23456789, 1234567.891, 98765.4321], [0.5, 1, 2]]})).unwrap();
+    s.execute("home.fontSize", json!({"range": "C1", "size": 20})).unwrap();
+    s.execute("home.bold", json!({"range": "C1", "on": true})).unwrap();
+    for _ in 0..4 {
+        s.execute("home.increaseDecimal", json!({"range": "A1"})).unwrap();
+    }
+    s.execute("home.comma", json!({"range": "B1"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "C1", "format": "Currency"})).unwrap();
+    s.execute("selection.set", json!({"cell": "E5"})).unwrap();
+    let want: Vec<String> =
+        ["A1", "B1", "C1"].iter().map(|a| s.execute("cell.get", json!({"cell": a})).unwrap()["text"].as_str().unwrap().trim().to_string()).collect();
+    assert_eq!(want, ["1.234567890000", "1,234,567.89", "$98,765.43"]);
+    let h = harness(s);
+    let texts: Vec<String> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+            _ => None,
+        })
+        .collect();
+    for t in &want {
+        assert!(texts.iter().any(|x| x.trim() == t), "{t} drawn in full: {texts:?}");
+    }
+    assert!(!texts.iter().any(|t| t.starts_with('#')), "no ####: {texts:?}");
+}
+
 fn text_shapes(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<(egui::epaint::TextShape, egui::Rect)>) {
     match shape {
         egui::Shape::Text(t) => out.push((t.clone(), clip)),

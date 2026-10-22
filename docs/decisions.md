@@ -80,3 +80,32 @@ relative steps keep each notch feeling the same, and the doublings land on 25, 5
 400%. The status bar's Zoom In / Zoom Out buttons and Ctrl+Alt+= / Ctrl+Alt+- keep their 10%
 steps, so the wheel and the buttons now step differently. Whether they should share one ladder
 (this one, Excel's, or another) is left to the maintainers.
+## Number formats widen columns that weren't sized by hand (#1077)
+
+Increase/Decrease Decimal, the ribbon's other number formats (the Number Format list, Accounting,
+Percent, Comma) and a number format set in Format Cells widen a column so the formatted numbers in
+the target fit, instead of showing `####`.
+Microsoft's support article "Stop showing rounded numbers" says only that "the column width adjusts
+automatically", so the rule comes from observing Excel 16.0 (build 17932, Windows) with synthetic
+workbooks:
+
+- A column at the default width, AutoFitted, or widened this way before widens to the widest number
+  in the formatted range, also with Wrap Text and a large bold font. It never narrows.
+- A width set with Column Width (or by dragging the border) stays, even when it equals the default:
+  the number shows `####`. AutoFit makes such a column automatic again.
+- Hidden columns, text, General numbers (they round to fit instead), merged cells and shrink-to-fit
+  cells don't widen.
+- In XLSX, Excel writes `customWidth="1"` for every width it stores and adds `bestFit="1"` for widths
+  that AutoFit or a number format set. Only `customWidth` without `bestFit` is read as set by hand: a
+  width with no flags, `bestFit` alone, or both, keeps widening after the file is opened again.
+
+`LineInfo::custom`, already used for rows set by hand, now marks columns set by hand too; GridCraft
+writes and reads the two flags as Excel does (and `.xls` COLINFO's fUserSet and fBestFit alike).
+Files that earlier GridCraft versions saved have `customWidth` without `bestFit` on every stored
+width, so those columns open as set by hand and keep their width.
+
+The engine has no font metrics, so the width is the same estimate AutoFit Column Width uses, which
+errs on the wide side; a UI test checks that the real font then draws the number, not `####`.
+Excel doesn't widen when a value is entered into a cell that already has the format (observed through
+the `Value` property: the cell shows `####`), and neither does GridCraft. Typing into such a cell
+wasn't observed.

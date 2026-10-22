@@ -250,8 +250,10 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             if i.hidden {
                 s.push_str(" hidden=\"1\"");
             }
+            // As Excel writes them: a width that AutoFit or a number format sized is bestFit too, so
+            // it keeps widening when the file is opened again; one set by hand is customWidth only.
             if i.size.is_some() {
-                s.push_str(" customWidth=\"1\"");
+                s.push_str(if i.custom { " customWidth=\"1\"" } else { " bestFit=\"1\" customWidth=\"1\"" });
             }
             if i.outline > 0 {
                 let _ = write!(s, " outlineLevel=\"{}\"", i.outline.min(7));

@@ -528,7 +528,12 @@ fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
         {
             *st = new;
         }
-    })
+    })?;
+    // A number format set here widens columns as the ribbon's do (observed: Excel 16.0).
+    if patch.get("num_fmt").is_some() {
+        widen_for_numbers(s, p)?;
+    }
+    ok()
 }
 
 /// The style patch with camelCase keys (`numFmt`, `diagDown`, as documented) renamed to the
@@ -708,7 +713,93 @@ fn number_format(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn set_fmt(s: &mut Session, p: &Json, code: &str) -> Result<Json> {
     let nf = NumFmt::new(code);
-    apply_style(s, p, |st| st.num_fmt = nf.clone())
+    apply_style(s, p, |st| st.num_fmt = nf.clone())?;
+    widen_for_numbers(s, p)
+}
+
+/// After a number format from the ribbon (Increase Decimal, Comma Style, the Number Format list…) or
+/// Format Cells, a column nobody sized by hand widens so the formatted numbers in the target fit,
+/// instead of showing ####. Observed in Excel 16.0 (build 17932): a column at the default width, AutoFitted, or
+/// widened this way before widens to the widest number in the range, also with Wrap Text and a large
+/// font. A width set with Column Width (or by dragging) stays, even when it equals the default. Hidden
+/// columns, text, General numbers (they round to fit), shrink-to-fit and merged cells don't widen,
+/// and columns never narrow.
+/// How many stored cells [`widen_for_numbers`] looks at in one command.
+const MAX_WIDEN_CELLS: usize = 1_000_000;
+
+fn widen_for_numbers(s: &mut Session, p: &Json) -> Result<Json> {
+    let sheet = target_sheet(s, p)?;
+    let ranges = target_ranges(s, p)?;
+    let measure = s.text_width.clone();
+    edit(s, |cx| {
+        let Some(sh) = cx.wb.sheet(sheet) else { return Ok(Json::Null) };
+        let Some(used) = sh.used_range() else { return Ok(Json::Null) };
+        if sh.show_formulas {
+            return Ok(Json::Null);
+        }
+        let targets: Vec<RangeRef> = ranges.iter().filter_map(|r| r.intersection(&used)).collect();
+        // Merged areas over the targets as sorted row intervals per column, so each cell is checked
+        // with a binary search rather than a scan of every merge.
+        let mut merged: std::collections::HashMap<u32, Vec<(u32, u32)>> = Default::default();
+        for m in sh.merges.iter().filter(|m| !m.is_single()) {
+            for x in targets.iter().filter_map(|r| m.intersection(r)) {
+                for col in x.start.col..=x.end.col {
+                    merged.entry(col).or_default().push((m.start.row, m.end.row));
+                }
+            }
+        }
+        for v in merged.values_mut() {
+            v.sort_unstable();
+            v.dedup();
+        }
+        let in_merge = |c: CellRef| {
+            merged.get(&c.col).is_some_and(|v| {
+                let i = v.partition_point(|&(r0, _)| r0 <= c.row);
+                i > 0 && v.get(i - 1).is_some_and(|&(_, r1)| c.row <= r1)
+            })
+        };
+        let mut need: std::collections::BTreeMap<u32, f32> = std::collections::BTreeMap::new();
+        // Measured as AutoFit Column Width measures (the UI's font when it supplies one).
+        let mut measured: std::collections::HashMap<(StyleId, String), f32> = Default::default();
+        // The stored cells looked at are capped, not the area: a sparse target as tall as the sheet
+        // still widens for the numbers it holds. Spilled values count as the grid shows them.
+        let mut budget = MAX_WIDEN_CELLS;
+        for r in &targets {
+            let spilled = sh.spill.range(r.start..=r.end).map(|(c, _)| *c).filter(|c| r.contains(*c));
+            for c in sh.cells.iter_range(*r).map(|(c, _)| c).chain(spilled) {
+                if budget == 0 {
+                    break;
+                }
+                budget -= 1;
+                if !matches!(sh.value_ref(c), Some(gridcraft_core::Value::Number(_)))
+                    || sh.cols.get(&c.col).is_some_and(|i| i.custom || i.hidden)
+                    || in_merge(c)
+                {
+                    continue;
+                }
+                let id = sh.style_id(c);
+                let st = cx.wb.styles.get(id);
+                if st.num_fmt.as_str() == "General" || st.align.shrink || st.align.h == HAlign::Fill {
+                    continue;
+                }
+                let text = crate::display::cell_text(&cx.wb, sh, c);
+                let exact = measured.len() < EXACT_TEXT_WIDTHS;
+                let w = *measured.entry((id, text)).or_insert_with_key(|(_, t)| match &measure {
+                    Some(m) => m(t, &st.font, exact),
+                    None => approx_text_width(t, st.font.size, st.font.bold),
+                });
+                let w = w + 6.0 + st.align.indent as f32 * 9.0;
+                let e = need.entry(c.col).or_insert(0.0);
+                *e = e.max(w);
+            }
+        }
+        let widen: Vec<(u32, f32)> = need.into_iter().filter(|&(c, w)| w > sh.col_width(c)).collect();
+        let sh = cx.sheet_mut(sheet)?;
+        for (c, w) in widen {
+            sh.cols.entry(c).or_default().size = Some(w.ceil().min(1785.0));
+        }
+        Ok(Json::Null)
+    })
 }
 
 /// Adds or removes one decimal place in the number format (Increase/Decrease Decimal).
@@ -1076,6 +1167,7 @@ fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
                 let e = sh.cols.entry(c).or_default();
                 e.size = Some(w as f32);
                 e.hidden = w == 0.0;
+                e.custom = true;
             }
         }
         Ok(Json::Null)
@@ -1167,6 +1259,7 @@ fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
             let e = sh.cols.entry(c).or_default();
             e.size = Some(w.ceil());
             e.hidden = false;
+            e.custom = false; // AutoFit makes a width set by hand automatic again (Excel).
         }
         Ok(Json::Null)
     })
@@ -1258,6 +1351,112 @@ mod tests {
         assert_eq!(adjust_decimals("0.0", &v, -1), "0");
         assert_eq!(adjust_decimals("#,##0.00;[Red]-#,##0.00", &v, 1), "#,##0.000;[Red]-#,##0.000");
         assert_eq!(adjust_decimals("0%", &v, 1), "0.0%");
+    }
+
+    fn col(s: &crate::Session, c: u32) -> (f32, bool) {
+        let sh = s.active().unwrap().wb.active().unwrap();
+        (sh.col_width(c), sh.cols.get(&c).is_some_and(|i| i.custom))
+    }
+
+    /// #1077: Increase Decimal widened the format but not the column, so the number turned into ####.
+    #[test]
+    fn increase_decimal_widens_a_column_nobody_sized() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "A1", "input": "3.14159265"})).unwrap();
+        let (default, _) = col(&s, 0);
+        s.execute("home.increaseDecimal", json!({"range": "A1"})).unwrap();
+        let (w, custom) = col(&s, 0);
+        let text = s.execute("cell.get", json!({"cell": "A1"})).unwrap()["text"].as_str().unwrap().to_string();
+        assert_eq!(text, "3.141592650");
+        assert!(w > default, "the column widens for {text}: {w} vs {default}");
+        assert!(w >= approx_text_width(&text, gridcraft_model::DEFAULT_FONT_SIZE, false), "and fits it");
+        assert!(!custom, "it isn't a width set by hand, so it can widen again");
+        s.execute("home.increaseDecimal", json!({"range": "A1"})).unwrap();
+        assert!(col(&s, 0).0 > w, "one more decimal, a little wider again");
+        let wide = col(&s, 0).0;
+        s.execute("home.decreaseDecimal", json!({"range": "A1"})).unwrap();
+        assert_eq!(col(&s, 0).0, wide, "fewer decimals don't narrow it");
+        s.execute("edit.undo", json!({})).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(col(&s, 0).0, w, "Undo takes back the format and the width in one step");
+    }
+
+    #[test]
+    fn number_formats_keep_a_width_set_by_hand_and_general_numbers_round_instead() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1234567.891, 1234567.891, 1234567.891, 1234567.891]]})).unwrap();
+        s.execute("home.columnWidth", json!({"cols": "A:A", "width": 40})).unwrap();
+        assert_eq!(col(&s, 0), (40.0, true), "Column Width (and dragging the border) is a width set by hand");
+        s.execute("home.hideColumns", json!({"cols": "D:D"})).unwrap();
+        for a in ["A1", "B1", "D1"] {
+            s.execute("home.comma", json!({"range": a})).unwrap();
+        }
+        s.execute("home.numberFormat", json!({"range": "C1", "format": "General"})).unwrap();
+        let (default, _) = col(&s, 4);
+        assert_eq!(col(&s, 0), (40.0, true), "a width set by hand stays: the cell shows ####, as in Excel");
+        assert!(col(&s, 1).0 > default, "B widens for 1,234,567.89");
+        assert_eq!(col(&s, 2).0, default, "General rounds to fit instead");
+        assert_eq!(col(&s, 3).0, 0.0, "a hidden column stays hidden");
+        // AutoFit makes a width set by hand automatic again; Wrap Text doesn't stop the widening.
+        s.execute("home.autofitColumnWidth", json!({"cols": "A:A"})).unwrap();
+        assert!(!col(&s, 0).1);
+        s.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
+        let fitted = col(&s, 0).0;
+        s.execute("home.increaseDecimal", json!({"range": "A1"})).unwrap();
+        s.execute("home.increaseDecimal", json!({"range": "A1"})).unwrap();
+        assert!(col(&s, 0).0 > fitted, "after AutoFit, with Wrap Text, A widens again");
+    }
+
+    fn book() -> (crate::Session, f32) {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let (default, _) = col(&s, 0);
+        (s, default)
+    }
+
+    /// Whole columns as tall as the sheet with two numbers: the cells are looked at, not the area.
+    #[test]
+    fn a_sparse_target_widens_for_the_numbers_it_holds() {
+        let (mut s, default) = book();
+        s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+        s.execute("cell.set", json!({"cell": "E1000000", "input": "1234567.891"})).unwrap();
+        s.execute("home.comma", json!({"range": "A:E"})).unwrap();
+        assert!(col(&s, 4).0 > default, "E widens for 1,234,567.89 a million rows down");
+    }
+
+    /// A spilled number counts as the grid shows it: G1's formula spills 1,234,567.891 into H1.
+    #[test]
+    fn a_spilled_number_widens_its_column() {
+        let (mut s, default) = book();
+        s.execute("cell.set", json!({"cell": "G1", "input": "=SEQUENCE(1,2,1,1234566.891)"})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "H1", "code": "#,##0.000"})).unwrap();
+        assert!(col(&s, 7).0 > default, "H widens for the value it shows");
+    }
+
+    /// A merged area keeps its columns; the cell beside it widens.
+    #[test]
+    fn a_merged_area_keeps_its_columns() {
+        let (mut s, default) = book();
+        s.execute("range.setValues", json!({"range": "J1", "values": [[1234567.891, null, 1234567.891]]})).unwrap();
+        s.execute("home.mergeCells", json!({"range": "J1:K1"})).unwrap();
+        s.execute("home.comma", json!({"range": "J1:L1"})).unwrap();
+        assert_eq!((col(&s, 9).0, col(&s, 10).0), (default, default), "the merged J1:K1 doesn't widen J or K");
+        assert!(col(&s, 11).0 > default, "L does");
+    }
+
+    #[test]
+    fn format_cells_widens_for_a_number_format_only() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1234567.891, 1234567.891]]})).unwrap();
+        let (default, _) = col(&s, 0);
+        s.execute("home.formatCells", json!({"range": "B1", "style": {"font": {"bold": true}}})).unwrap();
+        assert_eq!(col(&s, 1).0, default, "no number format, no widening");
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"numFmt": "#,##0.000000"}})).unwrap();
+        assert!(col(&s, 0).0 > default, "A widens for 1,234,567.891000, as Excel's Format Cells does");
+        assert!(!col(&s, 0).1);
     }
 
     #[test]

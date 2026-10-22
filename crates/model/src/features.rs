@@ -925,7 +925,8 @@ pub struct LineInfo {
     pub outline: u8,
     pub collapsed: bool,
     pub style: Option<crate::style::StyleId>,
-    /// The size was set by the user (rows): automatic heights follow the content.
+    /// The size was set by the user. Rows without it follow their content's height; columns
+    /// without it widen when a number format makes their numbers wider (`home.increaseDecimal`…).
     #[serde(default)]
     pub custom: bool,
 }

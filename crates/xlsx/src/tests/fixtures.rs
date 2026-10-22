@@ -169,7 +169,9 @@ fn styles_theme_and_sizes() {
     assert!(s.cols.get(&2).unwrap().hidden);
     assert_eq!(s.cols.get(&2).unwrap().size, Some(145.0));
     assert_eq!(s.cols.get(&2).unwrap().outline, 1);
+    assert!(s.cols.get(&2).unwrap().custom, "customWidth: a width set by hand");
     assert_ne!(s.cols.get(&3).unwrap().style, None);
+    assert!(!s.cols.get(&3).unwrap().custom, "no customWidth: not set by hand");
     assert_eq!(s.rows.get(&0).unwrap().size, Some(40.0));
     let r2 = s.rows.get(&1).unwrap();
     assert!(r2.hidden);
@@ -248,6 +250,27 @@ fn dxf_border_is_written_before_protection() {
     let dx = st.split_once("<dxfs").and_then(|(_, r)| r.split_once("</dxfs>")).map(|(d, _)| d).unwrap_or_default();
     let (b, p) = (dx.find("<border"), dx.find("<protection"));
     assert!(b.is_some() && p.is_some() && b < p, "{dx}");
+}
+
+/// Which stored widths were set by hand, as Excel 16.0 treats them when a number format makes a
+/// number wider (#1077): only customWidth without bestFit keeps its width; the others widen.
+#[test]
+fn column_widths_set_by_hand() {
+    let body = r#"<cols><col min="1" max="1" width="15"/><col min="2" max="2" width="15" customWidth="1"/>
+      <col min="3" max="3" width="15" bestFit="1"/><col min="4" max="4" width="15" bestFit="1" customWidth="1"/>
+      <col min="5" max="5" width="9.140625" customWidth="1"/></cols><sheetData/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    let custom: Vec<bool> = (0..5).map(|c| s.cols.get(&c).is_some_and(|i| i.custom)).collect();
+    assert_eq!(custom, [false, true, false, false, true]);
+    assert_eq!(s.col_width(4), s.default_col_width, "E: the default width, but set by hand");
+    // Written back the way Excel writes them.
+    let bytes = crate::write_xlsx(&wb).unwrap();
+    let mut pkg = crate::package::Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    let flags: Vec<(bool, bool)> =
+        sheet.child("cols").unwrap().kids("col").map(|c| (c.flag("customWidth", false), c.flag("bestFit", false))).collect();
+    assert_eq!(flags, [(true, true), (true, false), (true, true), (true, false)], "C and D are one run");
 }
 
 #[test]
