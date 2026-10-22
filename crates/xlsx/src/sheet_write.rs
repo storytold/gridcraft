@@ -1025,8 +1025,9 @@ fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mu
                 for v in values {
                     let _ = write!(s, "<filter val=\"{}\"/>", esc_attr(v));
                 }
-                for d in dates {
-                    date_group_item_xml(d, &mut s);
+                // Items from a session file are unchecked; out-of-range ones would make an invalid file.
+                for d in dates.iter().filter(|d| d.is_valid()) {
+                    date_group_item_xml(&d.normalized(), &mut s);
                 }
                 s.push_str("</filters>");
             }

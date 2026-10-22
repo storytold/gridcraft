@@ -767,6 +767,19 @@ impl DateGroupItem {
         DateGroupItem::of(&dt, self.grouping)
     }
 
+    /// Are the fields down to the grouping in range (year 0–9999, month 1–12, day 1–31, hour 0–23,
+    /// minute and second 0–59)? An item from a session file is not checked when it loads.
+    pub fn is_valid(&self) -> bool {
+        let n = self.normalized();
+        let below = |g: DateGrouping| self.grouping < g;
+        (0..=9999).contains(&n.year)
+            && (below(DateGrouping::Month) || (1..=12).contains(&n.month))
+            && (below(DateGrouping::Day) || (1..=31).contains(&n.day))
+            && n.hour <= 23
+            && n.minute <= 59
+            && n.second <= 59
+    }
+
     /// Does `dt` fall in this year, month, day…?
     pub fn contains(&self, dt: &DateTime) -> bool {
         DateGroupItem::of(dt, self.grouping) == self.normalized()

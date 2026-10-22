@@ -804,11 +804,25 @@ pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
     for fc in e.kids("filterColumn") {
         let Some(col) = fc.attr_u32("colId") else { continue };
         let crit = if let Some(f) = fc.child("filters") {
-            FilterCriterion::Values {
-                values: f.kids("filter").filter_map(|x| x.attr("val")).map(str::to_string).collect(),
-                blanks: f.flag("blank", false),
-                dates: f.kids("dateGroupItem").filter_map(read_date_group_item).collect(),
+            let items: Vec<&El> = f.kids("dateGroupItem").collect();
+            // dateGroupItem years and months follow `calendarType` (Hijri, Thai, Japanese eras…): read
+            // as Gregorian they would select other dates, so such a filter is left out.
+            let gregorian = f.attr("calendarType").is_none_or(|c| c == "none" || c.starts_with("gregorian"));
+            if !items.is_empty() && !gregorian {
+                cx.warn("AutoFilter date groups in a non-Gregorian calendar are not supported");
+                continue;
             }
+            let dates: Vec<DateGroupItem> = items.iter().filter_map(|x| read_date_group_item(x)).collect();
+            let values: Vec<String> = f.kids("filter").filter_map(|x| x.attr("val")).map(str::to_string).collect();
+            let blanks = f.flag("blank", false);
+            if dates.len() < items.len() {
+                cx.warn("AutoFilter date groups out of range were dropped");
+                // With nothing left the filter would hide every row instead of the dates it named.
+                if dates.is_empty() && values.is_empty() && !blanks {
+                    continue;
+                }
+            }
+            FilterCriterion::Values { values, blanks, dates }
         } else if let Some(cf) = fc.child("customFilters") {
             let mut it = cf.kids("customFilter").map(|c| (filter_op(c.attr("operator")).to_string(), c.attr("val").unwrap_or("").to_string()));
             let Some(a) = it.next() else { continue };
