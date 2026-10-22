@@ -15,7 +15,7 @@ use super::*;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "dataModel.status", "Data Model", ["Data", "Data Model"], None, "{} → {tables, measures}", always, status),
-        cmd!("dataModel.load", "Load Data Model", ["Data", "Data Model"], None, "{path} → {tables, measures}", always, load),
+        cmd!("dataModel.load", "Load Data Model", ["Data", "Data Model"], None, "{path | json | model} → {tables, measures}", always, load),
         cmd!(
             query
             "dataModel.evaluate",
@@ -120,8 +120,24 @@ fn status(s: &mut Session, _: &Json) -> Result<Json> {
 }
 
 fn load(s: &mut Session, p: &Json) -> Result<Json> {
-    let path = p.get("path").and_then(Json::as_str).ok_or_else(|| EngineError::Other("dataModel.load needs `path`".into()))?;
-    let text = std::fs::read_to_string(path).map_err(|error| EngineError::Other(format!("can't read {path}: {error}")))?;
+    // Native hosts pass a path; browser hosts pass the JSON text or object they read from the
+    // file picker (wasm has no filesystem).
+    let text = if let Some(json) = p.get("json").and_then(Json::as_str) {
+        json.to_string()
+    } else if let Some(model) = p.get("model") {
+        serde_json::to_string(model).map_err(|error| EngineError::Other(format!("invalid model JSON: {error}")))?
+    } else if let Some(path) = p.get("path").and_then(Json::as_str) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            std::fs::read_to_string(path).map_err(|error| EngineError::Other(format!("can't read {path}: {error}")))?
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            return Err(EngineError::Other(format!("dataModel.load cannot read the filesystem path {path} in the browser; pass `json` or `model`")));
+        }
+    } else {
+        return Err(EngineError::Other("dataModel.load needs `path`, `json` or `model`".into()));
+    };
     let mut model: DataModel = serde_json::from_str(&text).map_err(|error| EngineError::Other(format!("invalid model JSON: {error}")))?;
     model.parse_formulas().map_err(|error| EngineError::Other(error.to_string()))?;
     s.dax_model = Some(model);
@@ -412,6 +428,19 @@ mod tests {
         "relationships": [],
         "measures": [{"name":"Total Sales","formula":"SUM(Sales[Amount])","table":"Sales"}]
     }"#;
+
+    #[test]
+    fn load_accepts_json_text_and_objects() {
+        let mut s = Session::new();
+        let text = r#"{"tables":[{"name":"Sales","columns":[{"name":"Amount"}],"rows":[[10]]}],"relationships":[],"measures":[]}"#;
+        let status = s.execute("dataModel.load", json!({"json": text})).expect("load json text");
+        assert_eq!(status["tables"][0]["name"], "Sales");
+        let object: Json = serde_json::from_str(text).expect("json");
+        let status = s.execute("dataModel.load", json!({"model": object})).expect("load model object");
+        assert_eq!(status["tables"][0]["name"], "Sales");
+        assert!(s.execute("dataModel.load", json!({"json": "{not json"})).is_err());
+        assert!(s.execute("dataModel.load", json!({})).is_err());
+    }
 
     #[test]
     fn load_status_evaluate_and_pivot() {

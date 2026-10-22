@@ -999,10 +999,12 @@ fn power_pivot_footer(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, t: 
 fn power_pivot_load(app: &mut SheetApp, d: &mut Dialog) {
     let path = d.values.get("path").and_then(Json::as_str).unwrap_or("").trim().to_string();
     if path.is_empty() {
-        d.values.insert("error".into(), json!("Enter the path to a model JSON file."));
+        d.values.insert("error".into(), json!("Enter a model JSON path, or paste the model JSON."));
         return;
     }
-    match app.session.run("dataModel.load", json!({"path": path})) {
+    // Browser pickers hand back JSON text; native hosts pass a filesystem path.
+    let params = if path.starts_with('{') || path.starts_with('[') { json!({"json": path}) } else { json!({"path": path}) };
+    match app.session.run("dataModel.load", params) {
         Ok(model) => {
             d.values.insert("model".into(), model);
             d.values.insert("error".into(), json!(""));
@@ -1532,10 +1534,17 @@ fn power_pivot_open_model_dialog(ui: &mut egui::Ui, app: &mut SheetApp, d: &mut 
         });
         ui.add_space(4.0);
     }
-    ui.label(egui::RichText::new("Model file (JSON)").small().color(t.text_dim));
+    let web = app.services.open_async.is_some();
+    ui.label(egui::RichText::new(if web { "Model JSON" } else { "Model file (JSON)" }).small().color(t.text_dim));
     let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
     let width = ui.available_width().max(320.0);
-    if ui.add_sized([width, 24.0], egui::TextEdit::singleline(&mut path).hint_text("C:\\models\\model.json")).changed() {
+    let changed = if web {
+        // The browser has no filesystem path; paste the JSON the picker returned (or its text).
+        ui.add_sized([width, 90.0], egui::TextEdit::multiline(&mut path).hint_text("{\"tables\": [...]}")).changed()
+    } else {
+        ui.add_sized([width, 24.0], egui::TextEdit::singleline(&mut path).hint_text("C:\\models\\model.json")).changed()
+    };
+    if changed {
         d.values.insert("path".into(), json!(path));
     }
     ui.label(
