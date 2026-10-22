@@ -525,6 +525,9 @@ pub struct Session {
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
+    /// Data Model loaded from a JSON model file (Power Pivot prototype). Application state, not
+    /// saved in the workbook.
+    pub dax_model: Option<gridcraft_dax::DataModel>,
 }
 
 impl Session {

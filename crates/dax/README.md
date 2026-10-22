@@ -2,8 +2,9 @@
 
 The DAX language for GridCraft: a tokenizer, a Pratt parser, a syntax tree, a canonical printer,
 the function catalog for every dax.guide category with static call validation, the static type surface (types,
-literals, inference and operator result tables) and the full DAX statement/query grammar. This
-crate has no evaluator and no engine dependency.
+literals, inference and operator result tables), the full DAX statement/query grammar, a partial
+model evaluator, a columnar model store, a model-backed PivotTable renderer and a reader/writer for
+Power Pivot measures in `xl/model/item.data`. It has no dependency on the GridCraft engine.
 
 ```rust
 use gridcraft_dax::{parse_expression, print_expression};
@@ -39,6 +40,13 @@ assert!(gridcraft_dax::print_query(&query).starts_with("DEFINE\n    MEASURE Sale
 | `validate_expression(&Expr) -> Vec<ValidationError>` | Walks the tree and reports every invalid known-function call with its span. |
 | `types::{DataType, PseudoType, InferredType, TypeMetadata, TypeError}` | The eight DAX types, the BLANK/Table pseudo-types, inference results and static type errors. |
 | `types::{literal_type, infer_type, unary_type, binary_type, arithmetic_type, comparison_coercion, comparison_compatible, comparison_type}` | Literal classification, static inference and the documented operator/coercion tables. |
+| `model::{DataModel, ModelTable, ModelColumn, Measure, Relationship, parse_measure}` | Metadata + inline-row model, formula parsing and name validation. |
+| `binder::{Binder, BoundExpr, BoundMeasure, bind_formula}` | Name/measure/column resolution, dependency graph and cycle rejection. |
+| `eval::{Evaluator, FilterContext}` | Partial expression/measure evaluator over `DataModel`. |
+| `pivot::{pivot, pivot_cross, pivot_fields}` | Row/column grouping helpers. |
+| `pivot_table::PivotTable` | Power Pivot-style row/column/filter/value layout with subtotals and grand totals. |
+| `storage::{ModelStorage, TableStorage, ColumnStorage, ColumnData}` | Columnar, dictionary-encoded model store with filter/aggregate/relationship indexes. |
+| `model_file::{read_measures, write_measures, ModelMeasure}` | Read/write Power Pivot measures in `xl/model/item.data` (ABF container). |
 | `MAX_INPUT_LEN` (8192 bytes) / `MAX_DEPTH` (256) | Limits enforced with errors. |
 
 ### Syntax tree
@@ -357,6 +365,33 @@ coercions need the model, so they are recorded for documentation and future type
 Variadic overloads repeat their last parameter kind for every additional argument; the third
 `Variant` argument of `MAXX`/`MINX` accepts any expression.
 
+## Model, binder and evaluator
+
+`model::DataModel` is the metadata + inline-row view used by the binder and evaluator. JSON shape:
+
+```json
+{
+  "tables": [{"name": "Sales", "columns": [{"name": "Region"}, {"name": "Amount"}],
+              "rows": [["East", 10], ["West", 20]]}],
+  "relationships": [],
+  "measures": [{"name": "Total Sales", "formula": "SUM(Sales[Amount])", "table": "Sales"}]
+}
+```
+
+`DataModel::parse_formulas` parses each measure and validates table/column/relationship names.
+`Binder::bind_expression` resolves `Table[Column]`, measures, variables and function calls;
+`Binder::bind_measure` and `Binder::dependency_graph` expose direct measure dependencies and reject
+cycles. `Evaluator::new` pre-binds the measures and evaluates scalar or table expressions with a
+`FilterContext`; `pivot::pivot` groups a measure by row fields. `dax eval`, `dax bind` and
+`dax pivot` expose the same surfaces through the CLI.
+
+The evaluator is deliberately partial: unsupported functions return
+`EvalError::not_implemented`. `storage` is a simple columnar store (typed columns, dictionary
+strings, null bitmaps, relationship indexes), not VertiPaq: the evaluator still scans
+`DataModel` rows and is not wired to `ModelStorage` yet. `model_file` reads and writes measures in
+`xl/model/item.data` (ABF container, plain-LZ77 xpress8 chunks); it does not read the VertiPaq
+table/column segments. Full time-intelligence and visual-calculation semantics are not implemented.
+
 ## Extending in later PRs
 
 - Statement semantics (name resolution, duplicate-name shadowing, `START AT` value types,
@@ -365,10 +400,13 @@ Variadic overloads repeat their last parameter kind for every additional argumen
   engine-specific, and the crate records them without validating a model.
 - `Call`, `NameRef` and `NameStyle` keep spelling/quoting so catalog and type work can resolve
   names without re-lexing.
-- `types::infer_type` deliberately knows only `TRUE()`, `FALSE()` and `BLANK()`, plus the
-  operators and literals. The function PR supplies signatures for everything else;
-  `InferredType::Unknown` marks those calls today, and a `VAR`/`RETURN` block is typed by its
-  `RETURN` expression.
+- `types::infer_type` resolves every catalogued call through its documented `ReturnType`, plus
+  literals, operators, `TRUE()`/`FALSE()`/`BLANK()` and `VAR`/`RETURN` blocks. `InferredType::Unknown`
+  remains for names and functions whose return type is `Any`/unknown.
+- The binder and evaluator are intentionally a subset: name resolution covers tables, columns,
+  measures, variables and the dependency graph; evaluation covers the 22 aggregations, core
+  filter/logical/table/relationship functions and common date/math/text/information functions.
+  Unsupported functions return a structured `not implemented` error rather than a wrong value.
 
 ## Example
 

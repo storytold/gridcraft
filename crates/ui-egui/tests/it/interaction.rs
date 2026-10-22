@@ -1453,3 +1453,223 @@ fn header_footer_dialog_opens_on_the_saved_header_and_footer() {
     let pr = &h.state().session.active().unwrap().wb.active().unwrap().print;
     assert_eq!((pr.header.as_str(), pr.footer.as_str()), ("&CNew", "&CConfidential"));
 }
+
+#[test]
+fn power_pivot_dialog_loads_a_model_evaluates_dax_and_pivots() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-power-pivot-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("model.json");
+    std::fs::write(
+        &path,
+        r#"{
+            "tables": [{"name":"Sales","columns":[{"name":"Region","data_type":"String"},{"name":"Amount","data_type":"Double"}],
+                        "rows":[["East",10],["West",20],["East",30]]}],
+            "relationships": [],
+            "measures": [{"name":"Total Sales","formula":"SUM(Sales[Amount])","table":"Sales"}]
+        }"#,
+    )
+    .unwrap();
+
+    let mut h = harness(blank());
+    h.state_mut().open_dialog("powerPivot", json!({}));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("powerPivot"));
+    assert!(h.query_by_label("Load a model and choose a table tab to see its rows.").is_some(), "the data view starts empty");
+    assert!(h.query_by_label("No table tabs").is_some());
+    assert!(h.query_by_label("Load").is_some());
+    assert!(h.query_by_label("Evaluate").is_some());
+    assert!(h.query_by_label("Pivot Preview").is_some(), "the pivot preview is a secondary ribbon surface");
+    assert!(h.query_by_label("Functions").is_some(), "the Function Library stays accessible");
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("path".into(), json!(path.to_string_lossy()));
+    h.run_steps(1);
+    h.get_by_label("Load").click();
+    h.run_steps(3);
+    let d = h.state().dialog.as_ref().expect("the dialog stays open after loading");
+    assert_eq!(d.values["model"]["loaded"], json!(true));
+    assert_eq!(d.values.get("error").and_then(|e| e.as_str()), Some(""));
+    assert_eq!(d.values["tableData"]["rows"].as_array().map(Vec::len), Some(3), "the Data View fetched the first table's rows");
+    assert!(h.query_by_label("Sales").is_some(), "the table tab appears at the bottom of the Data View");
+    assert!(h.query_by_label("Region").is_some(), "the data grid has the table's column headers");
+    assert!(h.query_by_label("Total Sales").is_some(), "the calculation area lists the measures");
+
+    // The Function Library inserts a filled, parseable template into the formula bar.
+    h.get_by_label("Functions").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Function Picker").is_some(), "the Function Library opens");
+    h.get_by_label("Aggregation").click();
+    h.run_steps(1);
+    h.get_by_label("SUM").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!(d.values.get("formula").and_then(|f| f.as_str()), Some("SUM(Sales[Amount])"), "the template uses the loaded table/column");
+    assert_eq!(d.values.get("showFunctions").and_then(|f| f.as_bool()), Some(false), "choosing a function closes the picker");
+
+    // Scalar evaluation through the formula bar.
+    h.run_steps(1);
+    h.get_by_label("Evaluate").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!(d.result.as_ref().and_then(|r| r.get("value")).and_then(|v| v.as_f64()), Some(60.0));
+    assert!(h.query_by_label("60").is_some(), "the scalar is rendered");
+
+    // A table evaluation renders `{columns, rows}` as a headed grid.
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        d.values.insert("formula".into(), json!("FILTER(Sales, Sales[Amount] > 10)"));
+        d.values.insert("table".into(), json!(true));
+    }
+    h.run_steps(1);
+    h.get_by_label("Evaluate").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!(d.result.as_ref().and_then(|r| r.get("rows")).and_then(|r| r.as_array()).map(Vec::len), Some(2));
+    assert_eq!(d.result.as_ref().and_then(|r| r.get("columns")).and_then(|c| c.as_array()).map(Vec::len), Some(2));
+    assert!(h.query_all_by_label("West").count() >= 2, "the result grid renders the returned rows beside the data grid");
+
+    // The pivot preview is a secondary surface, opened from the Home ribbon, with its own grid.
+    h.get_by_label("Pivot Preview").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Pivot Result").is_some(), "the ribbon opens the pivot preview");
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        d.values.insert("measure".into(), json!("Total Sales"));
+        d.values.insert("rows".into(), json!("Sales[Region]"));
+        d.values.insert("columns".into(), json!("Sales[Region]"));
+    }
+    h.run_steps(1);
+    h.get_by_label("Pivot").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    let pivot = d.values.get("pivot").expect("the pivot result is kept apart from the formula result");
+    let columns = pivot.get("columns").and_then(|c| c.as_array()).cloned().unwrap_or_default();
+    assert!(columns.iter().any(|column| column.as_str() == Some("East")), "the column field reached dataModel.pivot: {columns:?}");
+    let rows = pivot.get("rows").and_then(|r| r.as_array()).cloned().unwrap_or_default();
+    assert_eq!(rows[0][0], json!("East"));
+    assert_eq!(rows[0][1], json!(40.0));
+    assert!(h.query_all_by_label("East").count() >= 2, "pivot rows render in their own grid beside the formula result");
+    assert!(h.query_all_by_label("40").count() >= 2, "pivot values render in the grid");
+
+    // Design: the measure list, Manage Relationships and the draft formula editor.
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        d.values.insert("showPivot".into(), json!(false));
+        d.values.insert("tab".into(), json!("Design"));
+    }
+    h.run_steps(2);
+    assert!(h.query_by_label("Measure definition").is_some());
+    assert!(h.query_by_label("Total Sales").is_some(), "the measure list shows the model measure");
+    assert!(h.query_by_label("Add Measure").is_some(), "the ribbon keeps Excel's placeholder actions");
+    h.get_by_label("Manage Relationships").click();
+    h.run_steps(1);
+    assert!(h.query_by_label("Relationships").is_some(), "Manage Relationships shows the relationship list");
+    assert!(h.query_by_label("No relationships are exposed by this model.").is_some());
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        d.values.insert("draftName".into(), json!("Total Sales"));
+        d.values.insert("draftFormula".into(), json!("SUM(Sales[Amount])"));
+    }
+    h.run_steps(1);
+    h.get_by_label("Evaluate").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!(d.result.as_ref().and_then(|r| r.get("value")).and_then(|v| v.as_f64()), Some(60.0));
+    assert!(h.query_by_label("60").is_some(), "the draft formula's result is rendered");
+
+    // Diagram: table cards and (for this fixture) no relationships to draw.
+    h.state_mut().dialog.as_mut().unwrap().values.insert("tab".into(), json!("Diagram"));
+    h.run_steps(2);
+    assert!(h.query_by_label("Model Diagram").is_some());
+    assert!(h.query_by_label("Sales").is_some(), "the diagram draws a card for the table");
+    assert!(h.query_by_label("Region").is_some(), "the card lists its columns");
+    assert!(h.query_by_label("This model exposes no relationships; showing table cards only.").is_some());
+    assert!(h.query_by_label("Fit").is_some(), "the diagram ribbon offers Fit");
+    assert!(h.query_by_label("Refresh").is_some(), "the diagram ribbon offers Refresh");
+
+    // Back on Home, engine errors are shown instead of a result, and the dialog stays open.
+    h.state_mut().dialog.as_mut().unwrap().values.insert("tab".into(), json!("Home"));
+    h.run_steps(2);
+    {
+        let d = h.state_mut().dialog.as_mut().unwrap();
+        d.values.insert("formula".into(), json!("SUM(Missing[Amount])"));
+        d.values.insert("table".into(), json!(false));
+    }
+    h.run_steps(1);
+    h.get_by_label("Evaluate").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    assert!(d.values.get("error").and_then(|e| e.as_str()).is_some_and(|e| !e.is_empty()), "the command's error is visible");
+    assert!(d.result.is_none());
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("powerPivot"));
+
+    h.state_mut().dialog = None;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn power_pivot_function_library_inserts_parseable_templates() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-power-pivot-functions-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("model.json");
+    std::fs::write(
+        &path,
+        r#"{
+            "tables": [{"name":"Sales","columns":[{"name":"Region","data_type":"String"},{"name":"Amount","data_type":"Double"}],
+                        "rows":[["East",10],["West",20],["East",30]]}],
+            "relationships": [],
+            "measures": [{"name":"Total Sales","formula":"SUM(Sales[Amount])","table":"Sales"}]
+        }"#,
+    )
+    .unwrap();
+    let mut session = blank();
+    session.run("dataModel.load", json!({"path": path.to_string_lossy()})).unwrap();
+    let mut h = harness(session);
+    h.state_mut().open_dialog("powerPivot", json!({}));
+    h.run_steps(3);
+
+    // Pick through the real Function Library (search box + function button), then Evaluate.
+    let cases = [
+        ("SUM", "SUM(Sales[Amount])", false),
+        ("SUMX", "SUMX(Sales, Sales[Amount])", false),
+        ("IF", "IF(TRUE(), 1, 0)", false),
+        ("ROUND", "ROUND(1.234, 2)", false),
+        ("CALCULATE", "CALCULATE([Total Sales], Sales[Region] = \"\")", false),
+        ("DATE", "DATE(2024, 1, 1)", false),
+        ("FILTER", "FILTER(Sales, Sales[Amount] > 0)", true),
+        ("TOPN", "TOPN(10, Sales, Sales[Amount], 0)", true),
+        ("ADDCOLUMNS", "ADDCOLUMNS(Sales, \"Value\", Sales[Amount])", true),
+        ("DATATABLE", "DATATABLE(\"Value\", INTEGER, {{1}, {2}})", true),
+    ];
+    for (name, expected, table) in cases {
+        h.get_by_label("Functions").click();
+        h.run_steps(1);
+        h.state_mut().dialog.as_mut().unwrap().values.insert("fnSearch".into(), json!(name));
+        h.run_steps(1);
+        h.get_by_label(name).click();
+        h.run_steps(1);
+        let d = h.state().dialog.as_ref().unwrap();
+        assert_eq!(d.values.get("formula").and_then(|f| f.as_str()), Some(expected), "{name} inserts its template");
+        assert_eq!(d.values.get("showFunctions").and_then(|f| f.as_bool()), Some(false));
+        h.state_mut().dialog.as_mut().unwrap().values.insert("table".into(), json!(table));
+        h.run_steps(1);
+        h.get_by_label("Evaluate").click();
+        h.run_steps(2);
+        let d = h.state().dialog.as_ref().unwrap();
+        let error = d.values.get("error").and_then(|e| e.as_str()).unwrap_or("");
+        assert!(error.is_empty(), "{name} template evaluates: {error}");
+        if name == "SUM" || name == "SUMX" {
+            assert_eq!(d.result.as_ref().and_then(|r| r.get("value")).and_then(|v| v.as_f64()), Some(60.0));
+        }
+        if name == "IF" {
+            assert_eq!(d.result.as_ref().and_then(|r| r.get("value")).and_then(|v| v.as_i64()), Some(1));
+        }
+        if table {
+            assert!(d.result.as_ref().and_then(|r| r.get("columns")).and_then(|c| c.as_array()).is_some(), "{name} returns a table");
+        }
+    }
+
+    h.state_mut().dialog = None;
+    let _ = std::fs::remove_dir_all(&dir);
+}

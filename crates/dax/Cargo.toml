@@ -9,4 +9,9 @@ description = "GridCraft DAX language: lexer, Pratt parser, syntax tree and cano
 workspace = true
 
 [dependencies]
+quick-xml = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

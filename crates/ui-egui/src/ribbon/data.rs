@@ -136,4 +136,8 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
     if big_button(ui, Icon::Function, "Solver", "Solver", false).clicked() {
         app.open_dialog("solver", json!({}));
     }
+    sep(ui);
+    if big_button(ui, Icon::Table, "Power\nPivot", "Manage the data model: load a model, evaluate DAX and pivot a measure", false).clicked() {
+        app.open_dialog("powerPivot", json!({}));
+    }
 }

@@ -225,6 +225,10 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("data.analyzeData", "Data", "Analysis", "Analyze Data"),
     ("data.solver", "Data", "Analysis", "Solver"),
     ("data.analysisToolPak", "Data", "Analysis", "Data Analysis"),
+    ("dataModel.load", "Data", "Data Model", "Load Data Model"),
+    ("dataModel.status", "Data", "Data Model", "Data Model"),
+    ("dataModel.evaluate", "Data", "Data Model", "Evaluate DAX"),
+    ("dataModel.pivot", "Data", "Data Model", "Data Model Pivot"),
     // Review
     ("review.spelling", "Review", "Proofing", "Spelling"),
     ("review.thesaurus", "Review", "Proofing", "Thesaurus"),

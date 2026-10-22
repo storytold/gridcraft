@@ -2013,6 +2013,9 @@ dependencies = [
 name = "gridcraft-dax"
 version = "0.10.0"
 dependencies = [
+ "quick-xml",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
@@ -2023,6 +2026,7 @@ dependencies = [
  "gridcraft-calc",
  "gridcraft-chart",
  "gridcraft-core",
+ "gridcraft-dax",
  "gridcraft-formula",
  "gridcraft-functions",
  "gridcraft-model",

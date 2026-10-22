@@ -24,6 +24,7 @@ mod format_cells;
 mod insert_function;
 mod names;
 mod paste;
+mod power_pivot;
 mod show;
 mod spelling;
 mod zoom;
@@ -1043,6 +1044,53 @@ impl Dialog {
                     json!({"path": "", "placement": placement, "at": active}),
                 );
                 dialog.picture_target = app.view_key();
+                dialog
+            }
+            "powerPivot" => {
+                // Excel's Power Pivot window: the loaded data model on the left, DAX evaluation
+                // and a pivot preview on the right. The model lives in the engine session, so
+                // the dialog reads it back through `dataModel.status`.
+                let status = app.session.run("dataModel.status", json!({})).unwrap_or(Json::Null);
+                let mut dialog = Dialog::custom(
+                    "powerPivot",
+                    "Power Pivot",
+                    json!({
+                        "tab": "Home",
+                        "path": p("path").as_str().unwrap_or_default(),
+                        "formula": "",
+                        "table": false,
+                        "measure": "",
+                        "rows": "",
+                        "columns": "",
+                        "error": "",
+                        "pivotError": "",
+                        "pivotNote": "",
+                        "model": status,
+                        "draftName": "",
+                        "draftFormula": "",
+                        "draftIndex": -1,
+                        "diagramZoom": 1.0,
+                        "diagramFit": false,
+                        "tableIndex": 0,
+                        "showPivot": false,
+                        "showFunctions": false,
+                        "fnCategory": "All",
+                        "fnSearch": "",
+                        "showRelationships": false,
+                    }),
+                );
+                // Excel's Data View shows the selected table's rows; status only carries counts,
+                // so fetch the first table as a table expression.
+                if let Some(table) = status
+                    .get("tables")
+                    .and_then(Json::as_array)
+                    .and_then(|tables| tables.first())
+                    .and_then(|table| table.get("name"))
+                    .and_then(Json::as_str)
+                    && let Ok(data) = app.session.run("dataModel.evaluate", json!({"formula": table, "table": true}))
+                {
+                    dialog.values.insert("tableData".into(), data);
+                }
                 dialog
             }
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
