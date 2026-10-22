@@ -982,14 +982,17 @@ fn protection_refuses_edits_of_locked_cells() {
 #[test]
 fn protection_allows_permitted_row_and_column_edits() {
     let mut s = protected(json!({"insertRows": true, "deleteRows": true, "insertColumns": true}));
+    // A deleted line has to be unlocked all the way, empty cells included: Excel's "Delete rows"
+    // only covers rows "where every cell in the row to be deleted is unlocked" (#1766).
+    assert!(s.execute("home.deleteRows", json!({"rows": "2:2"})).is_err(), "row 2 holds locked values");
+    assert!(s.execute("home.deleteRows", json!({"rows": "20:20"})).is_err(), "a row with no format of its own falls back to the locked default");
+    // Row 10 was unlocked whole, so it goes.
+    s.execute("home.deleteRows", json!({"rows": "10:10"})).unwrap();
     // Inserting shifts locked cells, which the protection allows.
     s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
     assert_eq!(v(&s, "A2"), Value::Number(1.0));
     s.execute("home.insertColumns", json!({"cols": "A:A"})).unwrap();
-    // Deleting removes the locked cells it covers: "Delete rows" permits exactly that, as in
-    // Excel (#1766). "Delete columns" isn't granted here, so columns stay refused.
-    s.execute("home.deleteRows", json!({"rows": "2:2"})).unwrap();
-    assert_eq!(v(&s, "B2"), Value::Number(2.0));
+    // "Delete columns" isn't granted here.
     assert!(s.execute("home.deleteColumns", json!({"cols": "Z:Z"})).is_err());
 }
 
@@ -997,20 +1000,43 @@ fn protection_allows_permitted_row_and_column_edits() {
 fn protection_still_refuses_moving_locked_columns() {
     // A move isn't a delete: the columns keep their cells, so the delete permission doesn't
     // cover relocating locked content.
-    let mut s = protected(json!({"insertColumns": true, "deleteColumns": true}));
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "D1", "values": [[10]]})).unwrap();
+    s.execute("home.lockCell", json!({"range": "D:D", "on": false})).unwrap();
+    s.execute("review.protectSheet", json!({"insertColumns": true, "deleteColumns": true})).unwrap();
     assert!(s.execute("sheet.moveColumns", json!({"cols": "A:A", "before": 3})).is_err());
-    // An unlocked column moves.
+    // A column unlocked whole moves.
     s.execute("sheet.moveColumns", json!({"cols": "D:D", "before": 0})).unwrap();
     assert_eq!(v(&s, "A1"), Value::Number(10.0));
 }
 
 #[test]
 fn protection_allows_a_permitted_column_deletion() {
-    let mut s = protected(json!({"deleteColumns": true}));
-    s.execute("home.deleteColumns", json!({"cols": "A:A"})).unwrap();
-    // The unlocked column D moved into C with its values.
-    assert_eq!(v(&s, "C1"), Value::Number(10.0));
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3]]})).unwrap();
+    // Column D is unlocked whole before the sheet is protected, its empty cells too, which is what
+    // the permission asks for.
+    s.execute("home.lockCell", json!({"range": "D:D", "on": false})).unwrap();
+    s.execute("review.protectSheet", json!({"deleteColumns": true})).unwrap();
+    // Column A holds locked values: refused, as in Excel, permission or not.
+    assert!(s.execute("home.deleteColumns", json!({"cols": "A:A"})).is_err());
+    s.execute("home.deleteColumns", json!({"cols": "D:D"})).unwrap();
     assert!(s.execute("home.deleteRows", json!({"rows": "2:2"})).is_err());
+}
+
+#[test]
+fn protection_allows_deleting_a_line_of_an_unlocked_sheet() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3]]})).unwrap();
+    // Select All, unlock: every column takes an unlocked format, so a row's empty cells do too.
+    s.execute("home.lockCell", json!({"range": "A1:XFD1048576", "on": false})).unwrap();
+    // One cell locked again makes its row undeletable.
+    s.execute("home.lockCell", json!({"range": "A2", "on": true})).unwrap();
+    s.execute("review.protectSheet", json!({"deleteRows": true})).unwrap();
+    // A blank row can go: every one of its cells is unlocked.
+    s.execute("home.deleteRows", json!({"rows": "20:20"})).unwrap();
+    assert!(s.execute("home.deleteRows", json!({"rows": "2:2"})).is_err(), "A2 is locked");
 }
 
 #[test]

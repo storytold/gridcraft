@@ -254,7 +254,7 @@ fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
         let cmd = if axis == Axis::Rows { "home.insertRows" } else { "home.insertColumns" };
         return Err(bad(cmd, "the inserted lines would extend past the end of the worksheet"));
     }
-    check_lines_protection(s, p, axis, true)?;
+    check_lines_protection(s, p, axis, at, count, true)?;
     let sheet = target_sheet(s, p)?;
     // Refuse to push data off the sheet.
     if let Some(u) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
@@ -327,7 +327,9 @@ fn delete_areas(s: &Session, p: &Json, axis: Axis) -> Result<Vec<(u32, u32)>> {
 
 fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let areas = delete_areas(s, p, axis)?;
-    check_lines_protection(s, p, axis, false)?;
+    for &(at, count) in &areas {
+        check_lines_protection(s, p, axis, at, count, false)?;
+    }
     let sheet = target_sheet(s, p)?;
     let out = edit(s, |cx| {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
@@ -376,13 +378,10 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
     {
         return Err(EngineError::Other("To prevent possible loss of data, columns cannot be shifted off of the worksheet.".into()));
     }
-    check_lines_protection(s, &json!({"cols": RangeRef::cols(before, before).a1()}), Axis::Cols, true)?;
-    check_lines_protection(s, &json!({"cols": RangeRef::cols(from, end - 1).a1()}), Axis::Cols, false)?;
+    check_lines_protection(s, &json!({"cols": RangeRef::cols(before, before).a1()}), Axis::Cols, before, 1, true)?;
     // A move isn't the deletion the permission grants: the columns keep their cells, so locked
     // ones still can't be relocated.
-    if lines_hold_locked_cells(s, sheet, from, count)? {
-        return Err(EngineError::Other(PROTECTED.into()));
-    }
+    check_lines_protection(s, &json!({"cols": RangeRef::cols(from, end - 1).a1()}), Axis::Cols, from, count, false)?;
 
     let moved_from = if before <= from { from + count } else { from };
     if moved_from.checked_add(count).is_none_or(|end| end > MAX_COLS) {
@@ -681,10 +680,11 @@ fn edit_doc<R>(d: &mut crate::DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -
     super::commit(d, f)
 }
 
-/// Sheet protection for inserting or deleting rows/columns: the protection must allow it. Deleting
-/// removes the locked cells it covers, which is exactly what Excel's "Delete rows"/"Delete
-/// columns" permission grants, so their contents aren't checked.
-fn check_lines_protection(s: &Session, p: &Json, axis: Axis, insert: bool) -> Result<()> {
+/// Sheet protection for inserting or deleting rows/columns. Inserting changes no cell, so the
+/// permission alone decides. Deleting removes the cells it covers, so, as in Excel, a line may only
+/// go when every cell in it is unlocked — `AllowDeletingRows`: "where every cell in the row to be
+/// deleted is unlocked", empty cells included.
+fn check_lines_protection(s: &Session, p: &Json, axis: Axis, at: u32, count: u32, insert: bool) -> Result<()> {
     let sheet = target_sheet(s, p)?;
     let wb = &s.doc()?.wb;
     let Some(sh) = wb.sheet(sheet) else { return Ok(()) };
@@ -698,25 +698,46 @@ fn check_lines_protection(s: &Session, p: &Json, axis: Axis, insert: bool) -> Re
     if !allowed {
         return Err(EngineError::Other(PROTECTED.into()));
     }
-    Ok(())
+    if insert || lines_all_unlocked(wb, sh, axis, at, count) {
+        return Ok(());
+    }
+    Err(EngineError::Other(PROTECTED.into()))
 }
 
-/// Whether the columns hold locked cells, or carry a locked column format of their own (the
-/// default format isn't one: an unstyled column is simply unstyled). Row and column deletion is
-/// exempt (the permission removes them, see `check_lines_protection`), but `sheet.moveColumns`
-/// relocates them, which the delete permission doesn't cover.
-fn lines_hold_locked_cells(s: &Session, sheet: usize, at: u32, count: u32) -> Result<bool> {
-    let wb = &s.doc()?.wb;
-    let Some(sh) = wb.sheet(sheet) else { return Ok(false) };
-    if sh.protection.is_none() {
-        return Ok(false);
-    }
+/// Whether every cell of the given lines is unlocked, which is what Excel's "Delete rows" and
+/// "Delete columns" permissions cover. A stored cell keeps its own format; an empty one takes the
+/// line's format, then the crossing line's, then the default — the order `Sheet::style_id` applies.
+fn lines_all_unlocked(wb: &Workbook, sh: &Sheet, axis: Axis, at: u32, count: u32) -> bool {
     let locked = |st: gridcraft_model::StyleId| wb.styles.get(st).protection.locked;
-    let end = at.saturating_add(count - 1).min(MAX_COLS - 1);
-    if (at..=end).any(|i| sh.cols.get(&i).and_then(|x| x.style).is_some_and(locked)) {
-        return Ok(true);
+    let end = at.saturating_add(count.max(1) - 1).min(if axis == Axis::Rows { MAX_ROWS - 1 } else { MAX_COLS - 1 });
+    let block = if axis == Axis::Rows { RangeRef::rows(at, end) } else { RangeRef::cols(at, end) };
+    if sh.cells.iter_range(block).any(|(_, cell)| locked(cell.style)) {
+        return false;
     }
-    Ok(sh.cells.iter_range(RangeRef::cols(at, end)).any(|(_, cell)| locked(cell.style)))
+    let (own, cross, cross_max) = if axis == Axis::Rows { (&sh.rows, &sh.cols, MAX_COLS as usize) } else { (&sh.cols, &sh.rows, MAX_ROWS as usize) };
+    let default_locked = locked(gridcraft_model::StyleId::default());
+    for i in at..=end {
+        match own.get(&i).and_then(|x| x.style) {
+            // The line's own format covers its empty cells.
+            Some(st) => {
+                if locked(st) {
+                    return false;
+                }
+            }
+            // Empty cells take the crossing line's format, else the default.
+            None => {
+                if default_locked && cross.len() < cross_max {
+                    // A crossing line with no format of its own leaves a locked empty cell.
+                    return false;
+                }
+                let blocked = |st: Option<gridcraft_model::StyleId>| st.map_or(default_locked, locked);
+                if cross.values().any(|x| blocked(x.style)) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
