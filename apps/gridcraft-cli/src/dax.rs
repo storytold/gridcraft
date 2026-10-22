@@ -57,13 +57,13 @@ fn read_input(args: &[String]) -> Result<String, String> {
     Ok(text)
 }
 
-/// Queries are tried first; a malformed `EVALUATE` reports its query error instead of a
-/// misleading expression error.
+/// Queries are tried first; a malformed `EVALUATE`/`DEFINE` reports its query error instead of
+/// a misleading expression error.
 fn parse_any(text: &str) -> Result<Parsed, String> {
     match parse_query(text) {
         Ok(query) => Ok(Parsed::Query(query)),
         Err(query_error) => {
-            if starts_with_evaluate(text) {
+            if starts_with_query_keyword(text) {
                 return Err(query_error.to_string());
             }
             parse_expression(text).map(Parsed::Expression).map_err(|e| e.to_string())
@@ -71,6 +71,10 @@ fn parse_any(text: &str) -> Result<Parsed, String> {
     }
 }
 
-fn starts_with_evaluate(text: &str) -> bool {
-    tokenize(text).is_ok_and(|tokens| matches!(tokens.first().map(|token| &token.kind), Some(TokenKind::Evaluate)))
+fn starts_with_query_keyword(text: &str) -> bool {
+    tokenize(text).is_ok_and(|tokens| match tokens.first().map(|token| &token.kind) {
+        Some(TokenKind::Evaluate) => true,
+        Some(TokenKind::Ident(word)) => word.eq_ignore_ascii_case("DEFINE"),
+        _ => false,
+    })
 }

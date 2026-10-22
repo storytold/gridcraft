@@ -8,6 +8,13 @@
 //! while a decimal point or exponent becomes [`TokenKind::Decimal`]. `dt"..."` text is
 //! validated here and emitted as [`TokenKind::DateTime`]. Overflow and malformed date/time
 //! literals are [`LexError`] values carrying the literal's span.
+//!
+//! Statement punctuation is lexed here too: `:` ([`TokenKind::Colon`]) separates a function
+//! parameter's name from its annotation, `@name` becomes [`TokenKind::AtName`] for `START AT`
+//! parameters, and `;` ([`TokenKind::Semicolon`]) is the optional trailing query terminator.
+//! Statement keywords such as `DEFINE` and `MEASURE` stay plain [`TokenKind::Ident`] tokens and
+//! are matched case-insensitively by the parser, so they remain available as identifier text
+//! wherever the grammar does not reserve them.
 
 use crate::ast::{DateTimeLiteral, Span};
 
@@ -52,8 +59,14 @@ pub enum TokenKind {
     Ge,
     AndAnd,
     OrOr,
-    /// `=>`, reserved for user-defined functions (a later PR).
+    /// `=>`, used by `DEFINE FUNCTION` definitions.
     Arrow,
+    /// `:` between a function parameter name and its type annotation.
+    Colon,
+    /// `@name`, an XMLA statement parameter reference in `START AT`.
+    AtName(String),
+    /// `;`, accepted only as an optional trailing statement terminator.
+    Semicolon,
     LParen,
     RParen,
     LBrace,
@@ -419,6 +432,29 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
             ',' => {
                 out.push(Token { kind: TokenKind::Comma, span: Span::new(start, pos(i + 1)) });
                 i += 1;
+            }
+            ':' => {
+                out.push(Token { kind: TokenKind::Colon, span: Span::new(start, pos(i + 1)) });
+                i += 1;
+            }
+            ';' => {
+                out.push(Token { kind: TokenKind::Semicolon, span: Span::new(start, pos(i + 1)) });
+                i += 1;
+            }
+            '@' => {
+                let mut text = String::new();
+                let mut j = i + 1;
+                while ch(j).is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '.')) {
+                    if let Some(c) = ch(j) {
+                        text.push(c);
+                    }
+                    j += 1;
+                }
+                if text.is_empty() {
+                    return Err(LexError::new("expected a parameter name after `@`", Span::new(start, pos(j))));
+                }
+                out.push(Token { kind: TokenKind::AtName(text), span: Span::new(start, pos(j)) });
+                i = j;
             }
             other => {
                 return Err(LexError::new(format!("unexpected character `{other}`"), Span::new(start, pos(i + 1))));

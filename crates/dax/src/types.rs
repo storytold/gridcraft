@@ -360,6 +360,9 @@ pub fn infer_type(expr: &Expr) -> Result<InferredType, TypeError> {
             }
             Ok(InferredType::Table)
         }
+        // Variable references are names, so their values are unknown without an environment; the
+        // block's type is the type of its `RETURN` expression.
+        ExprKind::VarReturn { body, .. } => infer_type(body),
     }
 }
 

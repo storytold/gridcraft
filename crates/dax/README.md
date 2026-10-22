@@ -1,9 +1,9 @@
 # gridcraft-dax
 
-The DAX language for GridCraft: a tokenizer, a Pratt parser, a syntax tree, a canonical printer
-the aggregation function catalog with static call validation, and the static type surface
-(types, literals, inference and operator result tables). This crate is the foundation for the
-statement PR. It has no evaluator and no engine dependency.
+The DAX language for GridCraft: a tokenizer, a Pratt parser, a syntax tree, a canonical printer,
+the aggregation function catalog with static call validation, the static type surface (types,
+literals, inference and operator result tables) and the full DAX statement/query grammar. This
+crate has no evaluator and no engine dependency.
 
 ```rust
 use gridcraft_dax::{parse_expression, print_expression};
@@ -11,8 +11,10 @@ use gridcraft_dax::{parse_expression, print_expression};
 let expr = parse_expression("1 + 2 * 3")?;
 assert_eq!(print_expression(&expr), "1 + 2 * 3");
 
-let query = gridcraft_dax::parse_query("EVALUATE SUM('Sales'[Amount])")?;
-assert_eq!(gridcraft_dax::print_query(&query), "EVALUATE SUM('Sales'[Amount])");
+let query = gridcraft_dax::parse_query(
+    "DEFINE MEASURE Sales[Margin] = [Sales Amount] - [Total Cost] EVALUATE Sales ORDER BY [Margin] DESC",
+)?;
+assert!(gridcraft_dax::print_query(&query).starts_with("DEFINE\n    MEASURE Sales[Margin] ="));
 # Ok::<(), gridcraft_dax::ParseError>(())
 ```
 
@@ -22,11 +24,15 @@ assert_eq!(gridcraft_dax::print_query(&query), "EVALUATE SUM('Sales'[Amount])");
 | --- | --- |
 | `parse_expression(&str) -> Result<Expr, ParseError>` | Parse one expression. One leading `=` (as typed in some editors) is accepted and ignored. |
 | `print_expression(&Expr) -> String` | Canonical text. |
-| `parse_query(&str) -> Result<Query, ParseError>` | Parse `EVALUATE <expression>` (only statement form in this PR). |
-| `print_query(&Query) -> String` | Canonical query text. |
+| `parse_query(&str) -> Result<Query, ParseError>` | Parse a query: optional `DEFINE`, then one or more `EVALUATE` statements. `EVALUATE <expr>` alone keeps working. |
+| `print_query(&Query) -> String` | Canonical multi-line query text. |
 | `tokenize(&str) -> Result<Vec<Token>, LexError>` | Tokens with byte spans, including `Eof`. |
 | `ParseError { message, span }` / `LexError { message, span }` | `Display + std::error::Error`; the lexer error converts with `From`. |
-| `ast::{Expr, ExprKind, Literal, DateTimeLiteral, Name, NameRef, NameStyle, Call, UnaryOp, BinaryOp, Span, Query}` | Syntax tree. |
+| `ast::{Expr, ExprKind, Literal, DateTimeLiteral, Name, NameRef, NameStyle, Call, UnaryOp, BinaryOp, Span}` | Expression syntax tree. |
+| `ast::{Query, Define, Definition, MeasureDef, ColumnDef, TableDef, VarDef, FunctionDef, MParameterDef}` | Query/`DEFINE` tree. |
+| `ast::{Evaluate, OrderItem, StartValue, SortDirection}` | `EVALUATE`, `ORDER BY` and `START AT`. |
+| `ast::{FunctionParam, ParameterType, ParameterSubtype, PassingMode}` | `FUNCTION` parameters and annotations. |
+| `ast::{VisualShape, Axis, AxisKind, AxisGroup, AxisOrderItem}` | `WITH VISUAL SHAPE`, `AXIS`, `GROUP`, `TOTAL`. |
 | `functions::{catalog, lookup}` | The 22 aggregation functions, looked up case-insensitively. |
 | `functions::{FunctionSpec, FunctionCategory, ParamKind, ReturnType, BlankPolicy, FunctionFlags, Parameter, Overload}` | Catalog record types. |
 | `validate_call(&Call) -> Vec<ValidationError>` | Arity/kind checks for one call; empty for valid or unknown functions. |
@@ -49,6 +55,26 @@ ExprKind =
   | Binary { op, left, right }            op: BinaryOp
   | Table(Vec<Expr>)                     { value, ... }
   | Tuple(Vec<Expr>)                     (value, ...)
+  | VarReturn { vars, body }             VAR a = 1 ... RETURN body
+
+Query { define: Option<Define>, evaluates: Vec<Evaluate> }
+Define { items: Vec<Definition> }
+Definition =
+    Measure(MeasureDef)                  name: NameRef, expr: Expr
+  | Column(ColumnDef)                    name: NameRef, expr: Expr
+  | Table(TableDef)                      name: Name, expr: Expr, visual_shape: Option<VisualShape>
+  | Var(VarDef)                          name: Name, expr: Expr
+  | Function(FunctionDef)                name: Name, params: Vec<FunctionParam>, body: Expr
+  | MParameter(MParameterDef)            name: Name, expr: Expr
+
+Evaluate { table: Expr, order_by: Vec<OrderItem>, start_at: Vec<StartValue> }
+OrderItem { expr: Expr, direction: SortDirection }
+StartValue = Literal(Literal) | Parameter(Name)          -- @name
+FunctionParam { name, ty, subtype, passing, default }
+VisualShape { axes: Vec<Axis>, densify: Option<String> }
+Axis { kind: AxisKind (Rows | Columns), groups: Vec<AxisGroup>, order_by: Vec<AxisOrderItem> }
+AxisGroup { columns: Vec<NameRef>, total: NameRef }
+AxisOrderItem { column: NameRef, direction: SortDirection }
 ```
 
 `Span` is a half-open byte range into the source. `Expr::walk` visits nodes depth-first with an
@@ -76,20 +102,70 @@ primary      := INTEGER | DECIMAL | STRING | TRUE | FALSE
               | "(" expression ")"
               | "(" expression "," expression ("," expression)* ")"
               | "{" [ expression ("," expression)* ] "}"
+              | VAR var_name "=" expression { VAR var_name "=" expression } RETURN expression
 name         := IDENT | "[" column "]" | "'" table "'"
 qualified    := (IDENT | "'" table "'") "[" column "]"
-query        := EVALUATE expression
+
+query        := [ define ] evaluate { evaluate } [ ";" ]
+define       := DEFINE definition { definition }
+definition   := MEASURE table '[' name ']' "=" expression
+              | COLUMN  table '[' name ']' "=" expression
+              | TABLE   table_name "=" expression [ visual_shape ]
+              | VAR     var_name "=" expression
+              | FUNCTION function_name "=" "(" [ param { "," param } ] ")" "=>" expression
+              | MPARAMETER mparameter_name "=" expression
+param        := param_name [ ":" [ type ] [ subtype ] [ passing_mode ] ] [ "=" expression ]
+evaluate     := EVALUATE expression [ order_by ] [ start_at ]
+order_by     := ORDER BY order_item { "," order_item }
+order_item   := expression [ ASC | DESC ]
+start_at     := START AT start_value { "," start_value }
+start_value  := literal | [ "+" | "-" ] number | "@" name
+visual_shape := WITH VISUAL SHAPE axis { axis } [ DENSIFY STRING ]
+axis         := AXIS ( ROWS | COLUMNS )
+                    group { group }
+                    ORDER BY column_ref [ ASC | DESC ] { "," column_ref [ ASC | DESC ] }
+group        := GROUP column_ref { "," column_ref } TOTAL column_ref
+column_ref   := "[" name "]" | table "[" name "]"
 ```
+
+Statement keywords are matched case-insensitively. There are no statement terminators in the
+documented grammar: `MEASURE`, `COLUMN`, `TABLE`, `VAR`, `FUNCTION`, `MPARAMETER` and the
+`EVALUATE` token bound definition bodies and separate statements, so no newline is needed.
+A single trailing `;` is accepted as a recovery extension. The `DEFINE` block is optional but
+requires at least one entry and must be followed by at least one `EVALUATE`. Duplicate definition
+names and forward/backward references are accepted; resolution is a semantic concern.
 
 The shape above is illustrative: the Pratt parser applies the precedence and associativity
 table below rather than a fixed grammar cascade.
 
 `*` is not a wildcard token: it is only the multiplication operator.
 
+### Statements
+
+- `EVALUATE` takes any table expression. `ORDER BY` sorts the result and defaults to `ASC`;
+  `START AT` requires `ORDER BY`, takes literals or `@parameter` references, and may not have
+  more values than `ORDER BY` items.
+- `DEFINE MEASURE`/`COLUMN` names are `<table>[<name>]`; `TABLE`, `FUNCTION` and `MPARAMETER`
+  names are bare or single-quoted. `VAR` names are bare only. A query-scoped `VAR` has no
+  `RETURN`; an expression-level `VAR ... RETURN ...` requires one. `RETURN` without a preceding
+  `VAR` is an error.
+- `FUNCTION` parameters may declare a type (`ANYVAL`, `SCALAR`, `TABLE`, `ANYREF`,
+  `CALENDARREF`, `COLUMNREF`, `MEASUREREF`, `TABLEREF`), a scalar subtype (`BOOLEAN`,
+  `DATETIME`, `DECIMAL`, `DOUBLE`, `INT64`, `NUMERIC`, `STRING`, `VARIANT`), a passing mode
+  (`VAL`/`EXPR`) and a default expression. Only `SCALAR` (or an omitted type) accepts a subtype.
+- `WITH VISUAL SHAPE` is valid only as the suffix of a `DEFINE TABLE`. It needs one or two axes
+  (`AXIS ROWS`, `AXIS COLUMNS`, no duplicates), each with at least one `GROUP ... TOTAL` level
+  and an `ORDER BY` list. `DENSIFY "column"` is optional and last, and takes a double-quoted
+  string, not a bracketed reference. `AXIS ROWPAGES` is not part of the grammar.
+- `MPARAMETER` is the Power BI dynamic M-parameter binding and is accepted as a `DEFINE` entry
+  even though Microsoft's `DEFINE` grammar omits it.
+
 ### Case and escapes
 
-- Keywords (`NOT`, `IN`, `EVALUATE`, `TRUE`, `FALSE`) are case-insensitive. `TRUE`/`FALSE` are
-  literals unless followed by `(` (then they are calls to a function of that name).
+- Keywords (`NOT`, `IN`, `EVALUATE`, `TRUE`, `FALSE`, and every statement keyword) are
+  case-insensitive. `TRUE`/`FALSE` are literals unless followed by `(` (then they are calls to a
+  function of that name). The printer writes statement keywords uppercase and keeps identifier
+  spelling.
 - Bare identifiers keep their spelling. Function names may contain `.` (`STDEV.P`).
 - Single-quoted table identifiers double an embedded quote: `'It''s'`.
 - Bracketed columns double an embedded `]`: `[A]]B]`.
@@ -184,6 +260,13 @@ date/time literals are lexer errors with the literal's span. Errors carry `messa
 spaces around binary operators, `, ` between arguments/items, and adds parentheses only where
 precedence or associativity requires them. Re-parsing canonical text yields the same AST.
 
+`print_query` prints `DEFINE` entries indented one level, each following `EVALUATE` on its own
+line with indented `ORDER BY`/`START AT` clauses, and visual-shape axes, groups and `DENSIFY`
+indented under their `TABLE`. The simple `EVALUATE <expression>` form stays on one line, so
+`print_query(parse_query("EVALUATE 1 + 2"))` is still `EVALUATE 1 + 2`. An expression-level
+`VAR ... RETURN ...` prints on one line and is parenthesised when it is an operand, because it
+binds looser than every operator. All printing remains iterative.
+
 ## Aggregation function catalog
 
 `functions::catalog()` returns the 22 functions of
@@ -253,18 +336,22 @@ recorded for documentation and future type checking, so the third `Variant` argu
 
 ## Extending in later PRs
 
-- `Query` currently holds only `evaluate`. `DEFINE`/`VAR` clauses (including query-level
-  `VAR`) extend `Query` and `parse_query`; `Expr` and the operator grammar stay unchanged.
-- The lexer already emits `=>` (`TokenKind::Arrow`) for user-defined functions.
+- Statement semantics (name resolution, duplicate-name shadowing, `START AT` value types,
+  function overloading and recursion rules, visual-shape evaluation) are not checked here; the
+  parser accepts what the grammar accepts. Query-defined tables/columns and `MPARAMETER` are
+  engine-specific, and the crate records them without validating a model.
 - `Call`, `NameRef` and `NameStyle` keep spelling/quoting so catalog and type work can resolve
   names without re-lexing.
-- `types::infer_type` deliberately knows only `TRUE()`, `FALSE()` and `BLANK()`. The function
-  PR supplies signatures for everything else; `InferredType::Unknown` marks those calls today.
+- `types::infer_type` deliberately knows only `TRUE()`, `FALSE()` and `BLANK()`, plus the
+  operators and literals. The function PR supplies signatures for everything else;
+  `InferredType::Unknown` marks those calls today, and a `VAR`/`RETURN` block is typed by its
+  `RETURN` expression.
 
 ## Example
 
 ```sh
 cargo run -p gridcraft-dax --example parse -- "1 + 2 * 3"
 cargo run -p gridcraft-dax --example parse -- "EVALUATE SUM('Sales'[Amount])"
+cargo run -p gridcraft-dax --example parse -- "DEFINE MEASURE Sales[M] = SUM(Sales[Amount]) EVALUATE Sales ORDER BY [M] DESC"
 echo 'NOT TRUE || FALSE && TRUE' | cargo run -p gridcraft-dax --example parse
 ```

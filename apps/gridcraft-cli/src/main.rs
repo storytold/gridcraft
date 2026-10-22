@@ -49,7 +49,7 @@ const USAGE: &str = "usage:
                      blank lines and lines starting with # or // are skipped
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
-  gridcraft-cli dax format [TEXT] [--file PATH]           canonical DAX text (expression or EVALUATE query)
+  gridcraft-cli dax format [TEXT] [--file PATH]           canonical DAX text (expression or EVALUATE/DEFINE query)
   gridcraft-cli dax parse [TEXT] [--file PATH]            DAX syntax tree
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
   gridcraft-cli send <port> <method> [json]

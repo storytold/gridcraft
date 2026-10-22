@@ -1,8 +1,9 @@
 //! DAX syntax tree.
 //!
-//! Every node carries a [`Span`] in byte offsets into the source text. [`Expr`] equality
-//! deliberately ignores spans (`PartialEq` compares [`ExprKind`] only), which makes the
-//! parser/printer round-trip invariant expressible as `parse(print(e)) == e`.
+//! Every expression node carries a [`Span`] in byte offsets into the source text. Statement
+//! nodes (`DEFINE` entries, `EVALUATE`, `ORDER BY`, visual shapes) group expressions and names.
+//! [`Expr`] equality deliberately ignores spans (`PartialEq` compares [`ExprKind`] only), which
+//! makes the parser/printer round-trip invariant expressible as `parse(print(e)) == e`.
 
 /// A half-open byte range `start..end` into the source text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -268,6 +269,21 @@ pub enum ExprKind {
     Table(Vec<Expr>),
     /// A row constructor / parenthesised comma list `(1, "a")`.
     Tuple(Vec<Expr>),
+    /// An expression-level `VAR <name> = <expr> ... RETURN <expr>` block.
+    VarReturn {
+        vars: Vec<VarDecl>,
+        body: Box<Expr>,
+    },
+}
+
+/// One `VAR <name> = <expression>` declaration inside an [`ExprKind::VarReturn`].
+///
+/// The name is a plain identifier: DAX variable names cannot be quoted or bracketed. Declarations
+/// are sequential, so `nameN` is visible only to `expressionN+1` and to the `RETURN` body.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VarDecl {
+    pub name: Name,
+    pub expr: Expr,
 }
 
 /// A DAX expression with its source span.
@@ -304,6 +320,10 @@ impl Expr {
                 ExprKind::Table(items) | ExprKind::Tuple(items) => {
                     stack.extend(items.iter().map(|e| (e, depth + 1)));
                 }
+                ExprKind::VarReturn { vars, body } => {
+                    stack.push((body, depth + 1));
+                    stack.extend(vars.iter().map(|var| (&var.expr, depth + 1)));
+                }
                 ExprKind::Literal(_) | ExprKind::Name(_) => {}
             }
         }
@@ -324,6 +344,10 @@ impl Expr {
                     stack.push(left);
                 }
                 ExprKind::Table(items) | ExprKind::Tuple(items) => stack.extend(items.iter().rev()),
+                ExprKind::VarReturn { vars, body } => {
+                    stack.push(body);
+                    stack.extend(vars.iter().rev().map(|var| &var.expr));
+                }
                 ExprKind::Literal(_) | ExprKind::Name(_) => {}
             }
         }
@@ -337,8 +361,292 @@ impl PartialEq for Expr {
     }
 }
 
-/// `EVALUATE <table expression>`. The statements PR extends this type.
+/// A complete DAX query: an optional `DEFINE` block followed by one or more `EVALUATE`
+/// statements.
+///
+/// A query always has at least one [`Evaluate`]; the parser rejects `DEFINE` without a following
+/// `EVALUATE`. For the simple form `EVALUATE <expression>` the `define` field is `None` and
+/// `evaluates` holds exactly one entry with no clauses.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Query {
-    pub evaluate: Expr,
+    pub define: Option<Define>,
+    pub evaluates: Vec<Evaluate>,
+}
+
+/// The `DEFINE` block of a query. One block applies to every `EVALUATE` statement.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Define {
+    pub items: Vec<Definition>,
+}
+
+/// One entry of a `DEFINE` block.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Definition {
+    Measure(MeasureDef),
+    Column(ColumnDef),
+    Table(TableDef),
+    Var(VarDef),
+    Function(FunctionDef),
+    MParameter(MParameterDef),
+}
+
+/// `MEASURE <table>[<measure>] = <scalar expression>`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeasureDef {
+    pub name: NameRef,
+    pub expr: Expr,
+}
+
+/// `COLUMN <table>[<column>] = <scalar expression>`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColumnDef {
+    pub name: NameRef,
+    pub expr: Expr,
+}
+
+/// `VAR <name> = <expression>` in a `DEFINE` block. Unlike an expression-level
+/// [`ExprKind::VarReturn`], a query-scoped variable has no `RETURN`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VarDef {
+    pub name: Name,
+    pub expr: Expr,
+}
+
+/// `TABLE <name> = <table expression> [WITH VISUAL SHAPE ...]`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableDef {
+    pub name: Name,
+    pub expr: Expr,
+    pub visual_shape: Option<VisualShape>,
+}
+
+/// `MPARAMETER <name> = <expression>`: a Power BI dynamic M parameter binding.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MParameterDef {
+    pub name: Name,
+    pub expr: Expr,
+}
+
+/// A query-defined function: `FUNCTION <name> = (<param>, ...) => <body>`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FunctionDef {
+    pub name: Name,
+    pub params: Vec<FunctionParam>,
+    pub body: Expr,
+}
+
+/// One parameter of a [`FunctionDef`].
+///
+/// Every annotation is optional: `p`, `p : INT64`, `p : SCALAR INT64 VAL` and `p = 1` are all
+/// valid parameter declarations.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FunctionParam {
+    pub name: Name,
+    pub ty: Option<ParameterType>,
+    pub subtype: Option<ParameterSubtype>,
+    pub passing: Option<PassingMode>,
+    pub default: Option<Expr>,
+}
+
+/// The DAX user-defined-function parameter types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ParameterType {
+    AnyVal,
+    Scalar,
+    Table,
+    AnyRef,
+    CalendarRef,
+    ColumnRef,
+    MeasureRef,
+    TableRef,
+}
+
+impl ParameterType {
+    /// The canonical uppercase keyword.
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            ParameterType::AnyVal => "ANYVAL",
+            ParameterType::Scalar => "SCALAR",
+            ParameterType::Table => "TABLE",
+            ParameterType::AnyRef => "ANYREF",
+            ParameterType::CalendarRef => "CALENDARREF",
+            ParameterType::ColumnRef => "COLUMNREF",
+            ParameterType::MeasureRef => "MEASUREREF",
+            ParameterType::TableRef => "TABLEREF",
+        }
+    }
+
+    /// Recognises a type keyword case-insensitively.
+    pub fn from_keyword(word: &str) -> Option<Self> {
+        Some(match word.to_ascii_uppercase().as_str() {
+            "ANYVAL" => ParameterType::AnyVal,
+            "SCALAR" => ParameterType::Scalar,
+            "TABLE" => ParameterType::Table,
+            "ANYREF" => ParameterType::AnyRef,
+            "CALENDARREF" => ParameterType::CalendarRef,
+            "COLUMNREF" => ParameterType::ColumnRef,
+            "MEASUREREF" => ParameterType::MeasureRef,
+            "TABLEREF" => ParameterType::TableRef,
+            _ => return None,
+        })
+    }
+}
+
+/// The scalar subtypes, which are only valid together with [`ParameterType::Scalar`] (or alone,
+/// as in the documented `p : INT64` shorthand).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ParameterSubtype {
+    Boolean,
+    DateTime,
+    Decimal,
+    Double,
+    Int64,
+    Numeric,
+    String,
+    Variant,
+}
+
+impl ParameterSubtype {
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            ParameterSubtype::Boolean => "BOOLEAN",
+            ParameterSubtype::DateTime => "DATETIME",
+            ParameterSubtype::Decimal => "DECIMAL",
+            ParameterSubtype::Double => "DOUBLE",
+            ParameterSubtype::Int64 => "INT64",
+            ParameterSubtype::Numeric => "NUMERIC",
+            ParameterSubtype::String => "STRING",
+            ParameterSubtype::Variant => "VARIANT",
+        }
+    }
+
+    pub fn from_keyword(word: &str) -> Option<Self> {
+        Some(match word.to_ascii_uppercase().as_str() {
+            "BOOLEAN" => ParameterSubtype::Boolean,
+            "DATETIME" => ParameterSubtype::DateTime,
+            "DECIMAL" => ParameterSubtype::Decimal,
+            "DOUBLE" => ParameterSubtype::Double,
+            "INT64" => ParameterSubtype::Int64,
+            "NUMERIC" => ParameterSubtype::Numeric,
+            "STRING" => ParameterSubtype::String,
+            "VARIANT" => ParameterSubtype::Variant,
+            _ => return None,
+        })
+    }
+}
+
+/// How a function argument is passed: `VAL` (eagerly) or `EXPR` (lazily).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PassingMode {
+    Val,
+    Expr,
+}
+
+impl PassingMode {
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            PassingMode::Val => "VAL",
+            PassingMode::Expr => "EXPR",
+        }
+    }
+
+    pub fn from_keyword(word: &str) -> Option<Self> {
+        match word.to_ascii_uppercase().as_str() {
+            "VAL" => Some(PassingMode::Val),
+            "EXPR" => Some(PassingMode::Expr),
+            _ => None,
+        }
+    }
+}
+
+/// One `EVALUATE <table expression> [ORDER BY ...] [START AT ...]` statement.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Evaluate {
+    pub table: Expr,
+    pub order_by: Vec<OrderItem>,
+    pub start_at: Vec<StartValue>,
+}
+
+/// One item of a query-level `ORDER BY` clause.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OrderItem {
+    pub expr: Expr,
+    pub direction: SortDirection,
+}
+
+/// The sort direction of an `ORDER BY` item. An omitted direction parses as
+/// [`SortDirection::Asc`], and the printer writes the keyword explicitly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+impl SortDirection {
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            SortDirection::Asc => "ASC",
+            SortDirection::Desc => "DESC",
+        }
+    }
+
+    pub const fn is_ascending(self) -> bool {
+        matches!(self, SortDirection::Asc)
+    }
+}
+
+/// One value of a `START AT` clause: a constant or an XMLA `@parameter` reference.
+///
+/// Start values are constants, not expressions. A sign in front of a numeric literal is folded
+/// into the literal (`START AT -1`); everything else must be a literal or `@name`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StartValue {
+    Literal(Literal),
+    Parameter(Name),
+}
+
+/// The `WITH VISUAL SHAPE` clause of a query-defined table.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VisualShape {
+    pub axes: Vec<Axis>,
+    /// The optional `DENSIFY "<column>"` clause, always last.
+    pub densify: Option<String>,
+}
+
+/// One `AXIS ROWS` / `AXIS COLUMNS` clause of a visual shape.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Axis {
+    pub kind: AxisKind,
+    pub groups: Vec<AxisGroup>,
+    pub order_by: Vec<AxisOrderItem>,
+}
+
+/// The axis of a visual shape. Only these two are documented.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AxisKind {
+    Rows,
+    Columns,
+}
+
+impl AxisKind {
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            AxisKind::Rows => "ROWS",
+            AxisKind::Columns => "COLUMNS",
+        }
+    }
+}
+
+/// One `GROUP <column>, ... TOTAL <column>` level of an axis.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisGroup {
+    pub columns: Vec<NameRef>,
+    pub total: NameRef,
+}
+
+/// One column of an axis `ORDER BY` clause.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisOrderItem {
+    pub column: NameRef,
+    pub direction: SortDirection,
 }

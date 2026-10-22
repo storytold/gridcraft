@@ -257,6 +257,14 @@ fn dax_format_parse_and_errors() {
     assert_eq!(query.trim(), "EVALUATE SUM('Sales'[Amount])");
     assert!(ok(&["dax", "parse", "EVALUATE 1"]).contains("Query"));
 
+    let define = ok(&["dax", "format", "DEFINE MEASURE Sales[M] = 1 VAR X = 2 EVALUATE Sales ORDER BY [M] DESC START AT 0"]);
+    assert_eq!(define.trim(), "DEFINE\n    MEASURE Sales[M] = 1\n    VAR X = 2\nEVALUATE Sales\nORDER BY\n    [M] DESC\nSTART AT 0");
+    assert!(ok(&["dax", "parse", "DEFINE MEASURE Sales[M] = 1 EVALUATE Sales"]).contains("Measure"));
+
+    let o = run(&["dax", "format", "DEFINE MEASURE Sales[M] = 1"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("EVALUATE"));
+
     let o = run(&["dax", "parse", "1 +"]);
     assert_eq!(o.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&o.stderr).contains("expected expression"));

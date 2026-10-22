@@ -358,6 +358,8 @@ fn comments_are_skipped() {
 #[test]
 fn query_parsing_and_printing() {
     let query = parse_query("EVALUATE SUM('Sales'[Amount])").unwrap();
+    assert!(query.define.is_none());
+    assert_eq!(query.evaluates.len(), 1);
     assert_eq!(print_query(&query), "EVALUATE SUM('Sales'[Amount])");
     assert_eq!(parse_query(&print_query(&query)).unwrap(), query);
 

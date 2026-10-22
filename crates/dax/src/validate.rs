@@ -169,5 +169,6 @@ fn describe_argument(expr: &Expr) -> &'static str {
         ExprKind::Unary { .. } | ExprKind::Binary { .. } => "an operator expression",
         ExprKind::Table(_) => "a table constructor",
         ExprKind::Tuple(_) => "a row constructor",
+        ExprKind::VarReturn { .. } => "a VAR/RETURN expression",
     }
 }

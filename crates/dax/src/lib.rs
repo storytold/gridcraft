@@ -2,8 +2,10 @@
 //!
 //! This crate covers the DAX expression grammar, the aggregation function catalog with static
 //! call validation, the static type surface (literal classification, inference and the documented
-//! operator result tables) and, for now, the query form `EVALUATE <expression>`. It does not
-//! evaluate expressions. Later PRs extend [`Query`] with `DEFINE`/`VAR` clauses.
+//! operator result tables) and the DAX query statements: `DEFINE` (`MEASURE`, `COLUMN`, `TABLE`,
+//! `VAR`, `FUNCTION`, `MPARAMETER`), `EVALUATE`, `ORDER BY`, `START AT`, expression-level
+//! `VAR ... RETURN`, and `WITH VISUAL SHAPE` (`AXIS`, `GROUP`, `TOTAL`, `DENSIFY`). It does not
+//! evaluate expressions.
 //!
 //! ```
 //! use gridcraft_dax::{parse_expression, print_expression};
@@ -23,7 +25,11 @@ pub mod printer;
 pub mod types;
 pub mod validate;
 
-pub use ast::{BinaryOp, Call, DateTimeLiteral, Expr, ExprKind, Literal, Name, NameRef, NameStyle, Query, Span, UnaryOp};
+pub use ast::{
+    Axis, AxisGroup, AxisKind, AxisOrderItem, BinaryOp, Call, ColumnDef, DateTimeLiteral, Define, Definition, Evaluate, Expr, ExprKind, FunctionDef,
+    FunctionParam, Literal, MParameterDef, MeasureDef, Name, NameRef, NameStyle, OrderItem, ParameterSubtype, ParameterType, PassingMode, Query,
+    SortDirection, Span, StartValue, TableDef, UnaryOp, VarDecl, VarDef, VisualShape,
+};
 pub use functions::{
     BlankPolicy, CATALOG, FunctionCategory, FunctionFlags, FunctionSpec, Overload, ParamKind, Parameter, ReturnType, catalog, lookup,
 };
