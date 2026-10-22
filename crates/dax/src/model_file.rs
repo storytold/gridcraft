@@ -1432,6 +1432,24 @@ mod tests {
     }
 
     #[test]
+    fn quoted_names_decode_as_utf8() {
+        // Each UTF-8 byte used to become a separate Latin-1 character, which made every
+        // non-ASCII table or measure name mojibake and broke the rewrite's old-name matching.
+        let text = "CREATE MEASURE 'Ventes Été'[Marge brute €] = SUM('Ventes Été'[Montant])";
+        let measures = parse_measure_statements(text).expect("parse");
+        assert_eq!(measures.len(), 1);
+        assert_eq!(measures[0].table, "Ventes Été");
+        assert_eq!(measures[0].name, "Marge brute €");
+        assert_eq!(measures[0].formula, "SUM('Ventes Été'[Montant])");
+
+        // A doubled delimiter is still an escaped delimiter, not a terminator.
+        assert_eq!(parse_quoted_table(b"'O''Brien'", 0), Some(("O'Brien".to_string(), 10)));
+        assert_eq!(parse_quoted_table(b"[Amount]]]", 0), Some(("Amount]".to_string(), 10)));
+        // Invalid UTF-8 is rejected instead of being lossily decoded.
+        assert_eq!(parse_quoted_table(&[b'\'', 0xFF, b'\''], 0), None);
+    }
+
+    #[test]
     fn parser_survives_fuzzed_lengths() {
         for length in 0..128usize {
             let data = vec![0xAB; length];
