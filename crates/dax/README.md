@@ -103,7 +103,7 @@ right, except `^`:
 | 7 | `=`, `==`, `<>`, `<`, `>`, `<=`, `>=` | left |
 | 8 | `NOT` | prefix |
 | 9 | `&&` | left |
-| 10 | `&#124;&#124;` | left |
+| 10 | `\|\|` | left |
 
 `=` coerces types at evaluation time; `==` is strict equality. This crate only records which
 operator was written. `IN` takes a list (`expr IN { v1, v2 }`) or a table expression
