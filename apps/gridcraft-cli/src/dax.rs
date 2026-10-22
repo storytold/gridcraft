@@ -251,3 +251,24 @@ fn starts_with_query_keyword(text: &str) -> bool {
         _ => false,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zip_entry_is_replaced_without_dropping_other_entries() -> Result<(), Box<dyn std::error::Error>> {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        writer.start_file("xl/model/item.data", options)?;
+        writer.write_all(b"old")?;
+        writer.start_file("xl/workbook.xml", options)?;
+        writer.write_all(b"<workbook/>")?;
+        let bytes = writer.finish()?.into_inner();
+
+        let replaced = replace_zip_entry(&bytes, "xl/model/item.data", b"new")?;
+        assert_eq!(read_zip_entry(&replaced, "xl/model/item.data")?, b"new");
+        assert_eq!(read_zip_entry(&replaced, "xl/workbook.xml")?, b"<workbook/>");
+        Ok(())
+    }
+}
