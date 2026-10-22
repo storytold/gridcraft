@@ -78,6 +78,91 @@ fn normalises() {
 }
 
 #[test]
+fn linked_workbook_sheet_ranges_round_trip() {
+    // MS-XLSX `sheet-range = [workbook-index] sheet-name ":" sheet-name`, quoted or not.
+    let span = |a: &str, b: &str| SheetSel::Span(a.into(), b.into());
+    for (src, sheet) in [
+        ("SUM([1]Jan:Dec!A1)", span("[1]Jan", "Dec")),
+        ("SUM('[1]Jan:Dec'!A1)", span("[1]Jan", "Dec")),
+        ("SUM('[1]Jan:My Dec'!A1)", span("[1]Jan", "My Dec")),
+        ("SUM('Jan:[1]Dec'!A1)", span("Jan", "[1]Dec")),
+        ("[2]Prices!B2", SheetSel::Named("[2]Prices".into())),
+    ] {
+        let e = parse(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        let first = match &e {
+            Expr::Call(_, args) => args.first(),
+            r => Some(r),
+        };
+        let Some(Expr::Ref(r)) = first else { panic!("{src}: {e:?}") };
+        assert_eq!(r.sheet, sheet, "{src}");
+        // What the printer writes reads back as the same formula.
+        let printed = print(&e);
+        assert_eq!(parse(&printed).ok(), Some(e), "{src} printed as {printed}");
+    }
+}
+
+#[test]
+fn names_of_linked_workbooks_print_as_excel_writes_them() {
+    // `[1]!Rate` is the linked workbook's own name: Excel writes no quotes, and `'[1]'!Rate`
+    // would name a sheet called `[1]` in this workbook. A sheet of the link is quoted as needed.
+    for (src, printed) in [
+        ("[1]!Rate", "[1]!Rate"),
+        ("SUM([1]!Rate,1)", "SUM([1]!Rate,1)"),
+        ("[1]Prices!Rate", "[1]Prices!Rate"),
+        ("'My Sheet'!Total", "'My Sheet'!Total"),
+    ] {
+        assert_eq!(print(&parse(src).unwrap()), printed, "{src}");
+    }
+}
+
+#[test]
+fn book_only_references_print_back_without_quotes() {
+    // `[1]!A1` (only a defined name should follow `[1]!`, but files may hold it) must not become
+    // `'[1]'!A1`, a reference to a sheet called `[1]`.
+    for src in ["[1]!A1", "[1]!$B$2", "SUM([1]!A1:B2)", "[0]!A1"] {
+        assert_eq!(print(&parse(src).unwrap()), src);
+    }
+}
+
+#[test]
+fn deleted_references_into_linked_workbooks_keep_the_link() {
+    // Excel writes `[1]Data!#REF!` for a reference whose cells were deleted in the linked
+    // workbook; the link stays in the formula.
+    for src in ["[1]Data!#REF!+1", "SUM('[1]My Data'!#REF!)", "SUM([1]Jan:Dec!#REF!)"] {
+        assert_eq!(print(&parse(src).unwrap()), src);
+    }
+    assert_eq!(print(&parse("Data!#REF!+1").unwrap()), "#REF!+1");
+}
+
+#[test]
+fn workbook_zero_is_this_workbook() {
+    // `[0]` (MS-XLSX) is the workbook itself: read as a local reference, it follows its sheet.
+    for (src, local) in [
+        ("[0]Data!B2", "Data!B2"),
+        ("'[0]My Data'!B2", "'My Data'!B2"),
+        ("SUM([0]Jan:Dec!A1)", "SUM(Jan:Dec!A1)"),
+        ("[0]!Rate", "Rate"),
+        ("[0]Data!Rate", "Data!Rate"),
+        ("[00]Data!B2", "Data!B2"),
+    ] {
+        assert_eq!(parse(src).unwrap(), parse(local).unwrap(), "{src}");
+    }
+    assert_eq!(print(&rename_sheet(parse("[0]Data!B2*2").unwrap(), "Data", "Local")), "Local!B2*2");
+}
+
+#[test]
+fn renaming_or_deleting_a_sheet_leaves_linked_spans_alone() {
+    // `[1]Jan:Dec` is a span of the linked workbook's sheets; this workbook's `Dec` isn't in it.
+    let order = ["Jan".to_string(), "Dec".to_string()];
+    for src in ["SUM([1]Jan:Dec!A1)+Dec!A1", "SUM('[1]Jan:Dec'!A1)+Dec!A1"] {
+        let renamed = print(&rename_sheet(parse(src).unwrap(), "Dec", "December"));
+        assert_eq!(renamed, "SUM([1]Jan:Dec!A1)+December!A1", "{src}");
+        let deleted = print(&crate::adjust::delete_sheet(parse(src).unwrap(), "Dec", &order));
+        assert_eq!(deleted, "SUM([1]Jan:Dec!A1)+#REF!", "{src}");
+    }
+}
+
+#[test]
 fn spill_operator() {
     for f in ["A1#", "Sheet1!$D$1#", "SUM(B2#)", "'My Sheet'!A1#*2", "ROWS(A1#)+1", "IF(A1,#N/A,#REF!)"] {
         assert_eq!(rt(f), f);

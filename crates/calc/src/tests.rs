@@ -114,6 +114,337 @@ fn chains_out_of_order() {
 }
 
 #[test]
+fn references_into_linked_workbooks_read_the_saved_values() {
+    use gridcraft_model::{ExternalBook, ExternalName, ExternalSheet};
+    let mut t = T::new();
+    let prices = ExternalSheet {
+        name: "P&L Prices".into(),
+        cells: vec![(c("A1"), Value::text("gas")), (c("B1"), Value::Number(4.5)), (c("A2"), Value::text("power")), (c("B2"), Value::Number(61.0))],
+        refresh_error: false,
+    };
+    let rates = ExternalSheet { name: "Rates".into(), cells: vec![(c("C3"), Value::Number(2.0))], refresh_error: false };
+    let failed = ExternalSheet { name: "Failed".into(), cells: vec![(c("A1"), Value::Number(9.0))], refresh_error: true };
+    let names = vec![
+        ExternalName { name: "Gas".into(), sheet: None, refers_to: "'P&L Prices'!$B$1".into() },
+        ExternalName { name: "Rate".into(), sheet: Some(1), refers_to: "$C$3".into() },
+        // Names inside a linked name are the linked workbook's too.
+        ExternalName { name: "GasTwice".into(), sheet: None, refers_to: "Gas*2".into() },
+        ExternalName { name: "RatePlus".into(), sheet: Some(1), refers_to: "Rate+GasTwice".into() },
+        // A sheet range or a sheetless reference in a workbook-level name can't be resolved
+        // from the saved values (and must not read this workbook's cells).
+        ExternalName { name: "Span".into(), sheet: None, refers_to: "Rates:Failed!$A$1".into() },
+        ExternalName { name: "Loose".into(), sheet: None, refers_to: "$E$9".into() },
+    ];
+    t.wb.external_books = vec![ExternalBook::default(), ExternalBook { sheets: vec![prices, rates, failed], names, ..Default::default() }].into();
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "Price".into(),
+        scope: None,
+        formula: "'[2]P&L Prices'!$A$1:$B$65536".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    t.set("A1", "='[2]P&L Prices'!B2*2");
+    t.set("A2", "=VLOOKUP(\"gas\",Price,2,FALSE)");
+    t.set("A3", "=SUM('[2]P&L Prices'!B1:B9)+[2]Rates!C3");
+    t.set("A4", "=[2]Rates!A1");
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3"), t.num("A4")), (122.0, 4.5, 67.5, 0.0));
+    // A sheet the link didn't save, or a book that isn't linked, is #REF! as before.
+    t.set("A5", "=[2]Other!A1");
+    t.set("A6", "=[1]Rates!C3");
+    t.set("A7", "='[3]Rates'!C3");
+    for at in ["A5", "A6", "A7"] {
+        assert_eq!(t.get(at), Value::Error(CellError::Ref), "{at}");
+    }
+    // A sheet whose last refresh failed keeps its saved cells; anything else in it is #REF!.
+    t.set("A8", "=[2]Failed!A1+[2]Failed!B1");
+    t.set("A9", "=[2]Failed!A1");
+    t.set("A10", "=SUM([2]Failed!A1:B1)");
+    assert_eq!((t.get("A8"), t.num("A9"), t.get("A10")), (Value::Error(CellError::Ref), 9.0, Value::Error(CellError::Ref)));
+    // A reference Excel found deleted in a linked workbook is #REF!.
+    t.set("A14", "=[2]Rates!#REF!+1");
+    assert_eq!(t.get("A14"), Value::Error(CellError::Ref));
+    // A whole column, or more columns than a block can hold, reaches the same uncached cells.
+    t.set("A11", "=SUM([2]Failed!A:A)");
+    t.set("A12", "=SUM([2]Failed!A1:A2)");
+    t.set("A13", "=SUM([2]Failed!A:Z)");
+    for at in ["A11", "A12", "A13"] {
+        assert_eq!(t.get(at), Value::Error(CellError::Ref), "{at}");
+    }
+    // The linked workbook's own names: workbook-scoped and sheet-scoped.
+    t.set("B1", "=[2]!Gas*10");
+    t.set("B2", "=[2]Rates!Rate+1");
+    assert_eq!((t.num("B1"), t.num("B2")), (45.0, 3.0));
+    t.set("B3", "=[2]!Missing");
+    assert_eq!(t.get("B3"), Value::Error(CellError::Ref));
+    t.set("E9", "100");
+    t.set("B4", "=[2]!GasTwice");
+    t.set("B5", "=[2]Rates!RatePlus");
+    t.set("B6", "=[2]!Span");
+    t.set("B7", "=[2]!Loose");
+    assert_eq!((t.num("B4"), t.num("B5")), (9.0, 11.0));
+    assert_eq!((t.get("B6"), t.get("B7")), (Value::Error(CellError::Ref), Value::Error(CellError::Ref)));
+    // SUMIF and friends need references; Excel can't read a closed workbook through them.
+    t.set("C1", "=SUMIF('[2]P&L Prices'!A1:A2,\"gas\",'[2]P&L Prices'!B1:B2)");
+    t.set("C2", "=COUNTIF(#REF!,\">0\")");
+    t.set("C3", "=SUMIF(Price,\"gas\")");
+    assert_eq!(
+        (t.get("C1"), t.get("C2"), t.get("C3")),
+        (Value::Error(CellError::Value), Value::Error(CellError::Ref), Value::Error(CellError::Value))
+    );
+    // Linked sheets print as Excel writes them: quoted only when the sheet name needs it.
+    let f = t.wb.sheet(0).unwrap().cells.get(c("A3")).and_then(|x| x.formula.clone()).unwrap();
+    assert_eq!(gridcraft_formula::print(f.expr.as_ref().unwrap()), "SUM('[2]P&L Prices'!B1:B9)+[2]Rates!C3");
+}
+
+#[test]
+fn linked_names_that_cannot_be_calculated_keep_their_saved_value() {
+    use gridcraft_model::{ExternalBook, ExternalName, ExternalSheet};
+    let mut t = T::new();
+    let data = ExternalSheet { name: "Data".into(), cells: vec![(c("A1"), Value::Number(7.0))], refresh_error: false };
+    let failed = ExternalSheet { name: "Failed".into(), cells: vec![], refresh_error: true };
+    let name = |name: &str, refers_to: &str| ExternalName { name: name.into(), sheet: None, refers_to: refers_to.into() };
+    let names = vec![
+        name("Broken", "#REF!"),
+        // Saved without a definition.
+        name("Blank", ""),
+        name("Span", "Data:Failed!$A$1"),
+        name("Loose", "$E$9"),
+        name("Elsewhere", "Gone!$A$1"),
+        name("Inner", "Undefined*2"),
+        name("Good", "Data!$A$1"),
+    ];
+    t.wb.external_books = vec![ExternalBook { sheets: vec![data, failed], names, ..Default::default() }].into();
+    // Cells as read from a file: the formula and the value Excel saved for it.
+    let saved = [
+        ("B1", "=[1]!Broken", Value::Number(20.0)),
+        ("B2", "=[1]!Blank", Value::text("KW")),
+        ("B3", "=[1]!Span", Value::Number(3.0)),
+        ("B4", "=[1]!Loose", Value::Number(4.0)),
+        ("B5", "=[1]!Elsewhere", Value::Number(5.0)),
+        ("B6", "=[1]!Inner+1", Value::Number(6.0)),
+        ("B7", "=[1]!Good*2", Value::Number(99.0)),
+        ("B8", "=[1]!Undefined", Value::Number(8.0)),
+        ("B9", "=[1]Failed!B1", Value::Number(9.0)),
+        ("B10", "=B1+1", Value::Number(0.0)),
+        ("B11", "=[1]!Broken", Value::Empty),
+    ];
+    for (at, formula, value) in saved {
+        let mut cell = Cell::formula(Formula::new(formula));
+        cell.value = value;
+        t.wb.sheet_mut(0).unwrap().cells.set(c(at), cell);
+    }
+    t.calc.recalc_all(&mut t.wb);
+    let expect = |t: &T| {
+        // Linked values only change when the link is updated, so Excel keeps showing these.
+        assert_eq!(t.num("B1"), 20.0);
+        assert_eq!(t.get("B2"), Value::text("KW"));
+        assert_eq!([t.num("B3"), t.num("B4"), t.num("B5"), t.num("B6")], [3.0, 4.0, 5.0, 6.0]);
+        // What the saved values can answer is calculated, and users of a kept value see it.
+        assert_eq!((t.num("B7"), t.num("B10")), (14.0, 21.0));
+        // A name the link doesn't define, a refresh-error sheet's unsaved cell, and a formula
+        // with no saved value are still #REF!.
+        for at in ["B8", "B9", "B11"] {
+            assert_eq!(t.get(at), Value::Error(CellError::Ref), "{at}");
+        }
+    };
+    expect(&t);
+    // Recalculating again keeps them.
+    t.set("E9", "100");
+    t.calc.recalc_all(&mut t.wb);
+    expect(&t);
+}
+
+#[test]
+fn linked_dynamic_array_keeps_saved_spill_values_after_recalc() {
+    use gridcraft_core::RangeRef;
+    use gridcraft_model::{ExternalBook, ExternalSheet};
+    let mut t = T::new();
+    t.wb.external_books =
+        vec![ExternalBook { opaque: true, sheets: vec![ExternalSheet { name: "Data".into(), ..Default::default() }], ..Default::default() }].into();
+    let sh = t.wb.sheet_mut(0).unwrap();
+    sh.cells.set(c("A1"), Cell { value: Value::Number(10.0), ..Cell::formula(Formula::new("=[1]Data!A1:A2")) });
+    sh.spill_ranges.insert(c("A1"), RangeRef::parse("A1:A2").unwrap());
+    sh.spill.insert(c("A2"), Value::Number(20.0));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.get("A1"), t.get("A2")), (Value::Number(10.0), Value::Number(20.0)));
+}
+
+#[test]
+fn linked_dynamic_array_through_defined_name_keeps_saved_spill_values() {
+    use gridcraft_core::RangeRef;
+    use gridcraft_model::{DefinedName, ExternalBook, ExternalSheet};
+    let mut t = T::new();
+    t.wb.external_books =
+        vec![ExternalBook { opaque: true, sheets: vec![ExternalSheet { name: "Data".into(), ..Default::default() }], ..Default::default() }].into();
+    t.wb.names.push(DefinedName { name: "Price".into(), scope: None, formula: "'[1]Data'!A1:A2".into(), comment: String::new(), hidden: false });
+    let sh = t.wb.sheet_mut(0).unwrap();
+    sh.cells.set(c("A1"), Cell { value: Value::Number(10.0), ..Cell::formula(Formula::new("=Price")) });
+    sh.spill_ranges.insert(c("A1"), RangeRef::parse("A1:A2").unwrap());
+    sh.spill.insert(c("A2"), Value::Number(20.0));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.get("A1"), t.get("A2")), (Value::Number(10.0), Value::Number(20.0)));
+}
+
+#[test]
+fn linked_dynamic_array_through_an_external_name_keeps_saved_spill_values() {
+    use gridcraft_core::RangeRef;
+    use gridcraft_model::ExternalBook;
+    let mut t = T::new();
+    t.wb.external_books = vec![ExternalBook { opaque: true, ..Default::default() }].into();
+    let sh = t.wb.sheet_mut(0).unwrap();
+    sh.cells.set(c("A1"), Cell { value: Value::Number(10.0), ..Cell::formula(Formula::new("=[1]!Arr")) });
+    sh.spill_ranges.insert(c("A1"), RangeRef::parse("A1:A2").unwrap());
+    sh.spill.insert(c("A2"), Value::Number(20.0));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.get("A1"), t.get("A2")), (Value::Number(10.0), Value::Number(20.0)));
+}
+
+#[test]
+fn a_kept_value_gives_way_when_what_the_formula_reads_here_changes() {
+    use gridcraft_model::{ExternalBook, ExternalName};
+    let mut t = T::new();
+    let names = vec![ExternalName { name: "Broken".into(), sheet: None, refers_to: "#REF!".into() }];
+    t.wb.external_books = vec![ExternalBook { names, ..Default::default() }].into();
+    let saved = [
+        ("A1", "5", Value::Number(5.0)),
+        ("B1", "=IFERROR([1]!Broken,A1*3)", Value::Number(15.0)),
+        ("C1", "=IF(A1>0,A1*2,[1]!Broken)", Value::Number(10.0)),
+        ("D1", "=[1]!Broken+A1", Value::Number(25.0)),
+        ("E1", "=SUM([1]!Broken,A1)", Value::Number(25.0)),
+        ("F1", "=[1]!Broken", Value::Number(9.0)),
+        ("G1", "=F1*2", Value::Number(18.0)),
+    ];
+    for (at, input, value) in saved {
+        let mut cell = if input.starts_with('=') { Cell::formula(Formula::new(input)) } else { Cell::value(value.clone()) };
+        cell.value = value;
+        t.wb.sheet_mut(0).unwrap().cells.set(c(at), cell);
+    }
+    t.calc.recalc_all(&mut t.wb);
+    let nums = |t: &T| ["B1", "C1", "D1", "E1", "F1", "G1"].map(|a| t.get(a));
+    let n = Value::Number;
+    // Loaded (or F9): what Excel saved stays.
+    assert_eq!(nums(&t), [n(15.0), n(10.0), n(25.0), n(25.0), n(9.0), n(18.0)]);
+    // An edit of a cell they read calculates them: the name is #REF!, as typed.
+    t.set("A1", "-1");
+    let r = Value::Error(CellError::Ref);
+    assert_eq!(nums(&t), [n(-3.0), r.clone(), r.clone(), r, n(9.0), n(18.0)]);
+    // F9 again: formulas that read only the link keep what they show.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.get("F1"), t.get("G1")), (n(9.0), n(18.0)));
+}
+
+#[test]
+fn dde_and_ole_links_read_saved_items_and_keep_other_values() {
+    use gridcraft_model::ExternalBook;
+    let mut t = T::new();
+    // [1] a DDE link with item ENE saved as 85.33; [2] an OLE link (or one whose part is missing).
+    let dde = ExternalBook { opaque: true, items: vec![("ENE".into(), Value::Number(85.33))], ..Default::default() };
+    let ole = ExternalBook { opaque: true, ..Default::default() };
+    t.wb.external_books = vec![dde, ole].into();
+    let saved = [
+        ("A1", "=[1]!ENE", Value::Number(1.0)),
+        ("A2", "=[1]!ene*2", Value::Number(2.0)),
+        ("A3", "=[1]!NoValues", Value::Number(3.0)),
+        ("A4", "=[2]!Item", Value::Number(4.0)),
+        ("A5", "=[2]Sheet!A1+1", Value::Number(5.0)),
+        ("A6", "=A1+A4", Value::Number(0.0)),
+    ];
+    for (at, formula, value) in saved {
+        let mut cell = Cell::formula(Formula::new(formula));
+        cell.value = value;
+        t.wb.sheet_mut(0).unwrap().cells.set(c(at), cell);
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("A1"), t.num("A2")), (85.33, 170.66));
+    assert_eq!([t.num("A3"), t.num("A4"), t.num("A5")], [3.0, 4.0, 5.0]);
+    assert!((t.num("A6") - 89.33).abs() < 1e-9, "{}", t.num("A6"));
+}
+
+#[test]
+fn if_family_range_arguments_with_a_deleted_linked_reference_are_ref() {
+    let mut t = T::new();
+    t.set("A1", "1");
+    for (at, f) in [("B1", "=SUMIF([1]S!#REF!,1)"), ("B2", "=COUNTIFS([1]S!#REF!,1)"), ("B3", "=SUMIF(#REF!,1)")] {
+        t.set(at, f);
+        assert_eq!(t.get(at), Value::Error(CellError::Ref), "{f}");
+    }
+}
+
+#[test]
+fn references_into_linked_workbooks_keep_their_position_and_size() {
+    use gridcraft_model::{ExternalBook, ExternalSheet};
+    let mut t = T::new();
+    // Data!A1:B6: a header row, then items a..e priced 10..14.
+    let mut cells = vec![(c("A1"), Value::text("Item")), (c("B1"), Value::text("Price"))];
+    for (i, item) in ["a", "b", "c", "d", "e"].into_iter().enumerate() {
+        cells.push((CellRef::new(i as u32 + 1, 0), Value::text(item)));
+        cells.push((CellRef::new(i as u32 + 1, 1), Value::Number(10.0 + i as f64)));
+    }
+    cells.sort_by_key(|(p, _)| *p);
+    t.wb.external_books =
+        vec![ExternalBook { sheets: vec![ExternalSheet { name: "Data".into(), cells, refresh_error: false }], ..Default::default() }].into();
+    // `@` takes the cell on the formula's row (or column), as for this workbook's references.
+    for at in ["D2", "D3", "D4", "D5", "D6"] {
+        t.set(at, "=@[1]Data!B:B");
+    }
+    assert_eq!([t.num("D2"), t.num("D3"), t.num("D4"), t.num("D5"), t.num("D6")], [10.0, 11.0, 12.0, 13.0, 14.0]);
+    t.set("F4", "=@[1]Data!B3:B6");
+    t.set("F9", "=@[1]Data!B3:B6");
+    t.set("B10", "=@[1]Data!A1:B1");
+    assert_eq!((t.num("F4"), t.get("F9"), t.get("B10")), (12.0, Value::Error(CellError::Value), Value::text("Price")));
+    // The reference keeps the size written, past the last saved cell.
+    t.set("G1", "=ROWS([1]Data!A:A)");
+    t.set("G2", "=ROWS([1]Data!A1:A100000)");
+    t.set("G3", "=COLUMNS([1]Data!1:1)");
+    t.set("G4", "=INDEX([1]Data!B:B,4)");
+    t.set("G5", "=INDEX([1]Data!A:A,10)");
+    t.set("G6", "=SUM([1]Data!B:B)+VLOOKUP(\"c\",[1]Data!A:B,2,FALSE)");
+    t.set("G7", "=ISREF([1]Data!B2)");
+    assert_eq!(
+        (t.num("G1"), t.num("G2"), t.num("G3"), t.num("G4"), t.num("G5"), t.num("G6"), t.get("G7")),
+        (1_048_576.0, 100_000.0, 16_384.0, 12.0, 0.0, 72.0, Value::Bool(true))
+    );
+    // INDIRECT reads another workbook only while it is open.
+    t.set("H1", "=INDIRECT(\"[1]Data!B2\")");
+    assert_eq!(t.get("H1"), Value::Error(CellError::Ref));
+}
+
+#[test]
+fn offset_refuses_a_base_in_a_linked_workbook() {
+    use gridcraft_model::{ExternalBook, ExternalSheet};
+    let mut t = T::new();
+    // Curve!D8:D10 = 37 and Backup!D38 = 39: the saved link has every cell OFFSET would read,
+    // but Excel takes the ISERROR branch while the source workbook is closed (enron
+    // "West NatGas Prices 1031", PowerPrices!D9).
+    let curve = (8..=10).map(|r| (CellRef::new(r - 1, 3), Value::Number(37.0))).collect();
+    let backup = vec![(c("D38"), Value::Number(39.0))];
+    t.wb.external_books = vec![ExternalBook {
+        sheets: vec![
+            ExternalSheet { name: "Curve".into(), cells: curve, refresh_error: false },
+            ExternalSheet { name: "Backup".into(), cells: backup, refresh_error: false },
+        ],
+        ..Default::default()
+    }]
+    .into();
+    t.set("A1", "=OFFSET([1]Curve!$D$6,2,0,3,1)");
+    t.set("A2", "=IF(ISERROR(AVERAGE(OFFSET([1]Curve!$D$6,2,0,3,1))),[1]Backup!$D$38,0)");
+    t.set("A3", "=SUM(OFFSET(B1,0,0,2,1))");
+    assert_eq!((t.get("A1"), t.num("A2"), t.num("A3")), (Value::Error(CellError::Value), 39.0, 0.0));
+}
+
+#[test]
+fn if_family_ranges_inside_lambdas_stay_references() {
+    // MAP/BYROW hand their LAMBDA ranges of this workbook: COUNTIF and SUMIF take them.
+    let mut t = T::new();
+    for (at, v) in [("E1", "1"), ("F1", "-2"), ("G1", "3"), ("E2", "-1"), ("F2", "5"), ("G2", "6")] {
+        t.set(at, v);
+    }
+    t.set("H1", "=BYROW(E1:G2,LAMBDA(r,COUNTIF(r,\">0\")))");
+    t.set("I1", "=MAP(E1:E2,LAMBDA(x,SUMIF(x,\">0\")))");
+    assert_eq!((t.num("H1"), t.num("H2"), t.num("I1"), t.num("I2")), (2.0, 2.0, 1.0, 0.0));
+}
+
+#[test]
 fn xlookup_returns_a_reference() {
     let mut t = T::new();
     for (i, (k, v)) in [("a", 1), ("b", 2), ("c", 3), ("d", 4)].iter().enumerate() {
@@ -806,6 +1137,29 @@ fn name_referring_to_several_ranges() {
     assert_eq!(t.num("E1"), 78.0);
 }
 
+#[test]
+fn linked_saved_value_recalculates_through_union_name() {
+    use gridcraft_model::DefinedName;
+    let mut t = T::new();
+    t.wb.names.push(DefinedName {
+        name: "u".into(),
+        scope: None,
+        formula: "Sheet1!$A$1:$A$2,Sheet1!$C$1:$C$2".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    for (at, value) in [("A1", "1"), ("A2", "2"), ("C1", "5"), ("C2", "7")] {
+        t.set(at, value);
+    }
+    let mut cell = Cell::formula(Formula::new("=[1]!Broken+SUM(u)"));
+    cell.value = Value::Number(99.0);
+    t.wb.external_books = vec![gridcraft_model::ExternalBook { opaque: true, ..Default::default() }].into();
+    t.wb.sheet_mut(0).unwrap().cells.set(c("E1"), cell);
+    t.calc.cells_changed(&mut t.wb, &[(0, c("E1"))]);
+    assert_eq!(t.get("E1"), Value::Number(99.0));
+    t.set("A1", "3");
+    assert_eq!(t.get("E1"), Value::Error(CellError::Ref));
+}
 #[test]
 fn legacy_array_formulas_fill_their_range() {
     let mut t = T::new();

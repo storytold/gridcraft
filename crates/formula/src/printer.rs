@@ -6,15 +6,28 @@ use gridcraft_core::{CellRef, col_to_letters, number_to_text};
 
 use crate::ast::*;
 
-pub use gridcraft_core::{quote_sheet, sheet_needs_quotes as needs_quotes};
+use gridcraft_core::sheet_needs_quotes as core_sheet_needs_quotes;
+/// Whether a sheet name needs quotes, preserving the unquoted `[n]` workbook prefix form.
+pub fn needs_quotes(name: &str) -> bool {
+    match book_prefix(name) {
+        Some((_, "")) => false,
+        Some((_, sheet)) => core_sheet_needs_quotes(sheet),
+        None => core_sheet_needs_quotes(name),
+    }
+}
+
+pub fn quote_sheet(name: &str) -> String {
+    if needs_quotes(name) { format!("'{}'", name.replace('\'', "''")) } else { name.to_string() }
+}
 
 fn sheet_prefix(s: &SheetSel) -> String {
     match s {
         SheetSel::Current => String::new(),
         SheetSel::Named(n) => format!("{}!", quote_sheet(n)),
         SheetSel::Span(a, b) => {
+            // `[1]Jan:Dec!A1`: a linked workbook's index can start the range, not its second sheet.
             let joined = format!("{a}:{b}");
-            if needs_quotes(a) || needs_quotes(b) { format!("'{}'!", joined.replace('\'', "''")) } else { format!("{joined}!") }
+            if needs_quotes(a) || core_sheet_needs_quotes(b) { format!("'{}'!", joined.replace('\'', "''")) } else { format!("{joined}!") }
         }
     }
 }
@@ -178,10 +191,16 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
             Some(at) => s.push_str(&reference_r1c1(r, at)),
             None => s.push_str(&reference_a1(r)),
         },
+        Expr::LinkedRefError(sheet) => {
+            s.push_str(&sheet_prefix(sheet));
+            s.push_str("#REF!");
+        }
         Expr::Name(n) => match n.rsplit_once('!') {
             // A sheet-qualified name is stored with the bare sheet name (`My Sheet!Total`): quote it so it parses back.
+            // A linked workbook's own name (`[1]!Rate`, `[Source.xlsx]!Rate`) has no sheet to quote.
             Some((sheet, name)) => {
-                s.push_str(&quote_sheet(sheet));
+                let book_only = sheet.strip_prefix('[').and_then(|b| b.strip_suffix(']')).is_some_and(|b| !b.is_empty() && !b.contains(['[', ']']));
+                s.push_str(&if book_only { sheet.to_string() } else { quote_sheet(sheet) });
                 s.push('!');
                 s.push_str(name);
             }

@@ -273,7 +273,7 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
         None | Some("Workbook") => None,
         Some(sh) => Some(d.wb.sheet_index(sh).ok_or_else(|| bad("formulas.defineName", "no such sheet"))?),
     };
-    let refers = match str_param(p, "refersTo") {
+    let mut refers = match str_param(p, "refersTo") {
         // As in Excel, relative references are relative to the active cell; names keep them
         // relative to A1, as files do.
         Some(r) => match gridcraft_formula::parse_name(r.trim_start_matches('=')) {
@@ -291,6 +291,13 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
             format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), body)
         }
     };
+    let parsed = gridcraft_formula::parse_name(&refers).map_err(|_| EngineError::Other("There's a problem with this formula.".into()))?;
+    super::edit::check_linked_books(&parsed, d.wb.external_books.len())?;
+    // A workbook prefix is stored as the parser reads it: `[0]Sheet1!$C$1` as `Sheet1!$C$1`, so
+    // it follows the sheet when it's renamed.
+    if refers.contains('[') {
+        refers = gridcraft_formula::print(&parsed);
+    }
     if gridcraft_formula::parse_name(&refers).is_err() {
         return Err(EngineError::Other("There's a problem with this formula.".into()));
     }
@@ -357,7 +364,7 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
         let formulas: Vec<(CellRef, std::sync::Arc<Formula>)> = sh.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect();
         for (c, f) in formulas {
             let Some(e) = f.expr().and_then(rename) else { continue };
-            let mut nf = Formula::from_expr(e);
+            let mut nf = f.rewritten(e);
             nf.array = f.array;
             nf.dynamic = f.dynamic;
             if let Some(cell) = sh.cells.get_mut(c) {

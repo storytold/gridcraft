@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use gridcraft_core::DateSystem;
+use gridcraft_core::{CellRef, DateSystem, RangeRef, Value};
 use gridcraft_formula::Expr;
 use serde::{Deserialize, Serialize};
 
@@ -96,6 +96,82 @@ pub struct DocProps {
     pub description: String,
 }
 
+/// The values a linked workbook had when the file was last saved with the link updated
+/// (`<externalLink>` `sheetDataSet`). `[n]` in a formula is the workbook's `external_books[n - 1]`.
+/// GridCraft doesn't open linked files: references into them read these values, as Excel does
+/// while the source is closed.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ExternalBook {
+    pub sheets: Vec<ExternalSheet>,
+    /// The linked workbook's defined names (`[1]!Rates`, `[1]Sheet1!Rates`).
+    pub names: Vec<ExternalName>,
+    /// The link isn't to a workbook (a DDE or OLE link), or its part is missing or unreadable.
+    /// What formulas read through it can't be calculated, apart from `items`: the cells keep the
+    /// values saved for them.
+    pub opaque: bool,
+    /// A DDE link's items with the values saved for them (`[1]!Price` reads item `Price`). An
+    /// item saved without values isn't here.
+    pub items: Vec<(String, Value)>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ExternalSheet {
+    pub name: String,
+    /// Cached cells, sorted by position (row, then column).
+    pub cells: Vec<(CellRef, Value)>,
+    /// The last update of the link couldn't read this sheet (`refreshError`): Excel keeps the
+    /// cells it had saved, and references to anything else in it are `#REF!`.
+    pub refresh_error: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ExternalName {
+    pub name: String,
+    /// Index into the book's `sheets` of the sheet the name is scoped to; `None` = workbook scope.
+    pub sheet: Option<usize>,
+    /// What the name refers to (without `=`); its sheets are the linked workbook's. Empty when
+    /// the file saved the name without a definition.
+    pub refers_to: String,
+}
+
+impl ExternalBook {
+    pub fn sheet(&self, name: &str) -> Option<&ExternalSheet> {
+        self.sheets.get(self.sheet_index(name)?)
+    }
+    /// The position in `sheets` of the sheet named `name`.
+    pub fn sheet_index(&self, name: &str) -> Option<usize> {
+        self.sheets.iter().position(|s| s.name.eq_ignore_ascii_case(name))
+    }
+    /// The name `name` as seen from sheet `sheet` (`None` = from the workbook): the sheet's own
+    /// name first, then the workbook-scoped one.
+    pub fn name(&self, name: &str, sheet: Option<&str>) -> Option<&ExternalName> {
+        let si = sheet.and_then(|s| self.sheet_index(s));
+        let find = |scope: Option<usize>| self.names.iter().find(|n| n.sheet == scope && n.name.eq_ignore_ascii_case(name));
+        si.and_then(|i| find(Some(i))).or_else(|| find(None))
+    }
+    /// The value saved for DDE item `name` (`[1]!Price`).
+    pub fn item(&self, name: &str) -> Option<&Value> {
+        self.items.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v)
+    }
+}
+
+impl ExternalSheet {
+    /// The cached value at `c` (blank when the link didn't store the cell).
+    pub fn value(&self, c: CellRef) -> Value {
+        self.cells.binary_search_by(|(p, _)| p.cmp(&c)).ok().and_then(|i| self.cells.get(i)).map(|(_, v)| v.clone()).unwrap_or_default()
+    }
+    /// The cached cells inside `range`, in order.
+    pub fn cells_in(&self, range: RangeRef) -> impl Iterator<Item = &(CellRef, Value)> {
+        let from = self.cells.partition_point(|(p, _)| p.row < range.start.row);
+        self.cells.get(from..).unwrap_or_default().iter().take_while(move |(p, _)| p.row <= range.end.row).filter(move |(p, _)| range.contains(*p))
+    }
+    /// The smallest range holding every cached cell.
+    pub fn extent(&self) -> Option<RangeRef> {
+        let (first, last) = (self.cells.first()?.0, self.cells.last()?.0);
+        let (c0, c1) = self.cells.iter().fold((u32::MAX, 0), |(a, b), (p, _)| (a.min(p.col), b.max(p.col)));
+        Some(RangeRef::new(CellRef::new(first.row, c0), CellRef::new(last.row, c1)))
+    }
+}
 /// One phonetic (furigana) run of a string item (`<rPh>`): the reading `text` and the range of the
 /// base text it annotates.
 ///
@@ -135,6 +211,10 @@ pub struct PhoneticString {
     pub runs: Vec<PhoneticRun>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub props: Option<PhoneticProps>,
+}
+
+fn is_all(s: &ShowObjects) -> bool {
+    *s == ShowObjects::All
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -186,6 +266,13 @@ pub struct Workbook {
     /// `preserved` are relative to. Saving into another folder rewrites them from there. Not in JSON.
     #[serde(skip)]
     pub source_dir: Option<std::path::PathBuf>,
+    /// Linked workbooks' cached values, in `<externalReferences>` order (`[1]` is the first).
+    /// Read from the file; the link parts themselves are kept for saving in `preserved`. Shared,
+    /// as sheets are: edits and undo history clone the workbook, never this cache. Not in JSON,
+    /// like the link parts: a workbook without them has no links, so a typed `[1]` is refused
+    /// rather than saved into a file that has no link for it.
+    #[serde(skip)]
+    pub external_books: Arc<Vec<ExternalBook>>,
     /// The file this workbook reports as its own, which is what `CELL("filename")` returns.
     /// `None` = no file yet, which Excel reports as an empty string until the workbook has been
     /// saved once. Deliberately separate from `source_dir`: that one names the folder relative
@@ -193,10 +280,6 @@ pub struct Workbook {
     /// the links in memory are still written for the old one. Not in JSON.
     #[serde(skip)]
     pub source_path: Option<std::path::PathBuf>,
-}
-
-fn is_all(s: &ShowObjects) -> bool {
-    *s == ShowObjects::All
 }
 
 impl Default for Workbook {
@@ -227,6 +310,7 @@ impl Workbook {
             csv_delimiter: None,
             preserved: None,
             source_dir: None,
+            external_books: Arc::default(),
             source_path: None,
         }
     }
@@ -299,7 +383,7 @@ impl Workbook {
                     let f = cell.formula.as_ref()?;
                     let e = f.expr()?;
                     let ne = spell_calls(e.clone(), &lambdas);
-                    (ne != e).then(|| (c, Formula { array: f.array, dynamic: f.dynamic, ..Formula::from_expr(ne) }))
+                    (ne != e).then(|| (c, Formula { array: f.array, ..f.rewritten(ne) }))
                 })
                 .collect();
             if fixed.is_empty() {

@@ -459,7 +459,7 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         return;
     }
     let dynamic = c.attr("cm").is_some();
-    let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
+    let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic)).map(|f| Formula { legacy: !dynamic, ..f });
     let value = if formula.is_none() && st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos) { Value::Empty } else { value };
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
 }

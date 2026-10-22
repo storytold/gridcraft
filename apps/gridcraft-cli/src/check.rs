@@ -373,7 +373,7 @@ fn is_volatile(e: &Expr, volatile_names: &HashSet<String>) -> bool {
 /// Upper-cased defined names whose formula is volatile, directly or through other names.
 fn volatile_names(wb: &Workbook) -> HashSet<String> {
     let parsed: Vec<(String, Option<Expr>)> =
-        wb.names.iter().map(|n| (n.name.to_ascii_uppercase(), gridcraft_engine::formula::parse(&n.formula).ok())).collect();
+        wb.names.iter().map(|n| (n.name.to_ascii_uppercase(), gridcraft_engine::formula::parse_name(&n.formula).ok())).collect();
     let mut set = HashSet::new();
     // Each round adds at least one name or stops, so `len + 1` rounds reach the fixed point.
     for _ in 0..=parsed.len() {
