@@ -174,3 +174,37 @@ fn check_exit_codes_and_json() {
     assert_eq!(run(&["check", book_s, "--tolerance", "x"]).status.code(), Some(2));
     assert_eq!(run(&["check", book_s, "--bogus"]).status.code(), Some(2));
 }
+
+#[test]
+fn dax_format_parse_and_errors() {
+    assert_eq!(ok(&["dax", "format", "1 + 2 * 3"]).trim(), "1 + 2 * 3");
+    assert_eq!(ok(&["dax", "format", "(1 + 2) * 3"]).trim(), "(1 + 2) * 3");
+    assert_eq!(ok(&["dax", "format", "-2 ^ 2"]).trim(), "-2 ^ 2");
+    assert!(ok(&["dax", "parse", "1 + 2 * 3"]).contains("Binary"));
+
+    assert_eq!(ok(&["dax", "format", "'Sales'[Amount] + 1"]).trim(), "'Sales'[Amount] + 1");
+    assert!(ok(&["dax", "parse", "'It''s'[A]]B]"]).contains("It's"));
+
+    let query = ok(&["dax", "format", "EVALUATE SUM('Sales'[Amount])"]);
+    assert_eq!(query.trim(), "EVALUATE SUM('Sales'[Amount])");
+    assert!(ok(&["dax", "parse", "EVALUATE 1"]).contains("Query"));
+
+    let o = run(&["dax", "parse", "1 +"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("expected expression"));
+    let o = run(&["dax", "format", "EVALUATE 1 +"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("end of input"));
+
+    let dir = tmpdir("dax");
+    let file = dir.join("expr.dax");
+    std::fs::write(&file, "1 + 2 * 3").unwrap();
+    assert_eq!(ok(&["dax", "format", "--file", file.to_str().unwrap()]).trim(), "1 + 2 * 3");
+    let _ = std::fs::remove_dir_all(dir);
+
+    let mut child = bin().args(["dax", "format"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"1 + 2 * 3").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), "1 + 2 * 3");
+}
