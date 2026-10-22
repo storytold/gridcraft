@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-21 · **Change:** minor (SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-21 · **Change:** minor (basis-0 securities functions count the end of February to a 31st as 31 days) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -122,6 +122,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | minor | Basis 0 (US 30/360) in the coupon, discount-security, ACCRINTM, PRICEMAT/YIELDMAT and AMOR* functions counts the end of February to a 31st as 31 days, as YEARFRAC does (COUPDAYBS(31 Mar 2008, 28 Feb 2011, 1, 0) = 31, was 30); ACCRINT and the odd-period functions keep their period count |
 | 2026-10-21 | minor | SUBTOTAL and AGGREGATE charge every argument against the evaluator's 16-million-cell limit before scanning; a value in XFD1048576 no longer makes `SUBTOTAL(9,A:XFD)` read the whole sheet (#2175) |
 | 2026-10-19 | minor | LET and LAMBDA names compare case-insensitively in any script, as in Excel: `=LET(dług,100,DŁUG*2)` is 200 (was #NAME?); also LET-bound lambdas called or passed by name (`żar(2)`, `MAP(…,Λ)`), `ISOMITTED`, and formula-bar alias translation (one shared `gridcraft_formula::same_name`, which matches `ß` with `ẞ` and keeps dotless `ı` apart from `i`) |
 | 2026-10-19 | minor | Long flat operator chains (#916): 4,096 operands (Excel's 8,192-character limit) no longer overflow the stack when entered, filled, adjusted or saved; chains past 64 operands are no longer saved as dynamic-array formulas; Spanish entry no longer refuses chains past 256 operands |
