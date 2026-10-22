@@ -331,7 +331,18 @@ pub fn infer_type(expr: &Expr) -> Result<InferredType, TypeError> {
             unary_type(*op, operand)
         }
         ExprKind::Binary { op, left, right } => {
-            let left = infer_type(left)?;
+            // `(a, b) IN { (a, b), ... }` uses a row constructor on the left, not a table
+            // expression. Validate its elements but let the operator comparison handle the
+            // row value.
+            let left = match (&left.kind, op) {
+                (ExprKind::Tuple(items), BinaryOp::In) => {
+                    for item in items {
+                        infer_type(item)?;
+                    }
+                    InferredType::Unknown
+                }
+                _ => infer_type(left)?,
+            };
             let right = infer_type(right)?;
             binary_type(*op, left, right)
         }

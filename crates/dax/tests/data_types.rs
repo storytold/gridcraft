@@ -350,6 +350,7 @@ fn literal_operator_inference() {
         ("TRUE || FALSE", data(DataType::Boolean)),
         ("NOT TRUE", data(DataType::Boolean)),
         ("1 IN { 1 }", data(DataType::Boolean)),
+        ("(1, \"a\") IN { (1, \"a\") }", data(DataType::Boolean)),
         ("TRUE() + 1", data(DataType::Integer)),
         ("-1", data(DataType::Integer)),
         ("+1", data(DataType::Integer)),
