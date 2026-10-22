@@ -325,7 +325,14 @@ pub fn infer_type(expr: &Expr) -> Result<InferredType, TypeError> {
     match &expr.kind {
         ExprKind::Literal(literal) => Ok(InferredType::Data(literal_type(literal))),
         ExprKind::Name(_) => Ok(InferredType::Unknown),
-        ExprKind::Call(call) => Ok(call_type(call)),
+        ExprKind::Call(call) => {
+            // The call itself may be unknown without a signature catalog, but every argument
+            // still has to type-check.
+            for arg in &call.args {
+                infer_type(arg)?;
+            }
+            Ok(call_type(call))
+        }
         ExprKind::Unary { op, expr } => {
             let operand = infer_type(expr)?;
             unary_type(*op, operand)
