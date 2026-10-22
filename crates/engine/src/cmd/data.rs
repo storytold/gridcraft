@@ -622,6 +622,12 @@ fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
 /// field given is the grouping.
 fn date_item_param(j: &Json) -> Result<DateGroupItem> {
     let err = || bad("data.filterBy", "a `dates` entry needs a year and valid month, day, hour, minute and second");
+    // A misspelt key (`months`) would otherwise widen the group without a word.
+    const KEYS: [&str; 6] = ["year", "month", "day", "hour", "minute", "second"];
+    match j.as_object() {
+        Some(o) if o.keys().all(|k| KEYS.contains(&k.as_str())) => {}
+        _ => return Err(err()),
+    }
     // Months and days start at 1; hours, minutes and seconds at 0.
     let field = |name: &str, min: u64, max: u64| -> Result<Option<u32>> {
         match j.get(name) {
@@ -649,10 +655,17 @@ fn date_item_param(j: &Json) -> Result<DateGroupItem> {
 }
 
 /// The date and time a cell shows, when it is a number in a date format with a date part. Time-only
-/// values (below 1) stay in the plain value list, as in Excel.
+/// values stay in the plain value list, as in Excel: below 1 in the 1900 system (serial 0 is the
+/// fictitious 1900-01-00), and below 1 in a time-only format in the 1904 system, whose serial 0 is
+/// the real 1904-01-01.
 pub fn cell_date(wb: &Workbook, sh: &Sheet, c: CellRef) -> Option<gridcraft_core::date::DateTime> {
     let n = sh.value(c).as_f64()?;
-    if n < 1.0 || !crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).is_date() {
+    let fmt = crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str());
+    let has_date = match wb.date_system {
+        gridcraft_core::DateSystem::D1900 => n >= 1.0,
+        gridcraft_core::DateSystem::D1904 => n >= 1.0 || (n >= 0.0 && fmt.kind() == gridcraft_numfmt::FormatKind::Date),
+    };
+    if !has_date || !fmt.is_date() {
         return None;
     }
     gridcraft_core::date::datetime_from_serial(wb.date_system, n)
@@ -1804,12 +1817,33 @@ mod tests {
     }
 
     #[test]
+    fn dates_on_the_first_day_of_the_1904_system_are_grouped() {
+        let mut s = Session::new();
+        s.new_workbook();
+        Arc::make_mut(&mut s.doc_mut().unwrap().wb).date_system = gridcraft_core::DateSystem::D1904;
+        s.execute("range.setValues", json!({"range": "A1", "values": [["When"], [0.25], [0.5], [1.0]]})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "A2:A4", "code": "yyyy-mm-dd hh:mm"})).unwrap();
+        s.execute("range.setValues", json!({"range": "B1", "values": [["Time"], [0.25]]})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "B2", "code": "h:mm"})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:B4"})).unwrap();
+        let wb = &s.doc().unwrap().wb;
+        let list = filter_list(wb, 0, 0);
+        assert_eq!(tree(&list.dates), ["1904[January[01[06[:00[:00]] 12[:00[:00]]] 02[00[:00[:00]]]]]"]);
+        assert!(list.values.is_empty(), "{:?}", list.values);
+        // A time-only format below 1 is a time, not a date.
+        let times = filter_list(wb, 0, 1);
+        assert!(times.dates.is_empty());
+        assert_eq!(times.values.first().map(|(t, _)| t.as_str()), Some("6:00"));
+    }
+
+    #[test]
     fn filter_by_rejects_malformed_dates() {
         let mut s = dated_session();
         for bad in [
             json!([{"month": 3}]),
             json!([{"year": 2026, "day": 5}]),
             json!([{"year": 2026, "month": 13}]),
+            json!([{"year": 2026, "months": 3}]),
             json!([{"year": 2026, "month": 0}]),
             json!([{"year": 2026, "month": 3, "day": 0}]),
             json!({"year": 2026}),

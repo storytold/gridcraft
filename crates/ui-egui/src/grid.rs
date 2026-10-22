@@ -3141,7 +3141,6 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
         }
     }
     let wb = app.session.active().map(|d| d.wb.clone()).unwrap_or(wb);
-    let list = gridcraft_engine::cmd::data::filter_list(&wb, si, col);
     let key = egui::Id::new(("filter_sel", col));
     let search_key = egui::Id::new(("filter_search", col));
     let open_key = egui::Id::new(("filter_open", col));
@@ -3168,7 +3167,9 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             }
             ui.separator();
             ui.label(egui::RichText::new("Filter").strong());
-            let mut list: FilterList = ui.ctx().data_mut(|d| d.get_temp::<FilterList>(key)).unwrap_or(list.clone());
+            // Built once when the menu opens; later frames reuse the stored list and its check state.
+            let stored: Option<FilterList> = ui.ctx().data_mut(|d| d.get_temp::<FilterList>(key));
+            let mut list: FilterList = stored.unwrap_or_else(|| gridcraft_engine::cmd::data::filter_list(&wb, si, col));
             let mut open: Vec<DateGroupItem> = ui.ctx().data_mut(|d| d.get_temp(open_key)).unwrap_or_default();
             // A search narrows the list; Select All and Apply then only cover the matches.
             let mut search: String = ui.ctx().data_mut(|d| d.get_temp(search_key)).unwrap_or_default();
