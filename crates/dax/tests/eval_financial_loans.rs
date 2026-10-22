@@ -166,7 +166,7 @@ fn french_accounting_depreciation() {
     assert_close(number("AMORDEGRC(2400, DATE(2008,8,19), DATE(2008,12,31), 300, 2, 0.15, 1)"), 485.0, "AMORDEGRC period 2");
     assert_close(number("AMORLINC(2400, DATE(2008,8,19), DATE(2008,12,31), 300, 0, 0.15, 1)"), 131.8032786885246, "AMORLINC prorated");
     assert_close(number("AMORLINC(2400, DATE(2008,8,19), DATE(2008,12,31), 300, 1, 0.15, 1)"), 360.0, "AMORLINC full period");
-    assert_close(number("AMORLINC(2400, DATE(2008,8,19), DATE(2008,12,31), 300, 0, 0.15, 0)"), 131.0, "AMORLINC 30/360");
+    assert_close(number("AMORLINC(2400, DATE(2008,8,19), DATE(2008,12,31), 300, 0, 0.15, 0)"), 132.0, "AMORLINC 30/360");
     assert_error("AMORDEGRC(2400, DATE(2008,8,19), DATE(2008,12,31), 300, 0, 0.22, 0)");
     assert_error("AMORLINC(2400, DATE(2008,12,31), DATE(2008,8,19), 300, 0, 0.15, 0)");
     assert_error("AMORLINC(2400, DATE(2008,8,19), DATE(2008,12,31), 300, 0, 0.15, 2)");

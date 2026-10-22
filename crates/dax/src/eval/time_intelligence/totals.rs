@@ -2,8 +2,8 @@
 //!
 //! `TOTAL*` are CALCULATE sugar: the expression is evaluated over a period-to-date window
 //! derived from the last date visible on the date column. `OPENINGBALANCE*`/`CLOSINGBALANCE*`
-//! scan the first/last date of the period whose expression result is not blank, which is how
-//! semi-additive measures behave.
+//! evaluate the expression on the period's boundary date (the last date, or the day before the
+//! first), matching Excel's `CALCULATE(<expr>, ENDOF.../PREVIOUSDAY(STARTOF...))` definitions.
 //!
 //! The window is applied as a filter on the date column. Like the table filter produced by
 //! `DATESMTD`/`ENDOFMONTH` inside CALCULATE, it replaces the existing filters on the date table
@@ -87,8 +87,12 @@ fn total(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context, 
     ev.eval(&args[0], &mut inner)
 }
 
-/// `OPENINGBALANCE*`/`CLOSINGBALANCE*`: the expression at the first (last) date of the period
-/// whose value is not blank.
+/// `OPENINGBALANCE*`/`CLOSINGBALANCE*`: `CALCULATE(<expression>, <boundary date>)`.
+///
+/// Excel defines the closing balance on the last date of the period and the opening balance on
+/// the day before the first date (`PREVIOUSDAY(STARTOF...)`). The expression is evaluated with a
+/// single-date filter, so a boundary date without data yields BLANK — including on sparse fact
+/// tables, where a "last date with a value" scan would invent a value Excel does not return.
 fn balance(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context, period: Period, opening: bool) -> Result<Scalar, EvalError> {
     let max = if period == Period::Year { 4 } else { 3 };
     if args.len() < 2 || args.len() > max {
@@ -101,25 +105,15 @@ fn balance(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context
     };
     let year_end = if period == Period::Year && args.len() >= 4 { Some(year_end_serial(ev, &args[3], ctx)?) } else { None };
     let (start, end) = period_bounds(period, last, year_end);
+    let boundary = if opening { start.floor() - 1.0 } else { end };
 
     let mut filters = date_table_filters(&ctx.filters, dates);
     if let Some(filter) = args.get(2) {
         apply_filter_arg(ev, filter, &mut filters, ctx)?;
     }
-    let candidates = dates_between(ev, dates, start, end);
-    if candidates.is_empty() {
-        return Ok(Scalar::Blank);
-    }
+    filters.set(dates.table, dates.column, [ScalarKey::from(&Scalar::DateTime(boundary))]);
     let mut inner = Context { filters, rows: ctx.rows.clone(), vars: ctx.vars.clone() };
-    let ordered: Vec<f64> = if opening { candidates } else { candidates.into_iter().rev().collect() };
-    for date in ordered {
-        inner.filters.set(dates.table, dates.column, [ScalarKey::from(&Scalar::DateTime(date))]);
-        let value = ev.eval(&args[0], &mut inner)?;
-        if !value.is_blank() {
-            return Ok(value);
-        }
-    }
-    Ok(Scalar::Blank)
+    ev.eval(&args[0], &mut inner)
 }
 
 /// `FIRSTNONBLANKVALUE`/`LASTNONBLANKVALUE`: the expression value at the first (last) visible

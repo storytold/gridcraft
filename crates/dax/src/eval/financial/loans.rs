@@ -728,8 +728,17 @@ fn year_fraction(start: f64, end: f64, basis: i64) -> Result<f64, EvalError> {
 fn thirty_360(start: f64, end: f64) -> f64 {
     let (y1, m1, d1) = date_parts(start);
     let (y2, m2, d2) = date_parts(end);
+    // US (NASD) 30/360: the start day is capped at 30, but an end day of 31 is only pulled back
+    // to 30 when the (adjusted) start day is 30 or 31. Excel therefore counts 2008-08-19 to
+    // 2008-12-31 as 132 days, not 131.
     let d1 = if m1 == 2 && d1 >= 28 { 30 } else { d1.min(30) };
-    let d2 = if m2 == 2 && d2 >= 28 { 30 } else { d2.min(30) };
+    let d2 = if m2 == 2 && d2 >= 28 {
+        30
+    } else if d2 == 31 && d1 >= 30 {
+        30
+    } else {
+        d2
+    };
     (360.0 * (y2 - y1) as f64 + 30.0 * (m2 - m1) as f64 + (d2 - d1) as f64) / 360.0
 }
 

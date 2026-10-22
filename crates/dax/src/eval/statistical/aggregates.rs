@@ -73,8 +73,8 @@ fn combinatoric(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, kind:
     let name = kind.name();
     let values = eval_all(ev, args, ctx)?;
     let arguments = super::super::support::args(name, &values);
-    let number = truncate_argument(arguments.number(0)?, name, 1)?;
-    let chosen = truncate_argument(arguments.number(1)?, name, 2)?;
+    let number = rounded_argument(arguments.number(0)?, name, 1)?;
+    let chosen = rounded_argument(arguments.number(1)?, name, 2)?;
     match kind {
         Combinatoric::Combin => {
             if number < 0 || chosen < 0 || number < chosen {
@@ -111,11 +111,12 @@ fn combinatoric(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, kind:
     }
 }
 
-fn truncate_argument(value: f64, name: &str, position: usize) -> Result<i64, EvalError> {
+/// Rounds like Excel: `COMBIN(8.9, 3.9)` counts 9 choose 4, not 8 choose 3.
+fn rounded_argument(value: f64, name: &str, position: usize) -> Result<i64, EvalError> {
     if !value.is_finite() || value.abs() > 9.0e15 {
         return Err(EvalError::new(format!("{name} argument {position} must be a finite number")));
     }
-    Ok(value.trunc() as i64)
+    Ok(value.round() as i64)
 }
 
 /// Exact combination count for small k, accumulated in `u128` so integer results within the

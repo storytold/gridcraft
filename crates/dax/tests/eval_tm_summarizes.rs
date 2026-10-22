@@ -475,19 +475,17 @@ fn topnskip_skips_then_takes_ordered_rows() {
 }
 
 #[test]
-fn topnskip_handles_ties_with_skip_and_dense_ranking() {
+fn topnskip_returns_exactly_the_requested_rows() {
     let empty = eval_table("TOPNSKIP(0, 0, Scores, Scores[Score], 0)").expect("zero rows");
     assert!(empty.rows.is_empty());
     assert_eq!(header(&empty), vec!["Team".to_string(), "Score".to_string()]);
 
-    let all_tied = eval_table("TOPNSKIP(1, 0, Scores, Scores[Score], 0)").expect("ties at N");
-    assert_eq!(all_tied.rows.len(), 2, "tied rows at the N-th position are all returned");
+    // Unlike TOPN, TOPNSKIP has no ties parameter: equal keys do not expand the result.
+    let first = eval_table("TOPNSKIP(1, 0, Scores, Scores[Score], 0)").expect("first row");
+    assert_eq!(first.rows.len(), 1);
 
-    let skip = eval_table("TOPNSKIP(1, 2, Scores, Scores[Score], 0)").expect("skip ties");
+    let skip = eval_table("TOPNSKIP(1, 2, Scores, Scores[Score], 0)").expect("skip rows");
     assert_eq!(skip.rows, vec![vec![text("C"), int(8)]]);
-
-    let dense = eval_table("TOPNSKIP(1, 2, Scores, Scores[Score], 0, \"DENSE\")").expect("dense ties");
-    assert_eq!(dense.rows, vec![vec![text("D"), int(5)]]);
 }
 
 #[test]

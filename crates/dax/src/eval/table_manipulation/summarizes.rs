@@ -104,12 +104,6 @@ struct LevelDef {
     order: Vec<String>,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum TieMode {
-    Skip,
-    Dense,
-}
-
 pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<Scalar, EvalError>> {
     let upper = name.to_ascii_uppercase();
     let result = match upper.as_str() {
@@ -1015,12 +1009,9 @@ fn top_n_skip(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resu
         return Ok(TableValue::new(table.columns.clone(), Vec::new()).with_lineage_if(table.lineage));
     }
     let mut keys: Vec<(&BoundExpr, bool)> = Vec::new();
-    let mut ties = TieMode::Skip;
     let mut index = 3usize;
     while index < args.len() {
         match &args[index] {
-            BoundExpr::Literal(Literal::String(text)) if text.eq_ignore_ascii_case("skip") => ties = TieMode::Skip,
-            BoundExpr::Literal(Literal::String(text)) if text.eq_ignore_ascii_case("dense") => ties = TieMode::Dense,
             BoundExpr::Literal(Literal::Integer(_)) | BoundExpr::Literal(Literal::Boolean(_)) | BoundExpr::Literal(Literal::Decimal(_)) => {
                 if let Some(last) = keys.last_mut() {
                     last.1 = order_is_ascending(&args[index]);
@@ -1039,37 +1030,9 @@ fn top_n_skip(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resu
     }
     scored.sort_by(|left, right| compare_scores(&left.0, &right.0, &keys));
 
-    let mut selected: Vec<Vec<Scalar>> = Vec::new();
-    let mut remaining = rows;
-    let mut position = 0usize;
-    let mut dense = 0usize;
-    let mut start = 0usize;
-    while start < scored.len() && remaining > 0 {
-        let mut end = start + 1;
-        while end < scored.len() && compare_plain_scores(&scored[start].0, &scored[end].0) {
-            end += 1;
-        }
-        let rank = match ties {
-            TieMode::Skip => position + 1,
-            TieMode::Dense => {
-                dense += 1;
-                dense
-            }
-        };
-        position += end - start;
-        if rank > skip {
-            let group = &scored[start..end];
-            if group.len() > remaining {
-                // Ties at the N-th row are all returned.
-                selected.extend(group.iter().map(|(_, row)| row.clone()));
-                remaining = 0;
-            } else {
-                selected.extend(group.iter().map(|(_, row)| row.clone()));
-                remaining -= group.len();
-            }
-        }
-        start = end;
-    }
+    // TOPNSKIP returns exactly Rows rows after Skip, in order: unlike TOPN it has no ties
+    // parameter and does not expand equal keys (Excel returns the requested count).
+    let selected: Vec<Vec<Scalar>> = scored.into_iter().skip(skip).take(rows).map(|(_, row)| row).collect();
     Ok(TableValue::new(table.columns.clone(), selected).with_lineage_if(table.lineage))
 }
 

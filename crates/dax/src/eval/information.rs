@@ -21,11 +21,10 @@ pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut
         "CONTAINSROW" => contains_row(ev, args, ctx),
         "CONTAINSSTRING" => contains_string(ev, args, ctx, false),
         "CONTAINSSTRINGEXACT" => contains_string(ev, args, ctx, true),
-        "CUSTOMDATA" | "USERNAME" | "USEROBJECTID" | "USERPRINCIPALNAME" => {
-            // Connection/user properties are not available to an offline, in-memory evaluator.
-            // DAX documents these as empty when the client did not supply them.
-            Ok(Scalar::String(String::new()))
-        }
+        "USERNAME" => Ok(Scalar::String(host_user())),
+        "USERPRINCIPALNAME" => Ok(Scalar::String(host_principal())),
+        // Connection objects and security-object IDs are not available offline.
+        "CUSTOMDATA" | "USEROBJECTID" => Ok(Scalar::String(String::new())),
         "USERCULTURE" => Ok(Scalar::String("en-US".into())),
         "EVALUATEANDLOG" => evaluate_and_log(ev, args, ctx),
         "HASONEFILTER" => has_one_filter(ev, args, ctx),
@@ -778,4 +777,19 @@ fn similarity_score(corpus: &[String], text: &str, search: &str, mode: MatchMode
         }
     }
     if score.is_finite() { score.max(0.0) } else { 0.0 }
+}
+
+/// The operating-system user name (`USERNAME`). Empty when the host does not expose one.
+fn host_user() -> String {
+    std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default()
+}
+
+/// `USERPRINCIPALNAME`: Excel's embedded engine reports `DOMAIN\user`; on a host without a
+/// domain the plain user name is the best available identity.
+fn host_principal() -> String {
+    let user = host_user();
+    match (std::env::var("USERDOMAIN"), user.as_str()) {
+        (Ok(domain), user) if !domain.is_empty() && !user.is_empty() => format!("{domain}\\{user}"),
+        (_, user) => user.to_string(),
+    }
 }

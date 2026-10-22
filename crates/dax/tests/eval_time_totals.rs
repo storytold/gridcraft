@@ -209,33 +209,56 @@ fn period_to_date_totals() {
 
 #[test]
 fn opening_and_closing_balances() {
-    let model = model();
-    let february = february_filter(&model);
-    assert_number(eval_measure(&model, "OB Month", february.clone()), 75.0);
-    assert_number(eval_measure(&model, "CB Month", february.clone()), 400.0);
-    // Q1 starts 2024-01-03; March 15 has no amount, so the closing value falls back to Feb 20.
-    assert_number(eval_measure(&model, "OB Quarter", february.clone()), 40.0);
-    assert_number(eval_measure(&model, "CB Quarter", february.clone()), 400.0);
-    assert_number(eval_measure(&model, "OB Year", february.clone()), 40.0);
-    assert_number(eval_measure(&model, "CB Year", february.clone()), 310.0);
-    // Fiscal year July 2023 - June 2024: first value in September, last value in June.
-    assert_number(eval_measure(&model, "OB Year June", february.clone()), 200.0);
-    assert_number(eval_measure(&model, "CB Year June", february), 300.0);
+    // Boundary dates need facts: add one sale on every date the balance functions select.
+    let mut facts = model();
+    let boundaries = [
+        (2023, 6, 30, 900),
+        (2023, 12, 30, 450),
+        (2023, 12, 31, 500),
+        (2024, 1, 6, 550),
+        (2024, 1, 13, 650),
+        (2024, 1, 31, 600),
+        (2024, 2, 29, 700),
+        (2024, 3, 31, 800),
+        (2024, 6, 30, 950),
+        (2024, 12, 31, 1000),
+    ];
+    let sales = &mut facts.tables[0].rows;
+    for (year, month, day, amount) in boundaries {
+        sales.push(vec![Scalar::String("Boundary".into()), Scalar::Integer(amount), date(year, month, day)]);
+    }
 
-    let january = date_filter(&model, &[date(2024, 1, 5)]);
-    assert_number(eval_measure(&model, "OB Month", january.clone()), 40.0);
-    assert_number(eval_measure(&model, "CB Month", january.clone()), 250.0);
-    assert_number(eval_measure(&model, "OB Week", january.clone()), 40.0);
-    assert_number(eval_measure(&model, "CB Week", january), 100.0);
+    let february = february_filter(&facts);
+    // EXCEL: CLOSINGBALANCEMONTH = CALCULATE(expr, ENDOFMONTH(dates)), OPENING = previous day.
+    assert_number(eval_measure(&facts, "OB Month", february.clone()), 600.0);
+    assert_number(eval_measure(&facts, "CB Month", february.clone()), 700.0);
+    assert_number(eval_measure(&facts, "OB Quarter", february.clone()), 500.0);
+    assert_number(eval_measure(&facts, "CB Quarter", february.clone()), 800.0);
+    assert_number(eval_measure(&facts, "OB Year", february.clone()), 500.0);
+    assert_number(eval_measure(&facts, "CB Year", february.clone()), 1000.0);
+    // Fiscal year July 2023 - June 2024: opening is 2023-06-30, closing is 2024-06-30.
+    assert_number(eval_measure(&facts, "OB Year June", february.clone()), 900.0);
+    assert_number(eval_measure(&facts, "CB Year June", february), 950.0);
 
-    let second_week = date_filter(&model, &[date(2024, 1, 12)]);
-    assert_number(eval_measure(&model, "OB Week", second_week.clone()), 250.0);
-    assert_number(eval_measure(&model, "CB Week", second_week), 250.0);
+    let january = date_filter(&facts, &[date(2024, 1, 5)]);
+    assert_number(eval_measure(&facts, "OB Month", january.clone()), 500.0);
+    assert_number(eval_measure(&facts, "CB Month", january.clone()), 600.0);
+    // The DAX week starts on Sunday 2023-12-31, so the opening date is 2023-12-30.
+    assert_number(eval_measure(&facts, "OB Week", january.clone()), 450.0);
+    assert_number(eval_measure(&facts, "CB Week", january), 550.0);
 
-    // The entire month of March has only a blank amount, so both balances are blank.
-    let march = filters(&model, &[("Date", "Year", Scalar::Integer(2024)), ("Date", "Month", Scalar::Integer(3))]);
-    assert_eq!(eval_measure(&model, "OB Month", march.clone()), Ok(Scalar::Blank));
-    assert_eq!(eval_measure(&model, "CB Month", march), Ok(Scalar::Blank));
+    let second_week = date_filter(&facts, &[date(2024, 1, 12)]);
+    assert_number(eval_measure(&facts, "OB Week", second_week.clone()), 550.0);
+    assert_number(eval_measure(&facts, "CB Week", second_week), 650.0);
+
+    // Without a fact on the boundary date Excel returns BLANK, not a scan backwards.
+    let march = filters(&facts, &[("Date", "Year", Scalar::Integer(2024)), ("Date", "Month", Scalar::Integer(3))]);
+    assert_eq!(eval_measure(&facts, "CB Month", march), Ok(Scalar::Decimal(800.0)));
+
+    let sparse = model();
+    let february = february_filter(&sparse);
+    assert_eq!(eval_measure(&sparse, "OB Month", february.clone()), Ok(Scalar::Blank));
+    assert_eq!(eval_measure(&sparse, "CB Month", february), Ok(Scalar::Blank));
 }
 
 #[test]

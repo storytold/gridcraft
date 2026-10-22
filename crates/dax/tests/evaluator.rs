@@ -139,6 +139,9 @@ fn iterators_resolve_rows_of_filtered_tables() {
 #[test]
 fn calculate_accepts_filter_table_arguments() {
     assert_eq!(eval("CALCULATE([Total Sales], FILTER(Sales, Sales[Amount] > 10))"), Scalar::Decimal(50.0));
+    assert_eq!(eval("CALCULATE([Total Sales], Sales[Amount] >= 20)"), Scalar::Decimal(50.0));
+    assert_eq!(eval("CALCULATE([Total Sales], 20 <= Sales[Amount])"), Scalar::Decimal(50.0));
+    assert_eq!(eval("CALCULATE([Total Sales], Sales[Amount] < 20)"), Scalar::Decimal(10.0));
 }
 
 #[test]

@@ -46,20 +46,20 @@ fn value(src: &str) -> Scalar {
 
 #[test]
 fn averagea_counts_text_and_booleans() {
-    // 10 + 20 + BLANK(0) + 40, divided by all four rows.
-    assert_eq!(value("AVERAGEA(Sales[Amount])"), Scalar::Decimal(17.5));
+    // BLANK is an empty cell, not a zero: 10 + 20 + 40 over three non-blank rows.
+    assert_eq!(value("AVERAGEA(Sales[Amount])"), Scalar::Decimal(70.0 / 3.0));
     // TRUE = 1, FALSE = 0: (1 + 0 + 1 + 0) / 4.
     assert_eq!(value("AVERAGEA(Sales[Flag])"), Scalar::Decimal(0.5));
     // "5" = 5, "" = 0, "abc" = 0, "7" = 7.
     assert_eq!(value("AVERAGEA(Sales[Note])"), Scalar::Decimal(3.0));
-    // Rows exist but every value is BLANK: 0, not BLANK.
-    assert_eq!(value("AVERAGEA(Sales[Empty])"), Scalar::Decimal(0.0));
+    // A column whose cells are all BLANK has no values to average.
+    assert_eq!(value("AVERAGEA(Sales[Empty])"), Scalar::Blank);
 }
 
 #[test]
 fn averagea_respects_the_filter_context_and_is_blank_for_no_rows() {
-    // East rows are 10 and BLANK: (10 + 0) / 2.
-    assert_eq!(value("CALCULATE(AVERAGEA(Sales[Amount]), Sales[Region] = \"East\")"), Scalar::Decimal(5.0));
+    // East rows are 10 and BLANK: the BLANK row is excluded.
+    assert_eq!(value("CALCULATE(AVERAGEA(Sales[Amount]), Sales[Region] = \"East\")"), Scalar::Decimal(10.0));
     assert_eq!(value("CALCULATE(AVERAGEA(Sales[Amount]), Sales[Region] = \"Nowhere\")"), Scalar::Blank);
 }
 
@@ -71,6 +71,7 @@ fn maxa_and_mina_count_logical_values() {
     assert_eq!(value("MINA(Sales[Note])"), Scalar::Decimal(0.0));
     assert_eq!(value("MAXA(Sales[Note])"), Scalar::Decimal(7.0));
     assert_eq!(value("MAXA(Sales[Amount])"), Scalar::Decimal(40.0));
+    assert_eq!(value("MINA(Sales[Amount])"), Scalar::Decimal(10.0));
 }
 
 #[test]

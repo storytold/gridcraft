@@ -717,19 +717,27 @@ impl<'a> Evaluator<'a> {
 
     fn apply_filter(&self, expr: &BoundExpr, filters: &mut FilterContext, ctx: &mut Context) -> Result<(), EvalError> {
         match expr {
-            BoundExpr::Binary { op, left, right } if matches!(op, BinaryOp::Eq | BinaryOp::Ne) => {
-                let BoundExpr::Column { table, column } = **left else {
-                    return Err(EvalError::new("CALCULATE filter must compare a column"));
+            BoundExpr::Binary { op, left, right }
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge) =>
+            {
+                // DAX boolean filters accept every comparison operator, not just equality. The
+                // column may be on either side; reverse the operator when it is on the right.
+                let (table, column, value_expr, comparison) = match (&**left, &**right) {
+                    (BoundExpr::Column { table, column }, value) => (*table, *column, value, *op),
+                    (value, BoundExpr::Column { table, column }) => (*table, *column, value, reverse_comparison(*op)),
+                    _ => return Err(EvalError::new("CALCULATE filter must compare a column")),
                 };
-                let value = self.eval(right, ctx)?;
-                let key = ScalarKey::from(&value);
-                if *op == BinaryOp::Eq {
-                    filters.set(table, column, [key]);
-                } else {
-                    let table_values = self.table(table, &ctx.filters).column(column);
-                    let keys = table_values.iter().filter(|v| !v.strict_eq(&value)).map(ScalarKey::from);
-                    filters.set(table, column, keys);
-                }
+                let value = self.eval(value_expr, ctx)?;
+                let keys: BTreeSet<ScalarKey> = self
+                    .table(table, &ctx.filters)
+                    .column(column)
+                    .into_iter()
+                    .filter(|candidate| {
+                        binary(comparison, candidate.clone(), value.clone()).ok().and_then(|result| result.to_bool()).unwrap_or(false)
+                    })
+                    .map(|candidate| ScalarKey::from(&candidate))
+                    .collect();
+                filters.set(table, column, keys);
                 Ok(())
             }
             BoundExpr::Call { spec, args } if spec.name == "ALL" || spec.name == "REMOVEFILTERS" => {
@@ -825,6 +833,16 @@ fn literal_value(literal: &Literal) -> Scalar {
 
 fn scalar_from_key(key: &ScalarKey) -> Scalar {
     key.to_scalar()
+}
+
+fn reverse_comparison(op: BinaryOp) -> BinaryOp {
+    match op {
+        BinaryOp::Lt => BinaryOp::Gt,
+        BinaryOp::Gt => BinaryOp::Lt,
+        BinaryOp::Le => BinaryOp::Ge,
+        BinaryOp::Ge => BinaryOp::Le,
+        other => other,
+    }
 }
 
 fn unary(op: UnaryOp, value: Scalar) -> Result<Scalar, EvalError> {

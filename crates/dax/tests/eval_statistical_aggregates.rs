@@ -102,8 +102,8 @@ fn combinatorics() {
     // Exact integer arithmetic far beyond f64's 2^53 integer range.
     assert_integer(eval("COMBIN(60, 30)").expect("COMBIN large"), 118_264_581_564_861_424);
     assert_integer(eval("COMBIN(52, 5)").expect("COMBIN 52 choose 5"), 2_598_960);
-    // Arguments are truncated to integers.
-    assert_integer(eval("COMBIN(8.9, 3.9)").expect("COMBIN truncates"), 56);
+    // Arguments round to the nearest integer, as Excel does.
+    assert_integer(eval("COMBIN(8.9, 3.9)").expect("COMBIN rounds"), 126);
 
     assert_integer(eval("COMBINA(8, 3)").expect("COMBINA"), 120);
     assert_integer(eval("COMBINA(4, 3)").expect("COMBINA"), 20);
@@ -114,7 +114,7 @@ fn combinatorics() {
     assert_close(eval("PERMUT(8, 3)").expect("PERMUT"), 336.0);
     assert_close(eval("PERMUT(5, 0)").expect("PERMUT"), 1.0);
     assert_close(eval("PERMUT(5, 5)").expect("PERMUT"), 120.0);
-    assert_close(eval("PERMUT(8.9, 3.9)").expect("PERMUT truncates"), 336.0);
+    assert_close(eval("PERMUT(8.9, 3.9)").expect("PERMUT rounds"), 3024.0);
 }
 
 #[test]
