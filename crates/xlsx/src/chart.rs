@@ -240,14 +240,20 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     let show_val = |e: &El| e.child("dLbls").is_some_and(|d| bool_val(d, "showVal"));
     let data_labels = groups.iter().any(|(g, _)| show_val(g) || g.kids("ser").any(show_val));
     let val_axes: Vec<&El> = plot.kids("valAx").collect();
-    let cat_ax = plot.child("catAx").or_else(|| plot.child("dateAx"));
+    // The primary axes are the first group's `axId`s: a file may list the secondary axes first,
+    // and reading their orientation would swap the directions (#1895 review).
+    let primary = |a: &El| a.child_val("axId").is_some_and(|id| first_axes.iter().any(|f| f == id));
+    let cat_axes: Vec<&El> = plot.kids("catAx").chain(plot.kids("dateAx")).collect();
+    let cat_ax = cat_axes.iter().find(|a| primary(a)).or_else(|| cat_axes.first()).copied();
     let scatter = matches!(first_kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
     let (x_ax, y_ax) = if scatter {
-        let x = val_axes.iter().find(|a| matches!(a.child_val("axPos"), Some("b") | Some("t"))).copied();
-        let y = val_axes.iter().find(|a| matches!(a.child_val("axPos"), Some("l") | Some("r"))).copied();
-        (x, y)
+        let pick = |pos: [&str; 2]| -> Option<&El> {
+            let hit = |a: &&&El| matches!(a.child_val("axPos"), Some(p) if pos.contains(&p));
+            val_axes.iter().find(|a| hit(a) && primary(a)).or_else(|| val_axes.iter().find(hit)).copied()
+        };
+        (pick(["b", "t"]), pick(["l", "r"]))
     } else {
-        (cat_ax, val_axes.first().copied())
+        (cat_ax, val_axes.iter().find(|a| primary(a)).or_else(|| val_axes.first()).copied())
     };
     let legend = match chart.child("legend") {
         None => LegendPos::None,

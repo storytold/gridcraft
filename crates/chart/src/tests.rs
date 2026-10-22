@@ -1280,6 +1280,82 @@ fn reversed_categories_mirror_the_series_within_a_cluster() {
 }
 
 #[test]
+fn reversed_value_axis_draws_bars_from_the_zero_baseline() {
+    let rects = |p: &[Prim], color: Rgba, min_w: f32| -> Vec<[f32; 4]> {
+        p.iter()
+            .filter_map(|q| match q {
+                Prim::Rect { x, y, w, h, fill, .. } if *fill == Some(color) && *w > min_w => Some([*x, *y, *w, *h]),
+                _ => None,
+            })
+            .collect()
+    };
+    // A histogram's zero count is the baseline: reversed, every bar grows down from the top.
+    let d = sample(ChartKind::Histogram);
+    let mut c = chart(ChartKind::Histogram);
+    c.val_reverse = true;
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let bars = rects(&prims, d.series[0].color, 20.0);
+    assert!(bars.len() > 1, "no histogram bars: {bars:?}");
+    assert!(bars.iter().all(|r| (r[1] - bars[0][1]).abs() < 0.01), "bars not on the baseline: {bars:?}");
+    assert!(bars.iter().any(|r| r[3] > 1.0), "every bin is flat: {bars:?}");
+    assert_sane(&prims, 640.0, 400.0);
+    // A reversed quartile box keeps its full height instead of collapsing to half a pixel.
+    let d = sample(ChartKind::BoxWhisker);
+    let mut c = chart(ChartKind::BoxWhisker);
+    c.val_reverse = true;
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let boxes = rects(&prims, d.series[0].color, 10.0);
+    assert!(boxes.iter().any(|r| r[3] > 1.0), "the quartile box collapsed: {boxes:?}");
+    assert_sane(&prims, 640.0, 400.0);
+}
+
+#[test]
+fn reversed_bars_put_their_labels_past_the_tip() {
+    let d = sample(ChartKind::ColumnClustered);
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.val_reverse = true;
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    // North's first value: the bar runs from the top (its baseline) down to the value tip.
+    let bar = prims
+        .iter()
+        .find_map(|q| match q {
+            Prim::Rect { y, h, w, fill, .. } if *fill == Some(d.series[0].color) && *w > 10.0 => Some((*y, *y + *h)),
+            _ => None,
+        })
+        .expect("no bar for the first series");
+    let label = prims
+        .iter()
+        .find_map(|q| match q {
+            Prim::Text { text, y, .. } if text == "$12,000" => Some(*y),
+            _ => None,
+        })
+        .expect("no label for the first value");
+    assert!(label > bar.1, "the label sits at the baseline end: {label} vs bar {:?}", bar);
+}
+
+#[test]
+fn a_combo_charts_secondary_series_keep_the_forward_axis() {
+    let d = sample(ChartKind::Combo);
+    let mut c = chart(ChartKind::Combo);
+    let plain = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    c.val_reverse = true;
+    let flipped = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    // The secondary axis has no direction of its own, so its line keeps its place (#1895 review).
+    let lines = |p: &[Prim]| -> Vec<Vec<[f32; 2]>> {
+        p.iter()
+            .filter_map(|q| match q {
+                Prim::Line { pts, color, .. } if *color == d.series[1].color => Some(pts.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let (a, b) = (lines(&plain), lines(&flipped));
+    assert!(!a.is_empty(), "no secondary line");
+    assert_eq!(a, b, "reversing the primary axis moved the secondary series");
+    assert_sane(&flipped, 640.0, 400.0);
+}
+
+#[test]
 fn mirrored_axes_flip_the_frame() {
     let d = sample(ChartKind::ColumnClustered);
     let mut c = chart(ChartKind::ColumnClustered);

@@ -1024,8 +1024,11 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         let jr = if chart.cat_reverse { ncat_slots - 1 - j } else { j };
         if horizontal { plot.bottom() - (jr as f32 + 0.5) * cw } else { plot.x + (jr as f32 + 0.5) * cw }
     };
-    let vpos = |v: f64, sc: &Scale| {
-        let f = if chart.val_reverse { 1.0 - sc.frac(v) } else { sc.frac(v) };
+    // Only the primary axes carry a direction: the secondary ones are read and written forward,
+    // so their series keep the forward mapping (#1895 review).
+    let vpos = |v: f64, sc: &Scale, rev: bool| {
+        let f = sc.frac(v);
+        let f = if rev { 1.0 - f } else { f };
         if horizontal { plot.x + f * plot.w } else { plot.bottom() - f * plot.h }
     };
 
@@ -1068,6 +1071,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                 continue;
             }
             let sc = scale_of(i);
+            let rev = chart.val_reverse && !sec.get(i).copied().unwrap_or(false);
             let fmt = Fmt::new(&s.number_format);
             let row = match spans.get(i) {
                 Some(r) => r,
@@ -1080,14 +1084,14 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                     for (j, sp) in row.iter().enumerate() {
                         let (b, t) = sp.unwrap_or((0.0, 0.0));
                         let c = center(j);
-                        top.push([c, vpos(t, &sc)]);
-                        base.push([c, vpos(b, &sc)]);
+                        top.push([c, vpos(t, &sc, rev)]);
+                        base.push([c, vpos(b, &sc, rev)]);
                         // Source values (not stack totals), just above the top edge like the line labels.
                         if labels_on
                             && sp.is_some()
                             && let Some(v) = s.values.get(j).copied().flatten()
                         {
-                            area_labels.push((c, vpos(t, &sc) - 5.0, fmt.format(v, None)));
+                            area_labels.push((c, vpos(t, &sc, rev) - 5.0, fmt.format(v, None)));
                         }
                     }
                     if top.len() == 1 {
@@ -1112,7 +1116,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                     let k = if chart.cat_reverse { nslots - 1.0 - k } else { k };
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
-                        let (pb, pt) = (vpos(*b, &sc), vpos(*t, &sc));
+                        let (pb, pt) = (vpos(*b, &sc, rev), vpos(*t, &sc, rev));
                         let c = center(j);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
@@ -1127,30 +1131,30 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                             let t = fmt.format(v, None);
                             let stacked = fam != Fam::Col;
                             let mid = (pb + pt) / 2.0;
+                            // Beyond the bar's tip, whichever way the value axis runs (#1895 review).
+                            let tip = if pt > pb { 1.0 } else { -1.0 };
                             if horizontal {
                                 let y = c + nslots * bw / 2.0 - (k + 0.5) * bw;
                                 if stacked {
                                     ctx.text(mid, y, &t, LABEL_SIZE, on(s.color), HAlign::Center, VAlign::Middle);
-                                } else if v >= 0.0 {
-                                    ctx.text(pb.max(pt) + 3.0, y, &t, LABEL_SIZE, TEXT, HAlign::Left, VAlign::Middle);
                                 } else {
-                                    ctx.text(lo - 3.0, y, &t, LABEL_SIZE, TEXT, HAlign::Right, VAlign::Middle);
+                                    let ha = if tip > 0.0 { HAlign::Left } else { HAlign::Right };
+                                    ctx.text(pt + 3.0 * tip, y, &t, LABEL_SIZE, TEXT, ha, VAlign::Middle);
                                 }
                             } else {
                                 let x = c - nslots * bw / 2.0 + (k + 0.5) * bw;
                                 if stacked {
                                     ctx.text(x, mid, &t, LABEL_SIZE, on(s.color), HAlign::Center, VAlign::Middle);
-                                } else if v >= 0.0 {
-                                    ctx.text(x, lo - 2.0, &t, LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
                                 } else {
-                                    ctx.text(x, lo + len + 2.0, &t, LABEL_SIZE, TEXT, HAlign::Center, VAlign::Top);
+                                    let va = if tip > 0.0 { VAlign::Top } else { VAlign::Bottom };
+                                    ctx.text(x, pt + 2.0 * tip, &t, LABEL_SIZE, TEXT, HAlign::Center, va);
                                 }
                             }
                         }
                     }
                 }
                 _ => {
-                    let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc)])).collect();
+                    let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc, rev)])).collect();
                     draw_runs(ctx, &pts, s.color, 2.25, s.smooth.then_some(plot));
                     let k = kinds.get(i).copied().unwrap_or(ChartKind::Line);
                     if k == ChartKind::LineMarkers && cw >= 3.0 {
@@ -1182,7 +1186,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         let px = |(fx, fy): (f64, f64)| {
             // Mirrored axes swap the ends of the fitted segment (#1687).
             let fx = if chart.cat_reverse { 1.0 - fx } else { fx };
-            let fy = if chart.val_reverse { 1.0 - fy } else { fy };
+            let fy = if chart.val_reverse && !sec.get(i).copied().unwrap_or(false) { 1.0 - fy } else { fy };
             if horizontal {
                 [plot.x + fy as f32 * plot.w, plot.bottom() - fx as f32 * plot.h]
             } else {
@@ -1345,13 +1349,19 @@ fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     }
     let cw = plot.w / bins as f32;
     for (b, c) in counts.iter().enumerate() {
-        let fr = if chart.val_reverse { 1.0 - ys.frac(*c as f64) } else { ys.frac(*c as f64) };
-        let top = plot.bottom() - fr * plot.h;
+        // Bars grow from the zero baseline, which sits at the top when the axis is reversed
+        // (#1895 review).
+        let len = ys.frac(*c as f64) * plot.h;
+        let (top, label) = if chart.val_reverse {
+            (plot.y, (plot.y + len + 2.0, VAlign::Top))
+        } else {
+            (plot.bottom() - len, (plot.bottom() - len - 2.0, VAlign::Bottom))
+        };
         let bi = if chart.cat_reverse { bins - 1 - b } else { b };
         let x = plot.x + bi as f32 * cw;
-        ctx.rect(x, top, cw, plot.bottom() - top, s.color, Some((WHITE, 0.75)));
+        ctx.rect(x, top, cw, len, s.color, Some((WHITE, 0.75)));
         if chart.data_labels {
-            ctx.text(x + cw / 2.0, top - 2.0, &c.to_string(), LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
+            ctx.text(x + cw / 2.0, label.0, &c.to_string(), LABEL_SIZE, TEXT, HAlign::Center, label.1);
         }
     }
 }
@@ -1746,7 +1756,8 @@ fn box_whisker(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         ctx.vline(c, vy(q1), vy(wlo), s.color, 1.25);
         ctx.hline(c - bw / 4.0, c + bw / 4.0, vy(whi), s.color, 1.25);
         ctx.hline(c - bw / 4.0, c + bw / 4.0, vy(wlo), s.color, 1.25);
-        let (yt, yb) = (vy(q3), vy(q1));
+        // A reversed value axis puts q3 below q1: the box keeps its full height (#1895 review).
+        let (yt, yb) = (vy(q3).min(vy(q1)), vy(q3).max(vy(q1)));
         ctx.rect(c - bw / 2.0, yt, bw, (yb - yt).max(0.5), s.color, None);
         ctx.hline(c - bw / 2.0, c + bw / 2.0, vy(med), WHITE, 1.5);
         let (mx, my, d) = (c, vy(mean), 3.0);
