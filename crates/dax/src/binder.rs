@@ -243,6 +243,16 @@ impl<'a> Binder<'a> {
                 "CONVERT" if index == 1 => keyword_name(arg),
                 // RANKX's Ties argument is documented as `Dense` but catalogued as a Scalar.
                 "RANKX" if index == 4 => keyword_name(arg),
+                // Window/relation clauses take bare enum words: `ORDERBY(x, DESC)`,
+                // `WINDOW(1, ABS, 1, ABS, ...)`, `INDEX(..., KEEP, PARTITIONBY(...))`, and the
+                // LOOKUP associated-columns behaviour (`INFERRED`).
+                "ORDERBY" if index % 2 == 1 => clause_keyword(arg, &["ASC", "DESC"]),
+                "INDEX" | "OFFSET" if index >= 2 => clause_keyword(arg, WINDOW_KEYWORDS),
+                "WINDOW" if matches!(index, 1 | 3) => clause_keyword(arg, &["ABS", "REL"]),
+                "WINDOW" if matches!(index, 6 | 9) => clause_keyword(arg, WINDOW_KEYWORDS),
+                "LOOKUP" | "LOOKUPWITHTOTALS" if index % 2 == 1 && index + 1 == call.args.len() => {
+                    clause_keyword(arg, &["EXPLICIT", "INFERRED", "DEFAULT"])
+                }
                 _ if matches!(expected, Some(ParamKind::Text)) => keyword_name(arg),
                 _ => visual_keyword_name(spec.name, index, arg),
             }
@@ -305,6 +315,15 @@ fn is_visual_keyword(function: &str, index: usize, word: &str) -> bool {
         "RANGE" => axis(&[2]) || order_by(&[3]) || blanks(&[4]) || reset(&[5]),
         _ => false,
     }
+}
+
+/// The enum words accepted by the window/relation clauses. Matching is case-insensitive, and an
+/// identifier outside this set is left to normal name binding so typos still report an error.
+const WINDOW_KEYWORDS: &[&str] = &["ASC", "DESC", "ABS", "REL", "DEFAULT", "FIRST", "LAST", "KEEP", "NONE", "LOWESTPARENT", "HIGHESTPARENT"];
+
+fn clause_keyword(expr: &Expr, allowed: &[&str]) -> Option<String> {
+    let word = keyword_name(expr)?;
+    allowed.iter().any(|candidate| word.eq_ignore_ascii_case(candidate)).then_some(word)
 }
 
 fn collect_measure_names(model: &DataModel, expr: &BoundExpr, out: &mut BTreeSet<String>) {
