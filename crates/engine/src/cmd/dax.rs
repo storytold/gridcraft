@@ -5,6 +5,8 @@
 //! they record no undo step; each one revalidates the whole model through
 //! [`DataModel::parse_formulas`] before it is stored, so a failed edit leaves the model untouched.
 
+use std::collections::BTreeSet;
+
 use gridcraft_dax::{Binder, DataModel, Evaluator, Measure, Relationship, parse_expression, pivot_cross, pivot_fields};
 use serde_json::{Value as Json, json};
 
@@ -208,6 +210,25 @@ fn measure_or_error(model: &DataModel, cmd: &str, name: &str) -> Result<usize> {
     model.measure_index(name).ok_or_else(|| bad(cmd, format!("unknown measure `{name}`")))
 }
 
+/// Measures that reference `target` from their formulas. Renaming or deleting the target would
+/// leave those references pointing at an unknown name (which the binder would otherwise read as
+/// an unqualified column), so edits must be rejected while dependents exist.
+fn dependents(model: &DataModel, cmd: &str, target: &str) -> Result<BTreeSet<String>> {
+    let graph = Binder::new(model).dependency_graph().map_err(|error| bad(cmd, error.to_string()))?;
+    Ok(graph
+        .into_iter()
+        .filter(|(name, dependencies)| {
+            !name.eq_ignore_ascii_case(target) && dependencies.iter().any(|dependency| dependency.eq_ignore_ascii_case(target))
+        })
+        .map(|(name, _)| name)
+        .collect())
+}
+
+fn dangling_reference_error(cmd: &str, action: &str, target: &str, dependent: &BTreeSet<String>) -> EngineError {
+    let names: Vec<&str> = dependent.iter().map(String::as_str).collect();
+    bad(cmd, format!("cannot {action} measure `{target}`: referenced by {}", names.join(", ")))
+}
+
 /// Relationship identity: the four endpoint names, compared the way the model compares names.
 fn same_ends(r: &Relationship, from_table: &str, from_column: &str, to_table: &str, to_column: &str) -> bool {
     r.from_table.eq_ignore_ascii_case(from_table)
@@ -244,10 +265,17 @@ fn update_measure(s: &mut Session, p: &Json) -> Result<Json> {
     let name = required_str(p, CMD, "name")?;
     let mut model = edit_model(s, CMD)?;
     let index = measure_or_error(&model, CMD, name)?;
+    let old_name = model.measures[index].name.clone();
     if p.get("new_name").is_some() {
         let new_name = required_str(p, CMD, "new_name")?;
         if model.measure_index(new_name).is_some_and(|other| other != index) {
             return Err(bad(CMD, format!("a measure named `{new_name}` already exists")));
+        }
+        if !new_name.eq_ignore_ascii_case(&old_name) {
+            let dependent = dependents(&model, CMD, &old_name)?;
+            if !dependent.is_empty() {
+                return Err(dangling_reference_error(CMD, "rename", &old_name, &dependent));
+            }
         }
         model.measures[index].name = new_name.to_string();
     }
@@ -268,6 +296,10 @@ fn delete_measure(s: &mut Session, p: &Json) -> Result<Json> {
     let name = required_str(p, CMD, "name")?;
     let mut model = edit_model(s, CMD)?;
     let index = measure_or_error(&model, CMD, name)?;
+    let dependent = dependents(&model, CMD, name)?;
+    if !dependent.is_empty() {
+        return Err(dangling_reference_error(CMD, "delete", name, &dependent));
+    }
     model.measures.remove(index);
     commit(s, CMD, model)
 }
@@ -561,6 +593,32 @@ mod tests {
             .is_ok()
         );
         assert!(s.execute("dataModel.status", json!({})).expect("status")["relationships"].as_array().expect("relationships").is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn measure_edits_reject_dangling_references() {
+        let json = r#"{
+            "tables": [{"name":"Sales","columns":[{"name":"Region"},{"name":"Amount"}],
+                        "rows":[["East",10],["West",20]]}],
+            "relationships": [],
+            "measures": [
+                {"name":"Base","formula":"SUM(Sales[Amount])","table":"Sales"},
+                {"name":"Derived","formula":"[Base] * 2","table":"Sales"}
+            ]
+        }"#;
+        let (path, dir) = write_model("dangling", json);
+        let mut s = Session::new();
+        s.execute("dataModel.load", json!({"path": path.to_string_lossy()})).expect("load");
+
+        let error = s.execute("dataModel.updateMeasure", json!({"name":"Base","new_name":"Renamed"})).expect_err("rename must fail");
+        assert!(error.to_string().contains("Derived"), "{error}");
+        assert!(s.execute("dataModel.deleteMeasure", json!({"name":"Base"})).is_err());
+
+        // Removing the dependent first makes the rename and deletion valid.
+        assert!(s.execute("dataModel.deleteMeasure", json!({"name":"Derived"})).is_ok());
+        assert!(s.execute("dataModel.updateMeasure", json!({"name":"Base","new_name":"Renamed"})).is_ok());
+        assert!(s.execute("dataModel.deleteMeasure", json!({"name":"Renamed"})).is_ok());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

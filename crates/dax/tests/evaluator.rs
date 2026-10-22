@@ -187,6 +187,80 @@ fn bidirectional_filters_do_not_recurse() {
 }
 
 #[test]
+fn userelationship_selects_the_matching_relationship_by_column() {
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) },
+                    ModelColumn { name: "OrderDate".into(), data_type: Some("DateTime".into()) },
+                    ModelColumn { name: "ShipDate".into(), data_type: Some("DateTime".into()) },
+                ],
+                rows: vec![
+                    vec![Scalar::Integer(10), Scalar::DateTime(45292.0), Scalar::DateTime(45293.0)],
+                    vec![Scalar::Integer(20), Scalar::DateTime(45293.0), Scalar::DateTime(45292.0)],
+                ],
+            },
+            ModelTable {
+                name: "Date".into(),
+                columns: vec![ModelColumn { name: "Date".into(), data_type: Some("DateTime".into()) }],
+                rows: vec![vec![Scalar::DateTime(45292.0)], vec![Scalar::DateTime(45293.0)]],
+            },
+        ],
+        relationships: vec![
+            Relationship {
+                from_table: "Sales".into(),
+                from_column: "OrderDate".into(),
+                to_table: "Date".into(),
+                to_column: "Date".into(),
+                bidirectional: false,
+                inactive: false,
+            },
+            Relationship {
+                from_table: "Sales".into(),
+                from_column: "ShipDate".into(),
+                to_table: "Date".into(),
+                to_column: "Date".into(),
+                bidirectional: false,
+                inactive: true,
+            },
+        ],
+        measures: vec![Measure { name: "Total".into(), formula: "SUM(Sales[Amount])".into(), table: Some("Sales".into()), format: None, expr: None }],
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let evaluate = |src: &str| {
+        let expr = parse_expression(src).expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+        evaluator.evaluate(&bound).expect("evaluate")
+    };
+    // The active OrderDate relationship sees the Jan 2 order row.
+    assert_eq!(evaluate("CALCULATE([Total], Date[Date] = DATE(2024,1,2))"), Scalar::Decimal(20.0));
+    // USERELATIONSHIP picks ShipDate even though OrderDate is the first relationship in the model.
+    assert_eq!(evaluate("CALCULATE([Total], USERELATIONSHIP(Sales[ShipDate], Date[Date]), Date[Date] = DATE(2024,1,2))"), Scalar::Decimal(10.0));
+    assert_eq!(evaluate("CALCULATE([Total], USERELATIONSHIP(Sales[ShipDate], Date[Date]), Date[Date] = DATE(2024,1,1))"), Scalar::Decimal(20.0));
+    // CROSSFILTER accepts both documented spellings and leaves the active relationship in place.
+    assert_eq!(evaluate("CALCULATE([Total], CROSSFILTER(Sales[OrderDate], Date[Date], OneWay))"), Scalar::Decimal(30.0));
+    assert_eq!(evaluate("CALCULATE([Total], CROSSFILTER(Sales[OrderDate], Date[Date], BOTH))"), Scalar::Decimal(30.0));
+}
+
+#[test]
+fn calculate_filters_replace_the_target_column_and_map_by_name() {
+    // The outer filter on Region must not suppress the candidates for the CALCULATE filter.
+    let model = model();
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expr = parse_expression("CALCULATE([Total Sales], Sales[Region] = \"East\")").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    let mut filters = FilterContext::default();
+    filters.set(0, 0, [gridcraft_dax::ScalarKey::String("West".into())]);
+    assert_eq!(evaluator.evaluate_with(&bound, filters).expect("evaluate"), Scalar::Decimal(40.0));
+
+    // VALUES(Sales[Amount]) exposes one column at position 0; it must filter Amount, not Region.
+    assert_eq!(eval("CALCULATE([Total Sales], VALUES(Sales[Amount]))"), Scalar::Decimal(60.0));
+}
+
+#[test]
 fn relationship_modifiers_apply_inside_calculate() {
     // The fixture's Sales[Region] -> Date[Date] relationship is active; both modifiers are valid
     // inside the filter list and must not be treated as table filters.

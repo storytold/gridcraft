@@ -653,6 +653,9 @@ fn amordegrc(name: &str, values: &[Scalar]) -> Result<Scalar, EvalError> {
     let mut step = 0;
     while step < period {
         depreciation = (rate * cost).round();
+        if depreciation == 0.0 {
+            return decimal(name, 0.0);
+        }
         remaining -= depreciation;
         if remaining < 0.0 {
             let left = period - step;

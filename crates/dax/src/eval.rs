@@ -39,8 +39,8 @@ use support::*;
 pub struct FilterContext {
     pub filters: BTreeMap<(usize, usize), BTreeSet<ScalarKey>>,
     /// Relationship behaviour set by `USERELATIONSHIP`/`CROSSFILTER` inside CALCULATE:
-    /// `(from_table, to_table) -> (active, bidirectional)`.
-    pub relationships: BTreeMap<(usize, usize), (bool, bool)>,
+    /// relationship index -> `(active, bidirectional)`.
+    pub relationships: BTreeMap<usize, (bool, bool)>,
 }
 
 impl FilterContext {
@@ -257,12 +257,11 @@ impl<'a> Evaluator<'a> {
         // table to rows whose key appears in the related table. Only tables that are actually
         // filtered can restrict this one, and a table already on the current propagation path is
         // skipped.
-        for relationship in &self.model.relationships {
+        for (index, relationship) in self.model.relationships.iter().enumerate() {
             let (Some(from), Some(to)) = (self.model.table_index(&relationship.from_table), self.model.table_index(&relationship.to_table)) else {
                 continue;
             };
-            let (active, bidirectional) =
-                filters.relationships.get(&(from, to)).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
+            let (active, bidirectional) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
             if !active {
                 continue;
             }
@@ -741,8 +740,13 @@ impl<'a> Evaluator<'a> {
                     _ => return Err(EvalError::new("CALCULATE filter must compare a column")),
                 };
                 let value = self.eval(value_expr, ctx)?;
+                // Build candidates without the target column's current filter: a CALCULATE filter
+                // replaces that column's filter, so the outer `Region = "West"` must not hide the
+                // rows that `Region = "East"` is meant to select.
+                let mut candidate_filters = ctx.filters.clone();
+                candidate_filters.filters.remove(&(table, column));
                 let keys: BTreeSet<ScalarKey> = self
-                    .table(table, &ctx.filters)
+                    .table(table, &candidate_filters)
                     .column(column)
                     .into_iter()
                     .filter(|candidate| {
@@ -794,9 +798,12 @@ impl<'a> Evaluator<'a> {
                     return Err(EvalError::new("CALCULATE table filter has no source table"));
                 };
                 filters.remove_table(table_index);
-                for (column, _) in table.columns.iter().enumerate() {
-                    let keys: BTreeSet<ScalarKey> = table.rows.iter().filter_map(|row| row.get(column)).map(ScalarKey::from).collect();
-                    filters.set(table_index, column, keys);
+                for (position, column) in table.columns.iter().enumerate() {
+                    // A table expression may expose a subset/reordering of the model columns
+                    // (VALUES(Sales[Amount]), DATESMTD(...)), so map by name, not by position.
+                    let Some(model_column) = self.model.column_index(table_index, &column.name) else { continue };
+                    let keys: BTreeSet<ScalarKey> = table.rows.iter().filter_map(|row| row.get(position)).map(ScalarKey::from).collect();
+                    filters.set(table_index, model_column, keys);
                 }
                 Ok(())
             }
@@ -812,40 +819,54 @@ impl<'a> Evaluator<'a> {
         };
         let (table_a, column_a) = column(args.first())?;
         let (table_b, column_b) = column(args.get(1))?;
-        let relationship = self.model.relationships.iter().find(|candidate| {
-            let from = self.model.table_index(&candidate.from_table);
-            let to = self.model.table_index(&candidate.to_table);
-            match (from, to) {
-                (Some(from), Some(to)) => (from == table_a && to == table_b) || (from == table_b && to == table_a),
-                _ => false,
-            }
-        });
-        let relationship = relationship.ok_or_else(|| EvalError::new(format!("{name} needs an existing relationship")))?;
-        let from = self.model.table_index(&relationship.from_table).ok_or_else(|| EvalError::new("bad relationship"))?;
-        let to = self.model.table_index(&relationship.to_table).ok_or_else(|| EvalError::new("bad relationship"))?;
-        let (from_column, to_column) = (
-            self.model.column_index(from, &relationship.from_column).ok_or_else(|| EvalError::new("bad relationship"))?,
-            self.model.column_index(to, &relationship.to_column).ok_or_else(|| EvalError::new("bad relationship"))?,
-        );
-        let matches = |table: usize, col: usize| (table == from && col == from_column) || (table == to && col == to_column);
-        if !matches(table_a, column_a) || !matches(table_b, column_b) || (table_a == table_b) {
-            return Err(EvalError::new(format!("{name} columns do not belong to one relationship")));
+        if table_a == table_b {
+            return Err(EvalError::new(format!("{name} needs columns from two different tables")));
         }
-        let state = if name.eq_ignore_ascii_case("USERELATIONSHIP") {
-            (true, relationship.bidirectional)
-        } else {
-            let direction = match args.get(2) {
-                Some(BoundExpr::Keyword(word)) | Some(BoundExpr::Literal(Literal::String(word))) => word.to_ascii_uppercase(),
-                _ => return Err(EvalError::new("CROSSFILTER needs ONE, BOTH or NONE")),
-            };
-            match direction.as_str() {
-                "ONE" | "ONEWAY" => (true, false),
-                "BOTH" | "TWOWAY" => (true, true),
-                "NONE" => (false, false),
-                _ => return Err(EvalError::new("CROSSFILTER direction must be ONE, BOTH or NONE")),
-            }
+        let table_name = |table: usize| self.model.tables.get(table).map(|table| table.name.clone());
+        let column_name =
+            |table: usize, column: usize| self.model.tables.get(table).and_then(|table| table.columns.get(column)).map(|column| column.name.clone());
+        let (Some(name_a), Some(name_b)) = (column_name(table_a, column_a), column_name(table_b, column_b)) else {
+            return Err(EvalError::new(format!("{name} needs two column references")));
         };
-        filters.relationships.insert((from, to), state);
+        let (Some(table_a_name), Some(table_b_name)) = (table_name(table_a), table_name(table_b)) else {
+            return Err(EvalError::new(format!("{name} needs two column references")));
+        };
+        let same = |left: &str, right: &str| left.eq_ignore_ascii_case(right);
+        let found = self.model.relationships.iter().enumerate().find(|(_, candidate)| {
+            let direct = same(&candidate.from_table, &table_a_name)
+                && same(&candidate.from_column, &name_a)
+                && same(&candidate.to_table, &table_b_name)
+                && same(&candidate.to_column, &name_b);
+            let reverse = same(&candidate.from_table, &table_b_name)
+                && same(&candidate.from_column, &name_b)
+                && same(&candidate.to_table, &table_a_name)
+                && same(&candidate.to_column, &name_a);
+            direct || reverse
+        });
+        let (index, relationship) = found.ok_or_else(|| EvalError::new(format!("{name} needs an existing relationship")))?;
+        if name.eq_ignore_ascii_case("USERELATIONSHIP") {
+            // Excel allows only one active relationship between two tables: activating this one
+            // deactivates the others between the same pair.
+            for (other_index, other) in self.model.relationships.iter().enumerate() {
+                let same_pair = (same(&other.from_table, &relationship.from_table) && same(&other.to_table, &relationship.to_table))
+                    || (same(&other.from_table, &relationship.to_table) && same(&other.to_table, &relationship.from_table));
+                if same_pair {
+                    filters.relationships.insert(other_index, (other_index == index, other.bidirectional));
+                }
+            }
+            return Ok(());
+        }
+        let direction = match args.get(2) {
+            Some(BoundExpr::Keyword(word)) | Some(BoundExpr::Literal(Literal::String(word))) => word.to_ascii_uppercase(),
+            _ => return Err(EvalError::new("CROSSFILTER needs ONE, BOTH or NONE")),
+        };
+        let state = match direction.as_str() {
+            "ONE" | "ONEWAY" => (true, false),
+            "BOTH" | "TWOWAY" => (true, true),
+            "NONE" => (false, false),
+            _ => return Err(EvalError::new("CROSSFILTER direction must be ONE, ONEWAY, BOTH, TWOWAY or NONE")),
+        };
+        filters.relationships.insert(index, state);
         Ok(())
     }
 

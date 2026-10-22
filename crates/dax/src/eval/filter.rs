@@ -874,7 +874,7 @@ fn group_cross_apply(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, 
         // The filter tables are cross-joined first; the group-by filter then pins the group's own
         // columns, so `ALL(Sales)` in a filter table cannot undo the grouping.
         for table in &filter_tables {
-            apply_table_filter(table, &mut filters);
+            apply_table_filter(ev, table, &mut filters);
         }
         for ((table, column), value) in split.groups.iter().zip(group) {
             filters.set(*table, *column, [ScalarKey::from(value)]);
@@ -990,7 +990,7 @@ fn filter_cluster(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> 
     for group in &groups {
         let mut filters = ctx.filters.clone();
         for table in &filter_tables {
-            apply_table_filter(table, &mut filters);
+            apply_table_filter(ev, table, &mut filters);
         }
         for ((table, column), value) in split.groups.iter().zip(group) {
             filters.set(*table, *column, [ScalarKey::from(value)]);
@@ -1025,13 +1025,16 @@ fn filter_cluster(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> 
 
 /// Applies a table expression as a CALCULATE filter: every column of its lineage is restricted to
 /// the values present in the table.
-fn apply_table_filter(table: &TableValue, filters: &mut FilterContext) {
+fn apply_table_filter(ev: &Evaluator<'_>, table: &TableValue, filters: &mut FilterContext) {
     let Some(lineage) = table.lineage else {
         return;
     };
-    for (index, _) in table.columns.iter().enumerate() {
-        let keys: BTreeSet<ScalarKey> = table.rows.iter().filter_map(|row| row.get(index)).map(ScalarKey::from).collect();
-        filters.set(lineage, index, keys);
+    for (position, column) in table.columns.iter().enumerate() {
+        // Map by name: a table expression can expose a subset or a reordering of the model
+        // columns (VALUES, DATESMTD, SELECTCOLUMNS).
+        let Some(model_column) = ev.model().column_index(lineage, &column.name) else { continue };
+        let keys: BTreeSet<ScalarKey> = table.rows.iter().filter_map(|row| row.get(position)).map(ScalarKey::from).collect();
+        filters.set(lineage, model_column, keys);
     }
 }
 

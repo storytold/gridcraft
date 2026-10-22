@@ -318,8 +318,10 @@ fn apply_filter_arg(ev: &Evaluator<'_>, expr: &BoundExpr, filters: &mut FilterCo
             if *op == BinaryOp::Eq {
                 filters.set(table, column, [ScalarKey::from(&value)]);
             } else {
+                let mut candidate_filters = ctx.filters.clone();
+                candidate_filters.filters.remove(&(table, column));
                 let keys = ev
-                    .table(table, &ctx.filters)
+                    .table(table, &candidate_filters)
                     .column(column)
                     .into_iter()
                     .filter(|candidate| !candidate.strict_eq(&value))
@@ -341,9 +343,10 @@ fn apply_filter_arg(ev: &Evaluator<'_>, expr: &BoundExpr, filters: &mut FilterCo
             let Some(index) = table.lineage else {
                 return Err(EvalError::new("a filter table needs a source table"));
             };
-            for (column, _) in table.columns.iter().enumerate() {
-                let keys: BTreeSet<ScalarKey> = table.rows.iter().filter_map(|row| row.get(column)).map(ScalarKey::from).collect();
-                filters.set(index, column, keys);
+            for (position, column) in table.columns.iter().enumerate() {
+                let Some(model_column) = ev.model().column_index(index, &column.name) else { continue };
+                let keys: BTreeSet<ScalarKey> = table.rows.iter().filter_map(|row| row.get(position)).map(ScalarKey::from).collect();
+                filters.set(index, model_column, keys);
             }
             Ok(())
         }
