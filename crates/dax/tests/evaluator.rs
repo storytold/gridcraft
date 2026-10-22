@@ -187,6 +187,45 @@ fn bidirectional_filters_do_not_recurse() {
 }
 
 #[test]
+fn relatedtable_returns_rows_from_the_many_side() {
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) },
+                    ModelColumn { name: "Product".into(), data_type: Some("String".into()) },
+                ],
+                rows: vec![
+                    vec![Scalar::Integer(10), Scalar::String("A".into())],
+                    vec![Scalar::Integer(20), Scalar::String("A".into())],
+                    vec![Scalar::Integer(30), Scalar::String("B".into())],
+                ],
+            },
+            ModelTable {
+                name: "Products".into(),
+                columns: vec![ModelColumn { name: "Product".into(), data_type: Some("String".into()) }],
+                rows: vec![vec![Scalar::String("A".into())], vec![Scalar::String("B".into())]],
+            },
+        ],
+        relationships: vec![Relationship {
+            from_table: "Sales".into(),
+            from_column: "Product".into(),
+            to_table: "Products".into(),
+            to_column: "Product".into(),
+            bidirectional: false,
+            inactive: false,
+        }],
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expr = parse_expression("SUMX(Products, COUNTROWS(RELATEDTABLE(Sales)))").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    assert_eq!(evaluator.evaluate(&bound).expect("relatedtable"), Scalar::Decimal(3.0));
+}
+
+#[test]
 fn filters_propagate_across_several_relationships() {
     let mut model = DataModel {
         tables: vec![
@@ -324,13 +363,47 @@ fn calculate_filters_replace_the_target_column_and_map_by_name() {
 
 #[test]
 fn relationship_modifiers_apply_inside_calculate() {
-    // The fixture's Sales[Region] -> Date[Date] relationship is active; both modifiers are valid
-    // inside the filter list and must not be treated as table filters.
-    assert_eq!(eval("COUNTROWS(CALCULATETABLE(Sales, CROSSFILTER(Sales[Region], Date[Date], BOTH)))"), Scalar::Integer(3));
-    assert_eq!(eval("COUNTROWS(CALCULATETABLE(Sales, USERELATIONSHIP(Sales[Region], Date[Date])))"), Scalar::Integer(3));
-    let model = model();
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) },
+                    ModelColumn { name: "Key".into(), data_type: Some("Int64".into()) },
+                ],
+                rows: vec![vec![Scalar::Integer(10), Scalar::Integer(1)], vec![Scalar::Integer(20), Scalar::Integer(2)]],
+            },
+            ModelTable {
+                name: "Dim".into(),
+                columns: vec![
+                    ModelColumn { name: "Key".into(), data_type: Some("Int64".into()) },
+                    ModelColumn { name: "Name".into(), data_type: Some("String".into()) },
+                ],
+                rows: vec![vec![Scalar::Integer(1), Scalar::String("A".into())], vec![Scalar::Integer(2), Scalar::String("B".into())]],
+            },
+        ],
+        relationships: vec![Relationship {
+            from_table: "Sales".into(),
+            from_column: "Key".into(),
+            to_table: "Dim".into(),
+            to_column: "Key".into(),
+            bidirectional: false,
+            inactive: false,
+        }],
+        measures: Vec::new(),
+    };
+    model.parse_formulas().expect("model parses");
     let evaluator = Evaluator::new(&model).expect("evaluator");
-    let expr = parse_expression("USERELATIONSHIP(Sales[Region], Date[Date])").expect("parse");
+    let evaluate = |src: &str| {
+        let expr = parse_expression(src).expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+        evaluator.evaluate(&bound).expect("evaluate")
+    };
+    // A Sales filter reaches Dim only when CROSSFILTER makes the relationship bidirectional.
+    assert_eq!(evaluate("CALCULATE(COUNTROWS(Dim), Sales[Key] = 1)"), Scalar::Integer(2));
+    assert_eq!(evaluate("CALCULATE(COUNTROWS(Dim), Sales[Key] = 1, CROSSFILTER(Sales[Key], Dim[Key], BOTH))"), Scalar::Integer(1));
+    // The modifier itself is not a scalar.
+    let expr = parse_expression("USERELATIONSHIP(Sales[Key], Dim[Key])").expect("parse");
     let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
     assert!(evaluator.evaluate(&bound).is_err(), "a modifier cannot be a standalone scalar");
 }

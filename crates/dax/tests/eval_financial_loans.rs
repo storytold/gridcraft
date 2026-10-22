@@ -173,6 +173,14 @@ fn french_accounting_depreciation() {
 }
 
 #[test]
+fn amordegrc_huge_period_terminates() {
+    // Once the rounded depreciation reaches zero the loop must stop rather than run `period`
+    // times; a user-supplied 10^15 period used to hang the evaluator.
+    let value = number("AMORDEGRC(2400, DATE(2008,8,19), DATE(2008,12,31), 0, 1000000000000000, 0.15, 1)");
+    assert_eq!(value, 0.0);
+}
+
+#[test]
 fn irregular_cash_flows() {
     assert_close(number("XNPV(CashFlows, CashFlows[Amount], CashFlows[Date], 0.09)"), -356.8911834998921, "XNPV");
     assert_close(number("XIRR(CashFlows, CashFlows[Amount], CashFlows[Date])"), 0.035365618646134966, "XIRR");
