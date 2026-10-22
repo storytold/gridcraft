@@ -16,6 +16,7 @@ mod es;
 mod es_functions;
 mod fr;
 mod it;
+mod it_functions;
 mod ja;
 mod ko;
 mod nl;
@@ -243,6 +244,7 @@ impl Language {
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::It => Some((it_functions::DESCRIPTIONS, it_functions::ARGUMENTS)),
             _ => None,
         }
     }

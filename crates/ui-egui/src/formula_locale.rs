@@ -170,4 +170,24 @@ mod tests {
         assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Some("Adds the cells that meet every condition."));
         assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
     }
+
+    /// Italian help over English and Italian formulas, as the Spanish one.
+    #[test]
+    fn italian_function_help_follows_the_interface_language_and_the_formula_syntax() {
+        use FormulaLocale::{En, It};
+        assert_eq!(sig("IF", En, Language::It), "IF(test_logico, [valore_se_vero], [valore_se_falso])");
+        assert_eq!(sig("VLOOKUP", En, Language::It), "VLOOKUP(cerca_valore, matrice, indice_colonna, [ordinato])");
+        assert_eq!(description("IF", En, Language::It).as_deref(), Some("Restituisce un valore in base a una condizione."));
+        // Italian names and separators, from a localized name.
+        assert_eq!(sig("se", It, Language::It), "SE(test_logico; [valore_se_vero]; [valore_se_falso])");
+        assert_eq!(sig("somma", It, Language::It), "SOMMA(numero1; [numero2]; ...)");
+        assert_eq!(description("SOMMA", It, Language::It).as_deref(), Some("Somma i numeri."));
+        // The date keys sort with the space before the period: the lookup must still hit them.
+        assert_eq!(description("TODAY", En, Language::It).as_deref(), Some("Restituisce la data odierna."));
+        assert_eq!(description("NOW", En, Language::It).as_deref(), Some("Restituisce la data e l'ora correnti."));
+        // An argument list Italian covers only in part stays English instead of mixing.
+        let sumifs = sig("SOMMA.PIÙ.SE", It, Language::It);
+        assert!(sumifs.ends_with("(sum_range; criteria_range1; criteria1; ...)"), "{sumifs}");
+        assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
+    }
 }
