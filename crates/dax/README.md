@@ -1,8 +1,8 @@
 # gridcraft-dax
 
-The DAX language for GridCraft: a tokenizer, a Pratt parser, a syntax tree and a canonical
-printer. This crate is the foundation for later DAX PRs (aggregation, data types and
-statements). It has no evaluator, no function catalog and no engine dependency.
+The DAX language for GridCraft: a tokenizer, a Pratt parser, a syntax tree, a canonical printer
+and the aggregation function catalog with static call validation. This crate is the foundation
+for later DAX PRs (data types and statements). It has no evaluator and no engine dependency.
 
 ```rust
 use gridcraft_dax::{parse_expression, print_expression};
@@ -26,6 +26,10 @@ assert_eq!(gridcraft_dax::print_query(&query), "EVALUATE SUM('Sales'[Amount])");
 | `tokenize(&str) -> Result<Vec<Token>, LexError>` | Tokens with byte spans, including `Eof`. |
 | `ParseError { message, span }` / `LexError { message, span }` | `Display + std::error::Error`; the lexer error converts with `From`. |
 | `ast::{Expr, ExprKind, Literal, Name, NameRef, NameStyle, Call, UnaryOp, BinaryOp, Span, Query}` | Syntax tree. |
+| `functions::{catalog, lookup}` | The 22 aggregation functions, looked up case-insensitively. |
+| `functions::{FunctionSpec, FunctionCategory, ParamKind, ReturnType, BlankPolicy, FunctionFlags, Parameter, Overload}` | Catalog record types. |
+| `validate_call(&Call) -> Vec<ValidationError>` | Arity/kind checks for one call; empty for valid or unknown functions. |
+| `validate_expression(&Expr) -> Vec<ValidationError>` | Walks the tree and reports every invalid known-function call with its span. |
 | `MAX_INPUT_LEN` (8192 bytes) / `MAX_DEPTH` (256) | Limits enforced with errors. |
 
 ### Syntax tree
@@ -122,6 +126,73 @@ iterative for left-associated chains.
 Errors carry `message` and a byte `span`; `Display` includes both. The canonical printer uses
 spaces around binary operators, `, ` between arguments/items, and adds parentheses only where
 precedence or associativity requires them. Re-parsing canonical text yields the same AST.
+
+## Aggregation function catalog
+
+`functions::catalog()` returns the 22 functions of
+[dax.guide/functions/aggregation](https://dax.guide/functions/aggregation/), in that order.
+`functions::lookup(name)` is case-insensitive. Each record carries its descriptive signature
+(`params`, with `optional` markers), exact `overloads`, `return_type`, `flags`
+(`iterator`, `not_recommended`, `excel_compatible`, `direct_query_limited`), `sugar_of`,
+`blank_policy`, `description` and `examples`. Every example in the catalog parses with
+`parse_expression` and validates.
+
+| Function | Arity | Iterator | Sugar of | Blank | Excel | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| `APPROXIMATEDISTINCTCOUNT` | 1 | no | — | BLANK | no | HyperLogLog / DirectQuery pushdown; column reference only. |
+| `AVERAGE` | 1 | no | `AVERAGEX` | unspecified | yes | Ignores blanks, includes zero; sources disagree on the empty/all-blank result. |
+| `AVERAGEA` | 1 | no | — | unspecified | yes | Booleans are 1/0 and any text is 0; dax.guide marks it not recommended. |
+| `AVERAGEX` | 2 | yes | — | BLANK | yes | Row context; blanks ignored, zeros included; empty set observed BLANK. |
+| `COUNT` | 1 | no | `COUNTX` | BLANK | yes | Counts numbers, dates and strings; empty strings count, booleans do not. |
+| `COUNTA` | 1 | no | `COUNTAX` | BLANK | yes | Counts non-blank values including booleans. |
+| `COUNTAX` | 2 | yes | — | BLANK | yes | Row context; booleans count. |
+| `COUNTBLANK` | 1 | no | — | unspecified | yes | Empty string counts as blank; dax.guide says never 0, Microsoft Learn says 0 when rows exist. |
+| `COUNTROWS` | 0–1 | no | — | BLANK | yes\* | \*The zero-argument form is rejected by Excel's embedded engine; pass a table there. |
+| `COUNTX` | 2 | yes | — | BLANK | yes | Row context; booleans are not counted. |
+| `DISTINCTCOUNT` | 1 | no | — | BLANK | yes | BLANK is one distinct value; totals are non-additive. |
+| `DISTINCTCOUNTNOBLANK` | 1 | no | `DISTINCTCOUNT` | unspecified | no | Excludes BLANK; rejected by Excel's embedded engine. |
+| `MAX` | 1–2 | no | `MAXX`\* | unspecified | yes | \*Only the one-argument column overload is sugar. Two scalars treat BLANK as significant per dax.guide, as 0 per Microsoft Learn. |
+| `MAXA` | 1 | no | — | unspecified | yes | TRUE/FALSE become 1/0; empty result conflicts across sources. |
+| `MAXX` | 2–3 | yes | — | unspecified | yes | Optional third `Variant` compares mixed types per `ORDER BY DESC`. |
+| `MIN` | 1–2 | no | `MINX`\* | unspecified | yes | \*Only the one-argument column overload is sugar. Two scalars have the same BLANK conflict as `MAX`. |
+| `MINA` | 1 | no | — | unspecified | yes | TRUE/FALSE become 1/0; empty result conflicts across sources. |
+| `MINX` | 2–3 | yes | — | unspecified | yes | Optional third `Variant` compares mixed types per `ORDER BY ASC`. |
+| `PRODUCT` | 1 | no | `PRODUCTX` | BLANK | yes | Multiplies numeric cells, ignoring blanks, logical values and text. |
+| `PRODUCTX` | 2 | yes | — | BLANK | yes | Row context; ignores blank results, unlike the `*` operator. |
+| `SUM` | 1 | no | `SUMX` | BLANK | yes | Adds numeric cells, ignoring blanks, logical values and text. |
+| `SUMX` | 2 | yes | — | BLANK | yes | Row context; blanks, logical values and text ignored. |
+
+`AVERAGEA`, `MAXA` and `MINA` use the X function internally but are not pure sugar: their
+boolean/text coercions differ, so `sugar_of` is `None`. `direct_query_limited` is `true` for all
+22 functions because Microsoft Learn excludes them from calculated columns and RLS rules in
+DirectQuery mode; `APPROXIMATEDISTINCTCOUNT` still supports DirectQuery pushdown in measures.
+
+### Blank policies
+
+- `BlankWhenEmpty` — the result is BLANK when there are no rows or no qualifying value. Used
+  where dax.guide and the observed engine agree, including the observed empty-set results of
+  `SUMX`, `AVERAGEX`, `COUNTX` and `PRODUCTX`.
+- `Unspecified` — dax.guide and Microsoft Learn disagree, or the sources are silent. This is
+  deliberate: the catalog does not pick a winner for `AVERAGE`/`AVERAGEA`, `COUNTBLANK`,
+  `MAX`/`MIN`/`MAXA`/`MINA` or `MAXX`/`MINX`.
+- `ZeroWhenRowsButNoMatch` — documents the Microsoft Learn rule. No function uses it today
+  because no engine observation supported it; it stays in the enum for a future evaluator that
+  needs to model the conflicting rule explicitly.
+
+### Static validation
+
+`validate_expression` walks the AST and reports every argument-count or argument-kind error for a
+catalogued function. Spans point at the offending argument for kind errors and at the whole call
+for arity errors; unknown functions are ignored but their arguments are still visited.
+
+A `ParamKind::Column` argument must be a bracketed `NameRef` (`Sales[Amount]` or `[Amount]`), so
+`SUM ( 1 )` and `AVERAGE ( 1 + 1 )` are rejected. A `ParamKind::Table` argument is rejected only
+when it is certainly scalar — a literal or an operator expression — so `COUNTROWS ( 1 )` fails
+while `COUNTROWS ( DISTINCT ( Sales[Region] ) )`, table variables and `{ 1, 2 }` are accepted.
+`COUNTROWS ()` is valid in the catalog (the Excel limitation is recorded on the function, not
+enforced here). `Expression`, `Scalar`, `Logical` and `Any` are not statically decidable and are
+recorded for documentation and future type checking, so the third `Variant` argument of
+`MAXX`/`MINX` accepts any expression.
 
 ## Extending in later PRs
 
