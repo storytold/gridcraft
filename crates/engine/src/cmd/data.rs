@@ -1,6 +1,7 @@
 //! Data tab: sort, filter, remove duplicates, text to columns, data validation, outline.
 
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, RangeRef, Value, sort_compare};
@@ -923,7 +924,7 @@ fn date_label(item: &DateGroupItem) -> String {
 }
 
 /// Groups sorted leaves into nodes at `depth`, recursing to `leaf`.
-fn date_nodes(leaves: &[(DateGroupItem, Vec<String>, bool)], depth: usize, leaf: usize) -> Vec<DateNode> {
+fn date_nodes(leaves: &[(DateGroupItem, BTreeSet<String>, bool)], depth: usize, leaf: usize) -> Vec<DateNode> {
     let Some(&grouping) = DateGrouping::ALL.get(depth) else { return vec![] };
     let mut out: Vec<DateNode> = vec![];
     let mut start = 0;
@@ -967,7 +968,8 @@ pub fn filter_list(wb: &Workbook, sheet: usize, col: u32) -> FilterList {
         _ => &[],
     });
     let mut seen = std::collections::BTreeMap::new();
-    let mut dates: std::collections::BTreeMap<DateGroupItem, (Vec<String>, bool)> = std::collections::BTreeMap::new();
+    // Every distinct text of a date stays searchable; a set keeps the inserts cheap however many there are.
+    let mut dates: std::collections::BTreeMap<DateGroupItem, (BTreeSet<String>, bool)> = std::collections::BTreeMap::new();
     let mut timed = false;
     for row in af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000) {
         let c = CellRef::new(row, col);
@@ -982,10 +984,8 @@ pub fn filter_list(wb: &Workbook, sheet: usize, col: u32) -> FilterList {
         match date {
             Some(d) => {
                 timed |= d.hour != 0 || d.minute != 0 || d.second != 0;
-                let e = dates.entry(DateGroupItem::of(&d, DateGrouping::Second)).or_insert_with(|| (vec![], false));
-                if !e.0.contains(&t) && e.0.len() < 8 {
-                    e.0.push(t);
-                }
+                let e = dates.entry(DateGroupItem::of(&d, DateGrouping::Second)).or_insert_with(|| (BTreeSet::new(), false));
+                e.0.insert(t);
                 e.1 |= on;
             }
             None => {
@@ -997,16 +997,12 @@ pub fn filter_list(wb: &Workbook, sheet: usize, col: u32) -> FilterList {
     // Leaves are days, or seconds when the column has times.
     let leaf = if timed { 5 } else { 2 };
     let leaf_grouping = DateGrouping::ALL.get(leaf).copied().unwrap_or(DateGrouping::Day);
-    let mut leaves: Vec<(DateGroupItem, Vec<String>, bool)> = vec![];
+    let mut leaves: Vec<(DateGroupItem, BTreeSet<String>, bool)> = vec![];
     for (item, (texts, on)) in dates {
         let key = DateGroupItem::of(&date_time_of(&item), leaf_grouping);
         match leaves.last_mut() {
             Some(last) if DateGroupItem::of(&date_time_of(&last.0), leaf_grouping) == key => {
-                for t in texts {
-                    if !last.1.contains(&t) {
-                        last.1.push(t);
-                    }
-                }
+                last.1.extend(texts);
                 last.2 |= on;
             }
             _ => leaves.push((key, texts, on)),
@@ -1834,6 +1830,25 @@ mod tests {
         let times = filter_list(wb, 0, 1);
         assert!(times.dates.is_empty());
         assert_eq!(times.values.first().map(|(t, _)| t.as_str()), Some("6:00"));
+    }
+
+    #[test]
+    fn every_text_of_a_date_stays_searchable() {
+        // One day shown in nine formats: the dropdown's search must find the ninth text too.
+        let codes = ["yyyy-mm-dd", "d/m/yyyy", "m/d/yyyy", "dd.mm.yyyy", "d mmm yyyy", "mmm d, yyyy", "dddd d", "yyyy/mm/dd", "d mmmm yyyy"];
+        let mut s = Session::new();
+        s.new_workbook();
+        let mut rows = vec![json!(["When"])];
+        rows.extend(codes.iter().map(|_| json!(["2026-03-05"])));
+        s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+        for (i, code) in codes.iter().enumerate() {
+            s.execute("home.numberFormat", json!({"range": format!("A{}", i + 2), "code": code})).unwrap();
+        }
+        s.execute("data.filter", json!({"range": format!("A1:A{}", codes.len() + 1)})).unwrap();
+        let list = filter_list(&s.doc().unwrap().wb, 0, 0);
+        let day = &list.dates[0].children[0].children[0];
+        assert_eq!(day.texts.len(), codes.len(), "{:?}", day.texts);
+        assert!(day.texts.iter().any(|t| t == "5 March 2026"), "{:?}", day.texts);
     }
 
     #[test]
