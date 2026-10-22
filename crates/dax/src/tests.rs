@@ -422,6 +422,15 @@ fn nesting_and_input_length_are_bounded() {
     let call = format!("ROW({args})");
     assert!(call.len() < MAX_INPUT_LEN);
     assert!(parse_expression(&call).is_ok());
+    // Parentheses disappear from the AST, so a grouped chain keeps its depth; adding more
+    // folds around it must still hit the limit.
+    let inner = vec!["1"; 200].join(" + ");
+    let outer = format!("({inner}) + {}", vec!["1"; 100].join(" + "));
+    assert!(outer.len() < MAX_INPUT_LEN);
+    assert!(parse_expression(&outer).is_err(), "a grouped 300-term chain exceeds the nesting limit");
+    let ok_inner = vec!["1"; 100].join(" + ");
+    let ok_outer = format!("({ok_inner}) + {}", vec!["1"; 100].join(" + "));
+    assert!(parse_expression(&ok_outer).is_ok());
 }
 
 #[test]

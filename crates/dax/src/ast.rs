@@ -244,6 +244,30 @@ impl Expr {
         Expr::new(ExprKind::Literal(value), span)
     }
 
+    /// The tree depth (a leaf is 1), computed iteratively so it is safe on any shape the
+    /// parser accepts. The parser uses this to bound the AST that recursive `Debug`,
+    /// `PartialEq` and drop glue would otherwise walk.
+    pub fn depth(&self) -> usize {
+        let mut max = 0;
+        let mut stack = vec![(self, 1usize)];
+        while let Some((node, depth)) = stack.pop() {
+            max = max.max(depth);
+            match &node.kind {
+                ExprKind::Call(call) => stack.extend(call.args.iter().map(|e| (e, depth + 1))),
+                ExprKind::Unary { expr, .. } => stack.push((expr, depth + 1)),
+                ExprKind::Binary { left, right, .. } => {
+                    stack.push((right, depth + 1));
+                    stack.push((left, depth + 1));
+                }
+                ExprKind::Table(items) | ExprKind::Tuple(items) => {
+                    stack.extend(items.iter().map(|e| (e, depth + 1)));
+                }
+                ExprKind::Literal(_) | ExprKind::Name(_) => {}
+            }
+        }
+        max
+    }
+
     /// Visits every node depth-first, parents before children. Iterative, so deeply nested
     /// (but within the parser limits) trees cannot overflow the stack.
     pub fn walk<'a>(&'a self, f: &mut dyn FnMut(&'a Expr)) {

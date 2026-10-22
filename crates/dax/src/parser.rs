@@ -41,6 +41,7 @@ pub fn parse_expression(src: &str) -> Result<Expr, ParseError> {
     }
     let expr = parser.expr(0)?;
     parser.expect_eof()?;
+    ensure_depth(&expr)?;
     Ok(expr)
 }
 
@@ -55,7 +56,18 @@ pub fn parse_query(src: &str) -> Result<Query, ParseError> {
     parser.next();
     let evaluate = parser.expr(0)?;
     parser.expect_eof()?;
+    ensure_depth(&evaluate)?;
     Ok(Query { evaluate })
+}
+
+/// Rejects an AST deeper than [`MAX_DEPTH`] even when parser recursion stayed shallow (for
+/// example a function call wrapped around a grouped chain).
+fn ensure_depth(expr: &Expr) -> Result<(), ParseError> {
+    let depth = expr.depth();
+    if depth > MAX_DEPTH {
+        return Err(ParseError::new(format!("expression is nested too deeply (limit {MAX_DEPTH})"), expr.span));
+    }
+    Ok(())
 }
 
 fn describe(kind: &TokenKind) -> String {
@@ -171,7 +183,6 @@ impl Parser {
 
     fn expr(&mut self, min_bp: u8) -> Result<Expr, ParseError> {
         self.enter()?;
-        let mut folded = 0usize;
         let mut lhs = self.prefix()?;
         while let Some(op) = self.binary_op() {
             let bp = op.precedence();
@@ -179,19 +190,17 @@ impl Parser {
                 break;
             }
             self.next();
-            // The folded node adds a level to the tree, so it counts against the nesting limit
-            // even though the loop itself does not recurse.
-            self.enter()?;
-            folded += 1;
             // `^` is right-associative; every other binary operator is left-associative.
             let next_min = if op.is_right_associative() { bp } else { bp + 1 };
             let rhs = self.expr(next_min)?;
+            // Grouped expressions return their inner tree without a parenthesis node, so the
+            // depth must come from the AST itself, not from the parser's recursion frames.
+            if lhs.depth().max(rhs.depth()) >= MAX_DEPTH {
+                return Err(self.error_here(format!("expression is nested too deeply (limit {MAX_DEPTH})")));
+            }
             let span = lhs.span.to(rhs.span);
             lhs = Expr::new(ExprKind::Binary { op, left: Box::new(lhs), right: Box::new(rhs) }, span);
         }
-        // The folds built a deeper tree, but those levels must not leak into sibling
-        // expressions parsed by the caller.
-        self.depth = self.depth.saturating_sub(folded);
         self.leave();
         Ok(lhs)
     }
