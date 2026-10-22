@@ -1460,7 +1460,6 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
 }
 
-
 #[test]
 fn mirrored_axis_orientation_round_trips() {
     let mk = |id: u32, kind: ChartKind, cell: &str, cat: bool, val: bool| Chart {

@@ -1219,6 +1219,67 @@ fn box_whisker_draws_each_series_quartile_method() {
 }
 
 #[test]
+fn reversed_categories_mirror_the_series_within_a_cluster() {
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered] {
+        let d = sample(kind);
+        let mut c = chart(kind);
+        c.data_labels = false;
+        let normal = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        c.cat_reverse = true;
+        let mirrored = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        // Bars come out series by series, so series `s` in category `j` is bar `s * 6 + j`.
+        // Vertical charts offset a slot on x, horizontal ones on y; index 0 is that axis.
+        // The canvas and the legend swatches are filled rects too: the bars are the rects
+        // sharing the most common size on the slot axis.
+        let bars = |p: &[Prim]| -> Vec<[f32; 3]> {
+            let rects: Vec<[f32; 3]> = p
+                .iter()
+                .filter_map(|q| match q {
+                    Prim::Rect { x, y, w, h, fill: Some(_), .. } => {
+                        Some(if kind == ChartKind::ColumnClustered { [*x, *w, *h] } else { [*y, *h, *w] })
+                    }
+                    _ => None,
+                })
+                .collect();
+            let width = |r: &[f32; 3]| (r[1] * 100.0).round() as i32;
+            let mut counts: Vec<(i32, usize)> = Vec::new();
+            for r in &rects {
+                match counts.iter_mut().find(|(k, _)| *k == width(r)) {
+                    Some((_, n)) => *n += 1,
+                    None => counts.push((width(r), 1)),
+                }
+            }
+            let bw = counts.iter().max_by_key(|(_, n)| *n).map(|(k, _)| *k as f32 / 100.0).unwrap_or(0.0);
+            let bars: Vec<[f32; 3]> = rects.into_iter().filter(|r| (r[1] - bw).abs() < 0.01).collect();
+            assert_eq!(bars.len(), 18, "{kind:?}: bar count");
+            bars
+        };
+        let (n, m) = (bars(&normal), bars(&mirrored));
+        // A horizontal chart's first slot sits at the bottom, so its axis runs the other way.
+        let dir = if kind == ChartKind::ColumnClustered { 1.0 } else { -1.0 };
+        for j in [0usize, 5] {
+            let (a, b, s) = (j, 6 + j, 12 + j);
+            assert!(dir * n[a][0] < dir * n[b][0] && dir * n[b][0] < dir * n[s][0], "{kind:?}: normal slot order in category {j}");
+            assert!(dir * m[a][0] > dir * m[b][0] && dir * m[b][0] > dir * m[s][0], "{kind:?}: reversed slot order in category {j}");
+            // Only the order flips: the cluster keeps the same slots and the same bar size.
+            // The category axis mirrors too, so category `j` sits where `5 - j` was.
+            let (ma, mb, ms) = (5 - j, 11 - j, 17 - j);
+            let mut slots_n = [n[a][0], n[b][0], n[s][0]];
+            let mut slots_m = [m[ma][0], m[mb][0], m[ms][0]];
+            slots_n.sort_by(f32::total_cmp);
+            slots_m.sort_by(f32::total_cmp);
+            for (p, q) in slots_n.iter().zip(&slots_m) {
+                assert!((p - q).abs() < 0.01, "{kind:?}: slot moved: {p} vs {q}");
+            }
+            for (p, q) in [(n[a], m[ms]), (n[b], m[mb]), (n[s], m[ma])] {
+                assert!((p[1] - q[1]).abs() < 0.01, "{kind:?}: bar size changed");
+            }
+        }
+        assert_sane(&mirrored, 640.0, 400.0);
+    }
+}
+
+#[test]
 fn mirrored_axes_flip_the_frame() {
     let d = sample(ChartKind::ColumnClustered);
     let mut c = chart(ChartKind::ColumnClustered);
