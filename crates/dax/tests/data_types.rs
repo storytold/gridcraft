@@ -519,6 +519,9 @@ fn variant_and_binary_have_no_literals_or_operators() {
     assert!(DataType::Variant.metadata().literal_syntax.is_none());
     assert!(DataType::Binary.metadata().literal_syntax.is_none());
     assert!(matches!(parse("VARIANT").kind, ExprKind::Name(_)));
+    // Container children still participate in inference.
+    assert!(infer("{ 1 + { 2 } }").is_err());
+    assert!(infer("(1 + { 2 })").is_err());
     assert!(matches!(parse("BINARY").kind, ExprKind::Name(_)));
     assert_eq!(infer("VARIANT"), Ok(InferredType::Unknown));
     assert_eq!(infer("BINARY"), Ok(InferredType::Unknown));

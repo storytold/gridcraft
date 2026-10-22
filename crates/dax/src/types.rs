@@ -346,7 +346,13 @@ pub fn infer_type(expr: &Expr) -> Result<InferredType, TypeError> {
             let right = infer_type(right)?;
             binary_type(*op, left, right)
         }
-        ExprKind::Table(_) | ExprKind::Tuple(_) => Ok(InferredType::Table),
+        ExprKind::Table(items) | ExprKind::Tuple(items) => {
+            // Containers are tables, but their elements still have to type-check.
+            for item in items {
+                infer_type(item)?;
+            }
+            Ok(InferredType::Table)
+        }
     }
 }
 
