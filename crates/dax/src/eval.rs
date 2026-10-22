@@ -612,9 +612,7 @@ impl<'a> Evaluator<'a> {
                 Ok(TableValue::new(columns, out))
             }
             "TREATAS" => self.eval_table(args.first().ok_or_else(|| EvalError::new("TREATAS needs a table"))?, ctx),
-            _ => {
-                return self.call_categories_table(name, args, ctx).unwrap_or_else(|| Err(EvalError::not_implemented(name)));
-            }
+            _ => self.call_categories_table(name, args, ctx).unwrap_or_else(|| Err(EvalError::not_implemented(name))),
         }
     }
 
@@ -752,6 +750,7 @@ impl<'a> Evaluator<'a> {
         Err(EvalError::new("no active relationship for RELATED"))
     }
 
+    #[allow(dead_code)] // table families use this as they land
     fn table_index_for(&self, table: &TableValue) -> Option<usize> {
         if let Some(lineage) = table.lineage {
             return Some(lineage);
@@ -953,13 +952,13 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
         "ISINTEGER" => Ok(Scalar::Boolean(matches!(arg(0)?, Scalar::Integer(_)))),
         "ISCURRENCY" => Ok(Scalar::Boolean(matches!(arg(0)?, Scalar::Currency(_)))),
         "DATE" => Ok(Scalar::DateTime(date_serial(number(0)? as i64, number(1)? as i64, number(2)? as i64, 0, 0, 0))),
-        "YEAR" => Ok(Scalar::Integer(date_parts(number(0)?).0 as i64)),
-        "MONTH" => Ok(Scalar::Integer(date_parts(number(0)?).1 as i64)),
-        "DAY" => Ok(Scalar::Integer(date_parts(number(0)?).2 as i64)),
+        "YEAR" => Ok(Scalar::Integer(date_parts(number(0)?).0)),
+        "MONTH" => Ok(Scalar::Integer(date_parts(number(0)?).1)),
+        "DAY" => Ok(Scalar::Integer(date_parts(number(0)?).2)),
         "HOUR" => Ok(Scalar::Integer((number(0)?.fract() * 24.0).floor() as i64)),
         "MINUTE" => Ok(Scalar::Integer(((number(0)?.fract() * 24.0).fract() * 60.0).floor() as i64)),
         "SECOND" => Ok(Scalar::Integer((((number(0)?.fract() * 24.0).fract() * 60.0).fract() * 60.0).round() as i64)),
-        "WEEKDAY" => Ok(Scalar::Integer(date_weekday(number(0)?) as i64)),
+        "WEEKDAY" => Ok(Scalar::Integer(date_weekday(number(0)?))),
         "EOMONTH" => Ok(Scalar::DateTime(eomonth(number(0)?, number(1)? as i64))),
         "EDATE" => Ok(Scalar::DateTime(edate(number(0)?, number(1)? as i64))),
         "DATEDIFF" => Ok(Scalar::Integer((number(1)? - number(0)?).trunc() as i64)),

@@ -5,6 +5,7 @@
 //! evaluator's [`Context`](super::Context), so they can choose lazy or eager evaluation and can
 //! push row frames for iterators. This module holds the small, boring pieces they share: scalar
 //! argument coercion, Excel date serials, rounding and row-frame construction.
+#![allow(dead_code)] // helpers are consumed by the per-family modules as they land
 
 use super::*;
 
@@ -169,15 +170,30 @@ pub(crate) fn edate(serial: f64, months: i64) -> f64 {
 }
 
 /// The local date as an Excel serial (TODAY).
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::disallowed_methods)] // wasm has no clock; this branch never compiles for it
 pub(crate) fn today_serial() -> f64 {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();
     (now / 86_400.0).floor() + 25569.0
 }
 
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn today_serial() -> f64 {
+    // The web build has no clock; TODAY/NOW return a fixed serial instead of trapping.
+    25569.0
+}
+
 /// The local date and time as an Excel serial (NOW).
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::disallowed_methods)]
 pub(crate) fn now_serial() -> f64 {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();
     now / 86_400.0 + 25569.0
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn now_serial() -> f64 {
+    25569.0
 }
 
 pub(crate) fn round_to(value: f64, digits: i32) -> f64 {
@@ -304,16 +320,15 @@ pub(crate) fn parse_date_text(text: &str) -> Option<f64> {
         }
         _ => return None,
     };
-    let (hour, minute, second) = match time.and_then(|time| {
-        let parts: Vec<&str> = time.split(':').collect();
-        let hour: i64 = parts.first()?.parse().ok()?;
-        let minute: i64 = parts.get(1).unwrap_or(&"0").parse().ok()?;
-        let second: i64 = parts.get(2).unwrap_or(&"0").parse().ok()?;
-        Some((hour, minute, second))
-    }) {
-        Some(parts) => parts,
-        None => (0, 0, 0),
-    };
+    let (hour, minute, second) = time
+        .and_then(|time| {
+            let parts: Vec<&str> = time.split(':').collect();
+            let hour: i64 = parts.first()?.parse().ok()?;
+            let minute: i64 = parts.get(1).unwrap_or(&"0").parse().ok()?;
+            let second: i64 = parts.get(2).unwrap_or(&"0").parse().ok()?;
+            Some((hour, minute, second))
+        })
+        .unwrap_or_default();
     Some(date_serial(year, month, day, hour, minute, second))
 }
 
