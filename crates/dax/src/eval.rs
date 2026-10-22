@@ -272,7 +272,9 @@ impl<'a> Evaluator<'a> {
             } else {
                 continue;
             };
-            if !filters.filters.keys().any(|(filtered, _)| *filtered == other) || visited.contains(&other) {
+            // Recurse when the related table is filtered directly or through a further
+            // relationship; the visited set keeps cycles bounded.
+            if visited.contains(&other) || !self.table_has_filter(other, filters, &mut BTreeSet::new()) {
                 continue;
             }
             let (Some(self_col), Some(other_col)) = (self.model.column_index(table, self_column), self.model.column_index(other, other_column))
@@ -286,6 +288,40 @@ impl<'a> Evaluator<'a> {
 
         visited.remove(&table);
         TableValue::new(model_table.columns.iter().map(|column| TableColumn { name: column.name.clone() }).collect(), rows).with_lineage(table)
+    }
+
+    /// Whether `table`, or any table reachable from it over active relationships, has a filter.
+    /// This lets filters propagate across several hops (`Sales -> Products -> Category`).
+    fn table_has_filter(&self, table: usize, filters: &FilterContext, visited: &mut BTreeSet<usize>) -> bool {
+        if !visited.insert(table) {
+            return false;
+        }
+        if filters.filters.keys().any(|(filtered, _)| *filtered == table) {
+            return true;
+        }
+        for (index, relationship) in self.model.relationships.iter().enumerate() {
+            let (active, bidirectional) = filters.relationships.get(&index).copied().unwrap_or((!relationship.inactive, relationship.bidirectional));
+            if !active {
+                continue;
+            }
+            let (Some(from), Some(to)) = (self.model.table_index(&relationship.from_table), self.model.table_index(&relationship.to_table)) else {
+                continue;
+            };
+            let next = if from == table {
+                Some(to)
+            } else if bidirectional && to == table {
+                Some(from)
+            } else {
+                None
+            };
+            if let Some(next) = next
+                && next != table
+                && self.table_has_filter(next, filters, visited)
+            {
+                return true;
+            }
+        }
+        false
     }
 
     pub(crate) fn eval_table(&self, expr: &BoundExpr, ctx: &mut Context) -> Result<TableValue, EvalError> {

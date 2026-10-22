@@ -187,6 +187,68 @@ fn bidirectional_filters_do_not_recurse() {
 }
 
 #[test]
+fn filters_propagate_across_several_relationships() {
+    let mut model = DataModel {
+        tables: vec![
+            ModelTable {
+                name: "Sales".into(),
+                columns: vec![
+                    ModelColumn { name: "Amount".into(), data_type: Some("Double".into()) },
+                    ModelColumn { name: "Product".into(), data_type: Some("String".into()) },
+                ],
+                rows: vec![vec![Scalar::Integer(10), Scalar::String("A".into())], vec![Scalar::Integer(20), Scalar::String("B".into())]],
+            },
+            ModelTable {
+                name: "Products".into(),
+                columns: vec![
+                    ModelColumn { name: "Product".into(), data_type: Some("String".into()) },
+                    ModelColumn { name: "Category".into(), data_type: Some("String".into()) },
+                ],
+                rows: vec![
+                    vec![Scalar::String("A".into()), Scalar::String("East".into())],
+                    vec![Scalar::String("B".into()), Scalar::String("West".into())],
+                ],
+            },
+            ModelTable {
+                name: "Categories".into(),
+                columns: vec![
+                    ModelColumn { name: "Category".into(), data_type: Some("String".into()) },
+                    ModelColumn { name: "Name".into(), data_type: Some("String".into()) },
+                ],
+                rows: vec![
+                    vec![Scalar::String("East".into()), Scalar::String("Group East".into())],
+                    vec![Scalar::String("West".into()), Scalar::String("Group West".into())],
+                ],
+            },
+        ],
+        relationships: vec![
+            Relationship {
+                from_table: "Sales".into(),
+                from_column: "Product".into(),
+                to_table: "Products".into(),
+                to_column: "Product".into(),
+                bidirectional: false,
+                inactive: false,
+            },
+            Relationship {
+                from_table: "Products".into(),
+                from_column: "Category".into(),
+                to_table: "Categories".into(),
+                to_column: "Category".into(),
+                bidirectional: false,
+                inactive: false,
+            },
+        ],
+        measures: vec![Measure { name: "Total".into(), formula: "SUM(Sales[Amount])".into(), table: Some("Sales".into()), format: None, expr: None }],
+    };
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expr = parse_expression("CALCULATE([Total], Categories[Name] = \"Group East\")").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    assert_eq!(evaluator.evaluate(&bound).expect("multi-hop filter"), Scalar::Decimal(10.0));
+}
+
+#[test]
 fn userelationship_selects_the_matching_relationship_by_column() {
     let mut model = DataModel {
         tables: vec![
