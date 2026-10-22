@@ -1,0 +1,12 @@
+[package]
+name = "gridcraft-dax"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft DAX language: lexer, Pratt parser, syntax tree and canonical printer"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
