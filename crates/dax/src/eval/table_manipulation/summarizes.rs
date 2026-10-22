@@ -989,10 +989,6 @@ fn compare_scores(left: &[Scalar], right: &[Scalar], keys: &[(&BoundExpr, bool)]
     Ordering::Equal
 }
 
-fn compare_plain_scores(left: &[Scalar], right: &[Scalar]) -> bool {
-    left.iter().zip(right).all(|(left, right)| left.compare(right) == Some(Ordering::Equal))
-}
-
 fn top_n_skip(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<TableValue, EvalError> {
     if args.len() < 3 {
         return Err(EvalError::new("TOPNSKIP needs Rows, Skip and a table"));

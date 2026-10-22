@@ -732,13 +732,7 @@ fn thirty_360(start: f64, end: f64) -> f64 {
     // to 30 when the (adjusted) start day is 30 or 31. Excel therefore counts 2008-08-19 to
     // 2008-12-31 as 132 days, not 131.
     let d1 = if m1 == 2 && d1 >= 28 { 30 } else { d1.min(30) };
-    let d2 = if m2 == 2 && d2 >= 28 {
-        30
-    } else if d2 == 31 && d1 >= 30 {
-        30
-    } else {
-        d2
-    };
+    let d2 = if (m2 == 2 && d2 >= 28) || (d2 == 31 && d1 >= 30) { 30 } else { d2 };
     (360.0 * (y2 - y1) as f64 + 30.0 * (m2 - m1) as f64 + (d2 - d1) as f64) / 360.0
 }
 
