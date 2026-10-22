@@ -413,7 +413,9 @@ fn nesting_and_input_length_are_bounded() {
 
     let chain = vec!["1"; 1_000].join(" + ");
     assert!(chain.len() < MAX_INPUT_LEN);
-    assert_eq!(round_trip(&chain), chain);
+    assert!(parse_expression(&chain).is_err(), "a 1,000-term chain exceeds the nesting limit");
+    let short = vec!["1"; 200].join(" + ");
+    assert_eq!(round_trip(&short), short);
 }
 
 #[test]

@@ -2,7 +2,7 @@
 
 use std::io::Read;
 
-use gridcraft_dax::{Expr, Query, parse_expression, parse_query, print_expression, print_query};
+use gridcraft_dax::{Expr, Query, TokenKind, parse_expression, parse_query, print_expression, print_query, tokenize};
 
 use super::{Args, USAGE};
 
@@ -72,7 +72,5 @@ fn parse_any(text: &str) -> Result<Parsed, String> {
 }
 
 fn starts_with_evaluate(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    let word = trimmed.split(|c: char| c.is_whitespace() || c == '(' || c == ';').next().unwrap_or("");
-    word.eq_ignore_ascii_case("EVALUATE")
+    tokenize(text).is_ok_and(|tokens| matches!(tokens.first().map(|token| &token.kind), Some(TokenKind::Evaluate)))
 }

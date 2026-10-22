@@ -7,7 +7,7 @@
 
 use std::io::{self, Read};
 
-use gridcraft_dax::{parse_expression, parse_query, print_expression, print_query};
+use gridcraft_dax::{TokenKind, parse_expression, parse_query, print_expression, print_query, tokenize};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut text = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
@@ -19,15 +19,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("no DAX expression supplied; pass it as an argument or on stdin".into());
     }
 
-    if let Ok(query) = parse_query(text) {
-        println!("Query");
-        println!("{query:#?}");
-        println!("Canonical: {}", print_query(&query));
-    } else {
-        let expr = parse_expression(text)?;
-        println!("AST");
-        println!("{expr:#?}");
-        println!("Canonical: {}", print_expression(&expr));
+    match parse_query(text) {
+        Ok(query) => {
+            println!("Query");
+            println!("{query:#?}");
+            println!("Canonical: {}", print_query(&query));
+        }
+        Err(query_error) => {
+            if starts_with_evaluate(text) {
+                return Err(query_error.into());
+            }
+            let expr = parse_expression(text)?;
+            println!("AST");
+            println!("{expr:#?}");
+            println!("Canonical: {}", print_expression(&expr));
+        }
     }
     Ok(())
+}
+
+fn starts_with_evaluate(text: &str) -> bool {
+    tokenize(text).is_ok_and(|tokens| matches!(tokens.first().map(|token| &token.kind), Some(TokenKind::Evaluate)))
 }

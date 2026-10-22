@@ -178,6 +178,9 @@ impl Parser {
                 break;
             }
             self.next();
+            // The folded node adds a level to the tree, so it counts against the nesting limit
+            // even though the loop itself does not recurse.
+            self.enter()?;
             // `^` is right-associative; every other binary operator is left-associative.
             let next_min = if op.is_right_associative() { bp } else { bp + 1 };
             let rhs = self.expr(next_min)?;
