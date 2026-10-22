@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (Esc and Enter close a data validation alert over the cell editor; Ctrl+Enter fill gives each cell the automatic number format typing gives it; keytip letters typed with Alt held, #1846; Number Stored as Text indicator and Convert to Number) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (punctuation shortcuts follow the keyboard layout's characters; Esc and Enter close a data validation alert over the cell editor; Ctrl+Enter fill gives each cell the automatic number format typing gives it; keytip letters typed with Alt held, #1846; Number Stored as Text indicator and Convert to Number) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -98,6 +98,9 @@ Checked against Microsoft's published "Keyboard shortcuts in Excel" (Windows and
 `keymap.rs` (everything added in #110, with a `lookup` table that tests cover) and
 `formula_bar.rs` (keys while editing). "Ctrl" means Cmd on a Mac unless the Mac column says
 otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, wherever `$` is).
+Punctuation keys go by the character the keyboard layout types, as in Excel: on a Croatian or German
+keyboard Ctrl+Shift+, types `;` and inserts the date, Ctrl+Shift+. (`:`) the time, Ctrl++ opens Insert.
+A character egui has no key for (`č`, `ö`, `<`) falls back to the key's position.
 
 | Shortcut (Windows) | Mac | Action | Status |
 |---|---|---|---|
@@ -183,6 +186,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-19 | minor | Ctrl+Enter (`range.fill`) gives each cell what typing the input there gives: a General cell gets the automatic number format (`5%`, `$5`, `3/4/2026`, `=TODAY()`) even when it already held a value, and a cell with its own format, a formatted row or column, or Text keeps it. Cells that held a value used to keep General (`5%` showed 0.05), and empty cells took the active cell's format |
 | 2026-10-19 | trivial | While a mouse button is held (a click or a drag selecting cells) the selection outline is drawn on its cells at once instead of gliding after the pointer, which read as lag; keyboard moves still glide |
 | 2026-10-18 | minor | Keytip letters typed with left Alt held continue the sequence (Alt+H, O, A / Alt+H, O, I ran nothing before: Alt+letter cancelled keytips); other Alt combinations, AltGr and macOS Option are unchanged (#1846) |
+| 2026-10-14 | minor | Punctuation shortcuts follow the character the keyboard layout types, digits keep their position: on a Croatian or German keyboard Ctrl+Shift+, (`;`) inserts the date instead of decreasing the font size, Ctrl+Shift+. (`:`) the time, Ctrl++ opens Insert, Ctrl+' copies the formula above, and Ctrl+Shift+0 (`=`) unhides columns instead of opening Insert |
 | 2026-10-17 | minor | A Ctrl+Alt+letter key that types a character (a user-defined Windows hotkey such as Ctrl+Alt+A for `ä`) types it instead of running the Ctrl+letter shortcut, e.g. Select All (#1530) |
 | 2026-10-16 | minor | Right-drag on the fill handle opens the fill menu on release: Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, Series…; Esc cancels the drag or closes the menu without filling |
 | 2026-10-16 | minor | With the active cell in a Table whose header row is scrolled out of view, the column headings show the header names and their filter buttons in place of the letters (#1423) |
