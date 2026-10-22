@@ -117,3 +117,51 @@ fn dragging_the_size_field_resizes_the_chart() {
     let (w1, _) = size(&h, id);
     assert!(w1 > w0 + 20.0, "width went from {w0} to {w1}");
 }
+
+fn right_click(h: &mut Harness, pos: egui::Pos2, wobble: egui::Vec2) {
+    h.input_mut().events.push(Event::PointerMoved(pos));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let end = pos + wobble;
+    if wobble != vec2(0.0, 0.0) {
+        h.input_mut().events.push(Event::PointerMoved(end));
+        h.run_steps(2);
+    }
+    h.input_mut().events.push(Event::PointerButton { pos: end, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+#[test]
+fn right_clicking_a_chart_opens_its_menu_not_the_cells() {
+    // #2067: a right-click on a chart opened the menu of the cell under it, or nothing at all.
+    for wobble in [vec2(0.0, 0.0), vec2(20.0, 10.0)] {
+        let (mut h, id) = fixture();
+        let (w0, h0) = size(&h, id);
+        let inside = corner(&h, id) - vec2(100.0, 80.0);
+        right_click(&mut h, inside, wobble);
+        assert_eq!(h.state().selected_chart, Some(id), "the right-clicked chart is selected ({wobble:?})");
+        assert!(matches!(h.state().grid.object_menu, Some((_, "chart", i)) if i == id), "the chart's menu opens ({wobble:?})");
+        assert!(h.state().grid.context_menu.is_none(), "the cell menu stays closed ({wobble:?})");
+        assert_eq!(size(&h, id), (w0, h0));
+        let a = h.state().session.doc().unwrap().wb.active().unwrap().charts.iter().find(|c| c.id == id).unwrap().anchor;
+        assert_eq!(a.cell, CellRef::parse("D3").unwrap(), "a right-button drag does not move the chart ({wobble:?})");
+    }
+    // Delete from the menu removes the chart.
+    let (mut h, id) = fixture();
+    let inside = corner(&h, id) - vec2(100.0, 80.0);
+    right_click(&mut h, inside, vec2(0.0, 0.0));
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    assert!(h.state().session.doc().unwrap().wb.active().unwrap().charts.is_empty());
+    assert!(h.state().grid.object_menu.is_none());
+    // Outside the chart a right-click still opens the cell menu.
+    let (mut h, _) = fixture();
+    let cell = {
+        let app = h.state();
+        let sh = app.session.doc().unwrap().wb.active().unwrap();
+        Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll).cell_rect(sh, CellRef::parse("A10").unwrap()).center()
+    };
+    right_click(&mut h, cell, vec2(0.0, 0.0));
+    assert!(h.state().grid.context_menu.is_some() && h.state().grid.object_menu.is_none());
+}

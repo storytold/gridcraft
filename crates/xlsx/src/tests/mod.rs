@@ -1,24 +1,33 @@
 //! Integration-style tests: round trips, hand-written fixtures, hostile input and CSV.
 
 mod array_export;
+mod cellmetadata;
+mod chart_book_names;
 mod chart_bool_default;
+mod chart_combo_kinds;
+mod chart_ref_offsets;
 mod csv_tests;
 mod encrypted_tests;
 mod fixtures;
 mod ink_roundtrip;
 mod literal_category_roundtrip;
 mod malformed;
+mod multilevel_category_roundtrip;
+mod note_box;
 mod ods_tests;
 mod passthrough_tests;
+mod phonetic_tests;
 mod pivot_tests;
 mod richdata_tests;
 mod roundtrip;
 mod shape_text_rtl;
+mod shared_media;
 mod sheet_names;
 mod smooth_roundtrip;
 mod trendline_roundtrip;
 mod xls_tests;
 mod xlsb_tests;
+mod zip_order;
 
 use std::io::Write;
 

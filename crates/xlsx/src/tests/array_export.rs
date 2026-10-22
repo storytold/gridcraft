@@ -162,6 +162,47 @@ fn scalar_formulas_constants_and_legacy_cse_do_not_require_dynamic_metadata() {
 }
 
 #[test]
+fn legacy_index_match_formulas_remain_scalar_after_xlsx_roundtrip() {
+    let source = super::minimal(
+        r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>a</t></is></c><c r="B1"><v>0.1</v></c><c r="D1" t="inlineStr"><is><t>c</t></is></c><c r="E1" t="inlineStr"><is><t>x</t></is></c><c r="F1"><f>INDEX($B$1:$B$3,MATCH(D1,$A$1:$A$3,0))</f><v>0.7</v></c><c r="F3" t="str"><f>IF(E1=&quot;&quot;,&quot;&quot;,INDEX($B$1:$B$3,MATCH(D1,$A$1:$A$3,0)))</f><v>0.7</v></c><c r="F5"><f>VLOOKUP(D1,$A$1:$B$3,2,FALSE)</f><v>0.7</v></c><c r="F6"><f>SUM($B$1:$B$3)</f><v>1.2</v></c><c r="F7"><f>MATCH(D1,$A$1:$A$3,0)</f><v>3</v></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>b</t></is></c><c r="B2"><v>0.4</v></c><c r="F2"><f>IFERROR(INDEX($B$1:$B$3,MATCH(D1,$A$1:$A$3,0)),0)</f><v>0.7</v></c></row><row r="3"><c r="A3" t="inlineStr"><is><t>c</t></is></c><c r="B3"><v>0.7</v></c></row></sheetData>"#,
+        &[],
+        "",
+        "",
+    );
+    let (opened, _) = read_xlsx(&source).unwrap();
+    let saved = write_xlsx(&opened).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+
+    for address in ["F1", "F2", "F3", "F5", "F6", "F7"] {
+        assert_scalar(&sheet, address);
+    }
+}
+
+#[test]
+fn shared_legacy_index_match_formulas_remain_scalar_after_xlsx_roundtrip() {
+    let mut body = String::from("<sheetData>");
+    for row in 16..=39 {
+        let formula = if row == 16 {
+            format!(r#"<f t="shared" ref="F16:F39" si="0">IF(E{row}="","",IFERROR(INDEX($B$1:$B$3,MATCH(D{row},$A$1:$A$3,0)),0))</f>"#)
+        } else {
+            r#"<f t="shared" si="0"/>"#.to_string()
+        };
+        body.push_str(&format!(r#"<row r="{row}"><c r="F{row}">{formula}<v>0.7</v></c></row>"#));
+    }
+    body.push_str("</sheetData>");
+    let source = super::minimal(&body, &[], "", "");
+    let (opened, _) = read_xlsx(&source).unwrap();
+    let saved = write_xlsx(&opened).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+
+    for row in 16..=39 {
+        assert_scalar(&sheet, &format!("F{row}"));
+    }
+}
+
+#[test]
 fn calculated_table_column_keeps_formula_and_cell_value() {
     let mut wb = Workbook::new();
     let sh = wb.sheet_mut(0).unwrap();
@@ -304,6 +345,11 @@ fn implicit_intersection_metadata_respects_function_argument_context() {
             ("SQRT(INDIRECT(A1))", true),
             ("INDEX(A1:B3,1,1)", false),
             ("INDEX(A1:A3,1)", false),
+            ("INDEX(A1:A3,MATCH(D1,A1:A3,0))", false),
+            ("IFERROR(INDEX(A1:A3,MATCH(D1,A1:A3,0)),0)", false),
+            ("IF(E1=\"\",\"\",INDEX(A1:A3,MATCH(D1,A1:A3,0)))", false),
+            ("INDEX(A1:B3,MATCH(D1,A1:A3,0),MATCH(E1,A1:B1,0))", false),
+            ("INDEX(A1:B3,MATCH(D1,A1:A3,0))", true),
             ("SUM(INDEX(A1:B3,0,1))", false),
             ("SQRT(INDEX(A1:B3,0,1))", true),
             ("SUM(ROW(A1:A3))", true),
@@ -408,4 +454,29 @@ fn implicit_intersection_metadata_distinguishes_table_rows_and_columns() {
         0,
         &[("Data[@Input]*2", false), ("SUM(Data[Input])", false), ("SUM(Data[Input]*2)", true), ("SQRT(Data[Input])", true)],
     );
+}
+
+#[test]
+fn long_flat_chains_are_scalar_formulas() {
+    // `=A1+A2+…` nests one level per operator. Past the scan's depth limit of 64, a plain sum
+    // of 66 cells was written as a dynamic-array formula; Excel writes it as a plain formula.
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let refs = (1..=1500).map(|r| format!("A{r}")).collect::<Vec<_>>().join("+");
+    let mixed = (1..=1000).map(|r| format!("A{r}*2")).collect::<Vec<_>>().join("-");
+    let literals = vec!["1"; 4096].join("&");
+    let ranges = format!("{refs}+A1:A3");
+    sh.cells.set(at("B1"), formula(&refs, 0.0));
+    sh.cells.set(at("B2"), formula(&mixed, 0.0));
+    sh.cells.set(at("B3"), formula(&literals, 0.0));
+    sh.cells.set(at("B4"), formula(&ranges, 0.0));
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    for address in ["B1", "B2", "B3"] {
+        assert_scalar(&sheet, address);
+    }
+    // A range anywhere in the chain still needs array evaluation.
+    assert_dynamic(&sheet, "B4", "B4");
+    assert_eq!(cell(&sheet, "B1").child("f").unwrap().text, refs);
 }

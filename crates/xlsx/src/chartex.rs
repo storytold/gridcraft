@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 
 use gridcraft_core::RangeRef;
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{Chart, ChartKind, LegendPos, Series, Workbook};
+use gridcraft_model::{Chart, ChartKind, LegendPos, QuartileMethod, Series, Workbook};
 
 use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, esc_attr};
@@ -48,15 +48,13 @@ fn kind_of(layout: &str) -> Option<ChartKind> {
 
 fn formula(dim: &El) -> Option<String> {
     let f = dim.child("f")?;
-    let t = f.text.trim();
-    Some(crate::fmla::from_file(t.strip_prefix('=').unwrap_or(t)))
+    Some(crate::fmla::from_file(&crate::chart::chart_ref_from_file(&f.text)))
 }
 
 fn text(tx: &El) -> Option<String> {
     if let Some(d) = tx.child("txData") {
         if let Some(f) = d.child("f") {
-            let t = f.text.trim();
-            return Some(t.strip_prefix('=').unwrap_or(t).to_string());
+            return Some(crate::chart::chart_ref_from_file(&f.text));
         }
         return d.child("v").map(|v| v.text.clone());
     }
@@ -99,6 +97,10 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
         let (cat, val) = data.iter().find(|(i, _, _)| i == id).map(|(_, c, v)| (c.clone(), v.clone())).unwrap_or_default();
         data_labels |= s.path(&["dataLabels", "visibility"]).is_some_and(|v| v.flag("value", false));
         series.push(Series {
+            quartiles: match s.path(&["layoutPr", "statistics"]).and_then(|el| el.attr("quartileMethod")) {
+                Some("inclusive") => QuartileMethod::Inclusive,
+                _ => QuartileMethod::Exclusive,
+            },
             name: s.child("tx").and_then(text),
             categories: cat,
             values: val.unwrap_or_default(),
@@ -309,9 +311,16 @@ pub fn write_chartex(wb: &Workbook, si: usize, ch: &Chart, names: &mut Vec<Strin
         let _ = write!(s, "<cx:dataId val=\"{i}\"/>");
         match ch.kind {
             ChartKind::Histogram => s.push_str("<cx:layoutPr><cx:binning intervalClosed=\"r\"/></cx:layoutPr>"),
-            ChartKind::BoxWhisker => s.push_str(
-                "<cx:layoutPr><cx:visibility meanLine=\"0\" meanMarker=\"1\" nonoutliers=\"0\" outliers=\"1\"/><cx:statistics quartileMethod=\"exclusive\"/></cx:layoutPr>",
-            ),
+            ChartKind::BoxWhisker => {
+                let method = match ser.quartiles {
+                    QuartileMethod::Exclusive => "exclusive",
+                    QuartileMethod::Inclusive => "inclusive",
+                };
+                let _ = write!(
+                    s,
+                    "<cx:layoutPr><cx:visibility meanLine=\"0\" meanMarker=\"1\" nonoutliers=\"0\" outliers=\"1\"/><cx:statistics quartileMethod=\"{method}\"/></cx:layoutPr>"
+                );
+            }
             ChartKind::Treemap => s.push_str("<cx:layoutPr><cx:parentLabelLayout val=\"overlapping\"/></cx:layoutPr>"),
             _ => {}
         }
@@ -363,4 +372,27 @@ pub fn write_chartex(wb: &Workbook, si: usize, ch: &Chart, names: &mut Vec<Strin
         "</cx:chart><cx:spPr><a:solidFill><a:schemeClr val=\"bg1\"/></a:solidFill><a:ln w=\"9525\"><a:solidFill>{GREY}</a:solidFill></a:ln></cx:spPr></cx:chartSpace>"
     );
     s
+}
+
+#[cfg(test)]
+mod quartile_tests {
+    use super::*;
+
+    #[test]
+    fn box_whisker_reads_quartile_method_and_defaults() {
+        for (statistics, expected) in [
+            ("", QuartileMethod::Exclusive),
+            ("<cx:statistics/>", QuartileMethod::Exclusive),
+            (r#"<cx:statistics quartileMethod="unknown"/>"#, QuartileMethod::Exclusive),
+            (r#"<cx:statistics quartileMethod="exclusive"/>"#, QuartileMethod::Exclusive),
+            (r#"<cx:statistics quartileMethod="inclusive"/>"#, QuartileMethod::Inclusive),
+        ] {
+            let xml = format!(
+                r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex"><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="boxWhisker"><cx:layoutPr>{statistics}</cx:layoutPr></cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#
+            );
+            let root = crate::xml::parse(xml.as_bytes()).unwrap();
+            let chart = read_chartex(&root).unwrap();
+            assert_eq!(chart.series[0].quartiles, expected);
+        }
+    }
 }

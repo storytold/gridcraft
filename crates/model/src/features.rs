@@ -323,6 +323,34 @@ pub struct Comment {
     /// read from the file (`dT`); empty when unknown, e.g. for comments made here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dates: Vec<String>,
+    /// Where the note's box sits and how big it is, as read from the file; `None` (a note made
+    /// here, or a file without the shape) writes the default box next to the cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_box: Option<NoteBox>,
+}
+
+/// A note box's place and size, from the note's VML shape: Excel's `<x:Anchor>` with its corners
+/// stored relative to the note's cell, so the box moves with the note when rows or columns are
+/// inserted or deleted, and the shape's width and height.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NoteBox {
+    /// Top-left corner: columns and rows from the note's cell (negative = left of or above it),
+    /// then the pixel offset into that column and row.
+    pub from: NoteCorner,
+    /// Bottom-right corner, the same way.
+    pub to: NoteCorner,
+    /// The shape's width and height in points (the VML style's `width`/`height`), when given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_pt: Option<(f64, f64)>,
+}
+
+/// One corner of a [`NoteBox`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteCorner {
+    pub col: i64,
+    pub col_px: u32,
+    pub row: i64,
+    pub row_px: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -406,6 +434,14 @@ pub enum LegendPos {
     Right,
 }
 
+/// Quartile calculation for a box & whisker series.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QuartileMethod {
+    #[default]
+    Exclusive,
+    Inclusive,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Series {
     /// Formula text for the series name (`Sheet1!$B$1`) or a literal.
@@ -421,6 +457,9 @@ pub struct Series {
     /// Draw line segments as a smoothed (spline) curve.
     #[serde(default)]
     pub smooth: bool,
+    /// Box & whisker quartiles; Excel defaults to exclusive.
+    #[serde(default)]
+    pub quartiles: QuartileMethod,
     /// Trendlines fitted to this series (Excel allows several per series).
     #[serde(default)]
     pub trendlines: Vec<Trendline>,
@@ -482,6 +521,18 @@ pub struct Trendline {
     pub dash: Option<LineDash>,
 }
 
+impl Trendline {
+    /// Longest forward / backward forecast kept from a file or a command, in x units. Excel's own
+    /// limit is unconfirmed; the renderer additionally bounds the forecast by the plot's slot budget.
+    pub const MAX_FORECAST: f64 = 100_000.0;
+
+    /// A forecast distance as stored: finite, not negative (NaN and infinity become 0) and at most
+    /// [`Self::MAX_FORECAST`].
+    pub fn clamp_forecast(v: f64) -> f64 {
+        if v.is_finite() && v > 0.0 { v.min(Self::MAX_FORECAST) } else { 0.0 }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Chart {
     pub id: u32,
@@ -508,9 +559,10 @@ pub struct Chart {
 pub struct Image {
     pub id: u32,
     pub anchor: Anchor,
-    /// Encoded bytes (PNG/JPEG), base64 in JSON.
-    #[serde(with = "crate::b64")]
-    pub data: Vec<u8>,
+    /// Encoded bytes (PNG/JPEG), base64 in JSON. Shared, so a copy of the sheet (an undo step)
+    /// doesn't copy the picture.
+    #[serde(with = "crate::b64::shared")]
+    pub data: std::sync::Arc<Vec<u8>>,
     pub mime: String,
     pub alt: String,
 }
@@ -867,7 +919,7 @@ pub fn password_hash(pw: &str) -> u64 {
 /// Outline grouping info for a row or column.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LineInfo {
-    /// Size in points; `None` = default (rows auto-fit to content).
+    /// Size in pixels at 96 dpi; `None` = default (rows auto-fit to content).
     pub size: Option<f32>,
     pub hidden: bool,
     pub outline: u8,
@@ -1046,5 +1098,21 @@ impl Default for PivotTable {
             values_on_rows: false,
             values_position: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod trendline_forecast_tests {
+    use super::Trendline;
+
+    #[test]
+    fn clamp_forecast_bounds_hostile_values() {
+        assert_eq!(Trendline::clamp_forecast(2.5), 2.5);
+        assert_eq!(Trendline::clamp_forecast(0.0), 0.0);
+        assert_eq!(Trendline::clamp_forecast(-4.0), 0.0);
+        assert_eq!(Trendline::clamp_forecast(f64::NAN), 0.0);
+        assert_eq!(Trendline::clamp_forecast(f64::INFINITY), 0.0);
+        assert_eq!(Trendline::clamp_forecast(f64::NEG_INFINITY), 0.0);
+        assert_eq!(Trendline::clamp_forecast(1e300), Trendline::MAX_FORECAST);
     }
 }

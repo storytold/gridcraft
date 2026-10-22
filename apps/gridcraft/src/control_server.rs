@@ -119,14 +119,23 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context) {
                 Line::Reject(e) => e,
                 Line::Request { id, method, params } => {
                     let (req, rx) = ControlRequest::new(method, params);
+                    let state = std::sync::Arc::clone(&req.state);
                     if tx.send(req).is_err() {
                         break;
                     }
                     // Wake the UI thread: egui only runs frames when something happens.
                     ctx.request_repaint();
-                    let mut reply = rx
-                        .recv_timeout(Duration::from_secs(60))
-                        .unwrap_or_else(|_| json!({"ok": false, "error": "timed out waiting for the UI (is the window minimised?)"}));
+                    let mut reply = rx.recv_timeout(Duration::from_secs(60)).unwrap_or_else(|_| {
+                        // Give up on the request as well as on its reply. While it is still
+                        // queued this keeps it from running late -- the client was told it had
+                        // failed, and an agent that retried after the error ran it twice (#1914);
+                        // if the app had already started it, its outcome is unknown instead.
+                        if ControlRequest::abandon(&state) {
+                            json!({"ok": false, "error": "timed out waiting for the UI (is the window minimised?)"})
+                        } else {
+                            json!({"ok": false, "error": "timed out waiting for the UI, which had already started the request, so it may still finish; its outcome is unknown"})
+                        }
+                    });
                     if let Some(o) = reply.as_object_mut() {
                         o.insert("id".into(), id);
                     }

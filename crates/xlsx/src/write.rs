@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use gridcraft_core::RangeRef;
 use gridcraft_formula::quote_sheet;
-use gridcraft_model::{CalcMode, CalcSettings, Style, Visibility, Workbook};
+use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style, Visibility, Workbook};
 
 use crate::package::ZipOut;
 use crate::xml::{esc, esc_attr};
@@ -113,6 +113,8 @@ pub struct Out {
     pub sst: Sst,
     pub images: u32,
     pub charts: u32,
+    /// The workbook's file name, which a PivotChart's link to its PivotTable names in brackets.
+    pub book_name: String,
     /// References of chartex parts, defined as hidden `_xlchart.v1.N` names.
     pub chart_names: Vec<String>,
     pub drawings: u32,
@@ -134,6 +136,20 @@ impl Out {
             self.overrides.push((format!("/{name}"), ct.to_string()));
         }
         self.parts.push((name.to_string(), data));
+    }
+    /// The `xl/media` file name (`imageN.ext`) holding `data`. A picture used on several sheets,
+    /// or twice on one, is written once and every drawing points to that part, as in Excel.
+    pub fn image_part(&mut self, ext: &str, data: &[u8]) -> String {
+        let existing = self.parts.iter().find(|(name, bytes)| {
+            name.strip_prefix("xl/media/image").is_some_and(|rest| rest.ends_with(&format!(".{ext}"))) && bytes.as_slice() == data
+        });
+        if let Some((name, _)) = existing {
+            return name.trim_start_matches("xl/media/").to_string();
+        }
+        self.images += 1;
+        let file = format!("image{}.{ext}", self.images);
+        self.part(&format!("xl/media/{file}"), None, data.to_vec());
+        file
     }
     pub fn default_type(&mut self, ext: &str, ct: &str) {
         self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string());
@@ -185,7 +201,16 @@ fn check_sheet_names(wb: &Workbook) -> Result<(), IoError> {
     Ok(())
 }
 
+/// Workbook name written in a PivotChart's link when the file name isn't known.
+const DEFAULT_BOOK_NAME: &str = "Workbook.xlsx";
+
 pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
+    write_xlsx_named(wb, kind, None)
+}
+
+/// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
+/// PivotTable in Excel only when its link starts with the workbook in brackets.
+pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
     }
@@ -201,6 +226,7 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
         sst: Sst::default(),
         images: 0,
         charts: 0,
+        book_name: book_name.filter(|n| !n.is_empty() && !n.contains(['[', ']'])).unwrap_or(DEFAULT_BOOK_NAME).to_string(),
         chart_names: vec![],
         drawings: 0,
         tables: 0,
@@ -212,6 +238,7 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
         cell_pictures: Default::default(),
         kept: Default::default(),
     };
+    out.kept.reserve_vml_blocks(wb);
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
     out.default_type("xml", "application/xml");
 
@@ -314,8 +341,20 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     }
 
     let mut w = format!("{XML_DECL}<workbook xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">");
-    w.push_str(&crate::passthrough::workbook_elements(wb, "fileVersion"));
-    w.push_str(if wb.date_system == gridcraft_core::DateSystem::D1904 { "<workbookPr date1904=\"1\"/>" } else { "<workbookPr/>" });
+    // A workbook read from a file keeps its <fileVersion> as it was: Excel trusts the saved values
+    // only when appName is "xl" (#799). One without names GridCraft (#1699), and Excel recalculates it.
+    let file_version = crate::passthrough::workbook_elements(wb, "fileVersion");
+    w.push_str(if file_version.is_empty() { "<fileVersion appName=\"gridcraft\"/>" } else { &file_version });
+    w.push_str("<workbookPr");
+    match wb.show_objects {
+        ShowObjects::All => {}
+        ShowObjects::Placeholders => w.push_str(" showObjects=\"placeholders\""),
+        ShowObjects::None => w.push_str(" showObjects=\"none\""),
+    }
+    if wb.date_system == gridcraft_core::DateSystem::D1904 {
+        w.push_str(" date1904=\"1\"");
+    }
+    w.push_str("/>");
     if wb.protected_structure {
         let pw = wb.structure_password.as_ref().map(|h| crate::sheet_write::password_attrs(h, "workbook")).unwrap_or_default();
         let _ = write!(w, "<workbookProtection{pw} lockStructure=\"1\"/>");
@@ -373,9 +412,12 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
         crate::theme::write_theme(&wb.theme).into_bytes(),
     );
     wb_rels.add("theme", "theme/theme1.xml");
+    // Phonetic (furigana) data is kept per string text: the table below holds each text once, so
+    // the runs of the entry with that text are written next to it (`Workbook::phonetics`).
+    let phonetics: HashMap<&str, &PhoneticString> = wb.phonetics.iter().map(|p| (p.text.as_str(), p)).collect();
     let mut sst = format!("{XML_DECL}<sst xmlns=\"{NS_MAIN}\" count=\"{}\" uniqueCount=\"{}\">", out.sst.count, out.sst.list.len());
     for t in &out.sst.list {
-        let _ = write!(sst, "<si>{}</si>", crate::xml::t_el(t));
+        let _ = write!(sst, "<si>{}</si>", crate::xml::si_body(t, phonetics.get(t.as_str()).copied()));
     }
     sst.push_str("</sst>");
     out.part("xl/sharedStrings.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"), sst.into_bytes());
@@ -404,7 +446,7 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     // A macro-free package can't hold a VBA project (Excel refuses such a file).
     if let Some(data) = wb.vba_project.as_ref().filter(|_| kind.is_macro_enabled()) {
         wb_rels.add("vbaProject", "vbaProject.bin");
-        out.part("xl/vbaProject.bin", Some(CT_VBA), data.clone());
+        out.part("xl/vbaProject.bin", Some(CT_VBA), data.to_vec());
     }
     out.part("xl/_rels/workbook.xml.rels", None, wb_rels.xml().into_bytes());
 
@@ -452,13 +494,15 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     ct.push_str("</Types>");
     let mut zip = ZipOut::new();
     zip.add("[Content_Types].xml", ct.as_bytes())?;
-    // Conventional order: rels, docProps, workbook, the rest.
+    // Excel's order: rels, workbook rels, workbook, the rest, document properties last. libmagic (PHP
+    // `finfo`, `file`) recognises an OOXML package only when an `xl/` entry name appears within the
+    // first few KB, so no user-sized part (document properties, a long description) may precede it.
     let rank = |n: &str| match n {
         "_rels/.rels" => 0,
-        n if n.starts_with("docProps/") => 1,
+        "xl/_rels/workbook.xml.rels" => 1,
         "xl/workbook.xml" => 2,
-        "xl/_rels/workbook.xml.rels" => 3,
-        _ => 4,
+        n if n.starts_with("docProps/") => 4,
+        _ => 3,
     };
     let mut parts = std::mem::take(&mut out.parts);
     parts.sort_by_key(|(n, _)| rank(n));

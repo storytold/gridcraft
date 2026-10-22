@@ -8,8 +8,8 @@ use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRe
 use gridcraft_formula::Expr;
 use gridcraft_model::{
     AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
-    Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation, ValidationKind,
-    XmlColumnPr,
+    NoteBox, NoteCorner, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation,
+    ValidationKind, XmlColumnPr,
 };
 
 use crate::IoError;
@@ -38,6 +38,7 @@ struct RowState {
 }
 
 const MAX_HYPERLINK_CELLS: u64 = 10_000;
+const MAX_COLUMN_ASSIGNMENTS: u64 = 1_000_000;
 
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
@@ -61,6 +62,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     drop(bytes);
 
     let mut fit_to_page = false;
+    let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
     cx.cf_ext_ids.clear();
     for e in &root.children {
         match e.name.as_str() {
@@ -88,7 +90,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                     sheet.default_col_width = px as f32;
                 }
             }
-            "cols" => read_cols(cx, e, &mut sheet),
+            "cols" => read_cols(cx, e, &mut sheet, &mut column_assignments_left)?,
             "mergeCells" => {
                 for m in e.kids("mergeCell") {
                     if let Some(r) = m.attr("ref").and_then(RangeRef::parse)
@@ -210,12 +212,13 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
             read_threaded(cx, &x, &mut sheet);
         }
     }
-    // Which notes are displayed lives in the VML shapes (`<x:Visible/>`). Best effort: the VML is
-    // only read for that flag, so a part that doesn't parse is skipped without a warning.
+    // Which notes are displayed (`<x:Visible/>`) and where their boxes sit live in the VML shapes.
+    // Best effort: the VML is only read for those, so a part that doesn't parse is skipped without
+    // a warning.
     if !sheet.comments.is_empty() {
         for rel in rels.iter().filter(|r| r.kind == "vmlDrawing") {
             if let Ok(Some(x)) = cx.pkg.read_xml(&rel.target) {
-                read_note_visibility(&x, &mut sheet, 0);
+                read_note_shapes(&x, &mut sheet, 0);
             }
         }
     }
@@ -300,7 +303,7 @@ fn read_views(e: &El, sheet: &mut Sheet) {
     }
 }
 
-fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet) {
+fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Result<(), IoError> {
     for c in e.kids("col") {
         let (Some(min), Some(max)) = (c.attr_u32("min"), c.attr_u32("max")) else { continue };
         if min == 0 || min > MAX_COLS || max < min {
@@ -324,14 +327,20 @@ fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet) {
                 info.style = Some(id);
             }
         }
-        // A width equal to the default with nothing else set is noise.
-        if info == LineInfo::default() || (info.size == Some(sheet.default_col_width) && LineInfo { size: None, ..info } == LineInfo::default()) {
+        // A custom width equal to the default still pins the column (Standard Width leaves it alone).
+        if info == LineInfo::default() {
             continue;
         }
+        // Overlapping declarations repeat work even when the final map stays small.
+        // Charge the clipped span before expansion, sharing the budget across <cols> blocks.
+        *remaining = remaining
+            .checked_sub(u64::from(max - min + 1))
+            .ok_or_else(|| IoError::TooLarge(format!("sheet \"{}\": more than {MAX_COLUMN_ASSIGNMENTS} expanded column assignments", sheet.name)))?;
         for col in (min - 1)..max {
             sheet.cols.insert(col, info);
         }
     }
+    Ok(())
 }
 
 fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
@@ -456,6 +465,11 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
+    // Keep the file's dynamic-array mark, so saving never turns the formula into a legacy one.
+    read_formula_text(cx, st, f, pos, dynamic).map(|fm| Formula { dynamic, ..fm })
+}
+
+fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
     let model = from_file(f.text.trim());
     let text = model.as_str();
     match f.attr("t").unwrap_or("normal") {
@@ -882,32 +896,61 @@ fn read_comments(x: &El, sheet: &mut Sheet) {
         {
             text = rest.strip_prefix('\n').unwrap_or(rest).to_string();
         }
-        sheet.comments.insert(cell, Comment { author, text, replies: vec![], threaded: false, resolved: false, visible: false, dates: vec![] });
+        sheet
+            .comments
+            .insert(cell, Comment { author, text, replies: vec![], threaded: false, resolved: false, visible: false, dates: vec![], note_box: None });
     }
 }
 
-/// Marks the notes whose VML shape carries `<x:Visible/>` as shown. Shapes may sit in groups.
-fn read_note_visibility(x: &El, sheet: &mut Sheet, depth: usize) {
+/// Reads the notes' VML shapes: a shape carrying `<x:Visible/>` marks its note as shown, and its
+/// `<x:Anchor>` and style size become the note's box. Shapes may sit in groups.
+fn read_note_shapes(x: &El, sheet: &mut Sheet, depth: usize) {
     if depth > xml::MAX_DEPTH {
         return;
     }
     for e in &x.children {
         if e.name != "shape" {
-            read_note_visibility(e, sheet, depth + 1);
+            read_note_shapes(e, sheet, depth + 1);
             continue;
         }
         let Some(cd) = e.child("ClientData").filter(|cd| cd.attr("ObjectType") == Some("Note")) else { continue };
-        if cd.child("Visible").is_none() {
-            continue;
-        }
         let num = |k: &str| cd.child(k).and_then(|v| v.text.trim().parse::<u32>().ok());
-        if let (Some(row), Some(col)) = (num("Row"), num("Column"))
-            && let Some(c) = sheet.comments.get_mut(&CellRef::new(row, col))
-            && !c.threaded
-        {
+        let (Some(row), Some(col)) = (num("Row"), num("Column")) else { continue };
+        let cell = CellRef::new(row, col);
+        let Some(c) = sheet.comments.get_mut(&cell) else { continue };
+        if cd.child("Visible").is_some() && !c.threaded {
             c.visible = true;
         }
+        if let Some(anchor) = cd.child("Anchor") {
+            c.note_box = note_box(&anchor.text, e.attr("style").unwrap_or(""), cell).filter(|b| *b != crate::sheet_write::DEFAULT_NOTE_BOX);
+        }
     }
+}
+
+/// A note's box from its VML `<x:Anchor>` (`LeftColumn, LeftOffset, TopRow, TopOffset,
+/// RightColumn, RightOffset, BottomRow, BottomOffset`; offsets in pixels) and its shape's style,
+/// the corners made relative to the note's `cell`. `None` when the anchor isn't eight in-sheet
+/// numbers.
+fn note_box(anchor: &str, style: &str, cell: CellRef) -> Option<NoteBox> {
+    let v: Vec<u32> = anchor.split(',').map(|p| p.trim().parse::<u32>().ok()).collect::<Option<_>>()?;
+    let [c1, dx1, r1, dy1, c2, dx2, r2, dy2] = <[u32; 8]>::try_from(v).ok()?;
+    if c1.max(c2) >= MAX_COLS || r1.max(r2) >= MAX_ROWS {
+        return None;
+    }
+    let corner = |c: u32, dx: u32, r: u32, dy: u32| NoteCorner {
+        col: i64::from(c) - i64::from(cell.col),
+        col_px: dx,
+        row: i64::from(r) - i64::from(cell.row),
+        row_px: dy,
+    };
+    let pt = |key: &str| {
+        style
+            .split(';')
+            .filter_map(|d| d.split_once(':'))
+            .find(|(k, _)| k.trim().eq_ignore_ascii_case(key))
+            .and_then(|(_, v)| v.trim().strip_suffix("pt")?.trim().parse::<f64>().ok().filter(|n| n.is_finite() && *n > 0.0 && *n < 1e6))
+    };
+    Some(NoteBox { from: corner(c1, dx1, r1, dy1), to: corner(c2, dx2, r2, dy2), size_pt: pt("width").zip(pt("height")) })
 }
 
 fn read_threaded(cx: &Ctx<'_>, x: &El, sheet: &mut Sheet) {
@@ -925,9 +968,10 @@ fn read_threaded(cx: &Ctx<'_>, x: &El, sheet: &mut Sheet) {
                     by_id.insert(id.to_string(), cell);
                 }
                 let dates = if date.is_empty() { vec![] } else { vec![date] };
-                sheet
-                    .comments
-                    .insert(cell, Comment { author, text, replies: vec![], threaded: true, resolved: t.flag("done", false), visible: false, dates });
+                sheet.comments.insert(
+                    cell,
+                    Comment { author, text, replies: vec![], threaded: true, resolved: t.flag("done", false), visible: false, dates, note_box: None },
+                );
             }
         }
     }

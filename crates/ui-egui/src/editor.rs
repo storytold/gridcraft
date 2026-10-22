@@ -32,6 +32,8 @@ pub struct EditState {
     pub point: Option<(usize, usize)>,
     /// Where point mode's keyboard cursor is.
     pub point_cell: Option<CellRef>,
+    /// The fixed range anchor and its sheet while pointing with the mouse or keyboard.
+    pub point_anchor: Option<(usize, CellRef)>,
     pub autocomplete: Vec<String>,
     pub ac_index: usize,
     pub request_focus: bool,
@@ -56,6 +58,7 @@ impl EditState {
             caret,
             point: None,
             point_cell: None,
+            point_anchor: None,
             autocomplete: vec![],
             ac_index: 0,
             request_focus: true,
@@ -81,14 +84,16 @@ impl EditState {
         if !self.is_formula() {
             return false;
         }
-        if let Some((_, e)) = self.point
-            && e == self.byte_caret()
-        {
+        if self.point_at_caret() {
             return true;
         }
         let before = self.text.get(..self.byte_caret()).unwrap_or("");
         let last = before.trim_end().chars().last();
         matches!(last, Some('=' | '(' | ',' | '+' | '-' | '*' | '/' | '^' | '&' | '<' | '>' | ':' | ';' | '{'))
+    }
+
+    pub fn point_at_caret(&self) -> bool {
+        self.point.is_some_and(|(start, end)| end == self.byte_caret() && self.text.get(start..end).is_some())
     }
 
     /// Inserts (or replaces the last pointed) reference text at the caret.
@@ -105,6 +110,17 @@ impl EditState {
         self.caret = self.text.get(..new_end).map(|s| s.chars().count()).unwrap_or(0);
         self.caret_to_end = false;
         self.sync_caret = true;
+    }
+
+    /// Add another argument after the current pointed reference. Keep only the new reference
+    /// replaceable, so a subsequent plain click does not remove earlier arguments or the separator.
+    pub fn append_ref(&mut self, r: &str) {
+        let separator = if self.point_at_caret() { self.locale.list_separator().to_string() } else { String::new() };
+        self.point = None;
+        self.insert_ref(&format!("{separator}{r}"));
+        if let Some((start, end)) = self.point {
+            self.point = Some((start + separator.len(), end));
+        }
     }
 
     /// Updates function autocomplete for the word before the caret.
@@ -139,6 +155,44 @@ impl EditState {
         self.text = format!("{a}{name}({b}");
         self.caret = self.text.get(..start + name.len() + 1).map(|s| s.chars().count()).unwrap_or(0);
         self.autocomplete.clear();
+        self.caret_to_end = false;
+        self.sync_caret = true;
+        true
+    }
+
+    /// Ctrl+Shift+A, as in Excel: right after a function name, or after its `(`, inserts the
+    /// argument names (optional ones without their brackets) and the closing parenthesis, and
+    /// the `(` too when missing. Anywhere else nothing changes and it returns false.
+    pub fn insert_argument_names(&mut self, language: crate::i18n::Language) -> bool {
+        if !self.is_formula() {
+            return false;
+        }
+        let caret_b = self.byte_caret();
+        let (Some(before), Some(after)) = (self.text.get(..caret_b), self.text.get(caret_b..)) else { return false };
+        // An odd number of quotes before the caret: it is inside a text literal.
+        if before.matches('"').count() % 2 == 1 {
+            return false;
+        }
+        let open = before.ends_with('(');
+        if !open && after.starts_with('(') {
+            return false;
+        }
+        let head = before.strip_suffix('(').unwrap_or(before);
+        let name: String =
+            head.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+        if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
+            return false;
+        }
+        let Some(signature) = crate::formula_locale::signature(&name, self.locale, language) else { return false };
+        let sep = self.locale.list_separator();
+        let inner = signature.split_once('(').map(|(_, rest)| rest.trim_end().trim_end_matches(')')).unwrap_or("");
+        let args: Vec<&str> = inner.split(sep).map(|a| a.trim().trim_start_matches('[').trim_end_matches(']')).filter(|a| !a.is_empty()).collect();
+        let close = if open && after.starts_with(')') { "" } else { ")" };
+        let inserted = format!("{}{}{close}", if open { "" } else { "(" }, args.join(&sep.to_string()));
+        self.text = format!("{before}{inserted}{after}");
+        self.caret += inserted.chars().count();
+        self.autocomplete.clear();
+        self.completion = None;
         self.caret_to_end = false;
         self.sync_caret = true;
         true
@@ -208,20 +262,29 @@ pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, 
             Tok::Sheet(a, _) => (Some(a.clone()), toks[i].start, i + 1),
             _ => (None, toks[i].start, i),
         };
-        if let Some(Tok::Word(w)) = toks.get(j).map(|t| &t.tok)
-            && let Some(c) = CellRef::parse(w)
-        {
-            let mut end = toks[j].end;
-            let mut range = RangeRef::cell(c);
-            if let (Some(Tok::Colon | Tok::Trim(_)), Some(Tok::Word(w2))) = (toks.get(j + 1).map(|t| &t.tok), toks.get(j + 2).map(|t| &t.tok))
-                && let Some(c2) = CellRef::parse(w2)
-            {
-                range = RangeRef::new(c, c2);
-                end = toks[j + 2].end;
-                i = j + 3;
+        if let Some(Tok::Word(w)) = toks.get(j).map(|t| &t.tok) {
+            let range_end = if matches!(toks.get(j + 1).map(|t| &t.tok), Some(Tok::Colon | Tok::Trim(_))) {
+                toks.get(j + 2).and_then(|token| {
+                    let end = match &token.tok {
+                        Tok::Word(w) => Some(w.clone()),
+                        Tok::Number(n) if n.fract() == 0.0 && *n >= 1.0 => Some(format!("{n}")),
+                        _ => None,
+                    }?;
+                    RangeRef::parse(&format!("{w}:{end}")).map(|range| (range, token.end))
+                })
             } else {
+                None
+            };
+            let (range, end) = if let Some(range_end) = range_end {
+                i = j + 3;
+                range_end
+            } else if let Some(c) = CellRef::parse(w) {
                 i = j + 1;
-            }
+                (RangeRef::cell(c), toks[j].end)
+            } else {
+                i += 1;
+                continue;
+            };
             let key = body.get(start..end).unwrap_or("").replace('$', "").to_ascii_uppercase();
             let idx = match seen.iter().position(|k| *k == key) {
                 Some(k) => k,
@@ -345,5 +408,27 @@ mod tests {
         assert!(ref_is_on_sheet(Some("Sheet2"), "Sheet1", "Sheet2"));
         assert!(!ref_is_on_sheet(Some("Sheet2"), "Sheet1", "Sheet1"));
         assert!(ref_is_on_sheet(Some("sheet2"), "Sheet1", "Sheet2"), "sheet names compare ignoring case");
+    }
+
+    #[test]
+    fn whole_row_and_column_ref_spans() {
+        let refs = formula_refs("=SUM(C:C,4:6,$D:$E,Sheet2!7:8)");
+        assert_eq!(refs.len(), 4);
+        assert_eq!(refs[0].2.a1(), "C:C");
+        assert_eq!(refs[1].2.a1(), "4:6");
+        assert_eq!(refs[2].2.a1(), "D:E");
+        assert_eq!(refs[3].2.a1(), "7:8");
+        assert_eq!(refs[3].3.as_deref(), Some("Sheet2"));
+    }
+
+    #[test]
+    fn inserting_a_union_keeps_each_reference_separately_pointed() {
+        let mut edit = EditState::new(0, CellRef::new(0, 0), "=SUM(".into(), true, false);
+        edit.insert_ref("C:C");
+        edit.append_ref("E:E");
+        assert_eq!(edit.text, "=SUM(C:C,E:E");
+        assert_eq!(formula_refs(&edit.text).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["C:C", "E:E"]);
+        assert_eq!(edit.point, Some((9, 12)));
+        assert!(edit.can_point());
     }
 }

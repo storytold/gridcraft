@@ -77,6 +77,29 @@ fn drawing_and_text() {
 }
 
 #[test]
+fn uri_and_page_links_are_real_pdf_annotations() {
+    let mut d = PdfDoc::new();
+    let first = d.add_page(200.0, 300.0);
+    first.link_uri(10.0, 20.0, 80.0, 30.0, "https://example.org/a(b)?q=£");
+    first.link_page(100.0, 40.0, 50.0, 20.0, 1, 35.0, 60.0);
+    first.link_uri(-20.0, -20.0, 40.0, 40.0, "mailto:a@example.org");
+    first.link_uri(0.0, 0.0, f32::NAN, 10.0, "https://bad.example");
+    first.link_uri(0.0, 0.0, 10.0, 10.0, "javascript:alert(1)");
+    let second = d.add_page(100.0, 200.0);
+    second.link_page(0.0, 0.0, 10.0, 10.0, 99, 0.0, 0.0);
+    let pdf = d.finish();
+    check_xref(&pdf);
+    let s = String::from_utf8_lossy(&pdf);
+    assert_eq!(s.matches("/Subtype /Link").count(), 3);
+    assert!(s.contains("/Annots ["));
+    assert!(s.contains("/Rect [10 250 90 280]"));
+    assert!(s.contains("/Rect [0 280 20 300]"));
+    assert!(s.contains("/URI (https://example.org/a\\(b\\)?q=%C2%A3)"));
+    assert!(s.contains("/XYZ 35 140 null"));
+    assert!(!s.contains("https://bad.example"));
+}
+
+#[test]
 fn images_with_alpha() {
     let mut d = PdfDoc::new();
     let p = d.add_page(200.0, 200.0);
@@ -276,4 +299,22 @@ fn info_strings_are_capped() {
     doc.info.title = "日".repeat(100_000);
     let pdf = doc.finish();
     assert_eq!(utf16_entry(&pdf, "/Title").chars().count(), MAX_INFO_CHARS);
+}
+
+#[test]
+fn cjk_text_is_not_replaced_by_question_marks() {
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(612.0, 792.0);
+    p.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "签字清单");
+    p.text(10.0, 40.0, 10.0, Font::Helvetica, [0, 0, 0], "No. 编号 2");
+    let pdf = doc.finish();
+    check_xref(&pdf);
+    assert!(find(&pdf, b"(????) Tj").is_none(), "CJK text written as question marks");
+    assert!(find(&pdf, b"<7B7E5B576E055355> Tj").is_some());
+    assert!(find(&pdf, b"(No. ) Tj").is_some());
+    assert!(find(&pdf, b"<7F1653F7> Tj").is_some());
+    assert!(find(&pdf, b"( 2) Tj").is_some());
+    assert!(find(&pdf, b"/Encoding /UniGB-UTF16-H").is_some());
+    // Measured as full-width glyphs, matching the CID font's default width.
+    assert_eq!(text_width(Font::Helvetica, 10.0, "签字"), 20.0);
 }

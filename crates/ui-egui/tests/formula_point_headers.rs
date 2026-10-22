@@ -35,13 +35,17 @@ fn header_center(h: &egui_kittest::Harness<'_, SheetApp>, rows: bool, index: u32
 }
 
 fn click(h: &mut egui_kittest::Harness<'_, SheetApp>, pos: Pos2) {
+    click_with_modifiers(h, pos, Modifiers::NONE);
+}
+
+fn click_with_modifiers(h: &mut egui_kittest::Harness<'_, SheetApp>, pos: Pos2, modifiers: Modifiers) {
+    h.input_mut().events.push(Event::ModifiersChanged(modifiers));
     for pressed in [true, false] {
-        h.input_mut()
-            .events
-            .extend([Event::PointerMoved(pos), Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE }]);
+        h.input_mut().events.extend([Event::PointerMoved(pos), Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers }]);
         h.step();
     }
     h.run_steps(2);
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
 }
 
 #[test]
@@ -52,6 +56,8 @@ fn column_header_click_inserts_a_column_reference() {
     let app = h.state();
     assert_eq!(app.editor.as_ref().map(|e| e.text.as_str()), Some("=SUM(C:C"));
     assert_eq!(app.session.active().unwrap().selection.current().a1(), "F8");
+    let text = app.editor.as_ref().map_or("", |ed| ed.text.as_str());
+    assert_eq!(gridcraft_ui_egui::editor::formula_refs(text).first().map(|r| r.2.a1()).as_deref(), Some("C:C"));
 }
 
 #[test]
@@ -62,6 +68,8 @@ fn row_header_click_inserts_a_row_reference() {
     let app = h.state();
     assert_eq!(app.editor.as_ref().map(|e| e.text.as_str()), Some("=SUM(4:4"));
     assert_eq!(app.session.active().unwrap().selection.current().a1(), "F8");
+    let text = app.editor.as_ref().map_or("", |ed| ed.text.as_str());
+    assert_eq!(gridcraft_ui_egui::editor::formula_refs(text).first().map(|r| r.2.a1()).as_deref(), Some("4:4"));
 }
 
 #[test]
@@ -72,4 +80,96 @@ fn a_second_header_click_replaces_the_pointed_reference() {
     let second = header_center(&h, false, 4);
     click(&mut h, second);
     assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some("=SUM(E:E"));
+}
+
+#[test]
+fn shift_selects_a_contiguous_column_range_while_editing_a_formula() {
+    let mut h = harness();
+    let first = header_center(&h, false, 2);
+    click(&mut h, first);
+    let second = header_center(&h, false, 4);
+    click_with_modifiers(&mut h, second, Modifiers::SHIFT);
+    let app = h.state();
+    let text = app.editor.as_ref().map_or("", |ed| ed.text.as_str());
+    assert_eq!(text, "=SUM(C:E");
+    assert_eq!(gridcraft_ui_egui::editor::formula_refs(text).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["C:E"]);
+}
+
+#[test]
+fn command_selects_discontiguous_columns_while_editing_a_formula() {
+    let mut h = harness();
+    let first = header_center(&h, false, 2);
+    click(&mut h, first);
+    let second = header_center(&h, false, 4);
+    click_with_modifiers(&mut h, second, Modifiers::COMMAND);
+    let app = h.state();
+    let text = app.editor.as_ref().map_or("", |ed| ed.text.as_str());
+    assert_eq!(text, "=SUM(C:C,E:E");
+    assert_eq!(gridcraft_ui_egui::editor::formula_refs(text).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["C:C", "E:E"]);
+}
+
+#[test]
+fn shift_selects_a_contiguous_row_range_while_editing_a_formula() {
+    let mut h = harness();
+    let first = header_center(&h, true, 3);
+    click(&mut h, first);
+    let second = header_center(&h, true, 5);
+    click_with_modifiers(&mut h, second, Modifiers::SHIFT);
+    let app = h.state();
+    let text = app.editor.as_ref().map_or("", |ed| ed.text.as_str());
+    assert_eq!(text, "=SUM(4:6");
+    assert_eq!(gridcraft_ui_egui::editor::formula_refs(text).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["4:6"]);
+}
+
+#[test]
+fn command_selects_discontiguous_rows_while_editing_a_formula() {
+    let mut h = harness();
+    let first = header_center(&h, true, 3);
+    click(&mut h, first);
+    let second = header_center(&h, true, 5);
+    click_with_modifiers(&mut h, second, Modifiers::COMMAND);
+    let app = h.state();
+    let text = app.editor.as_ref().map_or("", |ed| ed.text.as_str());
+    assert_eq!(text, "=SUM(4:4,6:6");
+    assert_eq!(gridcraft_ui_egui::editor::formula_refs(text).iter().map(|r| r.2.a1()).collect::<Vec<_>>(), ["4:4", "6:6"]);
+}
+
+#[test]
+fn shift_does_not_extend_a_column_reference_across_sheets() {
+    let mut h = harness();
+    h.state_mut().session.execute("home.insertSheet", json!({"name": "Other sheet"})).unwrap();
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    h.run_steps(2);
+    let first = header_center(&h, false, 2);
+    click(&mut h, first);
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": "Other sheet"})).unwrap();
+    h.run_steps(2);
+    let second = header_center(&h, false, 4);
+    click_with_modifiers(&mut h, second, Modifiers::SHIFT);
+    let text = h.state().editor.as_ref().map_or("", |ed| ed.text.as_str());
+    assert_eq!(text, "=SUM('Other sheet'!E:E");
+    assert_eq!(
+        gridcraft_ui_egui::editor::formula_refs(text).iter().map(|r| (r.2.a1(), r.3.clone())).collect::<Vec<_>>(),
+        [("E:E".into(), Some("Other sheet".into())),]
+    );
+}
+
+#[test]
+fn shift_does_not_extend_a_row_reference_across_sheets() {
+    let mut h = harness();
+    h.state_mut().session.execute("home.insertSheet", json!({"name": "Other sheet"})).unwrap();
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    h.run_steps(2);
+    let first = header_center(&h, true, 3);
+    click(&mut h, first);
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": "Other sheet"})).unwrap();
+    h.run_steps(2);
+    let second = header_center(&h, true, 5);
+    click_with_modifiers(&mut h, second, Modifiers::SHIFT);
+    let text = h.state().editor.as_ref().map_or("", |ed| ed.text.as_str());
+    assert_eq!(text, "=SUM('Other sheet'!6:6");
+    assert_eq!(
+        gridcraft_ui_egui::editor::formula_refs(text).iter().map(|r| (r.2.a1(), r.3.clone())).collect::<Vec<_>>(),
+        [("6:6".into(), Some("Other sheet".into())),]
+    );
 }

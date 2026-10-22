@@ -20,6 +20,17 @@ pub fn start() {
             return;
         };
         let mut options = eframe::WebOptions::default();
+        if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
+            let default_descriptor = std::sync::Arc::clone(&setup.device_descriptor);
+
+            setup.device_descriptor = std::sync::Arc::new(move |adapter| {
+                let mut descriptor = default_descriptor(adapter);
+
+                descriptor.required_limits = descriptor.required_limits.or_worse_values_from(&adapter.limits());
+
+                descriptor
+            });
+        }
         if query().contains("webgl")
             && let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
         {
@@ -58,14 +69,20 @@ pub fn start() {
                     ) {
                         app.ui.language = browser;
                     }
+                    // Preferences from an earlier visit (#1562), as the desktop app reads `ui.json`
+                    // and `prefs.json`; a saved language replaces the browser's.
+                    let (stored_ui, stored_prefs) = (stored(crate::prefs::UI_KEY), stored(crate::prefs::PREFS_KEY));
+                    crate::prefs::restore(&mut app, stored_ui.as_deref(), stored_prefs.as_deref());
+                    let mut prefs = crate::prefs::PrefsSync::new(stored_ui, stored_prefs);
                     SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
                     if let Some(bridge) = &app_bridge {
+                        prefs.keep_user_name(app.session.prefs.user_name.clone());
                         if let Some(author) = query_param("author") {
                             crate::host::Bridge::set_author(&mut app, &author);
                         }
                         bridge.post_ready();
                     }
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge }))
+                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, prefs }))
                 }),
             )
             .await;
@@ -93,6 +110,16 @@ struct WebShell {
     app: SheetApp,
     inbox: Inbox,
     bridge: Option<crate::host::Bridge>,
+    prefs: crate::prefs::PrefsSync,
+}
+
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok()?
+}
+
+/// A value stored on an earlier visit, if the browser allows storage.
+fn stored(key: &str) -> Option<String> {
+    local_storage()?.get_item(key).ok()?
 }
 
 impl eframe::App for WebShell {
@@ -113,6 +140,20 @@ impl eframe::App for WebShell {
             });
         }
         self.app.logic(ctx);
+        // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
+        let changed = self.prefs.changed(&self.app);
+        if !changed.is_empty() {
+            match local_storage() {
+                Some(store) => {
+                    for (key, json) in changed {
+                        if let Err(e) = store.set_item(key, &json) {
+                            log::warn!("preferences: cannot save {key}: {e:?}");
+                        }
+                    }
+                }
+                None => log::warn!("preferences: browser storage is unavailable"),
+            }
+        }
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -224,15 +265,20 @@ fn print_pdf(bytes: &[u8]) -> Result<(), String> {
     let window = web_sys::window().ok_or("no window")?;
     let document = window.document().ok_or("no document")?;
 
+    let iframe: web_sys::HtmlIFrameElement = document.create_element("iframe").map_err(js)?.dyn_into().map_err(|_| "not an iframe")?;
+    iframe.style().set_property("display", "none").map_err(js)?;
+    let body = document.body().ok_or("no body")?;
+
     let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
     let opts = web_sys::BlobPropertyBag::new();
     opts.set_type("application/pdf");
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(js)?;
     let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(js)?;
 
-    let iframe: web_sys::HtmlIFrameElement = document.create_element("iframe").map_err(js)?.dyn_into().map_err(|_| "not an iframe")?;
-    iframe.style().set_property("display", "none").map_err(js)?;
-    document.body().ok_or("no body")?.append_child(&iframe).map_err(js)?;
+    if let Err(e) = body.append_child(&iframe) {
+        cleanup_print(&iframe, &url);
+        return Err(js(e));
+    }
 
     // `onload` fires once the PDF has actually rendered inside the iframe;
     // printing before that would show a blank page. Set the handler BEFORE
@@ -240,19 +286,41 @@ fn print_pdf(bytes: &[u8]) -> Result<(), String> {
     let iframe_for_load = iframe.clone();
     let url_for_cleanup = url.clone();
     let on_load = wasm_bindgen::closure::Closure::once_into_js(move || {
-        let Some(content_window) = iframe_for_load.content_window() else { return };
-        let _ = content_window.print();
-        // `afterprint` fires once the print dialog (or print preview) closes, whether the user
-        // printed or cancelled — the right moment to release the blob URL and drop the iframe.
-        let iframe_for_cleanup = iframe_for_load.clone();
-        let on_after_print = wasm_bindgen::closure::Closure::once_into_js(move || {
-            web_sys::Url::revoke_object_url(&url_for_cleanup).ok();
-            iframe_for_cleanup.remove();
-        });
-        let _ = content_window.add_event_listener_with_callback("afterprint", on_after_print.unchecked_ref());
+        iframe_for_load.set_onload(None);
+        if let Err(e) = print_loaded_pdf(&iframe_for_load, &url_for_cleanup) {
+            cleanup_print(&iframe_for_load, &url_for_cleanup);
+            log::error!("print failed: {e:?}");
+        }
     });
     iframe.set_onload(Some(on_load.unchecked_ref()));
     iframe.set_src(&url);
+    Ok(())
+}
+
+fn cleanup_print(iframe: &web_sys::HtmlIFrameElement, url: &str) {
+    // Both operations are idempotent: print can fail after dispatching `afterprint`.
+    web_sys::Url::revoke_object_url(url).ok();
+    iframe.remove();
+}
+
+fn print_loaded_pdf(iframe: &web_sys::HtmlIFrameElement, url: &str) -> Result<(), JsValue> {
+    let content_window = iframe.content_window().ok_or_else(|| JsValue::from_str("no print content window"))?;
+    let iframe_for_cleanup = iframe.clone();
+    let url_for_cleanup = url.to_owned();
+    let on_after_print = wasm_bindgen::closure::Closure::once(move || {
+        cleanup_print(&iframe_for_cleanup, &url_for_cleanup);
+    });
+    // Listen before `print()`, which can dispatch `afterprint` before it returns.
+    // A one-shot listener also releases the callback when the dialog closes or is cancelled.
+    let options = web_sys::AddEventListenerOptions::new();
+    options.set_once(true);
+    let callback = on_after_print.as_ref().unchecked_ref();
+    content_window.add_event_listener_with_callback_and_add_event_listener_options("afterprint", callback, &options)?;
+    if let Err(e) = content_window.print() {
+        let _ = content_window.remove_event_listener_with_callback("afterprint", callback);
+        return Err(e);
+    }
+    let _ = on_after_print.into_js_value();
     Ok(())
 }
 
@@ -274,7 +342,6 @@ fn mime_for(name: &str) -> &'static str {
 }
 
 /// Trigger a browser save dialog or download of `bytes` named after `name`.
-
 fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let window = web_sys::window().ok_or("no window")?;

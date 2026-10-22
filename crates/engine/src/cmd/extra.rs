@@ -111,7 +111,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Rotate",
             ["Page Layout", "Arrange"],
             None,
-            "{kind: shape, id, flip?: horizontal|vertical} (swaps width/height for 90° turns)",
+            "{kind: shape, id} (swaps width/height for a 90° turn; `flip` is rejected: shapes have no flip state)",
             has_doc,
             rotate
         ),
@@ -351,7 +351,7 @@ fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
 /// The trendline described by `chart.addElement`'s trendline parameters (Excel's Add Chart
 /// Element ▸ Trendline choices, plus the Format Trendline options).
 fn trendline_param(p: &Json) -> Result<Trendline> {
-    let num = |k: &str| f64_param(p, k).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0);
+    let num = |k: &str| Trendline::clamp_forecast(f64_param(p, k).unwrap_or(0.0));
     let mut t = Trendline {
         forward: num("forward"),
         backward: num("backward"),
@@ -662,6 +662,9 @@ fn align(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn rotate(s: &mut Session, p: &Json) -> Result<Json> {
+    if p.get("flip").is_some_and(|f| !f.is_null()) {
+        return Err(bad("arrange.rotate", "`flip` is not supported: shapes have no flip state"));
+    }
     with_shape(s, p, |sh| std::mem::swap(&mut sh.anchor.width, &mut sh.anchor.height))
 }
 
@@ -828,6 +831,9 @@ fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let sheet = cx.sheet_mut(si)?;
         let headers: Vec<String> = (r.start.col..=r.end.col).map(|c| sheet.value(CellRef::new(r.start.row, c)).display()).collect();
+        if sheet.tables.iter().enumerate().any(|(i, o)| i != ti && o.range.intersects(&r)) {
+            return Err(EngineError::Other("A table can't overlap another table.".into()));
+        }
         let t = sheet.tables.get_mut(ti).ok_or_else(|| bad("table", "gone"))?;
         if r.start.row != t.range.start.row || !r.intersects(&t.range) {
             return Err(EngineError::Other(

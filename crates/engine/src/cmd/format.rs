@@ -133,9 +133,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             number_format
         ),
-        cmd!("home.accounting", "Accounting Number Format", ["Home", "Number"], None, "{range?, symbol?: \"$\"}", has_doc, |s, p| set_fmt(
-            s, p, ACCOUNTING
-        )),
+        cmd!("home.accounting", "Accounting Number Format", ["Home", "Number"], None, "{range?, symbol?: \"$\"}", has_doc, accounting),
         cmd!("home.percent", "Percent Style", ["Home", "Number"], Some("Ctrl+Shift+%"), "{range?}", has_doc, |s, p| set_fmt(s, p, "0%")),
         cmd!("home.comma", "Comma Style", ["Home", "Number"], None, "{range?}", has_doc, |s, p| set_fmt(s, p, COMMA)),
         cmd!("home.increaseDecimal", "Increase Decimal", ["Home", "Number"], None, "{range?}", has_doc, |s, p| decimals(s, p, 1)),
@@ -156,7 +154,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Row Height…",
             ["Home", "Cells", "Format"],
             None,
-            "{rows?: \"2:5\" | \"2:2,4:5\", height: 20 (points on screen)}",
+            "{sheet?, rows?: \"2:5\" | \"2:2,4:5\" | \"Sheet2!2:5\", height: 20 (pixels) | points: 15}",
             has_doc,
             row_height
         ),
@@ -165,28 +163,34 @@ pub fn specs() -> Vec<CommandSpec> {
             "Column Width…",
             ["Home", "Cells", "Format"],
             None,
-            "{cols?: \"B:D\" | \"B:B,D:F\", width: 64 (points) | chars: 8.43}",
+            "{sheet?, cols?: \"B:D\" | \"B:B,D:F\" | \"Sheet2!B:D\", width: 64 (pixels) | chars: 8.43}",
             has_doc,
             col_width
         ),
-        cmd!("home.autofitRowHeight", "AutoFit Row Height", ["Home", "Cells", "Format"], None, "{rows?}", has_doc, autofit_rows),
-        cmd!("home.autofitColumnWidth", "AutoFit Column Width", ["Home", "Cells", "Format"], None, "{cols?}", has_doc, autofit_cols),
-        cmd!("home.defaultWidth", "Default Width…", ["Home", "Cells", "Format"], None, "{width: 64}", has_doc, default_width),
-        cmd!("home.hideRows", "Hide Rows", ["Home", "Cells", "Format", "Hide & Unhide"], Some("Cmd+9"), "{rows?}", has_doc, |s, p| hide(
+        cmd!("home.autofitRowHeight", "AutoFit Row Height", ["Home", "Cells", "Format"], None, "{sheet?, rows?}", has_doc, autofit_rows),
+        cmd!("home.autofitColumnWidth", "AutoFit Column Width", ["Home", "Cells", "Format"], None, "{sheet?, cols?}", has_doc, autofit_cols),
+        cmd!("home.defaultWidth", "Default Width…", ["Home", "Cells", "Format"], None, "{sheet?, width: 64 (pixels)}", has_doc, default_width),
+        cmd!("home.hideRows", "Hide Rows", ["Home", "Cells", "Format", "Hide & Unhide"], Some("Cmd+9"), "{sheet?, rows?}", has_doc, |s, p| hide(
             s, p, true, true
         )),
-        cmd!("home.hideColumns", "Hide Columns", ["Home", "Cells", "Format", "Hide & Unhide"], Some("Cmd+0"), "{cols?}", has_doc, |s, p| hide(
-            s, p, false, true
-        )),
-        cmd!("home.unhideRows", "Unhide Rows", ["Home", "Cells", "Format", "Hide & Unhide"], Some("Cmd+Shift+9"), "{rows?}", has_doc, |s, p| hide(
-            s, p, true, false
-        )),
+        cmd!("home.hideColumns", "Hide Columns", ["Home", "Cells", "Format", "Hide & Unhide"], Some("Cmd+0"), "{sheet?, cols?}", has_doc, |s, p| {
+            hide(s, p, false, true)
+        }),
+        cmd!(
+            "home.unhideRows",
+            "Unhide Rows",
+            ["Home", "Cells", "Format", "Hide & Unhide"],
+            Some("Cmd+Shift+9"),
+            "{sheet?, rows?}",
+            has_doc,
+            |s, p| hide(s, p, true, false)
+        ),
         cmd!(
             "home.unhideColumns",
             "Unhide Columns",
             ["Home", "Cells", "Format", "Hide & Unhide"],
             Some("Cmd+Shift+0"),
-            "{cols?}",
+            "{sheet?, cols?}",
             has_doc,
             |s, p| hide(s, p, false, false)
         ),
@@ -201,6 +205,23 @@ pub fn specs() -> Vec<CommandSpec> {
 
 const ACCOUNTING: &str = "_(\"$\"* #,##0.00_);_(\"$\"* \\(#,##0.00\\);_(\"$\"* \"-\"??_);_(@_)";
 const COMMA: &str = "_(* #,##0.00_);_(* \\(#,##0.00\\);_(* \"-\"??_);_(@_)";
+
+/// Accounting Number Format with the currency symbol to use (Excel's own button takes the system
+/// currency; `symbol` is how the control channel picks another one, e.g. `"L"` for lempiras).
+fn accounting(s: &mut Session, p: &Json) -> Result<Json> {
+    let symbol = str_param(p, "symbol").unwrap_or("$");
+    // The symbol goes into a quoted literal: a quote or a backslash would end it, and a control
+    // character would reach the format's text as-is.
+    if symbol.contains(['"', '\\']) || symbol.chars().any(char::is_control) {
+        return Err(bad("home.accounting", "the symbol can't contain a quote, a backslash or a control character"));
+    }
+    set_fmt(s, p, &accounting_format(symbol))
+}
+
+fn accounting_format(symbol: &str) -> String {
+    let symbol = format!("\"{symbol}\"");
+    format!("_({symbol}* #,##0.00_);_({symbol}* \\(#,##0.00\\);_({symbol}* \"-\"??_);_(@_)")
+}
 
 fn with(p: &Json, key: &str, v: Json) -> Json {
     let mut m = p.as_object().cloned().unwrap_or_default();
@@ -296,7 +317,11 @@ fn underline(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn font_name(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(name) = str_param(p, "name").map(str::to_string) else { return Err(bad("home.fontName", "missing `name`")) };
-    apply_style(s, p, |st| st.font.name = name.clone())
+    apply_style(s, p, |st| {
+        st.font.name = name.clone();
+        st.font.charset = None;
+        st.font.family = None;
+    })
 }
 
 fn font_size(s: &mut Session, p: &Json) -> Result<Json> {
@@ -488,7 +513,7 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
-    let Some(patch) = p.get("style").cloned() else {
+    let Some(patch) = p.get("style").map(snake_case_keys) else {
         // Menu invocation without params: the UI opens the dialog.
         s.ui_requests.push(crate::UiRequest::Dialog("formatCells".into(), json!({})));
         return ok();
@@ -504,6 +529,32 @@ fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
             *st = new;
         }
     })
+}
+
+/// The style patch with camelCase keys (`numFmt`, `diagDown`, as documented) renamed to the
+/// style's own snake_case (`num_fmt`, `diag_down`). Keys starting with a capital (`Rgb`) stay.
+fn snake_case_keys(v: &Json) -> Json {
+    match v {
+        Json::Object(m) => Json::Object(
+            m.iter()
+                .map(|(k, v)| {
+                    let key = if k.starts_with(|c: char| c.is_ascii_lowercase()) {
+                        k.chars().fold(String::new(), |mut out, c| {
+                            if c.is_ascii_uppercase() {
+                                out.push('_');
+                            }
+                            out.push(c.to_ascii_lowercase());
+                            out
+                        })
+                    } else {
+                        k.clone()
+                    };
+                    (key, snake_case_keys(v))
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 /// Deep-merges `patch` into `base` (objects merge, everything else replaces).
@@ -933,29 +984,60 @@ fn cell_style(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- sizes
 
-fn line_targets(s: &Session, p: &Json, rows: bool) -> Result<Vec<(u32, u32)>> {
+/// The sheet and the row (or column) spans a size or visibility command works on. The lines are
+/// `rows`/`cols` (`"2:5"`, `"B:B,D:F"`, optionally `Sheet!`-prefixed), else the selection's; the
+/// sheet is `sheet`, else the prefix, else the active one. The selection belongs to the active
+/// sheet, so another sheet needs explicit lines.
+fn line_targets(s: &Session, p: &Json, rows: bool) -> Result<(usize, Vec<(u32, u32)>)> {
     let key = if rows { "rows" } else { "cols" };
+    let mut sheet = target_sheet(s, p)?;
     if let Some(t) = str_param(p, key) {
+        let (prefix, body) = split_sheet(t);
+        if let Some(name) = prefix {
+            let named = s.doc()?.wb.sheet_index(&name).ok_or_else(|| bad(key, format!("no sheet named `{name}`")))?;
+            if p.get("sheet").is_some_and(|v| !v.is_null()) && named != sheet {
+                return Err(bad(key, format!("`{t}` names a sheet other than `sheet`")));
+            }
+            sheet = named;
+        }
         // A comma-separated list ("B:B,D:F") targets several areas, like a multi-area selection.
-        return t
+        let lines = body
             .split(',')
             .map(|part| {
-                let r = RangeRef::parse(part).ok_or_else(|| bad(key, format!("not a range: {part}")))?;
+                let r = parse_lines(part).ok_or_else(|| bad(key, format!("not a range: {part}")))?;
                 Ok(if rows { (r.start.row, r.end.row) } else { (r.start.col, r.end.col) })
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
+        return Ok((sheet, lines));
     }
-    Ok(s.doc()?.selection.ranges.iter().map(|r| if rows { (r.start.row, r.end.row) } else { (r.start.col, r.end.col) }).collect())
+    let d = s.doc()?;
+    if sheet != d.wb.active_sheet {
+        return Err(bad(key, format!("missing `{key}`: the selection is on the active sheet")));
+    }
+    Ok((sheet, d.selection.ranges.iter().map(|r| if rows { (r.start.row, r.end.row) } else { (r.start.col, r.end.col) }).collect()))
 }
 
+/// Sizes are pixels at 96 dpi, the model's unit (header drags send pixels). `points` (row height)
+/// and `chars` (column width) take Excel's units, those of its Row Height and Column Width dialogs
+/// and of the file (`ht` is in points).
 fn row_height(s: &mut Session, p: &Json) -> Result<Json> {
-    let h = f64_param(p, "height").ok_or_else(|| bad("home.rowHeight", "missing `height`"))?;
-    if !(0.0..=546.0).contains(&h) {
-        return Err(EngineError::Other("Row height must be between 0 and 409 points.".into()));
-    }
-    let lines = line_targets(s, p, true)?;
+    let h = match (f64_param(p, "height"), f64_param(p, "points")) {
+        (Some(h), _) => {
+            if !(0.0..=546.0).contains(&h) {
+                return Err(EngineError::Other("Row height must be between 0 and 546 pixels (409.5 points).".into()));
+            }
+            h
+        }
+        (None, Some(pt)) => {
+            if !(0.0..=409.5).contains(&pt) {
+                return Err(EngineError::Other("Row height must be between 0 and 409.5 points.".into()));
+            }
+            pt * 4.0 / 3.0
+        }
+        _ => return Err(bad("home.rowHeight", "missing `height` (pixels) or `points`")),
+    };
+    let (si, lines) = line_targets(s, p, true)?;
     edit(s, |cx| {
-        let si = cx.sheet_index();
         let sh = cx.sheet_mut(si)?;
         for (a, b) in lines {
             for r in a..=b.min(a.saturating_add(1_048_575)) {
@@ -972,16 +1054,22 @@ fn row_height(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
     let w = match (f64_param(p, "width"), f64_param(p, "chars")) {
-        (Some(w), _) => w,
-        (None, Some(c)) => chars_to_points(c),
-        _ => return Err(bad("home.columnWidth", "missing `width`")),
+        (Some(w), _) => {
+            if !(0.0..=1800.0).contains(&w) {
+                return Err(EngineError::Other("Column width must be between 0 and 1800 pixels.".into()));
+            }
+            w
+        }
+        (None, Some(c)) => {
+            if !(0.0..=255.0).contains(&c) {
+                return Err(EngineError::Other("Column width must be between 0 and 255 characters.".into()));
+            }
+            chars_to_points(c)
+        }
+        _ => return Err(bad("home.columnWidth", "missing `width` (pixels) or `chars`")),
     };
-    if !(0.0..=1800.0).contains(&w) {
-        return Err(EngineError::Other("Column width must be between 0 and 255 characters.".into()));
-    }
-    let lines = line_targets(s, p, false)?;
+    let (si, lines) = line_targets(s, p, false)?;
     edit(s, |cx| {
-        let si = cx.sheet_index();
         let sh = cx.sheet_mut(si)?;
         for (a, b) in lines {
             for c in a..=b {
@@ -994,7 +1082,7 @@ fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Excel column width in characters (of the default font's digit width, 7 px) → points.
+/// Excel column width in characters (of the default font's digit width, 7 px) → pixels.
 pub fn chars_to_points(c: f64) -> f64 {
     if c <= 0.0 {
         0.0
@@ -1008,7 +1096,7 @@ pub fn chars_to_points(c: f64) -> f64 {
 pub use gridcraft_model::points_to_chars;
 
 /// Approximate text width in points for autofit (no font metrics in the engine: average glyph
-/// widths for the default font; the UI refines with real measurement when it autofits).
+/// widths for the default font; a front end with fonts measures instead, see `Session::text_width`).
 pub fn approx_text_width(text: &str, size: f32, bold: bool) -> f32 {
     let mut w = 0.0;
     for c in text.chars() {
@@ -1025,12 +1113,18 @@ pub fn approx_text_width(text: &str, size: f32, bold: bool) -> f32 {
     w * size * if bold { 1.07 } else { 1.0 } * 96.0 / 72.0
 }
 
+/// Distinct texts AutoFit measures exactly; past this many, `Session::text_width` is asked for a
+/// quick measure so a huge column doesn't lay out every value.
+const EXACT_TEXT_WIDTHS: usize = 2_000;
+
 fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
-    let lines = line_targets(s, p, false)?;
+    let (si, lines) = line_targets(s, p, false)?;
+    let measure = s.text_width.clone();
     edit(s, |cx| {
-        let si = cx.sheet_index();
         let Some(sh) = cx.wb.sheet(si) else { return Ok(Json::Null) };
         let mut widths = Vec::new();
+        let mut measured: std::collections::HashMap<StyleId, std::collections::HashMap<String, f32>> = Default::default();
+        let mut distinct = 0usize;
         let used = sh.used_range();
         for (a, b) in lines {
             for c in a..=b.min(a + 16383) {
@@ -1041,12 +1135,26 @@ fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
                     if sh.merge_at(cell).is_some_and(|m| !m.is_single()) {
                         continue;
                     }
-                    let st = cx.wb.styles.get(sh.style_id(cell));
+                    let id = sh.style_id(cell);
+                    let st = cx.wb.styles.get(id);
                     let text = crate::display::cell_text(&cx.wb, sh, cell);
                     for line in text.lines() {
-                        max = max.max(
-                            approx_text_width(line, st.font.size, st.font.bold) + 6.0 + st.align.indent as f32 * 9.0 + sh.filter_button_space(cell),
-                        );
+                        let w = match &measure {
+                            Some(m) => {
+                                let known = measured.entry(id).or_default();
+                                match known.get(line) {
+                                    Some(w) => *w,
+                                    None => {
+                                        let w = m(line, &st.font, distinct < EXACT_TEXT_WIDTHS);
+                                        known.insert(line.to_owned(), w);
+                                        distinct += 1;
+                                        w
+                                    }
+                                }
+                            }
+                            None => approx_text_width(line, st.font.size, st.font.bold),
+                        };
+                        max = max.max(w + 6.0 + st.align.indent as f32 * 9.0 + sh.filter_button_space(cell));
                     }
                 }
                 if max > 0.0 {
@@ -1065,9 +1173,8 @@ fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn autofit_rows(s: &mut Session, p: &Json) -> Result<Json> {
-    let lines = line_targets(s, p, true)?;
+    let (si, lines) = line_targets(s, p, true)?;
     edit(s, |cx| {
-        let si = cx.sheet_index();
         for (a, b) in lines {
             let b = b.min(a + 100_000);
             if let Some(sh) = cx.wb.sheet_mut(si) {
@@ -1087,17 +1194,16 @@ fn autofit_rows(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn default_width(s: &mut Session, p: &Json) -> Result<Json> {
     let w = f64_param(p, "width").ok_or_else(|| bad("home.defaultWidth", "missing `width`"))?;
+    let si = target_sheet(s, p)?;
     edit(s, |cx| {
-        let si = cx.sheet_index();
         cx.sheet_mut(si)?.default_col_width = w.clamp(0.0, 1800.0) as f32;
         Ok(Json::Null)
     })
 }
 
 fn hide(s: &mut Session, p: &Json, rows: bool, on: bool) -> Result<Json> {
-    let lines = line_targets(s, p, rows)?;
+    let (si, lines) = line_targets(s, p, rows)?;
     edit(s, |cx| {
-        let si = cx.sheet_index();
         let sh = cx.sheet_mut(si)?;
         for (a, b) in lines {
             // Unhiding a single selected line also reveals hidden neighbours (Excel needs the
@@ -1138,6 +1244,11 @@ mod tests {
     }
 
     #[test]
+    fn the_default_symbol_reproduces_the_accounting_format() {
+        assert_eq!(accounting_format("$"), ACCOUNTING);
+    }
+
+    #[test]
     fn decimal_steps() {
         let v = gridcraft_core::Value::Number(1.5);
         assert_eq!(adjust_decimals("General", &v, 1), "0.00");
@@ -1147,6 +1258,20 @@ mod tests {
         assert_eq!(adjust_decimals("0.0", &v, -1), "0");
         assert_eq!(adjust_decimals("#,##0.00;[Red]-#,##0.00", &v, 1), "#,##0.000;[Red]-#,##0.000");
         assert_eq!(adjust_decimals("0%", &v, 1), "0.0%");
+    }
+
+    #[test]
+    fn format_cells_takes_the_documented_keys() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"numFmt": "0.0", "borders": {"diagUp": {"style": "Thin"}}}})).unwrap();
+        let st = &s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"];
+        assert_eq!(st["num_fmt"], "0.0");
+        assert_eq!(st["borders"]["diag_up"]["style"], "Thin");
+        // The style's own snake_case keys keep working.
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"num_fmt": "0.00"}})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["num_fmt"], "0.00");
     }
 
     #[test]

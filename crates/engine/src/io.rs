@@ -147,7 +147,12 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     }
     // Text named `.xlsx` is read as text.
     if sniffed == gridcraft_xlsx::Format::Xlsx || (kind == Some(FileKind::Xlsx) && sniffed != gridcraft_xlsx::Format::Csv) {
-        let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
+        let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| {
+            EngineError::Other(match (&e, gridcraft_xlsx::oversized_part(bytes)) {
+                (gridcraft_xlsx::IoError::TooLarge(_), Some((part, size))) => part_too_large_message(name, &part, size),
+                _ => format!("We can't open '{name}': {e}"),
+            })
+        })?;
         return Ok((wb, report.warnings));
     }
     match kind {
@@ -157,7 +162,14 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             if wb.sheets.is_empty() {
                 wb = Workbook::new();
             }
-            Ok((wb, vec![]))
+            // The file's band placement and cell count are derived state: rebuild them from the
+            // cells themselves, dropping what is outside the sheet grid (#1008).
+            let dropped: usize = wb.sheets.iter_mut().map(|sh| std::sync::Arc::make_mut(sh).cells.rebuild()).sum();
+            let mut warnings = Vec::new();
+            if dropped > 0 {
+                warnings.push(format!("{name}: {dropped} cells outside the 1,048,576 × 16,384 grid were dropped"));
+            }
+            Ok((wb, warnings))
         }
         Some(FileKind::Tsv) => {
             let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, ..Default::default() };
@@ -174,6 +186,25 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             Ok((wb, vec![]))
         }
     }
+}
+
+/// What to tell the user when one part of an XLSX package unpacks to more than the reader's
+/// per-part limit: the sizes, why the limit is there, and what gets the data in. The limit is
+/// per part, so smaller sheets fit; the shared strings are one part for every sheet, so only a
+/// CSV, which has no parts, helps there.
+fn part_too_large_message(name: &str, part: &str, size: u64) -> String {
+    let limit = gridcraft_xlsx::MAX_PART >> 20;
+    let mb = size >> 20;
+    let size = if mb > limit { format!("{mb} MB") } else { format!("more than {limit} MB") };
+    let remedy = if part.contains("worksheets/") {
+        "To open it, split the data across several sheets, since the limit applies to each part, or save the sheet as CSV, which keeps only its values."
+    } else {
+        "To open it, save the data as CSV, which keeps only its values."
+    };
+    format!(
+        "We can't open '{name}': its part {part} unpacks to {size}, over GridCraft's limit of {limit} MB for one part \
+         (a guard against damaged or malicious files). {remedy}"
+    )
 }
 
 /// A CSV opens as a sheet named after the file (like Excel).
@@ -207,7 +238,10 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
     match kind {
         // The extension picks the package kind; only the macro-enabled kinds (.xlsm, .xltm) carry
         // the VBA project, so any other name saves without it, as Excel does.
-        FileKind::Xlsx => gridcraft_xlsx::write_xlsx_as(wb, gridcraft_xlsx::XlsxKind::from_path(path)).map_err(|e| EngineError::Other(e.to_string())),
+        FileKind::Xlsx => {
+            let book = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            gridcraft_xlsx::write_xlsx_named(wb, gridcraft_xlsx::XlsxKind::from_path(path), book).map_err(|e| EngineError::Other(e.to_string()))
+        }
         FileKind::Xls => {
             Err(EngineError::Other("Excel 97-2003 (.xls) is supported for import only. Save as .xlsx or another supported export format.".into()))
         }
@@ -235,6 +269,12 @@ pub fn source_dir(path: &str) -> Option<std::path::PathBuf> {
     std::path::absolute(path).ok()?.parent().map(std::path::Path::to_path_buf)
 }
 
+/// The file at `path` as `CELL("filename")` reports it: absolute, so the folder is the one the
+/// user sees. A workbook that arrived as bytes has no path and keeps only its name.
+pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
+    std::path::absolute(path).ok()
+}
+
 /// Save As CSV/Text writes "the text and values as they are displayed in cells" with "all
 /// characters in each cell" (Microsoft Support, *Excel formatting and features that are not
 /// transferred to other file formats*): number formats applied, never column-width `#####`.
@@ -254,7 +294,7 @@ fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
     .map_err(|e| EngineError::Other(e.to_string()))
 }
 
-fn esc(s: &str) -> String {
+pub(crate) fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
@@ -408,31 +448,56 @@ impl std::fmt::Write for ClipboardHtml {
 /// Most rows Save as Web Page writes. A sheet whose used range is taller fails instead of losing cells.
 const HTML_EXPORT_MAX_ROWS: u32 = 100_001;
 
-/// A sheet as a standalone HTML table (Save as Web Page).
+/// A sheet as a standalone HTML table (Save as Web Page). A sheet with pictures gets the sheet's
+/// own column widths and row heights so each picture and chart (inline SVG) can sit at its anchor.
 pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
     let Some(sh) = wb.sheet(sheet) else { return Ok(String::new()) };
+    let fixed = !(sh.images.is_empty() && sh.charts.is_empty());
+    let used = sh.used_range();
     let mut out = String::new();
     let _ = write!(
         out,
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title><style>table{{border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt}}td{{border:1px solid #d4d4d4;padding:2px 4px;white-space:nowrap}}</style></head><body><table{}>",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title><style>table{{border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt{}}}td{{border:1px solid #d4d4d4;padding:{};white-space:nowrap{}}}</style></head><body>",
         esc(&sh.name),
-        table_dir(sh)
+        if fixed { ";table-layout:fixed" } else { "" },
+        if fixed { "0 4px" } else { "2px 4px" },
+        if fixed { ";overflow:hidden;line-height:1" } else { "" }
     );
-    if let Some(r) = sh.used_range() {
+    if fixed {
+        out.push_str("<div style=\"position:relative\">");
+    }
+    let _ = write!(out, "<table{}", table_dir(sh));
+    if let (true, Some(r)) = (fixed, used) {
+        let width: f32 = (r.start.col..=r.end.col).map(|c| sh.col_width(c)).sum();
+        let _ = write!(out, " style=\"width:{width}px\"");
+    }
+    out.push('>');
+    if let Some(r) = used {
         if r.height() > HTML_EXPORT_MAX_ROWS {
             return Err(EngineError::Other(format!(
                 "the sheet is too tall for a web page ({} rows, at most {HTML_EXPORT_MAX_ROWS}). Save as .xlsx or CSV instead.",
                 r.height()
             )));
         }
+        if fixed {
+            out.push_str("<colgroup>");
+            for col in (r.start.col..=r.end.col).filter(|&c| !sh.is_col_hidden(c)) {
+                let _ = write!(out, "<col style=\"width:{}px\">", sh.col_width(col));
+            }
+            out.push_str("</colgroup>");
+        }
         for row in r.start.row..=r.end.row {
             if sh.is_row_hidden(row) {
                 continue;
             }
-            out.push_str("<tr>");
+            if fixed {
+                let _ = write!(out, "<tr style=\"height:{}px\">", sh.row_height(row));
+            } else {
+                out.push_str("<tr>");
+            }
             for col in r.start.col..=r.end.col {
                 let c = CellRef::new(row, col);
-                if sh.merges.iter().any(|m| m.contains(c) && m.start != c) {
+                if sh.merges.iter().any(|m| m.contains(c) && m.start != c) || (fixed && sh.is_col_hidden(col)) {
                     continue;
                 }
                 let text = crate::display::cell_text(wb, sh, c);
@@ -442,14 +507,52 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                     .merges
                     .iter()
                     .find(|m| m.start == c)
-                    .map(|m| format!(" rowspan=\"{}\" colspan=\"{}\"", m.height(), m.width()))
+                    .map(|m| {
+                        if fixed {
+                            let rows = (m.start.row..=m.end.row).filter(|&y| !sh.is_row_hidden(y)).count();
+                            let cols = (m.start.col..=m.end.col).filter(|&x| !sh.is_col_hidden(x)).count();
+                            format!(" rowspan=\"{rows}\" colspan=\"{cols}\"")
+                        } else {
+                            format!(" rowspan=\"{}\" colspan=\"{}\"", m.height(), m.width())
+                        }
+                    })
                     .unwrap_or_default();
                 let _ = write!(out, "<td style=\"{css}\"{}{span}>{}</td>", dir.attr(), esc(&text));
             }
             out.push_str("</tr>");
         }
     }
-    out.push_str("</table></body></html>");
+    out.push_str("</table>");
+    if fixed {
+        // Sheet units are CSS pixels; the table starts at the used range, not at A1.
+        let (left, top) = used.map_or((0.0, 0.0), |r| (sh.col_left(r.start.col), sh.row_top(r.start.row)));
+        let place = |a: &gridcraft_model::Anchor| {
+            format!(
+                "position:absolute;left:{}px;top:{}px;width:{}px;height:{}px",
+                sh.col_left(a.cell.col) - left + f64::from(a.dx),
+                sh.row_top(a.cell.row) - top + f64::from(a.dy),
+                a.width.max(0.0),
+                a.height.max(0.0)
+            )
+        };
+        for im in &sh.images {
+            let _ = write!(
+                out,
+                "<img src=\"data:{};base64,{}\" alt=\"{}\" style=\"{}\">",
+                esc(&im.mime),
+                base64_encode(&im.data),
+                esc(&im.alt),
+                place(&im.anchor)
+            );
+        }
+        for ch in &sh.charts {
+            if let Some(svg) = crate::chart_svg::chart_svg(wb, sheet, ch, &place(&ch.anchor)) {
+                out.push_str(&svg);
+            }
+        }
+        out.push_str("</div>");
+    }
+    out.push_str("</body></html>");
     Ok(out)
 }
 
@@ -573,6 +676,88 @@ mod tests {
     }
 
     #[test]
+    fn html_export_embeds_images_as_data_uris() {
+        let mut wb = Workbook::new();
+        wb.sheet_mut(0).unwrap().images.push(gridcraft_model::Image {
+            id: 1,
+            anchor: gridcraft_model::Anchor { cell: CellRef::new(0, 0), dx: 0.0, dy: 0.0, width: 72.0, height: 36.0, mode: Default::default() },
+            data: vec![1, 2, 3].into(),
+            mime: "image/png".into(),
+            alt: "a \"logo\"".into(),
+        });
+        let html = to_html(&wb, 0).unwrap();
+        assert!(
+            html.contains("<img src=\"data:image/png;base64,AQID\" alt=\"a &quot;logo&quot;\" style=\"position:absolute;left:0px;top:0px;width:72px;height:36px\"></div></body>"),
+            "{html}"
+        );
+        assert!(html.contains("<div style=\"position:relative\"><table"), "{html}");
+        assert!(!to_html(&Workbook::new(), 0).unwrap().contains("<img"), "no images, no <img>");
+    }
+
+    #[test]
+    fn html_export_places_images_at_their_anchor_using_sheet_geometry() {
+        let mut wb = Workbook::new();
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.cols.insert(1, gridcraft_model::LineInfo { size: Some(100.0), ..Default::default() });
+        sh.rows.insert(1, gridcraft_model::LineInfo { size: Some(30.0), ..Default::default() });
+        sh.images.push(gridcraft_model::Image {
+            id: 1,
+            anchor: gridcraft_model::Anchor { cell: CellRef::new(3, 2), dx: 5.0, dy: 7.0, width: 10.0, height: 20.0, mode: Default::default() },
+            data: vec![1].into(),
+            mime: "image/png".into(),
+            alt: String::new(),
+        });
+        sh.set_value(CellRef::new(1, 1), gridcraft_core::Value::Number(1.0));
+        let html = to_html(&wb, 0).unwrap();
+        // The table starts at B2; the picture is at C4: one 100 px column and two rows (30 + 20) further on.
+        assert!(html.contains("<col style=\"width:100px\">"), "{html}");
+        assert!(html.contains("<tr style=\"height:30px\">"), "{html}");
+        assert!(html.contains("left:105px;top:57px;width:10px;height:20px"), "{html}");
+    }
+
+    fn book_with_picture(anchor: &str, cell_at: (u32, u32)) -> Workbook {
+        let mut wb = Workbook::new();
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.set_value(CellRef::new(cell_at.0, cell_at.1), gridcraft_core::Value::Number(1.0));
+        sh.images.push(gridcraft_model::Image {
+            id: 1,
+            anchor: gridcraft_model::Anchor {
+                cell: CellRef::parse(anchor).unwrap(),
+                dx: 0.0,
+                dy: 0.0,
+                width: 10.0,
+                height: 10.0,
+                mode: Default::default(),
+            },
+            data: vec![1].into(),
+            mime: "image/png".into(),
+            alt: String::new(),
+        });
+        wb
+    }
+
+    #[test]
+    fn html_export_places_images_past_hidden_columns_and_rows() {
+        let mut wb = book_with_picture("C3", (0, 0));
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.set_value(CellRef::new(2, 2), gridcraft_core::Value::Number(2.0));
+        sh.cols.insert(1, gridcraft_model::LineInfo { hidden: true, ..Default::default() });
+        sh.rows.insert(1, gridcraft_model::LineInfo { hidden: true, ..Default::default() });
+        let html = to_html(&wb, 0).unwrap();
+        // Column B and row 2 take no room: C3 is one default column and row from A1.
+        assert_eq!(html.matches("<col ").count(), 2, "{html}");
+        assert_eq!(html.matches("<tr ").count(), 2, "{html}");
+        assert!(html.contains("left:64px;top:20px"), "{html}");
+    }
+
+    #[test]
+    fn html_export_places_images_above_and_left_of_the_table() {
+        let html = to_html(&book_with_picture("A1", (2, 2)), 0).unwrap();
+        // The table starts at C3, so a picture at A1 sits before it instead of failing.
+        assert!(html.contains("left:-128px;top:-40px"), "{html}");
+    }
+
+    #[test]
     fn html_export_marks_right_to_left_sheets() {
         use gridcraft_core::Value;
         use gridcraft_model::HAlign;
@@ -673,7 +858,7 @@ mod tests {
     #[test]
     fn macros_are_saved_only_into_xlsm() {
         let mut wb = Workbook::new();
-        wb.vba_project = Some(b"vba".to_vec());
+        wb.vba_project = Some(b"vba".to_vec().into());
         let has_macros = |path: &str| {
             let bytes = save_bytes(&wb, path).unwrap();
             gridcraft_xlsx::read_xlsx(&bytes).unwrap().0.vba_project.is_some()
@@ -879,6 +1064,54 @@ mod tests {
             ),
             "{types}"
         );
+    }
+
+    /// Where `part`'s entry starts in the central directory of `package`.
+    fn central_entry(package: &[u8], part: &str) -> usize {
+        let mut at = 0;
+        while let Some(i) = package.get(at..).and_then(|rest| rest.windows(4).position(|w| w == b"PK\x01\x02")) {
+            let entry = at + i;
+            let len = u16::from_le_bytes([package[entry + 28], package[entry + 29]]) as usize;
+            if &package[entry + 46..entry + 46 + len] == part.as_bytes() {
+                return entry;
+            }
+            at = entry + 46;
+        }
+        panic!("{part} is not in the package");
+    }
+
+    /// `package` with `part` declaring `size` unpacked bytes: the reader refuses the part on the
+    /// declared size, so no real 512 MB part has to be built.
+    fn declaring(mut package: Vec<u8>, part: &str, size: u32) -> Vec<u8> {
+        let at = central_entry(&package, part);
+        package[at + 24..at + 28].copy_from_slice(&size.to_le_bytes());
+        package
+    }
+
+    #[test]
+    fn a_part_over_the_size_limit_says_how_to_get_the_data_in() {
+        let mut wb = Workbook::new();
+        wb.sheet_mut(0).unwrap().set_value(CellRef::new(0, 0), gridcraft_core::Value::text("big"));
+        let package = save_bytes(&wb, "big.xlsx").unwrap();
+        // The size reported in storytold/gridcraft#1242.
+        let msg = open_bytes("big.xlsx", &declaring(package.clone(), "xl/worksheets/sheet1.xml", 540_278_731)).unwrap_err().to_string();
+        assert!(msg.starts_with("We can't open 'big.xlsx': "), "{msg}");
+        assert!(msg.contains("xl/worksheets/sheet1.xml") && msg.contains("515 MB") && msg.contains("512 MB"), "{msg}");
+        assert!(msg.contains("several sheets") && msg.contains("CSV"), "{msg}");
+        assert!(!msg.contains("bytes"), "{msg}");
+        // Splitting sheets doesn't shrink the shared strings, which every sheet uses: only CSV helps.
+        let msg = open_bytes("big.xlsx", &declaring(package.clone(), "xl/sharedStrings.xml", 540_278_731)).unwrap_err().to_string();
+        assert!(msg.contains("xl/sharedStrings.xml") && msg.contains("515 MB") && msg.contains("CSV"), "{msg}");
+        assert!(!msg.contains("several sheets"), "{msg}");
+        // Just over the limit never reads as a size equal to it.
+        let msg = open_bytes("big.xlsx", &declaring(package, "xl/worksheets/sheet1.xml", 512 * 1024 * 1024 + 1)).unwrap_err().to_string();
+        assert!(msg.contains("more than 512 MB"), "{msg}");
+        // A package that fails for another reason keeps its own error, oversized part or not.
+        let mut broken = declaring(save_bytes(&wb, "big.xlsx").unwrap(), "xl/worksheets/sheet1.xml", 540_278_731);
+        let at = central_entry(&broken, "xl/workbook.xml");
+        broken[at + 46 + "xl/workbook.xml".len() - 1] = b'x';
+        let msg = open_bytes("big.xlsx", &broken).unwrap_err().to_string();
+        assert!(msg.starts_with("We can't open 'big.xlsx': ") && !msg.contains("unpacks"), "{msg}");
     }
 
     #[test]

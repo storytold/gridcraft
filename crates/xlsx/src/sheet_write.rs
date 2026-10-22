@@ -3,10 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 
-use gridcraft_core::{CellError, CellRef, RangeRef, Value};
+use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
-    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, Orientation, Sheet, SparklineKind, Style, Table,
-    TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
+    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, Sheet,
+    SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
@@ -76,10 +76,34 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     let nstyles = wb.styles.len() as u32;
     let sid = |s: gridcraft_model::StyleId| if s.0 < nstyles { s.0 } else { 0 };
 
+    // A table's dropdown filter is kept in `sheet.autofilter`, not in `Table::filter` (the
+    // engine's only live filter state, which the reader also fills). Where the two coincide,
+    // fold the sheet filter's criteria into the table so they reach the file: the stored
+    // `colId` offsets are relative to the range's first column, and both ranges start at the
+    // same column, so they carry over verbatim. A filter that only partially covers a table
+    // has nowhere valid to go, so it keeps being suppressed below.
+    let folded: Vec<Table> = match &sheet.autofilter {
+        Some(af) if !af.criteria.is_empty() => sheet
+            .tables
+            .iter()
+            .cloned()
+            .map(|mut t| {
+                if t.header_row
+                    && t.filter_button
+                    && t.filter.is_empty()
+                    && t.range.contains_range(&af.range)
+                    && t.range.start.col == af.range.start.col
+                {
+                    t.filter = af.criteria.clone();
+                }
+                t
+            })
+            .collect(),
+        _ => sheet.tables.clone(),
+    };
     // Table header cells must hold the column names.
     let mut overrides: BTreeMap<CellRef, String> = BTreeMap::new();
-    let tables: Vec<(&Table, Vec<String>)> = sheet
-        .tables
+    let tables: Vec<(&Table, Vec<String>)> = folded
         .iter()
         .filter(|t| t.range.height() > t.header_row as u32 + t.totals_row as u32 || (t.header_row && t.range.height() > t.totals_row as u32))
         .map(|t| (t, table_columns(t)))
@@ -498,12 +522,10 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             if img.data.is_empty() {
                 continue;
             }
-            out.images += 1;
             let ext = image_ext(&img.mime, &img.data);
-            let name = format!("xl/media/image{}.{ext}", out.images);
             out.default_type(ext, image_content_type(ext));
-            out.part(&name, None, img.data.clone());
-            let rid = drels.add("image", &format!("../media/image{}.{ext}", out.images));
+            let file = out.image_part(ext, &img.data);
+            let rid = drels.add("image", &format!("../media/{file}"));
             objs.push(Obj::Image(img, rid));
         }
         for ch in &sheet.charts {
@@ -522,7 +544,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
                 drels.add_uri(crate::chartex::REL_CHARTEX, &format!("../charts/chartEx{n}.xml"))
             } else {
                 let name = format!("xl/charts/chart{}.xml", out.charts);
-                out.part(&name, Some(CT_CHART), crate::chart::write_chart(wb, si, ch).into_bytes());
+                out.part(&name, Some(CT_CHART), crate::chart::write_chart(wb, si, ch, &out.book_name).into_bytes());
                 drels.add("chart", &format!("../charts/chart{}.xml", out.charts))
             };
             objs.push(Obj::Chart(ch, rid));
@@ -551,7 +573,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         out.default_type("vml", "application/vnd.openxmlformats-officedocument.vmlDrawing");
         let vml_name = format!("xl/drawings/vmlDrawing{n}.vml");
-        let vml = kept.notes_vml(vml_xml(sheet, n), &vml_name, out);
+        let vml = kept.notes_vml(vml_xml(sheet, out.kept.notes_block(n)), &vml_name, out);
         out.part(&vml_name, None, vml.into_bytes());
         rels.add("comments", &format!("../comments{n}.xml"));
         let rid = rels.add("vmlDrawing", &format!("../drawings/vmlDrawing{n}.vml"));
@@ -667,6 +689,10 @@ fn write_cell(
         Value::Error(CellError::Spill | CellError::Calc) => Value::Error(CellError::Value),
         v => v,
     };
+    // A formula read with dynamic-array metadata keeps it, even where the shape analysis would
+    // not need it: Excel decided the formula is evaluated as an array.
+    let own = formula.filter(|f| f.dynamic && f.array.is_none()).map(|_| RangeRef::cell(c));
+    let dynamic = dynamic.or(own.as_ref());
     // A non-spilling formula may still need array evaluation to avoid implicit intersection.
     if dynamic.is_some() && formula.is_some_and(|f| f.array.is_none()) {
         s.push_str(" cm=\"1\"");
@@ -1260,6 +1286,24 @@ fn protected_ranges_xml(sheet: &Sheet) -> String {
     if s.is_empty() { s } else { format!("<protectedRanges>{s}</protectedRanges>") }
 }
 
+/// The box a note made here gets: two columns right of its cell, four rows tall, 108 x 59.25 pt.
+/// A box read from a file that equals it is kept as `None`, so a note's model survives a save.
+pub(crate) const DEFAULT_NOTE_BOX: NoteBox = NoteBox {
+    from: NoteCorner { col: 1, col_px: 15, row: 0, row_px: 2 },
+    to: NoteCorner { col: 3, col_px: 15, row: 4, row_px: 16 },
+    size_pt: Some(DEFAULT_NOTE_SIZE_PT),
+};
+const DEFAULT_NOTE_SIZE_PT: (f64, f64) = (108.0, 59.25);
+
+/// A note box's `<x:Anchor>` text and its width and height in points: the box read from the file
+/// or [`DEFAULT_NOTE_BOX`], its corners moved with the note's `cell` and kept on the sheet.
+fn note_anchor(cell: CellRef, b: Option<&NoteBox>) -> (String, (f64, f64)) {
+    let b = b.unwrap_or(&DEFAULT_NOTE_BOX);
+    let at = |base: u32, d: i64, max: u32| (i64::from(base) + d).clamp(0, i64::from(max) - 1);
+    let corner = |k: &NoteCorner| format!("{}, {}, {}, {}", at(cell.col, k.col, MAX_COLS), k.col_px, at(cell.row, k.row, MAX_ROWS), k.row_px);
+    (format!("{}, {}", corner(&b.from), corner(&b.to)), b.size_pt.unwrap_or(DEFAULT_NOTE_SIZE_PT))
+}
+
 /// Legacy VML shapes Excel uses to display notes.
 fn vml_xml(sheet: &Sheet, n: u32) -> String {
     let mut s = format!(
@@ -1268,14 +1312,13 @@ fn vml_xml(sheet: &Sheet, n: u32) -> String {
     for (i, (cell, c)) in sheet.comments.iter().enumerate() {
         let id = n as u64 * 1024 + 1 + i as u64;
         let vis = if c.visible { "visible" } else { "hidden" };
+        let (anchor, (w, h)) = note_anchor(*cell, c.note_box.as_ref());
         let _ = write!(
             s,
-            "<v:shape id=\"_x0000_s{id}\" type=\"#_x0000_t202\" style=\"position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:108pt;height:59.25pt;z-index:{};visibility:{vis}\" fillcolor=\"#ffffe1\" o:insetmode=\"auto\"><v:fill color2=\"#ffffe1\"/><v:shadow on=\"t\" color=\"black\" obscured=\"t\"/><v:path o:connecttype=\"none\"/><v:textbox style=\"mso-direction-alt:auto\"><div style=\"text-align:left\"></div></v:textbox><x:ClientData ObjectType=\"Note\"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{}, 15, {}, 2, {}, 15, {}, 16</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>{}</x:Row><x:Column>{}</x:Column>{}</x:ClientData></v:shape>",
+            "<v:shape id=\"_x0000_s{id}\" type=\"#_x0000_t202\" style=\"position:absolute;margin-left:59.25pt;margin-top:1.5pt;width:{}pt;height:{}pt;z-index:{};visibility:{vis}\" fillcolor=\"#ffffe1\" o:insetmode=\"auto\"><v:fill color2=\"#ffffe1\"/><v:shadow on=\"t\" color=\"black\" obscured=\"t\"/><v:path o:connecttype=\"none\"/><v:textbox style=\"mso-direction-alt:auto\"><div style=\"text-align:left\"></div></v:textbox><x:ClientData ObjectType=\"Note\"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{anchor}</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>{}</x:Row><x:Column>{}</x:Column>{}</x:ClientData></v:shape>",
+            num(w),
+            num(h),
             i + 1,
-            cell.col + 1,
-            cell.row,
-            cell.col + 3,
-            cell.row + 4,
             cell.row,
             cell.col,
             if c.visible { "<x:Visible/>" } else { "" }

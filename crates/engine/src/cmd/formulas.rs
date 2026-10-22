@@ -1,6 +1,6 @@
 //! Formulas tab: AutoSum, Insert Function, names, auditing, calculation.
 
-use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_core::{CellError, CellRef, RangeRef, Value};
 use gridcraft_model::{CalcMode, DefinedName, Formula};
 use serde_json::{Value as Json, json};
 
@@ -49,11 +49,22 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(query "formulas.tracePrecedents", "Trace Precedents", ["Formulas", "Formula Auditing"], None, "{cell?} → ranges", has_doc, trace_precedents),
         cmd!(query "formulas.traceDependents", "Trace Dependents", ["Formulas", "Formula Auditing"], None, "{cell?} → cells", has_doc, trace_dependents),
+        cmd!(noundo "formulas.selectPrecedents", "Select Precedents", ["Formulas", "Formula Auditing"], Some("Ctrl+["), "{cell?, all?: true = every level (Ctrl+Shift+[)} → selects the precedent cells", has_doc, select_precedents),
+        cmd!(noundo "formulas.selectDependents", "Select Dependents", ["Formulas", "Formula Auditing"], Some("Ctrl+]"), "{cell?, all?: true = every level (Ctrl+Shift+])}", has_doc, select_dependents),
         cmd!(noundo "formulas.removeArrows", "Remove Arrows", ["Formulas", "Formula Auditing"], None, "{}", has_doc, |_, _| ok()),
         cmd!("formulas.showFormulas", "Show Formulas", ["Formulas", "Formula Auditing"], Some("Ctrl+`"), "{on?}", has_doc, show_formulas),
+        cmd!(
+            "formulas.convertToNumber",
+            "Convert to Number",
+            [],
+            None,
+            "{range?} → {converted} (numbers stored as text in the range or selection become numbers)",
+            has_doc,
+            convert_to_number
+        ),
         cmd!(query "formulas.errorChecking", "Error Checking", ["Formulas", "Formula Auditing"], None, "{} → cells with errors", has_doc, error_checking),
         cmd!(query "formulas.evaluateFormula", "Evaluate Formula", ["Formulas", "Formula Auditing"], None, "{cell?, formula?} → steps", has_doc, evaluate_formula),
-        cmd!(query "formulas.evaluate", "Evaluate", [], None, "{formula: \"=SUM(A1:A3)\", cell?} → value without changing the sheet", has_doc, evaluate),
+        cmd!(query "formulas.evaluate", "Evaluate", [], None, "{formula: \"=SUM(A1:A3)\", cell?} → value without changing the sheet; a formula that couldn't be entered in a cell is an error", has_doc, evaluate),
         cmd!(noundo "formulas.calculateNow", "Calculate Now", ["Formulas", "Calculation"], Some("F9"), "{}", has_doc, calc_now),
         cmd!(noundo "formulas.calculateSheet", "Calculate Sheet", ["Formulas", "Calculation"], Some("Shift+F9"), "{}", has_doc, calc_now),
         cmd!(
@@ -237,7 +248,7 @@ fn valid_name(n: &str) -> bool {
 
 /// Looks like an R1C1 reference (`R`, `C`, `RC`, `R2`, `C3`, `R1C1`), which Excel doesn't
 /// accept as a name.
-fn is_r1c1(n: &str) -> bool {
+pub(crate) fn is_r1c1(n: &str) -> bool {
     let digits = |s: &str| s.bytes().take_while(u8::is_ascii_digit).count();
     let mut rest = n;
     if let Some(r) = rest.strip_prefix(['R', 'r']) {
@@ -265,7 +276,7 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
     let refers = match str_param(p, "refersTo") {
         // As in Excel, relative references are relative to the active cell; names keep them
         // relative to A1, as files do.
-        Some(r) => match gridcraft_formula::parse(r.trim_start_matches('=')) {
+        Some(r) => match gridcraft_formula::parse_name(r.trim_start_matches('=')) {
             Ok(e) if gridcraft_formula::adjust::has_relative_refs(&e) => {
                 let at = d.selection.active;
                 gridcraft_formula::print(&gridcraft_formula::adjust::shift_relative_wrapping(e, -(at.row as i64), -(at.col as i64)))
@@ -280,7 +291,7 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
             format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), body)
         }
     };
-    if gridcraft_formula::parse(&refers).is_err() {
+    if gridcraft_formula::parse_name(&refers).is_err() {
         return Err(EngineError::Other("There's a problem with this formula.".into()));
     }
     let comment = str_param(p, "comment").unwrap_or("").to_string();
@@ -348,6 +359,7 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
             let Some(e) = f.expr().and_then(rename) else { continue };
             let mut nf = Formula::from_expr(e);
             nf.array = f.array;
+            nf.dynamic = f.dynamic;
             if let Some(cell) = sh.cells.get_mut(c) {
                 cell.formula = Some(std::sync::Arc::new(nf));
             }
@@ -355,7 +367,7 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
     }
     for n in wb.names.iter_mut() {
         if n.scope.is_none_or(applies)
-            && let Some(e) = gridcraft_formula::parse(&n.formula).ok().and_then(rename)
+            && let Some(e) = gridcraft_formula::parse_name(&n.formula).ok().and_then(rename)
         {
             n.formula = gridcraft_formula::print(&e);
         }
@@ -389,7 +401,9 @@ fn name_manager(s: &mut Session, _: &Json) -> Result<Json> {
         .filter(|n| !n.hidden)
         .map(|n| {
             let sheet = n.scope.unwrap_or(d.wb.active_sheet);
-            let v = gridcraft_calc::evaluate(&d.wb, sheet, CellRef::default(), &n.formula);
+            // parse_name, not evaluate's parse: a name's top-level commas are unions.
+            let v = gridcraft_formula::parse_name(&n.formula)
+                .map_or(Value::Error(CellError::Name), |e| gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, CellRef::default(), &e));
             json!({"name": n.name, "refersTo": format!("={}", n.formula), "scope": n.scope.and_then(|i| d.wb.sheet(i)).map(|s| s.name.clone()).unwrap_or_else(|| "Workbook".into()), "value": crate::cmd::inspect::value_json(&v), "comment": n.comment})
         })
         .collect();
@@ -479,6 +493,82 @@ fn trace_dependents(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(Json::Array(v))
 }
 
+/// Excel's Ctrl+[ / Ctrl+]: select the precedent (or dependent) cells. When they all live on
+/// another sheet, jump there. `all` walks every level (Ctrl+Shift+[ / Ctrl+Shift+]).
+fn select_trace_cells(s: &mut Session, p: &Json, precedents: bool) -> Result<Json> {
+    use std::collections::BTreeSet;
+    let d = s.doc()?;
+    let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
+    let sheet = d.wb.active_sheet;
+    let all = bool_param(p, "all").unwrap_or(false);
+    // (sheet, a1) pairs to select; direct level keeps whole precedent ranges, transitive cells.
+    let mut found: BTreeSet<(usize, String)> = BTreeSet::new();
+    let mut seen: BTreeSet<(usize, CellRef)> = BTreeSet::new();
+    let mut frontier = vec![(sheet, at)];
+    seen.insert((sheet, at));
+    while let Some((ks, kc)) = frontier.pop() {
+        if precedents {
+            for a in d.calc.graph.precedents_of((ks, kc)) {
+                if all {
+                    // Walk only the stored cells inside the precedent area (sparse
+                    // range iterator, not the whole sheet): blanks are never selected
+                    // and only formula cells extend the frontier, so a formula late in
+                    // a large range is not skipped.
+                    let Some(sh) = d.wb.sheet(a.sheet) else { continue };
+                    for (c, cell) in sh.cells.iter_range(a.range) {
+                        if matches!(cell.value, Value::Empty) {
+                            continue;
+                        }
+                        if seen.insert((a.sheet, c)) {
+                            found.insert((a.sheet, c.a1()));
+                            if cell.formula.is_some() {
+                                frontier.push((a.sheet, c));
+                            }
+                        }
+                    }
+                } else {
+                    found.insert((a.sheet, a.range.a1()));
+                }
+            }
+        } else {
+            let mut deps = Vec::new();
+            d.calc.graph.dependents(ks, kc, &mut deps);
+            for k2 in deps {
+                if all {
+                    if seen.insert(k2) {
+                        found.insert((k2.0, k2.1.a1()));
+                        frontier.push(k2);
+                    }
+                } else {
+                    found.insert((k2.0, k2.1.a1()));
+                }
+            }
+        }
+        if !all {
+            break;
+        }
+    }
+    found.remove(&(sheet, at.a1()));
+    let name = if precedents { "precedent" } else { "dependent" };
+    let Some(si) = found.iter().find(|(si, _)| *si == sheet).or_else(|| found.first()).map(|(si, _)| *si) else {
+        return Err(bad("cell", format!("No {name} cells.")));
+    };
+    let list: Vec<String> = found.iter().filter(|(s, _)| *s == si).map(|(_, a)| a.clone()).collect();
+    let mut params = json!({ "range": list.join(",") });
+    if si != sheet {
+        params["sheet"] = json!(si);
+    }
+    s.execute("selection.set", params)
+}
+
+fn select_precedents(s: &mut Session, p: &Json) -> Result<Json> {
+    select_trace_cells(s, p, true)
+}
+
+fn select_dependents(s: &mut Session, p: &Json) -> Result<Json> {
+    select_trace_cells(s, p, false)
+}
+
 fn show_formulas(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = s.doc()?.wb.active_sheet;
     let cur = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.show_formulas);
@@ -486,6 +576,40 @@ fn show_formulas(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         cx.sheet_mut(sheet)?.show_formulas = on;
         Ok(json!({"on": on}))
+    })
+}
+
+/// The number a cell's text stands for when Excel's background check flags it as a number stored
+/// as text: a constant (not a formula's result) that would be a number if typed.
+pub fn number_stored_as_text(cell: &gridcraft_model::Cell) -> Option<f64> {
+    match &cell.value {
+        Value::Text(t) if cell.formula.is_none() => gridcraft_core::parse::number_stored_as_text(t),
+        _ => None,
+    }
+}
+
+/// Convert to Number: each number stored as text in the range becomes that number, keeping the
+/// cell's format.
+fn convert_to_number(s: &mut Session, p: &Json) -> Result<Json> {
+    let sheet = target_sheet(s, p)?;
+    let ranges = target_ranges(s, p)?;
+    edit(s, |cx| {
+        let mut converted = 0;
+        for r in &ranges {
+            let Some(r) = cx.wb.sheet(sheet).and_then(|sh| sh.used_range()).and_then(|u| r.intersection(&u)) else { continue };
+            let found: Vec<(CellRef, f64)> = cx
+                .wb
+                .sheet(sheet)
+                .map(|sh| sh.cells.iter_range(r).filter_map(|(c, x)| number_stored_as_text(x).map(|n| (c, n))).collect())
+                .unwrap_or_default();
+            let sh = cx.sheet_mut(sheet)?;
+            for (c, n) in &found {
+                sh.set_value(*c, Value::number(*n));
+            }
+            cx.changed.extend(found.iter().map(|(c, _)| (sheet, *c)));
+            converted += found.len();
+        }
+        Ok(json!({"converted": converted}))
     })
 }
 
@@ -528,23 +652,30 @@ fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
     let mut steps = Vec::new();
     let mut nodes = Vec::new();
     expr.walk(&mut |e| {
+        // Borrowed, not cloned: copying every operator of a long chain A1+A2+… copies the
+        // rest of the chain each time (quadratic memory).
         if matches!(e, gridcraft_formula::Expr::Call(..) | gridcraft_formula::Expr::Binary(..) | gridcraft_formula::Expr::Ref(_)) {
-            nodes.push(e.clone());
+            nodes.push(e);
         }
     });
     for e in nodes.into_iter().rev().take(200) {
-        let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, at, &e);
-        steps.push(json!({"expression": gridcraft_formula::print(&e), "value": crate::cmd::inspect::value_json(&v)}));
+        let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, at, e);
+        steps.push(json!({"expression": gridcraft_formula::print(e), "value": crate::cmd::inspect::value_json(&v)}));
     }
     let result = gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, at, &expr);
     Ok(json!({"formula": format!("={text}"), "steps": steps, "result": crate::cmd::inspect::value_json(&result)}))
 }
 
+/// Evaluates what typing `formula` into a cell would show. A formula `cell.set` would refuse (it
+/// doesn't parse, or calls a function with the wrong number of arguments) is an error that says
+/// why, not `#NAME?`; an unknown function name still evaluates to `#NAME?`, as in Excel.
 fn evaluate(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let f = str_param(p, "formula").ok_or_else(|| bad("formulas.evaluate", "missing `formula`"))?;
     let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
-    let v = gridcraft_calc::evaluate(&d.wb, d.wb.active_sheet, at, f);
+    let expr = crate::cmd::edit::parse_typed_formula(f.strip_prefix('=').unwrap_or(f))?;
+    crate::cmd::edit::check_arg_counts(&expr)?;
+    let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, d.wb.active_sheet, at, &expr);
     Ok(crate::cmd::inspect::value_json(&v))
 }
 
@@ -623,5 +754,40 @@ mod tests {
         s.execute("range.setValues", json!({"range": "A1", "values": [[format!("ع{}", arabic(199))], [1]]})).unwrap();
         let r = s.execute("formulas.createFromSelection", json!({"range": "A1:A2", "top": true})).unwrap();
         assert_eq!(r["created"], 1);
+    }
+
+    #[test]
+    fn names_referring_to_several_ranges() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1:C2", "values": [[1, 0, 5], [2, 0, 7]]})).unwrap();
+        // Excel writes and accepts a union in a name without parentheses.
+        let r = s.execute("formulas.defineName", json!({"name": "u", "refersTo": "=Sheet1!$A$1:$A$2,Sheet1!$C$1:$C$2"})).unwrap();
+        assert_eq!(r["refersTo"], "=Sheet1!$A$1:$A$2,Sheet1!$C$1:$C$2");
+        for (cell, input) in [("E1", "=SUM(u)"), ("E2", "=AREAS(u)"), ("E3", "=MIN(u)"), ("E4", "=INDEX(u,2,1,2)")] {
+            s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        let v = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["value"].clone();
+        assert_eq!(v(&mut s, "E1"), json!(15.0));
+        assert_eq!(v(&mut s, "E2"), json!(2.0));
+        assert_eq!(v(&mut s, "E3"), json!(1.0));
+        assert_eq!(v(&mut s, "E4"), json!(7.0));
+        // Renaming the sheet follows every area, and the definition keeps Excel's form.
+        s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+        let name = s.doc().unwrap().wb.names.iter().find(|n| n.name == "u").map(|n| n.formula.clone());
+        assert_eq!(name.as_deref(), Some("Data!$A$1:$A$2,Data!$C$1:$C$2"));
+        assert_eq!(v(&mut s, "E1"), json!(15.0));
+    }
+
+    #[test]
+    fn name_manager_previews_a_name_over_several_ranges() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1:C2", "values": [[1, 0, 5], [2, 0, 7]]})).unwrap();
+        s.execute("formulas.defineName", json!({"name": "u", "refersTo": "=Sheet1!$A$1:$A$2,Sheet1!$C$1:$C$2"})).unwrap();
+        let list = s.execute("formulas.nameManager", json!({})).unwrap();
+        let u = list.as_array().and_then(|l| l.iter().find(|n| n["name"] == "u")).cloned().unwrap();
+        // The union parses as one, so the preview is what the union gives in a cell, not #NAME?.
+        assert_eq!(u["value"], json!({"error": "#VALUE!"}));
     }
 }

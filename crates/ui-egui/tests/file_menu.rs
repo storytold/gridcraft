@@ -122,7 +122,7 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
         h.run_steps(2);
         assert_eq!(page(&h), Some(id));
     }
-    assert!(h.state_mut().run("ui.backstage", serde_json::json!({"page": "account"})).is_err());
+    assert!(h.state_mut().run("ui.backstage", serde_json::json!({"page": "feedback"})).is_err());
     h.state_mut().run("ui.backstage", serde_json::json!({"page": "close"})).unwrap();
     assert!(h.state().backstage.is_none());
     // The back arrow returns to the sheet too.
@@ -137,6 +137,8 @@ fn translated_options_headings_show_no_context_prefix() {
     for (code, headings, prefixed, (view, view_prefixed)) in [
         ("fr", ["Général", "Enregistrer"], ["Options|Général", "Options|Enregistrer"], ("Affichage", "Options de la feuille|Affichage")),
         ("sr", ["Opšte", "Sačuvaj"], ["Opcije|Opšte", "Opcije|Sačuvaj"], ("Prikaz", "Opcije lista|Prikaz")),
+        ("nl", ["Algemeen", "Opslaan"], ["Opties|Algemeen", "Opties|Opslaan"], ("Weergeven", "Bladopties|Weergeven")),
+        ("ro", ["General", "Salvare"], ["Opțiuni|General", "Opțiuni|Salvare"], ("Vizualizare", "Opțiuni foaie|Vizualizare")),
     ] {
         let mut h = harness(Services::default());
         h.state_mut().run("app.language.set", serde_json::json!({"language": code})).unwrap();
@@ -157,6 +159,20 @@ fn translated_options_headings_show_no_context_prefix() {
         assert!(h.query_by_label(view_prefixed).is_none(), "{code}: {view_prefixed} shows its context");
         assert!(h.query_all_by_label(view).count() >= 2, "{code}: the Sheet Options checkboxes don't read {view}");
     }
+}
+
+#[test]
+fn file_account_shows_the_version_and_opens_about() {
+    let mut h = harness(Services::default());
+    choose(&mut h, "Account");
+    assert_eq!(page(&h), Some("account"));
+    assert!(h.state().dialog.is_none());
+    // The About dialog also shows the version; it must not be open yet.
+    h.get_by_label(env!("CARGO_PKG_VERSION"));
+    h.get_by_label(env!("CARGO_PKG_LICENSE"));
+    click(&mut h, "About GridCraft");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("about"));
+    assert_eq!(page(&h), Some("account"), "About opens over the File view, like Protect Workbook on Info");
 }
 
 #[test]
@@ -196,6 +212,80 @@ fn save_as_offers_pdf_and_leaves_the_workbook_file_alone() {
     assert!(std::fs::read(dir.join("Report.pdf")).unwrap().starts_with(b"%PDF-"));
     let d = h.state().session.active().unwrap();
     assert!(d.path.is_none() && d.is_dirty(), "a PDF is a copy, not the workbook's file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The window's close button (or Alt+F4, or the OS quitting the app): steps until the request
+/// has been handled and returns the viewport commands the app answered with.
+fn request_window_close(h: &mut egui_kittest::Harness<'static, SheetApp>) -> Vec<egui::ViewportCommand> {
+    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    step_commands(h)
+}
+
+/// Runs a few frames and gathers the commands sent to the window.
+fn step_commands(h: &mut egui_kittest::Harness<'static, SheetApp>) -> Vec<egui::ViewportCommand> {
+    let mut out = Vec::new();
+    for _ in 0..3 {
+        h.step();
+        out.extend(h.output().viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default());
+    }
+    out
+}
+
+fn click_commands(h: &mut egui_kittest::Harness<'static, SheetApp>, label: &str) -> Vec<egui::ViewportCommand> {
+    h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
+    step_commands(h)
+}
+
+#[test]
+fn closing_the_window_asks_about_every_unsaved_workbook() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "B2", "input": "7"})).unwrap();
+    h.run_steps(2);
+
+    let sent = request_window_close(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::CancelClose), "unsaved changes hold the window open: {sent:?}");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    let sent = click_commands(&mut h, "Cancel");
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "Cancel keeps the app open");
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.documents().len(), 2, "Cancel keeps both workbooks");
+
+    request_window_close(&mut h);
+    let sent = click_commands(&mut h, "Don't Save");
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "the other workbook is still unsaved");
+    assert_eq!(h.state().session.documents().len(), 1);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"), "then it asks about the next one");
+    let sent = click_commands(&mut h, "Don't Save");
+    assert!(sent.contains(&egui::ViewportCommand::Close), "once every workbook is answered the window closes: {sent:?}");
+    let sent = request_window_close(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::CancelClose), "the close that follows is let through");
+}
+
+#[test]
+fn closing_the_window_can_save_first_and_a_saved_workbook_closes_at_once() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-close-window-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx").to_string_lossy().into_owned();
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.save", serde_json::json!({"path": &path})).unwrap();
+    h.run_steps(2);
+    let sent = request_window_close(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::CancelClose), "nothing unsaved: the window just closes");
+    assert!(h.state().dialog.is_none());
+
+    // A cell still being typed is an unsaved change too.
+    h.input_mut().events.push(egui::Event::Text("123".into()));
+    h.run_steps(2);
+    assert!(h.state().editor.is_some());
+    let sent = request_window_close(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::CancelClose), "{sent:?}");
+    let sent = click_commands(&mut h, "Save");
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    let (wb, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(123.0), "Save wrote the change before closing");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -243,4 +333,47 @@ fn a_cancelled_export_pdf_picker_writes_nothing() {
     h.state_mut().run_or_alert("file.exportPdf", serde_json::json!({}));
     assert!(h.state().message.is_none());
     assert!(h.state_mut().session.take_ui_requests().is_empty());
+}
+
+/// Share › Export as Web Page (and the native File menu's Save as Web Page) asks for a name in its
+/// own dialog. A bare name has no folder: written as typed it lands in the process's working
+/// directory, where nobody looks for it (#1212). The save picker chooses the folder instead.
+#[test]
+fn save_a_copy_with_a_bare_name_asks_where_to_save_it() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-save-copy-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (capture, target) = (asked.clone(), dir.clone());
+    let mut h = harness(Services {
+        pick_save: Some(Box::new(move |suggested| {
+            capture.lock().unwrap().push(suggested.to_string());
+            Some(target.join("Chosen.html").to_string_lossy().into_owned())
+        })),
+        ..Default::default()
+    });
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    let save_copy = |h: &mut egui_kittest::Harness<'static, SheetApp>, path: &str| {
+        h.state_mut().open_dialog("saveCopy", serde_json::json!({"format": "html"}));
+        h.run_steps(3);
+        h.state_mut().dialog.as_mut().unwrap().values.insert("path".into(), serde_json::json!(path));
+        h.run_steps(2);
+        h.get_by_label("   OK   ").click();
+        h.run_steps(3);
+    };
+    let name = format!("gridcraft-save-copy-{}", std::process::id());
+    save_copy(&mut h, &name);
+    let stray = std::path::PathBuf::from(format!("{name}.html"));
+    let written_in_cwd = stray.exists();
+    let _ = std::fs::remove_file(&stray);
+    assert!(!written_in_cwd, "a bare name is not written to the working directory");
+    assert_eq!(*asked.lock().unwrap(), vec![format!("{name}.html")], "the picker is offered the typed name");
+    assert!(std::fs::read_to_string(dir.join("Chosen.html")).unwrap().contains("42"), "the page is written where the picker says");
+    assert!(h.state().message.is_none());
+    // A full path skips the picker; a write that fails is reported, not swallowed.
+    save_copy(&mut h, &dir.join("Named.html").to_string_lossy());
+    assert!(dir.join("Named.html").exists());
+    save_copy(&mut h, &dir.join("missing").join("Lost.html").to_string_lossy());
+    assert!(h.state().message.is_some(), "a failed write is reported");
+    assert_eq!(asked.lock().unwrap().len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
 }

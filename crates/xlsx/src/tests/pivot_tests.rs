@@ -674,3 +674,53 @@ fn data_on_rows_with_one_value_field_reads_without_warning() {
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert!(back.sheet(0).unwrap().pivots[0].values_on_rows);
 }
+
+/// A one-sheet-of-data workbook with a pivot on "Report": `columns` are the source columns
+/// (header, values), `pt` the pivot built on `Data!A1:<last>`.
+fn small_pivot(columns: &[(&str, Vec<Value>)], pt: impl FnOnce(&mut PivotTable)) -> HashMap<String, String> {
+    let mut wb = Workbook::new();
+    let data = wb.sheet_mut(0).unwrap();
+    data.name = "Data".into();
+    let mut rows = 0;
+    for (c, (h, vals)) in columns.iter().enumerate() {
+        data.cells.set(CellRef::new(0, c as u32), Cell::value(Value::text(*h)));
+        for (r, v) in vals.iter().enumerate() {
+            if *v != Value::Empty {
+                data.cells.set(CellRef::new(r as u32 + 1, c as u32), Cell::value(v.clone()));
+            }
+        }
+        rows = rows.max(vals.len());
+    }
+    let last = format!("{}{}", gridcraft_core::col_to_letters(columns.len() as u32 - 1), rows + 1);
+    let mut table = PivotTable { id: 1, name: "PT".into(), source: format!("Data!$A$1:{last}"), anchor: at("A3"), ..PivotTable::default() };
+    pt(&mut table);
+    let mut report = Sheet::new("Report");
+    report.pivots = vec![table];
+    wb.sheets.push(Arc::new(report));
+    unzip(&write_xlsx(&wb).unwrap()).into_iter().map(|(k, v)| (k, String::from_utf8_lossy(&v).into_owned())).collect()
+}
+
+/// #1447: two value fields and no column field: Excel 365 adds a `Values` row unless told not to.
+#[test]
+fn two_value_fields_without_columns_hide_the_values_row() {
+    let cols = [
+        ("Region", vec![Value::text("East"), Value::text("West"), Value::text("East")]),
+        ("Sales", vec![Value::number(10.0), Value::number(20.0), Value::number(5.0)]),
+        ("Qty", vec![Value::number(1.0), Value::number(2.0), Value::number(3.0)]),
+    ];
+    let value = |c: &str| PivotValue { source_col: c.into(), name: format!("Sum of {c}"), ..PivotValue::default() };
+    let two = small_pivot(&cols, |p| {
+        p.rows = vec![field("Region")];
+        p.values = vec![value("Sales"), value("Qty")];
+    });
+    let t = &two["xl/pivotTables/pivotTable1.xml"];
+    assert!(t.contains("firstHeaderRow=\"0\" firstDataRow=\"1\""), "{t}");
+    assert!(t.contains("<x14:pivotTableDefinition hideValuesRow=\"1\"/>"), "{t}");
+    let one = small_pivot(&cols, |p| {
+        p.rows = vec![field("Region")];
+        p.values = vec![value("Sales")];
+    });
+    let t = &one["xl/pivotTables/pivotTable1.xml"];
+    assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
+    assert!(!t.contains("hideValuesRow"), "{t}");
+}

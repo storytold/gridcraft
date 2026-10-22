@@ -78,8 +78,10 @@ pub enum Drag {
         start: f32,
         orig: f32,
     },
+    /// Dragging the fill handle; `menu` when the right button drags it (the fill menu opens on release).
     Fill {
         target: Option<RangeRef>,
+        menu: bool,
     },
     /// Dragging a freeze handle: `cols` for the column bar, `to` the line count it would freeze.
     Freeze {
@@ -114,12 +116,17 @@ pub struct GridState {
     /// Column and row of the clicked header cell, and where to open the menu.
     pub filter_menu: Option<(u32, u32, Pos2)>,
     pub context_menu: Option<Pos2>,
+    /// The frame a right-click opened `context_menu` in: that click's own press doesn't close it.
+    pub context_menu_frame: u64,
+    /// After a right-drag of the fill handle: the source, the dragged range and where to open the menu.
+    pub fill_menu: Option<(RangeRef, RangeRef, Pos2)>,
+    /// The right-clicked chart, picture, shape or slicer: where to open its menu, its kind and id.
+    pub object_menu: Option<(Pos2, &'static str, u32)>,
     pub marching_phase: f32,
     /// The selection outline on its way to a new selection.
     pub glide: crate::selection_glide::SelectionGlide,
     pub last_click: Option<(CellRef, f64)>,
     pub hover_cell: Option<CellRef>,
-    pub autosave: bool,
     pub last_autosave: f64,
     pub last_border: String,
     pub last_fill: String,
@@ -134,6 +141,9 @@ pub struct GridState {
     pub ink: Vec<[f32; 2]>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
     pub pages: Option<((u64, u64, usize), Vec<(RangeRef, u32)>)>,
+    /// The PivotTable Fields pane's `pivot.fields` answer, cached per (doc uid, revision, pivot):
+    /// it scans the whole source list, far too slow to repeat every frame (#2113).
+    pub pivot_fields: Option<((u64, u64, String), serde_json::Value)>,
     pub header_menu: Option<(Pos2, bool)>,
     /// Page Layout view pagination, cached per (doc uid, revision, sheet, rows, columns).
     pub paper: Option<crate::paper_view::PaperCache>,
@@ -176,15 +186,6 @@ impl WheelZoom {
             w.glide = None;
         }
         w
-    }
-}
-
-impl GridState {
-    pub fn autosave(&self) -> bool {
-        self.autosave
-    }
-    pub fn toggle_autosave(&mut self) {
-        self.autosave = !self.autosave;
     }
 }
 
@@ -434,18 +435,7 @@ fn col32(c: Color, wb: &Workbook, default: Color32) -> Color32 {
 }
 
 fn numfmt_color(c: gridcraft_engine::numfmt::FormatColor) -> Color32 {
-    use gridcraft_engine::numfmt::FormatColor as F;
-    match c {
-        F::Black => Color32::BLACK,
-        F::Blue => Color32::from_rgb(0, 0, 255),
-        F::Cyan => Color32::from_rgb(0, 255, 255),
-        F::Green => Color32::from_rgb(0, 128, 0),
-        F::Magenta => Color32::from_rgb(255, 0, 255),
-        F::Red => Color32::from_rgb(255, 0, 0),
-        F::White => Color32::WHITE,
-        F::Yellow => Color32::from_rgb(255, 255, 0),
-        F::Indexed(_) => Color32::BLACK,
-    }
+    c.rgb().map(|[r, g, b]| Color32::from_rgb(r, g, b)).unwrap_or(Color32::BLACK)
 }
 
 /// Last column of a Center Across Selection run starting at `start`: it extends over following columns (up to `limit`) while `continues` holds.
@@ -722,6 +712,9 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     app.grid.cells_rect = Some(geo.mirror_rect(geo.cells));
     // The selection outline glides to a new selection. It stays on its cells when Animations is
     // off, when egui's animations are (the headless harness), and while a screenshot is on its way.
+    // A mouse button held down (a click or a drag selecting cells) moves it at once, as in Excel:
+    // a gliding outline trails the pointer and reads as lag.
+    let pointer_selecting = ui.input(|i| i.pointer.any_down());
     let outline = app.grid.glide.frame(crate::selection_glide::Frame {
         place,
         range: sel.current(),
@@ -729,7 +722,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         view: geo.cells,
         now,
         frame_nr: ui.ctx().cumulative_frame_nr(),
-        animate: app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight(),
+        animate: app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight() && !pointer_selecting,
     });
     if app.grid.glide.is_gliding() {
         ui.ctx().request_repaint();
@@ -745,7 +738,11 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     } else {
         paint_panes(app, &painter, &geo, &wb, si, sh, &sel, outline, &mut cf, &t)
     };
-    // Objects above cells.
+    // Objects above cells. A hidden object can't stay selected: Delete or the Format pane would act
+    // on something the user can't see.
+    if crate::chartview::objects_hidden(&wb) {
+        app.selected_chart = None;
+    }
     let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
     paint_overlays(app, ui, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh, &sel);
     if sh.view == gridcraft_engine::model::SheetViewMode::PageBreakPreview {
@@ -756,7 +753,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
     // Headers.
     if sh.show_headings {
-        paint_headers(&painter, &geo, sh, &sel, &t, &quads);
+        let headings = table_headings(&geo, sh, sel.active);
+        paint_headers(&painter, &geo, sh, &sel, &t, &quads, &headings);
         paint_freeze_handles(&painter, &geo, sh, &app.grid.drag, &t);
     }
     crate::outline::paint(&painter, &geo, sh, &t);
@@ -768,7 +766,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
     }
     // Interaction.
-    let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu);
+    let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu);
     // A pan the grid never saw end (it was hidden mid-drag) must not swallow the next press.
     if app.grid.touch_pan && !resp.dragged() && !resp.drag_stopped() {
         app.grid.touch_pan = false;
@@ -782,6 +780,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         crate::paper_view::interact(app, ui, &resp, &geo, sh, &wb);
         interact(app, ui, &resp, &geo, sh, &wb);
     }
+    update_cursor(app, ui, &resp, &geo, sh);
     crate::text_box::show(app, ui, &geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
         in_cell_editor(app, ui, &geo, sh, &wb);
@@ -790,7 +789,13 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     list_picker(app, ui, &geo, previous_popups.1 == app.grid.list_picker);
     header_menu(app, ui, previous_popups.2 == app.grid.header_menu);
     context_menu(app, ui);
+    fill_menu(app, ui, previous_popups.3 == app.grid.fill_menu);
+    object_menu(app, ui);
+    error_check_tag(app, ui, &geo, sh);
     let track_x = if rtl { (available.left(), rect.left()) } else { (rect.right(), available.right()) };
+    // The track starts below the column headings and frozen rows; the bar's column beside them
+    // takes its colour too instead of showing a light square in dark mode.
+    ui.painter().rect_filled(Rect::from_min_max(pos2(track_x.0, rect.top()), pos2(track_x.1, rect.bottom())), 0.0, t.tab_bar);
     vertical_scrollbar(app, ui, sh, &geo, track_x, max_y, &t);
     if app.session.clipboard.is_some() {
         // By the clock, not per frame: a gliding outline repaints more often than the ants step.
@@ -956,7 +961,9 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
 pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
     let pad_v = 1.5 * z;
     let y_top = rect.top() + pad_v;
-    let y_bottom = (rect.bottom() - gh - pad_v).max(y_top);
+    // Not clamped to `y_top`: text taller than the row overflows upward (Bottom) or both ways
+    // (Center), and the cell's clip rect trims it, so Middle and Bottom stay distinct from Top.
+    let y_bottom = rect.bottom() - gh - pad_v;
     match valign {
         VAlign::Top => y_top,
         VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
@@ -1065,7 +1072,9 @@ pub(crate) fn paint_quadrant(
     let (r0, r1) = rows;
     let (c0, c1) = cols;
     let range = RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1));
-    let merges: Vec<RangeRef> = sh.merges.iter().filter(|m| m.intersects(&range)).copied().collect();
+    // Merges are looked up 20 columns beyond the quadrant too: text overflowing in from off-screen cells stops at them.
+    let near = RangeRef::new(CellRef::new(r0, c0.saturating_sub(20)), CellRef::new(r1, c1.saturating_add(20).min(MAX_COLS - 1)));
+    let merges: Vec<RangeRef> = sh.merges.iter().filter(|m| m.intersects(&near)).copied().collect();
     let in_merge = |c: CellRef| merges.iter().find(|m| m.contains(c)).copied();
     // Gridlines.
     if sh.show_gridlines {
@@ -1119,8 +1128,25 @@ pub(crate) fn paint_quadrant(
         }
         looks.push((anchor, rect, lk, cfl));
     }
+    // Text cells just outside the quadrant whose text may overflow into it: the nearest non-empty
+    // cell left of `c0` and right of `c1` in each row (within the same frozen / scrolled pane).
+    let mut outside: Vec<(CellRef, Rect, Look, Option<CfLook>)> = Vec::new();
+    let same_pane = |col: u32| (col < geo.fc) == (c0 < geo.fc);
+    for r in r0..=r1 {
+        if sh.row_height(r) == 0.0 {
+            continue;
+        }
+        let left = (c0.saturating_sub(20)..c0).rev().map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
+        let right = (c1.saturating_add(1)..=c1.saturating_add(20).min(MAX_COLS - 1)).map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
+        for n in [left, right].into_iter().flatten() {
+            if same_pane(n.col) && sh.col_width(n.col) > 0.0 && in_merge(n).is_none() {
+                let (lk, cfl) = look(wb, si, sh, n, cf);
+                outside.push((n, geo.cell_rect(sh, n), lk, cfl));
+            }
+        }
+    }
     // Text and per-cell decorations.
-    for (c, rect, lk, cfl) in &looks {
+    for (c, rect, lk, cfl) in looks.iter().chain(&outside) {
         let c = *c;
         if let Some(picture) = sh.cell_pictures.get(&c) {
             crate::cell_pictures::paint(p, *rect, picture);
@@ -1228,7 +1254,10 @@ pub(crate) fn paint_quadrant(
             p.with_clip_rect(rect.intersect(p.clip_rect())).galley(pos2(x, y), galley, color);
             continue;
         }
-        let first_line = text.lines().next().unwrap_or("").to_string();
+        // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
+        let first_line: String = text.chars().filter(|&ch| ch != '\n' && ch != '\r').collect();
+        // The fill position indexes `text`; move it back by the breaks removed before it.
+        let fill_char = fill_char.map(|(ch, pos)| (ch, pos.saturating_sub(text.get(..pos).map_or(0, |s| s.matches(['\n', '\r']).count()))));
         // Shrink to fit: too-wide content is drawn in a smaller font so it fits the cell (or the
         // merged area): it neither spills, nor is clipped, nor turns into ####.
         let small = (st.align.shrink && !rotated && st.align.h != HAlign::Fill && fill_char.is_none())
@@ -1383,6 +1412,15 @@ pub(crate) fn paint_quadrant(
                 Stroke::NONE,
             ));
         }
+        // Background error checking: a number stored as text gets Excel's green corner (#1994).
+        if !sh.show_formulas && sh.cell(*c).and_then(gridcraft_engine::cmd::formulas::number_stored_as_text).is_some() {
+            let s = 6.0 * z.max(0.7);
+            p.add(egui::Shape::convex_polygon(
+                vec![rect.left_top(), pos2(rect.left() + s, rect.top()), pos2(rect.left(), rect.top() + s)],
+                t.error_check_green,
+                Stroke::NONE,
+            ));
+        }
     }
     // Sparklines.
     for sp in &sh.sparklines {
@@ -1417,10 +1455,7 @@ pub(crate) fn paint_quadrant(
         if !range.contains(c) {
             continue;
         }
-        let r = filter_button_rect(geo, sh, c);
-        p.rect_filled(r, 2.0, Color32::from_gray(250));
-        p.rect_stroke(r, 2.0, Stroke::new(1.0, Color32::from_gray(170)), StrokeKind::Inside);
-        crate::icons::paint(p, r.shrink(1.5), if active { crate::icons::Icon::Filter } else { crate::icons::Icon::Chevron }, Color32::from_gray(70));
+        paint_filter_button(p, filter_button_rect(geo, sh, c), active);
     }
 }
 
@@ -1430,6 +1465,67 @@ pub fn filter_button_rect(geo: &Geo, sh: &Sheet, c: CellRef) -> Rect {
     let pad = 2.0 * geo.z;
     let s = (rect.height() - 4.0).clamp(10.0, 18.0).min((sh.filter_button_space(c) * geo.z - pad).max(0.0));
     Rect::from_min_size(pos2(rect.right() - s - pad, rect.bottom() - s - pad), vec2(s, s))
+}
+
+/// A Table column heading that shows the column's header name in place of its letters.
+#[derive(Clone, Debug)]
+pub struct TableHeading {
+    pub col: u32,
+    /// The table's header row, which the filter menu is keyed by.
+    pub header_row: u32,
+    pub name: String,
+    /// The heading slot over the column (logical coordinates).
+    pub rect: Rect,
+    /// The filter button, when the table shows filter buttons.
+    pub button: Option<Rect>,
+    /// The column is filtered (the button shows the funnel).
+    pub filtered: bool,
+}
+
+/// The Table whose header names replace the column letters: the one holding the active cell,
+/// with its header row scrolled out of view and some of its rows still in view (Excel, #1423).
+pub fn heading_table<'a>(geo: &Geo, sh: &'a Sheet, active: CellRef) -> Option<&'a gridcraft_engine::model::Table> {
+    // Page Layout view keeps the letters.
+    if geo.paper.is_some() || geo.header_h <= 0.0 {
+        return None;
+    }
+    let tb = sh.tables.iter().find(|t| t.header_row && t.range.contains(active))?;
+    let header = tb.range.start.row;
+    // A header row in the frozen rows is always on screen.
+    if header < geo.fr {
+        return None;
+    }
+    let top = geo.cells.top() + geo.frozen_h;
+    let bottom = |r: u32| geo.y(sh, r) + sh.row_height(r) * geo.z;
+    (bottom(header) <= top + 0.5 && bottom(tb.range.end.row) > top + 0.5).then_some(tb)
+}
+
+/// The headings of `heading_table`'s visible columns.
+pub fn table_headings(geo: &Geo, sh: &Sheet, active: CellRef) -> Vec<TableHeading> {
+    let Some(tb) = heading_table(geo, sh, active) else { return Vec::new() };
+    let af = sh.autofilter.as_ref().filter(|af| af.range == tb.range);
+    let mut out = Vec::new();
+    for col in tb.range.start.col..=tb.range.end.col {
+        let w = sh.col_width(col) * geo.z;
+        let off = col - tb.range.start.col;
+        let Some(column) = tb.columns.get(off as usize) else { continue };
+        if w <= 0.0 {
+            continue;
+        }
+        let rect = Rect::from_min_size(pos2(geo.x(sh, col), geo.head_top()), vec2(w, geo.header_h));
+        // Clear of the 4-point column resize edge, and never wider than the column.
+        let s = (rect.height() - 6.0).clamp(10.0, 16.0).min(w - 7.0);
+        let button = (tb.filter_button && s > 0.0).then(|| Rect::from_min_size(pos2(rect.right() - s - 5.0, rect.center().y - s / 2.0), vec2(s, s)));
+        let filtered = tb.filter.iter().any(|(o, _)| *o == off) || af.is_some_and(|af| af.criteria.iter().any(|(o, _)| *o == off));
+        out.push(TableHeading { col, header_row: tb.range.start.row, name: column.name.clone(), rect, button, filtered });
+    }
+    out
+}
+
+fn paint_filter_button(p: &Painter, r: Rect, filtered: bool) {
+    p.rect_filled(r, 2.0, Color32::from_gray(250));
+    p.rect_stroke(r, 2.0, Stroke::new(1.0, Color32::from_gray(170)), StrokeKind::Inside);
+    crate::icons::paint(p, r.shrink(1.5), if filtered { crate::icons::Icon::Filter } else { crate::icons::Icon::Chevron }, Color32::from_gray(70));
 }
 
 /// The outline segments of merged area `m` drawn at `rect`: the top and left edges come from the
@@ -1681,7 +1777,7 @@ pub(crate) fn paint_selection(
         p.rect_filled(h, 0.0, t.sel_border);
     }
     // Fill-handle drag preview.
-    if let crate::grid::Drag::Fill { target: Some(tr) } = &app.grid.drag
+    if let crate::grid::Drag::Fill { target: Some(tr), .. } = &app.grid.drag
         && range_in_pane(*tr, rows, cols)
     {
         let rr = geo.range_rect(sh, *tr);
@@ -1727,8 +1823,9 @@ pub(crate) fn paint_headers(
     sel: &gridcraft_engine::Selection,
     t: &Tokens,
     quads: &[((u32, u32), (u32, u32), Rect)],
+    headings: &[TableHeading],
 ) {
-    let font = theme::ui_font((11.5 * (geo.z / DISPLAY_SCALE).max(0.75)).min(16.0));
+    let font = theme::ui_font(heading_font_size(geo.z));
     // The headers' own area: inside the outline bands.
     let r = Rect::from_min_max(pos2(geo.head_left(), geo.head_top()), geo.rect.max);
     let top = Rect::from_min_max(pos2(geo.cells.left(), r.top()), pos2(r.right(), geo.cells.top()));
@@ -1741,6 +1838,8 @@ pub(crate) fn paint_headers(
     let full_col = |c: u32| sel.ranges.iter().any(|x| x.is_full_cols() && c >= x.start.col && c <= x.end.col);
     let full_row = |rr: u32| sel.ranges.iter().any(|x| x.is_full_rows() && rr >= x.start.row && rr <= x.end.row);
     let _ = bounds;
+    // Hidden columns and rows leave a double divider where they sit, as in Excel.
+    let hidden_mark = Stroke::new(1.0, t.header_text.gamma_multiply(0.6));
     let mut done_cols = std::collections::HashSet::new();
     let mut done_rows = std::collections::HashSet::new();
     for (rows, cols, clip) in quads {
@@ -1761,8 +1860,28 @@ pub(crate) fn paint_headers(
                     pc.line_segment([pos2(cr.left(), cr.bottom() - 1.0), pos2(cr.right(), cr.bottom() - 1.0)], Stroke::new(2.0, t.accent));
                 }
                 pc.line_segment([pos2(cr.right() - 0.5, cr.top() + 3.0), pos2(cr.right() - 0.5, cr.bottom())], Stroke::new(1.0, t.header_line));
+                let (before, after) = hidden_around(c, |i| sh.col_width(i));
+                for x in [before.then_some(cr.left()), after.then_some(cr.right())].into_iter().flatten() {
+                    for dx in [-1.5, 1.5] {
+                        pc.line_segment([pos2(x + dx, cr.top() + 3.0), pos2(x + dx, cr.bottom())], hidden_mark);
+                    }
+                }
                 let color = if col_sel(c) { t.header_sel_text } else { t.header_text };
-                pc.text(cr.center(), Align2::CENTER_CENTER, col_to_letters(c), font.clone(), color);
+                match headings.iter().find(|h| h.col == c) {
+                    Some(h) => {
+                        // The name is cut off at the button, as a cell's text is at its neighbour.
+                        let end = h.button.map_or(cr.right(), |b| b.left()) - 2.0;
+                        let room = Rect::from_min_max(cr.min, pos2(end.max(cr.left()), cr.bottom())).intersect(pc.clip_rect());
+                        let pad = 4.0 * (geo.z / DISPLAY_SCALE).max(0.75);
+                        pc.with_clip_rect(room).text(pos2(cr.left() + pad, cr.center().y), Align2::LEFT_CENTER, &h.name, font.clone(), color);
+                        if let Some(b) = h.button {
+                            paint_filter_button(&pc, b, h.filtered);
+                        }
+                    }
+                    None => {
+                        pc.text(cr.center(), Align2::CENTER_CENTER, col_to_letters(c), font.clone(), color);
+                    }
+                }
             }
         }
         let pr = p.with_clip_rect(Rect::from_min_max(pos2(left.left(), clip.top()), pos2(left.right(), clip.bottom())));
@@ -1782,6 +1901,12 @@ pub(crate) fn paint_headers(
                     pr.line_segment([pos2(cr.right() - 1.0, cr.top()), pos2(cr.right() - 1.0, cr.bottom())], Stroke::new(2.0, t.accent));
                 }
                 pr.line_segment([pos2(cr.left() + 3.0, cr.bottom() - 0.5), pos2(cr.right(), cr.bottom() - 0.5)], Stroke::new(1.0, t.header_line));
+                let (before, after) = hidden_around(rr, |i| sh.row_height(i));
+                for y in [before.then_some(cr.top()), after.then_some(cr.bottom())].into_iter().flatten() {
+                    for dy in [-1.5, 1.5] {
+                        pr.line_segment([pos2(cr.left() + 3.0, y + dy), pos2(cr.right(), y + dy)], hidden_mark);
+                    }
+                }
                 let color = if row_sel(rr) { t.header_sel_text } else { t.header_text };
                 pr.text(cr.center(), Align2::CENTER_CENTER, (rr as u64 + 1).to_string(), font.clone(), color);
             }
@@ -1800,10 +1925,111 @@ pub(crate) fn paint_headers(
     p.line_segment([pos2(geo.cells.left() - 0.5, r.top()), pos2(geo.cells.left() - 0.5, r.bottom())], Stroke::new(1.0, t.header_line));
 }
 
+/// Whether the line before / after visible line `i` is hidden (zero size), so its header edges
+/// get the hidden marker. Line 0 has nothing before it.
+fn hidden_around(i: u32, size: impl Fn(u32) -> f32) -> (bool, bool) {
+    (i > 0 && size(i - 1) <= 0.0, i < u32::MAX && size(i + 1) <= 0.0)
+}
+
 // ------------------------------------------------------------------ interaction
 
 /// How close (in points) a press must be to an object's bottom-right corner to resize it instead of moving it.
 const OBJECT_RESIZE_RADIUS: f32 = 10.0;
+
+/// Decide after interaction so drag start and release use the new state in the same frame.
+fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
+    if app.text_box_editor.is_some() || app.grid.hf_edit.is_some() {
+        return;
+    }
+    let ctx = ui.ctx();
+    let pointer = ctx.input(|i| i.pointer.clone());
+    let pos = pointer.interact_pos().or(pointer.hover_pos()).map(|p| geo.mirror_pos(p));
+    let in_cells = pos.is_some_and(|p| geo.in_cells(p));
+    let (freeze_cols, freeze_rows) = freeze_handles(geo);
+    // Hover bookkeeping also serves cell notes, independently of who owns the cursor.
+    if resp.hovered()
+        && let Some(p) = pos
+        && !freeze_cols.contains(p)
+        && !freeze_rows.contains(p)
+        && !matches!(app.grid.drag, Drag::Freeze { .. })
+    {
+        app.grid.hover_cell = in_cells.then(|| geo.cell_at(sh, p));
+    }
+    // Draw tools own the cursor over cells, including while recording a stroke.
+    if !app.session.draw_tool.is_empty() && in_cells {
+        ctx.set_cursor_icon(CursorIcon::Crosshair);
+        return;
+    }
+    // A held drag owns the cursor even outside the grid; a press below egui's threshold still
+    // has Drag::None and uses hover. A click can briefly leave a drag state after release.
+    if resp.dragged() && pointer.primary_down() {
+        let cursor = match app.grid.drag {
+            Drag::None => None,
+            Drag::Select => Some(CursorIcon::Cell),
+            Drag::Rows(_) | Drag::Cols(_) => Some(CursorIcon::Default),
+            Drag::Fill { .. } => Some(CursorIcon::Crosshair),
+            Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { resize: false, .. } => Some(CursorIcon::Move),
+            Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
+            Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
+            Drag::Freeze { cols, .. } => Some(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
+            Drag::Object { resize: true, .. } => Some(CursorIcon::ResizeNwSe),
+        };
+        if let Some(cursor) = cursor {
+            ctx.set_cursor_icon(cursor);
+            return;
+        }
+    }
+    if !resp.hovered() {
+        return;
+    }
+    let Some(p) = pos else { return };
+    if freeze_cols.contains(p) || freeze_rows.contains(p) {
+        let cols = freeze_cols.contains(p);
+        ctx.set_cursor_icon(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical });
+        if app.grid.drag == Drag::None && !pointer.any_down() {
+            let tip = if cols { "Drag to freeze columns" } else { "Drag to freeze rows" };
+            resp.clone().on_hover_text_at_pointer(crate::i18n::current(ctx).tr(tip));
+        }
+        return;
+    }
+    let in_col_header = p.y < geo.cells.top() && p.y >= geo.head_top() && p.x >= geo.cells.left();
+    let in_row_header = p.x < geo.cells.left() && p.x >= geo.head_left() && p.y >= geo.cells.top();
+    let sel = app.session.active().map(|d| d.selection.clone()).unwrap_or_default();
+    let cur_rect = geo.range_rect(sh, sel.current());
+    let handle = Rect::from_center_size(cur_rect.right_bottom(), vec2(9.0, 9.0));
+    let handle_panes = geo.range_panes(RangeRef::cell(sel.current().end));
+    let border_panes = geo.range_panes(sel.current());
+    let on_handle = handle.contains(p) && handle_panes.iter().any(|r| r.contains(p));
+    let on_cur_border = on_border(cur_rect, p) && border_panes.iter().any(|r| r.contains(p));
+    let selected_object = crate::chartview::hit(app, geo, sh, p).filter(|&(_, id, _)| app.selected_chart == Some(id));
+    let near_corner = selected_object.is_some_and(|(_, _, rect)| (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS);
+    if app.grid.drag == Drag::None && near_corner {
+        ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
+    } else if (in_col_header && col_edge(geo, sh, p.x).is_some()) || (in_row_header && row_edge(geo, sh, p.y).is_some()) {
+        let near_col_edge = in_col_header && col_edge(geo, sh, p.x).is_some();
+        // Just past a hidden column or row, Excel shows a split cursor: dragging or
+        // double-clicking there unhides it.
+        let hidden = app.grid.drag == Drag::None
+            && if near_col_edge { hidden_col_edge(geo, sh, p.x).is_some() } else { hidden_row_edge(geo, sh, p.y).is_some() };
+        match pointer.hover_pos() {
+            Some(at) if hidden => paint_split_cursor(ctx, at, near_col_edge),
+            _ => ctx.set_cursor_icon(if near_col_edge { CursorIcon::ResizeColumn } else { CursorIcon::ResizeRow }),
+        }
+    } else if on_handle && app.editor.is_none() {
+        ctx.set_cursor_icon(CursorIcon::Crosshair);
+        if app.grid.drag == Drag::None && !pointer.any_down() {
+            resp.clone().on_hover_text_at_pointer("Drag to fill cells. Drag from inside a cell to select a range.");
+        }
+    } else if in_cells && app.editor.is_none() && on_cur_border {
+        ctx.set_cursor_icon(CursorIcon::Move);
+    } else if in_cells {
+        ctx.set_cursor_icon(CursorIcon::Cell);
+    } else if in_col_header {
+        let col = geo.col_at(sh, p.x);
+        let selected = sel.ranges.len() == 1 && sel.current().is_full_cols() && sel.current().contains(CellRef::new(0, col));
+        ctx.set_cursor_icon(if selected { CursorIcon::Move } else { CursorIcon::Default });
+    }
+}
 
 fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     // Text selection and editing must not also move the object or edit worksheet cells.
@@ -1832,51 +2058,6 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     let on_cur_border = |p: Pos2| on_border(cur_rect, p) && border_panes.iter().any(|r| r.contains(p));
 
     let (freeze_cols, freeze_rows) = freeze_handles(geo);
-    // Hover cursors.
-    if resp.hovered()
-        && let Some(p) = pos
-        && (freeze_cols.contains(p) || freeze_rows.contains(p) || matches!(app.grid.drag, Drag::Freeze { .. }))
-    {
-        let cols = match app.grid.drag {
-            Drag::Freeze { cols, .. } => cols,
-            _ => freeze_cols.contains(p),
-        };
-        ctx.set_cursor_icon(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical });
-        if app.grid.drag == Drag::None && !pointer.any_down() {
-            let tip = if cols { "Drag to freeze columns" } else { "Drag to freeze rows" };
-            resp.clone().on_hover_text_at_pointer(crate::i18n::current(&ctx).tr(tip));
-        }
-    } else if resp.hovered()
-        && let Some(p) = pos
-    {
-        let near_col_edge = in_col_header && col_edge(geo, sh, p.x).is_some();
-        let near_row_edge = in_row_header && row_edge(geo, sh, p.y).is_some();
-        let selected_object = crate::chartview::hit(app, geo, sh, p).filter(|&(_, id, _)| app.selected_chart == Some(id));
-        let near_corner = selected_object.is_some_and(|(_, _, rect)| (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS);
-        let near_object_corner = app.grid.drag == Drag::None && near_corner;
-        if near_object_corner || matches!(app.grid.drag, Drag::Object { resize: true, .. }) {
-            ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
-        } else if near_col_edge {
-            ctx.set_cursor_icon(CursorIcon::ResizeColumn);
-        } else if near_row_edge {
-            ctx.set_cursor_icon(CursorIcon::ResizeRow);
-        } else if on_handle(p) && app.editor.is_none() {
-            ctx.set_cursor_icon(CursorIcon::Crosshair);
-            if app.grid.drag == Drag::None && !pointer.any_down() {
-                resp.clone().on_hover_text_at_pointer("Drag to fill cells. Drag from inside a cell to select a range.");
-            }
-        } else if in_cells && app.editor.is_none() && on_cur_border(p) {
-            ctx.set_cursor_icon(CursorIcon::Move);
-        } else if in_cells {
-            ctx.set_cursor_icon(CursorIcon::Cell);
-        } else if in_col_header {
-            let col = geo.col_at(sh, p.x);
-            let selected = sel.ranges.len() == 1 && sel.current().is_full_cols() && sel.current().contains(CellRef::new(0, col));
-            ctx.set_cursor_icon(if selected { CursorIcon::Move } else { CursorIcon::Default });
-        }
-        app.grid.hover_cell = in_cells.then(|| geo.cell_at(sh, p));
-    }
-
     // Draw tab tools: the pen records a stroke, the eraser deletes ink under the pointer.
     if !app.session.draw_tool.is_empty() && in_cells {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
@@ -1940,10 +2121,12 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         }
         return;
     }
-    // Objects (charts, pictures, shapes, slicers) take clicks first.
-    if resp.drag_started() || primary_clicked {
+    // Objects (charts, pictures, shapes, slicers) take clicks first. Only the primary button moves
+    // them: a right-click that wobbles into a drag still opens the object's menu (#2067).
+    let primary_drag = resp.drag_started_by(egui::PointerButton::Primary);
+    if primary_drag || primary_clicked {
         // A drag is recognised only after the pointer has moved, so grab the object where the press began.
-        let at = if resp.drag_started() { pointer.press_origin().or(pos) } else { pos };
+        let at = if primary_drag { pointer.press_origin().or(pos) } else { pos };
         if let Some(p) = at
             && let Some((kind, id, rect)) = crate::chartview::hit(app, geo, sh, p)
         {
@@ -1958,7 +2141,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             if kind == "chart" && resp.double_clicked() {
                 app.grid.pane = Some("formatChart".into());
             }
-            if resp.drag_started() {
+            if primary_drag {
                 let a = object_anchor(sh, kind, id);
                 let resize = (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS;
                 if let Some(a) = a {
@@ -1966,16 +2149,36 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 }
             }
             return;
-        } else if primary_clicked || resp.drag_started() {
+        } else {
             app.selected_chart = None;
         }
+    }
+    // A right-click on a chart, picture, shape or slicer opens the object's menu, not the cell's
+    // under it; a right press that wobbles into a drag counts too (#2067).
+    let secondary_drag = resp.drag_started_by(egui::PointerButton::Secondary);
+    if (resp.secondary_clicked() || secondary_drag)
+        && let Some(p) = if secondary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos }
+        && let Some((kind, id, _)) = crate::chartview::hit(app, geo, sh, p)
+    {
+        app.selected_chart = Some(id);
+        app.grid.object_menu = Some((geo.mirror_pos(p), kind, id));
+        return;
     }
 
     // A double-click is also a click: handle header AutoFit before resize setup returns.
     if resp.double_clicked()
         && let Some(p) = pos
     {
-        let autofit = if in_col_header {
+        let unhide = if in_col_header {
+            hidden_col_edge(geo, sh, p.x).map(|col| ("home.unhideColumns", json!({"cols": RangeRef::cols(col, col).a1()})))
+        } else if in_row_header {
+            hidden_row_edge(geo, sh, p.y).map(|row| ("home.unhideRows", json!({"rows": RangeRef::rows(row, row).a1()})))
+        } else {
+            None
+        };
+        let autofit = if unhide.is_some() {
+            unhide
+        } else if in_col_header {
             col_edge(geo, sh, p.x).map(|(col, _)| {
                 let selected = sel.ranges.iter().any(|r| r.is_full_cols() && col >= r.start.col && col <= r.end.col);
                 ("home.autofitColumnWidth", if selected { json!({}) } else { json!({"cols": RangeRef::cols(col, col).a1()}) })
@@ -2005,11 +2208,8 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         // Fill down as far as the neighbouring column goes.
         let src = sel.current();
         let neighbour = if src.start.col > 0 { src.start.col - 1 } else { src.end.col + 1 };
-        let mut last = src.end.row;
-        while last + 1 < MAX_ROWS && sh.value_ref(CellRef::new(last + 1, neighbour)).is_some_and(|v| !v.is_empty()) && last - src.end.row < 1_000_000
-        {
-            last += 1;
-        }
+        let cap = src.end.row.saturating_add(1_000_000).min(MAX_ROWS - 1);
+        let last = if src.end.row < cap { sh.last_contiguous_nonempty(neighbour, src.end.row + 1, cap) } else { src.end.row };
         if last > src.end.row {
             let target = RangeRef::new(src.start, CellRef::new(last, src.end.col));
             let _ = app.run("edit.autoFill", json!({"source": src.a1(), "target": target.a1()}));
@@ -2047,11 +2247,18 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 return;
             }
             let c = geo.col_at(sh, p.x);
-            if point_header(app, wb, sh, RangeRef::cols(c, c)) {
+            // A Table heading's filter button, while the header names stand in for the letters.
+            if let Some(h) = table_headings(geo, sh, sel.active).into_iter().find(|h| h.col == c && h.button.is_some_and(|b| b.contains(p))) {
+                app.grid.filter_menu = Some((c, h.header_row, geo.mirror_pos(p)));
                 return;
             }
+            if point_header(app, wb, sh, RangeRef::cols(c, c), mods.shift, mods.command) {
+                return;
+            }
+            // An armed Format Painter paints the columns dragged over instead of moving them.
             if resp.drag_started()
                 && !mods.any()
+                && app.session.format_painter.is_none()
                 && sel.ranges.len() == 1
                 && sel.current().is_full_cols()
                 && sel.current().contains(CellRef::new(0, c))
@@ -2070,7 +2277,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 return;
             }
             let r = geo.row_at(sh, p.y);
-            if point_header(app, wb, sh, RangeRef::rows(r, r)) {
+            if point_header(app, wb, sh, RangeRef::rows(r, r), mods.shift, mods.command) {
                 return;
             }
             let range = if mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
@@ -2098,14 +2305,26 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         if let Some(ed) = app.editor.as_mut()
             && ed.can_point()
         {
+            let anchor = if mods.shift && ed.point_at_caret() {
+                ed.point_anchor.filter(|(sheet, _)| *sheet == wb.active_sheet).map(|(_, cell)| cell).unwrap_or(c)
+            } else {
+                c
+            };
+            let range = RangeRef::new(anchor, c);
+            let text = if range.is_single() { c.a1() } else { range.a1() };
             let sheet_name = (ed.sheet != wb.active_sheet).then(|| sh.name.clone());
             let r = match sheet_name {
-                Some(n) => format!("{}!{}", gridcraft_engine::formula::quote_sheet(&n), c.a1()),
-                None => c.a1(),
+                Some(n) => format!("{}!{text}", gridcraft_engine::formula::quote_sheet(&n)),
+                None => text,
             };
-            ed.insert_ref(&r);
+            if mods.command && !mods.shift {
+                ed.append_ref(&r);
+            } else {
+                ed.insert_ref(&r);
+            }
             ed.request_focus = true;
             ed.point_cell = Some(c);
+            ed.point_anchor = Some((wb.active_sheet, anchor));
             app.grid.drag = Drag::Select;
             app.grid.drag_select = true;
             if resp.drag_started()
@@ -2119,7 +2338,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             return;
         }
         if on_handle(p) {
-            app.grid.drag = Drag::Fill { target: None };
+            app.grid.drag = Drag::Fill { target: None, menu: resp.drag_started_by(egui::PointerButton::Secondary) };
             return;
         }
         if on_cur_border(p) && resp.drag_started() {
@@ -2254,10 +2473,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             Drag::Freeze { cols, .. } => {
                 app.grid.drag = Drag::Freeze { cols, to: Some(freeze_boundary(geo, sh, p, cols)) };
             }
-            Drag::Fill { .. } => {
+            Drag::Fill { menu, .. } => {
                 let src = sel.current();
                 let target = fill_target(src, pc);
-                app.grid.drag = Drag::Fill { target: Some(target) };
+                app.grid.drag = Drag::Fill { target: Some(target), menu };
                 scroll_by(app, auto);
             }
             Drag::Move { grab, .. } => {
@@ -2289,12 +2508,27 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     // Release.
     if resp.drag_stopped() || (!pointer.any_down() && app.grid.drag != Drag::None && !resp.dragged()) {
         match std::mem::take(&mut app.grid.drag) {
-            Drag::Select if resp.drag_stopped() => {
-                if let Some(p) = pos {
+            Drag::Select => {
+                if resp.drag_stopped()
+                    && let Some(p) = pos
+                {
                     select_to_pointer(app, geo, sh, wb, p);
                 }
+                format_painter_apply(app);
             }
-            Drag::Fill { target: Some(t) } => {
+            // Whole rows or columns clicked or dragged over by their headers.
+            Drag::Rows(_) | Drag::Cols(_) => format_painter_apply(app),
+            // Esc mid-drag lands here too (egui ends the drag on Esc): no menu, and the key is
+            // spent on the drag so the grid's Esc doesn't also drop the copy.
+            Drag::Fill { target: Some(t), menu: true } => {
+                if let Some(p) = pos
+                    && t != sel.current()
+                    && !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                {
+                    app.grid.fill_menu = Some((sel.current(), t, geo.mirror_pos(p)));
+                }
+            }
+            Drag::Fill { target: Some(t), menu: false } => {
                 let src = sel.current();
                 if t != src {
                     // Ctrl (Cmd on macOS) swaps copying and extending, as in Excel.
@@ -2352,6 +2586,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             app.grid.header_menu = Some((geo.mirror_pos(p), rows));
         } else {
             app.grid.context_menu = Some(geo.mirror_pos(p));
+            app.grid.context_menu_frame = ui.ctx().cumulative_frame_nr();
         }
     }
 
@@ -2361,12 +2596,53 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     keyboard(app, &ctx, resp, geo, sh);
 }
 
-/// Point mode on a header: inserts the whole-column or whole-row reference instead of selecting.
-fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef) -> bool {
+/// An armed Format Painter pastes onto the cells just clicked or dragged over (not while
+/// pointing a formula reference, which also drags a Select).
+fn format_painter_apply(app: &mut SheetApp) {
+    if app.session.format_painter.is_some() && !app.editor.as_ref().is_some_and(|ed| ed.can_point()) {
+        let dest = app.session.active().map(|d| d.selection.current().a1());
+        if let Some(dest) = dest
+            && let Err(e) = app.run("edit.formatPainter", json!({"apply": dest}))
+        {
+            app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+        }
+    }
+}
+
+/// Point mode on a header: inserts a whole-row or whole-column reference instead of selecting.
+fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef, extend: bool, add: bool) -> bool {
     let Some(ed) = app.editor.as_mut().filter(|ed| ed.can_point()) else { return false };
-    let r = range.a1();
-    let r = if ed.sheet != wb.active_sheet { format!("{}!{r}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { r };
-    ed.insert_ref(&r);
+    let edit_sheet = ed.sheet;
+    let active_sheet = wb.active_sheet;
+    let range = if extend {
+        ed.point
+            .and_then(|point| crate::editor::formula_refs(&ed.text).into_iter().find(|(start, end, ..)| (*start, *end) == point))
+            .and_then(|(_, _, previous, previous_sheet, _)| {
+                let previous_sheet = previous_sheet.as_deref().map(|name| wb.sheet_index(name)).unwrap_or(Some(edit_sheet));
+                if previous_sheet != Some(active_sheet) {
+                    return None;
+                }
+                if range.is_full_cols() && previous.is_full_cols() {
+                    Some(RangeRef::cols(previous.start.col.min(range.start.col), previous.end.col.max(range.end.col)))
+                } else if range.is_full_rows() && previous.is_full_rows() {
+                    Some(RangeRef::rows(previous.start.row.min(range.start.row), previous.end.row.max(range.end.row)))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(range)
+    } else {
+        range
+    };
+    let reference = range.a1();
+    let reference = if ed.sheet != wb.active_sheet { format!("{}!{reference}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { reference };
+    if add {
+        ed.append_ref(&reference);
+    } else {
+        ed.insert_ref(&reference);
+    }
+    ed.point_anchor = None;
+    ed.point_cell = Some(range.start);
     ed.request_focus = true;
     true
 }
@@ -2379,12 +2655,13 @@ fn select_to_pointer(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, p
     if let Some(ed) = app.editor.as_mut()
         && ed.point.is_some()
     {
-        if let Some(start) = ed.point_cell {
+        if let Some(start) = ed.point_anchor.filter(|(sheet, _)| *sheet == wb.active_sheet).map(|(_, cell)| cell).or(ed.point_cell) {
             let range = RangeRef::new(start, cell);
             let text = if range.is_single() { range.start.a1() } else { range.a1() };
             let text = if ed.sheet != wb.active_sheet { format!("{}!{text}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { text };
             ed.insert_ref(&text);
-            ed.point_cell = Some(start);
+            ed.point_cell = Some(cell);
+            ed.point_anchor = Some((wb.active_sheet, start));
         }
     } else if let Some(d) = app.session.active() {
         // Read the current anchor: starting a drag may have just replaced the selection.
@@ -2525,6 +2802,36 @@ fn row_edge(geo: &Geo, sh: &Sheet, y: f32) -> Option<(u32, f32)> {
     None
 }
 
+/// The hidden column whose (zero-width) edge is at `x`: only just right of the boundary, as the
+/// edge just left of it belongs to the visible column there.
+fn hidden_col_edge(geo: &Geo, sh: &Sheet, x: f32) -> Option<u32> {
+    col_edge(geo, sh, x).map(|(c, _)| c).filter(|&c| sh.col_width(c) <= 0.0)
+}
+
+fn hidden_row_edge(geo: &Geo, sh: &Sheet, y: f32) -> Option<u32> {
+    row_edge(geo, sh, y).map(|(r, _)| r).filter(|&r| sh.row_height(r) <= 0.0)
+}
+
+/// A split cursor (two bars with arrows either side) painted in place of the OS cursor, which
+/// has no such shape. Black on a white outline, like the system cursors.
+fn paint_split_cursor(ctx: &egui::Context, at: Pos2, cols: bool) {
+    ctx.set_cursor_icon(CursorIcon::None);
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("gridcraft.split_cursor")));
+    // Drawn for columns (bars vertical); rows swap the axes.
+    let pt = |x: f32, y: f32| if cols { pos2(at.x + x, at.y + y) } else { pos2(at.x + y, at.y + x) };
+    let arrow = |dir: f32| vec![pt(dir * 10.0, 0.0), pt(dir * 6.0, -4.0), pt(dir * 6.0, 4.0)];
+    for (width, color) in [(3.0, Color32::WHITE), (1.0, Color32::BLACK)] {
+        let stroke = Stroke::new(width, color);
+        for bx in [-1.5, 1.5] {
+            p.line_segment([pt(bx, -8.0), pt(bx, 8.0)], stroke);
+        }
+        p.line_segment([pt(-7.0, 0.0), pt(7.0, 0.0)], stroke);
+        for dir in [-1.0, 1.0] {
+            p.add(egui::Shape::convex_polygon(arrow(dir), color, Stroke::new(width - 1.0, color)));
+        }
+    }
+}
+
 fn is_filter_button(sh: &Sheet, geo: &Geo, p: Pos2) -> bool {
     let c = geo.cell_at(sh, p);
     sh.has_filter_button(c) && filter_button_rect(geo, sh, c).contains(p)
@@ -2605,7 +2912,16 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     }
     let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
     // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
-    if editing || app.dialog.is_some() || other_focus || app.message.is_some() || app.grid.filter_menu.is_some() {
+    // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
+    // arrow key would move the selection the menu fills from).
+    if editing
+        || app.dialog.is_some()
+        || other_focus
+        || app.message.is_some()
+        || app.grid.filter_menu.is_some()
+        || app.grid.fill_menu.is_some()
+        || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
+    {
         return;
     }
     if ctx.memory(|m| m.focused()).is_none() {
@@ -2622,6 +2938,9 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
             if !m.alt && (m.ctrl || m.command || (m.shift && *key == egui::Key::Space)))
     });
     let page = ((geo.cells.height() / geo.z) / sh.default_row_height).floor().max(1.0) as i64;
+    // Alt shortcuts type their character too on Windows and Linux (Alt+= sends Text("=")): once
+    // a shortcut ran, that text must not start an edit over what it just did.
+    let mut shortcut_ran = false;
     for ev in events {
         match ev {
             egui::Event::Copy => {
@@ -2631,7 +2950,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                 app.copy_to_clipboard(ctx, "edit.cut");
             }
             egui::Event::Paste(text) => app.paste_external(text),
-            egui::Event::Text(_) if shortcut_pressed => {}
+            egui::Event::Text(_) if shortcut_pressed || shortcut_ran => {}
             egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
                 app.begin_edit(Some(text), false);
                 if let Some(ed) = app.editor.as_mut() {
@@ -2642,6 +2961,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
+                    shortcut_ran = true;
                     continue;
                 }
                 let cmd = m.command;
@@ -2712,7 +3032,9 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                     }
                     Key::F9 => app.run_or_alert("formulas.calculateNow", json!({})),
                     Key::F4 if !cmd => {}
-                    _ if cmd => crate::ribbon::shortcut(app, key, m),
+                    _ if cmd && !crate::keymap::altgr_text(ctx, m, ctx.os() == egui::os::OperatingSystem::Mac) => {
+                        crate::ribbon::shortcut(app, key, m)
+                    }
                     _ => {}
                 }
             }
@@ -2734,10 +3056,21 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let st = wb.styles.get(sh.style_id(cell)).clone();
     let size = st.font.size * 96.0 / 72.0 * geo.z;
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
-    let text_w = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size().x;
     let lines = ed.text.lines().count().max(1) as f32 + if ed.text.ends_with('\n') { 1.0 } else { 0.0 };
-    let w = (text_w + 14.0).max(rect.width()).min(geo.cells.right() - rect.left());
-    let h = (size * 1.3 * lines + 4.0).max(rect.height());
+    // Wrap Text: the editor keeps the column's width and wraps, growing down as Excel's does.
+    // Otherwise it widens to the text's one-line width.
+    let wrap = st.align.wrap;
+    let (w, h) = if wrap {
+        // The field wraps at the width it is given (the editor's less its 2 px inset a side): its
+        // frame is `Frame::NONE`, so no text margin is taken off.
+        let wrapped = ui.painter().layout(ed.text.clone(), font.clone(), Color32::BLACK, (rect.width() - 4.0).max(1.0));
+        (rect.width(), (wrapped.size().y.max(size * 1.3 * lines) + 4.0).max(rect.height()))
+    } else {
+        let text_w = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size().x;
+        // Excel keeps the cell's height for one line and only grows for extra lines.
+        let h = if lines > 1.0 { (size * 1.3 * lines + 4.0).max(rect.height()) } else { rect.height() };
+        ((text_w + 14.0).max(rect.width()).min(geo.cells.right() - rect.left()), h)
+    };
     // Grows to the left on a right-to-left sheet.
     let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
     let fill = match st.fill.pattern {
@@ -2756,13 +3089,22 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let id = egui::Id::new("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
     child.set_clip_rect(clip);
-    crate::formula_bar::editor_widget(app, &mut child, id, font, false, erect.width() - 4.0);
+    // The theme's caret is meant for the UI chrome and vanishes on some fills (and, in the dark
+    // theme, on the white paper): pick black or white against the fill, like Excel.
+    child.visuals_mut().text_cursor.stroke.color = ink_on(fill);
+    crate::formula_bar::editor_widget(app, &mut child, id, font, wrap, erect.width() - 4.0);
 }
 
 /// Test the popup itself, not whether the pointer is over any part of the app.
 /// A trigger can sit outside its popup, so its opening click must be ignored.
 fn popup_dismissed(response: &egui::Response, was_open: bool) -> bool {
     response.ctx.input(|i| !i.focused || i.key_pressed(egui::Key::Escape)) || (was_open && response.clicked_elsewhere())
+}
+
+/// Black or white, whichever reads on `fill` (the threshold chart labels use).
+fn ink_on(fill: Color32) -> Color32 {
+    let l = 0.299 * fill.r() as f32 + 0.587 * fill.g() as f32 + 0.114 * fill.b() as f32;
+    if l < 150.0 { Color32::WHITE } else { Color32::BLACK }
 }
 
 /// The table whose header cell (`row`, `col`) was clicked, not just the first table in the column.
@@ -2925,7 +3267,7 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                     ui.separator();
                     continue;
                 }
-                if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(190.0, 20.0))).clicked() {
+                if ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(190.0, 20.0))).clicked() {
                     close = true;
                     match id {
                         "ui:pasteSpecial" => app.open_dialog("pasteSpecial", json!({})),
@@ -2959,9 +3301,14 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
             }
         });
     });
+    // A quick right-click presses and releases in one frame, and the menu's corner snaps to the
+    // nearest physical pixel, which can put the pointer just outside it: that press opened the
+    // menu, so it doesn't count as a click elsewhere.
+    let opened_now = app.grid.context_menu_frame == ui.ctx().cumulative_frame_nr();
     if close
         || ui.input(|i| i.key_pressed(egui::Key::Escape))
-        || (ui.input(|i| i.pointer.any_pressed())
+        || (!opened_now
+            && ui.input(|i| i.pointer.any_pressed())
             && !resp.response.contains_pointer()
             && !resp.response.hovered()
             && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| !resp.response.rect.contains(p)))
@@ -2970,16 +3317,141 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The menu a right-drag of the fill handle opens on release, as in Excel.
+fn fill_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
+    let Some((src, target, at)) = app.grid.fill_menu else { return };
+    let mut close = false;
+    let response = egui::Area::new(egui::Id::new("fill_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            ui.set_min_width(190.0);
+            let items = [
+                ("Copy Cells", "copy"),
+                ("Fill Series", "extend"),
+                ("Fill Formatting Only", "formats"),
+                ("Fill Without Formatting", "values"),
+                ("-", ""),
+                ("Series…", "ui:series"),
+            ];
+            let lang = crate::i18n::current(ui.ctx());
+            for (label, mode) in items {
+                if label == "-" {
+                    ui.separator();
+                    continue;
+                }
+                if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
+                    close = true;
+                    if mode == "ui:series" {
+                        let _ = app.session.run("selection.set", json!({"range": target.union(&src).a1(), "active": src.start.a1()}));
+                        let direction = if target.width() != src.width() { "rows" } else { "columns" };
+                        app.open_dialog("series", json!({"direction": direction}));
+                    } else if let Err(e) = app.run("edit.autoFill", json!({"source": src.a1(), "target": target.a1(), "mode": mode})) {
+                        app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+                    }
+                }
+            }
+        });
+    });
+    if close || popup_dismissed(&response.response, was_open) {
+        app.grid.fill_menu = None;
+    }
+}
+
+/// The right-click menu of a chart, picture, shape or slicer.
+fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
+    let Some((at, kind, id)) = app.grid.object_menu else { return };
+    let mut close = false;
+    let resp = egui::Area::new(egui::Id::new("object_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            ui.set_min_width(200.0);
+            let mut items = vec![("Delete", "object.delete")];
+            if kind == "chart" {
+                items.extend([("-", ""), ("Select Data…", "ui:selectData"), ("Format Chart Area…", "ui:formatChart")]);
+            }
+            let lang = crate::i18n::current(ui.ctx());
+            for (label, action) in items {
+                if label == "-" {
+                    ui.separator();
+                    continue;
+                }
+                if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(190.0, 20.0))).clicked() {
+                    close = true;
+                    match action {
+                        "ui:selectData" => app.open_dialog("selectData", json!({"chart": id})),
+                        "ui:formatChart" => app.grid.pane = Some("formatChart".into()),
+                        _ => {
+                            app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
+                            app.selected_chart = None;
+                        }
+                    }
+                }
+            }
+        });
+    });
+    if close
+        || ui.input(|i| i.key_pressed(egui::Key::Escape))
+        || (ui.input(|i| i.pointer.any_pressed())
+            && !resp.response.contains_pointer()
+            && !resp.response.hovered()
+            && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| !resp.response.rect.contains(p)))
+    {
+        app.grid.object_menu = None;
+    }
+}
+
+/// The warning button beside an active cell holding a number stored as text, as in Excel: its
+/// menu names the problem and offers Convert to Number for the selection (#1994).
+fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet) {
+    if app.editor.is_some() || app.dialog.is_some() || sh.show_formulas || app.grid.drag != Drag::None {
+        return;
+    }
+    let Some(active) = app.session.active().map(|d| d.selection.active) else { return };
+    if sh.cell(active).and_then(gridcraft_engine::cmd::formulas::number_stored_as_text).is_none() {
+        return;
+    }
+    let cell = geo.cell_rect(sh, active);
+    let size = vec2(18.0, 18.0);
+    // Left of the cell, or right of it when that would cover the row headings.
+    let left = if cell.left() - size.x - 2.0 >= geo.cells.left() { cell.left() - size.x - 2.0 } else { cell.right() + 2.0 };
+    let tag = geo.mirror_rect(Rect::from_min_size(pos2(left, cell.top()), size));
+    if !geo.cells.intersects(tag) {
+        return;
+    }
+    let lang = crate::i18n::current(ui.ctx());
+    let resp = ui.interact(tag, egui::Id::new("gridcraft.error_check_tag"), Sense::click()).on_hover_text(lang.tr("Number Stored as Text"));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, lang.tr("Error checking options")));
+    let t = Tokens::get(ui.ctx());
+    let p = ui.painter();
+    p.rect_filled(tag, 3.0, if resp.hovered() { t.hover } else { t.window });
+    p.rect_stroke(tag, 3.0, Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
+    // A warning sign: an amber diamond with an exclamation mark.
+    let c = tag.center();
+    let r = 6.0;
+    p.add(egui::Shape::convex_polygon(
+        vec![pos2(c.x, c.y - r), pos2(c.x + r, c.y), pos2(c.x, c.y + r), pos2(c.x - r, c.y)],
+        t.warning_fill,
+        Stroke::NONE,
+    ));
+    p.text(c, egui::Align2::CENTER_CENTER, "!", egui::FontId::proportional(10.0), t.warning_ink);
+    egui::Popup::menu(&resp).show(|ui| {
+        ui.label(egui::RichText::new(lang.tr("Number Stored as Text")).strong());
+        ui.separator();
+        if ui.button(lang.tr("Convert to Number")).clicked() {
+            app.run_or_alert("formulas.convertToNumber", json!({}));
+            ui.close();
+        }
+    });
+}
+
 /// Used by `EditState` users to keep the active cell visible while pointing.
 pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, extend: bool) {
     let Some(d) = app.session.active() else { return };
     let from = ed.point_cell.unwrap_or(ed.cell);
     let to = from.offset_clamped(dr, dc);
-    let text = if extend {
+    let anchor = if extend {
         // The anchor is the corner opposite the moving end: the written range is normalized, so
         // after extending up or left its first cell is the moving end, not the anchor.
         let pointed = ed.point.and_then(|(s, e)| ed.text.get(s..e)).and_then(RangeRef::parse);
-        let anchor = pointed
+        let inferred_anchor = pointed
             .map(|r| {
                 CellRef::new(
                     if from.row == r.start.row { r.end.row } else { r.start.row },
@@ -2987,13 +3459,15 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
                 )
             })
             .unwrap_or(from);
-        RangeRef::new(anchor, to).a1()
+        ed.point_anchor.filter(|(sheet, _)| *sheet == d.wb.active_sheet).map(|(_, cell)| cell).unwrap_or(inferred_anchor)
     } else {
-        to.a1()
+        to
     };
-    let _ = d;
+    let text = if extend { RangeRef::new(anchor, to).a1() } else { to.a1() };
+    let sheet = d.wb.active_sheet;
     ed.insert_ref(&text);
     ed.point_cell = Some(to);
+    ed.point_anchor = Some((sheet, anchor));
     app.grid.ensure_visible = true;
 }
 
@@ -3115,6 +3589,18 @@ pub(crate) fn paint_overlays(
     let _ = (wb, si);
 }
 
+/// Rows the list-validation dropdown shows before it scrolls (Excel shows 8).
+const LIST_PICKER_MAX_ROWS: usize = 8;
+const LIST_PICKER_ROW_H: f32 = 18.0;
+/// Popup frame around the rows: 2 px inner margin and the window stroke on each side, rounded up.
+const LIST_PICKER_CHROME: f32 = 8.0;
+
+/// Popup height for `n` items: every item up to `LIST_PICKER_MAX_ROWS`, then a scrollbar.
+fn list_picker_height(n: usize, row_h: f32, gap: f32) -> f32 {
+    let rows = n.clamp(1, LIST_PICKER_MAX_ROWS) as f32;
+    rows * row_h + (rows - 1.0) * gap
+}
+
 fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
     let Some(c) = app.grid.list_picker else { return };
     let Some(d) = app.session.active() else { return };
@@ -3127,14 +3613,27 @@ fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
     };
     let items = gridcraft_engine::cmd::data::list_items(&wb, si, &dv);
     let r = geo.cell_rect(sh, c);
-    let (at, pivot) = (geo.mirror_pos(r.left_bottom()), if geo.rtl { Align2::RIGHT_TOP } else { Align2::LEFT_TOP });
+    // Fit the popup to its rows (up to LIST_PICKER_MAX_ROWS); without a minimum the scroll area collapses to its 64 px default.
+    let height = list_picker_height(items.len(), LIST_PICKER_ROW_H, ui.spacing().item_spacing.y);
+    // Open below the cell, or above it when the rows would run past the bottom of the window (as Excel does).
+    let screen = ui.ctx().content_rect();
+    let above = r.bottom() + height + LIST_PICKER_CHROME > screen.bottom() && r.top() - height - LIST_PICKER_CHROME >= screen.top();
+    let (at, pivot) = match (above, geo.rtl) {
+        (false, false) => (geo.mirror_pos(r.left_bottom()), Align2::LEFT_TOP),
+        (false, true) => (geo.mirror_pos(r.left_bottom()), Align2::RIGHT_TOP),
+        (true, false) => (geo.mirror_pos(r.left_top()), Align2::LEFT_BOTTOM),
+        (true, true) => (geo.mirror_pos(r.left_top()), Align2::RIGHT_BOTTOM),
+    };
     let mut close = false;
     let response = egui::Area::new(egui::Id::new("dv_list")).fixed_pos(at).pivot(pivot).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_width(r.width().max(100.0));
-            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+            egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).show(ui, |ui| {
                 for it in &items {
-                    if ui.add(egui::Button::new(it.as_str()).frame(false).min_size(vec2(r.width().max(100.0), 18.0))).clicked() {
+                    if ui
+                        .add(egui::Button::new(it.as_str()).frame_when_inactive(false).min_size(vec2(r.width().max(100.0), LIST_PICKER_ROW_H)))
+                        .clicked()
+                    {
                         app.run_or_alert("cell.set", json!({"cell": c.a1(), "input": it}));
                         close = true;
                     }
@@ -3164,6 +3663,7 @@ fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
                     ("Delete", "home.deleteRows"),
                     ("Clear Contents", "edit.clearContents"),
                     ("-", ""),
+                    ("Format Cells…", "ui:formatCells"),
                     ("Row Height…", "ui:rowHeight"),
                     ("AutoFit Row Height", "home.autofitRowHeight"),
                     ("Hide", "home.hideRows"),
@@ -3180,6 +3680,7 @@ fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
                     ("Delete", "home.deleteColumns"),
                     ("Clear Contents", "edit.clearContents"),
                     ("-", ""),
+                    ("Format Cells…", "ui:formatCells"),
                     ("Column Width…", "ui:columnWidth"),
                     ("AutoFit Column Width", "home.autofitColumnWidth"),
                     ("Hide", "home.hideColumns"),
@@ -3197,11 +3698,12 @@ fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
                     ui.separator();
                     continue;
                 }
-                if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
+                if ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(180.0, 20.0))).clicked() {
                     close = true;
                     match id {
                         "ui:insertPaste" => app.open_dialog("insertPaste", json!({})),
                         "ui:rowHeight" => app.open_dialog("rowHeight", json!({})),
+                        "ui:formatCells" => app.open_dialog("formatCells", json!({})),
                         "ui:columnWidth" => app.open_dialog("columnWidth", json!({})),
                         "edit.copy" | "edit.cut" => {
                             app.copy_to_clipboard(ui.ctx(), id);
@@ -3375,6 +3877,12 @@ fn painted_halign(h: HAlign, rtl: bool) -> HAlign {
     }
 }
 
+/// Row and column heading labels grow with the zoom as the cells do, as in Excel (at 400% the
+/// labels are four times their 100% size), and never get smaller than a readable 8.5 points.
+pub(crate) fn heading_font_size(zoom: f32) -> f32 {
+    (11.5 * (zoom / DISPLAY_SCALE)).max(8.5)
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -3391,7 +3899,37 @@ mod tests {
             assert_eq!(painted_halign(h, true), h);
         }
     }
+
+    #[test]
+    fn heading_labels_scale_with_the_zoom_without_a_cap() {
+        use super::{DISPLAY_SCALE, heading_font_size};
+        let at = |percent: f32| heading_font_size(percent / 100.0 * DISPLAY_SCALE);
+        assert!((at(400.0) / at(100.0) - 4.0).abs() < 1e-4, "four times as large at 400%");
+        assert!(at(200.0) > at(100.0) && at(400.0) > at(200.0));
+        assert_eq!(at(10.0), 8.5, "never below a readable size");
+    }
     use super::*;
+
+    #[test]
+    fn list_picker_fits_up_to_eight_rows_then_scrolls() {
+        assert_eq!(list_picker_height(5, 18.0, 3.0), 5.0 * 18.0 + 4.0 * 3.0);
+        assert_eq!(list_picker_height(8, 18.0, 3.0), 8.0 * 18.0 + 7.0 * 3.0);
+        assert_eq!(list_picker_height(30, 18.0, 3.0), list_picker_height(8, 18.0, 3.0));
+        assert_eq!(list_picker_height(0, 18.0, 3.0), 18.0);
+    }
+
+    #[test]
+    fn number_format_colors_resolve_named_and_indexed_rgb() {
+        use gridcraft_engine::numfmt::FormatColor as F;
+        assert_eq!(numfmt_color(F::Green), Color32::from_rgb(0, 255, 0));
+        assert_eq!(numfmt_color(F::Indexed(1)), Color32::BLACK);
+        assert_eq!(numfmt_color(F::Indexed(10)), Color32::from_rgb(0, 128, 0));
+        assert_eq!(numfmt_color(F::Indexed(46)), Color32::from_rgb(255, 102, 0));
+        assert_eq!(numfmt_color(F::Indexed(56)), Color32::from_rgb(51, 51, 51));
+        for index in [0, 57, 255] {
+            assert_eq!(numfmt_color(F::Indexed(index)), Color32::BLACK);
+        }
+    }
 
     #[test]
     fn wheel_zoom_steps_along_the_ladder_and_stops_at_100() {
@@ -3549,10 +4087,24 @@ mod tests {
         assert!(y_top < y_center);
         assert!(y_center < y_bottom);
 
-        // Overflow case: gh exceeds rect height
+        // Overflow case: gh exceeds rect height; Top still starts inside the cell.
         let gh_overflow = 60.0;
-        let y_bottom_ovf = wrapped_cell_text_y(VAlign::Bottom, rect, gh_overflow, z);
-        assert!(y_bottom_ovf >= rect.top());
+        let y_top_ovf = wrapped_cell_text_y(VAlign::Top, rect, gh_overflow, z);
+        assert!(y_top_ovf >= rect.top());
+    }
+
+    #[test]
+    fn wrapped_cell_text_y_keeps_vertical_alignment_when_text_is_taller_than_the_row() {
+        // A default-height row holding three wrapped lines.
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 20.0));
+        let (gh, z) = (60.0, 1.0);
+        let y_top = wrapped_cell_text_y(VAlign::Top, rect, gh, z);
+        let y_center = wrapped_cell_text_y(VAlign::Center, rect, gh, z);
+        let y_bottom = wrapped_cell_text_y(VAlign::Bottom, rect, gh, z);
+        // Taller text overflows upward for Bottom and both ways for Center (the cell clips it).
+        assert!((y_top - 1.5).abs() < 0.01, "Top starts at the top edge, got {y_top}");
+        assert!((y_center + gh / 2.0 - rect.center().y).abs() < 0.01, "Center is centred, got {y_center}");
+        assert!((y_bottom + gh - (rect.bottom() - 1.5)).abs() < 0.01, "Bottom ends at the bottom edge, got {y_bottom}");
     }
 
     /// The screen box of a galley of `size` drawn at `pos` turned by `angle` about `pos`, as egui
@@ -3669,6 +4221,38 @@ mod pane_tests {
         sh.freeze = Some((2, 2));
         let scroll = vec2(3.0 * sh.default_col_width + 8.0, 0.0);
         Geo::new(sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0)), scroll)
+    }
+
+    #[test]
+    fn the_edge_just_past_a_hidden_line_unhides_it() {
+        let mut sh = Sheet::new("S");
+        sh.cols.entry(11).or_default().hidden = true; // L
+        sh.rows.entry(26).or_default().hidden = true; // 27
+        let geo = Geo::new(&sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(2000.0, 1200.0)), vec2(0.0, 0.0));
+        let x = geo.x(&sh, 12); // between K and M
+        assert_eq!(hidden_col_edge(&geo, &sh, x + 2.0), Some(11));
+        assert_eq!(hidden_col_edge(&geo, &sh, x - 2.0), None); // K's own edge
+        assert_eq!(hidden_col_edge(&geo, &sh, geo.x(&sh, 5)), None);
+        let y = geo.y(&sh, 27); // between 26 and 28
+        assert_eq!(hidden_row_edge(&geo, &sh, y + 2.0), Some(26));
+        assert_eq!(hidden_row_edge(&geo, &sh, y - 2.0), None);
+    }
+
+    #[test]
+    fn headers_mark_the_edges_next_to_hidden_lines() {
+        let mut sh = Sheet::new("S");
+        sh.cols.entry(0).or_default().hidden = true; // A
+        sh.cols.entry(11).or_default().hidden = true; // L
+        sh.rows.entry(26).or_default().hidden = true; // 27
+        let col = |c| hidden_around(c, |i| sh.col_width(i));
+        assert_eq!(col(1), (true, false)); // B, after hidden A
+        assert_eq!(col(10), (false, true)); // K
+        assert_eq!(col(12), (true, false)); // M
+        assert_eq!(col(5), (false, false));
+        let row = |r| hidden_around(r, |i| sh.row_height(i));
+        assert_eq!(row(25), (false, true));
+        assert_eq!(row(27), (true, false));
+        assert_eq!(row(0), (false, false));
     }
 
     #[test]

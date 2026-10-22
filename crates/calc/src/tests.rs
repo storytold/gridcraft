@@ -68,6 +68,25 @@ fn spill_range_operator() {
 }
 
 #[test]
+fn arrays_that_spill_as_before_do_not_requeue_their_dependents() {
+    // Two arrays that each read the other's spill area, and a formula reading both spills.
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(2)+0*B2");
+    t.set("B1", "=SEQUENCE(2)+0*A2");
+    t.set("C1", "=SUM(A1#)+SUM(B1#)");
+    // An edit that spills the same values again: one round, not one per round up to the limit.
+    t.set("A1", "=SEQUENCE(2)+0*B2+0");
+    assert_eq!((t.num("A2"), t.num("B2"), t.num("C1")), (2.0, 2.0, 6.0));
+    assert!(t.calc.last_recalc_cells <= 3, "{} formulas evaluated for one edit", t.calc.last_recalc_cells);
+    // Only the anchor's value changes: formulas reading the whole spill still see it.
+    t.set("A1", "={7;2}+0*B2");
+    assert_eq!((t.num("A1"), t.num("C1")), (7.0, 12.0));
+    // A spill that does change still reaches its dependents.
+    t.set("A1", "=SEQUENCE(2)*10+0*B2");
+    assert_eq!((t.num("A2"), t.num("C1")), (20.0, 33.0));
+}
+
+#[test]
 fn arithmetic_and_dependencies() {
     let mut t = T::new();
     t.set("A1", "2");
@@ -311,6 +330,29 @@ fn date_text_coerces_in_the_workbook_date_system() {
 }
 
 #[test]
+fn lambda_helpers_check_shapes_and_parameters() {
+    let mut t = T::new();
+    let calc = Value::Error(CellError::Calc);
+    // A LAMBDA returning several values can't fill one cell: the whole result is #CALC!.
+    t.set("A1", "=MAP({1,2},LAMBDA(x,{1,2}))");
+    assert_eq!((t.get("A1"), t.get("B1")), (calc.clone(), Value::Empty));
+    t.set("A2", "=BYROW({1,2;3,4},LAMBDA(r,r))");
+    assert_eq!((t.get("A2"), t.get("A3")), (calc.clone(), Value::Empty));
+    t.set("A4", "=MAKEARRAY(1,2,LAMBDA(r,c,{1,2}))");
+    assert_eq!(t.get("A4"), calc.clone());
+    t.set("D1", "=SCAN(0,{1,2},LAMBDA(a,b,{1,2}))");
+    assert_eq!((t.get("D1"), t.get("E1")), (calc, Value::Empty));
+    // One parameter per array (MAP) or exactly one (BYROW/BYCOL).
+    t.set("A5", "=MAP({1,2},LAMBDA(x,y,x))");
+    assert_eq!(t.get("A5"), Value::Error(CellError::Value));
+    t.set("A6", "=BYCOL({1,2},LAMBDA(c,d,SUM(c)))");
+    assert_eq!(t.get("A6"), Value::Error(CellError::Value));
+    // A single value in an array is fine.
+    t.set("A7", "=MAP({1,2},LAMBDA(x,SEQUENCE(1)*x))");
+    assert_eq!(t.num("B7"), 2.0);
+}
+
+#[test]
 fn operators() {
     let mut t = T::new();
     t.set("A1", "=\"a\"&1&TRUE");
@@ -366,6 +408,25 @@ fn spill_into_the_old_area_of_a_blocked_neighbour() {
     t.set("C8", "=SEQUENCE(2,2)");
     assert_eq!(t.get("C7"), Value::Error(CellError::Spill));
     assert_eq!([t.num("C8"), t.num("D8"), t.num("C9"), t.num("D9")], [1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn formulas_reading_an_array_that_loses_a_spill_conflict_read_spill_errors() {
+    // Two arrays of one recalculation want the same empty cell: the one laid out second is
+    // #SPILL!, and the formulas that read it in that pass (at its anchor, through `A2#`, or over
+    // the cells it would have spilled into) kept its values.
+    let mut t = T::new();
+    t.set("B1", "=SEQUENCE(3)");
+    t.set("A2", "=SEQUENCE(1,3)");
+    t.set("D2", "=A2*10");
+    t.set("E2", "=C2");
+    t.set("F2", "=SUM(A2#)");
+    t.set("G2", "=SUM(C2:C3)");
+    // Both arrays recalculated together: B1 is laid out first and takes B2.
+    t.calc.recalc_all(&mut t.wb);
+    let spill = Value::Error(CellError::Spill);
+    assert_eq!((t.num("B2"), t.get("A2"), t.get("D2")), (2.0, spill.clone(), spill));
+    assert_eq!((t.get("C2"), t.num("E2"), t.get("F2"), t.num("G2")), (Value::Empty, 0.0, Value::Error(CellError::Ref), 0.0));
 }
 
 #[test]
@@ -544,6 +605,25 @@ fn spills() {
 }
 
 #[test]
+fn an_anchor_given_a_formula_that_reads_its_old_spill_area_sees_it_empty() {
+    // The new formula was evaluated while the old array was still laid out, and only the
+    // anchor's dependents were evaluated again once it was gone.
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(3)");
+    assert_eq!(t.num("A3"), 3.0);
+    t.set("A1", "=SUM(A2:A3)+1");
+    assert_eq!((t.num("A1"), t.get("A3")), (1.0, Value::Empty));
+    // Still an array, now spilling elsewhere: it read A2 as 2 and spilled three columns.
+    t.set("A1", "=SEQUENCE(3)");
+    t.set("A1", "=SEQUENCE(1,A2+1)");
+    assert_eq!((t.num("A1"), t.get("B1"), t.get("A2")), (1.0, Value::Empty, Value::Empty));
+    // A smaller array inside the old area: it read A3 as 3 and spilled over A1:A2.
+    t.set("A1", "=SEQUENCE(3)");
+    t.set("A1", "=SEQUENCE(MAX(1,A3-1))");
+    assert_eq!((t.num("A1"), t.get("A2"), t.get("A3")), (1.0, Value::Empty, Value::Empty));
+}
+
+#[test]
 fn references_keep_their_size_past_the_used_range() {
     let mut t = T::new();
     t.set("A1", "5");
@@ -591,6 +671,27 @@ fn let_lambda() {
 }
 
 #[test]
+fn let_lambda_names_ignore_case_in_any_script() {
+    let mut t = T::new();
+    t.set("A1", "=LET(dług,100,DŁUG*2)");
+    assert_eq!(t.num("A1"), 200.0);
+    t.set("A2", "=LAMBDA(λ,ISOMITTED(Λ))()");
+    assert_eq!(t.get("A2"), Value::Bool(true));
+    t.set("A3", "=LAMBDA(ćma,ĆMA+1)(1)");
+    assert_eq!(t.num("A3"), 2.0);
+    t.set("A4", "=LET(ŻAR,LAMBDA(x,x*3),żar(2))");
+    assert_eq!(t.num("A4"), 6.0);
+    t.set("A5", "=LET(λ,LAMBDA(x,x+1),SUM(MAP({1,2},Λ)))");
+    assert_eq!(t.num("A5"), 5.0);
+    // `ß` upper-cases to `SS`, yet `ẞ` is its capital.
+    t.set("A6", "=LET(ß,100,ẞ*2)");
+    assert_eq!(t.num("A6"), 200.0);
+    // Dotless ı is a different name from i.
+    t.set("A7", "=LET(i,1,ı,2,i)");
+    assert_eq!(t.num("A7"), 1.0);
+}
+
+#[test]
 fn functions_given_by_name() {
     let mut t = T::new();
     for (i, (k, v)) in [("a", 1), ("b", -2), ("a", 3)].iter().enumerate() {
@@ -609,6 +710,36 @@ fn functions_given_by_name() {
     // A LET variable of that name is still the variable.
     t.set("J1", "=LET(ABS,LAMBDA(x,x*10),SUM(MAP(B1:B3,ABS)))");
     assert_eq!(t.num("J1"), 20.0);
+}
+
+#[test]
+fn groupby_and_pivotby_take_a_lambda() {
+    let mut t = T::new();
+    for (i, (k, c, v)) in [("a", "x", 1), ("b", "x", 2), ("a", "y", 3)].iter().enumerate() {
+        t.set(&format!("A{}", i + 1), k);
+        t.set(&format!("B{}", i + 1), c);
+        t.set(&format!("C{}", i + 1), &v.to_string());
+    }
+    t.set("E1", "=GROUPBY(A1:A3,C1:C3,LAMBDA(x,SUM(x)))");
+    assert_eq!(t.get("E1"), Value::from("a"));
+    assert_eq!(t.num("F1"), 4.0);
+    assert_eq!(t.get("E2"), Value::from("b"));
+    assert_eq!(t.num("F2"), 2.0);
+    assert_eq!(t.get("E3"), Value::from("Total"));
+    assert_eq!(t.num("F3"), 6.0);
+    // A LET-bound lambda, called once per group with that group's values.
+    t.set("H1", "=LET(f,LAMBDA(v,ROWS(v)*10),GROUPBY(A1:A3,C1:C3,f))");
+    assert_eq!(t.num("I1"), 20.0);
+    assert_eq!(t.num("I3"), 30.0);
+    // PIVOTBY: rows a, b, Total; columns x, y, Total.
+    t.set("K1", "=PIVOTBY(A1:A3,B1:B3,C1:C3,LAMBDA(x,SUM(x)))");
+    assert_eq!(t.get("L1"), Value::from("x"));
+    assert_eq!(t.num("L2"), 1.0);
+    assert_eq!(t.num("M2"), 3.0);
+    assert_eq!(t.num("N4"), 6.0);
+    // Neither a function nor a lambda.
+    t.set("P1", "=GROUPBY(A1:A3,C1:C3,TRUE)");
+    assert_eq!(t.get("P1"), Value::Error(CellError::Value));
 }
 
 #[test]
@@ -658,6 +789,24 @@ fn names_and_sheets() {
 }
 
 #[test]
+fn name_referring_to_several_ranges() {
+    let mut t = T::new();
+    // As Excel writes it in `<definedName>`: a union with no parentheses around it.
+    let union = "Sheet1!$A$1:$A$2,Sheet1!$C$1:$C$2";
+    t.wb.names.push(gridcraft_model::DefinedName { name: "u".into(), scope: None, formula: union.into(), comment: String::new(), hidden: false });
+    for (at, v) in [("A1", "1"), ("A2", "2"), ("C1", "5"), ("C2", "7")] {
+        t.set(at, v);
+    }
+    t.set("E1", "=SUM(u)");
+    t.set("E2", "=AREAS(u)");
+    t.set("E3", "=MIN(u)");
+    t.set("E4", "=INDEX(u,2,1,2)");
+    assert_eq!((t.num("E1"), t.num("E2"), t.num("E3"), t.num("E4")), (15.0, 2.0, 1.0, 7.0));
+    t.set("C2", "70");
+    assert_eq!(t.num("E1"), 78.0);
+}
+
+#[test]
 fn legacy_array_formulas_fill_their_range() {
     let mut t = T::new();
     t.set("A1", "1");
@@ -685,6 +834,34 @@ fn legacy_array_formulas_fill_their_range() {
 }
 
 #[test]
+fn array_broadcast_result_is_capped() {
+    // A full column against a full row broadcasts to 1048576 x 16384 (17 billion cells, about
+    // 400 GB): each operand is within its own cap, so only the product check stops the abort.
+    let mut t = T::new();
+    let col = "SEQUENCE(1048576)";
+    let row = "SEQUENCE(1,16384)";
+    for (at, formula) in [
+        ("A1", format!("=ROWS({col}*{row})")),
+        ("A2", format!("=ROWS({col}&{row})")),
+        ("A3", format!("=ROWS({col}>{row})")),
+        ("A4", format!("=ROWS(IF({col},{row}))")),
+        ("A5", format!("=ROWS(IF({col}>0,1,{row}))")),
+        ("A6", format!("=ROWS(TEXT({col},{row}))")),
+        ("A7", format!("=ROWS(MAP({col},{row},LAMBDA(a,b,a)))")),
+    ] {
+        t.set(at, &formula);
+        assert_eq!(t.get(at), Value::Error(CellError::Num), "{formula}");
+    }
+    // Broadcasts within the cap are unchanged.
+    t.set("C1", "=SUM(SEQUENCE(3)*SEQUENCE(1,4))");
+    assert_eq!(t.num("C1"), 60.0);
+    t.set("C2", "=SUM(IF(SEQUENCE(2)>1,SEQUENCE(1,3),0))");
+    assert_eq!(t.num("C2"), 6.0);
+    t.set("C3", "=COLUMNS(TEXT(SEQUENCE(2),SEQUENCE(1,5)))");
+    assert_eq!(t.num("C3"), 5.0);
+}
+
+#[test]
 fn text_function() {
     let mut t = T::new();
     t.set("A1", "=TEXT(1234.5,\"#,##0.00\")");
@@ -700,6 +877,41 @@ fn long_operator_chains() {
     assert_eq!(t.num("B1"), 1000.0);
     t.set("B2", &format!("=5{}", "+1-1".repeat(600)));
     assert_eq!(t.num("B2"), 5.0);
+}
+
+#[test]
+fn flat_chains_as_long_as_excel_allows() {
+    // Values observed in Excel (#916): a flat chain has no operand limit below the 8,192-character
+    // formula limit, which `=1+1+…` with 4,096 operands meets exactly. On a 1 MiB stack, as on
+    // the Windows main thread.
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let chain = |op: &str, item: &str, n: usize| format!("={}", vec![item; n].join(op));
+            let mut t = T::new();
+            for r in 1..=1500 {
+                t.set(&format!("A{r}"), "1");
+            }
+            t.set("B1", &chain("+", "1", 401));
+            t.set("B2", &chain("+", "1", 4096));
+            t.set("B3", &chain("-", "1", 2000));
+            t.set("B4", &chain("*", "1", 4096));
+            t.set("B5", &chain("/", "2", 4096));
+            t.set("B6", &chain("^", "1", 4096));
+            t.set("B7", &chain("+", "1%", 2000));
+            t.set("B8", "=1=1=1");
+            t.set("B9", &format!("={}", (1..=1500).map(|r| format!("A{r}")).collect::<Vec<_>>().join("+")));
+            t.set("B10", &chain("&", "1", 2000));
+            for (at, want) in [("B1", 401.0), ("B2", 4096.0), ("B3", -1998.0), ("B4", 1.0), ("B5", 0.0), ("B6", 1.0), ("B9", 1500.0)] {
+                assert_eq!(t.num(at), want, "{at}");
+            }
+            assert!((t.num("B7") - 20.0).abs() < 1e-9);
+            assert_eq!(t.get("B8"), Value::Bool(false));
+            assert_eq!(t.get("B10"), Value::text("1".repeat(2000)));
+        })
+        .expect("spawn")
+        .join()
+        .expect("long chains must not overflow the stack");
 }
 
 #[test]
@@ -736,6 +948,40 @@ fn subtotal_109_skips_nested_subtotal() {
     t.set("B2", "=SUBTOTAL(9,A1:A3)");
     assert_eq!(t.num("B1"), 1.0);
     assert_eq!(t.num("B2"), 3.0);
+}
+
+/// One value stored in the sheet's last cell makes `A:XFD` trim to ~17 billion cells. SUBTOTAL
+/// and AGGREGATE used to read every one of them into a vector (an abort on open, #2175); now
+/// every argument is charged against `MAX_CELLS` before any cell is read, and `#NUM!` comes back.
+#[test]
+fn subtotal_and_aggregate_cap_cells_visited() {
+    let mut t = T::new();
+    t.set("XFD1048576", "1");
+    let formulas = [
+        "=SUBTOTAL(9,A:XFD)",
+        "=SUBTOTAL(109,1:1048576)",
+        "=AGGREGATE(9,6,A:XFD)",
+        "=AGGREGATE(14,7,A:XFD,1)",
+        // A:J and K:T are about 10.5 million cells each: under the limit alone, over it together,
+        // so the second area is refused before the first is read.
+        "=SUBTOTAL(9,A:J,K:T)",
+        "=AGGREGATE(9,4,(A:J,K:T))",
+    ];
+    for (i, f) in formulas.iter().enumerate() {
+        let at = format!("B{}", i + 1);
+        t.set(&at, f);
+        assert_eq!(t.get(&at), Value::Error(CellError::Num), "{f}");
+    }
+
+    // Whole columns and rows still clip to the used range when it is small.
+    let mut t = T::new();
+    t.set("A1", "1");
+    t.set("B2", "2");
+    t.set("C2", "#N/A");
+    t.set("E5", "=SUBTOTAL(9,A:B)");
+    t.set("E6", "=AGGREGATE(9,6,1:2)");
+    t.set("E7", "=AGGREGATE(14,6,A:C,1)");
+    assert_eq!((t.num("E5"), t.num("E6"), t.num("E7")), (3.0, 3.0, 2.0));
 }
 
 /// SUBTOTAL leaves out rows a filter hides for every function number, while 1-11 keep rows
@@ -1267,6 +1513,142 @@ fn offset_extreme_arguments_return_ref() {
     }
 }
 
+/// A formula reading one further down (or on a later sheet) is calculated on demand, inside the
+/// formula that reads it. Chains of thousands of such formulas, common in financial models, used
+/// to overflow the stack (or give `#CIRC!` past 2,000 levels); they now calculate in full.
+#[test]
+fn long_dependency_chains_against_row_order_calculate() {
+    const N: u32 = 20_000;
+    let mut t = T::new();
+    {
+        let sh = t.wb.sheet_mut(0).unwrap();
+        for r in 1..N {
+            sh.cells.set(c(&format!("A{r}")), Cell::formula(Formula::new(&format!("=A{}+1", r + 1))));
+        }
+        sh.cells.set(c(&format!("A{N}")), Cell::value(Value::Number(1.0)));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1"), N as f64);
+    assert_eq!(t.num("A2"), (N - 1) as f64);
+    assert!(t.calc.circular.is_empty());
+    // An edit at the far end recalculates the whole chain.
+    t.set(&format!("A{N}"), "10");
+    assert_eq!(t.num("A1"), (N + 9) as f64);
+    assert!(t.calc.circular.is_empty());
+
+    // Hopping between two sheets at every step, through a range read (SUM) as well.
+    let mut t = T::new();
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
+    for r in 1..N {
+        t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("A{r}")), Cell::formula(Formula::new(&format!("=Data!A{r}+1"))));
+        let next = format!("=SUM(Sheet1!A{}:A{})", r + 1, r + 1);
+        t.wb.sheet_mut(1).unwrap().cells.set(c(&format!("A{r}")), Cell::formula(Formula::new(&next)));
+    }
+    t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("A{N}")), Cell::value(Value::Number(0.0)));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1"), (N - 1) as f64);
+    assert_eq!(t.wb.sheet(1).unwrap().value(c("A1")), Value::Number((N - 2) as f64));
+    assert!(t.calc.circular.is_empty());
+}
+
+/// A loop longer than the on-demand nesting limit is still a circular reference (and still ends).
+#[test]
+fn long_circular_chain_is_circular() {
+    const N: u32 = 5_000;
+    let mut t = T::new();
+    {
+        let sh = t.wb.sheet_mut(0).unwrap();
+        for r in 1..N {
+            sh.cells.set(c(&format!("A{r}")), Cell::formula(Formula::new(&format!("=A{}+1", r + 1))));
+        }
+        sh.cells.set(c(&format!("A{N}")), Cell::formula(Formula::new("=A1+1")));
+        sh.cells.set(c("B1"), Cell::formula(Formula::new("=1+2")));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Circ));
+    assert_eq!(t.get(&format!("A{N}")), Value::Error(CellError::Circ));
+    assert_eq!(t.num("B1"), 3.0);
+    assert!(!t.calc.circular.is_empty());
+    // Each formula is listed once at most.
+    let mut seen = t.calc.circular.clone();
+    seen.sort_by_key(|(s, c)| (*s, c.row, c.col));
+    seen.dedup();
+    assert_eq!(seen.len(), t.calc.circular.len());
+    // With iterative calculation the loop settles to numbers instead (no hang, no crash).
+    t.wb.calc.iterative = true;
+    t.wb.calc.max_iterations = 3;
+    t.calc.recalc_all(&mut t.wb);
+    assert!(t.get("A1").as_f64().is_some());
+}
+
+/// A loop closing back into the middle of a chain deeper than the on-demand nesting limit is found
+/// where calculating it in one go finds it: at the formula read while it was being calculated.
+#[test]
+fn deep_loop_is_found_where_it_closes() {
+    let mut t = T::new();
+    {
+        let sh = t.wb.sheet_mut(0).unwrap();
+        for r in 1..300 {
+            sh.cells.set(c(&format!("A{r}")), Cell::formula(Formula::new(&format!("=A{}+1", r + 1))));
+        }
+        sh.cells.set(c("A300"), Cell::formula(Formula::new("=A30+1")));
+        // Reads the loop through IFERROR, so its value shows where the loop was cut.
+        sh.cells.set(c("B1"), Cell::formula(Formula::new("=IFERROR(A1,-1)")));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.calc.circular, vec![(0, c("A30"))]);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Circ));
+    assert_eq!(t.num("B1"), -1.0);
+}
+
+#[test]
+fn large_bounded_references_keep_their_shape() {
+    // D3:AZ400 is 19,502 cells, past the size where a block used to be cut to the used range
+    // (which ends at column F here). Sliced that way it no longer lined up with the full-size
+    // operands next to it. Expected values observed in Excel 365 on the same layout.
+    let mut t = T::new();
+    for (at, v) in [
+        ("D1", "1"),
+        ("E1", "2"),
+        ("F1", "3"),
+        ("A3", "1"),
+        ("A4", "2"),
+        ("A5", "1"),
+        ("B3", "2"),
+        ("B4", "3"),
+        ("B5", "4"),
+        ("D3", "10"),
+        ("E3", "20"),
+        ("F3", "30"),
+        ("D4", "40"),
+        ("E4", "50"),
+        ("F4", "60"),
+        ("D5", "70"),
+        ("E5", "80"),
+        ("F5", "90"),
+    ] {
+        t.set(at, v);
+    }
+    let cases = [
+        ("=SUMPRODUCT(D3:AZ400*B3:B400,(A3:A400=1)*(D1:AZ1=2))", Value::Number(360.0)),
+        ("=ROWS(D3:AZ400*1)", Value::Number(398.0)),
+        ("=COLUMNS(D3:AZ400*1)", Value::Number(49.0)),
+        ("=SUMPRODUCT(D3:AZ400,(A3:A400=1)*(D1:AZ1=2))", Value::Number(100.0)),
+        ("=SUMPRODUCT(D3:AZ400+0,D3:AZ401)", Value::Error(CellError::Value)),
+        ("=COUNTBLANK(D3:AZ400)", Value::Number(19493.0)),
+        ("=SUMPRODUCT(--(D3:AZ400=\"\"))", Value::Number(19493.0)),
+        ("=SUM(D3:AZ400*B3:B400)", Value::Number(1530.0)),
+        ("=COLUMNS(TRANSPOSE(D3:AZ400))", Value::Number(398.0)),
+        // Whole columns are still read up to the used range.
+        ("=SUMPRODUCT((A:A=1)*B:B)", Value::Number(6.0)),
+    ];
+    for (i, (formula, want)) in cases.iter().enumerate() {
+        let at = format!("C{}", 1001 + i);
+        t.set(&at, formula);
+        assert_eq!(&t.get(&at), want, "{formula}");
+    }
+}
+
 #[test]
 fn median_large_values_recalculate_dependents() {
     let mut t = T::new();
@@ -1293,4 +1675,96 @@ fn median_large_values_recalculate_dependents() {
     for cell in ["C1", "C2"] {
         assert!((t.num(cell) + 1.3).abs() < 1e-14);
     }
+}
+
+#[test]
+fn cell_filename_names_the_workbook_file() {
+    // Excel returns `<folder>/[<file>]<sheet>`, and the classic sheet-name formula splits it on
+    // the `]`; an empty string broke that formula in every German workbook that used it (#1489).
+    let dir = std::path::Path::new("books");
+    let mut t = T::new();
+    t.wb.sheet_mut(0).unwrap().name = "Info".into();
+
+    // No file yet: empty, as in a workbook Excel has never saved.
+    t.set("A1", "1");
+    t.set("B1", "=CELL(\"filename\",A1)");
+    assert_eq!(t.get("B1"), Value::from(""));
+
+    t.wb.source_path = Some(dir.join("gc_cell_info_de.xlsx"));
+    t.calc = Calc::new();
+    let expect = dir.join("[gc_cell_info_de.xlsx]Info").to_string_lossy().into_owned();
+
+    t.set("B2", "=CELL(\"filename\",A1)");
+    assert_eq!(t.get("B2"), Value::from(expect.as_str()));
+
+    // The two formulas from the report: the sheet name, and the test that the `]` is there.
+    t.set("B3", "=MID(CELL(\"filename\",A1),FIND(\"]\",CELL(\"filename\",A1))+1,31)");
+    assert_eq!(t.get("B3"), Value::from("Info"), "the sheet-name formula");
+    t.set("B4", "=ISNUMBER(FIND(\"]\",CELL(\"filename\",A1)))");
+    assert_eq!(t.get("B4"), Value::Bool(true));
+    // The sheet is the one the reference is on, not the active one.
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Second")));
+    t.set("B6", "=CELL(\"filename\",Second!A1)");
+    assert_eq!(t.get("B6"), Value::from(dir.join("[gc_cell_info_de.xlsx]Second").to_string_lossy().into_owned().as_str()));
+
+    // A workbook that arrived as bytes knows its name but no folder: still splittable.
+    t.wb.source_path = Some(std::path::PathBuf::from("Book.xlsx"));
+    t.calc = Calc::new();
+    t.set("B7", "=CELL(\"filename\",A1)");
+    assert_eq!(t.get("B7"), Value::from("[Book.xlsx]Info"));
+}
+
+#[test]
+fn n_lifts_over_a_computed_array_but_reads_the_first_cell_of_a_range() {
+    let mut t = T::new();
+    t.set("B1", "0");
+    t.set("B2", "23850");
+    t.set("D2", "10%");
+    t.set("D3", "12%");
+    t.set("F1", "50000");
+    t.set("H1", "=SUMPRODUCT(D2:D3-D1:D2,F1-B1:B2,N(F1>B1:B2))");
+    assert!((t.num("H1") - 5523.0).abs() < 1e-9, "{:?}", t.get("H1"));
+    t.set("H2", "=SUMPRODUCT(N(B1:B2>0))");
+    assert_eq!(t.num("H2"), 1.0);
+    // A spill of N(D2:D3) would also show 10% in H3; summing it tells the two apart.
+    t.set("H3", "=SUM(N(D2:D3))");
+    assert!((t.num("H3") - 0.1).abs() < 1e-12, "{:?}", t.get("H3"));
+}
+
+#[test]
+fn a_dynamic_array_of_one_value_still_anchors_a_spill() {
+    // In Excel a dynamic-array formula anchors a spill range even while its result is a single
+    // value, so `C1#` is the 1 x 1 range and ROWS/SUM/COUNT of it work. GridCraft gave #REF!
+    // (and COUNT 0), so every formula counting a filtered list broke the moment the list had
+    // exactly one entry (#1491). Values and cells follow the reported fixture.
+    let mut t = T::new();
+    for i in 1..=5 {
+        t.set(&format!("A{i}"), &i.to_string());
+        t.set(&format!("B{i}"), "7");
+    }
+    t.set("C1", "=FILTER(A1:A5,A1:A5>4)");
+    t.set("C3", "=SORT(FILTER(A1:A5,A1:A5=3))");
+    t.set("C5", "=UNIQUE(B1:B5)");
+    // Control: the same FILTER matching two rows, which worked before.
+    t.set("C9", "=FILTER(A1:A5,A1:A5>3)");
+
+    t.set("E1", "=ROWS(C1#)");
+    t.set("E2", "=SUM(C1#)");
+    t.set("E3", "=ROWS(C3#)");
+    t.set("E5", "=COUNT(C5#)");
+    t.set("E9", "=ROWS(C9#)");
+    assert_eq!(t.get("E1"), Value::from(1.0));
+    assert_eq!(t.get("E2"), Value::from(5.0));
+    assert_eq!(t.get("E3"), Value::from(1.0));
+    assert_eq!(t.get("E5"), Value::from(1.0));
+    assert_eq!(t.get("E9"), Value::from(2.0), "a spilling array is unchanged");
+
+    // The anchors still show their first value, as they did.
+    assert_eq!(t.get("C1"), Value::from(5.0));
+    assert_eq!(t.get("C5"), Value::from(7.0));
+
+    // A formula whose result is a scalar never becomes an anchor: `#` on it is still #REF!.
+    t.set("D1", "=1+1");
+    t.set("E11", "=ROWS(D1#)");
+    assert_eq!(t.get("E11"), Value::Error(CellError::Ref));
 }

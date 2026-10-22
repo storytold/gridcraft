@@ -13,19 +13,29 @@ pub fn specs() -> Vec<CommandSpec> {
             "Freeze Panes",
             ["View", "Window", "Freeze Panes"],
             None,
-            "{cell?: \"B2\" (rows above and columns left of it freeze)}",
+            "{sheet?, cell?: \"B2\" (rows above and columns left of it freeze); without `cell`, unfreezes a frozen sheet}",
             has_doc,
             freeze_panes
         ),
-        cmd!("view.freezeTopRow", "Freeze Top Row", ["View", "Window", "Freeze Panes"], None, "{}", has_doc, |s, _| set_freeze(s, Some((1, 0)))),
-        cmd!("view.freezeFirstColumn", "Freeze First Column", ["View", "Window", "Freeze Panes"], None, "{}", has_doc, |s, _| set_freeze(
+        cmd!("view.freezeTopRow", "Freeze Top Row", ["View", "Window", "Freeze Panes"], None, "{sheet?}", has_doc, |s, p| set_freeze(
             s,
+            target_sheet(s, p)?,
+            Some((1, 0))
+        )),
+        cmd!("view.freezeFirstColumn", "Freeze First Column", ["View", "Window", "Freeze Panes"], None, "{sheet?}", has_doc, |s, p| set_freeze(
+            s,
+            target_sheet(s, p)?,
             Some((0, 1))
         )),
-        cmd!("view.unfreezePanes", "Unfreeze Panes", ["View", "Window", "Freeze Panes"], None, "{}", has_doc, |s, _| set_freeze(s, None)),
+        cmd!("view.unfreezePanes", "Unfreeze Panes", ["View", "Window", "Freeze Panes"], None, "{sheet?}", has_doc, |s, p| set_freeze(
+            s,
+            target_sheet(s, p)?,
+            None
+        )),
         cmd!("view.gridlines", "Gridlines", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "gridlines")),
         cmd!("view.headings", "Headings", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "headings")),
         cmd!("view.showZeros", "Show Zeros", [], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "zeros")),
+        cmd!("view.showObjects", "Show Objects", [], Some("Ctrl+6"), "{on?}", has_doc, show_objects),
         cmd!("view.rightToLeft", "Sheet Right-to-Left", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "rtl")),
         cmd!("view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
         cmd!("view.zoom100", "100%", ["View", "Zoom"], None, "{}", has_doc, |s, _| zoom(s, &json!({"percent": 100}))),
@@ -35,7 +45,15 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("view.zoomToSelection", "Zoom to Selection", ["View", "Zoom"], None, "{viewWidth?, viewHeight?}", has_doc, zoom_selection),
         cmd!("pageLayout.orientation", "Orientation", ["Page Layout", "Page Setup"], None, "{orientation: portrait|landscape}", has_doc, orientation),
-        cmd!("pageLayout.size", "Size", ["Page Layout", "Page Setup"], None, "{paper: Letter|Legal|A4|A3|A5|Tabloid|Executive}", has_doc, paper),
+        cmd!(
+            "pageLayout.size",
+            "Size",
+            ["Page Layout", "Page Setup"],
+            None,
+            "{paper: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes)}",
+            has_doc,
+            paper
+        ),
         cmd!(
             "pageLayout.margins",
             "Margins",
@@ -113,23 +131,28 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn freeze_panes(s: &mut Session, p: &Json) -> Result<Json> {
+    let si = target_sheet(s, p)?;
     let d = s.doc()?;
-    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
     if sh.freeze.is_some() && p.get("cell").is_none() {
-        return set_freeze(s, None);
+        return set_freeze(s, si, None);
     }
-    let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
+    let at = match cell_param_on(s, p, "cell", si)? {
+        Some(c) => c,
+        None if si == d.wb.active_sheet => d.selection.active,
+        // The selection belongs to the active sheet.
+        None => return Err(bad("view.freezePanes", "missing `cell`: the selection is on the active sheet")),
+    };
     let top = sh.view_top_left;
     let rows = at.row.saturating_sub(top.row);
     let cols = at.col.saturating_sub(top.col);
     let _ = (rows, cols);
     let (rows, cols) = (at.row, at.col);
-    set_freeze(s, if rows == 0 && cols == 0 { None } else { Some((rows, cols)) })
+    set_freeze(s, si, if rows == 0 && cols == 0 { None } else { Some((rows, cols)) })
 }
 
-fn set_freeze(s: &mut Session, f: Option<(u32, u32)>) -> Result<Json> {
+fn set_freeze(s: &mut Session, si: usize, f: Option<(u32, u32)>) -> Result<Json> {
     edit(s, |cx| {
-        let si = cx.sheet_index();
         cx.sheet_mut(si)?.freeze = f;
         Ok(json!({"freeze": f}))
     })
@@ -149,6 +172,16 @@ fn sheet_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
         };
         *slot = bool_param(p, "on").unwrap_or(!*slot);
         Ok(json!({"on": *slot}))
+    })
+}
+
+/// Ctrl+6: hides every object, or shows them again. Placeholders (from a file) count as shown.
+fn show_objects(s: &mut Session, p: &Json) -> Result<Json> {
+    use gridcraft_model::ShowObjects;
+    edit(s, |cx| {
+        let on = bool_param(p, "on").unwrap_or(cx.wb.show_objects == ShowObjects::None);
+        cx.wb.show_objects = if on { ShowObjects::All } else { ShowObjects::None };
+        Ok(json!({"on": on}))
     })
 }
 
@@ -232,13 +265,31 @@ fn print_area(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn print_titles(s: &mut Session, p: &Json) -> Result<Json> {
-    let rows = str_param(p, "rows").and_then(RangeRef::parse).map(|r| (r.start.row, r.end.row));
-    let cols = str_param(p, "cols").and_then(RangeRef::parse).map(|r| (r.start.col, r.end.col));
+    // An absent key leaves that axis alone, and an empty or null value clears it — the same
+    // reading `pageLayout.pageSetup` gives `titleRows`/`titleCols`. Assigning `None` for a
+    // key that was never sent used to wipe the other axis.
+    let axis = |key: &str, is_cols: bool| -> Result<Option<Option<(u32, u32)>>> {
+        match p.get(key) {
+            None => Ok(None),
+            Some(Json::Null) => Ok(Some(None)),
+            Some(Json::String(t)) if t.trim().is_empty() => Ok(Some(None)),
+            Some(Json::String(t)) => match RangeRef::parse(t) {
+                Some(r) => Ok(Some(Some(if is_cols { (r.start.col, r.end.col) } else { (r.start.row, r.end.row) }))),
+                None => Err(bad("pageLayout.printTitles", format!("`{key}` is not a range: `{t}`"))),
+            },
+            Some(_) => Err(bad("pageLayout.printTitles", format!("`{key}` must be text like \"1:2\" or \"A:A\""))),
+        }
+    };
+    let (rows, cols) = (axis("rows", false)?, axis("cols", true)?);
     edit(s, |cx| {
         let si = cx.sheet_index();
         let pr = &mut cx.sheet_mut(si)?.print;
-        pr.title_rows = rows;
-        pr.title_cols = cols;
+        if let Some(t) = rows {
+            pr.title_rows = t;
+        }
+        if let Some(t) = cols {
+            pr.title_cols = t;
+        }
         Ok(Json::Null)
     })
 }

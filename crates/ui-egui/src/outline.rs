@@ -261,7 +261,8 @@ pub fn paint(p: &Painter, geo: &Geo, sh: &Sheet, t: &Tokens) {
             pc.line_segment(tick, ink);
         }
     }
-    let font = theme::ui_font((10.0 * (geo.z / DISPLAY_SCALE).max(0.75)).min(14.0));
+    // The outline levels grow with the zoom like the headings beside them.
+    let font = theme::ui_font((10.0 * (geo.z / DISPLAY_SCALE)).max(7.5));
     for b in &l.buttons {
         let clip = match b.action {
             Action::Toggle { rows: true, .. } => row_clip,

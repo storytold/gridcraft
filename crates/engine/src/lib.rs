@@ -8,6 +8,7 @@
 
 pub mod catalog;
 pub mod cf;
+mod chart_svg;
 mod clip_html;
 pub mod cmd;
 pub mod display;
@@ -61,6 +62,8 @@ pub struct HistoryEntry {
     pub label: String,
     pub wb: Arc<Workbook>,
     pub selection: Selection,
+    /// Estimate of storage this snapshot retains beyond the next workbook version.
+    pub retained_bytes: usize,
 }
 
 /// The clipboard: a block of cells (with formulas and styles) or marching-ants reference.
@@ -116,6 +119,50 @@ pub struct DocState {
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 const UNDO_LIMIT: usize = 100;
+/// Past this many entries the journal drops its oldest half.
+const JOURNAL_MAX_ENTRIES: usize = 10_000;
+/// Past this many bytes (entries serialized as JSON) the journal drops its oldest entries until
+/// it is under half. Entries keep their full params so they replay (recorded scripts,
+/// `engine.journal`), and a `file.open` holds the whole file as base64: without a size cap a
+/// few opens of a large workbook keep tens of MB alive.
+pub(crate) const JOURNAL_MAX_BYTES: usize = 64 * 1024 * 1024;
+const UNDO_BYTES_LIMIT: usize = 128 * 1024 * 1024;
+
+fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
+    let mut bytes = std::mem::size_of::<Workbook>();
+    for (index, sheet) in older.sheets.iter().enumerate() {
+        // Moving or inserting sheets must not charge unchanged sheets at a new index.
+        if newer.sheets.iter().any(|next| Arc::ptr_eq(sheet, next)) {
+            continue;
+        }
+        bytes = bytes.saturating_add(std::mem::size_of::<gridcraft_model::Sheet>());
+        let empty = gridcraft_model::CellStore::new();
+        let next = newer.sheets.get(index).map_or(&empty, |next| &next.cells);
+        bytes = bytes.saturating_add(sheet.cells.retained_bytes_against(next));
+    }
+    bytes
+}
+
+fn push_history(history: &mut Vec<HistoryEntry>, label: String, wb: Arc<Workbook>, next: &Workbook, selection: Selection) {
+    push_history_with_budget(history, label, wb, next, selection, UNDO_BYTES_LIMIT);
+}
+
+fn push_history_with_budget(
+    history: &mut Vec<HistoryEntry>,
+    label: String,
+    wb: Arc<Workbook>,
+    next: &Workbook,
+    selection: Selection,
+    byte_budget: usize,
+) {
+    let retained_bytes = history_retained_bytes(&wb, next);
+    history.push(HistoryEntry { label, wb, selection, retained_bytes });
+    let mut total = history.iter().fold(0usize, |sum, entry| sum.saturating_add(entry.retained_bytes));
+    // Always preserve the latest action, even if that one edit exceeds the budget.
+    while history.len() > 1 && (history.len() > UNDO_LIMIT || total > byte_budget) {
+        total = total.saturating_sub(history.remove(0).retained_bytes);
+    }
+}
 
 impl DocState {
     pub fn new(mut wb: Workbook, path: Option<String>, title: String) -> DocState {
@@ -227,6 +274,13 @@ pub enum UiRequest {
     OpenUrl(String),
 }
 
+/// Width in points of one line of text drawn in a cell font, measured by a front end that has
+/// the font the grid draws with. With `exact` false the front end may answer with a cheaper
+/// measure that is never narrower (AutoFit asks for it on columns with many distinct values).
+/// Commands call it while they run, so a front end must not run commands while holding a lock
+/// the measure takes (egui's: see `theme::cell_text_width` in the UI crate).
+pub type TextWidth = Arc<dyn Fn(&str, &model::Font, bool) -> f32 + Send + Sync>;
+
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
@@ -236,6 +290,9 @@ pub struct Session {
     pub mode: Mode,
     /// Commands run so far, without their passwords ([`cmd::journal_params`]).
     pub journal: Vec<(String, Json)>,
+    /// Serialized size of each journal entry, measured once when it is pushed, and their sum.
+    journal_sizes: Vec<usize>,
+    journal_bytes: usize,
     pub ui_requests: Vec<UiRequest>,
     /// Format painter source style (sticky when double-clicked).
     pub format_painter: Option<(Arc<Workbook>, usize, RangeRef, bool)>,
@@ -256,6 +313,9 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
+    /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
+    /// [`cmd::format::approx_text_width`].
+    pub text_width: Option<TextWidth>,
 }
 
 impl Session {
@@ -309,6 +369,38 @@ impl Session {
         self.add_document(DocState::new(wb, None, format!("Book{n}")))
     }
 
+    /// Journals a command, then trims the oldest entries past either cap. A recording in progress
+    /// keeps pointing at the same entry (the steps the trim dropped are lost).
+    fn push_journal(&mut self, id: &str, params: Json) {
+        let size = |e: &(String, Json)| serde_json::to_vec(e).map_or(0, |v| v.len());
+        // `journal` is public: if it was changed from outside, measure it again.
+        if self.journal_sizes.len() != self.journal.len() {
+            self.journal_sizes = self.journal.iter().map(size).collect();
+            self.journal_bytes = self.journal_sizes.iter().sum();
+        }
+        let entry = (id.to_string(), params);
+        let entry_size = size(&entry);
+        self.journal.push(entry);
+        self.journal_sizes.push(entry_size);
+        self.journal_bytes = self.journal_bytes.saturating_add(entry_size);
+        let len = self.journal.len();
+        let mut n = if len > JOURNAL_MAX_ENTRIES { len - JOURNAL_MAX_ENTRIES / 2 } else { 0 };
+        let mut kept = self.journal_bytes.saturating_sub(self.journal_sizes.iter().take(n).sum());
+        if self.journal_bytes > JOURNAL_MAX_BYTES {
+            // The newest entry stays even when it is larger than the cap on its own.
+            while kept > JOURNAL_MAX_BYTES / 2 && n + 1 < len {
+                kept = kept.saturating_sub(self.journal_sizes.get(n).copied().unwrap_or(0));
+                n += 1;
+            }
+        }
+        if n > 0 {
+            self.journal.drain(..n);
+            self.journal_sizes.drain(..n);
+            self.journal_bytes = kept;
+            self.recording = self.recording.map(|r| r.saturating_sub(n));
+        }
+    }
+
     pub fn commands(&self) -> Vec<CommandInfo> {
         command_specs().iter().map(|c| c.info(self)).collect()
     }
@@ -340,20 +432,14 @@ impl Session {
             }
         };
         if spec.journal && result.is_ok() {
-            self.journal.push((id.to_string(), cmd::journal_params(&params)));
-            if self.journal.len() > 10_000 {
-                self.journal.drain(..5_000);
-            }
+            self.push_journal(id, cmd::journal_params(&params));
         }
         if spec.undoable
             && let Some((uid, wb, sel)) = before
             && let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid)
             && !Arc::ptr_eq(&d.wb, &wb)
         {
-            d.undo.push(HistoryEntry { label: spec.label.trim_end_matches('…').to_string(), wb, selection: sel });
-            if d.undo.len() > UNDO_LIMIT {
-                d.undo.remove(0);
-            }
+            push_history(&mut d.undo, spec.label.trim_end_matches('…').to_string(), wb, &d.wb, sel);
             d.redo.clear();
             d.revision += 1;
         }

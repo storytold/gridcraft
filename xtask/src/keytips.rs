@@ -10,12 +10,17 @@
 use std::fs;
 use std::path::Path;
 
-const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
+/// "File" is not a ribbon tab: its sequence opens the Backstage view.
+const TABS: &[&str] = &["File", "Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
 /// Commands whose empty-params behaviour depends on the host machine (e.g. the
 /// system dictionary). These are never probed; their tests assert "invoked
 /// something observable" so the checked-in file stays byte-identical everywhere.
 const ENV_SENSITIVE: &[&str] = &["review.spelling"];
+
+/// Commands that the UI turns into a dialog when invoked menu-style with no params (the engine
+/// command itself errors without them). Never probed; their tests assert the dialog opens.
+const UI_DIALOG_COMMANDS: &[(&str, &str)] = &[("insert.recommendedCharts", "recommendedCharts")];
 
 /// Format generated source through `rustfmt` so the checked-in file matches
 /// the emitter byte-for-byte.
@@ -57,7 +62,7 @@ fn probe_live_commands(ids: &[String]) -> Probe {
     use gridcraft_engine::Session;
     let mut map = Probe::new();
     for id in ids {
-        if ENV_SENSITIVE.contains(&id.as_str()) {
+        if ENV_SENSITIVE.contains(&id.as_str()) || UI_DIALOG_COMMANDS.iter().any(|(c, _)| c == id) {
             continue;
         }
         let mut s = Session::new();
@@ -260,6 +265,10 @@ fn render_tests(entries: &[Entry], probe: &Probe) -> String {
     let mut out = String::from(HEADER);
     for e in entries {
         let body = match e.kind.as_str() {
+            "tab" if e.target == "File" => format!(
+                "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().backstage.is_some(), \"{seq} must open the File view\");\n    assert_eq!(h.state().keytips.prefix(), Some({seq:?}));",
+                seq = e.seq,
+            ),
             "tab" => format!(
                 "sequence(&mut h, {seq:?}, false);\n    assert_eq!(h.state().ui.ribbon_tab, {tab:?}, \"{seq} must switch to the {tab} tab\");",
                 seq = e.seq,
@@ -269,6 +278,13 @@ fn render_tests(entries: &[Entry], probe: &Probe) -> String {
                 "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().dialog.is_none(), \"{seq} must not open a dialog\");\n    assert!(h.state().message.is_none(), \"{seq} must not open a message box\");\n    assert!(h.state().toast.is_none(), \"{seq} must not raise a toast\");\n    assert!(h.state().session.journal.is_empty(), \"{seq} must not journal\");",
                 seq = e.seq,
             ),
+            "command" if UI_DIALOG_COMMANDS.iter().any(|(c, _)| *c == e.target) => {
+                let dialog = UI_DIALOG_COMMANDS.iter().find(|(c, _)| *c == e.target).map_or("", |(_, d)| d);
+                format!(
+                    "// The dialog previews chart types for the selected data, so the sheet needs some.\n    h.state_mut().session.execute(\"range.setValues\", serde_json::json!({{\"range\": \"A1\", \"values\": [[\"Fruit\", \"Sales\"], [\"Apples\", 5], [\"Pears\", 3]]}})).unwrap();\n    h.state_mut().session.execute(\"selection.set\", serde_json::json!({{\"range\": \"A1:B3\"}})).unwrap();\n    sequence(&mut h, {seq:?}, false);\n    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some({dialog:?}), \"{seq} must open the {dialog} dialog\");",
+                    seq = e.seq,
+                )
+            }
             "command" => match probe.get(&e.target).copied().unwrap_or(2) {
                 0 => format!(
                     "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().session.journal.iter().any(|(id, _)| id == {id:?}), \"{seq} must journal {id}\");",

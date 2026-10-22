@@ -111,6 +111,15 @@ pub trait Ctx {
     fn computed_criterion(&mut self, _row: usize, _col: usize, _db: &Array, _record: usize) -> Option<bool> {
         None
     }
+    /// For GROUPBY/PIVOTBY: whether their function argument is a LAMBDA (its value is then not used).
+    fn has_lambda(&self) -> bool {
+        false
+    }
+    /// Calls that LAMBDA with `arg` (one group's values) and returns its single result; `None` when
+    /// there is no lambda.
+    fn call_lambda(&mut self, _arg: Value) -> Option<Value> {
+        None
+    }
 }
 
 pub type FnImpl = fn(&[Arg], &mut dyn Ctx) -> Value;

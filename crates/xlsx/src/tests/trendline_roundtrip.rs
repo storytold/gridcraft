@@ -47,6 +47,7 @@ fn chart(id: u32, kind: ChartKind, trendlines: Vec<Trendline>) -> Chart {
             color: Some(Color::Rgb(0x4472C4)),
             secondary: false,
             kind: None,
+            quartiles: Default::default(),
             smooth: false,
             trendlines,
         }],
@@ -168,4 +169,21 @@ fn excel_style_trendlines_are_read() {
     assert_eq!((t[0].width, t[0].dash), (Some(1.5), Some(LineDash::SysDot)));
     assert_eq!(t[0].color, Some(Color::Theme(5, 0)));
     assert_eq!(t[1].kind, TrendlineKind::MovingAverage(2), "period clamps to 2..255");
+}
+
+#[test]
+fn a_huge_forecast_in_a_file_is_read_clamped() {
+    let t = |f: &str, b: &str| {
+        format!(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:trendline><c:trendlineType val="linear"/><c:forward val="{f}"/><c:backward val="{b}"/></c:trendline><c:val><c:numRef><c:f>Data!$B$2:$B$6</c:f></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart></c:plotArea></c:chart></c:chartSpace>"#
+        )
+    };
+    let read = |f: &str, b: &str| {
+        let root = crate::xml::parse(t(f, b).as_bytes()).unwrap();
+        crate::chart::read_chart(&root).unwrap().series[0].trendlines[0].clone()
+    };
+    let big = read("1000000", "1e300");
+    assert_eq!((big.forward, big.backward), (Trendline::MAX_FORECAST, Trendline::MAX_FORECAST));
+    let small = read("2.5", "-3");
+    assert_eq!((small.forward, small.backward), (2.5, 0.0), "ordinary values are kept");
 }

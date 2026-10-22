@@ -49,13 +49,33 @@ pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
     parse_numeric(s.trim(), sys).map(|(n, _)| n)
 }
 
+/// Text that Excel's "Number Stored as Text" check flags: it would be a number if typed (signs,
+/// thousands separators, currency, percent, exponent, a parenthesised negative). Dates, times and
+/// fractions kept as text are not flagged, as in Excel.
+pub fn number_stored_as_text(s: &str) -> Option<f64> {
+    let t = s.trim();
+    match t.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
+        Some(inner) => parse_plain(inner.trim()).map(|(n, _)| -n),
+        None => parse_plain(t).map(|(n, _)| n),
+    }
+}
+
 fn parse_numeric(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
+    // Parenthesised negatives: (100) = -100. Each level negates, so ((100)) = 100. Stripped in a
+    // loop, not by recursion: runtime text (e.g. from REPT) can nest thousands deep (#2180).
+    let mut t = t;
+    let mut neg = false;
+    while let Some(inner) = t.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
+        t = inner.trim();
+        neg = !neg;
+    }
+    let (n, f) = parse_unparenthesised(t, sys)?;
+    Some((if neg { -n } else { n }, f))
+}
+
+fn parse_unparenthesised(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
     if t.is_empty() {
         return None;
-    }
-    // Parenthesised negatives: (100) = -100.
-    if let Some(inner) = t.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
-        return parse_numeric(inner.trim(), sys).map(|(n, f)| (-n, f));
     }
     if let Some(r) = parse_plain(t) {
         return Some(r);
@@ -146,14 +166,28 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
     Some((n, fmt))
 }
 
+/// A plain ASCII number: digits, with an optional `.digits` fraction when `frac` is set. Rejects
+/// `nan`, `inf`, signs and exponents that `f64::from_str` would accept.
+fn plain_number(s: &str, frac: bool) -> Option<f64> {
+    let (int, dec) = match s.split_once('.') {
+        Some((i, d)) if frac => (i, Some(d)),
+        _ => (s, None),
+    };
+    let digits = |x: &str| !x.is_empty() && x.bytes().all(|c| c.is_ascii_digit());
+    if !digits(int) || dec.is_some_and(|d| !digits(d)) {
+        return None;
+    }
+    s.parse().ok()
+}
+
 /// `1/2` (only with a whole part, else it's a date), `1 1/2`, `0 3/4`.
 fn parse_fraction(t: &str) -> Option<f64> {
     let (whole, frac) = t.split_once(' ')?;
     let neg = whole.starts_with('-');
-    let w: f64 = whole.trim_start_matches('-').parse().ok()?;
+    let w = plain_number(whole.trim_start_matches('-'), false)?;
     let (a, b) = frac.trim().split_once('/')?;
-    let a: f64 = a.parse().ok()?;
-    let b: f64 = b.parse().ok()?;
+    let a = plain_number(a, false)?;
+    let b = plain_number(b, false)?;
     if b == 0.0 || !w.is_finite() {
         return None;
     }
@@ -184,12 +218,12 @@ fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
     if parts.len() == 1 && ampm.is_none() {
         return None;
     }
-    if parts.len() > 3 || parts.iter().any(|p| p.is_empty()) {
+    if parts.len() > 3 || parts.iter().any(|p| p.is_empty() || p.starts_with('+')) {
         return None;
     }
-    let mut h: f64 = parts.first()?.parse().ok()?;
-    let m: f64 = parts.get(1).map_or(Some(0.0), |p| p.parse().ok())?;
-    let s: f64 = parts.get(2).map_or(Some(0.0), |p| p.parse().ok())?;
+    let mut h = plain_number(parts.first()?, false)?;
+    let m = parts.get(1).map_or(Some(0.0), |p| plain_number(p, false))?;
+    let s = parts.get(2).map_or(Some(0.0), |p| plain_number(p, true))?;
     if m >= 60.0 || s >= 60.0 || h < 0.0 || m < 0.0 || s < 0.0 {
         return None;
     }
@@ -211,7 +245,13 @@ fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
 
 fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
     let t = t.trim().trim_end_matches(',');
-    let num = |s: &str| s.trim().parse::<i64>().ok();
+    let num = |s: &str| {
+        let s = s.trim();
+        if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        s.parse::<i64>().ok()
+    };
     // ISO yyyy-mm-dd or yyyy/mm/dd
     let seps: &[char] = &['/', '-', '.'];
     let parts: Vec<&str> = t.split(seps).collect();
@@ -327,6 +367,21 @@ mod tests {
     }
 
     #[test]
+    fn non_digit_time_and_fraction_parts_stay_text() {
+        for s in ["1:nan", "nan:30", "1:30:NaN", "1 nan/2", "1 1/nan", "inf:00", "1e1:00", "+5:00"] {
+            assert_eq!(p(s).value, Value::text(s), "{s}");
+        }
+    }
+
+    #[test]
+    fn signed_date_parts_stay_text() {
+        for s in ["+3/4/2026", "3/+4/2026", "3/4/+2026", "1/1/2020 +5:00"] {
+            assert_eq!(p(s).value, Value::text(s), "{s}");
+        }
+        assert_eq!(p("3/4/2026").value, Value::Number(46085.0));
+    }
+
+    #[test]
     fn month_name_short_year() {
         for s in ["Mar 4, 26", "Mar 4 26", "March 4 26", "4 March 26", "Mar 4, 2026"] {
             assert_eq!(p(s).value, Value::Number(46085.0), "{s}");
@@ -350,6 +405,24 @@ mod tests {
         assert_eq!(p("1e3").value, Value::Number(1000.0));
         assert_eq!(p("1 1/2").value, Value::Number(1.5));
         assert_eq!(p(".5").value, Value::Number(0.5));
+    }
+
+    #[test]
+    fn deeply_nested_parentheses_do_not_overflow() {
+        // #2180: coercion used to recurse once per parenthesis and overflow the stack.
+        let depth = 100_000;
+        let s = format!("{}1{}", "(".repeat(depth), ")".repeat(depth));
+        assert_eq!(parse_number_text(&s), Some(1.0));
+        let odd = format!("{}1{}", "(".repeat(depth + 1), ")".repeat(depth + 1));
+        assert_eq!(parse_number_text(&odd), Some(-1.0));
+        let unbalanced = format!("{}1{}", "(".repeat(depth), ")".repeat(depth - 1));
+        assert_eq!(parse_number_text(&unbalanced), None);
+        assert_eq!(p(&s).value, Value::Number(1.0));
+        // Existing results are unchanged.
+        assert_eq!(parse_number_text("(100)"), Some(-100.0));
+        assert_eq!(parse_number_text("((100))"), Some(100.0));
+        assert_eq!(parse_number_text("( $1,200.50 )"), Some(-1200.5));
+        assert_eq!(parse_number_text("()"), None);
     }
 
     #[test]
@@ -397,5 +470,16 @@ mod tests {
         // The 1904 system starts after it.
         assert_eq!(parse_input("2/29/1900", DateSystem::D1904).value, Value::text("2/29/1900"));
         assert_eq!(parse_input("2/29/1904", DateSystem::D1904).value, Value::Number(59.0));
+    }
+
+    #[test]
+    fn numbers_stored_as_text() {
+        for (text, n) in [("123", 123.0), (" 42 ", 42.0), ("-1,000.5", -1000.5), ("$3", 3.0), ("50%", 0.5), ("1E3", 1000.0), ("(100)", -100.0)] {
+            assert_eq!(number_stored_as_text(text), Some(n), "{text}");
+        }
+        // Dates, times, fractions, words and blanks are not flagged.
+        for text in ["3/4/2026", "10:30", "1 1/2", "abc", "12abc", "", "  ", "TRUE", "#N/A", "((1))"] {
+            assert_eq!(number_stored_as_text(text), None, "{text}");
+        }
     }
 }
