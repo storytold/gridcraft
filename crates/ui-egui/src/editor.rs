@@ -43,6 +43,8 @@ pub struct EditState {
     pub completion: Option<String>,
     /// Move the caret to the end on the next frame.
     pub caret_to_end: bool,
+    /// Select from this char index to `caret` when the caret is next pushed into the widget.
+    pub select_from: Option<usize>,
 }
 
 impl EditState {
@@ -65,6 +67,7 @@ impl EditState {
             sync_caret: true,
             caret_to_end: true,
             completion: None,
+            select_from: None,
         }
     }
 
@@ -245,6 +248,23 @@ impl EditState {
         }
         None
     }
+
+    /// Points and selects the argument of the call that ends the text, as AutoSum proposes it
+    /// (`=SUM(B1:B3)`): a click, drag, arrow key or typing replaces `B1:B3`. An arrow key moves
+    /// from the range's first cell, as in Excel: ↑ on `=SUM(A2:A4)` gives `=SUM(A1)`. With no
+    /// argument (`=SUM()`) the caret goes between the parentheses.
+    pub fn point_last_argument(&mut self) {
+        let Some(open) = self.text.rfind('(') else { return };
+        let Some(close) = self.text.len().checked_sub(1).filter(|&c| c > open && self.text.ends_with(')')) else { return };
+        let chars = |byte: usize| self.text.get(..byte).map_or(0, |t| t.chars().count());
+        let (start, end) = (open + 1, close);
+        self.caret = chars(end);
+        self.point = (start < end).then_some((start, end));
+        self.select_from = (start < end).then(|| chars(start));
+        self.point_cell = self.text.get(start..end).and_then(RangeRef::parse).map(|r| r.start);
+        self.caret_to_end = false;
+        self.sync_caret = true;
+    }
 }
 
 /// References in formula text with their byte spans and colour index (same reference text ⇒
@@ -377,6 +397,29 @@ mod tests {
         assert!(e.can_point());
         let e2 = EditState::new(0, CellRef::new(0, 0), "hello".into(), true, false);
         assert!(!e2.can_point());
+    }
+
+    #[test]
+    fn autosum_points_and_selects_its_proposed_range() {
+        // #1834: Excel leaves AutoSum's range ready to be replaced by pointing or typing.
+        let mut e = EditState::new(0, CellRef::new(3, 0), "=SUM(A1:A3)".into(), true, false);
+        e.point_last_argument();
+        assert!(e.can_point());
+        assert_eq!((e.caret, e.select_from, e.point), (10, Some(5), Some((5, 10))));
+        assert_eq!(e.point_cell, Some(CellRef::new(0, 0)), "arrow keys move from the range's first cell");
+        e.insert_ref("A2");
+        assert_eq!(e.text, "=SUM(A2)");
+        // No proposal: the caret waits between the parentheses.
+        let mut e = EditState::new(0, CellRef::new(3, 0), "=SUMA()".into(), true, false);
+        e.point_last_argument();
+        assert!(e.can_point());
+        assert_eq!((e.caret, e.select_from, e.point), (6, None, None));
+        e.insert_ref("B2");
+        assert_eq!(e.text, "=SUMA(B2)");
+        // Text without a closing call is left alone.
+        let mut e = EditState::new(0, CellRef::new(3, 0), "=SUM(".into(), true, false);
+        e.point_last_argument();
+        assert_eq!((e.caret, e.point), (5, None));
     }
 
     #[test]

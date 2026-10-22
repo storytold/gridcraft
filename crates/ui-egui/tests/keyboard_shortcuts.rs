@@ -283,9 +283,10 @@ fn alt_equals_autosum_does_not_also_type_the_equals_sign() {
     for (selected, cell, formula) in [("A4", "A4", "=SUM(A1:A3)"), ("C3", "C3", "=SUM(A3:B3)"), ("A1:B3", "B4", "=SUM(B1:B3)")] {
         let mut h = harness(book(selected));
         alt_equals(&mut h);
-        assert_eq!(input(&h, cell), formula, "Alt+= on {selected}");
-        assert!(h.state().editor.is_none(), "Alt+= on {selected} started an edit");
-        // Enter moves on: there is no stray `=` edit to commit.
+        // One cell: the formula waits in the editor for Enter, as in Excel (#1834); a block gets
+        // its totals at once. Either way without a stray `=`.
+        let editing = h.state().editor.as_ref().map(|e| e.text.clone());
+        assert_eq!(editing.as_deref(), (!selected.contains(':')).then_some(formula), "Alt+= on {selected}");
         key(&mut h, Key::Enter, Modifiers::NONE);
         assert!(h.state().message.is_none(), "Alt+= on {selected}: {:?}", h.state().message);
         assert_eq!(input(&h, cell), formula);

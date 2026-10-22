@@ -340,7 +340,11 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         ed.request_focus = false;
         ed.sync_caret = false;
         let cursor = egui::text::CCursor::new(ed.caret);
-        output.state.cursor.set_char_range(Some(egui::text::CCursorRange::one(cursor)));
+        let range = match ed.select_from.take() {
+            Some(from) => egui::text::CCursorRange::two(egui::text::CCursor::new(from), cursor),
+            None => egui::text::CCursorRange::one(cursor),
+        };
+        output.state.cursor.set_char_range(Some(range));
         output.state.store(ui.ctx(), id);
     } else if resp.clicked() || resp.gained_focus() {
         // Clicking into the other editor moves editing there.
