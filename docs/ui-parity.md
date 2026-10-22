@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (Esc and Enter close a data validation alert over the cell editor; Ctrl+Enter fill gives each cell the automatic number format typing gives it; keytip letters typed with Alt held, #1846; Number Stored as Text indicator and Convert to Number) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (Increase/Decrease Font Size steps: one point below 8, the Font Size list up to 72; Esc and Enter close a data validation alert over the cell editor; Ctrl+Enter fill gives each cell the automatic number format typing gives it; keytip letters typed with Alt held, #1846; Number Stored as Text indicator and Convert to Number) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -124,7 +124,7 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 | Ctrl+Shift+* (Ctrl+Shift+8), Ctrl+Shift+Space | Cmd+Shift+Space | current region, select all | **added** |
 | Ctrl+Shift+Home / End, Shift+Home | same | extend to A1 / last used cell / row start | **added** |
 | Ctrl+P | Cmd+P | print | **added** |
-| Ctrl+Shift+> / < | Cmd+Shift+> / < | font size | **added** |
+| Ctrl+Shift+> / < | Cmd+Shift+> / < | font size: one point at a time from 1 to 8, then the Font Size list up to 72 | **added** |
 | Ctrl+Alt+V | Cmd+Control+V, Cmd+Option+V | Paste Special | **added** |
 | Ctrl+Alt+= / Ctrl+Alt+- | — | zoom in / out (10% steps) | **added** |
 | Alt+=, Alt+Down, Alt+Page Down / Up | Option+Down, Option+Page Down / Up | AutoSum, drop-down list, one screen right / left | **added** |
@@ -202,6 +202,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-13 | minor | AutoFill month patterns retain the workbook's date system, preventing shifted dates in 1904 workbooks when filling forward or backward |
 | 2026-10-13 | minor | Sheet tab bar: the tab strip shrinks to its tabs, up to 60% of the bar, so New sheet (+) sits right after the last tab and the horizontal scrollbar takes the rest (part of #943) |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
+| 2026-10-14 | minor | Increase/Decrease Font Size step one point at a time from 1 to 8 (Decrease jumped from 8 to 1, Increase from 1 to 8), then the Font Size list including 22 and 26, stopping at 72 (it went on to 96 and 409); Excel stops Decrease at 8, see decisions.md |
 | 2026-10-13 | minor | Formula-entry Command/Ctrl-click adds arguments and Shift-click extends references; ordinary replacement and dragging retain their behavior. Readiness estimates unchanged. |
 | 2026-10-12 | minor | Next/previous sheet navigation no longer activates hidden worksheets at either workbook boundary; command tests cover Hidden, VeryHidden and selection retention |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
