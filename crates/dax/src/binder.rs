@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{BinaryOp, Literal, NameRef, UnaryOp};
 use crate::model::DataModel;
-use crate::{Call, Expr, ExprKind, FunctionSpec, lookup, parse_expression, validate_call};
+use crate::{Call, Expr, ExprKind, FunctionSpec, ParamKind, lookup, parse_expression, validate_call};
 
 /// A name-resolution error with the source span.
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
@@ -241,9 +241,14 @@ impl<'a> Binder<'a> {
             let keyword = match spec.name {
                 "DATATABLE" if index % 2 == 1 => keyword_name(arg),
                 "CONVERT" if index == 1 => keyword_name(arg),
+                // RANKX's Ties argument is documented as `Dense` but catalogued as a Scalar.
+                "RANKX" if index == 4 => keyword_name(arg),
                 _ if matches!(expected, Some(ParamKind::Text)) => keyword_name(arg),
                 _ => None,
-            };
+            }
+            // A real table, measure or variable name always wins: `RANK(Sales, ORDERBY(...))`
+            // uses the table in a position whose documented overload would otherwise be `Ties`.
+            .filter(|keyword| !self.bare_name_resolves(keyword, vars));
             if let Some(keyword) = keyword {
                 args.push(BoundExpr::Keyword(keyword));
             } else {
@@ -258,6 +263,15 @@ fn keyword_name(expr: &Expr) -> Option<String> {
     match &expr.kind {
         ExprKind::Name(name) if name.table.is_none() && name.name.style == crate::NameStyle::Bare => Some(name.name.text.clone()),
         _ => None,
+    }
+}
+
+impl Binder<'_> {
+    /// Whether a bare name denotes a model table, measure or expression-level variable.
+    fn bare_name_resolves(&self, name: &str, vars: &[String]) -> bool {
+        self.model.table_index(name).is_some()
+            || self.model.measure_index(name).is_some()
+            || vars.iter().any(|variable| variable.eq_ignore_ascii_case(name))
     }
 }
 
