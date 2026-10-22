@@ -310,13 +310,15 @@ pub fn tool_definitions() -> Vec<Value> {
             "filter",
             "Filter",
             "Filter rows by a column (turns on AutoFilter on the current region, or `range`, when needed). Give `values` (keep rows whose \
-             cell text is one of them), `custom` ({op:\">\", value:\"10\", op2?, value2?, and?}), `top` ({count, bottom?, percent?}), or \
+             cell text is one of them), `dates` (keep date cells in these years, months or days), `custom` ({op:\">\", value:\"10\", op2?, \
+             value2?, and?}), `top` ({count, bottom?, percent?}), or \
              clear:true to remove this column's filter.",
             obj(
                 json!({
                     "column": string("Column letter, e.g. \"C\""),
                     "range": string("Data range to filter (default: the current region of the selection)"),
                     "values": {"type": "array", "items": {"type": ["string", "number", "boolean"]}, "description": "Values to keep"},
+                    "dates": {"type": "array", "items": {"type": "object"}, "description": "Date groups to keep: [{year, month?, day?, hour?, minute?, second?}]; the deepest field given is the group, e.g. {year: 2026, month: 3} is March 2026"},
                     "custom": {"type": "object", "description": "Custom criteria: {op: \"=\"|\"<>\"|\">\"|\">=\"|\"<\"|\"<=\"|\"beginsWith\"|\"contains\"…, value, op2?, value2?, and?: bool}"},
                     "top": {"type": "object", "description": "Top/bottom N: {count, bottom?: bool, percent?: bool}"},
                     "blanks": boolean("Also keep blank cells"),
@@ -576,7 +578,7 @@ fn filter(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
     if let Some(r) = a.get("range").and_then(Value::as_str) {
         exec(b, "selection.set", json!({"range": r}))?;
     }
-    exec(b, "data.filterBy", pick(a, &["column", "values", "custom", "top", "blanks", "clear"]))
+    exec(b, "data.filterBy", pick(a, &["column", "values", "dates", "custom", "top", "blanks", "clear"]))
 }
 
 fn save_workbook(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {

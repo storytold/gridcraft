@@ -753,9 +753,23 @@ impl DateGroupItem {
         }
     }
 
+    /// This item with the fields below its grouping set to 0, as [`DateGroupItem::of`] builds it.
+    pub fn normalized(&self) -> DateGroupItem {
+        let dt = DateTime {
+            year: self.year,
+            month: self.month,
+            day: self.day,
+            hour: self.hour,
+            minute: self.minute,
+            second: self.second,
+            ..DateTime::default()
+        };
+        DateGroupItem::of(&dt, self.grouping)
+    }
+
     /// Does `dt` fall in this year, month, day…?
     pub fn contains(&self, dt: &DateTime) -> bool {
-        DateGroupItem::of(dt, self.grouping) == *self
+        DateGroupItem::of(dt, self.grouping) == self.normalized()
     }
 }
 

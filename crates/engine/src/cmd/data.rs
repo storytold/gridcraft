@@ -658,20 +658,26 @@ pub fn cell_date(wb: &Workbook, sh: &Sheet, c: CellRef) -> Option<gridcraft_core
     gridcraft_core::date::datetime_from_serial(wb.date_system, n)
 }
 
-/// Does a cell pass a value-list criterion?
-fn values_pass(
-    values: &[String],
-    blanks: bool,
-    dates: &[DateGroupItem],
-    v: &Value,
-    text: &str,
-    date: Option<&gridcraft_core::date::DateTime>,
-) -> bool {
+/// A criterion's date groups, looked up by each level of a cell's date: at most six lookups per
+/// cell however many groups a file lists.
+struct DateSet(std::collections::HashSet<DateGroupItem>);
+
+impl DateSet {
+    fn new(items: &[DateGroupItem]) -> DateSet {
+        DateSet(items.iter().map(DateGroupItem::normalized).collect())
+    }
+
+    fn contains(&self, dt: &gridcraft_core::date::DateTime) -> bool {
+        DateGrouping::ALL.iter().any(|g| self.0.contains(&DateGroupItem::of(dt, *g)))
+    }
+}
+
+/// Does a cell pass a value-list criterion? `date` is the cell's date when `dates` is not empty.
+fn values_pass(values: &[String], blanks: bool, dates: &DateSet, v: &Value, text: &str, date: Option<&gridcraft_core::date::DateTime>) -> bool {
     if filter_blank(v) {
         return blanks;
     }
-    date.is_some_and(|d| dates.iter().any(|g| g.contains(d)))
-        || values.iter().any(|x| x.eq_ignore_ascii_case(text) || x.eq_ignore_ascii_case(&v.display()))
+    date.is_some_and(|d| dates.contains(d)) || values.iter().any(|x| x.eq_ignore_ascii_case(text) || x.eq_ignore_ascii_case(&v.display()))
 }
 
 /// Does a value pass a custom comparison (`>`, `=*abc*`, `<>x`…)?
@@ -741,6 +747,14 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             col_stats.insert(i, (thr, avg));
         }
     }
+    let date_sets: Vec<Option<DateSet>> = af
+        .criteria
+        .iter()
+        .map(|(_, c)| match c {
+            FilterCriterion::Values { dates, .. } if !dates.is_empty() => Some(DateSet::new(dates)),
+            _ => None,
+        })
+        .collect();
     for row in r.start.row + 1..=r.end.row {
         let mut visible = true;
         for (i, (off, crit)) in af.criteria.iter().enumerate() {
@@ -748,10 +762,10 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             let v = sh.value(c);
             let text = crate::display::cell_text(wb, sh, c);
             let ok = match crit {
-                FilterCriterion::Values { values, blanks, dates } => {
-                    let date = if dates.is_empty() { None } else { cell_date(wb, sh, c) };
-                    values_pass(values, *blanks, dates, &v, &text, date.as_ref())
-                }
+                FilterCriterion::Values { values, blanks, .. } => match date_sets.get(i).and_then(Option::as_ref) {
+                    Some(set) => values_pass(values, *blanks, set, &v, &text, cell_date(wb, sh, c).as_ref()),
+                    None => values_pass(values, *blanks, &DateSet::new(&[]), &v, &text, None),
+                },
                 FilterCriterion::Custom { a, b, and } => {
                     let x = custom_ok(&v, &text, &a.0, &a.1);
                     match b {
@@ -829,6 +843,10 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
     let Some(af) = &sh.autofilter else { return vec![] };
     let off = col.saturating_sub(af.range.start.col);
     let selected: Option<&FilterCriterion> = af.criteria.iter().find(|(o, _)| *o == off).map(|(_, c)| c);
+    let set = DateSet::new(match selected {
+        Some(FilterCriterion::Values { dates, .. }) => dates,
+        _ => &[],
+    });
     let mut seen = std::collections::BTreeMap::new();
     for row in af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000) {
         let c = CellRef::new(row, col);
@@ -838,7 +856,7 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
         let on = match selected {
             Some(FilterCriterion::Values { values, blanks, dates }) => {
                 let date = if dates.is_empty() { None } else { cell_date(wb, sh, c) };
-                values_pass(values, *blanks, dates, &v, &t, date.as_ref())
+                values_pass(values, *blanks, &set, &v, &t, date.as_ref())
             }
             _ => true,
         };
@@ -868,14 +886,6 @@ impl DateNode {
 
     pub fn any_checked(&self) -> bool {
         if self.children.is_empty() { self.checked } else { self.children.iter().any(DateNode::any_checked) }
-    }
-
-    /// Checks or unchecks this node and everything under it.
-    pub fn set_all(&mut self, on: bool) {
-        self.checked = on;
-        for c in &mut self.children {
-            c.set_all(on);
-        }
     }
 }
 
@@ -939,6 +949,10 @@ pub fn filter_list(wb: &Workbook, sheet: usize, col: u32) -> FilterList {
     let Some(af) = &sh.autofilter else { return FilterList::default() };
     let off = col.saturating_sub(af.range.start.col);
     let selected: Option<&FilterCriterion> = af.criteria.iter().find(|(o, _)| *o == off).map(|(_, c)| c);
+    let set = DateSet::new(match selected {
+        Some(FilterCriterion::Values { dates, .. }) => dates,
+        _ => &[],
+    });
     let mut seen = std::collections::BTreeMap::new();
     let mut dates: std::collections::BTreeMap<DateGroupItem, (Vec<String>, bool)> = std::collections::BTreeMap::new();
     let mut timed = false;
@@ -949,7 +963,7 @@ pub fn filter_list(wb: &Workbook, sheet: usize, col: u32) -> FilterList {
         let blank = filter_blank(&v);
         let t = if blank { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
         let on = match selected {
-            Some(FilterCriterion::Values { values, blanks, dates }) => values_pass(values, *blanks, dates, &v, &t, date.as_ref()),
+            Some(FilterCriterion::Values { values, blanks, .. }) => values_pass(values, *blanks, &set, &v, &t, date.as_ref()),
             _ => true,
         };
         match date {
@@ -1777,6 +1791,16 @@ mod tests {
         let sh = s.doc().unwrap().wb.active().unwrap();
         assert!(sh.is_row_hidden(1));
         assert!(!sh.is_row_hidden(2));
+    }
+
+    #[test]
+    fn date_groups_ignore_fields_below_their_grouping() {
+        // A year item that still carries a month (from a session file or an agent) covers the whole year.
+        let item = DateGroupItem { grouping: DateGrouping::Year, year: 2026, month: 3, day: 9, hour: 0, minute: 0, second: 0 };
+        let april = gridcraft_core::date::DateTime { year: 2026, month: 4, day: 1, ..Default::default() };
+        assert!(item.contains(&april));
+        assert!(DateSet::new(&[item]).contains(&april));
+        assert!(!DateSet::new(&[item]).contains(&gridcraft_core::date::DateTime { year: 2025, month: 4, day: 1, ..Default::default() }));
     }
 
     #[test]

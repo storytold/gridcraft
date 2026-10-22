@@ -3289,7 +3289,8 @@ fn date_node_matches(n: &DateNode, path: &str, needle: &str) -> bool {
 }
 
 /// One level of the filter dropdown's date tree: an expander, then a checkbox that is mixed when
-/// only some of the dates under it are checked. A search expands the matching branches.
+/// only some of the dates under it are checked. A search expands the matching branches and
+/// disables the expanders until it is cleared.
 fn date_tree_ui(ui: &mut egui::Ui, nodes: &mut [DateNode], path: &str, needle: &str, open: &mut Vec<DateGroupItem>, depth: usize) {
     for n in nodes.iter_mut() {
         if !needle.is_empty() && !date_node_matches(n, path, needle) {
@@ -3299,7 +3300,8 @@ fn date_tree_ui(ui: &mut egui::Ui, nodes: &mut [DateNode], path: &str, needle: &
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             ui.add_space(depth as f32 * 14.0);
-            let toggle = ui.add_visible(!n.children.is_empty(), egui::Button::new(if expanded { "▼" } else { "▶" }).small().frame(false));
+            let arrow = egui::Button::new(if expanded { "▼" } else { "▶" }).small().frame(false);
+            let toggle = if n.children.is_empty() { ui.add_visible(false, arrow) } else { ui.add_enabled(needle.is_empty(), arrow) };
             if toggle.clicked() {
                 if let Some(i) = open.iter().position(|o| *o == n.item) {
                     open.remove(i);
@@ -3307,10 +3309,15 @@ fn date_tree_ui(ui: &mut egui::Ui, nodes: &mut [DateNode], path: &str, needle: &
                     open.push(n.item);
                 }
             }
-            let all = n.all_checked();
+            // Like (Select All Search Results): the box shows and sets only the dates the search shows.
+            let (mut all, mut any) = (true, false);
+            date_leaves(n, path, needle, &mut |leaf| {
+                all &= leaf.checked;
+                any |= leaf.checked;
+            });
             let mut on = all;
-            if ui.add(egui::Checkbox::new(&mut on, n.label.as_str()).indeterminate(!all && n.any_checked())).changed() {
-                n.set_all(on);
+            if ui.add(egui::Checkbox::new(&mut on, n.label.as_str()).indeterminate(!all && any)).changed() {
+                date_leaves(n, path, needle, &mut |leaf| leaf.checked = on);
             }
         });
         if expanded && !n.children.is_empty() {

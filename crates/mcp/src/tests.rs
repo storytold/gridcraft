@@ -235,6 +235,14 @@ fn sort_and_filter() {
 }
 
 #[test]
+fn filter_by_dates() {
+    let mut s = server();
+    ok(&mut s, "write_range", json!({"range": "A1", "values": [["When"], ["2026-03-05"], ["2026-04-01"], ["2026-03-20"]]}));
+    let r = ok(&mut s, "filter", json!({"range": "A1:A4", "column": "A", "dates": [{"year": 2026, "month": 3}]}));
+    assert_eq!(r["hiddenRows"], 1, "{r}");
+}
+
+#[test]
 fn save_and_open_roundtrip() {
     let mut s = server();
     ok(&mut s, "write_range", json!({"range": "B2", "values": [[1, 2], [3, "=SUM(B2:C2)+B3"]]}));
