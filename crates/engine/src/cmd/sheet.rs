@@ -716,6 +716,9 @@ fn lines_all_unlocked(wb: &Workbook, sh: &Sheet, axis: Axis, at: u32, count: u32
     }
     let (own, cross, cross_max) = if axis == Axis::Rows { (&sh.rows, &sh.cols, MAX_COLS as usize) } else { (&sh.cols, &sh.rows, MAX_ROWS as usize) };
     let default_locked = locked(gridcraft_model::StyleId::default());
+    // Every line without a format of its own asks the crossing lines the same question, and a
+    // deleted block can span the whole sheet: answer it once.
+    let mut crossing_ok: Option<bool> = None;
     for i in at..=end {
         match own.get(&i).and_then(|x| x.style) {
             // The line's own format covers its empty cells.
@@ -726,12 +729,11 @@ fn lines_all_unlocked(wb: &Workbook, sh: &Sheet, axis: Axis, at: u32, count: u32
             }
             // Empty cells take the crossing line's format, else the default.
             None => {
-                if default_locked && cross.len() < cross_max {
+                let ok = *crossing_ok.get_or_insert_with(|| {
                     // A crossing line with no format of its own leaves a locked empty cell.
-                    return false;
-                }
-                let blocked = |st: Option<gridcraft_model::StyleId>| st.map_or(default_locked, locked);
-                if cross.values().any(|x| blocked(x.style)) {
+                    !(default_locked && cross.len() < cross_max) && !cross.values().any(|x| x.style.map_or(default_locked, locked))
+                });
+                if !ok {
                     return false;
                 }
             }
