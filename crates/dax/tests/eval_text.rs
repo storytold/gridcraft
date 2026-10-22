@@ -271,40 +271,25 @@ fn unicode_returns_the_first_code_point() {
 
 #[test]
 fn to_csv_serializes_with_headers_and_escaping() {
-    assert_eq!(
-        text("TOCSV(Items, 2)"),
-        "Label,Qty,Note\r\nAlpha,3,plain\r\nBeta,1,\"with, comma\""
-    );
-    assert_eq!(
-        text(r##"TOCSV(Items, -1, "|", FALSE)"##),
-        "Alpha|3|plain\r\nBeta|1|with, comma\r\nGamma|2|\"with \"\"quote\"\"\"\r\nDelta|4|"
-    );
+    assert_eq!(text("TOCSV(Items, 2)"), "Label,Qty,Note\r\nAlpha,3,plain\r\nBeta,1,\"with, comma\"");
+    assert_eq!(text(r##"TOCSV(Items, -1, "|", FALSE)"##), "Alpha|3|plain\r\nBeta|1|with, comma\r\nGamma|2|\"with \"\"quote\"\"\"\r\nDelta|4|");
     assert_eq!(text("TOCSV(Items, 0)"), "Label,Qty,Note");
     // An empty table still prints the header row.
     assert_eq!(text("TOCSV(FILTER(Items, Items[Qty] > 99))"), "Label,Qty,Note");
     assert_eq!(text("TOCSV(FILTER(Items, Items[Qty] > 99), 10, \",\", FALSE)"), "");
-    assert_eq!(
-        text("TOCSV(Sales, 1)"),
-        "Region,Amount,Code,Flag,When\r\nEast,10.5,A-1,true,2024-01-05T00:00:00"
-    );
+    assert_eq!(text("TOCSV(Sales, 1)"), "Region,Amount,Code,Flag,When\r\nEast,10.5,A-1,true,2024-01-05T00:00:00");
     assert!(eval_error(r##"TOCSV(Items, 1, "")"##).contains("Delimiter"));
     assert_eq!(eval_measure("Sales CSV"), eval("TOCSV(Sales, 1, \",\", TRUE)"));
 }
 
 #[test]
 fn to_json_serializes_with_stable_order_and_escaping() {
-    assert_eq!(
-        text("TOJSON(Items, 1)"),
-        "{\"header\":[\"Label\",\"Qty\",\"Note\"],\"rowCount\":4,\"data\":[[\"Alpha\",3,\"plain\"]]}"
-    );
+    assert_eq!(text("TOJSON(Items, 1)"), "{\"header\":[\"Label\",\"Qty\",\"Note\"],\"rowCount\":4,\"data\":[[\"Alpha\",3,\"plain\"]]}");
     assert_eq!(
         text("TOJSON(Items, -1)"),
         "{\"header\":[\"Label\",\"Qty\",\"Note\"],\"rowCount\":4,\"data\":[[\"Alpha\",3,\"plain\"],[\"Beta\",1,\"with, comma\"],[\"Gamma\",2,\"with \\\"quote\\\"\"],[\"Delta\",4,null]]}"
     );
-    assert_eq!(
-        text("TOJSON(Items, 0)"),
-        "{\"header\":[\"Label\",\"Qty\",\"Note\"],\"rowCount\":4,\"data\":[]}"
-    );
+    assert_eq!(text("TOJSON(Items, 0)"), "{\"header\":[\"Label\",\"Qty\",\"Note\"],\"rowCount\":4,\"data\":[]}");
     assert_eq!(
         text("TOJSON(Sales, 1)"),
         "{\"header\":[\"Region\",\"Amount\",\"Code\",\"Flag\",\"When\"],\"rowCount\":3,\"data\":[[\"East\",10.5,\"A-1\",true,\"2024-01-05T00:00:00\"]]}"

@@ -430,8 +430,7 @@ fn date_format_like(format: &str) -> bool {
             '\\' => escaped = true,
             '"' => in_quote = true,
             '0' | '#' => has_placeholder = true,
-            'd' | 'D' | 'm' | 'M' | 'y' | 'Y' | 'h' | 'H' | 'n' | 'N' | 's' | 'S' | 'q' | 'Q' | 'w' | 'W' | 'c' | 'C' | 't'
-            | 'T' => has_token = true,
+            'd' | 'D' | 'm' | 'M' | 'y' | 'Y' | 'h' | 'H' | 'n' | 'N' | 's' | 'S' | 'q' | 'Q' | 'w' | 'W' | 'c' | 'C' | 't' | 'T' => has_token = true,
             _ => {}
         }
     }
@@ -758,7 +757,10 @@ fn format_numeric(value: f64, pattern: &str) -> Result<String, EvalError> {
             }
             let (mantissa, exponent) = scientific_parts(magnitude, fraction_len);
             let (integer, fraction) = round_decimal(&mantissa.0, &mantissa.1, fraction_len as i32);
-            (assemble_number(&integer, &fraction, &integer_pattern, &fraction_pattern, grouping, has_dot), Some(exponent_text(sign, places, exponent)))
+            (
+                assemble_number(&integer, &fraction, &integer_pattern, &fraction_pattern, grouping, has_dot),
+                Some(exponent_text(sign, places, exponent)),
+            )
         }
         None => {
             let parts = decimal_parts(magnitude);
@@ -814,9 +816,8 @@ fn scientific_parts(magnitude: f64, fraction_len: usize) -> ((String, String), i
 
 // -- date/time formats ------------------------------------------------------------------------
 
-const MONTH_NAMES: [&str; 12] = [
-    "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December",
-];
+const MONTH_NAMES: [&str; 12] =
+    ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const WEEKDAY_NAMES: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 fn starts_with_ignore_case(chars: &[char], text: &str) -> bool {
@@ -1080,11 +1081,7 @@ fn number_text(value: f64) -> String {
     if !value.is_finite() {
         return String::new();
     }
-    if value.fract() == 0.0 && value.abs() < 1e15 {
-        format!("{value:.0}")
-    } else {
-        format!("{value}")
-    }
+    if value.fract() == 0.0 && value.abs() < 1e15 { format!("{value:.0}") } else { format!("{value}") }
 }
 
 fn iso_datetime(serial: f64) -> String {

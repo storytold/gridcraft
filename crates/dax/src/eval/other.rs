@@ -44,12 +44,7 @@ pub(crate) fn call(ev: &Evaluator<'_>, name: &str, exprs: &[BoundExpr], ctx: &mu
     Some(result)
 }
 
-pub(crate) fn call_table(
-    ev: &Evaluator<'_>,
-    name: &str,
-    exprs: &[BoundExpr],
-    ctx: &mut Context,
-) -> Option<Result<TableValue, EvalError>> {
+pub(crate) fn call_table(ev: &Evaluator<'_>, name: &str, exprs: &[BoundExpr], ctx: &mut Context) -> Option<Result<TableValue, EvalError>> {
     let result = match name.to_ascii_uppercase().as_str() {
         "INFO.STORAGETABLES" => storage_tables(ev, name, exprs, ctx),
         "SAMPLECARTESIANPOINTSBYCOVER" => sample_cartesian(ev, name, exprs, ctx),
@@ -65,13 +60,7 @@ pub(crate) fn call_table(
 /// `BITLSHIFT`/`BITRSHIFT`. Shift counts are truncated to integers; a negative amount shifts the
 /// other way. Shifting a 64-bit integer by 64 or more bits is undefined in DAX ("no error but
 /// overflow/underflow"): we return 0, or -1 for an arithmetic right shift of a negative number.
-fn bit_shift(
-    ev: &Evaluator<'_>,
-    name: &str,
-    exprs: &[BoundExpr],
-    ctx: &mut Context,
-    left: bool,
-) -> Result<Scalar, EvalError> {
+fn bit_shift(ev: &Evaluator<'_>, name: &str, exprs: &[BoundExpr], ctx: &mut Context, left: bool) -> Result<Scalar, EvalError> {
     let values = eval_all(ev, exprs, ctx)?;
     let a = args(name, &values);
     let number = truncated_integer(a.number(0)?, name, 1)?;
@@ -84,11 +73,7 @@ fn shift_bits(number: i64, shift: i64, left: bool) -> i64 {
     if magnitude >= 64 {
         return if direction_left || number >= 0 { 0 } else { -1 };
     }
-    if direction_left {
-        ((number as u64) << magnitude) as i64
-    } else {
-        number >> magnitude
-    }
+    if direction_left { ((number as u64) << magnitude) as i64 } else { number >> magnitude }
 }
 
 /// Truncates a numeric argument to an `i64`, rejecting values that cannot be represented.
@@ -111,13 +96,7 @@ enum EarlierMode {
     Outermost,
 }
 
-fn earlier(
-    ev: &Evaluator<'_>,
-    name: &str,
-    exprs: &[BoundExpr],
-    ctx: &mut Context,
-    mode: EarlierMode,
-) -> Result<Scalar, EvalError> {
+fn earlier(ev: &Evaluator<'_>, name: &str, exprs: &[BoundExpr], ctx: &mut Context, mode: EarlierMode) -> Result<Scalar, EvalError> {
     let Some(column_expr) = exprs.first() else {
         return Err(EvalError::new(format!("{name} needs a column reference")));
     };
@@ -161,31 +140,17 @@ fn earlier(
         }
     };
     let frame = frames.get(target).ok_or_else(|| no_outer_row_context(name, ev, table, column))?;
-    frame
-        .get(column)
-        .cloned()
-        .ok_or_else(|| EvalError::new(format!("{name} cannot read the column in the outer row context")))
+    frame.get(column).cloned().ok_or_else(|| EvalError::new(format!("{name} cannot read the column in the outer row context")))
 }
 
 fn no_outer_row_context(name: &str, ev: &Evaluator<'_>, table: usize, column: usize) -> EvalError {
     let table_name = ev.model().tables.get(table).map(|model| model.name.as_str()).unwrap_or("<table>");
-    let column_name = ev
-        .model()
-        .tables
-        .get(table)
-        .and_then(|model| model.columns.get(column))
-        .map(|model| model.name.as_str())
-        .unwrap_or("<column>");
+    let column_name = ev.model().tables.get(table).and_then(|model| model.columns.get(column)).map(|model| model.name.as_str()).unwrap_or("<column>");
     EvalError::new(format!("{name} requires an outer row context for {table_name}[{column_name}]"))
 }
 
 /// Resolves the column reference of `EARLIER`, `EARLIEST` and `MATCHBY`.
-fn resolve_column_reference(
-    ev: &Evaluator<'_>,
-    expr: &BoundExpr,
-    ctx: &Context,
-    name: &str,
-) -> Result<(usize, usize), EvalError> {
+fn resolve_column_reference(ev: &Evaluator<'_>, expr: &BoundExpr, ctx: &Context, name: &str) -> Result<(usize, usize), EvalError> {
     match expr {
         BoundExpr::Column { table, column } => Ok((*table, *column)),
         BoundExpr::UnqualifiedColumn { name: column_name } => {
@@ -520,14 +485,10 @@ fn window(ev: &Evaluator<'_>, name: &str, exprs: &[BoundExpr], ctx: &mut Context
     let relation_table: usize;
     if let Some(relation) = spec.relation {
         table = eval_table(ev, relation, ctx)?;
-        relation_table = table
-            .lineage
-            .ok_or_else(|| EvalError::new(format!("{name} needs a relation table with model lineage")))?;
+        relation_table = table.lineage.ok_or_else(|| EvalError::new(format!("{name} needs a relation table with model lineage")))?;
     } else if let Some(keyword) = spec.relation_keyword.as_deref() {
-        relation_table = ev
-            .model()
-            .table_index(keyword)
-            .ok_or_else(|| EvalError::new(format!("{name} expected a relation table, found `{keyword}`")))?;
+        relation_table =
+            ev.model().table_index(keyword).ok_or_else(|| EvalError::new(format!("{name} expected a relation table, found `{keyword}`")))?;
         table = ev.table(relation_table, &ctx.filters);
     } else {
         let (candidate, _) = spec
@@ -569,8 +530,7 @@ fn window(ev: &Evaluator<'_>, name: &str, exprs: &[BoundExpr], ctx: &mut Context
 
     // Partition first, then the ordering keys; stable so equal rows keep the relation's order.
     rows.sort_by(|left, right| {
-        compare_partition(&left.partition, &right.partition)
-            .then_with(|| compare_keys(&order, spec.blanks, &left.keys, &right.keys))
+        compare_partition(&left.partition, &right.partition).then_with(|| compare_keys(&order, spec.blanks, &left.keys, &right.keys))
     });
 
     let mut partition_start = 0usize;
@@ -593,11 +553,7 @@ fn window(ev: &Evaluator<'_>, name: &str, exprs: &[BoundExpr], ctx: &mut Context
             skip_rank = (position - partition_start) as i64 + 1;
         }
         if row.index == current {
-            let value = if rank {
-                if spec.dense { dense_rank } else { skip_rank }
-            } else {
-                (position - partition_start) as i64 + 1
-            };
+            let value = if rank { if spec.dense { dense_rank } else { skip_rank } } else { (position - partition_start) as i64 + 1 };
             return Ok(Scalar::Integer(value));
         }
         previous_keys = Some(&row.keys);
@@ -607,12 +563,7 @@ fn window(ev: &Evaluator<'_>, name: &str, exprs: &[BoundExpr], ctx: &mut Context
 
 /// When `ORDERBY` is omitted, the relation is ordered by every model column that is not part of
 /// the partition (dax.guide documents this default for the `Relation` argument).
-fn default_order_keys<'a>(
-    ev: &Evaluator<'_>,
-    table: &TableValue,
-    relation_table: usize,
-    partition: &[&'a BoundExpr],
-) -> Vec<OrderKey<'a>> {
+fn default_order_keys<'a>(ev: &Evaluator<'_>, table: &TableValue, relation_table: usize, partition: &[&'a BoundExpr]) -> Vec<OrderKey<'a>> {
     let mut excluded = BTreeSet::new();
     for expr in partition {
         if let Some((table_index, column)) = column_reference(expr)
@@ -672,10 +623,7 @@ fn current_row_index(
         } else {
             for expr in match_by {
                 let (_, column) = resolve_column_reference(ev, expr, ctx, "MATCHBY")?;
-                let value = frame
-                    .get(column)
-                    .cloned()
-                    .ok_or_else(|| EvalError::new("MATCHBY column is not part of the current row"))?;
+                let value = frame.get(column).cloned().ok_or_else(|| EvalError::new("MATCHBY column is not part of the current row"))?;
                 wanted.push((column, value));
             }
         }

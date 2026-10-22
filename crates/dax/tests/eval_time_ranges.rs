@@ -261,14 +261,8 @@ fn period_boundaries() {
     assert_eq!(eval_with("ENDOFWEEK('Date')", dates((2024, 3, 13), (2024, 3, 13))), Scalar::DateTime(serial(2024, 3, 16)));
     assert_eq!(eval_with("STARTOFYEAR('Date'[Date])", dates((2024, 3, 20), (2024, 3, 20))), Scalar::DateTime(serial(2024, 1, 1)));
     assert_eq!(eval_with("ENDOFYEAR('Date'[Date])", dates((2024, 3, 20), (2024, 3, 20))), Scalar::DateTime(serial(2024, 12, 31)));
-    assert_eq!(
-        eval_with("STARTOFYEAR('Date'[Date], \"6/30/2024\")", dates((2024, 3, 20), (2024, 3, 20))),
-        Scalar::DateTime(serial(2023, 7, 1))
-    );
-    assert_eq!(
-        eval_with("ENDOFYEAR('Date'[Date], \"6/30/2024\")", dates((2024, 8, 15), (2024, 8, 15))),
-        Scalar::DateTime(serial(2025, 6, 30))
-    );
+    assert_eq!(eval_with("STARTOFYEAR('Date'[Date], \"6/30/2024\")", dates((2024, 3, 20), (2024, 3, 20))), Scalar::DateTime(serial(2023, 7, 1)));
+    assert_eq!(eval_with("ENDOFYEAR('Date'[Date], \"6/30/2024\")", dates((2024, 8, 15), (2024, 8, 15))), Scalar::DateTime(serial(2025, 6, 30)));
 }
 
 #[test]
@@ -290,22 +284,13 @@ fn adjacent_periods() {
     assert_eq!(row_count("PARALLELPERIOD('Date'[Date], -1, \"MONTH\")", dates((2024, 3, 15), (2024, 3, 20))), 29);
     assert_eq!(row_count("PARALLELPERIOD('Date'[Date], 0, \"YEAR\")", dates((2024, 3, 15), (2024, 3, 20))), 366);
     assert_eq!(row_count("SAMEPERIODLASTYEAR('Date'[Date])", dates((2024, 3, 1), (2024, 3, 31))), 31);
-    assert_eq!(
-        bounds("SAMEPERIODLASTYEAR('Date'[Date])", dates((2024, 3, 1), (2024, 3, 31))),
-        (serial(2023, 3, 1), serial(2023, 3, 31))
-    );
+    assert_eq!(bounds("SAMEPERIODLASTYEAR('Date'[Date])", dates((2024, 3, 1), (2024, 3, 31))), (serial(2023, 3, 1), serial(2023, 3, 31)));
 }
 
 #[test]
 fn nonblank_scan_uses_the_value_expression() {
-    assert_eq!(
-        eval_with("FIRSTNONBLANK('Date'[Date], [Sales Amount])", year(2023)),
-        Scalar::DateTime(serial(2023, 1, 10))
-    );
-    assert_eq!(
-        eval_with("LASTNONBLANK('Date'[Date], [Sales Amount])", year(2023)),
-        Scalar::DateTime(serial(2023, 12, 31))
-    );
+    assert_eq!(eval_with("FIRSTNONBLANK('Date'[Date], [Sales Amount])", year(2023)), Scalar::DateTime(serial(2023, 1, 10)));
+    assert_eq!(eval_with("LASTNONBLANK('Date'[Date], [Sales Amount])", year(2023)), Scalar::DateTime(serial(2023, 12, 31)));
     assert_eq!(row_count("FIRSTNONBLANK('Date'[Date], [Sales Amount])", year(2023)), 1);
     // An aggregate expression works too: it is evaluated in the date row's context.
     assert_eq!(
@@ -322,18 +307,9 @@ fn range_tables_drive_calculate() {
     let march = dates((2024, 3, 1), (2024, 3, 31));
     assert_eq!(eval_with("CALCULATE(SUM(Sales[Amount]), DATESMTD('Date'[Date]))", march.clone()), Scalar::Decimal(400.0));
     assert_eq!(eval_with("CALCULATE([Sales Amount], SAMEPERIODLASTYEAR('Date'[Date]))", march), Scalar::Decimal(20.0));
-    assert_eq!(
-        eval_with("CALCULATE([Sales Amount], PREVIOUSYEAR('Date'[Date]))", dates((2024, 1, 10), (2024, 1, 20))),
-        Scalar::Decimal(150.0)
-    );
-    assert_eq!(
-        eval_with("CALCULATE(SUM(Sales[Amount]), ENDOFMONTH('Date'[Date]))", dates((2024, 2, 1), (2024, 2, 10))),
-        Scalar::Decimal(300.0)
-    );
-    assert_eq!(
-        eval_with("CALCULATE(COUNTROWS('Date'), FIRSTDATE('Date'[Date]))", dates((2024, 3, 1), (2024, 3, 31))),
-        Scalar::Integer(1)
-    );
+    assert_eq!(eval_with("CALCULATE([Sales Amount], PREVIOUSYEAR('Date'[Date]))", dates((2024, 1, 10), (2024, 1, 20))), Scalar::Decimal(150.0));
+    assert_eq!(eval_with("CALCULATE(SUM(Sales[Amount]), ENDOFMONTH('Date'[Date]))", dates((2024, 2, 1), (2024, 2, 10))), Scalar::Decimal(300.0));
+    assert_eq!(eval_with("CALCULATE(COUNTROWS('Date'), FIRSTDATE('Date'[Date]))", dates((2024, 3, 1), (2024, 3, 31))), Scalar::Integer(1));
     // Rolling twelve months ending December 31, 2024.
     assert_eq!(
         eval_with("CALCULATE(SUM(Sales[Amount]), DATESINPERIOD('Date'[Date], DATE(2024, 12, 31), -12, \"MONTH\"))", FilterContext::default()),
@@ -394,10 +370,7 @@ fn interval_keywords_reach_the_evaluator_as_keywords() {
             BoundExpr::Keyword("MONTH".into()),
         ],
     };
-    let countrows = BoundExpr::Call {
-        spec: gridcraft_dax::lookup("COUNTROWS").expect("COUNTROWS is catalogued"),
-        args: vec![dateadd],
-    };
+    let countrows = BoundExpr::Call { spec: gridcraft_dax::lookup("COUNTROWS").expect("COUNTROWS is catalogued"), args: vec![dateadd] };
     let count = evaluator.evaluate_with(&countrows, dates((2024, 3, 1), (2024, 3, 31))).expect("count");
     assert_eq!(count, Scalar::Integer(29));
 }

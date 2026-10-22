@@ -5,9 +5,10 @@
 //! operator result tables) and the DAX query statements: `DEFINE` (`MEASURE`, `COLUMN`, `TABLE`,
 //! `VAR`, `FUNCTION`, `MPARAMETER`), `EVALUATE`, `ORDER BY`, `START AT`, expression-level
 //! `VAR ... RETURN`, and `WITH VISUAL SHAPE` (`AXIS`, `GROUP`, `TOTAL`, `DENSIFY`). It also
-//! includes a partial model evaluator, a columnar model store, a PivotTable renderer and a
-//! reader/writer for Power Pivot measures in `xl/model/item.data`; the evaluator still scans the
-//! row-based `DataModel` and is not wired to the columnar store yet.
+//! includes a model evaluator with semantics for all 484 catalogued functions, a columnar model
+//! store, a PivotTable renderer and a reader/writer for Power Pivot measures in
+//! `xl/model/item.data`; the evaluator still scans the row-based `DataModel` and is not wired to
+//! the columnar store yet.
 //!
 //! ```
 //! use gridcraft_dax::{parse_expression, print_expression};

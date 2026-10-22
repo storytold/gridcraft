@@ -98,13 +98,7 @@ fn model() -> DataModel {
                 format: Some("#,0.00".into()),
                 expr: None,
             },
-            Measure {
-                name: "Total Quantity".into(),
-                formula: "SUM(Sales[Quantity])".into(),
-                table: Some("Sales".into()),
-                format: None,
-                expr: None,
-            },
+            Measure { name: "Total Quantity".into(), formula: "SUM(Sales[Quantity])".into(), table: Some("Sales".into()), format: None, expr: None },
         ],
     };
     model.parse_formulas().expect("fixture model parses");
@@ -198,11 +192,7 @@ fn column_statistics_reports_every_column() {
     assert_eq!(price[4], Scalar::Integer(4));
     assert_eq!(price[5], Scalar::Blank);
 
-    let empty = table
-        .rows
-        .iter()
-        .find(|row| row[0] == Scalar::String("EmptyStats".into()))
-        .expect("EmptyStats row");
+    let empty = table.rows.iter().find(|row| row[0] == Scalar::String("EmptyStats".into())).expect("EmptyStats row");
     assert_eq!(empty[2], Scalar::Blank);
     assert_eq!(empty[3], Scalar::Blank);
     assert_eq!(empty[4], Scalar::Integer(0));
@@ -270,10 +260,9 @@ fn filter_context_predicates() {
     assert!(!boolean("HASONEVALUE(Product[Color])"));
     assert!(!boolean("HASONEVALUE(Product[Category])"));
 
-    let single_category = eval_with("HASONEVALUE(Product[Category])", |model| {
-        filter(model, "Product", "Category", &[Scalar::String("Audio".into())])
-    })
-    .expect("HASONEVALUE");
+    let single_category =
+        eval_with("HASONEVALUE(Product[Category])", |model| filter(model, "Product", "Category", &[Scalar::String("Audio".into())]))
+            .expect("HASONEVALUE");
     assert_eq!(single_category, Scalar::Boolean(true));
 
     let two_colors = eval_with("HASONEVALUE(Product[Color])", |model| {
@@ -282,16 +271,12 @@ fn filter_context_predicates() {
     .expect("HASONEVALUE with two values");
     assert_eq!(two_colors, Scalar::Boolean(false));
 
-    let single_color_filter = eval_with("HASONEFILTER(Product[Color])", |model| {
-        filter(model, "Product", "Color", &[Scalar::String("Red".into())])
-    })
-    .expect("HASONEFILTER");
+    let single_color_filter =
+        eval_with("HASONEFILTER(Product[Color])", |model| filter(model, "Product", "Color", &[Scalar::String("Red".into())])).expect("HASONEFILTER");
     assert_eq!(single_color_filter, Scalar::Boolean(true));
 
-    let propagated = eval_with("HASONEFILTER(Product[Color])", |model| {
-        filter(model, "Product", "Category", &[Scalar::String("Computers".into())])
-    })
-    .expect("HASONEFILTER ignores propagated filters");
+    let propagated = eval_with("HASONEFILTER(Product[Color])", |model| filter(model, "Product", "Category", &[Scalar::String("Computers".into())]))
+        .expect("HASONEFILTER ignores propagated filters");
     assert_eq!(propagated, Scalar::Boolean(false));
 
     let two_value_filter = eval_with("HASONEFILTER(Product[Color])", |model| {
@@ -304,16 +289,12 @@ fn filter_context_predicates() {
     assert_eq!(empty_column, Scalar::Boolean(false));
 
     assert!(!boolean("ISFILTERED(Product[Color])"));
-    let filtered = eval_with("ISFILTERED(Product[Color])", |model| {
-        filter(model, "Product", "Color", &[Scalar::String("Red".into())])
-    })
-    .expect("ISFILTERED");
+    let filtered =
+        eval_with("ISFILTERED(Product[Color])", |model| filter(model, "Product", "Color", &[Scalar::String("Red".into())])).expect("ISFILTERED");
     assert_eq!(filtered, Scalar::Boolean(true));
 
-    let unrelated = eval_with("ISFILTERED(Product[Name])", |model| {
-        filter(model, "Product", "Color", &[Scalar::String("Red".into())])
-    })
-    .expect("ISFILTERED other column");
+    let unrelated = eval_with("ISFILTERED(Product[Name])", |model| filter(model, "Product", "Color", &[Scalar::String("Red".into())]))
+        .expect("ISFILTERED other column");
     assert_eq!(unrelated, Scalar::Boolean(false));
 }
 

@@ -252,10 +252,7 @@ fn networkdays_counts_working_days_with_weekends_and_holidays() {
     assert_eq!(value("NETWORKDAYS(DATE(2024,1,1), DATE(2024,1,31), 1, { DATE(2024,1,15) })"), Scalar::Integer(22));
     // A holiday already on a weekend does not count twice.
     assert_eq!(value("NETWORKDAYS(DATE(2024,1,1), DATE(2024,1,31), 1, { DATE(2024,1,6) })"), Scalar::Integer(23));
-    assert_eq!(
-        value("NETWORKDAYS(DATE(2024,1,1), DATE(2024,1,31), 1, { DATE(2024,1,1), DATE(2024,1,15) })"),
-        Scalar::Integer(21)
-    );
+    assert_eq!(value("NETWORKDAYS(DATE(2024,1,1), DATE(2024,1,31), 1, { DATE(2024,1,1), DATE(2024,1,15) })"), Scalar::Integer(21));
     // Weekend code 2 is Sunday/Monday, 11 is Sunday only.
     assert_eq!(value("NETWORKDAYS(DATE(2024,1,1), DATE(2024,1,31), 2)"), Scalar::Integer(22));
     assert_eq!(value("NETWORKDAYS(DATE(2024,1,1), DATE(2024,1,31), 11)"), Scalar::Integer(27));

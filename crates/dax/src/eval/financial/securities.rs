@@ -172,11 +172,7 @@ fn require_non_negative(name: &str, what: &str, value: f64) -> Result<f64, EvalE
 }
 
 fn finite(name: &str, value: f64) -> Result<f64, EvalError> {
-    if value.is_finite() {
-        Ok(value)
-    } else {
-        Err(num_error(name, "the result is not a finite number"))
-    }
+    if value.is_finite() { Ok(value) } else { Err(num_error(name, "the result is not a finite number")) }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -294,8 +290,7 @@ fn year_frac(start: f64, end: f64, basis: i64) -> f64 {
         _ => {
             // Actual/actual: the denominator is the average year length of the years covered,
             // unless the period stays within one year and does not straddle a leap day.
-            let spans_many_years = year1 != year2
-                && (year2 != year1 + 1 || month1 < month2 || (month1 == month2 && day1 < day2));
+            let spans_many_years = year1 != year2 && (year2 != year1 + 1 || month1 < month2 || (month1 == month2 && day1 < day2));
             if spans_many_years {
                 let mut total = 0.0;
                 let mut year = year1;
@@ -310,11 +305,7 @@ fn year_frac(start: f64, end: f64, basis: i64) -> f64 {
                 let leap_day = year1 != year2
                     && ((is_leap_year(year1) && (month1 < 2 || (month1 == 2 && day1 <= 29)))
                         || (is_leap_year(year2) && (month2 > 2 || (month2 == 2 && day2 == 29))));
-                if leap_day {
-                    366.0
-                } else {
-                    365.0
-                }
+                if leap_day { 366.0 } else { 365.0 }
             }
         }
     };
@@ -810,16 +801,7 @@ fn price(a: &support::Args<'_>) -> Result<Scalar, EvalError> {
     finite(a.name, price_value(settle, maturity, rate, yld, redemption, freq, basis)?).map(Scalar::Decimal)
 }
 
-fn yield_from_price(
-    settle: f64,
-    maturity: f64,
-    rate: f64,
-    price: f64,
-    redemption: f64,
-    freq: i64,
-    basis: i64,
-    name: &str,
-) -> Result<f64, EvalError> {
+fn yield_from_price(settle: f64, maturity: f64, rate: f64, price: f64, redemption: f64, freq: i64, basis: i64, name: &str) -> Result<f64, EvalError> {
     let (period, accrued, to_next, count) = coupon_context(settle, maturity, freq, basis)?;
     if count == 1.0 {
         let frequency = frequency_of(freq);
@@ -1056,11 +1038,7 @@ fn oddfprice(a: &support::Args<'_>) -> Result<Scalar, EvalError> {
     require_non_negative(a.name, "rate", rate)?;
     require_non_negative(a.name, "yield", yld)?;
     require_positive(a.name, "redemption", redemption)?;
-    finite(
-        a.name,
-        oddfprice_value(settle, maturity, issue, first_coupon, rate, yld, redemption, freq, basis)?,
-    )
-    .map(Scalar::Decimal)
+    finite(a.name, oddfprice_value(settle, maturity, issue, first_coupon, rate, yld, redemption, freq, basis)?).map(Scalar::Decimal)
 }
 
 fn oddfyield(a: &support::Args<'_>) -> Result<Scalar, EvalError> {
@@ -1079,11 +1057,8 @@ fn oddfyield(a: &support::Args<'_>) -> Result<Scalar, EvalError> {
     require_non_negative(a.name, "rate", rate)?;
     require_positive(a.name, "price", price)?;
     require_positive(a.name, "redemption", redemption)?;
-    let value = solve_yield(
-        a.name,
-        |candidate| oddfprice_value(settle, maturity, issue, first_coupon, rate, candidate, redemption, freq, basis),
-        price,
-    )?;
+    let value =
+        solve_yield(a.name, |candidate| oddfprice_value(settle, maturity, issue, first_coupon, rate, candidate, redemption, freq, basis), price)?;
     finite(a.name, value).map(Scalar::Decimal)
 }
 

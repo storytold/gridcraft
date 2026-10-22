@@ -362,7 +362,8 @@ fn sample_axis_with_local_min_max(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &
     let table = ev.eval_table(&args[1], ctx)?;
     let axis_index = column_position(ev, &table, &args[2])?;
     let measure_expr = &args[3];
-    let min_resolution_value = ev.eval(&args[4], ctx)?.to_number().ok_or_else(|| EvalError::new("SAMPLEAXISWITHLOCALMINMAX MinResolution must be numeric"))?;
+    let min_resolution_value =
+        ev.eval(&args[4], ctx)?.to_number().ok_or_else(|| EvalError::new("SAMPLEAXISWITHLOCALMINMAX MinResolution must be numeric"))?;
     if !min_resolution_value.is_finite() || min_resolution_value < 1.0 {
         return Err(EvalError::new("SAMPLEAXISWITHLOCALMINMAX MinResolution must be a positive integer"));
     }
@@ -470,10 +471,9 @@ fn sample_axis_with_local_min_max(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &
         return Err(EvalError::new("SAMPLEAXISWITHLOCALMINMAX MaxResolution cannot be lower than MinResolution"));
     }
 
-    let (Some(min_axis), Some(max_axis)) = (
-        groups.iter().flatten().map(|point| point.axis).reduce(f64::min),
-        groups.iter().flatten().map(|point| point.axis).reduce(f64::max),
-    ) else {
+    let (Some(min_axis), Some(max_axis)) =
+        (groups.iter().flatten().map(|point| point.axis).reduce(f64::min), groups.iter().flatten().map(|point| point.axis).reduce(f64::max))
+    else {
         return Ok(TableValue::new(table.columns, Vec::new()).with_lineage_if(table.lineage));
     };
 
@@ -575,8 +575,13 @@ fn substitute_with_index(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Conte
         let key: Vec<ScalarKey> =
             common.iter().map(|(left_column, _)| row.get(*left_column).map(ScalarKey::from).unwrap_or(ScalarKey::Blank)).collect();
         let Some(position) = positions.get(&key) else { continue };
-        let mut output: Vec<Scalar> =
-            table.columns.iter().enumerate().filter(|(column, _)| !dropped.contains(column)).filter_map(|(index, _)| row.get(index).cloned()).collect();
+        let mut output: Vec<Scalar> = table
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(column, _)| !dropped.contains(column))
+            .filter_map(|(index, _)| row.get(index).cloned())
+            .collect();
         output.push(Scalar::Integer(*position as i64));
         rows.push(output);
     }

@@ -144,20 +144,8 @@ fn calculate_accepts_filter_table_arguments() {
 #[test]
 fn cyclic_measures_are_rejected_before_evaluation() {
     let mut model = model();
-    model.measures.push(Measure {
-        name: "Cycle A".into(),
-        formula: "[Cycle B] + 1".into(),
-        table: Some("Sales".into()),
-        format: None,
-        expr: None,
-    });
-    model.measures.push(Measure {
-        name: "Cycle B".into(),
-        formula: "[Cycle A] + 1".into(),
-        table: Some("Sales".into()),
-        format: None,
-        expr: None,
-    });
+    model.measures.push(Measure { name: "Cycle A".into(), formula: "[Cycle B] + 1".into(), table: Some("Sales".into()), format: None, expr: None });
+    model.measures.push(Measure { name: "Cycle B".into(), formula: "[Cycle A] + 1".into(), table: Some("Sales".into()), format: None, expr: None });
     model.parse_formulas().expect("model parses");
     let error = match Evaluator::new(&model) {
         Ok(_) => panic!("cyclic measures must be rejected"),

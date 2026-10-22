@@ -98,13 +98,7 @@ fn table_ref(ev: &Evaluator<'_>, expr: &BoundExpr) -> Result<usize, EvalError> {
     }
 }
 
-fn type_test(
-    ev: &Evaluator<'_>,
-    args: &[BoundExpr],
-    ctx: &mut Context,
-    name: &str,
-    test: impl Fn(&Scalar) -> bool,
-) -> Result<Scalar, EvalError> {
+fn type_test(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, name: &str, test: impl Fn(&Scalar) -> bool) -> Result<Scalar, EvalError> {
     let argument = args.first().ok_or_else(|| EvalError::new(format!("{name} needs a value")))?;
     let value = ev.eval(argument, ctx)?;
     Ok(Scalar::Boolean(test(&value)))
@@ -132,17 +126,14 @@ fn contains(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result
             .ok_or_else(|| EvalError::new("CONTAINS column is out of range"))?;
         let position = match table.lineage {
             Some(lineage) if lineage == table_index => column_index,
-            _ => table
-                .column_index(&column_name)
-                .ok_or_else(|| EvalError::new(format!("CONTAINS table has no column `{column_name}`")))?,
+            _ => table.column_index(&column_name).ok_or_else(|| EvalError::new(format!("CONTAINS table has no column `{column_name}`")))?,
         };
         let expected = ev.eval(&pair[1], ctx)?;
         conditions.push((position, expected));
     }
     // All pairs must match the same row.
-    let found = table.rows.iter().any(|row| {
-        conditions.iter().all(|(position, expected)| row.get(*position).is_some_and(|value| value.strict_eq(expected)))
-    });
+    let found =
+        table.rows.iter().any(|row| conditions.iter().all(|(position, expected)| row.get(*position).is_some_and(|value| value.strict_eq(expected))));
     Ok(Scalar::Boolean(found))
 }
 
@@ -156,9 +147,7 @@ fn contains_row(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Re
     if table.columns.len() < values.len() {
         return Err(EvalError::new("CONTAINSROW has more values than the table has columns"));
     }
-    let found = table.rows.iter().any(|row| {
-        row.len() >= values.len() && row.iter().zip(&values).all(|(left, right)| left.strict_eq(right))
-    });
+    let found = table.rows.iter().any(|row| row.len() >= values.len() && row.iter().zip(&values).all(|(left, right)| left.strict_eq(right)));
     Ok(Scalar::Boolean(found))
 }
 
@@ -363,10 +352,7 @@ fn is_in_scope(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Res
     let (table, column) = column_ref(ev, args.first().ok_or_else(|| EvalError::new("ISINSCOPE needs a column"))?)?;
     // A grouping frame over the column's table puts the column in scope. Hierarchy levels are not
     // modelled, so every column of the current grouping frame is in scope.
-    let in_scope = ctx
-        .rows
-        .iter()
-        .any(|frame| frame.lineage == Some(table) && frame.model_columns.contains(&Some(column)));
+    let in_scope = ctx.rows.iter().any(|frame| frame.lineage == Some(table) && frame.model_columns.contains(&Some(column)));
     Ok(Scalar::Boolean(in_scope))
 }
 
@@ -419,22 +405,14 @@ fn name_of(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<
         None => NameComponent::Full,
         Some(argument) => {
             let value = ev.eval(argument, ctx)?;
-            if value.is_blank() {
-                NameComponent::Full
-            } else {
-                parse_component(&value.to_text())?
-            }
+            if value.is_blank() { NameComponent::Full } else { parse_component(&value.to_text())? }
         }
     };
     let escape = match args.get(2) {
         None => NameEscape::Escaped,
         Some(argument) => {
             let value = ev.eval(argument, ctx)?;
-            if value.is_blank() {
-                NameEscape::Escaped
-            } else {
-                parse_escape(&value.to_text())?
-            }
+            if value.is_blank() { NameEscape::Escaped } else { parse_escape(&value.to_text())? }
         }
     };
     let text = name_of_text(ev, &object, component, escape)?;
@@ -551,11 +529,7 @@ fn model_table_index(ev: &Evaluator<'_>, name: &str) -> Result<usize, EvalError>
 }
 
 fn model_table_name(ev: &Evaluator<'_>, table: usize) -> Result<String, EvalError> {
-    ev.model()
-        .tables
-        .get(table)
-        .map(|model_table| model_table.name.clone())
-        .ok_or_else(|| EvalError::new("NAMEOF table is out of range"))
+    ev.model().tables.get(table).map(|model_table| model_table.name.clone()).ok_or_else(|| EvalError::new("NAMEOF table is out of range"))
 }
 
 fn escape_table(name: &str, escape: NameEscape) -> String {
@@ -775,7 +749,8 @@ fn column_corpus(ev: &Evaluator<'_>, expr: &BoundExpr) -> Vec<String> {
 /// BM25 relevance over the column's values (k1 = 1.2, b = 0.75). The score is an opaque ranking
 /// value, so only its sign and relative order are meaningful.
 fn similarity_score(corpus: &[String], text: &str, search: &str, mode: MatchMode) -> f64 {
-    let documents: Vec<Vec<String>> = if corpus.is_empty() { vec![tokenize(text)] } else { corpus.iter().map(|document| tokenize(document)).collect() };
+    let documents: Vec<Vec<String>> =
+        if corpus.is_empty() { vec![tokenize(text)] } else { corpus.iter().map(|document| tokenize(document)).collect() };
     let target = tokenize(text);
     let query = tokenize(search);
     if query.is_empty() {
@@ -795,8 +770,7 @@ fn similarity_score(corpus: &[String], text: &str, search: &str, mode: MatchMode
         if term_frequency == 0 {
             continue;
         }
-        let matching_documents =
-            documents.iter().filter(|document| document.iter().any(|token| token_matches(token, term, mode))).count() as f64;
+        let matching_documents = documents.iter().filter(|document| document.iter().any(|token| token_matches(token, term, mode))).count() as f64;
         let inverse_frequency = (1.0 + (document_count - matching_documents + 0.5) / (matching_documents + 0.5)).ln();
         let denominator = term_frequency as f64 + k1 * (1.0 - b + b * document_length / average_length);
         if denominator > 0.0 {

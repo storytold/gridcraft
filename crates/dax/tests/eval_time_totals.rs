@@ -280,10 +280,7 @@ fn empty_window_and_invalid_arguments() {
 
     let spec = lookup("FIRSTNONBLANKVALUE").expect("catalog entry");
     let measure_index = model.measure_index("Total Amount").expect("measure");
-    let expr = BoundExpr::Call {
-        spec,
-        args: vec![BoundExpr::Literal(Literal::Integer(1)), BoundExpr::Measure(measure_index)],
-    };
+    let expr = BoundExpr::Call { spec, args: vec![BoundExpr::Literal(Literal::Integer(1)), BoundExpr::Measure(measure_index)] };
     let error = evaluator.evaluate(&expr).expect_err("non-column argument");
     assert!(error.message.contains("column reference"), "{}", error.message);
 }

@@ -326,14 +326,9 @@ fn yearfrac(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result
         1 => {
             let within_year = year1 == year2 || (year2 == year1 + 1 && (month1 > month2 || (month1 == month2 && day1 >= day2)));
             let year_length = if within_year {
-                let leap_day_between = (year1..=year2).any(|year| {
-                    is_leap(year) && (start..=end).contains(&support::date_serial(year, 2, 29, 0, 0, 0))
-                });
-                if (year1 == year2 && is_leap(year1)) || leap_day_between || (month2 == 2 && day2 == 29) {
-                    366.0
-                } else {
-                    365.0
-                }
+                let leap_day_between =
+                    (year1..=year2).any(|year| is_leap(year) && (start..=end).contains(&support::date_serial(year, 2, 29, 0, 0, 0)));
+                if (year1 == year2 && is_leap(year1)) || leap_day_between || (month2 == 2 && day2 == 29) { 366.0 } else { 365.0 }
             } else {
                 let years = (year2 - year1 + 1) as f64;
                 let span = support::date_serial(year2 + 1, 1, 1, 0, 0, 0) - support::date_serial(year1, 1, 1, 0, 0, 0);

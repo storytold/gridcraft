@@ -85,10 +85,7 @@ fn table_id(model: &DataModel, name: &str) -> Scalar {
 }
 
 fn relationship_name(relationship: &Relationship) -> String {
-    format!(
-        "{}[{}] -> {}[{}]",
-        relationship.from_table, relationship.from_column, relationship.to_table, relationship.to_column
-    )
+    format!("{}[{}] -> {}[{}]", relationship.from_table, relationship.from_column, relationship.to_table, relationship.to_column)
 }
 
 /// `CrossFilteringBehavior`/`SecurityFilteringBehavior`: 1 = one direction, 2 = both.
@@ -499,13 +496,7 @@ fn expressions(model: &DataModel) -> TableValue {
 fn parameter_list(spec: &crate::functions::FunctionSpec) -> String {
     spec.params
         .iter()
-        .map(|parameter| {
-            if parameter.optional {
-                format!("[{}]", parameter.name)
-            } else {
-                parameter.name.to_string()
-            }
-        })
+        .map(|parameter| if parameter.optional { format!("[{}]", parameter.name) } else { parameter.name.to_string() })
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -957,9 +948,7 @@ pub(crate) fn call_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], _ct
         ]),
         "INFO.CSDLMETADATA" => empty(&["METADATA"]),
         "INFO.CULTURES" => empty(&["ID", "ModelID", "Name", "LinguisticMetadataID", "ModifiedTime", "StructureModifiedTime"]),
-        "INFO.DATACOVERAGEDEFINITIONS" => {
-            empty(&["ID", "PartitionID", "Description", "Expression", "ModifiedTime", "State", "ErrorMessage"])
-        }
+        "INFO.DATACOVERAGEDEFINITIONS" => empty(&["ID", "PartitionID", "Description", "Expression", "ModifiedTime", "State", "ErrorMessage"]),
         "INFO.DATASOURCES" => empty(&[
             "ID",
             "ModelID",
@@ -1041,9 +1030,7 @@ pub(crate) fn call_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], _ct
             "LineageTag",
             "SourceLineageTag",
         ]),
-        "INFO.HIERARCHYSTORAGES" => {
-            empty(&["ID", "HierarchyID", "Name", "LevelDefinition", "MaterializationType", "StructureType", "SystemTableID"])
-        }
+        "INFO.HIERARCHYSTORAGES" => empty(&["ID", "HierarchyID", "Name", "LevelDefinition", "MaterializationType", "StructureType", "SystemTableID"]),
         "INFO.KPIS" => empty(&[
             "ID",
             "MeasureID",
@@ -1059,7 +1046,9 @@ pub(crate) fn call_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], _ct
             "TrendExpression",
             "ModifiedTime",
         ]),
-        "INFO.LEVELS" => empty(&["ID", "HierarchyID", "Ordinal", "Name", "Description", "ColumnID", "ModifiedTime", "LineageTag", "SourceLineageTag"]),
+        "INFO.LEVELS" => {
+            empty(&["ID", "HierarchyID", "Ordinal", "Name", "Description", "ColumnID", "ModifiedTime", "LineageTag", "SourceLineageTag"])
+        }
         "INFO.LINGUISTICMETADATA" => empty(&["ID", "CultureID", "Content", "ModifiedTime", "ContentType"]),
         "INFO.OBJECTTRANSLATIONS" => empty(&["ID", "CultureID", "ObjectID", "ObjectType", "Property", "Value", "ModifiedTime", "Altered"]),
         "INFO.PARQUETFILESTORAGES" => empty(&[
@@ -1118,9 +1107,7 @@ pub(crate) fn call_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], _ct
         }
         "INFO.ROLEMEMBERSHIPS" => empty(&["ID", "RoleID", "MemberName", "MemberID", "IdentityProvider", "MemberType", "ModifiedTime"]),
         "INFO.ROLES" => empty(&["ID", "ModelID", "Name", "Description", "ModelPermission", "ModifiedTime"]),
-        "INFO.SEGMENTMAPSTORAGES" => {
-            empty(&["ID", "PartitionStorageID", "Type", "RecordCount", "SegmentCount", "RecordsPerSegment"])
-        }
+        "INFO.SEGMENTMAPSTORAGES" => empty(&["ID", "PartitionStorageID", "Type", "RecordCount", "SegmentCount", "RecordsPerSegment"]),
         "INFO.SEGMENTSTORAGES" => empty(&["ID", "ColumnPartitionStorageID", "SegmentCount", "StorageFileID"]),
         "INFO.STORAGEFILES" => empty(&["ID", "OwnerID", "OwnerType", "StorageFolderID", "FileName"]),
         "INFO.STORAGEFOLDERS" => empty(&["ID", "OwnerID", "OwnerType", "Path"]),
@@ -1167,7 +1154,9 @@ pub(crate) fn call_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], _ct
             "TEMPERATURE",
             "LAST_ACCESSED",
         ]),
-        "INFO.TABLEPERMISSIONS" => empty(&["ID", "RoleID", "TableID", "FilterExpression", "ModifiedTime", "State", "ErrorMessage", "MetadataPermission"]),
+        "INFO.TABLEPERMISSIONS" => {
+            empty(&["ID", "RoleID", "TableID", "FilterExpression", "ModifiedTime", "State", "ErrorMessage", "MetadataPermission"])
+        }
         "INFO.TABLESTORAGES" => empty(&["ID", "TableID", "Name", "Version", "Settings", "RIViolationCount", "StorageFolderID"]),
         "INFO.USERDEFINEDFUNCTIONS" => empty(&[
             "ID",
@@ -1183,16 +1172,9 @@ pub(crate) fn call_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], _ct
             "LineageTag",
             "SourceLineageTag",
         ]),
-        "INFO.VARIATIONS" => empty(&[
-            "ID",
-            "ColumnID",
-            "Name",
-            "Description",
-            "RelationshipID",
-            "DefaultHierarchyID",
-            "DefaultColumnID",
-            "IsDefault",
-        ]),
+        "INFO.VARIATIONS" => {
+            empty(&["ID", "ColumnID", "Name", "Description", "RelationshipID", "DefaultHierarchyID", "DefaultColumnID", "IsDefault"])
+        }
         _ => return None,
     };
     Some(Ok(result))

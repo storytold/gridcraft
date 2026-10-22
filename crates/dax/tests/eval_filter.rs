@@ -22,7 +22,13 @@ fn model() -> DataModel {
         rows: vec![
             vec![Scalar::Integer(1), Scalar::String("Widget".into()), Scalar::String("Red".into()), Scalar::String("A".into()), Scalar::Integer(10)],
             vec![Scalar::Integer(2), Scalar::String("Gadget".into()), Scalar::String("Blue".into()), Scalar::String("A".into()), Scalar::Integer(20)],
-            vec![Scalar::Integer(3), Scalar::String("Doohickey".into()), Scalar::String("Red".into()), Scalar::String("B".into()), Scalar::Integer(30)],
+            vec![
+                Scalar::Integer(3),
+                Scalar::String("Doohickey".into()),
+                Scalar::String("Red".into()),
+                Scalar::String("B".into()),
+                Scalar::Integer(30),
+            ],
             vec![Scalar::Integer(4), Scalar::String("Gizmo".into()), Scalar::String("Green".into()), Scalar::String("B".into()), Scalar::Integer(40)],
         ],
     };
@@ -44,10 +50,7 @@ fn model() -> DataModel {
     };
     let notes = ModelTable {
         name: "Notes".into(),
-        columns: vec![
-            ModelColumn { name: "Key".into(), data_type: Some("Int64".into()) },
-            number_column("Score"),
-        ],
+        columns: vec![ModelColumn { name: "Key".into(), data_type: Some("Int64".into()) }, number_column("Score")],
         rows: vec![vec![Scalar::Integer(1), Scalar::Blank], vec![Scalar::Integer(2), Scalar::Integer(5)]],
     };
     let mut model = DataModel {
@@ -61,20 +64,8 @@ fn model() -> DataModel {
             inactive: false,
         }],
         measures: vec![
-            Measure {
-                name: "Total Amount".into(),
-                formula: "SUM(Sales[Amount])".into(),
-                table: Some("Sales".into()),
-                format: None,
-                expr: None,
-            },
-            Measure {
-                name: "Price Total".into(),
-                formula: "SUM(Products[Price])".into(),
-                table: Some("Products".into()),
-                format: None,
-                expr: None,
-            },
+            Measure { name: "Total Amount".into(), formula: "SUM(Sales[Amount])".into(), table: Some("Sales".into()), format: None, expr: None },
+            Measure { name: "Price Total".into(), formula: "SUM(Products[Price])".into(), table: Some("Products".into()), format: None, expr: None },
         ],
     };
     model.parse_formulas().expect("model parses");
@@ -171,8 +162,9 @@ fn index_partitions_the_relation() {
 #[test]
 fn index_uses_the_outer_partition_filter() {
     // CALCULATE pins Region to East, so INDEX only inspects the East partition.
-    let value = eval("CALCULATE(SUMX(INDEX(1, Sales, ORDERBY(Sales[OrderKey]), PARTITIONBY(Sales[Region])), Sales[Amount]), Sales[Region] = \"East\")")
-        .expect("INDEX in CALCULATE");
+    let value =
+        eval("CALCULATE(SUMX(INDEX(1, Sales, ORDERBY(Sales[OrderKey]), PARTITIONBY(Sales[Region])), Sales[Amount]), Sales[Region] = \"East\")")
+            .expect("INDEX in CALCULATE");
     assert_eq!(value, Scalar::Decimal(100.0));
 }
 
@@ -231,10 +223,9 @@ fn offset_partitions_the_relation() {
 
 #[test]
 fn offset_identifies_the_row_with_matchby() {
-    let table = eval_table(
-        "ADDCOLUMNS(Sales, \"Previous\", SUMX(OFFSET(-1, Sales, ORDERBY(Sales[OrderKey]), MATCHBY(Sales[OrderKey])), Sales[Amount]))",
-    )
-    .expect("OFFSET with MATCHBY");
+    let table =
+        eval_table("ADDCOLUMNS(Sales, \"Previous\", SUMX(OFFSET(-1, Sales, ORDERBY(Sales[OrderKey]), MATCHBY(Sales[OrderKey])), Sales[Amount]))")
+            .expect("OFFSET with MATCHBY");
     assert_eq!(column(&table, "Previous"), vec![Scalar::Blank, Scalar::Decimal(100.0), Scalar::Decimal(200.0), Scalar::Decimal(300.0)]);
 }
 
@@ -269,12 +260,9 @@ fn window_returns_an_absolute_range() {
 
 #[test]
 fn window_runs_relative_to_the_current_row() {
-    let table = eval_table("ADDCOLUMNS(Sales, \"Running\", SUMX(WINDOW(1, ABS, 0, REL, Sales, ORDERBY(Sales[OrderKey])), Sales[Amount]))")
-        .expect("WINDOW");
-    assert_eq!(
-        column(&table, "Running"),
-        vec![Scalar::Decimal(100.0), Scalar::Decimal(300.0), Scalar::Decimal(600.0), Scalar::Decimal(1000.0)]
-    );
+    let table =
+        eval_table("ADDCOLUMNS(Sales, \"Running\", SUMX(WINDOW(1, ABS, 0, REL, Sales, ORDERBY(Sales[OrderKey])), Sales[Amount]))").expect("WINDOW");
+    assert_eq!(column(&table, "Running"), vec![Scalar::Decimal(100.0), Scalar::Decimal(300.0), Scalar::Decimal(600.0), Scalar::Decimal(1000.0)]);
 }
 
 #[test]
@@ -302,14 +290,8 @@ fn window_error_paths() {
 #[test]
 fn lookupvalue_returns_one_result_per_search() {
     assert_eq!(eval("LOOKUPVALUE(Products[Name], Products[ProductKey], 2)"), Ok(Scalar::String("Gadget".into())));
-    assert_eq!(
-        eval("LOOKUPVALUE(Products[Color], Products[Category], \"B\", Products[Price], 40)"),
-        Ok(Scalar::String("Green".into()))
-    );
-    assert_eq!(
-        eval("LOOKUPVALUE(Products[Name], Products[ProductKey], 99, \"Unknown\")"),
-        Ok(Scalar::String("Unknown".into()))
-    );
+    assert_eq!(eval("LOOKUPVALUE(Products[Color], Products[Category], \"B\", Products[Price], 40)"), Ok(Scalar::String("Green".into())));
+    assert_eq!(eval("LOOKUPVALUE(Products[Name], Products[ProductKey], 99, \"Unknown\")"), Ok(Scalar::String("Unknown".into())));
     assert_eq!(eval("LOOKUPVALUE(Products[Name], Products[ProductKey], 99)"), Ok(Scalar::Blank));
 }
 
@@ -318,10 +300,7 @@ fn lookupvalue_handles_duplicates_and_errors() {
     // Both rows in category A have different names, so the value is ambiguous.
     let error = eval("LOOKUPVALUE(Products[Name], Products[Category], \"A\")").expect_err("ambiguous value");
     assert!(error.contains("multiple different values"), "{error}");
-    assert_eq!(
-        eval("LOOKUPVALUE(Products[Name], Products[Category], \"A\", \"Ambiguous\")"),
-        Ok(Scalar::String("Ambiguous".into()))
-    );
+    assert_eq!(eval("LOOKUPVALUE(Products[Name], Products[Category], \"A\", \"Ambiguous\")"), Ok(Scalar::String("Ambiguous".into())));
 
     let error = eval("LOOKUPVALUE(Sales[Amount], Products[ProductKey], 1)").expect_err("different tables");
     assert!(error.contains("result column's table"), "{error}");
@@ -411,8 +390,8 @@ fn apply_wrappers_return_their_table_expression() {
 
 #[test]
 fn dependon_matches_and_hides_the_leading_columns() {
-    let table = eval_table("ADDCOLUMNS(VALUES(Products[ProductKey]), \"Match\", COUNTROWS(DEPENDON(Products, Products[ProductKey])))")
-        .expect("DEPENDON");
+    let table =
+        eval_table("ADDCOLUMNS(VALUES(Products[ProductKey]), \"Match\", COUNTROWS(DEPENDON(Products, Products[ProductKey])))").expect("DEPENDON");
     assert_eq!(table.rows.len(), 4);
     assert_eq!(column(&table, "Match"), vec![Scalar::Integer(1); 4]);
 
@@ -439,7 +418,10 @@ fn groupcrossapply_summarises_groups_with_filter_tables() {
 fn groupcrossapplytable_adds_table_expressions() {
     let table = eval_table("GROUPCROSSAPPLYTABLE(Sales[Region], ALL(Sales), \"\", VALUES(Sales[ProductKey]))").expect("GROUPCROSSAPPLYTABLE");
     // East sells products 1 and 2; West sells products 1 and 3.
-    assert_eq!(column(&table, "Region"), vec![Scalar::String("East".into()), Scalar::String("East".into()), Scalar::String("West".into()), Scalar::String("West".into())]);
+    assert_eq!(
+        column(&table, "Region"),
+        vec![Scalar::String("East".into()), Scalar::String("East".into()), Scalar::String("West".into()), Scalar::String("West".into())]
+    );
     assert_eq!(column(&table, "ProductKey"), vec![Scalar::Integer(1), Scalar::Integer(2), Scalar::Integer(1), Scalar::Integer(3)]);
 }
 

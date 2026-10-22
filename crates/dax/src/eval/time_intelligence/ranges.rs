@@ -107,10 +107,7 @@ fn scalar_result(name: &str, table: TableValue) -> Result<Scalar, EvalError> {
     match table.rows.as_slice() {
         [] => Ok(Scalar::Blank),
         [row] => Ok(row.first().cloned().unwrap_or(Scalar::Blank)),
-        rows => Err(EvalError::new(format!(
-            "{name} returns a table with {} rows; use it as a CALCULATE filter instead of a scalar",
-            rows.len()
-        ))),
+        rows => Err(EvalError::new(format!("{name} returns a table with {} rows; use it as a CALCULATE filter instead of a scalar", rows.len()))),
     }
 }
 
@@ -186,8 +183,7 @@ fn date_axis(ev: &Evaluator<'_>, expr: &BoundExpr, ctx: &Context, name: &str) ->
             (table, index)
         }
         BoundExpr::Table(table) => {
-            let model_table =
-                model.tables.get(*table).ok_or_else(|| EvalError::new(format!("{name} needs a date table")))?;
+            let model_table = model.tables.get(*table).ok_or_else(|| EvalError::new(format!("{name} needs a date table")))?;
             let index = model_table
                 .columns
                 .iter()
@@ -200,15 +196,11 @@ fn date_axis(ev: &Evaluator<'_>, expr: &BoundExpr, ctx: &Context, name: &str) ->
     };
 
     let model_table = model.tables.get(table).ok_or_else(|| EvalError::new(format!("{name} needs a valid date table")))?;
-    let model_column =
-        model_table.columns.get(column).ok_or_else(|| EvalError::new(format!("{name} needs a valid date column")))?;
+    let model_column = model_table.columns.get(column).ok_or_else(|| EvalError::new(format!("{name} needs a valid date column")))?;
     if let Some(data_type) = &model_column.data_type
         && !is_date_type(data_type)
     {
-        return Err(EvalError::new(format!(
-            "{name} needs a DateTime column; `{}[{}]` is {data_type}",
-            model_table.name, model_column.name
-        )));
+        return Err(EvalError::new(format!("{name} needs a DateTime column; `{}[{}]` is {data_type}", model_table.name, model_column.name)));
     }
 
     let mut dates: Vec<(f64, Scalar)> = model_table
@@ -266,9 +258,8 @@ fn column_target(ev: &Evaluator<'_>, expr: &BoundExpr, name: &str) -> Result<(us
                 [] => return Err(EvalError::new(format!("{name} names the unknown column `[{column_name}]`"))),
                 _ => return Err(EvalError::new(format!("{name} needs a qualified column; `[{column_name}]` is ambiguous"))),
             };
-            let index = model
-                .column_index(table, column_name)
-                .ok_or_else(|| EvalError::new(format!("{name} names the unknown column `[{column_name}]`")))?;
+            let index =
+                model.column_index(table, column_name).ok_or_else(|| EvalError::new(format!("{name} names the unknown column `[{column_name}]`")))?;
             (table, index)
         }
         _ => return Err(EvalError::new(format!("{name} needs a column reference"))),
@@ -321,18 +312,10 @@ fn optional_date(ev: &Evaluator<'_>, args: &[BoundExpr], index: usize, ctx: &mut
     if value.is_blank() {
         return Ok(None);
     }
-    date_value(&value)
-        .map(|serial| Some(serial.floor()))
-        .ok_or_else(|| EvalError::new(format!("{name} argument {} must be a date", index + 1)))
+    date_value(&value).map(|serial| Some(serial.floor())).ok_or_else(|| EvalError::new(format!("{name} argument {} must be a date", index + 1)))
 }
 
-fn year_end_arg(
-    ev: &Evaluator<'_>,
-    args: &[BoundExpr],
-    index: usize,
-    ctx: &mut Context,
-    name: &str,
-) -> Result<Option<(i64, i64)>, EvalError> {
+fn year_end_arg(ev: &Evaluator<'_>, args: &[BoundExpr], index: usize, ctx: &mut Context, name: &str) -> Result<Option<(i64, i64)>, EvalError> {
     let Some(expr) = args.get(index) else {
         return Ok(None);
     };
@@ -340,9 +323,7 @@ fn year_end_arg(
     if value.is_blank() {
         return Ok(None);
     }
-    year_end_parts(&value)
-        .map(Some)
-        .ok_or_else(|| EvalError::new(format!("{name} YearEndDate must be a date such as \"6/30/2024\"")))
+    year_end_parts(&value).map(Some).ok_or_else(|| EvalError::new(format!("{name} YearEndDate must be a date such as \"6/30/2024\"")))
 }
 
 /// Reads the month/day of a `YearEndDate`. Excel writes it as `M/D/YYYY` (`"6/30/2008"`);
@@ -351,13 +332,8 @@ fn year_end_arg(
 fn year_end_parts(value: &Scalar) -> Option<(i64, i64)> {
     let (month, day) = match value {
         Scalar::String(text) => {
-            let numbers = text
-                .split(['/', '-'])
-                .map(str::trim)
-                .filter(|part| !part.is_empty())
-                .map(str::parse::<i64>)
-                .collect::<Result<Vec<i64>, _>>()
-                .ok()?;
+            let numbers =
+                text.split(['/', '-']).map(str::trim).filter(|part| !part.is_empty()).map(str::parse::<i64>).collect::<Result<Vec<i64>, _>>().ok()?;
             match numbers.as_slice() {
                 [month, day] => (*month, *day),
                 [year, month, day] if *year > 31 => (*month, *day),
@@ -550,8 +526,7 @@ fn compute_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut C
             if aligned && align_end(start, interval).floor() == start.floor() {
                 boundary = align_end(boundary, interval);
             }
-            let (low, high) =
-                if count > 0 { (start, boundary - 1.0) } else { (boundary + 1.0, start) };
+            let (low, high) = if count > 0 { (start, boundary - 1.0) } else { (boundary + 1.0, start) };
             Ok(axis.table(low, high))
         }
         "DATESMTD" => match axis.max {

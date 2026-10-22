@@ -17,8 +17,8 @@ use super::*;
 pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<Scalar, EvalError>> {
     let name = name.to_ascii_uppercase();
     match name.as_str() {
-        "ACOS" | "ACOSH" | "ACOT" | "ACOTH" | "ASIN" | "ASINH" | "ATAN" | "ATANH" | "CONVERT" | "COSH" | "COT" | "COTH"
-        | "CURRENCY" | "EVEN" | "MROUND" | "ODD" | "QUOTIENT" | "RAND" | "RANDBETWEEN" | "SINH" | "SQRTPI" | "TANH" => {}
+        "ACOS" | "ACOSH" | "ACOT" | "ACOTH" | "ASIN" | "ASINH" | "ATAN" | "ATANH" | "CONVERT" | "COSH" | "COT" | "COTH" | "CURRENCY" | "EVEN"
+        | "MROUND" | "ODD" | "QUOTIENT" | "RAND" | "RANDBETWEEN" | "SINH" | "SQRTPI" | "TANH" => {}
         _ => return None,
     }
     Some(evaluate(&name, ev, args, ctx))
@@ -198,11 +198,7 @@ fn magnitude_i64(number: f64) -> Result<i64, EvalError> {
 }
 
 fn with_sign(magnitude: i64, number: f64) -> i64 {
-    if number < 0.0 {
-        -magnitude
-    } else {
-        magnitude
-    }
+    if number < 0.0 { -magnitude } else { magnitude }
 }
 
 fn mround(number: f64, multiple: f64) -> Result<f64, EvalError> {

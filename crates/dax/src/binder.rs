@@ -303,9 +303,8 @@ fn is_visual_keyword(function: &str, index: usize, word: &str) -> bool {
     let axis = |positions: &[usize]| positions.contains(&index) && matches!(word.to_ascii_uppercase().as_str(), "ROWS" | "COLUMNS");
     let order_by = |positions: &[usize]| positions.contains(&index) && word.eq_ignore_ascii_case("KEEP");
     let blanks = |positions: &[usize]| positions.contains(&index) && matches!(word.to_ascii_uppercase().as_str(), "DEFAULT" | "FIRST" | "LAST");
-    let reset = |positions: &[usize]| {
-        positions.contains(&index) && matches!(word.to_ascii_uppercase().as_str(), "NONE" | "LOWESTPARENT" | "HIGHESTPARENT")
-    };
+    let reset =
+        |positions: &[usize]| positions.contains(&index) && matches!(word.to_ascii_uppercase().as_str(), "NONE" | "LOWESTPARENT" | "HIGHESTPARENT");
     match function {
         "COLLAPSE" | "EXPAND" | "COLLAPSEALL" | "EXPANDALL" => axis(&[0, 1]),
         "FIRST" | "LAST" => axis(&[1]) || order_by(&[2]) || blanks(&[3]) || reset(&[4]),

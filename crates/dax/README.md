@@ -2,8 +2,8 @@
 
 The DAX language for GridCraft: a tokenizer, a Pratt parser, a syntax tree, a canonical printer,
 the function catalog for every dax.guide category with static call validation, the static type surface (types,
-literals, inference and operator result tables), the full DAX statement/query grammar, a partial
-model evaluator, a columnar model store, a model-backed PivotTable renderer and a reader/writer for
+literals, inference and operator result tables), the full DAX statement/query grammar, a model
+evaluator, a columnar model store, a model-backed PivotTable renderer and a reader/writer for
 Power Pivot measures in `xl/model/item.data`. It has no dependency on the GridCraft engine.
 
 ```rust
@@ -385,12 +385,12 @@ cycles. `Evaluator::new` pre-binds the measures and evaluates scalar or table ex
 `FilterContext`; `pivot::pivot` groups a measure by row fields. `dax eval`, `dax bind` and
 `dax pivot` expose the same surfaces through the CLI.
 
-The evaluator is deliberately partial: unsupported functions return
-`EvalError::not_implemented`. `storage` is a simple columnar store (typed columns, dictionary
-strings, null bitmaps, relationship indexes), not VertiPaq: the evaluator still scans
-`DataModel` rows and is not wired to `ModelStorage` yet. `model_file` reads and writes measures in
-`xl/model/item.data` (ABF container, plain-LZ77 xpress8 chunks); it does not read the VertiPaq
-table/column segments. Full time-intelligence and visual-calculation semantics are not implemented.
+The evaluator implements every catalogued function (484). `storage` is a simple columnar store
+(typed columns, dictionary strings, null bitmaps, relationship indexes), not VertiPaq: the
+evaluator still scans `DataModel` rows and is not wired to `ModelStorage` yet. `model_file` reads
+and writes measures in `xl/model/item.data` (ABF container, plain-LZ77 xpress8 chunks); it does
+not read the VertiPaq table/column segments. Visual-calculation functions use the innermost row
+frame as the visual row and model order as the axis; there is no visual-shape metadata yet.
 
 ## Extending in later PRs
 
@@ -403,10 +403,11 @@ table/column segments. Full time-intelligence and visual-calculation semantics a
 - `types::infer_type` resolves every catalogued call through its documented `ReturnType`, plus
   literals, operators, `TRUE()`/`FALSE()`/`BLANK()` and `VAR`/`RETURN` blocks. `InferredType::Unknown`
   remains for names and functions whose return type is `Any`/unknown.
-- The binder and evaluator are intentionally a subset: name resolution covers tables, columns,
-  measures, variables and the dependency graph; evaluation covers the 22 aggregations, core
-  filter/logical/table/relationship functions and common date/math/text/information functions.
-  Unsupported functions return a structured `not implemented` error rather than a wrong value.
+- The binder resolves tables, columns, measures, variables and documented keyword parameters;
+  evaluation covers all 484 catalogued functions, split into one module per family under
+  `src/eval/`. Semantics for engine-only functions (internal filter clusters, `INFO.*` storage
+  views, visual calculations) are bounded equivalents documented in those modules; each family
+  has an integration suite under `tests/eval_*.rs`.
 
 ## Example
 

@@ -7,8 +7,8 @@
 //! rather than NaN.
 #![allow(unused_imports)]
 
-use super::*;
 use super::support::{args, date_parts, date_serial, date_value, days_in_month, eval_all, eval_table, frame_for};
+use super::*;
 
 /// Upper bound for depreciation loops: keeps hostile `Life` values from stalling evaluation.
 const MAX_DEPRECIATION_PERIODS: f64 = 1_000_000.0;
@@ -63,11 +63,7 @@ fn eager(
 }
 
 fn decimal(name: &str, value: f64) -> Result<Scalar, EvalError> {
-    if value.is_finite() {
-        Ok(Scalar::Decimal(value))
-    } else {
-        Err(EvalError::new(format!("{name} result is not a finite number")))
-    }
+    if value.is_finite() { Ok(Scalar::Decimal(value)) } else { Err(EvalError::new(format!("{name} result is not a finite number"))) }
 }
 
 fn invalid(name: &str, message: &str) -> EvalError {
@@ -185,11 +181,8 @@ fn nper(name: &str, values: &[Scalar]) -> Result<Scalar, EvalError> {
         }
         return decimal(name, -(pv + fv) / pmt);
     }
-    let (numerator, denominator) = if advance {
-        (pmt * (1.0 + rate) - rate * fv, rate * pv + pmt * (1.0 + rate))
-    } else {
-        (pmt - rate * fv, rate * pv + pmt)
-    };
+    let (numerator, denominator) =
+        if advance { (pmt * (1.0 + rate) - rate * fv, rate * pv + pmt * (1.0 + rate)) } else { (pmt - rate * fv, rate * pv + pmt) };
     if denominator == 0.0 {
         return Err(division_by_zero(name));
     }
@@ -224,25 +217,13 @@ fn ppmt(name: &str, values: &[Scalar]) -> Result<Scalar, EvalError> {
     decimal(name, pmt - interest)
 }
 
-fn interest_and_payment(
-    name: &str,
-    rate: f64,
-    per: f64,
-    nper: f64,
-    pv: f64,
-    fv: f64,
-    advance: bool,
-) -> Result<(f64, f64), EvalError> {
+fn interest_and_payment(name: &str, rate: f64, per: f64, nper: f64, pv: f64, fv: f64, advance: bool) -> Result<(f64, f64), EvalError> {
     if per < 1.0 || per > nper || !per.is_finite() {
         return Err(invalid(name, "period must be between 1 and nper"));
     }
     let pmt = payment(name, rate, nper, pv, fv, advance)?;
     let interest = if per == 1.0 {
-        if advance {
-            0.0
-        } else {
-            -pv
-        }
+        if advance { 0.0 } else { -pv }
     } else if advance {
         future_value(name, rate, per - 2.0, pmt, pv, true)? - pmt
     } else {
@@ -276,15 +257,7 @@ fn cumprinc(name: &str, values: &[Scalar]) -> Result<Scalar, EvalError> {
     decimal(name, count * pmt - interest)
 }
 
-fn cumulative_interest(
-    name: &str,
-    rate: f64,
-    nper: f64,
-    pv: f64,
-    start: f64,
-    end: f64,
-    advance: bool,
-) -> Result<f64, EvalError> {
+fn cumulative_interest(name: &str, rate: f64, nper: f64, pv: f64, start: f64, end: f64, advance: bool) -> Result<f64, EvalError> {
     if rate <= 0.0 || nper <= 0.0 || pv <= 0.0 {
         return Err(invalid(name, "rate, nper and pv must be positive"));
     }
@@ -402,11 +375,7 @@ fn rate_iteration(nper: f64, pmt: f64, mut pv: f64, mut fv: f64, advance: bool, 
         }
         value = next;
     }
-    if value > -1.0 && value.is_finite() {
-        Some(value)
-    } else {
-        None
-    }
+    if value > -1.0 && value.is_finite() { Some(value) } else { None }
 }
 
 fn pduration(name: &str, values: &[Scalar]) -> Result<Scalar, EvalError> {
@@ -725,15 +694,7 @@ fn amorlinc(name: &str, values: &[Scalar]) -> Result<Scalar, EvalError> {
     decimal(name, result)
 }
 
-fn validate_amor(
-    name: &str,
-    cost: f64,
-    salvage: f64,
-    period: i64,
-    rate: f64,
-    dates: (f64, f64),
-    basis: i64,
-) -> Result<(), EvalError> {
+fn validate_amor(name: &str, cost: f64, salvage: f64, period: i64, rate: f64, dates: (f64, f64), basis: i64) -> Result<(), EvalError> {
     let (purchased, first_period) = dates;
     if !matches!(basis, 0 | 1 | 3 | 4) {
         return Err(invalid(name, "basis must be 0, 1, 3 or 4"));
@@ -805,11 +766,7 @@ fn actual_actual(start: f64, end: f64) -> f64 {
         366.0
     } else if leap_start || leap_end {
         let feb29 = if leap_start { date_serial(y1, 2, 29, 0, 0, 0) } else { date_serial(y2, 2, 29, 0, 0, 0) };
-        if start <= feb29 && end >= feb29 {
-            366.0
-        } else {
-            365.0
-        }
+        if start <= feb29 && end >= feb29 { 366.0 } else { 365.0 }
     } else {
         365.0
     };
@@ -866,12 +823,7 @@ struct CashFlow {
     offset: f64,
 }
 
-fn collect_cash_flows(
-    ev: &Evaluator<'_>,
-    name: &str,
-    args: &[BoundExpr],
-    ctx: &mut Context,
-) -> Result<Vec<CashFlow>, EvalError> {
+fn collect_cash_flows(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Result<Vec<CashFlow>, EvalError> {
     let table = eval_table(ev, args.first().ok_or_else(|| invalid(name, "needs a table"))?, ctx)?;
     let values = args.get(1).ok_or_else(|| invalid(name, "needs a values expression"))?;
     let dates = args.get(2).ok_or_else(|| invalid(name, "needs a dates expression"))?;
@@ -932,22 +884,14 @@ fn xirr(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -
     let guess = match args.get(3) {
         Some(expr) => {
             let value = ev.eval(expr, ctx)?;
-            if value.is_blank() {
-                0.1
-            } else {
-                value.to_number().ok_or_else(|| invalid(name, "guess must be numeric"))?
-            }
+            if value.is_blank() { 0.1 } else { value.to_number().ok_or_else(|| invalid(name, "guess must be numeric"))? }
         }
         None => 0.1,
     };
     let flows = collect_cash_flows(ev, name, args, ctx)?;
     let has_positive = flows.iter().any(|flow| flow.value > 0.0);
     let has_negative = flows.iter().any(|flow| flow.value < 0.0);
-    let solved = if has_positive && has_negative && guess > -1.0 && guess.is_finite() {
-        solve_xirr(&flows, guess)
-    } else {
-        None
-    };
+    let solved = if has_positive && has_negative && guess > -1.0 && guess.is_finite() { solve_xirr(&flows, guess) } else { None };
     match solved {
         Some(rate) => decimal(name, rate),
         None => {

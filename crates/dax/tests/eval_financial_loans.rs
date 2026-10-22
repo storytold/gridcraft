@@ -15,9 +15,9 @@ fn model() -> DataModel {
                 ],
                 rows: vec![
                     vec![Scalar::Decimal(-10000.0), Scalar::DateTime(43831.0)], // 2020-01-01
-                    vec![Scalar::Decimal(2750.0), Scalar::DateTime(43922.0)],  // 2020-04-01
-                    vec![Scalar::Decimal(4250.0), Scalar::DateTime(44119.0)],  // 2020-10-15
-                    vec![Scalar::Decimal(3250.0), Scalar::DateTime(44197.0)],  // 2021-01-01
+                    vec![Scalar::Decimal(2750.0), Scalar::DateTime(43922.0)],   // 2020-04-01
+                    vec![Scalar::Decimal(4250.0), Scalar::DateTime(44119.0)],   // 2020-10-15
+                    vec![Scalar::Decimal(3250.0), Scalar::DateTime(44197.0)],   // 2021-01-01
                 ],
             },
             ModelTable {

@@ -66,11 +66,7 @@ fn visual_column(expression: &str) -> Vec<Option<f64>> {
     let source = format!("ADDCOLUMNS(Sales, \"Result\", {expression})");
     let table = eval_table(&source).unwrap_or_else(|error| panic!("{source} failed: {error}"));
     let index = table.column_index("Result").expect("Result column");
-    table
-        .rows
-        .iter()
-        .map(|row| row.get(index).and_then(|value| if value.is_blank() { None } else { value.to_number() }))
-        .collect()
+    table.rows.iter().map(|row| row.get(index).and_then(|value| if value.is_blank() { None } else { value.to_number() })).collect()
 }
 
 #[test]

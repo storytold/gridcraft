@@ -130,10 +130,7 @@ fn combinations_to_integer(number: i64, chosen: i64, name: &str) -> Result<Scala
     let mut result: u128 = 1;
     for index in 1..=k {
         // C(n, k) partial products are always divisible by `index`.
-        result = result
-            .checked_mul(n - k + index)
-            .ok_or_else(|| EvalError::new(format!("{name} result is too large")))?
-            / index;
+        result = result.checked_mul(n - k + index).ok_or_else(|| EvalError::new(format!("{name} result is too large")))? / index;
     }
     let value = i64::try_from(result).map_err(|_| EvalError::new(format!("{name} result is too large")))?;
     Ok(Scalar::Integer(value))
@@ -207,7 +204,13 @@ fn column_values(ev: &Evaluator<'_>, expr: &BoundExpr, ctx: &mut Context, name: 
 }
 
 /// Evaluates the iterator's expression once per row of the table argument.
-fn iterate_values(ev: &Evaluator<'_>, table_expr: &BoundExpr, value_expr: &BoundExpr, ctx: &mut Context, name: &str) -> Result<Vec<Scalar>, EvalError> {
+fn iterate_values(
+    ev: &Evaluator<'_>,
+    table_expr: &BoundExpr,
+    value_expr: &BoundExpr,
+    ctx: &mut Context,
+    name: &str,
+) -> Result<Vec<Scalar>, EvalError> {
     let table = ev.eval_table(table_expr, ctx).map_err(|error| EvalError::new(format!("{name}: {error}")))?;
     let mut values = Vec::with_capacity(table.rows.len());
     for row in &table.rows {
@@ -388,9 +391,7 @@ fn percentile_result(observations: &mut [StatValue], k: f64, exclusive: bool, na
         // A tiny tolerance keeps exact boundaries such as K = 1/(n+1) from failing on rounding.
         let tolerance = 1e-12;
         if k < lower - tolerance || k > upper + tolerance {
-            return Err(EvalError::new(format!(
-                "{name} K must be between {lower} and {upper} for {count} values"
-            )));
+            return Err(EvalError::new(format!("{name} K must be between {lower} and {upper} for {count} values")));
         }
     }
     observations.sort_by(stat_order);

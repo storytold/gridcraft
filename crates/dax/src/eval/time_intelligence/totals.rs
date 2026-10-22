@@ -132,8 +132,7 @@ fn non_blank_value(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut
     let source = ev.table(table, &ctx.filters);
     let values = source.column(column);
     let keys: BTreeSet<ScalarKey> = values.iter().filter(|value| !value.is_blank()).map(ScalarKey::from).collect();
-    let ordered: Vec<ScalarKey> =
-        if first { keys.into_iter().collect() } else { keys.into_iter().rev().collect() };
+    let ordered: Vec<ScalarKey> = if first { keys.into_iter().collect() } else { keys.into_iter().rev().collect() };
     let mut inner = Context { filters: ctx.filters.clone(), rows: ctx.rows.clone(), vars: ctx.vars.clone() };
     for key in ordered {
         inner.filters.set(table, column, [key]);
@@ -190,8 +189,7 @@ fn column_reference(ev: &Evaluator<'_>, expr: &BoundExpr) -> Result<(usize, usiz
             let [table] = tables.as_slice() else {
                 return Err(EvalError::new(format!("column `[{name}]` is ambiguous or not in the model")));
             };
-            let column =
-                ev.model().column_index(*table, name).ok_or_else(|| EvalError::new(format!("column `[{name}]` is not in the model")))?;
+            let column = ev.model().column_index(*table, name).ok_or_else(|| EvalError::new(format!("column `[{name}]` is not in the model")))?;
             Ok((*table, column))
         }
         _ => Err(EvalError::new("this function needs a column reference")),
@@ -276,11 +274,7 @@ fn fiscal_bounds(anchor: f64, year_end: f64) -> (f64, f64) {
     let (year, _, _) = date_parts(anchor);
     let year_end_in = |year: i64| date_serial(year, end_month, end_day.min(days_in_month(year, end_month)), 0, 0, 0);
     let end_this_year = year_end_in(year);
-    if anchor <= end_this_year + 1e-9 {
-        (year_end_in(year - 1) + 1.0, end_this_year)
-    } else {
-        (end_this_year + 1.0, year_end_in(year + 1))
-    }
+    if anchor <= end_this_year + 1e-9 { (year_end_in(year - 1) + 1.0, end_this_year) } else { (end_this_year + 1.0, year_end_in(year + 1)) }
 }
 
 /// Evaluates the optional `YearEndDate` argument. Only its month and day matter.

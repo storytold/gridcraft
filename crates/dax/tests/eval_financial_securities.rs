@@ -180,8 +180,7 @@ fn price_of_a_semiannual_bond() {
     close(value("PRICE(DATE(2016,11,15), DATE(2017,11,15), 0.06, 0.06, 100, 2, 0)"), 100.0, 1e-12);
     // One coupon left: 30/360 gives A = 120 days (May 15 to Sep 15) and DSR = E - A = 60 days,
     // so the price uses simple interest over one third of a coupon period.
-    let single = (100.0 * 0.08 / 2.0 + 100.0) / (1.0 + 0.06 / 2.0 * (60.0 / 180.0))
-        - 100.0 * 0.08 / 2.0 * (120.0 / 180.0);
+    let single = (100.0 * 0.08 / 2.0 + 100.0) / (1.0 + 0.06 / 2.0 * (60.0 / 180.0)) - 100.0 * 0.08 / 2.0 * (120.0 / 180.0);
     close(value("PRICE(DATE(2011,9,15), DATE(2011,11,15), 0.08, 0.06, 100, 2, 0)"), single, 1e-12);
     fails("PRICE(DATE(2011,11,15), DATE(2011,11,15), 0.08, 0.06, 100, 2, 0)");
     fails("PRICE(DATE(2011,9,15), DATE(2011,11,15), -0.08, 0.06, 100, 2, 0)");
@@ -211,11 +210,7 @@ fn duration_and_modified_duration() {
     close(value("MDURATION(DATE(2008,1,1), DATE(2016,1,1), 0.08, 0.09, 2, 1)"), 5.73566981391884, 1e-9);
     // Modified duration is Macaulay duration divided by (1 + yield / frequency).
     let macaulay = value("DURATION(DATE(2008,1,1), DATE(2016,1,1), 0.08, 0.09, 2, 1)");
-    close(
-        value("MDURATION(DATE(2008,1,1), DATE(2016,1,1), 0.08, 0.09, 2, 1)"),
-        macaulay / (1.0 + 0.09 / 2.0),
-        1e-12,
-    );
+    close(value("MDURATION(DATE(2008,1,1), DATE(2016,1,1), 0.08, 0.09, 2, 1)"), macaulay / (1.0 + 0.09 / 2.0), 1e-12);
     // A zero coupon bond's Macaulay duration equals its time to maturity in years.
     close(value("DURATION(DATE(2008,1,1), DATE(2018,1,1), 0, 0.05, 2, 0)"), 10.0, 1e-9);
     fails("DURATION(DATE(2018,1,1), DATE(2018,1,1), 0.08, 0.09, 2, 1)");
@@ -243,22 +238,12 @@ fn odd_last_period_price_and_yield() {
 
 #[test]
 fn odd_first_period_price_and_yield() {
-    close(
-        value("ODDFPRICE(DATE(2008,11,11), DATE(2021,3,1), DATE(2008,10,15), DATE(2009,3,1), 0.0785, 0.0625, 100, 2, 1)"),
-        113.597717474079,
-        1e-9,
-    );
-    close(
-        value("ODDFYIELD(DATE(2008,11,11), DATE(2021,3,1), DATE(2008,10,15), DATE(2009,3,1), 0.0575, 84.5, 100, 2, 0)"),
-        0.0772455415972989,
-        1e-9,
-    );
+    close(value("ODDFPRICE(DATE(2008,11,11), DATE(2021,3,1), DATE(2008,10,15), DATE(2009,3,1), 0.0785, 0.0625, 100, 2, 1)"), 113.597717474079, 1e-9);
+    close(value("ODDFYIELD(DATE(2008,11,11), DATE(2021,3,1), DATE(2008,10,15), DATE(2009,3,1), 0.0575, 84.5, 100, 2, 0)"), 0.0772455415972989, 1e-9);
     // The short first stub accrues from the issue date, so a 30/360 hand calculation: the odd
     // coupon is 137/181 of a coupon and the accrued interest is 27/181.
     let price = value("ODDFPRICE(DATE(2008,11,11), DATE(2021,3,1), DATE(2008,10,15), DATE(2009,3,1), 0.0785, 0.0625, 100, 2, 1)");
-    let source = format!(
-        "ODDFYIELD(DATE(2008,11,11), DATE(2021,3,1), DATE(2008,10,15), DATE(2009,3,1), 0.0785, {price}, 100, 2, 1)"
-    );
+    let source = format!("ODDFYIELD(DATE(2008,11,11), DATE(2021,3,1), DATE(2008,10,15), DATE(2009,3,1), 0.0785, {price}, 100, 2, 1)");
     close(value(&source), 0.0625, 1e-10);
     fails("ODDFPRICE(DATE(2008,11,11), DATE(2021,3,1), DATE(2008,10,15), DATE(2009,3,1), 0.0785, 0.0625, 100, 2, 7)");
     fails("ODDFPRICE(DATE(2008,11,11), DATE(2009,3,1), DATE(2008,10,15), DATE(2009,3,1), 0.0785, 0.0625, 100, 2, 1)");

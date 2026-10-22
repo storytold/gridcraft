@@ -16,20 +16,8 @@ fn model() -> DataModel {
                 ModelColumn { name: "Empty".into(), data_type: Some("String".into()) },
             ],
             rows: vec![
-                vec![
-                    Scalar::String("East".into()),
-                    Scalar::Integer(10),
-                    Scalar::Boolean(true),
-                    Scalar::String("5".into()),
-                    Scalar::Blank,
-                ],
-                vec![
-                    Scalar::String("West".into()),
-                    Scalar::Integer(20),
-                    Scalar::Boolean(false),
-                    Scalar::String(String::new()),
-                    Scalar::Blank,
-                ],
+                vec![Scalar::String("East".into()), Scalar::Integer(10), Scalar::Boolean(true), Scalar::String("5".into()), Scalar::Blank],
+                vec![Scalar::String("West".into()), Scalar::Integer(20), Scalar::Boolean(false), Scalar::String(String::new()), Scalar::Blank],
                 vec![Scalar::String("East".into()), Scalar::Blank, Scalar::Boolean(true), Scalar::String("abc".into()), Scalar::Blank],
                 vec![Scalar::Blank, Scalar::Integer(40), Scalar::Boolean(false), Scalar::String("7".into()), Scalar::Blank],
             ],

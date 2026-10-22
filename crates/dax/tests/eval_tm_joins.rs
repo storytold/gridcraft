@@ -83,14 +83,8 @@ fn generate_evaluates_the_second_table_per_row() {
     let result = table("GENERATE ( Sales, ROW ( \"Tag\", Sales[Region] ) )");
     assert_eq!(names(&result), vec!["Region", "Amount", "ProductKey", "Tag"]);
     assert_eq!(result.rows.len(), 4);
-    assert_eq!(
-        result.rows[0],
-        vec![Scalar::String("East".into()), Scalar::Integer(10), Scalar::Integer(1), Scalar::String("East".into())]
-    );
-    assert_eq!(
-        result.rows[3],
-        vec![Scalar::String("North".into()), Scalar::Integer(40), Scalar::Integer(3), Scalar::String("North".into())]
-    );
+    assert_eq!(result.rows[0], vec![Scalar::String("East".into()), Scalar::Integer(10), Scalar::Integer(1), Scalar::String("East".into())]);
+    assert_eq!(result.rows[3], vec![Scalar::String("North".into()), Scalar::Integer(40), Scalar::Integer(3), Scalar::String("North".into())]);
 }
 
 #[test]
@@ -159,10 +153,7 @@ fn generate_series_integer_and_boundaries() {
     let result = table("GENERATESERIES ( 1, 10, 2 )");
     assert_eq!(names(&result), vec!["Value"]);
     let values: Vec<Scalar> = result.rows.iter().map(|row| row[0].clone()).collect();
-    assert_eq!(
-        values,
-        vec![Scalar::Integer(1), Scalar::Integer(3), Scalar::Integer(5), Scalar::Integer(7), Scalar::Integer(9)]
-    );
+    assert_eq!(values, vec![Scalar::Integer(1), Scalar::Integer(3), Scalar::Integer(5), Scalar::Integer(7), Scalar::Integer(9)]);
 
     let single = table("GENERATESERIES ( 5, 5 )");
     assert_eq!(single.rows, vec![vec![Scalar::Integer(5)]]);
@@ -181,10 +172,7 @@ fn generate_series_decimal_and_date_results() {
     assert!((last - 1.0).abs() < 1e-9, "{last}");
 
     let dates = table("GENERATESERIES ( DATE ( 2024, 1, 1 ), DATE ( 2024, 1, 3 ) )");
-    assert_eq!(
-        dates.rows,
-        vec![vec![Scalar::DateTime(45292.0)], vec![Scalar::DateTime(45293.0)], vec![Scalar::DateTime(45294.0)]]
-    );
+    assert_eq!(dates.rows, vec![vec![Scalar::DateTime(45292.0)], vec![Scalar::DateTime(45293.0)], vec![Scalar::DateTime(45294.0)]]);
 }
 
 #[test]
@@ -219,10 +207,7 @@ fn detail_rows_returns_the_measure_home_table() {
     let result = table("DETAILROWS ( [Sales Amount] )");
     assert_eq!(names(&result), vec!["Region", "Amount", "ProductKey"]);
     assert_eq!(result.lineage, Some(0));
-    assert_eq!(
-        eval("CALCULATE ( COUNTROWS ( DETAILROWS ( [Sales Amount] ) ), Sales[Region] = \"East\" )"),
-        Ok(Scalar::Integer(2))
-    );
+    assert_eq!(eval("CALCULATE ( COUNTROWS ( DETAILROWS ( [Sales Amount] ) ), Sales[Region] = \"East\" )"), Ok(Scalar::Integer(2)));
 }
 
 const POINTS: &str = "UNION ( \
@@ -233,16 +218,24 @@ const POINTS: &str = "UNION ( \
 fn sample_axis_preserves_local_min_max_per_bin() {
     let result = table(&format!("SAMPLEAXISWITHLOCALMINMAX ( 2, {POINTS}, [X], [Y], 1 )"));
     assert_eq!(names(&result), vec!["X", "Y"]);
-    let axis: Vec<i64> = result.rows.iter().filter_map(|row| match row[0] {
-        Scalar::Integer(value) => Some(value),
-        _ => None,
-    }).collect();
+    let axis: Vec<i64> = result
+        .rows
+        .iter()
+        .filter_map(|row| match row[0] {
+            Scalar::Integer(value) => Some(value),
+            _ => None,
+        })
+        .collect();
     assert_eq!(axis, vec![2, 3, 7, 8]);
     // The selected rows keep the local minima and maxima: 9/1 in the first half, 9/0 in the second.
-    let measures: Vec<i64> = result.rows.iter().filter_map(|row| match row[1] {
-        Scalar::Integer(value) => Some(value),
-        _ => None,
-    }).collect();
+    let measures: Vec<i64> = result
+        .rows
+        .iter()
+        .filter_map(|row| match row[1] {
+            Scalar::Integer(value) => Some(value),
+            _ => None,
+        })
+        .collect();
     assert_eq!(measures, vec![9, 1, 9, 0]);
 }
 

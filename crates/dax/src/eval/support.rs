@@ -50,14 +50,18 @@ impl<'a> Args<'a> {
 
     pub(crate) fn optional_number(&self, index: usize, default: f64) -> Result<f64, EvalError> {
         match self.values.get(index) {
-            Some(value) if !value.is_blank() => value.to_number().ok_or_else(|| EvalError::new(format!("{} argument {} must be numeric", self.name, index + 1))),
+            Some(value) if !value.is_blank() => {
+                value.to_number().ok_or_else(|| EvalError::new(format!("{} argument {} must be numeric", self.name, index + 1)))
+            }
             _ => Ok(default),
         }
     }
 
     pub(crate) fn optional_bool(&self, index: usize, default: bool) -> Result<bool, EvalError> {
         match self.values.get(index) {
-            Some(value) if !value.is_blank() => value.to_bool().ok_or_else(|| EvalError::new(format!("{} argument {} must be Boolean", self.name, index + 1))),
+            Some(value) if !value.is_blank() => {
+                value.to_bool().ok_or_else(|| EvalError::new(format!("{} argument {} must be Boolean", self.name, index + 1)))
+            }
             _ => Ok(default),
         }
     }

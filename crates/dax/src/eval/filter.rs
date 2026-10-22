@@ -28,10 +28,19 @@ pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut
         "ORDERBY" | "PARTITIONBY" | "MATCHBY" => {
             Some(Err(EvalError::new(format!("{} is a clause and can only be used inside a window function", name.to_ascii_uppercase()))))
         }
-        "INDEX" | "OFFSET" | "WINDOW" => Some(Err(EvalError::new(format!("{} returns a table and cannot be used as a scalar", name.to_ascii_uppercase())))),
+        "INDEX" | "OFFSET" | "WINDOW" => {
+            Some(Err(EvalError::new(format!("{} returns a table and cannot be used as a scalar", name.to_ascii_uppercase()))))
+        }
         "ALLCROSSFILTERED" => Some(Err(EvalError::new("ALLCROSSFILTERED can only be used as a CALCULATE or CALCULATETABLE modifier"))),
-        "ALLSELECTEDAPPLY" | "ALLSELECTEDREMOVE" | "ALWAYSAPPLY" | "DEPENDON" | "FILTERCLUSTER" | "GROUPCROSSAPPLY" | "GROUPCROSSAPPLYTABLE"
-        | "NONFILTER" | "SHADOWCLUSTER" => Some(Err(EvalError::new(format!("{} returns a table", name.to_ascii_uppercase())))),
+        "ALLSELECTEDAPPLY"
+        | "ALLSELECTEDREMOVE"
+        | "ALWAYSAPPLY"
+        | "DEPENDON"
+        | "FILTERCLUSTER"
+        | "GROUPCROSSAPPLY"
+        | "GROUPCROSSAPPLYTABLE"
+        | "NONFILTER"
+        | "SHADOWCLUSTER" => Some(Err(EvalError::new(format!("{} returns a table", name.to_ascii_uppercase())))),
         _ => None,
     }
 }
@@ -39,9 +48,7 @@ pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut
 pub(crate) fn call_table(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<TableValue, EvalError>> {
     match name.to_ascii_uppercase().as_str() {
         "ALLCROSSFILTERED" => Some(all_cross_filtered(ev, args)),
-        "ALLSELECTEDAPPLY" | "ALLSELECTEDREMOVE" | "ALWAYSAPPLY" | "NONFILTER" | "SHADOWCLUSTER" => {
-            Some(apply_wrapper(ev, name, args, ctx))
-        }
+        "ALLSELECTEDAPPLY" | "ALLSELECTEDREMOVE" | "ALWAYSAPPLY" | "NONFILTER" | "SHADOWCLUSTER" => Some(apply_wrapper(ev, name, args, ctx)),
         "DEPENDON" => Some(depend_on(ev, args, ctx)),
         "INDEX" => Some(index_table(ev, args, ctx)),
         "OFFSET" => Some(offset_table(ev, args, ctx)),
@@ -140,13 +147,16 @@ fn window_table(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Re
     if args.len() < 2 {
         return Err(EvalError::new("WINDOW needs a start and an end boundary"));
     }
+    // The 2-argument form is `WINDOW(<start>, <end>)`; every longer form names both boundary
+    // types, so arity decides the layout.
     let typed = args.len() >= 3;
     if typed && args.len() < 4 {
         return Err(EvalError::new("WINDOW needs an end boundary after its start type"));
     }
     let from_value = whole_number(ev.eval(&args[0], ctx)?, "WINDOW start")?;
     let from_type = if typed { boundary_type(&args[1])? } else { BoundaryType::Rel };
-    let to_value = whole_number(ev.eval(&args[2], ctx)?, "WINDOW end")?;
+    let to_index = if typed { 2 } else { 1 };
+    let to_value = whole_number(ev.eval(&args[to_index], ctx)?, "WINDOW end")?;
     let to_type = if typed { boundary_type(&args[3])? } else { BoundaryType::Rel };
     let relation_start = if typed { 4 } else { 2 };
     let (relation, clause) = relation_and_clause(ev, args, relation_start, ctx)?;
@@ -224,18 +234,15 @@ fn boundary_position(value: i64, kind: BoundaryType, length: i64, anchor: Option
 /// Parses the optional relation plus the `ORDERBY`, `PARTITIONBY`, `MATCHBY`, blanks and reset
 /// slots of a window function. Slots are matched by their clause name, not by position, because
 /// the documented syntax allows the relation and several clauses to be omitted.
-fn relation_and_clause(
-    ev: &Evaluator<'_>,
-    args: &[BoundExpr],
-    start: usize,
-    ctx: &mut Context,
-) -> Result<(TableValue, WindowClause), EvalError> {
+fn relation_and_clause(ev: &Evaluator<'_>, args: &[BoundExpr], start: usize, ctx: &mut Context) -> Result<(TableValue, WindowClause), EvalError> {
     let mut relation: Option<TableValue> = None;
     let mut clause = WindowClause::default();
     for arg in args.iter().skip(start) {
         match arg {
             BoundExpr::Call { spec, .. } if spec.name.eq_ignore_ascii_case("ORDERBY") => clause.order = parse_order_by(arg)?,
-            BoundExpr::Call { spec, .. } if spec.name.eq_ignore_ascii_case("PARTITIONBY") => clause.partitions = parse_column_clause(arg, "PARTITIONBY")?,
+            BoundExpr::Call { spec, .. } if spec.name.eq_ignore_ascii_case("PARTITIONBY") => {
+                clause.partitions = parse_column_clause(arg, "PARTITIONBY")?
+            }
             BoundExpr::Call { spec, .. } if spec.name.eq_ignore_ascii_case("MATCHBY") => clause.match_by = parse_column_clause(arg, "MATCHBY")?,
             BoundExpr::Keyword(word) => {
                 if let Some(placement) = blank_placement(word)? {
@@ -413,9 +420,7 @@ fn sorted_entries(ev: &Evaluator<'_>, relation: &TableValue, clause: &WindowClau
         }
         entries.push(RowEntry { row: row.clone(), partition, order });
     }
-    entries.sort_by(|left, right| {
-        left.partition.cmp(&right.partition).then_with(|| compare_orders(&left.order, &right.order, clause))
-    });
+    entries.sort_by(|left, right| left.partition.cmp(&right.partition).then_with(|| compare_orders(&left.order, &right.order, clause)));
     Ok(entries)
 }
 
@@ -475,11 +480,7 @@ fn compare_window_values(left: Option<&Scalar>, right: Option<&Scalar>, desc: bo
                     _ => value.to_number().is_none_or(|number| number >= 0.0),
                 });
                 let ordering = if left_blank {
-                    if blank_first {
-                        Ordering::Less
-                    } else {
-                        Ordering::Greater
-                    }
+                    if blank_first { Ordering::Less } else { Ordering::Greater }
                 } else if blank_first {
                     Ordering::Greater
                 } else {
@@ -547,15 +548,13 @@ fn current_entry(
     if clause.match_by.is_empty() {
         return Ok(entries.iter().position(|entry| entry.row.iter().zip(&needle).all(|(value, needle)| value.strict_eq(needle))));
     }
-    let positions: Vec<usize> = clause
-        .match_by
-        .iter()
-        .map(|(table, column)| relation_position(ev, relation, *table, *column))
-        .collect::<Result<_, _>>()?;
+    let positions: Vec<usize> =
+        clause.match_by.iter().map(|(table, column)| relation_position(ev, relation, *table, *column)).collect::<Result<_, _>>()?;
     Ok(entries.iter().position(|entry| {
-        needle.iter().enumerate().all(|(needle_index, value)| {
-            entry.row.get(positions[needle_index]).is_some_and(|candidate| candidate.strict_eq(value))
-        })
+        needle
+            .iter()
+            .enumerate()
+            .all(|(needle_index, value)| entry.row.get(positions[needle_index]).is_some_and(|candidate| candidate.strict_eq(value)))
     }))
 }
 
@@ -624,11 +623,7 @@ fn lookup_value(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Re
 }
 
 fn alternate(args: &[BoundExpr], has_alternate: bool, ev: &Evaluator<'_>, ctx: &mut Context) -> Option<Result<Scalar, EvalError>> {
-    if has_alternate {
-        args.last().map(|expr| ev.eval(expr, ctx))
-    } else {
-        None
-    }
+    if has_alternate { args.last().map(|expr| ev.eval(expr, ctx)) } else { None }
 }
 
 fn lookup(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, totals: bool) -> Result<Scalar, EvalError> {

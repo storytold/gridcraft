@@ -2,34 +2,36 @@
 
 This list is generated from the `gridcraft-dax` catalog and evaluator. **Parsed** means the
 function is in the catalog with arity/parameter validation and round-trips through the parser
-and printer. **Evaluated** means the evaluator has a dispatch path for it (the semantics may
-still be partial for model/relationship functions).
+and printer. **Evaluated** means the evaluator has a dispatch path for it.
 
 - Catalogued (parsed and validated): **484**
-- Evaluated: **123**
-- Parsed only: **361**
+- Evaluated: **484**
+- Parsed only: **0**
 
 | Category | Catalogued | Evaluated |
 | --- | ---: | ---: |
-| Aggregation | 22 | 18 |
-| Date and time | 24 | 12 |
-| Filter | 29 | 10 |
-| Financial | 51 | 0 |
-| Information | 114 | 8 |
-| Logical | 13 | 9 |
-| Math and trig | 49 | 27 |
-| Other | 16 | 4 |
-| Parent and child | 5 | 4 |
+| Aggregation | 22 | 22 |
+| Date and time | 24 | 24 |
+| Filter | 29 | 29 |
+| Financial | 51 | 51 |
+| Information | 114 | 114 |
+| Logical | 13 | 13 |
+| Math and trig | 49 | 49 |
+| Other | 16 | 16 |
+| Parent and child | 5 | 5 |
 | Relationships | 4 | 4 |
-| Statistical | 43 | 0 |
-| Table manipulation | 35 | 12 |
-| Text | 23 | 15 |
-| Time intelligence | 45 | 0 |
-| Visual calculations | 11 | 0 |
+| Statistical | 43 | 43 |
+| Table manipulation | 35 | 35 |
+| Text | 23 | 23 |
+| Time intelligence | 45 | 45 |
+| Visual calculations | 11 | 11 |
 
 ## Evaluated functions
 
-`ABS`, `ADDCOLUMNS`, `ALL`, `ALLEXCEPT`, `ALLNOBLANKROW`, `ALLSELECTED`, `AND`, `APPROXIMATEDISTINCTCOUNT`, `AVERAGE`, `AVERAGEX`, `BLANK`, `CALCULATE`, `CALCULATETABLE`, `CEILING`, `COALESCE`, `CONCATENATE`, `COS`, `COUNT`, `COUNTA`, `COUNTAX`, `COUNTBLANK`, `COUNTROWS`, `COUNTX`, `CROSSFILTER`, `CROSSJOIN`, `DATATABLE`, `DATE`, `DATEDIFF`, `DAY`, `DEGREES`, `DISTINCT`, `DISTINCTCOUNT`, `DIVIDE`, `EDATE`, `EOMONTH`, `ERROR`, `EXACT`, `EXCEPT`, `EXP`, `FACT`, `FALSE`, `FILTER`, `FIND`, `FLOOR`, `GCD`, `HOUR`, `IF`, `IFERROR`, `INT`, `INTERSECT`, `ISBLANK`, `ISCURRENCY`, `ISERROR`, `ISEVEN`, `ISINTEGER`, `ISLOGICAL`, `ISNONTEXT`, `ISNUMBER`, `ISO.CEILING`, `ISODD`, `ISTEXT`, `KEEPFILTERS`, `LCM`, `LEFT`, `LEN`, `LN`, `LOG`, `LOG10`, `LOWER`, `MAX`, `MAXX`, `MID`, `MIN`, `MINUTE`, `MINX`, `MOD`, `MONTH`, `NOT`, `OR`, `PATH`, `PATHCONTAINS`, `PATHITEM`, `PATHLENGTH`, `PI`, `POWER`, `PRODUCT`, `PRODUCTX`, `RADIANS`, `RELATED`, `RELATEDTABLE`, `REMOVEFILTERS`, `REPT`, `RIGHT`, `ROUND`, `ROUNDDOWN`, `ROUNDUP`, `ROW`, `SEARCH`, `SECOND`, `SELECTCOLUMNS`, `SELECTEDVALUE`, `SIGN`, `SIN`, `SQRT`, `SUBSTITUTE`, `SUM`, `SUMX`, `SWITCH`, `TAN`, `TIME`, `TOPN`, `TREATAS`, `TRIM`, `TRUE`, `TRUNC`, `UNICHAR`, `UNION`, `UPPER`, `USERELATIONSHIP`, `VALUE`, `VALUES`, `WEEKDAY`, `YEAR`
+All 484 catalogued functions have an evaluator path. The catalog sections below are the complete
+list, grouped by family; each family has an integration suite under `crates/dax/tests/eval_*.rs`,
+and `crates/dax/tests/coverage.rs` asserts that every catalogued name binds and reaches an
+implementation.
 
 ## Catalogued (parsed and validated)
 
@@ -95,11 +97,11 @@ still be partial for model/relationship functions).
 
 ## Notes
 
-- `Evaluated` is based on dispatch names in `eval.rs`; table/iterator functions are counted
-  when they have a table path (`FILTER`, `SUMMARIZE`, `ADDCOLUMNS`, `VALUES`, `DISTINCT`,
-  `UNION`, `INTERSECT`, `EXCEPT`, `CROSSJOIN`, `TOPN`, `DATATABLE`, `TREATAS`, `ROW`).
-- Time-intelligence, financial, statistical distribution and visual-calculation functions are
-  catalogued and parse, but most return `EvalError::not_implemented` at evaluation time.
+- `Evaluated` means a dispatch arm exists in one of the family modules under
+  `crates/dax/src/eval/`; table-valued functions are counted when they have a `call_table` path.
+- Engine-only functions (internal filter clusters, `INFO.*` storage views, visual calculations)
+  use bounded equivalents of their documented behaviour, described in the module that implements
+  them; `MS Learn` and dax.guide are the semantic references for everything else.
 - The catalog is the dax.guide aggregation/data-type/statement/operator surface plus every
   function category in `crates/dax/src/functions/`; see `docs/parity-checklist.md` for the
   GridCraft command surface.

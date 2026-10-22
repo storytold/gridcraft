@@ -8,8 +8,8 @@
 
 mod aggregation;
 mod date_time;
-mod financial;
 mod filter;
+mod financial;
 mod information;
 mod logical;
 mod math_trig;
@@ -369,7 +369,7 @@ impl<'a> Evaluator<'a> {
                 let value = self.eval(args.first().ok_or_else(|| EvalError::new("NOT needs an argument"))?, ctx)?;
                 return Ok(Scalar::Boolean(!value.to_bool().unwrap_or(false)));
             }
-            "CALCULATE" | "CALCULATETABLE" => {
+            "CALCULATE" => {
                 let mut filters = ctx.filters.clone();
                 for arg in &args[1..] {
                     self.apply_filter(arg, &mut filters, ctx)?;
@@ -377,6 +377,7 @@ impl<'a> Evaluator<'a> {
                 let mut inner = Context { filters, rows: ctx.rows.clone(), vars: ctx.vars.clone() };
                 return self.eval(&args[0], &mut inner);
             }
+            "CALCULATETABLE" => return Err(EvalError::new("CALCULATETABLE returns a table and cannot be used as a scalar")),
             "FILTER" => {
                 let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("FILTER needs a table"))?, ctx)?;
                 let predicate = args.get(1).ok_or_else(|| EvalError::new("FILTER needs a predicate"))?;
@@ -410,7 +411,7 @@ impl<'a> Evaluator<'a> {
                 };
             }
             "RELATED" => return self.related(args.first(), ctx),
-            "RELATEDTABLE" => return Ok(Scalar::Blank),
+            "RELATEDTABLE" => return Err(EvalError::new("RELATEDTABLE returns a table and cannot be used as a scalar")),
             "USERELATIONSHIP" | "CROSSFILTER" => return Ok(Scalar::Blank),
             "SUM" | "AVERAGE" | "COUNT" | "COUNTA" | "COUNTBLANK" | "MIN" | "MAX" | "PRODUCT" | "DISTINCTCOUNT" | "APPROXIMATEDISTINCTCOUNT" => {
                 return self.aggregate(name, args, ctx);
@@ -477,6 +478,42 @@ impl<'a> Evaluator<'a> {
                 // Keep the source lineage: CALCULATE table filters and downstream iterators need
                 // to know which model table these rows came from.
                 Ok(TableValue::new(table.columns, rows).with_lineage_if(table.lineage))
+            }
+            "CALCULATETABLE" => {
+                let mut filters = ctx.filters.clone();
+                for arg in &args[1..] {
+                    self.apply_filter(arg, &mut filters, ctx)?;
+                }
+                let mut inner = Context { filters, rows: ctx.rows.clone(), vars: ctx.vars.clone() };
+                self.eval_table(&args[0], &mut inner)
+            }
+            "RELATEDTABLE" => {
+                let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("RELATEDTABLE needs a table"))?, ctx)?;
+                let Some(frame) = ctx.rows.last() else {
+                    return Err(EvalError::new("RELATEDTABLE needs a row context"));
+                };
+                let Some(frame_table) = frame.lineage else {
+                    return Err(EvalError::new("RELATEDTABLE needs a row context over a model table"));
+                };
+                let Some(lineage) = table.lineage else {
+                    return Err(EvalError::new("RELATEDTABLE needs a model table"));
+                };
+                for relationship in &self.model.relationships {
+                    if relationship.inactive {
+                        continue;
+                    }
+                    let from = self.model.table_index(&relationship.from_table);
+                    let to = self.model.table_index(&relationship.to_table);
+                    if from == Some(frame_table) && to == Some(lineage) {
+                        let from_col =
+                            self.model.column_index(frame_table, &relationship.from_column).ok_or_else(|| EvalError::new("bad relationship"))?;
+                        let to_col = self.model.column_index(lineage, &relationship.to_column).ok_or_else(|| EvalError::new("bad relationship"))?;
+                        let key = frame.get(from_col).cloned().ok_or_else(|| EvalError::new("row is out of range"))?;
+                        let rows = table.rows.iter().filter(|row| row.get(to_col).is_some_and(|value| value.strict_eq(&key))).cloned().collect();
+                        return Ok(TableValue::new(table.columns, rows).with_lineage(lineage));
+                    }
+                }
+                Err(EvalError::new("no active relationship for RELATEDTABLE"))
             }
             "ALL" | "ALLNOBLANKROW" | "ALLSELECTED" => {
                 let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("ALL needs a table"))?, ctx)?;

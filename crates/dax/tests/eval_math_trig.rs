@@ -167,4 +167,3 @@ fn convert_data_types() {
     assert!(eval_result("CONVERT(\"abc\", INTEGER)").is_err());
     assert!(eval_result("CONVERT(1, NONSENSE)").is_err());
 }
-

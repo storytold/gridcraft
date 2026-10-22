@@ -134,15 +134,9 @@ fn earlier_reads_the_outer_row_context() {
     // Amounts [10, 30, 20, 40, 20], quantities [5, 2, 8, 1, 4]. For every outer row the inner
     // iterator sums the quantities of rows with an amount greater than or equal to the outer one:
     // 20 + 3 + 15 + 1 + 15 = 54.
-    assert_eq!(
-        scalar("SUMX(Sales, SUMX(FILTER(Sales, Sales[Amount] >= EARLIER(Sales[Amount])), Sales[Quantity]))"),
-        Scalar::Decimal(54.0)
-    );
+    assert_eq!(scalar("SUMX(Sales, SUMX(FILTER(Sales, Sales[Amount] >= EARLIER(Sales[Amount])), Sales[Quantity]))"), Scalar::Decimal(54.0));
     // The explicit level 1 matches the default.
-    assert_eq!(
-        scalar("SUMX(Sales, SUMX(FILTER(Sales, Sales[Amount] >= EARLIER(Sales[Amount], 1)), Sales[Quantity]))"),
-        Scalar::Decimal(54.0)
-    );
+    assert_eq!(scalar("SUMX(Sales, SUMX(FILTER(Sales, Sales[Amount] >= EARLIER(Sales[Amount], 1)), Sales[Quantity]))"), Scalar::Decimal(54.0));
     // Every outer row repeats its amount for each of the 5 inner rows: 5 * (10+30+20+40+20).
     assert_eq!(scalar("SUMX(Sales, SUMX(Sales, EARLIEST(Sales[Amount])))"), Scalar::Decimal(600.0));
 }
@@ -244,26 +238,17 @@ fn rownumber_numbers_rows_in_order() {
 fn rank_handles_ties_and_dense_mode() {
     // Amounts [10, 30, 20, 40, 20]: SKIP ranks are [1, 4, 2, 5, 2] = 14.
     assert_eq!(
-        scalar_window(
-            "SUMX(Sales, RANK(SKIP, Sales, ORDERBY(Sales[Amount])))",
-            "SUMX(Sales, RANK(\"SKIP\", Sales, ORDERBY(Sales[Amount])))"
-        ),
+        scalar_window("SUMX(Sales, RANK(SKIP, Sales, ORDERBY(Sales[Amount])))", "SUMX(Sales, RANK(\"SKIP\", Sales, ORDERBY(Sales[Amount])))"),
         Scalar::Decimal(14.0)
     );
     // DENSE ranks are [1, 3, 2, 4, 2] = 12.
     assert_eq!(
-        scalar_window(
-            "SUMX(Sales, RANK(DENSE, Sales, ORDERBY(Sales[Amount])))",
-            "SUMX(Sales, RANK(\"DENSE\", Sales, ORDERBY(Sales[Amount])))"
-        ),
+        scalar_window("SUMX(Sales, RANK(DENSE, Sales, ORDERBY(Sales[Amount])))", "SUMX(Sales, RANK(\"DENSE\", Sales, ORDERBY(Sales[Amount])))"),
         Scalar::Decimal(12.0)
     );
     // The default is SKIP.
     assert_eq!(
-        scalar_window(
-            "SUMX(Sales, RANK(Sales, ORDERBY(Sales[Amount])))",
-            "SUMX(Sales, RANK(\"Sales\", ORDERBY(Sales[Amount])))"
-        ),
+        scalar_window("SUMX(Sales, RANK(Sales, ORDERBY(Sales[Amount])))", "SUMX(Sales, RANK(\"Sales\", ORDERBY(Sales[Amount])))"),
         Scalar::Decimal(14.0)
     );
 }
@@ -280,10 +265,7 @@ fn rank_and_rownumber_partition_and_order_blanks() {
         Scalar::Decimal(6.0)
     );
     // Point values are [-5, blank, 1]. DEFAULT orders the blank between -5 and 1 (position 2).
-    assert_eq!(
-        scalar("SUMX(Points, IF(Points[Value] = BLANK(), ROWNUMBER(Points, ORDERBY(Points[Value])), 0))"),
-        Scalar::Decimal(2.0)
-    );
+    assert_eq!(scalar("SUMX(Points, IF(Points[Value] = BLANK(), ROWNUMBER(Points, ORDERBY(Points[Value])), 0))"), Scalar::Decimal(2.0));
     // LAST puts the blank at the end, FIRST at the beginning.
     assert_eq!(
         scalar_window(
@@ -356,13 +338,11 @@ fn sample_cartesian_points_by_cover_drops_overlapping_points() {
     assert_eq!(fine.rows.len(), 4);
 
     // Large radii cover neighbouring cells, so a single point covers the whole sample space.
-    let covered = eval_table("SAMPLECARTESIANPOINTSBYCOVER(9, Sales, Sales[X], Sales[Y], Sales[Radius])")
-        .expect("radius sample");
+    let covered = eval_table("SAMPLECARTESIANPOINTSBYCOVER(9, Sales, Sales[X], Sales[Y], Sales[Radius])").expect("radius sample");
     assert_eq!(covered.rows.len(), 1);
 
     // MaxMinRatio clamps the smallest drawn radius to 5/2, which still covers the grid.
-    let ratio = eval_table("SAMPLECARTESIANPOINTSBYCOVER(9, Sales, Sales[X], Sales[Y], Sales[Radius], 2)")
-        .expect("ratio sample");
+    let ratio = eval_table("SAMPLECARTESIANPOINTSBYCOVER(9, Sales, Sales[X], Sales[Y], Sales[Radius], 2)").expect("ratio sample");
     assert_eq!(ratio.rows.len(), 1);
 
     assert!(eval_table("SAMPLECARTESIANPOINTSBYCOVER(0, Sales, Sales[X], Sales[Y])").is_err());

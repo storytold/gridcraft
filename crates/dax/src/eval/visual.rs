@@ -41,12 +41,8 @@ fn axis(ev: &Evaluator<'_>, ctx: &Context) -> Result<Axis, EvalError> {
     let Some(table) = frame.lineage else { return Err(EvalError::new(NO_FRAME)) };
     // Only model columns identify a row: computed columns added by ADDCOLUMNS/SELECTCOLUMNS are
     // skipped, exactly like context transition does.
-    let key: Vec<(usize, Scalar)> = frame
-        .model_columns
-        .iter()
-        .zip(frame.values.iter())
-        .filter_map(|(column, value)| (*column).map(|column| (column, value.clone())))
-        .collect();
+    let key: Vec<(usize, Scalar)> =
+        frame.model_columns.iter().zip(frame.values.iter()).filter_map(|(column, value)| (*column).map(|column| (column, value.clone()))).collect();
     if key.is_empty() {
         return Err(EvalError::new("visual calculation cannot locate the current row: the row carries no model columns"));
     }
@@ -122,11 +118,7 @@ fn boolean_arg(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context, index:
 fn first_last(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
     let axis = axis(ev, ctx)?;
     let expr = args.first().ok_or_else(|| EvalError::new(format!("{name} needs a column")))?;
-    let position = if name.eq_ignore_ascii_case("FIRST") {
-        Some(0)
-    } else {
-        axis.rows.len().checked_sub(1)
-    };
+    let position = if name.eq_ignore_ascii_case("FIRST") { Some(0) } else { axis.rows.len().checked_sub(1) };
     match position {
         Some(position) => eval_at(ev, expr, ctx, &axis, position),
         None => Ok(Scalar::Blank),
@@ -139,11 +131,7 @@ fn previous_next(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut C
     let axis = axis(ev, ctx)?;
     let expr = args.first().ok_or_else(|| EvalError::new(format!("{name} needs a column")))?;
     let steps = positive_count(ev, args, ctx, 1, "Steps")?;
-    let position = if name.eq_ignore_ascii_case("PREVIOUS") {
-        axis.current.checked_sub(steps)
-    } else {
-        axis.current.checked_add(steps)
-    };
+    let position = if name.eq_ignore_ascii_case("PREVIOUS") { axis.current.checked_sub(steps) } else { axis.current.checked_add(steps) };
     match position {
         Some(position) => eval_at(ev, expr, ctx, &axis, position),
         None => Ok(Scalar::Blank),
