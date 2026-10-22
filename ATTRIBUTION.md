@@ -8,6 +8,9 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 
 | Asset | Author | Source | Licence | Notes |
 |---|---|---|---|---|
+| `docs/images/turkish-interface.png` | GridCraft contributors; capture by @banadabi | Original GridCraft web UI with synthetic workbook data, captured in an isolated browser context | MIT OR Apache-2.0 | Turkish interface; no browser chrome, personal data or third-party application |
+| `docs/images/turkish-find.png` | GridCraft contributors; capture by @banadabi | Original GridCraft web UI, isolated browser capture | MIT OR Apache-2.0 | Turkish Find and Replace dialog; no personal data |
+| `docs/images/turkish-format.png` | GridCraft contributors; capture by @banadabi | Original GridCraft web UI, isolated browser capture | MIT OR Apache-2.0 | Turkish Format Cells dialog; no personal data |
 | `docs/brand/artcraft-logo.svg` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft brand terms (`docs/brand/LICENSE-brand.txt`) | Trademark, not open source |
 | `docs/brand/artcraft-logo.png` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft brand terms | Trademark |
 | `docs/brand/artcraft-logo-white.svg` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft brand terms | Trademark |

@@ -177,4 +177,27 @@ mod tests {
         assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Some("Adds the cells that meet every condition."));
         assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
     }
+
+    #[test]
+    fn turkish_help_keeps_canonical_formula_syntax_and_workbook_text() {
+        let locale = Language::Tr.formula_locale();
+        assert_eq!(locale, FormulaLocale::En);
+        assert_eq!(sig("SUM", locale, Language::Tr), "SUM(sayı1, [sayı2], ...)");
+        assert_eq!(sig("IF", locale, Language::Tr), "IF(mantıksal_sınama, [doğru_ise_değer], [yanlış_ise_değer])");
+        assert_eq!(description("SUM", locale, Language::Tr).as_deref(), Some("Bağımsız değişkenlerdeki tüm sayıları toplar."));
+        assert_eq!(
+            description("IFERROR", locale, Language::Tr).as_deref(),
+            Some("Değer bir hataysa alternatif değeri, değilse değerin kendisini döndürür.")
+        );
+        assert_eq!(
+            description("INDEX", locale, Language::Tr).as_deref(),
+            Some("Bir dizinin belirtilen konumundaki öğeyi, satırı veya sütunu döndürür.")
+        );
+        let wb = Workbook::new();
+        let cell = gridcraft_engine::core::CellRef::new(0, 0);
+        for text in ["=SUM(1.5,2.5)", "İstanbul ığüşöç İĞÜŞÖÇ", "=IF(A1>0,\"İyi\",\"Kötü\")"] {
+            assert_eq!(canonical(text, locale, &wb, 0, cell).unwrap(), text);
+            assert_eq!(display(text, locale, &wb, 0), text);
+        }
+    }
 }
