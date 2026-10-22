@@ -25,6 +25,7 @@ mod ro;
 mod ru;
 mod sr;
 mod tr;
+mod tr_functions;
 mod uk;
 mod vi;
 mod zh;
@@ -189,6 +190,12 @@ impl Language {
         if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
     }
 
+    /// Fold interface text for search. Turkish distinguishes dotted and dotless I; this must
+    /// never be used to normalize command identifiers or workbook contents.
+    pub(crate) fn search_key(self, text: &str) -> String {
+        if self == Self::Tr { text.replace('I', "ı").replace('İ', "i").to_lowercase() } else { text.to_lowercase() }
+    }
+
     /// Translates an interface label; untranslated labels fall back to English.
     ///
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
@@ -243,6 +250,7 @@ impl Language {
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::Tr => Some((tr_functions::DESCRIPTIONS, tr_functions::ARGUMENTS)),
             _ => None,
         }
     }
@@ -320,6 +328,45 @@ fn name_sort_key(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turkish_covers_the_shared_and_dialog_catalogs_without_losing_placeholders() {
+        let placeholders =
+            |s: &str| s.split('{').skip(1).filter_map(|rest| rest.split_once('}').map(|(name, _)| name.to_string())).collect::<Vec<_>>();
+        for (english, _) in ja::CORE.iter().chain(ja::DIALOGS) {
+            let translated = tr::translate(english).unwrap_or_else(|| panic!("missing Turkish: {english}"));
+            assert!(!translated.is_empty(), "empty Turkish: {english}");
+            assert_eq!(placeholders(english), placeholders(translated), "Turkish placeholders: {english}");
+            assert!(!translated.contains('|'), "Turkish context prefix leaked: {english}");
+            if !english.contains('\n') {
+                assert!(!translated.contains('\n'), "Turkish label gained a line break: {english}");
+            }
+        }
+        for (english, expected) in [
+            ("Save Changes?", "Değişiklikler Kaydedilsin mi?"),
+            ("Don't Save", "Kaydetme"),
+            ("Protect Sheet", "Sayfayı Koru"),
+            ("Unprotect Sheet", "Sayfa Korumasını Kaldır"),
+            ("Match case", "Büyük/küçük harf eşleştir"),
+            ("Format Cells|Fill", "Dolgu"),
+            ("Delete Sheet", "Sayfayı Sil"),
+            ("No Color", "Renk Yok"),
+        ] {
+            assert_eq!(Language::Tr.tr(english), expected);
+        }
+        assert_eq!(Language::Tr.tr("Unknown label"), "Unknown label");
+        assert_eq!(Language::Tr.tr("Sheet|Unknown label"), "Unknown label");
+        assert_eq!(Language::Tr.tr_error("command `chart`: Select a chart first."), "Önce bir grafik seçin.");
+    }
+
+    #[test]
+    fn turkish_interface_search_distinguishes_dotted_and_dotless_i() {
+        assert_eq!(Language::Tr.search_key("Iİıi"), "ıiıi");
+        assert_eq!(Language::Tr.search_key("SIRALA"), Language::Tr.search_key("Sırala"));
+        assert_eq!(Language::Tr.search_key("İŞLEV"), Language::Tr.search_key("İşlev"));
+        assert_ne!(Language::Tr.search_key("SI"), Language::Tr.search_key("Sİ"));
+        assert_eq!(Language::En.search_key("FILE.SAVE"), "file.save");
+    }
 
     /// Help tables are sorted, unique, and keyed by text the function catalog still has.
     #[test]

@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (the Japanese catalog covers the dialogs, messages and menus; Dutch interface language; Romanian interface catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (the Japanese catalog covers the dialogs, messages and menus; Dutch interface language; Romanian interface catalog; expanded Turkish dialogs, pivot pane and function help) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -8,6 +8,15 @@ right-to-left sheets and full complex-script support. Part of
 [target-app-parity.md](target-app-parity.md). **Localization: ~10% ready, 100–165 h** (estimated).
 
 ## Where we are (measured from source on `main`, after the 2026-10-10 merges)
+
+**2026-10-22 Turkish update:** 1,157 interface labels now cover the shared catalogs,
+dialog and File-view strings, tooltips, PivotTable controls and engine command
+labels. Custom dialogs that still drew hardcoded labels now use the existing
+translation lookup, benefiting any language that supplies those keys. The command
+palette displays translated labels and accepts Turkish searches while retaining
+canonical command IDs. Turkish also supplies 25 common function descriptions and
+21 argument names; canonical formulas and workbook text are preserved. Detailed
+scope and remaining gaps: [Turkish interface](turkish-localization.md).
 
 - **A first catalog exists, for the ribbon only.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in
   #31, #104, #82; German added 10-11) adds an interface-language preference that defaults to the
@@ -83,9 +92,11 @@ separators, number/date formats, machine translation with agent review, and scri
 | Italian | it | 971 (~44%) | dialogs, tooltips, pivot pane | Latin: yes | no | menus, File view, dialogs, pivot pane | 3–5 h |
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
-| Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
+| Turkish | tr | 1157 (~53%) | dialogs, tooltips, 25 function descriptions | Latin: yes | AI-assisted; native review pending | menus, File view, dialogs, messages | 3–5 h |
 
-Other shipped languages: Russian (ru), German (de), Czech (cs), French (fr) and Turkish (tr), menus only.
+Turkish catalog scope, formula syntax and validation: [Turkish interface](turkish-localization.md).
+
+Other shipped languages: Russian (ru), German (de), Czech (cs) and French (fr), menus only.
 | Vietnamese | vi | 398 (~18%) | no | Latin with stacked diacritics: unverified | no | menus, File view | 5–9 h |
 Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only; Dutch (nl), 518 labels (~24%): ribbon, context menus, File view, dialog titles and the Options page.
 
@@ -109,6 +120,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Turkish grows from 396 to 1157 labels, covering shared and dialog catalogs; 25 function descriptions and 21 argument names; canonical formula syntax unchanged |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |
 | 2026-10-20 | minor | Japanese catalog (`i18n/ja.rs`) covers every key the Brazilian Portuguese catalog translates: the 398-label shared core moved verbatim plus 545 dialog, message, Backstage and menu strings — 943 keys, ~12% → ~43%. A test parses `pt.rs`'s source, so the two catalogs can't drift apart again. Portuguese re-measured at 943 (was 923) |
