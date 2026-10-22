@@ -329,7 +329,7 @@ fn scope_and_subtotal_predicates() {
     assert_eq!(number("SUMX(Sales, IF(ISINSCOPE(Product[Color]), 1, 0))"), 0.0);
 
     assert!(error_message("ISSUBTOTAL(Product[Color])").contains("SUMMARIZE"));
-    assert_eq!(number("SUMX(Product, IF(ISSUBTOTAL(Product[Color]), 1, 0))"), 0.0);
+    assert!(error_message("SUMX(Product, ISSUBTOTAL(Product[Color]))").contains("SUMMARIZE"));
 }
 
 #[test]

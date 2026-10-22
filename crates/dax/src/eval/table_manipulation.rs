@@ -6,6 +6,8 @@ mod summarizes;
 
 use super::*;
 
+pub(crate) use summarizes::subtotal_columns;
+
 pub(crate) fn call(ev: &Evaluator<'_>, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<Scalar, EvalError>> {
     summarizes::call(ev, name, args, ctx).or_else(|| joins::call(ev, name, args, ctx))
 }

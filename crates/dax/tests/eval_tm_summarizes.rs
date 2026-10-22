@@ -210,6 +210,17 @@ fn summarize_rollup_adds_subtotals_and_grand_total() {
 }
 
 #[test]
+fn issue_subtotal_marks_only_the_rolled_up_rows() {
+    let table = eval_table("SUMMARIZE(Sales, ROLLUP(Sales[Region]), \"IsSubtotal\", ISSUBTOTAL(Sales[Region]))").expect("issue subtotal");
+    assert_columns(&table, &["Region", "IsSubtotal"]);
+    assert_eq!(table.rows.len(), 5, "four regions plus the grand total");
+    // Detail rows are FALSE; the blank-region grand total is the only subtotal row.
+    let flags: Vec<&Scalar> = table.rows.iter().map(|row| &row[1]).collect();
+    assert_eq!(flags.iter().filter(|flag| ***flag == Scalar::Boolean(true)).count(), 1);
+    assert_eq!(table.rows.last().expect("grand total")[1], Scalar::Boolean(true));
+}
+
+#[test]
 fn summarize_rollupgroup_selects_its_columns_without_subtotals() {
     // The catalog validates ROLLUP arguments as plain column references, so a ROLLUPGROUP is
     // only reachable as a group-by argument of its own; it then just contributes its columns.

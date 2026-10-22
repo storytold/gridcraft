@@ -356,13 +356,12 @@ fn is_in_scope(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Res
     Ok(Scalar::Boolean(in_scope))
 }
 
-fn is_subtotal(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
-    let (table, _) = column_ref(ev, args.first().ok_or_else(|| EvalError::new("ISSUBTOTAL needs a column"))?)?;
-    if !ctx.rows.iter().any(|frame| frame.lineage == Some(table)) {
-        return Err(EvalError::new("ISSUBTOTAL requires a SUMMARIZE row context"));
+fn is_subtotal(ev: &Evaluator<'_>, args: &[BoundExpr], _ctx: &mut Context) -> Result<Scalar, EvalError> {
+    let (table, column) = column_ref(ev, args.first().ok_or_else(|| EvalError::new("ISSUBTOTAL needs a column"))?)?;
+    match super::table_manipulation::subtotal_columns() {
+        Some(rolled_up) => Ok(Scalar::Boolean(rolled_up.contains(&(table, column)))),
+        None => Err(EvalError::new("ISSUBTOTAL requires a SUMMARIZE row context")),
     }
-    // ROLLUP subtotal rows are not materialised by this evaluator, so every row is a detail row.
-    Ok(Scalar::Boolean(false))
 }
 
 fn evaluate_and_log(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {

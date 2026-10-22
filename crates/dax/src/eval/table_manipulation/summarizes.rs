@@ -32,6 +32,31 @@ thread_local! {
     /// is only valid there; evaluation is single-threaded, so a thread-local stack is enough. The
     /// guard pops on drop, so errors cannot leave a stale group behind.
     static CURRENT_GROUPS: RefCell<Vec<TableValue>> = const { RefCell::new(Vec::new()) };
+
+    /// Columns that are rolled up (blanked) in the SUMMARIZE row currently being evaluated.
+    /// `None` outside a SUMMARIZE expression, so `ISSUBTOTAL` can tell "detail row" from
+    /// "not in a SUMMARIZE at all".
+    static SUBTOTAL_COLUMNS: RefCell<Option<Vec<(usize, usize)>>> = const { RefCell::new(None) };
+}
+
+/// The rolled-up columns of the SUMMARIZE row being evaluated, or `None` outside SUMMARIZE.
+pub(crate) fn subtotal_columns() -> Option<Vec<(usize, usize)>> {
+    SUBTOTAL_COLUMNS.with(|columns| columns.borrow().clone())
+}
+
+struct SubtotalGuard;
+
+impl SubtotalGuard {
+    fn push(columns: Vec<(usize, usize)>) -> Self {
+        SUBTOTAL_COLUMNS.with(|current| *current.borrow_mut() = Some(columns));
+        SubtotalGuard
+    }
+}
+
+impl Drop for SubtotalGuard {
+    fn drop(&mut self) {
+        SUBTOTAL_COLUMNS.with(|current| *current.borrow_mut() = None);
+    }
 }
 
 struct CurrentGroupGuard;
@@ -443,8 +468,14 @@ fn summarize(ev: &Evaluator<'_>, args: &[BoundExpr], ctx: &mut Context) -> Resul
     let mut output = Vec::with_capacity(rows.len());
     for (values, active) in rows {
         let mut row = values.clone();
-        for (_, expression) in &parsed.expressions {
-            row.push(eval_in_group(ev, ctx, expression, &layout.columns, &values, &active)?);
+        // Detail rows have every column active; a ROLLUP row deactivates the rolled-up columns.
+        let rolled_up: Vec<(usize, usize)> =
+            layout.columns.iter().zip(&active).filter(|(_, active)| !**active).map(|(column, _)| (column.table, column.column)).collect();
+        {
+            let _guard = SubtotalGuard::push(rolled_up);
+            for (_, expression) in &parsed.expressions {
+                row.push(eval_in_group(ev, ctx, expression, &layout.columns, &values, &active)?);
+            }
         }
         output.push(row);
     }
