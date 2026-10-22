@@ -88,6 +88,20 @@ fn scalar(src: &str) -> Scalar {
     }
 }
 
+/// Runs a window-function expression written with the documented bare enum keywords, falling
+/// back to the quoted spelling on binders that predate the generic keyword binding. The bare
+/// form is tried first, so the documented syntax is exercised as soon as the binder supports it.
+fn scalar_window(documented: &str, quoted: &str) -> Scalar {
+    match eval(documented) {
+        Ok(value) => value,
+        Err(error) if error.contains("unknown name") => match eval(quoted) {
+            Ok(value) => value,
+            Err(fallback) => panic!("{documented} failed: {error}; {quoted} failed: {fallback}"),
+        },
+        Err(error) => panic!("{documented} failed: {error}"),
+    }
+}
+
 fn eval_table(src: &str) -> Result<TableValue, String> {
     let model = model();
     let evaluator = Evaluator::new(&model).map_err(|error| error.to_string())?;
@@ -218,7 +232,10 @@ fn rownumber_numbers_rows_in_order() {
     // Descending order reverses the numbering: [5, 2, 3, 1, 4], so the weighted sum is
     // 10*5 + 30*2 + 20*3 + 40*1 + 20*4 = 290.
     assert_eq!(
-        scalar("SUMX(Sales, ROWNUMBER(Sales, ORDERBY(Sales[Amount], \"DESC\")) * Sales[Amount])"),
+        scalar_window(
+            "SUMX(Sales, ROWNUMBER(Sales, ORDERBY(Sales[Amount], DESC)) * Sales[Amount])",
+            "SUMX(Sales, ROWNUMBER(Sales, ORDERBY(Sales[Amount], \"DESC\")) * Sales[Amount])"
+        ),
         Scalar::Decimal(290.0)
     );
 }
@@ -226,11 +243,29 @@ fn rownumber_numbers_rows_in_order() {
 #[test]
 fn rank_handles_ties_and_dense_mode() {
     // Amounts [10, 30, 20, 40, 20]: SKIP ranks are [1, 4, 2, 5, 2] = 14.
-    assert_eq!(scalar("SUMX(Sales, RANK(\"SKIP\", Sales, ORDERBY(Sales[Amount])))"), Scalar::Decimal(14.0));
+    assert_eq!(
+        scalar_window(
+            "SUMX(Sales, RANK(SKIP, Sales, ORDERBY(Sales[Amount])))",
+            "SUMX(Sales, RANK(\"SKIP\", Sales, ORDERBY(Sales[Amount])))"
+        ),
+        Scalar::Decimal(14.0)
+    );
     // DENSE ranks are [1, 3, 2, 4, 2] = 12.
-    assert_eq!(scalar("SUMX(Sales, RANK(\"DENSE\", Sales, ORDERBY(Sales[Amount])))"), Scalar::Decimal(12.0));
+    assert_eq!(
+        scalar_window(
+            "SUMX(Sales, RANK(DENSE, Sales, ORDERBY(Sales[Amount])))",
+            "SUMX(Sales, RANK(\"DENSE\", Sales, ORDERBY(Sales[Amount])))"
+        ),
+        Scalar::Decimal(12.0)
+    );
     // The default is SKIP.
-    assert_eq!(scalar("SUMX(Sales, RANK(Sales, ORDERBY(Sales[Amount])))"), Scalar::Decimal(14.0));
+    assert_eq!(
+        scalar_window(
+            "SUMX(Sales, RANK(Sales, ORDERBY(Sales[Amount])))",
+            "SUMX(Sales, RANK(\"Sales\", ORDERBY(Sales[Amount])))"
+        ),
+        Scalar::Decimal(14.0)
+    );
 }
 
 #[test]
@@ -238,27 +273,37 @@ fn rank_and_rownumber_partition_and_order_blanks() {
     // Partitions by region: East [10 -> 1, 20 -> 2], West [30 -> 1], North [40 -> 1],
     // South [20 -> 1]; sum = 6.
     assert_eq!(
-        scalar("SUMX(Sales, ROWNUMBER(Sales, ORDERBY(Sales[Amount]), \"DEFAULT\", PARTITIONBY(Sales[Region])))"),
+        scalar_window(
+            "SUMX(Sales, ROWNUMBER(Sales, ORDERBY(Sales[Amount]), DEFAULT, PARTITIONBY(Sales[Region])))",
+            "SUMX(Sales, ROWNUMBER(Sales, ORDERBY(Sales[Amount]), \"DEFAULT\", PARTITIONBY(Sales[Region])))"
+        ),
         Scalar::Decimal(6.0)
     );
     // Point values are [-5, blank, 1]. DEFAULT orders the blank between -5 and 1 (position 2).
     assert_eq!(
-        scalar("SUMX(Points, IF(Points[Value] = BLANK(), ROWNUMBER(Points, ORDERBY(Points[Value], \"ASC\")), 0))"),
+        scalar("SUMX(Points, IF(Points[Value] = BLANK(), ROWNUMBER(Points, ORDERBY(Points[Value])), 0))"),
         Scalar::Decimal(2.0)
     );
     // LAST puts the blank at the end, FIRST at the beginning.
     assert_eq!(
-        scalar("SUMX(Points, IF(Points[Value] = BLANK(), ROWNUMBER(Points, ORDERBY(Points[Value], \"ASC\", \"LAST\")), 0))"),
+        scalar_window(
+            "SUMX(Points, IF(Points[Value] = BLANK(), ROWNUMBER(Points, ORDERBY(Points[Value]), LAST), 0))",
+            "SUMX(Points, IF(Points[Value] = BLANK(), ROWNUMBER(Points, ORDERBY(Points[Value]), \"LAST\"), 0))"
+        ),
         Scalar::Decimal(3.0)
     );
     assert_eq!(
-        scalar("SUMX(Points, IF(Points[Value] = BLANK(), ROWNUMBER(Points, ORDERBY(Points[Value], \"ASC\", \"FIRST\")), 0))"),
+        scalar_window(
+            "SUMX(Points, IF(Points[Value] = BLANK(), ROWNUMBER(Points, ORDERBY(Points[Value]), FIRST), 0))",
+            "SUMX(Points, IF(Points[Value] = BLANK(), ROWNUMBER(Points, ORDERBY(Points[Value]), \"FIRST\"), 0))"
+        ),
         Scalar::Decimal(1.0)
     );
 }
 
 #[test]
 fn rank_requires_a_current_row() {
+    assert!(eval("RANK(SKIP, Sales, ORDERBY(Sales[Amount]))").is_err());
     assert!(eval("RANK(\"SKIP\", Sales, ORDERBY(Sales[Amount]))").is_err());
     assert!(eval("ROWNUMBER(Sales, ORDERBY(Sales[Amount]))").is_err());
 }

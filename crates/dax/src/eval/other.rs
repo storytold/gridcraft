@@ -397,6 +397,10 @@ struct WindowSpec<'a> {
     dense: bool,
     ties_seen: bool,
     relation: Option<&'a BoundExpr>,
+    /// A bare name found where the relation belongs. The binder binds RANK's first argument as
+    /// a keyword (the catalog marks that position as text), so `RANK(Sales, ORDERBY(...))`
+    /// without a ties mode arrives as `Keyword("Sales")` instead of a table reference.
+    relation_keyword: Option<String>,
     order: Vec<OrderKey<'a>>,
     blanks: BlanksOrder,
     partition: Vec<&'a BoundExpr>,
@@ -412,12 +416,44 @@ struct WindowRow {
 /// Parses the keyword-style arguments of `RANK`/`ROWNUMBER`. `ORDERBY`, `PARTITIONBY` and
 /// `MATCHBY` are recognized structurally, so they never need to be evaluated as tables.
 ///
-/// The catalog/binder only turns bare words into keywords for `DATEDIFF` and `DATATABLE`, so
-/// keyword arguments such as `DENSE` or `DESC` must be written as string literals here.
+/// The binder turns documented bare enum parameters (`DENSE`, `SKIP`, `DEFAULT`, `FIRST`,
+/// `LAST`, ...) into [`BoundExpr::Keyword`] when the catalog marks the position as text. Quoted
+/// strings are accepted too, which keeps older expressions working. `ORDERBY`'s positions are
+/// all `Any`, so per-key `ASC`/`DESC`/`BLANKS` come through as plain names (see
+/// [`keyword_text`]).
 fn parse_window<'a>(name: &str, exprs: &'a [BoundExpr], rank: bool) -> Result<WindowSpec<'a>, EvalError> {
-    let mut spec =
-        WindowSpec { dense: false, ties_seen: false, relation: None, order: Vec::new(), blanks: BlanksOrder::Default, partition: Vec::new(), match_by: Vec::new() };
+    let mut spec = WindowSpec {
+        dense: false,
+        ties_seen: false,
+        relation: None,
+        relation_keyword: None,
+        order: Vec::new(),
+        blanks: BlanksOrder::Default,
+        partition: Vec::new(),
+        match_by: Vec::new(),
+    };
     for expr in exprs {
+        if let Some(text) = keyword_text(expr) {
+            let keyword = text.trim().to_ascii_uppercase();
+            if rank && !spec.ties_seen && matches!(keyword.as_str(), "DENSE" | "SKIP") {
+                spec.dense = keyword == "DENSE";
+                spec.ties_seen = true;
+            } else if matches!(keyword.as_str(), "DEFAULT" | "FIRST" | "LAST") {
+                spec.blanks = match keyword.as_str() {
+                    "FIRST" => BlanksOrder::First,
+                    "LAST" => BlanksOrder::Last,
+                    _ => BlanksOrder::Default,
+                };
+            } else if matches!(keyword.as_str(), "NONE" | "LOWESTPARENT" | "HIGHESTPARENT") {
+                // Reset: no visual parent hierarchy exists, so it is accepted and ignored.
+            } else if spec.relation.is_none() && spec.relation_keyword.is_none() {
+                // Resolved against the model's table names while evaluating (see `window`).
+                spec.relation_keyword = Some(text.clone());
+            } else {
+                return Err(EvalError::new(format!("{name} unexpected keyword `{text}`")));
+            }
+            continue;
+        }
         match expr {
             BoundExpr::Call { spec: call_spec, args: inner } if call_spec.name.eq_ignore_ascii_case("ORDERBY") => {
                 parse_order_by(inner, &mut spec.order)?;
@@ -427,23 +463,6 @@ fn parse_window<'a>(name: &str, exprs: &'a [BoundExpr], rank: bool) -> Result<Wi
             }
             BoundExpr::Call { spec: call_spec, args: inner } if call_spec.name.eq_ignore_ascii_case("MATCHBY") => {
                 spec.match_by.extend(inner.iter());
-            }
-            BoundExpr::Literal(Literal::String(text)) => {
-                let keyword = text.trim().to_ascii_uppercase();
-                if rank && !spec.ties_seen && matches!(keyword.as_str(), "DENSE" | "SKIP") {
-                    spec.dense = keyword == "DENSE";
-                    spec.ties_seen = true;
-                } else if matches!(keyword.as_str(), "DEFAULT" | "FIRST" | "LAST") {
-                    spec.blanks = match keyword.as_str() {
-                        "FIRST" => BlanksOrder::First,
-                        "LAST" => BlanksOrder::Last,
-                        _ => BlanksOrder::Default,
-                    };
-                } else if matches!(keyword.as_str(), "NONE" | "LOWESTPARENT" | "HIGHESTPARENT") {
-                    // Reset: no visual parent hierarchy exists, so it is accepted and ignored.
-                } else if spec.relation.is_none() {
-                    return Err(EvalError::new(format!("{name} expected a relation table, found the text `{text}`")));
-                }
             }
             _ => {
                 if spec.relation.is_none() {
@@ -456,9 +475,19 @@ fn parse_window<'a>(name: &str, exprs: &'a [BoundExpr], rank: bool) -> Result<Wi
     Ok(spec)
 }
 
+/// A keyword argument, written either as a bare name (bound by the catalog's `Text` parameter
+/// rule) or as a quoted string.
+fn keyword_text(expr: &BoundExpr) -> Option<String> {
+    match expr {
+        BoundExpr::Keyword(name) => Some(name.clone()),
+        BoundExpr::Literal(Literal::String(text)) => Some(text.clone()),
+        _ => None,
+    }
+}
+
 fn parse_order_by<'a>(inner: &'a [BoundExpr], order: &mut Vec<OrderKey<'a>>) -> Result<(), EvalError> {
     for expr in inner {
-        if let BoundExpr::Literal(Literal::String(text)) = expr {
+        if let Some(text) = keyword_text(expr) {
             let keyword = text.trim().to_ascii_uppercase();
             match keyword.as_str() {
                 "ASC" | "DESC" => {
@@ -494,6 +523,12 @@ fn window(ev: &Evaluator<'_>, name: &str, exprs: &[BoundExpr], ctx: &mut Context
         relation_table = table
             .lineage
             .ok_or_else(|| EvalError::new(format!("{name} needs a relation table with model lineage")))?;
+    } else if let Some(keyword) = spec.relation_keyword.as_deref() {
+        relation_table = ev
+            .model()
+            .table_index(keyword)
+            .ok_or_else(|| EvalError::new(format!("{name} expected a relation table, found `{keyword}`")))?;
+        table = ev.table(relation_table, &ctx.filters);
     } else {
         let (candidate, _) = spec
             .order
