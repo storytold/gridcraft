@@ -384,6 +384,7 @@ fn table_arguments_reject_obvious_scalars_but_accept_dynamic_tables() {
         "COUNTROWS ( \"Sales\" )",
         "COUNTROWS ( -1 )",
         "COUNTROWS ( 1 + 1 )",
+        "COUNTROWS ( Sales[Amount] )",
         "SUMX ( 1, Sales[Amount] )",
         "AVERAGEX ( 1 + 1, Sales[Amount] )",
         "MAXX ( TRUE, Sales[Amount] )",

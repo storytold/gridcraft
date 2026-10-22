@@ -143,7 +143,7 @@ fn expected_kinds(overloads: &[&Overload], index: usize) -> String {
 fn accepts(kind: ParamKind, argument: &Expr) -> bool {
     match kind {
         ParamKind::Column => is_column_reference(argument),
-        ParamKind::Table => !is_obvious_scalar(argument),
+        ParamKind::Table => !is_obvious_scalar(argument) && !is_column_reference(argument),
         ParamKind::Expression | ParamKind::Scalar | ParamKind::Logical | ParamKind::Any => true,
     }
 }
