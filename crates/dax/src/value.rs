@@ -9,6 +9,11 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 /// A DAX scalar value.
+///
+/// `Currency` and `DateTime` are plain numbers in DAX, so an untagged numeric representation
+/// would read them back as `Integer`/`Decimal`. They serialize as tagged JSON objects instead:
+/// `{"$currency": 1234}` (scaled by 10,000) and `{"$dateTime": 45292.5}`. Every other variant
+/// keeps its natural JSON form, so existing model files and command output stay unchanged.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Scalar {
@@ -17,11 +22,49 @@ pub enum Scalar {
     Boolean(bool),
     Integer(i64),
     /// Currency is an integer scaled by 10,000.
+    #[serde(with = "currency_serde")]
     Currency(i64),
     Decimal(f64),
     /// DateTime is an OLE Automation serial: whole days since 1899-12-30 plus a time fraction.
+    #[serde(with = "datetime_serde")]
     DateTime(f64),
     String(String),
+}
+
+mod currency_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize)]
+    struct Tagged {
+        #[serde(rename = "$currency")]
+        value: i64,
+    }
+
+    pub fn serialize<S: Serializer>(value: &i64, serializer: S) -> Result<S::Ok, S::Error> {
+        Tagged { value: *value }.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+        Ok(Tagged::deserialize(deserializer)?.value)
+    }
+}
+
+mod datetime_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize)]
+    struct Tagged {
+        #[serde(rename = "$dateTime")]
+        value: f64,
+    }
+
+    pub fn serialize<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+        Tagged { value: *value }.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+        Ok(Tagged::deserialize(deserializer)?.value)
+    }
 }
 
 impl Scalar {
@@ -125,9 +168,38 @@ impl From<&Scalar> for ScalarKey {
             Scalar::Boolean(value) => ScalarKey::Boolean(*value),
             Scalar::Integer(value) => ScalarKey::Integer(*value),
             Scalar::Currency(value) => ScalarKey::Currency(*value),
-            Scalar::Decimal(value) => ScalarKey::Decimal(value.to_bits()),
-            Scalar::DateTime(value) => ScalarKey::DateTime(value.to_bits()),
+            Scalar::Decimal(value) => ScalarKey::Decimal(order_bits(*value)),
+            Scalar::DateTime(value) => ScalarKey::DateTime(order_bits(*value)),
             Scalar::String(value) => ScalarKey::String(value.clone()),
+        }
+    }
+}
+
+/// Maps an `f64` to a `u64` whose unsigned order matches numeric order. `-0.0` and `0.0` map to
+/// the same key, so `Ord` on [`ScalarKey`] sorts pivot groups numerically.
+fn order_bits(value: f64) -> u64 {
+    let value = if value == 0.0 { 0.0 } else { value };
+    let bits = value.to_bits();
+    if bits >> 63 == 1 { !bits } else { bits | (1 << 63) }
+}
+
+/// Inverse of [`order_bits`].
+pub(crate) fn bits_order(bits: u64) -> f64 {
+    let bits = if bits >> 63 == 1 { bits & !(1 << 63) } else { !bits };
+    f64::from_bits(bits)
+}
+
+impl ScalarKey {
+    /// Rebuilds the scalar that produced this key.
+    pub fn to_scalar(&self) -> Scalar {
+        match self {
+            ScalarKey::Blank => Scalar::Blank,
+            ScalarKey::Boolean(value) => Scalar::Boolean(*value),
+            ScalarKey::Integer(value) => Scalar::Integer(*value),
+            ScalarKey::Currency(value) => Scalar::Currency(*value),
+            ScalarKey::Decimal(value) => Scalar::Decimal(bits_order(*value)),
+            ScalarKey::DateTime(value) => Scalar::DateTime(bits_order(*value)),
+            ScalarKey::String(value) => Scalar::String(value.clone()),
         }
     }
 }
@@ -155,6 +227,17 @@ impl TableValue {
     pub fn with_lineage(mut self, lineage: usize) -> Self {
         self.lineage = Some(lineage);
         self
+    }
+
+    /// Keeps the existing lineage when the input had one.
+    pub fn with_lineage_if(mut self, lineage: Option<usize>) -> Self {
+        self.lineage = lineage;
+        self
+    }
+
+    /// Builds a table from rows whose column names are given.
+    pub fn from_rows(columns: Vec<TableColumn>, rows: Vec<Vec<Scalar>>, lineage: Option<usize>) -> Self {
+        TableValue { columns, rows, lineage }
     }
 
     pub fn column_index(&self, name: &str) -> Option<usize> {

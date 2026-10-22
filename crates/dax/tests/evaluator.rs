@@ -129,6 +129,102 @@ fn pivot_groups_and_evaluates_measures() {
 }
 
 #[test]
+fn iterators_resolve_rows_of_filtered_tables() {
+    // The frame must carry the row values, not the position in the filtered table.
+    assert_eq!(eval("SUMX(FILTER(Sales, Sales[Region] = \"West\"), Sales[Amount])"), Scalar::Decimal(20.0));
+    // Context transition inside an iterator over a filtered table.
+    assert_eq!(eval("SUMX(FILTER(Sales, Sales[Amount] > 10), [Total Sales])"), Scalar::Decimal(50.0));
+}
+
+#[test]
+fn calculate_accepts_filter_table_arguments() {
+    assert_eq!(eval("CALCULATE([Total Sales], FILTER(Sales, Sales[Amount] > 10))"), Scalar::Decimal(50.0));
+}
+
+#[test]
+fn cyclic_measures_are_rejected_before_evaluation() {
+    let mut model = model();
+    model.measures.push(Measure {
+        name: "Cycle A".into(),
+        formula: "[Cycle B] + 1".into(),
+        table: Some("Sales".into()),
+        format: None,
+        expr: None,
+    });
+    model.measures.push(Measure {
+        name: "Cycle B".into(),
+        formula: "[Cycle A] + 1".into(),
+        table: Some("Sales".into()),
+        format: None,
+        expr: None,
+    });
+    model.parse_formulas().expect("model parses");
+    let error = match Evaluator::new(&model) {
+        Ok(_) => panic!("cyclic measures must be rejected"),
+        Err(error) => error,
+    };
+    assert!(error.message.contains("Cycle"), "{error:?}");
+}
+
+#[test]
+fn bidirectional_filters_do_not_recurse() {
+    let mut model = model();
+    model.tables.push(ModelTable {
+        name: "Products".into(),
+        columns: vec![ModelColumn { name: "Region".into(), data_type: Some("String".into()) }],
+        rows: vec![vec![Scalar::String("East".into())], vec![Scalar::String("West".into())]],
+    });
+    model.relationships.push(Relationship {
+        from_table: "Sales".into(),
+        from_column: "Region".into(),
+        to_table: "Products".into(),
+        to_column: "Region".into(),
+        bidirectional: true,
+        inactive: false,
+    });
+    model.parse_formulas().expect("model parses");
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let expr = parse_expression("CALCULATE(SUM(Sales[Amount]), Products[Region] = \"East\")").expect("parse");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    assert_eq!(evaluator.evaluate(&bound).expect("bidirectional filter"), Scalar::Decimal(40.0));
+
+    model.relationships.last_mut().expect("relationship").inactive = true;
+    let evaluator = Evaluator::new(&model).expect("evaluator");
+    let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+    assert_eq!(evaluator.evaluate(&bound).expect("inactive relationship is ignored"), Scalar::Decimal(60.0));
+}
+
+#[test]
+fn unbounded_scalar_functions_return_errors() {
+    for formula in ["FACT(171)", "REPT(\"x\", 100000)"] {
+        let model = model();
+        let evaluator = Evaluator::new(&model).expect("evaluator");
+        let expr = parse_expression(formula).expect("parse");
+        let bound = Binder::new(&model).bind_expression(&expr).expect("bind");
+        assert!(evaluator.evaluate(&bound).is_err(), "{formula} must fail");
+    }
+}
+
+#[test]
+fn scalar_json_round_trip_preserves_variants() {
+    for value in [Scalar::Currency(123_456), Scalar::DateTime(45293.5), Scalar::Integer(7), Scalar::Decimal(1.5), Scalar::Blank] {
+        let json = serde_json::to_value(&value).expect("serialize");
+        let back: Scalar = serde_json::from_value(json.clone()).expect("deserialize");
+        assert_eq!(back, value, "round trip through {json}");
+    }
+}
+
+#[test]
+fn scalar_keys_sort_numerically() {
+    let mut keys: Vec<gridcraft_dax::ScalarKey> =
+        [-2.5, -1.0, 0.0, 1.0, 2.5].into_iter().map(|value| gridcraft_dax::ScalarKey::from(&Scalar::Decimal(value))).collect();
+    keys.sort();
+    let back: Vec<f64> = keys.iter().map(|key| key.to_scalar().to_number().unwrap_or_default()).collect();
+    assert_eq!(back, vec![-2.5, -1.0, 0.0, 1.0, 2.5]);
+    assert_eq!(gridcraft_dax::ScalarKey::from(&Scalar::Decimal(-0.0)), gridcraft_dax::ScalarKey::from(&Scalar::Decimal(0.0)));
+}
+
+#[test]
 fn pivot_cross_puts_column_groups_in_columns() {
     let model = model();
     let rows = gridcraft_dax::pivot_fields(&model, &["Sales[Region]".into()]).expect("rows");

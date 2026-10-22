@@ -6,6 +6,23 @@
 //! Functions outside this subset return [`EvalError::not_implemented`]; the parser and catalog
 //! still accept them.
 
+mod aggregation;
+mod date_time;
+mod financial;
+mod filter;
+mod information;
+mod logical;
+mod math_trig;
+mod model_info;
+mod other;
+mod parent_child;
+mod statistical;
+mod support;
+mod table_manipulation;
+mod text;
+mod time_intelligence;
+mod visual;
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,6 +30,8 @@ use crate::ast::{BinaryOp, Literal, UnaryOp};
 use crate::binder::{BindError, Binder, BoundExpr};
 use crate::model::DataModel;
 use crate::value::{EvalError, Scalar, ScalarKey, TableColumn, TableValue};
+
+use support::*;
 
 /// A set of column-value filters. A column with several keys is an OR; different columns are
 /// ANDed.
@@ -42,10 +61,30 @@ impl FilterContext {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct RowFrame {
-    table: usize,
-    row: usize,
+/// One row of the evaluation row context.
+///
+/// `values` is the row's data, never a position in a derived table: iterators over `FILTER` or
+/// `ADDCOLUMNS` results must still resolve the original values. `names` mirrors `values` so
+/// unqualified `[Column]` references can find columns added by `ADDCOLUMNS`/`SELECTCOLUMNS`.
+/// `model_columns` maps a value back to its model column in `lineage` (`None` for computed
+/// columns), which lets a measure's context transition turn the row back into filters without
+/// guessing from positions.
+#[derive(Clone, Debug)]
+pub(crate) struct RowFrame {
+    pub(crate) lineage: Option<usize>,
+    pub(crate) names: Vec<String>,
+    pub(crate) values: Vec<Scalar>,
+    pub(crate) model_columns: Vec<Option<usize>>,
+}
+
+impl RowFrame {
+    fn get(&self, column: usize) -> Option<&Scalar> {
+        self.model_columns.iter().position(|candidate| *candidate == Some(column)).and_then(|index| self.values.get(index))
+    }
+
+    fn get_name(&self, name: &str) -> Option<Scalar> {
+        self.names.iter().position(|candidate| candidate.eq_ignore_ascii_case(name)).and_then(|index| self.values.get(index)).cloned()
+    }
 }
 
 /// An evaluator with pre-bound measures.
@@ -57,6 +96,9 @@ pub struct Evaluator<'a> {
 impl<'a> Evaluator<'a> {
     pub fn new(model: &'a DataModel) -> Result<Self, BindError> {
         let binder = Binder::new(model);
+        // Reject cyclic measure dependencies here: `eval_measure` recurses through measure
+        // references and would otherwise overflow the stack on every evaluation path.
+        binder.dependency_graph()?;
         let mut measures = Vec::with_capacity(model.measures.len());
         for measure in &model.measures {
             let Some(expr) = &measure.expr else {
@@ -92,7 +134,7 @@ impl<'a> Evaluator<'a> {
         self.eval_measure(index, &mut ctx)
     }
 
-    fn eval(&self, expr: &BoundExpr, ctx: &mut Context) -> Result<Scalar, EvalError> {
+    pub(crate) fn eval(&self, expr: &BoundExpr, ctx: &mut Context) -> Result<Scalar, EvalError> {
         match expr {
             BoundExpr::Literal(literal) => Ok(literal_value(literal)),
             BoundExpr::Column { table, column } => self.column_value(*table, *column, ctx),
@@ -131,16 +173,19 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    fn eval_measure(&self, index: usize, ctx: &mut Context) -> Result<Scalar, EvalError> {
+    pub(crate) fn eval_measure(&self, index: usize, ctx: &mut Context) -> Result<Scalar, EvalError> {
         let expr = self.measures.get(index).ok_or_else(|| EvalError::new(format!("measure index {index} is out of range")))?;
         let mut filters = ctx.filters.clone();
-        if let Some(frame) = ctx.rows.last().copied() {
-            // Context transition: the current row becomes an equivalent filter.
-            if let Some(table) = self.model.tables.get(frame.table) {
-                for (column, _) in table.columns.iter().enumerate() {
-                    if let Some(value) = table.rows.get(frame.row).and_then(|row| row.get(column)) {
-                        filters.set(frame.table, column, [ScalarKey::from(value)]);
-                    }
+        if let Some(frame) = ctx.rows.last()
+            && let Some(table) = frame.lineage
+            && self.model.tables.get(table).is_some()
+        {
+            // Context transition: the current row becomes an equivalent filter over the model
+            // columns it carries. Computed columns (ADDCOLUMNS/SELECTCOLUMNS) have no model
+            // column and are skipped.
+            for (index, column) in frame.model_columns.iter().enumerate() {
+                if let (Some(column), Some(value)) = (column, frame.values.get(index)) {
+                    filters.set(table, *column, [ScalarKey::from(value)]);
                 }
             }
         }
@@ -148,16 +193,9 @@ impl<'a> Evaluator<'a> {
         self.eval(expr, &mut inner)
     }
 
-    fn column_value(&self, table: usize, column: usize, ctx: &mut Context) -> Result<Scalar, EvalError> {
-        if let Some(frame) = ctx.rows.iter().rev().find(|frame| frame.table == table) {
-            return self
-                .model
-                .tables
-                .get(table)
-                .and_then(|t| t.rows.get(frame.row))
-                .and_then(|row| row.get(column))
-                .cloned()
-                .ok_or_else(|| EvalError::new("row is out of range"));
+    pub(crate) fn column_value(&self, table: usize, column: usize, ctx: &mut Context) -> Result<Scalar, EvalError> {
+        if let Some(frame) = ctx.rows.iter().rev().find(|frame| frame.lineage == Some(table)) {
+            return frame.get(column).cloned().ok_or_else(|| EvalError::new("row is out of range"));
         }
         if let Some(values) = ctx.filters.filters.get(&(table, column))
             && values.len() == 1
@@ -167,11 +205,15 @@ impl<'a> Evaluator<'a> {
         Err(EvalError::new("a column reference needs a row or a single-value filter context"))
     }
 
-    fn unqualified_column(&self, name: &str, ctx: &mut Context) -> Result<Scalar, EvalError> {
+    pub(crate) fn unqualified_column(&self, name: &str, ctx: &mut Context) -> Result<Scalar, EvalError> {
         for frame in ctx.rows.iter().rev() {
-            let Some(table) = self.model.tables.get(frame.table) else { continue };
-            if let Some(column) = self.model.column_index(frame.table, name) {
-                return table.rows.get(frame.row).and_then(|row| row.get(column)).cloned().ok_or_else(|| EvalError::new("row is out of range"));
+            if let Some(value) = frame.get_name(name) {
+                return Ok(value);
+            }
+            if let Some(table) = frame.lineage
+                && let Some(column) = self.model.column_index(table, name)
+            {
+                return frame.get(column).cloned().ok_or_else(|| EvalError::new("row is out of range"));
             }
         }
         let tables = self.model.tables_with_column(name);
@@ -184,10 +226,21 @@ impl<'a> Evaluator<'a> {
         Err(EvalError::new(format!("column `[{name}]` is ambiguous or out of row context")))
     }
 
-    fn table(&self, table: usize, filters: &FilterContext) -> TableValue {
+    pub(crate) fn table(&self, table: usize, filters: &FilterContext) -> TableValue {
+        self.table_inner(table, filters, &mut BTreeSet::new())
+    }
+
+    fn table_inner(&self, table: usize, filters: &FilterContext, visited: &mut BTreeSet<usize>) -> TableValue {
         let Some(model_table) = self.model.tables.get(table) else {
             return TableValue::new(Vec::new(), Vec::new());
         };
+        // A relationship chain can lead back to a table already being filtered (bidirectional
+        // pairs, or a cycle of single-direction relationships). Stop at the cycle: the direct
+        // filters on the other table still apply to it, but re-entering here adds nothing.
+        if !visited.insert(table) {
+            return TableValue::new(model_table.columns.iter().map(|column| TableColumn { name: column.name.clone() }).collect(), Vec::new())
+                .with_lineage(table);
+        }
         let mut rows: Vec<Vec<Scalar>> = model_table
             .rows
             .iter()
@@ -197,39 +250,41 @@ impl<'a> Evaluator<'a> {
             .cloned()
             .collect();
 
-        // Propagate filters across relationships: a filtered related table restricts this table
-        // to rows whose key appears in the related table.
+        // Propagate filters across active relationships: a filtered related table restricts this
+        // table to rows whose key appears in the related table. Only tables that are actually
+        // filtered can restrict this one, and a table already on the current propagation path is
+        // skipped.
         for relationship in &self.model.relationships {
+            if relationship.inactive {
+                continue;
+            }
             let (Some(from), Some(to)) = (self.model.table_index(&relationship.from_table), self.model.table_index(&relationship.to_table)) else {
                 continue;
             };
-            if from == table {
-                if let (Some(from_col), Some(to_col)) =
-                    (self.model.column_index(from, &relationship.from_column), self.model.column_index(to, &relationship.to_column))
-                {
-                    let keys: BTreeSet<ScalarKey> =
-                        self.table(to, filters).rows.iter().filter_map(|row| row.get(to_col)).map(ScalarKey::from).collect();
-                    if filters.filters.keys().any(|(t, _)| *t == to) {
-                        rows.retain(|row| row.get(from_col).is_some_and(|value| keys.contains(&ScalarKey::from(value))));
-                    }
-                }
-            } else if relationship.bidirectional
-                && to == table
-                && let (Some(from_col), Some(to_col)) =
-                    (self.model.column_index(from, &relationship.from_column), self.model.column_index(to, &relationship.to_column))
-            {
-                let keys: BTreeSet<ScalarKey> =
-                    self.table(from, filters).rows.iter().filter_map(|row| row.get(from_col)).map(ScalarKey::from).collect();
-                if filters.filters.keys().any(|(t, _)| *t == from) {
-                    rows.retain(|row| row.get(to_col).is_some_and(|value| keys.contains(&ScalarKey::from(value))));
-                }
+            let (other, self_column, other_column) = if from == table {
+                (to, &relationship.from_column, &relationship.to_column)
+            } else if relationship.bidirectional && to == table {
+                (from, &relationship.to_column, &relationship.from_column)
+            } else {
+                continue;
+            };
+            if !filters.filters.keys().any(|(filtered, _)| *filtered == other) || visited.contains(&other) {
+                continue;
             }
+            let (Some(self_col), Some(other_col)) = (self.model.column_index(table, self_column), self.model.column_index(other, other_column))
+            else {
+                continue;
+            };
+            let keys: BTreeSet<ScalarKey> =
+                self.table_inner(other, filters, visited).rows.iter().filter_map(|row| row.get(other_col)).map(ScalarKey::from).collect();
+            rows.retain(|row| row.get(self_col).is_some_and(|value| keys.contains(&ScalarKey::from(value))));
         }
 
+        visited.remove(&table);
         TableValue::new(model_table.columns.iter().map(|column| TableColumn { name: column.name.clone() }).collect(), rows).with_lineage(table)
     }
 
-    fn eval_table(&self, expr: &BoundExpr, ctx: &mut Context) -> Result<TableValue, EvalError> {
+    pub(crate) fn eval_table(&self, expr: &BoundExpr, ctx: &mut Context) -> Result<TableValue, EvalError> {
         match expr {
             BoundExpr::Table(table) => Ok(self.table(*table, &ctx.filters)),
             BoundExpr::Call { spec, args } => self.call_table(spec.name, args, ctx),
@@ -270,6 +325,10 @@ impl<'a> Evaluator<'a> {
                     Ok(value) => Ok(value),
                     Err(_) => self.eval(args.get(1).ok_or_else(|| EvalError::new("IFERROR needs an alternative"))?, ctx),
                 };
+            }
+            "ISERROR" => {
+                let arg = args.first().ok_or_else(|| EvalError::new("ISERROR needs an argument"))?;
+                return Ok(Scalar::Boolean(self.eval(arg, ctx).is_err()));
             }
             "SWITCH" => {
                 let value = self.eval(args.first().ok_or_else(|| EvalError::new("SWITCH needs an expression"))?, ctx)?;
@@ -321,17 +380,12 @@ impl<'a> Evaluator<'a> {
             "FILTER" => {
                 let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("FILTER needs a table"))?, ctx)?;
                 let predicate = args.get(1).ok_or_else(|| EvalError::new("FILTER needs a predicate"))?;
-                let table_index = self.table_index_for(&table);
                 let mut rows = Vec::new();
-                for (row_index, row) in table.rows.iter().enumerate() {
-                    if let Some(table_index) = table_index {
-                        ctx.rows.push(RowFrame { table: table_index, row: row_index });
-                    }
+                for row in &table.rows {
+                    ctx.rows.push(frame_for(self, &table, row));
                     let keep =
                         self.eval(predicate, ctx).and_then(|value| value.to_bool().ok_or_else(|| EvalError::new("FILTER predicate is not Boolean")));
-                    if table_index.is_some() {
-                        ctx.rows.pop();
-                    }
+                    ctx.rows.pop();
                     if keep? {
                         rows.push(row.clone());
                     }
@@ -372,8 +426,37 @@ impl<'a> Evaluator<'a> {
             _ => {}
         }
 
+        if let Some(result) = self.call_categories(name, args, ctx) {
+            return result;
+        }
         let values = args.iter().map(|arg| self.eval(arg, ctx)).collect::<Result<Vec<_>, _>>()?;
         scalar_function(name, &values)
+    }
+
+    /// Runs the family modules for functions the core switch does not handle.
+    fn call_categories(&self, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<Scalar, EvalError>> {
+        for dispatch in [
+            financial::call,
+            statistical::call,
+            time_intelligence::call,
+            information::call,
+            model_info::call,
+            filter::call,
+            table_manipulation::call,
+            text::call,
+            math_trig::call,
+            logical::call,
+            date_time::call,
+            other::call,
+            parent_child::call,
+            aggregation::call,
+            visual::call,
+        ] {
+            if let Some(result) = dispatch(self, name, args, ctx) {
+                return Some(result);
+            }
+        }
+        None
     }
 
     fn call_table(&self, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Result<TableValue, EvalError> {
@@ -381,22 +464,19 @@ impl<'a> Evaluator<'a> {
             "FILTER" => {
                 let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("FILTER needs a table"))?, ctx)?;
                 let predicate = args.get(1).ok_or_else(|| EvalError::new("FILTER needs a predicate"))?;
-                let table_index = self.table_index_for(&table);
                 let mut rows = Vec::new();
-                for (row_index, row) in table.rows.iter().enumerate() {
-                    if let Some(table_index) = table_index {
-                        ctx.rows.push(RowFrame { table: table_index, row: row_index });
-                    }
+                for row in &table.rows {
+                    ctx.rows.push(frame_for(self, &table, row));
                     let keep =
                         self.eval(predicate, ctx).and_then(|value| value.to_bool().ok_or_else(|| EvalError::new("FILTER predicate is not Boolean")));
-                    if table_index.is_some() {
-                        ctx.rows.pop();
-                    }
+                    ctx.rows.pop();
                     if keep? {
                         rows.push(row.clone());
                     }
                 }
-                Ok(TableValue::new(table.columns, rows))
+                // Keep the source lineage: CALCULATE table filters and downstream iterators need
+                // to know which model table these rows came from.
+                Ok(TableValue::new(table.columns, rows).with_lineage_if(table.lineage))
             }
             "ALL" | "ALLNOBLANKROW" | "ALLSELECTED" => {
                 let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("ALL needs a table"))?, ctx)?;
@@ -435,7 +515,6 @@ impl<'a> Evaluator<'a> {
             }
             "ADDCOLUMNS" | "SELECTCOLUMNS" => {
                 let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("table function needs a table"))?, ctx)?;
-                let table_index = self.table_index_for(&table);
                 let mut columns = table.columns.clone();
                 let mut expressions = Vec::new();
                 for pair in args[1..].chunks(2) {
@@ -448,20 +527,16 @@ impl<'a> Evaluator<'a> {
                     expressions.push(expr);
                 }
                 let mut rows = Vec::new();
-                for (row_index, row) in table.rows.iter().enumerate() {
-                    if let Some(table_index) = table_index {
-                        ctx.rows.push(RowFrame { table: table_index, row: row_index });
-                    }
+                for row in &table.rows {
+                    ctx.rows.push(frame_for(self, &table, row));
                     let mut out = row.clone();
                     for expr in &expressions {
                         out.push(self.eval(expr, ctx)?);
                     }
-                    if table_index.is_some() {
-                        ctx.rows.pop();
-                    }
+                    ctx.rows.pop();
                     rows.push(out);
                 }
-                Ok(TableValue::new(columns, rows))
+                Ok(TableValue::new(columns, rows).with_lineage_if(table.lineage))
             }
             "UNION" => {
                 let tables = args.iter().map(|arg| self.eval_table(arg, ctx)).collect::<Result<Vec<_>, _>>()?;
@@ -506,21 +581,16 @@ impl<'a> Evaluator<'a> {
             "TOPN" => {
                 let n = self.eval(args.first().ok_or_else(|| EvalError::new("TOPN needs N"))?, ctx)?.to_number().unwrap_or(0.0) as usize;
                 let table = self.eval_table(args.get(1).ok_or_else(|| EvalError::new("TOPN needs a table"))?, ctx)?;
-                let table_index = self.table_index_for(&table);
                 let order = args.get(2).ok_or_else(|| EvalError::new("TOPN needs an order expression"))?;
                 let mut scored = Vec::with_capacity(table.rows.len());
-                for (row_index, row) in table.rows.iter().enumerate() {
-                    if let Some(table_index) = table_index {
-                        ctx.rows.push(RowFrame { table: table_index, row: row_index });
-                    }
+                for row in &table.rows {
+                    ctx.rows.push(frame_for(self, &table, row));
                     let score = self.eval(order, ctx)?.to_number().unwrap_or(0.0);
-                    if table_index.is_some() {
-                        ctx.rows.pop();
-                    }
+                    ctx.rows.pop();
                     scored.push((score, row.clone()));
                 }
                 scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
-                Ok(TableValue::new(table.columns, scored.into_iter().take(n).map(|(_, row)| row).collect()))
+                Ok(TableValue::new(table.columns, scored.into_iter().take(n).map(|(_, row)| row).collect()).with_lineage_if(table.lineage))
             }
             "DATATABLE" => {
                 // The final argument is a table constructor of rows; earlier pairs describe columns.
@@ -542,8 +612,35 @@ impl<'a> Evaluator<'a> {
                 Ok(TableValue::new(columns, out))
             }
             "TREATAS" => self.eval_table(args.first().ok_or_else(|| EvalError::new("TREATAS needs a table"))?, ctx),
-            _ => Err(EvalError::not_implemented(name)),
+            _ => {
+                return self.call_categories_table(name, args, ctx).unwrap_or_else(|| Err(EvalError::not_implemented(name)));
+            }
         }
+    }
+
+    fn call_categories_table(&self, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Option<Result<TableValue, EvalError>> {
+        for dispatch in [
+            financial::call_table,
+            statistical::call_table,
+            time_intelligence::call_table,
+            information::call_table,
+            model_info::call_table,
+            filter::call_table,
+            table_manipulation::call_table,
+            text::call_table,
+            math_trig::call_table,
+            logical::call_table,
+            date_time::call_table,
+            other::call_table,
+            parent_child::call_table,
+            aggregation::call_table,
+            visual::call_table,
+        ] {
+            if let Some(result) = dispatch(self, name, args, ctx) {
+                return Some(result);
+            }
+        }
+        None
     }
 
     fn aggregate(&self, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
@@ -554,16 +651,11 @@ impl<'a> Evaluator<'a> {
     fn aggregate_x(&self, name: &str, args: &[BoundExpr], ctx: &mut Context) -> Result<Scalar, EvalError> {
         let table = self.eval_table(args.first().ok_or_else(|| EvalError::new("iterator needs a table"))?, ctx)?;
         let expression = args.get(1).ok_or_else(|| EvalError::new("iterator needs an expression"))?;
-        let table_index = self.table_index_for(&table);
         let mut values = Vec::with_capacity(table.rows.len());
-        for (row_index, _) in table.rows.iter().enumerate() {
-            if let Some(table_index) = table_index {
-                ctx.rows.push(RowFrame { table: table_index, row: row_index });
-            }
+        for row in &table.rows {
+            ctx.rows.push(frame_for(self, &table, row));
             let value = self.eval(expression, ctx);
-            if table_index.is_some() {
-                ctx.rows.pop();
-            }
+            ctx.rows.pop();
             values.push(value?);
         }
         aggregate_values(&name[..name.len() - 1], &values)
@@ -616,17 +708,15 @@ impl<'a> Evaluator<'a> {
             BoundExpr::Call { spec, .. } if spec.name == "KEEPFILTERS" => Ok(()),
             _ => {
                 // A table expression filter: use its distinct rows to restrict matching columns.
-                if let Ok(table) = self.eval_table(expr, ctx) {
-                    if let Some(table_index) = self.table_index_for(&table) {
-                        for (column, _) in table.columns.iter().enumerate() {
-                            let keys: BTreeSet<ScalarKey> = table.rows.iter().filter_map(|row| row.get(column)).map(ScalarKey::from).collect();
-                            filters.set(table_index, column, keys);
-                        }
-                    }
-                    Ok(())
-                } else {
-                    Err(EvalError::new("unsupported CALCULATE filter"))
+                let table = self.eval_table(expr, ctx)?;
+                let Some(table_index) = table.lineage else {
+                    return Err(EvalError::new("CALCULATE table filter has no source table"));
+                };
+                for (column, _) in table.columns.iter().enumerate() {
+                    let keys: BTreeSet<ScalarKey> = table.rows.iter().filter_map(|row| row.get(column)).map(ScalarKey::from).collect();
+                    filters.set(table_index, column, keys);
                 }
+                Ok(())
             }
         }
     }
@@ -635,23 +725,22 @@ impl<'a> Evaluator<'a> {
         let Some(BoundExpr::Column { table, column }) = arg else {
             return Err(EvalError::new("RELATED needs a column"));
         };
-        let Some(frame) = ctx.rows.last().copied() else {
+        let Some(frame) = ctx.rows.last() else {
             return Err(EvalError::new("RELATED needs a row context"));
         };
+        let Some(frame_table) = frame.lineage else {
+            return Err(EvalError::new("RELATED needs a row context over a model table"));
+        };
         for relationship in &self.model.relationships {
+            if relationship.inactive {
+                continue;
+            }
             let from = self.model.table_index(&relationship.from_table);
             let to = self.model.table_index(&relationship.to_table);
-            if from == Some(frame.table) && to == Some(*table) {
-                let from_col = self.model.column_index(frame.table, &relationship.from_column).ok_or_else(|| EvalError::new("bad relationship"))?;
+            if from == Some(frame_table) && to == Some(*table) {
+                let from_col = self.model.column_index(frame_table, &relationship.from_column).ok_or_else(|| EvalError::new("bad relationship"))?;
                 let to_col = self.model.column_index(*table, &relationship.to_column).ok_or_else(|| EvalError::new("bad relationship"))?;
-                let key = self
-                    .model
-                    .tables
-                    .get(frame.table)
-                    .and_then(|t| t.rows.get(frame.row))
-                    .and_then(|row| row.get(from_col))
-                    .cloned()
-                    .ok_or_else(|| EvalError::new("row is out of range"))?;
+                let key = frame.get(from_col).cloned().ok_or_else(|| EvalError::new("row is out of range"))?;
                 let related = self.table(*table, &ctx.filters);
                 for row in &related.rows {
                     if row.get(to_col).is_some_and(|value| value.strict_eq(&key)) {
@@ -675,32 +764,31 @@ impl<'a> Evaluator<'a> {
     }
 }
 
-struct Context {
-    filters: FilterContext,
-    rows: Vec<RowFrame>,
-    vars: Vec<Scalar>,
+pub(crate) struct Context {
+    pub(crate) filters: FilterContext,
+    pub(crate) rows: Vec<RowFrame>,
+    pub(crate) vars: Vec<Scalar>,
 }
 
 fn literal_value(literal: &Literal) -> Scalar {
     match literal {
         Literal::Integer(value) => Scalar::Integer(*value),
         Literal::Decimal(value) => Scalar::Decimal(*value),
-        Literal::DateTime(value) => Scalar::DateTime(date_serial(value.year, value.month, value.day, value.hour, value.minute, value.second)),
+        Literal::DateTime(value) => Scalar::DateTime(date_serial(
+            value.year as i64,
+            value.month as i64,
+            value.day as i64,
+            value.hour as i64,
+            value.minute as i64,
+            value.second as i64,
+        )),
         Literal::String(value) => Scalar::String(value.clone()),
         Literal::Boolean(value) => Scalar::Boolean(*value),
     }
 }
 
 fn scalar_from_key(key: &ScalarKey) -> Scalar {
-    match key {
-        ScalarKey::Blank => Scalar::Blank,
-        ScalarKey::Boolean(value) => Scalar::Boolean(*value),
-        ScalarKey::Integer(value) => Scalar::Integer(*value),
-        ScalarKey::Currency(value) => Scalar::Currency(*value),
-        ScalarKey::Decimal(value) => Scalar::Decimal(f64::from_bits(*value)),
-        ScalarKey::DateTime(value) => Scalar::DateTime(f64::from_bits(*value)),
-        ScalarKey::String(value) => Scalar::String(value.clone()),
-    }
+    key.to_scalar()
 }
 
 fn unary(op: UnaryOp, value: Scalar) -> Result<Scalar, EvalError> {
@@ -768,31 +856,6 @@ fn binary(op: BinaryOp, left: Scalar, right: Scalar) -> Result<Scalar, EvalError
     }
 }
 
-fn aggregate_values(name: &str, values: &[Scalar]) -> Result<Scalar, EvalError> {
-    let numbers: Vec<f64> = values.iter().filter(|v| !v.is_blank()).filter_map(Scalar::to_number).collect();
-    match name.to_ascii_uppercase().as_str() {
-        "SUM" => Ok(if numbers.is_empty() { Scalar::Blank } else { Scalar::Decimal(numbers.iter().sum()) }),
-        "AVERAGE" => Ok(if numbers.is_empty() { Scalar::Blank } else { Scalar::Decimal(numbers.iter().sum::<f64>() / numbers.len() as f64) }),
-        "PRODUCT" => Ok(if numbers.is_empty() { Scalar::Blank } else { Scalar::Decimal(numbers.iter().product()) }),
-        "MIN" => Ok(numbers.iter().copied().reduce(f64::min).map(Scalar::Decimal).unwrap_or(Scalar::Blank)),
-        "MAX" => Ok(numbers.iter().copied().reduce(f64::max).map(Scalar::Decimal).unwrap_or(Scalar::Blank)),
-        "COUNT" => {
-            let count = values.iter().filter(|v| !v.is_blank() && !matches!(v, Scalar::Boolean(_))).count();
-            Ok(if count == 0 { Scalar::Blank } else { Scalar::Integer(count as i64) })
-        }
-        "COUNTA" => {
-            let count = values.iter().filter(|v| !v.is_blank()).count();
-            Ok(if count == 0 { Scalar::Blank } else { Scalar::Integer(count as i64) })
-        }
-        "COUNTBLANK" => Ok(Scalar::Integer(values.iter().filter(|v| v.is_blank() || v.to_text().is_empty()).count() as i64)),
-        "DISTINCTCOUNT" | "APPROXIMATEDISTINCTCOUNT" => {
-            let distinct: BTreeSet<ScalarKey> = values.iter().map(ScalarKey::from).collect();
-            Ok(if values.is_empty() { Scalar::Blank } else { Scalar::Integer(distinct.len() as i64) })
-        }
-        _ => Err(EvalError::not_implemented(name)),
-    }
-}
-
 fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
     let arg = |index: usize| args.get(index).ok_or_else(|| EvalError::new(format!("{name} is missing argument {}", index + 1)));
     let number = |index: usize| arg(index)?.to_number().ok_or_else(|| EvalError::new(format!("{name} argument {} must be numeric", index + 1)));
@@ -839,7 +902,13 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
         "SIN" => Ok(Scalar::Decimal(number(0)?.sin())),
         "COS" => Ok(Scalar::Decimal(number(0)?.cos())),
         "TAN" => Ok(Scalar::Decimal(number(0)?.tan())),
-        "FACT" => Ok(Scalar::Decimal((1..=number(0)? as u64).fold(1.0, |a, b| a * b as f64))),
+        "FACT" => {
+            let n = number(0)?;
+            if !(0.0..=170.0).contains(&n) {
+                return Err(EvalError::new("FACT argument is out of range"));
+            }
+            Ok(Scalar::Decimal((1..=n as u64).fold(1.0, |a, b| a * b as f64)))
+        }
         "LEN" => Ok(Scalar::Integer(text(0)?.chars().count() as i64)),
         "UPPER" => Ok(Scalar::String(text(0)?.to_uppercase())),
         "LOWER" => Ok(Scalar::String(text(0)?.to_lowercase())),
@@ -858,7 +927,14 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
         }
         "CONCATENATE" => Ok(Scalar::String(format!("{}{}", text(0)?, text(1)?))),
         "EXACT" => Ok(Scalar::Boolean(text(0)? == text(1)?)),
-        "REPT" => Ok(Scalar::String(text(0)?.repeat(number(1)? as usize))),
+        "REPT" => {
+            let value = text(0)?;
+            let count = number(1)?.max(0.0) as usize;
+            if value.len().checked_mul(count).is_none_or(|len| len > 32_767) {
+                return Err(EvalError::new("REPT result is too long"));
+            }
+            Ok(Scalar::String(value.repeat(count)))
+        }
         "SUBSTITUTE" => {
             let value = text(0)?;
             let old = text(1)?;
@@ -876,7 +952,7 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
         "ISODD" => Ok(Scalar::Boolean(number(0)? as i64 % 2 != 0)),
         "ISINTEGER" => Ok(Scalar::Boolean(matches!(arg(0)?, Scalar::Integer(_)))),
         "ISCURRENCY" => Ok(Scalar::Boolean(matches!(arg(0)?, Scalar::Currency(_)))),
-        "DATE" => Ok(Scalar::DateTime(date_serial(number(0)? as u32, number(1)? as u32, number(2)? as u32, 0, 0, 0))),
+        "DATE" => Ok(Scalar::DateTime(date_serial(number(0)? as i64, number(1)? as i64, number(2)? as i64, 0, 0, 0))),
         "YEAR" => Ok(Scalar::Integer(date_parts(number(0)?).0 as i64)),
         "MONTH" => Ok(Scalar::Integer(date_parts(number(0)?).1 as i64)),
         "DAY" => Ok(Scalar::Integer(date_parts(number(0)?).2 as i64)),
@@ -884,8 +960,8 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
         "MINUTE" => Ok(Scalar::Integer(((number(0)?.fract() * 24.0).fract() * 60.0).floor() as i64)),
         "SECOND" => Ok(Scalar::Integer((((number(0)?.fract() * 24.0).fract() * 60.0).fract() * 60.0).round() as i64)),
         "WEEKDAY" => Ok(Scalar::Integer(date_weekday(number(0)?) as i64)),
-        "EOMONTH" => Ok(Scalar::DateTime(eomonth(number(0)?, number(1)? as i32))),
-        "EDATE" => Ok(Scalar::DateTime(edate(number(0)?, number(1)? as i32))),
+        "EOMONTH" => Ok(Scalar::DateTime(eomonth(number(0)?, number(1)? as i64))),
+        "EDATE" => Ok(Scalar::DateTime(edate(number(0)?, number(1)? as i64))),
         "DATEDIFF" => Ok(Scalar::Integer((number(1)? - number(0)?).trunc() as i64)),
         "PATH" => Ok(Scalar::String(format!("{}{}", text(0)?, text(1)?))),
         "PATHLENGTH" => Ok(Scalar::Integer(text(0)?.split('|').count() as i64)),
@@ -903,95 +979,5 @@ fn scalar_function(name: &str, args: &[Scalar]) -> Result<Scalar, EvalError> {
         "BLANK" => Ok(Scalar::Blank),
         "ERROR" => Err(EvalError::new(arg(0)?.to_text())),
         _ => Err(EvalError::not_implemented(name)),
-    }
-}
-
-fn round_to(value: f64, digits: i32) -> f64 {
-    let factor = 10f64.powi(digits);
-    (value * factor).round() / factor
-}
-
-fn round_direction(value: f64, digits: i32, up: bool) -> f64 {
-    let factor = 10f64.powi(digits);
-    let scaled = value * factor;
-    (if up { scaled.ceil() } else { scaled.floor() }) / factor
-}
-
-fn gcd(mut a: i64, mut b: i64) -> i64 {
-    a = a.abs();
-    b = b.abs();
-    while b != 0 {
-        let t = a % b;
-        a = b;
-        b = t;
-    }
-    a
-}
-
-fn lcm(a: i64, b: i64) -> i64 {
-    if a == 0 || b == 0 { 0 } else { (a / gcd(a, b) * b).abs() }
-}
-
-fn date_serial(year: u32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> f64 {
-    // Days since 1899-12-30, with the Excel 1900 leap-year bug ignored for modern dates.
-    let mut y = year as i64;
-    let mut m = month as i64;
-    if m <= 2 {
-        y -= 1;
-        m += 12;
-    }
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day as i64 - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468 + 25569;
-    days as f64 + (hour as f64 * 3600.0 + minute as f64 * 60.0 + second as f64) / 86400.0
-}
-
-fn date_parts(serial: f64) -> (u32, u32, u32) {
-    let days = serial.floor() as i64;
-    let z = days - 25569 + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    ((y + if m <= 2 { 1 } else { 0 }) as u32, m as u32, d as u32)
-}
-
-fn date_weekday(serial: f64) -> u32 {
-    let days = serial.floor() as i64;
-    let weekday = days.rem_euclid(7);
-    if weekday == 0 { 7 } else { weekday as u32 }
-}
-
-fn eomonth(serial: f64, months: i32) -> f64 {
-    let (year, month, _) = date_parts(serial);
-    let total = year as i32 * 12 + month as i32 - 1 + months;
-    let y = total.div_euclid(12) as u32;
-    let m = total.rem_euclid(12) as u32 + 1;
-    let last = days_in_month(y, m);
-    date_serial(y, m, last, 0, 0, 0)
-}
-
-fn edate(serial: f64, months: i32) -> f64 {
-    let (year, month, day) = date_parts(serial);
-    let total = year as i32 * 12 + month as i32 - 1 + months;
-    let y = total.div_euclid(12) as u32;
-    let m = total.rem_euclid(12) as u32 + 1;
-    date_serial(y, m, day.min(days_in_month(y, m)), 0, 0, 0)
-}
-
-fn days_in_month(year: u32, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400) => 29,
-        2 => 28,
-        _ => 30,
     }
 }

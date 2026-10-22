@@ -129,8 +129,8 @@ fn table_json(table: &gridcraft_dax::TableValue) -> Json {
 mod tests {
     use super::*;
 
-    fn fixture() -> (std::path::PathBuf, String) {
-        let dir = std::env::temp_dir().join(format!("gridcraft-dax-model-{}", std::process::id()));
+    fn fixture(name: &str) -> (std::path::PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("gridcraft-dax-model-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("model.json");
         let json = r#"{
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn load_status_evaluate_and_pivot() {
-        let (path, dir) = fixture();
+        let (path, dir) = fixture("load-status-evaluate-pivot");
         let mut s = Session::new();
         let status = s.execute("dataModel.load", json!({"path": path.to_string_lossy()})).expect("load");
         assert_eq!(status["tables"][0]["name"], "Sales");
@@ -169,7 +169,7 @@ mod tests {
     fn missing_model_and_bad_formula_report_errors() {
         let mut s = Session::new();
         assert!(s.execute("dataModel.evaluate", json!({"formula": "1"})).is_err());
-        let (path, dir) = fixture();
+        let (path, dir) = fixture("missing-model-and-bad-formula");
         s.execute("dataModel.load", json!({"path": path.to_string_lossy()})).expect("load");
         assert!(s.execute("dataModel.evaluate", json!({"formula": "SUM(Missing[Amount])"})).is_err());
         assert!(s.execute("dataModel.pivot", json!({"measure": "Missing", "rows": ["Sales[Region]"]})).is_err());

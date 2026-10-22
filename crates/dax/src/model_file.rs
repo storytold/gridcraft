@@ -178,9 +178,10 @@ fn xpress_decompress(input: &[u8], expected: usize) -> Result<Vec<u8>> {
                 out.push(byte);
                 continue;
             }
-            // A one flag at the very end of the input is the terminal marker.
+            // A one flag at the very end of the input is only the terminal marker once every
+            // declared byte has been produced; anything shorter is a corrupt or truncated chunk.
             if pos >= input.len() {
-                return Ok(out);
+                return Err(ModelFileError::Compression("stream ends before the declared uncompressed size".into()));
             }
             let token = read_u16(input, &mut pos)?;
             let offset = usize::from(token >> 3) + 1;
@@ -743,44 +744,28 @@ fn skip_ws(bytes: &[u8], mut index: usize) -> usize {
 }
 
 fn parse_quoted_table(bytes: &[u8], start: usize) -> Option<(String, usize)> {
-    let first = *bytes.get(start)?;
-    if first == b'\'' {
-        let mut index = start + 1;
-        let mut value = String::new();
-        loop {
-            let byte = *bytes.get(index)?;
-            if byte == b'\'' {
-                if bytes.get(index + 1) == Some(&b'\'') {
-                    value.push('\'');
-                    index += 2;
-                } else {
-                    return Some((value, index + 1));
-                }
+    let close = match *bytes.get(start)? {
+        b'\'' => b'\'',
+        b'[' => b']',
+        _ => return None,
+    };
+    let mut index = start + 1;
+    let mut value: Vec<u8> = Vec::new();
+    loop {
+        let byte = *bytes.get(index)?;
+        if byte == close {
+            // A doubled delimiter is an escaped delimiter inside the name.
+            if bytes.get(index + 1) == Some(&close) {
+                value.push(close);
+                index += 2;
             } else {
-                value.push(byte as char);
-                index += 1;
+                return Some((String::from_utf8(value).ok()?, index + 1));
             }
+        } else {
+            value.push(byte);
+            index += 1;
         }
     }
-    if first == b'[' {
-        let mut index = start + 1;
-        let mut value = String::new();
-        loop {
-            let byte = *bytes.get(index)?;
-            if byte == b']' {
-                if bytes.get(index + 1) == Some(&b']') {
-                    value.push(']');
-                    index += 2;
-                } else {
-                    return Some((value, index + 1));
-                }
-            } else {
-                value.push(byte as char);
-                index += 1;
-            }
-        }
-    }
-    None
 }
 
 fn parse_measure_statements(text: &str) -> Result<Vec<ModelMeasure>> {
@@ -1338,7 +1323,7 @@ pub fn write_measures(data: &[u8], measures: &[ModelMeasure]) -> Result<Vec<u8>>
     let script_content = container.decode_entry(script_entry)?;
     let script_text = content_text(&script_content);
     let new_xml = rewrite_script(&script_text, measures)?;
-    let new_script_blob = encode_file(new_xml.as_bytes(), true, container.header.error_code)?;
+    let new_script_blob = encode_file(new_xml.as_bytes(), container.header.apply_compression, container.header.error_code)?;
 
     let mut blobs: Vec<Vec<u8>> = Vec::with_capacity(container.entries.len());
     for (index, entry) in container.entries.iter().enumerate() {
