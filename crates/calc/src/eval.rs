@@ -1784,15 +1784,8 @@ fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSyste
         BinOp::Sub => num(|x, y| Value::number(x - y)),
         BinOp::Mul => num(|x, y| Value::number(x * y)),
         BinOp::Div => num(|x, y| if y == 0.0 { Value::Error(CellError::Div0) } else { Value::number(x / y) }),
-        BinOp::Pow => num(|x, y| {
-            if x == 0.0 && y == 0.0 {
-                Value::Error(CellError::Num)
-            } else if x == 0.0 && y < 0.0 {
-                Value::Error(CellError::Div0)
-            } else {
-                Value::number(x.powf(y))
-            }
-        }),
+        // Same rules as POWER, including the real odd roots of a negative base: `(-8)^(1/3)` is -2.
+        BinOp::Pow => num(|x, y| gridcraft_functions::power_of(x, y).map_or_else(Value::Error, Value::number)),
         BinOp::Concat => match (a.to_text(), b.to_text()) {
             (Ok(x), Ok(y)) => {
                 if x.len() + y.len() > 32767 * 4 {
