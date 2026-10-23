@@ -515,6 +515,15 @@ pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -
     fonts
 }
 
+/// The same cached Simplified Chinese face used by the UI, for native PDF preview only.
+/// Its bytes are never embedded in exported documents or application packages.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn chinese_preview_font() -> Option<FontData> {
+    let candidates = cjk_han_simplified();
+    let refs: Vec<_> = candidates.iter().map(|(path, index)| (path.as_str(), *index)).collect();
+    try_load(&refs)
+}
+
 /// Loads the system non-Latin fallback faces (one file per script family) and returns their keys so
 /// every family can carry them as fallback. egui's bundled fonts have no coverage beyond Latin, so
 /// without this a Thai, Hebrew, Japanese or Chinese workbook shows tofu boxes even though the text

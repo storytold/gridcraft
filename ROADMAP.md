@@ -2,7 +2,9 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-22 · **Change:** trivial (progress log: formula hardening, #2163/#2162; previously minor: Page Setup paper sizes: JIS B4/B5/B6, the Japanese postcards and envelopes, and A6; long flat operator chains up to Excel's formula limit) · **Target:** Microsoft Excel (Microsoft 365)
+Native Backstage Print rasterizes the actual export PDF, including fills, charts and headers, with revision/sheet/options cache invalidation. Browser builds retain the existing cell-text preview: PDF rasterization is excluded because wasm panic-abort cannot be contained with catch_unwind. macOS offscreen preview is covered; native Windows/Linux rendering, browser runtime and physical printing remain unverified.
+
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** trivial (progress log: formula hardening, #2163/#2162; previously minor: Page Setup paper sizes: JIS B4/B5/B6, the Japanese postcards and envelopes, and A6; long flat operator chains up to Excel's formula limit) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -262,3 +264,9 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-10 | minor | Checked against the alpha gate (six core workflows pass): stays alpha |
 | 2026-10-10 | major | Re-measured against Excel for Mac 16.113.4: stage alpha, breadth ~75%, ready ~50%, ~160–240 h to beta, ~700–1,100 h to full parity; restructured to the progress-docs standard; detail moved to `docs/` |
 | 2026-10-07 | major | First estimates: catalog 89%, functions ~93%, depth ~65%, ~35 h to alpha, ~215 h to full parity |
+
+### 2026-10-23 — PDF print preview integration
+
+Integrated main b8771d51. Retained upstream paper sizes, printer controls and UI fixes. The PDF preview renderer is native-only; browser builds keep the upstream miniature cell painter. No readiness or feature-count increase is claimed.
+
+Native preview follows #1912’s non-embedded GB1 output using licensed predefined CMap data and the existing UI system-font loader. If no Chinese face is installed, it reports the missing font instead of displaying a blank preview; exporting remains available. No system font is embedded or distributed.

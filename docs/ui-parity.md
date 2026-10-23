@@ -1,6 +1,8 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (Page Up and Ctrl+Up into frozen rows, Ctrl+Left and Alt+Page Up into frozen columns bring the scrolled area back; Auto Fill Options button after a left-drag of the fill handle (#1403); Show Outline Symbols, Ctrl+8; a too-wide number in a repeat-fill format such as Accounting shows #### instead of losing its leading digits; Esc and Enter close a data validation alert over the cell editor; Ctrl+Enter fill gives each cell the automatic number format typing gives it; keytip letters typed with Alt held, #1846; Number Stored as Text indicator and Convert to Number) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (Page Up and Ctrl+Up into frozen rows, Ctrl+Left and Alt+Page Up into frozen columns bring the scrolled area back; Auto Fill Options button after a left-drag of the fill handle (#1403); Show Outline Symbols, Ctrl+8; a too-wide number in a repeat-fill format such as Accounting shows #### instead of losing its leading digits; Esc and Enter close a data validation alert over the cell editor; Ctrl+Enter fill gives each cell the automatic number format typing gives it; keytip letters typed with Alt held, #1846; Number Stored as Text indicator and Convert to Number) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+
+Native Backstage Print rasterizes the actual export PDF, including fills, charts and headers, with revision/sheet/options cache invalidation. Browser builds retain the existing cell-text preview: PDF rasterization is excluded because wasm panic-abort cannot be contained with catch_unwind. macOS offscreen preview is covered; native Windows/Linux rendering, browser runtime and physical printing remain unverified.
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -227,3 +229,9 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-11 | major | Sequential Alt keytips: full-tab table (364 sequences), badges on every control, dropdowns open for typing/arrow editing, colour-palette arrows, real-Excel corrections (issues #33, #49) |
 | 2026-10-10 | minor | Chart resize bug (#190) |
 | 2026-10-10 | major | Created: chrome, grid, keyboard, dialogs, accessibility; key tips, Page Layout view and accessibility tree flagged |
+
+### 2026-10-23 — PDF print preview integration
+
+Integrated main b8771d51. Retained upstream paper sizes, printer controls and UI fixes. The PDF preview renderer is native-only; browser builds keep the upstream miniature cell painter. No readiness or feature-count increase is claimed.
+
+Native preview follows #1912’s non-embedded GB1 output using licensed predefined CMap data and the existing UI system-font loader. If no Chinese face is installed, it reports the missing font instead of displaying a blank preview; exporting remains available. No system font is embedded or distributed.

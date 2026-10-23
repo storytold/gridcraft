@@ -31,6 +31,7 @@ epaint_default_fonts = { workspace = true }
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+hayro = { version = "0.7.1", default-features = false, features = ["embed-fonts", "embed-cmaps"] }
 # The desktop's preferred language for the first-run interface language.
 sys-locale = { workspace = true }
 
