@@ -194,7 +194,19 @@ impl Language {
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
     /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
-        let translated = match self {
+        self.catalog(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+    }
+
+    /// A ribbon tab's name. Where a language names the tab differently from a command with the
+    /// same English label (Russian: the Insert tab is «Вставка», the Insert button «Вставить»), its
+    /// catalog keys the tab `Tab|name`; every other language falls back to the plain label.
+    pub fn tr_tab(self, tab: &str) -> &str {
+        self.catalog(&format!("Tab|{tab}")).unwrap_or_else(|| self.tr(tab))
+    }
+
+    /// The catalog entry for `text`, if this language has one.
+    fn catalog(self, text: &str) -> Option<&'static str> {
+        match self {
             Self::En => None,
             Self::Es => es::translate(text),
             Self::El => el::translate(text),
@@ -214,8 +226,7 @@ impl Language {
             Self::Vi => vi::translate(text),
             Self::Nl => nl::translate(text),
             Self::Ro => ro::translate(text),
-        };
-        translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+        }
     }
 
     pub(crate) fn tr_error(self, message: &str) -> String {
@@ -372,6 +383,13 @@ mod tests {
         assert_eq!(Language::Zh.tr("Data"), "数据");
         assert_eq!(Language::Ko.tr("Data"), "데이터");
         assert_eq!(Language::Ru.tr("Data"), "Данные");
+        // The Insert tab and the Insert command have different Russian names; elsewhere the tab
+        // name is the plain label.
+        assert_eq!(Language::Ru.tr_tab("Insert"), "Вставка");
+        assert_eq!(Language::Ru.tr("Insert"), "Вставить");
+        assert_eq!(Language::Ru.tr_tab("Data"), "Данные");
+        assert_eq!(Language::Es.tr_tab("Insert"), Language::Es.tr("Insert"));
+        assert_eq!(Language::En.tr_tab("Insert"), "Insert");
         assert_eq!(Language::PtBr.tr("Data"), "Dados");
         assert_eq!(Language::PtBr.tr_error("Select a chart first."), "Selecione um gráfico primeiro.");
         assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
