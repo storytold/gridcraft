@@ -76,6 +76,7 @@ pub(crate) mod stat;
 pub(crate) mod text;
 pub(crate) mod util;
 
+pub use criteria::{CriteriaFilter, lifting_pads_na};
 pub use ets::Timeline;
 pub use stat::{aggregate_values, aggregate_values_k};
 

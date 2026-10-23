@@ -191,6 +191,61 @@ impl Criterion {
     }
 }
 
+/// Array criteria with more elements than this are not parsed one by one: the filter selects
+/// every cell, which only means reading more cells than needed.
+const MAX_FILTER_CRITERIA: usize = 256;
+
+/// The cells one criteria argument of SUMIF, SUMIFS, COUNTIFS and their relatives can select,
+/// so the evaluator reads only those cells, as Excel does (reading the others could meet a
+/// circular reference Excel doesn't see). An array criterion is lifted element by element, so a
+/// cell is kept when any element selects it. Never misses a cell the function itself selects;
+/// a criterion the function rejects (`#VALUE!`) selects nothing.
+#[derive(Clone, Debug)]
+pub struct CriteriaFilter {
+    criteria: Vec<Criterion>,
+    all: bool,
+}
+
+impl CriteriaFilter {
+    /// `single_pair`: the function has one (range, criteria) pair, where text over 255 UTF-16
+    /// units is `#VALUE!`; with more pairs it is cut to 255 units. `pads_na`: the criteria
+    /// arguments are lifted together and some are shorter than the longest (see
+    /// [`lifting_pads_na`]), so the function also sees `#N/A` as this criterion at the
+    /// positions the shorter array lacks, and the filter must select what `#N/A` selects.
+    pub fn new(criteria: &Value, single_pair: bool, pads_na: bool) -> CriteriaFilter {
+        let parse = |v: &Value| if single_pair { Criterion::parse_arg(v).ok() } else { Some(Criterion::parse_arg_truncated(v)) };
+        let mut filter = match criteria {
+            Value::Array(a) if a.data.len() > MAX_FILTER_CRITERIA => CriteriaFilter { criteria: Vec::new(), all: true },
+            Value::Array(a) => CriteriaFilter { criteria: a.data.iter().filter_map(parse).collect(), all: false },
+            v => CriteriaFilter { criteria: parse(v).into_iter().collect(), all: false },
+        };
+        if pads_na {
+            filter.criteria.push(Criterion::parse(&Value::Error(CellError::NA)));
+        }
+        filter
+    }
+
+    /// Whether the criteria can select a cell holding `v`.
+    pub fn selects(&self, v: &Value) -> bool {
+        self.all || self.criteria.iter().any(|c| c.matches(v))
+    }
+}
+
+/// Whether lifting these criteria arguments together pads some with `#N/A`: an array argument
+/// that is neither one row/column wide along an axis nor as long as the longest array there
+/// (`{"x","y","z"}` with `{1,2}`) reads `#N/A` at the positions it lacks, as
+/// `Array::get_broadcast` does.
+pub fn lifting_pads_na(criteria: &[&Value]) -> bool {
+    let (mut rows, mut cols) = (1usize, 1usize);
+    for v in criteria {
+        if let Value::Array(a) = v {
+            rows = rows.max(a.rows);
+            cols = cols.max(a.cols);
+        }
+    }
+    criteria.iter().any(|v| matches!(v, Value::Array(a) if (a.rows != 1 && a.rows != rows) || (a.cols != 1 && a.cols != cols)))
+}
+
 /// Splits a leading comparison operator (`=` when there is none) off a text criterion.
 fn split_op(t: &str) -> (Op, &str) {
     if let Some(r) = t.strip_prefix(">=") {
@@ -338,6 +393,41 @@ mod tests {
 
     fn m(c: &str, v: Value) -> bool {
         Criterion::parse(&Value::from(c)).matches(&v)
+    }
+
+    #[test]
+    fn criteria_filter_selects_what_any_element_selects() {
+        let one = CriteriaFilter::new(&Value::from(">5"), true, false);
+        assert!(one.selects(&Value::Number(6.0)) && !one.selects(&Value::Number(5.0)));
+        let any = CriteriaFilter::new(&Value::from(gridcraft_core::Array::row(vec![Value::from("a*"), Value::Number(3.0)])), false, false);
+        assert!(any.selects(&Value::from("apple")) && any.selects(&Value::Number(3.0)) && !any.selects(&Value::from("pear")));
+        // A criterion the function rejects selects nothing; with several pairs it is cut instead.
+        let long = Value::from("a".repeat(300));
+        assert!(!CriteriaFilter::new(&long, true, false).selects(&Value::from("a".repeat(300))));
+        assert!(CriteriaFilter::new(&long, false, false).selects(&Value::from("a".repeat(255))));
+        // Very large array criteria select everything.
+        let many = Value::from(gridcraft_core::Array::row(vec![Value::Number(1.0); MAX_FILTER_CRITERIA + 1]));
+        assert!(CriteriaFilter::new(&many, false, false).selects(&Value::Number(2.0)));
+    }
+
+    #[test]
+    fn criteria_filter_selects_na_where_lifting_pads() {
+        use gridcraft_core::Array;
+        let xyz = Value::from(Array::row(vec![Value::from("x"), Value::from("y"), Value::from("z")]));
+        let one_two = Value::from(Array::row(vec![Value::Number(1.0), Value::Number(2.0)]));
+        let na = Value::Error(CellError::NA);
+        // `{"x","y","z"}` with `{1,2}`: the second reads `#N/A` at the third position.
+        assert!(lifting_pads_na(&[&xyz, &one_two]));
+        assert!(!CriteriaFilter::new(&one_two, false, false).selects(&na));
+        assert!(CriteriaFilter::new(&one_two, false, true).selects(&na));
+        // Scalars, equal lengths and one-wide arrays broadcast without padding.
+        let col = Value::from(Array::column(vec![Value::Number(1.0), Value::Number(2.0)]));
+        assert!(!lifting_pads_na(&[&Value::Number(1.0), &xyz]));
+        assert!(!lifting_pads_na(&[&xyz, &xyz]));
+        assert!(!lifting_pads_na(&[&xyz, &Value::from(Array::row(vec![Value::Number(1.0)]))]));
+        assert!(!lifting_pads_na(&[&xyz, &col]));
+        assert!(lifting_pads_na(&[&col, &Value::from(Array::column(vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]))]));
+        assert!(!lifting_pads_na(&[&one_two]));
     }
 
     #[test]

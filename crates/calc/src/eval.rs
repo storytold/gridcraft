@@ -197,18 +197,22 @@ impl<'h> Evaluator<'h> {
         }
         // A reference keeps its size, so the array has its shape and its blanks count
         // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`).
+        let Some(range) = self.area_extent(a) else { return Value::Error(CellError::Num) };
+        let (h, w) = (range.height() as usize, range.width() as usize);
+        let data = self.host.range_values(a.sheet, range);
+        Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+    }
+
+    /// The block `area_value` reads for a multi-cell area: large areas (whole columns) are
+    /// trimmed to the used range. `None` when it is still over `MAX_CELLS` (`#NUM!`).
+    fn area_extent(&mut self, a: &Area) -> Option<RangeRef> {
         let cells = u64::from(a.range.height()) * u64::from(a.range.width());
         // `A:A`, `1:1` and `A2:A1048576` run to the edge of the sheet: they stand for "the rest of
         // the column", not for a block of a chosen size.
         let to_edge = a.range.end.row == MAX_ROWS - 1 || a.range.end.col == MAX_COLS - 1;
         let full_size = cells <= FULL_SIZE_CELLS || (!to_edge && cells <= FULL_SIZE_BOUNDED_CELLS);
         let range = if full_size { a.range } else { self.trim(a) };
-        let (h, w) = (range.height() as usize, range.width() as usize);
-        if (h as u64) * (w as u64) > MAX_CELLS {
-            return Value::Error(CellError::Num);
-        }
-        let data = self.host.range_values(a.sheet, range);
-        Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+        (u64::from(range.height()) * u64::from(range.width()) <= MAX_CELLS).then_some(range)
     }
 
     /// Trims the bottom/right of an area to the sheet's used range (keeps the top-left so
@@ -762,6 +766,7 @@ impl<'h> Evaluator<'h> {
             "CELL" => self.cell_info(args),
             "TRIMRANGE" => self.trimrange(args),
             "SUBTOTAL" | "AGGREGATE" => self.subtotal(name, args),
+            "SUMIF" | "SUMIFS" | "COUNTIFS" | "AVERAGEIF" | "AVERAGEIFS" | "MAXIFS" | "MINIFS" => self.criteria_function(name, args),
             "TEXT" => {
                 if args.len() != 2 {
                     return err(CellError::Value);
@@ -877,25 +882,138 @@ impl<'h> Evaluator<'h> {
                     ev = Ev::R(vec![Area { sheet: area.sheet, range: resized_sum_range(area.range, h, w) }]);
                 }
             }
-            let from_ref = matches!(ev, Ev::R(_));
-            let value = match ev {
-                Ev::R(areas) if areas.len() > 1 => {
-                    // Multi-area references (unions): flatten into one row for aggregates.
-                    let mut vals = Vec::new();
-                    for ar in &areas {
-                        match self.area_value(ar) {
-                            Value::Array(a) => vals.extend(a.data.iter().cloned()),
-                            v => vals.push(v),
-                        }
-                    }
-                    Value::from(Array::row(vals))
-                }
-                ev => self.deref(ev),
-            };
-            evaluated.push(Arg { value, from_ref });
+            let arg = self.arg_of(ev);
+            evaluated.push(arg);
         }
         let mut ctx = FnCtx { ev: self, criteria, lambda };
         gridcraft_functions::call(spec, &evaluated, &mut ctx).pipe(Ev::V)
+    }
+
+    /// An evaluated argument as the function library takes it.
+    fn arg_of(&mut self, ev: Ev) -> Arg {
+        let from_ref = matches!(ev, Ev::R(_));
+        let value = match ev {
+            Ev::R(areas) if areas.len() > 1 => {
+                // Multi-area references (unions): flatten into one row for aggregates.
+                let mut vals = Vec::new();
+                for ar in &areas {
+                    match self.area_value(ar) {
+                        Value::Array(a) => vals.extend(a.data.iter().cloned()),
+                        v => vals.push(v),
+                    }
+                }
+                Value::from(Array::row(vals))
+            }
+            ev => self.deref(ev),
+        };
+        Arg { value, from_ref }
+    }
+
+    /// SUMIF, SUMIFS, COUNTIFS, AVERAGEIF(S), MAXIFS and MINIFS read their ranges the way Excel
+    /// does: the first criteria range in full, each later criteria range only where the pairs
+    /// before it matched, and the sum (average, max, min) range only where every pair matched.
+    /// Reading the other cells could calculate a formula that refers back to this one: a circular
+    /// reference Excel doesn't report. The cells not read are blank for the function library,
+    /// which never looks at them (it selects the same cells or fewer), so results, errors and
+    /// array lifting are unchanged. The static dependency graph still covers the whole ranges,
+    /// so edits recalculate the formula. Arguments that aren't single-area references take the
+    /// usual path.
+    fn criteria_function(&mut self, name: &str, args: &[Expr]) -> Ev {
+        let Some(spec) = gridcraft_functions::lookup(name) else { return err(CellError::Name) };
+        let n = args.len();
+        if n < spec.min_args || n > spec.max_args {
+            return err(CellError::Value);
+        }
+        // The criteria ranges (each followed by its criteria) and the range the function adds up.
+        let (pairs, target): (Vec<usize>, Option<usize>) = match name {
+            "SUMIF" | "AVERAGEIF" if n == 3 => (vec![0], Some(2)),
+            "COUNTIFS" if n >= 4 && n.is_multiple_of(2) => ((0..n).step_by(2).collect(), None),
+            "SUMIFS" | "AVERAGEIFS" | "MAXIFS" | "MINIFS" if n >= 3 && !n.is_multiple_of(2) => ((1..n).step_by(2).collect(), Some(0)),
+            // Nothing to leave out: every cell is read.
+            _ => return self.builtin(name, args),
+        };
+        let resize = resizes_sum_range(name, n);
+        let mut evs: Vec<Ev> = args.iter().map(|a| self.eval(a)).collect();
+        if resize
+            && let Some((h, w)) = evs.first().and_then(ev_shape)
+            && let Some(Ev::R(areas)) = evs.get_mut(2)
+            && let [area] = areas.as_mut_slice()
+        {
+            area.range = resized_sum_range(area.range, h, w);
+        }
+        // The ranges in reading order with the block each one reads.
+        let mut ranges: Vec<(usize, Area, RangeRef)> = Vec::new();
+        for &i in pairs.iter().chain(target.iter()) {
+            let one = match evs.get(i) {
+                Some(Ev::R(areas)) => match areas.as_slice() {
+                    [area] => self.area_extent(area).map(|extent| (i, *area, extent)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            match one {
+                Some(r) => ranges.push(r),
+                None => {
+                    let evaluated: Vec<Arg> = evs.into_iter().map(|ev| self.arg_of(ev)).collect();
+                    return gridcraft_functions::call(spec, &evaluated, &mut FnCtx { ev: self, criteria: None, lambda: None }).pipe(Ev::V);
+                }
+            }
+        }
+        let is_range = |i: usize| ranges.iter().any(|(r, _, _)| *r == i);
+        let mut evaluated: Vec<Arg> = Vec::with_capacity(n);
+        for (i, ev) in evs.into_iter().enumerate() {
+            let arg = if is_range(i) { Arg { value: Value::Empty, from_ref: true } } else { self.arg_of(ev) };
+            evaluated.push(arg);
+        }
+        let Some(&(_, _, first)) = ranges.first() else { return err(CellError::Value) };
+        let (h, w) = (first.height() as usize, first.width() as usize);
+        // Ranges of different sizes make the function `#VALUE!` without reading any cell.
+        // SUMIF's sum range has the criteria range's size, cut off at the sheet's edge.
+        let sized = ranges.iter().all(|(i, _, r)| (resize && Some(*i) == target) || (r.height() as usize, r.width() as usize) == (h, w));
+        let single_pair = pairs.len() == 1;
+        // Criteria arrays of different lengths are lifted together and the shorter one reads
+        // `#N/A` where it ends, which selects the `#N/A` cells there.
+        let criteria_values: Vec<&Value> = pairs.iter().filter_map(|&i| evaluated.get(i + 1)).map(|a| &a.value).collect();
+        let pads_na = gridcraft_functions::lifting_pads_na(&criteria_values);
+        let mut selected = vec![sized; h.saturating_mul(w)];
+        for (k, &(i, area, extent)) in ranges.iter().enumerate() {
+            let (rh, rw) = (extent.height() as usize, extent.width() as usize);
+            let data = if sized && (k == 0 || selected.iter().all(|s| *s)) {
+                self.host.range_values(area.sheet, extent)
+            } else {
+                let mut data = vec![Value::Empty; rh.saturating_mul(rw)];
+                if sized {
+                    for (at, slot) in data.iter_mut().enumerate() {
+                        let (r, c) = (at / rw.max(1), at % rw.max(1));
+                        if r < h && c < w && selected.get(r * w + c).copied().unwrap_or(false) {
+                            let cell = CellRef::new(extent.start.row.saturating_add(r as u32), extent.start.col.saturating_add(c as u32));
+                            *slot = self.host.cell_value(area.sheet, cell);
+                        }
+                    }
+                }
+                data
+            };
+            if sized
+                && Some(i) != target
+                && let Some(criteria) = evaluated.get(i + 1)
+            {
+                let filter = gridcraft_functions::CriteriaFilter::new(&criteria.value, single_pair, pads_na);
+                for (s, v) in selected.iter_mut().zip(data.iter()) {
+                    if *s && !filter.selects(v) {
+                        *s = false;
+                    }
+                }
+            }
+            let value = if rh * rw == 1 {
+                data.into_iter().next().unwrap_or_default()
+            } else {
+                Array::new(rh, rw, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+            };
+            if let Some(slot) = evaluated.get_mut(i) {
+                slot.value = value;
+            }
+        }
+        gridcraft_functions::call(spec, &evaluated, &mut FnCtx { ev: self, criteria: None, lambda: None }).pipe(Ev::V)
     }
 
     /// Performs aggregation operations without copying its ranges: blocks are folded over the stored
