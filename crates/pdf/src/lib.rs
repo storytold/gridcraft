@@ -291,7 +291,20 @@ fn dash_values(dash: &[f32]) -> String {
     d.iter().map(|v| n(*v)).collect::<Vec<_>>().join(" ")
 }
 
-fn rgb_op(c: Rgb, stroke: bool) -> String {
+/// Gray level of an 8-bit colour with Rec. 709 luma weights (0.2126, 0.7152, 0.0722), in integers
+/// that sum to 256 so white stays white and a gray stays put. The one conversion behind grayscale
+/// output ([`PdfDoc::grayscale`]) and the Print page's grayscale preview.
+pub fn gray_of(r: u8, g: u8, b: u8) -> u8 {
+    ((54 * r as u32 + 183 * g as u32 + 19 * b as u32 + 128) >> 8).min(255) as u8
+}
+
+fn rgb_op(gray: bool, c: Rgb, stroke: bool) -> String {
+    let c = if gray {
+        let y = gray_of(c[0], c[1], c[2]);
+        [y, y, y]
+    } else {
+        c
+    };
     let f = |v: u8| n(v as f32 / 255.0);
     format!("{} {} {} {}", f(c[0]), f(c[1]), f(c[2]), if stroke { "RG" } else { "rg" })
 }
@@ -323,6 +336,8 @@ pub struct Page {
     images: Vec<ImageData>,
     links: Vec<LinkAnnotation>,
     depth: u32,
+    /// Colours are converted to gray as they are drawn.
+    gray: bool,
 }
 
 /// Most bytes of content per page before further drawing is dropped (keeps hostile inputs from
@@ -411,7 +426,7 @@ impl Page {
         if !(extent(w) && extent(h) && finite(&[x, y])) {
             return;
         }
-        let s = format!("{}\n{} {} {} {} re f", rgb_op(color, false), n(x), n(self.y(y + h)), n(w), n(h));
+        let s = format!("{}\n{} {} {} {} re f", rgb_op(self.gray, color, false), n(x), n(self.y(y + h)), n(w), n(h));
         self.op(&s);
     }
 
@@ -419,7 +434,8 @@ impl Page {
         if !finite(&[x, y, w, h]) {
             return;
         }
-        let s = format!("{}\n{} w [] 0 d\n{} {} {} {} re S", rgb_op(color, true), n(stroke_width(width)), n(x), n(self.y(y + h)), n(w), n(h));
+        let s =
+            format!("{}\n{} w [] 0 d\n{} {} {} {} re S", rgb_op(self.gray, color, true), n(stroke_width(width)), n(x), n(self.y(y + h)), n(w), n(h));
         self.op(&s);
     }
 
@@ -434,7 +450,7 @@ impl Page {
         }
         let s = format!(
             "{}\n{} w [{}] 0 d\n{} {} m {} {} l S",
-            rgb_op(color, true),
+            rgb_op(self.gray, color, true),
             n(stroke_width(width)),
             dash_values(dash),
             n(x0),
@@ -450,7 +466,7 @@ impl Page {
         if pts.len() < 2 || !pts.iter().all(|p| finite(p)) {
             return;
         }
-        let mut s = format!("{}\n{} w [{}] 0 d 1 j\n", rgb_op(color, true), n(stroke_width(width)), dash_values(dash));
+        let mut s = format!("{}\n{} w [{}] 0 d 1 j\n", rgb_op(self.gray, color, true), n(stroke_width(width)), dash_values(dash));
         self.path(&mut s, pts, false);
         s.push_str(" S");
         self.op(&s);
@@ -472,11 +488,11 @@ impl Page {
         }
         let mut s = String::new();
         if let Some(f) = fill {
-            s.push_str(&rgb_op(f, false));
+            s.push_str(&rgb_op(self.gray, f, false));
             s.push('\n');
         }
         if let Some((c, w)) = stroke {
-            let _ = writeln!(s, "{}\n{} w [] 0 d 1 j", rgb_op(c, true), n(stroke_width(w)));
+            let _ = writeln!(s, "{}\n{} w [] 0 d 1 j", rgb_op(self.gray, c, true), n(stroke_width(w)));
         }
         self.path(&mut s, pts, true);
         s.push_str(match (fill.is_some(), stroke.is_some()) {
@@ -497,11 +513,11 @@ impl Page {
         let y = self.y(cy);
         let mut s = String::new();
         if let Some(f) = fill {
-            s.push_str(&rgb_op(f, false));
+            s.push_str(&rgb_op(self.gray, f, false));
             s.push('\n');
         }
         if let Some((c, w)) = stroke {
-            let _ = writeln!(s, "{}\n{} w [] 0 d", rgb_op(c, true), n(stroke_width(w)));
+            let _ = writeln!(s, "{}\n{} w [] 0 d", rgb_op(self.gray, c, true), n(stroke_width(w)));
         }
         let _ = write!(
             s,
@@ -556,7 +572,7 @@ impl Page {
         let size = n(size.min(10_000.0));
         let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
         // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
-        let mut s = format!("BT\n{}\n{} {} {} {} {} {} Tm\n", rgb_op(color, false), n(cs), n(-sn), n(sn), n(cs), n(x), n(self.y(y)));
+        let mut s = format!("BT\n{}\n{} {} {} {} {} {} Tm\n", rgb_op(self.gray, color, false), n(cs), n(-sn), n(sn), n(cs), n(x), n(self.y(y)));
         // Runs of WinAnsi text use `font`; runs it cannot encode use the CID font. Each `Tj`
         // advances the text position, so the runs follow each other on the baseline.
         let mut rest = text;
@@ -586,7 +602,12 @@ impl Page {
         let mut rgb = Vec::with_capacity(px * 3);
         let mut alpha = Vec::with_capacity(px);
         for p in rgba.as_chunks::<4>().0.iter().take(px) {
-            rgb.extend_from_slice(&[p[0], p[1], p[2]]);
+            if self.gray {
+                let y = gray_of(p[0], p[1], p[2]);
+                rgb.extend_from_slice(&[y, y, y]);
+            } else {
+                rgb.extend_from_slice(&[p[0], p[1], p[2]]);
+            }
             alpha.push(p[3]);
         }
         let alpha = if alpha.iter().all(|a| *a == 255) { None } else { Some(alpha) };
@@ -610,6 +631,9 @@ pub struct Info {
 pub struct PdfDoc {
     pages: Vec<Page>,
     pub info: Info,
+    /// Pages added after this is set draw every colour (fills, strokes, text, images) as its
+    /// Rec. 709 gray, so output stays gray whatever the printer does with a monochrome request.
+    pub grayscale: bool,
 }
 
 /// PackBits-style run-length encoding (PDF `RunLengthDecode`).
@@ -677,7 +701,16 @@ impl PdfDoc {
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
         let height = if height_pt.is_finite() { height_pt.clamp(3.0, 14_400.0) } else { 792.0 };
-        self.pages.push(Page { width, height, content: String::new(), fonts: [false; FONT_SLOTS], images: Vec::new(), links: Vec::new(), depth: 0 });
+        self.pages.push(Page {
+            width,
+            height,
+            content: String::new(),
+            fonts: [false; FONT_SLOTS],
+            images: Vec::new(),
+            links: Vec::new(),
+            depth: 0,
+            gray: self.grayscale,
+        });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
     }

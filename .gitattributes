@@ -1,0 +1,5 @@
+# Files that `cargo xtask` regenerates and compares byte for byte: always LF, whatever core.autocrlf says
+# (a Windows checkout with autocrlf=true would otherwise look out of date).
+docs/parity-checklist.md text eol=lf
+crates/ui-egui/src/keytips/keytip_table/generated.rs text eol=lf
+crates/ui-egui/tests/keytips_generated.rs text eol=lf

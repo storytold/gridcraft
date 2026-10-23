@@ -16,6 +16,8 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+#[cfg(feature = "network-print")]
+mod network_print;
 mod print;
 
 use std::cell::RefCell;
@@ -195,6 +197,8 @@ fn services() -> Services {
         open_url: Some(Box::new(|url: &str| open_with_system(url))),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
+        #[cfg(feature = "network-print")]
+        network_print: Some(network_print::service(None, None)),
         ..Default::default()
     }
 }

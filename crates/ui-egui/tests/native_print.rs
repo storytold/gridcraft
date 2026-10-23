@@ -24,7 +24,7 @@ fn native_print_uses_selected_settings_and_reports_spool_errors() {
     let pdf = app.run("file.print", json!({"sheets":"active"})).unwrap();
     assert!(pdf["base64"].as_str().is_some(), "the engine still returns PDF bytes without submitting");
     assert!(jobs.borrow().is_empty(), "opening settings/exporting does not spool");
-    app.printing.printers.push(Printer { name: "Chosen queue".into(), default: false });
+    app.printing.printers.push(Printer { name: "Chosen queue".into(), label: String::new(), default: false });
     let configured = app.run("ui.printSettings", json!({"printer":"Chosen queue", "copies":3,"duplex":"shortEdge","grayscale":true})).unwrap();
     assert_eq!(configured["ready"], true);
     assert_eq!(configured["printers"][0]["name"], "Chosen queue");
@@ -51,7 +51,7 @@ fn print_settings_are_visible_in_a_narrow_window() {
     app.run("cell.set", json!({"cell":"A1", "input":"A sheet to print"})).unwrap();
     app.services.printers = Some(Box::new(|| {
         let (sender, receiver) = std::sync::mpsc::channel();
-        sender.send(vec![Printer { name: "Test queue".into(), default: true }]).unwrap();
+        sender.send(vec![Printer { name: "Test queue".into(), label: String::new(), default: true }]).unwrap();
         receiver
     }));
     app.services.print_native = Some(Box::new(|_, _| {
@@ -81,7 +81,7 @@ fn invalid_print_settings_are_rejected_without_partial_changes() {
     let mut session = Session::new();
     session.new_workbook();
     let mut app = SheetApp::new(session, Services::default());
-    app.printing.printers.push(Printer { name: "Queue".into(), default: true });
+    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
     let before = app.run("ui.printSettings", json!({})).unwrap();
     for params in [
         json!({"printer":"Missing"}),
@@ -106,7 +106,7 @@ fn repeated_fast_jobs_each_surface_an_identical_receipt() {
     let mut session = Session::new();
     session.new_workbook();
     let mut app = SheetApp::new(session, Services::default());
-    app.printing.printers.push(Printer { name: "Queue".into(), default: true });
+    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
     app.run("ui.printSettings", json!({"printer":"Queue"})).unwrap();
     app.services.print_native = Some(Box::new(|_, _| {
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -123,5 +123,16 @@ fn repeated_fast_jobs_each_surface_an_identical_receipt() {
         app.toast = None;
         app.poll_printing(&egui::Context::default());
         assert!(app.toast.is_none());
+    }
+}
+
+#[test]
+fn print_parameters_that_are_not_an_object_are_refused_not_a_panic() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut app = SheetApp::new(session, Services::default());
+    for bad in [json!([]), json!([1, 2]), json!("x"), json!(3), json!(true)] {
+        assert!(app.run("ui.printSubmit", bad.clone()).is_err(), "{bad}");
+        assert!(app.print_network(bad.clone(), None, None).is_err(), "{bad}");
     }
 }
