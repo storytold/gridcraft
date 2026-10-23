@@ -8,6 +8,9 @@
 //! (mode, iteration, precision as displayed). Everything else (fonts, fills, borders, charts,
 //! pictures, comments, conditional formats, validation, macros) is skipped with a warning.
 //! Encrypted workbooks and pre-BIFF8 versions are refused.
+//!
+//! Every formula in the file is a legacy (pre-dynamic-array) one, so it is read with Excel's
+//! implicit `@` (see `array_formula.rs`), like an `.xlsx` formula saved without `cm`.
 
 mod formula;
 mod ftab;
@@ -21,7 +24,7 @@ use gridcraft_model::{CalcMode, CalcSettings, Cell, DefinedName, Formula, LineIn
 
 use crate::cfb::Compound;
 use crate::tables::{builtin_format, col_width_to_px, pt_to_px};
-use crate::{IoError, ReadReport};
+use crate::{FunctionInfo, IoError, ReadReport};
 use formula::{Links, Mode, SupBook, Unsupported, Xti, cell_error, decode};
 use records::{Cursor, Record, Records};
 
@@ -130,13 +133,20 @@ struct Globals {
     precision_as_displayed: bool,
 }
 
-/// Reads an Excel 97-2003 workbook. Inspect the report's warnings for what was skipped.
+/// Reads an Excel 97-2003 workbook, with the default [`FunctionInfo`]. Inspect the report's
+/// warnings for what was skipped.
 pub fn read_xls(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
-    read_xls_with(bytes, Budget::default())
+    read_xls_budgeted(bytes, Budget::default(), FunctionInfo::default())
 }
 
-/// [`read_xls`] with an explicit resource budget.
-pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workbook, ReadReport), IoError> {
+/// [`read_xls`] with the function library's facts, which decide where the legacy formulas get
+/// Excel's implicit `@`.
+pub fn read_xls_with(bytes: &[u8], functions: FunctionInfo) -> Result<(Workbook, ReadReport), IoError> {
+    read_xls_budgeted(bytes, Budget::default(), functions)
+}
+
+/// [`read_xls_with`] with an explicit resource budget.
+pub(crate) fn read_xls_budgeted(bytes: &[u8], mut budget: Budget, functions: FunctionInfo) -> Result<(Workbook, ReadReport), IoError> {
     let cf = Compound::open(bytes).map_err(invalid)?;
     let stream = match cf.root_stream("Workbook").map_err(invalid)? {
         Some(s) => s,
@@ -198,6 +208,10 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     }
     wb.calc.precision_as_displayed = g.precision_as_displayed;
     defined_names(&g, &model_index, &mut wb, &mut report);
+    // Every .xls formula is a legacy (pre-dynamic-array) one: read with Excel's implicit `@`, like
+    // an .xlsx formula without `cm`. Ctrl+Shift+Enter arrays are read as they are.
+    let legacy = wb.sheets.iter().enumerate().map(|(si, s)| (si, legacy_cells(s))).collect();
+    crate::array_formula::apply_legacy(&mut wb, legacy, functions);
     wb.active_sheet = wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0);
     // The overview comes first.
     report.warnings.insert(
@@ -205,6 +219,11 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
         "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, number formats, merged cells, column widths, row heights and defined names were read. Fonts, fills, borders, charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
     );
     Ok((wb, report))
+}
+
+/// The cells holding a formula that is not a Ctrl+Shift+Enter array.
+fn legacy_cells(sheet: &Sheet) -> Vec<CellRef> {
+    sheet.cells.iter().filter(|(_, c)| c.formula.as_ref().is_some_and(|f| f.array.is_none())).map(|(at, _)| at).collect()
 }
 
 fn bof(rec: &Record<'_>) -> Result<(u16, u16), IoError> {
@@ -460,7 +479,9 @@ impl SheetState<'_> {
                     self.unsupported("syntax GridCraft can't parse yet");
                     return;
                 }
-                f.array = array.filter(|r| !r.is_single());
+                // A one-cell Ctrl+Shift+Enter array keeps its range, as when an .xlsx is read:
+                // it evaluates as an array, not with implicit intersection.
+                f.array = array;
                 if let Some(cell) = self.sheet.cells.get_mut(pos) {
                     cell.formula = Some(Arc::new(f));
                 } else {

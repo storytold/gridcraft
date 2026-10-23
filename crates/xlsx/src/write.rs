@@ -9,7 +9,7 @@ use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style
 
 use crate::package::ZipOut;
 use crate::xml::{esc, esc_attr};
-use crate::{IoError, XlsxKind};
+use crate::{FunctionInfo, IoError, XlsxKind};
 
 pub const NS_MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 pub const NS_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -128,6 +128,10 @@ pub struct Out {
     pub cell_pictures: crate::richdata::PicturesOut,
     /// Kept (pass-through) parts written so far.
     pub kept: crate::passthrough::KeptOut,
+    /// Decides which formulas need dynamic-array metadata.
+    pub functions: FunctionInfo,
+    /// Defined names analysed for implicit intersection, shared by every formula written.
+    pub(crate) names: crate::array_formula::NameCache,
 }
 
 impl Out {
@@ -204,13 +208,13 @@ fn check_sheet_names(wb: &Workbook) -> Result<(), IoError> {
 /// Workbook name written in a PivotChart's link when the file name isn't known.
 const DEFAULT_BOOK_NAME: &str = "Workbook.xlsx";
 
-pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
-    write_xlsx_named(wb, kind, None)
+pub fn write_xlsx(wb: &Workbook, kind: XlsxKind, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
+    write_xlsx_named(wb, kind, None, functions)
 }
 
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
-pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
     }
@@ -237,6 +241,8 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         needs_calc: false,
         cell_pictures: Default::default(),
         kept: Default::default(),
+        functions,
+        names: Default::default(),
     };
     out.kept.reserve_vml_blocks(wb);
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");

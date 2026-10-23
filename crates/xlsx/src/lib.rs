@@ -49,7 +49,7 @@ pub use csv::{MAX_CSV_BYTES, read_csv, write_csv, write_csv_limited};
 pub use ods::read_ods;
 pub use package::MAX_PART;
 pub use passthrough::rebase_links;
-pub use xls::read_xls;
+pub use xls::{read_xls, read_xls_with};
 pub use xlsb::read_xlsb;
 
 /// Errors from reading or writing files.
@@ -80,10 +80,40 @@ impl ReadReport {
     }
 }
 
+/// What reading and writing formulas needs to know about worksheet functions. The function
+/// library sits beside this crate (format crates depend only on core, formula and model), so the
+/// caller supplies its answers; the engine passes the library's.
+///
+/// It decides how legacy formulas (saved without dynamic-array metadata) are read with Excel's
+/// implicit `@`, and which formulas are saved with dynamic-array metadata.
+#[derive(Clone, Copy, Debug)]
+pub struct FunctionInfo {
+    /// Whether `name` (upper case, without `_xlfn.`) is a built-in worksheet function rather than
+    /// an add-in, VBA or LAMBDA function.
+    pub is_builtin: fn(&str) -> bool,
+    /// Whether parameter `i` of the built-in function `name` takes a single value, as opposed to
+    /// a reference or array taken as a whole.
+    pub is_scalar_arg: fn(&str, usize) -> bool,
+}
+
+impl Default for FunctionInfo {
+    /// Without the function library: every name counts as built in, and this crate's table of
+    /// reference- and array-taking parameters alone decides parameter types.
+    fn default() -> Self {
+        FunctionInfo { is_builtin: |_| true, is_scalar_arg: |_, _| true }
+    }
+}
+
 /// Reads an `.xlsx` / `.xlsm` / `.xltx` / `.xltm` package (the workbook part is found through the
-/// package relationships, so every main-part content type is accepted).
+/// package relationships, so every main-part content type is accepted), with the default
+/// [`FunctionInfo`].
 pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
-    read::read_xlsx(bytes)
+    read::read_xlsx(bytes, FunctionInfo::default())
+}
+
+/// [`read_xlsx`] with the function library's facts.
+pub fn read_xlsx_with(bytes: &[u8], functions: FunctionInfo) -> Result<(Workbook, ReadReport), IoError> {
+    read::read_xlsx(bytes, functions)
 }
 
 /// The part of a zip package that declares more than [`MAX_PART`] unpacked bytes, with that size:
@@ -135,20 +165,32 @@ impl XlsxKind {
     }
 }
 
-/// Writes a workbook as an `.xlsx` package, or as an `.xlsm` one when it holds a VBA project.
+/// Writes a workbook as an `.xlsx` package, or as an `.xlsm` one when it holds a VBA project,
+/// with the default [`FunctionInfo`].
 pub fn write_xlsx(wb: &Workbook) -> Result<Vec<u8>, IoError> {
-    write::write_xlsx(wb, if wb.vba_project.is_some() { XlsxKind::MacroWorkbook } else { XlsxKind::Workbook })
+    let kind = if wb.vba_project.is_some() { XlsxKind::MacroWorkbook } else { XlsxKind::Workbook };
+    write::write_xlsx(wb, kind, FunctionInfo::default())
 }
 
-/// Writes a workbook as the given member of the `.xlsx` family.
+/// Writes a workbook as the given member of the `.xlsx` family, with the default [`FunctionInfo`].
 pub fn write_xlsx_as(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
-    write::write_xlsx(wb, kind)
+    write::write_xlsx(wb, kind, FunctionInfo::default())
+}
+
+/// [`write_xlsx_as`] with the function library's facts.
+pub fn write_xlsx_with(wb: &Workbook, kind: XlsxKind, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
+    write::write_xlsx(wb, kind, functions)
 }
 
 /// Writes a workbook as the given member of the `.xlsx` family for the file `book_name` (a bare
 /// file name, used for the workbook in a PivotChart's link to its PivotTable).
 pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: &str) -> Result<Vec<u8>, IoError> {
-    write::write_xlsx_named(wb, kind, Some(book_name))
+    write_xlsx_named_with(wb, kind, book_name, FunctionInfo::default())
+}
+
+/// [`write_xlsx_named`] with the function library's facts.
+pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: &str, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
+    write::write_xlsx_named(wb, kind, Some(book_name), functions)
 }
 
 /// CSV import options.

@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
-    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, Sheet,
-    SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
+    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, Formula, LineInfo, NoteBox, NoteCorner, Orientation,
+    Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
@@ -323,13 +323,26 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         s.push('>');
         for c in cells {
-            let cell = sheet.cells.get(*c);
+            let mut cell = sheet.cells.get(*c);
             let ov = overrides.get(c);
             let ex = extra.get(c);
+            let mut legacy_cell = None;
             let array = dynamic.get(c).copied().or_else(|| {
-                let f = cell?.formula.as_ref()?;
-                (f.array.is_none() && crate::array_formula::needs_array(wb, si, *c, f)).then_some(RangeRef::cell(*c))
+                // A formula read with its dynamic-array mark keeps it (`cm`, see `read_formula`).
+                let f = cell?.formula.as_ref().filter(|f| f.array.is_none() && !f.dynamic)?;
+                match crate::array_formula::export(wb, si, *c, f, out.functions, &mut out.names) {
+                    crate::array_formula::Export::Unchanged => None,
+                    crate::array_formula::Export::Dynamic => Some(RangeRef::cell(*c)),
+                    // Every `@` is one Excel implies in a legacy formula: write it without them.
+                    crate::array_formula::Export::Legacy(e) => {
+                        legacy_cell = cell.map(|x| Cell { formula: Some(std::sync::Arc::new(Formula::from_expr(e))), ..x.clone() });
+                        None
+                    }
+                }
             });
+            if legacy_cell.is_some() {
+                cell = legacy_cell.as_ref();
+            }
             write_cell(&mut s, *c, cell, sheet.cell_pictures.get(c), ov, ex, array.as_ref(), &sid, out);
         }
         s.push_str("</row>");

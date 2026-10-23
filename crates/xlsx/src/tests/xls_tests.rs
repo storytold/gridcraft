@@ -492,8 +492,11 @@ fn sheets_share_one_record_budget() {
     stream.extend(eof());
     let file = compound("Workbook", &stream);
     // About n × 2,000 records in all: over a 100,000 shared allowance, though each sheet alone fits.
-    assert!(matches!(crate::xls::read_xls_with(&file, crate::xls::Budget::with_max_records(100_000)), Err(IoError::TooLarge(_))));
-    assert!(crate::xls::read_xls_with(&file, crate::xls::Budget::with_max_records(10_000_000)).is_ok());
+    assert!(matches!(
+        crate::xls::read_xls_budgeted(&file, crate::xls::Budget::with_max_records(100_000), crate::FunctionInfo::default()),
+        Err(IoError::TooLarge(_))
+    ));
+    assert!(crate::xls::read_xls_budgeted(&file, crate::xls::Budget::with_max_records(10_000_000), crate::FunctionInfo::default()).is_ok());
 
     // Two sheets at the same offset are refused outright.
     let mut dup = bof(0x0005);
@@ -607,6 +610,112 @@ fn a_format_shorter_than_its_count_keeps_its_characters() {
     assert_eq!(fmt("A2"), "yyyy-mm-dd");
     assert_eq!(fmt("A3"), "0.000");
     assert!(report.warnings.iter().any(|w| w.contains("declared length")), "{:?}", report.warnings);
+}
+
+/// A workbook whose "Report" sheet holds legacy formulas over ranges of "Data": Data!A1 = 11,
+/// B1:G1 = 1, A2 = 5, A3 = 7, and Report!B1:G1 filled, so a formula in Report!A1 that spilled
+/// would be blocked.
+fn legacy_formulas_book() -> Vec<u8> {
+    let area3d = |r0: u16, r1: u16, c0: u16, c1: u16| cat(&[&[0x3B], &0u16.to_le_bytes(), &u16s(&[r0, r1, c0, c1])]);
+    let a2a3 = area3d(1, 2, 0, 0);
+    let sum = |inner: &[u8]| cat(&[inner, &[0x22, 1], &4u16.to_le_bytes()]);
+    let boundsheet = |pos: u32, name: &str| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, name.len() as u8, 0], name.as_bytes()]));
+    let globals = |p1: u32, p2: u32| {
+        cat(&[
+            &bof(0x0005),
+            &boundsheet(p1, "Data"),
+            &boundsheet(p2, "Report"),
+            &rec(0x01AE, &u16s(&[2, 0x0401])),
+            &rec(0x0017, &cat(&[&u16s(&[1]), &u16s(&[0, 0, 0])])),
+            &eof(),
+        ])
+    };
+    let number = |r: u16, c: u16, n: f64| rec(0x0203, &cat(&[&cell(r, c, 0), &n.to_le_bytes()]));
+    let mut data = bof(0x0010);
+    data.extend(number(0, 0, 11.0));
+    for c in 1..7 {
+        data.extend(number(0, c, 1.0));
+    }
+    data.extend(number(1, 0, 5.0));
+    data.extend(number(2, 0, 7.0));
+    data.extend(eof());
+    let shared = cat(&[&a2a3, &ptg_int(10), &[0x05]]);
+    let array = cat(&[&a2a3, &ptg_int(2), &[0x05]]);
+    let single_array = sum(&cat(&[&a2a3, &ptg_int(2), &[0x05]]));
+    let mut report = bof(0x0010);
+    for c in 1..7 {
+        report.extend(number(0, c, 0.0));
+    }
+    report.extend(cat(&[
+        // A1 = Data!A1:G1, A2 = +Data!A1:G1 (a title row repeated from another sheet).
+        &formula(0, 0, num(11.0), &area3d(0, 0, 0xC000, 6 | 0xC000)),
+        &formula(1, 0, num(11.0), &cat(&[&area3d(0, 0, 0xC000, 6 | 0xC000), &[0x12]])),
+        // C2:C3 share Data!$A$2:$A$3*10.
+        &formula(1, 2, num(50.0), &exp(1, 2)),
+        &rec(0x04BC, &cat(&[&u16s(&[1, 2]), &[2, 2, 0, 2], &(shared.len() as u16).to_le_bytes(), &shared])),
+        &formula(2, 2, num(70.0), &exp(1, 2)),
+        // D2:D3 = {Data!$A$2:$A$3*2}, entered with Ctrl+Shift+Enter.
+        &formula(1, 3, num(10.0), &exp(1, 3)),
+        &rec(0x0221, &cat(&[&u16s(&[1, 2]), &[3, 3], &[0; 6], &(array.len() as u16).to_le_bytes(), &array])),
+        &formula(2, 3, num(14.0), &exp(1, 3)),
+        // H1 = {SUM(Data!$A$2:$A$3*2)}, a one-cell Ctrl+Shift+Enter array.
+        &formula(0, 7, num(24.0), &exp(0, 7)),
+        &rec(0x0221, &cat(&[&u16s(&[0, 0]), &[7, 7], &[0; 6], &(single_array.len() as u16).to_le_bytes(), &single_array])),
+        // H2 = MAX(SUM(Data!$A$2:$A$3/12),0), H3 = SUM(Data!$A$2:$A$3), H4 = SQRT(Data!$A$2:$A$3).
+        &formula(1, 7, num(5.0 / 12.0), &cat(&[&sum(&cat(&[&a2a3, &ptg_int(12), &[0x06]])), &ptg_int(0), &[0x22, 2], &7u16.to_le_bytes()])),
+        &formula(2, 7, num(12.0), &sum(&a2a3)),
+        &formula(3, 7, special(2, 0x0F), &cat(&[&a2a3, &[0x21], &20u16.to_le_bytes()])),
+        &eof(),
+    ]));
+    let p1 = globals(0, 0).len() as u32;
+    let p2 = p1 + data.len() as u32;
+    cat(&[&globals(p1, p2), &data, &report])
+}
+
+#[test]
+fn legacy_formulas_read_with_implicit_intersection() {
+    let bytes = compound("Workbook", &legacy_formulas_book());
+    let formula = |wb: &gridcraft_model::Workbook, a1: &str| {
+        let f = wb.sheets[1].cell(CellRef::parse(a1).unwrap()).and_then(|c| c.formula.clone()).unwrap();
+        (f.text.clone(), f.array)
+    };
+    let range = |a1: &str| RangeRef::parse(a1);
+    let (wb, _) = read_xls(&bytes).unwrap();
+    // Every .xls formula is legacy: a range where one value is expected is intersected.
+    assert_eq!(formula(&wb, "A1"), ("@Data!A1:G1".into(), None));
+    assert_eq!(formula(&wb, "A2"), ("+@Data!A1:G1".into(), None));
+    // Shared formulas too, each cell on its own.
+    assert_eq!(formula(&wb, "C2"), ("@Data!$A$2:$A$3*10".into(), None));
+    assert_eq!(formula(&wb, "C3"), ("@Data!$A$2:$A$3*10".into(), None));
+    // Ctrl+Shift+Enter arrays, one cell or several, stay arrays and are not intersected.
+    assert_eq!(formula(&wb, "D2"), ("Data!$A$2:$A$3*2".into(), range("D2:D3")));
+    assert_eq!(formula(&wb, "H1"), ("SUM(Data!$A$2:$A$3*2)".into(), range("H1")));
+    // An operation inside SUM takes values; SUM of the range itself is left alone.
+    assert_eq!(formula(&wb, "H2"), ("MAX(SUM(@Data!$A$2:$A$3/12),0)".into(), None));
+    assert_eq!(formula(&wb, "H3"), ("SUM(Data!$A$2:$A$3)".into(), None));
+    assert_eq!(formula(&wb, "H4"), ("SQRT(@Data!$A$2:$A$3)".into(), None));
+
+    // The caller's function facts decide: here SQRT takes its argument as a whole.
+    let library = crate::FunctionInfo { is_builtin: |_| true, is_scalar_arg: |n, _| n != "SQRT" };
+    let (custom, _) = crate::read_xls_with(&bytes, library).unwrap();
+    assert_eq!(formula(&custom, "H4"), ("SQRT(Data!$A$2:$A$3)".into(), None));
+    assert_eq!(formula(&custom, "A1"), ("@Data!A1:G1".into(), None));
+
+    // Saved as .xlsx, they stay legacy: no dynamic-array metadata, no _xlfn.SINGLE, and they read
+    // back as they were opened.
+    let saved = write_xlsx(&wb).unwrap();
+    let mut sheet = String::new();
+    std::io::Read::read_to_string(
+        &mut zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap().by_name("xl/worksheets/sheet2.xml").unwrap(),
+        &mut sheet,
+    )
+    .unwrap();
+    assert!(!sheet.contains("cm=") && !sheet.contains("SINGLE"), "{sheet}");
+    assert!(sheet.contains("<f>Data!A1:G1</f>") && sheet.contains("<f>MAX(SUM(Data!$A$2:$A$3/12),0)</f>"), "{sheet}");
+    let (back, _) = read_xlsx(&saved).unwrap();
+    for a1 in ["A1", "A2", "C2", "C3", "D2", "H1", "H2", "H3", "H4"] {
+        assert_eq!(formula(&back, a1), formula(&wb, a1), "{a1}");
+    }
 }
 
 fn one_sheet_with(sheet_records: &[u8]) -> Vec<u8> {
