@@ -110,6 +110,10 @@ pub struct Out {
     overrides: Vec<(String, String)>,
     defaults: BTreeMap<String, String>,
     pub dxfs: Vec<Style>,
+    /// Number format ids assigned so far (inline `x14:dxf` formats); `styles.xml` adds the rest.
+    pub num_fmts: crate::styles::NumFmts,
+    /// Excel 2010 conditional format rules written so far (each needs a unique id).
+    pub x14_cf_rules: u32,
     pub sst: Sst,
     pub images: u32,
     pub charts: u32,
@@ -160,6 +164,12 @@ impl Out {
 /// file only needs ids that are unique within it).
 pub fn person_guid(i: usize) -> String {
     format!("{{00000000-0000-4000-8002-{:012X}}}", i as u64 & 0xFFFF_FFFF_FFFF)
+}
+
+/// Id of the i-th Excel 2010 conditional format rule of the package (deterministic and unique,
+/// like [`person_guid`]).
+pub fn x14_cf_rule_guid(i: u32) -> String {
+    format!("{{00000000-0000-4000-8003-{i:012X}}}")
 }
 
 /// `$A$1:$D$20` (or `$1:$3` / `$A:$C`).
@@ -223,6 +233,8 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         overrides: vec![],
         defaults: BTreeMap::new(),
         dxfs: vec![],
+        num_fmts: Default::default(),
+        x14_cf_rules: 0,
         sst: Sst::default(),
         images: 0,
         charts: 0,
@@ -397,7 +409,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     w.push_str("</workbook>");
 
     // Workbook-level parts.
-    let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &pivots.number_formats(wb));
+    let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &pivots.number_formats(wb), std::mem::take(&mut out.num_fmts));
     pivots.finish(wb, &mut out, &|code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied()));
     out.part("xl/styles.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"), styles.into_bytes());
     wb_rels.add("styles", "styles.xml");

@@ -977,6 +977,139 @@ fn icon_sets_always_write_one_cfvo_per_icon() {
     assert_eq!(rules, [3, 4, 5]);
 }
 
+const X14_CF_SHEET: &str = r#"<sheetData/>
+  <conditionalFormatting sqref="B1:B5"><cfRule type="dataBar" priority="2"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar><extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:id>{00000000-0000-0000-0000-00000000000A}</x14:id></ext></extLst></cfRule></conditionalFormatting>
+  <extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:conditionalFormattings>
+    <x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">
+      <x14:cfRule type="cellIs" priority="3" operator="between" id="{00000000-0000-0000-0000-000000000001}"><xm:f>Lists!$A$1</xm:f><xm:f>Lists!$A$2</xm:f><x14:dxf><font><b/><color rgb="FF4F5051"/></font><numFmt numFmtId="170" formatCode="0.0%"/><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill><border><left style="thin"><color rgb="FF000000"/></left></border></x14:dxf></x14:cfRule>
+      <x14:cfRule type="expression" priority="1" stopIfTrue="1" id="{00000000-0000-0000-0000-000000000002}"><xm:f>A1=Lists!$B$1</xm:f><x14:dxf><fill><patternFill><bgColor rgb="FFFFEB9C"/></patternFill></fill></x14:dxf></x14:cfRule>
+      <xm:sqref>A1:A10 C1</xm:sqref></x14:conditionalFormatting>
+    <x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:cfRule type="dataBar" id="{00000000-0000-0000-0000-00000000000A}"><x14:dataBar minLength="0" maxLength="100" gradient="0"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/></x14:dataBar></x14:cfRule><xm:sqref>B1:B5</xm:sqref></x14:conditionalFormatting>
+    <x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:cfRule type="iconSet" priority="4" id="{00000000-0000-0000-0000-000000000003}"><x14:iconSet iconSet="3Stars"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo></x14:iconSet></x14:cfRule><xm:sqref>D1:D3</xm:sqref></x14:conditionalFormatting>
+  </x14:conditionalFormattings></ext></extLst>"#;
+
+/// Rules in the `x14:conditionalFormattings` extension (such as those referring to other sheets)
+/// carry `xm:f` formulas and an inline `x14:dxf`; their priorities interleave with the main
+/// section's. A data bar's linked extension adds no rule, only the bar's solid fill (its other
+/// settings are skipped with a warning); x14 icon sets are skipped with a warning.
+#[test]
+fn x14_conditional_formats_are_read() {
+    let (wb, rep) = read_xlsx(&super::minimal(X14_CF_SHEET, &[], "", "")).unwrap();
+    let mut cfs = wb.sheet(0).unwrap().cond_formats.clone();
+    cfs.sort_by_key(|cf| cf.priority);
+    assert_eq!(cfs.iter().map(|cf| cf.priority).collect::<Vec<_>>(), [1, 2, 3], "{cfs:?}");
+    let [expr, bar, cell] = &cfs[..] else { panic!("{cfs:?}") };
+    assert_eq!(expr.ranges, [rr("A1:A10"), rr("C1")]);
+    assert!(expr.stop_if_true);
+    match &expr.rule {
+        CfRule::Expression { formula, style } => {
+            assert_eq!(formula, "A1=Lists!$B$1");
+            assert_eq!(style.fill, Fill::solid(Color::Rgb(0xFFEB9C)));
+        }
+        r => panic!("{r:?}"),
+    }
+    assert!(matches!(bar.rule, CfRule::DataBar { gradient: false, .. }), "{bar:?}");
+    assert_eq!(bar.ranges, [rr("B1:B5")]);
+    match &cell.rule {
+        CfRule::CellIs { op, a, b, style } => {
+            assert_eq!((*op, a.as_str(), b.as_deref()), (CfOperator::Between, "Lists!$A$1", Some("Lists!$A$2")));
+            assert!(style.font.bold);
+            assert_eq!(style.font.color, Color::Rgb(0x4F5051));
+            assert_eq!(style.num_fmt.as_str(), "0.0%");
+            assert_eq!(style.fill, Fill::solid(Color::Rgb(0xFFC7CE)));
+            assert_eq!(style.borders.left.style, BorderStyle::Thin);
+        }
+        r => panic!("{r:?}"),
+    }
+    // Unsupported x14 kinds still warn, by name; nothing else does.
+    assert!(rep.warnings.iter().any(|w| w.contains("\"dataBar\"")), "{:?}", rep.warnings);
+    assert!(rep.warnings.iter().any(|w| w.contains("\"iconSet\"")), "{:?}", rep.warnings);
+    assert_eq!(rep.warnings.iter().filter(|w| w.contains("conditional format")).count(), 2, "{:?}", rep.warnings);
+}
+
+/// A rule referring to another sheet is written in the x14 extension (as the LibreOffice-saved
+/// file that motivated this places it), ahead of the sparklines in the one `extLst`; other rules
+/// stay in the main section, and so does a rule with a 3-D span, which MS-XLSX 2.6.27 forbids in
+/// `xm:f`.
+#[test]
+fn cross_sheet_rules_are_written_in_the_x14_extension() {
+    let mut wb = Workbook::new();
+    wb.sheets.push(Arc::new(Sheet::new("Vehicle Range")));
+    let grey = Style { font: Font { color: Color::Rgb(0x4F5051), ..Style::default().font }, num_fmt: NumFmt::new("0.0%"), ..Style::default() };
+    let s = wb.sheet_mut(0).unwrap();
+    let rules = [
+        (CfRule::Expression { formula: "E1>Sheet1!$B$1".into(), style: Box::new(grey.clone()) }, false),
+        (CfRule::CellIs { op: CfOperator::Equal, a: "'Vehicle Range'!$A$8".into(), b: None, style: Box::new(grey.clone()) }, true),
+        (CfRule::CellIs { op: CfOperator::Greater, a: "5".into(), b: None, style: Box::new(grey.clone()) }, false),
+        (CfRule::Expression { formula: "SUM('Sheet1:Vehicle Range'!$A$1)>0".into(), style: Box::new(grey) }, false),
+    ];
+    for (i, (rule, stop_if_true)) in rules.into_iter().enumerate() {
+        s.cond_formats.push(CondFormat { ranges: vec![rr("E:E")], rule, priority: i as u32 + 1, stop_if_true });
+    }
+    s.sparklines.push(Sparkline { cell: at("J2"), source: "B2:B3".into(), kind: SparklineKind::Line, color: Color::Auto, markers: false });
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    let (main, ext) = xml.split_once("<extLst>").unwrap();
+    assert_eq!(main.matches("<cfRule ").count(), 3, "{main}");
+    assert!(!main.contains("$A$8"), "{main}");
+    assert!(main.contains("<formula>E1&gt;Sheet1!$B$1</formula>"), "{main}");
+    assert!(main.contains("<formula>SUM('Sheet1:Vehicle Range'!$A$1)&gt;0</formula>"), "{main}");
+    assert_eq!(ext.matches("<x14:cfRule ").count(), 1, "{ext}");
+    assert_eq!(ext.matches("<extLst>").count(), 0, "one extLst: {ext}");
+    let cf = ext.find("{78C0D931-6437-407d-A8EE-F0AAD7539E65}").unwrap();
+    assert!(cf < ext.find("{05C60535-1F16-4fd2-B633-F4F36F0B64E0}").unwrap(), "conditional formats before sparklines: {ext}");
+    assert!(ext.contains("xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\""), "{ext}");
+    assert!(ext.contains("<x14:conditionalFormatting xmlns:xm=\"http://schemas.microsoft.com/office/excel/2006/main\">"), "{ext}");
+    assert!(ext.contains("<x14:cfRule type=\"cellIs\" priority=\"2\" stopIfTrue=\"1\" operator=\"equal\" id=\"{"), "{ext}");
+    assert!(ext.contains("<xm:f>'Vehicle Range'!$A$8</xm:f><x14:dxf><font><color rgb=\"FF4F5051\"/></font><numFmt numFmtId=\""), "{ext}");
+    assert!(ext.contains("</x14:dxf></x14:cfRule><xm:sqref>E:E</xm:sqref></x14:conditionalFormatting>"), "{ext}");
+    // The inline number format's id is the one `styles.xml` declares for its code.
+    let id = ext.split("<numFmt numFmtId=\"").nth(1).and_then(|r| r.split('"').next()).unwrap();
+    let mut styles = String::new();
+    zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap().by_name("xl/styles.xml").unwrap().read_to_string(&mut styles).unwrap();
+    assert!(styles.contains(&format!("<numFmt numFmtId=\"{id}\" formatCode=\"0.0%\"/>")), "{styles}");
+
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let mut got = back.sheet(0).unwrap().cond_formats.clone();
+    got.sort_by_key(|cf| cf.priority);
+    assert_eq!(got, wb.sheet(0).unwrap().cond_formats);
+}
+
+/// A differential format's protection is written after its alignment and border (the CT_Dxf
+/// order: font, numFmt, fill, alignment, border, protection), both inline in an `x14:dxf` and in `styles.xml`, and reads back.
+#[test]
+fn dxf_protection_is_written_in_schema_order() {
+    let mut wb = Workbook::new();
+    wb.sheets.push(Arc::new(Sheet::new("Other")));
+    let mut st = Style { fill: Fill::solid(Color::Rgb(0xFFC7CE)), ..Style::default() };
+    st.align.h = HAlign::Center;
+    st.protection = gridcraft_model::style::Protection { locked: false, hidden: true };
+    st.borders.left.style = BorderStyle::Thin;
+    let s = wb.sheet_mut(0).unwrap();
+    let rules = [
+        CfRule::Expression { formula: "A1=Other!$A$1".into(), style: Box::new(st.clone()) },
+        CfRule::Expression { formula: "A1>5".into(), style: Box::new(st) },
+    ];
+    for (i, rule) in rules.into_iter().enumerate() {
+        s.cond_formats.push(CondFormat { ranges: vec![rr("A1:A5")], rule, priority: i as u32 + 1, stop_if_true: false });
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    let mut styles = String::new();
+    zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap().by_name("xl/styles.xml").unwrap().read_to_string(&mut styles).unwrap();
+    let dxfs = &styles[styles.find("<dxfs").unwrap()..];
+    for part in [xml.as_str(), dxfs] {
+        let p = part.find("<protection locked=\"0\" hidden=\"1\"/>").unwrap_or_else(|| panic!("{part}"));
+        assert!(part.find("<alignment").unwrap() < part.find("<border>").unwrap() && part.find("<border>").unwrap() < p, "{part}");
+    }
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let mut got = back.sheet(0).unwrap().cond_formats.clone();
+    got.sort_by_key(|cf| cf.priority);
+    assert_eq!(got, wb.sheet(0).unwrap().cond_formats);
+}
+
 /// Files have no `@` operator: Excel writes `@x` as `_xlfn.SINGLE(x)` in a dynamic-array
 /// formula, and reads it back as `@x`.
 #[test]
@@ -1320,6 +1453,11 @@ fn solid_data_bar_survives_with_sparklines_and_gradient_neighbours() {
     // x14 cfvo values are `xm:f` children; a `val` attribute there is not valid x14.
     let (xml, _) = sheet1_xml(&bytes);
     assert!(xml.contains("<x14:cfvo type=\"num\"><xm:f>9</xm:f></x14:cfvo>"), "{xml}");
+    // Both solid bars sit in the one x14 conditional format extension, under its MS-XLSX uri.
+    assert_eq!(xml.matches("<ext uri=\"{78C0D931-6437-407d-A8EE-F0AAD7539E65}\"").count(), 1, "{xml}");
+    assert_eq!(xml.matches("<x14:cfRule type=\"dataBar\"").count(), 2, "{xml}");
+    // As drawn here: negatives in the bar's colour, no axis (Excel's x14 defaults differ), and read back without a warning.
+    assert_eq!(xml.matches("<x14:dataBar gradient=\"0\" negativeBarColorSameAsPositive=\"1\" axisPosition=\"none\">").count(), 2, "{xml}");
     let (back, rep) = read_xlsx(&bytes).unwrap();
     assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
     let b = &back.sheets[0];
