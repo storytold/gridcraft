@@ -188,6 +188,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
                 ("Doughnut", "doughnut", ""),
                 ("Scatter", "scatter", ""),
                 ("Radar", "radar", ""),
+                ("Pareto", "pareto", ""),
             ] {
                 if ui.button(l).clicked() {
                     app.run_or_alert("chart.set", json!({"chart": id, "type": k, "subtype": s}));

@@ -271,6 +271,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Automate" => "Automatizacija",
         "Table Design" => "Dizajn tabele",
         "Chart Design" => "Dizajn grafikona",
+        "Pareto" => "Pareto",
+        "Cumulative %" => "Kumulativno %",
         "Ready" => "Spremno",
         "Enter" => "Unos",
         "Edit" => "Uređivanje",

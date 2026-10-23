@@ -275,6 +275,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Automate" => "Tự động hóa",
         "Table Design" => "Thiết kế bảng",
         "Chart Design" => "Thiết kế biểu đồ",
+        "Pareto" => "Pareto",
+        "Cumulative %" => "% tích lũy",
         "Ready" => "Sẵn sàng",
         "Enter" => "Nhập",
         "Edit" => "Sửa",

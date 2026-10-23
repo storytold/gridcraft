@@ -261,6 +261,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Automate" => "Автоматизація",
         "Table Design" => "Конструктор таблиць",
         "Chart Design" => "Конструктор діаграм",
+        "Pareto" => "Парето",
+        "Cumulative %" => "Накопичений %",
         "Ready" => "Готово",
         "Enter" => "Ввід",
         "Edit" => "Редагування",

@@ -20,7 +20,16 @@ pub const REL_COLORS: &str = "http://schemas.microsoft.com/office/2011/relations
 
 /// Kinds written as chartex parts.
 pub fn is_chartex(k: ChartKind) -> bool {
-    matches!(k, ChartKind::Histogram | ChartKind::BoxWhisker | ChartKind::Waterfall | ChartKind::Funnel | ChartKind::Treemap | ChartKind::Sunburst)
+    matches!(
+        k,
+        ChartKind::Histogram
+            | ChartKind::Pareto
+            | ChartKind::BoxWhisker
+            | ChartKind::Waterfall
+            | ChartKind::Funnel
+            | ChartKind::Treemap
+            | ChartKind::Sunburst
+    )
 }
 
 /// The `mc:Choice` requirement for a kind's drawing frame: (prefix, namespace). Funnel charts
@@ -36,7 +45,8 @@ pub fn requires(k: ChartKind) -> (&'static str, &'static str) {
 
 fn kind_of(layout: &str) -> Option<ChartKind> {
     Some(match layout {
-        "clusteredColumn" | "paretoLine" => ChartKind::Histogram,
+        "clusteredColumn" => ChartKind::Histogram,
+        "paretoLine" => ChartKind::Pareto,
         "boxWhisker" => ChartKind::BoxWhisker,
         "waterfall" => ChartKind::Waterfall,
         "funnel" => ChartKind::Funnel,
@@ -83,12 +93,14 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
         })
         .unwrap_or_default();
     let mut kind = None;
+    let mut pareto = false;
     let mut series = vec![];
     let mut data_labels = false;
     for s in region.kids("series") {
         let layout = s.attr("layoutId").unwrap_or("");
         // A Pareto line belongs to its histogram.
         if layout == "paretoLine" {
+            pareto = true;
             continue;
         }
         let k = kind_of(layout)?;
@@ -124,7 +136,7 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
     let axis_title = |id: &str| plot.kids("axis").find(|a| a.attr("id") == Some(id)).and_then(|a| a.path(&["title", "tx"])).and_then(text);
     Some(Chart {
         id: 0,
-        kind: kind?,
+        kind: if pareto { ChartKind::Pareto } else { kind? },
         anchor: Default::default(),
         title: chart.path(&["title", "tx"]).and_then(text),
         series,
@@ -280,8 +292,15 @@ pub fn write_chartex(wb: &Workbook, si: usize, ch: &Chart, names: &mut Vec<Strin
         ChartKind::Sunburst => "sunburst",
         _ => "clusteredColumn",
     };
+    let pareto = ch.kind == ChartKind::Pareto;
+    // Excel stores one clusteredColumn series per value column and a paretoLine for each,
+    // hiding every column after the first. Opening a Pareto made from two value columns in
+    // Excel 365 and saving it keeps that shape (observed 2026-10-18); the hidden series are
+    // part of Excel's own file, so they stay here too.
     for (i, ser) in ch.series.iter().enumerate() {
-        let _ = write!(s, "<cx:series layoutId=\"{layout}\" uniqueId=\"{{00000000-0000-0000-0000-{:08X}{i:04X}}}\">", ch.id);
+        // Excel shows the first Pareto series and hides the rest.
+        let hidden = if pareto && i > 0 { " hidden=\"1\"" } else { "" };
+        let _ = write!(s, "<cx:series layoutId=\"{layout}\" uniqueId=\"{{00000000-0000-0000-0000-{:08X}{i:04X}}}\"{hidden}>", ch.id);
         if let Some(n) = &ser.name {
             s.push_str(&tx_xml(n, wb, si, names));
         }
@@ -322,13 +341,32 @@ pub fn write_chartex(wb: &Workbook, si: usize, ch: &Chart, names: &mut Vec<Strin
                 );
             }
             ChartKind::Treemap => s.push_str("<cx:layoutPr><cx:parentLabelLayout val=\"overlapping\"/></cx:layoutPr>"),
+            ChartKind::Pareto => {
+                if ser.categories.is_some() {
+                    s.push_str("<cx:layoutPr><cx:aggregation/></cx:layoutPr>");
+                } else {
+                    s.push_str("<cx:layoutPr><cx:binning intervalClosed=\"r\"/></cx:layoutPr>");
+                }
+            }
             _ => {}
         }
+        if pareto {
+            s.push_str("<cx:axisId val=\"1\"/>");
+        }
         s.push_str("</cx:series>");
+        if pareto {
+            let _ = write!(
+                s,
+                "<cx:series layoutId=\"paretoLine\" ownerIdx=\"{}\" uniqueId=\"{{00000000-0000-0000-0000-{:08X}{:04X}}}\"><cx:axisId val=\"2\"/></cx:series>",
+                i * 2,
+                ch.id,
+                0x8000 + i
+            );
+        }
     }
     s.push_str("</cx:plotAreaRegion>");
     let gap = match ch.kind {
-        ChartKind::Histogram => Some("0"),
+        ChartKind::Histogram | ChartKind::Pareto => Some("0"),
         ChartKind::BoxWhisker => Some("1"),
         ChartKind::Waterfall => Some("0.5"),
         ChartKind::Funnel => Some("0.06"),
@@ -354,6 +392,9 @@ pub fn write_chartex(wb: &Workbook, si: usize, ch: &Chart, names: &mut Vec<Strin
                 }
             );
         }
+    }
+    if pareto {
+        s.push_str("<cx:axis id=\"2\"><cx:valScaling max=\"1\" min=\"0\"/><cx:units unit=\"percentage\"/><cx:tickLabels/></cx:axis>");
     }
     s.push_str("</cx:plotArea>");
     let pos = match ch.legend {

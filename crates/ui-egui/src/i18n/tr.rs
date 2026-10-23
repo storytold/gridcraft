@@ -373,6 +373,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Automate" => "Otomatikleştir",
         "Table Design" => "Tablo Tasarımı",
         "Chart Design" => "Grafik Tasarımı",
+        "Pareto" => "Pareto",
+        "Cumulative %" => "Kümülatif %",
         "Ready" => "Hazır",
         "Enter" => "Giriş",
         "Edit" => "Düzenle",

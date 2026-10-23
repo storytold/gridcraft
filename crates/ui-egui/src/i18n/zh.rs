@@ -268,6 +268,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Automate" => "自动化",
         "Table Design" => "表格设计",
         "Chart Design" => "图表设计",
+        "Pareto" => "排列图",
+        "Cumulative %" => "累积百分比",
         "Ready" => "就绪",
         "Enter" => "输入",
         "Edit" => "编辑",

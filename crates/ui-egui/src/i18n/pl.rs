@@ -259,6 +259,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Automate" => "Automatyzacja",
         "Table Design" => "Projekt tabeli",
         "Chart Design" => "Projekt wykresu",
+        "Pareto" => "Pareto",
+        "Cumulative %" => "Skumulowany %",
         "Ready" => "Gotowy",
         "Enter" => "Wprowadź",
         "Edit" => "Edytuj",

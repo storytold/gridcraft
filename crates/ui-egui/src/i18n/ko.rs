@@ -268,6 +268,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Automate" => "자동화",
         "Table Design" => "표 디자인",
         "Chart Design" => "차트 디자인",
+        "Pareto" => "파레토",
+        "Cumulative %" => "누적 %",
         "Ready" => "준비",
         "Enter" => "입력",
         "Edit" => "편집",

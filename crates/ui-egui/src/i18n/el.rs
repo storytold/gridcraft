@@ -359,6 +359,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Automate" => "Αυτοματισμός",
         "Table Design" => "Σχεδίαση πίνακα",
         "Chart Design" => "Σχεδίαση γραφήματος",
+        "Pareto" => "Παρέτο",
+        "Cumulative %" => "Αθροιστικό %",
         "Ready" => "Έτοιμο",
         "Enter" => "Εισαγωγή",
         "Edit" => "Επεξεργασία",

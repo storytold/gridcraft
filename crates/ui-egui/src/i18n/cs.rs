@@ -384,6 +384,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Automate" => "Automatizace",
         "Table Design" => "Návrh tabulky",
         "Chart Design" => "Návrh grafu",
+        "Pareto" => "Pareto",
+        "Cumulative %" => "Kumulativní %",
         "Ready" => "Připraveno",
         "Enter" => "Zadat",
         "Edit" => "Úpravy",
