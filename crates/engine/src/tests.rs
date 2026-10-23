@@ -1948,6 +1948,81 @@ fn insert_and_delete_cells_never_shift_part_of_a_table() {
 }
 
 #[test]
+fn insert_and_delete_cells_unmerge_merges_they_would_split() {
+    // Found by the command-sequence fuzzer (seeds 466, 801, 891): Insert/Delete Cells moved a
+    // merged area into one that stayed put, so two merges overlapped. Excel asks first ("some
+    // merged cells will unmerge") and, on OK, unmerges every merge reaching into the shifted
+    // cells without lying wholly within their band; merges inside the band shift, grow or shrink.
+    fn merges(s: &Session) -> Vec<String> {
+        let mut m: Vec<String> = s.doc().unwrap().wb.sheet(0).unwrap().merges.iter().map(|m| m.a1()).collect();
+        m.sort();
+        m
+    }
+    fn setup(list: &[&str]) -> Session {
+        let mut s = s();
+        for m in list {
+            s.execute("home.mergeCells", json!({"range": m})).unwrap();
+        }
+        s
+    }
+    // The bead repros: a whole-row merge below an Insert Cells band, and a merge cut by Delete Cells.
+    for (list, cmd, range, shift, after) in [
+        (&["22:24", "F19:F20"][..], "home.insertCells", "E8:H11", "down", &["F23:F24"][..]),
+        (&["L7:L8", "H6:J13"][..], "home.deleteCells", "J7:K14", "left", &["J7:J8"][..]),
+    ] {
+        let mut s = setup(list);
+        let before = merges(&s);
+        let e = s.execute(cmd, json!({"range": range, "shift": shift})).unwrap_err();
+        assert!(e.to_string().contains(crate::cmd::sheet::UNMERGE_ERROR), "{cmd} {range}: {e}");
+        assert_eq!(merges(&s), before, "a refused shift changes nothing");
+        s.execute(cmd, json!({"range": range, "shift": shift, "unmerge": true})).unwrap();
+        assert_eq!(merges(&s), after, "{cmd} {range} {shift}");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(merges(&s), before, "one undo step brings the merges back");
+    }
+    // Merges Excel splits (asks, then unmerges) and merges it shifts without asking.
+    for (merge, cmd, range, shift, after) in [
+        ("A10:F10", "home.insertCells", "E8:H11", "down", None),
+        ("A30:F30", "home.insertCells", "E8:H11", "down", None),
+        ("E5:E9", "home.insertCells", "E8:H11", "down", Some("E5:E13")),
+        ("E8:F9", "home.insertCells", "E8:H11", "down", Some("E12:F13")),
+        ("A5:F6", "home.insertCells", "E8:H11", "down", Some("A5:F6")),
+        ("I19:J20", "home.insertCells", "E8:H11", "down", Some("I19:J20")),
+        ("M13:N15", "home.deleteCells", "J7:K14", "left", None),
+        ("M7:N8", "home.deleteCells", "J7:K14", "left", Some("K7:L8")),
+        ("K7:L8", "home.deleteCells", "J7:K14", "left", Some("J7:J8")),
+        ("D20:F21", "home.deleteCells", "E8:H11", "up", None),
+        ("D9:E9", "home.deleteCells", "E8:H11", "up", None),
+        ("E10:E13", "home.deleteCells", "E8:H11", "up", Some("E8:E9")),
+        ("E20:F21", "home.deleteCells", "E8:H11", "up", Some("E16:F17")),
+        ("J4:K6", "home.insertCells", "E5:F6", "right", None),
+        ("E4:E5", "home.insertCells", "E5:F6", "right", None),
+        ("J5:K6", "home.insertCells", "E5:F6", "right", Some("L5:M6")),
+        ("C5:D6", "home.insertCells", "E5:F6", "right", Some("C5:D6")),
+    ] {
+        let mut s = setup(&[merge]);
+        let r = s.execute(cmd, json!({"range": range, "shift": shift}));
+        match after {
+            Some(a) => {
+                r.unwrap_or_else(|e| panic!("{merge} {cmd} {range} {shift}: {e}"));
+                assert_eq!(merges(&s), [a], "{merge} {cmd} {range} {shift}");
+            }
+            None => {
+                assert!(r.is_err_and(|e| e.to_string().contains(crate::cmd::sheet::UNMERGE_ERROR)), "{merge} {cmd} {range} {shift}");
+                s.execute(cmd, json!({"range": range, "shift": shift, "unmerge": true})).unwrap();
+                assert!(merges(&s).is_empty(), "{merge} {cmd} {range} {shift}: {:?}", merges(&s));
+            }
+        }
+    }
+    // Merges wholly inside the deleted cells go with them.
+    for (merge, cmd, range, shift) in [("J8:K9", "home.deleteCells", "J7:K14", "left"), ("E9:F10", "home.deleteCells", "E8:H11", "up")] {
+        let mut s = setup(&[merge]);
+        s.execute(cmd, json!({"range": range, "shift": shift})).unwrap();
+        assert!(merges(&s).is_empty(), "{merge}");
+    }
+}
+
+#[test]
 fn table_names_with_a_hyphen_are_rejected() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Qty"], [7]]})).unwrap();

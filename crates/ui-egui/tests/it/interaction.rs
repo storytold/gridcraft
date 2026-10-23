@@ -669,6 +669,92 @@ fn data_analysis_dialog_runs_a_tool_and_asks_before_overwriting() {
 }
 
 #[test]
+fn insert_cells_dialog_asks_before_unmerging_split_merges() {
+    let mut s = blank();
+    s.execute("home.mergeCells", json!({"range": "22:24"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "F19:F20"})).unwrap();
+    s.execute("selection.set", json!({"range": "E8:H11"})).unwrap();
+    let merges = |h: &egui_kittest::Harness<'static, SheetApp>| -> Vec<String> {
+        h.state().session.active().unwrap().wb.active().unwrap().merges.iter().map(|m| m.a1()).collect()
+    };
+    let mut h = harness(s);
+    let before = merges(&h);
+    // Escape cancels, Enter (OK) unmerges and shifts.
+    for (answer, k) in [("Cancel", Key::Escape), ("OK", Key::Enter)] {
+        h.state_mut().open_dialog("insertCells", json!({}));
+        h.run_steps(2);
+        key(&mut h, Key::Enter, Modifiers::NONE);
+        let d = h.state().dialog.as_ref().expect("the dialog stays open to ask");
+        assert_eq!(d.values.get("askUnmerge"), Some(&json!(true)));
+        assert!(h.state().message.is_none());
+        key(&mut h, k, Modifiers::NONE);
+        assert!(h.state().dialog.is_none(), "{answer} closes the dialog");
+        if answer == "Cancel" {
+            assert_eq!(merges(&h), before, "Cancel leaves the merges alone");
+        }
+    }
+    assert_eq!(merges(&h), ["F23:F24"], "OK unmerges rows 22:24 and shifts F19:F20 down");
+}
+
+#[test]
+fn delete_cells_dialog_asks_before_unmerging_split_merges() {
+    let mut s = blank();
+    s.execute("home.mergeCells", json!({"range": "22:24"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "F19:F20"})).unwrap();
+    s.execute("selection.set", json!({"range": "E8:H11"})).unwrap();
+    let merges = |h: &egui_kittest::Harness<'static, SheetApp>| -> Vec<String> {
+        h.state().session.active().unwrap().wb.active().unwrap().merges.iter().map(|m| m.a1()).collect()
+    };
+    let mut h = harness(s);
+    let before = merges(&h);
+    // Escape cancels, Enter (OK) unmerges and shifts up.
+    for (answer, k) in [("Cancel", Key::Escape), ("OK", Key::Enter)] {
+        h.state_mut().open_dialog("deleteCells", json!({}));
+        h.run_steps(2);
+        key(&mut h, Key::Enter, Modifiers::NONE);
+        let d = h.state().dialog.as_ref().expect("the dialog stays open to ask");
+        assert_eq!(d.values.get("askUnmerge"), Some(&json!(true)));
+        assert!(h.state().message.is_none());
+        key(&mut h, k, Modifiers::NONE);
+        assert!(h.state().dialog.is_none(), "{answer} closes the dialog");
+        if answer == "Cancel" {
+            assert_eq!(merges(&h), before, "Cancel leaves the merges alone");
+        }
+    }
+    assert_eq!(merges(&h), ["F15:F16"], "OK unmerges rows 22:24 and shifts F19:F20 up");
+}
+
+#[test]
+fn insert_paste_dialog_asks_before_unmerging_split_merges() {
+    let mut s = blank();
+    s.execute("home.mergeCells", json!({"range": "22:24"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "F19:F20"})).unwrap();
+    s.execute("selection.set", json!({"range": "E8"})).unwrap();
+    let merges = |h: &egui_kittest::Harness<'static, SheetApp>| -> Vec<String> {
+        h.state().session.active().unwrap().wb.active().unwrap().merges.iter().map(|m| m.a1()).collect()
+    };
+    let mut h = harness(s);
+    // Insert Copied Cells needs a clipboard: a 4x4 block, pasted at the active cell E8.
+    h.state_mut().run("edit.copy", json!({"range": "A1:D4"})).unwrap();
+    let before = merges(&h);
+    // Escape cancels, Enter (OK) unmerges and shifts down.
+    for (answer, k) in [("Cancel", Key::Escape), ("OK", Key::Enter)] {
+        h.state_mut().open_dialog("insertPaste", json!({}));
+        h.run_steps(2);
+        key(&mut h, Key::Enter, Modifiers::NONE);
+        let d = h.state().dialog.as_ref().expect("the dialog stays open to ask");
+        assert_eq!(d.values.get("askUnmerge"), Some(&json!(true)));
+        assert!(h.state().message.is_none());
+        key(&mut h, k, Modifiers::NONE);
+        assert!(h.state().dialog.is_none(), "{answer} closes the dialog");
+        if answer == "Cancel" {
+            assert_eq!(merges(&h), before, "Cancel leaves the merges alone");
+        }
+    }
+    assert_eq!(merges(&h), ["F23:F24"], "OK unmerges rows 22:24 and shifts F19:F20 down");
+}
+
+#[test]
 fn solver_dialog_loads_the_saved_model_and_results_can_restore() {
     let mut s = blank();
     for (c, v) in [("A1", "0"), ("A2", "0"), ("B1", "=3*A1+5*A2"), ("B2", "=2*A2"), ("B3", "=3*A1+2*A2")] {

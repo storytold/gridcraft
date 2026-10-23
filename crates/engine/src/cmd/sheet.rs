@@ -36,17 +36,33 @@ pub fn specs() -> Vec<CommandSpec> {
             Axis::Cols
         )),
         cmd!("sheet.moveColumns", "Move Columns", [], None, "{cols?: \"B:C\", before: zero-based column index}", has_doc, move_columns),
-        cmd!("home.insertCells", "Insert Cells…", ["Home", "Cells", "Insert"], None, "{range?, shift: right|down|row|column}", has_doc, insert_cells),
+        cmd!(
+            "home.insertCells",
+            "Insert Cells…",
+            ["Home", "Cells", "Insert"],
+            None,
+            "{range?, shift: right|down|row|column, unmerge?: bool}",
+            has_doc,
+            insert_cells
+        ),
         cmd!(
             "home.insertCopiedCells",
             "Insert Copied Cells",
             ["Home", "Cells", "Insert"],
             None,
-            "{at?: \"B3\", shift?: down|right}: inserts the copied cells at `at` (the active cell) and pastes them there. Whole copied rows or columns insert whole rows or columns; other blocks shift the cells at `at` down (default) or right. A cut of whole rows or columns moves them (Insert Cut Cells)",
+            "{at?: \"B3\", shift?: down|right, unmerge?: bool}: inserts the copied cells at `at` (the active cell) and pastes them there. Whole copied rows or columns insert whole rows or columns; other blocks shift the cells at `at` down (default) or right. A cut of whole rows or columns moves them (Insert Cut Cells). `unmerge: true` unmerges the merged cells a shift would split",
             has_clipboard,
             insert_copied_cells
         ),
-        cmd!("home.deleteCells", "Delete Cells…", ["Home", "Cells", "Delete"], None, "{range?, shift: left|up|row|column}", has_doc, delete_cells),
+        cmd!(
+            "home.deleteCells",
+            "Delete Cells…",
+            ["Home", "Cells", "Delete"],
+            None,
+            "{range?, shift: left|up|row|column, unmerge?: bool}",
+            has_doc,
+            delete_cells
+        ),
         cmd!("home.insertSheet", "Insert Sheet", ["Home", "Cells", "Insert"], Some("Shift+F11"), "{name?, before?: index}", has_doc, insert_sheet),
         cmd!("home.deleteSheet", "Delete Sheet", ["Home", "Cells", "Delete"], None, "{sheet?}", has_doc, delete_sheet),
         cmd!("sheet.rename", "Rename Sheet", ["Home", "Cells", "Format"], None, "{sheet?, name}", has_doc, rename_sheet),
@@ -490,6 +506,7 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let e = Edit::InsertCells { axis: if shift == "right" { Axis::Cols } else { Axis::Rows }, range: r };
     let sheet = target_sheet(s, p)?;
+    let mut unmerge = Vec::new();
     if let Some(sh) = s.doc()?.wb.sheet(sheet) {
         check_table_shift(sh, &e)?;
         // Refuse to push data off the sheet: cells in the last `width`/`height` positions would be dropped.
@@ -501,10 +518,12 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
         if sh.cells.iter_range(doomed).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
             return Err(EngineError::Other("To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet.".into()));
         }
+        unmerge = check_merge_shift(sh, &e, p)?;
     }
     let right = shift == "right";
     let out = edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
+        sh.merges.retain(|m| !unmerge.contains(m));
         if right {
             sh.cells.shift_cols_in_rows(r.start.row, r.end.row, r.start.col, r.width() as i64);
         } else {
@@ -530,14 +549,17 @@ fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let e = Edit::DeleteCells { axis: if shift == "left" { Axis::Cols } else { Axis::Rows }, range: r };
     let sheet = target_sheet(s, p)?;
+    let mut unmerge = Vec::new();
     if let Some(sh) = s.doc()?.wb.sheet(sheet) {
         check_table_shift(sh, &e)?;
+        unmerge = check_merge_shift(sh, &e, p)?;
     }
     let left = shift == "left";
     let out = edit(s, |cx| {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
         {
             let sh = cx.sheet_mut(sheet)?;
+            sh.merges.retain(|m| !unmerge.contains(m));
             sh.take_cells(r);
             if left {
                 sh.cells.shift_cols_in_rows(r.start.row, r.end.row, r.end.col + 1, -(r.width() as i64));
@@ -586,7 +608,8 @@ fn insert_copied_cells(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let revision = d.revision;
     let before = (d.wb.clone(), d.selection.clone());
-    let result = insert_copied_steps(s, &clip, sheet, at, shift, cut);
+    let unmerge = bool_param(p, "unmerge").unwrap_or(false);
+    let result = insert_copied_steps(s, &clip, sheet, at, shift, cut, unmerge);
     let d = s.doc_mut()?;
     // The nested steps collapse into this command's single undo step.
     for _ in 0..d.revision.saturating_sub(revision) {
@@ -609,7 +632,15 @@ fn insert_copied_cells(s: &mut Session, p: &Json) -> Result<Json> {
     }
 }
 
-fn insert_copied_steps(s: &mut Session, clip: &crate::Clipboard, sheet: usize, at: CellRef, shift: &str, cut: bool) -> Result<(RangeRef, Json)> {
+fn insert_copied_steps(
+    s: &mut Session,
+    clip: &crate::Clipboard,
+    sheet: usize,
+    at: CellRef,
+    shift: &str,
+    cut: bool,
+    unmerge: bool,
+) -> Result<(RangeRef, Json)> {
     let sel = clip.selected;
     let rows = sel.is_full_rows();
     let cols = sel.is_full_cols();
@@ -633,7 +664,8 @@ fn insert_copied_steps(s: &mut Session, clip: &crate::Clipboard, sheet: usize, a
             .offset(clip.range.height() as i64 - 1, clip.range.width() as i64 - 1)
             .ok_or_else(|| EngineError::Other("The copied cells don't fit on the sheet at this position.".into()))?;
         let block = RangeRef::new(at, end);
-        s.execute("home.insertCells", json!({"range": block.a1(), "shift": shift, "sheet": sheet}))?;
+        // The Insert Paste dialog confirms the unmerge itself; the nested insert takes its answer.
+        s.execute("home.insertCells", json!({"range": block.a1(), "shift": shift, "sheet": sheet, "unmerge": unmerge}))?;
         (block, at)
     };
     // Inserting ended copy mode; bring the clipboard back for the paste. A cut reads the live
@@ -1091,6 +1123,47 @@ fn shift_table_columns(t: &mut gridcraft_model::Table, at: u32, count: u32, inse
             t.columns.drain(a..b);
         }
     }
+}
+
+/// What Insert/Delete Cells says when the shift would split merged cells. The UI matches on it to
+/// ask before running the command again with `unmerge: true`.
+pub const UNMERGE_ERROR: &str = "would split merged cells";
+
+/// The merged areas Insert/Delete Cells would split: those reaching into the cells that shift
+/// (the edited range and everything beyond it, across the range's rows or columns) while sticking
+/// out of that band sideways. Merges within the band's width shift, grow or shrink with it; merges
+/// outside it stay put. Excel asks before such a shift and unmerges the areas it would split.
+fn merges_split_by_shift(sh: &Sheet, e: &Edit) -> Vec<RangeRef> {
+    let (axis, r) = match *e {
+        Edit::InsertCells { axis, range } | Edit::DeleteCells { axis, range } => (axis, range),
+        _ => return Vec::new(),
+    };
+    let band = match axis {
+        Axis::Rows => RangeRef::new(CellRef::new(r.start.row, r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col)),
+        Axis::Cols => RangeRef::new(CellRef::new(r.start.row, r.start.col), CellRef::new(r.end.row, MAX_COLS - 1)),
+    };
+    // A merge across the band's full width (rows for a vertical shift) moves, grows or shrinks
+    // whole, even when it starts before the edited cells.
+    let whole = |m: &RangeRef| match axis {
+        Axis::Rows => m.start.col >= r.start.col && m.end.col <= r.end.col,
+        Axis::Cols => m.start.row >= r.start.row && m.end.row <= r.end.row,
+    };
+    sh.merges.iter().filter(|m| m.intersects(&band) && !whole(m)).copied().collect()
+}
+
+/// Refuses an Insert/Delete Cells that would split merged cells, unless `unmerge: true` says to
+/// unmerge them first (Excel's OK). Returns the merges to unmerge.
+fn check_merge_shift(sh: &Sheet, e: &Edit, p: &Json) -> Result<Vec<RangeRef>> {
+    let split = merges_split_by_shift(sh, e);
+    if !split.is_empty() && !bool_param(p, "unmerge").unwrap_or(false) {
+        let areas: Vec<String> = split.iter().take(3).map(|m| m.a1()).collect();
+        return Err(EngineError::Other(format!(
+            "Shifting these cells {UNMERGE_ERROR} ({}{}); pass unmerge: true to unmerge them and continue.",
+            areas.join(", "),
+            if split.len() > areas.len() { ", …" } else { "" }
+        )));
+    }
+    Ok(split)
 }
 
 /// Like Excel, Insert/Delete Cells never shifts part of a table: cells shifted up or down must
