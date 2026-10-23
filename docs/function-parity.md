@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-21 · **Change:** minor (SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-21 · **Change:** minor (legacy formulas from files evaluate with implicit intersection; SUBTOTAL and AGGREGATE cap the cells they visit, #2175; previously minor: MEDIAN and AGGREGATE median avoid intermediate overflow) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -83,6 +83,7 @@ This improves series preparation; it does not change the model-fitting or season
 | Dynamic arrays, spill, `#SPILL!`, spill operator `A1#` | done; stale spills after a structural edit or a cleared blocker fixed (#133, #139; PRs #148, #157) |
 | Recalculation after clearing large sparse ranges | every stored cell changed by Clear is reported to recalculation, without a million-coordinate cutoff; removed formula spills are cleared, and removing empty merges still unblocks spills (#1032) |
 | SUBTOTAL / AGGREGATE input size | references trim to the used range; all areas, arrays and values of one call are charged against the 16-million-cell limit before any cell is read (skipped hidden, nested and error cells count), and `#NUM!` past it (#2175) |
+| Implicit intersection `@`, legacy CSE array formulas | done; formulas saved without dynamic-array metadata open with Excel's implicit `@` inserted where a range meets a single-value parameter, operator or cell result, and calculate like Excel's cached values (cells differing from Excel's cached values: POI's FormulaEvalTestData_Copy 197 → 3, StructuredReferences 2 → 0). T reads a reference's top-left cell |
 | Implicit intersection `@`, legacy CSE array formulas | done; legacy array range fill (PR #156) |
 | Implicit intersection `@`, legacy CSE array formulas | done, the entered range filled (PR #156) |
 | Trim references `A1:.E10` (trailing), `A1.:E10` (leading), `A1.:.E10` (both), also on whole rows/columns (`A:.A`) | done; evaluated as `TRIMRANGE(range, code, code)`, adjusted on insert/delete; files store `_xlfn.TRIMRANGE(range,code,code)` (Excel's own file spelling unconfirmed in public docs), `_xlfn._TRO_ALL/_TRO_LEADING/_TRO_TRAILING(...)` read too |
@@ -129,8 +130,9 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 | 2026-10-16 | minor | FORECAST.ETS gap interpolation uses a forward-only known-point scan instead of rescanning each gap for every missing value; numerical behavior and missing-point limits are preserved (#1042) |
 | 2026-10-15 | minor | MEDIAN and AGGREGATE median use an overflow-safe midpoint (#1579); regressions cover finite extremes, tiny values and dependent recalculation |
 | 2026-10-15 | minor | ADDRESS quotes a sheet name the way Excel does: names that read as an A1 cell (`A1`) or an R1C1 reference (`R1C1`, `RC`) and names starting with `.` get quotes; `TRUE` / `FALSE` stay bare (#1458) |
-| 2026-10-13 | minor | Clear reports changed stored cells sparsely, including those beyond the first million coordinates; dependent formulas and removed spills update, while clearing empty merges still unblocks spills (#1032) |
 | 2026-10-14 | minor | Bounded references up to 1,048,576 cells (`D3:AZ400`) keep their full shape instead of stopping at the used range, so `SUMPRODUCT(D3:AZ400*B3:B400,(A3:A400=x)*(D1:AZ1=y))` broadcasts like Excel and `ROWS`, `COUNTBLANK` and `--(r="")` count the blanks; references that run to the edge of the sheet (`A:A`) still stop at the used range (#1010) |
+| 2026-10-13 | minor | Legacy formulas from files (no dynamic-array metadata) evaluate with implicit intersection: cells differing from Excel's cached values 68,964 → 49,866 across 4,224 test-corpus workbooks (none gets more) |
+| 2026-10-13 | minor | Clear reports changed stored cells sparsely, including those beyond the first million coordinates; dependent formulas and removed spills update, while clearing empty merges still unblocks spills (#1032) |
 | 2026-10-12 | minor | USDOLLAR added as a Compatibility function (not on Microsoft's list, so the counts don't change); MIRR with no positive flow is -1, COUNTIF's bare `"<="` / `">="` skip empty strings, INDIRECT with `a1` = FALSE gives `#REF!` for A1-style text (#738) |
 | 2026-10-11 | minor | TEXT / number formats fixed against Excel-cached results: fraction literals and zero fractions, `0` denominators zero padded, `?` pads the thousands separator, booleans use the text section (226 mismatches → 0 in 352 TEXT cells) |
 | 2026-10-11 | minor | Iterative calculation: circular references iterate up to Maximum Iterations / Maximum Change when enabled |

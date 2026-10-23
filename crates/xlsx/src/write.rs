@@ -9,7 +9,7 @@ use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style
 
 use crate::package::ZipOut;
 use crate::xml::{esc, esc_attr};
-use crate::{IoError, XlsxKind};
+use crate::{FunctionInfo, IoError, XlsxKind};
 
 pub const NS_MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 pub const NS_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -128,6 +128,8 @@ pub struct Out {
     pub cell_pictures: crate::richdata::PicturesOut,
     /// Kept (pass-through) parts written so far.
     pub kept: crate::passthrough::KeptOut,
+    /// Decides which formulas need dynamic-array metadata.
+    pub functions: FunctionInfo,
 }
 
 impl Out {
@@ -204,13 +206,13 @@ fn check_sheet_names(wb: &Workbook) -> Result<(), IoError> {
 /// Workbook name written in a PivotChart's link when the file name isn't known.
 const DEFAULT_BOOK_NAME: &str = "Workbook.xlsx";
 
-pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
-    write_xlsx_named(wb, kind, None)
+pub fn write_xlsx(wb: &Workbook, kind: XlsxKind, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
+    write_xlsx_named_with(wb, kind, None, functions)
 }
 
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
-pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
     }
@@ -237,6 +239,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         needs_calc: false,
         cell_pictures: Default::default(),
         kept: Default::default(),
+        functions,
     };
     out.kept.reserve_vml_blocks(wb);
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
@@ -514,3 +517,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
 
 /// Cell metadata declaring dynamic-array formulas (MS-XLSX `XLDAPR`).
 const METADATA: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<metadata xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:xda=\"http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray\"><metadataTypes count=\"1\"><metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\" cellMeta=\"1\"/></metadataTypes><futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext uri=\"{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/></ext></extLst></bk></futureMetadata><cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata></metadata>";
+/// Writes a workbook with a caller-supplied file name and the default function facts.
+pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+    write_xlsx_named_with(wb, kind, book_name, FunctionInfo::default())
+}
