@@ -139,6 +139,7 @@ fn translated_options_headings_show_no_context_prefix() {
         ("sr", ["Opšte", "Sačuvaj"], ["Opcije|Opšte", "Opcije|Sačuvaj"], ("Prikaz", "Opcije lista|Prikaz")),
         ("nl", ["Algemeen", "Opslaan"], ["Opties|Algemeen", "Opties|Opslaan"], ("Weergeven", "Bladopties|Weergeven")),
         ("ro", ["General", "Salvare"], ["Opțiuni|General", "Opțiuni|Salvare"], ("Vizualizare", "Opțiuni foaie|Vizualizare")),
+        ("ka", ["ზოგადი", "შენახვა"], ["Options|General", "Options|Save"], ("ხედი", "Sheet Options|View")),
     ] {
         let mut h = harness(Services::default());
         h.state_mut().run("app.language.set", serde_json::json!({"language": code})).unwrap();

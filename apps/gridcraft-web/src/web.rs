@@ -60,12 +60,15 @@ pub fn start() {
                     }
                     let mut app = SheetApp::new(session, services);
                     app.ui.system_theme = true;
-                    // Follow the browser's language, except a CJK one: the web build has no system
-                    // CJK fonts (none are bundled), so that interface would render as tofu.
+                    // Follow the browser's language, except a CJK or Georgian one: the web build has no system
+                    // fonts (none are bundled), so that interface would render as tofu.
                     let browser = gridcraft_ui_egui::i18n::Language::system();
                     if !matches!(
                         browser,
-                        gridcraft_ui_egui::i18n::Language::Zh | gridcraft_ui_egui::i18n::Language::Ja | gridcraft_ui_egui::i18n::Language::Ko
+                        gridcraft_ui_egui::i18n::Language::Zh
+                            | gridcraft_ui_egui::i18n::Language::Ja
+                            | gridcraft_ui_egui::i18n::Language::Ko
+                            | gridcraft_ui_egui::i18n::Language::Ka
                     ) {
                         app.ui.language = browser;
                     }
