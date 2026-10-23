@@ -356,6 +356,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Leyenda: abajo",
         "Legend: Top" => "Leyenda: arriba",
         "Legend: Right" => "Leyenda: derecha",
+        "First slice angle" => "Ángulo del primer sector",
+        "Doughnut hole size" => "Tamaño del orificio del anillo",
         "Gridlines: None" => "Líneas de cuadrícula: ninguna",
         "Gridlines: Show" => "Líneas de cuadrícula: mostrar",
         "Chart\nTitle" => "Título\ndel gráfico",

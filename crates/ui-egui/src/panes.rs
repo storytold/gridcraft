@@ -170,6 +170,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
         return;
     };
     let theme = app.session.active().map(|d| d.wb.theme.clone()).unwrap_or_default();
+    let lang = crate::i18n::current(ui.ctx());
     ui.collapsing("Chart Title", |ui| {
         let field = egui::Id::new(("gridcraft.chart_title", id));
         if let Some(title) = crate::widgets::committed_text(ui, field, chart.title.as_deref().unwrap_or(""), None) {
@@ -194,6 +195,18 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
                 }
             }
         });
+        if matches!(chart.kind, gridcraft_chart::ChartKind::Pie | gridcraft_chart::ChartKind::Doughnut) {
+            let mut angle = u32::from(chart.first_slice_angle);
+            if ui.add(egui::Slider::new(&mut angle, 0..=359).text(lang.tr("First slice angle"))).changed() {
+                app.run_or_alert("chart.set", json!({"chart": id, "firstSliceAngle": angle}));
+            }
+        }
+        if chart.kind == gridcraft_chart::ChartKind::Doughnut {
+            let mut hole = u32::from(chart.hole_size);
+            if ui.add(egui::Slider::new(&mut hole, 10..=90).text(lang.tr("Doughnut hole size"))).changed() {
+                app.run_or_alert("chart.set", json!({"chart": id, "holeSize": hole}));
+            }
+        }
     });
     ui.collapsing("Legend", |ui| {
         ui.horizontal(|ui| {

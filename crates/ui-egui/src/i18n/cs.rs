@@ -356,6 +356,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legenda: dole",
         "Legend: Top" => "Legenda: nahoře",
         "Legend: Right" => "Legenda: vpravo",
+        "First slice angle" => "Úhel prvního výseku",
+        "Doughnut hole size" => "Velikost otvoru prstence",
         "Gridlines: None" => "Mřížka: žádná",
         "Gridlines: Show" => "Mřížka: zobrazit",
         "Chart\nTitle" => "Název\ngrafu",

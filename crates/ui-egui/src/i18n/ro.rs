@@ -238,6 +238,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legendă: jos",
         "Legend: Top" => "Legendă: sus",
         "Legend: Right" => "Legendă: dreapta",
+        "First slice angle" => "Unghiul primei felii",
+        "Doughnut hole size" => "Dimensiunea găurii gogoașei",
         "Gridlines: None" => "Linii de grilă: niciuna",
         "Gridlines: Show" => "Linii de grilă: afișare",
         "Chart\nTitle" => "Titlu\ndiagramă",

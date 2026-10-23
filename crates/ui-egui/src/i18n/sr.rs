@@ -243,6 +243,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legenda: Dole",
         "Legend: Top" => "Legenda: Gore",
         "Legend: Right" => "Legenda: Desno",
+        "First slice angle" => "Ugao prve kriške",
+        "Doughnut hole size" => "Veličina rupe prstena",
         "Gridlines: None" => "Linije mreže: Ništa",
         "Gridlines: Show" => "Linije mreže: Prikaži",
         "Chart\nTitle" => "Naslov\ngrafikona",

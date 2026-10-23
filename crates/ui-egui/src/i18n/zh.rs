@@ -240,6 +240,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "图例：底部",
         "Legend: Top" => "图例：顶部",
         "Legend: Right" => "图例：右侧",
+        "First slice angle" => "第一扇区起始角度",
+        "Doughnut hole size" => "圆环图内径大小",
         "Gridlines: None" => "网格线：无",
         "Gridlines: Show" => "网格线：显示",
         "Chart\nTitle" => "图表\n标题",

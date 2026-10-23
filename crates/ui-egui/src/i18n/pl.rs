@@ -231,6 +231,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legenda: u dołu",
         "Legend: Top" => "Legenda: u góry",
         "Legend: Right" => "Legenda: z prawej",
+        "First slice angle" => "Kąt pierwszego wycinka",
+        "Doughnut hole size" => "Rozmiar otworu pączka",
         "Gridlines: None" => "Linie siatki: brak",
         "Gridlines: Show" => "Linie siatki: pokaż",
         "Chart\nTitle" => "Tytuł\nwykresu",

@@ -244,6 +244,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legenda: onder",
         "Legend: Top" => "Legenda: boven",
         "Legend: Right" => "Legenda: rechts",
+        "First slice angle" => "Hoek eerste punt",
+        "Doughnut hole size" => "Grootte van het donutgat",
         "Gridlines: None" => "Rasterlijnen: geen",
         "Gridlines: Show" => "Rasterlijnen: weergeven",
         "Chart\nTitle" => "Grafiek-\ntitel",

@@ -1446,6 +1446,8 @@ fn insert_pivot_chart(s: &mut Session, p: &Json) -> Result<Json> {
         data_labels: false,
         gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
         style: 1,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,

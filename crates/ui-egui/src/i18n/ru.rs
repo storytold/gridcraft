@@ -240,6 +240,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Легенда: снизу",
         "Legend: Top" => "Легенда: сверху",
         "Legend: Right" => "Легенда: справа",
+        "First slice angle" => "Угол первого сектора",
+        "Doughnut hole size" => "Размер отверстия кольцевой диаграммы",
         "Gridlines: None" => "Линии сетки: нет",
         "Gridlines: Show" => "Линии сетки: показать",
         "Chart\nTitle" => "Название\nдиаграммы",

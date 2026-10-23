@@ -240,6 +240,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "범례: 아래쪽",
         "Legend: Top" => "범례: 위쪽",
         "Legend: Right" => "범례: 오른쪽",
+        "First slice angle" => "첫째 조각의 각도",
+        "Doughnut hole size" => "도넛 구멍 크기",
         "Gridlines: None" => "눈금선: 없음",
         "Gridlines: Show" => "눈금선: 표시",
         "Chart\nTitle" => "차트\n제목",

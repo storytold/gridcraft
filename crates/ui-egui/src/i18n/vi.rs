@@ -247,6 +247,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Chú giải: Dưới",
         "Legend: Top" => "Chú giải: Trên",
         "Legend: Right" => "Chú giải: Phải",
+        "First slice angle" => "Góc lát đầu tiên",
+        "Doughnut hole size" => "Kích thước lỗ bánh donut",
         "Gridlines: None" => "Đường lưới: Không",
         "Gridlines: Show" => "Đường lưới: Hiện",
         "Chart\nTitle" => "Tiêu đề\nbiểu đồ",

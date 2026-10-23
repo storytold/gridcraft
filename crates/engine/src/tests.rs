@@ -2826,6 +2826,21 @@ fn every_chart_kind_survives_xlsx() {
 }
 
 #[test]
+fn chart_set_doughnut_hole_and_angle() {
+    let mut s = s();
+    chart_data(&mut s);
+    s.execute("insert.chart", json!({"type": "doughnut", "range": "A1:B7"})).unwrap();
+    s.execute("chart.set", json!({"holeSize": 5, "firstSliceAngle": 400})).unwrap();
+    s.execute("chart.set", json!({"holeSize": 200})).unwrap();
+    let c = s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    assert_eq!((c.hole_size, c.first_slice_angle), (90, 40));
+    s.execute("chart.set", json!({"holeSize": 25, "firstSliceAngle": 180})).unwrap();
+    reopen(&mut s);
+    let c = &s.doc().unwrap().wb.active().unwrap().charts[0];
+    assert_eq!((c.kind, c.hole_size, c.first_slice_angle), (gridcraft_model::ChartKind::Doughnut, 25, 180));
+}
+
+#[test]
 fn scatter_of_two_columns_is_one_series_with_the_first_as_x() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["X", "Y"], [1, 10], [2, 20], [3, 30]]})).unwrap();

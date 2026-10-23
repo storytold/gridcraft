@@ -233,6 +233,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Легенда: знизу",
         "Legend: Top" => "Легенда: згори",
         "Legend: Right" => "Легенда: праворуч",
+        "First slice angle" => "Кут першого сегмента",
+        "Doughnut hole size" => "Розмір отвору пончика",
         "Gridlines: None" => "Лінії сітки: немає",
         "Gridlines: Show" => "Лінії сітки: показати",
         "Chart\nTitle" => "Назва\nдіаграми",

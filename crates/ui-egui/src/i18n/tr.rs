@@ -345,6 +345,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Gösterge: Alt",
         "Legend: Top" => "Gösterge: Üst",
         "Legend: Right" => "Gösterge: Sağ",
+        "First slice angle" => "İlk dilim açısı",
+        "Doughnut hole size" => "Donut deliği boyutu",
         "Gridlines: None" => "Kılavuz Çizgileri: Yok",
         "Gridlines: Show" => "Kılavuz Çizgileri: Göster",
         "Chart\nTitle" => "Grafik\nBaşlığı",

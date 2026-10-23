@@ -44,6 +44,8 @@ fn chart(kind: ChartKind) -> Chart {
         data_labels: true,
         gridlines: true,
         style: 0,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: Some("Quarter".into()),
         y_title: Some("Revenue".into()),
         source: None,
@@ -143,6 +145,182 @@ fn every_kind_renders_sanely() {
             assert!(n_shapes > 2, "{kind:?}: nothing drawn");
         }
     }
+}
+
+#[test]
+fn doughnut_draws_each_series_as_a_ring() {
+    let mut c = chart(ChartKind::Doughnut);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.hole_size = 25;
+    c.first_slice_angle = 0;
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["A", "B", "C"].iter().map(|s| s.to_string()).collect(),
+        series: vec![
+            series("Inner", &[1.0, 2.0, 3.0], [20, 96, 130, 255], ChartKind::Doughnut),
+            series("Middle", &[3.0, 2.0, 1.0], [221, 132, 82, 255], ChartKind::Doughnut),
+            series("Outer", &[1.0, 1.0, 1.0], [89, 161, 79, 255], ChartKind::Doughnut),
+        ],
+    };
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let wedges: Vec<(f32, f32, f32)> = prims
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Wedge { r_outer, r_inner, a0, .. } => Some((*r_outer, *r_inner, *a0)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(wedges.len(), 9, "three rings of three slices");
+    // Excel draws the first series as the innermost ring; the hole is 25% of the radius.
+    assert!(wedges[0].0 < wedges[3].0 && wedges[3].0 < wedges[6].0, "{wedges:?}");
+    assert!(wedges[0].1 > 0.0, "hole: {wedges:?}");
+}
+
+#[test]
+fn doughnut_with_many_series_still_draws_the_outer_rings() {
+    let mut c = chart(ChartKind::Doughnut);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.hole_size = 75;
+    // The annulus is a few dozen pixels tall and there are far more series than pixels, so every
+    // ring is thinner than 1 px. The chart used to draw nothing at all.
+    let many = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
+        series: (0..255).map(|i| series(&format!("S{i}"), &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut)).collect(),
+    };
+    let single = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
+        // Two series, so the title fallback (a lone series names the chart) does not shrink the plot.
+        series: vec![
+            series("Only", &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut),
+            series("Other", &[1.0, 1.0], [221, 132, 82, 255], ChartKind::Doughnut),
+        ],
+    };
+    let (w, h) = (640.0, 400.0);
+    let radii = |d: &ChartData| -> Vec<f32> {
+        render(&c, d, w, h, &ApproxMeasure)
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Wedge { r_outer, .. } => Some(*r_outer),
+                _ => None,
+            })
+            .collect()
+    };
+    let outer = radii(&many);
+    assert!(!outer.is_empty(), "a sub-pixel ring must not suppress the whole chart");
+    let mut distinct = outer.clone();
+    distinct.sort_by(f32::total_cmp);
+    distinct.dedup();
+    assert!(distinct.len() > 8, "only {} rings drawn", distinct.len());
+    assert!(distinct.len() < 255, "too many rings for the pixels available: {}", distinct.len());
+    // The outermost ring still reaches the plot radius the single-ring chart uses.
+    let r = radii(&single).into_iter().fold(0.0f32, f32::max);
+    let drawn = distinct.last().copied().unwrap_or(0.0);
+    assert!((drawn - r).abs() < 0.01, "outermost ring {drawn} of {r}");
+}
+
+#[test]
+fn doughnut_first_slice_angle_rotates_the_start() {
+    let mut c = chart(ChartKind::Doughnut);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.first_slice_angle = 90;
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
+        series: vec![series("Only", &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut)],
+    };
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let first = prims.iter().find_map(|p| match p {
+        Prim::Wedge { a0, .. } => Some(*a0),
+        _ => None,
+    });
+    assert!(first.is_some_and(|a| (a - std::f32::consts::FRAC_PI_2).abs() < 0.01), "{first:?}");
+}
+
+/// Every slice must occupy exactly its angular share, even when the first slice angle pushes the
+/// start past 12 o'clock (the split at TAU used to put whole slices over their neighbours).
+#[test]
+fn rotated_wedges_cover_each_slice_once_without_overlap() {
+    const TAU: f32 = std::f32::consts::TAU;
+    for kind in [ChartKind::Doughnut, ChartKind::Pie] {
+        for angle in [180u16, 270] {
+            let mut c = chart(kind);
+            c.title = None;
+            c.legend = LegendPos::None;
+            c.data_labels = false;
+            c.first_slice_angle = angle;
+            let d = ChartData {
+                category_levels: vec![],
+                palette: vec![[230, 126, 34, 255], [39, 174, 96, 255], [142, 68, 173, 255]],
+                categories: ["A", "B", "C", "D"].iter().map(|s| s.to_string()).collect(),
+                series: vec![series("Only", &[1.0; 4], [20, 96, 130, 255], kind)],
+            };
+            let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+            let wedges: Vec<(f32, f32)> = prims
+                .iter()
+                .filter_map(|p| match p {
+                    Prim::Wedge { a0, a1, .. } => Some((*a0, *a1)),
+                    _ => None,
+                })
+                .collect();
+            assert!(wedges.len() >= 4, "{kind:?} at {angle}: {wedges:?}");
+            for (a0, a1) in &wedges {
+                assert!((0.0..TAU).contains(a0), "{kind:?} at {angle}: start {a0} outside [0, TAU)");
+                assert!(*a1 > *a0 && *a1 <= TAU + 1e-4, "{kind:?} at {angle}: bad sweep {a0}..{a1}");
+            }
+            // Sample away from the boundaries: a correct four-slice chart covers every angle once.
+            let steps = 1440;
+            for k in 0..steps {
+                let theta = (k as f32 + 0.5) * TAU / steps as f32;
+                let cover = wedges.iter().filter(|(a0, a1)| theta >= *a0 && theta < *a1).count();
+                assert_eq!(cover, 1, "{kind:?} at {angle}: {theta} covered {cover} times by {wedges:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn doughnut_legend_names_categories_and_matches_every_ring() {
+    let mut c = chart(ChartKind::Doughnut);
+    c.title = None;
+    c.data_labels = false;
+    c.legend = LegendPos::Right;
+    c.first_slice_angle = 180;
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![[230, 126, 34, 255], [39, 174, 96, 255], [142, 68, 173, 255]],
+        categories: ["A", "B", "C", "D"].iter().map(|s| s.to_string()).collect(),
+        series: vec![
+            series("Outer", &[1.0; 4], [20, 96, 130, 255], ChartKind::Doughnut),
+            series("Inner", &[1.0; 4], [221, 132, 82, 255], ChartKind::Doughnut),
+        ],
+    };
+    let entries = legend_entries(&c, &d);
+    assert_eq!(entries.iter().map(|(name, _, _)| name.as_str()).collect::<Vec<_>>(), ["A", "B", "C", "D"]);
+
+    let start = f32::from(c.first_slice_angle) * std::f32::consts::TAU / 360.0;
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let mut rings = Vec::new();
+    for p in &prims {
+        let Prim::Wedge { r_outer, a0, a1, fill, .. } = p else { continue };
+        rings.push(*r_outer);
+        let rel = ((a0 + a1) / 2.0 - start).rem_euclid(std::f32::consts::TAU);
+        let cat = ((rel / (std::f32::consts::TAU / 4.0)) as usize).min(3);
+        assert_eq!(*fill, entries[cat].1, "ring wedge at {a0}..{a1} does not match legend entry {}", entries[cat].0);
+    }
+    rings.sort_by(f32::total_cmp);
+    rings.dedup();
+    assert_eq!(rings.len(), 2, "two series must draw two rings");
 }
 
 #[test]
@@ -457,7 +635,11 @@ fn pie_starts_at_twelve_clockwise() {
     assert!(wedges.windows(2).all(|w| w[1].0 >= w[0].1 - 1e-4));
     assert!((wedges[5].1 - std::f32::consts::TAU).abs() < 1e-3);
     assert!(wedges.iter().all(|w| w.2 == 0.0 && w.3.map(|s| s.0) == Some([255; 4])));
-    let prims = render(&chart(ChartKind::Doughnut), &d, 400.0, 400.0, &ApproxMeasure);
+    let mut c = chart(ChartKind::Doughnut);
+    c.hole_size = 50;
+    let mut d = sample(ChartKind::Doughnut);
+    d.series.truncate(1);
+    let prims = render(&c, &d, 400.0, 400.0, &ApproxMeasure);
     let ok = prims.iter().any(|p| matches!(p, Prim::Wedge { r_outer, r_inner, .. } if (r_inner / r_outer - 0.5).abs() < 1e-3));
     assert!(ok);
 }

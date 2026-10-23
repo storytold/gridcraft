@@ -87,7 +87,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 | PivotTables | 7 | ~65% | ~45% | 25–40 | Insert/Recommended, field list, three layouts, values on rows or columns, date grouping, show-values-as, refresh, calculated fields, XLSX round-trip. Missing: slicers, timelines, calculated items, PivotCharts, value/label filters, number grouping, GETPIVOTDATA, data-model pivots. Round-trip never checked in Excel |
 | Charts and sparklines | 8 | ~50% | ~30% | 40–60 | 25 chart kinds, all 2-D. The chart model holds title, legend position, a data-labels flag, gridlines flag and axis titles; no axis scaling, trendlines, error bars, per-point formatting, chart sheets, 3-D, surface, map, Pareto. Several kinds don't survive XLSX round trip (open PRs #158, #161). [chart-parity.md](chart-parity.md) |
 | Page layout, print, PDF | 5 | ~80% | ~55% | 12–20 | Page setup, print titles, breaks, Page Break Preview, headers/footers, PDF export and printing. Paper sizes match Japanese Excel: B4/B5/B6 are the JIS sizes, ISO B4/B5/B6 stay reachable by name, and Japanese Postcard (はがき), Japanese Double Postcard (往復はがき), the chou/kaku envelopes and A6 are available. No true Page Layout view; the PDF writer uses only the 14 standard fonts without embedding (no CJK or other non-Latin text in PDF); web print only exports (#141, #143) |
-| Charts and sparklines | 8 | ~50% | ~30% | 40–60 | 25 chart kinds, all 2-D. The chart model holds title, legend position, a data-labels flag, gridlines flag and axis titles; no axis scaling, error bars, per-point formatting, chart sheets, 3-D, surface, map, Pareto. Kinds survive XLSX round trip (#158, #161). [chart-parity.md](chart-parity.md) |
+| Charts and sparklines | 8 | ~50% | ~30% | 40–60 | 25 chart kinds, all 2-D. Doughnut charts draw every series as a concentric ring (first series innermost), with editable hole size and first slice angle. The chart model holds title, legend position, a data-labels flag, gridlines flag and axis titles; no axis scaling, error bars, per-point formatting, chart sheets, 3-D, surface, map, Pareto. Kinds survive XLSX round trip (#158, #161). [chart-parity.md](chart-parity.md) |
 | Page layout, print, PDF | 5 | ~80% | ~55% | 12–20 | Page setup, print titles, breaks, Page Break Preview, headers/footers, PDF export and printing. No true Page Layout view; the PDF writer uses only the 14 standard fonts without embedding (no CJK or other non-Latin text in PDF); web print only exports (#141, #143) |
 | What-if and analysis | 4 | ~50% | ~40% | 22–35 | Goal Seek, Scenario Manager, data tables, Analysis ToolPak (13 of 19 tools, no charts), Solver (Simplex LP, a local nonlinear method and Evolutionary; Answer and Limits reports; no Sensitivity report or options dialog). Missing: Forecast Sheet, Analyze Data |
 | Get & Transform, external data, data model | 5 | ~15% | ~10% | 60–100 | Import of CSV/TSV, JSON, HTML. No Power Query editor, no From Web, database or folder sources, no connections or refresh, no relationships or data model, no external workbook links (dropped with a warning) |
@@ -308,8 +308,9 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 - What-if: Goal Seek, scenarios, data tables. Spelling (system word list) and thesaurus.
 - Draw: pen, highlighter, eraser, ink strokes and Ink to Shape. Task panes: Comments (threaded
   replies, resolve), Watch Window, Selection, Format Chart.
-- Charts: column, bar, line, area, pie, doughnut, scatter, bubble, radar, histogram, waterfall,
-  funnel, treemap, sunburst, box & whisker, stock and combo charts; sparklines.
+- Charts: column, bar, line, area, pie, doughnut (one concentric ring per series), scatter,
+  bubble, radar, histogram, waterfall, funnel, treemap, sunburst, box & whisker, stock and combo
+  charts; sparklines.
 - UI (egui): Excel-style title bar with Quick Access Toolbar and AutoSave, the full ribbon with
   galleries (cell styles, table styles, colour palettes, conditional formatting menus),
   contextual Table/Chart Design tabs, formula bar with Name Box, virtualised grid (smooth

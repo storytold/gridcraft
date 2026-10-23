@@ -331,6 +331,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Υπόμνημα: κάτω",
         "Legend: Top" => "Υπόμνημα: επάνω",
         "Legend: Right" => "Υπόμνημα: δεξιά",
+        "First slice angle" => "Γωνία πρώτης φέτας",
+        "Doughnut hole size" => "Μέγεθος οπής ντόνατ",
         "Gridlines: None" => "Γραμμές πλέγματος: καμία",
         "Gridlines: Show" => "Γραμμές πλέγματος: εμφάνιση",
         "Chart\nTitle" => "Τίτλος\nγραφήματος",

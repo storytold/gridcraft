@@ -409,6 +409,8 @@ fn sample() -> Workbook {
         data_labels: true,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: Some("Region".into()),
         y_title: Some("Amount".into()),
         source: None,
@@ -447,6 +449,9 @@ fn sample() -> Workbook {
     });
     s.charts.push(combo);
     s.charts.push(Chart { kind: ChartKind::Waterfall, legend: LegendPos::None, title: None, ..base_chart.clone() });
+    let mut doughnut = Chart { kind: ChartKind::Doughnut, hole_size: 25, first_slice_angle: 180, legend: LegendPos::Right, ..base_chart.clone() };
+    doughnut.series.push(base_chart.series[0].clone());
+    s.charts.push(doughnut);
 
     wb.sheets = vec![Arc::new(s)];
     let mut s2 = Sheet::new("Hidden");
@@ -572,6 +577,7 @@ fn full_roundtrip() {
         assert_eq!(y.title, x.title);
         assert_eq!(y.legend, x.legend);
         assert_eq!(y.data_labels, x.data_labels);
+        assert_eq!((y.hole_size, y.first_slice_angle), (x.hole_size, x.first_slice_angle));
         if !matches!(x.kind, ChartKind::Pie | ChartKind::Doughnut) {
             assert_eq!(y.gridlines, x.gridlines);
             assert_eq!((&y.x_title, &y.y_title), (&x.x_title, &x.y_title));
