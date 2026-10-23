@@ -978,6 +978,28 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Tab Color", "シートの見出しの色"),
     ("Unhide…", "再表示…"),
     ("Unprotect Sheet…", "シート保護の解除…"),
+    ("New Formatting Rule", "新しい書式ルール"),
+    ("Format all cells based on their values", "値に基づいてすべてのセルを書式設定"),
+    ("Format Style:", "書式スタイル:"),
+    ("2-Color Scale", "2 色スケール"),
+    ("3-Color Scale", "3 色スケール"),
+    ("Lowest value", "最小値"),
+    ("Highest value", "最大値"),
+    ("Percent", "パーセント"),
+    ("Percentile", "パーセンタイル"),
+    ("Formula", "数式"),
+    ("Minimum", "最小"),
+    ("Maximum", "最大"),
+    ("Midpoint", "中間"),
+    ("More Rules…", "その他のルール…"),
+    ("Select a Rule Type", "ルールの種類を選択"),
+    ("Edit the Rule Description", "ルールの説明を編集"),
+    ("Format only cells that contain", "含むセルのみを書式設定"),
+    ("Format only top or bottom ranked values", "上位または下位に入る値のみを書式設定"),
+    ("Format only values that are above or below average", "平均より上または下の値のみを書式設定"),
+    ("Format only unique or duplicate values", "重複する値または一意の値のみを書式設定"),
+    ("Use a formula to determine which cells to format", "数式を使用して、書式設定するセルを決定"),
+    ("This rule type isn't available yet.", "このルールの種類はまだ使用できません。"),
 ];
 
 /// Translates an interface label; `None` for a label the catalog does not know, so `i18n.rs` can
@@ -1084,14 +1106,14 @@ mod tests {
         }
         assert_eq!(seen.len(), catalog_keys().count());
         assert_eq!(CORE.len(), 392, "the shared reference set every catalog covers");
-        assert_eq!(DIALOGS.len(), 562, "the dialog, message and menu strings beyond it");
-        assert_eq!(catalog_keys().count(), 954);
+        assert_eq!(DIALOGS.len(), 584, "the dialog, message and menu strings beyond it");
+        assert_eq!(catalog_keys().count(), 976);
     }
 
     #[test]
     fn covers_every_key_the_portuguese_catalog_translates() {
         let portuguese = portuguese_keys();
-        assert_eq!(portuguese.len(), 954, "pt.rs's arms changed: add the new keys here and update the count");
+        assert_eq!(portuguese.len(), 976, "pt.rs's arms changed: add the new keys here and update the count");
         let japanese: HashSet<&str> = catalog_keys().collect();
         for key in &portuguese {
             assert!(japanese.contains(key.as_str()), "the Portuguese catalog translates {key:?}, the Japanese one does not");

@@ -296,7 +296,8 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
   the fill handle explains how to fill versus select cells.
 - Formatting: fonts, fills, all border styles, alignment (wrap, indent, rotation, merge), number
   formats, 47 cell styles, 60 table styles, conditional formatting (cell rules, text, dates,
-  duplicates, top/bottom, averages, data bars, colour scales, icon sets, formulas), automatic
+  duplicates, top/bottom, averages, data bars, colour scales with per-stop type/value/colour
+  editors, icon sets, formulas), automatic
   row heights, autofit, hide/unhide, freeze panes.
   Border presets include visual diagrams; Format Cells previews draft borders before applying.
 - Data: sort (multi-level, by colour, custom lists), AutoFilter (values, custom, top 10,

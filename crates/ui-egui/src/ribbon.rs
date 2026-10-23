@@ -1326,6 +1326,10 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
                 act(app, "home.conditionalFormat", json!({"rule": {"type": "colorScale", "colors": cols}}));
             }
         }
+        ui.separator();
+        if ui.button("More Rules…").clicked() {
+            app.open_dialog("newFormattingRule", json!({"style": "3color"}));
+        }
     });
     ui.menu_button("Icon Sets", |ui| {
         for (label, set) in [
@@ -1343,7 +1347,7 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
     });
     ui.separator();
     if ui.button("New Rule…").clicked() {
-        app.open_dialog("cfQuick", json!({"type": "expression", "title": "New Formatting Rule"}));
+        app.open_dialog("newFormattingRule", json!({}));
     }
     ui.menu_button("Clear Rules", |ui| {
         menu_items(
@@ -2756,6 +2760,34 @@ mod title_bar_tests {
     fn no_room_draws_nothing_but_does_not_crash() {
         let (_, w, _) = layout_title("Book1.xlsx", true, 0.0);
         assert!(w <= 20.0, "a zero-width slot leaves at most the ellipsis: {w}");
+    }
+}
+
+#[cfg(test)]
+mod ribbon_tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn new_rule_opens_the_rule_type_list_with_the_formula_entry() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let app = SheetApp::new(session, Default::default());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 800.0)).build_ui_state(
+            |ui, app: &mut SheetApp| {
+                cf_menu(app, ui);
+                crate::dialogs::show(app, ui.ctx());
+            },
+            app,
+        );
+        h.run_steps(2);
+        h.get_by_label("New Rule…").click();
+        h.run_steps(2);
+        let d = h.state().dialog.as_ref().expect("New Rule… opens a dialog");
+        assert_eq!(d.name(), "newFormattingRule");
+        assert_eq!(d.values.get("ruleType").and_then(serde_json::Value::as_str), Some("allCells"));
+        // Formula rules stay reachable: New Rule… shows Excel's rule-type list, formula entry included.
+        h.get_by_label("Use a formula to determine which cells to format");
     }
 }
 

@@ -969,6 +969,28 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Salvamento automático: salvar após cada alteração (pastas de trabalho salvas em um arquivo)"
         }
         "All sheets" => "Todas as planilhas",
+        "New Formatting Rule" => "Nova Regra de Formatação",
+        "Format all cells based on their values" => "Formatar todas as células com base em seus valores",
+        "Format Style:" => "Estilo de Formatação:",
+        "2-Color Scale" => "Escala de 2 Cores",
+        "3-Color Scale" => "Escala de 3 Cores",
+        "Lowest value" => "Valor mais baixo",
+        "Highest value" => "Valor mais alto",
+        "Percent" => "Porcentagem",
+        "Percentile" => "Percentil",
+        "Formula" => "Fórmula",
+        "Minimum" => "Mínimo",
+        "Maximum" => "Máximo",
+        "Midpoint" => "Ponto Médio",
+        "More Rules…" => "Mais Regras…",
+        "Select a Rule Type" => "Selecionar um Tipo de Regra",
+        "Edit the Rule Description" => "Editar a Descrição da Regra",
+        "Format only cells that contain" => "Formatar apenas células que contenham",
+        "Format only top or bottom ranked values" => "Formatar apenas valores classificados acima ou abaixo",
+        "Format only values that are above or below average" => "Formatar apenas valores acima ou abaixo da média",
+        "Format only unique or duplicate values" => "Formatar apenas valores exclusivos ou duplicados",
+        "Use a formula to determine which cells to format" => "Usar uma fórmula para determinar quais células devem ser formatadas",
+        "This rule type isn't available yet." => "Este tipo de regra ainda não está disponível.",
         _ => return None,
     })
 }

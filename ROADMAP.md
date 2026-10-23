@@ -224,6 +224,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-20 | minor | Dutch (nl) listed under other shipped languages; progress log row |
 | 2026-10-19 | minor | Progress log: long flat operator chains (#916) |
 | 2026-10-19 | trivial | Progress log: desktop theme portal read timeout |
+| 2026-10-17 | minor | Conditional formatting: 2-/3-colour scale editor with per-stop type/value/colour, and in-place rule editing (part of #1165) |
 | 2026-10-16 | minor | Progress log: undo steps share picture and macro bytes |
 | 2026-10-16 | minor | Progress log: floating pictures' textures bounded and kept per workbook |
 | 2026-10-16 | trivial | Progress log: web preferences kept between visits (#1562) |
