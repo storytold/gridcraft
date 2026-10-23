@@ -81,10 +81,28 @@ impl fmt::Display for CellError {
 
 /// A 2-D array of values (row-major). Always at least 1×1.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ArrayFields")]
 pub struct Array {
     pub rows: usize,
     pub cols: usize,
     pub data: Vec<Value>,
+}
+
+/// An array as stored. Loading checks it as [`Array::new`] does: indexing assumes `data` holds
+/// `rows × cols` values (#2160).
+#[derive(Deserialize)]
+struct ArrayFields {
+    rows: usize,
+    cols: usize,
+    data: Vec<Value>,
+}
+
+impl TryFrom<ArrayFields> for Array {
+    type Error = String;
+    fn try_from(a: ArrayFields) -> Result<Self, Self::Error> {
+        let (rows, cols, len) = (a.rows, a.cols, a.data.len());
+        Array::new(rows, cols, a.data).ok_or_else(|| format!("an array of {rows} × {cols} holds {len} values"))
+    }
 }
 
 impl Array {
@@ -392,6 +410,20 @@ pub fn sci_text(n: f64, sig: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_loaded_array_holds_rows_times_cols_values() {
+        // #2160: indexing assumes `data.len() == rows * cols`.
+        for bad in [
+            r#"{"rows":3,"cols":2,"data":[{"t":"Number","v":1.0}]}"#,
+            r#"{"rows":0,"cols":1,"data":[]}"#,
+            r#"{"rows":18446744073709551615,"cols":2,"data":[]}"#,
+        ] {
+            assert!(serde_json::from_str::<Array>(bad).is_err(), "{bad}");
+        }
+        let ok = Array::new(1, 2, vec![Value::Number(1.0), Value::Bool(true)]).unwrap();
+        assert_eq!(serde_json::from_str::<Array>(&serde_json::to_string(&ok).unwrap()).unwrap(), ok);
+    }
 
     #[test]
     fn number_text() {
