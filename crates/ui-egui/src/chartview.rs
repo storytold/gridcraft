@@ -4,11 +4,28 @@
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
-use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Workbook};
+use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Slicer, Workbook};
+use std::collections::HashMap;
+use std::sync::{Arc, Weak};
 
 use crate::SheetApp;
 use crate::grid::Geo;
 use crate::theme;
+
+/// The slicer's tiles, computed once per workbook version. Every change to a document, undoable or
+/// not (recalculation, refresh), installs a new `Arc<Workbook>`; the cache holds a `Weak` to the one
+/// it was built from, so a new version is always told apart (the allocation, and so its address,
+/// stays reserved while the `Weak` lives) without a strong reference that would make the next edit's
+/// `Arc::make_mut` copy the whole workbook.
+fn cached_slicer_items<'a>(app: &'a mut SheetApp, wb: &Workbook, si: usize, sl: &Slicer) -> &'a [gridcraft_engine::pivot::SlicerTile] {
+    let cur = app.session.active().map(|d| Arc::downgrade(&d.wb));
+    let fresh = matches!((&app.grid.slicer_tiles, &cur), (Some((Some(built), _)), Some(cur)) if Weak::ptr_eq(built, cur));
+    if !fresh {
+        app.grid.slicer_tiles = None;
+    }
+    let (_, tiles) = app.grid.slicer_tiles.get_or_insert_with(|| (cur, HashMap::new()));
+    tiles.entry((si, sl.id)).or_insert_with(|| gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl))
+}
 
 fn rgba(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
@@ -259,7 +276,7 @@ pub(crate) fn objects_hidden(wb: &Workbook) -> bool {
     wb.show_objects == gridcraft_engine::model::ShowObjects::None
 }
 
-pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
+pub(crate) fn paint_objects(app: &mut SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
     let mut painted = Vec::new();
     if objects_hidden(wb) {
         return painted;
@@ -394,11 +411,12 @@ pub struct SlicerLayout {
     pub tiles: Vec<Rect>,
 }
 
-pub fn slicer_layout(rect: Rect, z: f32, n: usize, columns: u32) -> SlicerLayout {
+/// `row_height`: the slicer's button height in pixels (`None`: the default).
+pub fn slicer_layout(rect: Rect, z: f32, n: usize, columns: u32, row_height: Option<f32>) -> SlicerLayout {
     let header_h = 26.0 * z;
     let pad = 6.0 * z;
     let gap = 3.0 * z;
-    let tile_h = 22.0 * z;
+    let tile_h = row_height.filter(|h| h.is_finite()).unwrap_or(22.0).clamp(8.0, 400.0) * z;
     let header = Rect::from_min_size(rect.min, vec2(rect.width(), header_h));
     let cb = 16.0 * z;
     let clear = Rect::from_min_size(pos2(header.right() - pad - cb, header.top() + (header_h - cb) / 2.0), vec2(cb, cb));
@@ -418,15 +436,15 @@ pub fn slicer_layout(rect: Rect, z: f32, n: usize, columns: u32) -> SlicerLayout
     SlicerLayout { header, clear, tiles }
 }
 
-fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) {
+fn paint_slicers(app: &mut SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) {
     let tk = theme::Tokens::get(p.ctx());
     for sl in &sh.slicers {
         let r = anchor_rect(geo, sh, &sl.anchor);
         if !r.intersects(p.clip_rect()) {
             continue;
         }
-        let items = gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl);
-        let lay = slicer_layout(r, geo.z, items.len(), sl.columns);
+        let items = cached_slicer_items(app, wb, si, sl);
+        let lay = slicer_layout(r, geo.z, items.len(), sl.columns, sl.row_height);
         let radius = 4.0 * geo.z;
         // Card + soft shadow.
         p.rect_filled(r.translate(vec2(0.0, 1.5)), radius, Color32::from_black_alpha(18));
@@ -435,22 +453,28 @@ fn paint_slicers(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usiz
         // Header.
         p.rect_filled(lay.header, radius, tk.accent_soft);
         p.rect_filled(Rect::from_min_max(pos2(lay.header.left(), lay.header.bottom() - radius), lay.header.max), 0.0, tk.accent_soft);
-        let cap = if sl.caption.is_empty() { sl.column.clone() } else { sl.caption.clone() };
+        let cap = if sl.caption.is_empty() { sl.field().to_string() } else { sl.caption.clone() };
         p.text(lay.header.left_center() + vec2(8.0 * geo.z, 0.0), Align2::LEFT_CENTER, cap, theme::ui_bold(12.5 * geo.z), tk.accent_dark);
         // Clear-filter button (tinted when a filter is active).
-        let filtered = sl.selected.is_some();
+        let filtered = items.iter().any(|t| !t.selected);
         if let Some(icon) = crate::icons::from_name("filter") {
             crate::icons::paint(p, lay.clear, icon, if filtered { tk.accent } else { tk.text_dim });
         }
         // Value tiles.
-        for ((val, on), tr) in items.iter().zip(&lay.tiles) {
+        for (tile, tr) in items.iter().zip(&lay.tiles) {
             if !r.contains(tr.left_top()) {
                 continue; // overflowed the card; skip (no scroll yet)
             }
-            let (fill, fg) = if *on { (tk.accent, Color32::WHITE) } else { (tk.hover, tk.text_dim) };
+            // Items with no data under the PivotTables' other filters are dimmed.
+            let (fill, fg) = match (tile.selected, tile.has_data) {
+                (true, true) => (tk.accent, Color32::WHITE),
+                (true, false) => (tk.accent_soft, tk.text_dim),
+                (false, true) => (tk.hover, tk.text_dim),
+                (false, false) => (tk.window, tk.text_dim),
+            };
             p.rect_filled(*tr, 3.0 * geo.z, fill);
             let cp = p.with_clip_rect(tr.intersect(p.clip_rect()));
-            cp.text(tr.left_center() + vec2(6.0 * geo.z, 0.0), Align2::LEFT_CENTER, val, theme::ui_font(12.0 * geo.z), fg);
+            cp.text(tr.left_center() + vec2(6.0 * geo.z, 0.0), Align2::LEFT_CENTER, &tile.label, theme::ui_font(12.0 * geo.z), fg);
         }
         if app.selected_chart == Some(sl.id) {
             selection_frame(p, r);
@@ -466,7 +490,7 @@ pub enum SlicerAction {
 
 /// A click on a slicer's value tile or clear button, if any. A click elsewhere in a slicer returns
 /// `None` so the caller can treat it as a select/drag on the object.
-pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) -> Option<(u32, SlicerAction)> {
+pub fn slicer_click(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) -> Option<(u32, SlicerAction)> {
     if !geo.cells.contains(p) || objects_hidden(wb) {
         return None;
     }
@@ -475,14 +499,14 @@ pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) ->
         if !r.contains(p) {
             continue;
         }
-        let items = gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl);
-        let lay = slicer_layout(r, geo.z, items.len(), sl.columns);
+        let items = cached_slicer_items(app, wb, si, sl);
+        let lay = slicer_layout(r, geo.z, items.len(), sl.columns, sl.row_height);
         if lay.clear.contains(p) {
             return Some((sl.id, SlicerAction::Clear));
         }
-        for ((val, _on), tr) in items.iter().zip(&lay.tiles) {
+        for (tile, tr) in items.iter().zip(&lay.tiles) {
             if r.contains(tr.left_top()) && tr.contains(p) {
-                return Some((sl.id, SlicerAction::Toggle(val.clone())));
+                return Some((sl.id, SlicerAction::Toggle(tile.key.clone())));
             }
         }
         return None; // inside this (topmost) slicer, but on its header/background → select/drag
@@ -529,4 +553,75 @@ pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static s
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gridcraft_engine::model::{Anchor, PivotSort, Slicer, SlicerCrossFilter, SlicerPivot, SlicerSource};
+    use serde_json::json;
+
+    #[test]
+    fn slicer_tile_cache_refreshes_after_source_edit() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        session
+            .execute("range.setValues", json!({"range": "A1:B4", "values": [["Region", "Sales"], ["East", 1], ["West", 2], ["North", 3]]}))
+            .unwrap();
+        session.execute("insert.pivotTable", json!({"source": "A1:B4", "destination": "D1", "rows": ["Region"], "values": ["Sales"]})).unwrap();
+        let mut app = SheetApp::new(session, Default::default());
+        {
+            let d = app.session.doc_mut().unwrap();
+            let sheet = d.wb.active_sheet;
+            let name = d.wb.sheet(sheet).unwrap().name.clone();
+            let pivot = d.wb.sheet(sheet).unwrap().pivots[0].name.clone();
+            let slicer = Slicer {
+                id: 100,
+                source: SlicerSource::Pivot {
+                    pivots: vec![SlicerPivot { sheet: name, name: pivot }],
+                    field: "Region".into(),
+                    sort: PivotSort::Asc,
+                    cross_filter: SlicerCrossFilter::default(),
+                    show_missing: true,
+                },
+                caption: "Region".into(),
+                anchor: Anchor::default(),
+                columns: 1,
+                name: String::new(),
+                style: String::new(),
+                row_height: None,
+            };
+            std::sync::Arc::make_mut(&mut d.wb).sheet_mut(sheet).unwrap().slicers.push(slicer);
+        }
+        let wb = app.session.active().unwrap().wb.clone();
+        let slicer = wb.active().unwrap().slicers[0].clone();
+        let strong = Arc::strong_count(&wb);
+        let before: Vec<_> = cached_slicer_items(&mut app, &wb, wb.active_sheet, &slicer).iter().map(|x| x.label.clone()).collect();
+        assert_eq!(before, ["East", "North", "West"]);
+        // The cache holds no strong reference, so the next edit doesn't copy the workbook.
+        assert_eq!(Arc::strong_count(&wb), strong);
+
+        app.session.execute("cell.set", json!({"cell": "A2", "input": "South"})).unwrap();
+        let wb = app.session.active().unwrap().wb.clone();
+        let slicer = wb.active().unwrap().slicers[0].clone();
+        let after: Vec<_> = cached_slicer_items(&mut app, &wb, wb.active_sheet, &slicer).iter().map(|x| x.label.clone()).collect();
+        assert_eq!(after, ["North", "South", "West"]);
+
+        // A source value that changes only on a manual recalculation (not undoable, so the
+        // document revision stays) still refreshes the tiles.
+        app.session.execute("cell.set", json!({"cell": "F1", "input": "West"})).unwrap();
+        app.session.execute("cell.set", json!({"cell": "A3", "input": "=F1"})).unwrap();
+        app.session.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+        app.session.execute("cell.set", json!({"cell": "F1", "input": "Central"})).unwrap();
+        let tiles = |app: &mut SheetApp| {
+            let wb = app.session.active().unwrap().wb.clone();
+            let slicer = wb.active().unwrap().slicers[0].clone();
+            cached_slicer_items(app, &wb, wb.active_sheet, &slicer).iter().map(|x| x.label.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(tiles(&mut app), ["North", "South", "West"]);
+        let revision = app.session.active().unwrap().revision;
+        app.session.execute("formulas.calculateNow", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        assert_eq!(tiles(&mut app), ["Central", "North", "South"]);
+    }
 }

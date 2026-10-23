@@ -3,12 +3,14 @@
 //! formats, tables, comments, filters, sparklines, floating charts/pictures/shapes and the
 //! in-cell editor.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Weak};
 
 use egui::{Align2, Color32, CursorIcon, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_engine::cf::{CfCache, CfLook};
 use gridcraft_engine::core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
 use gridcraft_engine::model::{BorderLine, BorderStyle, Color, HAlign, LineIndex, PatternType, Sheet, Style, Underline, VAlign, Workbook};
+use gridcraft_engine::pivot::SlicerTile;
 use serde_json::json;
 
 use crate::SheetApp;
@@ -158,6 +160,9 @@ pub struct GridState {
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
+    /// Slicer tiles by (sheet, slicer id), with the workbook version they were computed from
+    /// (`None` without a document). Any other version, undoable or not, replaces them.
+    pub slicer_tiles: Option<(Option<Weak<Workbook>>, HashMap<(usize, u32), Vec<SlicerTile>>)>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
     pub pages: Option<((u64, u64, usize), Vec<(RangeRef, u32)>)>,
     /// The PivotTable Fields pane's `pivot.fields` answer, cached per (doc uid, revision, pivot):
@@ -2141,7 +2146,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     if primary_clicked
         && !resp.drag_started()
         && let Some(p) = pos
-        && let Some((id, act)) = crate::chartview::slicer_click(geo, sh, wb, wb.active_sheet, p)
+        && let Some((id, act)) = crate::chartview::slicer_click(app, geo, sh, wb, wb.active_sheet, p)
     {
         app.selected_chart = Some(id);
         match act {

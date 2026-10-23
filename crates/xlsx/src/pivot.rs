@@ -1,11 +1,11 @@
 //! PivotTables: pivot cache definitions and records (ECMA-376 Part 1 §18.10.1) and PivotTable
 //! definitions (§18.10.1.73), written from the model's [`PivotTable`]s and read back into them.
 //!
-//! Writing: one cache per PivotTable, with a records snapshot of the source list (omitted, with
-//! `saveData="0"`, for very large sources) and `refreshOnLoad="1"` so a reader recomputes the
-//! report from the source on open. Fields used on an axis get shared items (or, for date
-//! grouping, `fieldGroup` group items) so the table's `<items>` can refer to them. The report
-//! cells the engine wrote stay on the sheet as plain cells.
+//! Writing: one cache per PivotTable (the PivotTables a slicer connects share one), with a
+//! records snapshot of the source list (omitted, with `saveData="0"`, for very large sources) and
+//! `refreshOnLoad="1"` so a reader recomputes the report from the source on open. Fields used on
+//! an axis get shared items (or, for date grouping, `fieldGroup` group items) so the table's
+//! `<items>` can refer to them. The report cells the engine wrote stay on the sheet as plain cells.
 //!
 //! Reading: the cache's source and field names plus the table's areas, functions, show-values-as,
 //! layout flags, grand totals and style become a model [`PivotTable`]. Anything we don't model
@@ -40,6 +40,8 @@ const MAX_ITEMS: usize = 1_048_576;
 const MAX_FIELDS: usize = 16_384;
 /// The `x14:dataField` extension (Excel 2010 show-values-as additions such as rank).
 const EXT_X14_DATA_FIELD: &str = "{E15A36E0-9728-4e99-A89B-3F7291B0FE68}";
+/// Extension carrying a cache's id for slicer caches.
+const EXT_X14_CACHE_ID: &str = "{725AE2AE-9491-48be-B2B4-4EB974FC3084}";
 const EXT_X14_PIVOT_TABLE: &str = "{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}";
 const NS_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
 
@@ -256,13 +258,35 @@ impl CField {
     }
 }
 
-/// A cache built from a PivotTable's source.
+/// A cache built from the source of one or more PivotTables.
 struct Cache {
     fields: Vec<CField>,
-    /// Pivot field → cache field, by the pivot field's position in rows, then columns.
-    axis_map: Vec<Option<usize>>,
     source_xml: String,
     records: Option<(u64, String)>,
+    /// Fields slicers filter (written with items even off the axes).
+    slicer_fields: Vec<usize>,
+    /// The cache's id for slicer caches (`x14:pivotCacheDefinition pivotCacheId`).
+    slicer_id: Option<u32>,
+}
+
+/// A PivotTable's pivot field → cache field map, by the pivot field's position in rows, then
+/// columns.
+type AxisMap = Vec<Option<usize>>;
+
+/// What a slicer cache needs from a written PivotTable.
+pub struct PivotSlicerInfo {
+    /// The cache's `pivotCacheId`.
+    pub cache_id: u32,
+    pub fields: Vec<SlicerField>,
+}
+
+/// A cache field that a slicer filters.
+pub struct SlicerField {
+    pub name: String,
+    /// The captions its item indices refer to.
+    pub labels: Vec<String>,
+    /// The items are date groups, in date order.
+    pub grouped: bool,
 }
 
 /// PivotTables being written; the tables themselves are finished after the styles part (their
@@ -271,8 +295,17 @@ struct Cache {
 pub struct PivotWriter {
     /// (cache id, workbook-relative part name).
     caches: Vec<(u32, String)>,
+    /// The caches written, which the pending tables refer to.
+    built: Vec<Cache>,
+    /// PivotTables (sheet, index) whose shared cache an earlier table wrote: (cache id, index in
+    /// `built`, axis map).
+    shared: HashMap<(usize, usize), (u32, usize, AxisMap)>,
     pending: Vec<Pending>,
     tables: u32,
+    /// Slicer data of the caches that slicers filter, and (sheet, pivot index) → its index there
+    /// for each PivotTable written with such a cache.
+    infos: Vec<PivotSlicerInfo>,
+    slicer_info: HashMap<(usize, usize), usize>,
 }
 
 struct Pending {
@@ -280,38 +313,88 @@ struct Pending {
     sheet: usize,
     idx: usize,
     cache_id: u32,
-    cache: Cache,
+    /// Index in `PivotWriter::built`.
+    cache: usize,
+    axis_map: AxisMap,
 }
 
 impl PivotWriter {
     /// Writes the caches of a sheet's PivotTables and adds the sheet's relationships to its
-    /// PivotTable parts. Pivots whose source can't be resolved are not written.
+    /// PivotTable parts. Pivots whose source can't be resolved are not written. The PivotTables a
+    /// slicer connects get one cache, written with the first of them.
     pub fn add_sheet(&mut self, wb: &Workbook, si: usize, out: &mut Out, rels: &mut Rels) {
         let Some(sheet) = wb.sheet(si) else { return };
-        for (idx, pt) in sheet.pivots.iter().enumerate() {
-            let Some(cache) = build_cache(wb, pt, si) else { continue };
-            let n = self.caches.len() as u32 + 1;
-            let cache_part = format!("xl/pivotCache/pivotCacheDefinition{n}.xml");
-            let rec_rid = if let Some((count, xml)) = &cache.records {
-                let mut r = Rels::default();
-                let rid = r.add("pivotCacheRecords", &format!("pivotCacheRecords{n}.xml"));
-                out.part(&format!("xl/pivotCache/_rels/pivotCacheDefinition{n}.xml.rels"), None, r.xml().into_bytes());
-                let s = format!("{XML_DECL}<pivotCacheRecords xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\" count=\"{count}\">{xml}</pivotCacheRecords>");
-                out.part(&format!("xl/pivotCache/pivotCacheRecords{n}.xml"), Some(CT_PIVOT_CACHE_REC), s.into_bytes());
-                Some(rid)
-            } else {
-                None
+        for idx in 0..sheet.pivots.len() {
+            let (n, cache, axis_map) = match self.shared.remove(&(si, idx)) {
+                Some(x) => x,
+                None => {
+                    let Some(x) = self.write_cache(wb, si, idx, out) else { continue };
+                    x
+                }
             };
-            out.part(&cache_part, Some(CT_PIVOT_CACHE_DEF), cache_xml(&cache, rec_rid.as_deref(), wb.date_system).into_bytes());
-            self.caches.push((n, format!("pivotCache/pivotCacheDefinition{n}.xml")));
             self.tables += 1;
             let t = self.tables;
             rels.add("pivotTable", &format!("../pivotTables/pivotTable{t}.xml"));
             let mut tr = Rels::default();
             tr.add("pivotCacheDefinition", &format!("../pivotCache/pivotCacheDefinition{n}.xml"));
             out.part(&format!("xl/pivotTables/_rels/pivotTable{t}.xml.rels"), None, tr.xml().into_bytes());
-            self.pending.push(Pending { part: format!("xl/pivotTables/pivotTable{t}.xml"), sheet: si, idx, cache_id: n, cache });
+            self.pending.push(Pending { part: format!("xl/pivotTables/pivotTable{t}.xml"), sheet: si, idx, cache_id: n, cache, axis_map });
         }
+    }
+
+    /// Writes the cache of PivotTable `idx` on sheet `si` (shared with the PivotTables its
+    /// slicers connect, which are recorded in `shared`); returns (cache id, index in `built`,
+    /// the table's axis map).
+    fn write_cache(&mut self, wb: &Workbook, si: usize, idx: usize, out: &mut Out) -> Option<(u32, usize, AxisMap)> {
+        let group = out.slicers.cache_group(si, idx).unwrap_or_else(|| vec![(si, idx)]);
+        let members: Vec<((usize, usize), &PivotTable)> =
+            group.iter().filter_map(|&(gs, gp)| Some(((gs, gp), wb.sheet(gs)?.pivots.get(gp)?))).collect();
+        let slicer_fields = out.slicers.fields_for(si, idx);
+        let tables: Vec<(&PivotTable, usize)> = members.iter().map(|((gs, _), pt)| (*pt, *gs)).collect();
+        let (mut cache, maps) = build_cache(wb, &tables, &slicer_fields)?;
+        let n = self.caches.len() as u32 + 1;
+        if !cache.slicer_fields.is_empty() {
+            cache.slicer_id = Some(n);
+            let fields = cache
+                .slicer_fields
+                .iter()
+                .filter_map(|&i| cache.fields.get(i))
+                .map(|f| SlicerField { name: f.name.clone(), labels: f.item_labels(), grouped: f.group.is_some() })
+                .collect();
+            for (key, _) in &members {
+                self.slicer_info.insert(*key, self.infos.len());
+            }
+            self.infos.push(PivotSlicerInfo { cache_id: n, fields });
+        }
+        let cache_part = format!("xl/pivotCache/pivotCacheDefinition{n}.xml");
+        let rec_rid = if let Some((count, xml)) = &cache.records {
+            let mut r = Rels::default();
+            let rid = r.add("pivotCacheRecords", &format!("pivotCacheRecords{n}.xml"));
+            out.part(&format!("xl/pivotCache/_rels/pivotCacheDefinition{n}.xml.rels"), None, r.xml().into_bytes());
+            let s = format!("{XML_DECL}<pivotCacheRecords xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\" count=\"{count}\">{xml}</pivotCacheRecords>");
+            out.part(&format!("xl/pivotCache/pivotCacheRecords{n}.xml"), Some(CT_PIVOT_CACHE_REC), s.into_bytes());
+            Some(rid)
+        } else {
+            None
+        };
+        out.part(&cache_part, Some(CT_PIVOT_CACHE_DEF), cache_xml(&cache, rec_rid.as_deref(), wb.date_system).into_bytes());
+        self.caches.push((n, format!("pivotCache/pivotCacheDefinition{n}.xml")));
+        let b = self.built.len();
+        self.built.push(cache);
+        let mut mine = None;
+        for ((key, _), map) in members.iter().zip(maps) {
+            if *key == (si, idx) {
+                mine = Some(map);
+            } else {
+                self.shared.insert(*key, (n, b, map));
+            }
+        }
+        Some((n, b, mine?))
+    }
+
+    /// Slicer data of the PivotTable `idx` on sheet `si`, when it was written for a slicer.
+    pub fn slicer_info(&self, si: usize, idx: usize) -> Option<&PivotSlicerInfo> {
+        self.slicer_info.get(&(si, idx)).and_then(|&i| self.infos.get(i))
     }
 
     /// Adds the workbook relationships to the caches; returns the `<pivotCaches>` element (empty
@@ -348,9 +431,10 @@ impl PivotWriter {
 
     /// Writes the PivotTable parts. `fmt_id` maps a number format code to its styles id.
     pub fn finish(self, wb: &Workbook, out: &mut Out, fmt_id: &dyn Fn(&str) -> Option<u32>) {
-        for p in self.pending {
+        for p in &self.pending {
             let Some(pt) = wb.sheet(p.sheet).and_then(|s| s.pivots.get(p.idx)) else { continue };
-            let xml = table_xml(pt, p.idx, p.cache_id, &p.cache, fmt_id);
+            let Some(cache) = self.built.get(p.cache) else { continue };
+            let xml = table_xml(pt, p.idx, p.cache_id, cache, &p.axis_map, fmt_id);
             out.part(&p.part, Some(CT_PIVOT_TABLE), xml.into_bytes());
         }
     }
@@ -415,8 +499,64 @@ fn header_text(v: &Value) -> String {
     }
 }
 
-fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cache> {
-    let (si, r, source_xml) = resolve_source(wb, &pt.source, pivot_sheet, 0)?;
+/// Whether a slicer on `field` of `pt` can be written: the PivotTable's cache can be built and its
+/// source has the field.
+pub(crate) fn slicer_field_ok(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize, field: &str) -> bool {
+    let Some((si, r, _)) = resolve_source(wb, &pt.source, pivot_sheet, 0) else { return false };
+    let Some(sh) = wb.sheet(si) else { return false };
+    r.count() <= MAX_SOURCE_CELLS && (r.start.col..=r.end.col).any(|c| same(&header_text(&sh.value(CellRef::new(r.start.row, c)).scalar()), field))
+}
+
+/// Whether the PivotTables `members` (sheet, index) can be written with one pivot cache, as the
+/// PivotTables a slicer connects must be: they have the same source (written the same way) and
+/// the same calculated fields (a cache's calculated fields are read back into each of its
+/// tables), and a date-grouped field (which a cache groups for all its tables) has the same base
+/// grouping (the finest level, on the axes or by the filters) in every table that uses it,
+/// `slicer_fields` counting as used by all.
+pub(crate) fn can_share(wb: &Workbook, members: &[(usize, usize)], slicer_fields: &[String]) -> bool {
+    let pts: Vec<(&PivotTable, usize)> = members.iter().filter_map(|&(si, pi)| Some((wb.sheet(si)?.pivots.get(pi)?, si))).collect();
+    if pts.len() != members.len() {
+        return false;
+    }
+    let mut source: Option<(usize, RangeRef, String)> = None;
+    for (pt, si) in &pts {
+        let Some(here) = resolve_source(wb, &pt.source, *si, 0) else { return false };
+        if source.as_ref().is_some_and(|x| *x != here) {
+            return false;
+        }
+        source = Some(here);
+    }
+    // The base grouping a table gives a column (finest of its axis fields' and its filter's).
+    let base = |pt: &PivotTable, col: &str| -> Option<PivotDateGroup> {
+        let axis = pt.rows.iter().chain(pt.columns.iter()).filter(|f| same(&f.source_col, col)).map(|f| f.date_group);
+        axis.chain(pt.filters.iter().filter(|f| same(&f.source_col, col)).map(|f| pt.filter_group(f))).min_by_key(|g| g.coarseness())
+    };
+    let uses = |pt: &PivotTable, col: &str| base(pt, col).is_some() || slicer_fields.iter().any(|f| same(f, col));
+    for (pt, _) in &pts {
+        let cols = pt.rows.iter().chain(pt.columns.iter()).map(|f| &f.source_col).chain(pt.filters.iter().map(|f| &f.source_col));
+        for col in cols {
+            let want = base(pt, col);
+            if want.is_some_and(|g| g != PivotDateGroup::None) && pts.iter().any(|(o, _)| uses(o, col) && base(o, col) != want) {
+                return false;
+            }
+        }
+    }
+    let formula = |f: &str| f.trim().trim_start_matches('=').trim().to_lowercase();
+    let calc = |pt: &PivotTable| -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = pt.calculated_fields.iter().map(|cf| (cf.name.trim().to_lowercase(), formula(&cf.formula))).collect();
+        v.sort();
+        v.dedup_by(|a, b| a.0 == b.0);
+        v
+    };
+    let first = pts.first().map(|(pt, _)| calc(pt)).unwrap_or_default();
+    pts.iter().all(|(pt, _)| calc(pt) == first)
+}
+
+/// The cache of `tables` (PivotTable, its sheet), which [`can_share`] one, and each table's axis
+/// map. `slicer_fields`: fields slicers filter, which need shared items.
+fn build_cache(wb: &Workbook, tables: &[(&PivotTable, usize)], slicer_fields: &[String]) -> Option<(Cache, Vec<AxisMap>)> {
+    let (first, pivot_sheet) = tables.first()?;
+    let (si, r, source_xml) = resolve_source(wb, &first.source, *pivot_sheet, 0)?;
     if r.count() > MAX_SOURCE_CELLS {
         return None;
     }
@@ -468,10 +608,16 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
         }
     }
 
-    // Which fields are on an axis, and how dates are grouped: per base column, the base field
-    // takes the finest grouping and coarser ones become extra (non-database) fields chained
-    // through `par`, as Excel lays them out.
-    let axis: Vec<&PivotField> = pt.rows.iter().chain(pt.columns.iter()).collect();
+    // How dates are grouped, by the axis fields and the filters (a filtered field in no area keeps
+    // its grouping): per base column, the base field takes the finest grouping and coarser ones
+    // become extra (non-database) fields chained through `par`, as Excel lays them out.
+    let used: Vec<(&str, PivotDateGroup)> = tables
+        .iter()
+        .flat_map(|(pt, _)| {
+            let axis = pt.rows.iter().chain(pt.columns.iter()).map(|f| (f.source_col.as_str(), f.date_group));
+            axis.chain(pt.filters.iter().map(|f| (f.source_col.as_str(), pt.filter_group(f))))
+        })
+        .collect();
     let groupable = |f: &CField| {
         let s = &f.stats;
         s.number
@@ -483,29 +629,22 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
     };
     // (base column field, groupings fine → coarse)
     let mut groupings: Vec<(usize, Vec<PivotDateGroup>)> = Vec::new();
-    for pf in &axis {
-        let Some(b) = find(&fields, &pf.source_col) else { continue };
-        if pf.date_group == PivotDateGroup::None || !fields.get(b).is_some_and(groupable) {
+    for &(col, by) in &used {
+        let Some(b) = find(&fields, col) else { continue };
+        if by == PivotDateGroup::None || !fields.get(b).is_some_and(groupable) {
             continue;
         }
         match groupings.iter_mut().find(|(x, _)| *x == b) {
             Some((_, v)) => {
-                if !v.contains(&pf.date_group) {
-                    v.push(pf.date_group);
+                if !v.contains(&by) {
+                    v.push(by);
                 }
             }
-            None => groupings.push((b, vec![pf.date_group])),
+            None => groupings.push((b, vec![by])),
         }
     }
-    let fineness = |g: &PivotDateGroup| match g {
-        PivotDateGroup::Days => 0,
-        PivotDateGroup::Months => 1,
-        PivotDateGroup::Quarters => 2,
-        PivotDateGroup::Years => 3,
-        PivotDateGroup::None => 4,
-    };
     for (b, list) in groupings.iter_mut() {
-        list.sort_by_key(fineness);
+        list.sort_by_key(|g| g.coarseness());
         let (min, max) = fields.get(*b).map(|f| (f.stats.min, f.stats.max)).unwrap_or((0.0, 0.0));
         let (start, end) = (min.floor(), max.floor() + 1.0);
         let make = |by: PivotDateGroup| Group { by, base: *b, par: None, start, end, items: group_items(wb.date_system, by, start, end) };
@@ -541,33 +680,43 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
             prev = new;
         }
     }
-    let mut axis_map: Vec<Option<usize>> = Vec::with_capacity(axis.len());
-    for pf in &axis {
-        let Some(b) = find(&fields, &pf.source_col) else {
-            axis_map.push(None);
-            continue;
-        };
-        let grouped = fields.iter().position(|f| f.group.as_ref().is_some_and(|g| g.base == b && g.by == pf.date_group));
-        match grouped {
-            Some(i) if pf.date_group != PivotDateGroup::None => axis_map.push(Some(i)),
-            _ => {
-                if let Some(f) = fields.get_mut(b)
-                    && f.group.is_none()
-                {
-                    f.itemized = true;
+    let mut axis_maps: Vec<AxisMap> = Vec::with_capacity(tables.len());
+    for (pt, _) in tables {
+        let mut axis_map: AxisMap = Vec::with_capacity(pt.rows.len() + pt.columns.len());
+        for pf in pt.rows.iter().chain(pt.columns.iter()) {
+            let Some(b) = find(&fields, &pf.source_col) else {
+                axis_map.push(None);
+                continue;
+            };
+            let grouped = fields.iter().position(|f| f.group.as_ref().is_some_and(|g| g.base == b && g.by == pf.date_group));
+            match grouped {
+                Some(i) if pf.date_group != PivotDateGroup::None => axis_map.push(Some(i)),
+                _ => {
+                    if let Some(f) = fields.get_mut(b)
+                        && f.group.is_none()
+                    {
+                        f.itemized = true;
+                    }
+                    axis_map.push(Some(b));
                 }
-                axis_map.push(Some(b));
+            }
+        }
+        axis_maps.push(axis_map);
+        // Page fields (filters not on an axis) need items too.
+        for f in &pt.filters {
+            let on_axis = pt.rows.iter().chain(pt.columns.iter()).any(|a| same(&a.source_col, &f.source_col));
+            if !on_axis
+                && let Some(i) = find(&fields, &f.source_col)
+                && let Some(cf) = fields.get_mut(i)
+            {
+                cf.itemized = true;
             }
         }
     }
-    // Page fields (filters not on an axis) need items too.
-    for f in &pt.filters {
-        let on_axis = axis.iter().any(|a| same(&a.source_col, &f.source_col));
-        if !on_axis
-            && let Some(i) = find(&fields, &f.source_col)
-            && let Some(cf) = fields.get_mut(i)
-        {
-            cf.itemized = true;
+    let slicer_idx: Vec<usize> = slicer_fields.iter().filter_map(|n| find(&fields, n)).collect();
+    for &i in &slicer_idx {
+        if let Some(f) = fields.get_mut(i) {
+            f.itemized = true;
         }
     }
     for f in fields.iter_mut() {
@@ -616,7 +765,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
         None
     };
     // Calculated fields come after the database and grouping fields.
-    for cf in &pt.calculated_fields {
+    for cf in tables.iter().flat_map(|(pt, _)| pt.calculated_fields.iter()) {
         let f = cf.formula.trim();
         let f = f.strip_prefix('=').unwrap_or(f).trim();
         if cf.name.trim().is_empty() || f.is_empty() || fields.iter().any(|x| same(&x.name, &cf.name)) {
@@ -633,7 +782,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
             formula: Some(f.to_string()),
         });
     }
-    Some(Cache { fields, axis_map, source_xml, records })
+    Some((Cache { fields, source_xml, records, slicer_fields: slicer_idx, slicer_id: None }, axis_maps))
 }
 
 fn group_items(sys: DateSystem, by: PivotDateGroup, start: f64, end: f64) -> Vec<String> {
@@ -763,41 +912,49 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
         }
         s.push_str("</cacheField>");
     }
-    s.push_str("</cacheFields></pivotCacheDefinition>");
+    s.push_str("</cacheFields>");
+    if let Some(id) = c.slicer_id {
+        let _ = write!(
+            s,
+            "<extLst><ext uri=\"{EXT_X14_CACHE_ID}\" xmlns:x14=\"{NS_X14}\"><x14:pivotCacheDefinition pivotCacheId=\"{id}\"/></ext></extLst>"
+        );
+    }
+    s.push_str("</pivotCacheDefinition>");
     s
 }
 
-fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn Fn(&str) -> Option<u32>) -> String {
+fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, axis_map: &[Option<usize>], fmt_id: &dyn Fn(&str) -> Option<u32>) -> String {
     let nf = c.fields.len();
     let find_db = |name: &str| c.fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
-    let row_idx: Vec<usize> = c.axis_map.iter().take(pt.rows.len()).filter_map(|x| *x).collect();
-    let col_idx: Vec<usize> = c.axis_map.iter().skip(pt.rows.len()).filter_map(|x| *x).collect();
-    // Filters: on an axis field → hidden items there; otherwise a page field.
+    let row_idx: Vec<usize> = axis_map.iter().take(pt.rows.len()).filter_map(|x| *x).collect();
+    let col_idx: Vec<usize> = axis_map.iter().skip(pt.rows.len()).filter_map(|x| *x).collect();
+    // Filters go on the cache field holding their items: the axis field at the filter's date
+    // level, else the field grouped at that level, else the base field. On a field in Rows or
+    // Columns, or a hidden filter (a slicer's), they're hidden items; otherwise a page field.
     let mut hidden: HashMap<usize, &PivotFilter> = HashMap::new();
     let mut pages: Vec<(usize, &PivotFilter)> = Vec::new();
     for f in &pt.filters {
-        let axis_pos = pt.rows.iter().chain(pt.columns.iter()).position(|a| same(&a.source_col, &f.source_col));
-        match axis_pos {
-            Some(p) => {
-                if let Some(Some(i)) = c.axis_map.get(p) {
-                    hidden.insert(*i, f);
-                }
-            }
-            None => {
-                if let Some(i) = find_db(&f.source_col)
-                    && !pages.iter().any(|(j, _)| *j == i)
-                {
-                    pages.push((i, f));
-                    hidden.insert(i, f);
-                }
-            }
+        let g = pt.filter_group(f);
+        let mut axis = pt.rows.iter().chain(pt.columns.iter());
+        let on_axis = axis.clone().any(|a| same(&a.source_col, &f.source_col));
+        let level = axis.position(|a| same(&a.source_col, &f.source_col) && a.date_group == g).and_then(|p| axis_map.get(p).copied().flatten());
+        let grouped = || {
+            let b = find_db(&f.source_col)?;
+            c.fields.iter().position(|cf| cf.group.as_ref().is_some_and(|gr| gr.base == b && gr.by == g))
+        };
+        let Some(i) = level.or_else(grouped).or_else(|| find_db(&f.source_col)) else { continue };
+        if on_axis || f.hidden {
+            hidden.insert(i, f);
+        } else if !pages.iter().any(|(j, _)| *j == i) {
+            pages.push((i, f));
+            hidden.insert(i, f);
         }
     }
     let find_calc = |name: &str| c.fields.iter().position(|f| f.formula.is_some() && same(&f.name, name));
     let vals: Vec<(usize, &PivotValue)> =
         pt.values.iter().filter_map(|v| find_db(&v.source_col).or_else(|| find_calc(&v.source_col)).map(|i| (i, v))).collect();
     let axis_field = |i: usize| -> Option<&PivotField> {
-        let p = c.axis_map.iter().position(|x| *x == Some(i))?;
+        let p = axis_map.iter().position(|x| *x == Some(i))?;
         pt.rows.iter().chain(pt.columns.iter()).nth(p)
     };
 
@@ -834,7 +991,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     let loc = RangeRef::new(a, CellRef::new(end.row.max(a.row), end.col.max(a.col)));
     let k = vals.len();
     // Σ Values (two or more value fields): its index among the written fields of its axis.
-    let (row_map, _) = c.axis_map.split_at(pt.rows.len().min(c.axis_map.len()));
+    let (row_map, _) = axis_map.split_at(pt.rows.len().min(axis_map.len()));
     let values_at = |map: &[Option<usize>], n: usize| pt.values_position.map_or(n, |p| map.iter().take(p).filter(|x| x.is_some()).count());
     let row_values = (k > 1 && pt.values_on_rows).then(|| values_at(row_map, row_idx.len()));
     // In Columns Σ Values comes after the last field: the column layout doesn't place it elsewhere.
@@ -919,7 +1076,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         if !pt.subtotals_top {
             s.push_str(" subtotalTop=\"0\"");
         }
-        if axis.is_some() {
+        if axis.is_some() || ((f.itemized || f.group.is_some()) && (hidden.contains_key(&i) || c.slicer_fields.contains(&i))) {
             let collapsed: &[String] = axis_field(i).map(|f| f.collapsed_items.as_slice()).unwrap_or(&[]);
             let count = labels.len() + usize::from(pt.subtotals);
             let _ = write!(s, "><items count=\"{count}\">");
@@ -1069,6 +1226,8 @@ impl FieldIn {
 struct CacheIn {
     source: String,
     fields: Vec<FieldIn>,
+    /// `x14:pivotCacheDefinition pivotCacheId`: how slicer caches name the cache.
+    slicer_id: Option<u32>,
 }
 
 /// Workbook-level pivot cache lookup, filled from `<pivotCaches>`; caches are parsed once.
@@ -1093,6 +1252,53 @@ impl CachesIn {
         }
         CachesIn { by_id, parsed: HashMap::new(), next_id: 1 }
     }
+
+    /// Whether a slicer cache id resolves to a parsed PivotTable cache.
+    pub fn has_slicer_cache(&self, cache_id: u32) -> bool {
+        self.parsed.values().flatten().any(|c| c.slicer_id == Some(cache_id))
+    }
+
+    /// Item captions of field `field` in the cache a slicer cache names by `pivotCacheId`, in
+    /// shared item order (what the slicer cache's `<i x>` indices refer to), and the field's date
+    /// grouping. `None` for a grouping GridCraft can't compute.
+    pub fn slicer_labels(&self, cache_id: u32, field: &str) -> Option<(&[String], PivotDateGroup)> {
+        let cache = self.parsed.values().flatten().find(|c| c.slicer_id == Some(cache_id))?;
+        let f = cache.fields.iter().find(|f| f.database && same(&f.name, field))?;
+        let group = match &f.group {
+            None => PivotDateGroup::None,
+            Some((_, by, _)) => (*by)?,
+        };
+        Some((f.labels(), group))
+    }
+
+    /// What `field` names in the cache a slicer cache names by `pivotCacheId`, when it is not a
+    /// source column. `None` when it is one, or the cache isn't known.
+    pub fn slicer_non_source(&self, cache_id: u32, field: &str) -> Option<NonSourceField<'_>> {
+        let cache = self.parsed.values().flatten().find(|c| c.slicer_id == Some(cache_id))?;
+        if cache.fields.iter().any(|f| f.database && same(&f.name, field)) {
+            return None;
+        }
+        let base = cache
+            .fields
+            .iter()
+            .find(|f| same(&f.name, field))
+            .and_then(|f| f.group.as_ref())
+            .and_then(|(base, by, _)| by.and((*base).and_then(|b| cache.fields.get(b))))
+            .filter(|b| b.database);
+        Some(match base {
+            Some(b) => NonSourceField::DateLevel { base: &b.name },
+            None => NonSourceField::Other,
+        })
+    }
+}
+
+/// A slicer cache's source field that is not a source column of its pivot cache.
+pub enum NonSourceField<'a> {
+    /// A coarser date level, which Excel keeps in a field of its own when a date is grouped at
+    /// several levels ("Years" over "Date" grouped by years and months), grouping column `base`.
+    DateLevel { base: &'a str },
+    /// Another field (calculated, grouped in a way GridCraft can't compute) or none of that name.
+    Other,
 }
 
 fn item_label_el(e: &El, sys: DateSystem) -> String {
@@ -1168,7 +1374,9 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
         cx.warn("a PivotTable's cache has no fields; kept as plain cells");
         return None;
     }
-    Some(CacheIn { source, fields })
+    let slicer_id =
+        x.child("extLst").and_then(|l| l.kids("ext").find_map(|e| e.child("pivotCacheDefinition"))).and_then(|d| d.attr_u32("pivotCacheId"));
+    Some(CacheIn { source, fields, slicer_id })
 }
 
 /// Reads the PivotTables related to a worksheet part.
@@ -1317,7 +1525,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 if items.iter().any(|it| it.flag("h", false)) {
                     let shown: Vec<String> = items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| lab(it)).collect();
                     if !filters.iter().any(|ff| same(&ff.source_col, &name)) {
-                        filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown) });
+                        filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown), hidden: false, date_group: group });
                     }
                 }
             }
@@ -1328,7 +1536,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     let mut page_filters = Vec::new();
     for p in &pages {
         let Some(i) = p.attr_i64("fld").filter(|i| *i >= 0).map(|i| i as usize) else { continue };
-        let Some((name, _)) = field_ref(cx, cache, i) else { continue };
+        let Some((name, group)) = field_ref(cx, cache, i) else { continue };
         let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
         let selected = if let Some(k) = p.attr_u32("item") {
             labels.get(k as usize).map(|l| vec![l.clone()])
@@ -1344,7 +1552,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 })
             })
         };
-        page_filters.push(PivotFilter { source_col: name, selected });
+        page_filters.push(PivotFilter { source_col: name, selected, hidden: false, date_group: group });
     }
     let mut axis_filters = Vec::new();
     let (rows, rows_values) = axis(cx, &row_x, &mut axis_filters);
@@ -1358,7 +1566,31 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         if pt.values_on_rows { rows_values.or_else(|| x.attr_u32("dataPosition").map(|p| p as usize)).filter(|p| *p < pt.rows.len()) } else { None };
     filters.extend(page_filters);
     filters.extend(axis_filters);
+    // Hidden items of a field in no area: a slicer's selection on a field the table doesn't show.
+    // A date-grouped cache field keeps its grouping, so the items are its groups.
+    let page_x: Vec<i64> = pages.iter().filter_map(|p| p.attr_i64("fld")).collect();
+    for (i, e) in pfs.iter().enumerate() {
+        let placed = [&row_x, &col_x, &page_x].iter().any(|l| l.contains(&(i as i64)));
+        let items = items_of(e);
+        if placed || !items.iter().any(|it| it.flag("h", false)) {
+            continue;
+        }
+        // Items of a grouping GridCraft can't compute could never match a source value.
+        if let Some(f) = cache.fields.get(i).filter(|f| matches!(f.group, Some((_, None, _)))) {
+            cx.warn(format!("PivotTable \"{}\": the filter on grouped field \"{}\" is not supported and was ignored", pt.name, f.name));
+            continue;
+        }
+        let Some((name, group)) = field_ref(cx, cache, i) else { continue };
+        if filters.iter().any(|f| same(&f.source_col, &name)) {
+            continue;
+        }
+        let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
+        let shown =
+            items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| it.attr_u32("x").and_then(|k| labels.get(k as usize)).cloned()).collect();
+        filters.push(PivotFilter { source_col: name, selected: Some(shown), hidden: true, date_group: group });
+    }
     pt.filters = filters;
+    pt.normalize_filter_groups();
 
     // Values.
     if let Some(df) = x.child("dataFields") {
