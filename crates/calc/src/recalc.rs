@@ -943,6 +943,55 @@ impl Calc {
         self.run(wb, all, true);
     }
 
+    /// Calculates formulas whose cached result is [`Value::Empty`], using every other formula's
+    /// cached result as a fixed input, even errors, empty text, volatile functions and unknown UDFs.
+    /// Formula metadata is retained for `ISFORMULA` and `FORMULATEXT`. Existing spills of cached
+    /// anchors are retained; missing anchors use the normal evaluator and spill rules.
+    ///
+    /// Intended for read-only consumers that prefer saved results over recalculation. This does
+    /// not validate cache freshness or reconstruct a cached anchor's absent spill values/range.
+    /// Missing formulas have the same function support and bounded recalculation rounds as
+    /// [`Self::recalc_all`]; unparseable missing formulas produce `#NAME?`.
+    ///
+    /// The full dependency graph is rebuilt before returning, so subsequent [`Self::cells_changed`]
+    /// calls work normally (and may then replace cached results). Calling this again preserves the
+    /// results just calculated, including errors.
+    pub fn recalc_missing(&mut self, wb: &mut Workbook) {
+        self.graph = Graph::default();
+        let mut unparsed = Vec::new();
+        for (si, sheet) in wb.sheets.iter().enumerate() {
+            for (c, cell) in sheet.cells.iter() {
+                if cell.value.is_empty()
+                    && let Some(f) = &cell.formula
+                {
+                    if let Some(e) = f.expr() {
+                        let (areas, dynamic) = precedents(wb, si, &e);
+                        self.graph.insert((si, c), Node { areas, dynamic });
+                    } else {
+                        unparsed.push((si, c));
+                    }
+                }
+            }
+        }
+        // Keep cached formulas out of the graph for every dynamic/spill follow-up round too.
+        self.graph.settle();
+        for &(si, c) in &unparsed {
+            if let Some(sheet) = wb.sheet_mut(si) {
+                if let Some(range) = sheet.spill_ranges.remove(&c) {
+                    sheet.spill.retain(|at, _| !range.contains(*at));
+                }
+                if let Some(cell) = sheet.cells.get_mut(c) {
+                    cell.value = Value::Error(CellError::Name);
+                }
+            }
+        }
+        let missing: Vec<Key> = self.graph.nodes.keys().copied().collect();
+        self.circular.clear();
+        self.run(wb, missing, false);
+        self.last_recalc_cells += unparsed.len();
+        self.rebuild(wb);
+    }
+
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();

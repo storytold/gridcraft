@@ -1068,6 +1068,133 @@ fn recalc_all_after_load() {
 }
 
 #[test]
+fn recalc_missing_preserves_cached_results_and_formula_metadata() {
+    let mut t = T::new();
+    let cached = [
+        ("A1", "=UNSUPPORTED_UDF()", Value::Number(17.0)),
+        ("A2", "=1+1", Value::Number(99.0)),
+        ("A3", "=RAND()", Value::Number(12345.0)),
+        ("A4", "=1", Value::Number(0.0)),
+        ("A5", "=TRUE()", Value::Bool(false)),
+        ("A6", "=1", Value::from("")),
+        ("A7", "=1", Value::from("saved text")),
+        ("A8", "=1+", Value::Number(8.0)),
+        ("A9", "=1", Value::from(gridcraft_core::Array::scalar(Value::Number(9.0)))),
+    ];
+    let s = t.wb.sheet_mut(0).unwrap();
+    for (at, formula, value) in &cached {
+        let mut cell = Cell::formula(Formula::new(formula));
+        cell.value = value.clone();
+        s.cells.set(c(at), cell);
+    }
+    for (i, error) in CellError::ALL.into_iter().chain([CellError::Circ]).enumerate() {
+        let mut cell = Cell::formula(Formula::new("=1"));
+        cell.value = Value::Error(error);
+        s.cells.set(gridcraft_core::CellRef::new(i as u32, 2), cell);
+    }
+    for (at, formula) in [("B1", "=A1*2"), ("B2", "=A2+1"), ("B3", "=ISFORMULA(A1)"), ("B4", "=FORMULATEXT(A1)"), ("B5", "=C1")] {
+        s.cells.set(c(at), Cell::formula(Formula::new(formula)));
+    }
+    let before: Vec<_> = s.cells.iter().filter(|(_, cell)| !cell.value.is_empty()).map(|(at, cell)| (at, cell.clone())).collect();
+    t.calc.recalc_missing(&mut t.wb);
+    for (at, cell) in before {
+        assert_eq!(t.wb.sheet(0).unwrap().cell(at), Some(&cell), "{at:?}");
+    }
+    assert_eq!((t.num("B1"), t.num("B2")), (34.0, 100.0));
+    assert_eq!(t.get("B3"), Value::Bool(true));
+    assert_eq!(t.get("B4"), Value::from("=UNSUPPORTED_UDF()"));
+    assert_eq!(t.get("B5"), Value::Error(CellError::Null));
+}
+
+#[test]
+fn recalc_missing_evaluates_chains_and_missing_formula_errors() {
+    let mut t = T::new();
+    let s = t.wb.sheet_mut(0).unwrap();
+    for (at, formula) in [
+        ("A1", "=B1+1"),
+        ("B1", "=C1+1"),
+        ("C1", "=2"),
+        ("D1", "=SUM(A1:C1)"),
+        ("A2", "=UNSUPPORTED_UDF()"),
+        ("B2", "=1+"),
+        ("C2", "=B2+1"),
+        ("D2", "=ISFORMULA(C1)"),
+        ("E2", "=FORMULATEXT(C1)"),
+        ("F2", "=ROWS(B2#)"),
+        ("F3", "=B3+1"),
+    ] {
+        s.cells.set(c(at), Cell::formula(Formula::new(formula)));
+    }
+    s.spill_ranges.insert(c("B2"), gridcraft_core::RangeRef::new(c("B2"), c("B3")));
+    s.spill.insert(c("B3"), Value::Number(20.0));
+    t.calc.recalc_missing(&mut t.wb);
+    assert_eq!((t.num("A1"), t.num("B1"), t.num("C1"), t.num("D1")), (4.0, 3.0, 2.0, 9.0));
+    for at in ["A2", "B2", "C2"] {
+        assert_eq!(t.get(at), Value::Error(CellError::Name));
+    }
+    assert_eq!(t.get("D2"), Value::Bool(true));
+    assert_eq!(t.get("E2"), Value::from("=2"));
+    assert_eq!(t.get("F2"), Value::Error(CellError::Ref));
+    assert_eq!(t.num("F3"), 1.0);
+    let s = t.wb.sheet(0).unwrap();
+    assert!(!s.spill_ranges.contains_key(&c("B2")));
+    assert!(!s.spill.contains_key(&c("B3")));
+}
+
+#[test]
+fn recalc_missing_preserves_cached_spills_and_dependents_across_rounds() {
+    let mut t = T::new();
+    let s = t.wb.sheet_mut(0).unwrap();
+    for (at, formula, value) in [("D1", "=UNSUPPORTED_UDF()", 10.0), ("B2", "=SUM(H1#)", 999.0), ("B3", "=INDIRECT(\"H3\")", 888.0)] {
+        let mut cell = Cell::formula(Formula::new(formula));
+        cell.value = Value::Number(value);
+        s.cells.set(c(at), cell);
+    }
+    let saved_range = gridcraft_core::RangeRef::new(c("D1"), c("D2"));
+    s.spill_ranges.insert(c("D1"), saved_range);
+    s.spill.insert(c("D2"), Value::Number(20.0));
+    for (at, formula) in [
+        ("A1", "=SUM(D1#)"),
+        ("A2", "=ROWS(D1#)"),
+        ("A3", "=D2+1"),
+        ("A4", "=SUM(H1#)"),
+        ("B1", "=H3+1"),
+        ("C2", "=SEQUENCE(1,2)"),
+        ("H1", "=SEQUENCE(3)"),
+    ] {
+        s.cells.set(c(at), Cell::formula(Formula::new(formula)));
+    }
+    t.calc.recalc_missing(&mut t.wb);
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (30.0, 2.0, 21.0));
+    assert_eq!((t.num("A4"), t.num("B1"), t.num("H3")), (6.0, 4.0, 3.0));
+    assert_eq!((t.num("B2"), t.num("B3"), t.num("D1"), t.num("D2")), (999.0, 888.0, 10.0, 20.0));
+    assert_eq!(t.get("C2"), Value::Error(CellError::Spill));
+    let s = t.wb.sheet(0).unwrap();
+    assert_eq!(s.spill_ranges.get(&c("D1")), Some(&saved_range));
+    assert_eq!(s.spill.get(&c("D2")), Some(&Value::Number(20.0)));
+    assert_eq!(s.spill_ranges.get(&c("H1")), Some(&gridcraft_core::RangeRef::new(c("H1"), c("H3"))));
+}
+
+#[test]
+fn recalc_missing_is_repeatable_and_restores_incremental_editing() {
+    let mut t = T::new();
+    let s = t.wb.sheet_mut(0).unwrap();
+    s.cells.set(c("A1"), Cell::value(Value::Number(2.0)));
+    let mut cached = Cell::formula(Formula::new("=A1*2"));
+    cached.value = Value::Number(99.0);
+    s.cells.set(c("B1"), cached);
+    s.cells.set(c("C1"), Cell::formula(Formula::new("=B1+1")));
+    t.calc.recalc_missing(&mut t.wb);
+    assert_eq!((t.num("B1"), t.num("C1")), (99.0, 100.0));
+    assert_eq!(t.calc.last_recalc_cells, 1);
+    t.calc.recalc_missing(&mut t.wb);
+    assert_eq!((t.num("B1"), t.num("C1")), (99.0, 100.0));
+    assert_eq!(t.calc.last_recalc_cells, 0);
+    t.set("A1", "3");
+    assert_eq!((t.num("B1"), t.num("C1")), (6.0, 7.0));
+}
+
+#[test]
 fn sumif_sum_range_takes_the_criteria_size() {
     // Excel adds up the range that starts at sum_range's top-left cell with the criteria range's
     // height and width, whatever size sum_range has.

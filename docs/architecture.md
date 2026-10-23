@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (bound Undo's retained cell storage) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-22 · **Change:** minor (cache-preserving calculation API for read-only consumers) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -41,6 +41,14 @@ including tests, 2026-10-10.
 3. **Recalc** marks dependents of changed cells dirty through the dependency graph (with range
    nodes for range dependents), evaluates in topological order, spills dynamic arrays and reports
    `#SPILL!`/cycles. Volatile functions are always dirty.
+   Read-only consumers can explicitly call `Calc::recalc_missing`: only formula cells with
+   `Value::Empty` results are calculated, with nonempty cached results (including errors, empty
+   strings, volatile functions and unknown UDFs) treated as fixed inputs. Formula metadata and
+   cached anchors' existing spill values/ranges are retained. Missing formulas use the existing
+   evaluator, including its function support and bounded spill/dynamic follow-up rounds;
+   unparseable missing formulas return `#NAME?`. This neither validates saved results nor
+   reconstructs missing spill data for cached anchors. The full dependency graph is restored
+   before return, so later edits recalculate normally rather than continuing to trust caches.
 4. **Rendering**: the egui grid reads display values (number formats applied in `engine/display.rs`)
    for the visible window only; charts render through `crates/chart` primitives.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
@@ -71,5 +79,6 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | Add the opt-in `Calc::recalc_missing` API for cache-preserving read-only calculation; retain normal incremental editing afterwards |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |
