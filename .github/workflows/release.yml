@@ -24,7 +24,9 @@ jobs:
     with:
       app-name: gridcraft
       app-title: GridCraft
-      craft-fonts-ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+      craft-fonts-ref: d47f68570a43b364afcd832d00c297a9edea6932
+      # The web build embeds craft-fonts' Indian-script faces (~5 MB; crates/ui-egui/build.rs).
+      web-craft-fonts: true
       version: ${{ inputs.version }}
     secrets:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}

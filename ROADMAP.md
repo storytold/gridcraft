@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (Page Setup paper sizes: JIS B4/B5/B6, the Japanese postcards and envelopes, and A6; long flat operator chains up to Excel's formula limit) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (ten Indian interface languages; Indian-script faces in the web build) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -63,7 +63,7 @@ collaboration, mobile, AI).
 | File formats | ~50% | 80–120 | [file-format-parity.md](docs/file-format-parity.md) |
 | Performance | ~35% | 35–55 | [target-app-parity.md](docs/target-app-parity.md#performance) |
 | Stability | ~60% | 15–25 | [gaps.md](docs/gaps.md) |
-| Localization | ~10% (ribbon in 6 languages) | 100–165 | [localization-parity.md](docs/localization-parity.md) |
+| Localization | ~10% (ribbon in 19 languages) | 100–165 | [localization-parity.md](docs/localization-parity.md) |
 | Hardware (multi-core calc, GPU, pen, multi-window) | ~40% | 25–40 | [hardware-parity.md](docs/hardware-parity.md) |
 | Platforms | ~80% (no iOS/Android; ahead on Linux, BSD, RISC-V) | 30–60 | [target-app-parity.md](docs/target-app-parity.md#platforms) |
 | Ecosystem / add-ins | ~10% (VBA out of scope; own scripts, MCP, CLI) | 25–40 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
@@ -92,9 +92,10 @@ collaboration, mobile, AI).
 
 The ribbon is translated into Japanese, Simplified Chinese, Korean, Brazilian Portuguese, Russian
 and German (266–268 labels each, ~12% of ~2,200 strings; merged 10-10 in #31, #104, #82, German
-added 10-11), the
-interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
-(#38). Japanese (10-17) and Brazilian Portuguese also translate the dialog titles and labels,
+added 10-11) and ten Indian languages (Hindi, Bengali, Marathi, Telugu, Tamil, Gujarati, Kannada,
+Malayalam, Odia, Punjabi; ~392 labels each, ~18%), the
+interface follows the system language, and CJK, Thai, Hebrew and Indian-script text falls back to
+system fonts (#38) and is shaped (conjuncts, reordered vowel signs). Japanese (10-17) and Brazilian Portuguese also translate the dialog titles and labels,
 message boxes, Backstage/File-view items, template names and native menus: 943 strings each, ~43%.
 The remaining dialogs, menus and messages are English; formulas and number formats are en-US only.
 Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
@@ -103,10 +104,10 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 |---|---|---|---|
 | English | en | full (source language) | 100% |
 | Simplified Chinese | zh-Hans | menus only | ~12% |
-| Spanish | es | none | 0% |
-| Hindi | hi | none | 0% |
+| Spanish | es | menus only | ~17% |
+| Hindi | hi | menus only | ~18% |
 | Arabic | ar | none (no RTL layout, no shaping) | 0% |
-| French | fr | none | 0% |
+| French | fr | menus, File view, dialog titles | ~24% |
 | Portuguese | pt-BR | menus, File view, dialogs | ~43% |
 | Indonesian | id | none | 0% |
 | Japanese | ja | menus, File view, dialogs, messages | ~43% |
@@ -114,7 +115,7 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 | Korean | ko | menus only | ~12% |
 | Vietnamese | vi | none | 0% |
 
-Other shipped languages: 3 (Russian and German, menus only, ~12%; Dutch, menus, File view and dialog titles, ~24%).
+Other shipped languages: 12 (Russian and German, menus only, ~12%; Dutch, menus, File view and dialog titles, ~24%; the Indian languages bn, mr, te, ta, gu, kn, ml, or, pa, menus only, ~18%).
 
 ## Upcoming
 
@@ -135,6 +136,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-23 | Ten Indian interface languages (Hindi, Bengali, Marathi, Telugu, Tamil, Gujarati, Kannada, Malayalam, Odia, Punjabi) with system Indian-script fonts on Windows, macOS, Linux and BSD, shaped correctly; the web build embeds Noto Sans faces from craft-fonts when built with `CRAFT_FONTS_DIR` |
 | 2026-10-21 | Page Setup paper sizes match Japanese Excel: `B4`/`B5`/`B6` are the JIS sizes (ISO B4/B5/B6 stay reachable by name), so a Japanese B5 worksheet prints at 182×257 mm; Japanese Postcard (100×148 mm), Double Postcard (148×200 mm), Envelope #3/#4 (120×235/90×205 mm), Kaku #2/#3 (240×332/216×277 mm) and A6 are added, both sizes reach the PDF page (`file.exportPdf`/`file.print` MediaBox) and the size survives an XLSX round-trip; the Page Layout Size menu lists them. `B4`/`B5` used to be the ISO sizes, which is changed here |
 | 2026-10-20 | Japanese interface catalog covers every key the Brazilian Portuguese catalog translates: the 398-label shared core plus 545 dialog, message, Backstage and menu strings (943 total, ~43% of ~2,200). A test parses `pt.rs`'s source, so the two catalogs stay in step |
 | 2026-10-20 | Interface translated into Dutch (518 labels: ribbon, context menus, File view, dialog titles, Options); `nl`, `nl-NL`, `nl-BE` locale tags resolve to Dutch |
@@ -220,6 +222,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | minor | Ten Indian languages, Indian-script fonts (desktop and web); language counts and table updated; progress log row |
 | 2026-10-21 | minor | Page Setup paper sizes: JIS B4/B5/B6 (ISO by name), Japanese postcards and envelopes, A6; PDF page size follows, XLSX round-trips |
 | 2026-10-20 | minor | Dutch (nl) listed under other shipped languages; progress log row |
 | 2026-10-19 | minor | Progress log: long flat operator chains (#916) |

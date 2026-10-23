@@ -27,6 +27,74 @@ fn main() {
     if let Err(e) = std::fs::write(&out, generate(&json, &people)) {
         println!("cargo::warning=writing {}: {e}", out.display());
     }
+    craft_fonts_main();
+}
+
+/// The craft-fonts scripts GridCraft embeds: the Indian scripts, which the web build has no other
+/// face for (~5 MB together). Desktop systems ship faces for every script, so nothing else is
+/// embedded; the system faces stay first and these are the last resort.
+const CRAFT_SCRIPTS: &[&str] = &["Deva", "Beng", "Guru", "Gujr", "Orya", "Taml", "Telu", "Knda", "Mlym"];
+
+/// Writes `$OUT_DIR/craft_fonts.rs`: the optional craft-fonts build input (`CRAFT_FONTS_DIR`, see
+/// craft-fonts' docs/integration.md). Unset means an empty table and no change; set but unusable is
+/// a warning. `CRAFT_FONTS_REQUIRED` makes both an error, and so is a table missing a
+/// [`CRAFT_SCRIPTS`] script.
+fn craft_fonts_main() {
+    println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
+    println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
+    let required = std::env::var_os("CRAFT_FONTS_REQUIRED").is_some();
+    let mut src = String::from("pub static CRAFT_FONTS: &[CraftFont] = &[\n");
+    match std::env::var_os("CRAFT_FONTS_DIR").map(std::path::PathBuf::from) {
+        Some(dir) => match craft_fonts(&dir) {
+            Ok((entries, covered)) => {
+                let missing: Vec<&str> = CRAFT_SCRIPTS.iter().copied().filter(|s| !covered.contains(s)).collect();
+                if required && !missing.is_empty() {
+                    println!("cargo::error=CRAFT_FONTS_DIR={}: no face for {}", dir.display(), missing.join(", "));
+                }
+                src.push_str(&entries);
+            }
+            Err(e) if required => println!("cargo::error=CRAFT_FONTS_DIR={}: {e}", dir.display()),
+            Err(e) => println!("cargo::warning=building without craft-fonts: CRAFT_FONTS_DIR={}: {e}", dir.display()),
+        },
+        None if required => println!("cargo::error=CRAFT_FONTS_REQUIRED is set but CRAFT_FONTS_DIR is not"),
+        None => {}
+    }
+    src.push_str("];\n");
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("craft_fonts.rs");
+    if let Err(e) = std::fs::write(&out, src) {
+        println!("cargo::error=writing {}: {e}", out.display());
+    }
+}
+
+/// One `CraftFont { .. }` initialiser per manifest line whose scripts include a [`CRAFT_SCRIPTS`] one,
+/// and the [`CRAFT_SCRIPTS`] scripts those lines cover.
+fn craft_fonts(dir: &std::path::Path) -> Result<(String, Vec<&'static str>), String> {
+    let manifest = dir.join("fonts/manifest.txt");
+    println!("cargo::rerun-if-changed={}", manifest.display());
+    let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    let mut out = String::new();
+    let mut covered = Vec::new();
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        let f: Vec<&str> = line.split(" | ").map(str::trim).collect();
+        let [family, style, file, scripts, ..] = f.as_slice() else {
+            return Err(format!("malformed manifest line: {line}"));
+        };
+        let scripts: Vec<&str> = scripts.split(',').map(str::trim).collect();
+        if !scripts.iter().any(|s| CRAFT_SCRIPTS.contains(s)) {
+            continue;
+        }
+        covered.extend(CRAFT_SCRIPTS.iter().copied().filter(|s| scripts.contains(s)));
+        let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
+        println!("cargo::rerun-if-changed={}", path.display());
+        let scripts: Vec<String> = scripts.iter().map(|s| format!("{s:?}")).collect();
+        let _ = writeln!(
+            out,
+            "    CraftFont {{ family: {family:?}, style: {style:?}, scripts: &[{}], bytes: include_bytes!({:?}) }},",
+            scripts.join(", "),
+            path.display().to_string(),
+        );
+    }
+    Ok((out, covered))
 }
 
 fn read<T>(path: &std::path::Path, fallback: &str, parse: impl Fn(&str) -> Result<T, String>) -> Option<T> {

@@ -46,3 +46,21 @@ jobs:
 
       - name: Quality gate
         run: cargo xtask ci
+
+      # The optional craft-fonts build input (CRAFT_FONTS_DIR): the Indian-script faces the web build
+      # embeds. The gate above runs without it; this checks the embedded faces draw and shape Indian
+      # text with no system faces, and that the web build compiles with them.
+      - name: Check out craft-fonts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: d47f68570a43b364afcd832d00c297a9edea6932
+          path: craft-fonts
+
+      - name: Embedded craft-fonts faces
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+        run: |
+          cargo test -p gridcraft-ui-egui --lib theme::
+          cargo check --target wasm32-unknown-unknown -p gridcraft-web

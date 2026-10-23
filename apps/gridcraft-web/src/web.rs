@@ -60,13 +60,11 @@ pub fn start() {
                     }
                     let mut app = SheetApp::new(session, services);
                     app.ui.system_theme = true;
-                    // Follow the browser's language, except a CJK one: the web build has no system
-                    // CJK fonts (none are bundled), so that interface would render as tofu.
+                    // Follow the browser's language, except one needing a script face this build
+                    // lacks: the web has no system fonts, only the Indian-script faces embedded from
+                    // craft-fonts (CRAFT_FONTS_DIR), so a CJK interface would render as tofu.
                     let browser = gridcraft_ui_egui::i18n::Language::system();
-                    if !matches!(
-                        browser,
-                        gridcraft_ui_egui::i18n::Language::Zh | gridcraft_ui_egui::i18n::Language::Ja | gridcraft_ui_egui::i18n::Language::Ko
-                    ) {
+                    if browser.renders_without_system_fonts() {
                         app.ui.language = browser;
                     }
                     // Preferences from an earlier visit (#1562), as the desktop app reads `ui.json`

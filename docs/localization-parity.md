@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-21 · **Change:** minor (the Japanese catalog covers the dialogs, messages and menus; Dutch interface language; Romanian interface catalog) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (ten Indian languages; web build: Indian-script faces from craft-fonts) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -27,7 +27,8 @@ right-to-left sheets and full complex-script support. Part of
 - **A first catalog exists.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in #31, #104, #82; German
   added 10-11) adds an interface-language preference that defaults to the system language (closes
   #20) and a View-tab switcher, with English-keyed lookup tables: Simplified Chinese, Korean,
-  Russian, German and Czech 266–518 labels each, Brazilian Portuguese and Japanese 943 each. The
+  Russian, German and Czech 266–518 labels each, the ten Indian languages ~392 each (the shared
+  core), Brazilian Portuguese and Japanese 943 each. The
   tables are used by the ribbon, sheet tabs and widgets (`ribbon.rs`, `tabs.rs`, `widgets.rs`), the
   Format Cells dialog, every dialog title and the shared OK/Cancel buttons; Japanese and Portuguese
   also cover the other dialog labels, message boxes, Backstage/File-view items, template names and
@@ -41,13 +42,25 @@ right-to-left sheets and full complex-script support. Part of
   separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
   localized function names and `;` separators (#45). German with localized numbers and formulas
   is in PR #163 (open).
+- **Indian languages (2026-10-11).** Hindi, Bengali, Marathi, Telugu, Tamil, Gujarati, Kannada,
+  Malayalam, Odia and Punjabi (Gurmukhi) catalogs (`i18n/{hi,bn,mr,te,ta,gu,kn,ml,or,pa}.rs`), each
+  covering every key of the reference table (392 labels, ~18%), with their locale tags
+  (`hi-IN`…; Shahmukhi `pa-Arab`/`pa-PK` stays English). Machine-translated, no native review yet.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
-  #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
+  #142 is still open pending confirmation), and for the nine Indian scripts (Devanagari, Bengali,
+  Gurmukhi, Gujarati, Odia, Tamil, Telugu, Kannada, Malayalam) on 2026-10-11: Nirmala UI and the
+  per-script faces on Windows, Kohinoor/Noto/Sangam MN on macOS, Noto Sans or Lohit on Linux and
+  the BSDs. Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
-  Noto CJK and WenQuanYi faces can render Chinese without a broad filesystem grant. This does
-  not change the installed-font catalogue or add bundled fonts. Lao falls back to Lao Sangam MN / Lao MN (macOS),
-  Leelawadee UI / DokChampa (Windows) or Noto Sans Lao / Phetsarath OT (Linux). There is no complex-text shaping: Arabic and
-  Devanagari don't join or reorder, and there is no bidirectional layout. **Sheet Right-to-Left**
+  Noto CJK and WenQuanYi faces can render Chinese without a broad filesystem grant. Lao falls back to Lao Sangam MN / Lao MN (macOS),
+  Leelawadee UI / DokChampa (Windows) or Noto Sans Lao / Phetsarath OT (Linux). **Text is shaped**: epaint 0.36 runs every run through harfrust (OpenType GSUB/GPOS),
+  so conjuncts, reordered and split vowel signs render correctly wherever a face is present
+  (tested: `theme::tests::indic_text_is_shaped_not_drawn_letter_by_letter`). The web build has no
+  system fonts: builds made with craft-fonts (`CRAFT_FONTS_DIR`) embed Noto Sans for the nine
+  Indian scripts (~5 MB, storytold/craft-fonts#21) as the last face in every chain, so Indian text
+  renders there too, and the web build follows a browser in an Indian language only when those
+  faces are embedded. CJK interfaces are still not auto-selected on the web (no CJK face). There is no bidirectional
+  layout: Arabic and Hebrew runs shape but don't reorder. **Sheet Right-to-Left**
   (`view.rightToLeft`, Page Layout › Sheet Options, XLSX `rightToLeft`, `.xls` WINDOW2 fRightToLeft) mirrors the grid (#146):
   column A and the row headers on the right, the vertical scrollbar on the left; hit-testing,
   arrow keys, editor, popups and floating objects follow; text stays left-to-right inside its box
@@ -70,10 +83,10 @@ separators, number/date formats, machine translation with agent review, and scri
 |---|---|---|---|---|---|---|---|
 | English | en | ~2,200 / ~2,200 (100%, source) | yes | Latin: yes | yes | full | — |
 | Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
-| Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
-| Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
+| Spanish | es | 381 (~17%) | no | Latin: yes | no | menus only | 6–10 h |
+| Hindi | hi | 392 (~18%) | no | Devanagari: shaped, system faces; web: craft-fonts faces | no | menus only | 6–10 h |
 | Arabic | ar | 0 (0%) | no | **no shaping, no RTL UI**; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
-| French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
+| French | fr | 518 (~24%) | no | Latin: yes | no | menus, File view, dialog titles | 6–10 h |
 | Portuguese | pt-BR | 943 (~43%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display, but phonetic runs (ふりがな) survive an XLSX open + save | no | menus only | 8–12 h |
@@ -89,7 +102,24 @@ Other shipped languages: Russian (ru), German (de), Czech (cs), French (fr) and 
 | Vietnamese | vi | 398 (~18%) | no | Latin with stacked diacritics: unverified | no | menus, File view | 5–9 h |
 Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only; Dutch (nl), 518 labels (~24%): ribbon, context menus, File view, dialog titles and the Options page.
 
-**Total:** catalog work 10–20 h + languages 92–144 h ≈ **100–165 h**. Parallelizes almost fully
+Other Indian languages (menus only, ~392 labels ~18% each, shaped with system faces, no native
+review; 4–8 h each to full once the catalog covers dialogs):
+
+| Language | Code | Script | Faces (Windows · macOS · Linux/BSD) |
+|---|---|---|---|
+| Bengali | bn | Bengali | Nirmala UI, Vrinda · Kohinoor Bangla · Noto Sans Bengali, Lohit |
+| Marathi | mr | Devanagari | Nirmala UI, Mangal · Kohinoor Devanagari · Noto Sans Devanagari, Lohit |
+| Telugu | te | Telugu | Nirmala UI, Gautami · Kohinoor Telugu · Noto Sans Telugu, Lohit |
+| Tamil | ta | Tamil | Nirmala UI, Latha · Tamil Sangam MN · Noto Sans Tamil, Lohit |
+| Gujarati | gu | Gujarati | Nirmala UI, Shruti · Kohinoor Gujarati · Noto Sans Gujarati, Lohit |
+| Kannada | kn | Kannada | Nirmala UI, Tunga · Noto Sans Kannada · Noto Sans Kannada, Lohit |
+| Malayalam | ml | Malayalam | Nirmala UI, Kartika · Malayalam Sangam MN · Noto Sans Malayalam, Lohit |
+| Odia | or | Odia | Nirmala UI, Kalinga · Noto Sans Oriya · Noto Sans Oriya, Lohit |
+| Punjabi | pa | Gurmukhi | Nirmala UI, Raavi · Gurmukhi Sangam MN · Noto Sans Gurmukhi, Lohit |
+
+Urdu (Arabic script, right-to-left) waits for bidirectional layout and an RTL interface.
+
+**Total:** catalog work 10–20 h + languages 86–136 h ≈ **95–155 h** (Hindi no longer needs shaping work). Parallelizes almost fully
 once the catalog covers dialogs and commands. **Needs a human:** native-speaker review of every
 language (none so far) and of localized function names.
 
@@ -101,14 +131,15 @@ language (none so far) and of localized function names.
 2. Locale-aware formulas: localized function-name tables and separators at the formula-bar
    boundary only (files keep en-US invariant names), locale number and date formats, list
    separators in CSV.
-3. Text shaping and fallback: a shaping engine for grid, editor and PDF text (Arabic, Devanagari,
-   Thai), system font fallback for CJK, bidirectional runs, right-to-left sheet tabs and printing;
-   embedded subset fonts in PDF.
+3. Script support: shaping is done (epaint/harfrust) and system faces cover CJK, Thai, Hebrew and
+   the Indian scripts. Left: bidirectional runs, right-to-left sheet tabs and printing, script
+   CJK faces for the web build, embedded subset fonts in PDF.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | minor | Ten Indian languages (hi, bn, mr, te, ta, gu, kn, ml, or, pa; the shared ~392-label core each), Indian-script system faces on Windows/macOS/Linux/BSD, and on the web Indian-script faces from craft-fonts (`CRAFT_FONTS_DIR`); corrected "no shaping": epaint 0.36 shapes with harfrust. Hindi 12–18 h → 6–10 h; total 95–155 h |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |
 | 2026-10-20 | minor | Japanese catalog (`i18n/ja.rs`) covers every key the Brazilian Portuguese catalog translates: the 398-label shared core moved verbatim plus 545 dialog, message, Backstage and menu strings — 943 keys, ~12% → ~43%. A test parses `pt.rs`'s source, so the two catalogs can't drift apart again. Portuguese re-measured at 943 (was 923) |

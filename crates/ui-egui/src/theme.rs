@@ -461,7 +461,10 @@ pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -
     let mut bound: Vec<String> = Vec::new();
     // The non-Latin fallback faces have to sit at the end of each chain: a Latin font owns Latin,
     // and epaint picks the first face that has the glyph, so they only catch their own scripts.
-    let fallback = load_fallback(&mut fonts, HanOrder::of(language));
+    let mut fallback = load_fallback(&mut fonts, HanOrder::of(language));
+    // craft-fonts faces go last: system faces win where they exist, these catch the rest (the web
+    // build, a desktop without a face for the script).
+    fallback.extend(add_craft_faces(&mut fonts));
     for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
         let paths = candidates(role);
         let refs: Vec<(&str, u32)> = paths.iter().map(|(p, i)| (p.as_str(), *i)).collect();
@@ -548,6 +551,18 @@ fn load_fallback(_fonts: &mut FontDefinitions, _han: HanOrder) -> Vec<String> {
     Vec::new()
 }
 
+/// Adds the embedded craft-fonts faces ([`crate::craft_fonts`]) and returns their keys; none in a
+/// build without craft-fonts.
+fn add_craft_faces(fonts: &mut FontDefinitions) -> Vec<String> {
+    let mut keys = Vec::new();
+    for f in crate::craft_fonts::CRAFT_FONTS {
+        let key = format!("craft-{} {}", f.family, f.style);
+        fonts.font_data.insert(key.clone(), Arc::new(FontData::from_static(f.bytes)));
+        keys.push(key);
+    }
+    keys
+}
+
 /// Every fallback face we look for, in chain order: `(key, candidate files)`. One file per script
 /// family is enough — epaint picks the first face with the glyph, and a script's glyphs live in one
 /// file. Order only matters between faces that both cover a glyph (Japanese vs Chinese kanji), so
@@ -567,6 +582,15 @@ fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u32)>)> {
         ("sys-thai", thai()),
         ("sys-lao", lao()),
         ("sys-hebrew", hebrew()),
+        ("sys-devanagari", indic(Indic::Devanagari)),
+        ("sys-bengali", indic(Indic::Bengali)),
+        ("sys-gurmukhi", indic(Indic::Gurmukhi)),
+        ("sys-gujarati", indic(Indic::Gujarati)),
+        ("sys-odia", indic(Indic::Odia)),
+        ("sys-tamil", indic(Indic::Tamil)),
+        ("sys-telugu", indic(Indic::Telugu)),
+        ("sys-kannada", indic(Indic::Kannada)),
+        ("sys-malayalam", indic(Indic::Malayalam)),
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
     ]
@@ -747,6 +771,88 @@ fn hebrew() -> Vec<(String, u32)> {
     v
 }
 
+/// The Indian scripts with a fallback face. epaint shapes every run with harfrust, so a face with
+/// the script's OpenType tables is all conjuncts and reordered vowel signs need.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Indic {
+    Devanagari,
+    Bengali,
+    Gurmukhi,
+    Gujarati,
+    Odia,
+    Tamil,
+    Telugu,
+    Kannada,
+    Malayalam,
+}
+
+/// Indian-script faces. Windows' Nirmala UI covers all nine scripts (loaded once, see
+/// [`load_fallback`]), with the older per-script faces behind it; macOS ships Kohinoor, Noto and
+/// Sangam MN faces; Linux and the BSDs usually have Noto Sans or Lohit.
+#[cfg(not(target_arch = "wasm32"))]
+fn indic(script: Indic) -> Vec<(String, u32)> {
+    let mac_sys = "/System/Library/Fonts";
+    let mac_sup = "/System/Library/Fonts/Supplemental";
+    let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
+    // (Windows face, macOS faces with the Regular face's index, Noto name, Lohit directory and file)
+    let (win_face, mac, noto, lohit): (&str, &[(&str, u32)], &str, (&str, &str)) = match script {
+        Indic::Devanagari => (
+            "mangal.ttf",
+            &[("{sys}/Kohinoor.ttc", 0), ("{sup}/Devanagari Sangam MN.ttc", 0), ("{sup}/ITFDevanagari.ttc", 0)],
+            "Devanagari",
+            ("lohit-devanagari", "Lohit-Devanagari"),
+        ),
+        Indic::Bengali => {
+            ("vrinda.ttf", &[("{sys}/KohinoorBangla.ttc", 0), ("{sup}/Bangla Sangam MN.ttc", 0)], "Bengali", ("lohit-bengali", "Lohit-Bengali"))
+        }
+        Indic::Gurmukhi => {
+            ("raavi.ttf", &[("{sup}/Gurmukhi Sangam MN.ttc", 0), ("{sup}/Gurmukhi MN.ttc", 0)], "Gurmukhi", ("lohit-punjabi", "Lohit-Gurmukhi"))
+        }
+        Indic::Gujarati => (
+            "shruti.ttf",
+            &[("{sys}/KohinoorGujarati.ttc", 3), ("{sup}/Gujarati Sangam MN.ttc", 0)],
+            "Gujarati",
+            ("lohit-gujarati", "Lohit-Gujarati"),
+        ),
+        Indic::Odia => ("kalinga.ttf", &[("{sys}/NotoSansOriya.ttc", 0), ("{sup}/Oriya Sangam MN.ttc", 0)], "Oriya", ("lohit-oriya", "Lohit-Odia")),
+        Indic::Tamil => ("latha.ttf", &[("{sup}/Tamil Sangam MN.ttc", 0), ("{sup}/Tamil MN.ttc", 0)], "Tamil", ("lohit-tamil", "Lohit-Tamil")),
+        Indic::Telugu => {
+            ("gautami.ttf", &[("{sys}/KohinoorTelugu.ttc", 0), ("{sup}/Telugu Sangam MN.ttc", 0)], "Telugu", ("lohit-telugu", "Lohit-Telugu"))
+        }
+        Indic::Kannada => {
+            ("tunga.ttf", &[("{sys}/NotoSansKannada.ttc", 3), ("{sup}/Kannada Sangam MN.ttc", 0)], "Kannada", ("lohit-kannada", "Lohit-Kannada"))
+        }
+        Indic::Malayalam => (
+            "kartika.ttf",
+            &[("{sup}/Malayalam Sangam MN.ttc", 0), ("{sup}/Malayalam MN.ttc", 0)],
+            "Malayalam",
+            ("lohit-malayalam", "Lohit-Malayalam"),
+        ),
+    };
+    let mut v: Vec<(String, u32)> = vec![(format!("{win}\\Nirmala.ttc"), 0), (format!("{win}\\Nirmala.ttf"), 0), (format!("{win}\\{win_face}"), 0)];
+    v.extend(mac.iter().map(|(m, index)| (m.replace("{sys}", mac_sys).replace("{sup}", mac_sup), *index)));
+    let mut linux: Vec<String> = Vec::new();
+    for d in ["truetype/noto", "opentype/noto", "google-noto", "noto", "TTF"] {
+        linux.push(format!("{d}/NotoSans{noto}-Regular.ttf"));
+    }
+    // Fedora ships the variable Noto Sans faces; their default instance is Regular.
+    linux.push(format!("google-noto-vf/NotoSans{noto}[wght].ttf"));
+    let (dir, file) = lohit;
+    for d in ["truetype/", ""] {
+        linux.push(format!("{d}{dir}/{file}.ttf"));
+    }
+    // The system fonts, then the same layouts under a Flatpak sandbox's read-only host mounts.
+    for root in ["/usr/share/fonts", "/run/host/fonts"] {
+        v.extend(linux.iter().map(|f| (format!("{root}/{f}"), 0)));
+    }
+    for root in ["/usr/local/share/fonts", "/run/host/local-fonts"] {
+        v.push((format!("{root}/noto/NotoSans{noto}-Regular.ttf"), 0));
+        v.push((format!("{root}/{dir}/{file}.ttf"), 0));
+    }
+    v
+}
+
 /// Symbol faces behind the UI font. Interface fonts such as Noto Sans and Cantarell (and egui's
 /// built-in Ubuntu) lack arrows, check marks, geometric shapes and keyboard symbols (▾ ✓ ✕ ▲ ↳ ⇧),
 /// which then render as empty boxes (#197, #54). DejaVu Sans covers most of them; the paths cover
@@ -899,12 +1005,14 @@ mod tests {
     #[test]
     fn fallback_faces_are_appended_to_every_family() {
         // Structural: whatever loaded, the non-Latin fallback keys must sit at the end of each chain
-        // (after the Latin/default fonts) so Latin still wins for Latin text, in the language's order.
+        // (after the Latin/default fonts) so Latin still wins for Latin text, in the language's order,
+        // followed only by the embedded craft-fonts faces (the last resort).
         for han in [HanOrder::Chinese, HanOrder::Japanese] {
             let language = if han == HanOrder::Japanese { Language::Ja } else { Language::Zh };
             let fonts = font_definitions_for_language(language);
+            let craft = crate::craft_fonts::CRAFT_FONTS.iter().map(|f| format!("craft-{} {}", f.family, f.style));
             let fb_keys: Vec<String> =
-                fallback_faces(han).into_iter().map(|(k, _)| k.to_string()).filter(|k| fonts.font_data.contains_key(k)).collect();
+                fallback_faces(han).into_iter().map(|(k, _)| k.to_string()).chain(craft).filter(|k| fonts.font_data.contains_key(k)).collect();
             if fb_keys.is_empty() {
                 return; // no fallback face on this machine (minimal Linux)
             }
@@ -941,11 +1049,47 @@ mod tests {
         let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
         assert_eq!(
             keys(HanOrder::Japanese),
-            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            [
+                "sys-cjk-han-ja",
+                "sys-cjk-han-zh",
+                "sys-cjk-hangul",
+                "sys-thai",
+                "sys-lao",
+                "sys-hebrew",
+                "sys-devanagari",
+                "sys-bengali",
+                "sys-gurmukhi",
+                "sys-gujarati",
+                "sys-odia",
+                "sys-tamil",
+                "sys-telugu",
+                "sys-kannada",
+                "sys-malayalam",
+                "sys-symbols",
+                "sys-symbols-2"
+            ]
         );
         assert_eq!(
             keys(HanOrder::Chinese),
-            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            [
+                "sys-cjk-han-zh",
+                "sys-cjk-han-ja",
+                "sys-cjk-hangul",
+                "sys-thai",
+                "sys-lao",
+                "sys-hebrew",
+                "sys-devanagari",
+                "sys-bengali",
+                "sys-gurmukhi",
+                "sys-gujarati",
+                "sys-odia",
+                "sys-tamil",
+                "sys-telugu",
+                "sys-kannada",
+                "sys-malayalam",
+                "sys-symbols",
+                "sys-symbols-2"
+            ]
         );
         assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
         for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs, Language::Fr, Language::Tr] {
@@ -997,17 +1141,148 @@ mod tests {
     }
 
     #[test]
+    fn indic_text_is_shaped_not_drawn_letter_by_letter() {
+        // epaint shapes each run with harfrust, so with a face in the chain a conjunct is one glyph
+        // and a split vowel sign is drawn on both sides of its consonant. Drawn per character, क्ष
+        // would show three glyphs (क, a visible virama, ष) and கொ two.
+        let ctx = egui::Context::default();
+        ctx.set_fonts(font_definitions());
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        out.textures_delta.clear(); // nothing consumes the atlas in a headless test
+        let drawn = |text: &str| {
+            let galley = ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), FontId::proportional(14.0), Color32::BLACK));
+            galley.rows.iter().flat_map(|r| r.glyphs.iter()).filter(|g| g.uv_rect.size.x > 0.0).count()
+        };
+        let has = |script| indic(script).iter().any(|(p, _)| std::path::Path::new(p).exists());
+        if has(Indic::Devanagari) {
+            assert_eq!(drawn("क्ष"), 1, "क + virama + ष forms the conjunct क्ष");
+        }
+        if has(Indic::Tamil) {
+            assert_eq!(drawn("கொ"), 3, "the vowel sign ொ splits around க");
+        }
+    }
+
+    #[test]
+    fn craft_fonts_draw_and_shape_indian_text_without_system_faces() {
+        // What the web build sees: egui's bundled fonts plus the embedded craft-fonts faces, no
+        // system faces. Runs only in a build with CRAFT_FONTS_DIR set (CI sets it).
+        if crate::craft_fonts::CRAFT_FONTS.is_empty() {
+            return;
+        }
+        let mut fonts = FontDefinitions::default();
+        let craft = add_craft_faces(&mut fonts);
+        if let Some(chain) = fonts.families.get_mut(&FontFamily::Proportional) {
+            chain.extend(craft);
+        }
+        drop_unparseable_fonts(&mut fonts);
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        out.textures_delta.clear(); // nothing consumes the atlas in a headless test
+        let glyphs = |text: &str| {
+            let galley = ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), FontId::proportional(14.0), Color32::BLACK));
+            galley.rows.iter().flat_map(|r| r.glyphs.iter()).filter(|g| g.uv_rect.size.x > 0.0).map(|g| g.uv_rect).collect::<Vec<_>>()
+        };
+        let tofu = glyphs("\u{25FB}");
+        let samples = [
+            ("Deva", "हिन्दी"),
+            ("Beng", "বাংলা"),
+            ("Guru", "ਪੰਜਾਬੀ"),
+            ("Gujr", "ગુજરાતી"),
+            ("Orya", "ଓଡ଼ିଆ"),
+            ("Taml", "தமிழ்"),
+            ("Telu", "తెలుగు"),
+            ("Knda", "ಕನ್ನಡ"),
+            ("Mlym", "മലയാളം"),
+        ];
+        for (script, sample) in samples {
+            if !crate::craft_fonts::covers(script) {
+                continue;
+            }
+            let drawn = glyphs(sample);
+            assert!(!drawn.is_empty() && drawn.iter().all(|g| !tofu.contains(g)), "{script}: {sample:?} renders as tofu");
+        }
+        if crate::craft_fonts::covers("Deva") {
+            assert_eq!(glyphs("क्ष").len(), 1, "क + virama + ष forms the conjunct क्ष");
+        }
+    }
+
+    #[test]
+    fn indic_faces_are_regular_weight() {
+        // A family collection's face order is not alphabetical by weight (macOS's Kohinoor Gujarati
+        // starts with Bold, Noto Sans Kannada with Thin), so each candidate names its Regular face.
+        use skrifa::MetadataProvider;
+        let scripts = [
+            Indic::Devanagari,
+            Indic::Bengali,
+            Indic::Gurmukhi,
+            Indic::Gujarati,
+            Indic::Odia,
+            Indic::Tamil,
+            Indic::Telugu,
+            Indic::Kannada,
+            Indic::Malayalam,
+        ];
+        for script in scripts {
+            for (path, index) in indic(script) {
+                let Ok(bytes) = std::fs::read(&path) else { continue };
+                let Ok(font) = skrifa::FontRef::from_index(&bytes, index) else { continue };
+                let weight = font.attributes().weight.value();
+                assert!((350.0..=500.0).contains(&weight), "{script:?}: {path} face {index} has weight {weight}");
+            }
+        }
+    }
+
+    #[test]
+    fn indic_faces_reach_fedora_and_flatpak_layouts() {
+        // Fedora installs only the variable Noto Sans faces; a Flatpak sees the host's fonts under
+        // /run/host. Missing either leaves the interface in tofu boxes there.
+        let cases = [
+            (Indic::Devanagari, "Devanagari"),
+            (Indic::Bengali, "Bengali"),
+            (Indic::Gurmukhi, "Gurmukhi"),
+            (Indic::Gujarati, "Gujarati"),
+            (Indic::Odia, "Oriya"),
+            (Indic::Tamil, "Tamil"),
+            (Indic::Telugu, "Telugu"),
+            (Indic::Kannada, "Kannada"),
+            (Indic::Malayalam, "Malayalam"),
+        ];
+        for (script, noto) in cases {
+            let paths: Vec<String> = indic(script).into_iter().map(|(path, _)| path).collect();
+            for expected in [
+                format!("/usr/share/fonts/google-noto-vf/NotoSans{noto}[wght].ttf"),
+                format!("/run/host/fonts/google-noto-vf/NotoSans{noto}[wght].ttf"),
+                format!("/run/host/fonts/truetype/noto/NotoSans{noto}-Regular.ttf"),
+                format!("/run/host/local-fonts/noto/NotoSans{noto}-Regular.ttf"),
+            ] {
+                assert!(paths.contains(&expected), "{script:?} doesn't probe {expected}");
+            }
+        }
+    }
+
+    #[test]
     fn fallback_covers_its_script() {
         // Real render check, per script: the proportional family (what cells and the UI use) must
         // resolve a sample string to a real glyph, not the tofu replacement char. Skips a script
         // whose face is absent (a minimal machine) and fails if a face is present but not wired in.
-        let cases: [(&str, Vec<(String, u32)>, &str); 8] = [
+        let cases: [(&str, Vec<(String, u32)>, &str); 17] = [
             ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
             ("sys-cjk-han-zh", cjk_han_simplified(), "页面布局 客户端配置"),
             ("sys-cjk-hangul", cjk_hangul(), "한글"),
             ("sys-thai", thai(), "ทดสอบ"),
             ("sys-lao", lao(), "ພາສາລາວ"),
             ("sys-hebrew", hebrew(), "עברית"),
+            // Indian scripts, each with a conjunct or a vowel sign the shaper has to place.
+            ("sys-devanagari", indic(Indic::Devanagari), "हिन्दी क्षेत्र"),
+            ("sys-bengali", indic(Indic::Bengali), "বাংলা ক্ষেত্র"),
+            ("sys-gurmukhi", indic(Indic::Gurmukhi), "ਪੰਜਾਬੀ"),
+            ("sys-gujarati", indic(Indic::Gujarati), "ગુજરાતી"),
+            ("sys-odia", indic(Indic::Odia), "ଓଡ଼ିଆ"),
+            ("sys-tamil", indic(Indic::Tamil), "தமிழ் கொண்டு"),
+            ("sys-telugu", indic(Indic::Telugu), "తెలుగు"),
+            ("sys-kannada", indic(Indic::Kannada), "ಕನ್ನಡ"),
+            ("sys-malayalam", indic(Indic::Malayalam), "മലയാളം"),
             ("ui", candidates(UI), "Русский"),
             // Czech interface labels: every Czech accented letter, in both cases.
             ("ui", candidates(UI), "Příliš žluťoučký kůň úpěl ďábelské ódy ŘŠČŽÝÁÍÉÚŮĚŤĎŇÓ"),

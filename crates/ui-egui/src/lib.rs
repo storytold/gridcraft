@@ -11,6 +11,7 @@ mod border_preview;
 mod cell_pictures;
 pub mod chartview;
 pub mod control;
+pub mod craft_fonts;
 pub mod credits;
 pub mod dialogs;
 pub mod editor;

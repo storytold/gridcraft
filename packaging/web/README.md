@@ -12,6 +12,16 @@ static site in `gridcraft-web-<version>/`:
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
 
+## Fonts
+
+Browsers don't give the app system fonts, so the web build draws only what it embeds: egui's Latin,
+Greek and Cyrillic faces, plus, in builds made with craft-fonts (`CRAFT_FONTS_DIR`, set by the
+release workflow), Noto Sans for the nine Indian scripts used by the Hindi, Bengali, Marathi,
+Telugu, Tamil, Gujarati, Kannada, Malayalam, Odia and Punjabi interfaces. Those faces add about
+5 MB to the `.wasm` (31.7 MB instead of 26.6 MB before optimisation; 10.4 MB gzipped). Chinese,
+Japanese and Korean text has no face on the web yet, so the app doesn't switch to those interfaces
+from the browser's language.
+
 ## Any path works
 
 All URLs in `index.html` are relative (`public_url = "./"` in `apps/gridcraft-web/Trunk.toml`),
