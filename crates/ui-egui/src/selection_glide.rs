@@ -24,12 +24,20 @@
 //! always "the cells' rectangle plus what is left of the offset", in screen points. Scrolling
 //! under a gliding outline therefore carries it along, and an arrow key held at the edge of the
 //! window (the sheet scrolls, the cell stays where it is on screen) doesn't make it wobble.
+//!
+//! A new destination's glide is timed from the previous frame, so the outline already moves in
+//! the frame that shows the change. Timed from this frame it would stand still there, and a
+//! selection that changes every frame (a held arrow key) would freeze it in place.
 
 use egui::{Rect, pos2};
 use gridcraft_engine::core::RangeRef;
 
 /// How long a glide takes, in seconds.
 pub const GLIDE_SECS: f64 = 0.12;
+/// The most of a new glide that may have passed by the frame showing it: one frame at 60 Hz.
+/// egui paints nothing while the app sits idle, so the previous frame can be seconds old; the
+/// glide still runs its whole course then.
+const HEAD_START_SECS: f64 = 1.0 / 60.0;
 /// How far outside the cell area a glide may start or end (screen points).
 const OFFSCREEN_SLACK: f32 = 48.0;
 
@@ -64,11 +72,13 @@ pub struct SelectionGlide {
     started: f64,
     gliding: bool,
     frame_nr: u64,
+    /// The clock at the last frame.
+    now: f64,
 }
 
 impl Default for SelectionGlide {
     fn default() -> Self {
-        SelectionGlide { last: None, drawn: Rect::ZERO, offset: [0.0; 4], started: 0.0, gliding: false, frame_nr: 0 }
+        SelectionGlide { last: None, drawn: Rect::ZERO, offset: [0.0; 4], started: 0.0, gliding: false, frame_nr: 0, now: 0.0 }
     }
 }
 
@@ -77,12 +87,14 @@ impl SelectionGlide {
     pub fn frame(&mut self, f: Frame) -> Rect {
         let fresh = f.frame_nr.wrapping_sub(self.frame_nr) <= 1;
         self.frame_nr = f.frame_nr;
+        let previous = std::mem::replace(&mut self.now, f.now);
         let key = Some((f.place, f.range));
         if self.last != key {
-            // A new destination: set off from where the outline is drawn now (mid-glide or at rest).
+            // A new destination: set off from where the outline is drawn now (mid-glide or at rest),
+            // timed from the frame that drew it there so it is already on its way in this one.
             let same_sheet = self.last.is_some_and(|(place, _)| place == f.place);
             self.offset = if same_sheet && fresh { offset_between(self.drawn, f.target, f.view) } else { [0.0; 4] };
-            self.started = f.now;
+            self.started = if fresh && previous <= f.now { previous.max(f.now - HEAD_START_SECS) } else { f.now };
             self.last = key;
         }
         if !f.animate {
@@ -214,7 +226,8 @@ mod tests {
         let (a, b) = (at(0.0, 0.0), at(64.0, 32.0));
         let mut r = Rig::new(cell(0, 0), a);
         r.select(cell(2, 1), b);
-        let drawn = r.settle(DT);
+        let mut drawn = vec![r.step(0.0)];
+        drawn.extend(r.settle(DT));
         assert_eq!(drawn.first(), Some(&a), "it sets off from where it was");
         assert_eq!(drawn.last(), Some(&b), "and lands exactly on the cells");
         assert!(drawn.len() > 20, "over about {GLIDE_SECS} s, not in one frame: {} frames", drawn.len());
@@ -266,6 +279,33 @@ mod tests {
         let next = r.step(0.0);
         assert!(near(next, mid), "no jump when the destination changes: {next:?} vs {mid:?}");
         assert_eq!(r.settle(DT).last(), Some(&at(128.0, 0.0)));
+    }
+
+    #[test]
+    fn a_selection_changing_every_frame_keeps_up() {
+        // A held arrow key: a new destination every frame. The outline moves in each frame that
+        // shows one, instead of standing still until the changes stop.
+        let mut r = Rig::new(cell(0, 0), at(0.0, 0.0));
+        let mut last = r.glide.drawn();
+        for col in 1..=30u16 {
+            let target = at(64.0 * f32::from(col), 0.0);
+            r.select(cell(0, u32::from(col)), target);
+            let drawn = r.step(1.0 / 60.0);
+            assert!(drawn.min.x > last.min.x, "frame {col}: stood still at {drawn:?}");
+            assert!(target.min.x - drawn.min.x < 2.0 * 64.0, "frame {col}: {drawn:?} trails {target:?} by two cells or more");
+            last = drawn;
+        }
+    }
+
+    #[test]
+    fn a_change_after_sitting_idle_still_glides() {
+        // egui paints nothing while idle: the frame before the change can be long gone.
+        let mut r = Rig::new(cell(0, 0), at(0.0, 0.0));
+        r.select(cell(0, 1), at(64.0, 0.0));
+        let first = r.step(5.0);
+        assert!(first.min.x > 0.0 && first.min.x < 32.0, "{first:?}");
+        assert!(r.glide.is_gliding());
+        assert_eq!(r.settle(DT).last(), Some(&at(64.0, 0.0)));
     }
 
     #[test]
@@ -323,13 +363,13 @@ mod tests {
         let column = Rect::from_min_max(pos2(0.0, 0.0), pos2(64.0, 16_000_000.0));
         let mut r = Rig::new(RangeRef::cols(0, 0), column);
         r.select(cell(3, 0), at(0.0, 48.0));
-        let first = r.step(DT);
+        let first = r.step(0.0);
         assert_eq!(first.min, column.min);
         assert_eq!(first.max.y, 64.0 + VIEW.height(), "from the window's height below, not from row 1,048,576");
         assert_eq!(r.settle(DT).last(), Some(&at(0.0, 48.0)));
         // And back: the far edge leaves the same way.
         r.select(RangeRef::cols(0, 0), column);
-        assert_eq!(r.step(DT).max.y, 16_000_000.0 - VIEW.height());
+        assert_eq!(r.step(0.0).max.y, 16_000_000.0 - VIEW.height());
         assert_eq!(r.settle(DT).last(), Some(&column));
     }
 
