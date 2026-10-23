@@ -165,7 +165,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Custom Sort…" => "Aangepast sorteren…",
         "Filter" => "Filteren",
         "Reapply" => "Opnieuw toepassen",
-        "Get Data\n(Text/CSV)" => "Gegevens ophalen\n(tekst/CSV)",
+        "Get\nData" => "Gegevens\nophalen",
         "Remove\nDuplicates" => "Duplicaten\nverwijderen",
         "Data\nValidation" => "Gegevens-\nvalidatie",
         "Data Validation" => "Gegevensvalidatie",

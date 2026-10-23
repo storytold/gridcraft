@@ -159,7 +159,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Custom Sort…" => "Özel Sıralama…",
         "Filter" => "Filtre",
         "Reapply" => "Yeniden Uygula",
-        "Get Data\n(Text/CSV)" => "Veri Al\n(Metin/CSV)",
+        "Get\nData" => "Veri\nAl",
         "Remove\nDuplicates" => "Yinelenenleri\nKaldır",
         "Data\nValidation" => "Veri\nDoğrulama",
         "Data Validation" => "Veri Doğrulama",

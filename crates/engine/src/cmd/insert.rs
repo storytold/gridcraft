@@ -496,7 +496,7 @@ fn table_style(s: &mut Session, p: &Json) -> Result<Json> {
 /// Table names follow the Microsoft name rules, as the xlsx writer does: letters, digits, `_` and `.`,
 /// starting with a letter, `_` or `\`, and at most 255 characters. Anything else (a hyphen, say) would
 /// read as an operator inside a structured reference, and the writer would rename the table on save.
-fn valid_table_name(name: &str) -> bool {
+pub(crate) fn valid_table_name(name: &str) -> bool {
     name.chars().count() <= 255
         && name.starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '\\')
         && CellRef::parse(name).is_none()
@@ -539,6 +539,22 @@ fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
                 if let Some(cell) = sh.cells.get_mut(c) {
                     cell.formula = Some(std::sync::Arc::new(Formula::from_expr(ne)));
                 }
+            }
+        }
+        // Queries that load into the table, or read it, follow too.
+        for q in cx.wb.queries.iter_mut() {
+            if q.load.table.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(&old)) {
+                q.load.table = Some(name.clone());
+            }
+            if let gridcraft_model::QuerySource::CurrentWorkbook { name: n } = &mut q.source
+                && n.eq_ignore_ascii_case(&old)
+            {
+                n.clone_from(&name);
+            }
+        }
+        for q in cx.wb.excel_queries.iter_mut() {
+            if q.table.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(&old)) {
+                q.table = Some(name.clone());
             }
         }
         cx.structural = true;

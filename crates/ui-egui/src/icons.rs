@@ -131,6 +131,14 @@ pub enum Icon {
     OpenFolder,
     Info,
     Print,
+    /// From Web: a globe.
+    Globe,
+    /// Databases and connections: a cylinder.
+    Database,
+    /// Refresh All: two arrows chasing each other.
+    Refresh,
+    /// A query: a small table with a funnel.
+    Query,
 }
 
 struct G<'a> {
@@ -713,6 +721,49 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             g.line(&[(4.0, 11.5), (1.5, 11.5), (1.5, 5.5), (14.5, 5.5), (14.5, 11.5), (12.0, 11.5)], c, 1.1);
             g.line(&[(4.5, 9.0), (4.5, 14.5), (11.5, 14.5), (11.5, 9.0), (4.5, 9.0)], c, 1.1);
             g.circle(12.3, 7.6, 0.6, Some(c), None);
+        }
+        Icon::Globe => {
+            g.circle(8.0, 8.0, 6.5, None, Some(BLUE));
+            g.p.add(egui::Shape::ellipse_stroke(g.pt(8.0, 8.0), vec2(2.8 * g.s, 6.5 * g.s), Stroke::new(1.0 * g.s.clamp(1.0, 2.0), BLUE)));
+            g.stroke(&[(1.5, 8.0), (14.5, 8.0)], BLUE);
+            g.stroke(&[(2.6, 4.8), (13.4, 4.8)], light);
+            g.stroke(&[(2.6, 11.2), (13.4, 11.2)], light);
+        }
+        Icon::Database => {
+            g.p.add(egui::Shape::ellipse_filled(g.pt(8.0, 3.5), vec2(5.5 * g.s, 2.0 * g.s), BLUE));
+            g.line(&[(2.5, 3.5), (2.5, 12.5)], c, 1.1);
+            g.line(&[(13.5, 3.5), (13.5, 12.5)], c, 1.1);
+            for y in [8.0, 12.5] {
+                g.p.add(CubicBezierShape::from_points_stroke(
+                    [g.pt(2.5, y), g.pt(4.0, y + 2.6), g.pt(12.0, y + 2.6), g.pt(13.5, y)],
+                    false,
+                    Color32::TRANSPARENT,
+                    Stroke::new(1.1 * g.s.clamp(1.0, 2.0), c),
+                ));
+            }
+        }
+        Icon::Refresh => {
+            g.p.add(CubicBezierShape::from_points_stroke(
+                [g.pt(2.5, 8.0), g.pt(2.5, 3.0), g.pt(10.5, 1.5), g.pt(13.0, 5.5)],
+                false,
+                Color32::TRANSPARENT,
+                Stroke::new(1.2 * g.s.clamp(1.0, 2.0), GREEN),
+            ));
+            g.poly(&[(14.5, 2.5), (14.0, 7.0), (10.0, 5.5)], GREEN);
+            g.p.add(CubicBezierShape::from_points_stroke(
+                [g.pt(13.5, 8.0), g.pt(13.5, 13.0), g.pt(5.5, 14.5), g.pt(3.0, 10.5)],
+                false,
+                Color32::TRANSPARENT,
+                Stroke::new(1.2 * g.s.clamp(1.0, 2.0), GREEN),
+            ));
+            g.poly(&[(1.5, 13.5), (2.0, 9.0), (6.0, 10.5)], GREEN);
+        }
+        Icon::Query => {
+            g.rect(1.5, 2.5, 9.5, 9.5, Some(Color32::WHITE), Some(c));
+            g.rect(1.5, 2.5, 9.5, 2.5, Some(GREEN), None);
+            g.stroke(&[(1.5, 8.0), (11.0, 8.0)], light);
+            g.stroke(&[(6.0, 5.0), (6.0, 12.0)], light);
+            g.poly(&[(8.5, 8.5), (15.0, 8.5), (12.6, 11.5), (12.6, 14.5), (10.9, 15.0), (10.9, 11.5)], BLUE);
         }
     }
 }

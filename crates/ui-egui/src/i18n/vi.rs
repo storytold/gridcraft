@@ -168,7 +168,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Custom Sort…" => "Sắp xếp tùy chỉnh…",
         "Filter" => "Lọc",
         "Reapply" => "Áp dụng lại",
-        "Get Data\n(Text/CSV)" => "Lấy dữ liệu\n(Văn bản/CSV)",
+        "Get\nData" => "Lấy\ndữ liệu",
         "Remove\nDuplicates" => "Loại bỏ\ntrùng lặp",
         "Data\nValidation" => "Xác thực\ndữ liệu",
         "Data Validation" => "Xác thực dữ liệu",

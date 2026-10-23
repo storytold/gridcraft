@@ -172,6 +172,18 @@ fn services() -> Services {
                 .pick_file()
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
+        // Get Data › From File and From Folder.
+        pick_data_file: Some(Box::new(|kind: &str| {
+            let (label, exts): (&str, &[&str]) = match kind {
+                "excel" => ("Excel Workbook", &["xlsx", "xlsm", "xls", "xlsb", "ods"]),
+                "xml" => ("XML", &["xml"]),
+                "json" => ("JSON", &["json"]),
+                "access" => ("Access Database", &["accdb", "mdb"]),
+                _ => ("Text/CSV", &["csv", "txt", "tsv", "prn"]),
+            };
+            rfd::FileDialog::new().add_filter(label, exts).add_filter("All Files", &["*"]).pick_file().and_then(|p| p.to_str().map(str::to_string))
+        })),
+        pick_folder: Some(Box::new(|| rfd::FileDialog::new().pick_folder().and_then(|p| p.to_str().map(str::to_string)))),
         pick_picture: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])
@@ -289,6 +301,8 @@ fn main() -> eframe::Result<()> {
         }
     }
     let mut session = Session::new();
+    // Web and ODBC for Get & Transform and WEBSERVICE.
+    gridcraft_external::install(&mut session);
     if let Some(s) = &sample
         && let Err(e) = session.execute("file.new", json!({"sample": s}))
     {

@@ -1,6 +1,6 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (PivotTable calculated fields) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** trivial (the rest of the M library listed beside Get & Transform) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
@@ -66,7 +66,7 @@ to check our files, and Windows machines with the reported GPU drivers.
 | M1 | Excel look: chrome, ribbon, formula bar, grid, tabs, status bar, control channel | done (polish continues) |
 | M2 | Formatting completeness | done |
 | M3 | Editing power (AutoComplete, spelling, drag-move/copy) | done |
-| M4 | Data (advanced filter, consolidate, what-if) | most; Solver, ToolPak and Power Query remain |
+| M4 | Data (advanced filter, consolidate, what-if) | most; Solver and ToolPak remain |
 | M5 | Formulas tab (trace arrows, watch window, evaluate, error checking) | done |
 | M6 | Conditional formatting manager parity | done |
 | M7 | Charts parity | partial; Format pane in; axes, trendlines, error bars, round-trip remain |
@@ -78,14 +78,14 @@ to check our files, and Windows machines with the reported GPU drivers.
 | M13 | Release & polish | releases shipping (v0.2.0–v0.4.0, signed) |
 | M14 | **Beta gates** (table above) | not started as a milestone; parts in open PRs |
 | M15 | Localization infrastructure and the twelve languages | started: ribbon catalog in ja, zh, ko, pt-BR, ru (#31, #104, #82); German in PR #163 |
-| M16 | Get & Transform, data model | not started |
+| M16 | Get & Transform, data model | Get & Transform in (queries, Power Query Editor, file/web/OData/ODBC sources, refresh, trust); data model not started |
 
 ## After beta (ranked)
 
 | Work | Gap | Hours |
 |---|---|---|
 | Localization: catalog past the ribbon, then twelve languages | #11 | 100–165 |
-| Get & Transform and the data model | #12 | 60–100 |
+| Get & Transform remainder and the data model; the rest of the M library | #12 | 30–60; 100–170 |
 | Solver, Analysis ToolPak, Forecast Sheet | #13 | 22–35 |
 | Remaining functions, oracle suite | #15 | 18–30 |
 | Collaboration and review | #16 | 35–55 |
@@ -112,6 +112,8 @@ to check our files, and Windows machines with the reported GPU drivers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | trivial | After-beta list: the rest of the M library (100–170 h) beside the Get & Transform remainder |
+| 2026-10-14 | minor | Get & Transform landed (M16 partly); remaining #12 work 30–60 h |
 | 2026-10-11 | minor | PivotTable calculated fields landed |
 | 2026-10-10 | minor | Current focus and M15 updated for the 10-10 merges |
 | 2026-10-10 | minor | Added the alpha gate table (six core workflows; passes, stays alpha) |

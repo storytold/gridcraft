@@ -21,3 +21,7 @@ log = { workspace = true }
 # `check`: validating the packages GridCraft writes (content types, relationships).
 zip = { workspace = true }
 quick-xml = { workspace = true }
+
+# Get & Transform's web and ODBC sources, and WEBSERVICE.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+gridcraft-external = { workspace = true }

@@ -24,6 +24,7 @@ gridcraft-engine = { path = "crates/engine" }
 gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
+gridcraft-external = { path = "crates/external" }
 
 # foundation
 thiserror = "2"
@@ -34,6 +35,8 @@ rayon = "1"
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
 quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
+# Raw deflate for Power Query M's Binary.Decompress (Enter Data tables); already in the tree through zip.
+miniz_oxide = "0.8"
 sha2 = { version = "0.11", default-features = false }
 # Decrypting password-protected workbooks ([MS-OFFCRYPTO]): AES and SHA-1, pure Rust (wasm-safe).
 aes = { version = "0.9", default-features = false }

@@ -162,7 +162,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Custom Sort…" => "Нетипове сортування…",
         "Filter" => "Фільтр",
         "Reapply" => "Повторити",
-        "Get Data\n(Text/CSV)" => "Отримати дані\n(текст/CSV)",
+        "Get\nData" => "Отримати\nдані",
         "Remove\nDuplicates" => "Видалити\nдублікати",
         "Data\nValidation" => "Перевірка\nданих",
         "Data Validation" => "Перевірка даних",

@@ -853,6 +853,22 @@ impl Dialog {
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title"), "quit": p("quit")})),
             "start" => Dialog::custom("start", "GridCraft", json!({})),
+            // Get & Transform (drawn by `power_query::dialog`).
+            "navigator" => Dialog::custom("navigator", "Navigator", params.clone()),
+            "fromWeb" => {
+                let title = if params.get("odata").and_then(Json::as_bool) == Some(true) { "OData feed" } else { "From Web" };
+                Dialog::custom("fromWeb", title, params.clone())
+            }
+            "fromOdbc" => Dialog::custom("fromOdbc", "From ODBC", params.clone()),
+            "fromSqlServer" => Dialog::custom("fromSqlServer", "SQL Server database", params.clone()),
+            "loadTo" => Dialog::custom("loadTo", "Import Data", params.clone()),
+            "queryProperties" => Dialog::custom("queryProperties", "Query Properties", params.clone()),
+            "dataSourceSettings" => Dialog::custom("dataSourceSettings", "Data Source Settings", params.clone()),
+            "queryOptions" => Dialog::custom("queryOptions", "Query Options", params.clone()),
+            "recentSources" => Dialog::custom("recentSources", "Recent Sources", params.clone()),
+            "existingConnections" => Dialog::custom("existingConnections", "Existing Connections", params.clone()),
+            "mergeQueries" => Dialog::custom("mergeQueries", "Merge", params.clone()),
+            "appendQueries" => Dialog::custom("appendQueries", "Append", params.clone()),
             "comments" => {
                 app.grid.pane = None;
                 app.run_or_alert("review.showComments", json!({"on": true}));
@@ -1150,6 +1166,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
         "recommendedCharts" => 600.0,
+        "navigator" => 780.0,
+        "fromWeb" | "fromOdbc" | "fromSqlServer" | "dataSourceSettings" | "recentSources" | "existingConnections" | "mergeQueries" => 500.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
         "zoom" => 220.0,
@@ -1192,6 +1210,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "solver" => solver(ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
+                "navigator" | "fromWeb" | "fromOdbc" | "fromSqlServer" | "loadTo" | "queryProperties" | "dataSourceSettings" | "queryOptions"
+                | "recentSources" | "existingConnections" | "mergeQueries" | "appendQueries" => crate::power_query::dialog(app, ui, &mut d, &mut open),
                 "agents" => {
                     ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");
                     ui.add_space(4.0);

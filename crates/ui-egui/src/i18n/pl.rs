@@ -160,7 +160,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Custom Sort…" => "Sortowanie niestandardowe…",
         "Filter" => "Filtruj",
         "Reapply" => "Zastosuj ponownie",
-        "Get Data\n(Text/CSV)" => "Pobierz dane\n(tekst/CSV)",
+        "Get\nData" => "Pobierz\ndane",
         "Remove\nDuplicates" => "Usuń\nduplikaty",
         "Data\nValidation" => "Poprawność\ndanych",
         "Data Validation" => "Poprawność danych",

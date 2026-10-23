@@ -981,6 +981,22 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
         app.toggle_autosave();
     }
+    ui.add_space(18.0);
+    section(ui, lang, "Trust Center");
+    ui.label(lang.tr("Security settings for Data Connections"));
+    use gridcraft_engine::ExternalContent;
+    let mode = app.session.prefs.external_content;
+    for (value, id, label) in [
+        (ExternalContent::EnableAll, "enableAll", "Enable all Data Connections (not recommended)"),
+        (ExternalContent::Prompt, "prompt", "Prompt user about Data Connections"),
+        (ExternalContent::DisableAll, "disableAll", "Disable all Data Connections"),
+    ] {
+        if ui.radio(mode == value, lang.tr(label)).clicked() && mode != value {
+            app.run_or_alert("file.trustCenter", json!({"externalContent": id}));
+        }
+    }
+    ui.add_space(4.0);
+    dim(ui, lang.tr("Applies to Get & Transform queries and WEBSERVICE in workbooks opened from a file."));
     let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
     ui.add_space(18.0);
     section(ui, lang, "Formulas");

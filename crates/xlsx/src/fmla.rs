@@ -176,6 +176,9 @@ mod tests {
         assert_eq!(to_file(&Formula::new("Sales[@Units]*Sales[@[Unit Price]]")), "Sales[[#This Row],[Units]]*Sales[[#This Row],[Unit Price]]");
         assert_eq!(text_to_file("=[@Units]&COUNTA(Sales[@])"), "[[#This Row],[Units]]&COUNTA(Sales[#This Row])");
         assert_eq!(text_to_file("=SUM(Sales[Units])+[#Totals]"), "SUM(Sales[Units])+[#Totals]");
+        // A `!` in a column name (or a deleted column's `#REF!`) isn't a sheet separator.
+        assert_eq!(to_file(&Formula::new("SUBTOTAL(101,Sales['#REF!])")), "SUBTOTAL(101,Sales['#REF!])");
+        assert_eq!(text_to_file("=SUM(Sales[Wow!])+Sheet2!Total"), "SUM(Sales[Wow!])+Sheet2!Total");
         for f in ["Sales[@Units]*[@[Unit Price]]", "Sales[@]", "[@[Unit Price]]+1"] {
             let file = to_file(&Formula::new(f));
             assert!(!file.contains("[@"), "{file}");

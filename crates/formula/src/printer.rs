@@ -211,7 +211,8 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
         },
         Expr::Name(n) => match sheet_split(n) {
             // A sheet-qualified name is stored with the bare sheet name (`My Sheet!Total`): quote it so it parses back.
-            Some((sheet, name)) => {
+            // A `!` inside brackets belongs to a structured reference carried as a name (`T[Wow!]`), not a sheet.
+            Some((sheet, name)) if !name.contains(']') => {
                 s.push_str(&quote_sheet(sheet));
                 s.push('!');
                 s.push_str(name);

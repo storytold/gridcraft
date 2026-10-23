@@ -62,6 +62,10 @@ pub trait Host {
     fn random(&mut self) -> f64;
     /// Called when a volatile or dynamic-reference function is used.
     fn note_volatile(&mut self) {}
+    /// WEBSERVICE: the text a URL returns. Hosts without web access give `#VALUE!`.
+    fn web_service(&mut self, _url: &str) -> Result<String, CellError> {
+        Err(CellError::Value)
+    }
     /// The spill range of the dynamic array anchored at `anchor` (`None`: it doesn't spill).
     fn spill_range(&mut self, sheet: usize, anchor: CellRef) -> Option<RangeRef> {
         self.workbook().sheet(sheet)?.spill_ranges.get(&anchor).copied()
@@ -107,6 +111,9 @@ impl Ctx for FnCtx<'_, '_> {
     }
     fn random(&mut self) -> f64 {
         self.ev.host.random()
+    }
+    fn web_service(&mut self, url: &str) -> Result<String, CellError> {
+        self.ev.host.web_service(url)
     }
     /// Excel's "formula as criteria": the formula is written for the first record, so its relative
     /// references move down to `record`'s row, and the database's labels name its fields.

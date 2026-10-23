@@ -169,7 +169,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Custom Sort…", "ユーザー設定の並べ替え…"),
     ("Filter", "フィルター"),
     ("Reapply", "再適用"),
-    ("Get Data\n(Text/CSV)", "データの取得 (テキスト/CSV)"),
+    ("Get\nData", "データの\n取得"),
     ("Remove\nDuplicates", "重複の削除"),
     ("Data\nValidation", "データの入力規則"),
     ("Data Validation", "データの入力規則"),

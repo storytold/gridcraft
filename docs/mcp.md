@@ -57,6 +57,15 @@ with a file open.
 | `screenshot` | `path` | PNG of the window (Remote only). |
 | `list_functions` | `search?`, `category?` | Worksheet functions with signatures. |
 
+Get & Transform (Power Query) goes through `execute_command`: the `data.from*` source commands
+create and load queries, `query.navigator` lists what a source offers, `query.set`,
+`query.addStep`, `query.removeStep`, `query.renameStep` and `query.moveStep` edit them,
+`query.preview` shows rows at any applied step, `data.refresh` / `data.refreshAll` refresh, and
+`query.mText` returns the M-like text. The headless server (`gridcraft-cli mcp`) reads files, makes
+HTTP(S) requests and, on Windows, reaches ODBC sources itself; with `--connect` the app does. A
+workbook opened with queries or WEBSERVICE calls keeps external content disabled until
+`data.enableContent`. Query JSON and the step reference are in [cli.md](cli.md#get--transform-power-query).
+
 Results are one text block holding pretty JSON; failures set `isError: true` with a readable message. Unknown tools,
 missing required arguments and wrong argument types are JSON-RPC `-32602` errors; malformed JSON is `-32700`; unknown
 methods `-32601`.

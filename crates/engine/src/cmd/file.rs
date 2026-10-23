@@ -88,6 +88,9 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
     let i = s.add_document(doc);
+    // A workbook with queries or WEBSERVICE calls: the Security Warning (or, as the Trust Center
+    // allows, refresh-on-open).
+    let blocked = super::query::after_open(s)?;
     // The decrypted-workbook notice is for the info bar, not a message box.
     let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE).collect();
     if !shown.is_empty() {
@@ -99,7 +102,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let d = s.doc()?;
     Ok(
-        json!({"index": i, "title": d.display_title(), "sheets": d.wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(), "warnings": warnings}),
+        json!({"index": i, "title": d.display_title(), "sheets": d.wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(), "warnings": warnings, "externalBlocked": blocked}),
     )
 }
 

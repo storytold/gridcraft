@@ -12,22 +12,22 @@ generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 
 | Number | Value | Kind |
 |---|---|---|
-| Feature breadth (weighted by use) | **~75%** | estimated from the area table below; anchored on two measurements |
-| Ribbon and menu catalog | **274 / 290 (94.5%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
+| Feature breadth (weighted by use) | **~77%** | estimated from the area table below; anchored on two measurements |
+| Ribbon and menu catalog | **294 / 309 (95.1%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
 | Worksheet functions, by name | **513 / 523 (98.1%)** | measured: registered functions vs Microsoft's published function list (method below) |
-| Worksheet functions that do real work | **504 / 523 (96.4%)** | measured: excludes 9 stubs (7 CUBE functions, WEBSERVICE, FILTERXML) |
-| **Ready for real work** | **~50%** | estimated; written weights below (51.6 computed) |
+| Worksheet functions that do real work | **506 / 523 (96.7%)** | measured: excludes 7 stubs (the CUBE functions) |
+| **Ready for real work** | **~50%** | estimated; written weights below (52.5 computed) |
 | **Mainstream practitioner** | **~50%** | estimated; [method](#mainstream-practitioner) (69.5 depth × 0.90 × 0.92 × 0.88 = 50.6) |
 | **Essentials user** | **~63%** | estimated; [method](#essentials-user) (80.2 depth × 0.92 × 0.95 × 0.90 = 63.1) |
 | Stage | **alpha** | see [Stage](#stage) |
 | Remaining to beta | **~160–240 Opus 5.5 agent-hours** | estimated; [roadmap.md](roadmap.md#beta-gates) |
-| Remaining to full parity | **~700–1,100 Opus 5.5 agent-hours** | estimated; sum of the rows below |
+| Remaining to full parity | **~660–1,080 Opus 5.5 agent-hours** | estimated; sum of the dimension rows below; the rest of the M library (100–170 h, [gaps.md](gaps.md) §12) comes on top |
 
 ### Readiness by audience
 
 | Audience | Ready % | Opus 5.5 agent wall-clock hours to ~95% | Work that dominates |
 |---|---|---|---|
-| Full target (ready for real work) | ~50% | ~650–1,050 | Get & Transform and the data model, localization (twelve languages), charts depth, file fidelity (`.xls`, corpus, pass-through), PivotTables, collaboration, mobile |
+| Full target (ready for real work) | ~50% | ~620–1,010 | The data model, localization (twelve languages), charts depth, file fidelity (`.xls`, corpus, pass-through), PivotTables, collaboration, mobile |
 | Mainstream practitioner | ~50% | ~200–310 | File exchange with Excel users (corpus and Excel verification, pass-through, large files, `.xls`, encryption: 63–97 h), common-chart depth (30–45 h), PivotTables (20–30 h), keyboard and interaction (18–28 h), calc correctness and functions (20–33 h) |
 | Essentials user | ~63% | ~60–100 | Opening files people send (`.xls` import and saving with a password 24–36 h; macOS Finder open 2–4 h), launch stability (6–10 h), basic chart resize and polish (6–10 h), print and Page Layout (8–12 h), small editing and UI fixes (10–16 h) |
 
@@ -80,7 +80,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 | Area | Weight | Breadth | Ready | Hours | Evidence |
 |---|---|---|---|---|---|
 | Formula language and calculation | 18 | ~92% | ~72% | 20–30 | A1/R1C1 parser, reference adjustment, dependency-graph recalc, dynamic arrays and `#SPILL!`, `A1#`, LET/LAMBDA and helpers, structured references, names, 3-D references. Open correctness bugs: 15-digit equality (#57), stale spills after structural edits and cleared blockers (#133, #139), 3-D span endpoint deletion (#140), sheet rename and qualified names (#134). Single-threaded |
-| Worksheet functions | 12 | 98.1% (measured) | ~82% | 16–26 | 513 / 523 names, 504 working. Missing: GETPIVOTDATA, IMAGE plus cloud functions. No conformance suite against Excel-computed oracles; edge-case bugs keep surfacing (#137, #138). [function-parity.md](function-parity.md) |
+| Worksheet functions | 12 | 98.1% (measured) | ~82% | 16–26 | 513 / 523 names, 506 working. Missing: GETPIVOTDATA, IMAGE plus cloud functions. No conformance suite against Excel-computed oracles; edge-case bugs keep surfacing (#137, #138). [function-parity.md](function-parity.md) |
 | Editing, navigation, clipboard, fill | 12 | ~90% | ~70% | 15–25 | Point mode, F4, AutoComplete, Paste Special, AutoFill, Flash Fill, Find/Replace, Go To Special. Bugs: rectangular drag-select (#28), monthly fill (#132), cut across sheets (#128), Insert Copied Cells missing (#21), key tips only on part of the Home tab (#43; #33, #49). [ui-parity.md](ui-parity.md) |
 | Cell formatting, styles, conditional formatting | 10 | ~95% | ~80% | 8–14 | Full number-format language, borders, 47 cell styles, 60 table styles, all CF rule kinds including data bars, colour scales and icon sets. Gaps: font weights beyond regular/bold (#168), system fonts list (#4), themes |
 | Sort, filter, tables, validation, outline | 8 | ~82% | ~70% | 10–16 | Multi-level sort, AutoFilter, Advanced Filter, tables with totals, validation, outline, subtotals, consolidate. Advanced Filter copy-to preserves cells outside its result and rejects worksheet overflow (#1031). Bugs: subtotal header (#131), validation edits (#129), table style panic caught (#130); no slicers on tables |
@@ -90,17 +90,17 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 | Charts and sparklines | 8 | ~50% | ~30% | 40–60 | 25 chart kinds, all 2-D. The chart model holds title, legend position, a data-labels flag, gridlines flag and axis titles; no axis scaling, error bars, per-point formatting, chart sheets, 3-D, surface, map, Pareto. Kinds survive XLSX round trip (#158, #161). [chart-parity.md](chart-parity.md) |
 | Page layout, print, PDF | 5 | ~80% | ~55% | 12–20 | Page setup, print titles, breaks, Page Break Preview, headers/footers, PDF export and printing. No true Page Layout view; the PDF writer uses only the 14 standard fonts without embedding (no CJK or other non-Latin text in PDF); web print only exports (#141, #143) |
 | What-if and analysis | 4 | ~50% | ~40% | 22–35 | Goal Seek, Scenario Manager, data tables, Analysis ToolPak (13 of 19 tools, no charts), Solver (Simplex LP, a local nonlinear method and Evolutionary; Answer and Limits reports; no Sensitivity report or options dialog). Missing: Forecast Sheet, Analyze Data |
-| Get & Transform, external data, data model | 5 | ~15% | ~10% | 60–100 | Import of CSV/TSV, JSON, HTML. No Power Query editor, no From Web, database or folder sources, no connections or refresh, no relationships or data model, no external workbook links (dropped with a warning) |
+| Get & Transform, external data, data model | 5 | ~65% | ~50% | 30–60 (+100–170 M library) | Queries made in GridCraft run as typed applied steps (the Advanced Editor shows an M-like rendering of them), the Power Query Editor, Navigator, Text/CSV, Excel workbook, XML, JSON, folder (combine), web (HTML tables, CSV/JSON/XML), OData, ODBC and SQL Server/Access through ODBC (Windows), table/range and blank sources, ~35 transforms, Merge (six joins) and Append, load to a table or connection only, Refresh All with refresh on open and every N minutes, the Security Warning and Trust Center setting, WEBSERVICE and FILTERXML; definitions round-trip in a custom XML part. Excel's own Power Query queries (DataMashup) are listed and refresh through an M interpreter that runs the M the Power Query Editor writes (sources, ~60 `Table.*` functions, the scalar functions their steps use); what a query needs that isn't supported is named. The M library (~300 functions) covers the scalar functions people write by hand in custom columns. Missing: editing Excel's queries, the rest of the M library (records and tables as values, connectors such as `Sql.Database`), no PDF/SharePoint/Azure/online/Analysis Services/OLE DB sources, no data model or relationships, no credentials or privacy levels, refresh runs in the foreground |
 | Insert objects | 3 | ~55% | ~45% | 25–40 | Pictures, 8 shape kinds (Excel has ~170), text boxes, own icon set, ink with Ink to Shape, hyperlinks, checkboxes. Missing: SmartArt, WordArt, equations, signature line, objects, 3-D models, screenshot, pictures in cells (PR #105) |
 | Review, comments, protection, collaboration | 4 | ~55% | ~40% | 35–55 | Threaded comments, notes, spelling (system dictionary), thesaurus, sheet and workbook protection, Allow Edit Ranges with Excel-compatible password hashes (#307). Missing: comment navigation, Show Changes, notes-to-comments conversion, accessibility checker, co-authoring, opening password-encrypted files (refused with a message since #17) |
 | Automation | 4 | ~30% | ~20% | 12–20 | Recorded, editable GridCraft scripts (Automate tab). VBA is out of scope by owner decision and is **dropped** when an `.xlsm` is opened (warning shown). No Office Scripts compatibility |
-| **Weighted** | 100 | **~75%** | **~59%** | **300–485** | |
+| **Weighted** | 100 | **~77%** | **~61%** | **270–445** | |
 
 ## Dimensions
 
 | Dimension | Weight | Ready | Hours | Evidence |
 |---|---|---|---|---|
-| Features | 45 | ~59% | 300–485 | Table above |
+| Features | 45 | ~61% | 270–445 | Table above |
 | File formats | 15 | ~50% | 80–120 | XLSX read/write is broad but unproven on a real corpus and in Excel; XLSB and ODS are values-only import; no XLS, XML Spreadsheet 2003, SYLK, DIF, PRN; VBA dropped; 100 MB XLSX fails (#175). [file-format-parity.md](file-format-parity.md) |
 | UI/UX fidelity | 12 | ~55% | 50–80 | Excel-style ribbon, galleries, dialogs, formula bar, status bar; 59 commands with shortcuts vs Excel's 200+; key tips on part of the Home tab only; short context menu; single window. [ui-parity.md](ui-parity.md) |
 | Performance | 8 | ~35% | 35–55 | [Performance](#performance) |
@@ -110,9 +110,9 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 | Platforms | 2 | ~80% | 30–60 | [Platforms](#platforms) |
 | Ecosystem / add-ins | 2 | ~10% | 25–40 | [Ecosystem and AI](#ecosystem-and-ai) |
 | AI features | 2 | ~15% | 30–50 | [Ecosystem and AI](#ecosystem-and-ai) |
-| **Ready for real work** | 100 | **~50%** (51.6 computed: 0.45 × 59.0 features + the other rows × their weights) | **~700–1,100** | |
+| **Ready for real work** | 100 | **~50%** (52.5 computed: 0.45 × 61.0 features + the other rows × their weights) | **~660–1,080** (+100–170 M library) | |
 
-How the full number is built: features ready is the weighted mean of the area table (59.0 with
+How the full number is built: features ready is the weighted mean of the area table (61.0 with
 charts at 30%); ready for real work is the weighted mean of this table with the weights written
 under [Weights](#weights). Re-checked after the 10-10 merges: charts were corrected from 38% to
 30% (round-trip loss, #190 chart resize) and localization rose from 5% to 10% (#31, #104, #82,
@@ -335,9 +335,13 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-21 | minor | Page Setup paper sizes: `B4`/`B5`/`B6` are the JIS sizes Japanese Excel uses (ISO B4/B5/B6 by name), and Japanese Postcard, Japanese Double Postcard, the chou/kaku envelopes and A6 are added; PDF MediaBox and `file.print` follow, and the Size menu lists them |
+| 2026-10-20 | trivial | Features dimension row matches the area table (~61%, 270–445 h); full parity 660–1,080 h plus 100–170 h for the M library; typed steps and Excel's M queries described apart |
 | 2026-10-18 | trivial | Stale chart notes: all chart kinds survive XLSX round-trip (PRs #158, #161) and trendlines landed |
 | 2026-10-16 | minor | Advanced Filter copy-to clears only its actual output and rejects overflow without changing cells (#1031) |
 | 2026-10-15 | minor | Row auto-fit: line breaks count only in wrapping cells (Excel: wrap off shows one line, AutoFit gives one line); unwrapped multi-line cells from files no longer grow rows on open (no score change) |
+| 2026-10-15 | minor | Get & Transform: hand-written M functions (~300 library functions); the rest of the M library 150–250 → 100–170 h |
+| 2026-10-15 | minor | Get & Transform: Excel's Power Query queries refresh through an M interpreter (area ~60% → ~65% breadth, ~45% → ~50% ready; the rest of the M library 150–250 h) |
+| 2026-10-14 | minor | Get & Transform: queries with typed steps, the Power Query Editor, web/file/ODBC sources, refresh and trust (area ~15% → ~60% breadth, ~10% → ~45% ready, 60–100 → 30–60 h); WEBSERVICE and FILTERXML work (506 / 523); catalog 294 / 309 |
 | 2026-10-12 | minor | Essentials AutoFit evidence: rows auto-fit oversized fonts on open and row formatting (#833) |
 | 2026-10-12 | minor | Sheet tabs: reveal the selected tab on navigation and resize while preserving manual scrolling (#681); no score change |
 | 2026-10-12 | minor | PivotTables: values on rows (Σ Values in Rows at any position, all three layouts; `pivot.moveField` and the field pane move it; `dataOnRows` round-trips) (no score change) |

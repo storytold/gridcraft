@@ -166,7 +166,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Custom Sort…" => "自定义排序…",
         "Filter" => "筛选",
         "Reapply" => "重新应用",
-        "Get Data\n(Text/CSV)" => "获取数据\n(文本/CSV)",
+        "Get\nData" => "获取\n数据",
         "Remove\nDuplicates" => "删除\n重复项",
         "Data\nValidation" => "数据\n验证",
         "Data Validation" => "数据验证",

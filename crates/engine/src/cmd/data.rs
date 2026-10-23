@@ -654,9 +654,15 @@ fn filter_blank(v: &Value) -> bool {
 
 /// Hides rows of the autofilter range that fail any criterion.
 pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
+    let Some(af) = wb.sheet(sheet).and_then(|sh| sh.autofilter.clone()) else { return };
+    apply_criteria(wb, sheet, af.range, &af.criteria);
+}
+
+/// Hides the rows of `r` below its header row that fail any of `criteria` (column offset within
+/// `r` → criterion) and shows the others: the sheet's autofilter, or a table's filter.
+pub(crate) fn apply_criteria(wb: &mut Workbook, sheet: usize, r: RangeRef, criteria: &[(u32, FilterCriterion)]) {
     let Some(sh) = wb.sheet(sheet) else { return };
-    let Some(af) = sh.autofilter.clone() else { return };
-    let r = af.range;
+    let af = gridcraft_model::AutoFilter { range: r, criteria: criteria.to_vec() };
     let mut hide = Vec::new();
     // Precompute per-criterion top10 threshold and average once, not per row.
     let mut col_stats: std::collections::HashMap<usize, (Option<f64>, f64)> = std::collections::HashMap::new();

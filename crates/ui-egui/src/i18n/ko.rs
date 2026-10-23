@@ -166,7 +166,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Custom Sort…" => "사용자 지정 정렬…",
         "Filter" => "필터",
         "Reapply" => "다시 적용",
-        "Get Data\n(Text/CSV)" => "데이터 가져오기\n(텍스트/CSV)",
+        "Get\nData" => "데이터\n가져오기",
         "Remove\nDuplicates" => "중복\n항목 제거",
         "Data\nValidation" => "데이터\n유효성 검사",
         "Data Validation" => "데이터 유효성 검사",

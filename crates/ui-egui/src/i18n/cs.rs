@@ -157,7 +157,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Custom Sort…" => "Vlastní řazení…",
         "Filter" => "Filtr",
         "Reapply" => "Použít znovu",
-        "Get Data\n(Text/CSV)" => "Načíst data\n(text/CSV)",
+        "Get\nData" => "Načíst\ndata",
         "Remove\nDuplicates" => "Odebrat\nduplicity",
         "Data\nValidation" => "Ověření\ndat",
         "Data Validation" => "Ověření dat",

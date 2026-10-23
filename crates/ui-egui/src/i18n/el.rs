@@ -156,7 +156,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Custom Sort…" => "Προσαρμοσμένη ταξινόμηση…",
         "Filter" => "Φίλτρο",
         "Reapply" => "Επανάληψη εφαρμογής",
-        "Get Data\n(Text/CSV)" => "Λήψη δεδομένων\n(κείμενο/CSV)",
+        "Get\nData" => "Λήψη\nδεδομένων",
         "Remove\nDuplicates" => "Κατάργηση\nδιπλοτύπων",
         "Data\nValidation" => "Επικύρωση\nδεδομένων",
         "Data Validation" => "Επικύρωση δεδομένων",

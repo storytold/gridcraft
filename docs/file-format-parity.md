@@ -90,8 +90,17 @@ values) is still dropped.
 
 Excel's Get Data reaches files (Excel, CSV, XML, JSON, PDF, Parquet, folders), databases (SQL
 Server, Access, ODBC, …), web pages, SharePoint and online services, through Power Query.
-GridCraft imports CSV/TSV, JSON and HTML tables only, with no query editor, no connections and no
-refresh. Counted under features (Get & Transform, ~10% ready), not here.
+GridCraft's queries read Text/CSV (delimiter and file origin detected or chosen), Excel workbooks
+(sheets, tables, names), XML (repeating elements), JSON (arrays of records, flattened), folders
+(file list, or files combined), web pages (HTML tables), CSV/JSON/XML over HTTP(S), OData feeds,
+and ODBC data sources including SQL Server and Access (Windows). PDF, Parquet, SharePoint, Azure,
+online services, Analysis Services and OLE DB are listed and disabled. Query definitions are saved
+in GridCraft's own custom XML part (`customXml/gridcraftQueries.xml`), which Excel keeps; Excel's
+own Power Query parts (DataMashup, connections) are passed through unchanged; their queries are
+read from the DataMashup part ([MS-QDEFF]: M formulas, load settings, linked connections and
+tables), listed, and refreshed by GridCraft's M interpreter (the M the Power Query Editor writes;
+functions it lacks are named per query). A query table hanging off a loaded table is dropped on
+save, because the table part is rewritten. Loaded results are ordinary tables. Counted under features (Get & Transform, ~45% ready).
 
 ## Work (76–114 h)
 
@@ -132,6 +141,9 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-15 | minor | XLSX: formulas and PivotTable sources quote sheet names like Excel (a leading `.`, R1C1-like and cell-like names), so `'.x'!A1` no longer saves as `.x!A1`, which Excel could not open (#1458) |
 | 2026-10-15 | minor | XLSX text preserves CR and CRLF across save/reopen; shared strings use `_x000D_` and other XML text uses `&#13;` (#1488) |
 | 2026-10-15 | minor | XLSX save keeps legacy `INDEX`/`MATCH` formulas scalar instead of marking them as dynamic arrays (#1505) |
+| 2026-10-15 | minor | Excel's Power Query queries refresh from their M formulas (DataMashup kept byte for byte) |
+| 2026-10-14 | minor | Excel's Power Query queries are read from the DataMashup part and listed read-only; the part stays byte for byte |
+| 2026-10-14 | minor | Get & Transform sources listed; query definitions round-trip in a GridCraft custom XML part beside Excel's kept DataMashup |
 | 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-14 | minor | XLSX formulas read with dynamic-array metadata (`cm`) keep it on save, so Excel does not recalculate them with implicit intersection |
 | 2026-10-14 | minor | PDF export writes clickable annotations for safe cell URLs and destinations on printed pages; CLI `convert` accepts `.pdf` output (#954) |

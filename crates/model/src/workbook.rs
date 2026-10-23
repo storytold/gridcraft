@@ -186,6 +186,13 @@ pub struct Workbook {
     /// `preserved` are relative to. Saving into another folder rewrites them from there. Not in JSON.
     #[serde(skip)]
     pub source_dir: Option<std::path::PathBuf>,
+    /// Get & Transform queries (Data › Queries & Connections), in the order they were created.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queries: Vec<crate::query::Query>,
+    /// Power Query queries authored in Excel, read from its `DataMashup` part (kept in `preserved`)
+    /// to be listed read-only. Not in JSON.
+    #[serde(skip)]
+    pub excel_queries: Vec<crate::query::ExcelQuery>,
     /// The file this workbook reports as its own, which is what `CELL("filename")` returns.
     /// `None` = no file yet, which Excel reports as an empty string until the workbook has been
     /// saved once. Deliberately separate from `source_dir`: that one names the folder relative
@@ -227,6 +234,8 @@ impl Workbook {
             csv_delimiter: None,
             preserved: None,
             source_dir: None,
+            queries: vec![],
+            excel_queries: vec![],
             source_path: None,
         }
     }
