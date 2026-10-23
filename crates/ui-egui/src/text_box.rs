@@ -15,6 +15,7 @@ pub struct EditState {
     original: String,
     request_focus: bool,
     rect: Option<Rect>,
+    selection: Option<u32>,
 }
 
 pub(crate) fn editor_id() -> egui::Id {
@@ -23,6 +24,7 @@ pub(crate) fn editor_id() -> egui::Id {
 
 impl SheetApp {
     pub fn begin_text_box_edit(&mut self, id: u32) -> bool {
+        let selected = self.selected_chart;
         if !self.commit_edit(0, 0, false, false) {
             return false;
         }
@@ -35,6 +37,7 @@ impl SheetApp {
         let Some(shape) = sh.shapes.iter().find(|s| s.id == id && s.kind == ShapeKind::TextBox) else {
             return false;
         };
+        let selected = selected.or_else(|| sh.outer_group(gridcraft_engine::model::DrawingRef::Shape(id)));
         // shape.setText refuses edits on a protected sheet; don't open an editor that can't commit.
         if sh.is_protected() {
             self.message = Some(("Text Box".into(), "The cell or chart you're trying to change is on a protected sheet.".into()));
@@ -48,6 +51,7 @@ impl SheetApp {
             original: shape.text.clone(),
             request_focus: true,
             rect: None,
+            selection: selected,
         });
         self.selected_chart = Some(id);
         self.grid.drag = crate::grid::Drag::None;
@@ -70,6 +74,7 @@ impl SheetApp {
             Ok(()) => {
                 self.session.mode = Mode::Ready;
                 self.after_engine();
+                self.selected_chart = ed.selection;
                 Ok(())
             }
             Err(e) => {
@@ -80,7 +85,8 @@ impl SheetApp {
     }
 
     pub fn cancel_text_box_edit(&mut self) {
-        self.text_box_editor = None;
+        let Some(ed) = self.text_box_editor.take() else { return };
+        self.selected_chart = ed.selection;
         self.session.mode = Mode::Ready;
     }
 

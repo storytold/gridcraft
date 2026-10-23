@@ -1003,6 +1003,69 @@ fn rotated_wrapped_text_is_drawn_rotated_inside_its_cell() {
 }
 
 #[test]
+fn the_eraser_erases_a_grouped_ink_stroke_and_leaves_the_rest_of_its_group() {
+    use gridcraft_engine::model::{DrawingGroup, DrawingRef};
+    let mut s = blank();
+    let stroke = |s: &mut Session, x: f64| {
+        s.execute("draw.stroke", json!({"points": [[x, 100.0], [x + 40.0, 130.0]]})).unwrap()["shape"].as_u64().unwrap() as u32
+    };
+    let (erased, kept) = (stroke(&mut s, 300.0), stroke(&mut s, 400.0));
+    let gid = {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        let id = wb.next_object_id();
+        let sh = wb.sheet_mut(0).unwrap();
+        let anchor = sh.shapes[0].anchor;
+        let members = vec![DrawingRef::Shape(erased), DrawingRef::Shape(kept)];
+        sh.groups.push(DrawingGroup {
+            id,
+            name: "Ink".into(),
+            anchor,
+            child_offset: (0, 0),
+            child_extent: (1, 1),
+            flip: (false, false),
+            rotation: 0,
+            member_rotations: Vec::new(),
+            members,
+            file: None,
+        });
+        id
+    };
+    s.execute("draw.eraser", json!({"on": true})).unwrap();
+    let mut h = harness(s);
+    let pos = {
+        let app = h.state();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        let a = sheet.shapes.iter().find(|sh| sh.id == erased).unwrap().anchor;
+        egui::pos2(geo.x(sheet, a.cell.col) + a.dx * geo.z, geo.y(sheet, a.cell.row) + a.dy * geo.z) + egui::vec2(a.width, a.height) * geo.z / 2.0
+    };
+    click(&mut h, pos);
+    let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sheet.shapes.iter().map(|sh| sh.id).collect::<Vec<_>>(), vec![kept]);
+    assert_eq!(sheet.drawing_group(gid).map(|g| g.members.clone()), Some(vec![DrawingRef::Shape(kept)]));
+}
+
+#[test]
+fn hidden_objects_are_not_erased_by_the_eraser() {
+    let mut s = blank();
+    let stroke = s.execute("draw.stroke", json!({"points": [[300.0, 100.0], [340.0, 130.0]]})).unwrap()["shape"].as_u64().unwrap() as u32;
+    s.execute("draw.eraser", json!({"on": true})).unwrap();
+    let mut h = harness(s);
+    let pos = {
+        let app = h.state();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        let a = sheet.shapes.iter().find(|sh| sh.id == stroke).unwrap().anchor;
+        egui::pos2(geo.x(sheet, a.cell.col) + a.dx * geo.z, geo.y(sheet, a.cell.row) + a.dy * geo.z) + egui::vec2(a.width, a.height) * geo.z / 2.0
+    };
+    let wb = std::sync::Arc::make_mut(&mut h.state_mut().session.doc_mut().unwrap().wb);
+    wb.show_objects = gridcraft_engine::model::ShowObjects::None;
+    h.run_steps(2);
+    click(&mut h, pos);
+    assert!(h.state().session.active().unwrap().wb.active().unwrap().shapes.iter().any(|sh| sh.id == stroke));
+}
+
+#[test]
 fn undo_after_backspace_restores_the_cleared_cell() {
     // #1855: Backspace clears the cell and opens an empty editor; committing it must not add a
     // second, empty undo step, so one Ctrl+Z brings the value back and leaves other edits alone.

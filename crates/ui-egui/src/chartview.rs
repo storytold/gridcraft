@@ -4,7 +4,7 @@
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
-use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Workbook};
+use gridcraft_engine::model::{Anchor, DrawingRef, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
@@ -381,8 +381,62 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
             }
         }
     }
+    // A selected group is framed as a whole, like Excel. The early return above ensures hidden
+    // objects, including groups, receive no frame.
+    if let Some(a) = app.selected_chart.and_then(|id| sh.group_anchor(id)) {
+        let r = anchor_rect(geo, sh, &a);
+        let start = p.add(egui::Shape::Noop);
+        selection_frame(p, r);
+        done(start, r);
+    }
     paint_slicers(app, p, geo, wb, si, sh);
     painted
+}
+/// The topmost object under `p`, a grouped one as itself: (kind, id, rect).
+pub fn hit_object(geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
+    for sl in sh.slicers.iter().rev() {
+        let r = anchor_rect(geo, sh, &sl.anchor);
+        if r.contains(p) && geo.cells.contains(p) {
+            return Some(("slicer", sl.id, r));
+        }
+    }
+    for ch in sh.charts.iter().rev() {
+        let r = anchor_rect(geo, sh, &ch.anchor);
+        if r.expand(4.0).contains(p) && geo.cells.contains(p) {
+            return Some(("chart", ch.id, r));
+        }
+    }
+    for im in sh.images.iter().rev() {
+        let r = anchor_rect(geo, sh, &im.anchor);
+        if r.contains(p) && geo.cells.contains(p) {
+            return Some(("image", im.id, r));
+        }
+    }
+    for s in sh.shapes.iter().rev() {
+        let r = anchor_rect(geo, sh, &s.anchor);
+        if r.expand(3.0).contains(p) && geo.cells.contains(p) {
+            return Some(("shape", s.id, r));
+        }
+    }
+    None
+}
+
+/// Returns the outermost group under `p`, so clicking a member selects its group like Excel.
+pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
+    if app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+        return None;
+    }
+    let (kind, id, r) = hit_object(geo, sh, p)?;
+    let member = match kind {
+        "chart" => DrawingRef::Chart(id),
+        "image" => DrawingRef::Image(id),
+        "shape" => DrawingRef::Shape(id),
+        _ => return Some((kind, id, r)),
+    };
+    match sh.outer_group(member).and_then(|g| Some((g, sh.group_anchor(g)?))) {
+        Some((g, a)) => Some(("group", g, anchor_rect(geo, sh, &a))),
+        None => Some((kind, id, r)),
+    }
 }
 
 /// Geometry of a slicer's parts within its screen rect.
@@ -497,36 +551,4 @@ fn selection_frame(p: &Painter, r: Rect) {
         p.circle_stroke(c, 4.0, Stroke::new(1.0, Color32::from_gray(100)));
     }
     let _ = Align2::CENTER_CENTER;
-}
-
-/// The topmost object under `p`: (kind, id, rect).
-pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static str, u32, Rect)> {
-    if app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
-        return None;
-    }
-    for sl in sh.slicers.iter().rev() {
-        let r = anchor_rect(geo, sh, &sl.anchor);
-        if r.contains(p) && geo.cells.contains(p) {
-            return Some(("slicer", sl.id, r));
-        }
-    }
-    for ch in sh.charts.iter().rev() {
-        let r = anchor_rect(geo, sh, &ch.anchor);
-        if r.expand(4.0).contains(p) && geo.cells.contains(p) {
-            return Some(("chart", ch.id, r));
-        }
-    }
-    for im in sh.images.iter().rev() {
-        let r = anchor_rect(geo, sh, &im.anchor);
-        if r.contains(p) && geo.cells.contains(p) {
-            return Some(("image", im.id, r));
-        }
-    }
-    for s in sh.shapes.iter().rev() {
-        let r = anchor_rect(geo, sh, &s.anchor);
-        if r.expand(3.0).contains(p) && geo.cells.contains(p) {
-            return Some(("shape", s.id, r));
-        }
-    }
-    None
 }

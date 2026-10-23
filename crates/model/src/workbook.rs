@@ -353,6 +353,15 @@ impl Workbook {
             for c in &s.slicers {
                 m = m.max(c.id);
             }
+            // Members too: an id a group still lists (its object deleted) isn't handed out again.
+            for g in &s.groups {
+                m = m.max(g.id);
+                for r in &g.members {
+                    let (crate::DrawingRef::Chart(id) | crate::DrawingRef::Image(id) | crate::DrawingRef::Shape(id) | crate::DrawingRef::Group(id)) =
+                        *r;
+                    m = m.max(id);
+                }
+            }
         }
         m + 1
     }

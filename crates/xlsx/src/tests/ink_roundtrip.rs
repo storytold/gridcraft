@@ -192,3 +192,73 @@ fn oversized_polyline_is_not_truncated_into_different_ink() {
     let wb = read_drawing(&drawing().replace(POINTS, &commands));
     assert!(wb.sheet(0).unwrap().shapes.iter().all(|s| s.kind != ShapeKind::Ink));
 }
+
+/// An ink stroke `sp` at child offset `(x, y)`, 952500 × 476250 EMUs, with `xfrm_attrs` on its
+/// `a:xfrm`.
+fn grouped_stroke(x: i64, y: i64, xfrm_attrs: &str) -> String {
+    format!(
+        r#"<xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="Stroke"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr>
+        <a:xfrm{xfrm_attrs}><a:off x="{x}" y="{y}"/><a:ext cx="952500" cy="476250"/></a:xfrm>
+        <a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/><a:pathLst>{PATH}{POINTS}</a:path></a:pathLst></a:custGeom>
+        <a:noFill/><a:ln w="28575" cap="flat"><a:solidFill><a:srgbClr val="A12BCD"/></a:solidFill><a:miter/></a:ln>
+        </xdr:spPr></xdr:sp>"#
+    )
+}
+
+/// A group over B2:F12 (x 64, y 20, 256 × 200 px) as Excel writes one: its child box is its
+/// own box in sheet EMUs. It holds a rectangle and `members`.
+fn grouped_drawing(members: &str) -> String {
+    format!(
+        r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+        <xdr:twoCellAnchor editAs="absolute"><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>11</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+        <xdr:grpSp><xdr:nvGrpSpPr><xdr:cNvPr id="2" name="Inked"/><xdr:cNvGrpSpPr/></xdr:nvGrpSpPr>
+        <xdr:grpSpPr><a:xfrm><a:off x="609600" y="190500"/><a:ext cx="2438400" cy="1905000"/><a:chOff x="609600" y="190500"/><a:chExt cx="2438400" cy="1905000"/></a:xfrm></xdr:grpSpPr>
+        <xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="4" name="R"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="609600" y="190500"/><a:ext cx="476250" cy="190500"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:p><a:r><a:t>R</a:t></a:r></a:p></xdr:txBody></xdr:sp>
+        {members}
+        </xdr:grpSp><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#
+    )
+}
+
+#[test]
+fn ink_strokes_in_a_group_round_trip_at_their_child_space_transform() {
+    use gridcraft_model::{DrawingRef, ObjectRect};
+    // Stroke A at child (800100, 285750) is 20 px right of and 10 px below the group's corner;
+    // stroke B is turned 1°, which the group keeps for saving.
+    let xml = grouped_drawing(&format!("{}{}", grouped_stroke(800100, 285750, ""), grouped_stroke(1905000, 1143000, r#" rot="60000""#)));
+    let mut wb = read_drawing(&xml);
+    let strokes = |s: &Sheet| s.shapes.iter().filter(|sh| sh.kind == ShapeKind::Ink).cloned().collect::<Vec<_>>();
+    let boxes = |s: &Sheet| strokes(s).iter().map(|sh| s.drawing_rect(DrawingRef::Shape(sh.id)).unwrap()).collect::<Vec<_>>();
+    let near = |a: ObjectRect, b: (f64, f64, f64, f64)| {
+        (a.x - b.0).abs() < 0.01 && (a.y - b.1).abs() < 0.01 && (a.w - b.2).abs() < 0.01 && (a.h - b.3).abs() < 0.01
+    };
+    let check = |s: &Sheet, a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)| {
+        let found = strokes(s);
+        assert_eq!(found.len(), 2, "{:?}", s.shapes.iter().map(|sh| sh.kind).collect::<Vec<_>>());
+        let r = boxes(s);
+        assert!(near(r[0], a) && near(r[1], b), "{r:?}");
+        for stroke in &found {
+            for (p, q) in points(stroke).iter().zip([[-10.0, 5.0], [50.0, 40.0], [90.0, 10.0]]) {
+                assert!((p[0] - q[0]).abs() < 0.001 && (p[1] - q[1]).abs() < 0.001, "{p:?}");
+            }
+        }
+        let g = &s.groups[0];
+        assert_eq!(g.members.len(), 3);
+        assert_eq!(g.member_rotations, vec![(DrawingRef::Shape(found[1].id), 60000)]);
+    };
+    check(wb.sheet(0).unwrap(), (84.0, 30.0, 100.0, 50.0), (200.0, 120.0, 100.0, 50.0));
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    check(back.sheet(0).unwrap(), (84.0, 30.0, 100.0, 50.0), (200.0, 120.0, 100.0, 50.0));
+
+    // Sized to 1.5 times, the group keeps its child space, so the strokes are saved at a child
+    // scale other than 1:1, and reopen as the same strokes in their new places.
+    let s = wb.sheet_mut(0).unwrap();
+    let gid = s.groups[0].id;
+    let r = s.drawing_rect(DrawingRef::Group(gid)).unwrap();
+    s.transform_group(gid, r, ObjectRect { w: r.w * 1.5, h: r.h * 1.5, ..r });
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    check(back.sheet(0).unwrap(), (94.0, 35.0, 150.0, 75.0), (268.0, 170.0, 150.0, 75.0));
+
+    // A mirrored stroke would lose its flip, so it keeps the shape fallback.
+    let wb = read_drawing(&grouped_drawing(&grouped_stroke(800100, 285750, r#" flipH="1""#)));
+    assert!(wb.sheet(0).unwrap().shapes.iter().all(|s| s.kind != ShapeKind::Ink));
+}

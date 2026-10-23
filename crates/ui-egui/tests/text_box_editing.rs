@@ -1,9 +1,9 @@
 //! Text-box editing through real pointer and keyboard input, including document boundaries.
 
-use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
+use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, epaint::Shape as EguiShape, pos2, vec2};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
-use gridcraft_engine::model::{Shape, Workbook};
+use gridcraft_engine::model::{DrawingGroup, DrawingRef, Shape, Workbook};
 use gridcraft_ui_egui::{SheetApp, grid::Geo};
 use serde_json::json;
 
@@ -38,6 +38,52 @@ fn fixture() -> (Harness, u32) {
     (h, id)
 }
 
+fn grouped_fixture() -> (Harness, u32, u32) {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell": "B2", "input": "cell stays"})).unwrap();
+    session.execute("selection.set", json!({"cell": "B2"})).unwrap();
+    let id = session.execute("insert.textBox", json!({"at": "B2", "width": 240, "height": 120, "text": ORIGINAL})).unwrap()["shape"].as_u64().unwrap()
+        as u32;
+    let other = session.execute("insert.textBox", json!({"at": "E4", "width": 120, "height": 80, "text": "Other member"})).unwrap()["shape"]
+        .as_u64()
+        .unwrap() as u32;
+    let group_id = {
+        let d = session.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let group_id = wb.next_object_id();
+        let sh = wb.sheet_mut(0).unwrap();
+        let anchor = sh.shapes.iter().find(|s| s.id == id).unwrap().anchor;
+        sh.groups.push(DrawingGroup {
+            id: group_id,
+            name: "Text boxes".into(),
+            anchor,
+            child_offset: (0, 0),
+            child_extent: (100, 100),
+            flip: (false, false),
+            rotation: 0,
+            member_rotations: Vec::new(),
+            members: vec![DrawingRef::Shape(id), DrawingRef::Shape(other)],
+            file: None,
+        });
+        group_id
+    };
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(1200.0, 800.0))
+        .with_step_dt(1.0 / 60.0)
+        .with_os(egui::os::OperatingSystem::Mac)
+        .build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            SheetApp::new(session, Default::default()),
+        );
+    h.run_steps(4);
+    (h, id, group_id)
+}
+
 fn shape(h: &Harness, id: u32) -> &Shape {
     h.state().session.doc().unwrap().wb.active().unwrap().shapes.iter().find(|s| s.id == id).unwrap()
 }
@@ -52,6 +98,21 @@ fn shape_rect(h: &Harness, id: u32) -> Rect {
     let geo = Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
     let a = shape(h, id).anchor;
     Rect::from_min_size(pos2(geo.x(sh, a.cell.col) + a.dx * geo.z, geo.y(sh, a.cell.row) + a.dy * geo.z), vec2(a.width, a.height) * geo.z)
+}
+
+fn group_frame_painted(h: &Harness, group_id: u32) -> bool {
+    let app = h.state();
+    let sh = app.session.doc().unwrap().wb.active().unwrap();
+    let geo = Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
+    let anchor = sh.group_anchor(group_id).unwrap();
+    let expected = Rect::from_min_size(
+        pos2(geo.x(sh, anchor.cell.col) + anchor.dx * geo.z, geo.y(sh, anchor.cell.row) + anchor.dy * geo.z),
+        vec2(anchor.width, anchor.height.max(1.0)) * geo.z,
+    );
+    h.output()
+        .shapes
+        .iter()
+        .any(|s| matches!(&s.shape, EguiShape::Rect(frame) if frame.rect == expected && frame.stroke.color == Color32::from_gray(120)))
 }
 
 fn cell_center(h: &Harness, address: &str) -> Pos2 {
@@ -131,6 +192,47 @@ fn double_click_edits_multiline_text_and_commits_on_outside_click() {
     click(&mut h, outside);
     assert_eq!(shape(&h, id).text, "New first line\nNew second line");
     assert_cell_unchanged(&h);
+}
+
+#[test]
+fn double_click_edits_a_text_box_inside_a_group_and_preserves_members_on_save() {
+    let (mut h, id, group_id) = grouped_fixture();
+    h.run_steps(45);
+    let p = shape_rect(&h, id).center();
+    click(&mut h, p);
+    assert_eq!(h.state().selected_chart, Some(group_id), "single-click selection is promoted to the group");
+    assert!(group_frame_painted(&h, group_id), "single-click group selection paints the group frame");
+    click(&mut h, p);
+    assert_eq!(h.state().selected_chart, Some(id), "editing selects the member needed by the editor");
+    assert_eq!(h.state().text_box_editor.as_ref().map(|e| e.id), Some(id), "editing targets the raw group member");
+    replace(&mut h, "Updated grouped text");
+    let outside = cell_center(&h, "J15");
+    click(&mut h, outside);
+    assert_eq!(h.state().selected_chart, None, "clicking a cell clears the group selection");
+    let sheet = h.state().session.doc().unwrap().wb.active().unwrap();
+    let members = sheet.drawing_group(group_id).unwrap().members.clone();
+    assert_eq!(sheet.shapes.iter().find(|s| s.id == id).unwrap().text, "Updated grouped text");
+    assert_eq!(members.len(), 2);
+
+    let saved = h.state_mut().run("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let bytes = gridcraft_engine::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    let (reopened, _) = gridcraft_engine::io::open_bytes("grouped.xlsx", &bytes).unwrap();
+    let saved_sheet = reopened.sheet(0).unwrap();
+    let saved_shape = saved_sheet.shapes.iter().find(|s| s.text == "Updated grouped text").unwrap();
+    let saved_group = saved_sheet.groups.iter().find(|g| g.members.len() == members.len()).unwrap();
+    assert!(saved_group.members.contains(&DrawingRef::Shape(saved_shape.id)), "saved group retains the edited member");
+}
+
+#[test]
+fn escape_restores_group_selection_after_grouped_text_edit() {
+    let (mut h, id, group_id) = grouped_fixture();
+    h.run_steps(45);
+    let p = shape_rect(&h, id).center();
+    click(&mut h, p);
+    click(&mut h, p);
+    assert_eq!(h.state().selected_chart, Some(id));
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(h.state().selected_chart, Some(group_id));
 }
 
 fn drag(h: &mut Harness, from: Pos2, to: Pos2) {

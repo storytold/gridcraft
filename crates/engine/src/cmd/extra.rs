@@ -642,6 +642,14 @@ fn align(s: &mut Session, p: &Json) -> Result<Json> {
     let si = s.doc()?.wb.active_sheet;
     edit(s, |cx| {
         let sheet = cx.sheet_mut(si)?;
+        let grouped = match kind.as_str() {
+            "chart" => sheet.charts.iter().any(|o| ids.contains(&o.id) && sheet.outer_group(DrawingRef::Chart(o.id)).is_some()),
+            "image" => sheet.images.iter().any(|o| ids.contains(&o.id) && sheet.outer_group(DrawingRef::Image(o.id)).is_some()),
+            _ => sheet.shapes.iter().any(|o| ids.contains(&o.id) && sheet.outer_group(DrawingRef::Shape(o.id)).is_some()),
+        };
+        if grouped {
+            return Err(bad("arrange.align", "objects in a group can't be aligned yet"));
+        }
         let geo: Vec<(u32, f64, f64, f32, f32)> = {
             let shc = sheet.clone();
             anchors_of(sheet, &kind)
