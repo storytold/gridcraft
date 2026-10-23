@@ -142,3 +142,151 @@ fn select_over_the_control_channel_scrolls_the_active_cell_into_view() {
     assert_eq!(active(&h), CellRef::parse("BZ150").unwrap());
     assert!(visible(&h, "BZ150") && !visible(&h, "A1"), "selecting a far range scrolls its active cell into view");
 }
+
+fn scroll(h: &Harness) -> egui::Vec2 {
+    h.state().view().scroll
+}
+
+#[test]
+fn page_down_and_back_up_from_row_10_shows_rows_2_to_9_again() {
+    // The reported steps: row 1 frozen, row 10 selected, Page Down, Page Up, Page Up.
+    let mut h = harness();
+    h.state_mut().session.execute("view.freezePanes", json!({"cell": "A2"})).unwrap();
+    h.state_mut().session.execute("selection.set", json!({"cell": "A10"})).unwrap();
+    h.run_steps(2);
+    key(&mut h, Key::PageDown, Modifiers::NONE);
+    key(&mut h, Key::PageUp, Modifiers::NONE);
+    assert_eq!(active(&h), CellRef::parse("A10").unwrap());
+    key(&mut h, Key::PageUp, Modifiers::NONE);
+    assert_eq!(active(&h), CellRef::parse("A1").unwrap());
+    assert_eq!(scroll(&h).y, 0.0);
+    assert!(visible(&h, "A2") && visible(&h, "A9"));
+}
+
+#[test]
+fn page_up_into_a_frozen_top_row_scrolls_the_rows_below_it_back_to_the_top() {
+    // Row 1 frozen: Page Up from far down ends on A1, and rows 2 onwards show under it again
+    // instead of the view staying a page down.
+    let mut h = harness();
+    h.state_mut().session.execute("view.freezePanes", json!({"cell": "A2"})).unwrap();
+    key(&mut h, Key::ArrowDown, CTRL);
+    assert!(!visible(&h, "A2"));
+    for _ in 0..20 {
+        key(&mut h, Key::PageUp, Modifiers::NONE);
+    }
+    assert_eq!(active(&h), CellRef::parse("A1").unwrap());
+    assert_eq!(scroll(&h).y, 0.0, "the scrolled rows are back at the top");
+    assert!(visible(&h, "A2"));
+    // Ctrl+Up from the bottom lands on A1 the same way.
+    key(&mut h, Key::ArrowDown, CTRL);
+    assert!(!visible(&h, "A2"));
+    key(&mut h, Key::ArrowUp, CTRL);
+    assert_eq!(active(&h), CellRef::parse("A1").unwrap());
+    assert!(visible(&h, "A2"));
+}
+
+#[test]
+fn ctrl_left_into_a_frozen_first_column_scrolls_the_columns_beside_it_back() {
+    let mut h = harness();
+    h.state_mut().session.execute("view.freezePanes", json!({"cell": "B1"})).unwrap();
+    key(&mut h, Key::ArrowRight, CTRL);
+    assert!(!visible(&h, "B1"));
+    key(&mut h, Key::ArrowLeft, CTRL);
+    assert_eq!(active(&h), CellRef::parse("A1").unwrap());
+    assert_eq!(scroll(&h).x, 0.0);
+    assert!(visible(&h, "B1"));
+}
+
+#[test]
+fn moving_within_a_frozen_row_leaves_the_scrolled_rows_where_they_are() {
+    // Selecting in row 1 while the rows below are scrolled down (without a reveal, as a click
+    // does), then moving along the frozen row, must not jump the view back to the top.
+    let mut h = harness();
+    h.state_mut().session.execute("view.freezePanes", json!({"cell": "A2"})).unwrap();
+    key(&mut h, Key::ArrowDown, CTRL);
+    let down = scroll(&h).y;
+    assert!(down > 0.0);
+    h.state_mut().session.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    h.run_steps(2);
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(active(&h), CellRef::parse("B1").unwrap());
+    assert_eq!(scroll(&h).y, down, "the view stays scrolled down");
+}
+
+#[test]
+fn alt_page_up_into_a_frozen_first_column_scrolls_the_columns_beside_it_back() {
+    let mut h = harness();
+    h.state_mut().session.execute("view.freezePanes", json!({"cell": "B1"})).unwrap();
+    key(&mut h, Key::ArrowRight, CTRL);
+    assert!(!visible(&h, "B1"));
+    for _ in 0..20 {
+        key(&mut h, Key::PageUp, Modifiers::ALT);
+    }
+    assert_eq!(active(&h), CellRef::parse("A1").unwrap());
+    assert_eq!(scroll(&h).x, 0.0);
+    assert!(visible(&h, "B1"));
+}
+
+#[test]
+fn extending_up_into_a_frozen_top_row_scrolls_the_rows_below_it_back_to_the_top() {
+    let mut h = harness();
+    h.state_mut().session.execute("view.freezePanes", json!({"cell": "A2"})).unwrap();
+    key(&mut h, Key::ArrowDown, CTRL);
+    assert!(!visible(&h, "A2"));
+    key(&mut h, Key::ArrowUp, CTRL_SHIFT);
+    assert_extended(&h, "A200", "A1");
+    assert!(visible(&h, "A2"));
+}
+
+#[test]
+fn other_reveals_onto_a_frozen_cell_leave_the_scrolled_rows_where_they_are() {
+    // Only arrow and paging keys bring the scrolled rows back; selecting a header cell from the
+    // control channel (as Find, Go To or Undo would) keeps the place the user scrolled to.
+    let mut h = harness();
+    h.state_mut().session.execute("view.freezePanes", json!({"cell": "A2"})).unwrap();
+    key(&mut h, Key::ArrowDown, CTRL);
+    let down = scroll(&h).y;
+    control(&mut h, "engine.execute", json!({"command": "selection.set", "params": {"cell": "B1"}}));
+    assert_eq!(active(&h), CellRef::parse("B1").unwrap());
+    assert_eq!(scroll(&h).y, down);
+}
+
+#[test]
+fn pointing_along_a_frozen_row_keeps_the_edited_cell_in_view() {
+    // Editing a formula far down and pointing at header cells with the arrows must not scroll
+    // the cell being edited away.
+    let mut h = harness();
+    h.state_mut().session.execute("view.freezePanes", json!({"cell": "A2"})).unwrap();
+    key(&mut h, Key::ArrowDown, CTRL);
+    let down = scroll(&h).y;
+    h.state_mut().begin_edit(Some("=SUM(".into()), false);
+    h.run_steps(2);
+    let ed = h.state_mut().editor.as_mut().expect("editing");
+    ed.caret = ed.text.chars().count();
+    ed.point_cell = Some(CellRef::parse("B1").unwrap());
+    h.run_steps(2);
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(h.state().editor.as_ref().and_then(|e| e.point_cell), Some(CellRef::parse("C1").unwrap()), "the arrow moved the point");
+    assert_eq!(scroll(&h).y, down);
+    assert!(visible(&h, "A200"), "the edited cell stays in view");
+}
+
+#[test]
+fn down_from_a_frozen_header_row_goes_to_row_2_at_the_top_from_far_down() {
+    // Excel's quick way back to the top: select a cell in the frozen header row while far down,
+    // press Down, and the view jumps to row 2 under the header. Selecting the header cell alone
+    // doesn't scroll.
+    let mut h = harness();
+    h.state_mut().session.execute("view.freezePanes", json!({"cell": "A2"})).unwrap();
+    h.state_mut().session.execute("selection.set", json!({"cell": "A100000"})).unwrap();
+    h.state_mut().grid.ensure_visible = true;
+    h.run_steps(2);
+    assert!(!visible(&h, "A2") && visible(&h, "A100000"));
+    h.state_mut().session.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    h.run_steps(2);
+    assert!(visible(&h, "A100000"));
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(active(&h), CellRef::parse("A2").unwrap());
+    assert_eq!(scroll(&h).y, 0.0);
+    assert!(visible(&h, "A2"));
+}

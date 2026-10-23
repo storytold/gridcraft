@@ -134,10 +134,11 @@ fn vh_lookup(args: &[Arg], vertical: bool) -> R<Value> {
         return Err(*e);
     }
     let idx = num(args, 2)?;
-    if idx < 1.0 {
+    // NaN too: it would pass `idx < 1.0` and become index 0 (#2163).
+    if idx.is_nan() || idx < 1.0 {
         return Err(CellError::Value);
     }
-    let idx = idx.trunc() as usize - 1;
+    let idx = (idx.trunc() as usize).saturating_sub(1);
     let approx = opt_bool(args, 3, true)?;
     let (keys, len) = if vertical { (column(&table, 0), table.cols) } else { (row(&table, 0), table.rows) };
     if idx >= len {

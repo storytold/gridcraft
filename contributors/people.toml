@@ -94,6 +94,9 @@ sync_github_name = false
 [people.bilalmughal]
 sync_github_name = true
 
+[people.tyrel]
+real_name = "Tyrel Haveman"
+
 [people.carminezac]
 real_name = "Carmine Zacchia"
 display_name = "Carmine Zacchia"

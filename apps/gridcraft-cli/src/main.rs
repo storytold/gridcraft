@@ -43,6 +43,8 @@ const USAGE: &str = "usage:
                      cached-value calc oracle + XLSX round-trip fidelity (exit 1 on any difference)
   gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl]
                      [--out FILE] [--print RANGE] [--quiet]
+                     a script line is id={json} or {\"command\": \"id\", \"params\": {…}};
+                     blank lines and lines starting with # or // are skipped
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
@@ -375,6 +377,17 @@ fn parse_command(text: &str) -> Result<Option<(String, Value)>, String> {
     }
     if t.starts_with('{') {
         let v: Value = serde_json::from_str(t).map_err(|e| format!("bad JSON: {e}"))?;
+        // A key this does not read is a mistake, not a comment: `{"command": …, "args": {…}}` and
+        // `{"command": …, "name": "Report"}` ran the command with no parameters at all and the
+        // script still exited 0, so a typo made a valid, wrong workbook (#2256).
+        if let Some(o) = v.as_object() {
+            let mut unknown: Vec<&str> = o.keys().map(String::as_str).filter(|k| !matches!(*k, "command" | "id" | "params")).collect();
+            if !unknown.is_empty() {
+                unknown.sort_unstable();
+                let (plural, list) = (if unknown.len() == 1 { "key" } else { "keys" }, unknown.join("`, `"));
+                return Err(format!("unknown {plural} `{list}`: a line is {{\"command\": \"id\", \"params\": {{…}}}}"));
+            }
+        }
         let id = v.get("command").or_else(|| v.get("id")).and_then(Value::as_str).ok_or("JSON command needs a `command` field")?;
         return Ok(Some((id.to_string(), v.get("params").cloned().unwrap_or_else(|| json!({})))));
     }
@@ -567,6 +580,26 @@ mod tests {
         assert_eq!(parse_command("{\"command\":\"edit.redo\"}").unwrap(), Some(("edit.redo".into(), json!({}))));
         assert_eq!(parse_command("  # comment").unwrap(), None);
         assert!(parse_command("x={bad").is_err());
+        // A key this does not read is a mistake: the command used to run with no parameters and
+        // the script still exited 0, so a typo made a valid, wrong workbook (#2256).
+        for (line, named) in [
+            (r#"{"command":"home.insertSheet","args":{"name":"R"}}"#, "`args`"),
+            (r#"{"command":"home.insertSheet","name":"R"}"#, "`name`"),
+            (r#"{"command":"home.insertSheet","params":{},"note":"why"}"#, "`note`"),
+        ] {
+            let e = parse_command(line).expect_err("refused");
+            assert!(e.contains("unknown key") && e.contains(named), "{line}: {e}");
+            assert!(e.contains(r#"{"command": "id", "params": {…}}"#), "{line}: {e}");
+        }
+        // Several at once are listed in one message, sorted.
+        let e = parse_command(r#"{"command":"x","name":"R","args":{}}"#).expect_err("refused");
+        assert!(e.contains("unknown keys `args`, `name`"), "{e}");
+        // `id` is still the accepted alternative to `command`, and `params` still carries them.
+        assert_eq!(parse_command(r#"{"id":"edit.undo"}"#).unwrap(), Some(("edit.undo".into(), json!({}))));
+        assert_eq!(
+            parse_command(r#"{"command":"home.insertSheet","params":{"name":"R"}}"#).unwrap(),
+            Some(("home.insertSheet".into(), json!({"name": "R"})))
+        );
     }
 
     #[test]

@@ -84,6 +84,9 @@ fn main() {
         }
         i += 1;
     }
+    // Catalog the installed fonts first (the app scans in the background from its first frame), so
+    // the workbook's fonts are drawn in their own faces, not a substitute.
+    let _ = gridcraft_ui_egui::fonts::catalog();
     let mut session = Session::new();
     if let Some(p) = &input {
         session.execute("file.open", json!({"path": p})).expect("open");
@@ -136,7 +139,9 @@ fn main() {
                 app
             },
         );
-    harness.run_steps(8);
+    // The workbook's installed fonts bind once the font scan is done; frames past the first few
+    // apply them, so the snapshot shows them as the app does.
+    harness.run_steps(14);
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");
     eprintln!("wrote {out} ({}x{})", img.width(), img.height());

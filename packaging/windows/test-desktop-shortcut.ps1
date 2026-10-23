@@ -72,10 +72,10 @@ function Invoke-Msi([string] $Name, [string[]] $Arguments) {
       throw "$Name exceeded two minutes; see $log"
     }
     if ($process.ExitCode -ne 0) {
-      if (Test-Path $log) { Get-Content $log -Tail 60 | Write-Host }
+      if (Test-Path $log) { Get-Content $log -Tail 60 }
       throw "$Name exited $($process.ExitCode); see $log"
     }
-    Write-Host "ok $Name"
+    Write-Output "ok $Name"
   } finally {
     $process.Dispose()
   }
@@ -146,7 +146,7 @@ function Uninstall-AsSystem($Package) {
       $info = Get-ScheduledTaskInfo -TaskName $taskName
       if ($info.LastRunTime -ge $started.AddSeconds(-1) -and $task.State -ne 'Running' -and $info.LastTaskResult -ne 267009) {
         Assert-That ($info.LastTaskResult -eq 0) "Cross-account uninstall failed with $($info.LastTaskResult); see $log"
-        Write-Host 'ok uninstall-as-system'
+        Write-Output 'ok uninstall-as-system'
         return
       }
     } while ((Get-Date) -lt $deadline)

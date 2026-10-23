@@ -76,6 +76,10 @@ pub struct Sheet {
     pub show_headings: bool,
     pub show_formulas: bool,
     pub show_zeros: bool,
+    /// The outline's level buttons and brackets (Excel's Show Outline Symbols, Ctrl+8); the
+    /// outline itself stays.
+    #[serde(default = "yes")]
+    pub show_outline_symbols: bool,
     pub right_to_left: bool,
     pub zoom: u16,
     pub cond_formats: Vec<CondFormat>,
@@ -113,6 +117,10 @@ pub struct Sheet {
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
 }
 
+fn yes() -> bool {
+    true
+}
+
 /// Default width of a column and height of a row (pixels at 96 dpi) for the default font.
 pub const DEFAULT_COL_WIDTH: f32 = 64.0;
 pub const DEFAULT_ROW_HEIGHT: f32 = 20.0;
@@ -140,6 +148,7 @@ impl Sheet {
             tab_color: None,
             visibility: Visibility::Visible,
             show_gridlines: true,
+            show_outline_symbols: true,
             show_headings: true,
             show_formulas: false,
             show_zeros: true,

@@ -1768,3 +1768,16 @@ fn a_dynamic_array_of_one_value_still_anchors_a_spill() {
     t.set("E11", "=ROWS(D1#)");
     assert_eq!(t.get("E11"), Value::Error(CellError::Ref));
 }
+
+#[test]
+fn text_before_after_empty_instance_defaults_to_one() {
+    let mut t = T::new();
+    t.set("A1", "=TEXTBEFORE(\"Little Red Riding Hood\",\"red\",,1)");
+    assert_eq!(t.get("A1"), Value::Text("Little ".into()));
+    t.set("A2", "=TEXTAFTER(\"a-b\",\"-\",,,,\"nf\")");
+    assert_eq!(t.get("A2"), Value::Text("b".into()));
+    t.set("A3", "=TEXTAFTER(\"a-b\",\"x\",,,,\"nf\")");
+    assert_eq!(t.get("A3"), Value::Text("nf".into()));
+    t.set("A4", "=TEXTBEFORE(\"a-b\",\"-\",0)");
+    assert_eq!(t.get("A4"), Value::Error(CellError::Value));
+}

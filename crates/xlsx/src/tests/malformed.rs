@@ -331,6 +331,19 @@ fn ordinary_overlapping_column_ranges_keep_last_declaration() {
     assert_eq!(wb.styles.get(last.style.unwrap()).num_fmt.as_str(), "0.00");
 }
 
+/// Show Outline Symbols off (`showOutlineSymbols="0"`) is read and written back.
+#[test]
+fn outline_symbols_flag_round_trips() {
+    let body = r#"<sheetViews><sheetView showOutlineSymbols="0" workbookViewId="0"/></sheetViews><sheetData/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    assert!(!wb.sheet(0).unwrap().show_outline_symbols);
+    let (back, _) = read_xlsx(&crate::write_xlsx(&wb).unwrap()).unwrap();
+    assert!(!back.sheet(0).unwrap().show_outline_symbols);
+    // Absent means shown.
+    let (wb, _) = read_xlsx(&minimal("<sheetData/>", &[], "", "")).unwrap();
+    assert!(wb.sheet(0).unwrap().show_outline_symbols);
+}
+
 #[test]
 fn date_group_items_out_of_range_are_dropped_and_omitted_fields_default() {
     // Month 0, day 0, hour 24 and a missing year match no date: those items are dropped. An omitted

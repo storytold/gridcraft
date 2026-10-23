@@ -184,6 +184,18 @@ mod tests {
     }
 
     #[test]
+    fn struct_ref_column_with_bang() {
+        // A `!` inside the brackets is part of the column name, not a sheet separator.
+        assert_eq!(to_file(&Formula::new("SUM(Table1[Done!])")), "SUM(Table1[Done!])");
+        assert_eq!(text_to_file("=Table1[[#This Row],[a!b]]"), "Table1[[#This Row],[a!b]]");
+        // `Table1[#REF!]` was found by the command-sequence fuzzer (seed 40).
+        for text in ["SUM(Table1[Done!])", "Table1[#REF!]", "Table1[@[x!]]", "Sheet2!A1+Table1[[#All],[a!b]]"] {
+            let f = Formula::new(text);
+            assert_eq!(from_file(&to_file(&f)), f.text);
+        }
+    }
+
+    #[test]
     fn prefixes() {
         assert_eq!(to_file(&Formula::new("XLOOKUP(1,A:A,B:B)+SUM(A1)")), "_xlfn.XLOOKUP(1,A:A,B:B)+SUM(A1)");
         assert_eq!(to_file(&Formula::new("FILTER(A1:A3,B1:B3)")), "_xlfn._xlws.FILTER(A1:A3,B1:B3)");

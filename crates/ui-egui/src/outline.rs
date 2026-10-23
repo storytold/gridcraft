@@ -224,6 +224,10 @@ pub fn layout(geo: &Geo, sh: &Sheet) -> Layout {
 
 /// The button under `p` (logical coordinates), if any.
 pub fn hit(geo: &Geo, sh: &Sheet, p: Pos2) -> Option<Action> {
+    // Hidden symbols (or no outline) leave empty bands: a click on their edge is a cell click.
+    if geo.band_w <= 0.0 && geo.band_h <= 0.0 {
+        return None;
+    }
     let (rows, cols) = bands(geo);
     if !rows.contains(p) && !cols.contains(p) {
         return None;

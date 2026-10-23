@@ -16,7 +16,7 @@ APP_ID=ai.storyteller.gridcraft
 LINUX="$ROOT/packaging/linux"
 
 SKIP_BUILD=0
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     -h | --help) sed -n '2,11p' "$0"; exit 0 ;;
@@ -34,7 +34,7 @@ BASENAME="gridcraft-$VERSION-freebsd-$ARCH"
 
 echo "==> GridCraft $VERSION for FreeBSD $ARCH"
 
-if [ "$SKIP_BUILD" = 0 ]; then
+if [[ "$SKIP_BUILD" = 0 ]]; then
   (cd "$ROOT" && cargo build --release --locked -p gridcraft -p gridcraft-cli)
 fi
 BIN="$CARGO_TARGET_DIR/release"

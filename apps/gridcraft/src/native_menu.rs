@@ -125,7 +125,7 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 ("Unhide Sheet…", "sheet.unhide", None),
                 ("-", "", None),
                 ("Conditional Formatting…", "dialog:manageRules", None),
-                ("Format as Table", "insert.table", None),
+                ("Format as Table", "home.formatAsTable", None),
             ],
         ),
         (

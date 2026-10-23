@@ -1005,7 +1005,31 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Print job submitted: {receipt}" => "Lucrarea de imprimare a fost trimisă: {receipt}",
         "Print failed: {error}" => "Imprimarea a eșuat: {error}",
         "Print failed: the printing worker stopped." => "Imprimarea a eșuat: procesul de imprimare s-a oprit.",
-        "Options|Editing" => "Editing",
+        "Options|Editing" => "Editare",
+        "Duplicate" => "Duplicare",
+        "Rename" => "Redenumire",
+        "Product Information" => "Informații despre produs",
+        "Tab Color" => "Culoare filă",
+        "Select All Sheets" => "Selectare toate foile",
+        "Fit selection" => "Încadrare selecție",
+        "All sheets" => "Toate foile",
+        "Version" => "Versiune",
+        "Unhide…" => "Reafișare…",
+        "Platform" => "Platformă",
+        "Unprotect Sheet…" => "Deprotejare foaie…",
+        "AutoSave: save after every change (workbooks saved to a file)" => {
+            "Salvare automată: salvează după fiecare modificare (registrele salvate într-un fișier)"
+        }
+        "Licence" => "Licență",
+        "Account" => "Cont",
+        "No Color" => "Fără culoare",
+        "Move or Copy…" => "Mutare sau copiere…",
+        "Number Stored as Text" => "Număr stocat ca text",
+        "Select Data…" => "Selectare date…",
+        "Convert to Number" => "Conversie în număr",
+        "Format Chart Area…" => "Formatare zonă diagramă…",
+        "Error checking options" => "Opțiuni de verificare a erorilor",
+        "Paste formulas that refer to the copied cells" => "Lipire formule care fac referire la celulele copiate",
         _ => return None,
     })
 }

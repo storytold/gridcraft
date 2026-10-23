@@ -556,8 +556,41 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
     Ok(out)
 }
 
+thread_local! {
+    /// How many [`ScriptSandbox`]es are alive on this thread.
+    static SCRIPT_SANDBOX: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// While one is alive, [`read_file`] and [`write_file`] on this thread refuse every path: a
+/// stored script's steps run inside one (#2178), so no command reaches the file system from a
+/// script whatever its parameters are called. Dropping it (also on unwind) lifts the refusal.
+pub(crate) struct ScriptSandbox(());
+
+impl ScriptSandbox {
+    pub(crate) fn enter() -> Self {
+        let _ = SCRIPT_SANDBOX.try_with(|c| c.set(c.get().saturating_add(1)));
+        ScriptSandbox(())
+    }
+}
+
+impl Drop for ScriptSandbox {
+    fn drop(&mut self) {
+        let _ = SCRIPT_SANDBOX.try_with(|c| c.set(c.get().saturating_sub(1)));
+    }
+}
+
+/// Refuses file access while a [`ScriptSandbox`] is alive (and, failing closed, while the
+/// thread is being torn down).
+fn script_sandbox_check(path: &str) -> Result<()> {
+    if SCRIPT_SANDBOX.try_with(|c| c.get() > 0).unwrap_or(true) {
+        return Err(EngineError::Other(format!("{path}: scripts can't read or write files")));
+    }
+    Ok(())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
+    script_sandbox_check(path)?;
     let meta = std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     if meta.len() > 2 * 1024 * 1024 * 1024 {
         return Err(EngineError::Other("files larger than 2 GB aren't supported".into()));
@@ -567,11 +600,13 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
 
 #[cfg(target_arch = "wasm32")]
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
+    script_sandbox_check(path)?;
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
+    script_sandbox_check(path)?;
     // Write to a temporary file, then rename: a crash never leaves a half-written workbook.
     let tmp = format!("{path}.sctmp");
     std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| {
@@ -584,6 +619,7 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
 
 #[cfg(target_arch = "wasm32")]
 pub fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
+    script_sandbox_check(path)?;
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
@@ -899,6 +935,32 @@ mod tests {
         write_file(ok.to_str().unwrap(), b"workbook").unwrap();
         assert_eq!(std::fs::read(&ok).unwrap(), b"workbook");
         assert!(!dir.join("Book2.xlsx.sctmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// While a script runs (#2178), file reads and writes are refused whatever command or
+    /// parameter asked for them; nesting and dropping the sandbox restore access.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn script_sandbox_refuses_file_access_until_dropped() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-sandbox-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let existing = dir.join("in.csv");
+        std::fs::write(&existing, b"a,b\n").unwrap();
+        let (existing, out) = (existing.to_string_lossy().to_string(), dir.join("out.xlsx").to_string_lossy().to_string());
+        {
+            let _outer = ScriptSandbox::enter();
+            {
+                let _inner = ScriptSandbox::enter();
+                assert!(read_file(&existing).is_err());
+            }
+            assert!(read_file(&existing).is_err(), "the outer sandbox still holds");
+            assert!(write_file(&out, b"leak").is_err());
+            assert!(!std::path::Path::new(&out).exists());
+        }
+        assert_eq!(read_file(&existing).unwrap(), b"a,b\n");
+        write_file(&out, b"ok").unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

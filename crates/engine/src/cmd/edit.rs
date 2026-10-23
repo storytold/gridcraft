@@ -16,7 +16,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Values",
             [],
             None,
-            "{range?: \"A1\", values: [[...]] (rows of numbers/strings/bools/null; strings starting with = are formulas)}",
+            "{range?: \"A1\", values: [[...]] (rows of numbers/strings/bools/null; strings starting with = are formulas), parse?: bool (default true: a string goes through typed input, so \"05.04.2026\" becomes a date and \"2.500\" a number, by en-US rules; false stores every other string as the text it is, so a dd.mm.yyyy date or a thousands separator survives)}",
             has_doc,
             range_set_values
         ),
@@ -299,6 +299,15 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let start = target_range(s, p)?.start;
     let Some(rows) = p.get("values").and_then(Json::as_array) else { return Err(bad("range.setValues", "missing `values` (array of rows)")) };
+    // A string is run through typed input by default, which reads it with en-US rules: a caller
+    // sending "05.04.2026" from a dd.mm.yyyy export got 4 May, and "2.500" became 2.5, in silence
+    // (#2255). `parse: false` stores a string as the text it is; numbers, booleans and formulas
+    // are unaffected either way.
+    let parse = match p.get("parse") {
+        None | Some(Json::Null) => true,
+        Some(Json::Bool(b)) => *b,
+        Some(other) => return Err(bad("range.setValues", format!("parse {other}: true or false"))),
+    };
     if rows.len() > MAX_ROWS as usize {
         return Err(bad("range.setValues", "too many rows"));
     }
@@ -320,6 +329,17 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                     }),
                     Json::Bool(b) => {
                         Some(Cell { value: Value::Bool(*b), formula: None, style: cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default() })
+                    }
+                    // Text as given: no date or number reading, and a leading `'` is part of the
+                    // text rather than the marker that makes it text. A formula is still a
+                    // formula, which is what the ticket asks for and what `=` means in a cell.
+                    Json::String(text) if !parse && !text.starts_with('=') => {
+                        let mut style = cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
+                        // Line breaks still turn on Wrap Text, as typed input does.
+                        if text.contains('\n') && !cx.wb.styles.get(style).align.wrap {
+                            style = cx.wb.styles.derive(style, |s| s.align.wrap = true);
+                        }
+                        Some(Cell { value: Value::Text(text.as_str().into()), formula: None, style })
                     }
                     _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,
                 };
@@ -1767,6 +1787,55 @@ mod tests {
         assert_eq!(get(&mut s, "A3")["value"], json!(true));
         assert_eq!(get(&mut s, "A4")["value"], json!(200.5));
         assert!(s.execute("cell.set", json!({"cell": "A5"})).is_err());
+    }
+
+    /// Every string in `values` went through typed input, read with en-US rules, in silence: a
+    /// caller sending "05.04.2026" from a dd.mm.yyyy export stored 4 May, "2.500" became 2.5 and
+    /// "4.25 %" became a percentage (#2255). `parse: false` stores a string as the text it is.
+    #[test]
+    fn set_values_can_store_strings_as_the_text_they_are() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let strings = ["05.04.2026", "02/11/2026", "2.500", "4.25 %", "=1+1", "'keep"];
+        let row: Vec<Json> = strings.iter().map(|v| json!(v)).collect();
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+
+        // The default is unchanged: the dates swap, the thousands separator is a decimal point.
+        s.execute("range.setValues", json!({"range": "A1", "values": [row.clone()]})).unwrap();
+        assert_eq!(get(&mut s, "A1")["text"], "5/4/2026", "dd.mm.yyyy read as mm.dd.yyyy");
+        assert_eq!(get(&mut s, "C1")["value"], json!(2.5), "\"2.500\" read as a decimal");
+        assert_eq!(get(&mut s, "D1")["value"], json!(0.0425), "\"4.25 %\" read as a percentage");
+
+        // With `parse: false` each string is the text it was given, and a formula is still a
+        // formula.
+        s.execute("range.setValues", json!({"range": "A3", "parse": false, "values": [row.clone()]})).unwrap();
+        for (i, want) in strings.iter().enumerate() {
+            let cell = format!("{}3", (b'A' + i as u8) as char);
+            let got = get(&mut s, &cell);
+            if *want == "=1+1" {
+                assert_eq!(got["value"], json!(2.0), "{cell} is still a formula: {got}");
+                assert_eq!(got["formula"], "=1+1", "{got}");
+            } else {
+                assert_eq!(got["value"], json!(*want), "{cell} is the text it was given: {got}");
+                assert!(got["formula"].is_null(), "{cell} is not a formula: {got}");
+            }
+        }
+        // Numbers and booleans are untouched either way.
+        s.execute("range.setValues", json!({"range": "A5", "parse": false, "values": [[12.5, true, null]]})).unwrap();
+        assert_eq!(get(&mut s, "A5")["value"], json!(12.5));
+        assert_eq!(get(&mut s, "B5")["value"], json!(true));
+        assert_eq!(get(&mut s, "C5")["text"], "");
+        // `parse` is a flag, and anything else is a usage error rather than a quiet default.
+        s.execute("range.setValues", json!({"range": "A7", "parse": true, "values": [["2.500"]]})).unwrap();
+        assert_eq!(get(&mut s, "A7")["value"], json!(2.5));
+        assert!(s.execute("range.setValues", json!({"range": "A8", "parse": "no", "values": [["x"]]})).is_err());
+        assert!(s.execute("range.setValues", json!({"range": "A8", "parse": 0, "values": [["x"]]})).is_err());
+        // A line break still turns on Wrap Text.
+        s.execute("range.setValues", json!({"range": "A9", "parse": false, "values": [["one\ntwo"]]})).unwrap();
+        assert_eq!(get(&mut s, "A9")["value"], json!("one\ntwo"));
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert!(d.wb.styles.get(sh.style_id(CellRef::parse("A9").unwrap())).align.wrap);
     }
 
     #[test]

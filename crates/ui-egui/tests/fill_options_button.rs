@@ -1,0 +1,211 @@
+//! After a left-drag of the fill handle, the Auto Fill Options button redoes the fill as Copy Cells,
+//! Fill Series, Fill Formatting Only or Fill Without Formatting (#1403).
+
+use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
+use egui_kittest::kittest::Queryable;
+use gridcraft_engine::Session;
+use gridcraft_engine::core::{CellRef, Value};
+use gridcraft_ui_egui::{SheetApp, grid::Geo};
+use serde_json::json;
+
+type Harness = egui_kittest::Harness<'static, SheetApp>;
+
+fn harness(setup: impl FnOnce(&mut Session)) -> Harness {
+    let mut session = Session::new();
+    session.new_workbook();
+    setup(&mut session);
+    let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        SheetApp::new(session, Default::default()),
+    );
+    h.run_steps(4);
+    h
+}
+
+/// B1:B2 holds 1, 2 and is selected.
+fn one_two(s: &mut Session) {
+    s.execute("range.setValues", json!({"range": "B1", "values": [[1], [2]]})).unwrap();
+    s.execute("selection.set", json!({"range": "B1:B2"})).unwrap();
+}
+
+fn corner(h: &Harness, cell: &str) -> Pos2 {
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+    geo.mirror_pos(geo.cell_rect(sheet, CellRef::parse(cell).unwrap()).right_bottom() - vec2(1.0, 1.0))
+}
+
+fn center(h: &Harness, cell: &str) -> Pos2 {
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+    geo.screen_cell_rect(sheet, CellRef::parse(cell).unwrap()).center()
+}
+
+fn press(h: &mut Harness, pos: Pos2, button: PointerButton) {
+    h.input_mut().events.extend([Event::PointerMoved(pos), Event::PointerButton { pos, button, pressed: true, modifiers: Modifiers::NONE }]);
+    h.step();
+}
+
+fn move_to(h: &mut Harness, from: Pos2, to: Pos2) {
+    for i in 1..=10 {
+        h.input_mut().events.push(Event::PointerMoved(from + (to - from) * (i as f32 / 10.0)));
+        h.step();
+    }
+}
+
+fn release(h: &mut Harness, pos: Pos2, button: PointerButton) {
+    h.input_mut().events.push(Event::PointerButton { pos, button, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+}
+
+/// Drags the handle of the current selection (whose bottom-right cell is `from`) to `to`.
+fn drag_handle(h: &mut Harness, from: &str, to: &str, button: PointerButton) {
+    let (start, end) = (corner(h, from), center(h, to));
+    press(h, start, button);
+    move_to(h, start, end);
+    release(h, end, button);
+}
+
+fn value(h: &Harness, cell: &str) -> Value {
+    h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::parse(cell).unwrap())
+}
+
+fn values(h: &Harness, cells: &[&str]) -> Vec<Value> {
+    cells.iter().map(|c| value(h, c)).collect()
+}
+
+fn bold(h: &Harness, cell: &str) -> bool {
+    let d = h.state().session.active().unwrap();
+    let sh = d.wb.active().unwrap();
+    d.wb.styles.get(sh.style_id(CellRef::parse(cell).unwrap())).font.bold
+}
+
+fn italic(h: &Harness, cell: &str) -> bool {
+    let d = h.state().session.active().unwrap();
+    let sh = d.wb.active().unwrap();
+    d.wb.styles.get(sh.style_id(CellRef::parse(cell).unwrap())).font.italic
+}
+
+fn selection(h: &Harness) -> String {
+    h.state().session.active().unwrap().selection.a1()
+}
+
+fn n(x: f64) -> Value {
+    Value::Number(x)
+}
+
+#[test]
+fn left_drag_shows_the_auto_fill_options_button() {
+    let mut h = harness(one_two);
+    assert!(h.query_by_label("Auto Fill Options").is_none());
+    drag_handle(&mut h, "B2", "B6", PointerButton::Primary);
+
+    assert_eq!(values(&h, &["B3", "B6"]), [n(3.0), n(6.0)]);
+    assert!(h.query_by_label("Auto Fill Options").is_some());
+}
+
+#[test]
+fn copy_cells_replaces_the_series_the_drag_made() {
+    let mut h = harness(one_two);
+    let steps_before = h.state().session.active().unwrap().undo.len();
+    drag_handle(&mut h, "B2", "B6", PointerButton::Primary);
+    h.get_by_label("Auto Fill Options").click();
+    h.run_steps(3);
+    h.get_by_label("Copy Cells").click();
+    h.run_steps(3);
+
+    assert_eq!(values(&h, &["B3", "B4", "B5", "B6"]), [n(1.0), n(2.0), n(1.0), n(2.0)]);
+    assert_eq!(selection(&h), "B1:B6");
+    assert_eq!(h.state().session.active().unwrap().undo.len(), steps_before + 1, "one fill step, not two");
+}
+
+#[test]
+fn a_lone_number_copies_on_drag_and_counts_up_with_fill_series() {
+    let mut h = harness(|s| {
+        s.execute("cell.set", json!({"cell": "B1", "input": "5"})).unwrap();
+        s.execute("selection.set", json!({"cell": "B1"})).unwrap();
+    });
+    drag_handle(&mut h, "B1", "B4", PointerButton::Primary);
+    assert_eq!(values(&h, &["B2", "B3", "B4"]), [n(5.0), n(5.0), n(5.0)]);
+    h.get_by_label("Auto Fill Options").click();
+    h.run_steps(3);
+    h.get_by_label("Fill Series").click();
+    h.run_steps(3);
+
+    assert_eq!(values(&h, &["B2", "B3", "B4"]), [n(6.0), n(7.0), n(8.0)]);
+}
+
+fn formatted(s: &mut Session) {
+    s.execute("range.setValues", json!({"range": "B1", "values": [[1], [2], [null], [9]]})).unwrap();
+    s.execute("home.bold", json!({"range": "B1:B2", "on": true})).unwrap();
+    s.execute("home.italic", json!({"range": "B4", "on": true})).unwrap();
+    s.execute("selection.set", json!({"range": "B1:B2"})).unwrap();
+}
+
+#[test]
+fn fill_without_formatting_keeps_the_targets_formats() {
+    let mut h = harness(formatted);
+    drag_handle(&mut h, "B2", "B4", PointerButton::Primary);
+    h.get_by_label("Auto Fill Options").click();
+    h.run_steps(3);
+    h.get_by_label("Fill Without Formatting").click();
+    h.run_steps(3);
+
+    assert_eq!(values(&h, &["B3", "B4"]), [n(3.0), n(4.0)]);
+    assert!(!bold(&h, "B3") && !bold(&h, "B4"));
+    assert!(italic(&h, "B4"));
+}
+
+#[test]
+fn the_button_goes_away_once_the_selection_moves() {
+    let mut h = harness(one_two);
+    drag_handle(&mut h, "B2", "B6", PointerButton::Primary);
+    assert!(h.query_by_label("Auto Fill Options").is_some());
+    let away = center(&h, "E9");
+    h.input_mut().events.push(Event::PointerMoved(away));
+    h.input_mut().events.push(Event::PointerButton { pos: away, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.input_mut().events.push(Event::PointerButton { pos: away, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+
+    assert!(h.query_by_label("Auto Fill Options").is_none());
+}
+
+#[test]
+fn right_drag_makes_no_button() {
+    let mut h = harness(one_two);
+    drag_handle(&mut h, "B2", "B6", PointerButton::Secondary);
+    assert!(h.query_by_label("Auto Fill Options").is_none());
+}
+
+#[test]
+fn the_button_goes_away_once_the_workbook_changes() {
+    let mut h = harness(one_two);
+    drag_handle(&mut h, "B2", "B6", PointerButton::Primary);
+    assert!(h.query_by_label("Auto Fill Options").is_some());
+    h.state_mut().session.execute("cell.set", json!({"cell": "D1", "input": "x"})).unwrap();
+    h.run_steps(3);
+
+    assert_eq!(selection(&h), "B1:B6", "the selection did not move");
+    assert!(h.query_by_label("Auto Fill Options").is_none(), "its undo would take the unrelated edit with it");
+}
+
+#[test]
+fn the_button_stays_inside_the_grid_on_a_right_to_left_sheet() {
+    let mut h = harness(|s| {
+        one_two(s);
+        s.execute("view.rightToLeft", json!({"on": true})).unwrap();
+    });
+    drag_handle(&mut h, "B2", "B6", PointerButton::Primary);
+
+    let button = h.get_by_label("Auto Fill Options").rect();
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+    assert!(geo.cells.contains_rect(button), "{button:?} outside {:?}", geo.cells);
+    let filled = geo.screen_cell_rect(sheet, CellRef::parse("B6").unwrap());
+    assert!(button.center().x < filled.left() && button.top() >= filled.bottom() - 1.0, "below-left of the mirrored range's corner");
+}

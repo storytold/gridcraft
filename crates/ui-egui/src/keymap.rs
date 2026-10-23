@@ -223,9 +223,11 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
             let width = ((geo.cells.width() - geo.frozen_w) / geo.z).max(1.0);
             let cols = (width / sh.default_col_width.max(1.0)).floor().max(1.0) as i64;
             let dc = if shortcut == Shortcut::ScreenRight { cols } else { -cols };
+            let from = app.session.active().map(|d| if m.shift { d.selection.moving_end() } else { d.selection.active });
             let _ = app.session.run("selection.move", json!({"dr": 0, "dc": dc, "extend": m.shift}));
             app.grid.ensure_visible = true;
             app.grid.reveal_moving_end = m.shift;
+            app.grid.reveal_from = from;
         }
         Shortcut::Edit => app.begin_edit(None, false),
         Shortcut::ContextMenu => app.grid.context_menu = Some(geo.cell_rect(sh, active).center()),

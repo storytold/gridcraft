@@ -1207,7 +1207,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         }
                     });
                 }
-                "macros" => macros(ui, &mut d),
+                "macros" => macros(app, ui, &mut d),
                 "statistics" | "accessibility" | "errorChecking" | "evaluateFormula" | "comments" => {
                     let r = if d.name == "comments" {
                         app.session.active().and_then(|doc| doc.wb.active().map(|s| json!(s.comments.iter().map(|(c, m)| json!({"cell": c.a1(), "author": m.author, "text": m.text})).collect::<Vec<_>>())))
@@ -1753,13 +1753,24 @@ fn about(ui: &mut egui::Ui, d: &mut Dialog) {
 /// The Macros dialog: lists GridCraft's own recorded scripts and (if the file carries one) the
 /// preserved VBA project. Mirrors Excel's Developer ▸ Macros list, but is honest that VBA is
 /// preserved and not executed.
-fn macros(ui: &mut egui::Ui, d: &mut Dialog) {
+fn macros(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     ui.label("Automation in this workbook. GridCraft runs its own scripts; a file's VBA project is preserved but not executed.");
     ui.add_space(6.0);
     let items: Vec<Json> = d.result.as_ref().and_then(Json::as_array).cloned().unwrap_or_default();
     if items.is_empty() {
         ui.weak("This workbook has no scripts or macros.");
         return;
+    }
+    // Scripts that came with a file stay disabled until the user trusts the workbook (#2178).
+    if items.iter().any(|it| it.get("trusted").and_then(Json::as_bool) == Some(false)) {
+        ui.horizontal(|ui| {
+            ui.weak("Scripts in this workbook came from a file and are disabled.");
+            if ui.button("Trust Scripts").on_hover_text("Let this workbook's scripts run for the rest of this session").clicked() {
+                let _ = app.run("automate.trustScripts", json!({"trusted": true}));
+                d.result = app.session.run("view.macros", json!({})).ok();
+            }
+        });
+        ui.add_space(6.0);
     }
     egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
         for it in &items {

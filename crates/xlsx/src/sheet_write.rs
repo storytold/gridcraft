@@ -172,6 +172,9 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     if !sheet.show_zeros {
         s.push_str(" showZeros=\"0\"");
     }
+    if !sheet.show_outline_symbols {
+        s.push_str(" showOutlineSymbols=\"0\"");
+    }
     if sheet.right_to_left {
         s.push_str(" rightToLeft=\"1\"");
     }
