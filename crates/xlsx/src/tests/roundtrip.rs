@@ -377,6 +377,8 @@ fn sample() -> Workbook {
         text: "box".into(),
         format: ShapeFormat {
             no_line: true,
+            flip_h: false,
+            flip_v: false,
             font_size: Some(20.0),
             bold: true,
             italic: true,
@@ -1456,4 +1458,60 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     let t = b.tables.first().expect("the table survived");
     assert!(t.filter.is_empty(), "the criteria landed on the wrong table column: {:?}", t.filter);
     assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
+}
+
+#[test]
+fn ink_to_shape_presets_round_trip() {
+    let kinds = [
+        ShapeKind::Diamond,
+        ShapeKind::Parallelogram,
+        ShapeKind::Trapezoid,
+        ShapeKind::Pentagon,
+        ShapeKind::Hexagon,
+        ShapeKind::RightTriangle,
+        ShapeKind::BlockArrow,
+        ShapeKind::ArrowDouble,
+    ];
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        for (i, kind) in kinds.iter().enumerate() {
+            s.shapes.push(Shape {
+                id: i as u32 + 1,
+                kind: *kind,
+                anchor: Anchor { cell: at("A1"), dx: i as f32 * 80.0, dy: 0.0, width: 64.0, height: 40.0, mode: AnchorMode::Absolute },
+                fill: Color::Rgb(0x4472C4),
+                line: Color::Rgb(0x000000),
+                text: String::new(),
+                format: Default::default(),
+            });
+        }
+    }
+    let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let got: Vec<ShapeKind> = back.sheets[0].shapes.iter().map(|s| s.kind).collect();
+    assert_eq!(got, kinds);
+}
+
+/// A line or arrow's direction is its `a:xfrm flipH`/`flipV`: a right-to-left arrow saved without
+/// them would open pointing right.
+#[test]
+fn flipped_shapes_keep_their_mirroring_round_trip() {
+    let mut wb = Workbook::new();
+    wb.sheet_mut(0).unwrap().shapes.push(Shape {
+        id: 1,
+        kind: ShapeKind::Arrow,
+        anchor: Anchor { cell: at("A1"), dx: 10.0, dy: 20.0, width: 120.0, height: 0.0, mode: AnchorMode::Absolute },
+        fill: Color::Auto,
+        line: Color::Rgb(0x000000),
+        text: String::new(),
+        format: ShapeFormat { flip_h: true, ..Default::default() },
+    });
+    let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let sh = &back.sheets[0].shapes[0];
+    assert_eq!(sh.kind, ShapeKind::Arrow);
+    assert!(sh.format.flip_h, "the mirroring was lost on save");
+    assert!(!sh.format.flip_v);
+    assert_eq!(sh.anchor.height, 0.0);
 }

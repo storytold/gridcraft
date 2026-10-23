@@ -1351,28 +1351,27 @@ fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block) 
         let fill = rgb_of(shp.fill, wb);
         let line = rgb_of(shp.line, wb).filter(|_| !shp.format.no_line).map(|c| (c, (0.75 * b.k).max(0.25)));
         match shp.kind {
-            ShapeKind::Ellipse => {
-                let pts: Vec<[f32; 2]> = (0..72)
-                    .map(|i| {
-                        let a = i as f32 / 72.0 * std::f32::consts::TAU;
-                        [x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()]
-                    })
-                    .collect();
-                pg.polygon(&pts, fill, line);
-            }
-            ShapeKind::Triangle => pg.polygon(&[[x + w / 2.0, y], [x + w, y + h], [x, y + h]], fill, line),
             ShapeKind::Line | ShapeKind::Arrow => {
                 let c = line.map(|l| l.0).or(fill).unwrap_or([0, 0, 0]);
-                pg.stroke_line(x, y, x + w, y + h, (1.0 * b.k).max(0.3), c);
+                // Flips mirror the preset inside its box, so the arrow points the way it was drawn.
+                let [x0, y0] = shp.format.mirror_point(x, y, w, h, [x, y]);
+                let [x1, y1] = shp.format.mirror_point(x, y, w, h, [x + w, y + h]);
+                pg.stroke_line(x0, y0, x1, y1, (1.0 * b.k).max(0.3), c);
                 if shp.kind == ShapeKind::Arrow {
-                    let ang = h.atan2(w);
+                    let ang = (y1 - y0).atan2(x1 - x0);
                     let al = 8.0 * b.k;
-                    let p = |da: f32| [x + w - al * (ang + da).cos(), y + h - al * (ang + da).sin()];
-                    pg.polygon(&[[x + w, y + h], p(0.4), p(-0.4)], Some(c), None);
+                    let p = |da: f32| [x1 - al * (ang + da).cos(), y1 - al * (ang + da).sin()];
+                    pg.polygon(&[[x1, y1], p(0.4), p(-0.4)], Some(c), None);
                 }
             }
             _ => {
-                pg.polygon(&[[x, y], [x + w, y], [x + w, y + h], [x, y + h]], fill, line);
+                if let Some(mut pts) = preset_outline(shp.kind, x, y, w, h) {
+                    // An imported flipped shape draws its mirrored vertices, like Excel.
+                    mirror_outline(&shp.format, x, y, w, h, &mut pts);
+                    pg.polygon(&pts, fill, line);
+                } else {
+                    pg.polygon(&[[x, y], [x + w, y], [x + w, y + h], [x, y + h]], fill, line);
+                }
             }
         }
         if !shp.text.is_empty() {
@@ -1448,6 +1447,62 @@ fn draw_headings(pg: &mut Page, b: &Block, col_heads: bool, row_heads: bool, at:
             let tw = gridcraft_pdf::text_width(Font::Helvetica, fsize, &t);
             pg.text(x + (size.0 - tw) / 2.0, y0 + (y1 - y0) / 2.0 + fsize * 0.35, fsize, Font::Helvetica, [0x40, 0x40, 0x40], &t);
         }
+    }
+}
+
+/// A preset shape's outline in the box (`x`, `y`, `w`, `h`), before the shape's flips are
+/// applied. `None` for the presets drawn as a plain rectangle.
+fn preset_outline(kind: ShapeKind, x: f32, y: f32, w: f32, h: f32) -> Option<Vec<[f32; 2]>> {
+    Some(match kind {
+        ShapeKind::Ellipse => (0..72)
+            .map(|i| {
+                let a = i as f32 / 72.0 * std::f32::consts::TAU;
+                [x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()]
+            })
+            .collect(),
+        ShapeKind::Triangle => vec![[x + w / 2.0, y], [x + w, y + h], [x, y + h]],
+        ShapeKind::RightTriangle => vec![[x, y + h], [x + w, y + h], [x, y]],
+        ShapeKind::Diamond => vec![[x + w / 2.0, y], [x + w, y + h / 2.0], [x + w / 2.0, y + h], [x, y + h / 2.0]],
+        ShapeKind::Parallelogram => vec![[x + w / 4.0, y], [x + w, y], [x + 3.0 * w / 4.0, y + h], [x, y + h]],
+        ShapeKind::Trapezoid => vec![[x + w / 5.0, y], [x + 4.0 * w / 5.0, y], [x + w, y + h], [x, y + h]],
+        ShapeKind::Pentagon => (0..5)
+            .map(|i| {
+                let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::TAU / 5.0;
+                [x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()]
+            })
+            .collect(),
+        ShapeKind::Hexagon => {
+            vec![[x + w / 4.0, y], [x + 3.0 * w / 4.0, y], [x + w, y + h / 2.0], [x + 3.0 * w / 4.0, y + h], [x + w / 4.0, y + h], [x, y + h / 2.0]]
+        }
+        ShapeKind::BlockArrow => vec![
+            [x, y + 0.28 * h],
+            [x + 0.62 * w, y + 0.28 * h],
+            [x + 0.62 * w, y],
+            [x + w, y + h / 2.0],
+            [x + 0.62 * w, y + h],
+            [x + 0.62 * w, y + 0.72 * h],
+            [x, y + 0.72 * h],
+        ],
+        ShapeKind::ArrowDouble => vec![
+            [x, y + h / 2.0],
+            [x + 0.22 * w, y + 0.18 * h],
+            [x + 0.22 * w, y + 0.39 * h],
+            [x + 0.78 * w, y + 0.39 * h],
+            [x + 0.78 * w, y + 0.18 * h],
+            [x + w, y + h / 2.0],
+            [x + 0.78 * w, y + 0.82 * h],
+            [x + 0.78 * w, y + 0.61 * h],
+            [x + 0.22 * w, y + 0.61 * h],
+            [x + 0.22 * w, y + 0.82 * h],
+        ],
+        _ => return None,
+    })
+}
+
+/// Applies a shape's flips to an outline in the box (`x`, `y`, `w`, `h`).
+fn mirror_outline(f: &ShapeFormat, x: f32, y: f32, w: f32, h: f32, pts: &mut [[f32; 2]]) {
+    for q in pts {
+        *q = f.mirror_point(x, y, w, h, *q);
     }
 }
 
@@ -1834,6 +1889,22 @@ mod tests {
     }
     fn contains(hay: &[u8], needle: &str) -> bool {
         hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+    }
+
+    #[test]
+    fn flipped_presets_are_mirrored_when_printed() {
+        // Right triangle: (left, bottom), (right, bottom), (left, top).
+        let mut pts = preset_outline(ShapeKind::RightTriangle, 0.0, 0.0, 100.0, 60.0).unwrap();
+        assert_eq!(pts, [[0.0, 60.0], [100.0, 60.0], [0.0, 0.0]]);
+        let flip_h = ShapeFormat { flip_h: true, ..Default::default() };
+        mirror_outline(&flip_h, 0.0, 0.0, 100.0, 60.0, &mut pts);
+        assert_eq!(pts, [[100.0, 60.0], [0.0, 60.0], [100.0, 0.0]], "flipH moves the right angle to the right");
+        // The concave block arrow's head flips over a horizontal axis.
+        let mut arrow = preset_outline(ShapeKind::BlockArrow, 0.0, 0.0, 100.0, 50.0).unwrap();
+        let flip_v = ShapeFormat { flip_v: true, ..Default::default() };
+        mirror_outline(&flip_v, 0.0, 0.0, 100.0, 50.0, &mut arrow);
+        assert_eq!(arrow[1], [62.0, 50.0 - 14.0], "the upper shaft edge moves to the lower one");
+        assert_eq!(arrow[2], [62.0, 50.0], "the head's top corner moves to the bottom");
     }
 
     #[test]

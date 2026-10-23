@@ -4,7 +4,7 @@
 use egui::epaint::{PathShape, PathStroke};
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_chart::{HAlign, Prim, VAlign};
-use gridcraft_engine::model::{Anchor, ShapeKind, Sheet, Workbook};
+use gridcraft_engine::model::{Anchor, ShapeFormat, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
 use crate::grid::Geo;
@@ -286,18 +286,6 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                 p.rect_filled(r, 10.0 * geo.z, fill);
                 p.rect_stroke(r, 10.0 * geo.z, Stroke::new(1.0, line), StrokeKind::Inside);
             }
-            ShapeKind::Ellipse => {
-                let pts: Vec<Pos2> = (0..64)
-                    .map(|i| {
-                        let a = i as f32 / 64.0 * std::f32::consts::TAU;
-                        pos2(r.center().x + r.width() / 2.0 * a.cos(), r.center().y + r.height() / 2.0 * a.sin())
-                    })
-                    .collect();
-                p.add(PathShape::convex_polygon(pts, fill, Stroke::new(1.0, line)));
-            }
-            ShapeKind::Triangle => {
-                p.add(PathShape::convex_polygon(vec![pos2(r.center().x, r.top()), r.right_bottom(), r.left_bottom()], fill, Stroke::new(1.0, line)));
-            }
             ShapeKind::Ink => {
                 let w = gridcraft_engine::cmd::draw::ink_width(sp) * geo.z;
                 let pts: Vec<Pos2> =
@@ -315,12 +303,24 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
                 label = false;
             }
             ShapeKind::Line | ShapeKind::Arrow => {
-                p.line_segment([r.left_top(), r.right_bottom()], Stroke::new(2.0, line));
+                // The preset runs from the box's top-left corner; flips mirror it inside the
+                // box, which is how a line or arrow turns around without a rotation.
+                let (a, b) = (mirror(&sp.format, r, pos2(r.left(), r.top())), mirror(&sp.format, r, pos2(r.right(), r.bottom())));
+                p.line_segment([a, b], Stroke::new(2.0, line));
                 if sp.kind == ShapeKind::Arrow {
-                    let d = (r.right_bottom() - r.left_top()).normalized();
+                    let d = (b - a).normalized();
                     let n = vec2(-d.y, d.x);
-                    let tip = r.right_bottom();
-                    p.add(PathShape::convex_polygon(vec![tip, tip - d * 10.0 + n * 5.0, tip - d * 10.0 - n * 5.0], line, Stroke::NONE));
+                    p.add(PathShape::convex_polygon(vec![b, b - d * 10.0 + n * 5.0, b - d * 10.0 - n * 5.0], line, Stroke::NONE));
+                }
+            }
+            // The remaining presets are polygons: egui fills convex paths only, so each is drawn
+            // as convex pieces plus one outline, with every vertex mirrored by the shape's flips.
+            _ => {
+                if let Some(geo) = preset_geometry(sp.kind, r, &sp.format) {
+                    for piece in geo.pieces {
+                        p.add(PathShape::convex_polygon(piece, fill, Stroke::NONE));
+                    }
+                    p.add(PathShape::closed_line(geo.outline, Stroke::new(1.0, line)));
                 }
             }
         }
@@ -392,6 +392,120 @@ pub struct SlicerLayout {
     pub clear: Rect,
     /// One rect per value tile, in order.
     pub tiles: Vec<Rect>,
+}
+
+/// Mirrors `q` inside `r` when the shape's transform flips it (`a:xfrm flipH`/`flipV`).
+fn mirror(f: &ShapeFormat, r: Rect, q: Pos2) -> Pos2 {
+    let [x, y] = f.mirror_point(r.left(), r.top(), r.width(), r.height(), [q.x, q.y]);
+    pos2(x, y)
+}
+
+/// A preset shape's convex fill pieces and its full outline, mirrored inside `r` by `f`.
+struct PresetGeometry {
+    pieces: Vec<Vec<Pos2>>,
+    outline: Vec<Pos2>,
+}
+
+/// The geometry of a polygon preset inside `r`, with every vertex mirrored by the shape's flips
+/// so an imported flipped preset draws as the file says. `None` for presets painted as their own
+/// primitives (rectangles, text boxes, lines, arrows, ink and icons).
+fn preset_geometry(kind: ShapeKind, r: Rect, f: &ShapeFormat) -> Option<PresetGeometry> {
+    let m = |pts: Vec<Pos2>| pts.into_iter().map(|q| mirror(f, r, q)).collect::<Vec<_>>();
+    let single = |pts: Vec<Pos2>| {
+        let outline = m(pts);
+        PresetGeometry { pieces: vec![outline.clone()], outline }
+    };
+    let pts: Vec<Pos2> = match kind {
+        ShapeKind::Ellipse => (0..64)
+            .map(|i| {
+                let a = i as f32 / 64.0 * std::f32::consts::TAU;
+                pos2(r.center().x + r.width() / 2.0 * a.cos(), r.center().y + r.height() / 2.0 * a.sin())
+            })
+            .collect(),
+        ShapeKind::Triangle => vec![pos2(r.center().x, r.top()), r.right_bottom(), r.left_bottom()],
+        ShapeKind::RightTriangle => vec![r.left_bottom(), r.right_bottom(), r.left_top()],
+        ShapeKind::Diamond => {
+            vec![pos2(r.center().x, r.top()), pos2(r.right(), r.center().y), pos2(r.center().x, r.bottom()), pos2(r.left(), r.center().y)]
+        }
+        ShapeKind::Parallelogram => vec![
+            pos2(r.left() + r.width() * 0.25, r.top()),
+            pos2(r.right(), r.top()),
+            pos2(r.right() - r.width() * 0.25, r.bottom()),
+            pos2(r.left(), r.bottom()),
+        ],
+        ShapeKind::Trapezoid => vec![
+            pos2(r.left() + r.width() * 0.2, r.top()),
+            pos2(r.right() - r.width() * 0.2, r.top()),
+            pos2(r.right(), r.bottom()),
+            pos2(r.left(), r.bottom()),
+        ],
+        ShapeKind::Pentagon => (0..5)
+            .map(|i| {
+                let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::TAU / 5.0;
+                pos2(r.center().x + r.width() / 2.0 * a.cos(), r.center().y + r.height() / 2.0 * a.sin())
+            })
+            .collect(),
+        ShapeKind::Hexagon => vec![
+            pos2(r.left() + r.width() * 0.25, r.top()),
+            pos2(r.right() - r.width() * 0.25, r.top()),
+            pos2(r.right(), r.center().y),
+            pos2(r.right() - r.width() * 0.25, r.bottom()),
+            pos2(r.left() + r.width() * 0.25, r.bottom()),
+            pos2(r.left(), r.center().y),
+        ],
+        ShapeKind::BlockArrow => {
+            let (w, h) = (r.width(), r.height());
+            // egui fills convex paths only, so the concave arrow is a shaft and a head.
+            let shaft = vec![
+                pos2(r.left(), r.center().y - h * 0.22),
+                pos2(r.left() + w * 0.62, r.center().y - h * 0.22),
+                pos2(r.left() + w * 0.62, r.center().y + h * 0.22),
+                pos2(r.left(), r.center().y + h * 0.22),
+            ];
+            let head = vec![pos2(r.left() + w * 0.62, r.top()), pos2(r.right(), r.center().y), pos2(r.left() + w * 0.62, r.bottom())];
+            let outline = vec![
+                pos2(r.left(), r.center().y - h * 0.22),
+                pos2(r.left() + w * 0.62, r.center().y - h * 0.22),
+                pos2(r.left() + w * 0.62, r.top()),
+                pos2(r.right(), r.center().y),
+                pos2(r.left() + w * 0.62, r.bottom()),
+                pos2(r.left() + w * 0.62, r.center().y + h * 0.22),
+                pos2(r.left(), r.center().y + h * 0.22),
+            ];
+            return Some(PresetGeometry { pieces: vec![m(shaft), m(head)], outline: m(outline) });
+        }
+        ShapeKind::ArrowDouble => {
+            let (w, h) = (r.width(), r.height());
+            let shaft = vec![
+                pos2(r.left() + w * 0.22, r.center().y - h * 0.11),
+                pos2(r.right() - w * 0.22, r.center().y - h * 0.11),
+                pos2(r.right() - w * 0.22, r.center().y + h * 0.11),
+                pos2(r.left() + w * 0.22, r.center().y + h * 0.11),
+            ];
+            let left_head =
+                vec![pos2(r.left(), r.center().y), pos2(r.left() + w * 0.22, r.top() + h * 0.18), pos2(r.left() + w * 0.22, r.bottom() - h * 0.18)];
+            let right_head = vec![
+                pos2(r.right(), r.center().y),
+                pos2(r.right() - w * 0.22, r.top() + h * 0.18),
+                pos2(r.right() - w * 0.22, r.bottom() - h * 0.18),
+            ];
+            let outline = vec![
+                pos2(r.left(), r.center().y),
+                pos2(r.left() + w * 0.22, r.top() + h * 0.18),
+                pos2(r.left() + w * 0.22, r.center().y - h * 0.11),
+                pos2(r.right() - w * 0.22, r.center().y - h * 0.11),
+                pos2(r.right() - w * 0.22, r.top() + h * 0.18),
+                pos2(r.right(), r.center().y),
+                pos2(r.right() - w * 0.22, r.bottom() - h * 0.18),
+                pos2(r.right() - w * 0.22, r.center().y + h * 0.11),
+                pos2(r.left() + w * 0.22, r.center().y + h * 0.11),
+                pos2(r.left() + w * 0.22, r.bottom() - h * 0.18),
+            ];
+            return Some(PresetGeometry { pieces: vec![m(shaft), m(left_head), m(right_head)], outline: m(outline) });
+        }
+        _ => return None,
+    };
+    Some(single(pts))
 }
 
 pub fn slicer_layout(rect: Rect, z: f32, n: usize, columns: u32) -> SlicerLayout {
@@ -529,4 +643,25 @@ pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static s
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flipped_presets_mirror_their_vertices() {
+        let r = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 60.0));
+        let plain = preset_geometry(ShapeKind::RightTriangle, r, &ShapeFormat::default()).expect("right triangle geometry");
+        assert_eq!(plain.outline, vec![pos2(10.0, 80.0), pos2(110.0, 80.0), pos2(10.0, 20.0)]);
+        let flip_h = ShapeFormat { flip_h: true, ..Default::default() };
+        let flipped = preset_geometry(ShapeKind::RightTriangle, r, &flip_h).expect("right triangle geometry");
+        assert_eq!(flipped.outline, vec![pos2(110.0, 80.0), pos2(10.0, 80.0), pos2(110.0, 20.0)], "flipH moves the right angle");
+        // The block arrow stays split into convex pieces, and its vertices mirror with the outline.
+        let flip_v = ShapeFormat { flip_v: true, ..Default::default() };
+        let arrow = preset_geometry(ShapeKind::BlockArrow, r, &flip_v).expect("block arrow geometry");
+        assert_eq!(arrow.pieces.len(), 2);
+        assert!((arrow.pieces[0][0].y - 63.2).abs() < 1e-3, "{:?}", arrow.pieces[0][0]);
+        assert!((arrow.outline[1].y - 63.2).abs() < 1e-3, "{:?}", arrow.outline[1]);
+    }
 }

@@ -1733,10 +1733,14 @@ fn draw(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "draw.eraser", json!({}));
     }
     sep(ui);
-    let __k = big_button(ui, Icon::Shapes, "Ink to\nShape", "Convert the last ink stroke to a shape", false);
+    let on = app.session.ink_to_shape;
+    let __k = big_button(ui, Icon::Shapes, "Ink to\nShape", "Convert every stroke to the nearest shape", false);
+    if on {
+        ui.painter().rect_stroke(__k.rect, 5.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Inside);
+    }
     control_keytip(app, ui, &__k, "draw.inkToShape");
     if __k.clicked() {
-        act(app, "draw.inkToShape", json!({}));
+        act(app, "draw.inkToShape", json!({"on": !on}));
     }
 }
 

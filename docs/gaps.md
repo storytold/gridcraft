@@ -143,8 +143,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 17. Insert objects (F)
 - Ink strokes now survive XLSX save/reopen as editable polylines. Inserted icons still lose their
   identity/artwork on save (#551); native Office InkML import is not implemented.
-- SmartArt, WordArt, equations, signature line, objects, 3-D models, screenshot; 8 shape kinds vs
-  ~170; pictures in cells (#61, PR #105). **Estimate:** 25–40 h.
+- SmartArt, WordArt, equations, signature line, objects, 3-D models, screenshot; 17 shape kinds vs
+  ~170 (Ink to Shape now converts Excel's preset set: rectangles/squares, ellipse/circle, diamond,
+  parallelogram, trapezoid, pentagon, hexagon, triangle/right triangle, block and double arrows);
+  pictures in cells (#61, PR #105). **Estimate:** 25–40 h.
 
 ### 18. Accessibility (U)
 - AccessKit on, but no accessible grid/ribbon tree, no high contrast, no checker. **Estimate:** 12–18 h.

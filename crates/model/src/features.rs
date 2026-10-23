@@ -574,6 +574,18 @@ pub enum ShapeKind {
     RoundedRectangle,
     Ellipse,
     Triangle,
+    /// A triangle with one right angle (DrawingML `rtTriangle`).
+    RightTriangle,
+    /// A four-sided polygon standing on a point (DrawingML `diamond`).
+    Diamond,
+    Parallelogram,
+    Trapezoid,
+    Pentagon,
+    Hexagon,
+    /// A block arrow pointing right (DrawingML `rightArrow`).
+    BlockArrow,
+    /// An arrow with a head at both ends (DrawingML `leftRightArrow`).
+    ArrowDouble,
     Line,
     Arrow,
     TextBox,
@@ -592,7 +604,8 @@ pub struct Shape {
     pub fill: Color,
     pub line: Color,
     pub text: String,
-    /// Outline visibility and text formatting (DrawingML `a:ln`, `a:bodyPr`, `a:pPr`, `a:rPr`).
+    /// Outline visibility, mirroring and text formatting (DrawingML `a:xfrm flipH`/`flipV`,
+    /// `a:ln`, `a:bodyPr`, `a:pPr`, `a:rPr`).
     #[serde(default)]
     pub format: ShapeFormat,
 }
@@ -615,13 +628,18 @@ pub enum ShapeTextAnchor {
     Bottom,
 }
 
-/// How a shape's outline and text look. The text properties apply to the whole text (the first
-/// paragraph's and first run's properties when a file has several).
+/// How a shape's outline, mirroring and text look. The text properties apply to the whole text
+/// (the first paragraph's and first run's properties when a file has several).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShapeFormat {
     /// No outline (`a:ln/a:noFill`), whatever `Shape::line` says.
     pub no_line: bool,
+    /// Mirrored left to right inside its box (`a:xfrm flipH`). A line or arrow keeps its
+    /// direction this way: its geometry always runs from the box's top-left corner.
+    pub flip_h: bool,
+    /// Mirrored top to bottom inside its box (`a:xfrm flipV`).
+    pub flip_v: bool,
     /// Text size in points (`a:rPr sz` / 100); `None` is the default size.
     pub font_size: Option<f32>,
     pub bold: bool,
@@ -638,6 +656,15 @@ pub struct ShapeFormat {
     pub anchor: Option<ShapeTextAnchor>,
     /// Paragraphs run right to left (`a:pPr rtl`).
     pub rtl: bool,
+}
+
+impl ShapeFormat {
+    /// Mirrors `q`, a point in the box at (`x`, `y`) of size `w` × `h`, inside that box when the
+    /// shape is flipped (`a:xfrm flipH`/`flipV`). Preset geometry is drawn from its top-left, so
+    /// renderers mirror every vertex; text is not mirrored.
+    pub fn mirror_point(&self, x: f32, y: f32, w: f32, h: f32, q: [f32; 2]) -> [f32; 2] {
+        [if self.flip_h { 2.0 * x + w - q[0] } else { q[0] }, if self.flip_v { 2.0 * y + h - q[1] } else { q[1] }]
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
