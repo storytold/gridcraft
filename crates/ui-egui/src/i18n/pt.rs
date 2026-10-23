@@ -969,6 +969,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Salvamento automático: salvar após cada alteração (pastas de trabalho salvas em um arquivo)"
         }
         "All sheets" => "Todas as planilhas",
+        "{used} cells used · {optimizable} can be optimized" => "{used} células usadas · {optimizable} podem ser otimizadas",
+        "{used} used · {optimizable} optimizable" => "{used} usadas · {optimizable} otimizáveis",
+        "Optimize all" => "Otimizar tudo",
+        "Optimize sheet" => "Otimizar planilha",
+        "Optimize also clears formatting you set on blank cells, such as fills, borders and number formats." => {
+            "Otimizar também limpa a formatação definida em células vazias, como preenchimentos, bordas e formatos de número."
+        }
+        "(protected)" => "(protegida)",
+        "Cells to optimize" => "Células a otimizar",
+        "No performance issues found." => "Nenhum problema de desempenho encontrado.",
+        "Showing the first {shown} of {total} cells." => "Mostrando as primeiras {shown} de {total} células.",
+        "Optimized {count} cells." => "{count} células otimizadas.",
         _ => return None,
     })
 }

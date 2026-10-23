@@ -2154,6 +2154,13 @@
    "note": "Show All Comments; reserved until the command lands"
   },
   {
+   "seq": "RA3",
+   "kind": "dialog",
+   "target": "checkPerformance",
+   "excel": "Check Performance",
+   "note": ""
+  },
+  {
    "seq": "RC",
    "kind": "dialog",
    "target": "comment",

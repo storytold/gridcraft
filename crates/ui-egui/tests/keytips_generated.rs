@@ -2360,6 +2360,13 @@ fn keytip_ra2_() {
 }
 
 #[test]
+fn keytip_ra3_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "RA3", false);
+    assert!(h.state().dialog.is_some(), "RA3 must open the checkPerformance dialog");
+}
+
+#[test]
 fn keytip_rc_() {
     let mut h = harness(blank());
     sequence(&mut h, "RC", false);
@@ -2755,7 +2762,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 365;
+    const EXPECTED: usize = 366;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 

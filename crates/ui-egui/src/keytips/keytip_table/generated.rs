@@ -318,6 +318,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("AY", Entry::Finish(Action::Command("data.reapply"))),             // Excel: Reapply Filter; containment(Reapply)
     ("RA1", Entry::Finish(Action::Dialog("accessibility"))),            // Excel: Check Accessibility
     ("RA2", Entry::Finish(Action::Command("review.showComments"))), // Excel: Show All Comments; Show All Comments; reserved until the command lands
+    ("RA3", Entry::Finish(Action::Dialog("checkPerformance"))),     // Excel: Check Performance
     ("RC", Entry::Finish(Action::Dialog("comment"))),               // Excel: New Comment
     ("RD", Entry::Finish(Action::Command("review.deleteComment"))), // Excel: Delete Comment
     ("RG", Entry::Finish(Action::Pending("review.showChanges"))),   // pending; Excel: Track Changes; reserved until the command lands

@@ -811,6 +811,11 @@ impl Dialog {
                 d.result = app.session.run("review.checkAccessibility", json!({})).ok();
                 d
             }
+            "checkPerformance" => {
+                let mut d = Dialog::custom("checkPerformance", "Workbook Performance", json!({}));
+                d.result = Some(app.session.run("review.checkPerformance", json!({})).unwrap_or_else(|e| json!({"error": crate::clean_error(&e)})));
+                d
+            }
             "errorChecking" => {
                 let mut d = Dialog::custom("errorChecking", "Error Checking", json!({}));
                 d.result = app.session.run("formulas.errorChecking", json!({})).ok();
@@ -1150,6 +1155,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
         "recommendedCharts" => 600.0,
+        "checkPerformance" => 560.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
         "zoom" => 220.0,
@@ -1208,6 +1214,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     });
                 }
                 "macros" => macros(app, ui, &mut d),
+                "checkPerformance" => check_performance(app, ui, &mut d, &mut open),
                 "statistics" | "accessibility" | "errorChecking" | "evaluateFormula" | "comments" => {
                     let r = if d.name == "comments" {
                         app.session.active().and_then(|doc| doc.wb.active().map(|s| json!(s.comments.iter().map(|(c, m)| json!({"cell": c.a1(), "author": m.author, "text": m.text})).collect::<Vec<_>>())))
@@ -2213,6 +2220,129 @@ fn zoom(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) 
         ui.label("%");
     });
     ok_cancel(ui, confirm, open);
+}
+
+/// Review › Check Performance: Excel's Workbook Performance pane. It reports cells used and how
+/// many blank formatted cells can be optimized, per sheet, with Optimize all / Optimize sheet and
+/// a bounded list of the optimizable cells. Calculation auditing is a separate, opt-in command
+/// and deliberately absent here.
+fn check_performance(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bool) {
+    let lang = crate::i18n::current(ui.ctx());
+    let report = d.result.clone().unwrap_or(Json::Null);
+    if let Some(error) = report.get("error").and_then(Json::as_str) {
+        ui.label(error);
+        if ui.button(lang.tr("Close")).clicked() {
+            *open = false;
+        }
+        return;
+    }
+    let used = report.get("usedCells").and_then(Json::as_u64).unwrap_or(0);
+    let optimizable = report.get("optimizableCells").and_then(Json::as_u64).unwrap_or(0);
+    ui.label(
+        lang.tr("{used} cells used · {optimizable} can be optimized")
+            .replace("{used}", &used.to_string())
+            .replace("{optimizable}", &optimizable.to_string()),
+    );
+    let sheets = report.get("sheets").and_then(Json::as_array).cloned().unwrap_or_default();
+    let mut optimize_all = false;
+    let mut optimize_sheet = None;
+    let mut go_to = None;
+    let actionable = sheets
+        .iter()
+        .filter(|s| s.get("protected").and_then(Json::as_bool) != Some(true))
+        .any(|s| s.get("optimizableCells").and_then(Json::as_u64).unwrap_or(0) > 0);
+    if actionable {
+        // Excel's page warns about formatted blank cells too: Optimize removes deliberate fills,
+        // borders and number formats, not just leftovers.
+        ui.label(
+            egui::RichText::new(lang.tr("Optimize also clears formatting you set on blank cells, such as fills, borders and number formats."))
+                .small(),
+        );
+        optimize_all = ui.button(lang.tr("Optimize all")).clicked();
+    }
+    ui.separator();
+    for sheet in &sheets {
+        let name = sheet.get("name").and_then(Json::as_str).unwrap_or("");
+        let index = sheet.get("index").and_then(Json::as_u64);
+        let sheet_used = sheet.get("usedCells").and_then(Json::as_u64).unwrap_or(0);
+        let sheet_optimizable = sheet.get("optimizableCells").and_then(Json::as_u64).unwrap_or(0);
+        let protected = sheet.get("protected").and_then(Json::as_bool).unwrap_or(false);
+        ui.horizontal(|ui| {
+            let label = if protected { format!("{name} {}", lang.tr("(protected)")) } else { name.to_string() };
+            ui.label(egui::RichText::new(label).strong());
+            ui.label(
+                lang.tr("{used} used · {optimizable} optimizable")
+                    .replace("{used}", &sheet_used.to_string())
+                    .replace("{optimizable}", &sheet_optimizable.to_string()),
+            );
+            if sheet_optimizable > 0 && !protected && ui.button(lang.tr("Optimize sheet")).clicked() {
+                optimize_sheet = Some(json!(index));
+            }
+        });
+    }
+    if optimizable == 0 {
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(lang.tr("No performance issues found.")).strong());
+    } else {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(lang.tr("Cells to optimize")).strong());
+        let cells = report.get("cells").and_then(Json::as_array).cloned().unwrap_or_default();
+        egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+            for cell in &cells {
+                ui.horizontal(|ui| {
+                    let sheet = cell.get("sheet").and_then(Json::as_str).unwrap_or("");
+                    let at = cell.get("cell").and_then(Json::as_str).unwrap_or("");
+                    ui.label(format!("{sheet}!{at}"));
+                    if let Some(reason) = cell.get("reason").and_then(Json::as_str) {
+                        ui.label(egui::RichText::new(reason).small());
+                    }
+                    if ui.button(lang.tr("Go To")).clicked() {
+                        go_to = cell.get("goto").and_then(Json::as_str).map(str::to_string);
+                    }
+                });
+            }
+        });
+        if report.get("truncated").and_then(Json::as_bool) == Some(true) {
+            let shown = report.get("shown").and_then(Json::as_u64).unwrap_or(0);
+            ui.label(
+                lang.tr("Showing the first {shown} of {total} cells.")
+                    .replace("{shown}", &shown.to_string())
+                    .replace("{total}", &optimizable.to_string()),
+            );
+        }
+    }
+    if optimize_all {
+        match app.run("review.optimizePerformance", json!({})) {
+            Ok(result) => {
+                let count = result["optimized"].as_u64().unwrap_or(0);
+                let message = lang.tr("Optimized {count} cells.").replace("{count}", &count.to_string());
+                app.toast = Some((message, crate::now_ms()));
+            }
+            Err(e) => app.message = Some(("Workbook Performance".into(), crate::clean_error(&e))),
+        }
+        d.result = Some(app.run("review.checkPerformance", json!({})).unwrap_or_else(|e| json!({"error": crate::clean_error(&e)})));
+        return;
+    }
+    if let Some(sheet) = optimize_sheet {
+        match app.run("review.optimizePerformance", json!({"sheet": sheet})) {
+            Ok(result) => {
+                let count = result["optimized"].as_u64().unwrap_or(0);
+                let message = lang.tr("Optimized {count} cells.").replace("{count}", &count.to_string());
+                app.toast = Some((message, crate::now_ms()));
+            }
+            Err(e) => app.message = Some(("Workbook Performance".into(), crate::clean_error(&e))),
+        }
+        d.result = Some(app.run("review.checkPerformance", json!({})).unwrap_or_else(|e| json!({"error": crate::clean_error(&e)})));
+        return;
+    }
+    if let Some(reference) = go_to {
+        app.run_or_alert("edit.goTo", json!({"reference": reference}));
+        app.grid.ensure_visible = true;
+    }
+    ui.add_space(4.0);
+    if ui.button(lang.tr("Close")).clicked() {
+        *open = false;
+    }
 }
 
 fn go_to(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
