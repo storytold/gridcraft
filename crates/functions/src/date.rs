@@ -750,6 +750,22 @@ mod tests {
     }
 
     #[test]
+    fn month_name_date_text() {
+        // #1342: a month name without separators, or with a year.
+        let y = gridcraft_core::parse::current_year() as f64;
+        close(ev("DATEVALUE", vec![t("1Jan")]), d(y, 1.0, 1.0));
+        close(ev("DATEVALUE", vec![t("Mar 15")]), d(y, 3.0, 15.0));
+        close(ev("DATEVALUE", vec![t("Jan 2021")]), 44197.0);
+        close(ev("DATEVALUE", vec![t("Jan2021")]), 44197.0);
+        close(ev("DATEVALUE", vec![t("1Jan21")]), 44197.0);
+        close(ev("DATEVALUE", vec![t("15Mar2024")]), 45366.0);
+        close(ev("MONTH", vec![t("1Feb")]), 2.0);
+        close(ev("YEAR", vec![t("March 2024")]), 2024.0);
+        is_err(ev("DATEVALUE", vec![t("32Jan")]), CellError::Value);
+        is_err(ev("MONTH", vec![t("Jan")]), CellError::Value);
+    }
+
+    #[test]
     fn day_counts() {
         close(ev("DAYS", vec![n(d(2021.0, 3.0, 15.0)), n(d(2021.0, 2.0, 1.0))]), 42.0);
         close(ev("DAYS", vec![t("2021-02-01"), t("2021-03-15")]), -42.0);

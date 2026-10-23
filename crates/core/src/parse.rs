@@ -1,7 +1,8 @@
 //! Parsing what people type into a cell (and numeric text in formulas).
 //!
 //! Recognises numbers with thousands separators, percentages, currency, scientific notation,
-//! fractions (`1 1/2`), dates (`3/4/2026`, `2026-03-04`, `4-Mar-2026`, `Mar 4, 2026`), times
+//! fractions (`1 1/2`), dates (`3/4/2026`, `2026-03-04`, `4-Mar-2026`, `Mar 4, 2026`, `1Jan`,
+//! `Mar 15`, `Jan 2021`, `15Mar2024`), times
 //! (`10:30`, `10:30:15 PM`) and date-times. Locale: en-US.
 
 use crate::date::{DateSystem, MONTHS, serial_from_ymd, time_fraction};
@@ -247,8 +248,120 @@ fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
     Some((time_fraction(h, m, s), parts.len() == 3, ampm.is_some()))
 }
 
+/// A piece of month-name date text: a run of digits or a month name.
+enum DatePart<'a> {
+    Num(&'a str),
+    Month(u32),
+}
+
+/// Two-digit years: 00–29 are 2000–2029, 30–99 are 1930–1999 (Excel's window).
+fn two_digit_year(y: i64) -> i64 {
+    if y < 30 { 2000 + y } else { 1900 + y }
+}
+
+/// A year written with one, two or four digits. Three or five digits are not a year.
+fn year_part(s: &str) -> Option<i64> {
+    let y = s.parse::<i64>().ok()?;
+    match s.len() {
+        1 | 2 => Some(two_digit_year(y)),
+        4 => Some(y),
+        _ => None,
+    }
+}
+
+/// A day written with one or two digits (`5`, `05`; not `005`).
+fn day_part(s: &str) -> Option<i64> {
+    if s.len() > 2 {
+        return None;
+    }
+    s.parse::<i64>().ok()
+}
+
+/// Dates written with a month name, as Excel reads them: day and month (`1Jan`, `1 Jan`,
+/// `1-Jan`, `1/Jan`), month and day (`Jan1`, `Mar 15`, `Jan-21`), month and year (`Jan 2021`,
+/// `Jan2021`, `Jan-99`) and day, month and year (`1Jan21`, `15Mar2024`, `4-Mar-2026`,
+/// `4 March 2026`). The parts may touch or be split by spaces, `-` or `/`; `.` and `,` are not
+/// read here. Month names are full or at least three letters (`Sept`, `Janu`). A month name
+/// followed by one or two digits is a day when that day exists in the current year (`Jan 21` is
+/// 21 January), otherwise a two-digit year (`Jan 32` is January 1932). A missing day is the 1st,
+/// a missing year the current year. Text with a month name in another order (`Jan 15 2021`,
+/// `2021 Jan`) is not read here.
+fn parse_month_name_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
+    let mut parts: Vec<DatePart> = Vec::with_capacity(3);
+    let mut rest = t;
+    loop {
+        let spaced = rest.trim_start_matches(' ');
+        let (sep, after) = match spaced.strip_prefix(['-', '/']) {
+            Some(a) => (true, a.trim_start_matches(' ')),
+            None => (false, spaced),
+        };
+        if after.is_empty() {
+            // A trailing `-` or `/` is not part of a date.
+            if sep {
+                return None;
+            }
+            break;
+        }
+        // A leading separator (`-1Jan`) is not a date either.
+        if parts.is_empty() && (sep || spaced.len() != rest.len()) {
+            return None;
+        }
+        let first = after.chars().next()?;
+        let end = if first.is_ascii_digit() {
+            after.find(|c: char| !c.is_ascii_digit())
+        } else if first.is_ascii_alphabetic() {
+            after.find(|c: char| !c.is_ascii_alphabetic())
+        } else {
+            return None;
+        }
+        .unwrap_or(after.len());
+        let (run, tail) = (after.get(..end)?, after.get(end..)?);
+        // At most three parts; digit runs longer than a year and words longer than "September"
+        // are never part of a date, so work stays bounded for long text.
+        if parts.len() == 3 {
+            return None;
+        }
+        if first.is_ascii_digit() {
+            if run.len() > 4 {
+                return None;
+            }
+            parts.push(DatePart::Num(run));
+        } else {
+            if run.len() > 9 {
+                return None;
+            }
+            parts.push(DatePart::Month(month_from_name(run)?));
+        }
+        rest = tail;
+    }
+    let year = current_year();
+    match parts.as_slice() {
+        [DatePart::Num(d), DatePart::Month(m)] => valid_ymd(sys, year, *m as i64, day_part(d)?).map(|s| (s, "d-mmm")),
+        [DatePart::Month(m), DatePart::Num(n)] => {
+            let m = *m as i64;
+            let v = n.parse::<i64>().ok()?;
+            match n.len() {
+                // A day of this year when there is one, else a two-digit year.
+                1 | 2 => match valid_ymd(sys, year, m, v) {
+                    Some(s) => Some((s, "d-mmm")),
+                    None => valid_ymd(sys, two_digit_year(v), m, 1).map(|s| (s, "mmm-yy")),
+                },
+                4 => valid_ymd(sys, v, m, 1).map(|s| (s, "mmm-yy")),
+                _ => None,
+            }
+        }
+        [DatePart::Num(d), DatePart::Month(m), DatePart::Num(y)] => valid_ymd(sys, year_part(y)?, *m as i64, day_part(d)?).map(|s| (s, "d-mmm-yy")),
+        _ => None,
+    }
+}
+
 fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
     let t = t.trim().trim_end_matches(',');
+    if t.bytes().any(|b| b.is_ascii_alphabetic())
+        && let Some(r) = parse_month_name_date(t, sys)
+    {
+        return Some(r);
+    }
     let num = |s: &str| {
         let s = s.trim();
         if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
@@ -267,19 +380,13 @@ fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
             return valid_ymd(sys, y, m, d).map(|s| (s, "yyyy-mm-dd"));
         }
         if let (Some(m), Some(d), Some(y)) = (num(a), num(b), num(c)) {
-            let y = if c.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
+            let y = if c.len() <= 2 { two_digit_year(y) } else { y };
             return valid_ymd(sys, y, m, d).map(|s| (s, "m/d/yyyy"));
-        }
-        // 4-Mar-2026
-        if let (Some(d), Some(m), Some(y)) = (num(a), month_from_name(b), num(c)) {
-            let y = if c.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
-            return valid_ymd(sys, y, m as i64, d).map(|s| (s, "d-mmm-yy"));
         }
     }
     if parts.len() == 2 {
         let (a, b) = (parts[0].trim(), parts[1].trim());
-        // m/d in the current year is ambiguous without a clock; use month/day of 2026? Excel uses
-        // the current year. We accept d-mmm / mmm-d only with month names, and m/d → current year.
+        // m/d is in the current year, like Excel.
         if let (Some(m), Some(d)) = (num(a), num(b)) {
             let y = current_year();
             if (1..=12).contains(&m) && (1..=31).contains(&d) {
@@ -290,27 +397,15 @@ fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
                 return valid_ymd(sys, d, m, 1).map(|s| (s, "mmm-yy"));
             }
         }
-        if let (Some(d), Some(m)) = (num(a), month_from_name(b)) {
-            return valid_ymd(sys, current_year(), m as i64, d).map(|s| (s, "d-mmm"));
-        }
-        if let (Some(m), Some(y)) = (month_from_name(a), num(b)) {
-            let y = if b.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
-            return valid_ymd(sys, y, m as i64, 1).map(|s| (s, "mmm-yy"));
-        }
     }
-    // "Mar 4, 2026" / "March 4 2026" / "4 March 2026"
+    // "Mar 4, 2026" / "March 4 2026" (day-first month-name forms are read above)
     let words: Vec<&str> = t.split([' ', ',']).filter(|w| !w.is_empty()).collect();
-    if words.len() == 3 {
+    if words.len() == 3
+        && let (Some(m), Some(d), Some(y)) = (month_from_name(words[0]), num(words[1]), num(words[2]))
+    {
         // Two-digit years follow the same 2029 rule as the dashed forms above.
-        let expand = |w: &str, y: i64| if w.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
-        if let (Some(m), Some(d), Some(y)) = (month_from_name(words[0]), num(words[1]), num(words[2])) {
-            let y = expand(words[2], y);
-            return valid_ymd(sys, y, m as i64, d).map(|s| (s, "d-mmm-yy"));
-        }
-        if let (Some(d), Some(m), Some(y)) = (num(words[0]), month_from_name(words[1]), num(words[2])) {
-            let y = expand(words[2], y);
-            return valid_ymd(sys, y, m as i64, d).map(|s| (s, "d-mmm-yy"));
-        }
+        let y = if words[2].len() <= 2 { two_digit_year(y) } else { y };
+        return valid_ymd(sys, y, m as i64, d).map(|s| (s, "d-mmm-yy"));
     }
     None
 }
@@ -470,6 +565,161 @@ mod tests {
         assert_eq!(p("25:00").value, Value::Number(25.0 / 24.0));
         assert_eq!(p("25:00").format, Some("[h]:mm:ss"));
         assert_eq!(p("23:59").format, Some("h:mm"));
+    }
+
+    /// Serial of a date, for expectations that depend on the current year.
+    fn ymd(y: i64, m: i64, d: i64) -> Value {
+        Value::Number(serial_from_ymd(DateSystem::D1900, y, m, d).unwrap_or(f64::NAN))
+    }
+
+    #[test]
+    fn month_name_without_separators_or_with_a_year() {
+        let y = current_year();
+        // Day and month, month and day: the current year (#1342).
+        for (s, m, d) in [
+            ("1Jan", 1, 1),
+            ("1 Jan", 1, 1),
+            ("Jan1", 1, 1),
+            ("15Mar", 3, 15),
+            ("1January", 1, 1),
+            ("2 March", 3, 2),
+            ("Mar 15", 3, 15),
+            ("jan 1", 1, 1),
+            ("05Jan", 1, 5),
+            ("Jan 05", 1, 5),
+            ("1Sept", 9, 1),
+            ("Sep1", 9, 1),
+            ("March1", 3, 1),
+            ("1Marc", 3, 1),
+            ("1  Jan", 1, 1),
+            ("1 - Jan", 1, 1),
+            ("1/Jan", 1, 1),
+        ] {
+            assert_eq!(p(s).value, ymd(y, m, d), "{s}");
+            assert_eq!(p(s).format, Some("d-mmm"), "{s}");
+        }
+        // Month and year, two or four digits, with or without a space.
+        for (s, yy, m) in [
+            ("Jan 2021", 2021, 1),
+            ("Jan2021", 2021, 1),
+            ("March 2024", 2024, 3),
+            ("JAN2021", 2021, 1),
+            ("Sept 2024", 2024, 9),
+            ("Janu 2021", 2021, 1),
+            ("Jan-2021", 2021, 1),
+            ("Jan/2021", 2021, 1),
+            ("Jan  2021", 2021, 1),
+            ("Jan 1900", 1900, 1),
+            ("Jan 9999", 9999, 1),
+        ] {
+            assert_eq!(p(s).value, ymd(yy, m, 1), "{s}");
+            assert_eq!(p(s).format, Some("mmm-yy"), "{s}");
+        }
+        // Day, month and year with no separators, or mixed.
+        for (s, yy, m, d) in [
+            ("1Jan21", 2021, 1, 1),
+            ("1Jan2021", 2021, 1, 1),
+            ("15Mar2024", 2024, 3, 15),
+            ("01Jan2021", 2021, 1, 1),
+            ("1Jan1", 2001, 1, 1),
+            ("1Jan29", 2029, 1, 1),
+            ("1Jan30", 1930, 1, 1),
+            ("1Jan00", 2000, 1, 1),
+            ("15Jan 2021", 2021, 1, 15),
+            ("15 Jan2021", 2021, 1, 15),
+            ("1-Jan2021", 2021, 1, 1),
+            ("1Jan-2021", 2021, 1, 1),
+            ("1/Jan2021", 2021, 1, 1),
+            ("1Janua2021", 2021, 1, 1),
+            ("29Feb2024", 2024, 2, 29),
+            ("31Dec9999", 9999, 12, 31),
+            ("4 March 26", 2026, 3, 4),
+        ] {
+            assert_eq!(p(s).value, ymd(yy, m, d), "{s}");
+            assert_eq!(p(s).format, Some("d-mmm-yy"), "{s}");
+        }
+        assert_eq!(p("1Jan1900").value, Value::Number(1.0));
+        assert_eq!(parse_input("1Jan1904", DateSystem::D1904).value, Value::Number(0.0));
+        // With a time.
+        assert_eq!(p("1Jan21 18:00").value, Value::Number(44197.75));
+        assert_eq!(p("Jan2021 6:00 PM").value, Value::Number(44197.75));
+    }
+
+    #[test]
+    fn month_name_then_a_number_is_a_day_when_the_day_exists() {
+        let y = current_year();
+        // Excel reads `Jan-21` as 21 January of this year, like `Jan 21` (it was January 2021).
+        for s in ["Jan-21", "Jan 21", "Jan21", "Jan/21"] {
+            assert_eq!(p(s).value, ymd(y, 1, 21), "{s}");
+            assert_eq!(p(s).format, Some("d-mmm"), "{s}");
+        }
+        assert_eq!(p("Jan 31").value, ymd(y, 1, 31));
+        // No such day: a two-digit year instead.
+        for (s, yy, m) in [("Jan 32", 1932, 1), ("Jan32", 1932, 1), ("Feb 30", 1930, 2), ("Feb-30", 1930, 2)] {
+            assert_eq!(p(s).value, ymd(yy, m, 1), "{s}");
+            assert_eq!(p(s).format, Some("mmm-yy"), "{s}");
+        }
+        for s in ["Jan 0", "Jan00", "Jan 00"] {
+            assert_eq!(p(s).value, ymd(2000, 1, 1), "{s}");
+        }
+        assert_eq!(p("Jan 99").value, ymd(1999, 1, 1));
+        // 29 February is a day in leap years and the year 2029 otherwise.
+        let leap = crate::date::days_in_month_in(DateSystem::D1900, y as i32, 2) == 29;
+        assert_eq!(p("Feb 29").value, if leap { ymd(y, 2, 29) } else { ymd(2029, 2, 1) });
+    }
+
+    #[test]
+    fn month_name_forms_excel_keeps_as_text() {
+        for s in [
+            "32Jan",
+            "0Jan",
+            "30Feb",
+            "001Jan",
+            "123Jan",
+            "Jan",
+            "May",
+            "Sept",
+            "Ma 1",
+            "1Ma",
+            "Jan 100",
+            "Jan 999",
+            "Jan 1899",
+            "Jan 10000",
+            "Jan-001",
+            "1Jan100",
+            "1Jan10000",
+            "29Feb2025",
+            "Jan123",
+            "Jan152021",
+            "Jan15 2021",
+            "1Jan,2021",
+            "1Jan, 2021",
+            "2021Jan",
+            "2021 Jan",
+            "Janx",
+            "1Janx",
+            "x1Jan",
+            "1Jan1Jan",
+            "Jan1Jan",
+            "-1Jan",
+            "1Jan-",
+            "1Mar.",
+            "Mar.1",
+            "1.Jan",
+            "Jan.2021",
+            "Jan.21",
+            "4.Mar.2026",
+            "4 Mar, 2026",
+            "1Jan2021x",
+            "1 Jan 2021 Jan",
+        ] {
+            assert_eq!(p(s).value, Value::text(s), "{s}");
+        }
+        // Long text stays text without slow scanning.
+        let long = "1Jan".repeat(10_000);
+        assert_eq!(p(&long).value, Value::text(long.as_str()));
+        let digits = "1".repeat(10_000) + "Jan";
+        assert_eq!(p(&digits).value, Value::text(digits.as_str()));
     }
 
     #[test]
