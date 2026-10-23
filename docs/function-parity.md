@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-21 · **Change:** minor (SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-21 · **Change:** minor (number-to-text in `&`, CONCAT, TEXTJOIN and the IM functions rounds to 15 digits first and switches to scientific like Excel; previously minor: MEDIAN and AGGREGATE median avoid intermediate overflow; SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -129,6 +129,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 | 2026-10-16 | minor | FORECAST.ETS gap interpolation uses a forward-only known-point scan instead of rescanning each gap for every missing value; numerical behavior and missing-point limits are preserved (#1042) |
 | 2026-10-15 | minor | MEDIAN and AGGREGATE median use an overflow-safe midpoint (#1579); regressions cover finite extremes, tiny values and dependent recalculation |
 | 2026-10-15 | minor | ADDRESS quotes a sheet name the way Excel does: names that read as an A1 cell (`A1`) or an R1C1 reference (`R1C1`, `RC`) and names starting with `.` get quotes; `TRUE` / `FALSE` stay bare (#1458) |
+| 2026-10-14 | minor | Number-to-text (`&`, CONCAT, TEXTJOIN, VALUETOTEXT, the IM functions' complex text, and also formula printing, pivot and chart labels) rounds to 15 significant digits before choosing decimal or scientific, so `=(1E15-0.5)&""` is `1E+15`, not `1000000000000000`; and below 1 it switches to scientific when the decimal would be longer than 21 characters (sign not counted), as Excel caches IMCSCH/IMEXP/IMTAN results: `1.28233995888454E-06`, so `9.99999999999999E-09` (was `0.00000001`), but `0.0000692361330972509`. Only 15-digit positive mantissas are Excel-verified; the limit for shorter mantissas and for negatives is inferred |
 | 2026-10-13 | minor | Clear reports changed stored cells sparsely, including those beyond the first million coordinates; dependent formulas and removed spills update, while clearing empty merges still unblocks spills (#1032) |
 | 2026-10-14 | minor | Bounded references up to 1,048,576 cells (`D3:AZ400`) keep their full shape instead of stopping at the used range, so `SUMPRODUCT(D3:AZ400*B3:B400,(A3:A400=x)*(D1:AZ1=y))` broadcasts like Excel and `ROWS`, `COUNTBLANK` and `--(r="")` count the blanks; references that run to the edge of the sheet (`A:A`) still stop at the used range (#1010) |
 | 2026-10-12 | minor | USDOLLAR added as a Compatibility function (not on Microsoft's list, so the counts don't change); MIRR with no positive flow is -1, COUNTIF's bare `"<="` / `">="` skip empty strings, INDIRECT with `a1` = FALSE gives `#REF!` for A1-style text (#738) |

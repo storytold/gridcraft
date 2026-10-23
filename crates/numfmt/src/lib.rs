@@ -274,23 +274,22 @@ impl NumberFormat {
     }
 
     /// Formats a number. The flag is true when the value cannot be shown (date out of range).
-    fn format_number(&self, n: f64, sys: DateSystem) -> (Formatted, bool) {
-        let general = |n: f64| Formatted {
-            text: format_general_fit(n, GENERAL_WIDTH).unwrap_or_else(|| OVERFLOW.into()),
-            color: None,
-            fill: None,
-            numeric: true,
-        };
+    /// With `full`, General is not narrowed to the cell width but written by [`general_full`].
+    fn format_number(&self, n: f64, sys: DateSystem, full: bool) -> (Formatted, bool) {
+        let general_text = |n: f64, width: usize| if full { Some(general_full(n)) } else { format_general_fit(n, width) };
+        let general =
+            |n: f64| Formatted { text: general_text(n, GENERAL_WIDTH).unwrap_or_else(|| OVERFLOW.into()), color: None, fill: None, numeric: true };
         if self.is_general() {
             return (general(n), false);
         }
         let Some((sec, drop_sign)) = self.select(n) else { return (general(n), false) };
         let minus = n < 0.0 && !drop_sign;
         let out: Option<Out> = match sec.kind {
-            SecKind::Text => Some(render::render_text(sec, &format_general_fit(n, GENERAL_WIDTH).unwrap_or_default())),
+            SecKind::Text => Some(render::render_text(sec, &general_text(n, GENERAL_WIDTH).unwrap_or_default())),
             SecKind::General => {
                 let width = if minus { GENERAL_WIDTH - 1 } else { GENERAL_WIDTH };
-                Some(render::render_general(sec, n.abs(), width))
+                let text = general_text(n.abs(), width).unwrap_or_else(|| "#".repeat(width.clamp(1, 11)));
+                Some(render::render_general(sec, &text))
             }
             SecKind::Date => {
                 if minus {
@@ -324,16 +323,45 @@ impl NumberFormat {
 
 /// Formats a cell value for display.
 pub fn format_value(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted {
+    format_value_with(v, fmt, sys, false)
+}
+
+/// Formats a cell value as Save As CSV/Text writes it: like [`format_value`], except that a number
+/// shown as General (a General or Text section, with or without colour and literals) is not
+/// narrowed to the cell width but written by `general_full`: `124412140710`, not `1.24412E+11`.
+/// Excel writes the cell display here; GridCraft keeps the digits.
+pub fn format_value_full(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted {
+    format_value_with(v, fmt, sys, true)
+}
+
+/// General for Save As CSV/Text: the text `&` gives (15 significant digits), but never with an
+/// exponent, because reopening the file would give the cell a scientific format that rounds it
+/// on the next save. Where `&` writes an exponent, a number of 1 or more is written as the
+/// shortest digits that read back as the same value (every integer f64 holds below 1e16 exactly,
+/// so 16-digit card numbers survive), and a smaller one as its 15 significant digits in full.
+fn general_full(n: f64) -> String {
+    let text = gridcraft_core::number_to_text(n);
+    if !text.contains('E') {
+        text
+    } else if n.abs() >= 1.0 {
+        format!("{n}")
+    } else {
+        let mag: i32 = format!("{n:.14e}").split_once('e').and_then(|(_, e)| e.parse().ok()).unwrap_or(0);
+        gridcraft_core::value::trim_decimal(&format!("{:.*}", (14 - mag).max(0) as usize, n))
+    }
+}
+
+fn format_value_with(v: &Value, fmt: &NumberFormat, sys: DateSystem, full: bool) -> Formatted {
     match v {
         Value::Empty => Formatted::default(),
         Value::Number(n) if !n.is_finite() => Formatted { text: CellError::Num.as_str().into(), ..Formatted::default() },
-        Value::Number(n) => fmt.format_number(*n, sys).0,
+        Value::Number(n) => fmt.format_number(*n, sys, full).0,
         Value::Text(t) => fmt.format_text(t),
         Value::Bool(b) => Formatted { text: if *b { "TRUE" } else { "FALSE" }.into(), ..Formatted::default() },
         Value::Error(e) => Formatted { text: e.as_str().into(), ..Formatted::default() },
         Value::Array(a) => match a.data.first() {
             Some(Value::Array(_)) | None => Formatted::default(),
-            Some(first) => format_value(first, fmt, sys),
+            Some(first) => format_value_with(first, fmt, sys, full),
         },
     }
 }
@@ -435,7 +463,7 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    let (f, overflow) = fmt.format_number(n, sys, false);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 

@@ -293,6 +293,24 @@ fn iterative_calculation_of_text_and_errors() {
     assert_eq!(t.get("B1"), Value::Error(CellError::Div0));
 }
 
+/// `&`, CONCAT and TEXTJOIN turn a number into at most 15 significant digits, decimal unless that
+/// would need 16 integer digits or more than 21 characters below 1.
+#[test]
+fn text_joins_convert_numbers_to_15_significant_digits() {
+    let mut t = T::new();
+    for (formula, text) in [
+        ("=(1E15-0.5)&\"\"", "1E+15"),
+        ("=(999999999999999)&\"\"", "999999999999999"),
+        ("=1234567890123456&\"\"", "1.23456789012346E+15"),
+        ("=(9.99999999999999E-9)&\"\"", "9.99999999999999E-09"),
+        ("=CONCAT(1/3*1E-5)", "3.33333333333333E-06"),
+        ("=TEXTJOIN(\",\",TRUE,1/3*1E-4,0.1+0.2)", "0.0000333333333333333,0.3"),
+    ] {
+        t.set("A1", formula);
+        assert_eq!(t.get("A1"), Value::from(text), "{formula}");
+    }
+}
+
 #[test]
 fn circular_references_without_iterative_calculation() {
     let mut t = T::new();
