@@ -5269,6 +5269,20 @@ fn a_multi_area_range_is_refused_by_print_area() {
     assert_eq!(s.doc().unwrap().wb.active().unwrap().print.print_area, Some(gridcraft_core::RangeRef::parse("A1:B2").unwrap()));
 }
 
+#[test]
+fn a_multi_area_selection_can_clear_but_not_set_print_area() {
+    let mut s = s();
+    s.execute("pageLayout.printArea", json!({"range": "A1:B2"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B2,C3:D4"})).unwrap();
+
+    s.execute("pageLayout.printArea", json!({"clear": true})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().print.print_area.is_none(), "clear succeeds with a multi-area selection");
+
+    let e = s.execute("pageLayout.printArea", json!({})).unwrap_err().to_string();
+    assert!(e.contains("This action won't work on multiple selections."), "printArea: {e}");
+    assert!(s.doc().unwrap().wb.active().unwrap().print.print_area.is_none(), "the refused set left the print area clear");
+}
+
 /// `data.textToColumns` used to split only the first area of "A1,B2".
 #[test]
 fn a_multi_area_range_is_refused_by_text_to_columns() {
