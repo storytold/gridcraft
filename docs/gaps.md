@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** minor (the Japanese catalog covers the dialogs, messages and menus) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** minor (§8: refreshed file pivots keep their sort, captions and layout settings; the Japanese catalog covers the dialogs, messages and menus) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -84,7 +84,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 8. PivotTables: no slicers, calculated items, PivotCharts; unverified in Excel (F)
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
   `insert.pivotChart`, `table.insertSlicer`; calculated items and GETPIVOTDATA missing (calculated fields
-  and values on rows done).
+  and values on rows done). Refreshing a file's pivot keeps its sort-by-value, captions, item order and layout settings; Excel's order among items with equal sort values is not reproduced.
 - **Impact:** pivots are the analyst's main tool.
 - **Estimate:** 20–30 h for beta (25–40 h full).
 
@@ -198,6 +198,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-11 | minor | §3: XLSX pass-through keeps custom XML, external links, connections, query tables, printer settings, controls and OLE objects (#330, #324) |
 | 2026-10-11 | minor | §13: Forecast Sheet landed (#322) |
 | 2026-10-11 | minor | §15: ODDFPRICE, ODDFYIELD, ODDLPRICE, ODDLYIELD added (18 functions missing) |
+| 2026-10-13 | minor | §8: refresh fidelity for file pivots (sort by value, captions, item order, layout settings) |
 | 2026-10-11 | minor | §15: PERCENTOF and EUROCONVERT added (20 functions missing) |
 | 2026-10-11 | minor | §15: BAHTTEXT added (21 functions missing) |
 | 2026-10-11 | minor | §15: TRIMRANGE added (21 functions missing; trim-reference operators still missing) |
