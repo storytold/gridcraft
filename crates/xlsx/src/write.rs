@@ -137,6 +137,13 @@ impl Out {
         }
         self.parts.push((name.to_string(), data));
     }
+    /// Replaces the bytes of a part already added.
+    pub fn replace(&mut self, name: &str, data: Vec<u8>) {
+        if let Some(p) = self.parts.iter_mut().find(|(n, _)| n == name) {
+            p.1 = data;
+        }
+    }
+
     /// The `xl/media` file name (`imageN.ext`) holding `data`. A picture used on several sheets,
     /// or twice on one, is written once and every drawing points to that part, as in Excel.
     pub fn image_part(&mut self, ext: &str, data: &[u8]) -> String {
@@ -253,7 +260,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     let mut wb_rels = Rels::default();
     // Kept content first: the chart sheets among the worksheets need their relationship ids.
     let kept = crate::passthrough::write_workbook(wb, &mut wb_rels, &mut out);
-    let mut pivots = crate::pivot::PivotWriter::default();
+    let mut pivots = crate::pivot::PivotWriter::new(kept.pivot_cache_ids(), kept.pivot_cache_entries());
     let mut sheets_xml = String::new();
     let mut sheet_id = 1usize;
     for (i, sheet) in wb.sheets.iter().enumerate() {
@@ -397,8 +404,16 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     w.push_str("</workbook>");
 
     // Workbook-level parts.
-    let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &pivots.number_formats(wb));
-    pivots.finish(wb, &mut out, &|code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied()));
+    let mut extra_fmts = pivots.number_formats(wb);
+    for code in out.kept.num_fmt_codes() {
+        if !extra_fmts.contains(&code) {
+            extra_fmts.push(code);
+        }
+    }
+    let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &extra_fmts);
+    let fmt_id = |code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied());
+    pivots.finish(wb, &mut out, &fmt_id);
+    crate::passthrough::finish_style_ids(&mut out, &fmt_id);
     out.part("xl/styles.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"), styles.into_bytes());
     wb_rels.add("styles", "styles.xml");
     if wb.styles.iter().any(|(_, st)| st.num_fmt.as_str() == "checkbox") {
