@@ -21,20 +21,25 @@ pub(crate) fn canonical(
     if locale == FormulaLocale::En || wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@") {
         return Ok(text.to_string());
     }
-    // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text).
     let body = text;
-    if body.starts_with('=')
-        || ((body.starts_with('+') || body.starts_with('-')) && body.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
-    {
+    // Decimal-comma number entry follows the same preference, without rewriting text or dates.
+    let normalized = body.trim().replace(locale.decimal_separator(), ".");
+    let number = normalized.strip_suffix('%').unwrap_or(&normalized);
+    let is_number = number.parse::<f64>().is_ok_and(f64::is_finite);
+    // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text): a `+`
+    // or `-` entry is a formula when it reads as one and text when it doesn't, and a signed number
+    // in this locale (`-1,5`) is a number. The apostrophe keeps the engine from reading such text
+    // again in English syntax.
+    if !body.starts_with('=') && !is_number && gridcraft_engine::core::parse::starts_formula(body) {
+        return Ok(canonical(&format!("={body}"), locale, wb, sheet, cell).unwrap_or_else(|_| format!("'{body}")));
+    }
+    if body.starts_with('=') {
         let known = |name: &str| wb.name(name, sheet).is_some() || wb.table(name).is_some();
         // Match the engine's existing convenience for missing closing parentheses.
         let expr = formula::parse_closing_parens(body, |text| formula::parse_input(text, locale, known));
         return Ok(format!("={}", formula::print(&expr?)));
     }
-    // Decimal-comma number entry follows the same preference, without rewriting text or dates.
-    let normalized = body.trim().replace(locale.decimal_separator(), ".");
-    let number = normalized.strip_suffix('%').unwrap_or(&normalized);
-    if number.parse::<f64>().is_ok_and(f64::is_finite) {
+    if is_number {
         return Ok(normalized);
     }
     Ok(text.to_string())
@@ -151,6 +156,7 @@ pub(crate) fn display_template(text: &str, locale: FormulaLocale, wb: &Workbook,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gridcraft_engine::core::CellRef;
 
     /// The hint for `name`, empty when there is none.
     fn sig(name: &str, locale: FormulaLocale, language: Language) -> String {
@@ -176,5 +182,24 @@ mod tests {
         assert!(sumifs.ends_with("(sum_range; criteria_range1; criteria1; ...)"), "{sumifs}");
         assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Some("Adds the cells that meet every condition."));
         assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
+    }
+
+    #[test]
+    fn a_leading_sign_starts_a_formula_in_spanish_too() {
+        // #2023: `+5+4` is a formula in every formula language; in Spanish `-1,5` stays the
+        // number -1.5 rather than becoming a formula.
+        let wb = Workbook::new();
+        let at = CellRef::parse("A1").unwrap();
+        let entry = |text: &str| canonical(text, FormulaLocale::Es, &wb, 0, at).ok();
+        assert_eq!(entry("+5+4").as_deref(), Some("=+5+4"));
+        assert_eq!(entry("-5+4").as_deref(), Some("=-5+4"));
+        assert_eq!(entry("-SUMA(1;2)").as_deref(), Some("=-SUM(1,2)"));
+        assert_eq!(entry("-1,5").as_deref(), Some("-1.5"));
+        assert_eq!(entry("+2,5%").as_deref(), Some("+2.5%"));
+        assert_eq!(entry("-").as_deref(), Some("-"));
+        // An entry that doesn't read as a formula stays text; only `=` entries are refused.
+        assert_eq!(entry("--").as_deref(), Some("'--"));
+        assert_eq!(entry("+34 612 345 678").as_deref(), Some("'+34 612 345 678"));
+        assert_eq!(entry("=--"), None);
     }
 }

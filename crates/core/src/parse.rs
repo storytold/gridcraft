@@ -49,6 +49,14 @@ pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
     parse_numeric(s.trim(), sys).map(|(n, _)| n)
 }
 
+/// Whether typed cell input is meant as a formula: it starts with `=`, or, as Lotus 1-2-3 users
+/// type it, with `+` or `-` and isn't a number on its own (`+5+4` is `=+5+4`, `-5` the number -5,
+/// a lone `+` or `-` text). A leading space or apostrophe makes the input text. Callers parse
+/// the formula; a `+` or `-` entry that doesn't parse (`--`) stays text, as in Excel.
+pub fn starts_formula(input: &str) -> bool {
+    input.starts_with('=') || (input.len() > 1 && input.starts_with(['+', '-']) && parse_number_text(input).is_none())
+}
+
 /// Text that Excel's "Number Stored as Text" check flags: it would be a number if typed (signs,
 /// thousands separators, currency, percent, exponent, a parenthesised negative). Dates, times and
 /// fractions kept as text are not flagged, as in Excel.
@@ -434,6 +442,19 @@ mod tests {
         assert_eq!(p("e").value, Value::text("e"));
         assert_eq!(p("-").value, Value::text("-"));
         assert_eq!(p("1.2.3.4").value, Value::text("1.2.3.4"));
+    }
+
+    #[test]
+    fn a_leading_sign_starts_a_formula_unless_the_entry_is_a_number() {
+        // #2023: Excel reads `+5+4` as `=+5+4`, as Lotus 1-2-3 did.
+        for s in ["=1", "=", "+5+4", "-5+4", "--5", "+-5", "-.5*2", "-3/4", "+A1", "-SUM(1,2)", "+(5+4)", "-abc", "--"] {
+            assert!(starts_formula(s), "{s}");
+        }
+        // Signed numbers, percentages and currency stay numbers; a lone sign, a leading space or
+        // apostrophe and other text stay text.
+        for s in ["+5", "-5", "+5%", "-$5", "-1e3", "+.5", "-1,234.5", "+", "-", " +5+4", "'+5+4", "5+4", "", "a-b"] {
+            assert!(!starts_formula(s), "{s}");
+        }
     }
 
     #[test]

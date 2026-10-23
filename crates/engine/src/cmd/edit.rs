@@ -131,12 +131,15 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     if fmt_is_text {
         return Ok(Some(Cell { value: Value::text(input), formula: None, style }));
     }
-    let is_formula = input.starts_with('=')
-        || (input.len() > 1
-            && (input.starts_with('+') || input.starts_with('-'))
-            && gridcraft_core::parse::parse_number_text(input).is_none()
-            && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('));
-    if is_formula {
+    // As in Excel, a `+` or `-` entry is a formula when it reads as one (`+5+4` enters `=+5+4`)
+    // and text when it doesn't (`--`, `+49 170 1234567`); only `=` entries are refused.
+    if !input.starts_with('=')
+        && gridcraft_core::parse::starts_formula(input)
+        && let Ok(cell) = input_to_cell(&format!("={input}"), sheet, at, wb)
+    {
+        return Ok(cell);
+    }
+    if input.starts_with('=') {
         let body = input.strip_prefix('=').unwrap_or(input);
         let expr = wb.name_call_case(parse_typed_formula(body)?);
         check_arg_counts(&expr)?;
