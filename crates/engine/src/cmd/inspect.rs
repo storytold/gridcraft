@@ -136,7 +136,7 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
         "style": style,
         "merge": sh.merge_at(c).map(|m| m.a1()),
         "comment": sh.comments.get(&c),
-        "hyperlink": sh.hyperlinks.get(&c),
+        "hyperlink": crate::links::cell_link(&d.wb, sheet, c),
         "python": cell.and_then(|x| x.py.as_deref()).map(|py| json!({
             "code": py.code,
             "output": if py.object { "object" } else { "value" },
