@@ -247,6 +247,13 @@ fn scalar_arg(name: &str, i: usize) -> bool {
         "FORECAST" | "FORECAST.LINEAR" => i == 0,
         "FORECAST.ETS" | "FORECAST.ETS.CONFINT" => i != 1 && i != 2,
         "FORECAST.ETS.SEASONALITY" | "FORECAST.ETS.STAT" => i > 1,
+        "DSUM" | "DCOUNT" | "DCOUNTA" | "DGET" | "DAVERAGE" | "DMAX" | "DMIN" | "DPRODUCT" | "DSTDEV" | "DSTDEVP" | "DVAR" | "DVARP" | "GCD"
+        | "LCM" | "MODE.MULT" | "F.TEST" | "FTEST" | "CHISQ.TEST" | "CHITEST" => false,
+        "PERCENTRANK" | "PERCENTRANK.INC" | "PERCENTRANK.EXC" | "TRIMMEAN" | "ZTEST" | "Z.TEST" => i != 0,
+        "PROB" | "TTEST" | "T.TEST" => i > 1,
+        "FVSCHEDULE" | "CELL" => i == 0,
+        "NETWORKDAYS" | "WORKDAY" => i < 2,
+        "NETWORKDAYS.INTL" | "WORKDAY.INTL" => i < 3,
         _ => true,
     }
 }
@@ -257,7 +264,9 @@ fn scalar_arg(name: &str, i: usize) -> bool {
 /// scalar position meant implicit intersection there (`ISBLANK(B:B)` at row 4 read `B4`).
 /// Without it the reference lifts into an array that spills or fails with `#SPILL!`. Wrap
 /// those references in `@`, which the evaluator already intersects and the exporter writes
-/// as `_xlfn.SINGLE`, so the file round-trips as a modern explicit intersection.
+/// as `_xlfn.SINGLE`, so the file round-trips as a modern explicit intersection. `ROW` and
+/// `COLUMN` need their arguments to remain references, so their array result is intersected
+/// instead when the call is on a scalar path.
 ///
 /// Only references on an all-scalar path from the root are wrapped: anything under an
 /// array-taking position (aggregates, `SUM(IF(…))`, array constructors such as `FILTER` or
@@ -379,13 +388,21 @@ impl Rewriter {
         {
             return Expr::Call(name.to_string(), args);
         }
-        Expr::Call(name.to_string(), args.into_iter().enumerate().map(|(i, a)| self.expr(a, Self::arg_scalar(name, i), depth)).collect())
+        let scalar_row_result = matches!(name, "ROW" | "COLUMN") && args.first().is_some_and(|a| !matches!(a, Expr::Ref(r) if r.range().is_single()));
+        let call = Expr::Call(name.to_string(), args.into_iter().enumerate().map(|(i, a)| self.expr(a, Self::arg_scalar(name, i), depth)).collect());
+        if scalar_row_result {
+            // ROW/COLUMN need their reference argument intact; intersect their array result in
+            // a legacy scalar position instead of turning that reference into a value.
+            self.changed = true;
+            Expr::Unary(UnOp::At, Box::new(call))
+        } else {
+            call
+        }
     }
 
-    /// Whether argument `i` of `name` expects a single value. Mirrors [`scalar_arg`], except
-    /// `ROW`/`COLUMN`, whose spilling result still intersected in legacy non-array formulas.
+    /// Whether argument `i` of `name` expects a single value, using the file-format policy above.
     fn arg_scalar(name: &str, i: usize) -> bool {
-        name == "ROW" || name == "COLUMN" || scalar_arg(name, i)
+        scalar_arg(name, i)
     }
 }
 
@@ -413,12 +430,41 @@ mod tests {
             ("XLOOKUP(B:B,A:A,C:C)", "XLOOKUP(@B:B,A:A,C:C)"),
             ("VLOOKUP(B:B,A:C,2)", "VLOOKUP(@B:B,A:C,2)"),
             ("MATCH(B:B,A:A,0)", "MATCH(@B:B,A:A,0)"),
-            ("ROW(B:B)", "ROW(@B:B)"),
             ("CHOOSE(B:B,1,2)", "CHOOSE(@B:B,1,2)"),
             ("SUMIF(A:A,B:B,C:C)", "SUMIF(A:A,@B:B,C:C)"),
             ("LET(x,1,x+B:B)", "LET(x,1,x+@B:B)"),
             ("OFFSET(A1,B:B,0)", "OFFSET(A1,@B:B,0)"),
             ("MyName+B:B", "MyName+@B:B"),
+        ] {
+            assert_eq!(rewrite(before).as_deref(), Some(after), "{before}");
+        }
+    }
+
+    #[test]
+    fn legacy_reference_arguments_stay_references() {
+        for text in ["DSUM(A1:C5,2,E1:F2)", "CELL(\"address\",B:B)", "FTEST(A:A,B:B)", "CHITEST(A:A,B:B)"] {
+            assert_eq!(rewrite(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn legacy_row_and_column_intersect_their_result_not_the_reference() {
+        assert_eq!(rewrite("ROW(B:B)").as_deref(), Some("@ROW(B:B)"));
+        assert_eq!(rewrite("COLUMN(B:B)").as_deref(), Some("@COLUMN(B:B)"));
+        assert_eq!(rewrite("ROW(B1)"), None, "a single-cell reference already returns one value");
+        assert_eq!(rewrite("SUM(ROW(B:B))"), None, "an array-taking parent keeps the array result");
+    }
+
+    #[test]
+    fn legacy_scalar_intersection_follows_argument_metadata() {
+        for (before, after) in [
+            ("PERCENTRANK(A:A,B:B,C:C)", "PERCENTRANK(A:A,@B:B,@C:C)"),
+            ("TRIMMEAN(A:A,B:B)", "TRIMMEAN(A:A,@B:B)"),
+            ("PROB(A:A,B:B,C:C,D:D)", "PROB(A:A,B:B,@C:C,@D:D)"),
+            ("TTEST(A:A,B:B,C:C,D:D)", "TTEST(A:A,B:B,@C:C,@D:D)"),
+            ("FVSCHEDULE(A:A,B:B)", "FVSCHEDULE(@A:A,B:B)"),
+            ("NETWORKDAYS(A:A,B:B,C:C)", "NETWORKDAYS(@A:A,@B:B,C:C)"),
+            ("WORKDAY.INTL(A:A,B:B,C:C,D:D)", "WORKDAY.INTL(@A:A,@B:B,@C:C,D:D)"),
         ] {
             assert_eq!(rewrite(before).as_deref(), Some(after), "{before}");
         }
