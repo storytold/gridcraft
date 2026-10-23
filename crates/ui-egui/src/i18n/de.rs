@@ -95,6 +95,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go To Special…" => "Inhalte auswählen…",
         "PivotTable" => "PivotTable",
         "Recommended\nCharts" => "Empfohlene\nDiagramme",
+        "Hierarchy" => "Hierarchie",
         "Table" => "Tabelle",
         "Pictures" => "Bilder",
         "Shapes" => "Formen",

@@ -96,6 +96,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go To Special…" => "Выделить группу ячеек…",
         "PivotTable" => "Сводная таблица",
         "Recommended\nCharts" => "Рекомендуемые\nдиаграммы",
+        "Hierarchy" => "Иерархия",
         "Table" => "Таблица",
         "Pictures" => "Изображения",
         "Shapes" => "Фигуры",

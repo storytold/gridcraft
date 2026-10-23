@@ -466,7 +466,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format Chart pane" => "Παράθυρο μορφοποίησης γραφήματος",
         "Format as Table" => "Μορφοποίηση ως πίνακας",
         "Hide Sheet" => "Απόκρυψη φύλλου",
-        "Hierarchy & more" => "Ιεραρχία και άλλα",
+        "Hierarchy" => "Ιεραρχία",
         "Highlighter" => "Εργαλείο επισήμανσης",
         "How agents drive GridCraft (MCP / control channel)" => "Πώς οι πράκτορες χειρίζονται το GridCraft (MCP / κανάλι ελέγχου)",
         "Import a text or CSV file" => "Εισαγωγή αρχείου κειμένου ή CSV",

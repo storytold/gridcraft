@@ -164,7 +164,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("NH1", Entry::Finish(Action::Dialog("headerFooter"))), // Excel: Header & Footer
     ("NHF", Entry::Finish(Action::Command("pageLayout.headerFooter"))), // Excel: Header & Footer
     ("NHI", Entry::Finish(Action::Control("insert.chart.hierarchy"))), // Excel: Hierarchy Chart; Hierarchy (kind TBD)
-    ("NI1", Entry::Finish(Action::Command("insert.chart"))), // Excel: Waterfall Chart; Waterfall (kind TBD)
+    ("NI1", Entry::Finish(Action::Control("insert.chart.waterfall"))), // Excel: Waterfall Chart; Waterfall, Funnel, Stock or Radar
     ("NI2", Entry::Finish(Action::Dialog("insertLink"))), // Excel: Link
     ("NJ", Entry::Finish(Action::Pending("insert.object"))), // pending; Excel: Object; insert.object missing; reserved until the command lands
     ("NM1T", Entry::Finish(Action::Command("insert.picture"))), // Excel: SmartArt Picture; containment(Picture)
@@ -180,7 +180,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("NR", Entry::Finish(Action::Command("insert.recommendedCharts"))), // Excel: Recommended Charts
     ("NSA", Entry::Finish(Action::Control("insert.chart.statistic"))), // Excel: Statistical Chart; Statistical chart (kind TBD)
     ("NSC", Entry::Finish(Action::Pending("insert.screenshot"))), // pending; Excel: Screenshot Menu; Screenshot; reserved until the command lands
-    ("NSD", Entry::Finish(Action::Command("insert.chart"))), // Excel: Combo Chart; Combo (kind TBD)
+    ("NSD", Entry::Finish(Action::Control("insert.chart.combo"))), // Excel: Combo Chart; Combo
     ("NSF", Entry::Finish(Action::Command("insert.slicer"))), // Excel: Slicer; insert.slicer missing (gap #8); reserved until the command lands
     ("NSH", Entry::Finish(Action::Command("insert.shape"))), // Excel: Shapes
     ("NSP", Entry::Finish(Action::Command("insert.recommendedPivotTables"))), // Excel: Recommended PivotTables
@@ -214,9 +214,9 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("PRS", Entry::Finish(Action::Command("pageLayout.printArea"))), // Excel: Set Print Area
     ("PSP", Entry::Finish(Action::Dialog("pageSetup"))),        // Excel: Page Setup
     ("PSZ", Entry::Finish(Action::Command("pageLayout.size"))), // Excel: Size
-    ("PTC", Entry::Finish(Action::Command("pageLayout.themeColors"))), // Excel: Theme Colors; containment(Colors)
-    ("PTE", Entry::Finish(Action::Command("pageLayout.themeEffects"))), // Excel: Theme Effects; containment(Effects)
-    ("PTF", Entry::Finish(Action::Command("pageLayout.themeFonts"))), // Excel: Theme Fonts; containment(Fonts)
+    ("PTC", Entry::Finish(Action::Control("pageLayout.themeColors"))), // Excel: Theme Colors; containment(Colors)
+    ("PTE", Entry::Finish(Action::Control("pageLayout.themeEffects"))), // Excel: Theme Effects; containment(Effects)
+    ("PTF", Entry::Finish(Action::Control("pageLayout.themeFonts"))), // Excel: Theme Fonts; containment(Fonts)
     ("PTH", Entry::Continue),                                   // Excel: Themes; group level:
     ("PTHB", Entry::Finish(Action::Command("pageLayout.theme"))), // Excel: Browse Themes; containment(Themes)
     ("PVG", Entry::Finish(Action::Command("view.gridlines"))),  // Excel: View Gridlines
@@ -342,8 +342,8 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("WJ", Entry::Finish(Action::Control("view.zoom"))),            // Excel: Zoom To 100%; runs the 100% zoom handler (percent param)
     ("WL", Entry::Finish(Action::Command("view.normal"))),          // Excel: Normal View; containment(Normal)
     ("WM", Entry::Continue),                                        // Excel: Macros Menu; group level: containment(Macros)
-    ("WMR", Entry::Finish(Action::Command("view.macros"))),         // Excel: Record Macro; Record Macro (macros menu)
-    ("WMV", Entry::Finish(Action::Command("view.macros"))),         // Excel: View Macros; containment(Macros)
+    ("WMR", Entry::Finish(Action::Command("automate.recordActions"))), // Excel: Record Macro; Record Macro (macros menu)
+    ("WMV", Entry::Finish(Action::Dialog("macros"))),               // Excel: View Macros; containment(Macros)
     ("WN", Entry::Finish(Action::Command("view.newWindow"))),       // Excel: New Window
     ("WP", Entry::Finish(Action::Command("view.pageLayout"))),      // Excel: Page Layout View
     ("WQ", Entry::Finish(Action::Dialog("zoom"))),                  // Excel: Zoom; opens the Zoom dialog

@@ -447,7 +447,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format Chart pane" => "Venster Grafiek opmaken",
         "Format as Table" => "Opmaken als tabel",
         "Hide Sheet" => "Blad verbergen",
-        "Hierarchy & more" => "Hiërarchie en meer",
+        "Hierarchy" => "Hiërarchie",
         "Highlighter" => "Markeerstift",
         "How agents drive GridCraft (MCP / control channel)" => "Hoe agents GridCraft besturen (MCP / besturingskanaal)",
         "Import a text or CSV file" => "Een tekst- of CSV-bestand importeren",

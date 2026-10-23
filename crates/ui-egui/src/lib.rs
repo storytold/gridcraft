@@ -546,6 +546,29 @@ impl SheetApp {
         if id == "insert.recommendedCharts" && params.get("type").is_none() {
             return self.open_dialog("recommendedCharts", json!({}));
         }
+        // The Insert tab's PivotChart: with no PivotTable at the active cell the report has to be
+        // chosen first (Excel's Create PivotChart); the command alone needs one to be named.
+        if id == "insert.pivotChart" && params.get("pivot").is_none() && crate::pivot_pane::active_pivot(self).is_none() {
+            return self.open_dialog("pivotChart", json!({}));
+        }
+        // Data › Consolidate opens its dialog: the command needs source ranges, so it refuses a
+        // programmatic call without them.
+        if id == "data.consolidate" && params.get("sources").is_none() {
+            return self.open_dialog("consolidate", json!({}));
+        }
+        // Commands that only report data (Add-ins, Queries & Connections, Thesaurus, Custom Views,
+        // Switch Windows) show what they returned in a dialog rather than throwing it away.
+        let result_dialog = match id {
+            "home.addIns" => Some("addIns"),
+            "data.queriesConnections" => Some("queriesConnections"),
+            "review.thesaurus" => Some("thesaurus"),
+            "view.customViews" => Some("customViews"),
+            "view.switchWindows" => Some("switchWindows"),
+            _ => None,
+        };
+        if let Some(name) = result_dialog.filter(|_| params.as_object().is_none_or(|m| m.is_empty())) {
+            return self.open_dialog(name, json!({}));
+        }
         if let Err(e) = self.run(id, params) {
             self.alert(e);
         }

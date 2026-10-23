@@ -1073,10 +1073,10 @@
   },
   {
    "seq": "NI1",
-   "kind": "command",
-   "target": "insert.chart",
+   "kind": "control",
+   "target": "insert.chart.waterfall",
    "excel": "Waterfall Chart",
-   "note": "Waterfall (kind TBD)"
+   "note": "Waterfall, Funnel, Stock or Radar"
   },
   {
    "seq": "NI2",
@@ -1186,10 +1186,10 @@
   },
   {
    "seq": "NSD",
-   "kind": "command",
-   "target": "insert.chart",
+   "kind": "control",
+   "target": "insert.chart.combo",
    "excel": "Combo Chart",
-   "note": "Combo (kind TBD)"
+   "note": "Combo"
   },
   {
    "seq": "NSF",
@@ -1422,21 +1422,21 @@
   },
   {
    "seq": "PTC",
-   "kind": "command",
+   "kind": "control",
    "target": "pageLayout.themeColors",
    "excel": "Theme Colors",
    "note": "containment(Colors)"
   },
   {
    "seq": "PTE",
-   "kind": "command",
+   "kind": "control",
    "target": "pageLayout.themeEffects",
    "excel": "Theme Effects",
    "note": "containment(Effects)"
   },
   {
    "seq": "PTF",
-   "kind": "command",
+   "kind": "control",
    "target": "pageLayout.themeFonts",
    "excel": "Theme Fonts",
    "note": "containment(Fonts)"
@@ -2326,14 +2326,14 @@
   {
    "seq": "WMR",
    "kind": "command",
-   "target": "view.macros",
+   "target": "automate.recordActions",
    "excel": "Record Macro",
    "note": "Record Macro (macros menu)"
   },
   {
    "seq": "WMV",
-   "kind": "command",
-   "target": "view.macros",
+   "kind": "dialog",
+   "target": "macros",
    "excel": "View Macros",
    "note": "containment(Macros)"
   },

@@ -887,7 +887,7 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Format as Table", "テーブルとして書式設定"),
     ("Hide", "非表示"),
     ("Hide Sheet", "シートの非表示"),
-    ("Hierarchy & more", "階層とその他"),
+    ("Hierarchy", "階層"),
     ("Highlighter", "蛍光ペン"),
     ("How agents drive GridCraft (MCP / control channel)", "エージェントによる GridCraft の操作 (MCP / 制御チャネル)"),
     ("Import a text or CSV file", "テキストまたは CSV ファイルのインポート"),

@@ -461,7 +461,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format Chart pane" => "Podokno formátu grafu",
         "Format as Table" => "Formátovat jako tabulku",
         "Hide Sheet" => "Skrýt list",
-        "Hierarchy & more" => "Hierarchické a další grafy",
+        "Hierarchy" => "Hierarchie",
         "Highlighter" => "Zvýrazňovač",
         "How agents drive GridCraft (MCP / control channel)" => "Jak agenti ovládají GridCraft (MCP / řídicí kanál)",
         "Import a text or CSV file" => "Importovat textový soubor nebo CSV",

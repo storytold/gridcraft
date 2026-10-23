@@ -98,6 +98,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go To Special…" => "Đi tới đặc biệt…",
         "PivotTable" => "PivotTable",
         "Recommended\nCharts" => "Biểu đồ\nđề xuất",
+        "Hierarchy" => "Hệ thống phân cấp",
         "Table" => "Bảng",
         "Pictures" => "Ảnh",
         "Shapes" => "Hình",

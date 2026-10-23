@@ -878,7 +878,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format as Table" => "Formatare ca tabel",
         "Hide" => "Ascundere",
         "Hide Sheet" => "Ascundere foaie",
-        "Hierarchy & more" => "Ierarhie și altele",
+        "Hierarchy" => "Ierarhie",
         "Highlighter" => "Marker",
         "How agents drive GridCraft (MCP / control channel)" => "Cum controlează agenții GridCraft (MCP / canal de control)",
         "Import a text or CSV file" => "Importă un fișier text sau CSV",

@@ -96,6 +96,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go To Special…" => "定位条件…",
         "PivotTable" => "数据透视表",
         "Recommended\nCharts" => "推荐\n图表",
+        "Hierarchy" => "层次结构",
         "Table" => "表格",
         "Pictures" => "图片",
         "Shapes" => "形状",

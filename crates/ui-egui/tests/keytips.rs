@@ -680,3 +680,23 @@ fn font_dropdown_highlight_follows_the_filtered_rows() {
     h.run_steps(3);
     assert!(h.query_all_by_label("Georgia").count() >= 1, "an emptied filter lists every font again");
 }
+
+/// The Insert ▸ Charts category keytips (NI1, NSD) open their menus, so keyboard users reach the
+/// chart types rather than firing a command with no type. The generated suite only proves they
+/// route to a control without an error box.
+#[test]
+fn chart_category_keytips_open_their_menus() {
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::N, Key::I, Key::Num1], false);
+    h.run_steps(3);
+    assert!(h.state().message.is_none() && h.state().toast.is_none());
+    assert!(h.query_by_label("Funnel").is_some(), "NI1 opens the Waterfall, Funnel, Stock or Radar menu");
+    assert!(h.query_by_label("Radar").is_some());
+
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::N, Key::S, Key::D], false);
+    h.run_steps(3);
+    assert!(h.state().message.is_none() && h.state().toast.is_none());
+    // "Combo" also names the menu's only item; one label is enough.
+    assert!(h.query_all_by_label("Combo").count() >= 1, "NSD opens the Combo menu");
+}
