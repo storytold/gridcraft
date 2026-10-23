@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** minor (the Japanese catalog covers the dialogs, messages and menus) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** minor (the Japanese catalog covers the dialogs, messages and menus; gradient cell fills render and round-trip) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -193,6 +193,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-11 | minor | §15: trim-reference operators (`A1:.E10`, `A1.:E10`, `A1.:.E10`) parse and evaluate |
 | 2026-10-11 | minor | §4: trendlines (six types, forecast, equation and R²) read, written and drawn |
 | 2026-10-11 | minor | §7: password-encrypted workbooks open with their password; saving with one remains (#11) |
+| 2026-10-17 | minor | Cell fills: XLSX gradient fills (linear/path, all stops, theme tints) render and round-trip; not previously listed as a gap |
 | 2026-10-11 | minor | §16: comment navigation, Show Comments, Show All Notes and Convert to Comments landed (#281) |
 | 2026-10-11 | minor | §7: `.xls` (BIFF8) import of values, formulas and number formats (#121) |
 | 2026-10-11 | minor | §3: XLSX pass-through keeps custom XML, external links, connections, query tables, printer settings, controls and OLE objects (#330, #324) |

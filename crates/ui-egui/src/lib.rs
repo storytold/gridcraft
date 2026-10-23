@@ -18,6 +18,7 @@ mod floating_pictures;
 pub mod fonts;
 pub mod formula_bar;
 mod formula_locale;
+mod gradient;
 pub mod grid;
 pub mod i18n;
 pub mod icons;

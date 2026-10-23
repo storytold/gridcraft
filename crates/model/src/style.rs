@@ -245,17 +245,254 @@ pub enum PatternType {
     LightTrellis,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// A gradient stop: `position` is 0..=1 across the gradient.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GradientStop {
+    pub position: f64,
+    pub color: Color,
+}
+
+impl Eq for GradientStop {}
+
+impl Hash for GradientStop {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        self.position.to_bits().hash(h);
+        self.color.hash(h);
+    }
+}
+
+/// A linear or path gradient. Positions and convergence values are clamped to 0..=1;
+/// linear degrees are normalised to 0..360. Degrees follow SpreadsheetML: 0 = left-to-right,
+/// 90 = top-to-bottom, measured clockwise from the horizontal axis.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum GradientKind {
+    Linear { degree: f64 },
+    Path { left: f64, right: f64, top: f64, bottom: f64 },
+}
+
+impl Eq for GradientKind {}
+
+impl Hash for GradientKind {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        match self {
+            GradientKind::Linear { degree } => {
+                0u8.hash(h);
+                degree.to_bits().hash(h);
+            }
+            GradientKind::Path { left, right, top, bottom } => {
+                1u8.hash(h);
+                left.to_bits().hash(h);
+                right.to_bits().hash(h);
+                top.to_bits().hash(h);
+                bottom.to_bits().hash(h);
+            }
+        }
+    }
+}
+
+impl Default for GradientKind {
+    fn default() -> Self {
+        GradientKind::Linear { degree: 0.0 }
+    }
+}
+
+impl GradientKind {
+    fn normalized(self) -> GradientKind {
+        match self {
+            GradientKind::Linear { degree } => {
+                // `+ 0.0` turns `-0.0` into `+0.0`: the two compare equal but hash differently.
+                GradientKind::Linear { degree: if degree.is_finite() { degree.rem_euclid(360.0) + 0.0 } else { 0.0 } }
+            }
+            GradientKind::Path { mut left, mut right, mut top, mut bottom } => {
+                let clamp = |v: f64| if v.is_finite() { v.clamp(0.0, 1.0) + 0.0 } else { 0.5 };
+                left = clamp(left);
+                right = clamp(right);
+                top = clamp(top);
+                bottom = clamp(bottom);
+                if left > right {
+                    std::mem::swap(&mut left, &mut right);
+                }
+                if top > bottom {
+                    std::mem::swap(&mut top, &mut bottom);
+                }
+                GradientKind::Path { left, right, top, bottom }
+            }
+        }
+    }
+}
+
+/// A cell gradient fill. Excel writes these as `<gradientFill>` and the UI exposes one or two
+/// endpoint colours, but the model keeps every stop so imported files round-trip.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GradientFill {
+    pub kind: GradientKind,
+    pub stops: Vec<GradientStop>,
+}
+
+impl Eq for GradientFill {}
+
+impl Hash for GradientFill {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        self.kind.hash(h);
+        self.stops.hash(h);
+    }
+}
+
+impl GradientFill {
+    pub fn new(kind: GradientKind, stops: Vec<GradientStop>) -> GradientFill {
+        let mut stops: Vec<GradientStop> = stops
+            .into_iter()
+            .filter(|s| s.position.is_finite())
+            // `+ 0.0` normalises `-0.0`: equality treats them as equal, so `Hash` must too.
+            .map(|s| GradientStop { position: s.position.clamp(0.0, 1.0) + 0.0, color: s.color })
+            .collect();
+        stops.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap_or(std::cmp::Ordering::Equal));
+        if stops.is_empty() {
+            stops.push(GradientStop { position: 0.0, color: Color::Auto });
+        }
+        GradientFill { kind: kind.normalized(), stops }
+    }
+
+    pub fn linear(degree: f64, stops: Vec<GradientStop>) -> GradientFill {
+        GradientFill::new(GradientKind::Linear { degree }, stops)
+    }
+
+    pub fn path(left: f64, right: f64, top: f64, bottom: f64, stops: Vec<GradientStop>) -> GradientFill {
+        GradientFill::new(GradientKind::Path { left, right, top, bottom }, stops)
+    }
+
+    pub fn is_linear(&self) -> bool {
+        matches!(self.kind, GradientKind::Linear { .. })
+    }
+
+    /// Resolved stops in position order, with automatic colours as black.
+    pub fn resolved_stops(&self, theme: &Theme) -> Vec<(f64, [u8; 3])> {
+        self.stops.iter().map(|s| (s.position, s.color.resolve(theme).unwrap_or([0, 0, 0]))).collect()
+    }
+
+    /// Samples the gradient at normalised cell coordinates (`u` right, `v` down).
+    pub fn sample(&self, u: f64, v: f64, theme: &Theme) -> Option<[u8; 3]> {
+        let stops = self.resolved_stops(theme);
+        self.sample_resolved(&stops, u, v)
+    }
+
+    /// Samples against stops already resolved for the theme. Rendering paths call this with one
+    /// `resolved_stops` per cell instead of resolving (and allocating) for every vertex.
+    pub fn sample_resolved(&self, stops: &[(f64, [u8; 3])], u: f64, v: f64) -> Option<[u8; 3]> {
+        let first = stops.first()?;
+        let last = stops.last()?;
+        let t = self.position(u, v);
+        if t <= first.0 {
+            return Some(first.1);
+        }
+        if t >= last.0 {
+            return Some(last.1);
+        }
+        for pair in stops.windows(2) {
+            let (a, ca) = pair[0];
+            let (b, cb) = pair[1];
+            if t >= a && t <= b {
+                let f = if b > a { (t - a) / (b - a) } else { 0.0 };
+                return Some([
+                    (ca[0] as f64 + (cb[0] as f64 - ca[0] as f64) * f).round() as u8,
+                    (ca[1] as f64 + (cb[1] as f64 - ca[1] as f64) * f).round() as u8,
+                    (ca[2] as f64 + (cb[2] as f64 - ca[2] as f64) * f).round() as u8,
+                ]);
+            }
+        }
+        Some(last.1)
+    }
+
+    /// The gradient position (0..=1) at normalised cell coordinates.
+    pub fn position(&self, u: f64, v: f64) -> f64 {
+        let (u, v) = (u.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
+        match self.kind {
+            GradientKind::Linear { degree } => {
+                let angle = degree.to_radians();
+                // SpreadsheetML measures `degree` clockwise from the horizontal axis, with v
+                // down: 0 = left-to-right, 90 = top-to-bottom.
+                let (dx, dy) = (angle.cos(), angle.sin());
+                let lo = dx.min(0.0) + dy.min(0.0);
+                let hi = dx.max(0.0) + dy.max(0.0);
+                if hi > lo {
+                    let t = ((u * dx + v * dy - lo) / (hi - lo)).clamp(0.0, 1.0);
+                    // sin/cos of right angles leave a tiny epsilon at the endpoints.
+                    if t < 1e-12 {
+                        0.0
+                    } else if 1.0 - t < 1e-12 {
+                        1.0
+                    } else {
+                        t
+                    }
+                } else {
+                    0.0
+                }
+            }
+            GradientKind::Path { left, right, top, bottom } => {
+                let edge = |value: f64, lo: f64, hi: f64| {
+                    if value < lo {
+                        (lo - value) / lo.max(1e-9)
+                    } else if value > hi {
+                        (value - hi) / (1.0 - hi).max(1e-9)
+                    } else {
+                        0.0
+                    }
+                };
+                edge(u, left, right).max(edge(v, top, bottom)).clamp(0.0, 1.0)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Fill {
     pub pattern: PatternType,
     /// Pattern foreground (the solid colour for `Solid`).
     pub fg: Color,
     pub bg: Color,
+    /// When set, this is a gradient fill and `pattern` is `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient: Option<GradientFill>,
 }
 
 impl Fill {
     pub fn solid(c: Color) -> Fill {
-        Fill { pattern: PatternType::Solid, fg: c, bg: Color::Auto }
+        Fill { pattern: PatternType::Solid, fg: c, bg: Color::Auto, gradient: None }
+    }
+
+    pub fn gradient(kind: GradientKind, stops: Vec<GradientStop>) -> Fill {
+        Fill { pattern: PatternType::None, fg: Color::Auto, bg: Color::Auto, gradient: Some(GradientFill::new(kind, stops)) }
+    }
+
+    pub fn is_set(&self) -> bool {
+        self.gradient.is_some() || self.pattern != PatternType::None
+    }
+
+    pub fn is_gradient(&self) -> bool {
+        self.gradient.is_some()
+    }
+
+    /// The colour a swatch or non-gradient fallback (HTML export) should show: the first stop for
+    /// a gradient, the foreground for a pattern/solid, and `None` for no fill.
+    pub fn preview_color(&self, theme: &Theme) -> Option<[u8; 3]> {
+        if let Some(g) = &self.gradient {
+            g.stops.first().and_then(|s| s.color.resolve(theme))
+        } else if self.pattern != PatternType::None {
+            self.fg.resolve(theme)
+        } else {
+            None
+        }
+    }
+
+    /// Repairs values that arrived through JSON: clamps and orders gradient stops and keeps a
+    /// gradient and a pattern from both being active.
+    pub fn normalize(&mut self) {
+        if let Some(g) = self.gradient.take() {
+            self.gradient = Some(GradientFill::new(g.kind, g.stops));
+            self.pattern = PatternType::None;
+            self.fg = Color::Auto;
+            self.bg = Color::Auto;
+        }
     }
 }
 
@@ -529,5 +766,94 @@ mod tests {
         let json = serde_json::to_string(&t).unwrap();
         assert!(json.contains("major_font_ea") && json.contains("游ゴシック"), "{json}");
         assert_eq!(serde_json::from_str::<Theme>(&json).unwrap(), t);
+    }
+
+    #[test]
+    fn gradient_sampling_and_normalisation() {
+        let th = Theme::default();
+        let stops = vec![GradientStop { position: 0.0, color: Color::Rgb(0x000000) }, GradientStop { position: 1.0, color: Color::Rgb(0xFFFFFF) }];
+        let horizontal = GradientFill::linear(0.0, stops.clone());
+        assert_eq!(horizontal.position(0.0, 0.5), 0.0);
+        assert_eq!(horizontal.position(1.0, 0.5), 1.0);
+        assert_eq!(horizontal.sample(0.5, 0.5, &th), Some([128, 128, 128]));
+
+        // SpreadsheetML: 0 = left-to-right, 90 = top-to-bottom, 180 = right-to-left,
+        // 270 = bottom-to-top.
+        let vertical = GradientFill::linear(90.0, stops.clone());
+        assert_eq!(vertical.position(0.5, 0.0), 0.0);
+        assert_eq!(vertical.position(0.5, 1.0), 1.0);
+        let right_to_left = GradientFill::linear(180.0, stops.clone());
+        assert_eq!(right_to_left.position(0.0, 0.5), 1.0);
+        assert_eq!(right_to_left.position(1.0, 0.5), 0.0);
+        let bottom_to_top = GradientFill::linear(270.0, stops.clone());
+        assert_eq!(bottom_to_top.position(0.5, 0.0), 1.0);
+        assert_eq!(bottom_to_top.position(0.5, 1.0), 0.0);
+        let down_right = GradientFill::linear(45.0, stops.clone());
+        assert_eq!(down_right.position(0.0, 0.0), 0.0);
+        assert_eq!(down_right.position(1.0, 1.0), 1.0);
+        let down_left = GradientFill::linear(135.0, stops.clone());
+        assert_eq!(down_left.position(1.0, 0.0), 0.0);
+        assert_eq!(down_left.position(0.0, 1.0), 1.0);
+
+        // Resolving once per cell must give the same samples as resolving per point.
+        let resolved = horizontal.resolved_stops(&th);
+        for (u, v) in [(0.0, 0.0), (0.25, 0.75), (0.5, 0.5), (1.0, 1.0)] {
+            assert_eq!(horizontal.sample_resolved(&resolved, u, v), horizontal.sample(u, v, &th));
+        }
+
+        // Swatches and HTML fall back to the first gradient stop, then the solid foreground.
+        let preview = Fill::gradient(
+            GradientKind::Linear { degree: 90.0 },
+            vec![GradientStop { position: 0.0, color: Color::Rgb(0xFF0000) }, GradientStop { position: 1.0, color: Color::Rgb(0x0000FF) }],
+        );
+        assert_eq!(preview.preview_color(&th), Some([255, 0, 0]));
+        assert_eq!(Fill::solid(Color::Rgb(0x00FF00)).preview_color(&th), Some([0, 255, 0]));
+        assert_eq!(Fill::default().preview_color(&th), None);
+
+        let center = GradientFill::path(0.5, 0.5, 0.5, 0.5, stops);
+        assert_eq!(center.position(0.5, 0.5), 0.0);
+        assert_eq!(center.position(0.0, 0.5), 1.0);
+
+        let mut fill = Fill::gradient(
+            GradientKind::Linear { degree: 0.0 },
+            vec![GradientStop { position: 2.0, color: Color::Rgb(0xFFFFFF) }, GradientStop { position: -1.0, color: Color::Rgb(0x000000) }],
+        );
+        fill.pattern = PatternType::Solid;
+        fill.normalize();
+        let g = fill.gradient.as_ref().unwrap();
+        assert_eq!(g.stops.iter().map(|s| s.position).collect::<Vec<_>>(), vec![0.0, 1.0]);
+        assert_eq!(fill.pattern, PatternType::None);
+        assert_eq!(Fill::solid(Color::Rgb(0xFF0000)).gradient, None);
+    }
+
+    #[test]
+    fn gradient_normalisation_agrees_with_hash() {
+        let stop = |p: f64| GradientStop { position: p, color: Color::Rgb(0xFF0000) };
+        let a = GradientFill::new(GradientKind::Linear { degree: -0.0 }, vec![stop(-0.0), stop(1.0)]);
+        let b = GradientFill::new(GradientKind::Linear { degree: 0.0 }, vec![stop(0.0), stop(1.0)]);
+        assert_eq!(a, b);
+        assert_eq!(a.kind, GradientKind::Linear { degree: 0.0 });
+        assert_eq!(a.stops[0].position.to_bits(), 0.0f64.to_bits());
+
+        let path = GradientFill::new(GradientKind::Path { left: -0.0, right: 0.0, top: -0.0, bottom: 0.0 }, vec![stop(0.5)]);
+        if let GradientKind::Path { left, right, top, bottom } = path.kind {
+            assert_eq!(left.to_bits(), 0.0f64.to_bits());
+            assert_eq!(top.to_bits(), 0.0f64.to_bits());
+            assert_eq!(right.to_bits(), 0.0f64.to_bits());
+            assert_eq!(bottom.to_bits(), 0.0f64.to_bits());
+        }
+
+        let fill = |g: GradientFill| Fill { pattern: PatternType::None, fg: Color::Auto, bg: Color::Auto, gradient: Some(g) };
+        let mut styles = StyleTable::default();
+        let ia = styles.intern(Style { fill: fill(a), ..Style::default() });
+        let ib = styles.intern(Style { fill: fill(b), ..Style::default() });
+        assert_eq!(ia, ib, "equal fills must intern to one StyleId");
+    }
+
+    #[test]
+    fn gradient_keeps_every_stop() {
+        let stops = (0..100).map(|i| GradientStop { position: i as f64 / 99.0, color: Color::Rgb(0x010000 + i) }).collect();
+        let g = GradientFill::new(GradientKind::Linear { degree: 0.0 }, stops);
+        assert_eq!(g.stops.len(), 100);
     }
 }

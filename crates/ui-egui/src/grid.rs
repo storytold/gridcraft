@@ -427,6 +427,7 @@ impl Geo {
 struct Look {
     style: Style,
     fill: Option<Color32>,
+    gradient: Option<gridcraft_engine::model::GradientFill>,
     text_color: Color32,
 }
 
@@ -456,8 +457,8 @@ fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (
     if let Some(l) = &cfl
         && let Some(st) = &l.style
     {
-        if st.fill.pattern != PatternType::None {
-            style.fill = st.fill;
+        if st.fill.is_set() {
+            style.fill = st.fill.clone();
         }
         if st.font.color != Color::Auto {
             style.font.color = st.font.color;
@@ -489,27 +490,35 @@ fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (
             }
         }
     }
-    let mut fill = match style.fill.pattern {
-        PatternType::None => None,
-        PatternType::Solid => style.fill.fg.resolve(&wb.theme).map(theme::color32),
-        _ => {
-            // Patterns: approximate with a blend of foreground and background.
-            let fg = style.fill.fg.resolve(&wb.theme).unwrap_or([0, 0, 0]);
-            let bg = style.fill.bg.resolve(&wb.theme).unwrap_or([255, 255, 255]);
-            Some(Color32::from_rgb(
-                ((fg[0] as u16 + bg[0] as u16 * 3) / 4) as u8,
-                ((fg[1] as u16 + bg[1] as u16 * 3) / 4) as u8,
-                ((fg[2] as u16 + bg[2] as u16 * 3) / 4) as u8,
-            ))
+    // Move the gradient out of the copied style: `Look` owns it, so the style must not keep a
+    // second deep copy of every stop.
+    let mut gradient = style.fill.gradient.take();
+    let mut fill = if gradient.is_some() {
+        None
+    } else {
+        match style.fill.pattern {
+            PatternType::None => None,
+            PatternType::Solid => style.fill.fg.resolve(&wb.theme).map(theme::color32),
+            _ => {
+                // Patterns: approximate with a blend of foreground and background.
+                let fg = style.fill.fg.resolve(&wb.theme).unwrap_or([0, 0, 0]);
+                let bg = style.fill.bg.resolve(&wb.theme).unwrap_or([255, 255, 255]);
+                Some(Color32::from_rgb(
+                    ((fg[0] as u16 + bg[0] as u16 * 3) / 4) as u8,
+                    ((fg[1] as u16 + bg[1] as u16 * 3) / 4) as u8,
+                    ((fg[2] as u16 + bg[2] as u16 * 3) / 4) as u8,
+                ))
+            }
         }
     };
     if let Some(l) = &cfl
         && let Some(rgb) = l.scale_fill
     {
+        gradient = None;
         fill = Some(theme::color32(rgb));
     }
     let text_color = col32(style.font.color, wb, Color32::BLACK);
-    (Look { style, fill, text_color }, cfl)
+    (Look { style, fill, gradient, text_color }, cfl)
 }
 
 /// Text for a value with General narrowing to the available width.
@@ -783,7 +792,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     update_cursor(app, ui, &resp, &geo, sh);
     crate::text_box::show(app, ui, &geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
-        in_cell_editor(app, ui, &geo, sh, &wb);
+        in_cell_editor(app, ui, &geo, sh, &wb, &mut cf);
     }
     filter_menu(app, ui, &geo, previous_popups.0 == app.grid.filter_menu);
     list_picker(app, ui, &geo, previous_popups.1 == app.grid.list_picker);
@@ -1121,7 +1130,9 @@ pub(crate) fn paint_quadrant(
             None => (geo.cell_rect(sh, c), c),
         };
         let (lk, cfl) = look(wb, si, sh, anchor, cf);
-        if let Some(f) = lk.fill {
+        if let Some(g) = &lk.gradient {
+            crate::gradient::paint_rect(p, rect, g, &wb.theme);
+        } else if let Some(f) = lk.fill {
             p.rect_filled(rect.expand(0.0), 0.0, f);
         } else if in_merge(c).is_some() {
             p.rect_filled(rect.shrink(0.5), 0.0, Color32::WHITE);
@@ -1320,8 +1331,16 @@ pub(crate) fn paint_quadrant(
                 }
             }
             clip = Rect::from_min_max(pos2(left, rect.top()), pos2(right, rect.bottom()));
-            // Paint over the gridlines the text passes through.
-            if lk.fill.is_none() {
+            // Paint over the gridlines the text passes through, unless a gradient lies under the
+            // text: `grid_bg` would erase a neighbouring cell's gradient. Conditional formats
+            // live in the effective look, not the stored style, so ask `look`.
+            let mut gradient_under = |from: f32, to: f32| {
+                let (lo, hi) = (from.min(to), from.max(to));
+                (geo.col_at(sh, lo)..=geo.col_at(sh, hi))
+                    .any(|col| col != c.col && look(wb, si, sh, CellRef::new(c.row, col), cf).0.gradient.is_some())
+            };
+            if lk.fill.is_none() && lk.gradient.is_none() && !gradient_under(clip.left(), rect.left()) && !gradient_under(rect.right(), clip.right())
+            {
                 let inner = Rect::from_min_max(pos2(clip.left() + 1.0, clip.top() + 0.5), pos2(clip.right() - 1.0, clip.bottom() - 1.0));
                 let extra_l = Rect::from_min_max(inner.min, pos2(rect.left() + 1.0, inner.bottom()));
                 let extra_r = Rect::from_min_max(pos2(rect.right() - 1.0, inner.top()), inner.max);
@@ -3043,7 +3062,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     }
 }
 
-fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook) {
+fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook, cf: &mut CfCache) {
     let Some(ed) = app.editor.as_ref() else { return };
     if ed.sheet != wb.active_sheet {
         return;
@@ -3053,7 +3072,7 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
         Some(m) => geo.range_rect(sh, m),
         None => geo.cell_rect(sh, cell),
     };
-    let st = wb.styles.get(sh.style_id(cell)).clone();
+    let st = wb.styles.get(sh.style_id(cell));
     let size = st.font.size * 96.0 / 72.0 * geo.z;
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
     let lines = ed.text.lines().count().max(1) as f32 + if ed.text.ends_with('\n') { 1.0 } else { 0.0 };
@@ -3073,10 +3092,11 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     };
     // Grows to the left on a right-to-left sheet.
     let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
-    let fill = match st.fill.pattern {
-        PatternType::Solid => st.fill.fg.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::WHITE),
-        _ => Color32::WHITE,
-    };
+    // The editor paints the cell's effective fill, conditional formats and table styles included,
+    // and the caret contrasts with that same gradient rather than the raw style.
+    let lk = look(wb, wb.active_sheet, sh, cell, cf).0;
+    let fill = lk.fill.unwrap_or(Color32::WHITE);
+    let gradient = lk.gradient;
     let split = pos2(geo.cells.left() + geo.frozen_w, geo.cells.top() + geo.frozen_h);
     let quadrant = Rect::from_min_max(
         pos2(if cell.col >= geo.fc { split.x } else { geo.cells.left() }, if cell.row >= geo.fr { split.y } else { geo.cells.top() }),
@@ -3084,14 +3104,25 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     );
     let clip = ui.clip_rect().intersect(quadrant);
     let painter = ui.painter().with_clip_rect(clip);
-    painter.rect_filled(erect, 0.0, fill);
+    if let Some(g) = &gradient {
+        crate::gradient::paint_rect(&painter, erect, g, &wb.theme);
+    } else {
+        painter.rect_filled(erect, 0.0, fill);
+    }
     painter.rect_stroke(erect.expand(1.0), 0.0, Stroke::new(2.0, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
     let id = egui::Id::new("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
     child.set_clip_rect(clip);
     // The theme's caret is meant for the UI chrome and vanishes on some fills (and, in the dark
-    // theme, on the white paper): pick black or white against the fill, like Excel.
-    child.visuals_mut().text_cursor.stroke.color = ink_on(fill);
+    // theme, on the white paper): pick black or white against what is under the caret, like Excel.
+    let caret_byte = ed.text.char_indices().nth(ed.caret).map_or(ed.text.len(), |(i, _)| i);
+    let before_caret = &ed.text[..caret_byte];
+    let caret_line = before_caret.matches('\n').count();
+    let caret_x = ui.painter().layout_no_wrap(before_caret.rsplit('\n').next().unwrap_or("").to_string(), font.clone(), Color32::BLACK).size().x;
+    let u = ((caret_x + 2.0) / erect.width().max(1.0)).clamp(0.0, 1.0) as f64;
+    let v = if wrap { ((caret_line as f32 + 0.5) / lines.max(1.0)).clamp(0.0, 1.0) as f64 } else { 0.5 };
+    let caret_bg = gradient.as_ref().and_then(|g| g.sample(u, v, &wb.theme)).map_or(fill, |rgb| Color32::from_rgb(rgb[0], rgb[1], rgb[2]));
+    child.visuals_mut().text_cursor.stroke.color = ink_on(caret_bg);
     crate::formula_bar::editor_widget(app, &mut child, id, font, wrap, erect.width() - 4.0);
 }
 

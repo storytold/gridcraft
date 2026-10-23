@@ -343,6 +343,41 @@ mod tests {
     }
 
     #[test]
+    fn fill_tab_labels_are_in_every_catalog() {
+        // Source-driven: every literal label in `fill_tab` must exist in every non-English
+        // language, so a new control cannot ship as English-only.
+        let src = include_str!("dialogs.rs");
+        let start = src.find("fn fill_tab(").expect("fill_tab");
+        let body = &src[start..];
+        let end = body.find("\nfn ").unwrap_or(body.len());
+        let body = &body[..end];
+        let mut keys: Vec<&str> = body
+            .match_indices("lang.tr(\"")
+            .filter_map(|(i, _)| {
+                let rest = &body[i + "lang.tr(\"".len()..];
+                rest.find('"').map(|j| &rest[..j])
+            })
+            .collect();
+        // The four preset buttons pass their label through a variable.
+        keys.extend(["Vertical", "Diagonal up", "Horizontal", "Diagonal down"]);
+        keys.sort_unstable();
+        keys.dedup();
+        assert!(keys.contains(&"Gradient") && keys.contains(&"Add Stop"));
+        for key in keys {
+            assert!(es::translate(key).is_some(), "missing Spanish: {key}");
+            assert!(zh::translate(key).is_some(), "missing Simplified Chinese: {key}");
+            assert!(ko::translate(key).is_some(), "missing Korean: {key}");
+            assert!(ru::translate(key).is_some(), "missing Russian: {key}");
+            assert!(pt::translate(key).is_some(), "missing Portuguese: {key}");
+            assert!(de::translate(key).is_some(), "missing German: {key}");
+            assert!(cs::translate(key).is_some(), "missing Czech: {key}");
+            assert!(fr::translate(key).is_some(), "missing French: {key}");
+            assert!(sr::translate(key).is_some(), "missing Serbian: {key}");
+            assert!(ja::translate(key).is_some(), "missing Japanese: {key}");
+        }
+    }
+
+    #[test]
     fn translations_are_unique_and_preserve_unknown_text() {
         for (i, (en, ja)) in ja::CORE.iter().enumerate() {
             assert!(!ja.is_empty());

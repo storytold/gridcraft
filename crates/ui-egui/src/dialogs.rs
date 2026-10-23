@@ -5,6 +5,7 @@
 //! `ui.dialog.set {field, value}` edits a field and `ui.dialog.confirm` presses OK.
 
 use egui::{Color32, Key, Sense, Stroke, StrokeKind, vec2};
+use gridcraft_engine::model::{Color as CellColor, Fill, GradientFill, GradientKind, GradientStop, PatternType, Theme};
 
 use crate::icons::{self, Icon};
 use serde_json::{Map, Value as Json, json};
@@ -1789,6 +1790,146 @@ fn macros(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     });
 }
 
+fn gradient_color_button(ui: &mut egui::Ui, color: &mut CellColor, theme: &Theme) {
+    let mut rgb = color.resolve(theme).unwrap_or([0, 0, 0]);
+    if ui.color_edit_button_srgb(&mut rgb).changed() {
+        *color = CellColor::rgb(rgb[0], rgb[1], rgb[2]);
+    }
+}
+
+fn fill_tab(ui: &mut egui::Ui, fill: &mut Fill, theme: &Theme, lang: crate::i18n::Language) {
+    let was = if fill.is_gradient() {
+        2
+    } else if fill.pattern != PatternType::None {
+        1
+    } else {
+        0
+    };
+    let mut mode = was;
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut mode, 0, lang.tr("No Fill"));
+        ui.selectable_value(&mut mode, 1, lang.tr("Solid"));
+        ui.selectable_value(&mut mode, 2, lang.tr("Gradient"));
+    });
+    if mode != was {
+        match mode {
+            0 => *fill = Fill::default(),
+            1 => {
+                let c = fill
+                    .gradient
+                    .as_ref()
+                    .and_then(|g| g.stops.first())
+                    .map(|s| s.color)
+                    .unwrap_or_else(|| if fill.fg == CellColor::Auto { CellColor::Theme(4, 0) } else { fill.fg });
+                *fill = Fill::solid(c);
+            }
+            _ => {
+                let start = if fill.pattern == PatternType::Solid && fill.fg != CellColor::Auto { fill.fg } else { CellColor::Theme(4, 0) };
+                *fill = Fill::gradient(
+                    GradientKind::Linear { degree: 90.0 },
+                    vec![GradientStop { position: 0.0, color: start }, GradientStop { position: 1.0, color: CellColor::Theme(0, 0) }],
+                );
+            }
+        }
+    }
+    ui.add_space(4.0);
+    match mode {
+        0 => {
+            ui.weak(lang.tr("No fill"));
+        }
+        1 => {
+            ui.label(lang.tr("Background Color:"));
+            if let Some(c) = crate::widgets::color_palette(ui, &theme.colors, lang.tr("No Color")) {
+                *fill = if c == "none" { Fill::default() } else { Fill::solid(CellColor::from_hex(&c).unwrap_or_default()) };
+            }
+        }
+        _ => {
+            let Some(mut g) = fill.gradient.clone() else { return };
+            let mut linear = g.is_linear();
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut linear, true, lang.tr("Linear"));
+                ui.radio_value(&mut linear, false, lang.tr("Path"));
+            });
+            if linear != g.is_linear() {
+                g.kind =
+                    if linear { GradientKind::Linear { degree: 90.0 } } else { GradientKind::Path { left: 0.5, right: 0.5, top: 0.5, bottom: 0.5 } };
+            }
+            match &mut g.kind {
+                GradientKind::Linear { degree } => {
+                    ui.add(egui::Slider::new(degree, 0.0..=360.0).text(lang.tr("Angle")));
+                    ui.horizontal(|ui| {
+                        for (label, value) in [("Vertical", 90.0), ("Diagonal up", 315.0), ("Horizontal", 0.0), ("Diagonal down", 45.0)] {
+                            if ui.small_button(lang.tr(label)).clicked() {
+                                *degree = value;
+                            }
+                        }
+                    });
+                }
+                GradientKind::Path { left, right, top, bottom } => {
+                    ui.horizontal(|ui| {
+                        if ui.small_button(lang.tr("From center")).clicked() {
+                            *left = 0.5;
+                            *right = 0.5;
+                            *top = 0.5;
+                            *bottom = 0.5;
+                        }
+                        if ui.small_button(lang.tr("From corner")).clicked() {
+                            *left = 0.0;
+                            *right = 0.0;
+                            *top = 0.0;
+                            *bottom = 0.0;
+                        }
+                    });
+                    ui.add(egui::Slider::new(left, 0.0..=1.0).text(lang.tr("Left")));
+                    ui.add(egui::Slider::new(right, 0.0..=1.0).text(lang.tr("Right")));
+                    ui.add(egui::Slider::new(top, 0.0..=1.0).text(lang.tr("Top")));
+                    ui.add(egui::Slider::new(bottom, 0.0..=1.0).text(lang.tr("Bottom")));
+                }
+            }
+            ui.separator();
+            let count = g.stops.len();
+            let mut remove = None;
+            let mut editing = false;
+            for i in 0..count {
+                ui.horizontal(|ui| {
+                    ui.label(format!("{}{}", lang.tr("Gradient|Stop"), i + 1));
+                    gradient_color_button(ui, &mut g.stops[i].color, theme);
+                    let mut pct = g.stops[i].position * 100.0;
+                    let resp = ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).suffix("%"));
+                    if resp.changed() {
+                        g.stops[i].position = pct / 100.0;
+                    }
+                    // Keyboard changes set `changed` but not `dragged`; keep the row bound to
+                    // the same stop while its slider still owns focus as well.
+                    editing |= resp.dragged() || resp.has_focus();
+                    if count > 2 && ui.small_button("×").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                g.stops.remove(i);
+            }
+            if ui.small_button(lang.tr("Add Stop")).clicked() {
+                let color = g.stops.last().map(|s| s.color).unwrap_or(CellColor::Auto);
+                g.stops.push(GradientStop { position: 0.5, color });
+            }
+            // Sorting while a stop is being dragged or keyboard-edited would move a different
+            // stop under that slider. Keep the row order until the edit ends; only the preview
+            // is sorted.
+            let preview = GradientFill::new(g.kind, g.stops.clone());
+            let (rect, _) = ui.allocate_exact_size(vec2(240.0, 54.0), Sense::hover());
+            crate::gradient::paint_rect(ui.painter(), rect, &preview, theme);
+            ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::from_gray(190)), StrokeKind::Inside);
+            *fill = if editing {
+                Fill { pattern: PatternType::None, fg: CellColor::Auto, bg: CellColor::Auto, gradient: Some(g) }
+            } else {
+                Fill::gradient(preview.kind, preview.stops)
+            };
+        }
+    }
+}
+
 fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     // `d.tab` stays the English name (it is what `open_dialog` and tests pass); only the drawn
     // labels are translated. The Fill tab is keyed by context: the Alignment tab's "Fill" is a
@@ -1977,15 +2118,8 @@ fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: 
             crate::border_preview::sample(ui, &st.borders, &theme);
         }
         "Fill" => {
-            let colors = app.session.active().map(|doc| doc.wb.theme.colors).unwrap_or_default();
-            ui.label(lang.tr("Background Color:"));
-            if let Some(c) = crate::widgets::color_palette(ui, &colors, lang.tr("No Color")) {
-                st.fill = if c == "none" {
-                    Default::default()
-                } else {
-                    gridcraft_engine::model::Fill::solid(gridcraft_engine::model::Color::from_hex(&c).unwrap_or_default())
-                };
-            }
+            let theme = app.session.active().map(|doc| doc.wb.theme.clone()).unwrap_or_default();
+            fill_tab(ui, &mut st.fill, &theme, lang);
         }
         "Protection" => {
             ui.checkbox(&mut st.protection.locked, lang.tr("Locked"));

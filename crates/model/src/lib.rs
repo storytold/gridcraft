@@ -22,8 +22,8 @@ pub use preserved::{Preserved, PreservedPart, PreservedRel, PreservedSheet, Pres
 pub use sheet::{DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, LineIndex, Sheet, SheetViewMode, Visibility, points_to_chars};
 pub use store::CellStore;
 pub use style::{
-    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, Style, StyleId, StyleTable, Theme, Underline,
-    VAlign, VertAlign,
+    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, GradientFill, GradientKind, GradientStop, HAlign, NumFmt, PatternType, Style,
+    StyleId, StyleTable, Theme, Underline, VAlign, VertAlign,
 };
 pub use workbook::{CalcMode, CalcSettings, DefinedName, DocProps, PhoneticProps, PhoneticRun, PhoneticString, ShowObjects, Workbook};
 

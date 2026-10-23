@@ -969,6 +969,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Salvamento automático: salvar após cada alteração (pastas de trabalho salvas em um arquivo)"
         }
         "All sheets" => "Todas as planilhas",
+        "No Fill" => "Sem preenchimento",
+        "No fill" => "Sem preenchimento",
+        "Solid" => "Sólido",
+        "Gradient" => "Gradiente",
+        "Path" => "Caminho",
+        "Angle" => "Ângulo",
+        "Diagonal up" => "Diagonal para cima",
+        "Diagonal down" => "Diagonal para baixo",
+        "From center" => "Do centro",
+        "From corner" => "Do canto",
+        "Add Stop" => "Adicionar parada",
+        "Gradient|Stop" => "Parada",
         _ => return None,
     })
 }

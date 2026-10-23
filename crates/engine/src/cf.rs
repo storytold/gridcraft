@@ -350,8 +350,8 @@ impl CfCache {
 /// Adds the parts `lower` sets that `style` leaves unset (differential styles: default parts
 /// are unset).
 fn layer_under(style: &mut Style, lower: &Style) {
-    if style.fill.pattern == PatternType::None {
-        style.fill = lower.fill;
+    if !style.fill.is_set() {
+        style.fill = lower.fill.clone();
     }
     if style.font.color == Color::Auto {
         style.font.color = lower.font.color;

@@ -87,7 +87,7 @@ pub fn table_cell_style(wb: &Workbook, sheet: usize, t: &Table, c: CellRef) -> S
     let is_total = t.totals_row && c.row == t.range.end.row;
     let data_row = c.row.saturating_sub(t.range.start.row + t.header_row as u32);
     let data_col = c.col - t.range.start.col;
-    let explicit_fill = own.fill.pattern != PatternType::None;
+    let explicit_fill = own.fill.is_set();
     if is_header {
         if let Some(f) = lk.header_fill
             && !explicit_fill
@@ -291,6 +291,28 @@ mod tests {
         s.execute("range.setValues", json!({"range": "A1", "values": [["a", "b"], [1, 2], [3, 4]]})).unwrap();
         s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
         assert_eq!(s.execute("edit.goTo", json!({"reference": "Table1"})).unwrap()["selection"], "A2:B3");
+    }
+
+    #[test]
+    fn converting_a_table_keeps_gradient_fills() {
+        use gridcraft_model::{Color, Fill, GradientKind, GradientStop};
+
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["h"], ["x"], ["y"]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:A3", "header": true, "style": "TableStyleMedium2"})).unwrap();
+        let gradient = Fill::gradient(
+            GradientKind::Linear { degree: 90.0 },
+            vec![GradientStop { position: 0.0, color: Color::Rgb(0xFF0000) }, GradientStop { position: 1.0, color: Color::Rgb(0x0000FF) }],
+        );
+        s.execute("home.formatCells", json!({"range": "A1:A3", "style": {"fill": gradient}})).unwrap();
+        s.execute("table.convertToRange", json!({})).unwrap();
+        // The header and the first data row (a banded row) must both win over the table look.
+        for a in ["A1", "A2"] {
+            let got = s.execute("cell.get", json!({"cell": a})).unwrap();
+            let fill: Fill = serde_json::from_value(got["style"]["fill"].clone()).unwrap();
+            assert!(fill.gradient.is_some(), "{a} lost its gradient");
+        }
     }
 }
 

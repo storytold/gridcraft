@@ -310,10 +310,8 @@ fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef, dir: CellDir) -> String 
     if let Some(h) = st.font.color.hex(&wb.theme) {
         let _ = write!(css, "color:{h};");
     }
-    if st.fill.pattern != gridcraft_model::PatternType::None
-        && let Some(h) = st.fill.fg.hex(&wb.theme)
-    {
-        let _ = write!(css, "background:{h};");
+    if let Some([r, g, b]) = st.fill.preview_color(&wb.theme) {
+        let _ = write!(css, "background:#{r:02X}{g:02X}{b:02X};");
     }
     let v = sh.value(c);
     let align = match st.align.h {
@@ -875,6 +873,26 @@ mod tests {
                  <tr><td style=\"{cell}text-align:left;\">Apples &amp; &lt;pears&gt;</td><td style=\"{cell}text-align:right;\">3</td></tr></table>"
             )
         );
+    }
+
+    #[test]
+    fn html_and_clipboard_use_the_first_gradient_stop() {
+        use gridcraft_model::{Color, Fill, GradientKind, GradientStop, StyleId};
+        let mut wb = Workbook::new();
+        let id = wb.styles.derive(StyleId::DEFAULT, |s| {
+            s.fill = Fill::gradient(
+                GradientKind::Linear { degree: 0.0 },
+                vec![GradientStop { position: 0.0, color: Color::Rgb(0xFF0000) }, GradientStop { position: 1.0, color: Color::Rgb(0xFFFF00) }],
+            );
+        });
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("x"));
+        sh.set_style(CellRef::new(0, 0), id);
+
+        let html = to_html(&wb, 0).unwrap();
+        assert!(html.contains("background:#FF0000;"), "{html}");
+        let clip = range_html(&wb, 0, RangeRef::parse("A1").unwrap(), "x").unwrap();
+        assert!(clip.contains("background:#FF0000;"), "{clip}");
     }
 
     #[test]

@@ -55,7 +55,7 @@ fn sample() -> Workbook {
             vert: VertAlign::Subscript,
             ..Font::default()
         };
-        s.fill = Fill { pattern: PatternType::LightTrellis, fg: Color::Theme(5, -250), bg: Color::Rgb(0x00FF00) };
+        s.fill = Fill { pattern: PatternType::LightTrellis, fg: Color::Theme(5, -250), bg: Color::Rgb(0x00FF00), gradient: None };
     });
     let red = Style {
         font: Font { color: Color::Rgb(0x9C0006), bold: true, ..Font::default() },
@@ -1325,6 +1325,81 @@ fn solid_data_bar_survives_with_sparklines_and_gradient_neighbours() {
     let b = &back.sheets[0];
     assert_eq!(b.cond_formats, wb.sheets[0].cond_formats);
     assert_eq!(b.sparklines.len(), 1);
+}
+
+#[test]
+fn gradient_fill_roundtrips_type_stops_and_colors() {
+    let mut wb = Workbook::new();
+    let linear = wb.styles.derive(StyleId::DEFAULT, |s| {
+        s.fill = Fill::gradient(
+            GradientKind::Linear { degree: 135.0 },
+            vec![
+                GradientStop { position: 0.0, color: Color::Theme(4, 400) },
+                GradientStop { position: 0.6, color: Color::Rgb(0x00FF00) },
+                GradientStop { position: 1.0, color: Color::Rgb(0x0000FF) },
+            ],
+        );
+    });
+    let path = wb.styles.derive(StyleId::DEFAULT, |s| {
+        s.fill = Fill::gradient(
+            GradientKind::Path { left: 0.2, right: 0.8, top: 0.1, bottom: 0.9 },
+            vec![GradientStop { position: 0.0, color: Color::Rgb(0xFF0000) }, GradientStop { position: 1.0, color: Color::Rgb(0xFFFFFF) }],
+        );
+    });
+    let s = wb.sheet_mut(0).unwrap();
+    s.set_value(at("A1"), Value::Number(1.0));
+    s.set_style(at("A1"), linear);
+    s.set_value(at("A2"), Value::Number(2.0));
+    s.set_style(at("A2"), path);
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let xml = String::from_utf8(pkg.read("xl/styles.xml").unwrap().unwrap()).unwrap();
+    assert!(xml.contains("<gradientFill degree=\"135\"><stop position=\"0\"><color theme=\"4\" tint=\"0.4\"/>"), "{xml}");
+    assert!(xml.contains("<gradientFill type=\"path\" left=\"0.2\" right=\"0.8\" top=\"0.1\" bottom=\"0.9\">"), "{xml}");
+
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let sh = back.sheet(0).unwrap();
+    assert_eq!(back.styles.get(sh.style_id(at("A1"))), wb.styles.get(linear));
+    assert_eq!(back.styles.get(sh.style_id(at("A2"))), wb.styles.get(path));
+}
+
+/// A file may hold a `<gradientFill>` with a single stop; it must not gain a synthetic second
+/// stop on read or save.
+#[test]
+fn one_stop_gradient_round_trips() {
+    let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>
+        <fill><gradientFill degree="90"><stop position="0.25"><color rgb="FF112233"/></stop></gradientFill></fill>
+      </fills>
+      <cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="0" fillId="2" borderId="0" xfId="0" applyFill="1"/></cellXfs>
+    </styleSheet>"#;
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1" s="1"/></row></sheetData>"#;
+    let (wb, _) = read_xlsx(&super::minimal(body, &[("xl/styles.xml", styles)], rels, "")).unwrap();
+    let one = vec![GradientStop { position: 0.25, color: Color::Rgb(0x112233) }];
+    let read = wb.styles.get(wb.sheet(0).unwrap().style_id(at("A1"))).fill.gradient.clone().expect("gradient");
+    assert_eq!(read.stops, one);
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let saved = back.styles.get(back.sheet(0).unwrap().style_id(at("A1"))).fill.gradient.clone().expect("gradient after save");
+    assert_eq!(saved.stops, one);
+}
+
+/// Excel's own solid fill is `<patternFill patternType="solid"><fgColor .../><bgColor indexed="64"/></patternFill>`.
+/// A partial `home.formatCells` fill must produce the same bytes, not a missing/odd background.
+#[test]
+fn solid_fill_writes_excels_bgcolor_indexed_64() {
+    let mut wb = Workbook::new();
+    let id = wb.styles.derive(StyleId::DEFAULT, |s| s.fill = Fill::solid(Color::Rgb(0xFF0000)));
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(at("A1"), Value::Number(1.0));
+    sh.set_style(at("A1"), id);
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let xml = String::from_utf8(pkg.read("xl/styles.xml").unwrap().unwrap()).unwrap();
+    assert!(xml.contains(r#"<patternFill patternType="solid"><fgColor rgb="FFFF0000"/><bgColor indexed="64"/></patternFill>"#), "{xml}");
 }
 
 #[test]

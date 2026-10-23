@@ -3876,7 +3876,7 @@ fn conditional_format_styles_take_hex_colours_and_quoted_values() {
         json!({"range": "A1", "rule": {"type": "expression", "formula": "=TRUE", "style": {"fill": {"fg": "C6EFCE"}}}}),
     )
     .unwrap();
-    assert_eq!(style(&rule(&s, 0)).fill, Fill { pattern: PatternType::Solid, fg: Color::Rgb(0xC6EFCE), bg: Color::Auto });
+    assert_eq!(style(&rule(&s, 0)).fill, Fill { pattern: PatternType::Solid, fg: Color::Rgb(0xC6EFCE), bg: Color::Auto, gradient: None });
     let internal = json!({"fill": {"pattern": "Solid", "fg": {"Rgb": 16773836}}, "borders": {"left": {"style": "Thin", "color": "#C00000"}}});
     s.execute("home.conditionalFormat", json!({"range": "A1", "rule": {"type": "expression", "formula": "=TRUE", "style": internal}})).unwrap();
     let st = style(&rule(&s, 0));

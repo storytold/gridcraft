@@ -1461,13 +1461,7 @@ fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
             for (i, n) in names.iter().enumerate() {
                 let st = gridcraft_engine::cmd::format::builtin_cell_style(n, &wb.theme).unwrap_or_default();
                 let (r, resp) = ui.allocate_exact_size(vec2(82.0, 24.0), Sense::click());
-                let fill = st
-                    .fill
-                    .fg
-                    .resolve(&wb.theme)
-                    .filter(|_| st.fill.pattern != gridcraft_engine::model::PatternType::None)
-                    .map(theme::color32)
-                    .unwrap_or(Color32::WHITE);
+                let fill = st.fill.preview_color(&wb.theme).map(theme::color32).unwrap_or(Color32::WHITE);
                 ui.painter().rect_filled(r, 0.0, fill);
                 ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_gray(210)), StrokeKind::Inside);
                 if !st.borders.bottom.is_none() {
