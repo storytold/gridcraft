@@ -287,6 +287,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("table.firstColumn", "Table Design", "Table Style Options", "First Column"),
     ("table.lastColumn", "Table Design", "Table Style Options", "Last Column"),
     ("table.bandedColumns", "Table Design", "Table Style Options", "Banded Columns"),
+    ("table.filterButton", "Table Design", "Table Style Options", "Filter Button"),
     ("table.style", "Table Design", "Table Styles", "Table Styles"),
     // Chart Design / Format
     ("chart.addElement", "Chart Design", "Chart Layouts", "Add Chart Element"),

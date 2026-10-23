@@ -1644,6 +1644,223 @@ fn tables_and_structured_refs() {
 }
 
 #[test]
+fn table_header_row_toggles_and_restores_filter_arrows() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["H"], ["a"], ["b"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A3", "header": true, "name": "T"})).unwrap();
+    s.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    // Filter Button off first: Excel still turns the arrows back on when the header returns.
+    s.execute("table.filterButton", json!({"table": "T", "on": false})).unwrap();
+
+    // Header Row off: the range drops the header row, its cells clear, and the filter goes.
+    s.execute("table.headerRow", json!({"table": "T", "on": false})).unwrap();
+    {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        let t = &sh.tables[0];
+        assert!(!t.header_row);
+        assert!(!t.filter_button, "turning the header off turns the filter buttons off");
+        assert_eq!(t.range.a1(), "A2:A3");
+        assert_eq!(t.columns[0].name, "H", "the column name is kept in the table definition");
+        assert!(sh.autofilter.is_none());
+        assert!(sh.value(CellRef::new(0, 0)).is_empty(), "the header cell is cleared");
+        assert_eq!(sh.value(CellRef::new(1, 0)).display(), "a");
+        assert_eq!(d.selection.active, CellRef::new(1, 0), "the selection follows the table");
+    }
+
+    // The Filter Button needs a header row.
+    let e = s.execute("table.filterButton", json!({"table": "T", "on": true})).unwrap_err();
+    assert!(e.to_string().contains("Header Row"), "{e}");
+
+    // Header Row back on restores the stored column names and the filter arrows, as Excel does,
+    // even though Filter Button was off before the header went away.
+    s.execute("table.headerRow", json!({"table": "T", "on": true})).unwrap();
+    {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        let t = &sh.tables[0];
+        assert!(t.header_row);
+        assert!(t.filter_button, "the arrows come back with the header");
+        assert_eq!(t.range.a1(), "A1:A3");
+        assert_eq!(sh.value(CellRef::new(0, 0)), Value::text("H"));
+        assert_eq!(sh.value(CellRef::new(1, 0)).display(), "a");
+    }
+}
+
+#[test]
+fn table_header_row_on_inserts_cells_when_the_row_above_is_taken() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["H"], ["a"], ["b"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A3", "header": true, "name": "T"})).unwrap();
+    s.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    s.execute("table.headerRow", json!({"table": "T", "on": false})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().tables[0].range.a1(), "A2:A3");
+
+    // Excel inserts a row's worth of cells for the header instead of refusing or replacing the
+    // value typed above the table.
+    s.execute("cell.set", json!({"cell": "A1", "input": "keep me"})).unwrap();
+    s.execute("table.headerRow", json!({"table": "T", "on": true})).unwrap();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let t = &sh.tables[0];
+    assert!(t.header_row);
+    assert_eq!(t.range.a1(), "A2:A4", "the table moved down a row");
+    assert_eq!(sh.value(CellRef::new(0, 0)).display(), "keep me");
+    assert_eq!(sh.value(CellRef::new(1, 0)), Value::text("H"));
+    assert_eq!(sh.value(CellRef::new(2, 0)).display(), "a");
+    assert_eq!(sh.value(CellRef::new(3, 0)).display(), "b");
+}
+
+#[test]
+fn table_header_row_on_inserts_cells_when_the_table_starts_in_row_1() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["a"], ["b"], ["c"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A3", "header": true, "name": "T"})).unwrap();
+    // A file can hold a headerless table that starts in row 1.
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        let sh = wb.sheet_mut(0).unwrap();
+        let t = &mut sh.tables[0];
+        t.header_row = false;
+        t.filter_button = false;
+        t.columns[0].name = "H".into();
+    }
+
+    s.execute("table.headerRow", json!({"table": "T", "on": true})).unwrap();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let t = &sh.tables[0];
+    assert!(t.header_row);
+    assert_eq!(t.range.a1(), "A1:A4", "the header goes in at A1 and the data shifts down");
+    assert_eq!(sh.value(CellRef::new(0, 0)), Value::text("H"));
+    assert_eq!(sh.value(CellRef::new(1, 0)).display(), "a");
+    assert_eq!(sh.value(CellRef::new(2, 0)).display(), "b");
+    assert_eq!(sh.value(CellRef::new(3, 0)).display(), "c");
+}
+
+#[test]
+fn table_filter_button_off_keeps_the_criteria_and_hidden_rows() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["H"], ["a"], ["b"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A3", "header": true, "name": "T"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "values": ["a"]})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().is_row_hidden(2), "the filter hid b");
+
+    s.execute("table.filterButton", json!({"table": "T", "on": false})).unwrap();
+    {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        assert!(!sh.tables[0].filter_button, "only the arrows go");
+        assert!(sh.autofilter.as_ref().is_some_and(|a| !a.criteria.is_empty()), "the criteria stay");
+        assert!(sh.is_row_hidden(2), "the filtered row stays hidden");
+        assert_eq!(sh.value(CellRef::new(0, 0)), Value::text("H"), "the header stays");
+    }
+    // On brings the arrows back with the criteria still applied.
+    s.execute("table.filterButton", json!({"table": "T", "on": true})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().is_row_hidden(2));
+
+    // Data › Filter removes the filter and reveals its rows.
+    s.execute("data.filter", json!({})).unwrap();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(!sh.tables[0].filter_button);
+    assert!(sh.autofilter.is_none());
+    assert!(!sh.is_row_hidden(2));
+}
+
+#[test]
+fn table_filter_button_off_round_trips_with_criteria_and_hidden_rows() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["H"], ["a"], ["b"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A3", "header": true, "name": "T"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "values": ["a"]})).unwrap();
+    s.execute("table.filterButton", json!({"table": "T", "on": false})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().is_row_hidden(2));
+
+    // The table part keeps `<autoFilter>` with the criteria and marks every column
+    // `hiddenButton="1"` (the standard per-column way to hide the dropdowns), so the file reopens
+    // with the filter still applied, its row hidden, and Filter Button still off.
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "t.xlsx", "base64": r["base64"].as_str().unwrap()})).unwrap();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let t = &sh.tables[0];
+    assert!(!t.filter_button, "the button stays off");
+    assert_eq!(t.filter.len(), 1, "the criteria survive");
+    assert!(sh.is_row_hidden(2), "the filtered row stays hidden");
+}
+
+#[test]
+fn table_filter_off_reveals_only_filter_hidden_rows() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["H"], ["a"], ["b"], ["c"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A4", "header": true, "name": "T"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "values": ["a"]})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().is_row_hidden(2), "b is filtered out");
+    s.execute("home.hideRows", json!({"rows": "2:2"})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().is_row_hidden(1), "a is hidden by hand");
+
+    s.execute("data.filter", json!({})).unwrap();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(!sh.is_row_hidden(2), "the filter-hidden row comes back");
+    assert!(sh.is_row_hidden(1), "the manually hidden row stays hidden");
+}
+
+#[test]
+fn table_filter_off_clears_criteria_stored_in_the_table() {
+    // An XLSX table keeps its AutoFilter criteria on the table itself, not on a sheet AutoFilter.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["H"], ["a"], ["b"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A3", "header": true, "name": "T"})).unwrap();
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.tables[0].filter = vec![(0, gridcraft_model::FilterCriterion::Values { values: vec!["a".into()], blanks: false })];
+        sh.rows.entry(2).or_default().hidden = true;
+    }
+    assert!(s.doc().unwrap().wb.active().unwrap().autofilter.is_none());
+
+    s.execute("data.filter", json!({})).unwrap();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(sh.tables[0].filter.is_empty());
+    assert!(!sh.is_row_hidden(2), "the row the table criteria hid comes back");
+}
+
+#[test]
+fn table_filter_off_with_a_totals_row_removes_the_filter() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["H", "N"], ["a", 1], ["b", 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3", "header": true, "name": "T"})).unwrap();
+    s.execute("table.totalRow", json!({"table": "T", "on": true})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().tables[0].range.a1(), "A1:B4");
+    s.execute("data.filterBy", json!({"column": "A", "values": ["a"]})).unwrap();
+
+    s.execute("data.filter", json!({})).unwrap();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(sh.autofilter.is_none(), "the AutoFilter over the table is gone");
+    assert!(!sh.is_row_hidden(2), "b comes back");
+    assert!(!sh.is_row_hidden(3), "the totals row is not hidden");
+}
+
+#[test]
+fn headerless_table_saves_without_a_header_and_keeps_its_names() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["H"], ["a"], ["b"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A3", "header": true, "name": "T"})).unwrap();
+    s.execute("table.headerRow", json!({"table": "T", "on": false})).unwrap();
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "t.xlsx", "base64": r["base64"].as_str().unwrap()})).unwrap();
+    let d = s.doc().unwrap();
+    let t = &d.wb.active().unwrap().tables[0];
+    assert!(!t.header_row);
+    assert_eq!(t.range.a1(), "A2:A3");
+    assert_eq!(t.columns[0].name, "H");
+}
+
+#[test]
 fn structured_refs_to_columns_with_edge_spaces() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty "], ["a", 2], ["b", 3]]})).unwrap();

@@ -2456,11 +2456,9 @@ fn table_design(app: &mut SheetApp, ui: &mut Ui) {
     }
     sep(ui);
     ui.vertical(|ui| {
-        for (label, cmd, v) in [
-            ("Header Row", "table.headerRow", header && filter),
-            ("Total Row", "table.totalRow", totals),
-            ("Banded Rows", "table.bandedRows", banded),
-        ] {
+        for (label, cmd, v) in
+            [("Header Row", "table.headerRow", header), ("Total Row", "table.totalRow", totals), ("Banded Rows", "table.bandedRows", banded)]
+        {
             let mut on = v;
             if ui.checkbox(&mut on, label).changed() {
                 act(app, cmd, json!({"table": tname, "on": on}));
@@ -2477,6 +2475,14 @@ fn table_design(app: &mut SheetApp, ui: &mut Ui) {
             if ui.checkbox(&mut on, label).changed() {
                 act(app, cmd, json!({"table": tname, "on": on}));
             }
+        }
+    });
+    ui.vertical(|ui| {
+        // Excel keeps the Filter Button box disabled and unchecked while the table has no header row.
+        let mut on = filter && header;
+        let resp = ui.add_enabled(header, egui::Checkbox::new(&mut on, "Filter Button"));
+        if resp.changed() {
+            act(app, "table.filterButton", json!({"table": tname, "on": on}));
         }
     });
     sep(ui);

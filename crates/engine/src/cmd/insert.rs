@@ -6,7 +6,7 @@ use gridcraft_formula::adjust::{Axis, Edit};
 use gridcraft_model::*;
 use serde_json::{Value as Json, json};
 
-use super::sheet::{rewrite, shift_cell_features};
+use super::sheet::{check_table_shift, rewrite, shift_cell_features};
 use super::*;
 use crate::selection::current_region;
 
@@ -43,11 +43,20 @@ pub fn specs() -> Vec<CommandSpec> {
             p,
             "bandedCols"
         )),
-        cmd!("table.headerRow", "Header Row", ["Table", "Table Style Options"], None, "{table?, on?}", has_doc, |s, p| table_flag(s, p, "header")),
+        cmd!("table.headerRow", "Header Row", ["Table", "Table Style Options"], None, "{table?, on?}", has_doc, |s, p| table_header(
+            s,
+            p,
+            bool_param(p, "on")
+        )),
         cmd!("table.firstColumn", "First Column", ["Table", "Table Style Options"], None, "{table?, on?}", has_doc, |s, p| table_flag(
             s, p, "firstCol"
         )),
         cmd!("table.lastColumn", "Last Column", ["Table", "Table Style Options"], None, "{table?, on?}", has_doc, |s, p| table_flag(s, p, "lastCol")),
+        cmd!("table.filterButton", "Filter Button", ["Table", "Table Style Options"], None, "{table?, on?}", has_doc, |s, p| table_filter_button(
+            s,
+            p,
+            bool_param(p, "on")
+        )),
         cmd!("table.style", "Table Styles", ["Table", "Table Styles"], None, "{table?, style}", has_doc, table_style),
         cmd!("table.rename", "Table Name", ["Table", "Properties"], None, "{table?, name}", has_doc, table_rename),
         cmd!("table.convertToRange", "Convert to Range", ["Table", "Tools"], None, "{table?}", has_doc, table_convert),
@@ -407,16 +416,176 @@ fn table_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
             "bandedCols" => t.banded_cols = on.unwrap_or(!t.banded_cols),
             "firstCol" => t.first_col = on.unwrap_or(!t.first_col),
             "lastCol" => t.last_col = on.unwrap_or(!t.last_col),
-            "header" => {
-                t.filter_button = on.unwrap_or(!t.filter_button);
-                if !t.filter_button {
-                    t.filter.clear();
-                }
-            }
             _ => {}
         }
         Ok(Json::Null)
     })
+}
+
+/// Header Row, as Excel: turning it off drops the header row from the table (the range starts one
+/// row lower and the header cells are cleared), removes the filter, and keeps the column names in
+/// the table definition. Turning it back on restores the row, writes those names into it and shows
+/// the filter buttons again; when the row above is taken (or the table starts in row 1) a row's
+/// worth of cells is inserted for the header instead of refusing.
+fn table_header(s: &mut Session, p: &Json, on: Option<bool>) -> Result<Json> {
+    let (si, ti) = find_table(s, p)?;
+    edit(s, |cx| {
+        let Some(t) = cx.wb.sheet(si).and_then(|sh| sh.tables.get(ti)) else { return Ok(Json::Null) };
+        let want = on.unwrap_or(!t.header_row);
+        if want == t.header_row {
+            return Ok(Json::Null);
+        }
+        let c0 = t.range.start.col;
+        let c1 = t.range.end.col;
+        if want {
+            let start = t.range.start.row;
+            let names: Vec<String> = t.columns.iter().map(|c| c.name.clone()).collect();
+            // The row above can take the header when it exists, holds nothing in the table's
+            // columns and doesn't belong to another table.
+            let free_above = start.checked_sub(1).is_some_and(|row| {
+                cx.wb.sheet(si).is_some_and(|sh| {
+                    (c0..=c1).all(|c| {
+                        !sh.tables.iter().enumerate().any(|(i, o)| i != ti && o.range.contains(CellRef::new(row, c)))
+                            && sh.cell(CellRef::new(row, c)).is_none_or(|x| x.formula.is_none() && x.value.is_empty())
+                    })
+                })
+            });
+            if free_above {
+                let new_start = start.saturating_sub(1);
+                let Some(t) = cx.wb.sheet_mut(si).and_then(|sh| sh.tables.get_mut(ti)) else { return Ok(Json::Null) };
+                t.range.start.row = new_start;
+                t.header_row = true;
+                t.filter_button = true;
+                let Some(sh) = cx.wb.sheet_mut(si) else { return Ok(Json::Null) };
+                for (i, name) in names.iter().enumerate() {
+                    sh.set_value(CellRef::new(new_start, c0 + i as u32), gridcraft_core::Value::text(name.as_str()));
+                }
+            } else {
+                // Excel inserts a row's worth of cells over the table's columns and shifts the
+                // table down, keeping whatever sits above it (a value typed in A1 stays in A1).
+                let e = Edit::InsertCells { axis: Axis::Rows, range: RangeRef::new(CellRef::new(start, c0), CellRef::new(start, c1)) };
+                let name = {
+                    let sh = cx.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+                    check_table_shift(sh, &e)?;
+                    let bottom = RangeRef::new(CellRef::new(MAX_ROWS - 1, c0), CellRef::new(MAX_ROWS - 1, c1));
+                    if sh.cells.iter_range(bottom).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
+                        return Err(EngineError::Other(
+                            "To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet.".into(),
+                        ));
+                    }
+                    sh.name.clone()
+                };
+                let sh = cx.sheet_mut(si)?;
+                sh.cells.shift_rows_in_cols(c0, c1, start, 1);
+                shift_cell_features(sh, &e);
+                rewrite(&mut cx.wb, &name, &e);
+                let Some(t) = cx.wb.sheet_mut(si).and_then(|sh| sh.tables.get_mut(ti)) else { return Ok(Json::Null) };
+                t.range.start.row = start;
+                t.header_row = true;
+                t.filter_button = true;
+                let Some(sh) = cx.wb.sheet_mut(si) else { return Ok(Json::Null) };
+                for (i, name) in names.iter().enumerate() {
+                    sh.set_value(CellRef::new(start, c0 + i as u32), gridcraft_core::Value::text(name.as_str()));
+                }
+            }
+        } else {
+            let old_start = t.range.start.row;
+            let data_end = t.range.end.row.saturating_sub(t.totals_row as u32);
+            if data_end <= old_start {
+                return Err(EngineError::Other("A table without data rows needs its header row.".into()));
+            }
+            clear_table_filter(cx, si, ti);
+            let Some(t) = cx.wb.sheet_mut(si).and_then(|sh| sh.tables.get_mut(ti)) else { return Ok(Json::Null) };
+            t.range.start.row = old_start + 1;
+            t.header_row = false;
+            t.filter_button = false;
+            let Some(sh) = cx.wb.sheet_mut(si) else { return Ok(Json::Null) };
+            for c in c0..=c1 {
+                sh.remove_cell(CellRef::new(old_start, c));
+            }
+            // The contextual tab follows an active cell: keep it inside the table when the header
+            // row it was in just disappeared.
+            if cx.sel.active.row == old_start && (c0..=c1).contains(&cx.sel.active.col) {
+                let at = CellRef::new(old_start + 1, cx.sel.active.col);
+                *cx.sel = Selection { active: at, anchor: at, ranges: vec![RangeRef::new(at, at)] };
+            }
+        }
+        cx.structural = true;
+        Ok(Json::Null)
+    })
+}
+
+/// Filter Button: shows or hides the header dropdowns, as the Table Design box does. Hiding them
+/// keeps the criteria and the hidden rows; Data › Filter removes the filter. It needs a header row.
+fn table_filter_button(s: &mut Session, p: &Json, on: Option<bool>) -> Result<Json> {
+    let (si, ti) = find_table(s, p)?;
+    edit(s, |cx| {
+        let want = on.unwrap_or(!cx.wb.sheet(si).and_then(|sh| sh.tables.get(ti)).is_some_and(|t| t.filter_button));
+        set_table_filter_button(cx, si, ti, want)?;
+        Ok(Json::Null)
+    })
+}
+
+/// Applies Filter Button for the Table Design checkbox: it only shows or hides the header
+/// dropdowns. The criteria and the rows they hide stay as they are; removing the filter is
+/// Data › Filter (`toggle_filter`), which also reveals the rows.
+pub(crate) fn set_table_filter_button(cx: &mut Ctx, si: usize, ti: usize, want: bool) -> Result<()> {
+    let Some((header, current)) = cx.wb.sheet(si).and_then(|sh| sh.tables.get(ti)).map(|t| (t.header_row, t.filter_button)) else {
+        return Ok(());
+    };
+    if want && !header {
+        return Err(EngineError::Disabled("table.filterButton".into(), "turn Header Row on first".into()));
+    }
+    if want == current {
+        return Ok(());
+    }
+    if let Some(t) = cx.wb.sheet_mut(si).and_then(|sh| sh.tables.get_mut(ti)) {
+        t.filter_button = want;
+    }
+    cx.structural = true;
+    Ok(())
+}
+
+/// Clears a table's filter (its own `Table::filter` and a sheet AutoFilter covering it) and
+/// reveals the rows those criteria hid. Evaluation is shared with `apply_filter`, so manually
+/// hidden rows that pass the criteria are left hidden.
+pub(crate) fn clear_table_filter(cx: &mut Ctx, si: usize, ti: usize) {
+    let Some(t) = cx.wb.sheet(si).and_then(|sh| sh.tables.get(ti)) else { return };
+    let full = t.range;
+    let table_filter = t.filter.clone();
+    let filter_range = t.filter_range();
+    let af = cx.wb.sheet(si).and_then(|sh| sh.autofilter.clone());
+    let mut hide = std::collections::HashSet::new();
+    let mut remove_af = false;
+    if let Some(sh) = cx.wb.sheet(si) {
+        if !table_filter.is_empty()
+            && let Some(r) = filter_range
+        {
+            hide.extend(super::data::criteria_hide_rows(&cx.wb, sh, r, &table_filter));
+        }
+        if let Some(a) = &af
+            && a.range.start == full.start
+            && a.range.end.col == full.end.col
+            && (a.range.end.row == full.end.row || Some(a.range.end.row) == filter_range.map(|r| r.end.row))
+        {
+            if !a.criteria.is_empty() {
+                hide.extend(super::data::criteria_hide_rows(&cx.wb, sh, a.range, &a.criteria));
+            }
+            remove_af = true;
+        }
+    }
+    let Some(sh) = cx.wb.sheet_mut(si) else { return };
+    if remove_af {
+        sh.autofilter = None;
+    }
+    if let Some(t) = sh.tables.get_mut(ti) {
+        t.filter.clear();
+    }
+    for row in hide {
+        if let Some(info) = sh.rows.get_mut(&row) {
+            info.hidden = false;
+        }
+    }
 }
 
 /// Writes the totals row cells (labels and SUBTOTAL formulas).

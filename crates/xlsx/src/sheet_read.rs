@@ -771,6 +771,22 @@ fn filter_op(s: Option<&str>) -> &'static str {
     }
 }
 
+/// Whether every column of a table's AutoFilter has `hiddenButton="1"` (or `showButton="0"`):
+/// that is how a table whose Filter Button is off is written. One visible column brings the
+/// dropdowns back.
+fn autofilter_buttons_hidden(e: &El, width: u32) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    for fc in e.kids("filterColumn") {
+        let Some(col) = fc.attr_u32("colId") else { return false };
+        let hidden = fc.flag("hiddenButton", false) || !fc.flag("showButton", true);
+        if col >= width || !hidden {
+            return false;
+        }
+        seen.insert(col);
+    }
+    !seen.is_empty() && seen.len() as u32 == width
+}
+
 pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
     let range = e.attr("ref").and_then(RangeRef::parse)?;
     let mut criteria = vec![];
@@ -864,6 +880,7 @@ pub fn read_table(cx: &mut Ctx<'_>, x: &El) -> Option<Table> {
     // Only XML tables are kept as such: a query table's definition hangs off the table part, which
     // is rewritten, so it would lose it.
     let xml_table = x.attr("tableType") == Some("xml");
+    let af = x.child("autoFilter");
     Some(Table {
         id: x.attr_u32("id").unwrap_or(0),
         name,
@@ -876,8 +893,10 @@ pub fn read_table(cx: &mut Ctx<'_>, x: &El) -> Option<Table> {
         banded_cols: si.is_some_and(|s| s.flag("showColumnStripes", false)),
         first_col: si.is_some_and(|s| s.flag("showFirstColumn", false)),
         last_col: si.is_some_and(|s| s.flag("showLastColumn", false)),
-        filter_button: x.child("autoFilter").is_some(),
-        filter: x.child("autoFilter").and_then(|e| read_autofilter(cx, e)).map(|af| af.criteria).unwrap_or_default(),
+        // A table whose Filter Button is off still carries its AutoFilter (the criteria stay), with
+        // every column's button hidden.
+        filter_button: af.is_some_and(|e| !autofilter_buttons_hidden(e, range.width())),
+        filter: af.and_then(|e| read_autofilter(cx, e)).map(|af| af.criteria).unwrap_or_default(),
         table_type: xml_table.then(|| "xml".to_string()),
         connection_id: x.attr_u32("connectionId").filter(|_| xml_table),
     })

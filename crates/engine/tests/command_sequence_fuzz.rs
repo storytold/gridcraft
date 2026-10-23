@@ -63,6 +63,9 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("insert.picture", "reads files"),
     ("pageLayout.background", "reads files"),
     ("formulas.calculationOptions", "manual and iterative calculation differ from a full recalc by design"),
+    // A table toggle needs a selected table and is covered by the Table Design tests; drawing it
+    // from the all-command pool would also shift every existing seed's sequence.
+    ("table.filterButton", "table toggle: covered by the Table Design tests"),
 ];
 
 // ---------------------------------------------------------------- deterministic randomness

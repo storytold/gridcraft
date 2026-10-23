@@ -88,12 +88,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             .iter()
             .cloned()
             .map(|mut t| {
-                if t.header_row
-                    && t.filter_button
-                    && t.filter.is_empty()
-                    && t.range.contains_range(&af.range)
-                    && t.range.start.col == af.range.start.col
-                {
+                if t.header_row && t.filter.is_empty() && t.range.contains_range(&af.range) && t.range.start.col == af.range.start.col {
                     t.filter = af.criteria.clone();
                 }
                 t
@@ -367,7 +362,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     if let Some(af) = &sheet.autofilter
         && !sheet.tables.iter().any(|t| t.range.intersects(&af.range))
     {
-        s.push_str(&autofilter_xml(af.range, &af.criteria, out));
+        s.push_str(&autofilter_xml(af.range, &af.criteria, false, out));
     }
     if !sheet.merges.is_empty() {
         let merges: Vec<&RangeRef> = sheet.merges.iter().filter(|m| !m.is_single()).collect();
@@ -993,15 +988,28 @@ fn filter_operator(op: &str) -> &'static str {
     }
 }
 
-fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mut Out) -> String {
+/// `<autoFilter>` for a filter range. `hide_buttons` (a table's Filter Button is off) marks every
+/// column `hiddenButton="1"`: the standard per-column way to hide the dropdowns while the criteria
+/// stay applied. `criteria` hold column offsets from the range's first column.
+fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], hide_buttons: bool, out: &mut Out) -> String {
     let mut s = format!("<autoFilter ref=\"{}\"", range.a1());
-    if criteria.is_empty() {
+    let columns: Vec<(u32, Option<&FilterCriterion>)> = if hide_buttons {
+        (0..range.width()).map(|col| (col, criteria.iter().find(|(o, _)| *o == col).map(|(_, x)| x))).collect()
+    } else {
+        criteria.iter().map(|(col, c)| (*col, Some(c))).collect()
+    };
+    if columns.is_empty() {
         s.push_str("/>");
         return s;
     }
     s.push('>');
-    for (col, c) in criteria {
-        let _ = write!(s, "<filterColumn colId=\"{col}\">");
+    for (col, c) in columns {
+        let hidden = if hide_buttons { " hiddenButton=\"1\"" } else { "" };
+        let Some(c) = c else {
+            let _ = write!(s, "<filterColumn colId=\"{col}\"{hidden}/>");
+            continue;
+        };
+        let _ = write!(s, "<filterColumn colId=\"{col}\"{hidden}>");
         match c {
             FilterCriterion::Values { values, blanks } => {
                 let _ = write!(s, "<filters{}>", if *blanks { " blank=\"1\"" } else { "" });
@@ -1065,10 +1073,14 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
         let _ = write!(s, " connectionId=\"{c}\"");
     }
     s.push('>');
-    if t.header_row && t.filter_button {
-        let end_row = if t.totals_row { t.range.end.row.saturating_sub(1).max(t.range.start.row) } else { t.range.end.row };
-        let r = RangeRef::new(t.range.start, CellRef::new(end_row, t.range.end.col));
-        s.push_str(&autofilter_xml(r, &t.filter, out));
+    if t.header_row
+        && let Some(r) = t.filter_range()
+        && (t.filter_button || !t.filter.is_empty())
+    {
+        // Filter Button off keeps the criteria (and Excel's rows stay hidden), so the filter is
+        // still written; `hiddenButton="1"` on every column is the standard way to say the arrows
+        // are hidden (there is no table-level attribute for it).
+        s.push_str(&autofilter_xml(r, &t.filter, !t.filter_button, out));
     }
     let _ = write!(s, "<tableColumns count=\"{}\">", cols.len());
     for (i, name) in cols.iter().enumerate() {

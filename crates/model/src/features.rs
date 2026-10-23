@@ -110,6 +110,15 @@ impl Table {
     pub fn totals_range(&self) -> Option<RangeRef> {
         self.totals_row.then(|| RangeRef::new(CellRef::new(self.range.end.row, self.range.start.col), self.range.end))
     }
+    /// The range an AutoFilter covers: the header row through the last data row, excluding the
+    /// totals row. `None` when the table has no header row (Excel then has no filter buttons).
+    pub fn filter_range(&self) -> Option<RangeRef> {
+        if !self.header_row {
+            return None;
+        }
+        let end = self.range.end.row.checked_sub(self.totals_row as u32)?;
+        (end >= self.range.start.row).then(|| RangeRef::new(self.range.start, CellRef::new(end, self.range.end.col)))
+    }
     pub fn column_index(&self, name: &str) -> Option<usize> {
         self.columns.iter().position(|c| c.name.eq_ignore_ascii_case(name))
     }

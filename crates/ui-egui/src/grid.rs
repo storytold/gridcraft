@@ -3109,7 +3109,7 @@ fn ink_on(fill: Color32) -> Color32 {
 
 /// The table whose header cell (`row`, `col`) was clicked, not just the first table in the column.
 fn filter_table_range(sh: &Sheet, col: u32, row: u32) -> Option<RangeRef> {
-    sh.tables.iter().find(|t| t.range.start.row == row && col >= t.range.start.col && col <= t.range.end.col).map(|t| t.range)
+    sh.tables.iter().find(|t| t.range.start.row == row && col >= t.range.start.col && col <= t.range.end.col).and_then(|t| t.filter_range())
 }
 
 fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
@@ -4049,6 +4049,15 @@ mod tests {
         assert_eq!(filter_table_range(&sh, 0, 4), Some(sh.tables[1].range));
         assert_eq!(filter_table_range(&sh, 0, 0), Some(sh.tables[0].range));
         assert_eq!(filter_table_range(&sh, 1, 4), None);
+
+        // A headered table whose filter range is empty (header and totals share one row) has no
+        // buttons to open; the range must not fall back to the table itself.
+        let mut deg = Sheet::new("D");
+        let mut t = table(3, 0, 0);
+        t.totals_row = true;
+        deg.tables.push(t);
+        assert_eq!(deg.tables[0].filter_range(), None);
+        assert_eq!(filter_table_range(&deg, 0, 0), None);
     }
 
     #[test]

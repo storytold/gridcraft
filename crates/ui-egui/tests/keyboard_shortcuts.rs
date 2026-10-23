@@ -205,7 +205,7 @@ fn alt_down_only_opens_enabled_table_filter_buttons() {
         let mut session = book("B1");
         session.execute("insert.table", json!({"range": "A1:B3"})).unwrap();
         if !enabled {
-            session.execute("table.headerRow", json!({"on": false})).unwrap();
+            session.execute("table.filterButton", json!({"on": false})).unwrap();
         }
         session.execute("selection.set", json!({"cell": "B1"})).unwrap();
         let mut h = harness(session);
