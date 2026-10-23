@@ -4599,3 +4599,81 @@ fn html_export_without_pictures_or_charts_has_no_fixed_geometry() {
     let html = crate::io::to_html(&s.doc().unwrap().wb, 0).unwrap();
     assert!(!html.contains("<colgroup>") && !html.contains("table-layout") && !html.contains("<svg") && !html.contains("<img"), "{html}");
 }
+
+// ------------------------------------------------ multi-area ranges (issue: silent first-area use)
+
+/// `range.setValues` used to write at the first area's corner and quietly drop "C2:D2"; it now
+/// refuses the multi-area range, while a single area behaves exactly as before.
+#[test]
+fn a_multi_area_range_is_refused_by_range_set_values() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["seed"]]})).unwrap();
+
+    let e = s.execute("range.setValues", json!({"range": "A1:B1,C2:D2", "values": [[1, 2], [3, 4]]})).unwrap_err().to_string();
+    assert!(e.contains("This action won't work on multiple selections."), "range.setValues: {e}");
+    // The refused call changed nothing.
+    for cell in ["A1", "B1", "C2", "D2"] {
+        assert_eq!(v(&s, cell), if cell == "A1" { Value::text("seed") } else { Value::Empty }, "{cell}");
+    }
+
+    // One area still writes.
+    s.execute("range.setValues", json!({"range": "A1:B1", "values": [[1, 2]]})).unwrap();
+    assert_eq!((v(&s, "A1"), v(&s, "B1")), (Value::Number(1.0), Value::Number(2.0)));
+}
+
+/// `pageLayout.printArea` used to keep only "A1:B2" of "A1:B2,C3:D4".
+#[test]
+fn a_multi_area_range_is_refused_by_print_area() {
+    let mut s = s();
+    let e = s.execute("pageLayout.printArea", json!({"range": "A1:B2,C3:D4"})).unwrap_err().to_string();
+    assert!(e.contains("This action won't work on multiple selections."), "printArea: {e}");
+    assert!(s.doc().unwrap().wb.active().unwrap().print.print_area.is_none(), "the refused call set nothing");
+
+    // One area still sets the print area.
+    s.execute("pageLayout.printArea", json!({"range": "A1:B2"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().print.print_area, Some(gridcraft_core::RangeRef::parse("A1:B2").unwrap()));
+}
+
+#[test]
+fn a_multi_area_selection_can_clear_but_not_set_print_area() {
+    let mut s = s();
+    s.execute("pageLayout.printArea", json!({"range": "A1:B2"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B2,C3:D4"})).unwrap();
+
+    s.execute("pageLayout.printArea", json!({"clear": true})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().print.print_area.is_none(), "clear succeeds with a multi-area selection");
+
+    let e = s.execute("pageLayout.printArea", json!({})).unwrap_err().to_string();
+    assert!(e.contains("This action won't work on multiple selections."), "printArea: {e}");
+    assert!(s.doc().unwrap().wb.active().unwrap().print.print_area.is_none(), "the refused set left the print area clear");
+}
+
+/// `data.textToColumns` used to split only the first area of "A1,B2".
+#[test]
+fn a_multi_area_range_is_refused_by_text_to_columns() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["a,b"]]})).unwrap();
+    let e = s.execute("data.textToColumns", json!({"range": "A1,B2", "delimiters": [","]})).unwrap_err().to_string();
+    assert!(e.contains("This action won't work on multiple selections."), "textToColumns: {e}");
+    assert_eq!(v(&s, "A1"), Value::text("a,b"), "the refused call left A1 alone");
+
+    // One area still splits.
+    s.execute("data.textToColumns", json!({"range": "A1", "delimiters": [","]})).unwrap();
+    assert_eq!((v(&s, "A1"), v(&s, "B1")), (Value::text("a"), Value::text("b")));
+}
+
+/// `block()` (used by `insert.table`) used to fall back to the current (last) area of a Ctrl
+/// selection; a multi-area selection is now refused, a single one still makes a table.
+#[test]
+fn a_multi_area_selection_is_refused_by_insert_table() {
+    let mut s = s();
+    s.execute("selection.set", json!({"range": "A1:B2,C1:D2"})).unwrap();
+    let e = s.execute("insert.table", json!({})).unwrap_err().to_string();
+    assert!(e.contains("This action won't work on multiple selections."), "insert.table: {e}");
+    assert!(s.doc().unwrap().wb.active().unwrap().tables.is_empty(), "the refused call made no table");
+
+    // A single-area selection still makes a table.
+    s.execute("selection.set", json!({"range": "A1:B2"})).unwrap();
+    s.execute("insert.table", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().tables.len(), 1);
+}

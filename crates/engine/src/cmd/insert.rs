@@ -218,6 +218,9 @@ fn block(s: &Session, p: &Json) -> Result<RangeRef> {
         return target_range(s, p);
     }
     let d = s.doc()?;
+    if d.selection.ranges.len() > 1 {
+        return Err(multiple_areas());
+    }
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let sel = d.selection.current();
     if !sel.is_single() {

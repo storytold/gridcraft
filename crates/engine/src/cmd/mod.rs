@@ -251,8 +251,22 @@ pub(crate) fn parse_lines(t: &str) -> Option<RangeRef> {
     RangeRef::parse(t).or_else(|| if t.contains(':') { None } else { RangeRef::parse(&format!("{t}:{t}")) })
 }
 
+/// The error a command that works on one block shows when the target names several areas (Excel's
+/// wording). Prefer this over quietly acting on one of them.
+pub(crate) fn multiple_areas() -> EngineError {
+    EngineError::Other("This action won't work on multiple selections.".into())
+}
+
+/// A single-block range parameter. Takes the one area a command that can't act on several works
+/// on; a multi-area range (a comma-separated list, or a Ctrl selection) is refused rather than
+/// silently reduced to its first area.
 pub(crate) fn target_range(s: &Session, p: &Json) -> Result<RangeRef> {
-    Ok(target_ranges(s, p)?.first().copied().unwrap_or_default())
+    let mut areas = target_ranges(s, p)?.into_iter();
+    let Some(first) = areas.next() else { return Ok(RangeRef::default()) };
+    if areas.next().is_some() {
+        return Err(multiple_areas());
+    }
+    Ok(first)
 }
 
 /// The sheet a call names (`sheet` param or a `Sheet!` prefix on `range`), else the active one.

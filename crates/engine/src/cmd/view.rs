@@ -257,11 +257,10 @@ fn margins(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn print_area(s: &mut Session, p: &Json) -> Result<Json> {
-    let clear = bool_param(p, "clear").unwrap_or(false);
-    let r = target_range(s, p)?;
+    let area = if bool_param(p, "clear").unwrap_or(false) { None } else { Some(target_range(s, p)?) };
     edit(s, |cx| {
         let si = cx.sheet_index();
-        cx.sheet_mut(si)?.print.print_area = if clear { None } else { Some(r) };
+        cx.sheet_mut(si)?.print.print_area = area;
         Ok(Json::Null)
     })
 }
