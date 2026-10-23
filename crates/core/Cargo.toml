@@ -13,6 +13,9 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+chrono = { workspace = true, features = ["clock"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
 

@@ -66,6 +66,31 @@ pub fn serial_from_unix_ms(ms: f64) -> f64 {
     25569.0 + ms / 86_400_000.0
 }
 
+/// A Unix instant expressed as local wall time in the 1900 date system. The offset belongs
+/// to this instant, so daylight saving and date rollover are handled by the host timezone.
+pub fn local_serial_from_unix_ms(ms: f64) -> Option<f64> {
+    if !ms.is_finite() {
+        return None;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let offset_minutes = {
+        use chrono::TimeZone;
+        if ms < i64::MIN as f64 || ms >= i64::MAX as f64 {
+            return None;
+        }
+        let date = chrono::Local.timestamp_millis_opt(ms as i64).single()?;
+        f64::from(date.offset().local_minus_utc()) / 60.0
+    };
+    #[cfg(target_arch = "wasm32")]
+    let offset_minutes = {
+        let date = js_sys::Date::new_0();
+        date.set_time(ms);
+        -date.get_timezone_offset()
+    };
+    let serial = serial_from_unix_ms(ms) + offset_minutes / 1440.0;
+    serial.is_finite().then_some(serial)
+}
+
 /// Converts a 1900-system serial (as the clock supplies it) to the serial of the same instant in `sys`.
 pub fn serial_in_system(sys: DateSystem, serial_1900: f64) -> f64 {
     match sys {

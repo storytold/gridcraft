@@ -1220,10 +1220,10 @@ impl Calc {
 }
 
 /// Current date-time as a serial (1900 system), from the system clock (browser clock on wasm).
-/// UTC; the local offset isn't available without platform calls. Falls back to a fixed date only
-/// when no clock is available.
+/// Local wall time, including the host's offset at this instant. Falls back to a fixed date
+/// only when the clock or timezone is unavailable.
 pub fn now_serial() -> f64 {
-    gridcraft_core::date::unix_now_ms().map_or(46302.5, gridcraft_core::date::serial_from_unix_ms)
+    gridcraft_core::date::unix_now_ms().and_then(gridcraft_core::date::local_serial_from_unix_ms).unwrap_or(46302.5)
 }
 
 /// Evaluates a formula in the context of a cell without storing it (conditional formats, data
