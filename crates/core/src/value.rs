@@ -103,6 +103,10 @@ impl fmt::Display for CellError {
 }
 
 /// A 2-D array of values (row-major). Always at least 1×1.
+///
+/// Indexing assumes `data` holds `rows × cols` values. Loading doesn't check that (the fields are
+/// public, so a file can say anything): whoever loads values from a file checks them with
+/// [`Value::is_well_formed`] and repairs what fails (#2160).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Array {
     pub rows: usize,
@@ -208,6 +212,23 @@ impl From<Array> for Value {
 }
 
 impl Value {
+    /// Whether every array in this value, including arrays nested in another array's values, is
+    /// at least 1×1 and holds exactly `rows × cols` values, as indexing assumes. Values built in
+    /// code always are; values loaded from a file may not be (#2160). Walks without recursion,
+    /// so a deeply nested value can't overflow the stack.
+    pub fn is_well_formed(&self) -> bool {
+        let mut pending = vec![self];
+        while let Some(v) = pending.pop() {
+            if let Value::Array(a) = v {
+                if a.rows == 0 || a.cols == 0 || a.rows.checked_mul(a.cols) != Some(a.data.len()) {
+                    return false;
+                }
+                pending.extend(a.data.iter().filter(|x| matches!(x, Value::Array(_))));
+            }
+        }
+        true
+    }
+
     /// A number, or `#NUM!` when it is NaN or infinite (Excel never stores those).
     pub fn number(v: f64) -> Value {
         if v.is_finite() { Value::Number(if v == 0.0 { 0.0 } else { v }) } else { Value::Error(CellError::Num) }
@@ -487,6 +508,27 @@ pub fn sci_text(n: f64, sig: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_loaded_array_is_checked_by_is_well_formed() {
+        // #2160: indexing assumes `data.len() == rows * cols`. A file can say otherwise; loading
+        // keeps what it says and `is_well_formed` tells the loader to repair it.
+        let number = |n: f64| Value::Number(n);
+        let loaded = |json: &str| serde_json::from_str::<Value>(json).unwrap();
+        for bad in [
+            r#"{"t":"Array","v":{"rows":3,"cols":2,"data":[{"t":"Number","v":1.0}]}}"#,
+            r#"{"t":"Array","v":{"rows":0,"cols":1,"data":[]}}"#,
+            r#"{"t":"Array","v":{"rows":18446744073709551615,"cols":2,"data":[]}}"#,
+            // Nested in a well-formed array.
+            r#"{"t":"Array","v":{"rows":1,"cols":2,"data":[{"t":"Number","v":1.0},{"t":"Array","v":{"rows":2,"cols":2,"data":[]}}]}}"#,
+        ] {
+            assert!(!loaded(bad).is_well_formed(), "{bad}");
+        }
+        let ok = Value::from(Array::new(1, 2, vec![number(1.0), Value::from(Array::scalar(number(2.0)))]).unwrap());
+        let back = loaded(&serde_json::to_string(&ok).unwrap());
+        assert_eq!(back, ok, "what is saved loads back unchanged");
+        assert!(back.is_well_formed() && number(1.0).is_well_formed() && Value::Empty.is_well_formed());
+    }
 
     #[test]
     fn number_text() {

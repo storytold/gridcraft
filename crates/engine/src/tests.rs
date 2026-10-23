@@ -4168,6 +4168,53 @@ fn json_import_rebuilds_cell_store_bands_and_counts() {
 }
 
 #[test]
+fn json_import_orders_ranges_and_repairs_arrays() {
+    // #2160: ranges and arrays were taken from a JSON workbook as written. A merge with its
+    // corners swapped (or off the sheet) wrapped `height()` to about 4.29e9 in release, and an
+    // array shorter than rows x cols was indexed past its end. Like Excel with a damaged file,
+    // the open goes on: ranges are put in order on the sheet, damaged values are dropped.
+    let mut s = s();
+    s.execute("home.mergeCells", json!({"range": "B2:C3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A5", "input": "keep"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B5", "input": "=LEN(A5)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C5", "input": "7"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let good: serde_json::Value = serde_json::to_value(&**wb).unwrap();
+
+    let mut file = good.clone();
+    file["sheets"][0]["merges"][0] = json!({"start": {"row": 4_000_000_000u32, "col": 5}, "end": {"row": 2, "col": 1}});
+    let (back, _) = crate::io::open_bytes("book.json", &serde_json::to_vec(&file).unwrap()).unwrap();
+    let merge = back.active().unwrap().merges[0];
+    assert_eq!(merge, gridcraft_core::RangeRef::parse("B3:F1048576").unwrap());
+    assert_eq!(merge.height(), 1_048_574);
+
+    // B5 (a formula) caches an array that claims a million values and holds none; C5 (a
+    // constant) holds a well-formed array with a damaged one nested in it.
+    let mut file = good;
+    let band = file["sheets"][0]["cells"]["bands"].as_object_mut().unwrap().values_mut().next().unwrap();
+    band["rows"]["4"]["1"]["value"] = json!({"t": "Array", "v": {"rows": 1000, "cols": 1000, "data": []}});
+    let nested = json!({"t": "Array", "v": {"rows": 2, "cols": 2, "data": [{"t": "Number", "v": 1.0}]}});
+    band["rows"]["4"]["2"]["value"] = json!({"t": "Array", "v": {"rows": 1, "cols": 2, "data": [{"t": "Number", "v": 1.0}, nested]}});
+    let bytes = serde_json::to_vec(&file).unwrap();
+    let (back, warnings) = crate::io::open_bytes("book.json", &bytes).unwrap();
+    let sh = back.active().unwrap();
+    let value = |a: &str| sh.cell(CellRef::parse(a).unwrap()).map(|c| c.value.clone());
+    assert_eq!(value("B5"), Some(Value::Empty), "the damaged cached result is dropped");
+    assert_eq!(value("C5"), Some(Value::Empty), "a damaged array nested in another is found");
+    assert_eq!(value("A5"), Some(Value::text("keep")), "the rest of the sheet loads");
+    assert!(sh.cell(CellRef::parse("B5").unwrap()).unwrap().formula.is_some(), "the formula stays");
+    assert_eq!(
+        warnings.iter().filter(|w| w.contains("was damaged")).collect::<Vec<_>>(),
+        [&"The value saved in Sheet1!B5 (and 1 more) was damaged, so it was dropped; a formula there calculates it again.".to_string()]
+    );
+
+    // Opened in the session, the formula calculates its value again.
+    s.execute("file.open", json!({"name": "book.json", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(v(&s, "B5"), Value::Number(4.0));
+    assert_eq!(v(&s, "C5"), Value::Empty);
+}
+
+#[test]
 fn notes_comments_and_links_survive_a_json_save() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();

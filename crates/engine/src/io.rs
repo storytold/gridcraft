@@ -249,14 +249,38 @@ pub fn enforce_python_limits(wb: &mut Workbook) -> Vec<String> {
 /// A Python result a file may hold: a scalar, or an array whose size matches its data and has at
 /// most [`gridcraft_model::python::MAX_RESULT_CELLS`] cells.
 fn sane_python_output(v: &gridcraft_core::Value) -> bool {
-    match v {
-        gridcraft_core::Value::Array(a) => {
-            a.rows >= 1
-                && a.cols >= 1
-                && a.rows.checked_mul(a.cols).is_some_and(|n| n == a.data.len() && n <= gridcraft_model::python::MAX_RESULT_CELLS)
+    v.is_well_formed()
+        && match v {
+            gridcraft_core::Value::Array(a) => a.data.len() <= gridcraft_model::python::MAX_RESULT_CELLS,
+            _ => true,
         }
-        _ => true,
+}
+
+/// A JSON workbook keeps cell values as written, and an array in one may not hold the
+/// `rows × cols` values that indexing assumes (#2160). Like Excel repairing a damaged file, the
+/// open goes on: such a value is dropped, so the cell is empty until its formula, if it has one,
+/// calculates again (opening recalculates). Python results are checked by
+/// [`enforce_python_limits`]. Runs before anything reads the cells. Returns the warnings.
+fn drop_damaged_values(wb: &mut Workbook) -> Vec<String> {
+    let mut damaged = Vec::new();
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheets.get(si) else { continue };
+        let cells: Vec<CellRef> = sh.cells.iter().filter(|(_, cell)| !cell.value.is_well_formed()).map(|(c, _)| c).collect();
+        if cells.is_empty() {
+            continue;
+        }
+        let name = sh.name.clone();
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        for c in cells {
+            if let Some(cell) = sh.cells.get_mut(c) {
+                cell.value = gridcraft_core::Value::Empty;
+            }
+            damaged.push(format!("{name}!{}", c.a1()));
+        }
     }
+    let Some(first) = damaged.first() else { return vec![] };
+    let more = if damaged.len() > 1 { format!(" (and {} more)", damaged.len() - 1) } else { String::new() };
+    vec![format!("The value saved in {first}{more} was damaged, so it was dropped; a formula there calculates it again.")]
 }
 
 /// Parses bytes that aren't encrypted, as they are.
@@ -317,6 +341,7 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             if dropped > 0 {
                 warnings.push(format!("{name}: {dropped} cells outside the 1,048,576 × 16,384 grid were dropped"));
             }
+            warnings.extend(drop_damaged_values(&mut wb));
             Ok((wb, warnings))
         }
         Some(FileKind::Sylk) => {
