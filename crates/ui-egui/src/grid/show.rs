@@ -769,7 +769,7 @@ pub(crate) fn paint_overlays(input: OverlayInput<'_>) {
         );
     }
     // Hyperlink tooltip.
-    if let Some(h) = hover.and_then(|c| sh.hyperlinks.get(&c))
+    if let Some(h) = hover.and_then(|c| gridcraft_engine::links::cell_link(wb, si, c))
         && app.editor.is_none()
     {
         let tip = h.tooltip.clone().unwrap_or_else(|| format!("{}\nClick once to follow. Click and hold to select this cell.", h.target));
