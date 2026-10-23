@@ -204,7 +204,7 @@ egui frontend is a separate crate, so the UI can be swapped without touching the
 ## Roadmap
 
 GridCraft is in **alpha**: the core workflow works end to end, but depth, fidelity and file
-compatibility are still rough. It covers 89% of standard ribbon commands in our catalog
+compatibility are still rough. It covers 94.5% of standard ribbon commands in our catalog
 ([`docs/parity-checklist.md`](docs/parity-checklist.md)) and 513 standard worksheet functions
 ([`docs/function-parity.md`](docs/function-parity.md)); this is a parity inventory, not a count of working implementations. Weighted by what spreadsheet users rely on, we
 estimate it is about 50% ready for real work. Next up: XLSX fidelity on real-world files, very large

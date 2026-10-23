@@ -50,6 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("table.lastColumn", "Last Column", ["Table", "Table Style Options"], None, "{table?, on?}", has_doc, |s, p| table_flag(s, p, "lastCol")),
         cmd!("table.style", "Table Styles", ["Table", "Table Styles"], None, "{table?, style}", has_doc, table_style),
         cmd!("table.rename", "Table Name", ["Table", "Properties"], None, "{table?, name}", has_doc, table_rename),
+        cmd!("table.unlink", "Unlink", ["Table Design", "External Table Data"], None, "{table?}", has_doc, table_unlink),
         cmd!("table.convertToRange", "Convert to Range", ["Table", "Tools"], None, "{table?}", has_doc, table_convert),
         cmd!(
             "table.totalFunction",
@@ -527,6 +528,27 @@ fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         cx.structural = true;
+        Ok(Json::Null)
+    })
+}
+
+/// Unlink: drop the table's external binding and keep its data as a plain table. The XLSX writer
+/// stops emitting `tableType`, `connectionId`, `uniqueName` and `xmlColumnPr`; the data, styles,
+/// totals, filters and column names stay.
+fn table_unlink(s: &mut Session, p: &Json) -> Result<Json> {
+    let (si, ti) = find_table(s, p)?;
+    edit(s, |cx| {
+        let sh = cx.sheet_mut(si)?;
+        let Some(t) = sh.tables.get_mut(ti) else { return Ok(Json::Null) };
+        if !t.is_external() {
+            return Err(EngineError::Disabled("table.unlink".into(), "the table has no external data connection".into()));
+        }
+        t.table_type = None;
+        t.connection_id = None;
+        for c in &mut t.columns {
+            c.xml = None;
+            c.unique_name = None;
+        }
         Ok(Json::Null)
     })
 }

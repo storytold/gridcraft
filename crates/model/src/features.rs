@@ -96,6 +96,12 @@ pub struct Table {
 }
 
 impl Table {
+    /// Whether the table is bound to data outside the sheet: an XML map or a connection. A column's
+    /// `uniqueName` is part of that binding too, and a file can carry it without `tableType`,
+    /// `connectionId` or `xmlColumnPr`, so it counts.
+    pub fn is_external(&self) -> bool {
+        self.table_type.is_some() || self.connection_id.is_some() || self.columns.iter().any(|c| c.xml.is_some() || c.unique_name.is_some())
+    }
     pub fn data_range(&self) -> Option<RangeRef> {
         let r0 = self.range.start.row + self.header_row as u32;
         let r1 = self.range.end.row.checked_sub(self.totals_row as u32)?;

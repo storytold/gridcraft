@@ -55,6 +55,8 @@ pub enum Icon {
     More,
     Chevron,
     ChevronUp,
+    Refresh,
+    Unlink,
     Close,
     Check,
     Fx,
@@ -434,6 +436,16 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
         }
         Icon::Chevron => g.line(&[(4.5, 6.5), (8.0, 10.0), (11.5, 6.5)], c, 1.2),
         Icon::ChevronUp => g.line(&[(4.5, 10.0), (8.0, 6.5), (11.5, 10.0)], c, 1.2),
+        Icon::Refresh => {
+            g.circle(8.0, 8.0, 5.0, None, Some(c));
+            g.line(&[(11.5, 3.0), (13.0, 6.0), (10.0, 7.0)], c, 1.4);
+            g.circle(12.6, 4.6, 1.2, Some(c), None);
+        }
+        Icon::Unlink => {
+            g.line(&[(2.5, 10.5), (5.0, 8.0), (7.0, 10.0)], c, 1.5);
+            g.line(&[(9.0, 6.0), (11.0, 8.0), (13.5, 5.5)], c, 1.5);
+            g.line(&[(7.5, 7.5), (8.5, 8.5)], c, 1.2);
+        }
         Icon::Left => g.line(&[(10.0, 4.0), (6.0, 8.0), (10.0, 12.0)], c, 1.2),
         Icon::Right => g.line(&[(6.0, 4.0), (10.0, 8.0), (6.0, 12.0)], c, 1.2),
         Icon::Close => {

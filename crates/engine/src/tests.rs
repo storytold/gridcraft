@@ -1644,6 +1644,115 @@ fn tables_and_structured_refs() {
 }
 
 #[test]
+fn table_unlink_drops_the_external_binding_and_keeps_the_data() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty"], ["x", 2], ["y", 5]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3", "header": true, "name": "Data"})).unwrap();
+    s.execute("table.totalRow", json!({"on": true, "table": "Data"})).unwrap();
+    s.execute("table.style", json!({"table": "Data", "style": "TableStyleMedium9"})).unwrap();
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        let t = &mut wb.sheet_mut(0).unwrap().tables[0];
+        t.table_type = Some("xml".into());
+        t.connection_id = Some(7);
+        t.columns[0].unique_name = Some("ItemID".into());
+        t.columns[0].xml =
+            Some(gridcraft_model::XmlColumnPr { map_id: 1, xpath: "/DataList/Item/Item".into(), data_type: "string".into(), denormalized: false });
+        t.filter = vec![(1, gridcraft_model::FilterCriterion::Values { values: vec!["2".into()], blanks: false })];
+    }
+    {
+        let d = s.doc().unwrap();
+        let t = &d.wb.active().unwrap().tables[0];
+        assert!(t.is_external());
+        assert!(t.totals_row);
+        assert_eq!(t.style, "TableStyleMedium9");
+        assert_eq!(t.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Item", "Qty"]);
+    }
+
+    s.execute("table.unlink", json!({"table": "Data"})).unwrap();
+    {
+        let d = s.doc().unwrap();
+        let t = &d.wb.active().unwrap().tables[0];
+        assert!(!t.is_external());
+        assert_eq!(t.table_type, None);
+        assert_eq!(t.connection_id, None);
+        assert!(t.columns.iter().all(|c| c.unique_name.is_none() && c.xml.is_none()));
+        assert_eq!(t.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Item", "Qty"], "column names stay");
+        assert!(t.totals_row, "the totals row stays");
+        assert_eq!(t.style, "TableStyleMedium9", "the table style stays");
+        assert_eq!(t.filter.len(), 1, "filter criteria stay");
+    }
+    assert_eq!(v(&s, "B2"), Value::Number(2.0), "the data stays");
+
+    // Undo restores the binding; unlinking again then saving writes a plain table.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().tables[0].is_external());
+    s.execute("table.unlink", json!({"table": "Data"})).unwrap();
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "d.xlsx", "base64": r["base64"].as_str().unwrap()})).unwrap();
+    let d = s.doc().unwrap();
+    let t = &d.wb.active().unwrap().tables[0];
+    assert!(!t.is_external());
+    assert_eq!(t.filter.len(), 1);
+    assert_eq!(t.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Item", "Qty"], "column names survive the save");
+    assert!(t.totals_row, "the totals row survives the save");
+    assert_eq!(t.style, "TableStyleMedium9", "the table style survives the save");
+
+    // A plain table has nothing to unlink.
+    s.execute("insert.table", json!({"range": "D1:D2", "header": true, "name": "Plain"})).unwrap();
+    let e = s.execute("table.unlink", json!({"table": "Plain"})).unwrap_err();
+    assert!(e.to_string().contains("no external data"), "{e}");
+}
+
+/// A file can carry `uniqueName` on its columns without `tableType`, `connectionId` or
+/// `xmlColumnPr`; the reader keeps it, so the table is external and unlink has to clear it.
+#[test]
+fn table_unlink_clears_a_lone_unique_name() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty"], ["x", 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B2", "header": true, "name": "Data"})).unwrap();
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().tables[0].columns[0].unique_name = Some("ItemID".into());
+    }
+    assert!(s.doc().unwrap().wb.active().unwrap().tables[0].is_external());
+
+    // The binding survives the file: the writer emits the lone `uniqueName` and the reader keeps it.
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "u.xlsx", "base64": r["base64"].as_str().unwrap()})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().tables[0].is_external());
+
+    s.execute("table.unlink", json!({"table": "Data"})).unwrap();
+    {
+        let d = s.doc().unwrap();
+        let t = &d.wb.active().unwrap().tables[0];
+        assert!(!t.is_external());
+        assert!(t.columns.iter().all(|c| c.unique_name.is_none() && c.xml.is_none()));
+        assert_eq!(t.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Item", "Qty"]);
+    }
+    assert_eq!(v(&s, "B2"), Value::Number(2.0), "the data stays");
+
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    // The reader drops a standalone `connectionId`, so check the written part itself: a writer
+    // regression that leaves any external metadata in must fail here, not only in the round-trip.
+    let bytes = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("xl/tables/table1.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains("name=\"Data\"") && xml.contains("ref=\"A1:B2\""), "the table itself is still written: {xml}");
+    assert!(!xml.contains("tableType="), "no tableType is written: {xml}");
+    assert!(!xml.contains("connectionId="), "no connectionId is written: {xml}");
+    assert!(!xml.contains("<xmlColumnPr"), "no xmlColumnPr is written: {xml}");
+    assert!(!xml.contains("uniqueName="), "no uniqueName is written: {xml}");
+
+    s.execute("file.open", json!({"name": "u2.xlsx", "base64": r["base64"].as_str().unwrap()})).unwrap();
+    let d = s.doc().unwrap();
+    let t = &d.wb.active().unwrap().tables[0];
+    assert!(!t.is_external(), "the saved table is plain");
+    assert!(t.columns.iter().all(|c| c.unique_name.is_none()), "no uniqueName is written");
+}
+
+#[test]
 fn structured_refs_to_columns_with_edge_spaces() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty "], ["a", 2], ["b", 3]]})).unwrap();

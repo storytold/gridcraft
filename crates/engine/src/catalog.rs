@@ -280,6 +280,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("table.summarizePivot", "Table Design", "Tools", "Summarize with PivotTable"),
     ("table.removeDuplicates", "Table Design", "Tools", "Remove Duplicates"),
     ("table.convertToRange", "Table Design", "Tools", "Convert to Range"),
+    ("table.unlink", "Table Design", "External Table Data", "Unlink"),
     ("table.insertSlicer", "Table Design", "Tools", "Insert Slicer"),
     ("table.headerRow", "Table Design", "Table Style Options", "Header Row"),
     ("table.totalRow", "Table Design", "Table Style Options", "Total Row"),
