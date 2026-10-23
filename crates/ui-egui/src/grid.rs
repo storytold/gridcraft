@@ -2483,8 +2483,13 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             Drag::ResizeCol { col, start, orig } => {
                 let w = (orig + (p.x - start) / geo.z).max(0.0);
-                app.toast =
-                    Some((format!("Width: {:.2} ({} pixels)", gridcraft_engine::cmd::format::points_to_chars(w as f64), w.round()), crate::now_ms()));
+                app.toast = Some((
+                    crate::i18n::current(ui.ctx())
+                        .tr("Width: {size} ({px} pixels)")
+                        .replace("{size}", &format!("{:.2}", gridcraft_engine::cmd::format::points_to_chars(w as f64)))
+                        .replace("{px}", &w.round().to_string()),
+                    crate::now_ms(),
+                ));
                 // Inside a selection of whole columns, every selected column takes the new width
                 // (Ctrl-selected areas included); otherwise only the dragged one.
                 let cols = if sel.ranges.iter().any(|r| r.is_full_cols() && col >= r.start.col && col <= r.end.col) {
@@ -2497,7 +2502,13 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             Drag::ResizeRow { row, start, orig } => {
                 let h = (orig + (p.y - start) / geo.z).max(0.0);
-                app.toast = Some((format!("Height: {:.2} ({} pixels)", h * 0.75, h.round()), crate::now_ms()));
+                app.toast = Some((
+                    crate::i18n::current(ui.ctx())
+                        .tr("Height: {size} ({px} pixels)")
+                        .replace("{size}", &format!("{:.2}", h * 0.75))
+                        .replace("{px}", &h.round().to_string()),
+                    crate::now_ms(),
+                ));
                 let rows = if sel.ranges.iter().any(|r| r.is_full_rows() && row >= r.start.row && row <= r.end.row) {
                     sel.ranges
                         .iter()
@@ -3157,6 +3168,7 @@ fn filter_table_range(sh: &Sheet, col: u32, row: u32) -> Option<RangeRef> {
 }
 
 fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
+    let lang = crate::i18n::current(ui.ctx());
     let Some((col, row, at)) = app.grid.filter_menu else { return };
     let Some(d) = app.session.active() else { return };
     let wb = d.wb.clone();
@@ -3208,7 +3220,7 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
                 close = true;
             }
             ui.separator();
-            ui.label(egui::RichText::new("Filter").strong());
+            ui.label(egui::RichText::new(lang.tr("Filter")).strong());
             let mut checks: Vec<(String, bool)> = ui.ctx().data_mut(|d| d.get_temp::<Vec<(String, bool)>>(key)).unwrap_or(values.clone());
             // A search narrows the list; Select All and Apply then only cover the matches.
             let mut search: String = ui.ctx().data_mut(|d| d.get_temp(search_key)).unwrap_or_default();
@@ -3221,7 +3233,7 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             let all = checks.iter().filter(|(v, _)| matches(v)).all(|(_, b)| *b);
             let mut all_new = all;
             let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
-            if ui.checkbox(&mut all_new, label).changed() {
+            if ui.checkbox(&mut all_new, lang.tr(label)).changed() {
                 for c in checks.iter_mut().filter(|(v, _)| matches(v)) {
                     c.1 = all_new;
                 }
@@ -3240,14 +3252,14 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             let checks: Vec<(String, bool)> = checks.iter().map(|(v, on)| (v.clone(), *on && matches(v))).collect();
             ui.separator();
             ui.horizontal(|ui| {
-                let clear = ui.button("Clear Filter");
+                let clear = ui.button(lang.tr("Clear Filter"));
                 if clear.clicked() {
                     let _ = app.run("data.filterBy", json!({"column": col_to_letters(col), "clear": true}));
                     close = true;
                 }
                 // Nothing checked would hide every row, so Enter (unlike a click on Apply) does nothing then.
                 let any = checks.iter().any(|(_, on)| *on);
-                let apply = ui.button("Apply");
+                let apply = ui.button(lang.tr("Apply"));
                 ui.ctx().data_mut(|d| d.insert_temp(buttons_key, vec![ascending.id, descending.id, clear.id, apply.id]));
                 if apply.clicked() || (enter && any) {
                     let blanks = checks.iter().any(|(v, on)| v == "(Blanks)" && *on);
@@ -3671,7 +3683,9 @@ pub(crate) fn paint_overlays(
     if let Some(h) = hover.and_then(|c| sh.hyperlinks.get(&c))
         && app.editor.is_none()
     {
-        let tip = h.tooltip.clone().unwrap_or_else(|| format!("{}\nClick once to follow. Click and hold to select this cell.", h.target));
+        let tip = h.tooltip.clone().unwrap_or_else(|| {
+            format!("{}\n{}", h.target, crate::i18n::current(ui.ctx()).tr("Click once to follow. Click and hold to select this cell."))
+        });
         egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("link_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(tip);
         });
@@ -3912,7 +3926,7 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
         p.text(
             rr.center(),
             Align2::CENTER_CENTER,
-            format!("Page {n}"),
+            format!("{} {n}", app.ui.language.tr("Page")),
             theme::ui_bold((rr.height().min(rr.width()) / 6.0).clamp(14.0, 72.0)),
             Color32::from_black_alpha(45),
         );
