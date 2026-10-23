@@ -161,7 +161,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("NF", Entry::Continue),  // Excel: Online Pictures; group level: containment(Picture)
     ("NFP", Entry::Continue), // Excel: From Picture Menu; group level: containment(Picture)
     ("NFPF", Entry::Finish(Action::Command("insert.picture"))), // Excel: Picture From File; containment(Picture)
-    ("NH1", Entry::Finish(Action::Dialog("headerFooter"))), // Excel: Header & Footer
+    ("NH1", Entry::Finish(Action::Control("pageLayout.headerFooter"))), // Excel: Header & Footer; ribbon control: starts editing the page header
     ("NHF", Entry::Finish(Action::Command("pageLayout.headerFooter"))), // Excel: Header & Footer
     ("NHI", Entry::Finish(Action::Control("insert.chart.hierarchy"))), // Excel: Hierarchy Chart; Hierarchy (kind TBD)
     ("NI1", Entry::Finish(Action::Command("insert.chart"))), // Excel: Waterfall Chart; Waterfall (kind TBD)

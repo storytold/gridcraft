@@ -1166,7 +1166,8 @@ fn keytip_nfpf_() {
 fn keytip_nh1_() {
     let mut h = harness(blank());
     sequence(&mut h, "NH1", false);
-    assert!(h.state().dialog.is_some(), "NH1 must open the headerFooter dialog");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "NH1 must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]

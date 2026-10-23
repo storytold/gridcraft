@@ -160,6 +160,47 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
     (m.on_hover_text(tip_text(ui, tip)).clicked(), a)
 }
 
+/// Large split button, the size of [`big_button`]: icon over a one- or two-line label. The body runs
+/// the default action and the arrow strip on the right opens a menu, so the two have separate hit
+/// areas. Returns (body clicked, arrow response, the whole button rect for anchoring keytips).
+pub fn large_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, menu_label: &str) -> (bool, Response, Rect) {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::ui_font(11.5);
+    let label = tr(ui, label);
+    let menu_label = tr(ui, menu_label);
+    let lines: Vec<_> = label.split('\n').map(|line| ui.painter().layout_no_wrap(line.to_string(), font.clone(), t.text)).collect();
+    let text_w = lines.iter().map(|line| line.size().x).fold(0.0, f32::max);
+    let main_w = (text_w + 12.0).max(44.0);
+    let arrow_w = 14.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(main_w + arrow_w, 72.0), Sense::hover());
+    let main = Rect::from_min_size(rect.min, vec2(main_w, rect.height()));
+    let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
+    let m = ui.interact(main, ui.id().with((tip, "main")), Sense::click());
+    let a = ui.interact(arrow, ui.id().with((tip, "arrow")), Sense::click());
+    if m.is_pointer_button_down_on() {
+        ui.painter().rect_filled(main, 5.0, t.pressed);
+    } else if a.is_pointer_button_down_on() {
+        ui.painter().rect_filled(arrow, 5.0, t.pressed);
+    } else if m.hovered() {
+        ui.painter().rect_filled(main, 5.0, t.hover);
+    } else if a.hovered() {
+        ui.painter().rect_filled(arrow, 5.0, t.hover);
+    }
+    ui.painter().line_segment([pos2(main.right(), rect.top() + 6.0), pos2(main.right(), rect.bottom() - 6.0)], Stroke::new(1.0, t.separator));
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(main.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text);
+    for (i, line) in lines.iter().enumerate() {
+        ui.painter().galley(
+            pos2(main.center().x - line.size().x / 2.0, rect.top() + 46.0 + i as f32 * 13.0 - line.size().y / 2.0),
+            line.clone(),
+            t.text,
+        );
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(arrow.center().x, rect.top() + 49.0), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
+    m.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+    a.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), menu_label));
+    (m.on_hover_text(tr(ui, tip)).clicked(), a, rect)
+}
+
 /// A one-line text field for a value stored in the workbook, which callers reload every frame. The text being typed is
 /// kept in egui memory until the field loses focus, then returned to commit (`None` when Escape cancels the edit).
 pub fn committed_text(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f32>) -> Option<String> {

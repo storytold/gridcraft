@@ -8,7 +8,7 @@ use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Tokens};
-use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::widgets::{big_button, color_palette, icon_button, large_split_button, small_button, split_button, toggle_button};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -365,9 +365,35 @@ fn act(app: &mut SheetApp, id: &str, params: serde_json::Value) {
     app.run_or_alert(id, params);
 }
 
+/// The part of a sequence still to type, or `None` when the badge is not armed.
+fn keytip_rest<'a>(app: &SheetApp, sequence: &'a str) -> Option<&'a str> {
+    app.keytips.prefix().and_then(|prefix| sequence.strip_prefix(prefix)).filter(|s| !s.is_empty())
+}
+
 /// Keytips are painted, not focusable widgets: the grid retains keyboard focus.
 fn keytip(app: &SheetApp, ui: &Ui, sequence: &str, at: egui::Pos2) {
-    let Some(rest) = app.keytips.prefix().and_then(|prefix| sequence.strip_prefix(prefix)).filter(|s| !s.is_empty()) else { return };
+    if let Some(rest) = keytip_rest(app, sequence) {
+        paint_keytip(ui, rest, at);
+    }
+}
+
+/// Paint several group badges side by side, centred on `at` but apart from each other, so
+/// alternatives (e.g. `NZ` and `NH`) stay readable.
+fn keytip_group(app: &SheetApp, ui: &Ui, sequences: &[&str], at: egui::Pos2) {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::ui_bold(10.5);
+    let rest: Vec<&str> = sequences.iter().filter_map(|sequence| keytip_rest(app, sequence)).collect();
+    let widths: Vec<f32> = rest.iter().map(|r| ui.painter().layout_no_wrap((*r).into(), font.clone(), t.text).size().x + 7.0).collect();
+    let gap = 4.0;
+    let total: f32 = widths.iter().sum::<f32>() + gap * widths.len().saturating_sub(1) as f32;
+    let mut x = at.x - total / 2.0;
+    for (rest, width) in rest.iter().zip(&widths) {
+        paint_keytip(ui, rest, pos2(x + width / 2.0, at.y));
+        x += width + gap;
+    }
+}
+
+fn paint_keytip(ui: &Ui, rest: &str, at: egui::Pos2) {
     let t = Tokens::get(ui.ctx());
     let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("ribbon_keytips"))).with_clip_rect(ui.clip_rect());
     let text = painter.layout_no_wrap(rest.into(), theme::ui_bold(10.5), t.text);
@@ -1678,17 +1704,43 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
         app.open_dialog("comment", json!({"threaded": true}));
     }
     sep(ui);
-    let __k = big_button(ui, Icon::TextBox, "Text\nBox", "Text Box", false);
-    control_keytip(app, ui, &__k, "insert.textBox");
-    if __k.clicked() {
+    // Excel folds Text Box and Header & Footer into one Text split button: the body inserts a text
+    // box, the arrow opens the drop-down.
+    let (text_body, text_arrow, text_rect) = large_split_button(ui, Icon::TextBox, "Text", "Text Box", "Text options");
+    let prefix = app.keytips.prefix().unwrap_or_default();
+    let mut badges = keytip_table::group_extension(prefix, &["insert.textBox", "pageLayout.headerFooter"]);
+    // One key deeper, the control's own badge (e.g. NZ -> T, NH -> 1) sits beside the group badges.
+    if let Some(final_badge) =
+        keytip_table::control_badge(prefix, "insert.textBox").or_else(|| keytip_table::item_letter(prefix, "pageLayout.headerFooter"))
+    {
+        badges.push(final_badge);
+    }
+    keytip_group(app, ui, &badges, text_rect.center_bottom());
+    if text_body {
         act(app, "insert.textBox", json!({}));
     }
-    let __k = big_button(ui, Icon::PageLayout, "Header &\nFooter", "Header & Footer", false);
-    control_keytip(app, ui, &__k, "dialog:headerFooter");
-    if __k.clicked() {
-        // As in Excel: Page Layout view, editing the header in place (the dialog is under Page Setup).
+    // NH1 is a control keytip: it starts editing the page header rather than opening the Page
+    // Setup dialog (which stays available from the Page Layout tab).
+    if invoke(app, "pageLayout.headerFooter") {
         crate::paper_view::start_editing(app);
     }
+    egui::Popup::menu(&text_arrow).show(|ui| {
+        for (label, id) in [("Text Box", "insert.textBox"), ("Header & Footer", "pageLayout.headerFooter")] {
+            let response = ui.add(egui::Button::new(app.ui.language.tr(label)).frame(false).min_size(vec2(220.0, 22.0)));
+            if let Some(sequence) = keytip_table::item_letter(app.keytips.prefix().unwrap_or_default(), id) {
+                keytip(app, ui, sequence, pos2(response.rect.right() - 10.0, response.rect.center().y));
+            }
+            if response.clicked() {
+                if id == "insert.textBox" {
+                    act(app, id, json!({}));
+                } else {
+                    // As in Excel: Page Layout view, editing the header in place (the dialog is under Page Setup).
+                    crate::paper_view::start_editing(app);
+                }
+                ui.close();
+            }
+        }
+    });
     let sym = big_button(ui, Icon::Symbol, "Symbol", "Symbol", true);
     control_keytip(app, ui, &sym, "insert.symbol");
     egui::Popup::menu(&sym).show(|ui| {

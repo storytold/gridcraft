@@ -1052,10 +1052,10 @@
   },
   {
    "seq": "NH1",
-   "kind": "dialog",
-   "target": "headerFooter",
+   "kind": "control",
+   "target": "pageLayout.headerFooter",
    "excel": "Header & Footer",
-   "note": ""
+   "note": "ribbon control: starts editing the page header"
   },
   {
    "seq": "NHF",
