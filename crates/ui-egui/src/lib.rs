@@ -105,7 +105,7 @@ impl Default for UiState {
             ribbon_collapsed: false,
             formula_bar_expanded: false,
             status_bar: true,
-            animations: true,
+            animations: false,
             autocomplete: true,
             autosave: false,
             recent: vec![],
