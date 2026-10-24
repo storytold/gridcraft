@@ -467,8 +467,9 @@ impl<'a> PassHost<'a> {
 }
 
 /// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
-/// overlaps merged cells, holds other cells, or another formula's spill (unless that formula is
-/// recalculated in this pass, and so may spill elsewhere now).
+/// overlaps merged cells, holds other cells, or the spill of another formula anchored earlier in
+/// reading order (unless that formula is recalculated in this pass, and so may spill elsewhere
+/// now). A spill of a later anchor gives way to it when written back.
 fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     let Some(sh) = host.wb.sheet(sheet) else { return false };
     let end =
@@ -477,7 +478,10 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     let own = sh.spill_ranges.get(&anchor);
     let spilled_over = |c: CellRef| {
         !own.is_some_and(|o| o.contains(c))
-            && sh.spill_ranges.iter().any(|(o, r)| *o != anchor && r.contains(c) && !host.exprs.contains_key(&(sheet, *o)))
+            && sh
+                .spill_ranges
+                .iter()
+                .any(|(o, r)| *o != anchor && r.contains(c) && !host.exprs.contains_key(&(sheet, *o)) && (o.row, o.col) < (anchor.row, anchor.col))
     };
     end.row >= gridcraft_core::MAX_ROWS
         || end.col >= gridcraft_core::MAX_COLS
@@ -1004,6 +1008,13 @@ impl Calc {
                 }
             }
         }
+        // So can the area a removed formula spilled over.
+        for (si, r) in &cleared {
+            match emptied.iter_mut().find(|x| x.0 == *si) {
+                Some(x) => x.1 = CellRef::new(x.1.row.max(r.end.row), x.1.col.max(r.end.col)),
+                None => emptied.push((*si, r.end)),
+            }
+        }
         // An emptied cell can unblock an anchor any distance above or to the left of it.
         for (si, end) in emptied {
             for &(s, c) in self.graph.nodes.keys() {
@@ -1140,11 +1151,37 @@ impl Calc {
                 if let Some(arr) = new {
                     let end = CellRef::new(k.1.row.saturating_add(arr.rows as u32 - 1), k.1.col.saturating_add(arr.cols as u32 - 1));
                     let range = RangeRef::new(k.1, end);
+                    // Two arrays that want the same cells: the one anchored first in reading order
+                    // keeps them, whatever order they were entered in, so a full recalculation
+                    // (which lays every spill out afresh) gives what the incremental one does. A
+                    // spill of a later anchor already laid out is taken over, and recalculated.
+                    let later: Vec<(CellRef, RangeRef)> = sheet
+                        .spill_ranges
+                        .iter()
+                        .filter(|(o, r)| **o != k.1 && (o.row, o.col) > (k.1.row, k.1.col) && r.intersects(&range))
+                        .map(|(o, r)| (*o, *r))
+                        .collect();
                     let blocked = end.row >= gridcraft_core::MAX_ROWS
                         || end.col >= gridcraft_core::MAX_COLS
-                        || range.iter().any(|c| c != k.1 && (sheet.cells.has(c) || sheet.spill.contains_key(&c)))
+                        || range
+                            .iter()
+                            .any(|c| c != k.1 && (sheet.cells.has(c) || (sheet.spill.contains_key(&c) && !later.iter().any(|(_, r)| r.contains(c)))))
                         || sheet.merges.iter().any(|m| m.intersects(&range))
                         || sheet.tables.iter().any(|t| t.range.contains(k.1));
+                    if !blocked {
+                        for (o, r) in later {
+                            for c in r.iter() {
+                                sheet.spill.remove(&c);
+                            }
+                            sheet.spill_ranges.remove(&o);
+                            if let Some(cell) = sheet.cells.get_mut(o) {
+                                cell.value = Value::Error(CellError::Spill);
+                            }
+                            spill_changes.push((k.0, o));
+                            self.graph.dependents_of_range(k.0, r, &mut spill_changes);
+                            freed.push((k.0, r));
+                        }
+                    }
                     if blocked {
                         if let Some(cell) = sheet.cells.get_mut(k.1) {
                             cell.value = Value::Error(CellError::Spill);
