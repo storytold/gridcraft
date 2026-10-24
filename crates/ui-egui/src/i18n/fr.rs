@@ -417,6 +417,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save .xlsx workbooks automatically after every change" => "Enregistrer automatiquement les classeurs .xlsx après chaque modification",
         "Workbook calculation" => "Calcul du classeur",
         "Enable iterative calculation" => "Activer le calcul itératif",
+        "Maximum Iterations:" => "Nombre maximal d'itérations :",
+        "Maximum Change:" => "Écart maximal :",
+        "Maximum Iterations must be a whole number from 1 to 32767." => {
+            "Le nombre maximal d'itérations doit être un entier compris entre 1 et 32767."
+        }
+        "Maximum Change must be a number of 0 or more." => "L'écart maximal doit être un nombre supérieur ou égal à 0.",
         "Calculation settings are saved with the workbook." => "Les paramètres de calcul sont enregistrés avec le classeur.",
         "Insert Sheet" => "Insérer une feuille",
         "Rename" => "Renommer",

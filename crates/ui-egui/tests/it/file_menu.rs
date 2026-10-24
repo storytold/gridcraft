@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use gridcraft_engine::{Session, core::CellRef, core::Value};
 use gridcraft_ui_egui::i18n::Language;
 use gridcraft_ui_egui::{Services, SheetApp};
@@ -329,6 +329,120 @@ fn a_cancelled_export_pdf_picker_writes_nothing() {
     h.state_mut().run_or_alert("file.exportPdf", serde_json::json!({}));
     assert!(h.state().message.is_none());
     assert!(h.state_mut().session.take_ui_requests().is_empty());
+}
+
+/// Options › Formulas: Maximum Iterations and Maximum Change, with the checkbox that enables them.
+#[test]
+fn options_sets_maximum_iterations_and_change_only_while_iteration_is_on() {
+    use egui::accesskit::Role;
+    let mut session = Session::new();
+    session.new_workbook();
+    // Tall enough that the Formulas section is on screen without scrolling.
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 1400.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        SheetApp::new(session, Services::default()),
+    );
+    h.run_steps(4);
+    h.state_mut().run("file.options", serde_json::json!({})).unwrap();
+    h.run_steps(3);
+    let calc = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().session.active().unwrap().wb.calc.clone();
+    // The text field on the same row as `label`.
+    let field = |h: &egui_kittest::Harness<'static, SheetApp>, label: &str| {
+        let l = h.get_by_label(label).rect();
+        h.get_all_by_role(Role::TextInput).map(|n| n.rect()).find(|r| r.left() > l.left() && (r.center().y - l.center().y).abs() < 8.0).unwrap()
+    };
+    let disabled = |h: &egui_kittest::Harness<'static, SheetApp>, rect: egui::Rect| {
+        h.get_all_by_role(Role::TextInput).find(|n| n.rect() == rect).unwrap().accesskit_node().is_disabled()
+    };
+    let retype = |h: &mut egui_kittest::Harness<'static, SheetApp>, rect: egui::Rect, text: &str| {
+        h.input_mut().events.push(egui::Event::PointerMoved(rect.center()));
+        h.run_steps(1);
+        h.get_all_by_role(Role::TextInput).find(|n| n.rect() == rect).unwrap().click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(1);
+        for c in text.chars() {
+            h.input_mut().events.push(egui::Event::Text(c.to_string()));
+            h.run_steps(2);
+        }
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+    };
+
+    // Iteration is off: the two fields show the defaults, greyed out.
+    let (iterations, change) = (field(&h, "Maximum Iterations:"), field(&h, "Maximum Change:"));
+    assert!(disabled(&h, iterations) && disabled(&h, change), "the fields are disabled while iteration is off");
+    assert_eq!(h.get_all_by_role(Role::TextInput).find(|n| n.rect() == iterations).unwrap().value().as_deref(), Some("100"));
+    assert_eq!(h.get_all_by_role(Role::TextInput).find(|n| n.rect() == change).unwrap().value().as_deref(), Some("0.001"));
+
+    h.get_by_role_and_label(Role::CheckBox, "Enable iterative calculation").click();
+    h.run_steps(3);
+    assert!(calc(&h).iterative);
+    let (iterations, change) = (field(&h, "Maximum Iterations:"), field(&h, "Maximum Change:"));
+    assert!(!disabled(&h, iterations) && !disabled(&h, change));
+
+    retype(&mut h, iterations, "500");
+    assert_eq!(calc(&h).max_iterations, 500);
+    retype(&mut h, change, "0.01");
+    assert_eq!(calc(&h).max_change, 0.01);
+    assert!(h.state().message.is_none());
+
+    // Out-of-range entries are refused with a message and change nothing (the command alone would clamp them).
+    for bad in ["0", "32768", "12.5", "lots"] {
+        retype(&mut h, iterations, bad);
+        assert_eq!(calc(&h).max_iterations, 500, "{bad}");
+        assert!(h.state_mut().message.take().is_some(), "{bad} is reported");
+        h.run_steps(2);
+    }
+    retype(&mut h, iterations, "32767");
+    assert_eq!(calc(&h).max_iterations, 32767);
+    for bad in ["-1", "x"] {
+        retype(&mut h, change, bad);
+        assert_eq!(calc(&h).max_change, 0.01, "{bad}");
+        assert!(h.state_mut().message.take().is_some(), "{bad} is reported");
+        h.run_steps(2);
+    }
+    retype(&mut h, change, "0");
+    assert_eq!(calc(&h).max_change, 0.0);
+
+    // Undo puts the old value back in the field.
+    h.state_mut().run("edit.undo", serde_json::json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(calc(&h).max_change, 0.01);
+    let change = field(&h, "Maximum Change:");
+    assert_eq!(h.get_all_by_role(Role::TextInput).find(|n| n.rect() == change).unwrap().value().as_deref(), Some("0.01"));
+
+    // A value typed but not confirmed with Enter is dropped when the checkbox switches iteration off.
+    let iterations = field(&h, "Maximum Iterations:");
+    h.input_mut().events.push(egui::Event::PointerMoved(iterations.center()));
+    h.run_steps(1);
+    h.get_all_by_role(Role::TextInput).find(|n| n.rect() == iterations).unwrap().click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.input_mut().events.push(egui::Event::Text("777".into()));
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::CheckBox, "Enable iterative calculation").click();
+    h.run_steps(3);
+    assert!(!calc(&h).iterative);
+    assert_eq!(calc(&h).max_iterations, 32767, "an unconfirmed entry is not committed once iteration is off");
+    assert!(h.state().message.is_none());
+
+    // Spanish accepts a decimal comma in Maximum Change, and still a dot.
+    h.get_by_role_and_label(Role::CheckBox, "Enable iterative calculation").click();
+    h.run_steps(3);
+    h.state_mut().run("app.language.set", serde_json::json!({"language": Language::Es.code()})).unwrap();
+    h.state_mut().run("file.options", serde_json::json!({})).unwrap();
+    h.run_steps(3);
+    let change = field(&h, "Cambio máximo:");
+    retype(&mut h, change, "0,02");
+    assert_eq!(calc(&h).max_change, 0.02);
+    retype(&mut h, change, "0.5");
+    assert_eq!(calc(&h).max_change, 0.5);
+    assert!(h.state().message.is_none());
 }
 
 /// Share › Export as Web Page (and the native File menu's Save as Web Page) asks for a name in its
