@@ -22,113 +22,279 @@ fn accent_for(n: u32) -> Option<u8> {
     if k == 0 { None } else { Some(3 + k as u8) }
 }
 
-/// Header/band/body colours for a table style.
+/// Fills, text colours and thin lines of a table style, per part of the table (the recipes in
+/// plan/excel/table-style-spec.json). Band 1 is the first data row; unbanded rows use band 2.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TableLook {
     pub header_fill: Option<Color>,
     pub header_font: Color,
-    pub header_bold: bool,
-    pub band_fill: Option<Color>,
-    pub body_fill: Option<Color>,
-    pub line: Option<Color>,
-    pub total_top: Option<Color>,
+    pub band1: Option<Color>,
+    pub band2: Option<Color>,
+    pub body_font: Color,
+    pub top: Option<Color>,
+    pub header_bottom: Option<Color>,
+    pub inner_h: Option<Color>,
+    pub inner_v: Option<Color>,
+    pub sides: Option<Color>,
+    pub bottom: Option<Color>,
+    /// The totals row's double top rule (the gallery doesn't show totals).
+    pub total_top: Color,
 }
 
 pub fn look(style: &str) -> TableLook {
     let (fam, n) = parse_style_name(style);
     let acc = accent_for(n);
-    let base = |tint: i16| match acc {
-        Some(a) => Color::Theme(a, tint),
-        None => Color::Theme(1, if tint == 0 { 0 } else { tint.clamp(-1000, 1000) }),
+    // An accent tint, or the neutral column's colour.
+    let a = |tint: i16, neutral: Color| acc.map_or(neutral, |a| Color::Theme(a, tint));
+    let (black, white) = (Color::Theme(1, 0), Color::Theme(0, 0));
+    let (grey, mid_grey) = (Color::Theme(0, -150), Color::Theme(0, -350));
+    let main = a(0, black);
+    let plain = TableLook {
+        header_fill: None,
+        header_font: black,
+        band1: None,
+        band2: None,
+        body_font: black,
+        top: None,
+        header_bottom: None,
+        inner_h: None,
+        inner_v: None,
+        sides: None,
+        bottom: None,
+        total_top: main,
     };
-    let neutral_light = |tint: i16| match acc {
-        Some(a) => Color::Theme(a, tint),
-        None => Color::Theme(0, -((1000 - tint).clamp(0, 1000) / 6)),
-    };
-    match fam {
-        "Light" => {
-            let group = (n - 1) / 7; // 0: lines only, 1: banded header line, 2: grid
+    match (fam, n.saturating_sub(1) / 7) {
+        ("Light", 0) => {
+            let text = a(-250, black);
+            let line = Some(main);
+            TableLook { header_font: text, body_font: text, band1: Some(a(800, grey)), top: line, header_bottom: line, bottom: line, ..plain }
+        }
+        ("Light", 1) => {
+            let line = Some(main);
+            TableLook { header_fill: line, header_font: white, top: line, inner_h: line, sides: line, bottom: line, ..plain }
+        }
+        ("Light", _) => {
+            let line = Some(main);
+            TableLook { band1: Some(a(800, grey)), top: line, header_bottom: line, inner_v: line, sides: line, bottom: line, ..plain }
+        }
+        ("Medium", 0) => {
+            let line = Some(a(400, black));
+            TableLook { header_fill: Some(main), header_font: white, band1: Some(a(800, grey)), top: line, sides: line, bottom: line, ..plain }
+        }
+        ("Medium", 1) => TableLook {
+            header_fill: Some(main),
+            header_font: white,
+            band1: Some(a(600, mid_grey)),
+            band2: Some(a(800, grey)),
+            header_bottom: Some(white),
+            inner_v: Some(white),
+            ..plain
+        },
+        ("Medium", 2) => {
+            // Accent header over neutral grey bands and black rules; the neutral style adds a grid.
+            let line = Some(black);
+            let grid = if acc.is_none() { line } else { None };
+            let header_fill = Some(main);
             TableLook {
-                header_fill: None,
-                header_font: if group == 0 { base(-250) } else { Color::Auto },
-                header_bold: true,
-                band_fill: Some(neutral_light(800)),
-                body_fill: None,
-                line: Some(base(0)),
-                total_top: Some(base(0)),
+                header_fill,
+                header_font: white,
+                band1: Some(grey),
+                top: line,
+                header_bottom: line,
+                inner_v: grid,
+                sides: grid,
+                bottom: line,
+                total_top: black,
+                ..plain
             }
         }
-        "Dark" => TableLook {
-            header_fill: Some(Color::Theme(1, 0)),
-            header_font: Color::Theme(0, 0),
-            header_bold: true,
-            band_fill: Some(base(-250)),
-            body_fill: Some(base(0)),
-            line: None,
-            total_top: Some(Color::Theme(0, 0)),
+        ("Medium", _) => {
+            let line = Some(a(400, black));
+            let pale = Some(a(800, grey));
+            TableLook { header_fill: pale, band1: Some(a(600, mid_grey)), band2: pale, top: line, inner_v: line, sides: line, bottom: line, ..plain }
+        }
+        ("Dark", 0) => TableLook {
+            header_fill: Some(black),
+            header_font: white,
+            band1: Some(a(-250, Color::Theme(1, 250))),
+            band2: Some(a(0, Color::Theme(1, 450))),
+            body_font: white,
+            header_bottom: Some(white),
+            total_top: white,
+            ..plain
         },
-        _ => TableLook {
-            header_fill: Some(base(0)),
-            header_font: Color::Theme(0, 0),
-            header_bold: true,
-            band_fill: Some(neutral_light(800)),
-            body_fill: None,
-            line: if (n - 1) / 7 == 0 { None } else { Some(base(400)) },
-            total_top: Some(base(0)),
-        },
+        _ if n == 8 => TableLook { header_fill: Some(black), header_font: white, band1: Some(mid_grey), band2: Some(grey), ..plain },
+        _ => {
+            // Dark 9-11 pair accents 1+2, 3+4 and 5+6: the header takes the even one.
+            let k = n.clamp(9, 11) as u8 - 8;
+            let (head, body) = (Color::Theme(3 + 2 * k, 0), 2 + 2 * k);
+            let band1 = Some(Color::Theme(body, 600));
+            TableLook { header_fill: Some(head), header_font: white, band1, band2: Some(Color::Theme(body, 800)), total_top: head, ..plain }
+        }
     }
 }
 
-/// The style a table gives a cell (merged over the cell's own style: explicit fills/fonts win).
+/// Which parts of a table are on (the Table Style Options checkboxes).
+#[derive(Clone, Copy, Debug)]
+pub struct TableParts {
+    pub header_row: bool,
+    pub totals_row: bool,
+    pub banded_rows: bool,
+    pub banded_cols: bool,
+    pub first_col: bool,
+    pub last_col: bool,
+}
+
+impl TableParts {
+    pub fn of(t: &Table) -> TableParts {
+        TableParts {
+            header_row: t.header_row,
+            totals_row: t.totals_row,
+            banded_rows: t.banded_rows,
+            banded_cols: t.banded_cols,
+            first_col: t.first_col,
+            last_col: t.last_col,
+        }
+    }
+}
+
+/// What a table style paints on one cell of a `rows` x `cols` table (`row`, `col` from its
+/// top-left). Each line has one owner: a horizontal line is a cell's bottom (top only on the
+/// first row and the totals row), a vertical one a cell's right (left only on the first column).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CellLook {
+    pub fill: Option<Color>,
+    pub font: Color,
+    pub bold: bool,
+    pub borders: Borders,
+}
+
+pub fn cell_look(lk: &TableLook, p: TableParts, row: u32, col: u32, rows: u32, cols: u32) -> CellLook {
+    let last_row = rows.saturating_sub(1);
+    let last_col = cols.saturating_sub(1);
+    let is_header = p.header_row && row == 0;
+    let is_total = p.totals_row && row == last_row && !is_header;
+    let thin = |c: Option<Color>| c.map(|color| BorderLine { style: BorderStyle::Thin, color }).unwrap_or_default();
+    let mut b = Borders::default();
+    if row == 0 {
+        b.top = thin(lk.top);
+    }
+    b.bottom = thin(if row == last_row {
+        lk.bottom
+    } else if is_header {
+        lk.header_bottom
+    } else if p.totals_row && row.saturating_add(1) == last_row {
+        None // the totals row draws its own top rule
+    } else {
+        lk.inner_h
+    });
+    if col == 0 {
+        b.left = thin(lk.sides);
+    }
+    b.right = thin(if col == last_col { lk.sides } else { lk.inner_v });
+    let mut out = CellLook { borders: b, font: lk.body_font, ..Default::default() };
+    if is_header {
+        out.fill = lk.header_fill;
+        out.font = lk.header_font;
+        out.bold = true;
+    } else if is_total {
+        out.fill = lk.band2;
+        out.bold = true;
+        out.borders.top = BorderLine { style: BorderStyle::Double, color: lk.total_top };
+    } else {
+        let data_row = row.saturating_sub(p.header_row as u32);
+        let band1 = (p.banded_rows && data_row.is_multiple_of(2)) || (p.banded_cols && col.is_multiple_of(2));
+        out.fill = if band1 { lk.band1 } else { lk.band2 };
+    }
+    if (p.first_col && col == 0) || (p.last_col && col == last_col) {
+        out.bold = true;
+    }
+    out
+}
+
+/// The style a table gives a cell (merged over the cell's own style: explicit fills, fonts and
+/// borders win).
 pub fn table_cell_style(wb: &Workbook, sheet: usize, t: &Table, c: CellRef) -> Style {
     let own = wb.sheet(sheet).map(|sh| wb.styles.get(sh.style_id(c)).clone()).unwrap_or_default();
+    let (start, end) = (t.range.start, t.range.end);
+    let rows = end.row.saturating_sub(start.row).saturating_add(1);
+    let cols = end.col.saturating_sub(start.col).saturating_add(1);
+    let lk = cell_look(&look(&t.style), TableParts::of(t), c.row.saturating_sub(start.row), c.col.saturating_sub(start.col), rows, cols);
     let mut s = own.clone();
-    let lk = look(&t.style);
-    let is_header = t.header_row && c.row == t.range.start.row;
-    let is_total = t.totals_row && c.row == t.range.end.row;
-    let data_row = c.row.saturating_sub(t.range.start.row + t.header_row as u32);
-    let data_col = c.col - t.range.start.col;
-    let explicit_fill = own.fill.pattern != PatternType::None;
-    if is_header {
-        if let Some(f) = lk.header_fill
-            && !explicit_fill
-        {
-            s.fill = Fill::solid(f);
-        }
-        if own.font.color == Color::Auto {
-            s.font.color = lk.header_font;
-        }
-        s.font.bold = s.font.bold || lk.header_bold;
-        if let Some(l) = lk.line {
-            s.borders.bottom = BorderLine { style: BorderStyle::Thin, color: l };
-        }
-    } else if is_total {
-        s.font.bold = true;
-        if let Some(l) = lk.total_top {
-            s.borders.top = BorderLine { style: BorderStyle::Double, color: l };
-        }
-    } else {
-        let band = (t.banded_rows && data_row.is_multiple_of(2)) || (t.banded_cols && data_col.is_multiple_of(2));
-        if !explicit_fill {
-            if band {
-                if let Some(f) = lk.band_fill {
-                    s.fill = Fill::solid(f);
-                }
-            } else if let Some(f) = lk.body_fill {
-                s.fill = Fill::solid(f);
-            }
-        }
-        if let Some(l) = lk.line
-            && t.style.contains("Light")
-            && c.row == t.range.end.row
-        {
-            s.borders.bottom = BorderLine { style: BorderStyle::Thin, color: l };
+    if let Some(f) = lk.fill
+        && own.fill.pattern == PatternType::None
+    {
+        s.fill = Fill::solid(f);
+    }
+    if own.font.color == Color::Auto {
+        s.font.color = lk.font;
+    }
+    s.font.bold = s.font.bold || lk.bold;
+    for (side, line) in [
+        (&mut s.borders.top, lk.borders.top),
+        (&mut s.borders.bottom, lk.borders.bottom),
+        (&mut s.borders.left, lk.borders.left),
+        (&mut s.borders.right, lk.borders.right),
+    ] {
+        if side.is_none() {
+            *side = line;
         }
     }
-    if (t.first_col && c.col == t.range.start.col) || (t.last_col && c.col == t.range.end.col) {
-        s.font.bold = true;
+    s
+}
+
+/// A table's first and last visible row and column (hidden or filtered lines skipped).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShownEdges {
+    pub top: u32,
+    pub bottom: u32,
+    pub left: u32,
+    pub right: u32,
+}
+
+/// Finds [`ShownEdges`]. It scans the hidden lines at each edge, so the grid and print call it
+/// once per table per paint (through [`crate::cf::CfCache::table_edges`]), not once per cell.
+pub fn shown_edges(sh: &Sheet, t: &Table) -> ShownEdges {
+    let (start, end) = (t.range.start, t.range.end);
+    let row_shown = |r: &u32| sh.row_height(*r) > 0.0;
+    let col_shown = |k: &u32| sh.col_width(*k) > 0.0;
+    // With every row (or column) hidden, each cell takes both edges' lines; nothing is drawn.
+    ShownEdges {
+        top: (start.row..=end.row).find(row_shown).unwrap_or(end.row),
+        bottom: (start.row..=end.row).rev().find(row_shown).unwrap_or(start.row),
+        left: (start.col..=end.col).find(col_shown).unwrap_or(end.col),
+        right: (start.col..=end.col).rev().find(col_shown).unwrap_or(start.col),
     }
-    if t.style.starts_with("TableStyleDark") && !is_header && own.font.color == Color::Auto {
-        s.font.color = Color::Theme(0, 0);
+}
+
+/// The style the grid and print draw for a table cell. Like [`table_cell_style`], but the
+/// table's outer frame follows hidden rows and columns: the last visible row takes the table's
+/// bottom line, the last visible column its right side, and the first visible row and column its
+/// top line and left side. (Each frame line is owned by the edge cell, which is never drawn while
+/// it is hidden or filtered out.) Convert to Range uses [`table_cell_style`], the table as it is.
+pub fn table_cell_shown_style(wb: &Workbook, sheet: usize, t: &Table, e: ShownEdges, c: CellRef) -> Style {
+    let mut s = table_cell_style(wb, sheet, t, c);
+    let Some(sh) = wb.sheet(sheet) else { return s };
+    let (start, end) = (t.range.start, t.range.end);
+    let below = c.row < end.row && c.row >= e.bottom;
+    let above = c.row > start.row && c.row <= e.top;
+    let right = c.col < end.col && c.col >= e.right;
+    let left = c.col > start.col && c.col <= e.left;
+    if !(below || above || right || left) {
+        return s;
+    }
+    let own = wb.styles.get(sh.style_id(c)).borders;
+    if below && own.bottom.is_none() {
+        s.borders.bottom = table_cell_style(wb, sheet, t, CellRef::new(end.row, c.col)).borders.bottom;
+    }
+    if above && own.top.is_none() {
+        s.borders.top = table_cell_style(wb, sheet, t, CellRef::new(start.row, c.col)).borders.top;
+    }
+    if right && own.right.is_none() {
+        s.borders.right = table_cell_style(wb, sheet, t, CellRef::new(c.row, end.col)).borders.right;
+    }
+    if left && own.left.is_none() {
+        s.borders.left = table_cell_style(wb, sheet, t, CellRef::new(c.row, start.col)).borders.left;
     }
     s
 }

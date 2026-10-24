@@ -471,7 +471,7 @@ fn center_across_end(start: u32, limit: u32, continues: impl Fn(u32) -> bool) ->
 fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (Look, Option<CfLook>) {
     let mut style = wb.styles.get(sh.style_id(c)).clone();
     if let Some(t) = sh.table_at(c) {
-        style = gridcraft_engine::tables::table_cell_style(wb, si, t, c);
+        style = gridcraft_engine::tables::table_cell_shown_style(wb, si, t, cf.table_edges(sh, t), c);
     }
     let cfl = cf.look(wb, si, c);
     if let Some(l) = &cfl

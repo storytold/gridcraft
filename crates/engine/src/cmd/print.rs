@@ -634,12 +634,12 @@ struct Look {
     cf: Option<crate::cf::CfLook>,
 }
 
-fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<crate::cf::CfCache>) -> Look {
+fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut crate::cf::CfCache) -> Look {
     let mut style = match sh.table_at(c) {
-        Some(t) => crate::tables::table_cell_style(wb, si, t, c),
+        Some(t) => crate::tables::table_cell_shown_style(wb, si, t, cf.table_edges(sh, t), c),
         None => wb.styles.get(sh.style_id(c)).clone(),
     };
-    let cfl = cf.as_mut().and_then(|cache| cache.look(wb, si, c));
+    let cfl = cf.look(wb, si, c);
     if let Some(st) = cfl.as_ref().and_then(|l| l.style.as_ref()) {
         if st.fill.pattern != PatternType::None {
             style.fill = st.fill;
@@ -882,7 +882,7 @@ fn font_for(style: &Style) -> Font {
 }
 
 /// Draws the cells of a block: fills, gridlines, data bars, borders and text.
-fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::cf::CfCache>) {
+fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut crate::cf::CfCache) {
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
     if bw <= 0.0 || bh <= 0.0 {
@@ -1530,7 +1530,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     let mut printed_blocks = Vec::new();
     for lay in layouts {
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
-        let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
+        let mut cf = crate::cf::CfCache::new();
         let k = lay.k();
         let (aw, ah) = lay.avail();
         for (pi, (ri, ci)) in lay.pages.iter().enumerate() {
