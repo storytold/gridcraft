@@ -192,6 +192,50 @@ pub fn print_range(sh: &Sheet) -> Option<RangeRef> {
     r
 }
 
+/// Widens the used range to the right so that plain text overflowing past its last column is not clipped (#2333).
+/// A print area set by the user is kept as it is.
+fn grow_for_overflow(wb: &Workbook, sh: &Sheet, r: RangeRef) -> RangeRef {
+    let last = r.end.col;
+    if sh.print.print_area.is_some() || sh.show_formulas || last + 1 >= MAX_COLS {
+        return r;
+    }
+    let mut extra = 0.0f32;
+    for (c, _) in sh.cells.iter_range(r) {
+        let v = sh.value(c);
+        if v.is_empty() || matches!(v, Value::Number(_)) {
+            continue;
+        }
+        let st = wb.styles.get(sh.style_id(c));
+        let a = &st.align;
+        if a.wrap || a.shrink || a.rotation != 0 || matches!(a.h, HAlign::Right | HAlign::CenterAcross) || sh.merges.iter().any(|m| m.contains(c)) {
+            continue;
+        }
+        let text = crate::display::value_text_as(wb, &v, st.num_fmt.as_str()).replace(['\n', '\r'], " ");
+        let tw = gridcraft_pdf::text_width(font_for(st), st.font.size.clamp(1.0, 409.0), &text) / PX_TO_PT;
+        let mut need = tw + 2.0 * PAD_PX + f32::from(a.indent) * 9.0 - sh.col_width(c.col);
+        let general_centered = a.h == HAlign::General && matches!(v, Value::Bool(_) | Value::Error(_));
+        if general_centered || matches!(a.h, HAlign::Center | HAlign::Distributed) {
+            need /= 2.0;
+        }
+        // Text stops at the first non-empty neighbour, as draw_text does.
+        let mut col = c.col;
+        while need > 0.0 && col < last {
+            col += 1;
+            if !empty_for_overflow(sh, CellRef::new(c.row, col), &sh.merges) {
+                need = 0.0;
+            }
+            need -= sh.col_width(col);
+        }
+        extra = extra.max(need);
+    }
+    let mut end = last;
+    while extra > 0.0 && end + 1 < MAX_COLS && end - last < 255 {
+        end += 1;
+        extra -= sh.col_width(end);
+    }
+    RangeRef::new(r.start, CellRef::new(r.end.row, end))
+}
+
 /// Whole rows/columns are trimmed to the used range.
 fn trim_full(sh: &Sheet, r: RangeRef) -> RangeRef {
     if !(r.is_full_cols() || r.is_full_rows()) {
@@ -264,7 +308,7 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
     }
     let area = match range_override {
         Some(r) => trim_full(sh, r),
-        None => print_range(sh).unwrap_or(RangeRef::cell(CellRef::new(0, 0))),
+        None => print_range(sh).map(|r| grow_for_overflow(wb, sh, r)).unwrap_or(RangeRef::cell(CellRef::new(0, 0))),
     };
     let title_rows = title_span(st.title_rows, MAX_ROWS);
     let title_cols = title_span(st.title_cols, MAX_COLS);
@@ -1834,6 +1878,22 @@ mod tests {
     }
     fn contains(hay: &[u8], needle: &str) -> bool {
         hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+    }
+
+    #[test]
+    fn print_range_covers_text_overflowing_the_last_column() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "AAAAAAAAAAAAAAAAAAAA"})).unwrap();
+        let pv = s.execute("file.printPreview", json!({})).unwrap();
+        assert_eq!(pv["pageList"][0]["range"], "A1:D1");
+        // Text from an earlier column that runs past the last used one counts too.
+        s.execute("cell.set", json!({"cell": "B2", "input": "x"})).unwrap();
+        let pv = s.execute("file.printPreview", json!({})).unwrap();
+        assert_eq!(pv["pageList"][0]["range"], "A1:D2");
+        // A print area set by the user is kept as it is.
+        s.execute("pageLayout.pageSetup", json!({"printArea": "A1:B2"})).unwrap();
+        let pv = s.execute("file.printPreview", json!({})).unwrap();
+        assert_eq!(pv["pageList"][0]["range"], "A1:B2");
     }
 
     #[test]
