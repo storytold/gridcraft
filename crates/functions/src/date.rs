@@ -273,6 +273,9 @@ fn days360_core(d1: &DateTime, d2: &DateTime, european: bool) -> i64 {
         a = a.min(30);
         b = b.min(30);
     } else {
+        if last_of_feb(d1) && last_of_feb(d2) {
+            b = 30;
+        }
         if a == 31 || last_of_feb(d1) {
             a = 30;
         }
@@ -759,6 +762,7 @@ mod tests {
         close(ev("DAYS360", vec![n(d(2011.0, 1.0, 30.0)), n(d(2011.0, 12.0, 31.0)), b(true)]), 330.0);
         close(ev("DAYS360", vec![n(d(2011.0, 2.0, 28.0)), n(d(2011.0, 3.0, 31.0))]), 30.0);
         close(ev("DAYS360", vec![n(d(2011.0, 1.0, 1.0)), n(d(2011.0, 1.0, 31.0))]), 30.0);
+        close(ev("DAYS360", vec![n(d(2021.0, 2.0, 28.0)), n(d(2021.0, 2.0, 28.0))]), 0.0);
     }
 
     #[test]
