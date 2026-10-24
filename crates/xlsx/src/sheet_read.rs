@@ -178,9 +178,9 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 if e.attr("orientation") == Some("landscape") {
                     sheet.print.orientation = Orientation::Landscape;
                 }
-                if let Some(p) = e.attr_u32("paperSize").and_then(paper_name) {
-                    sheet.print.paper = p.to_string();
-                }
+                // A page setup without a paper size is Letter, the format's default; a sheet with
+                // no page setup at all keeps the default paper (observed in Excel).
+                sheet.print.paper = e.attr_u32("paperSize").and_then(paper_name).unwrap_or("Letter").to_string();
                 if let Some(s) = e.attr_u32("scale") {
                     sheet.print.scale = s.clamp(10, 400) as u16;
                 }

@@ -833,11 +833,35 @@ impl PrintSettings {
     }
 }
 
+/// The paper a sheet prints on when nothing says otherwise: a new sheet, or a file's sheet without
+/// page setup. Excel takes the printer's default paper (observed: A4 on a German system), which
+/// follows the region; the app sets it once at start-up. Unset, it is `Letter`.
+static DEFAULT_PAPER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Sets the default paper (see [`default_paper`]) once; later calls are ignored.
+pub fn set_default_paper(name: &str) {
+    let _ = DEFAULT_PAPER.set(name.to_string());
+}
+
+/// The paper new sheets and sheets without page setup print on (`Letter` until set).
+pub fn default_paper() -> &'static str {
+    DEFAULT_PAPER.get().map_or("Letter", String::as_str)
+}
+
+/// The default paper of a region, from a locale tag (`de-DE`, `en_US.UTF-8`): Letter in the Americas
+/// that use it and the Philippines, A4 elsewhere; `None` when the tag names no region.
+pub fn paper_for_locale(tag: &str) -> Option<&'static str> {
+    const LETTER: [&str; 16] = ["US", "CA", "MX", "PR", "GT", "SV", "HN", "NI", "CR", "PA", "DO", "CO", "VE", "CL", "PH", "BZ"];
+    let tag = tag.split(['.', '@']).next().unwrap_or("");
+    let region = tag.split(['-', '_']).skip(1).find(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic()))?.to_ascii_uppercase();
+    Some(if LETTER.contains(&region.as_str()) { "Letter" } else { "A4" })
+}
+
 impl Default for PrintSettings {
     fn default() -> Self {
         PrintSettings {
             orientation: Orientation::Portrait,
-            paper: "Letter".into(),
+            paper: default_paper().into(),
             margins: [0.7, 0.7, 0.75, 0.75, 0.3, 0.3],
             print_area: None,
             title_rows: None,
@@ -1098,6 +1122,24 @@ impl Default for PivotTable {
             values_on_rows: false,
             values_position: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod paper_tests {
+    use super::*;
+
+    #[test]
+    fn the_region_picks_the_default_paper() {
+        assert_eq!(paper_for_locale("de-DE"), Some("A4"));
+        assert_eq!(paper_for_locale("en-US"), Some("Letter"));
+        assert_eq!(paper_for_locale("en_CA.UTF-8"), Some("Letter"));
+        assert_eq!(paper_for_locale("en-GB"), Some("A4"));
+        assert_eq!(paper_for_locale("zh-Hans-CN"), Some("A4"), "a script subtag is skipped");
+        assert_eq!(paper_for_locale("de"), None);
+        assert_eq!(paper_for_locale(""), None);
+        // Unset (tests never set it), new sheets print on Letter.
+        assert_eq!(PrintSettings::default().paper, "Letter");
     }
 }
 

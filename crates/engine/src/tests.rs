@@ -4660,4 +4660,16 @@ fn a_script_cannot_switch_windows() {
     assert_eq!(v(&s, "A1"), Value::number(2.0));
 }
 
+/// The default paper follows the paper locale where POSIX has one: LC_ALL, then LC_PAPER, then the
+/// system locale; a locale without a region (`C`) is passed over.
+#[test]
+fn the_default_paper_follows_the_paper_locale() {
+    let env = |vars: &'static [(&'static str, &'static str)]| move |name: &str| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string());
+    assert_eq!(crate::system_paper(env(&[("LC_PAPER", "de_DE.UTF-8")]), Some("en_US".into())), Some("A4"));
+    assert_eq!(crate::system_paper(env(&[("LC_ALL", "en_US.UTF-8"), ("LC_PAPER", "de_DE")]), None), Some("Letter"));
+    assert_eq!(crate::system_paper(env(&[("LC_ALL", "C")]), Some("en-GB".into())), Some("A4"));
+    assert_eq!(crate::system_paper(env(&[]), Some("en-US".into())), Some("Letter"));
+    assert_eq!(crate::system_paper(env(&[]), None), None);
+}
+
 mod seams;

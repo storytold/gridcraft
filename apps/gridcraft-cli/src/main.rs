@@ -62,6 +62,7 @@ fn stdout_failed(e: std::io::Error) -> ! {
 }
 
 fn main() -> ExitCode {
+    gridcraft_engine::use_system_paper();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or_default();
     let r = match args.first().map(String::as_str) {
