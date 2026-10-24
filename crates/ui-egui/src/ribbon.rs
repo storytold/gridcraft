@@ -1360,7 +1360,7 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
     });
     ui.separator();
     if ui.button("New Rule…").clicked() {
-        app.open_dialog("cfQuick", json!({"type": "expression", "title": "New Formatting Rule"}));
+        app.open_dialog("newFormattingRule", json!({}));
     }
     ui.menu_button("Clear Rules", |ui| {
         menu_items(

@@ -824,7 +824,40 @@ impl Dialog {
                 Dialog::custom("sort", "Sort", json!({"header": true, "levels": [{"column": col, "order": "asc"}]}))
             }
             "nameManager" => Dialog::custom("nameManager", "Name Manager", json!({})),
-            "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
+            "manageRules" => {
+                // What Cancel puts back: the active sheet's rules as the dialog opens.
+                let sheet = app.session.active().map(|doc| doc.wb.active_sheet);
+                // Current Selection and New Rule… keep to the selection the dialog opened with.
+                let selection = app.session.active().map(|doc| doc.selection.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","));
+                let now = app.session.run("home.manageRules", json!({"sheet": sheet})).unwrap_or(Json::Null);
+                let snapshot: Vec<Json> = now["rules"]
+                    .as_array()
+                    .map(|a| a.iter().map(|r| json!({"rule": r["rule"], "appliesTo": r["appliesTo"], "stopIfTrue": r["stopIfTrue"]})).collect())
+                    .unwrap_or_default();
+                Dialog::custom(
+                    "manageRules",
+                    "Conditional Formatting Rules Manager",
+                    json!({"show": "selection", "sheet": sheet, "selection": selection, "snapshot": snapshot}),
+                )
+            }
+            "newFormattingRule" => {
+                // New Rule… starts from Format only cells that contain › Cell Value between;
+                // Manage Rules › Edit Rule… passes the rule's index and params.
+                let index = p("index").as_u64();
+                let mut rule = p("rule").as_object().cloned().unwrap_or_else(|| {
+                    json!({"type": "cellIs", "operator": "between", "value": "", "value2": ""}).as_object().cloned().unwrap_or_default()
+                });
+                if !rule.contains_key("fill") {
+                    let theme = app.session.active().map(|doc| doc.wb.theme.clone()).unwrap_or_default();
+                    let preset = rule.get("preset").and_then(Json::as_str).unwrap_or("lightRedFillDarkRedText").to_string();
+                    cf_apply_preset(&mut rule, &preset, &theme);
+                }
+                let title = if index.is_some() { "Edit Formatting Rule" } else { "New Formatting Rule" };
+                let mut d =
+                    Dialog::custom("newFormattingRule", title, json!({"rule": rule, "index": index, "range": p("range"), "sheet": p("sheet")}));
+                d.command = Some(if index.is_some() { "home.manageRules" } else { "home.conditionalFormat" });
+                d
+            }
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),
             "about" => {
@@ -1187,6 +1220,16 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                 }
             }
         }
+        "newFormattingRule" => {
+            let rule = d.values.get("rule").cloned().unwrap_or(Json::Null);
+            v = match d.values.get("index").and_then(Json::as_u64) {
+                Some(i) => json!({"update": i, "rule": rule, "sheet": d.values.get("sheet")}),
+                None => match d.values.get("range").and_then(Json::as_str) {
+                    Some(r) => json!({"range": r, "rule": rule, "sheet": d.values.get("sheet")}),
+                    None => json!({"rule": rule}),
+                },
+            };
+        }
         "cfQuick" => {
             let mut rule = Map::new();
             for (k, val) in &d.values {
@@ -1230,7 +1273,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "journal" | "agents" | "macros" => 520.0,
+        "manageRules" => 680.0,
+        "newFormattingRule" => 560.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
@@ -1264,7 +1309,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "zoom" => zoom(ui, &mut d, &mut confirm, &mut open),
                 "sort" => sort(app, ui, &mut d, &mut confirm),
                 "nameManager" => name_manager(app, ui, &mut d, &mut open),
-                "manageRules" => manage_rules(app, ui),
+                "manageRules" => manage_rules(app, ui, &mut d, &mut confirm, &mut open),
+                "newFormattingRule" => formatting_rule(app, ui, &mut d, &mut confirm, &mut open),
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
@@ -1481,6 +1527,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
     if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {
         open = false;
+    }
+    if !open && d.name == "manageRules" && d.values.get("ok").is_none() {
+        manage_rules_revert(app, &d);
     }
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
@@ -2679,30 +2728,869 @@ fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &
     }
 }
 
-fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
-    let list = app.session.run("home.manageRules", json!({})).unwrap_or(Json::Null);
-    let rules = list["rules"].as_array().cloned().unwrap_or_default();
-    if rules.is_empty() {
-        ui.label("There are no conditional formatting rules on this sheet.");
+/// The six rule types in New Formatting Rule, with the rule `type` each starts from.
+const CF_RULE_KINDS: [(&str, &str); 6] = [
+    ("colorScale", "Format all cells based on their values"),
+    ("cellIs", "Format only cells that contain"),
+    ("top10", "Format only top or bottom ranked values"),
+    ("aboveAverage", "Format only values that are above or below average"),
+    ("duplicate", "Format only unique or duplicate values"),
+    ("expression", "Use a formula to determine which cells to format"),
+];
+
+const CF_PRESETS: [(&str, &str); 6] = [
+    ("lightRedFillDarkRedText", "Light Red Fill with Dark Red Text"),
+    ("yellowFillDarkYellowText", "Yellow Fill with Dark Yellow Text"),
+    ("greenFillDarkGreenText", "Green Fill with Dark Green Text"),
+    ("lightRedFill", "Light Red Fill"),
+    ("redText", "Red Text"),
+    ("redBorder", "Red Border"),
+];
+
+const CF_OPERATORS: [(&str, &str); 8] = [
+    ("between", "CF|between"),
+    ("notBetween", "CF|not between"),
+    ("equal", "CF|equal to"),
+    ("notEqual", "CF|not equal to"),
+    ("greater", "CF|greater than"),
+    ("less", "CF|less than"),
+    ("greaterOrEqual", "CF|greater than or equal to"),
+    ("lessOrEqual", "CF|less than or equal to"),
+];
+
+const CF_PERIODS: [(&str, &str); 10] = [
+    ("yesterday", "Yesterday"),
+    ("today", "Today"),
+    ("tomorrow", "Tomorrow"),
+    ("last7Days", "In the last 7 days"),
+    ("lastWeek", "Last week"),
+    ("thisWeek", "This week"),
+    ("nextWeek", "Next week"),
+    ("lastMonth", "Last month"),
+    ("thisMonth", "This month"),
+    ("nextMonth", "Next month"),
+];
+
+const CF_ICON_SETS: [(&str, &str); 6] = [
+    ("3Arrows", "3 Arrows"),
+    ("3TrafficLights1", "3 Traffic Lights"),
+    ("3Symbols", "3 Symbols"),
+    ("4Rating", "4 Ratings"),
+    ("5Arrows", "5 Arrows"),
+    ("5Quarters", "5 Quarters"),
+];
+
+/// Which of [`CF_RULE_KINDS`] a rule `type` belongs to.
+fn cf_kind_of(ty: &str) -> usize {
+    match ty {
+        "colorScale" | "dataBar" | "iconSet" => 0,
+        "top10" => 2,
+        "aboveAverage" => 3,
+        "duplicate" | "unique" => 4,
+        "expression" => 5,
+        _ => 1,
     }
-    for (i, r) in rules.iter().enumerate() {
-        ui.horizontal(|ui| {
-            let kind = r["rule"].as_object().and_then(|o| o.keys().next().cloned()).unwrap_or_default();
-            ui.label(format!(
-                "{}. {kind}  applies to {}",
-                i + 1,
-                r["ranges"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(",")).unwrap_or_default()
-            ));
-            if ui.small_button("▲").clicked() {
-                app.run_or_alert("home.manageRules", json!({"moveUp": i}));
+}
+
+fn cf_str(rule: &Map<String, Json>, key: &str) -> String {
+    match rule.get(key) {
+        Some(Json::String(s)) => s.clone(),
+        Some(Json::Null) | None => String::new(),
+        Some(v) => v.to_string(),
+    }
+}
+
+fn cf_flag(rule: &Map<String, Json>, key: &str) -> bool {
+    rule.get(key).and_then(Json::as_bool).unwrap_or(false)
+}
+
+fn hex_color(s: &str) -> Option<Color32> {
+    let h = s.trim().strip_prefix('#')?;
+    let v = u32::from_str_radix(h.get(..6)?, 16).ok()?;
+    Some(Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
+}
+
+/// Sets a rule's plain format overrides to a Highlight Cells preset.
+fn cf_apply_preset(rule: &mut Map<String, Json>, preset: &str, theme: &gridcraft_engine::model::Theme) {
+    use gridcraft_engine::model::{BorderStyle, PatternType, Underline};
+    let st = gridcraft_engine::cmd::insert::preset_style(preset);
+    let hex = |c: gridcraft_engine::model::Color| c.hex(theme);
+    rule.insert("fill".into(), json!(if st.fill.pattern == PatternType::None { None } else { hex(st.fill.fg) }.unwrap_or_else(|| "none".into())));
+    rule.insert("fontColor".into(), json!(hex(st.font.color).unwrap_or_else(|| "auto".into())));
+    let border = (st.borders.left.style != BorderStyle::None).then(|| hex(st.borders.left.color)).flatten();
+    rule.insert("border".into(), json!(border.unwrap_or_else(|| "none".into())));
+    rule.insert("bold".into(), json!(st.font.bold));
+    rule.insert("italic".into(), json!(st.font.italic));
+    rule.insert("underline".into(), json!(st.font.underline != Underline::None));
+    rule.insert("strike".into(), json!(st.font.strike));
+    rule.remove("preset");
+    rule.remove("style");
+}
+
+/// A combo box over `(value, label)` pairs for `rule[key]`; true when the user picked one.
+fn cf_combo(ui: &mut egui::Ui, id: &str, rule: &mut Map<String, Json>, key: &str, options: &[(&str, &str)], width: f32) -> bool {
+    let lang = crate::i18n::current(ui.ctx());
+    let current = cf_str(rule, key);
+    let label = options.iter().find(|(v, _)| *v == current).or(options.first()).map(|(_, l)| lang.tr(l)).unwrap_or_default();
+    let mut picked = None;
+    egui::ComboBox::from_id_salt(("cfRule", id)).width(width).selected_text(label).show_ui(ui, |ui| {
+        for (v, l) in options {
+            if ui.selectable_label(*v == current, lang.tr(l)).clicked() {
+                picked = Some(*v);
             }
-            if ui.small_button("▼").clicked() {
-                app.run_or_alert("home.manageRules", json!({"moveDown": i}));
-            }
-            if ui.small_button("Delete").clicked() {
-                app.run_or_alert("home.manageRules", json!({"delete": i}));
+        }
+    });
+    if let Some(v) = picked {
+        rule.insert(key.into(), json!(v));
+    }
+    picked.is_some()
+}
+
+fn cf_text(ui: &mut egui::Ui, rule: &mut Map<String, Json>, key: &str, width: f32) {
+    let mut text = cf_str(rule, key);
+    if ui.add(egui::TextEdit::singleline(&mut text).desired_width(width)).changed() {
+        rule.insert(key.into(), json!(text));
+    }
+}
+
+/// A swatch and a menu with our colour palette; returns the picked hex or `none`.
+fn cf_color_button(ui: &mut egui::Ui, label: &str, current: Option<Color32>, none_label: &str, colors: &[u32; 12]) -> Option<String> {
+    let lang = crate::i18n::current(ui.ctx());
+    let mut picked = None;
+    ui.horizontal(|ui| {
+        let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+        let border = ui.visuals().widgets.inactive.fg_stroke.color;
+        match current {
+            Some(c) => ui.painter().rect_filled(r, 2.0, c),
+            None => ui.painter().line_segment([r.left_bottom(), r.right_top()], Stroke::new(1.0, border)),
+        };
+        ui.painter().rect_stroke(r, 2.0, Stroke::new(1.0, border), StrokeKind::Inside);
+        ui.menu_button(lang.tr(label), |ui| {
+            if let Some(c) = crate::widgets::color_palette(ui, colors, lang.tr(none_label)) {
+                picked = Some(c);
+                ui.close();
             }
         });
+    });
+    picked
+}
+
+/// Fill, font and border of a rule's format, as a cell would show them.
+fn cf_preview(ui: &mut egui::Ui, rule: &Map<String, Json>, size: egui::Vec2) {
+    let lang = crate::i18n::current(ui.ctx());
+    let fill = hex_color(&cf_str(rule, "fill"));
+    let font = hex_color(&cf_str(rule, "fontColor"));
+    let border = hex_color(&cf_str(rule, "border"));
+    let plain = fill.is_none() && font.is_none() && border.is_none() && !["bold", "italic", "underline", "strike"].iter().any(|k| cf_flag(rule, k));
+    let (r, _) = ui.allocate_exact_size(size, Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(r, 0.0, fill.unwrap_or(Color32::WHITE));
+    p.rect_stroke(r, 0.0, Stroke::new(if border.is_some() { 1.5 } else { 1.0 }, border.unwrap_or(Color32::from_gray(190))), StrokeKind::Inside);
+    if plain {
+        p.text(r.center(), egui::Align2::CENTER_CENTER, lang.tr("No Format Set"), egui::FontId::proportional(12.0), Color32::from_gray(90));
+        return;
+    }
+    let mut text = egui::RichText::new("AaBbCcYyZz").color(font.unwrap_or(Color32::BLACK)).size(12.5);
+    if cf_flag(rule, "bold") {
+        text = text.strong();
+    }
+    if cf_flag(rule, "italic") {
+        text = text.italics();
+    }
+    if cf_flag(rule, "underline") {
+        text = text.underline();
+    }
+    if cf_flag(rule, "strike") {
+        text = text.strikethrough();
+    }
+    let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), r.width(), egui::FontSelection::Default);
+    let pos = r.center() - galley.size() / 2.0;
+    ui.painter().galley(pos, galley, Color32::BLACK);
+}
+
+/// The cell format a rule applies: preset, colours, font styles and a preview.
+fn cf_format_editor(ui: &mut egui::Ui, rule: &mut Map<String, Json>, theme: &gridcraft_engine::model::Theme) {
+    let lang = crate::i18n::current(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.label(lang.tr("Preview:"));
+        cf_preview(ui, rule, vec2(200.0, 26.0));
+        let mut preset = Map::new();
+        preset.insert("p".into(), json!("custom"));
+        let mut options = vec![("custom", "Custom Format")];
+        options.extend(CF_PRESETS);
+        if cf_combo(ui, "preset", &mut preset, "p", &options, 220.0) {
+            let p = cf_str(&preset, "p");
+            if p != "custom" {
+                cf_apply_preset(rule, &p, theme);
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        let colors = theme.colors;
+        if let Some(c) = cf_color_button(ui, "CF|Fill", hex_color(&cf_str(rule, "fill")), "No Color", &colors) {
+            rule.insert("fill".into(), json!(c));
+        }
+        if let Some(c) = cf_color_button(ui, "Font Color", hex_color(&cf_str(rule, "fontColor")), "Automatic", &colors) {
+            rule.insert("fontColor".into(), json!(if c == "none" { "auto".into() } else { c }));
+        }
+        if let Some(c) = cf_color_button(ui, "CF|Border", hex_color(&cf_str(rule, "border")), "No Border", &colors) {
+            rule.insert("border".into(), json!(c));
+        }
+        for (key, label, tip) in [("bold", "B", "Bold"), ("italic", "I", "Italic"), ("underline", "U", "Underline"), ("strike", "S", "Strikethrough")]
+        {
+            let mut text = egui::RichText::new(label);
+            text = match key {
+                "bold" => text.strong(),
+                "italic" => text.italics(),
+                "underline" => text.underline(),
+                _ => text.strikethrough(),
+            };
+            let on = cf_flag(rule, key);
+            if ui.add(egui::Button::selectable(on, text).min_size(vec2(22.0, 20.0))).on_hover_text(lang.tr(tip)).clicked() {
+                rule.insert(key.into(), json!(!on));
+            }
+        }
+        if ui.button(lang.tr("Clear")).clicked() {
+            for (k, v) in [("fill", json!("none")), ("fontColor", json!("auto")), ("border", json!("none"))] {
+                rule.insert(k.into(), v);
+            }
+            for k in ["bold", "italic", "underline", "strike"] {
+                rule.insert(k.into(), json!(false));
+            }
+            rule.remove("style");
+        }
+    });
+}
+
+/// One column of a colour scale or data bar: the threshold type, its value and colour.
+fn cf_threshold(ui: &mut egui::Ui, rule: &mut Map<String, Json>, key: &str, label: &str, value_width: f32) {
+    let lang = crate::i18n::current(ui.ctx());
+    let ends: &[(&str, &str)] = match key {
+        "min" => &[("min", "Lowest Value")],
+        "max" => &[("max", "Highest Value")],
+        _ => &[],
+    };
+    let mut options: Vec<(&str, &str)> = ends.to_vec();
+    options.extend([("num", "Number"), ("percent", "Percent"), ("formula", "Formula"), ("percentile", "Percentile")]);
+    let mut t = rule.get(key).and_then(Json::as_object).cloned().unwrap_or_default();
+    if !t.contains_key("type") {
+        let default = if key == "mid" { "percentile" } else { key };
+        t.insert("type".into(), json!(default));
+        if key == "mid" {
+            t.insert("value".into(), json!("50"));
+        }
+    }
+    ui.vertical(|ui| {
+        ui.strong(lang.tr(label));
+        cf_combo(ui, &format!("{key}Type"), &mut t, "type", &options, value_width);
+        if !matches!(cf_str(&t, "type").as_str(), "min" | "max") {
+            cf_text(ui, &mut t, "value", value_width);
+        }
+    });
+    rule.insert(key.into(), Json::Object(t));
+}
+
+/// Rule type 1: colour scales, data bars and icon sets.
+fn cf_values_editor(ui: &mut egui::Ui, rule: &mut Map<String, Json>, theme: &gridcraft_engine::model::Theme) {
+    let lang = crate::i18n::current(ui.ctx());
+    let ty = cf_str(rule, "type");
+    let colors = rule.get("colors").and_then(Json::as_array).map_or(0, Vec::len);
+    let mut style = Map::new();
+    style.insert("s".into(), json!(if ty == "colorScale" { if colors == 2 { "2color" } else { "3color" } } else { ty.as_str() }));
+    ui.horizontal(|ui| {
+        ui.label(lang.tr("Format Style:"));
+        let options = [("2color", "2-Color Scale"), ("3color", "3-Color Scale"), ("dataBar", "Data Bar"), ("iconSet", "Icon Sets")];
+        if cf_combo(ui, "formatStyle", &mut style, "s", &options, 160.0) {
+            for k in ["colors", "min", "mid", "max", "color", "set", "thresholds"] {
+                rule.remove(k);
+            }
+            match cf_str(&style, "s").as_str() {
+                "2color" => {
+                    rule.insert("type".into(), json!("colorScale"));
+                    rule.insert("colors".into(), json!(["#F8696B", "#63BE7B"]));
+                }
+                "3color" => {
+                    rule.insert("type".into(), json!("colorScale"));
+                    rule.insert("colors".into(), json!(["#F8696B", "#FFEB84", "#63BE7B"]));
+                }
+                "dataBar" => {
+                    rule.insert("type".into(), json!("dataBar"));
+                    rule.insert("color".into(), json!("#638EC6"));
+                }
+                _ => {
+                    rule.insert("type".into(), json!("iconSet"));
+                    rule.insert("set".into(), json!("3TrafficLights1"));
+                }
+            }
+        }
+    });
+    ui.add_space(6.0);
+    let palette = theme.colors;
+    match cf_str(rule, "type").as_str() {
+        "colorScale" => {
+            let mut cols: Vec<String> = rule
+                .get("colors")
+                .and_then(Json::as_array)
+                .map(|a| a.iter().filter_map(|c| c.as_str().map(str::to_string)).collect())
+                .unwrap_or_else(|| ["#F8696B", "#FFEB84", "#63BE7B"].map(String::from).to_vec());
+            let keys: &[(&str, &str)] = if cols.len() == 2 {
+                &[("min", "Minimum"), ("max", "Maximum")]
+            } else {
+                &[("min", "Minimum"), ("mid", "Midpoint"), ("max", "Maximum")]
+            };
+            ui.horizontal(|ui| {
+                for (i, (key, label)) in keys.iter().enumerate() {
+                    ui.vertical(|ui| {
+                        cf_threshold(ui, rule, key, label, 140.0);
+                        if let Some(slot) = cols.get_mut(i)
+                            && let Some(c) = cf_color_button(ui, "Color", hex_color(slot), "Automatic", &palette)
+                            && c != "none"
+                        {
+                            *slot = c;
+                        }
+                    });
+                }
+            });
+            // The scale itself, as the cells will grade.
+            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width().min(420.0), 14.0), Sense::hover());
+            let stops: Vec<Color32> = cols.iter().filter_map(|c| hex_color(c)).collect();
+            let n = 40;
+            for k in 0..n {
+                let t = k as f32 / (n - 1) as f32 * (stops.len().max(2) - 1) as f32;
+                let i = (t.floor() as usize).min(stops.len().saturating_sub(2));
+                let (a, b) = (stops.get(i).copied().unwrap_or(Color32::WHITE), stops.get(i + 1).copied().unwrap_or(Color32::WHITE));
+                let f = t - i as f32;
+                let c = Color32::from_rgb(
+                    (a.r() as f32 + (b.r() as f32 - a.r() as f32) * f) as u8,
+                    (a.g() as f32 + (b.g() as f32 - a.g() as f32) * f) as u8,
+                    (a.b() as f32 + (b.b() as f32 - a.b() as f32) * f) as u8,
+                );
+                let w = r.width() / n as f32;
+                ui.painter().rect_filled(egui::Rect::from_min_size(r.min + vec2(w * k as f32, 0.0), vec2(w + 0.5, r.height())), 0.0, c);
+            }
+            rule.insert("colors".into(), json!(cols));
+        }
+        "dataBar" => {
+            ui.horizontal(|ui| {
+                cf_threshold(ui, rule, "min", "Minimum", 140.0);
+                cf_threshold(ui, rule, "max", "Maximum", 140.0);
+            });
+            ui.horizontal(|ui| {
+                if let Some(c) = cf_color_button(ui, "Bar Color", hex_color(&cf_str(rule, "color")), "Automatic", &palette)
+                    && c != "none"
+                {
+                    rule.insert("color".into(), json!(c));
+                }
+                let mut gradient = rule.get("gradient").and_then(Json::as_bool).unwrap_or(true);
+                if ui.checkbox(&mut gradient, lang.tr("Gradient Fill")).changed() {
+                    rule.insert("gradient".into(), json!(gradient));
+                }
+                let mut only = !rule.get("showValue").and_then(Json::as_bool).unwrap_or(true);
+                if ui.checkbox(&mut only, lang.tr("Show Bar Only")).changed() {
+                    rule.insert("showValue".into(), json!(!only));
+                }
+            });
+        }
+        _ => {
+            ui.horizontal(|ui| {
+                ui.label(lang.tr("Icon Style:"));
+                if cf_combo(ui, "iconSet", rule, "set", &CF_ICON_SETS, 160.0) {
+                    // Another set has another number of icons: back to the default thresholds.
+                    rule.remove("thresholds");
+                }
+                let set = cf_str(rule, "set");
+                let n = gridcraft_engine::cf::icon_count(&set);
+                for i in 0..n {
+                    let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                    crate::grid::paint_cf_icon(ui.painter(), r.shrink(2.0), &set, i);
+                }
+            });
+            ui.horizontal(|ui| {
+                let mut reverse = cf_flag(rule, "reverse");
+                if ui.checkbox(&mut reverse, lang.tr("Reverse Icon Order")).changed() {
+                    rule.insert("reverse".into(), json!(reverse));
+                }
+                let mut only = !rule.get("showValue").and_then(Json::as_bool).unwrap_or(true);
+                if ui.checkbox(&mut only, lang.tr("Show Icon Only")).changed() {
+                    rule.insert("showValue".into(), json!(!only));
+                }
+            });
+        }
+    }
+}
+
+/// Rule type 2: cell value, specific text, dates, blanks and errors.
+fn cf_contains_editor(ui: &mut egui::Ui, rule: &mut Map<String, Json>) {
+    let lang = crate::i18n::current(ui.ctx());
+    let ty = cf_str(rule, "type");
+    let group = match ty.as_str() {
+        "containsText" | "notContainsText" | "beginsWith" | "endsWith" => "text",
+        "timePeriod" => "date",
+        "blanks" | "noBlanks" | "errors" | "noErrors" => ty.as_str(),
+        _ => "cellIs",
+    };
+    ui.label(lang.tr("Format only cells with:"));
+    ui.horizontal(|ui| {
+        let mut g = Map::new();
+        g.insert("g".into(), json!(group));
+        let groups = [
+            ("cellIs", "Cell Value"),
+            ("text", "Specific Text"),
+            ("date", "Dates Occurring"),
+            ("blanks", "Blanks"),
+            ("noBlanks", "No Blanks"),
+            ("errors", "Errors"),
+            ("noErrors", "No Errors"),
+        ];
+        if cf_combo(ui, "contains", &mut g, "g", &groups, 130.0) {
+            let t = match cf_str(&g, "g").as_str() {
+                "text" => "containsText",
+                "date" => "timePeriod",
+                "cellIs" => "cellIs",
+                other => other,
+            }
+            .to_string();
+            rule.insert("type".into(), json!(t));
+        }
+        match cf_str(rule, "type").as_str() {
+            "cellIs" => {
+                if !rule.contains_key("operator") {
+                    rule.insert("operator".into(), json!("between"));
+                }
+                cf_combo(ui, "operator", rule, "operator", &CF_OPERATORS, 170.0);
+                cf_text(ui, rule, "value", 90.0);
+                if matches!(cf_str(rule, "operator").as_str(), "between" | "notBetween") {
+                    ui.label(lang.tr("and"));
+                    cf_text(ui, rule, "value2", 90.0);
+                }
+            }
+            "containsText" | "notContainsText" | "beginsWith" | "endsWith" => {
+                let ops = [
+                    ("containsText", "containing"),
+                    ("notContainsText", "not containing"),
+                    ("beginsWith", "beginning with"),
+                    ("endsWith", "ending with"),
+                ];
+                cf_combo(ui, "textOp", rule, "type", &ops, 140.0);
+                cf_text(ui, rule, "text", 140.0);
+            }
+            "timePeriod" => {
+                if !rule.contains_key("period") {
+                    rule.insert("period".into(), json!("yesterday"));
+                }
+                cf_combo(ui, "period", rule, "period", &CF_PERIODS, 160.0);
+            }
+            _ => {}
+        }
+    });
+    if cf_str(rule, "type") == "cellIs" {
+        ui.label(egui::RichText::new(lang.tr("Type a number, text, or a formula such as =$B$1.")).small().weak());
+    }
+}
+
+/// New Formatting Rule (or Edit Formatting Rule from Manage Rules):
+/// the rule type, then the rule's description and format.
+fn formatting_rule(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let lang = app.ui.language;
+    let theme = app.session.active().map(|doc| doc.wb.theme.clone()).unwrap_or_default();
+    let mut rule = d.values.get("rule").and_then(Json::as_object).cloned().unwrap_or_default();
+    let kind = cf_kind_of(&cf_str(&rule, "type"));
+    ui.label(lang.tr("Select a Rule Type:"));
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        for (i, (start, label)) in CF_RULE_KINDS.iter().enumerate() {
+            if ui.add(egui::Button::selectable(i == kind, format!("►  {}", lang.tr(label)))).clicked() && i != kind {
+                rule.insert("type".into(), json!(start));
+                match *start {
+                    "colorScale" => {
+                        rule.insert("colors".into(), json!(["#F8696B", "#FFEB84", "#63BE7B"]));
+                    }
+                    "top10" => {
+                        rule.insert("rank".into(), json!(10));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    });
+    ui.add_space(6.0);
+    ui.label(lang.tr("Edit the Rule Description:"));
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        match cf_kind_of(&cf_str(&rule, "type")) {
+            0 => cf_values_editor(ui, &mut rule, &theme),
+            1 => cf_contains_editor(ui, &mut rule),
+            2 => {
+                ui.label(lang.tr("Format values that rank in the:"));
+                ui.horizontal(|ui| {
+                    let mut m = Map::new();
+                    m.insert("b".into(), json!(if cf_flag(&rule, "bottom") { "bottom" } else { "top" }));
+                    if cf_combo(ui, "topBottom", &mut m, "b", &[("top", "CF|Top"), ("bottom", "CF|Bottom")], 90.0) {
+                        rule.insert("bottom".into(), json!(cf_str(&m, "b") == "bottom"));
+                    }
+                    let mut rank = rule.get("rank").and_then(Json::as_u64).unwrap_or(10);
+                    if ui.add(egui::DragValue::new(&mut rank).range(1..=1000)).changed() {
+                        rule.insert("rank".into(), json!(rank));
+                    }
+                    let mut percent = cf_flag(&rule, "percent");
+                    if ui.checkbox(&mut percent, lang.tr("% of the selected range")).changed() {
+                        rule.insert("percent".into(), json!(percent));
+                    }
+                });
+            }
+            3 => {
+                ui.label(lang.tr("Format values that are:"));
+                let current = match (cf_flag(&rule, "below"), cf_flag(&rule, "equal"), rule.get("stdDev").and_then(Json::as_u64).unwrap_or(0)) {
+                    (b, _, n @ 1..) => format!("{}{n}", if b { "sdBelow" } else { "sdAbove" }),
+                    (false, false, _) => "above".into(),
+                    (true, false, _) => "below".into(),
+                    (false, true, _) => "equalAbove".into(),
+                    (true, true, _) => "equalBelow".into(),
+                };
+                let mut m = Map::new();
+                m.insert("a".into(), json!(current));
+                let options = [
+                    ("above", "CF|above"),
+                    ("below", "CF|below"),
+                    ("equalAbove", "equal or above"),
+                    ("equalBelow", "equal or below"),
+                    ("sdAbove1", "1 std dev above"),
+                    ("sdBelow1", "1 std dev below"),
+                    ("sdAbove2", "2 std dev above"),
+                    ("sdBelow2", "2 std dev below"),
+                    ("sdAbove3", "3 std dev above"),
+                    ("sdBelow3", "3 std dev below"),
+                ];
+                ui.horizontal(|ui| {
+                    if cf_combo(ui, "average", &mut m, "a", &options, 150.0) {
+                        let a = cf_str(&m, "a");
+                        let sd = a.strip_prefix("sdAbove").or_else(|| a.strip_prefix("sdBelow")).and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
+                        rule.insert("below".into(), json!(a.contains("elow")));
+                        rule.insert("equal".into(), json!(a.starts_with("equal")));
+                        rule.insert("stdDev".into(), json!(sd));
+                    }
+                    ui.label(lang.tr("the average for the selected range"));
+                });
+            }
+            4 => {
+                ui.label(lang.tr("Format all:"));
+                ui.horizontal(|ui| {
+                    cf_combo(ui, "uniqueDup", &mut rule, "type", &[("duplicate", "CF|duplicate"), ("unique", "CF|unique")], 110.0);
+                    ui.label(lang.tr("values in the selected range"));
+                });
+            }
+            _ => {
+                ui.label(lang.tr("Format values where this formula is true:"));
+                let mut f = cf_str(&rule, "formula");
+                if f.is_empty() {
+                    f.push('=');
+                }
+                if ui.add(egui::TextEdit::singleline(&mut f).desired_width(ui.available_width()).font(egui::TextStyle::Monospace)).changed() {
+                    rule.insert("formula".into(), json!(f));
+                }
+                let top_left = d.values.get("range").and_then(Json::as_str).and_then(|r| r.split([':', ',']).next()).map(str::to_string);
+                let top_left = top_left.or_else(|| app.session.active().map(|doc| doc.selection.current().start.a1())).unwrap_or_else(|| "A1".into());
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} {top_left}. {}",
+                        lang.tr("The formula is written for the top-left cell of the range,"),
+                        lang.tr("Example: =$B2>100 highlights each row whose column B is over 100.")
+                    ))
+                    .small()
+                    .weak(),
+                );
+            }
+        }
+        if kind != 0 && cf_kind_of(&cf_str(&rule, "type")) != 0 {
+            ui.add_space(8.0);
+            ui.separator();
+            cf_format_editor(ui, &mut rule, &theme);
+        }
+    });
+    // No rule without something to compare against.
+    let missing = match cf_str(&rule, "type").as_str() {
+        "cellIs" => {
+            cf_str(&rule, "value").trim().is_empty()
+                || (matches!(cf_str(&rule, "operator").as_str(), "between" | "notBetween") && cf_str(&rule, "value2").trim().is_empty())
+        }
+        "expression" => cf_str(&rule, "formula").trim().trim_start_matches('=').trim().is_empty(),
+        "containsText" | "notContainsText" | "beginsWith" | "endsWith" => cf_str(&rule, "text").is_empty(),
+        _ => false,
+    };
+    d.values.insert("rule".into(), Json::Object(rule));
+    ok_cancel(ui, confirm, open);
+    if *confirm && missing {
+        *confirm = false;
+        app.message = Some((d.title.clone(), lang.tr("Enter a value, text or formula for the rule.").into()));
+    }
+}
+
+/// The Rule column of Manage Rules.
+fn cf_describe(p: &Json, lang: crate::i18n::Language) -> String {
+    let s = |k: &str| match p.get(k) {
+        Some(Json::String(s)) => s.clone(),
+        Some(Json::Null) | None => String::new(),
+        Some(v) => v.to_string(),
+    };
+    let label = |options: &[(&str, &str)], v: &str| {
+        options.iter().find(|(k, _)| *k == v).map(|(_, l)| lang.tr(l).to_string()).unwrap_or_else(|| v.to_string())
+    };
+    let flag = |k: &str| p.get(k).and_then(Json::as_bool).unwrap_or(false);
+    match s("type").as_str() {
+        "cellIs" => {
+            let op = s("operator");
+            let symbol = match op.as_str() {
+                "equal" => "=",
+                "notEqual" => "<>",
+                "greater" => ">",
+                "less" => "<",
+                "greaterOrEqual" => ">=",
+                "lessOrEqual" => "<=",
+                _ => "",
+            };
+            if symbol.is_empty() {
+                format!("{} {} {} {} {}", lang.tr("Cell Value"), label(&CF_OPERATORS, &op), s("value"), lang.tr("and"), s("value2"))
+            } else {
+                format!("{} {symbol} {}", lang.tr("Cell Value"), s("value"))
+            }
+        }
+        "expression" => format!("{} {}", lang.tr("Formula:"), s("formula")),
+        "containsText" => format!("{} \"{}\"", lang.tr("Cell value contains"), s("text")),
+        "notContainsText" => format!("{} \"{}\"", lang.tr("Cell value does not contain"), s("text")),
+        "beginsWith" => format!("{} \"{}\"", lang.tr("Cell value begins with"), s("text")),
+        "endsWith" => format!("{} \"{}\"", lang.tr("Cell value ends with"), s("text")),
+        "blanks" => lang.tr("Blanks").into(),
+        "noBlanks" => lang.tr("No Blanks").into(),
+        "errors" => lang.tr("Errors").into(),
+        "noErrors" => lang.tr("No Errors").into(),
+        "duplicate" => lang.tr("Duplicate Values").into(),
+        "unique" => lang.tr("Unique Values").into(),
+        "timePeriod" => label(&CF_PERIODS, &s("period")),
+        "top10" => {
+            format!("{} {}{}", lang.tr(if flag("bottom") { "CF|Bottom" } else { "CF|Top" }), s("rank"), if flag("percent") { "%" } else { "" })
+        }
+        "aboveAverage" => {
+            let sd = p.get("stdDev").and_then(Json::as_u64).unwrap_or(0);
+            if sd > 0 {
+                format!("{sd} {}", lang.tr(if flag("below") { "std dev below average" } else { "std dev above average" }))
+            } else {
+                lang.tr(match (flag("below"), flag("equal")) {
+                    (false, false) => "Above Average",
+                    (true, false) => "Below Average",
+                    (false, true) => "Equal to or Above Average",
+                    (true, true) => "Equal to or Below Average",
+                })
+                .into()
+            }
+        }
+        "colorScale" => lang.tr("Graded Color Scale").into(),
+        "dataBar" => lang.tr("Data Bar").into(),
+        "iconSet" => lang.tr("Icon Set").into(),
+        other => other.to_string(),
+    }
+}
+
+/// The Format column of Manage Rules.
+fn cf_format_cell(ui: &mut egui::Ui, p: &Json) {
+    let size = vec2(130.0, 20.0);
+    match p.get("type").and_then(Json::as_str).unwrap_or("") {
+        "colorScale" => {
+            let cols: Vec<Color32> = p
+                .get("colors")
+                .and_then(Json::as_array)
+                .map(|a| a.iter().filter_map(|c| c.as_str().and_then(hex_color)).collect())
+                .unwrap_or_default();
+            let (r, _) = ui.allocate_exact_size(size, Sense::hover());
+            let w = r.width() / cols.len().max(1) as f32;
+            for (i, c) in cols.iter().enumerate() {
+                ui.painter().rect_filled(egui::Rect::from_min_size(r.min + vec2(w * i as f32, 0.0), vec2(w, r.height())), 0.0, *c);
+            }
+        }
+        "dataBar" => {
+            let (r, _) = ui.allocate_exact_size(size, Sense::hover());
+            let c = p.get("color").and_then(Json::as_str).and_then(hex_color).unwrap_or(Color32::from_rgb(0x63, 0x8E, 0xC6));
+            ui.painter().rect_filled(r, 0.0, Color32::WHITE);
+            ui.painter().rect_filled(egui::Rect::from_min_size(r.min + vec2(2.0, 3.0), vec2(r.width() * 0.6, r.height() - 6.0)), 0.0, c);
+        }
+        "iconSet" => {
+            let set = p.get("set").and_then(Json::as_str).unwrap_or("3TrafficLights1");
+            ui.horizontal(|ui| {
+                for i in 0..gridcraft_engine::cf::icon_count(set) {
+                    let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                    crate::grid::paint_cf_icon(ui.painter(), r.shrink(2.0), set, i);
+                }
+            });
+        }
+        _ => cf_preview(ui, p.as_object().unwrap_or(&Map::new()), size),
+    }
+}
+
+/// Conditional Formatting Rules Manager: which rules to show, New/Edit/
+/// Delete/Duplicate and priority arrows, the rule table, and the selected rule's Applies to.
+/// Changes apply at once; Cancel puts back the rules the dialog opened with.
+fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let lang = app.ui.language;
+    // Every action targets the sheet the dialog opened on, the one Cancel restores.
+    let sheet = d.values.get("sheet").cloned().unwrap_or(Json::Null);
+    let show = d.values.get("show").and_then(Json::as_str).unwrap_or("selection").to_string();
+    let list =
+        app.session.run("home.manageRules", on_sheet(&sheet, json!({"show": show, "selection": d.values.get("selection")}))).unwrap_or(Json::Null);
+    let rules = list["rules"].as_array().cloned().unwrap_or_default();
+    let total = list["total"].as_u64().unwrap_or(0);
+    // The selected rule is followed by its place on the sheet: a move swaps it with a neighbour
+    // the Current Selection view may hide, so its row in the list can stay where it was.
+    if let Some(at) = d.values.get("selectedRule").and_then(Json::as_u64)
+        && let Some(i) = rules.iter().position(|r| r["index"].as_u64() == Some(at))
+    {
+        d.list_index = i;
+    }
+    if d.list_index >= rules.len() {
+        d.list_index = rules.len().saturating_sub(1);
+    }
+    let selected = rules.get(d.list_index).cloned();
+    let index = selected.as_ref().and_then(|r| r["index"].as_u64());
+    ui.horizontal(|ui| {
+        ui.label(lang.tr("Show formatting rules for:"));
+        let mut m = Map::new();
+        m.insert("show".into(), json!(show));
+        if cf_combo(ui, "show", &mut m, "show", &[("selection", "Current Selection"), ("sheet", "This Worksheet")], 160.0) {
+            d.values.insert("show".into(), m.get("show").cloned().unwrap_or(Json::Null));
+            d.list_index = 0;
+        }
+    });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        if ui.button(format!("＋ {}", lang.tr("New Rule…"))).clicked() {
+            app.open_dialog("newFormattingRule", json!({"sheet": sheet, "range": d.values.get("selection")}));
+        }
+        let some = index.is_some();
+        if ui.add_enabled(some, egui::Button::new(lang.tr("Edit Rule…"))).clicked()
+            && let Some(r) = &selected
+        {
+            app.open_dialog("newFormattingRule", json!({"index": index, "rule": r["params"], "sheet": sheet}));
+        }
+        if ui.add_enabled(some, egui::Button::new(format!("－ {}", lang.tr("Delete Rule")))).clicked() {
+            app.run_or_alert("home.manageRules", on_sheet(&sheet, json!({"delete": index})));
+        }
+        if ui.add_enabled(some, egui::Button::new(lang.tr("Duplicate Rule"))).clicked() {
+            app.run_or_alert("home.manageRules", on_sheet(&sheet, json!({"duplicate": index})));
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let first = index == Some(0);
+            let last = index.is_some_and(|i| i + 1 >= total);
+            if ui.add_enabled(some && !last, egui::Button::new("▼")).on_hover_text(lang.tr("Move Down")).clicked() {
+                app.run_or_alert("home.manageRules", on_sheet(&sheet, json!({"moveDown": index})));
+                d.values.insert("selectedRule".into(), json!(index.map(|i| i + 1)));
+            }
+            if ui.add_enabled(some && !first, egui::Button::new("▲")).on_hover_text(lang.tr("Move Up")).clicked() {
+                app.run_or_alert("home.manageRules", on_sheet(&sheet, json!({"moveUp": index})));
+                d.values.insert("selectedRule".into(), json!(index.map(|i| i.saturating_sub(1))));
+            }
+        });
+    });
+    ui.add_space(4.0);
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_min_height(220.0);
+        ui.set_width(ui.available_width());
+        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+            egui::Grid::new("cfRules").striped(true).num_columns(4).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
+                ui.strong(lang.tr("Rule (applied in order shown)"));
+                ui.strong(lang.tr("CF|Format"));
+                ui.strong(lang.tr("Applies to"));
+                ui.strong(lang.tr("Stop If True"));
+                ui.end_row();
+                for (i, r) in rules.iter().enumerate() {
+                    let text: String = cf_describe(&r["params"], lang).chars().take(48).collect();
+                    let resp = ui.add(egui::Button::selectable(i == d.list_index, text).min_size(vec2(220.0, 20.0)));
+                    if resp.clicked() {
+                        d.list_index = i;
+                        d.values.insert("selectedRule".into(), r["index"].clone());
+                        d.values.remove("appliesTo");
+                    }
+                    if resp.double_clicked() {
+                        app.open_dialog("newFormattingRule", json!({"index": r["index"], "rule": r["params"], "sheet": sheet}));
+                    }
+                    cf_format_cell(ui, &r["params"]);
+                    ui.label(r["appliesTo"].as_str().unwrap_or(""));
+                    // Colour scales, data bars and icon sets don't stop other rules.
+                    let styled = !matches!(r["params"]["type"].as_str(), Some("colorScale" | "dataBar" | "iconSet"));
+                    let mut stop = r["stopIfTrue"].as_bool().unwrap_or(false);
+                    if ui.add_enabled(styled, egui::Checkbox::without_text(&mut stop)).changed() {
+                        app.run_or_alert("home.manageRules", on_sheet(&sheet, json!({"update": r["index"], "stopIfTrue": stop})));
+                    }
+                    ui.end_row();
+                }
+            });
+            if rules.is_empty() {
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(lang.tr(if show == "selection" {
+                        "No rules apply to the selected cells. Show This Worksheet to see every rule, or click New Rule…"
+                    } else {
+                        "There are no conditional formatting rules on this sheet."
+                    }))
+                    .italics()
+                    .weak(),
+                );
+            }
+        });
+    });
+    ui.add_space(6.0);
+    ui.label(lang.tr("Applies to:"));
+    ui.horizontal(|ui| {
+        let current = selected.as_ref().and_then(|r| r["appliesTo"].as_str()).unwrap_or("").to_string();
+        let mut text = d.values.get("appliesTo").and_then(Json::as_str).map(str::to_string).unwrap_or_else(|| current.clone());
+        let edited = text != current;
+        let field = ui.add_enabled(index.is_some(), egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 70.0));
+        if field.changed() {
+            d.values.insert("appliesTo".into(), json!(text));
+        }
+        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+        if ui.add_enabled(edited, egui::Button::new("✓")).on_hover_text(lang.tr("Apply")).clicked() || (enter && edited) {
+            if app.run("home.manageRules", on_sheet(&sheet, json!({"update": index, "appliesTo": text}))).is_err() {
+                app.message = Some((d.title.clone(), lang.tr("Applies to must be a range such as =$A$1:$B$10.").into()));
+            }
+            d.values.remove("appliesTo");
+        }
+        if ui.add_enabled(edited, egui::Button::new("×")).on_hover_text(lang.tr("Cancel")).clicked() {
+            d.values.remove("appliesTo");
+        }
+    });
+    ui.add_space(8.0);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let ok = ui.add(
+            egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(Color32::WHITE))
+                .fill(crate::theme::Tokens::get(ui.ctx()).accent),
+        );
+        if ok.clicked() {
+            // A pending Applies to edit is kept on OK.
+            if let Some(t) = d.values.get("appliesTo").and_then(Json::as_str) {
+                app.run_or_alert("home.manageRules", on_sheet(&sheet, json!({"update": index, "appliesTo": t})));
+            }
+            d.values.insert("ok".into(), json!(true));
+            *confirm = true;
+        }
+        if ui.button(format!(" {} ", lang.tr("Cancel"))).clicked() {
+            *open = false;
+        }
+    });
+}
+
+/// `params` aimed at `sheet` (Manage Rules works on the sheet it opened on).
+fn on_sheet(sheet: &Json, mut params: Json) -> Json {
+    params["sheet"] = sheet.clone();
+    params
+}
+
+/// Manage Rules closed without OK: put back the sheet's rules as they were when it opened.
+fn manage_rules_revert(app: &mut SheetApp, d: &Dialog) {
+    let Some(saved) = d.values.get("snapshot") else { return };
+    let now = app.session.run("home.manageRules", json!({"sheet": d.values.get("sheet")})).unwrap_or(Json::Null);
+    let now = now["rules"]
+        .as_array()
+        .map(|a| a.iter().map(|r| json!({"rule": r["rule"], "appliesTo": r["appliesTo"], "stopIfTrue": r["stopIfTrue"]})).collect::<Vec<_>>());
+    if now.as_ref() != saved.as_array() {
+        app.run_or_alert("home.manageRules", json!({"sheet": d.values.get("sheet"), "set": saved}));
     }
 }
 
