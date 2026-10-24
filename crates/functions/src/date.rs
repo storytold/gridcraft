@@ -123,8 +123,16 @@ fn weekday(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 fn isoweek(sys: DateSystem, s: i64) -> R<i64> {
     let iso_wd = (weekday0(sys, s) + 6) % 7 + 1; // Monday = 1
     let thursday = s - iso_wd as i64 + 4;
-    let y = if thursday < 1 { 1900 } else { dt(sys, thursday as f64)?.year as i64 };
-    let jan1 = ymd_serial(sys, y, 1, 1)?;
+    let first = match sys {
+        DateSystem::D1900 => 1,
+        DateSystem::D1904 => 0,
+    };
+    let jan1 = if thursday < first {
+        // The week belongs to the year before the calendar starts.
+        first - 365
+    } else {
+        ymd_serial(sys, dt(sys, thursday as f64)?.year as i64, 1, 1)?
+    };
     Ok((thursday - jan1).div_euclid(7) + 1)
 }
 
@@ -842,6 +850,19 @@ mod tests {
         let spec = crate::lookup("DATEVALUE").unwrap();
         close(crate::call(spec, &[t("2/29/1904")], &mut ctx), 59.0);
         is_err(crate::call(spec, &[t("2/29/1900")], &mut ctx), CellError::Value);
+    }
+
+    #[test]
+    fn isoweek_at_calendar_start() {
+        let iso = crate::lookup("ISOWEEKNUM").unwrap();
+        let wk = crate::lookup("WEEKNUM").unwrap();
+        let mut ctx = TestCtx::default();
+        close(crate::call(iso, &[n(1.0)], &mut ctx), 52.0);
+        close(crate::call(wk, &[n(1.0), n(21.0)], &mut ctx), 52.0);
+        let mut ctx = TestCtx { sys: gridcraft_core::DateSystem::D1904, ..TestCtx::default() };
+        for s in [0.0, 1.0, 2.0] {
+            close(crate::call(iso, &[n(s)], &mut ctx), 53.0);
+        }
     }
 
     #[test]
