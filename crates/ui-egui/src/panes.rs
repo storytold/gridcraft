@@ -285,4 +285,63 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
             ui.data_mut(|d| d.remove::<(f32, f32)>(draft));
         }
     });
+    ui.collapsing("Trendline", |ui| {
+        //As in Excel, no trendlines on cake, ring and radar (nor 3-D and chartex).
+        let kind_name = format!("{:?}", chart.kind).to_lowercase();
+        let supported = !["pie", "doughnut", "radar", "3d", "histogram", "waterfall", "funnel", "treemap", "sunburst", "boxwhisker"]
+        .iter()
+        .any(|k| kind_name.contains(k));
+        if !supported {
+            ui.label(egui::RichText::new("Trendlines are not available for this chart type.").italics());
+            return;
+        }
+
+        // Series to aplly to
+        let sel_key = egui::Id::new(("gridcraft.trend_series", id));
+        let mut series: usize = ui.data_mut(|d| d.get_temp(sel_key)).unwrap_or(0);
+        series = series.min(chart.series.len().saturating_sub(1));
+        egui::ComboBox::from_label("Series")
+            .selected_text(format!("Series {}", series + 1))
+            .show_ui(ui, |ui| {
+                for i in 0..chart.series.len() {
+                    ui.selectable_value(&mut series, i, format!("Series {}", i + 1));
+                }
+            });
+        ui.data_mut(|d| d.insert_temp(sel_key, series));
+
+        let ord_key = egui::Id::new(("gridcraft.trend_order", id));
+        let per_key = egui::Id::new(("gridcraft.trend_period", id));
+        let mut order: u32 = ui.data_mut(|d| d.get_temp(ord_key)).unwrap_or(2);
+        let mut period: u32 = ui.data_mut(|d| d.get_temp(per_key)).unwrap_or(2);
+
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(&mut order).prefix("Order ").range(2..=6));
+            ui.add(egui::DragValue::new(&mut period).prefix("Period ").range(2..=255));
+        });
+        ui.data_mut(|d| {
+            d.insert_temp(ord_key, order);
+            d.insert_temp(per_key, period);
+        });
+
+        ui.horizontal_wrapped(|ui| {
+            // (label, type, extra parameter)
+            let items = [
+                ("Linear", "linear", json!({})),
+                ("Exponential", "exponential", json!({})),
+                ("Logarithmic", "logarithmic", json!({})),
+                ("Power", "power", json!({})),
+                ("Polynomial", "polynomial", json!({"order": order})),
+                ("Moving average", "movingAverage", json!({"period": period})),
+            ];
+            for (label, kind, extra) in items {
+                if ui.button(label).clicked() {
+                    let mut args = json!({"chart": id, "element": "trendline", "series": series, "type": kind});
+                    if let (Some(a), Some(e)) = (args.as_object_mut(), extra.as_object()) {
+                        a.extend(e.clone());
+                    }
+                    app.run_or_alert("chart.addElement", args);
+                }
+            }
+        });
+    });
 }
