@@ -1363,6 +1363,171 @@ fn remove_duplicates_compares_shown_text() {
     assert_eq!(r["removed"], 1);
 }
 
+/// The legacy array range recorded on the formula in `a` (None: no array formula there).
+fn array_at(s: &Session, a: &str) -> Option<String> {
+    let d = s.doc().unwrap();
+    d.wb.active().unwrap().cell(CellRef::parse(a).unwrap()).and_then(|x| x.formula.as_ref()?.array).map(|r| r.a1())
+}
+
+/// Puts a legacy (Ctrl+Shift+Enter) array formula over `range`.
+fn set_array(s: &mut Session, range: &str, input: &str) {
+    s.execute("selection.set", json!({"range": range})).unwrap();
+    let at = range.split(':').next().unwrap();
+    s.execute("cell.set", json!({"cell": at, "input": input, "array": true})).unwrap();
+}
+
+#[test]
+fn remove_duplicates_moves_legacy_arrays_with_their_rows() {
+    // Found by the command-sequence fuzzer (seed 9): the formula cell moved up but kept its old
+    // array range, so the array no longer started at its own cell.
+    let mut s = self::s();
+    s.execute("file.new", json!({"sample": "sales"})).unwrap();
+    s.execute("cell.set", json!({"array": true, "cell": "C21", "input": "=1"})).unwrap();
+    s.execute("data.removeDuplicates", json!({"header": false, "range": "C17:G23"})).unwrap();
+    let d = s.doc().unwrap();
+    for (c, cell) in d.wb.active().unwrap().cells.iter() {
+        if let Some(a) = cell.formula.as_ref().and_then(|f| f.array) {
+            assert_eq!(a.start, c, "{c}: array covers {a}");
+        }
+    }
+
+    // Excel: a one-cell array moves up with its row and stays an array; one in a removed row goes.
+    let mut s = self::s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["x"], ["x"], ["y"], ["y"], ["z"]]})).unwrap();
+    set_array(&mut s, "A6", "=ROW()");
+    let r = s.execute("data.removeDuplicates", json!({"range": "A1:A6", "header": false})).unwrap();
+    assert_eq!(r["removed"], 2);
+    assert_eq!(array_at(&s, "A4").as_deref(), Some("A4"));
+    assert_eq!(v(&s, "A4"), Value::Number(4.0));
+    assert!(v(&s, "A5").is_empty() && v(&s, "A6").is_empty());
+    reopen(&mut s);
+    assert_eq!((array_at(&s, "A4").as_deref(), v(&s, "A4")), (Some("A4"), Value::Number(4.0)));
+
+    let mut s = self::s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["x"], [1], ["y"]]})).unwrap();
+    set_array(&mut s, "A4", "=1");
+    s.execute("data.removeDuplicates", json!({"range": "A1:A4", "header": false})).unwrap();
+    assert!(array_at(&s, "A4").is_none() && v(&s, "A4").is_empty());
+
+    // A one-row array inside the range's columns moves whole; in a removed row it is removed.
+    let mut s = self::s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["x", 1], ["x", 1], ["y", 2], ["y", 2], [null, null], ["q", "r"]]})).unwrap();
+    set_array(&mut s, "A5:B5", "={7,8}");
+    s.execute("data.removeDuplicates", json!({"range": "A1:B6", "header": false})).unwrap();
+    assert_eq!(array_at(&s, "A3").as_deref(), Some("A3:B3"));
+    assert_eq!((v(&s, "A3"), v(&s, "B3")), (Value::Number(7.0), Value::Number(8.0)));
+    assert_eq!((v(&s, "A4"), v(&s, "B4")), (Value::from("q"), Value::from("r")));
+    assert!(array_at(&s, "A5").is_none() && v(&s, "A5").is_empty() && v(&s, "B5").is_empty());
+
+    // Two one-row arrays: the lower one moves onto the cells of a removed duplicate.
+    let mut s = self::s();
+    set_array(&mut s, "A1:B1", "={1,2}");
+    set_array(&mut s, "A2:B2", "={1,2}");
+    set_array(&mut s, "A3:B3", "={3,4}");
+    s.execute("data.removeDuplicates", json!({"range": "A1:B3", "header": false})).unwrap();
+    assert_eq!((array_at(&s, "A2").as_deref(), v(&s, "A2"), v(&s, "B2")), (Some("A2:B2"), Value::Number(3.0), Value::Number(4.0)));
+    assert!(array_at(&s, "A3").is_none() && v(&s, "A3").is_empty() && v(&s, "B3").is_empty());
+}
+
+#[test]
+fn remove_duplicates_and_sort_refuse_to_split_a_legacy_array() {
+    let refused = |setup: &dyn Fn(&mut Session), cmd: &str, p: serde_json::Value| {
+        let mut s = self::s();
+        setup(&mut s);
+        let before = s.doc().unwrap().wb.clone();
+        let e = s.execute(cmd, p.clone()).unwrap_err().to_string();
+        assert!(e.contains("You can't change part of an array."), "{cmd} {p}: {e}");
+        assert_eq!(s.doc().unwrap().wb.sheets, before.sheets, "{cmd} {p} changed the sheet");
+    };
+    let col = |s: &mut Session, vals: serde_json::Value| {
+        s.execute("range.setValues", json!({"range": "A1", "values": vals})).unwrap();
+    };
+    // Excel refuses whenever an array in the moving rows spans several rows or reaches past the
+    // range, even when nothing would move (no duplicates, or the array above them).
+    let dup = "data.removeDuplicates";
+    let cases: [(serde_json::Value, &str, &str, serde_json::Value); 6] = [
+        (json!([["x"], ["x"], ["y"], ["y"]]), "A5:A6", "=ROW(A1:A2)", json!({"range": "A1:A6", "header": false})),
+        (json!([["x"], ["x"], ["y"], ["y"], [null], ["q"]]), "A5:B5", "={1,2}", json!({"range": "A1:A6", "header": false})),
+        (json!([["x"], ["x"], ["y"], ["y"], ["z"]]), "A6:A7", "=ROW(A1:A2)", json!({"range": "A1:A6", "header": false})),
+        (json!([["x"], ["y"], ["z"]]), "A4:A5", "=ROW(A1:A2)", json!({"range": "A1:A5", "header": false})),
+        (json!([[null], [null], ["q"], ["q"]]), "A1:A2", "=ROW(A1:A2)", json!({"range": "A1:A4", "header": false})),
+        (json!([[null], [null], ["y"], ["y"]]), "A1:A2", "=ROW(A1:A2)", json!({"range": "A1:A4", "header": true})),
+    ];
+    for (vals, at, f, p) in cases {
+        refused(
+            &|s| {
+                col(s, vals.clone());
+                set_array(s, at, f);
+            },
+            dup,
+            p,
+        );
+    }
+    // Sort: the same rule, by rows or by columns.
+    let keys = json!([{"column": "A"}]);
+    let cases: [(serde_json::Value, &str, &str, serde_json::Value); 3] = [
+        (json!([[3], [2]]), "A3:A4", "=ROW(A1:A2)", json!({"range": "A1:A4", "header": false, "keys": keys})),
+        (json!([[3], [2]]), "A3:B3", "={1,2}", json!({"range": "A1:A3", "header": false, "keys": keys})),
+        (json!([[3]]), "B1:C1", "={1,2}", json!({"range": "A1:C1", "header": false, "orientation": "columns", "keys": [{"row": 1}]})),
+    ];
+    for (vals, at, f, p) in cases {
+        refused(
+            &|s| {
+                col(s, vals.clone());
+                set_array(s, at, f);
+            },
+            "data.sort",
+            p,
+        );
+    }
+}
+
+#[test]
+fn remove_duplicates_leaves_arrays_outside_the_moving_block() {
+    // An array in the header row, or in the same rows but outside the range's columns, stays.
+    let mut s = self::s();
+    set_array(&mut s, "A1:B1", "={\"h\",\"g\"}");
+    s.execute("range.setValues", json!({"range": "A2", "values": [["x", 1], ["x", 1]]})).unwrap();
+    s.execute("data.removeDuplicates", json!({"range": "A1:B3", "header": true})).unwrap();
+    assert_eq!((array_at(&s, "A1").as_deref(), v(&s, "B1")), (Some("A1:B1"), Value::from("g")));
+    assert!(v(&s, "A3").is_empty());
+
+    let mut s = self::s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["x"], ["x"], ["y"]]})).unwrap();
+    set_array(&mut s, "C1:C2", "=ROW(A1:A2)");
+    s.execute("data.removeDuplicates", json!({"range": "A1:A3", "header": false})).unwrap();
+    assert_eq!((array_at(&s, "C1").as_deref(), v(&s, "C2")), (Some("C1:C2"), Value::Number(2.0)));
+    assert_eq!(v(&s, "A2"), Value::from("y"));
+}
+
+#[test]
+fn sort_keeps_legacy_arrays_and_moves_them_with_their_line() {
+    // Sorting rebuilt each moved formula and dropped its Ctrl+Shift+Enter range.
+    let mut s = self::s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[3], [2]]})).unwrap();
+    set_array(&mut s, "A3", "=1");
+    s.execute("data.sort", json!({"range": "A1:A3", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    assert_eq!((array_at(&s, "A1").as_deref(), v(&s, "A1")), (Some("A1"), Value::Number(1.0)));
+    assert_eq!((v(&s, "A2"), v(&s, "A3")), (Value::Number(2.0), Value::Number(3.0)));
+
+    let mut s = self::s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[3, 9], [2, 8]]})).unwrap();
+    set_array(&mut s, "A3:B3", "={1,5}");
+    s.execute("data.sort", json!({"range": "A1:B3", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    assert_eq!((array_at(&s, "A1").as_deref(), v(&s, "A1"), v(&s, "B1")), (Some("A1:B1"), Value::Number(1.0), Value::Number(5.0)));
+    assert_eq!((v(&s, "B2"), v(&s, "A3"), v(&s, "B3")), (Value::Number(8.0), Value::Number(3.0), Value::Number(9.0)));
+    assert!(array_at(&s, "A3").is_none());
+
+    let mut s = self::s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[3, 2], ["a", "b"]]})).unwrap();
+    set_array(&mut s, "C1:C2", "={1;7}");
+    s.execute("data.sort", json!({"range": "A1:C2", "header": false, "orientation": "columns", "keys": [{"row": 1}]})).unwrap();
+    assert_eq!((array_at(&s, "A1").as_deref(), v(&s, "A1"), v(&s, "A2")), (Some("A1:A2"), Value::Number(1.0), Value::Number(7.0)));
+    assert_eq!((v(&s, "C1"), v(&s, "C2")), (Value::Number(3.0), Value::from("a")));
+    reopen(&mut s);
+    assert_eq!((array_at(&s, "A1").as_deref(), v(&s, "A2")), (Some("A1:A2"), Value::Number(7.0)));
+}
+
 #[test]
 fn remove_duplicates_with_a_sheet_prefix_works_on_the_named_sheet() {
     let col = |s: &Session, sheet: &str| -> Vec<Value> {

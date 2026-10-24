@@ -283,6 +283,7 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
         if sh.merges.iter().any(|m| m.intersects(&body) && !m.is_single()) {
             return Err(EngineError::Other("To do this, all the merged cells need to be the same size.".into()));
         }
+        check_moving_arrays(sh, body, by_cols)?;
         let n = if by_cols { body.width() } else { body.height() };
         let line = |i: u32, k: u32| if by_cols { CellRef::new(k, body.start.col + i) } else { CellRef::new(body.start.row + i, k) };
         let theme = cx.wb.theme.clone();
@@ -353,11 +354,19 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
                 let dst = line(dst_i as u32, k);
                 let mut cell = sh.cell(src).cloned();
                 if let Some(c) = cell.as_mut()
-                    && let Some(f) = &c.formula
-                    && let Some(e) = f.expr()
+                    && let Some(f) = c.formula.as_mut()
                 {
-                    let shifted = gridcraft_formula::adjust::shift_relative(e, dst.row as i64 - src.row as i64, dst.col as i64 - src.col as i64);
-                    c.formula = Some(Arc::new(Formula::from_expr(shifted)));
+                    let (dr, dc) = (dst.row as i64 - src.row as i64, dst.col as i64 - src.col as i64);
+                    if let Some(e) = f.expr() {
+                        let mut moved = Formula::from_expr(gridcraft_formula::adjust::shift_relative(e, dr, dc));
+                        moved.array = f.array;
+                        *f = Arc::new(moved);
+                    }
+                    // A legacy array keeps its Ctrl+Shift+Enter range, moved with its line.
+                    if f.array.is_some() {
+                        let array = moved_array(f.array, dr, dc);
+                        Arc::make_mut(f).array = array;
+                    }
                 }
                 if let Some(picture) = sh.cell_pictures.get(&src) {
                     pictures.push((dst, picture.clone()));
@@ -465,6 +474,21 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
         Ok(Json::Null)
     })?;
     Ok(json!({"sorted": body.a1()}))
+}
+
+/// Sort and Remove Duplicates move whole lines of `body`. A legacy multi-cell array there can only
+/// travel whole, one line thick: Excel refuses ("You can't change part of an array.") when an
+/// array in the block spans several lines or reaches past the block, even if nothing would move.
+fn check_moving_arrays(sh: &Sheet, body: RangeRef, by_cols: bool) -> Result<()> {
+    let thick = |a: &RangeRef| if by_cols { a.width() > 1 } else { a.height() > 1 };
+    let split =
+        sh.cells.iter().filter_map(|(_, x)| x.formula.as_ref()?.array).any(|a| a.intersects(&body) && (!body.contains_range(&a) || thick(&a)));
+    if split { Err(EngineError::Other("You can't change part of an array.".into())) } else { Ok(()) }
+}
+
+/// A legacy array's range after its formula cell moved by `dr` rows and `dc` columns.
+fn moved_array(a: Option<RangeRef>, dr: i64, dc: i64) -> Option<RangeRef> {
+    a.and_then(|a| Some(RangeRef::new(a.start.offset(dr, dc)?, a.end.offset(dr, dc)?)))
 }
 
 /// Re-anchor one floating object for a sort. `bottom` is the object's bottom-right line and the
@@ -849,6 +873,9 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
     let mut removed = 0;
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
+        if start <= r.end.row {
+            check_moving_arrays(sh, RangeRef::new(CellRef::new(start, r.start.col), r.end), false)?;
+        }
         let mut seen = std::collections::HashSet::new();
         let mut keep: Vec<u32> = Vec::new();
         // Cells are compared by the text they show, as in Excel: the same date in two formats
@@ -888,8 +915,19 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
                     .filter_map(move |col| sh.hyperlinks.get(&CellRef::new(*row, col)).map(|h| (CellRef::new(start + i as u32, col), h.clone())))
             })
             .collect();
+        // A kept row's one-row legacy arrays move up with it (check_moving_arrays refused the rest).
+        let moved = |row: u32, to: u32, c: u32| {
+            let mut cell = sh.cell(CellRef::new(row, c)).cloned()?;
+            if let Some(f) = cell.formula.as_mut()
+                && f.array.is_some()
+            {
+                let array = moved_array(f.array, to as i64 - row as i64, 0);
+                Arc::make_mut(f).array = array;
+            }
+            Some(cell)
+        };
         let rows: Vec<Vec<Option<Cell>>> =
-            keep.iter().map(|row| (r.start.col..=r.end.col).map(|c| sh.cell(CellRef::new(*row, c)).cloned()).collect()).collect();
+            keep.iter().enumerate().map(|(i, row)| (r.start.col..=r.end.col).map(|c| moved(*row, start + i as u32, c)).collect()).collect();
         let shm = cx.sheet_mut(sheet)?;
         for row in start..=r.end.row {
             for c in r.start.col..=r.end.col {
@@ -919,6 +957,10 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         }
         for c in RangeRef::new(CellRef::new(start, r.start.col), r.end).iter() {
             cx.changed.push((sheet, c));
+        }
+        if removed > 0 {
+            // Rows moved up: like Sort, request a full recalculation.
+            cx.structural = true;
         }
         Ok(())
     })?;
