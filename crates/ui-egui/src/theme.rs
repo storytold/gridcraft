@@ -566,6 +566,7 @@ fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u32)>)> {
         ("sys-cjk-hangul", cjk_hangul()),
         ("sys-thai", thai()),
         ("sys-lao", lao()),
+        ("sys-khmer", khmer()),
         ("sys-hebrew", hebrew()),
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
@@ -711,6 +712,39 @@ fn lao() -> Vec<(String, u32)> {
         v.push((format!("{d}/lao/Phetsarath_OT.ttf"), 0));
         v.push((format!("{d}/Phetsarath_OT.ttf"), 0));
     }
+    v
+}
+
+/// Khmer faces. Windows ships Leelawadee UI (and Khmer UI, DaunPenh, MoolBoran on older versions);
+/// macOS has Khmer Sangam MN and Khmer MN; Linux usually has Noto Sans Khmer or Noto Serif Khmer.
+/// The system's own Khmer face stands in for a Khmer OS font the workbook names but we don't have,
+/// as Excel does; the Khmer OS fonts are wider, so a bundled one would not match its layout.
+#[cfg(not(target_arch = "wasm32"))]
+fn khmer() -> Vec<(String, u32)> {
+    let mac_sup = "/System/Library/Fonts/Supplemental";
+    let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
+    let lin = [
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/opentype/noto",
+        "/usr/share/fonts/truetype",
+        "/usr/share/fonts",
+        "/usr/share/fonts/google-noto",
+        "/usr/share/fonts/chromeos/noto", // ChromeOS's Linux container (#1762)
+    ];
+    let mut v: Vec<(String, u32)> = Vec::new();
+    v.push((format!("{win}\\LeelawUI.ttf"), 0)); // Leelawadee UI
+    v.push((format!("{win}\\KhmerUI.ttf"), 0)); // Khmer UI
+    v.push((format!("{win}\\DaunPenh.ttf"), 0)); // DaunPenh
+    v.push((format!("{win}\\MoolBoran.ttf"), 0)); // MoolBoran
+    v.push((format!("{mac_sup}/Khmer Sangam MN.ttf"), 0));
+    v.push((format!("{mac_sup}/Khmer MN.ttc"), 0));
+    for d in lin {
+        v.push((format!("{d}/NotoSansKhmer-Regular.ttf"), 0));
+        v.push((format!("{d}/NotoSerifKhmer-Regular.ttf"), 0));
+    }
+    // Fedora ships the variable Noto Sans Khmer; its default instance is Regular.
+    v.push(("/usr/share/fonts/google-noto-vf/NotoSansKhmer[wdth,wght].ttf".into(), 0));
+    v.push(("/usr/share/fonts/google-noto-vf/NotoSansKhmer[wght].ttf".into(), 0));
     v
 }
 
@@ -941,11 +975,11 @@ mod tests {
         let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
         assert_eq!(
             keys(HanOrder::Japanese),
-            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-khmer", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
         );
         assert_eq!(
             keys(HanOrder::Chinese),
-            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-khmer", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
         );
         assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
         for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs, Language::Fr, Language::Tr] {
@@ -1001,12 +1035,13 @@ mod tests {
         // Real render check, per script: the proportional family (what cells and the UI use) must
         // resolve a sample string to a real glyph, not the tofu replacement char. Skips a script
         // whose face is absent (a minimal machine) and fails if a face is present but not wired in.
-        let cases: [(&str, Vec<(String, u32)>, &str); 8] = [
+        let cases: [(&str, Vec<(String, u32)>, &str); 9] = [
             ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
             ("sys-cjk-han-zh", cjk_han_simplified(), "页面布局 客户端配置"),
             ("sys-cjk-hangul", cjk_hangul(), "한글"),
             ("sys-thai", thai(), "ทดสอบ"),
             ("sys-lao", lao(), "ພາສາລາວ"),
+            ("sys-khmer", khmer(), "ភាសាខ្មែរ"),
             ("sys-hebrew", hebrew(), "עברית"),
             ("ui", candidates(UI), "Русский"),
             // Czech interface labels: every Czech accented letter, in both cases.
@@ -1049,6 +1084,7 @@ mod tests {
         let probes = |cands: Vec<(String, u32)>, path: &str| cands.iter().any(|(p, _)| p == path);
         let cros = "/usr/share/fonts/chromeos";
         assert!(probes(thai(), &format!("{cros}/noto/NotoSansThai-Regular.ttf")));
+        assert!(probes(khmer(), &format!("{cros}/noto/NotoSansKhmer-Regular.ttf")));
         assert!(probes(hebrew(), &format!("{cros}/noto/NotoSansHebrew-Regular.ttf")));
         assert!(probes(cjk_han_japanese(), &format!("{cros}/notocjk/NotoSansCJK-Regular.ttc")));
         assert!(probes(cjk_han_simplified(), &format!("{cros}/notocjk/NotoSansCJK-Regular.ttc")));
