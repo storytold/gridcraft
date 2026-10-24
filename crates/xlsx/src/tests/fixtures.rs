@@ -690,3 +690,27 @@ fn custom_widths_equal_to_the_default_round_trip() {
         sheet.child("cols").unwrap().kids("col").map(|c| (c.attr_u32("min"), c.attr_u32("max"), c.flag("customWidth", false))).collect();
     assert_eq!(cols, [(Some(4), Some(7), true)]);
 }
+
+#[test]
+fn hidden_and_empty_path_shapes_are_not_imported() {
+    let anchor = r#"<xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>8</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>"#;
+    let style = r#"<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln>"#;
+    let drawing = format!(
+        r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <xdr:twoCellAnchor>{anchor}<xdr:sp><xdr:nvSpPr><xdr:cNvPr id="2" name="Hidden" hidden="1"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>{style}</xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>
+      <xdr:twoCellAnchor>{anchor}<xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="Empty"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/><a:pathLst/></a:custGeom>{style}</xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>
+      <xdr:twoCellAnchor>{anchor}<xdr:sp><xdr:nvSpPr><xdr:cNvPr id="4" name="Visible"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>{style}</xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>
+    </xdr:wsDr>"#
+    );
+    let srels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
+    let bytes = minimal(
+        r#"<sheetData/><drawing r:id="rId1"/>"#,
+        &[("xl/worksheets/_rels/sheet1.xml.rels", srels), ("xl/drawings/drawing1.xml", drawing.as_str())],
+        "",
+        "",
+    );
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let s = wb.sheet(0).unwrap();
+    // Only the visible rectangle is drawn; the hidden one and the empty custom path are not.
+    assert_eq!(s.shapes.len(), 1);
+}

@@ -197,8 +197,16 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
 
 fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     let sp = obj.child("spPr")?;
+    // Excel draws nothing for a hidden shape.
+    if obj.children.iter().filter_map(|nv| nv.child("cNvPr")).any(|c| c.flag("hidden", false)) {
+        return None;
+    }
     if let Some(shape) = ink::read(obj, anchor) {
         return Some(shape);
+    }
+    // A custom geometry without any path draws nothing (it is not a rectangle).
+    if sp.child("custGeom").is_some_and(|g| g.child("pathLst").is_none_or(|p| p.child("path").is_none())) {
+        return None;
     }
     let prst = sp.child("prstGeom").and_then(|g| g.attr("prst")).unwrap_or("rect");
     let tx_box = obj.path(&["nvSpPr", "cNvSpPr"]).is_some_and(|c| c.flag("txBox", false));
