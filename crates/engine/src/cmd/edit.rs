@@ -1282,10 +1282,15 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// Applies a reference adjustment to every cell formula and defined name in the workbook.
 pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &str, e: &gridcraft_formula::adjust::Edit) {
+    rewrite_all_formulas_many(wb, target, std::slice::from_ref(e));
+}
+
+/// [`rewrite_all_formulas`] for several edits applied in order, visiting each formula once.
+pub(crate) fn rewrite_all_formulas_many(wb: &mut gridcraft_model::Workbook, target: &str, edits: &[gridcraft_formula::adjust::Edit]) {
     use gridcraft_formula::adjust::Edit;
     // Rows and columns inserted or deleted on the target sheet move its legacy array ranges too
     // (a cut moves its arrays itself).
-    let moves_arrays = matches!(e, Edit::Insert { .. } | Edit::Delete { .. } | Edit::InsertCells { .. } | Edit::DeleteCells { .. });
+    let moves_arrays = |e: &Edit| matches!(e, Edit::Insert { .. } | Edit::Delete { .. } | Edit::InsertCells { .. } | Edit::DeleteCells { .. });
     for si in 0..wb.sheets.len() {
         let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
         let keys: Vec<(CellRef, std::sync::Arc<Formula>)> =
@@ -1293,16 +1298,19 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
         if keys.is_empty() {
             continue;
         }
-        let on_target = moves_arrays && host.eq_ignore_ascii_case(target);
+        let on_target = host.eq_ignore_ascii_case(target);
         let Some(sheet) = wb.sheet_mut(si) else { continue };
         for (c, f) in keys {
-            let Some(expr) = f.expr() else { continue };
-            let new = gridcraft_formula::adjust::adjust(expr, &host, target, e);
+            let Some(mut new) = f.expr() else { continue };
+            let mut array = f.array;
+            for e in edits {
+                new = gridcraft_formula::adjust::adjust(new, &host, target, e);
+                array = match array {
+                    Some(a) if on_target && moves_arrays(e) => super::sheet::map_range(a, e),
+                    a => a,
+                };
+            }
             let text = gridcraft_formula::print(&new);
-            let array = match f.array {
-                Some(a) if on_target => super::sheet::map_range(a, e),
-                a => a,
-            };
             if (text != f.text || array != f.array)
                 && let Some(cell) = sheet.cells.get_mut(c)
             {
@@ -1316,7 +1324,7 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
     for n in wb.names.iter_mut() {
         if let Ok(expr) = gridcraft_formula::parse_name(&n.formula) {
             // Names are workbook-level: unqualified refs don't occur; qualified ones adjust.
-            let new = gridcraft_formula::adjust::adjust(expr, "\u{0}", target, e);
+            let new = edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust(expr, "\u{0}", target, e));
             n.formula = gridcraft_formula::print(&new);
         }
     }
