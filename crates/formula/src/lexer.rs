@@ -338,12 +338,16 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                     push(&mut out, Tok::Sheet(w, None), j + 1);
                     i = j + 1;
                 } else if ch(j) == Some(':') && {
-                    // Sheet1:Sheet3!A1 — look ahead for word then '!'
+                    // Sheet1:Sheet3!A1 — look ahead for word then '!'.
                     let mut k = j + 1;
                     while ch(k).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
                         k += 1;
                     }
-                    k > j + 1 && ch(k) == Some('!')
+                    // `Sheet1!A1:Sheet1!B2` is a range whose second end repeats the sheet, not a span.
+                    let repeats_sheet = is_range_end(&w)
+                        && matches!(out.last(), Some(Token { tok: Tok::Sheet(p, None), .. })
+                            if chars.get(j + 1..k).is_some_and(|s| s.iter().map(|c| c.1).eq(p.chars())));
+                    k > j + 1 && ch(k) == Some('!') && !repeats_sheet
                 } {
                     let mut k = j + 1;
                     while ch(k).is_some_and(|c| is_word_char(c) && !(array_depth > 0 && c == locale.array_column_separator())) {
