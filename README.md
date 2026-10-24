@@ -271,6 +271,16 @@ handling again for troubleshooting.
 | Fedora/RHEL/openSUSE | `gridcraft-<ver>-linux-x86_64.rpm` | `gridcraft-<ver>-linux-aarch64.rpm` | |
 | Tarball | `gridcraft-<ver>-linux-x86_64.tar.gz` | `gridcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
 
+**Wayland:** on a Wayland desktop the app runs through XWayland when it is available, because
+winit (the windowing library) supports dragging files into the window only on X11, and GNOME draws
+no window frame for native Wayland windows. To use the native Wayland backend instead (for example
+for sharper text with fractional scaling, at the cost of file drag-and-drop), start it with
+`GRIDCRAFT_WAYLAND=1`:
+
+```sh
+GRIDCRAFT_WAYLAND=1 gridcraft
+```
+
 ### FreeBSD
 
 | Build | File |
