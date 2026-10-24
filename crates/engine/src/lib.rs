@@ -189,6 +189,9 @@ pub struct DocState {
     /// The format `path`'s content was recognised as when its extension doesn't name one (an
     /// XLSX called `budget.dat`): Save writes it back in that format.
     pub content_kind: Option<io::FileKind>,
+    /// The file a read-only open came from (`readOnly` on a workbook with a password to modify).
+    /// Save never writes over it, so the reservation holds; Save As to another file still works.
+    pub read_only_source: Option<String>,
     /// Whether the scripts stored in this workbook may run (`automate.runScript`). A workbook
     /// that arrives already carrying scripts (opened from a file) starts untrusted until the
     /// user trusts it in this session (`automate.trustScripts`); one with no scripts starts
@@ -283,6 +286,7 @@ impl DocState {
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
+            read_only_source: None,
             scripts_trusted,
             trust,
         }

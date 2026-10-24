@@ -345,6 +345,23 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     // only when appName is "xl" (#799). One without names GridCraft (#1699), and Excel recalculates it.
     let file_version = crate::passthrough::workbook_elements(wb, "fileVersion");
     w.push_str(if file_version.is_empty() { "<fileVersion appName=\"gridcraft\"/>" } else { &file_version });
+    if let Some(r) = &wb.write_reservation {
+        w.push_str("<fileSharing");
+        if r.read_only_recommended {
+            w.push_str(" readOnlyRecommended=\"1\"");
+        }
+        if !r.user_name.is_empty() {
+            let _ = write!(w, " userName=\"{}\"", esc_attr(&r.user_name));
+        }
+        match &r.password {
+            Some(gridcraft_model::PasswordHash::Legacy(h)) => {
+                let _ = write!(w, " reservationPassword=\"{h:04X}\"");
+            }
+            Some(h) => w.push_str(&crate::sheet_write::password_attrs(h, "")),
+            None => {}
+        }
+        w.push_str("/>");
+    }
     w.push_str("<workbookPr");
     match wb.show_objects {
         ShowObjects::All => {}
