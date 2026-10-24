@@ -73,6 +73,37 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
   downloads) are blocked.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
 
+### Driving it from the page (`?host=parent`)
+
+A page on the **same origin** can host GridCraft as its spreadsheet editor: add `?host=parent`
+(and optionally `&author=<name>` for new notes and comments) to the iframe `src`. The app then
+starts empty, opens what the page sends and hands every save back instead of downloading it.
+Messages are plain objects posted with `postMessage` to/from the page's own origin:
+
+| Message | Direction | Fields |
+|---|---|---|
+| `gridcraft:ready` | to the page | `version`: listening; send a workbook now |
+| `gridcraft:open` | from the page | `name`, `bytes` (`ArrayBuffer` or `Uint8Array`): open it like File › Open |
+| `gridcraft:save` | to the page | `name`, `bytes`: Save, Save As and Export as PDF, instead of a download |
+| `gridcraft:dirty` | to the page | `dirty`: unsaved changes appeared or went away |
+| `gridcraft:failed` | to the page | `error`: the app couldn't start |
+| `gridcraft:command` | from the page | `id`, `method`, `params`: any method of the [control protocol](../../docs/control-protocol.md) |
+| `gridcraft:result` | to the page | `id`, `ok`, `result` or `error`: one per command |
+| `gridcraft:selection` | to the page | `sheet`, `active` (`B6`), `ranges` (`["B6:C9"]`): when a workbook opens and whenever the selection or the active sheet changes |
+
+Commands run on the next frame, in order, as if the user had given them, so they are undoable and
+mark the workbook dirty. For example, write a value and select the cell:
+
+```js
+frame.contentWindow.postMessage({ type: "gridcraft:command", id: 1, method: "engine.execute",
+  params: { command: "cell.set", params: { cell: "B6", input: "5320984863" } } }, location.origin);
+frame.contentWindow.postMessage({ type: "gridcraft:command", id: 2, method: "engine.execute",
+  params: { command: "selection.set", params: { range: "B6" } } }, location.origin);
+```
+
+`ui.screenshot` isn't available in the browser (it answers with an error); everything else in
+the control protocol is. At most 1,000 commands wait between two frames; more are refused.
+
 ## Renderer selection
 
 GridCraft's web build is the same egui app as the desktop one, compiled to wasm

@@ -19,6 +19,11 @@ A line that is not a JSON object with a string `method` (an HTTP request, text t
 bytes that aren't UTF-8, a line over 64 MiB) gets one error reply and the server closes the
 connection; nothing sent after it runs. Blank lines are skipped.
 
+The web build has no TCP port; a same-origin page hosting it in an iframe (`?host=parent`) sends
+the same methods as `gridcraft:command` messages and hears `gridcraft:selection` when the
+selection moves. See "Driving it from the page" in
+[`packaging/web/README.md`](../packaging/web/README.md).
+
 ## Methods
 
 | Method | Params | What it does |
