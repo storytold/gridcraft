@@ -342,6 +342,71 @@ fn serve_loop_over_buffers() {
     assert!(lines[2]["result"]["content"][0]["text"].as_str().unwrap().contains("42"));
 }
 
+/// Streams `len` bytes of `a` from one reused buffer, then `tail`: a huge line costs no memory to
+/// produce, so only the server can make it expensive.
+struct HugeLine {
+    left: u64,
+    tail: &'static [u8],
+    chunk: Vec<u8>,
+}
+
+impl std::io::Read for HugeLine {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let buf = std::io::BufRead::fill_buf(self)?;
+        let n = buf.len().min(out.len());
+        out[..n].copy_from_slice(&buf[..n]);
+        std::io::BufRead::consume(self, n);
+        Ok(n)
+    }
+}
+
+impl std::io::BufRead for HugeLine {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        if self.left > 0 {
+            let n = self.chunk.len().min(usize::try_from(self.left).unwrap_or(usize::MAX));
+            return Ok(&self.chunk[..n]);
+        }
+        Ok(self.tail)
+    }
+    fn consume(&mut self, n: usize) {
+        if self.left > 0 {
+            self.left -= n as u64;
+        } else {
+            self.tail = &self.tail[n..];
+        }
+    }
+}
+
+#[test]
+fn a_line_without_newline_keeps_at_most_the_limit_in_memory() {
+    // #2164: the whole line was buffered before its size was checked (4 GiB here; any size a
+    // client cares to send).
+    let mut input =
+        HugeLine { left: 4 << 30, tail: concat!("\n", r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#, "\n").as_bytes(), chunk: vec![b'a'; 1 << 20] };
+    let mut buf = Vec::new();
+    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), Some(false));
+    assert!(buf.capacity() <= 2 * (16 << 20) + 1, "kept {} bytes", buf.capacity());
+    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), Some(true));
+    assert!(buf.starts_with(br#"{"jsonrpc""#));
+    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), None);
+}
+
+#[test]
+fn serve_loop_bounds_a_line_without_newline() {
+    // #2164: a 4 GiB line was read whole before its size was checked. Now the server keeps at
+    // most 16 MB of it, answers that it is too large, and reads the next message normally.
+    let input =
+        HugeLine { left: 4 << 30, tail: concat!("\n", r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#, "\n").as_bytes(), chunk: vec![b'a'; 1 << 20] };
+    let mut out = Vec::new();
+    server().serve(input, &mut out).unwrap();
+    let lines: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["error"]["code"], -32600);
+    assert!(lines[0]["error"]["message"].as_str().unwrap().contains("too large"));
+    assert_eq!(lines[1]["id"], 7);
+    assert!(lines[1].get("result").is_some(), "{}", lines[1]);
+}
+
 #[test]
 fn cell_set_without_input_is_error() {
     let mut s = server();
