@@ -956,7 +956,10 @@ impl Calc {
                 None => {
                     self.graph.remove(k);
                     // A formula replaced by a constant (or cleared) takes its spilled values with it.
-                    if let Some(sh) = wb.sheet_mut(k.0)
+                    // Read before writing: a write gives this copy of the sheet a spill map of its
+                    // own, where the undo step before could have shared it.
+                    if wb.sheet(k.0).is_some_and(|sh| sh.spill_ranges.contains_key(&k.1))
+                        && let Some(sh) = wb.sheet_mut(k.0)
                         && let Some(r) = sh.spill_ranges.remove(&k.1)
                     {
                         for c in r.iter() {

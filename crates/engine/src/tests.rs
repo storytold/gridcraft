@@ -3202,6 +3202,55 @@ fn add_image(s: &mut Session, cell: &str, mode: gridcraft_model::AnchorMode) -> 
     id
 }
 
+/// Every edit keeps the workbook as it was for Undo. Typing in a cell shares the sheet's rows,
+/// spilled values, notes, links, rules and validations, and the workbook's names and styles, with
+/// the step before, instead of copying them all into every step (100,000 spilled cells cost
+/// 6.5 MB per typed cell); changing one of them gives the new step a copy of that one only.
+#[test]
+fn undo_steps_share_the_parts_an_edit_leaves_alone() {
+    use gridcraft_model::Shared;
+    let mut s = s();
+    for (id, p) in [
+        ("cell.set", json!({"cell": "J1", "input": "=SEQUENCE(50)"})),
+        ("review.newNote", json!({"cell": "A1", "text": "checked"})),
+        ("insert.link", json!({"cell": "B1", "target": "https://example.com"})),
+        (
+            "home.conditionalFormat",
+            json!({"range": "C1:C5", "rule": {"type": "cellIs", "operator": "greater", "value": "1", "preset": "lightRedFill"}}),
+        ),
+        ("data.validation", json!({"range": "D1:D5", "type": "whole", "operator": "between", "formula1": "0", "formula2": "9"})),
+        ("formulas.defineName", json!({"name": "Total", "refersTo": "=Sheet1!$E$1"})),
+        ("home.rowHeight", json!({"rows": "2:4", "height": 30})),
+        ("home.fillColor", json!({"range": "F1", "color": "#FFCC00"})),
+    ] {
+        s.execute(id, p).unwrap();
+    }
+    s.execute("cell.set", json!({"cell": "Z9", "input": "1"})).unwrap();
+    let d = s.doc().unwrap();
+    let (before, now) = (&d.undo.last().unwrap().wb, &d.wb);
+    let (a, b) = (before.active().unwrap(), now.active().unwrap());
+    assert_eq!(b.spill.len(), 49, "the spill is there");
+    assert!(Shared::ptr_eq(&a.spill, &b.spill) && Shared::ptr_eq(&a.spill_ranges, &b.spill_ranges));
+    assert!(Shared::ptr_eq(&a.rows, &b.rows) && Shared::ptr_eq(&a.cols, &b.cols));
+    assert!(Shared::ptr_eq(&a.comments, &b.comments) && Shared::ptr_eq(&a.hyperlinks, &b.hyperlinks));
+    assert!(Shared::ptr_eq(&a.cond_formats, &b.cond_formats) && Shared::ptr_eq(&a.validations, &b.validations));
+    assert!(Shared::ptr_eq(&before.names, &now.names) && Shared::ptr_eq(&before.styles, &now.styles));
+    // A new note gives the new step notes of its own and leaves the rest shared.
+    s.execute("review.newNote", json!({"cell": "A2", "text": "also"})).unwrap();
+    let d = s.doc().unwrap();
+    let (a, b) = (d.undo.last().unwrap().wb.active().unwrap(), d.wb.active().unwrap());
+    assert!(!Shared::ptr_eq(&a.comments, &b.comments));
+    assert_eq!((a.comments.len(), b.comments.len()), (1, 2));
+    assert!(Shared::ptr_eq(&a.rows, &b.rows) && Shared::ptr_eq(&a.spill, &b.spill));
+    // Undo gives back exactly the workbook before.
+    s.execute("edit.undo", json!({"steps": 2})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let notes: Vec<(CellRef, &str)> = sh.comments.iter().map(|(c, n)| (*c, n.text.as_str())).collect();
+    assert_eq!(notes, vec![(CellRef::parse("A1").unwrap(), "checked")], "A1's note is back as it was, A2's is gone");
+    assert!(sh.cell(CellRef::parse("Z9").unwrap()).is_none());
+    assert_eq!(sh.spill.len(), 49);
+}
+
 fn image_cell(s: &Session, id: u32) -> Option<CellRef> {
     s.doc().unwrap().wb.active().unwrap().images.iter().find(|i| i.id == id).map(|i| i.anchor.cell)
 }
@@ -3866,7 +3915,8 @@ fn icon_set_thresholds_from_files_pick_the_icon() {
         },
         priority: 1,
         stop_if_true: false,
-    }];
+    }]
+    .into();
     assert_eq!([icon(&s, "A1"), icon(&s, "A2"), icon(&s, "A3"), icon(&s, "A4")], [Some(0), Some(1), Some(1), Some(2)]);
 }
 

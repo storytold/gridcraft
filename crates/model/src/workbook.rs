@@ -7,6 +7,7 @@ use gridcraft_formula::Expr;
 use serde::{Deserialize, Serialize};
 
 use crate::cell::Formula;
+use crate::shared::Shared;
 use crate::sheet::Sheet;
 use crate::style::{StyleTable, Theme};
 
@@ -140,8 +141,8 @@ pub struct PhoneticString {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Arc<Sheet>>,
-    pub names: Vec<DefinedName>,
-    pub styles: StyleTable,
+    pub names: Shared<Vec<DefinedName>>,
+    pub styles: Shared<StyleTable>,
     pub theme: Theme,
     pub date_system: DateSystem,
     pub calc: CalcSettings,
@@ -210,8 +211,8 @@ impl Workbook {
     pub fn new() -> Workbook {
         Workbook {
             sheets: vec![Arc::new(Sheet::new("Sheet1"))],
-            names: vec![],
-            styles: StyleTable::default(),
+            names: Shared::default(),
+            styles: Shared::default(),
             theme: Theme::default(),
             date_system: DateSystem::D1900,
             calc: CalcSettings::default(),

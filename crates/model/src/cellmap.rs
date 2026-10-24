@@ -21,6 +21,24 @@ pub fn deserialize<'de, D: Deserializer<'de>, V: Deserialize<'de>>(d: D) -> Resu
     Ok(out)
 }
 
+/// The same, for a map shared between copies of its sheet ([`crate::Shared`]).
+pub mod shared {
+    use std::collections::BTreeMap;
+
+    use gridcraft_core::CellRef;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::Shared;
+
+    pub fn serialize<S: Serializer, V: Serialize>(map: &Shared<BTreeMap<CellRef, V>>, s: S) -> Result<S::Ok, S::Error> {
+        super::serialize(map, s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>, V: Deserialize<'de>>(d: D) -> Result<Shared<BTreeMap<CellRef, V>>, D::Error> {
+        super::deserialize(d).map(Shared::new)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{Comment, Hyperlink, Sheet};
