@@ -231,6 +231,9 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            // References use their cells' format, whatever the series says.
+            number_format: Some("0%".into()),
+            innermost_categories: false,
         },
         Series {
             name: None,
@@ -243,6 +246,8 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         },
         Series {
             name: Some("Literal".into()),
@@ -255,6 +260,8 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: Some("0.0%".into()),
+            innermost_categories: false,
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -274,6 +281,7 @@ fn resolve_from_workbook() {
     assert!(s1.secondary);
     assert_eq!(d.series[2].name, "Literal");
     assert_eq!(d.series[2].values.len(), 4);
+    assert_eq!(d.series[2].number_format, "0.0%");
 
     // Default categories.
     c.series.remove(0);
@@ -294,6 +302,8 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         },
         Series {
             name: None,
@@ -306,6 +316,8 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -323,6 +335,8 @@ fn resolve_from_workbook() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        number_format: None,
+        innermost_categories: false,
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series[0].x.as_ref().map(|x| x.len()), Some(3));
@@ -341,6 +355,8 @@ fn resolve_from_workbook() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        number_format: None,
+        innermost_categories: false,
     }];
     let d = resolve(&wb, 7, &c);
     assert_eq!(d.series.len(), 1);
@@ -1042,6 +1058,8 @@ fn pie_points_follow_workbook_theme() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        number_format: None,
+        innermost_categories: false,
     }];
     let d = resolve(&wb, 0, &c);
     let expected = vec![series_color(&wb.theme, 0), series_color(&wb.theme, 1)];
@@ -1095,6 +1113,47 @@ fn area_charts_draw_source_value_labels_only_when_enabled() {
         let first_label = on.iter().position(|p| matches!(p, Prim::Text { text, .. } if text == "$12,000"));
         assert!(first_label > last_poly, "{kind:?}: label drawn under a later area");
     }
+}
+
+#[test]
+fn a_multi_level_category_block_draws_its_innermost_level() {
+    // A PivotChart's two levels of row labels in A1:B4, the outer one (country) on the left:
+    // one label per point, from the innermost column.
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        s.name = "Graph".into();
+        for (r, (outer, inner)) in [("Canada", "Ottawa"), ("", "Toronto"), ("USA", "Boston"), ("", "NYC")].iter().enumerate() {
+            if !outer.is_empty() {
+                s.set_value(CellRef::new(r as u32, 0), Value::from(*outer));
+            }
+            s.set_value(CellRef::new(r as u32, 1), Value::from(*inner));
+            s.set_value(CellRef::new(r as u32, 2), Value::Number(r as f64 + 1.0));
+            s.set_value(CellRef::new(5, r as u32), Value::from(*inner));
+            s.set_value(CellRef::new(6, r as u32), Value::from(*outer));
+        }
+    }
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![Series {
+        categories: Some("Graph!$A$1:$B$4".into()),
+        values: "Graph!$C$1:$C$4".into(),
+        innermost_categories: true,
+        ..Series::default()
+    }];
+    let data = resolve(&wb, 0, &c);
+    assert_eq!(data.categories, vec!["Ottawa", "Toronto", "Boston", "NYC"]);
+    assert!(data.category_levels.is_empty(), "innermost PivotChart must not expose outer labels");
+    // A block with a column per point: its last row is the innermost level.
+    c.series[0].categories = Some("Graph!$A$6:$D$7".into());
+    let data = resolve(&wb, 0, &c);
+    assert_eq!(data.categories, vec!["Canada", "", "USA", ""]);
+    assert!(data.category_levels.is_empty(), "innermost PivotChart must not expose outer labels");
+    // Without the flag, every cell is a label, as for any other chart.
+    c.series[0].categories = Some("Graph!$A$1:$B$4".into());
+    c.series[0].innermost_categories = false;
+    let data = resolve(&wb, 0, &c);
+    assert_eq!(data.categories, vec!["Ottawa", "Toronto", "Boston", "NYC"]);
+    assert_eq!(data.category_levels, vec![vec!["Canada", "", "USA", ""]]);
 }
 
 #[test]
@@ -1169,6 +1228,22 @@ fn two_level_categories_resolve_and_draw() {
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.categories, months);
     assert!(d.category_levels.is_empty());
+}
+
+#[test]
+fn square_category_blocks_keep_their_declared_orientation_on_ties() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.name = "Data".into();
+    for (i, value) in ["A1", "B1", "A2", "B2", "A3", "B3"].iter().enumerate() {
+        s.set_value(CellRef::parse(value).unwrap(), Value::from(*value));
+        s.set_value(CellRef::new(3, i as u32), Value::Number(i as f64 + 1.0));
+    }
+    let mut c = chart(ChartKind::Line);
+    c.series = vec![Series { categories: Some("Data!$A$1:$B$2".into()), values: "Data!$A$3:$B$3".into(), ..Series::default() }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.categories, vec!["A2", "B2"]);
+    assert_eq!(d.category_levels, vec![vec!["A1", "B1"]]);
 }
 
 #[test]

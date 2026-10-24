@@ -4267,6 +4267,54 @@ fn paste_special_validation_moves_relative_references() {
 }
 
 #[test]
+fn a_multi_level_pivot_chart_draws_one_label_per_point_after_saves() {
+    use gridcraft_model::{Anchor, Chart, ChartKind, LegendPos, Series, Workbook};
+    // Two levels of row labels in A4:B7, the outer one (country) on the left, as a PivotChart
+    // opened from a file keeps them when the innermost column holds its cache.
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.name = "Graph".into();
+    sh.set_value(CellRef::new(2, 2), Value::from("Total"));
+    for (i, (outer, inner)) in [("Canada", "Ottawa"), ("", "Toronto"), ("USA", "Boston"), ("", "NYC")].iter().enumerate() {
+        let r = 3 + i as u32;
+        if !outer.is_empty() {
+            sh.set_value(CellRef::new(r, 0), Value::from(*outer));
+        }
+        sh.set_value(CellRef::new(r, 1), Value::from(*inner));
+        sh.set_value(CellRef::new(r, 2), Value::Number(i as f64 + 1.0));
+    }
+    sh.charts.push(Chart {
+        id: 1,
+        kind: ChartKind::ColumnClustered,
+        anchor: Anchor { cell: CellRef::new(0, 5), width: 480.0, height: 300.0, ..Anchor::default() },
+        title: None,
+        series: vec![Series {
+            name: Some("Graph!$C$3".into()),
+            categories: Some("Graph!$A$4:$B$7".into()),
+            values: "Graph!$C$4:$C$7".into(),
+            innermost_categories: true,
+            ..Series::default()
+        }],
+        legend: LegendPos::Bottom,
+        data_labels: false,
+        gridlines: true,
+        style: 2,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+        pivot: Some("Graph!PivotTable1".into()),
+    });
+    let labels = ["Ottawa", "Toronto", "Boston", "NYC"];
+    for _ in 0..2 {
+        wb = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap().0;
+        let ch = &wb.sheet(0).unwrap().charts[0];
+        let s = &ch.series[0];
+        assert_eq!((s.name.as_deref(), s.categories.as_deref(), s.innermost_categories), (Some("Graph!$C$3"), Some("Graph!$A$4:$B$7"), true));
+        assert_eq!(gridcraft_chart::resolve(&wb, 0, ch).categories, labels);
+    }
+}
+#[test]
 fn editing_quote_prefixed_text_keeps_it_text() {
     let mut s = s();
     for (i, input) in ["'00123", "'=1+1", "'TRUE", "''abc"].iter().enumerate() {
@@ -4288,7 +4336,6 @@ fn editing_quote_prefixed_text_keeps_it_text() {
     let d = s.doc().unwrap();
     assert_eq!(crate::display::edit_text(&d.wb, d.wb.active().unwrap(), CellRef::parse("B1").unwrap()), "hello");
 }
-
 #[test]
 fn csv_as_text_keeps_identifier_columns_as_written() {
     let csv = "gtin,zip,flag,day\n8435392892278,01234,TRUE,2026-03-04\n";

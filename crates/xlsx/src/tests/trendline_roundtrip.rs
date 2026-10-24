@@ -50,6 +50,8 @@ fn chart(id: u32, kind: ChartKind, trendlines: Vec<Trendline>) -> Chart {
             quartiles: Default::default(),
             smooth: false,
             trendlines,
+            number_format: None,
+            innermost_categories: false,
         }],
         legend: LegendPos::Bottom,
         data_labels: false,
@@ -161,7 +163,7 @@ fn excel_style_trendlines_are_read() {
     // type that is skipped rather than failing the chart.
     let xml = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:lineChart><c:grouping val="standard"/><c:ser><c:idx val="0"/><c:order val="0"/><c:marker><c:symbol val="none"/></c:marker><c:trendline><c:spPr><a:ln w="19050" cap="rnd"><a:solidFill><a:schemeClr val="accent2"/></a:solidFill><a:prstDash val="sysDot"/></a:ln></c:spPr><c:trendlineType val="poly"/><c:order val="3"/><c:dispRSqr val="0"/><c:dispEq/></c:trendline><c:trendline><c:trendlineType val="movingAvg"/><c:period val="1"/></c:trendline><c:trendline><c:trendlineType val="cubicSpline"/></c:trendline><c:val><c:numRef><c:f>Data!$B$2:$B$6</c:f></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:lineChart></c:plotArea></c:chart></c:chartSpace>"#;
     let root = crate::xml::parse(xml.as_bytes()).unwrap();
-    let c = crate::chart::read_chart(&root).unwrap();
+    let (c, _) = crate::chart::read_chart(&root).unwrap();
     let t = &c.series[0].trendlines;
     assert_eq!(t.len(), 2);
     assert_eq!(t[0].kind, TrendlineKind::Polynomial(3));
@@ -180,7 +182,7 @@ fn a_huge_forecast_in_a_file_is_read_clamped() {
     };
     let read = |f: &str, b: &str| {
         let root = crate::xml::parse(t(f, b).as_bytes()).unwrap();
-        crate::chart::read_chart(&root).unwrap().series[0].trendlines[0].clone()
+        crate::chart::read_chart(&root).unwrap().0.series[0].trendlines[0].clone()
     };
     let big = read("1000000", "1e300");
     assert_eq!((big.forward, big.backward), (Trendline::MAX_FORECAST, Trendline::MAX_FORECAST));

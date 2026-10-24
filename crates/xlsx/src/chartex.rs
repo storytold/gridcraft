@@ -171,8 +171,7 @@ fn tx_xml(t: &str, wb: &Workbook, si: usize, names: &mut Vec<String>) -> String 
         let v = crate::chart::ref_values(wb, si, t).and_then(|v| v.into_iter().next()).map(|v| v.display()).unwrap_or_default();
         format!("<cx:tx><cx:txData>{}<cx:v>{}</cx:v></cx:txData></cx:tx>", f_xml(wb, si, t, names), esc(&v))
     } else {
-        let lit = t.trim().strip_prefix('"').and_then(|x| x.strip_suffix('"')).unwrap_or(t);
-        format!("<cx:tx><cx:txData><cx:v>{}</cx:v></cx:txData></cx:tx>", esc(lit))
+        format!("<cx:tx><cx:txData><cx:v>{}</cx:v></cx:txData></cx:tx>", esc(&crate::chart::literal_text(t)))
     }
 }
 

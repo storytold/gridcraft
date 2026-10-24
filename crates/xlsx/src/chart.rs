@@ -3,8 +3,8 @@
 
 use std::fmt::Write as _;
 
-use gridcraft_core::{RangeRef, Value, category_levels};
-use gridcraft_formula::{Expr, SheetSel};
+use gridcraft_core::{CellRef, RangeRef, Value, category_levels};
+use gridcraft_formula::{BinOp, Expr, Reference, SheetSel};
 use gridcraft_model::{Chart, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
 
 use crate::drawing::{dml_color, srgb};
@@ -98,29 +98,246 @@ pub(crate) fn chart_ref_from_file(text: &str) -> String {
     }
     out
 }
+const MAX_CHART_CACHED_POINTS: usize = 16_777_216;
 
-fn data_ref(e: Option<&El>) -> Option<String> {
+struct ChartReadBudget {
+    remaining: usize,
+    exceeded: bool,
+}
+
+impl ChartReadBudget {
+    fn new() -> Self {
+        Self { remaining: MAX_CHART_CACHED_POINTS, exceeded: false }
+    }
+}
+
+fn data_ref(e: Option<&El>, budget: &mut ChartReadBudget) -> Option<String> {
     let e = e?;
     for k in ["numRef", "strRef", "multiLvlStrRef"] {
         if let Some(f) = e.child(k).and_then(|r| r.child("f")) {
             return Some(chart_ref_from_file(&f.text));
         }
     }
-    // Literal values become an array constant.
     for k in ["numLit", "strLit"] {
         if let Some(l) = e.child(k) {
-            let pts: Vec<String> = l
-                .kids("pt")
-                .filter_map(|p| p.child("v"))
-                .map(|v| if k == "numLit" { v.text.trim().to_string() } else { format!("\"{}\"", v.text.replace('"', "\"\"")) })
-                .collect();
-            return Some(format!("{{{}}}", pts.join(",")));
+            return read_points(l, l, budget).map(|p| literal(&p, k == "numLit"));
         }
     }
     None
 }
 
-fn read_series(s: &El) -> Series {
+/// Excel's maximum worksheet row count bounds cache expansion while preserving declared trailing gaps.
+const MAX_CACHED_POINTS: usize = gridcraft_core::MAX_ROWS as usize;
+
+/// The points of a cache or literal (`c` holds `ptCount`, `pts` the `<c:pt>`s), by index; missing
+/// points are `None`. Points without a valid `idx` (schema-invalid, but some writers omit it) go
+/// in document order. A missing, unreadable or too small `ptCount` gives way to the points present.
+///
+/// The per-chart budget is checked before allocation. If the requested count would exceed the
+/// remaining budget, all present points are retained when they fit; only trailing gaps are
+/// clamped. If present points extend past the remaining budget, points beyond that boundary are
+/// dropped as well, and the caller is warned.
+fn read_points<'a>(c: &El, pts: &'a El, budget: &mut ChartReadBudget) -> Option<Vec<Option<&'a str>>> {
+    let at = |i: usize, p: &El| p.attr("idx").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(i);
+    let placed = || pts.kids("pt").enumerate().map(|(i, p)| (at(i, p), p)).filter(|(i, _)| *i < MAX_CACHED_POINTS);
+    let highest = placed().map(|(i, _)| i + 1).max().unwrap_or(0);
+    let requested =
+        c.child_val("ptCount").and_then(|v| v.trim().parse::<usize>().ok()).map(|n| n.min(MAX_CACHED_POINTS).max(highest)).unwrap_or(highest);
+    let count = if requested <= budget.remaining {
+        requested
+    } else {
+        budget.exceeded = true;
+        if highest <= budget.remaining { highest } else { budget.remaining }
+    };
+    budget.remaining = budget.remaining.saturating_sub(count);
+    if count == 0 {
+        return None;
+    }
+    let mut vals = vec![None; count];
+    for (i, p) in placed() {
+        if let (Some(slot), Some(v)) = (vals.get_mut(i), p.child("v")) {
+            *slot = Some(v.text.as_str());
+        }
+    }
+    Some(vals)
+}
+
+/// Points as an array constant. Missing points become `#N/A` (numbers) or `""` (text) so
+/// positions line up.
+fn literal<S: AsRef<str>>(points: &[Option<S>], numeric: bool) -> String {
+    let items: Vec<String> = points
+        .iter()
+        .map(|v| match (v.as_ref().map(AsRef::as_ref), numeric) {
+            (Some(t), true) => t.trim().parse::<f64>().ok().filter(|n| n.is_finite()).map_or_else(|| "#N/A".to_string(), num),
+            (None, true) => "#N/A".to_string(),
+            (Some(t), false) => format!("\"{}\"", t.replace('"', "\"\"")),
+            (None, false) => "\"\"".to_string(),
+        })
+        .collect();
+    format!("{{{}}}", items.join(","))
+}
+
+/// The points cached under a PivotChart series reference.
+#[derive(Clone, Debug)]
+struct CachedPoints {
+    points: Vec<Option<String>>,
+    numeric: bool,
+    /// A `multiLvlStrRef` of more than one level: one column (or row) of cells per level, the
+    /// innermost last. The cache holds the innermost level.
+    multi_level: bool,
+}
+
+/// What a PivotChart series saved with its references, plotted when the referenced cells don't
+/// hold it (see [`plot_cached`]).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PivotSeriesCache {
+    name: Option<String>,
+    categories: Option<CachedPoints>,
+    values: Option<CachedPoints>,
+    /// The values' `numCache` format code.
+    number_format: Option<String>,
+}
+
+/// `numCache`, `strCache`, or the innermost level of a `multiLvlStrCache`, under `cat` or `val`.
+fn cached_points(e: Option<&El>, budget: &mut ChartReadBudget) -> Option<CachedPoints> {
+    let e = e?;
+    let owned = |p: Vec<Option<&str>>| p.into_iter().map(|v| v.map(str::to_string)).collect();
+    if let Some(c) = e.path(&["numRef", "numCache"]) {
+        Some(CachedPoints { points: owned(read_points(c, c, budget)?), numeric: true, multi_level: false })
+    } else if let Some(c) = e.path(&["strRef", "strCache"]) {
+        Some(CachedPoints { points: owned(read_points(c, c, budget)?), numeric: false, multi_level: false })
+    } else {
+        let c = e.path(&["multiLvlStrRef", "multiLvlStrCache"])?;
+        let multi_level = c.kids("lvl").nth(1).is_some();
+        Some(CachedPoints { points: owned(read_points(c, c.child("lvl")?, budget)?), numeric: false, multi_level })
+    }
+}
+
+fn pivot_series_cache(s: &El, budget: &mut ChartReadBudget) -> PivotSeriesCache {
+    PivotSeriesCache {
+        name: s.path(&["tx", "strRef", "strCache", "pt", "v"]).map(|v| v.text.clone()),
+        categories: cached_points(s.child("cat"), budget),
+        values: cached_points(s.child("val"), budget),
+        number_format: s
+            .path(&["val", "numRef", "numCache", "formatCode"])
+            .map(|c| c.text.trim())
+            .filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("General"))
+            .map(str::to_string),
+    }
+}
+
+/// The references of a series formula: one area, or a union `(Sheet!$A$1:$A$3,Sheet!$A$5)`.
+fn ref_areas<'e>(e: &'e Expr, out: &mut Vec<&'e Reference>) -> bool {
+    match e {
+        Expr::Ref(r) => {
+            out.push(r);
+            true
+        }
+        Expr::Paren(x) => ref_areas(x, out),
+        Expr::Binary(BinOp::Union, a, b) => ref_areas(a, out) && ref_areas(b, out),
+        _ => false,
+    }
+}
+
+/// Whether a cell shows the cached point: numbers within rounding, text as is. A number cache
+/// leaves out cells that hold no number.
+fn point_matches(v: &Value, p: Option<&str>, numeric: bool) -> bool {
+    match (v, p) {
+        (Value::Number(n), Some(t)) => t.trim().parse::<f64>().is_ok_and(|c| c == *n || (c - n).abs() <= 1e-9 * c.abs().max(n.abs())),
+        (Value::Number(_), None) => false,
+        (_, None) => numeric || v.is_empty(),
+        (_, Some(_)) if numeric => false,
+        (Value::Text(s), Some(t)) => **s == *t,
+        (Value::Bool(b), Some(t)) => t.eq_ignore_ascii_case(if *b { "TRUE" } else { "FALSE" }),
+        (Value::Error(e), Some(t)) => e.as_str() == t,
+        (Value::Empty, Some(t)) => t.is_empty(),
+        (Value::Array(_), Some(_)) => false,
+    }
+}
+
+/// Whether the cells a series formula refers to (on sheet `home` when unqualified) hold the
+/// cached points, one cell per point. Of a multi-level block, the innermost level is compared.
+fn live_matches(wb: &Workbook, home: usize, f: &str, p: &CachedPoints) -> bool {
+    let Ok(e) = gridcraft_formula::parse(f) else { return false };
+    let mut refs = Vec::new();
+    if !ref_areas(&e, &mut refs) {
+        return false;
+    }
+    let mut areas = Vec::with_capacity(refs.len());
+    for r in refs {
+        let si = match &r.sheet {
+            SheetSel::Current => Some(home),
+            SheetSel::Named(n) => wb.sheet_index(n),
+            SheetSel::Span(..) => None,
+        };
+        let Some(sheet) = si.and_then(|i| wb.sheet(i)) else { return false };
+        areas.push((sheet, r.range()));
+    }
+    let n = p.points.len();
+    if p.multi_level {
+        // The last column of a block with a row per point, or the last row of one with a
+        // column per point.
+        let [(sheet, r)] = areas[..] else { return false };
+        let leaf = if r.height() as usize == n {
+            RangeRef::new(CellRef::new(r.start.row, r.end.col), r.end)
+        } else if r.width() as usize == n {
+            RangeRef::new(CellRef::new(r.end.row, r.start.col), r.end)
+        } else {
+            return false;
+        };
+        areas = vec![(sheet, leaf)];
+    }
+    if areas.iter().try_fold(0u64, |t, (_, r)| t.checked_add(r.count())) != Some(n as u64) {
+        return false;
+    }
+    areas.iter().flat_map(|(sheet, r)| r.iter().map(|c| sheet.value(c))).zip(&p.points).all(|(v, pt)| point_matches(&v, pt.as_deref(), p.numeric))
+}
+
+/// A PivotChart's `<c:f>` formulas only approximate its PivotTable: often just the table's corner
+/// cell, or a block that takes in the grand total row. Excel draws the chart from the PivotTable,
+/// and the cached points are what it shows. When the cells a series' categories or values refer
+/// to (on sheet `si`) don't hold their cached points, the series plots the cached points (and its
+/// cached name) instead; refreshing the PivotTable rebinds the chart to live cells. A live
+/// multi-level category block keeps its reference and draws only its innermost level.
+pub(crate) fn plot_cached(wb: &Workbook, si: usize, ch: &mut Chart, caches: &[PivotSeriesCache]) {
+    for (ser, c) in ch.series.iter_mut().zip(caches) {
+        let stale = |f: Option<&str>, p: &&CachedPoints| !f.is_some_and(|f| live_matches(wb, si, f, p));
+        let categories = c.categories.as_ref().filter(|p| stale(ser.categories.as_deref(), p)).map(|p| literal(&p.points, p.numeric));
+        let values = c.values.as_ref().filter(|p| stale(Some(&ser.values), p)).map(|p| literal(&p.points, p.numeric));
+        if categories.is_none() && c.categories.as_ref().is_some_and(|p| p.multi_level) {
+            ser.innermost_categories = true;
+        }
+        if categories.is_none() && values.is_none() {
+            continue;
+        }
+        if categories.is_some() {
+            ser.categories = categories;
+        }
+        if let Some(v) = values {
+            ser.values = v;
+            ser.number_format.clone_from(&c.number_format);
+        }
+        if let Some(name) = &c.name {
+            ser.name = Some(format!("\"{}\"", name.replace('"', "\"\"")));
+        }
+    }
+}
+
+/// [`plot_cached`] for the PivotCharts read from a workbook (by chart id), once every sheet's
+/// cells are in.
+pub(crate) fn plot_pivot_caches(wb: &mut Workbook, pending: &[(u32, Vec<PivotSeriesCache>)]) {
+    for (id, caches) in pending {
+        let at = wb.sheets.iter().enumerate().find_map(|(si, sh)| sh.charts.iter().position(|c| c.id == *id).map(|ci| (si, ci)));
+        let Some((si, ci)) = at else { continue };
+        let Some(mut ch) = wb.sheet(si).and_then(|sh| sh.charts.get(ci)).cloned() else { continue };
+        plot_cached(wb, si, &mut ch, caches);
+        if let Some(slot) = wb.sheet_mut(si).and_then(|sh| sh.charts.get_mut(ci)) {
+            *slot = ch;
+        }
+    }
+}
+
+fn read_series(s: &El, budget: &mut ChartReadBudget) -> Series {
     let name = s
         .child("tx")
         .and_then(|tx| tx.path(&["strRef", "f"]).map(|f| chart_ref_from_file(&f.text)).or_else(|| tx.child("v").map(|v| v.text.clone())));
@@ -130,17 +347,26 @@ fn read_series(s: &El) -> Series {
         .and_then(dml_color)
         .or_else(|| sp.and_then(|p| p.path(&["ln", "solidFill"])).and_then(dml_color))
         .or_else(|| s.path(&["marker", "spPr", "solidFill"]).and_then(dml_color));
+    let values = s.child("val").or_else(|| s.child("yVal"));
     Series {
         name,
-        categories: data_ref(s.child("cat")).or_else(|| data_ref(s.child("xVal"))),
-        values: data_ref(s.child("val")).or_else(|| data_ref(s.child("yVal"))).unwrap_or_default(),
-        bubble_sizes: data_ref(s.child("bubbleSize")),
+        categories: data_ref(s.child("cat"), budget).or_else(|| data_ref(s.child("xVal"), budget)),
+        values: data_ref(s.child("val"), budget).or_else(|| data_ref(s.child("yVal"), budget)).unwrap_or_default(),
+        bubble_sizes: data_ref(s.child("bubbleSize"), budget),
         color,
         secondary: false,
         kind: None,
         quartiles: Default::default(),
         smooth: bool_val(s, "smooth"),
         trendlines: s.kids("trendline").filter_map(read_trendline).collect(),
+        // Literal values keep the format code saved with them.
+        number_format: values
+            .filter(|v| v.child("numRef").is_none())
+            .and_then(|v| v.path(&["numLit", "formatCode"]))
+            .map(|c| c.text.trim())
+            .filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("General"))
+            .map(str::to_string),
+        innermost_categories: false,
     }
 }
 
@@ -216,16 +442,25 @@ fn axis_ids(g: &El) -> Vec<String> {
     g.kids("axId").filter_map(|a| a.attr("val")).map(str::to_string).collect()
 }
 
-pub fn read_chart(root: &El) -> Option<Chart> {
+/// A chart part, with the cached points of each series when it is a PivotChart (empty otherwise),
+#[cfg(test)]
+pub(crate) fn read_chart(root: &El) -> Option<(Chart, Vec<PivotSeriesCache>)> {
+    read_chart_with_budget(root).map(|(chart, caches, _)| (chart, caches))
+}
+
+pub(crate) fn read_chart_with_budget(root: &El) -> Option<(Chart, Vec<PivotSeriesCache>, bool)> {
     let chart = root.child("chart")?;
     let plot = chart.child("plotArea")?;
     let groups: Vec<(&El, ChartKind)> = plot.children.iter().filter_map(|g| group_kind(g).map(|k| (g, k))).collect();
     let (first, first_kind) = *groups.first()?;
     let first_axes = axis_ids(first);
+    let pivot = root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty());
     let mut series = vec![];
+    let mut caches = vec![];
+    let mut budget = ChartReadBudget::new();
     for (gi, (g, k)) in groups.iter().enumerate() {
         for s in g.kids("ser") {
-            let mut ser = read_series(s);
+            let mut ser = read_series(s, &mut budget);
             if groups.len() > 1 {
                 // Every series of a combo chart keeps its own group's kind, the first group's included.
                 ser.kind = Some(*k);
@@ -234,6 +469,9 @@ pub fn read_chart(root: &El) -> Option<Chart> {
                 ser.secondary = axis_ids(g) != first_axes;
             }
             series.push(ser);
+            if pivot.is_some() {
+                caches.push(pivot_series_cache(s, &mut budget));
+            }
         }
     }
     let kind = if groups.len() > 1 { ChartKind::Combo } else { first_kind };
@@ -258,11 +496,16 @@ pub fn read_chart(root: &El) -> Option<Chart> {
             _ => LegendPos::Right,
         },
     };
-    Some(Chart {
+    let ch = Chart {
         id: 0,
         kind,
         anchor: Default::default(),
-        title: chart.child("title").and_then(rich_title),
+        // No `<c:title>`: an automatic title (a lone series' name), unless the file deleted it.
+        title: match chart.child("title") {
+            Some(t) => rich_title(t),
+            None if bool_val(chart, "autoTitleDeleted") => Some(String::new()),
+            None => None,
+        },
         series,
         legend,
         data_labels,
@@ -272,8 +515,9 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         y_title: y_ax.and_then(|a| a.child("title")).and_then(rich_title),
         source: None,
         by_rows: false,
-        pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
-    })
+        pivot,
+    };
+    Some((ch, caches, budget.exceeded))
 }
 
 // ---------------------------------------------------------------- writing
@@ -352,6 +596,13 @@ fn is_ref(f: &str) -> bool {
     matches!(gridcraft_formula::parse(f), Ok(Expr::Ref(_)))
 }
 
+/// The items of an array constant (`{1,"a";#N/A,2}`), row-major; nothing for anything else.
+fn array_items(f: &str) -> Vec<Expr> {
+    match gridcraft_formula::parse(f) {
+        Ok(Expr::Array(rows)) => rows.into_iter().flatten().collect(),
+        _ => Vec::new(),
+    }
+}
 /// A chart reference that is a name: its sheet when qualified (`Sheet1!Sales`), the bare
 /// name, and the definition formulas would find from sheet `si` (none when undefined). `None`
 /// when it isn't a name, or names a sheet the workbook doesn't have.
@@ -387,16 +638,27 @@ fn is_defined_name(wb: &Workbook, si: usize, f: &str) -> bool {
     chart_name(wb, si, f).is_some_and(|(_, _, d)| d.is_some())
 }
 
-fn num_data(tag: &str, f: Option<&str>, wb: &Workbook, si: usize) -> String {
+/// `fmt` is the format code saved with literal values (`numLit`); references save their cells'.
+fn num_data(tag: &str, f: Option<&str>, fmt: Option<&str>, wb: &Workbook, si: usize) -> String {
     let f = f.unwrap_or("").trim();
     if f.is_empty() {
         return format!("<c:{tag}><c:numLit><c:ptCount val=\"0\"/></c:numLit></c:{tag}>");
     }
     if f.starts_with('{') {
-        let vals: Vec<&str> = f.trim_matches(|c| c == '{' || c == '}').split([',', ';']).collect();
-        let mut s = format!("<c:{tag}><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val=\"{}\"/>", vals.len());
-        for (i, v) in vals.iter().enumerate() {
-            if let Ok(n) = v.trim().parse::<f64>() {
+        let items = array_items(f);
+        let fmt = esc(fmt.unwrap_or("General"));
+        let mut s = format!("<c:{tag}><c:numLit><c:formatCode>{fmt}</c:formatCode><c:ptCount val=\"{}\"/>", items.len());
+        for (i, e) in items.iter().enumerate() {
+            let n = match e {
+                Expr::Number(n) => Some(*n),
+                Expr::Unary(gridcraft_formula::UnOp::Neg, x) => match **x {
+                    Expr::Number(n) => Some(-n),
+                    _ => None,
+                },
+                _ => None,
+            };
+            // Anything else (`#N/A`, text) is a gap: its index is left out.
+            if let Some(n) = n {
                 let _ = write!(s, "<c:pt idx=\"{i}\"><c:v>{}</c:v></c:pt>", num(n));
             }
         }
@@ -478,6 +740,15 @@ fn str_data(tag: &str, f: &str, wb: &Workbook, si: usize) -> String {
     s
 }
 
+/// The text of a literal series name: a quoted formula literal (`"Sales ""East"""`) without its
+/// quotes and with `""` read as `"`; bare text as is.
+pub(crate) fn literal_text(n: &str) -> std::borrow::Cow<'_, str> {
+    match n.trim().strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+        Some(t) => t.replace("\"\"", "\"").into(),
+        None => n.into(),
+    }
+}
+
 /// `<c:cat>` of a series: a string reference, or a multi-level one (`multiLvlStrRef`) when the
 /// category range has more columns than a column of values (or more rows than a row of values:
 /// year beside month). Its cache lists the innermost level first, then each outer level with
@@ -525,8 +796,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
         if is_ref(n) || is_defined_name(wb, si, n) {
             x.push_str(&str_data("tx", n, wb, si));
         } else {
-            let lit = n.trim().strip_prefix('"').and_then(|t| t.strip_suffix('"')).unwrap_or(n);
-            let _ = write!(x, "<c:tx><c:v>{}</c:v></c:tx>", esc(lit));
+            let _ = write!(x, "<c:tx><c:v>{}</c:v></c:tx>", esc(&literal_text(n)));
         }
     }
     let color = s.color.as_ref().and_then(|c: &Color| srgb(c, &wb.theme));
@@ -563,11 +833,11 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
     match g {
         G::Scatter { .. } | G::Bubble => {
             if let Some(c) = &s.categories {
-                x.push_str(&num_data("xVal", Some(c), wb, si));
+                x.push_str(&num_data("xVal", Some(c), None, wb, si));
             }
-            x.push_str(&num_data("yVal", Some(&s.values), wb, si));
+            x.push_str(&num_data("yVal", Some(&s.values), s.number_format.as_deref(), wb, si));
             if g == G::Bubble {
-                x.push_str(&num_data("bubbleSize", s.bubble_sizes.as_deref().or(Some(&s.values)), wb, si));
+                x.push_str(&num_data("bubbleSize", s.bubble_sizes.as_deref().or(Some(&s.values)), None, wb, si));
                 x.push_str("<c:bubble3D val=\"0\"/>");
             } else {
                 let _ = write!(x, "<c:smooth val=\"{}\"/>", s.smooth as u8);
@@ -577,7 +847,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
             if let Some(c) = &s.categories {
                 x.push_str(&cat_data(c, &s.values, wb, si));
             }
-            x.push_str(&num_data("val", Some(&s.values), wb, si));
+            x.push_str(&num_data("val", Some(&s.values), s.number_format.as_deref(), wb, si));
             if matches!(g, G::Line { .. }) {
                 let _ = write!(x, "<c:smooth val=\"{}\"/>", s.smooth as u8);
             }
@@ -752,12 +1022,14 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         let _ = write!(s, "<c:pivotSource><c:name>[{}]{}</c:name><c:fmtId val=\"0\"/></c:pivotSource>", esc(book_name), esc(link));
     }
     s.push_str("<c:chart>");
+    // `None` is the automatic title; an empty title is one that was turned off.
     match &ch.title {
         Some(t) if !t.is_empty() => {
             s.push_str(&title_xml(t));
             s.push_str("<c:autoTitleDeleted val=\"0\"/>");
         }
-        _ => s.push_str("<c:autoTitleDeleted val=\"1\"/>"),
+        Some(_) => s.push_str("<c:autoTitleDeleted val=\"1\"/>"),
+        None => s.push_str("<c:autoTitleDeleted val=\"0\"/>"),
     }
     s.push_str("<c:plotArea><c:layout/>");
     let all: Vec<(usize, &Series)> = ch.series.iter().enumerate().collect();

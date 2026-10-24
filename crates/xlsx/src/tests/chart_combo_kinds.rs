@@ -25,7 +25,7 @@ fn kinds(first: &str, second: &str) -> Vec<Option<ChartKind>> {
          <c:chart><c:plotArea>{first}{second}</c:plotArea></c:chart></c:chartSpace>"
     );
     let root = parse(xml.as_bytes()).unwrap();
-    let ch = read_chart(&root).unwrap();
+    let (ch, _) = read_chart(&root).unwrap();
     assert_eq!(ch.kind, ChartKind::Combo);
     ch.series.iter().map(|s| s.kind).collect()
 }

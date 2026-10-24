@@ -137,7 +137,7 @@ fn value_text(v: &Value) -> String {
 /// the outer levels of a multi-level axis: a category range wider than a column of values (or
 /// taller than a row of values) groups its innermost labels, year beside month. Each outer level
 /// has one entry per category, non-empty where a group starts, as the cells are.
-fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str) -> (Vec<String>, Vec<Vec<String>>) {
+fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, innermost: bool) -> (Vec<String>, Vec<Vec<String>>) {
     let vals = eval_list(wb, sheet, formula);
     let cells: Option<(usize, RangeRef)> = parse_ref(wb, sheet, formula);
     let src = cells.and_then(|(sh, r)| wb.sheet(sh).map(|s| (s, r)));
@@ -168,12 +168,21 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str) -> (
     let at = |row: usize, col: usize| texts.get(row * w + col).cloned().unwrap_or_default();
     let column = |c: usize| (0..h).map(|row| at(row, c)).collect::<Vec<String>>();
     let row = |rr: usize| (0..w).map(|c| at(rr, c)).collect::<Vec<String>>();
-    let outer = levels.outer as usize;
-    if levels.by_columns {
+    let value_count = eval_list(wb, sheet, values).len();
+    let by_columns = if value_count == h && w > 1 && h != w {
+        true
+    } else if value_count == w && h > 1 && h != w {
+        false
+    } else {
+        levels.by_columns
+    };
+    let outer = if by_columns { w.saturating_sub(1).min(3) } else { h.saturating_sub(1).min(3) };
+    let result = if by_columns {
         (column(w - 1), (1..=outer).filter_map(|k| (w - 1).checked_sub(k)).map(column).collect())
     } else {
         (row(h - 1), (1..=outer).filter_map(|k| (h - 1).checked_sub(k)).map(row).collect())
-    }
+    };
+    if innermost { (result.0, vec![]) } else { result }
 }
 
 /// Whether `t` names a defined name seen from `sheet` (`Name`, or `Sheet1!Name` looked up on
@@ -242,7 +251,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
         if categories.is_none()
             && let Some(f) = &s.categories
         {
-            let (c, outer) = category_table(wb, sheet, f, &s.values);
+            let (c, outer) = category_table(wb, sheet, f, &s.values, s.innermost_categories);
             if !c.is_empty() {
                 categories = Some(c);
                 category_levels = outer;
@@ -268,7 +277,10 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             secondary: s.secondary,
             smooth: s.smooth,
             trendlines,
-            number_format: ref_format(wb, sheet, &s.values),
+            number_format: match &s.number_format {
+                Some(code) if s.values.trim_start().starts_with('{') => code.clone(),
+                _ => ref_format(wb, sheet, &s.values),
+            },
         });
     }
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
