@@ -1092,7 +1092,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                         top.push([c, vpos(t, &sc, rev)]);
                         base.push([c, vpos(b, &sc, rev)]);
                         // Source values (not stack totals), just past the edge like the line labels,
-                        // on the side the value axis runs (#1895 review).
+                        // on the side the value axis runs.
                         if labels_on
                             && sp.is_some()
                             && let Some(v) = s.values.get(j).copied().flatten()
@@ -1143,10 +1143,10 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                             let t = fmt.format(v, None);
                             let stacked = fam != Fam::Col;
                             let mid = (pb + pt) / 2.0;
-                            // Beyond the bar's tip, whichever way the value axis runs (#1895 review).
-                            // A zero-length bar (a value of 0) has no tip, so it follows the axis's
-                            // own direction instead of the negative side: right for bars, up for
-                            // columns, mirrored with a reversed axis (#1895 review).
+                            // Beyond the bar's tip, whichever way the value axis runs. A zero-length
+                            // bar (a value of 0) has no tip, so it follows the axis's own direction
+                            // instead of the negative side: right for bars, up for columns, mirrored
+                            // with a reversed axis (#1895 review).
                             let fwd = if horizontal { 1.0 } else { -1.0 };
                             let tip = if pt == pb {
                                 if rev { -fwd } else { fwd }
@@ -1374,8 +1374,7 @@ fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     }
     let cw = plot.w / bins as f32;
     for (b, c) in counts.iter().enumerate() {
-        // Bars grow from the zero baseline, which sits at the top when the axis is reversed
-        // (#1895 review).
+        // Bars grow from the zero baseline, which sits at the top when the axis is reversed.
         let len = ys.frac(*c as f64) * plot.h;
         let (top, label) = if chart.val_reverse {
             (plot.y, (plot.y + len + 2.0, VAlign::Top))

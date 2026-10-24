@@ -1344,7 +1344,7 @@ fn a_zero_length_bar_keeps_its_label_on_the_axis_side() {
     };
     let mut c = chart(ChartKind::BarClustered);
     // A value of 0 leaves the bar without a tip, so its label follows the axis's own side: past the
-    // baseline towards growing values, which a reversed axis mirrors (#1895 review).
+    // baseline towards growing values, which a reversed axis mirrors.
     for (val_reverse, forward) in [(false, true), (true, false)] {
         c.val_reverse = val_reverse;
         let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
