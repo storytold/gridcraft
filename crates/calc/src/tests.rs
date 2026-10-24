@@ -604,6 +604,85 @@ fn spills() {
     assert_eq!(t.num("D2"), 40.0);
 }
 
+impl T {
+    /// The first cell of `range` whose value differs from a full recalculation of the workbook.
+    fn full_recalc_diff(&self, range: &str) -> Option<String> {
+        let mut fresh = self.wb.clone();
+        Calc::new().recalc_all(&mut fresh);
+        gridcraft_core::RangeRef::parse(range).unwrap().iter().find_map(|at| {
+            let (a, b) = (self.wb.sheet(0).unwrap().value(at), fresh.sheet(0).unwrap().value(at));
+            (a != b).then(|| format!("{}: {a:?}, {b:?} after a full recalc", at.a1()))
+        })
+    }
+}
+
+#[test]
+fn an_array_reading_its_own_cell_and_spilling_over_its_input_matches_a_full_recalc() {
+    // J17 reads itself (#CIRC!) and the cells it spills into. Recalculated after an edit, it read
+    // the values its last array had left there, that #CIRC! included, which a full recalculation
+    // (laying every array out again) doesn't see.
+    let mut t = T::new();
+    t.set("J17", "=SORT(H17:L19)");
+    t.set("H18", "5");
+    assert_eq!(t.full_recalc_diff("H17:N19"), None);
+    assert_eq!((t.num("J17"), t.get("L18"), t.num("N18")), (5.0, Value::Error(CellError::Circ), 0.0));
+    t.set("H18", "7");
+    assert_eq!(t.full_recalc_diff("H17:N19"), None);
+}
+
+#[test]
+fn an_array_spilling_over_part_of_its_input_reads_that_part_as_blank() {
+    // The anchor outside its input, the array spilling over part of it (G12:H12): those cells
+    // read blank, as when the formula was entered, not as the old array's values.
+    let mut t = T::new();
+    for (at, v) in [("D12", "4"), ("D13", "3"), ("D14", "2"), ("D15", "1"), ("E12", "40"), ("E13", "30"), ("E14", "20"), ("E15", "10")] {
+        t.set(at, v);
+    }
+    t.set("G9", "=SORT(D12:H15)");
+    assert_eq!((t.num("G9"), t.num("G12"), t.num("H12"), t.num("J12")), (1.0, 4.0, 40.0, 0.0));
+    t.set("D13", "7");
+    assert_eq!(t.full_recalc_diff("D9:K15"), None);
+    // D12's row, sorted third, holds G12:H12, which read blank (not the old 4 and 40).
+    assert_eq!((t.num("G11"), t.num("H11"), t.num("J11"), t.num("K11"), t.num("G12")), (4.0, 40.0, 0.0, 0.0, 7.0));
+}
+
+#[test]
+fn an_array_read_back_through_another_formula_matches_a_full_recalc() {
+    // C2 reads A1's array, which reads C2.
+    let mut t = T::new();
+    t.set("C1", "5");
+    t.set("C3", "1");
+    t.set("A1", "=SORT(C1:C3)");
+    t.set("C2", "=A3*2");
+    t.set("C1", "6");
+    assert_eq!(t.full_recalc_diff("A1:C3"), None);
+    // An anchor given a formula that reads its old area sees it empty.
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(3)");
+    t.set("A1", "=SUM(A2:A3)+1");
+    assert_eq!((t.num("A1"), t.get("A3")), (1.0, Value::Empty));
+}
+
+#[test]
+fn an_array_spilling_over_its_own_input_iterates_from_its_old_area() {
+    // With iterative calculation on, the old array is the previous value the loop reads.
+    let mut t = T::iterative(100, 0.001);
+    for (at, v) in [("H17", "3"), ("H18", "1"), ("H19", "2"), ("I17", "30"), ("I18", "10"), ("I19", "20")] {
+        t.set(at, v);
+    }
+    t.set("J17", "=SORT(H17:L19)");
+    t.set("H18", "6");
+    // Sorted on H and carrying I along, as in Excel; L:N hold the loop's own values.
+    let jk: Vec<(f64, f64)> = (17..=19).map(|r| (t.num(&format!("J{r}")), t.num(&format!("K{r}")))).collect();
+    assert_eq!(jk, vec![(2.0, 20.0), (3.0, 30.0), (6.0, 10.0)]);
+    for r in 17..=19 {
+        for col in ["L", "M", "N"] {
+            t.num(&format!("{col}{r}"));
+        }
+    }
+    assert!(t.calc.circular.is_empty());
+}
+
 #[test]
 fn an_anchor_given_a_formula_that_reads_its_old_spill_area_sees_it_empty() {
     // The new formula was evaluated while the old array was still laid out, and only the
