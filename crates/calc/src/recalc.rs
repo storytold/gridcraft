@@ -574,7 +574,9 @@ impl PassHost<'_> {
             if self.cycle_seen.insert(k) {
                 self.cycles.push(k);
             }
-            return Value::Error(CellError::Circ);
+            // As in Excel with iteration off: the loop reads the value the formula shows (its
+            // cached value from the file, 0 if it has none) and is reported, not turned into an error.
+            return self.previous(k);
         }
         if self.depth >= MAX_NESTED {
             self.suspend = Some(k);
@@ -650,12 +652,21 @@ impl PassHost<'_> {
             }
             _ => v,
         };
+        // A formula a loop closes on keeps the value it shows, so the loop doesn't advance with each
+        // recalculation and a file's values survive opening it.
+        // Its new array doesn't spill either: the cells around it keep theirs.
+        let v = if !self.iterate && self.cycle_seen.contains(&k) {
+            self.spills.remove(&k);
+            self.previous(k)
+        } else {
+            v
+        };
         self.results.insert(k, v.clone());
         v
     }
 
-    /// A formula's previous value for iterative calculation: from the last iteration, else the
-    /// value it shows. Blank, and the `#CIRC!` of a loop calculated with iteration off, are 0.
+    /// A formula's previous value, read where a loop closes: from the last iteration, else the
+    /// value it shows. Blank, and the `#CIRC!` older versions showed for a loop, are 0.
     fn previous(&self, k: Key) -> Value {
         let v = match self.prev.get(&k) {
             Some(v) => v.clone(),

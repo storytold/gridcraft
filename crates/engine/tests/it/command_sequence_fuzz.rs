@@ -32,7 +32,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
+use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
 use gridcraft_engine::calc::Calc;
 use gridcraft_engine::model::{CalcMode, Formula, Sheet, Workbook};
 use gridcraft_engine::{EngineError, Session, command_specs, find_command, io};
@@ -415,15 +415,18 @@ fn structure_problem(wb: &Workbook, sel: &gridcraft_engine::Selection) -> Option
     None
 }
 
-fn same_value(a: &Value, b: &Value) -> bool {
+fn same_value(a: &Value, b: &Value, saved: bool) -> bool {
     match (a, b) {
+        // A file holds #SPILL! and #CALC! as #VALUE!, and a loop keeps the value the file holds.
+        (Value::Error(CellError::Spill | CellError::Calc), Value::Error(CellError::Value)) if saved => true,
         (Value::Number(x), Value::Number(y)) => x == y || (x.is_nan() && y.is_nan()),
         _ => a == b,
     }
 }
 
 /// The first cell whose displayed value (own value or spilled) differs between two workbooks.
-fn value_diff(a: &Workbook, b: &Workbook, what: &str) -> Option<String> {
+/// `saved`: `b` was read back from a file in which a circular reference keeps its saved value.
+fn value_diff(a: &Workbook, b: &Workbook, what: &str, saved: bool) -> Option<String> {
     for (x, y) in a.sheets.iter().zip(&b.sheets) {
         let mut keys: BTreeSet<CellRef> = BTreeSet::new();
         for s in [x, y] {
@@ -432,7 +435,7 @@ fn value_diff(a: &Workbook, b: &Workbook, what: &str) -> Option<String> {
         }
         for c in keys {
             let (va, vb) = (x.value(c), y.value(c));
-            if !same_value(&va, &vb) {
+            if !same_value(&va, &vb, saved) {
                 let f = x.cell(c).and_then(|c| c.formula.as_ref()).map(|f| format!(" (formula ={})", f.text)).unwrap_or_default();
                 return Some(format!("{}!{c}{f}: {va:?} in memory, {vb:?} after {what}", x.name));
             }
@@ -448,7 +451,7 @@ fn recalc_diff(wb: &Workbook) -> Result<(), String> {
     }
     let mut fresh = wb.clone();
     Calc::new().recalc_all(&mut fresh);
-    value_diff(wb, &fresh, "a full recalc").map_or(Ok(()), Err)
+    value_diff(wb, &fresh, "a full recalc", false).map_or(Ok(()), Err)
 }
 
 fn normalized_formula(f: &Formula) -> String {
@@ -460,7 +463,8 @@ fn normalized_formula(f: &Formula) -> String {
 fn roundtrip_diff(wb: &Workbook) -> Result<(), String> {
     let bytes = io::save_bytes(wb, "fuzz.xlsx").map_err(|e| format!("save failed: {e}"))?;
     let (mut back, _) = io::open_bytes("fuzz.xlsx", &bytes).map_err(|e| format!("reload failed: {e}"))?;
-    Calc::new().recalc_all(&mut back);
+    let mut calc = Calc::new();
+    calc.recalc_all(&mut back);
     let names = |wb: &Workbook| wb.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
     if names(wb) != names(&back) {
         return Err(format!("sheets {:?} reload as {:?}", names(wb), names(&back)));
@@ -475,7 +479,7 @@ fn roundtrip_diff(wb: &Workbook) -> Result<(), String> {
         }
     }
     if wb.calc.mode == CalcMode::Automatic && !wb.calc.iterative {
-        value_diff(wb, &back, "an XLSX save and reload").map_or(Ok(()), Err)?;
+        value_diff(wb, &back, "an XLSX save and reload", !calc.circular.is_empty()).map_or(Ok(()), Err)?;
     }
     Ok(())
 }

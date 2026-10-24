@@ -2740,6 +2740,45 @@ fn show_outline_symbols_toggles() {
     assert!(!on(&s));
 }
 
+/// A circular formula saved by Excel opens with its cached value, as do the formulas reading it,
+/// and saving keeps them (the loop used to open as #CIRC!, saved as 0).
+#[test]
+fn circular_formula_from_a_file_keeps_its_values() {
+    use gridcraft_model::{Cell, Formula, Workbook};
+    let mut wb = Workbook::new();
+    {
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.cells.set(CellRef::parse("A1").unwrap(), Cell::value(Value::from("x")));
+        let mut b1 = Cell::formula(Formula::new("=IF($A1=B$1,1,0)"));
+        b1.value = Value::Number(1.0);
+        sh.cells.set(CellRef::parse("B1").unwrap(), b1);
+        let mut b2 = Cell::formula(Formula::new("=IF($A1=B$1,1,0)+B$1"));
+        b2.value = Value::Number(1.0);
+        sh.cells.set(CellRef::parse("B2").unwrap(), b2);
+    }
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "loop.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(1.0));
+    assert_eq!(v(&s, "B2"), Value::Number(1.0));
+    assert!(!s.doc().unwrap().calc.circular.is_empty());
+    reopen(&mut s);
+    assert_eq!(v(&s, "B1"), Value::Number(1.0));
+    assert_eq!(v(&s, "B2"), Value::Number(1.0));
+}
+
+/// A circular dynamic-array formula opens, saves and reopens without spilling.
+#[test]
+fn circular_array_formula_keeps_its_value_through_save() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=SEQUENCE(3)+B1*0"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(0.0));
+    assert!(v(&s, "B2").is_empty());
+    reopen(&mut s);
+    assert_eq!(v(&s, "B1"), Value::Number(0.0));
+    assert!(v(&s, "B2").is_empty() && v(&s, "B3").is_empty());
+}
+
 fn reopen(s: &mut Session) {
     let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
     let b64 = r["base64"].as_str().unwrap().to_string();
@@ -2755,7 +2794,8 @@ fn calculation_options_enable_iterative_calculation() {
     };
     s.execute("cell.set", json!({"cell": "A1", "input": "=(A2+10)/2"})).unwrap();
     s.execute("cell.set", json!({"cell": "A2", "input": "=A1"})).unwrap();
-    assert_eq!(v(&s, "A1"), Value::Error(gridcraft_core::CellError::Circ));
+    // Off, the loop keeps the values it shows (as in Excel) and is reported.
+    assert_eq!((v(&s, "A1"), v(&s, "A2")), (Value::Number(5.0), Value::Number(5.0)));
     assert!(!s.doc().unwrap().calc.circular.is_empty());
     // Switching it on recalculates the loop.
     let r = s.execute("formulas.calculationOptions", json!({"iterative": true})).unwrap();
@@ -2778,7 +2818,8 @@ fn calculation_options_enable_iterative_calculation() {
     near(&s, "A1", 10.0);
     // Undo brings the previous settings back.
     s.execute("formulas.calculationOptions", json!({"iterative": false})).unwrap();
-    assert_eq!(v(&s, "A1"), Value::Error(gridcraft_core::CellError::Circ));
+    near(&s, "A1", 10.0);
+    assert!(!s.doc().unwrap().calc.circular.is_empty());
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.doc().unwrap().wb.calc.iterative);
     near(&s, "A1", 10.0);

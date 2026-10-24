@@ -273,7 +273,9 @@ fn errors_and_cycles() {
     assert_eq!(t.get("A1"), Value::Error(CellError::Div0));
     t.set("B1", "=B2");
     t.set("B2", "=B1");
-    assert!(t.get("B1").is_error());
+    // A loop with iteration off shows 0, as in Excel, and is reported.
+    assert_eq!((t.num("B1"), t.num("B2")), (0.0, 0.0));
+    assert!(!t.calc.circular.is_empty());
     t.set("C1", "=NOSUCHFN(1)");
     assert_eq!(t.get("C1"), Value::Error(CellError::Name));
     // `_xludf.` marks a user-defined function, never the built-in of the same name (#726).
@@ -372,16 +374,58 @@ fn iterative_calculation_of_text_and_errors() {
 fn circular_references_without_iterative_calculation() {
     let mut t = T::new();
     t.set("A1", "=A1+1");
-    assert_eq!(t.get("A1"), Value::Error(CellError::Circ));
+    // As in Excel: the formula keeps the value it shows (0 for a new one) and the loop is reported.
+    assert_eq!(t.num("A1"), 0.0);
     assert_eq!(t.calc.circular, vec![(0, c("A1"))]);
-    // Switched on, the loop is calculated from 0 rather than from the error.
+    // Recalculating doesn't advance it.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1"), 0.0);
+    // Switched on, the loop is calculated.
     t.wb.calc.iterative = true;
     t.calc.recalc_all(&mut t.wb);
     assert_eq!(t.num("A1"), 100.0);
     assert!(t.calc.circular.is_empty());
+    // Switched off again, it keeps its last value.
     t.wb.calc.iterative = false;
     t.calc.recalc_all(&mut t.wb);
-    assert_eq!(t.get("A1"), Value::Error(CellError::Circ));
+    assert_eq!(t.num("A1"), 100.0);
+    assert_eq!(t.calc.circular, vec![(0, c("A1"))]);
+}
+
+/// A dynamic-array formula on a loop keeps the value it shows and doesn't spill its new array.
+#[test]
+fn circular_array_formula_does_not_spill() {
+    let mut t = T::new();
+    t.set("B1", "=SEQUENCE(3)+B1*0");
+    assert_eq!(t.num("B1"), 0.0);
+    assert!(t.get("B2").is_empty() && t.get("B3").is_empty(), "B2 {:?} B3 {:?}", t.get("B2"), t.get("B3"));
+    assert_eq!(t.calc.circular, vec![(0, c("B1"))]);
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("B1"), 0.0);
+    assert!(t.get("B2").is_empty());
+}
+
+/// A loop in a file keeps the values Excel saved: the formula a loop closes on shows its cached
+/// value, and the formulas reading it calculate from that value (#CIRC! hid them all before).
+#[test]
+fn loop_keeps_cached_values_from_the_file() {
+    let mut t = T::new();
+    {
+        let sh = t.wb.sheet_mut(0).unwrap();
+        sh.cells.set(c("A1"), Cell::value(Value::from("x")));
+        let mut e7 = Cell::formula(Formula::new("=IF($A1=B$1,1,0)"));
+        e7.value = Value::Number(1.0);
+        sh.cells.set(c("B1"), e7);
+        sh.cells.set(c("B2"), Cell::formula(Formula::new("=IF(B$1=1,\"yes\",\"no\")")));
+        sh.cells.set(c("B3"), Cell::formula(Formula::new("=B1*10")));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("B1"), 1.0);
+    assert_eq!(t.get("B2"), Value::from("yes"));
+    assert_eq!(t.num("B3"), 10.0);
+    assert_eq!(t.calc.circular, vec![(0, c("B1"))]);
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("B1"), 1.0);
 }
 
 #[test]
@@ -1901,9 +1945,13 @@ fn long_circular_chain_is_circular() {
         sh.cells.set(c("B1"), Cell::formula(Formula::new("=1+2")));
     }
     t.calc.recalc_all(&mut t.wb);
-    assert_eq!(t.get("A1"), Value::Error(CellError::Circ));
-    assert_eq!(t.get(&format!("A{N}")), Value::Error(CellError::Circ));
+    assert!(t.get("A1").as_f64().is_some());
+    assert!(t.get(&format!("A{N}")).as_f64().is_some());
     assert_eq!(t.num("B1"), 3.0);
+    // Recalculating doesn't advance the loop.
+    let a1 = t.num("A1");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1"), a1);
     assert!(!t.calc.circular.is_empty());
     // Each formula is listed once at most.
     let mut seen = t.calc.circular.clone();
@@ -1918,7 +1966,8 @@ fn long_circular_chain_is_circular() {
 }
 
 /// A loop closing back into the middle of a chain deeper than the on-demand nesting limit is found
-/// where calculating it in one go finds it: at the formula read while it was being calculated.
+/// where calculating it in one go finds it: at the formula read while it was being calculated,
+/// which keeps the value it shows.
 #[test]
 fn deep_loop_is_found_where_it_closes() {
     let mut t = T::new();
@@ -1933,8 +1982,10 @@ fn deep_loop_is_found_where_it_closes() {
     }
     t.calc.recalc_all(&mut t.wb);
     assert_eq!(t.calc.circular, vec![(0, c("A30"))]);
-    assert_eq!(t.get("A1"), Value::Error(CellError::Circ));
-    assert_eq!(t.num("B1"), -1.0);
+    // A30 keeps the 0 it shows; A1 counts up to it.
+    assert_eq!(t.num("A30"), 0.0);
+    assert_eq!(t.num("A1"), 29.0);
+    assert_eq!(t.num("B1"), 29.0);
 }
 
 #[test]
