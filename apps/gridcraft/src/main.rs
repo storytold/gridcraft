@@ -229,6 +229,58 @@ fn icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+/// Whether to open the window on X11 (XWayland) rather than Wayland. GNOME's compositor draws no
+/// frames for Wayland clients, so there winit falls back to its own bare frame: a plain strip with
+/// square buttons and no title. Through XWayland, GNOME draws its own title bar, themed and with
+/// the user's button layout, as for WordCraft. Other desktops (KDE, Sway…) frame Wayland windows
+/// themselves and stay on Wayland; `GRIDCRAFT_WAYLAND=1` keeps GNOME on Wayland too.
+///
+/// winit builds one event loop per process, so a failed X11 start can't fall back to Wayland:
+/// X11 is only chosen when `usable` (`x11_usable`) confirms that it will start on the local
+/// display. It is only asked on GNOME Wayland, without the opt-out.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn prefer_x11(var: impl Fn(&str) -> Option<String>, usable: impl FnOnce(&str) -> bool) -> bool {
+    let gnome = var("XDG_CURRENT_DESKTOP").is_some_and(|d| d.split(':').any(|d| d.eq_ignore_ascii_case("gnome")));
+    let wayland = var("WAYLAND_DISPLAY").is_some_and(|d| !d.is_empty());
+    let opt_out = var("GRIDCRAFT_WAYLAND").is_some_and(|v| !v.is_empty() && v != "0");
+    // Only a local display (`:0`, `:0.0`), the session's XWayland; remote displays aren't tried.
+    // x11rb's TCP addressing adds the number to port 6000 in a u16, which overflows (a panic)
+    // past 59535; the probe doesn't use TCP, but the bound keeps the number safe either way.
+    let local = var("DISPLAY").filter(|d| {
+        let n = d.strip_prefix(':').and_then(|s| s.split('.').next()).unwrap_or_default();
+        n.bytes().all(|b| b.is_ascii_digit()) && n.parse::<u16>().is_ok_and(|n| n <= 59535)
+    });
+    gnome && wayland && !opt_out && local.is_some_and(|d| usable(&d))
+}
+
+/// Whether winit's X11 backend will start on `display`: the libraries it loads are there (without
+/// them it fails, or panics for libxkbcommon-x11), and the server accepts a connection, its
+/// authorization included. A socket that exists proves neither. The probe connection is closed
+/// before returning.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn x11_usable(display: &str) -> bool {
+    use x11_dl::{xcursor::Xcursor, xinput2::XInput2, xlib::Xlib, xlib_xcb::Xlib_xcb};
+    let libs = Xlib::open().is_ok()
+        && Xcursor::open().is_ok()
+        && Xlib_xcb::open().is_ok()
+        && XInput2::open().is_ok()
+        && xkbcommon_dl::x11::xkbcommon_x11_option().is_some();
+    if !libs {
+        log::info!("X11 libraries missing; staying on Wayland");
+        return false;
+    }
+    // `unix/` limits x11rb to the Unix socket, as Xlib connects to `:N`. Without it x11rb falls
+    // back to TCP localhost:6000+N, which could pass for a server winit can't reach and would
+    // hand the session's Xauthority cookie to whatever listens on that port.
+    match x11rb::connect(Some(&format!("unix/{display}"))) {
+        Ok(_) => true,
+        Err(e) => {
+            log::info!("X11 display {display} unusable ({e}); staying on Wayland");
+            false
+        }
+    }
+}
+
 fn main() -> eframe::Result<()> {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -321,6 +373,18 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(i);
     }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    let options = {
+        let mut options = options;
+        if prefer_x11(|k| std::env::var(k).ok(), x11_usable) {
+            log::info!("GNOME on Wayland: using X11 so GNOME draws the title bar (GRIDCRAFT_WAYLAND=1 keeps Wayland)");
+            options.event_loop_builder = Some(Box::new(|builder| {
+                use winit::platform::x11::EventLoopBuilderExtX11 as _;
+                builder.with_x11();
+            }));
+        }
+        options
+    };
     // Before eframe creates the wgpu instance: Windows starts on DirectX 12, or OpenGL when
     // DirectX 12 has no GPU driver, and never touches Vulkan unless asked (see graphics.rs).
     #[cfg(target_os = "windows")]
@@ -382,6 +446,96 @@ fn main() -> eframe::Result<()> {
         return run(options);
     }
     result
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "freebsd")))]
+mod backend_tests {
+    use std::cell::Cell;
+
+    use super::{prefer_x11, x11_usable};
+
+    /// `prefer_x11` with these environment variables and a probe answering `usable`; also returns
+    /// the display the probe was asked about, if it was asked.
+    fn prefer(vars: &[(&str, &str)], usable: bool) -> (bool, Option<String>) {
+        let asked = Cell::new(None);
+        let x11 = prefer_x11(
+            |k| vars.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string()),
+            |d| {
+                asked.set(Some(d.to_string()));
+                usable
+            },
+        );
+        (x11, asked.take())
+    }
+
+    const GNOME_WAYLAND: &[(&str, &str)] = &[("XDG_CURRENT_DESKTOP", "ubuntu:GNOME"), ("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":0")];
+
+    /// GNOME on Wayland gets GNOME's title bar through XWayland when X11 will start there.
+    #[test]
+    fn gnome_wayland_uses_a_usable_x11() {
+        assert_eq!(prefer(GNOME_WAYLAND, true), (true, Some(":0".into())));
+        let screen = [("XDG_CURRENT_DESKTOP", "GNOME"), ("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":1.0")];
+        assert_eq!(prefer(&screen, true), (true, Some(":1.0".into())));
+        let zero = [GNOME_WAYLAND, &[("GRIDCRAFT_WAYLAND", "0")]].concat();
+        assert!(prefer(&zero, true).0);
+    }
+
+    /// A missing socket, a refused authorization or missing libraries all make the probe say
+    /// no; the window then stays on Wayland, which still starts (an X11 failure couldn't fall back).
+    #[test]
+    fn unusable_x11_stays_on_wayland() {
+        assert_eq!(prefer(GNOME_WAYLAND, false), (false, Some(":0".into())));
+    }
+
+    /// Everything else keeps winit's default backend, without even probing the X server.
+    #[test]
+    fn other_sessions_keep_the_default_backend() {
+        let kde = [("XDG_CURRENT_DESKTOP", "KDE"), ("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":0")];
+        assert_eq!(prefer(&kde, true), (false, None));
+        let x11_session = [("XDG_CURRENT_DESKTOP", "GNOME"), ("DISPLAY", ":0")];
+        assert_eq!(prefer(&x11_session, true), (false, None), "an X11 session already uses X11");
+        let opt_out = [GNOME_WAYLAND, &[("GRIDCRAFT_WAYLAND", "1")]].concat();
+        assert_eq!(prefer(&opt_out, true), (false, None));
+        let no_display = [("XDG_CURRENT_DESKTOP", "GNOME"), ("WAYLAND_DISPLAY", "wayland-0")];
+        assert_eq!(prefer(&no_display, true), (false, None));
+        for remote in ["host:0", ":", ":x", ":+1", "unix:/tmp/sock", ":59536", ":65000", ":99999999999"] {
+            let vars = [("XDG_CURRENT_DESKTOP", "GNOME"), ("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", remote)];
+            assert_eq!(prefer(&vars, true), (false, None), "{remote}");
+        }
+    }
+
+    /// The real probe tries to connect: a display with no server behind it is unusable (and the
+    /// probe returns rather than hanging or panicking). The highest display number `prefer_x11`
+    /// passes on doesn't overflow x11rb's TCP port.
+    #[test]
+    fn probe_rejects_a_display_without_a_server() {
+        assert!(!x11_usable(":59535"));
+    }
+
+    /// The probe never connects over TCP: a listener on localhost:6000+N, with no Unix socket for
+    /// `:N`, gets no connection (and so never sees the Xauthority cookie).
+    #[test]
+    fn probe_never_uses_tcp() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let Some((n, listener)) = (500..600u16).find_map(|n| {
+            let free = !std::path::Path::new(&format!("/tmp/.X11-unix/X{n}")).exists();
+            free.then(|| std::net::TcpListener::bind(("127.0.0.1", 6000 + n)).ok().map(|l| (n, l))).flatten()
+        }) else {
+            return; // No free port to listen on; nothing to check.
+        };
+        let connected = Arc::new(AtomicBool::new(false));
+        let seen = Arc::clone(&connected);
+        // Closes each connection at once, so a regression fails fast instead of hanging. Left
+        // blocked in accept when nothing connects; the test process ends it.
+        std::thread::spawn(move || {
+            for _ in listener.incoming() {
+                seen.store(true, Ordering::SeqCst);
+            }
+        });
+        assert!(!x11_usable(&format!(":{n}")));
+        assert!(!connected.load(Ordering::SeqCst), "the probe connected to TCP port {}", 6000 + n);
+    }
 }
 
 #[cfg(test)]

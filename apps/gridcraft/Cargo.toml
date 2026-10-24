@@ -31,6 +31,15 @@ arboard = { workspace = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 arboard = { workspace = true, features = ["wayland-data-control"] }
+# Opens the window on X11 under GNOME's Wayland session, where GNOME draws the title bar
+# (`prefer_x11`). Already in Cargo.lock through eframe; same version, no extra features.
+winit = { version = "0.30", default-features = false, features = ["x11"] }
+# `x11_usable` checks that winit's X11 backend will start before choosing it: the libraries winit
+# loads (x11-dl, xkbcommon-dl) and an authorized connection (x11rb). All already in Cargo.lock
+# through winit, same versions.
+x11-dl = "2.21"
+x11rb = { version = "0.13", default-features = false }
+xkbcommon-dl = { version = "0.4", default-features = false, features = ["x11"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Blocks on the start-up DirectX 12 adapter probe (`graphics.rs`); already in the tree via eframe.

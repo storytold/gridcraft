@@ -165,6 +165,13 @@ directives, e.g. `RUST_LOG=debug` or `RUST_LOG=warn,gridcraft_engine=debug` (a t
 matches a prefix: `gridcraft*=debug`). Runs with `GRIDCRAFT_NO_PREFS` set (no saved settings)
 log to standard error only.
 
+### Title bar on GNOME
+
+GNOME draws no title bar for Wayland windows, so in a GNOME Wayland session GridCraft opens
+through XWayland, when it accepts a connection, and GNOME draws its usual title bar and window
+buttons. Otherwise GridCraft stays on Wayland. `GRIDCRAFT_WAYLAND=1`
+keeps the window on Wayland, with a plainer built-in frame. Other desktops are unchanged.
+
 ## For agents: MCP, CLI and the control channel
 
 ```sh
