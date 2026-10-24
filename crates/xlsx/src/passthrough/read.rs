@@ -283,6 +283,29 @@ impl KeptReader {
         (!p.is_empty()).then(|| Arc::new(p))
     }
 
+    /// Keeps the original chart part, and the parts behind it, of each chart read into `sheet`
+    /// from a chart part (`Ctx::chart_parts`), with the chart as read. A chart that can't be kept
+    /// (missing or damaged part, size limits) is written from the model on save, as before.
+    pub fn charts(&mut self, cx: &mut Ctx<'_>, sheet: &mut Sheet) {
+        let read = std::mem::take(&mut cx.chart_parts);
+        if !self.on || read.is_empty() {
+            return;
+        }
+        let mut kept = vec![];
+        for (id, part) in read {
+            let Some(ch) = sheet.charts.iter().find(|c| c.id == id) else { continue };
+            let root = PreservedRel { id: String::new(), rel_type: format!("{NS_REL}/chart"), target: part.clone(), external: false };
+            if let Ok(parts) = self.closure(cx, &root, &HashSet::new(), CHART_GRAPH) {
+                kept.push(PreservedChart { id, chart: unplaced(ch), part, parts });
+            }
+        }
+        if !kept.is_empty() {
+            let mut p = sheet.preserved.as_deref().cloned().unwrap_or_default();
+            p.charts = kept;
+            sheet.preserved = Some(Arc::new(p));
+        }
+    }
+
     /// Sheet-level content of the sheet part `part`.
     pub fn sheet(&mut self, cx: &mut Ctx<'_>, part: &str, name: &str) -> Option<Arc<Preserved>> {
         if !self.on {
