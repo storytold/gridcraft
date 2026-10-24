@@ -1,13 +1,13 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (direct desktop printing through craft-print) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (multi-core recalculation on native builds) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 The hardware Excel uses, per platform, against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Hardware: ~40% ready, 25–40 h** (estimated).
 
 | Hardware feature | Excel | GridCraft (macOS · Windows · Linux · BSD · web) | Gap and estimate |
 |---|---|---|---|
-| Multi-core recalculation | Multi-threaded recalculation on all cores (Windows and Mac), configurable thread count | Single-threaded everywhere (no threading in `crates/calc`) | Parallel recalc of independent dependency chains on native builds; WASM stays single-threaded or uses workers later: 12–18 h |
+| Multi-core recalculation | Multi-threaded recalculation on all cores (Windows and Mac), configurable thread count | Levels of independent formulas on every core on native builds (2026-10-23), each worker keeping copies of the blocks it reads twice within a 256 MiB budget shared by the workers; `calcPr concurrentCalc`/`concurrentManualCount` round-trip and `formulas.calculationOptions` sets them; WASM single-threaded | An Options control for the setting (command-only today); WASM workers later: 4–8 h |
 | GPU rendering of the grid and charts | DirectX / Metal accelerated drawing | wgpu: Metal · DirectX 12 (default since 10-08; OpenGL when DirectX 12 has no GPU driver or fails to start; Vulkan only on request, so the Intel UHD `igvk64.dll` crash (#120) can't happen; shaders compiled with FXC, so no DXC runtime is needed, #339) · Vulkan/GL · Vulkan/GL · WebGPU or WebGL2 | At parity in kind. Driver problems: screen flashing on Windows 11 (#76): 2–4 h |
 | Pen and touch (Draw tab) | Pen pressure and tilt, eraser end, touch mode, Ink to Shape, ink replay | Pen, highlighter, eraser, Ink to Shape with mouse/pen input; **no pressure or tilt**, no touch mode | Pressure-sensitive strokes where winit reports force; touch-friendly ribbon spacing: 4–6 h |
 | Trackpad and mouse | Smooth scrolling, pinch zoom, horizontal scroll, Magic Mouse | Smooth scrolling and zoom via egui | Verify pinch zoom on each platform: 1–2 h |
@@ -20,6 +20,7 @@ The hardware Excel uses, per platform, against GridCraft. Part of
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | minor | Multi-core recalculation: levels of independent formulas on every core (native); settings round-trip and command |
 | 2026-10-12 | minor | Desktop File > Print now discovers printers and submits PDF jobs through pinned craft-print with printer choice, copies, duplex and grayscale; browser printing and PDF export remain available. Remaining print parity includes page ranges and driver-specific tray/options UI; physical printer fidelity needs hardware validation. |
 | 2026-10-11 | trivial | Windows: DirectX 12 shaders compiled with FXC, no DXC runtime needed (#339, #354) |
 | 2026-10-11 | trivial | Windows: OpenGL fallback when DirectX 12 has no GPU or fails to start; Vulkan never by default (#120) |

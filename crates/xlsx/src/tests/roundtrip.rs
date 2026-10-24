@@ -20,7 +20,15 @@ fn rr(a: &str) -> RangeRef {
 fn sample() -> Workbook {
     let mut wb = Workbook::new();
     wb.date_system = DateSystem::D1904;
-    wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true };
+    wb.calc = CalcSettings {
+        mode: CalcMode::Manual,
+        iterative: true,
+        max_iterations: 42,
+        max_change: 0.5,
+        precision_as_displayed: true,
+        multi_threaded: false,
+        threads: 3,
+    };
     wb.protected_structure = true;
     wb.structure_password = Some(gridcraft_model::PasswordHash::new_sha512("s3cret", b"0123456789abcdef"));
     wb.props = DocProps {
@@ -707,6 +715,29 @@ fn iterative_calculation_settings_roundtrip() {
         let calc = read_xlsx(&bytes).unwrap().0.calc;
         assert!(calc.iterative, "{attrs}");
         assert_eq!((calc.max_iterations, calc.max_change), (count, change), "{attrs}");
+    }
+    // The calculation-thread attributes: anything but a boolean keeps the default (on), a
+    // count that isn't a non-negative integer is "every processor", a large one saturates.
+    for (attrs, multi, threads) in [
+        (r#"concurrentCalc="2""#, true, 0),
+        (r#"concurrentCalc="0" concurrentManualCount="-1""#, false, 0),
+        (r#"concurrentCalc="false" concurrentManualCount="7""#, false, 7),
+        (r#"concurrentManualCount="99999999999""#, true, 1024),
+        (r#"concurrentManualCount="5000""#, true, 1024),
+        (r#"concurrentManualCount="abc""#, true, 0),
+    ] {
+        let wbx = xml(attrs);
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+        let ws = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
+        let bytes = super::make_zip(&[
+            ("[Content_Types].xml", super::CT.as_bytes()),
+            ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+            ("xl/workbook.xml", wbx.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+            ("xl/worksheets/sheet1.xml", ws.as_bytes()),
+        ]);
+        let calc = read_xlsx(&bytes).unwrap().0.calc;
+        assert_eq!((calc.multi_threaded, calc.threads), (multi, threads), "{attrs}");
     }
 }
 

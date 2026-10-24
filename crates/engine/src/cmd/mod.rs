@@ -372,8 +372,22 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     if structural {
         d.calc.recalc_all(&mut wb);
-    } else if !changed.is_empty() {
-        d.calc.cells_changed(&mut wb, &changed);
+    } else {
+        // Formulas reading a defined name depend on what it resolves to (its range, or the
+        // references in its LAMBDA body), and those edges are built from the definitions. The
+        // name commands are structural edits; the hidden names that store solver models,
+        // scenarios, custom views, scripts and the watch list are rewritten by their own commands
+        // without that, and a cell can still read them. Those readers (and readers of a name that
+        // mentions a changed name) are re-resolved and recalculated like edited cells; the rest
+        // of the workbook isn't, since saving a custom view in a workbook of 50K formulas must
+        // not cost a full recalculation.
+        let mut dirty = changed;
+        if wb.names != d.wb.names {
+            dirty.extend(name_readers(&wb, &changed_names(&d.wb.names, &wb.names)));
+        }
+        if !dirty.is_empty() {
+            d.calc.cells_changed(&mut wb, &dirty);
+        }
     }
     if let Some(t0) = t0 {
         eprintln!("commit: + recalc {:?}", t0.elapsed());
@@ -519,6 +533,69 @@ fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
         }
     }
     lines
+}
+
+/// The names (lower-cased) whose definition differs between `old` and `new`, including names
+/// added or removed. Scope is ignored: a mention is matched by name alone, which can only
+/// recalculate a reader more than necessary.
+pub(super) fn changed_names(old: &[gridcraft_model::DefinedName], new: &[gridcraft_model::DefinedName]) -> std::collections::HashSet<String> {
+    let key = |n: &gridcraft_model::DefinedName| (n.name.to_ascii_lowercase(), n.scope, n.formula.clone());
+    let olds: std::collections::HashSet<_> = old.iter().map(key).collect();
+    let news: std::collections::HashSet<_> = new.iter().map(key).collect();
+    olds.symmetric_difference(&news).map(|(name, _, _)| name.clone()).collect()
+}
+
+/// Whether `e` mentions a name in `names` (lower-cased, without a sheet prefix), as a name or as
+/// a call. A LAMBDA parameter or LET variable with the same name counts as a mention too: that
+/// only recalculates a formula that didn't need it.
+fn mentions(e: &gridcraft_formula::Expr, names: &std::collections::HashSet<String>) -> bool {
+    let mut found = false;
+    e.walk(&mut |x| {
+        if found {
+            return;
+        }
+        if let gridcraft_formula::Expr::Name(n) | gridcraft_formula::Expr::Call(n, _) = x {
+            let bare = n.rsplit('!').next().unwrap_or(n);
+            if names.contains(&bare.to_ascii_lowercase()) {
+                found = true;
+            }
+        }
+    });
+    found
+}
+
+/// The formulas that read any of `changed` names, directly or through another name whose
+/// definition mentions one: what a change to those names can affect. Names referring to names
+/// are followed to a fixed point, at most once per name.
+pub(super) fn name_readers(wb: &Workbook, changed: &std::collections::HashSet<String>) -> Vec<Key> {
+    if changed.is_empty() {
+        return Vec::new();
+    }
+    let mut affected = changed.clone();
+    let parsed: Vec<(String, Option<gridcraft_formula::Expr>)> =
+        wb.names.iter().map(|n| (n.name.to_ascii_lowercase(), gridcraft_formula::parse_name(&n.formula).ok())).collect();
+    loop {
+        let before = affected.len();
+        for (name, expr) in &parsed {
+            if !affected.contains(name) && expr.as_ref().is_some_and(|e| mentions(e, &affected)) {
+                affected.insert(name.clone());
+            }
+        }
+        if affected.len() == before {
+            break;
+        }
+    }
+    let mut out = Vec::new();
+    for (si, sheet) in wb.sheets.iter().enumerate() {
+        for (c, cell) in sheet.cells.iter() {
+            if let Some(e) = cell.formula.as_ref().and_then(|f| f.expr_arc())
+                && mentions(&e, &affected)
+            {
+                out.push((si, c));
+            }
+        }
+    }
+    out
 }
 
 /// Recomputes an automatic row height from its content: the largest font, and wrapped text.

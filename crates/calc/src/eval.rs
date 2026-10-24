@@ -4,6 +4,7 @@
 //! `ROW`, `OFFSET`, `INDEX`, `:` and friends can work on references) or a lambda. Cell reads go
 //! through [`Host`], which lets the recalculation engine evaluate dirty precedents on demand.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gridcraft_core::{Array, CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, compare};
@@ -74,6 +75,15 @@ pub trait Host {
     /// Values of a block, row-major. Hosts can override with a sparse fast path.
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
         range.iter().map(|c| self.cell_value(sheet, c)).collect()
+    }
+    /// The parsed formula of a defined name visible from `scope_sheet`, with the sheet its
+    /// unqualified references refer to: `Some((expr, scope))` for a name that parses, `Some((None,
+    /// _))`-equivalent `None` inside for one that doesn't (it evaluates to `#NAME?`), and `None`
+    /// for no such name. The default parses on every call; a recalc pass caches per name, since a
+    /// formula column calling a LAMBDA name re-parses that name once per cell otherwise.
+    fn name_expr(&mut self, name: &str, scope_sheet: usize) -> Option<(Option<Arc<Expr>>, Option<usize>)> {
+        let def = self.workbook().name(name, scope_sheet)?;
+        Some((gridcraft_formula::parse_name(&def.formula).ok().map(Arc::new), def.scope))
     }
     /// The sheet's used range (`Sheet::used_range`, which walks every stored row). Hosts that
     /// keep the workbook unchanged while evaluating can remember it.
@@ -300,38 +310,35 @@ impl<'h> Evaluator<'h> {
         if let Some((_, v)) = self.env.iter().rev().find(|(k, _)| gridcraft_formula::same_name(k, n)) {
             return v.clone();
         }
-        let wb = self.host.workbook();
         // Sheet-qualified `Sheet1!Name`.
         let (scope_sheet, bare) = match n.split_once('!') {
-            Some((s, b)) => match wb.sheet_index(&gridcraft_core::unquote_sheet(s)) {
+            Some((s, b)) => match self.host.workbook().sheet_index(&gridcraft_core::unquote_sheet(s)) {
                 Some(i) => (i, b),
                 None => return err(CellError::Name),
             },
             None => (self.sheet, n),
         };
-        if let Some(def) = wb.name(bare, scope_sheet) {
-            let text = def.formula.clone();
-            let scope = def.scope.unwrap_or(self.sheet);
-            return match gridcraft_formula::parse_name(&text) {
-                Ok(expr) => {
-                    // Relative references in a name are relative to A1: used here, they move by
-                    // this cell's offset from it.
-                    let expr = if gridcraft_formula::adjust::has_relative_refs(&expr) {
-                        gridcraft_formula::adjust::shift_relative_wrapping(expr, self.at.row as i64, self.at.col as i64)
-                    } else {
-                        expr
-                    };
-                    let saved = self.sheet;
-                    // Unqualified references in a name refer to the scope sheet.
-                    self.sheet = scope;
-                    let r = self.eval(&expr);
-                    self.sheet = saved;
-                    r
-                }
-                Err(_) => err(CellError::Name),
+        if let Some((parsed, def_scope)) = self.host.name_expr(bare, scope_sheet) {
+            let scope = def_scope.unwrap_or(self.sheet);
+            let Some(expr) = parsed else { return err(CellError::Name) };
+            // Relative references in a name are relative to A1: used here, they move by this
+            // cell's offset from it. Only then is the shared parse copied.
+            let shifted;
+            let expr: &Expr = if gridcraft_formula::adjust::has_relative_refs(&expr) {
+                shifted = gridcraft_formula::adjust::shift_relative_wrapping((*expr).clone(), self.at.row as i64, self.at.col as i64);
+                &shifted
+            } else {
+                &expr
             };
+            let saved = self.sheet;
+            // Unqualified references in a name refer to the scope sheet.
+            self.sheet = scope;
+            let r = self.eval(expr);
+            self.sheet = saved;
+            return r;
         }
         // A table name alone means its data body.
+        let wb = self.host.workbook();
         if let Some((si, ti)) = wb.table(bare)
             && let Some(t) = wb.sheet(si).and_then(|s| s.tables.get(ti))
             && let Some(d) = t.data_range()
@@ -782,15 +789,26 @@ impl<'h> Evaluator<'h> {
                 let v = self.arg_val(args, 0).unwrap_or_default();
                 let f = self.arg_val(args, 1).unwrap_or_default();
                 let sys = self.host.workbook().date_system;
+                // One format code for a whole range of values is the usual shape
+                // (`TEXT(A2:A2000, "0")`): convert the code to text once, not per element.
+                let scalar_code: Option<Result<String, CellError>> = if matches!(f, Value::Array(_)) { None } else { Some(f.to_text()) };
                 let one = |v: &Value, f: &Value| -> Value {
                     if let Value::Error(e) = v {
                         return Value::Error(*e);
                     }
-                    let code = match f.to_text() {
-                        Ok(c) => c,
-                        Err(e) => return Value::Error(e),
+                    let owned;
+                    let code: &str = match &scalar_code {
+                        Some(Ok(c)) => c.as_str(),
+                        Some(Err(e)) => return Value::Error(*e),
+                        None => match f.to_text() {
+                            Ok(c) => {
+                                owned = c;
+                                owned.as_str()
+                            }
+                            Err(e) => return Value::Error(e),
+                        },
                     };
-                    match gridcraft_numfmt::text_function(v, &code, sys) {
+                    match gridcraft_numfmt::text_function(v, code, sys) {
                         Ok(s) => Value::text(s),
                         Err(e) => Value::Error(e),
                     }
@@ -1866,11 +1884,74 @@ pub fn resized_sum_range(sum: RangeRef, height: u32, width: u32) -> RangeRef {
 }
 
 /// Collects the static references of an expression with their sheets resolved; `dynamic` is
-/// set when the formula uses INDIRECT/OFFSET/names/tables whose targets can change.
+/// set when the formula uses INDIRECT/OFFSET/tables (or a name that can't be resolved now) whose
+/// targets can change between recalcs.
+///
+/// Defined names are resolved here, not treated as dynamic: a name holding a range contributes
+/// that range, a name holding a LAMBDA contributes the references inside its body (its
+/// parameters, and LET variables, are bound names, not lookups), names referring to names follow
+/// the chain to a bounded depth. A column of cells calling one LAMBDA name is then an ordinary
+/// static dependency, re-evaluated when its inputs change and only then. Changing a name's
+/// definition is a structural edit (full rebuild), so the resolution can't go stale. Names with
+/// relative references (evaluated relative to the using cell), unknown names, unparsable names,
+/// sheet-scoped names used from another sheet, cycles between names and chains deeper than the
+/// bound stay dynamic. A LAMBDA name calling itself is not a cycle here: the call reads what its
+/// body reads.
+///
+/// Resolves names through a fresh [`NameCache`]; a graph build resolving many formulas shares one
+/// through [`precedents_with`].
 pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
+    precedents_with(wb, sheet, e, &mut NameCache::default())
+}
+
+/// [`precedents`] with the defined names resolved through `names`, shared across the formulas of
+/// one graph build.
+pub fn precedents_with(wb: &Workbook, sheet: usize, e: &Expr, names: &mut NameCache) -> (Vec<Area>, bool) {
     let mut out = Vec::new();
     let mut dynamic = false;
-    let push = |out: &mut Vec<Area>, r: &Reference, range: RangeRef| match &r.sheet {
+    collect_precedents(wb, sheet, e, &mut Vec::new(), &mut out, &mut dynamic, 0, names);
+    // Each area once: a formula mentioning a name or a range k times depends on it once.
+    let mut distinct = HashSet::new();
+    out.retain(|a| distinct.insert(*a));
+    (out, dynamic)
+}
+
+/// Names referring to names are followed this many levels before the formula is called dynamic.
+const NAME_DEPTH: usize = 8;
+
+/// What each defined name contributes to the formulas using it, resolved once per graph build.
+///
+/// The workbook's names don't change while a graph is built, so a name read from thousands of
+/// cells, or mentioned many times inside another name's definition, is resolved the first time
+/// and looked up after that. The work of a build is then linear in the size of the definitions,
+/// however often they are referenced; followed afresh at every mention, a chain of names each
+/// mentioning the previous one k times would cost k^depth per use. A name met again from its own
+/// definition (a recursive LAMBDA) adds nothing; met again from deeper down the chain it is a
+/// cycle, and the names on it are dynamic. A chain cut by [`NAME_DEPTH`] is
+/// dynamic from the cut up to the formula, and the cache keeps that answer for those names even
+/// where a shorter chain reaches them later: dynamic is always a correct answer, only a slower one.
+#[derive(Default)]
+pub struct NameCache {
+    /// Keyed by the name, its scope and the sheet its unqualified references resolve against.
+    entries: HashMap<(String, Option<usize>, usize), NameEntry>,
+}
+
+enum NameEntry {
+    /// Being resolved further up the current chain, entered at `depth`: met again from its own
+    /// definition it is a direct self-call, from deeper down a cycle.
+    Resolving {
+        depth: usize,
+    },
+    Resolved {
+        areas: Vec<Area>,
+        dynamic: bool,
+    },
+}
+
+/// Adds `range` to `out` on the sheet(s) `r` names, or on `sheet` for an unqualified reference;
+/// a sheet that doesn't exist contributes nothing (evaluation reports #REF!).
+fn push_area(wb: &Workbook, sheet: usize, out: &mut Vec<Area>, r: &Reference, range: RangeRef) {
+    match &r.sheet {
         SheetSel::Current => out.push(Area { sheet, range }),
         SheetSel::Named(n) => {
             if let Some(i) = wb.sheet_index(n) {
@@ -1884,31 +1965,114 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
                 }
             }
         }
-    };
-    e.walk(&mut |x| match x {
-        Expr::Ref(r) => push(&mut out, r, r.range()),
-        // The cells SUMIF/AVERAGEIF really read from the sum range (see `resized_sum_range`); when
-        // the criteria range's size isn't known statically, recalculate the formula every time.
-        Expr::Call(n, args) if resizes_sum_range(n, args.len()) => match (args.first(), args.get(2)) {
-            (Some(Expr::Ref(c)), Some(Expr::Ref(s))) => {
-                let (crit, sum) = (c.range(), s.range());
-                push(&mut out, s, resized_sum_range(sum, crit.height(), crit.width()));
+    }
+}
+
+/// A LET/LAMBDA parameter as written: `[x]` for an optional one is bound as `x`.
+fn bound_name(n: &str) -> String {
+    n.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase()
+}
+
+/// Adds the precedents a defined name contributes when used from `sheet` to `out`, resolving it
+/// through `names` the first time and looking it up after that.
+#[allow(clippy::too_many_arguments)]
+fn name_precedents(wb: &Workbook, sheet: usize, n: &str, out: &mut Vec<Area>, dynamic: &mut bool, depth: usize, names: &mut NameCache) {
+    let (scope_sheet, bare) = match n.split_once('!') {
+        Some((s, b)) => match wb.sheet_index(s.trim_matches('\'')) {
+            Some(i) => (i, b),
+            None => {
+                *dynamic = true;
+                return;
             }
-            (_, Some(Expr::Number(_) | Expr::Text(_) | Expr::Bool(_) | Expr::Error(_) | Expr::Array(_) | Expr::Missing)) => {}
-            _ => dynamic = true,
         },
-        Expr::Call(n, _)
-            if matches!(n.as_str(), "INDIRECT" | "OFFSET" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO") =>
-        {
-            dynamic = true
+        None => (sheet, n),
+    };
+    let Some(def) = wb.name(bare, scope_sheet) else {
+        // Not a defined name: a table name (data body known only at evaluation) or a typo
+        // (#NAME?). Either way, evaluate every time.
+        *dynamic = true;
+        return;
+    };
+    // A sheet-scoped name used from another sheet (`Sheet1!F`): a LAMBDA it yields runs its body
+    // against the calling cell's sheet, not the scope sheet its references are resolved against
+    // here, so the cells it reads aren't known statically.
+    if def.scope.is_some_and(|s| s != sheet) {
+        *dynamic = true;
+    }
+    let name_sheet = def.scope.unwrap_or(sheet);
+    let key = (def.name.to_ascii_lowercase(), def.scope, name_sheet);
+    // Looked up before the depth bound: a hit doesn't recurse.
+    match names.entries.get(&key) {
+        // A direct self-call (a recursive LAMBDA): it reads what the body being collected reads,
+        // nothing more.
+        Some(NameEntry::Resolving { depth: entered }) if entered.saturating_add(1) == depth => return,
+        Some(NameEntry::Resolving { .. }) => {
+            // A longer cycle (A→B→A): B's entry lacks A's areas, so the names on it are dynamic.
+            *dynamic = true;
+            return;
         }
-        Expr::Name(_) | Expr::Struct(_) => dynamic = true,
-        Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !is_special(n) => dynamic = true,
+        Some(NameEntry::Resolved { areas, dynamic: d }) => {
+            out.extend_from_slice(areas);
+            *dynamic |= *d;
+            return;
+        }
+        None => {}
+    }
+    if depth >= NAME_DEPTH {
+        *dynamic = true;
+        return;
+    }
+    let mut areas = Vec::new();
+    let mut d = false;
+    match gridcraft_formula::parse_name(&def.formula) {
+        Ok(expr) if !gridcraft_formula::adjust::has_relative_refs(&expr) => {
+            names.entries.insert(key.clone(), NameEntry::Resolving { depth });
+            collect_precedents(wb, name_sheet, &expr, &mut Vec::new(), &mut areas, &mut d, depth + 1, names);
+            // Stored once each: a definition mentioning a range k times contributes it once.
+            let mut distinct = HashSet::new();
+            areas.retain(|a| distinct.insert(*a));
+        }
+        _ => d = true,
+    }
+    out.extend_from_slice(&areas);
+    *dynamic |= d;
+    names.entries.insert(key, NameEntry::Resolved { areas, dynamic: d });
+}
+
+/// Walks `e`, adding every static reference to `out` and setting `dynamic` for what can't be
+/// resolved now. `bound` holds the LAMBDA parameters and LET variables in scope, which are not
+/// name lookups; `depth` counts the defined names entered on the way here.
+#[allow(clippy::too_many_arguments)]
+fn collect_precedents(
+    wb: &Workbook,
+    sheet: usize,
+    e: &Expr,
+    bound: &mut Vec<String>,
+    out: &mut Vec<Area>,
+    dynamic: &mut bool,
+    depth: usize,
+    names: &mut NameCache,
+) {
+    match e {
+        Expr::Ref(r) => push_area(wb, sheet, out, r, r.range()),
+        Expr::Name(n) => {
+            if !bound.contains(&bound_name(n)) {
+                name_precedents(wb, sheet, n, out, dynamic, depth, names);
+            }
+        }
+        Expr::Struct(_) => *dynamic = true,
+        Expr::Array(rows) => {
+            for x in rows.iter().flatten() {
+                collect_precedents(wb, sheet, x, bound, out, dynamic, depth, names);
+            }
+        }
+        Expr::Unary(_, a) | Expr::Paren(a) => collect_precedents(wb, sheet, a, bound, out, dynamic, depth, names),
         // A range ending in a function's result (`A1:INDEX(B1:B9,n)`) covers the cells between
         // the references inside it, not only those references.
         Expr::Binary(BinOp::Range, a, b) if !matches!((&**a, &**b), (Expr::Ref(_), Expr::Ref(_))) => {
-            let mut inner = precedents(wb, sheet, a).0;
-            inner.extend(precedents(wb, sheet, b).0);
+            let mut inner = Vec::new();
+            collect_precedents(wb, sheet, a, bound, &mut inner, dynamic, depth, names);
+            collect_precedents(wb, sheet, b, bound, &mut inner, dynamic, depth, names);
             let mut boxes: Vec<Area> = Vec::new();
             for area in inner {
                 match boxes.iter_mut().find(|x| x.sheet == area.sheet) {
@@ -1918,9 +2082,91 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
             }
             out.extend(boxes);
         }
-        _ => {}
-    });
-    (out, dynamic)
+        Expr::Binary(..) => {
+            // Unwind the left spine of a long operator chain (`=A1+A2+…`, 4,096 operands within
+            // Excel's formula limit) into a list, so the walk recurses once per right operand
+            // and not once per operator. A range operator with a computed end stays a node of
+            // its own (the arm above).
+            let mut rights = Vec::new();
+            let mut node = e;
+            while let Expr::Binary(op, a, b) = node
+                && !(*op == BinOp::Range && !matches!((&**a, &**b), (Expr::Ref(_), Expr::Ref(_))))
+            {
+                rights.push(&**b);
+                node = a;
+            }
+            collect_precedents(wb, sheet, node, bound, out, dynamic, depth, names);
+            for b in rights.into_iter().rev() {
+                collect_precedents(wb, sheet, b, bound, out, dynamic, depth, names);
+            }
+        }
+        Expr::Invoke(f, args) => {
+            collect_precedents(wb, sheet, f, bound, out, dynamic, depth, names);
+            for a in args {
+                collect_precedents(wb, sheet, a, bound, out, dynamic, depth, names);
+            }
+        }
+        Expr::Call(n, args) => {
+            // The cells SUMIF/AVERAGEIF really read from the sum range (see `resized_sum_range`);
+            // when the criteria range's size isn't known statically, recalculate every time.
+            if resizes_sum_range(n, args.len()) {
+                match (args.first(), args.get(2)) {
+                    (Some(Expr::Ref(c)), Some(Expr::Ref(s))) => {
+                        let (crit, sum) = (c.range(), s.range());
+                        push_area(wb, sheet, out, s, resized_sum_range(sum, crit.height(), crit.width()));
+                    }
+                    (_, Some(Expr::Number(_) | Expr::Text(_) | Expr::Bool(_) | Expr::Error(_) | Expr::Array(_) | Expr::Missing)) => {}
+                    _ => *dynamic = true,
+                }
+            }
+            if matches!(n.as_str(), "INDIRECT" | "OFFSET" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO") {
+                *dynamic = true;
+            }
+            match n.as_str() {
+                // Parameters are bound inside the body only; the body is the last argument.
+                "LAMBDA" if !args.is_empty() => {
+                    let added = args.len() - 1;
+                    for p in &args[..added] {
+                        if let Expr::Name(pn) = p {
+                            bound.push(bound_name(pn));
+                        }
+                    }
+                    if let Some(body) = args.last() {
+                        collect_precedents(wb, sheet, body, bound, out, dynamic, depth, names);
+                    }
+                    bound.truncate(bound.len().saturating_sub(added));
+                }
+                // Each LET variable is bound for the values after it and for the result.
+                "LET" if args.len() >= 3 => {
+                    let mut added = 0;
+                    for pair in args[..args.len() - 1].chunks(2) {
+                        if let [Expr::Name(vn), value] = pair {
+                            collect_precedents(wb, sheet, value, bound, out, dynamic, depth, names);
+                            bound.push(bound_name(vn));
+                            added += 1;
+                        } else if let [other] = pair {
+                            collect_precedents(wb, sheet, other, bound, out, dynamic, depth, names);
+                        }
+                    }
+                    if let Some(result) = args.last() {
+                        collect_precedents(wb, sheet, result, bound, out, dynamic, depth, names);
+                    }
+                    bound.truncate(bound.len().saturating_sub(added));
+                }
+                _ => {
+                    for a in args {
+                        collect_precedents(wb, sheet, a, bound, out, dynamic, depth, names);
+                    }
+                    // Not a built-in: a defined name holding a LAMBDA (its body's references are
+                    // this cell's precedents too), or unknown (#NAME?, evaluated every time).
+                    if gridcraft_functions::lookup(n).is_none() && !is_special(n) && !bound.contains(&bound_name(n)) {
+                        name_precedents(wb, sheet, n, out, dynamic, depth, names);
+                    }
+                }
+            }
+        }
+        Expr::Number(_) | Expr::Text(_) | Expr::Bool(_) | Expr::Error(_) | Expr::Missing => {}
+    }
 }
 
 fn is_special(n: &str) -> bool {

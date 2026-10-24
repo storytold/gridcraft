@@ -80,7 +80,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Calculation Options",
             ["Formulas", "Calculation"],
             None,
-            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
+            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001), multiThreaded?: bool (Enable multi-threaded calculation), threads?: 0–1024 (0: every processor; at most the processors present run)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
             has_doc,
             calc_options
         ),
@@ -744,6 +744,12 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(v) = f64_param(p, "maxChange") {
             cx.wb.calc.set_max_change(v);
         }
+        if let Some(v) = bool_param(p, "multiThreaded") {
+            cx.wb.calc.multi_threaded = v;
+        }
+        if let Some(v) = u32_param(p, "threads") {
+            cx.wb.calc.threads = v.min(1024);
+        }
         let c = &cx.wb.calc;
         // Switching to automatic, or changing how circular references are calculated outside
         // manual mode, recalculates the workbook.
@@ -751,7 +757,9 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
         if mode == Some(CalcMode::Automatic) || (iteration_changed && c.mode != CalcMode::Manual) {
             cx.structural = true;
         }
-        Ok(json!({"mode": format!("{:?}", c.mode), "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change}))
+        Ok(
+            json!({"mode": format!("{:?}", c.mode), "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change, "multiThreaded": c.multi_threaded, "threads": c.threads}),
+        )
     })
 }
 

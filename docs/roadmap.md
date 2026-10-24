@@ -1,6 +1,6 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (test command) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (multi-threaded recalc landed; previously minor: test command) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
@@ -14,7 +14,7 @@ list is [`gaps.md`](gaps.md); numbers and method are in
    15-digit comparison (#187). 8–15 h. Language work should extend the new `i18n` catalog past the
    ribbon rather than add scattered literals.
 2. **XLSX on real files** (gaps #1, #3): corpus run plus Excel opening our output.
-3. **Large workbooks and multi-threaded recalc** (gap #2).
+3. **Large workbooks** (gap #2; multi-threaded recalc landed 2026-10-23).
 
 ## Alpha gate
 
@@ -45,7 +45,7 @@ and edge features. Each gate links its gap.
 |---|---|---|
 | XLSX proven on a real-world corpus; Excel opens our output without repair | #1 | 15–25 |
 | Unmodelled XLSX parts preserved on save | #3 | 10–15 |
-| 100 MB workbooks open; 1M rows usable; multi-threaded recalc; 100k-edit recalc < 100 ms | #2 | 25–40 |
+| 100 MB workbooks open; 1M rows usable; multi-threaded recalc (done 2026-10-23); 100k-edit recalc < 100 ms | #2 | 20–30 |
 | Charts: kinds and options survive round trip; axes, trendlines, error bars | #4 | 25–35 |
 | Text in every script renders and exports | #5 | 12–20 |
 | Calculation correctness bugs closed; iterative calculation | #6 | 10–15 |
@@ -114,6 +114,7 @@ to check our files, and Windows machines with the reported GPU drivers.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-23 | minor | Measuring: tests run through `cargo xtask test` |
+| 2026-10-23 | minor | Multi-threaded recalc landed; focus 3 and the beta gate row updated |
 | 2026-10-11 | minor | PivotTable calculated fields landed |
 | 2026-10-10 | minor | Current focus and M15 updated for the 10-10 merges |
 | 2026-10-10 | minor | Added the alpha gate table (six core workflows; passes, stays alpha) |

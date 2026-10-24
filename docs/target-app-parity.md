@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (Page Setup paper sizes match Japanese Excel: B4/B5/B6 are the JIS sizes, with ISO B4/B5/B6 by name and the Japanese postcards, envelopes and A6 added; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (recalculation runs levels of independent formulas on every core; two 1M-cell workbooks timed on one and eight threads) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -79,7 +79,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 
 | Area | Weight | Breadth | Ready | Hours | Evidence |
 |---|---|---|---|---|---|
-| Formula language and calculation | 18 | ~92% | ~72% | 20–30 | A1/R1C1 parser, reference adjustment, dependency-graph recalc, dynamic arrays and `#SPILL!`, `A1#`, LET/LAMBDA and helpers, structured references, names, 3-D references. Open correctness bugs: 15-digit equality (#57), stale spills after structural edits and cleared blockers (#133, #139), 3-D span endpoint deletion (#140), sheet rename and qualified names (#134). Single-threaded |
+| Formula language and calculation | 18 | ~92% | ~72% | 20–30 | A1/R1C1 parser, reference adjustment, dependency-graph recalc, dynamic arrays and `#SPILL!`, `A1#`, LET/LAMBDA and helpers, structured references, names, 3-D references. Open correctness bugs: 15-digit equality (#57), stale spills after structural edits and cleared blockers (#133, #139), 3-D span endpoint deletion (#140), sheet rename and qualified names (#134) |
 | Worksheet functions | 12 | 98.1% (measured) | ~82% | 16–26 | 513 / 523 names, 504 working. Missing: GETPIVOTDATA, IMAGE plus cloud functions. No conformance suite against Excel-computed oracles; edge-case bugs keep surfacing (#137, #138). [function-parity.md](function-parity.md) |
 | Editing, navigation, clipboard, fill | 12 | ~90% | ~70% | 15–25 | Point mode, F4, AutoComplete, Paste Special, AutoFill, Flash Fill, Find/Replace, Go To Special. Bugs: rectangular drag-select (#28), monthly fill (#132), cut across sheets (#128), Insert Copied Cells missing (#21), key tips only on part of the Home tab (#43; #33, #49). [ui-parity.md](ui-parity.md) |
 | Cell formatting, styles, conditional formatting | 10 | ~95% | ~80% | 8–14 | Full number-format language, borders, 47 cell styles, 60 table styles, all CF rule kinds including data bars, colour scales and icon sets. Gaps: font weights beyond regular/bold (#168), system fonts list (#4), themes |
@@ -203,15 +203,19 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 | Measure | GridCraft | Excel | Kind |
 |---|---|---|---|
 | Sheet size limits | 1,048,576 × 16,384 | same | measured (`crates/core/src/addr.rs`) |
-| Recalc threads | 1 | all cores | measured (no threading in `crates/calc`) |
+| Recalc threads | every core for levels of independent formulas (2026-10-23); wasm and iterative calculation single-threaded | all cores | measured on an 8-core laptop: 51K LAMBDA-name calls, evaluation 11.9 s on one thread → 2.2 s on eight; 41K lookups over columns of formulas 2.5 s → 0.3 s, most of it from the copies each worker keeps of the blocks it reads twice (the threads alone gave about 1.6 s), which the single-threaded pass doesn't have yet |
 | Edit → recalc, 100k dependents | ~0.4 s (2026-10-07), target < 100 ms | tens of ms | measured on the owner's machine; #66 since made range-formula recalc linear, not re-timed |
+| Formulas referencing defined names | static dependencies (2026-10-14; were volatile: every name made its formula recalculate on every edit) | static | measured: 1M-cell workbook with 49K LAMBDA-name calls, unrelated edit ~10 s → ~1 s |
+| Open a 1M-cell, 49K-formula XLSX (no cached values) | 109 s single-threaded on a 2-core sandbox (2026-10-14; was 447 s); 13.7 s on one thread, 4.0 s on eight on an 8-core laptop (2026-10-23) | seconds, multi-threaded | measured |
 | Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
 | Open a ~100 MB XLSX | fails (#175) | opens | user report |
 | Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
 
-Work: streaming XLSX reader with shared-string and style dedup, multi-threaded recalc of
-independent chains (native only; WASM stays single-threaded), whole-column reference
+Work: streaming XLSX reader with shared-string and style dedup, whole-column reference
 clamping, a `cargo xtask bench` with fixed workbooks so the numbers become measured.
+Multi-threaded recalc landed 2026-10-23 (levels of independent formulas on worker threads,
+per-worker copies of the blocks read twice; wasm stays single-threaded; the single-threaded
+pass follows the same plan, so results don't depend on the machine).
 
 ## Platforms
 
@@ -334,10 +338,12 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | minor | Performance: recalculation runs levels of independent formulas on every core; open times of two 1M-cell workbooks measured on one and eight threads |
 | 2026-10-21 | minor | Page Setup paper sizes: `B4`/`B5`/`B6` are the JIS sizes Japanese Excel uses (ISO B4/B5/B6 by name), and Japanese Postcard, Japanese Double Postcard, the chou/kaku envelopes and A6 are added; PDF MediaBox and `file.print` follow, and the Size menu lists them |
 | 2026-10-18 | trivial | Stale chart notes: all chart kinds survive XLSX round-trip (PRs #158, #161) and trendlines landed |
 | 2026-10-16 | minor | Advanced Filter copy-to clears only its actual output and rejects overflow without changing cells (#1031) |
 | 2026-10-15 | minor | Row auto-fit: line breaks count only in wrapping cells (Excel: wrap off shows one line, AutoFit gives one line); unwrapped multi-line cells from files no longer grow rows on open (no score change) |
+| 2026-10-14 | minor | Performance: defined names are static precedents (formulas calling LAMBDA names no longer recalculate on every edit), parsed names cached per pass, `TEXT(n,"0")` integer fast path; measured on a 1M-cell workbook (no score change) |
 | 2026-10-12 | minor | Essentials AutoFit evidence: rows auto-fit oversized fonts on open and row formatting (#833) |
 | 2026-10-12 | minor | Sheet tabs: reveal the selected tab on navigation and resize while preserving manual scrolling (#681); no score change |
 | 2026-10-12 | minor | PivotTables: values on rows (Σ Values in Rows at any position, all three layouts; `pivot.moveField` and the field pane move it; `dataOnRows` round-trips) (no score change) |

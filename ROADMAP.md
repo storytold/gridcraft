@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (accounting negatives such as `$(1,234)` read as numbers; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: Page Setup paper sizes: JIS B4/B5/B6, the Japanese postcards and envelopes, and A6; long flat operator chains up to Excel's formula limit) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (recalculation runs levels of independent formulas on every core; previously minor: accounting negatives such as `$(1,234)` read as numbers; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: Page Setup paper sizes: JIS B4/B5/B6, the Japanese postcards and envelopes, and A6; long flat operator chains up to Excel's formula limit) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -125,7 +125,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
    correctness, chart kind round-trip, CJK font fallback, macOS Finder open, German and Chinese
    UI). Review and merge: 8–15 h.
 2. **XLSX fidelity on a real-world corpus**, with Excel opening our output without repair: 25–35 h.
-3. **Large workbooks and recalc speed**: 100 MB XLSX, 1M rows, multi-threaded recalc: 40–60 h.
+3. **Large workbooks and recalc speed**: 100 MB XLSX, 1M rows (multi-threaded recalc landed 2026-10-23): 30–50 h.
 4. **Charts depth**: kinds and options round-trip, axes, trendlines, error bars: 25–35 h.
 5. **Text in every script** (CJK, Thai, Arabic, Devanagari) in cells and PDF: 12–20 h.
 6. **Legacy `.xls` import and password-protected workbooks**: 20–30 h.
@@ -138,6 +138,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-23 | Accounting negatives in text: `$(1,234)`, `$ (5)` and `(5)%` read as negative numbers when typed, coerced by arithmetic or passed to VALUE, like Excel 365; `(-5)`, `((5))`, `$5%` and dates or times in parentheses stay text |
 | 2026-10-23 | Calc: `INDEX(A1:C3,2)` (one index on a reference of several rows and columns) is `#REF!` as in Excel, instead of the whole row; `INDEX(A1:C3,2,)` still gives the row |
 | 2026-10-22 | Formula hardening: digits too many for a finite number are text, so `"1 <400 digits>/<400 digits>"` no longer coerces to NaN; a NaN column index in VLOOKUP, HLOOKUP and the D-functions is `#VALUE!` instead of an index underflow; REGEXREPLACE stops building a result as soon as it can only be too long (a worst case went from 1 GB to 7 MB) (#2163, #2162) |
+| 2026-10-23 | Recalculation runs on every core: the dirty formulas are planned into levels of formulas that don't read one another, and wide levels are calculated on worker threads, each reading the main pass's results so far and handing back any formula that turns out to read one not done yet (INDIRECT, OFFSET, a spill of this pass), which the main thread finishes with the usual bounded-stack machinery. RAND stays on the main thread in row-major order; iterative calculation and wasm stay single-threaded. Each worker keeps a copy of the blocks it reads twice in a level (text included, within a byte budget the workers share), which is where much of the gain on lookups comes from; the single-threaded pass has no such copies yet. A 1M-cell workbook with 51K LAMBDA-name calls opens in 4.0 s on 8 threads (13.7 s on one); 41K lookups over columns of formulas in 2.1 s (4.2 s). On one thread, too, the pass now follows the plan, so the order RAND draws in is the same on every machine (RAND sequences differ from earlier releases); formulas on or behind a cycle still run in row-major order after the levels, so `#CIRC!` moves only where a leveled INDIRECT or OFFSET reader reaches the cycle first. Planning costs about 20 ms per 100K dirty formulas, up to 0.6 s and 430 MB for a million formulas with 64 precedents each. `calcPr concurrentCalc`/`concurrentManualCount` round-trip; `formulas.calculationOptions` sets `multiThreaded`/`threads` |
 | 2026-10-21 | Page Setup paper sizes match Japanese Excel: `B4`/`B5`/`B6` are the JIS sizes (ISO B4/B5/B6 stay reachable by name), so a Japanese B5 worksheet prints at 182×257 mm; Japanese Postcard (100×148 mm), Double Postcard (148×200 mm), Envelope #3/#4 (120×235/90×205 mm), Kaku #2/#3 (240×332/216×277 mm) and A6 are added, both sizes reach the PDF page (`file.exportPdf`/`file.print` MediaBox) and the size survives an XLSX round-trip; the Page Layout Size menu lists them. `B4`/`B5` used to be the ISO sizes, which is changed here |
 | 2026-10-20 | Japanese interface catalog covers every key the Brazilian Portuguese catalog translates: the 398-label shared core plus 545 dialog, message, Backstage and menu strings (943 total, ~43% of ~2,200). A test parses `pt.rs`'s source, so the two catalogs stay in step |
 | 2026-10-20 | Interface translated into Dutch (518 labels: ribbon, context menus, File view, dialog titles, Options); `nl`, `nl-NL`, `nl-BE` locale tags resolve to Dutch |
@@ -156,6 +157,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-14 | Recalculation: a dynamic array's anchor given a new formula that reads its old spill area (`A1` was `=SEQUENCE(3)`, becomes `=SUM(A2:A3)+1` or `=SEQUENCE(1,A2+1)`) sees that area empty instead of the old values |
 | 2026-10-14 | Recalculation: when two arrays of one recalculation want the same empty cells, the formulas that read the one laid out second (at its anchor or over the cells it would have spilled into) read `#SPILL!` and empty cells instead of its values |
 | 2026-10-14 | Border keytips: each Alt, H, B letter applies the preset Excel's Borders menu gives it (H,B,O bottom, H,B,B bottom double, H,B,N no border, H,B,A all borders and the rest); they all drew a bottom border before. H,B,M opens Format Cells on the Border tab |
+| 2026-10-14 | Recalc: defined names are static precedents (a range name contributes its range, a LAMBDA name the references in its body; parameters and LET variables are bound names), so a column of LAMBDA calls is no longer re-evaluated on every edit; a recalc pass parses each name once; `TEXT(n,"0")` on an integer skips the general renderer. A real 1M-cell, 49K-formula workbook: open 447 s → 109 s, an unrelated edit ~10 s → ~1 s |
 | 2026-10-13 | Formula-entry Command/Ctrl-click inserts another reference with the locale's argument separator; Shift-click extends from a stable, sheet-aware anchor. Pointer tests cover repeated clicks, reversed ranges, ordinary replacement, typed separators, Spanish syntax, sheet switches and keyboard continuation. Readiness estimates unchanged. |
 | 2026-10-13 | `formulas.evaluate` (`gridcraft-cli eval`, MCP `evaluate_formula`) refuses what entering the formula in a cell refuses, with the reason (`=SUM(1;2)`: "expected `,` or `)`"), instead of `#NAME?` for any formula that doesn't parse |
 | 2026-10-13 | Colour menus: Fill Color, Font Color and the Format Cells pickers end with Recent Colors (the last ten custom colours) and More Colors… (hue/saturation area, RGB, hex box, preview, OK/Cancel) (#928) |
@@ -229,6 +231,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |
 | 2026-10-23 | minor | Progress log: INDEX with one index on a 2-D reference is #REF! |
 | 2026-10-22 | trivial | Progress log: formula hardening (#2163, #2162) |
+| 2026-10-23 | minor | Progress log: multi-threaded recalculation |
 | 2026-10-21 | minor | Page Setup paper sizes: JIS B4/B5/B6 (ISO by name), Japanese postcards and envelopes, A6; PDF page size follows, XLSX round-trips |
 | 2026-10-20 | minor | Dutch (nl) listed under other shipped languages; progress log row |
 | 2026-10-19 | minor | Progress log: long flat operator chains (#916) |
