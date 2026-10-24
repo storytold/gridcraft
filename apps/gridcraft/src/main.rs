@@ -16,6 +16,7 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod opener;
 mod print;
 
 use std::cell::RefCell;
@@ -207,16 +208,16 @@ fn open_with_system(target: &str) {
         log::warn!("refused to open {target:?}: only http, https and mailto links are opened");
         return;
     };
-    let target = target.as_str();
-    let cmd = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(windows) {
-        "explorer"
-    } else {
-        "xdg-open"
+    // By absolute path where the platform has one (#2176): a bare `explorer` would be looked up
+    // in the application's directory first.
+    let env = |key: &str| std::env::var(key).ok();
+    let (system_root, windir) = (env("SystemRoot"), env("windir"));
+    let Some((program, arg)) = opener::opener_command(opener::Os::current(), &target, system_root.as_deref(), windir.as_deref()) else {
+        log::warn!("refused to open {target:?}: it could be read as an option");
+        return;
     };
-    if let Err(e) = std::process::Command::new(cmd).arg(target).spawn() {
-        log::warn!("{cmd} {target}: {e}");
+    if let Err(e) = std::process::Command::new(&program).arg(&arg).spawn() {
+        log::warn!("{} {arg}: {e}", program.display());
     }
 }
 
