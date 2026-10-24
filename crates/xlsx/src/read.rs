@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
-use gridcraft_model::{CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook};
+use gridcraft_model::{CalcMode, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook};
 
 use crate::package::{Package, Rel};
 use crate::styles::{StylesIn, read_styles};
@@ -29,7 +29,7 @@ pub struct Ctx<'a> {
     /// Custom number formats from the styles part, by id.
     pub num_fmts: std::collections::HashMap<u32, String>,
     /// Value metadata blocks, indexed by the worksheet's one-based `vm` attribute.
-    pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
+    pub rich_values: Vec<Option<crate::richdata::RichCell>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
 }
@@ -111,7 +111,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         persons: Default::default(),
         next_id: 1,
         num_fmts: Default::default(),
-        cell_pictures: vec![],
+        rich_values: vec![],
         cf_ext_ids: vec![],
     };
     let root_rels = cx.pkg.rels("")?;
@@ -133,7 +133,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
     let wb_rels = cx.pkg.rels(&wb_part)?;
     let mut kept = crate::passthrough::KeptReader::new(&mut cx);
-    cx.cell_pictures = match crate::richdata::read(&mut cx, &wb_rels) {
+    cx.rich_values = match crate::richdata::read(&mut cx, &wb_rels) {
         Ok(pictures) => pictures,
         Err(error) => {
             cx.warn(format!("cell-picture data could not be read ({error}); scalar fallbacks were retained"));

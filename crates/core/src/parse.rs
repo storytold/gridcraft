@@ -30,7 +30,9 @@ pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
     if t.eq_ignore_ascii_case("FALSE") {
         return Parsed { value: Value::Bool(false), format: None };
     }
-    if let Some(e) = CellError::parse(t) {
+    // Excel keeps typed `#SPILL!` and `#CALC!` as text: those errors come only from formulas
+    // (or from pasting a formula result as a value).
+    if let Some(e) = CellError::parse(t).filter(|e| !matches!(e, CellError::Spill | CellError::Calc)) {
         return Parsed { value: Value::Error(e), format: None };
     }
     if let Some((n, f)) = parse_numeric(t, sys) {
@@ -446,6 +448,11 @@ mod tests {
         assert_eq!(p("'123").value, Value::text("123"));
         assert_eq!(p("true").value, Value::Bool(true));
         assert_eq!(p("#N/A").value, Value::Error(CellError::NA));
+        assert_eq!(p("#GETTING_DATA").value, Value::Error(CellError::GettingData));
+        // Observed in Excel: these stay text when typed.
+        for t in ["#SPILL!", "#CALC!", "#spill!", "#FIELD!", "#BUSY!", "#BLOCKED!", "#UNKNOWN!", "#CONNECT!", "#PYTHON!"] {
+            assert_eq!(p(t).value, Value::text(t), "{t}");
+        }
         assert_eq!(p("e").value, Value::text("e"));
         assert_eq!(p("-").value, Value::text("-"));
         assert_eq!(p("1.2.3.4").value, Value::text("1.2.3.4"));

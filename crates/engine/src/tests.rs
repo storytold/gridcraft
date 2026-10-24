@@ -4266,6 +4266,31 @@ fn paste_special_validation_moves_relative_references() {
     assert!(ok(&mut s, "C3", "20"));
 }
 
+/// Typed `#SPILL!`/`#CALC!` stay text (as in Excel); pasted as values from a formula result they
+/// are error constants, and both survive an XLSX save and reopen (ft-3ir.10.25).
+#[test]
+fn newer_error_constants_survive_xlsx_roundtrip() {
+    use gridcraft_core::CellError;
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "#SPILL!"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "#CALC!"})).unwrap();
+    assert_eq!((v(&s, "A1"), v(&s, "A2")), (Value::text("#SPILL!"), Value::text("#CALC!")));
+    s.execute("cell.set", json!({"cell": "B2", "input": "x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=SEQUENCE(2)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B3", "input": "=FILTER({1,2},{FALSE,FALSE})"})).unwrap();
+    s.execute("edit.copy", json!({"range": "B1:B3"})).unwrap();
+    s.execute("selection.set", json!({"range": "C1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "values"})).unwrap();
+    let errors = |s: &Session| ["B1", "B3", "C1", "C3"].map(|a| v(s, a));
+    let expected = [CellError::Spill, CellError::Calc, CellError::Spill, CellError::Calc].map(Value::Error);
+    assert_eq!(errors(&s), expected);
+    assert!(s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("C1").unwrap()).unwrap().formula.is_none());
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "errors.xlsx", "base64": saved["base64"]})).unwrap();
+    assert_eq!(errors(&s), expected);
+    assert_eq!((v(&s, "A1"), v(&s, "A2")), (Value::text("#SPILL!"), Value::text("#CALC!")));
+}
+
 #[test]
 fn editing_quote_prefixed_text_keeps_it_text() {
     let mut s = s();

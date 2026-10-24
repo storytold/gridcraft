@@ -16,6 +16,7 @@ use crate::IoError;
 use crate::fmla::from_file;
 use crate::package::Rel;
 use crate::read::Ctx;
+use crate::richdata::RichCell;
 use crate::styles::read_color;
 use crate::tables::{col_width_to_px, paper_name, pt_to_px};
 use crate::xml::{self, El};
@@ -441,16 +442,22 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
             None => Value::Empty,
         },
     };
-    let picture = c.attr("vm").and_then(|vm| {
+    let rich = c.attr("vm").and_then(|vm| {
         if vm == "0" {
             return None;
         }
-        let picture = vm.parse::<usize>().ok().and_then(|n| n.checked_sub(1)).and_then(|n| cx.cell_pictures.get(n)).cloned().flatten();
-        if picture.is_none() {
+        let rich = vm.parse::<usize>().ok().and_then(|n| n.checked_sub(1)).and_then(|n| cx.rich_values.get(n)).cloned().flatten();
+        if rich.is_none() {
             cx.warn("some cells have unsupported or missing value metadata; kept their scalar fallback (cell pictures may be missing)");
         }
-        picture
+        rich
     });
+    let (picture, value) = match (rich, value) {
+        (Some(RichCell::Picture(picture)), value) => (Some(picture), value),
+        // A newer error (#SPILL!, #CALC!) cached as #VALUE! with its real kind in a rich value.
+        (Some(RichCell::Error(e)), Value::Error(_)) => (None, Value::Error(e)),
+        (_, value) => (None, value),
+    };
     if let Some(picture) = picture {
         if c.child("f").is_some() {
             cx.warn("formula-generated cell pictures were imported as static pictures; their formulas were not retained");

@@ -38,6 +38,16 @@ value in Excel. Moving the formula, inserting or deleting rows and columns, and 
 names keep the mark; retyping the formula drops it, and the writer then decides from the
 formula's shape. Rich-value metadata other than cell pictures (data types, `#SPILL!` error
 values) is still dropped.
+Error values: `#SPILL!` and `#CALC!` (formula results, and constants pasted as values) are saved
+as Excel saves them: a cached `#VALUE!` whose value metadata (`vm`) points at an `_error` rich
+value, `errorType` being `ERROR.TYPE` minus one (8 and 13). They read back as the same error,
+from GridCraft's files and from Excel's (which add sub-types and spill offsets we ignore). Excel's
+other newer errors (`#FIELD!` 12, and `#CONNECT!`, `#BLOCKED!`, `#UNKNOWN!`, `#BUSY!`,
+`#PYTHON!`) have no GridCraft kind and read as `#VALUE!`. Typed `#SPILL!`/`#CALC!` stay text, as
+in Excel (ft-3ir.10.25). The rich-value metadata type now carries `coerce="1"` and lower-case
+extension URIs: without them Excel 16.0 refused the whole file, cell pictures included. Checked
+in Excel 16.0 (build 20430) over COM: constants, cached formula results, with and without cell
+pictures, reopen with the same errors (`ERROR.TYPE` 9 and 14).
 
 | Format | Excel | GridCraft read | GridCraft write | Fidelity / notes | Tests |
 |---|---|---|---|---|---|
@@ -136,6 +146,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-14 | minor | XLSX formulas read with dynamic-array metadata (`cm`) keep it on save, so Excel does not recalculate them with implicit intersection |
 | 2026-10-14 | minor | PDF export writes clickable annotations for safe cell URLs and destinations on printed pages; CLI `convert` accepts `.pdf` output (#954) |
 | 2026-10-13 | trivial | XLSX export keeps a picture shared by several sheets as one media part (#985) |
+| 2026-10-15 | minor | XLSX: `#SPILL!`/`#CALC!` saved and read as `_error` rich values like Excel (they reopened as `#VALUE!`); typed `#SPILL!`/`#CALC!` stay text; rich-value metadata Excel accepts (`coerce`, lower-case URIs) |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |
 | 2026-10-12 | minor | `.xls` import reads the calculation settings (CalcMode, CalcIter, CalcCount, CalcDelta, CalcPrecision), so circular models calculate instead of showing `#CIRC!` (#724) |
