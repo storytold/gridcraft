@@ -1253,14 +1253,23 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         cx.warn(format!("PivotTable \"{}\" has no valid location; kept as plain cells", pt.name));
         return None;
     };
-    let pfs: Vec<&El> = x.child("pivotFields").map(|p| p.kids("pivotField").collect()).unwrap_or_default();
+    // Field lists are capped, and a field is used once (Excel puts a field on one axis, once):
+    // each use walks the field's items.
+    let pfs: Vec<&El> = x.child("pivotFields").map(|p| p.kids("pivotField").take(MAX_FIELDS).collect()).unwrap_or_default();
     let pf = |i: usize| pfs.get(i).copied();
-    let idx_list = |name: &str, attr: &str| -> Vec<i64> {
-        x.child(name).map(|e| e.children.iter().filter_map(|f| f.attr_i64(attr)).collect()).unwrap_or_default()
+    let mut used_fields = std::collections::HashSet::new();
+    let mut idx_list = |name: &str, attr: &str| -> Vec<i64> {
+        x.child(name)
+            .map(|e| e.children.iter().filter_map(|f| f.attr_i64(attr)).filter(|&i| i < 0 || used_fields.insert(i)).take(MAX_FIELDS).collect())
+            .unwrap_or_default()
     };
     let row_x = idx_list("rowFields", "x");
     let col_x = idx_list("colFields", "x");
-    let pages: Vec<&El> = x.child("pageFields").map(|p| p.kids("pageField").collect()).unwrap_or_default();
+    let mut page_fields = std::collections::HashSet::new();
+    let pages: Vec<&El> = x
+        .child("pageFields")
+        .map(|p| p.kids("pageField").filter(|f| f.attr_i64("fld").is_none_or(|i| page_fields.insert(i))).take(MAX_FIELDS).collect())
+        .unwrap_or_default();
 
     // Layout from the first axis field (pivotField defaults: compact and outline on).
     let first_axis = row_x.iter().chain(col_x.iter()).find(|i| **i >= 0).and_then(|i| pf(*i as usize));
@@ -1303,7 +1312,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
             }
             let i = i as usize;
             let Some((name, group)) = field_ref(cx, cache, i) else { continue };
-            let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
+            let labels: &[String] = cache.fields.get(i).map(|f| f.labels()).unwrap_or(&[]);
             let mut f = PivotField { source_col: name.clone(), date_group: group, sort: PivotSort::None, collapsed_items: vec![] };
             if let Some(e) = pf(i) {
                 f.sort = match e.attr("sortType") {
@@ -1329,7 +1338,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     for p in &pages {
         let Some(i) = p.attr_i64("fld").filter(|i| *i >= 0).map(|i| i as usize) else { continue };
         let Some((name, _)) = field_ref(cx, cache, i) else { continue };
-        let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
+        let labels: &[String] = cache.fields.get(i).map(|f| f.labels()).unwrap_or(&[]);
         let selected = if let Some(k) = p.attr_u32("item") {
             labels.get(k as usize).map(|l| vec![l.clone()])
         } else {
@@ -1362,7 +1371,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
 
     // Values.
     if let Some(df) = x.child("dataFields") {
-        for d in df.kids("dataField") {
+        for d in df.kids("dataField").take(MAX_FIELDS) {
             let Some(i) = d.attr_u32("fld").map(|i| i as usize) else { continue };
             let Some(f) = cache.fields.get(i) else { continue };
             let func = match d.attr("subtotal") {

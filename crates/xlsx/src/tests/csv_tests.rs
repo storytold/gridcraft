@@ -306,6 +306,27 @@ fn the_cap_counts_the_bytes_the_cells_hold_and_accepted_exports_keep_every_posit
     assert_eq!(tabs.len(), 14);
 }
 
+/// #2159: a record keeps at most one field per sheet column while it is read, not after; the rest
+/// of the line is still read through, so the next line starts the next record.
+#[test]
+fn fields_past_the_last_column_are_not_collected() {
+    let src = format!("{}last\nnext,row\n", "x,".repeat(100_000));
+    let mut records = vec![];
+    crate::csv::parse_records(&src, ',', '"', |rec| {
+        records.push(rec);
+        true
+    });
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].len(), 16_384);
+    assert_eq!(records[1], vec!["next".to_string(), "row".to_string()]);
+    // The same through the reader, and a quoted delimiter past the cap doesn't split the line.
+    let src = format!("{}\"a,\nb\",z\nnext\n", "x,".repeat(20_000));
+    let wb = read_csv(src.as_bytes(), &CsvOptions { delimiter: b',', ..CsvOptions::default() }).unwrap();
+    assert_eq!(v(&wb, 0, 16_383), Value::text("x"));
+    assert_eq!(v(&wb, 1, 0), Value::text("next"));
+    assert_eq!(wb.sheet(0).unwrap().cells.len(), 16_385);
+}
+
 #[test]
 fn parser_stops_collecting_fields_at_max_cols() {
     let extra = 50;

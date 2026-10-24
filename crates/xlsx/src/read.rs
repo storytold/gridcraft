@@ -32,6 +32,54 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// Cell elements read so far, across every sheet (capped by `sheet_read::MAX_CELLS`).
+    pub cells: u64,
+}
+
+/// The most worksheets read from one workbook (as the XLS reader allows).
+const MAX_SHEETS: usize = 4096;
+/// The most shared strings read from one workbook (as the XLS reader allows): each is an
+/// `Arc<str>` of its own, so a hundred million tiny `<si/>` would ask for gigabytes.
+const MAX_STRINGS: usize = 4_000_000;
+
+/// Sheet names taken while reading, compared as `Workbook::sheet_index` compares them (ASCII case
+/// folded), with the next `(n)` suffix to try for each base, so renaming duplicates stays linear.
+#[derive(Default)]
+pub(crate) struct SheetNames {
+    taken: std::collections::HashSet<String>,
+    next_suffix: std::collections::HashMap<String, usize>,
+}
+
+impl SheetNames {
+    /// Records `name` as taken.
+    pub(crate) fn insert(&mut self, name: &str) {
+        self.taken.insert(name.to_ascii_lowercase());
+    }
+
+    /// A valid name for the `i`-th sheet based on `name`, not yet taken; it is recorded as taken.
+    pub(crate) fn unique(&mut self, name: &str, i: usize) -> String {
+        let mut base: String = name.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).take(31).collect();
+        if base.trim().is_empty() {
+            base = format!("Sheet{}", i + 1);
+        }
+        if self.taken.insert(base.to_ascii_lowercase()) {
+            return base;
+        }
+        let short: String = base.chars().take(25).collect();
+        let key = short.to_ascii_lowercase();
+        let mut n = self.next_suffix.get(&key).copied().unwrap_or(2);
+        loop {
+            let candidate = format!("{short} ({n})");
+            n = n.saturating_add(1);
+            if self.taken.insert(candidate.to_ascii_lowercase()) {
+                self.next_suffix.insert(key, n);
+                return candidate;
+            }
+            if n == usize::MAX {
+                return base;
+            }
+        }
+    }
 }
 
 impl Ctx<'_> {
@@ -113,6 +161,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        cells: 0,
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -182,6 +231,9 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
                 let mut phonetics = Vec::new();
                 let mut dropped = 0usize;
                 let res = xml::parse_streaming(&b, &["si"], &mut |si| {
+                    if sst.len() >= MAX_STRINGS {
+                        return Err(IoError::TooLarge(format!("the workbook has more than {MAX_STRINGS} shared strings")));
+                    }
                     let text = xml::rich_text(&si);
                     let raw = si.kids("rPh").count();
                     let (runs, props) = xml::phonetic_data(&si, &text);
@@ -192,8 +244,10 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
                     sst.push(Arc::from(text));
                     Ok(())
                 });
-                if let Err(e) = res {
-                    cx.warn(format!("shared strings are damaged ({e}); kept {} strings", sst.len()));
+                match res {
+                    Ok(_) => {}
+                    Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
+                    Err(e) => cx.warn(format!("shared strings are damaged ({e}); kept {} strings", sst.len())),
                 }
                 if dropped > 0 {
                     cx.warn(format!("shared strings: {dropped} phonetic runs were dropped (bad sb/eb or no reading)"));
@@ -251,10 +305,19 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     // Sheets. `file_to_model[i]` maps the i-th <sheet> to a model sheet index.
     let mut file_to_model: Vec<Option<usize>> = vec![];
     let mut pivot_caches = crate::pivot::CachesIn::new(&wb_xml, &wb_rels);
-    let sheet_els: Vec<El> = wb_xml.child("sheets").map(|s| s.kids("sheet").cloned().collect()).unwrap_or_default();
+    let sheet_els: Vec<&El> = wb_xml.child("sheets").map(|s| s.kids("sheet").collect()).unwrap_or_default();
+    if sheet_els.len() > MAX_SHEETS {
+        return Err(IoError::TooLarge(format!("the workbook has more than {MAX_SHEETS} sheets")));
+    }
+    let mut rel_by_id: std::collections::HashMap<&str, &Rel> = std::collections::HashMap::with_capacity(wb_rels.len());
+    for r in &wb_rels {
+        // The first of duplicate ids wins, as a linear search would find it.
+        rel_by_id.entry(r.id.as_str()).or_insert(r);
+    }
+    let mut names = SheetNames::default();
     for (i, se) in sheet_els.iter().enumerate() {
         let name = se.attr("name").unwrap_or("").to_string();
-        let rel = se.attr("id").and_then(|id| wb_rels.iter().find(|r| r.id == id)).cloned();
+        let rel = se.attr("id").and_then(|id| rel_by_id.get(id).copied()).cloned();
         let Some(rel) = rel else {
             cx.warn(format!("sheet \"{name}\" has no part; skipped"));
             file_to_model.push(None);
@@ -270,7 +333,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             file_to_model.push(None);
             continue;
         }
-        let name = unique_name(&wb, &name, i);
+        let name = names.unique(&name, i);
         let mut sheet = match crate::sheet_read::read_sheet(&mut cx, &rel.target, &name) {
             Ok(s) => s,
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
@@ -397,17 +460,6 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     wb.styles = cx.styles;
     wb.phonetics = cx.phonetics;
     Ok((wb, cx.report))
-}
-
-pub(crate) fn unique_name(wb: &Workbook, name: &str, i: usize) -> String {
-    let mut base: String = name.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).take(31).collect();
-    if base.trim().is_empty() {
-        base = format!("Sheet{}", i + 1);
-    }
-    if wb.sheet_index(&base).is_none() {
-        return base;
-    }
-    (2..).map(|n| format!("{} ({n})", base.chars().take(25).collect::<String>())).find(|n| wb.sheet_index(n).is_none()).unwrap_or(base)
 }
 
 /// Strips a sheet qualifier (`'My Sheet'!$A$1` → `$A$1`).

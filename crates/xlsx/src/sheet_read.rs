@@ -32,12 +32,67 @@ struct RowState {
     shared: HashMap<u32, Shared>,
     /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
     /// the anchor) are not stored, so the formula can fill them again.
-    dynamic: Vec<RangeRef>,
+    dynamic: SpillIndex,
     dropped: u64,
     rows: u64,
 }
 
+/// Array-formula ranges indexed by row: per row, the disjoint column spans they cover (anchor
+/// cells left out), so the per-cell test is a map lookup however many array formulas there are.
+#[derive(Default)]
+struct SpillIndex {
+    rows: HashMap<u32, std::collections::BTreeMap<u32, u32>>,
+    /// Row spans recorded so far (capped by [`MAX_SPILL_ROWS`]).
+    spans: u64,
+    /// A range was left out because the budget ran out.
+    overflowed: bool,
+}
+
+/// The most (row, array formula) pairs indexed per sheet: four arrays spilling the whole height of
+/// the grid. Bounds the index's memory and the time to build it.
+const MAX_SPILL_ROWS: u64 = 4_000_000;
+
+impl SpillIndex {
+    /// Records `r`; false when it doesn't fit in the budget (it is then not recorded).
+    fn add(&mut self, r: RangeRef) -> bool {
+        let height = u64::from(r.end.row.saturating_sub(r.start.row)) + 1;
+        if self.spans.saturating_add(height) > MAX_SPILL_ROWS {
+            self.overflowed = true;
+            return false;
+        }
+        self.spans += height;
+        for row in r.start.row..=r.end.row {
+            let c0 = if row == r.start.row { r.start.col.saturating_add(1) } else { r.start.col };
+            if c0 > r.end.col {
+                continue;
+            }
+            Self::insert_span(self.rows.entry(row).or_default(), c0, r.end.col);
+        }
+        true
+    }
+
+    /// Adds `c0..=c1` to a row's disjoint spans, merging the ones it overlaps or touches.
+    fn insert_span(spans: &mut std::collections::BTreeMap<u32, u32>, mut c0: u32, mut c1: u32) {
+        while let Some((&s, &e)) = spans.range(..=c1.saturating_add(1)).next_back() {
+            if e.saturating_add(1) < c0 {
+                break;
+            }
+            spans.remove(&s);
+            c0 = c0.min(s);
+            c1 = c1.max(e);
+        }
+        spans.insert(c0, c1);
+    }
+
+    /// Whether `pos` is inside a recorded range and is not its anchor.
+    fn covers(&self, pos: CellRef) -> bool {
+        self.rows.get(&pos.row).and_then(|spans| spans.range(..=pos.col).next_back()).is_some_and(|(_, &e)| e >= pos.col)
+    }
+}
+
 const MAX_HYPERLINK_CELLS: u64 = 10_000;
+/// The most cell elements read from one workbook, across its sheets (the calc engine's limit).
+pub(crate) const MAX_CELLS: u64 = 16_000_000;
 const MAX_COLUMN_ASSIGNMENTS: u64 = 1_000_000;
 
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
@@ -45,12 +100,13 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
     let mut st = RowState::default();
-    let res = xml::parse_streaming(&bytes, &["row"], &mut |row| {
-        read_row(cx, &mut sheet, &mut st, &row);
-        Ok(())
-    });
+    let res = xml::parse_streaming_capped(&bytes, &["row"], MAX_COLS as usize, &mut |row| read_row(cx, &mut sheet, &mut st, &row));
+    if st.dynamic.overflowed {
+        cx.warn(format!("sheet \"{name}\": too many array formula ranges; some cached values inside them were kept"));
+    }
     let root = match res {
         Ok(r) => r,
+        Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
         Err(e) => {
             cx.warn(format!("sheet \"{name}\" is damaged ({e}); kept {} rows", st.rows));
             El::default()
@@ -61,6 +117,12 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     }
     drop(bytes);
 
+    // Relationships by id: hyperlinks, drawings and tables each look one up.
+    let mut rel_by_id: HashMap<&str, &Rel> = HashMap::with_capacity(rels.len());
+    for r in &rels {
+        // The first of duplicate ids wins, as a linear search would find it.
+        rel_by_id.entry(r.id.as_str()).or_insert(r);
+    }
     let mut fit_to_page = false;
     let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
     cx.cf_ext_ids.clear();
@@ -108,7 +170,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                     }
                 }
             }
-            "hyperlinks" => read_hyperlinks(cx, name, e, &rels, &mut sheet),
+            "hyperlinks" => read_hyperlinks(cx, name, e, &rel_by_id, &mut sheet),
             "autoFilter" => sheet.autofilter = read_autofilter(cx, e),
             "printOptions" => {
                 sheet.print.gridlines = e.flag("gridLines", false);
@@ -178,14 +240,14 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 });
             }
             "drawing" => {
-                if let Some(rel) = e.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)) {
+                if let Some(rel) = e.attr("id").and_then(|id| rel_by_id.get(id).copied()) {
                     let target = rel.target.clone();
                     crate::drawing::read_drawing(cx, &target, &mut sheet)?;
                 }
             }
             "tableParts" => {
                 for tp in e.kids("tablePart") {
-                    if let Some(rel) = tp.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)) {
+                    if let Some(rel) = tp.attr("id").and_then(|id| rel_by_id.get(id).copied()) {
                         let target = rel.target.clone();
                         if let Some(x) = cx.optional_xml(&target)?
                             && let Some(mut t) = read_table(cx, &x)
@@ -344,19 +406,19 @@ fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Re
     Ok(())
 }
 
-fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
+fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) -> Result<(), IoError> {
     st.rows += 1;
     let r = match row.attr_u32("r") {
         Some(r) if r >= 1 => r - 1,
         Some(_) => {
             st.dropped += 1;
-            return;
+            return Ok(());
         }
         None => st.next_row,
     };
     if r >= MAX_ROWS {
         st.dropped += 1;
-        return;
+        return Ok(());
     }
     st.next_row = r + 1;
     let mut info = LineInfo::default();
@@ -380,6 +442,10 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
     }
     let mut next_col = 0u32;
     for c in row.kids("c") {
+        cx.cells += 1;
+        if cx.cells > MAX_CELLS {
+            return Err(IoError::TooLarge(format!("the workbook has more than {MAX_CELLS} cells")));
+        }
         let pos = match c.attr("r") {
             Some(a) => match CellRef::parse(a.trim()) {
                 Some(p) => p,
@@ -397,6 +463,7 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
         next_col = pos.col + 1;
         read_cell(cx, sheet, st, c, pos);
     }
+    Ok(())
 }
 
 fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos: CellRef) {
@@ -461,7 +528,7 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     }
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
-    let value = if formula.is_none() && st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos) { Value::Empty } else { value };
+    let value = if formula.is_none() && st.dynamic.covers(pos) { Value::Empty } else { value };
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
 }
 
@@ -502,7 +569,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             let mut fm = Formula::new(text);
             let range = f.attr("ref").and_then(RangeRef::parse).unwrap_or(RangeRef::cell(pos));
             if !range.is_single() {
-                st.dynamic.push(range);
+                st.dynamic.add(range);
             }
             if !dynamic {
                 fm.array = Some(range);
@@ -732,11 +799,11 @@ fn read_validation(v: &El) -> Option<Validation> {
     })
 }
 
-fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &[Rel], sheet: &mut Sheet) {
+fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &HashMap<&str, &Rel>, sheet: &mut Sheet) {
     let mut cells = 0u64;
     for h in e.kids("hyperlink") {
         let Some(range) = h.attr("ref").and_then(RangeRef::parse) else { continue };
-        let mut target = h.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)).map(|r| r.target.clone()).unwrap_or_default();
+        let mut target = h.attr("id").and_then(|id| rels.get(id)).map(|r| r.target.clone()).unwrap_or_default();
         // A relationship is a file or web page; a bare `location` is a place in this workbook.
         let external = !target.is_empty();
         if let Some(loc) = h.attr("location").filter(|l| !l.is_empty()) {
@@ -1058,6 +1125,73 @@ mod tests {
         assert_eq!(parse_iso_datetime("06:00:00", DateSystem::D1900), Some(0.25));
         assert_eq!(parse_iso_datetime("garbage", DateSystem::D1900), None);
         assert_eq!(parse_iso_datetime("2024-13-01", DateSystem::D1900), None);
+    }
+
+    fn ctx(pkg: crate::package::Package<'_>) -> Ctx<'_> {
+        Ctx {
+            pkg,
+            report: Default::default(),
+            sst: vec![],
+            phonetics: vec![],
+            xf_map: vec![],
+            dxfs: vec![],
+            palette: vec![],
+            date_system: DateSystem::D1900,
+            styles: Default::default(),
+            persons: Default::default(),
+            next_id: 1,
+            num_fmts: Default::default(),
+            cell_pictures: vec![],
+            cf_ext_ids: vec![],
+            cells: 0,
+        }
+    }
+
+    /// #2159: the workbook-wide cell cap refuses the open once passed, across sheets.
+    #[test]
+    fn cells_past_the_workbook_cap_are_refused() {
+        let bytes = crate::tests::minimal(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c></row></sheetData>"#, &[], "", "");
+        let pkg = crate::package::Package::open(&bytes).unwrap();
+        let mut cx = ctx(pkg);
+        cx.cells = MAX_CELLS - 2;
+        let sheet = read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data").unwrap();
+        assert_eq!(sheet.cells.len(), 2);
+        assert!(matches!(read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data"), Err(IoError::TooLarge(_))));
+    }
+
+    /// #2159: array ranges are found by row, not by a scan per cell; anchors keep their value.
+    #[test]
+    fn spill_index_finds_ranges_by_row() {
+        let mut ix = SpillIndex::default();
+        let r = |s: &str| RangeRef::parse(s).unwrap();
+        let at = |s: &str| CellRef::parse(s).unwrap();
+        assert!(ix.add(r("B2:D4")));
+        assert!(ix.add(r("E3:F3")));
+        assert!(ix.add(r("C3:C9")));
+        assert!(!ix.covers(at("B2")), "anchor");
+        assert!(ix.covers(at("C2")) && ix.covers(at("D2")) && ix.covers(at("B3")));
+        assert!(ix.covers(at("F3")) && !ix.covers(at("E3")), "E3 is an anchor");
+        assert!(!ix.covers(at("A3")) && !ix.covers(at("G3")) && !ix.covers(at("E4")));
+        assert!(ix.covers(at("C9")) && !ix.covers(at("C10")) && !ix.covers(at("B9")));
+        assert_eq!(ix.rows.get(&2).map(|s| s.len()), Some(2));
+        // A range touching both spans of row 3 merges them into one.
+        assert!(ix.add(r("A1:E3")));
+        assert!(ix.covers(at("A3")) && ix.covers(at("E3")) && ix.covers(at("F3")) && !ix.covers(at("G3")));
+        assert_eq!(ix.rows.get(&2).map(|s| s.len()), Some(1));
+        // Thousands of array formulas on one row stay one lookup each.
+        let mut ix = SpillIndex::default();
+        for c in (0..MAX_COLS - 1).step_by(2) {
+            assert!(ix.add(RangeRef::new(CellRef::new(0, c), CellRef::new(1, c))));
+        }
+        assert!(ix.covers(CellRef::new(1, 100)) && !ix.covers(CellRef::new(1, 101)) && !ix.covers(CellRef::new(0, 100)));
+        // The index has a budget: past it, ranges are left out (and reported by the sheet reader).
+        let mut ix = SpillIndex::default();
+        let full = RangeRef::new(CellRef::new(0, 0), CellRef::new(MAX_ROWS - 1, 0));
+        for _ in 0..3 {
+            assert!(ix.add(full));
+        }
+        assert!(!ix.add(full));
+        assert!(ix.overflowed);
     }
 
     #[test]

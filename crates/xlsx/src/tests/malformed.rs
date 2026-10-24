@@ -266,6 +266,106 @@ fn hostile_formula_text_does_not_overflow_the_stack() {
     assert_eq!(a_value, gridcraft_core::Value::Number(3.0));
 }
 
+/// A one-sheet-per-entry workbook: `names` are the sheet names, every sheet sharing one part.
+fn many_sheets(names: &[String]) -> Vec<u8> {
+    let sheets: String = names.iter().enumerate().map(|(i, n)| format!(r#"<sheet name="{n}" sheetId="{}" r:id="rId1"/>"#, i + 1)).collect();
+    let wb = format!(
+        r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>{sheets}</sheets></workbook>"#
+    );
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+    let sheet = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
+    make_zip(&[
+        ("[Content_Types].xml", super::CT.as_bytes()),
+        ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+        ("xl/workbook.xml", wb.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+    ])
+}
+
+/// #2159: a row of more `<c>` than the grid has columns is refused before it is built in memory.
+#[test]
+fn a_row_wider_than_the_grid_is_refused() {
+    let row = |n: usize| format!(r#"<sheetData><row r="1">{}</row></sheetData>"#, "<c/>".repeat(n));
+    assert!(matches!(read_xlsx(&minimal(&row(16_385), &[], "", "")), Err(IoError::TooLarge(_))));
+    assert!(read_xlsx(&minimal(&row(16_384), &[], "", "")).is_ok());
+    // Every other part has a cap on children too (a merge list of more than a million entries).
+    let merges = format!("<sheetData/><mergeCells>{}</mergeCells>", r#"<mergeCell ref="A1:B2"/>"#.repeat((1 << 20) + 1));
+    assert!(matches!(read_xlsx(&minimal(&merges, &[], "", "")), Err(IoError::TooLarge(_))));
+}
+
+/// #2159: overlapping `<col min=1 max=16384>` entries share one budget of column writes.
+#[test]
+fn overlapping_column_entries_have_a_budget() {
+    let parts = [("xl/styles.xml", r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#)];
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let cols = format!("<cols>{}</cols><sheetData/>", r#"<col min="1" max="16384" width="20" customWidth="1"/>"#.repeat(300));
+    assert!(matches!(read_xlsx(&minimal(&cols, &parts, rels, "")), Err(IoError::TooLarge(_))));
+    // A normal list reads with no warning.
+    let (wb, rep) = read_xlsx(&minimal(r#"<cols><col min="2" max="4" width="20" customWidth="1"/></cols><sheetData/>"#, &parts, rels, "")).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().cols.len(), 3);
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+}
+
+/// #2159: the sheet count is capped, and renaming duplicate sheet names stays linear.
+#[test]
+fn sheet_count_is_capped_and_duplicate_names_are_renamed() {
+    let names: Vec<String> = (0..4097).map(|i| format!("S{i}")).collect();
+    assert!(matches!(read_xlsx(&many_sheets(&names)), Err(IoError::TooLarge(_))));
+    let dups: Vec<String> = (0..300).map(|i| if i % 2 == 0 { "a".to_string() } else { "A".to_string() }).collect();
+    let (wb, _) = read_xlsx(&many_sheets(&dups)).unwrap();
+    assert_eq!(wb.sheets.len(), 300);
+    assert_eq!(wb.sheets[0].name, "a");
+    assert_eq!(wb.sheets[1].name, "A (2)");
+    assert_eq!(wb.sheets[299].name, "A (300)");
+    let distinct: std::collections::HashSet<String> = wb.sheets.iter().map(|s| s.name.to_ascii_lowercase()).collect();
+    assert_eq!(distinct.len(), 300);
+    // The name set alone: thousands of duplicates, with a suffixed name already taken.
+    let mut taken = crate::read::SheetNames::default();
+    assert_eq!(taken.unique("x (3)", 0), "x (3)");
+    let got: Vec<String> = (0..4096).map(|i| taken.unique("X", i)).collect();
+    assert_eq!(got[0], "X");
+    assert_eq!(got[1], "X (2)");
+    assert_eq!(got[2], "X (4)");
+    assert_eq!(got.iter().map(|n| n.to_ascii_lowercase()).collect::<std::collections::HashSet<_>>().len(), 4096);
+    assert_eq!(taken.unique("", 9), "Sheet10");
+}
+
+/// #2159: the shared-string count is capped (each string is an allocation of its own).
+#[test]
+fn too_many_shared_strings_are_refused() {
+    let sst = |n: usize| format!(r#"<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">{}</sst>"#, "<si/>".repeat(n));
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>"#;
+    let big = sst(4_000_001);
+    assert!(matches!(read_xlsx(&minimal("<sheetData/>", &[("xl/sharedStrings.xml", &big)], rels, "")), Err(IoError::TooLarge(_))));
+    let small = sst(3);
+    assert!(read_xlsx(&minimal("<sheetData/>", &[("xl/sharedStrings.xml", &small)], rels, "")).is_ok());
+}
+
+/// #2159: hyperlinks find their relationship by id (a map, not a scan per hyperlink); the first
+/// of duplicate ids wins, as before.
+#[test]
+fn hyperlinks_resolve_relationships_by_id() {
+    let n = 5_000;
+    let mut rels = String::from(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
+    for i in 0..n {
+        rels.push_str(&format!(
+            r#"<Relationship Id="h{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/{i}" TargetMode="External"/>"#
+        ));
+    }
+    rels.push_str(r#"<Relationship Id="h0" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/second" TargetMode="External"/>"#);
+    rels.push_str("</Relationships>");
+    let links: String = (0..n).map(|i| format!(r#"<hyperlink ref="A{}" r:id="h{i}"/>"#, i + 1)).collect();
+    let body = format!(r#"<sheetData/><hyperlinks>{links}<hyperlink ref="B1" r:id="missing"/></hyperlinks>"#);
+    let (wb, _) = read_xlsx(&minimal(&body, &[("xl/worksheets/_rels/sheet1.xml.rels", &rels)], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.hyperlinks.len(), n);
+    let link = |a: &str| s.hyperlinks.get(&gridcraft_core::CellRef::parse(a).unwrap()).map(|h| h.target.clone());
+    assert_eq!(link("A1").as_deref(), Some("https://example.com/0"));
+    assert_eq!(link("A5000").as_deref(), Some("https://example.com/4999"));
+    assert_eq!(link("B1"), None);
+}
+
 #[test]
 fn repeated_column_ranges_have_one_worksheet_work_budget() {
     // 62 * 16,384 = 1,015,808 assignments, while the map holds at most 16,384 columns.

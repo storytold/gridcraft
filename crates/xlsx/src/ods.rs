@@ -233,6 +233,7 @@ struct Import {
     text: u64,
     formats: Vec<(&'static str, StyleId)>,
     spreadsheet_seen: bool,
+    names: crate::read::SheetNames,
 }
 
 impl Import {
@@ -241,7 +242,20 @@ impl Import {
         wb.sheets.clear();
         let mut report = ReadReport::default();
         report.warn("ODS data-only import: formulas become their saved results and will not recalculate. Source formatting, charts, images and other features are not imported. Save a new .xlsx file; ODS saving is not supported.");
-        Self { wb, report, stack: vec![], sheet: None, row: None, cell: None, cells: 0, merges: 0, text: 0, formats: vec![], spreadsheet_seen: false }
+        Self {
+            wb,
+            report,
+            stack: vec![],
+            sheet: None,
+            row: None,
+            cell: None,
+            cells: 0,
+            merges: 0,
+            text: 0,
+            formats: vec![],
+            spreadsheet_seen: false,
+            names: Default::default(),
+        }
     }
 
     fn parse(&mut self, bytes: &[u8]) -> Result<(), IoError> {
@@ -317,9 +331,10 @@ impl Import {
                     return Err(IoError::TooLarge("ODS contains more than 1024 sheets".into()));
                 }
                 let original = attr(reader, e, TABLE, b"name")?.unwrap_or_default();
-                let mut name = crate::read::unique_name(&self.wb, original.trim_matches('\''), self.wb.sheets.len());
+                let mut name = self.names.unique(original.trim_matches('\''), self.wb.sheets.len());
                 if self.wb.check_sheet_name(&name, None).is_err() {
                     name = self.wb.next_sheet_name();
+                    self.names.insert(&name);
                 }
                 if name != original {
                     self.report.warn("Some ODS sheet names were shortened or renamed to valid, unique XLSX sheet names.");
