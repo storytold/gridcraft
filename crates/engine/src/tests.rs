@@ -18,6 +18,8 @@ fn v(s: &Session, a: &str) -> Value {
     s.doc().unwrap().wb.active().unwrap().value(CellRef::parse(a).unwrap())
 }
 
+mod windows;
+
 #[test]
 fn entering_empty_cells_preserves_whole_sheet_formatting() {
     let mut s = s();

@@ -356,7 +356,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("WVH", Entry::Finish(Action::Command("view.headings"))),       // Excel: Toggle Headings; containment(Headings)
     ("WVN", Entry::Finish(Action::Pending("view.navigation"))),     // pending; Excel: Navigation; Navigation pane; reserved until the command lands
     ("WVR", Entry::Finish(Action::Command("view.ruler"))),          // Excel: Ruler
-    ("WW", Entry::Finish(Action::Command("view.switchWindows"))),   // Excel: Switch Windows
+    ("WW", Entry::Finish(Action::Control("view.switchWindows"))),   // Excel: Switch Windows
     ("JAM", Entry::Finish(Action::Command("chart.formatSelection"))), // Excel: Chart format: Format Selection pane; containment(Format Selection)
     ("JCA", Entry::Finish(Action::Command("chart.addElement"))),    // Excel: Chart: Add Chart Element; containment(Add Chart Element)
     ("JCC", Entry::Finish(Action::Command("chart.changeType"))),    // Excel: Chart: Change Chart Type; containment(Change Chart Type)

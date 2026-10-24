@@ -402,6 +402,8 @@ impl SheetApp {
             || matches!(
                 id,
                 "window.activate"
+                    | "window.next"
+                    | "window.previous"
                     | "sheet.activate"
                     | "sheet.next"
                     | "sheet.previous"
@@ -421,11 +423,28 @@ impl SheetApp {
         {
             self.commit_text_box_edit()?;
         }
+        // A switch to another document commits the cell being edited first (the editor isn't
+        // document-aware, so it would carry on in the other workbook), and stays put when the
+        // entry is refused, as the sheet tabs do.
+        let switches_document = matches!(id, "window.activate" | "window.next" | "window.previous" | "view.hideWindow" | "view.unhideWindow");
+        let leaves_document = switches_document || matches!(id, "view.newWindow" | "file.new" | "file.open");
+        if leaves_document && self.editor.is_some() && !self.commit_edit(0, 0, false, false) {
+            // The commit has shown why (a bad formula, a validation rule); the caller learns
+            // that the command did not run.
+            let why = self.message.as_ref().map(|(_, m)| m.clone()).unwrap_or_else(|| "the cell entry was not accepted".into());
+            return Err(format!("finish the entry first: {why}"));
+        }
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
         let r = self.session.run(id, params);
         self.after_engine();
+        // Object selection and auditing arrows are per sheet of the document that was shown;
+        // the other document's chart 1 is not the one that was clicked.
+        if r.is_ok() && (switches_document || matches!(id, "file.new" | "file.open" | "file.close" | "view.newWindow")) {
+            self.selected_chart = None;
+            self.grid.trace = None;
+        }
         // The new chart is selected, as after inserting any object, so Delete removes it, not its data.
         if id == "insert.chart"
             && let Ok(r) = &r
@@ -555,7 +574,11 @@ impl SheetApp {
             return self.open_dialog("recommendedCharts", json!({}));
         }
         if let Err(e) = self.run(id, params) {
-            self.alert(e);
+            // A switch refused because the cell entry was not accepted has already shown the
+            // entry's own reason (a bad formula, a validation message): that one stays.
+            if !e.starts_with("finish the entry first") {
+                self.alert(e);
+            }
         }
     }
 

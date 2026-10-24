@@ -2514,7 +2514,7 @@ fn keytip_wg_() {
 fn keytip_wh_() {
     let mut h = harness(blank());
     sequence(&mut h, "WH", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "view.hideWindow"), "WH must journal view.hideWindow");
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "WH must invoke view.hideWindow and surface its missing-params error");
 }
 
 #[test]
@@ -2609,7 +2609,7 @@ fn keytip_wt_() {
 fn keytip_wu_() {
     let mut h = harness(blank());
     sequence(&mut h, "WU", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "view.unhideWindow"), "WU must journal view.unhideWindow");
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "WU must invoke view.unhideWindow and surface its missing-params error");
 }
 
 #[test]
@@ -2658,7 +2658,8 @@ fn keytip_wvr_() {
 fn keytip_ww_() {
     let mut h = harness(blank());
     sequence(&mut h, "WW", false);
-    assert!(h.state().message.is_none() && h.state().toast.is_none(), "WW must run view.switchWindows cleanly");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "WW must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]

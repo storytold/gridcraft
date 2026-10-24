@@ -44,11 +44,11 @@ muda = { version = "0.21", default-features = false }
 # workspace forbids) behind a safe API. Pinned exactly: review the diff before bumping.
 fmv-macos-events = "=0.1.0"
 
-# tests/mac_menu_appkit.rs: reads AppKit's menu bar back. Already in Cargo.lock (muda, winit);
-# pinned exactly to the same versions.
-[target.'cfg(target_os = "macos")'.dev-dependencies]
+# The native menu keeps the app's window out of AppKit's own window list (src/native_menu.rs), and
+# tests/mac_menu_appkit.rs reads AppKit's menu bar back. Already in Cargo.lock (muda, winit); pinned
+# exactly to the same versions. Safe bindings only: the workspace forbids unsafe code.
 objc2 = "=0.6.5"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSResponder"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSCell", "NSMenu", "NSMenuItem", "NSResponder", "NSWindow"] }
 
 [[test]]
 name = "mac_menu_appkit"

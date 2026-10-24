@@ -149,6 +149,15 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         F1 if alt && s => run("home.insertSheet"),
         F1 if alt => run("insert.chart"),
         F10 if alt && s => Shortcut::Dialog("errorChecking", json!({})),
+        // Ctrl+F6 / Ctrl+Shift+F6 and Ctrl+Tab / Ctrl+Shift+Tab: the next / previous workbook
+        // window. macOS Cmd+` / Cmd+Shift+` belong to the native Window menu's accelerators
+        // (apps/gridcraft), so Backtick is not bound here.
+        // Excel for Mac: Control+` shows formulas (Cmd+` is the next window).
+        Backtick if ctrl && !s && mac => run("formulas.showFormulas"),
+        F6 if ctrl && !s => run("window.next"),
+        F6 if ctrl => run("window.previous"),
+        Tab if ctrl && !s => run("window.next"),
+        Tab if ctrl => run("window.previous"),
         // Function keys.
         F1 if cmd && !s => run("view.collapseRibbon"),
         F2 if (cmd || ctrl) && s => Shortcut::Dialog("comment", json!({"threaded": true})),
@@ -186,7 +195,11 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
     match shortcut {
         Shortcut::Run(id, params) => {
             app.run_or_alert(id, params);
-            app.grid.ensure_visible = true;
+            // A window switch shows the other workbook as it was left; revealing its active
+            // cell would scroll it.
+            if !id.starts_with("window.") {
+                app.grid.ensure_visible = true;
+            }
         }
         Shortcut::Dialog(name, params) => app.open_dialog(name, params),
         Shortcut::Date | Shortcut::Time => {

@@ -408,8 +408,11 @@ pub struct Session {
     pub recorder: Option<record::Recorder>,
     /// How many `execute` calls are running (0 between top-level commands).
     depth: u32,
-    /// Windows hidden with View › Hide.
-    pub hidden_windows: Vec<usize>,
+    /// Windows hidden with View › Hide, by document `uid`. The `window.*` commands identify a
+    /// window by its document's uid, never by index (indices shift when a document closes), and a
+    /// later multi-window front end (one native window per document) maps its windows to the same
+    /// uids. Never holds every document: hiding the last visible window is refused.
+    pub hidden_windows: Vec<u64>,
     /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
     pub draw_tool: String,
     pub draw_color: String,
@@ -445,8 +448,12 @@ impl Session {
     pub fn active_index(&self) -> usize {
         self.active
     }
+    /// Makes document `i` the active one, and visible: a hidden window is never the active
+    /// one, whichever way a document is activated.
     pub fn set_active(&mut self, i: usize) {
-        if i < self.docs.len() {
+        if let Some(d) = self.docs.get(i) {
+            let uid = d.uid;
+            self.hidden_windows.retain(|u| *u != uid);
             self.active = i;
         }
     }
@@ -467,13 +474,36 @@ impl Session {
         self.active = self.docs.len() - 1;
         self.active
     }
+    /// The index of the document with this `uid`, if it is open.
+    pub fn document_index(&self, uid: u64) -> Option<usize> {
+        self.docs.iter().position(|d| d.uid == uid)
+    }
+    /// Whether the window of the document with this `uid` is hidden (View › Hide).
+    pub fn is_hidden(&self, uid: u64) -> bool {
+        self.hidden_windows.contains(&uid)
+    }
+    /// Closes document `i`. The active document stays active (its index moves down when a lower
+    /// one closes); when the active one closes, the document now at its index (or the last one)
+    /// takes over, unless that window is hidden, in which case the first visible one does. The
+    /// closed uid leaves the hidden list.
     pub fn close_document(&mut self, i: usize) {
-        if i < self.docs.len() {
-            let d = self.docs.remove(i);
-            self.groups.retain(|g| g.doc != d.uid);
-            if self.active >= self.docs.len() {
-                self.active = self.docs.len().saturating_sub(1);
-            }
+        if i >= self.docs.len() {
+            return;
+        }
+        let closed = self.docs.remove(i);
+        self.groups.retain(|g| g.doc != closed.uid);
+        self.hidden_windows.retain(|u| *u != closed.uid);
+        if i < self.active {
+            self.active = self.active.saturating_sub(1);
+        }
+        if self.active >= self.docs.len() {
+            self.active = self.docs.len().saturating_sub(1);
+        }
+        // A hidden window never stays active: the first visible one takes over, or, when the
+        // closed window was the last visible one, the takeover is unhidden.
+        if self.docs.get(self.active).is_some_and(|d| self.is_hidden(d.uid)) {
+            let v = self.docs.iter().position(|d| !self.is_hidden(d.uid)).unwrap_or(self.active);
+            self.set_active(v);
         }
     }
     /// A new blank workbook titled `BookN`.

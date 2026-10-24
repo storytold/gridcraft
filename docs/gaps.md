@@ -157,7 +157,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   **Estimate:** 15–23 h.
 
 ### 20. Multiple windows; pen pressure (H)
-- One window (#162, PR #171); no pressure or tilt in ink. **Estimate:** 10–14 h.
+- One window (#162, PR #171); switching between the open workbooks from the Window menu, the ribbon and the keyboard landed 2026-10-23 with window commands keyed by document, ready for a window per workbook; no pressure or tilt in ink. **Estimate:** 10–14 h.
   [hardware-parity.md](hardware-parity.md)
 
 ### 21. Automation and add-ins (F)

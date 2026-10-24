@@ -2353,6 +2353,16 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
+    // Switch Windows lists the open workbooks (Excel's View > Window > Switch Windows).
+    let sw = big_button(ui, Icon::Book, "Switch\nWindows", "Switch Windows", true);
+    sw.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Switch Windows"));
+    control_keytip(app, ui, &sw, "view.switchWindows");
+    let forced = invoke(app, "view.switchWindows");
+    egui::Popup::menu(&sw).open_memory(popup_command(forced, sw.clicked())).show(|ui| {
+        // Many open workbooks scroll rather than run off the screen.
+        ui.set_max_height(420.0);
+        egui::ScrollArea::vertical().show(ui, |ui| switch_windows_menu(app, ui));
+    });
     ui.vertical(|ui| {
         ui.label(lang.tr("Display theme"));
         let mode = app.ui.theme_mode();
@@ -2406,6 +2416,40 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
             },
         );
     });
+}
+
+/// The Switch Windows drop-down: the visible open workbooks in `window.list` order, numbered as
+/// Excel numbers them, the active one checked and an unsaved one marked as the title bar marks it.
+/// An entry activates its workbook by document id, so a closed window never shifts the target.
+fn switch_windows_menu(app: &mut SheetApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let windows = match app.session.run("window.list", json!({})) {
+        Ok(list) => list.as_array().cloned().unwrap_or_default(),
+        Err(e) => {
+            ui.label(crate::clean_error(&e));
+            return;
+        }
+    };
+    let flag = |w: &serde_json::Value, key: &str| w.get(key).and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let mut chosen = None;
+    for (n, w) in windows.iter().filter(|w| !flag(w, "hidden")).enumerate() {
+        let title = w.get("title").and_then(serde_json::Value::as_str).unwrap_or("");
+        let active = flag(w, "active");
+        let label = format!("{} {}{}", n.saturating_add(1), title, if flag(w, "dirty") { " •" } else { "" });
+        // The leading blanks keep a column clear for the check mark of the active book.
+        let response = ui.add(egui::Button::new(format!("        {label}")).frame_when_inactive(false).min_size(vec2(220.0, 22.0)));
+        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), active, label.clone()));
+        if active {
+            let at = pos2(response.rect.left() + 11.0, response.rect.center().y);
+            icons::paint(ui.painter(), Rect::from_center_size(at, vec2(12.0, 12.0)), Icon::Check, t.text);
+        }
+        if response.clicked() {
+            chosen = w.get("id").cloned();
+        }
+    }
+    if let Some(id) = chosen {
+        act(app, "window.activate", json!({"id": id}));
+    }
 }
 
 fn automate(app: &mut SheetApp, ui: &mut Ui) {
@@ -2695,7 +2739,9 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
             app.begin_edit(Some(text), false);
             None
         }
-        Key::Backtick => Some(("formulas.showFormulas", json!({}))),
+        // Windows Ctrl+`; on the Mac Cmd+` cycles windows (the native Window menu) and Show
+        // Formulas is Control+` (`keymap`), as in Excel for Mac.
+        Key::Backtick if !m.mac_cmd => Some(("formulas.showFormulas", json!({}))),
         _ => None,
     };
     if let Some((id, p)) = id {

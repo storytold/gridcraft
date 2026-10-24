@@ -25,7 +25,6 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             options
         ),
-        cmd!(noundo "window.activate", "Switch Window", ["Window"], None, "{index}", has_doc, activate_window),
     ]
 }
 
@@ -218,13 +217,4 @@ fn options(s: &mut Session, _: &Json) -> Result<Json> {
         json!({"mode": mode, "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change})
     });
     Ok(json!({"calculation": calculation}))
-}
-
-fn activate_window(s: &mut Session, p: &Json) -> Result<Json> {
-    let i = u32_param(p, "index").ok_or_else(|| bad("window.activate", "missing `index`"))? as usize;
-    if i >= s.documents().len() {
-        return Err(bad("window.activate", "no such window"));
-    }
-    s.set_active(i);
-    ok()
 }

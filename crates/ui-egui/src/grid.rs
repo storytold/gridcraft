@@ -800,6 +800,12 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     if app.grid.touch_pan && !resp.dragged() && !resp.drag_stopped() {
         app.grid.touch_pan = false;
     }
+    // Switching windows works while a cell or text box is being edited, as in Excel: the command
+    // commits the entry first, or refuses with the reason and keeps the editor. Nothing else
+    // reaches the grid while an editor has the keyboard (`interact` stands back for a text box).
+    if (app.editor.is_some() || app.text_box_editor.is_some()) && app.dialog.is_none() && app.message.is_none() {
+        window_shortcut_while_editing(app, ui.ctx());
+    }
     if app.grid.touch_pan {
         // Skip the frames of a touch pan, its release included.
         if !resp.dragged() {
@@ -2977,6 +2983,31 @@ fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
     let params =
         if ranges.contains(&clicked) { json!({"range": ranges.join(","), "active": active.a1()}) } else { json!({"range": ranges.join(",")}) };
     let _ = app.session.run("selection.set", params);
+}
+
+/// Ctrl+F6 / Ctrl+Tab and their Shift variants while an editor is open: the window command
+/// commits the entry and switches, or refuses and keeps the editor (`run_command`); the key
+/// press is consumed so the editor doesn't see it.
+fn window_shortcut_while_editing(app: &mut SheetApp, ctx: &egui::Context) {
+    let mac = ctx.os() == egui::os::OperatingSystem::Mac;
+    let presses: Vec<(egui::Key, Option<egui::Key>, egui::Modifiers)> = ctx.input(|i| {
+        i.events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => Some((*key, *physical_key, *modifiers)),
+                _ => None,
+            })
+            .collect()
+    });
+    for (key, physical, m) in presses {
+        if let Some(crate::keymap::Shortcut::Run(id, params)) = crate::keymap::lookup(key, physical, m, mac)
+            && id.starts_with("window.")
+        {
+            ctx.input_mut(|i| i.consume_key(m, key));
+            app.run_or_alert(id, params);
+            return;
+        }
+    }
 }
 
 /// Grid keyboard handling when no text field has focus.

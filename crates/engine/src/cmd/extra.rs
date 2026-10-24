@@ -143,9 +143,13 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "view.split", "Split", ["View", "Window"], None, "{} (toggles a split at the active cell; shown as frozen panes in this version)", has_doc, split),
         cmd!(noundo "view.newWindow", "New Window", ["View", "Window"], None, "{} opens a second window on the same workbook (a linked copy)", has_doc, new_window),
         cmd!(noundo "view.arrangeAll", "Arrange All", ["View", "Window"], None, "{}", has_doc, |_, _| ok()),
-        cmd!(noundo "view.hideWindow", "Hide", ["View", "Window"], None, "{}", has_doc, hide_window),
-        cmd!(noundo "view.unhideWindow", "Unhide…", ["View", "Window"], None, "{index?}", has_doc, unhide_window),
-        cmd!(query "view.switchWindows", "Switch Windows", ["View", "Window"], None, "{} → open windows", always, switch_windows),
+        cmd!(noundo "view.hideWindow", "Hide", ["View", "Window"], None, "{} hides the active window and activates the next visible one → {id, index}; the last visible window cannot be hidden", has_doc, hide_window),
+        cmd!(noundo "view.unhideWindow", "Unhide…", ["View", "Window"], None, "{id?, index?} (default: the most recently hidden window) → {id, index}", has_doc, unhide_window),
+        cmd!(query "view.switchWindows", "Switch Windows", ["View", "Window"], None, "{} → open windows, as window.list", always, window_list),
+        cmd!(query "window.list", "Windows", ["Window"], None, "{} → [{id, index, title, path, dirty, active, hidden}] in document order; `id` is the window's stable identity, `index` its current position", always, window_list),
+        cmd!(noundo "window.activate", "Switch Window", ["Window"], None, "{id} or {index} (id wins) → {id, index}; unhides the window if it was hidden", has_doc, activate_window),
+        cmd!(noundo "window.next", "Next Window", ["Window"], None, "{} activates the next visible window in document order, wrapping → {id, index}", has_doc, next_window),
+        cmd!(noundo "window.previous", "Previous Window", ["Window"], None, "{} activates the previous visible window in document order, wrapping → {id, index}", has_doc, previous_window),
         cmd!(noundo "view.ruler", "Ruler", ["View", "Show"], None, "{on?} → {on}: rulers in Page Layout view (an application option)", has_doc, ruler),
         cmd!(query "view.macros", "Macros", ["View", "Macros"], None, "{} → scripts", has_doc, all_scripts),
         // Table tools
@@ -816,33 +820,116 @@ fn new_window(s: &mut Session, _: &Json) -> Result<Json> {
     Ok(json!({"index": i}))
 }
 
-fn hide_window(s: &mut Session, _: &Json) -> Result<Json> {
-    s.hidden_windows.push(s.active_index());
-    let n = s.documents().len();
-    if n > 1 {
-        let next = (0..n).find(|i| !s.hidden_windows.contains(i)).unwrap_or(0);
-        s.set_active(next);
-    }
-    ok()
+// ---------------------------------------------------------------- windows
+//
+// A window is the document's `uid`: stable for the session, where an index shifts whenever a
+// lower document closes. Every command here answers with the window that is active afterwards,
+// `{id, index}`, so callers can hold the uid and look the index up when they need it. A later
+// multi-window front end (one native window per document) maps its windows to these uids and
+// keeps `window.*` as the one API.
+
+/// `{id, index}` of the active window.
+fn window_result(s: &Session) -> Result<Json> {
+    let d = s.doc()?;
+    Ok(json!({"id": d.uid, "index": s.active_index()}))
 }
 
-fn unhide_window(s: &mut Session, p: &Json) -> Result<Json> {
-    let i = u32_param(p, "index").map(|v| v as usize).or_else(|| s.hidden_windows.last().copied());
-    if let Some(i) = i {
-        s.hidden_windows.retain(|x| *x != i);
-        s.set_active(i);
+/// Activates document `i`, unhiding it if it was hidden.
+fn show_window(s: &mut Session, i: usize) -> Result<Json> {
+    if i >= s.documents().len() {
+        return Err(bad("window.activate", "no such window"));
     }
-    ok()
+    s.set_active(i);
+    window_result(s)
 }
 
-fn switch_windows(s: &mut Session, _: &Json) -> Result<Json> {
+/// The index of the visible window `step` places from the active one in document order (`1`
+/// next, `-1` previous), wrapping around; the active window itself when it is the only visible
+/// one.
+fn visible_neighbour(s: &Session, step: i64) -> Option<usize> {
+    let n = s.documents().len() as i64;
+    if n == 0 {
+        return None;
+    }
+    let cur = s.active_index();
+    (1..=n)
+        .map(|k| (cur as i64).saturating_add(step.saturating_mul(k)).rem_euclid(n) as usize)
+        .find(|&j| j == cur || s.documents().get(j).is_some_and(|d| !s.is_hidden(d.uid)))
+}
+
+fn window_list(s: &mut Session, _: &Json) -> Result<Json> {
     Ok(Json::Array(
         s.documents()
             .iter()
             .enumerate()
-            .map(|(i, d)| json!({"index": i, "title": d.display_title(), "active": i == s.active_index(), "hidden": s.hidden_windows.contains(&i)}))
+            .map(|(i, d)| {
+                json!({
+                    "id": d.uid,
+                    "index": i,
+                    "title": d.display_title(),
+                    "path": d.path,
+                    "dirty": d.is_dirty(),
+                    "active": i == s.active_index(),
+                    "hidden": s.is_hidden(d.uid),
+                })
+            })
             .collect(),
     ))
+}
+
+/// `{id?, index?}` → the index of the window it names (`id` wins when both are given); `None`
+/// when neither is given, an error when the one given names no open window.
+fn window_param(s: &Session, cmd: &str, p: &Json) -> Result<Option<usize>> {
+    // A selector that is given but unusable is an error, not "none given".
+    let given = |key: &str| p.get(key).is_some_and(|v| !v.is_null());
+    if given("id") {
+        let id = u64_param(p, "id").ok_or_else(|| bad(cmd, "`id` must be a window id"))?;
+        return s.document_index(id).map(Some).ok_or_else(|| bad(cmd, format!("no window with id {id}")));
+    }
+    if given("index") {
+        let i = u32_param(p, "index").ok_or_else(|| bad(cmd, "`index` must be a non-negative integer"))?;
+        return if (i as usize) < s.documents().len() { Ok(Some(i as usize)) } else { Err(bad(cmd, format!("no window at index {i}"))) };
+    }
+    Ok(None)
+}
+
+fn activate_window(s: &mut Session, p: &Json) -> Result<Json> {
+    let i = window_param(s, "window.activate", p)?.ok_or_else(|| bad("window.activate", "missing `id` or `index`"))?;
+    show_window(s, i)
+}
+
+fn next_window(s: &mut Session, _: &Json) -> Result<Json> {
+    let i = visible_neighbour(s, 1).ok_or(EngineError::NoDocument)?;
+    show_window(s, i)
+}
+
+fn previous_window(s: &mut Session, _: &Json) -> Result<Json> {
+    let i = visible_neighbour(s, -1).ok_or(EngineError::NoDocument)?;
+    show_window(s, i)
+}
+
+fn hide_window(s: &mut Session, _: &Json) -> Result<Json> {
+    let uid = s.doc()?.uid;
+    let visible = s.documents().iter().filter(|d| !s.is_hidden(d.uid)).count();
+    if visible <= 1 {
+        return Err(bad("view.hideWindow", "the last visible window cannot be hidden"));
+    }
+    if !s.is_hidden(uid) {
+        s.hidden_windows.push(uid);
+    }
+    let next = visible_neighbour(s, 1).ok_or(EngineError::NoDocument)?;
+    show_window(s, next)
+}
+
+fn unhide_window(s: &mut Session, p: &Json) -> Result<Json> {
+    let i = match window_param(s, "view.unhideWindow", p)? {
+        Some(i) => i,
+        None => {
+            let last = s.hidden_windows.last().copied().ok_or_else(|| bad("view.unhideWindow", "no hidden windows"))?;
+            s.document_index(last).ok_or_else(|| bad("view.unhideWindow", "no such window"))?
+        }
+    };
+    show_window(s, i)
 }
 
 fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {

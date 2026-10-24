@@ -229,6 +229,9 @@ pub(crate) fn bool_param(p: &Json, key: &str) -> Option<bool> {
 pub(crate) fn u32_param(p: &Json, key: &str) -> Option<u32> {
     p.get(key).and_then(Json::as_u64).map(|v| v.min(u32::MAX as u64) as u32)
 }
+pub(crate) fn u64_param(p: &Json, key: &str) -> Option<u64> {
+    p.get(key).and_then(Json::as_u64)
+}
 
 /// An object anchor mode from Excel's wording or the model's: `"moveAndSize"`/`"twoCell"`,
 /// `"moveOnly"`/`"oneCell"`, `"absolute"`/`"don't move or size"` (case-insensitive).

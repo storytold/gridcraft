@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (New Formatting Rule's formula box takes references clicked or dragged on the grid, #2348; Page Up and Ctrl+Up into frozen rows, Ctrl+Left and Alt+Page Up into frozen columns bring the scrolled area back; Auto Fill Options button after a left-drag of the fill handle (#1403); Show Outline Symbols, Ctrl+8; a too-wide number in a repeat-fill format such as Accounting shows #### instead of losing its leading digits; Esc and Enter close a data validation alert over the cell editor; Ctrl+Enter fill gives each cell the automatic number format typing gives it; keytip letters typed with Alt held, #1846; Number Stored as Text indicator and Convert to Number) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (Window menu: switching between open workbooks; previously minor: New Formatting Rule's formula box takes references clicked or dragged on the grid, #2348; Page Up and Ctrl+Up into frozen rows, Ctrl+Left and Alt+Page Up into frozen columns bring the scrolled area back; Auto Fill Options button after a left-drag of the fill handle (#1403); Show Outline Symbols, Ctrl+8; a too-wide number in a repeat-fill format such as Accounting shows #### instead of losing its leading digits; Esc and Enter close a data validation alert over the cell editor; Ctrl+Enter fill gives each cell the automatic number format typing gives it; keytip letters typed with Alt held, #1846; Number Stored as Text indicator and Convert to Number) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -34,6 +34,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Dark mode, system appearance | yes | yes | done (10-09) |
 | Page Layout view (paper view with rulers and header editing) | yes | yes (#329, 10-11): per-sheet view saved in XLSX, pages with margins and gaps on the print pagination, "Click to add data" pages, rulers (inches or centimetres), headers and footers drawn and edited in place with a Header & Footer tab | margins drag on the rulers (#792, with header and footer margins); header/footer pictures, Different First Page / Odd & Even missing (1–3 h) |
 | Multiple windows per workbook | yes | no (#162) | see [hardware-parity.md](hardware-parity.md) |
+| Window menu: switch between open workbooks | yes (Switch Windows in View › Window; Window menu on the Mac) | yes (2026-10-23) | View › Window › Switch Windows lists the open workbooks, numbered, the active one checked, a dirty one marked; Ctrl+F6 / Ctrl+Shift+F6 and Ctrl+Tab / Ctrl+Shift+Tab cycle; on the Mac the native Window menu lists them with Next Window Cmd+\` and Previous Window Cmd+Shift+\`. Windows are identified by the document, so a later window-per-workbook build keeps the same commands (`window.list`, `window.activate {id}`, `window.next`, `window.previous`) |
 
 ## Grid interaction
 
@@ -105,7 +106,7 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 | Ctrl+F, Ctrl+H, Ctrl+G, Ctrl+K, Ctrl+T | Cmd (Ctrl+H) | find, replace, go to, hyperlink, table | present |
 | Ctrl+D, Ctrl+R, Ctrl+E, Ctrl+1, Ctrl+9 / 0, Ctrl+Shift+9 / 0 | Cmd (Ctrl+E on Mac: see below) | fill down/right, Flash Fill, Format Cells, hide/unhide | present |
 | Ctrl+- , Ctrl+Shift+= | Cmd | Delete / Insert cells dialog | present |
-| Ctrl+; , Ctrl+` | Control+; | current date, show formulas | present (Mac Control+; added) |
+| Ctrl+; , Ctrl+\` | Control+; , Control+\` | current date, show formulas | present (Mac Control+; and Control+\` added; Cmd+\` is the next window on the Mac) |
 | Arrows, Shift / Ctrl / Ctrl+Shift+arrows, Home, Ctrl+Home / End, Page Up / Down, Ctrl+Page Up / Down | Cmd+arrows | navigation and extension | present |
 | Tab, Shift+Tab, Enter, Shift+Enter, Ctrl+Space, Shift+Space, Delete, Esc | same | entry and selection | present |
 | F2, F9, F10 (key tips), F4 / Alt+Enter / Ctrl+Enter / Ctrl+Shift+Enter while editing | same | edit, calculate, references, new line, fill, array | present |
@@ -137,7 +138,8 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 | Ctrl+Q, Ctrl+A after a function name, Ctrl+Shift+U, Ctrl+Alt+P | same | Quick Analysis, Function Arguments, formula bar height, tooltips | missing |
 | Ctrl+Shift+A after a function name | Control+Shift+A | argument names: `=SUMIF(` becomes `=SUMIF(range,criteria,sum_range)`, the `(` added when missing; one Undo takes them back | **added** |
 | Ctrl+6, Ctrl+Q, Ctrl+A after a function name, Ctrl+Shift+U, Ctrl+Alt+P | same | objects, Quick Analysis, Function Arguments, formula bar height, tooltips | missing |
-| Ctrl+Shift+Page Up / Down, Ctrl+Alt+5, Ctrl+Shift+F1, Ctrl+F5–F10, Alt+F8 / F11 / F12 | same | group sheets, shape cycling, full screen, window keys, macros, VBA, Power Query | missing |
+| Ctrl+F6, Ctrl+Shift+F6, Ctrl+Tab, Ctrl+Shift+Tab | Cmd+\`, Cmd+Shift+\` | next / previous workbook window | **added** (in a browser Ctrl+Tab and Ctrl+Shift+Tab belong to the browser's tabs, as in Excel Online; the Switch Windows drop-down works there) |
+| Ctrl+Shift+Page Up / Down, Ctrl+Alt+5, Ctrl+Shift+F1, Ctrl+F5, Ctrl+F7–F10, Alt+F8 / F11 / F12 | same | group sheets, shape cycling, full screen, window keys, macros, VBA, Power Query | missing |
 | — | Cmd+= (calculate), Cmd+T (references while editing; F4 works), Shift+F7, Cmd+Shift+L | Mac-only extras | missing (Cmd+= is egui's zoom key; no thesaurus or Modify Cell Style) |
 
 On Windows, AltGr arrives as Ctrl+Alt: a Ctrl+Alt key that also types a character is treated as
@@ -183,6 +185,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-23 | minor | After a left-drag of the fill handle an Auto Fill Options button sits below the filled cells; its menu redoes the fill as Copy Cells, Fill Series, Fill Formatting Only or Fill Without Formatting (undoes the drag's fill, then `edit.autoFill` in that mode). It goes away when the workbook changes or the selection moves (#1403) |
 | 2026-10-22 | minor | Show Outline Symbols (`view.showOutlineSymbols`, Ctrl+8): a sheet can hide the outline's level buttons and brackets while keeping its outline, as Excel saves with `showOutlineSymbols="0"` (read and written); the grid then gives the bands no room |
 | 2026-10-22 | minor | A number in a repeat-fill format (`*`, as in the Accounting format) that is too wide for its column shows #### like any other number, instead of the fill rebuilding the value so its leading digits were cut off (2,509.00 CHF drawn as "509.00 CHF") |
+| 2026-10-23 | minor | Window menu: switching between open workbooks (View › Window › Switch Windows, Ctrl+F6 / Ctrl+Tab, the Mac Window menu with Cmd+\`); Show Formulas is Control+\` on the Mac |
 | 2026-10-21 | minor | Background error checking, first part (#1994): a constant whose text would be a number if typed (signs, thousands, currency, percent, exponent, parenthesised negative) gets Excel's green corner triangle; the active cell then shows a warning button whose menu names the problem and offers Convert to Number for the selection (`formulas.convertToNumber`). Dates, times and fractions kept as text and formula results are not flagged, as in Excel |
 | 2026-10-21 | minor | Paste Special laid out as Excel's: Paste and Operation options each in two columns inside a frame, Skip blanks and Transpose side by side, Paste Link as a button that pastes references at once; labels translated (the generic form didn't translate them) and the window no longer runs past the screen |
 | 2026-10-21 | minor | Form dialogs (conditional-format quick rules, New Name, Remove Duplicates, Text to Columns and every other `Dialog::form`) fit their content: OK and Cancel sit in a row under the last field instead of a right-to-left layout that took the screen's whole height and left the buttons floating halfway down |
