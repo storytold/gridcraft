@@ -512,6 +512,14 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     let value = if formula.is_none() && in_dynamic(st, pos) { Value::Empty } else { value };
+    // A dynamic array keeps the area it was saved spilling over (`ref`): when two arrays want the
+    // same cells, recalculating gives them to this one again, as before saving.
+    if dynamic
+        && formula.as_ref().is_some_and(|f| f.array.is_none())
+        && let Some(r) = st.dynamic.last().filter(|r| r.start == pos)
+    {
+        sheet.spill_ranges.insert(pos, *r);
+    }
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
 }
 

@@ -662,6 +662,20 @@ fn spill_into_the_old_area_of_a_blocked_neighbour() {
 }
 
 #[test]
+fn a_full_recalc_keeps_a_spill_with_the_formula_already_spilling_there() {
+    // F13's array would spill over F14:G14, which C14's array already fills: F13 is #SPILL!, and
+    // a full recalculation (Ctrl+Alt+F9) doesn't hand the area to F13 for coming first in
+    // reading order.
+    let mut t = T::new();
+    t.set("C14", "=SEQUENCE(1,7)");
+    t.set("F13", "=SEQUENCE(5,2)");
+    assert_eq!(t.get("F13"), Value::Error(CellError::Spill));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("F13"), Value::Error(CellError::Spill));
+    assert_eq!([t.num("C14"), t.num("G14"), t.num("I14")], [1.0, 5.0, 7.0]);
+}
+
+#[test]
 fn formulas_reading_an_array_that_loses_a_spill_conflict_read_spill_errors() {
     // Two arrays of one recalculation want the same empty cell: the one laid out second is
     // #SPILL!, and the formulas that read it in that pass (at its anchor, through `A2#`, or over
