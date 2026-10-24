@@ -10,7 +10,12 @@ pub mod keytip_table;
 pub enum Action {
     Tab(&'static str),
     Command(&'static str),
+    /// A command run with fixed params (a JSON object literal from keytips.json `params`), for
+    /// menu items that share one command id, like the Borders presets (HBO bottom, HBN none).
+    CommandWith(&'static str, &'static str),
     Dialog(&'static str),
+    /// A dialog opened with fixed params, like Format Cells on its Border tab (HBM).
+    DialogWith(&'static str, &'static str),
     /// The target command does not exist yet: the sequence is reserved, its badge shows, and
     /// invoking it is a silent no-op until the command lands (see keytips.json `pending`).
     Pending(&'static str),

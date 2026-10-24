@@ -18,7 +18,7 @@ fn harness(freeze: Option<(u32, u32)>) -> Harness {
     sh.view_active = CellRef::parse("A31").unwrap();
     sh.freeze = freeze;
     let mut session = Session::new();
-    session.add_document(DocState::new(wb, None, "Book1".into()));
+    session.add_document(DocState::new(wb, None, "Book1".into(), gridcraft_engine::Trust::Local));
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());

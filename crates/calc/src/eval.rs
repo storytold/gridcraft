@@ -1301,7 +1301,13 @@ impl<'h> Evaluator<'h> {
                 let area = usize::try_from((area_n as u64).saturating_sub(1)).ok();
                 let Some(a) = area.and_then(|i| areas.get(i)).copied() else { return err(CellError::Ref) };
                 let r = a.range;
-                // A single row or column with one index picks along it.
+                // A single row or column with one index picks along it. An area with several rows
+                // and columns needs both: `INDEX(A1:C3,2)` is #REF! in Excel (an empty third
+                // argument, `INDEX(A1:C3,2,)`, still means the whole row). Arrays differ:
+                // `INDEX({1,2;3,4},2)` is the row.
+                if two_args && r.height() > 1 && r.width() > 1 {
+                    return err(CellError::Ref);
+                }
                 let (row, col) = if two_args && r.height() == 1 { (1, row) } else { (row, col) };
                 if row as u64 > r.height() as u64 || col as u64 > r.width() as u64 {
                     return err(CellError::Ref);

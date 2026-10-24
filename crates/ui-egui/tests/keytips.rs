@@ -680,3 +680,96 @@ fn font_dropdown_highlight_follows_the_filtered_rows() {
     h.run_steps(3);
     assert!(h.query_all_by_label("Georgia").count() >= 1, "an emptied filter lists every font again");
 }
+
+fn borders(h: &Harness, cell: &str) -> gridcraft_engine::model::Borders {
+    let d = h.state().session.active().unwrap();
+    let sh = d.wb.active().unwrap();
+    d.wb.styles.get(sh.style_id(CellRef::parse(cell).unwrap())).borders
+}
+
+/// [left, right, top, bottom] line styles of `cell`.
+fn sides(h: &Harness, cell: &str) -> [gridcraft_engine::model::BorderStyle; 4] {
+    let b = borders(h, cell);
+    [b.left.style, b.right.style, b.top.style, b.bottom.style]
+}
+
+fn selected(range: &str) -> Session {
+    let mut s = blank();
+    s.execute("selection.set", json!({"range": range})).unwrap();
+    s
+}
+
+#[test]
+fn border_keytips_apply_their_own_preset() {
+    use gridcraft_engine::model::BorderStyle::{Double, None as N, Thick, Thin};
+    // Alt, H, B, letter on A1 alone: each Borders menu letter draws its own preset (they all drew
+    // a bare bottom border before). Letters observed in Excel's Borders menu.
+    for (k, want) in [
+        (Key::O, [N, N, N, Thin]),
+        (Key::P, [N, N, Thin, N]),
+        (Key::L, [Thin, N, N, N]),
+        (Key::R, [N, Thin, N, N]),
+        (Key::A, [Thin, Thin, Thin, Thin]),
+        (Key::S, [Thin, Thin, Thin, Thin]),
+        (Key::T, [Thick, Thick, Thick, Thick]),
+        (Key::B, [N, N, N, Double]),
+        (Key::H, [N, N, N, Thick]),
+        (Key::D, [N, N, Thin, Thin]),
+        (Key::C, [N, N, Thin, Thick]),
+        (Key::U, [N, N, Thin, Double]),
+    ] {
+        let mut h = harness(selected("A1"));
+        sequence(&mut h, &[Key::H, Key::B, k], false);
+        assert!(h.state().message.is_none() && h.state().toast.is_none(), "H,B,{k:?} must run cleanly");
+        assert_eq!(sides(&h, "A1"), want, "H,B,{k:?}");
+    }
+}
+
+#[test]
+fn border_keytip_no_border_clears_a_bordered_cell() {
+    use gridcraft_engine::model::BorderStyle::None as N;
+    let mut s = selected("A1");
+    s.execute("home.borders", json!({"range": "A1", "preset": "all"})).unwrap();
+    let mut h = harness(s);
+    sequence(&mut h, &[Key::H, Key::B, Key::N], false);
+    assert_eq!(sides(&h, "A1"), [N, N, N, N], "H,B,N must clear every side, not add a bottom border");
+    assert_eq!(h.state().grid.last_border, "none", "the picked preset becomes the Borders button's face");
+}
+
+#[test]
+fn border_keytip_all_borders_covers_every_side_of_a_block() {
+    use gridcraft_engine::model::BorderStyle::Thin;
+    let mut h = harness(selected("A1:B2"));
+    sequence(&mut h, &[Key::H, Key::B, Key::A], false);
+    for cell in ["A1", "B1", "A2", "B2"] {
+        assert_eq!(sides(&h, cell), [Thin; 4], "H,B,A must border every side of {cell}");
+    }
+}
+
+#[test]
+fn border_keytip_outside_borders_skips_the_inside_edges() {
+    use gridcraft_engine::model::BorderStyle::{None as N, Thin};
+    let mut h = harness(selected("A1:B2"));
+    sequence(&mut h, &[Key::H, Key::B, Key::S], false);
+    assert_eq!(sides(&h, "A1"), [Thin, N, Thin, N]);
+    assert_eq!(sides(&h, "B2"), [N, Thin, N, Thin]);
+}
+
+#[test]
+fn border_keytip_more_borders_opens_format_cells_on_the_border_tab() {
+    let mut h = harness(blank());
+    sequence(&mut h, &[Key::H, Key::B, Key::M], false);
+    let d = h.state().dialog.as_ref().expect("H,B,M opens Format Cells");
+    assert_eq!(d.tab, "Border");
+}
+
+#[test]
+fn border_keytips_without_a_command_stay_silent() {
+    // Erase Border (a pen mode), Line Color and Line Style are reserved: no border is drawn.
+    for k in [Key::E, Key::I, Key::Y] {
+        let mut h = harness(selected("A1"));
+        sequence(&mut h, &[Key::H, Key::B, k], false);
+        assert!(!h.state().session.journal.iter().any(|(id, _)| id.starts_with("home.")), "H,B,{k:?} must not run a command");
+        assert_eq!(borders(&h, "A1"), Default::default(), "H,B,{k:?} must not draw a border");
+    }
+}

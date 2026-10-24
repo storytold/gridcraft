@@ -7,6 +7,7 @@
 use egui::{Color32, Key, Sense, Stroke, StrokeKind, vec2};
 
 use crate::icons::{self, Icon};
+use gridcraft_engine::core::{CellRef, RangeRef};
 use serde_json::{Map, Value as Json, json};
 
 use crate::SheetApp;
@@ -44,6 +45,28 @@ pub struct Dialog {
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
     focus_initialized: bool,
+    /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
+    pick: Option<RefPick>,
+}
+
+/// A formula box in point mode, as in Excel: a click on the grid writes the cell's absolute
+/// reference at the caret instead of selecting it, and a drag grows it into a range.
+#[derive(Clone, Debug)]
+struct RefPick {
+    key: &'static str,
+    /// The sheet the dialog was opened on, by name: its index changes when sheets are inserted or
+    /// moved while the dialog is open. References to another sheet carry that sheet's name.
+    sheet: String,
+    /// Caret (char index), mirrored from the text box while it has the keyboard.
+    caret: usize,
+    /// The reference last inserted (byte span), replaced by the next click or the drag.
+    point: Option<(usize, usize)>,
+    anchor: CellRef,
+    /// Give the box the keyboard back, caret after the reference, on the next frame.
+    refocus: bool,
+    /// The selection the rule applies to, fixed when the dialog opened as Excel's "Applies to":
+    /// pointing on another sheet must not move the rule there.
+    applies_to: String,
 }
 
 impl Dialog {
@@ -77,6 +100,46 @@ impl Dialog {
         self.values.insert(key.into(), value);
     }
 
+    /// Whether a click on the grid goes to a formula box of this dialog rather than the selection.
+    pub fn picks_references(&self) -> bool {
+        self.pick.is_some()
+    }
+
+    /// A click (`extend` false) or a drag reaching `cell`: writes the absolute reference at the
+    /// formula box's caret, replacing the reference the press inserted, as in the formula bar's
+    /// point mode. An empty box starts with `=`. After an operand there is no place for a
+    /// reference, so nothing changes. `active_sheet` names the sheet shown when it is not the
+    /// dialog's own.
+    pub fn pick_reference(&mut self, cell: CellRef, active_sheet: &str, extend: bool) {
+        let Some(pick) = self.pick.as_mut() else { return };
+        let text = self.values.get(pick.key).and_then(Json::as_str).unwrap_or("").to_string();
+        let mut ed = crate::editor::EditState::new(0, cell, text, true, false);
+        ed.caret = pick.caret.min(ed.text.chars().count());
+        ed.point = pick.point;
+        if ed.text.trim().is_empty() {
+            ed.text = "=".into();
+            ed.caret = 1;
+            ed.point = None;
+        }
+        if !ed.can_point() {
+            return;
+        }
+        if !extend {
+            pick.anchor = cell;
+        }
+        let range = abs(&RangeRef::new(pick.anchor, cell));
+        let reference = if active_sheet.eq_ignore_ascii_case(&pick.sheet) {
+            range
+        } else {
+            format!("{}!{range}", gridcraft_engine::formula::quote_sheet(active_sheet))
+        };
+        ed.insert_ref(&reference);
+        pick.caret = ed.caret;
+        pick.point = ed.point;
+        pick.refocus = true;
+        self.values.insert(pick.key.into(), json!(ed.text));
+    }
+
     fn form(name: &str, title: &str, command: &'static str, fields: Vec<Field>, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
@@ -94,6 +157,7 @@ impl Dialog {
             picture_target: None,
             back: None,
             focus_initialized: false,
+            pick: None,
         }
     }
 
@@ -114,6 +178,7 @@ impl Dialog {
             picture_target: None,
             back: None,
             focus_initialized: false,
+            pick: None,
         }
     }
 
@@ -690,6 +755,19 @@ impl Dialog {
                     fields,
                     json!({"preset": "lightRedFillDarkRedText", "period": "today"}),
                 );
+                if ty == "expression" {
+                    let (sheet, applies_to) = app
+                        .session
+                        .active()
+                        .map(|doc| {
+                            (
+                                doc.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(),
+                                doc.selection.ranges.iter().map(RangeRef::a1).collect::<Vec<_>>().join(","),
+                            )
+                        })
+                        .unwrap_or_default();
+                    d.pick = Some(RefPick { key: "formula", sheet, caret: 0, point: None, anchor: CellRef::new(0, 0), refocus: false, applies_to });
+                }
                 d.values.insert("type".into(), json!(ty));
                 d.values.insert("operator".into(), p("operator"));
                 d
@@ -1115,6 +1193,10 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                 rule.insert(k.clone(), val.clone());
             }
             v = json!({"rule": Json::Object(rule)});
+            if let Some(pick) = d.pick.as_ref().filter(|pick| !pick.applies_to.is_empty() && !pick.sheet.is_empty()) {
+                v["sheet"] = json!(pick.sheet.as_str());
+                v["range"] = json!(pick.applies_to);
+            }
         }
         "series" => {
             if let Some(s) = d.values.get("stop").and_then(Json::as_str).and_then(|s| s.parse::<f64>().ok()) {
@@ -1634,6 +1716,25 @@ fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
     d.focus_first_field = false;
 }
 
+/// Keeps a picking formula box's caret, and gives it the keyboard back after a grid click put a
+/// reference in it (the click took the focus), its caret after the reference.
+fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
+    if typed {
+        pick.point = None;
+    }
+    if pick.refocus {
+        let mut state = egui::text_edit::TextEditState::load(&r.ctx, r.id).unwrap_or_default();
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(pick.caret))));
+        state.store(&r.ctx, r.id);
+        r.request_focus();
+        pick.refocus = false;
+    } else if r.has_focus()
+        && let Some(range) = egui::text_edit::TextEditState::load(&r.ctx, r.id).and_then(|state| state.cursor.char_range())
+    {
+        pick.caret = range.primary.index.into();
+    }
+}
+
 /// Draws a dialog's `fields`, editing its values.
 fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
@@ -1658,6 +1759,9 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         take_first_focus(d, &r);
                         if r.changed() {
                             d.values.insert(key.into(), json!(s));
+                        }
+                        if let Some(pick) = d.pick.as_mut().filter(|pick| pick.key == key) {
+                            track_pick(pick, &r, r.changed());
                         }
                     });
                 }

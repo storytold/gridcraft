@@ -342,7 +342,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 | 2026-10-12 | minor | Essentials AutoFit evidence: rows auto-fit oversized fonts on open and row formatting (#833) |
 | 2026-10-12 | minor | Sheet tabs: reveal the selected tab on navigation and resize while preserving manual scrolling (#681); no score change |
 | 2026-10-12 | minor | PivotTables: values on rows (Σ Values in Rows at any position, all three layouts; `pivot.moveField` and the field pane move it; `dataOnRows` round-trips) (no score change) |
-| 2026-10-11 | minor | Stability: command-sequence fuzz harness (`crates/engine/tests/command_sequence_fuzz.rs`) checks random command sequences against undo/redo, XLSX round-trip, full-recalc and structure invariants; the sequence bugs it found are fixed (no score change) |
+| 2026-10-11 | minor | Stability: command-sequence fuzz harness (`crates/engine/tests/it/command_sequence_fuzz.rs`) checks random command sequences against undo/redo, XLSX round-trip, full-recalc and structure invariants; the sequence bugs it found are fixed (no score change) |
 | 2026-10-11 | minor | Password-encrypted workbooks open (#11): Essentials file-opening work 24–36 h |
 | 2026-10-11 | minor | Worksheet functions 505 / 523 (96.6%; 496 working): ODDFPRICE, ODDFYIELD, ODDLPRICE, ODDLYIELD |
 | 2026-10-11 | minor | Worksheet functions 503 / 523 (96.2%; 494 working): PERCENTOF, EUROCONVERT |

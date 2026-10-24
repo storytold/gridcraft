@@ -316,7 +316,10 @@ fn keytip_hbd_() {
 fn keytip_hbe_() {
     let mut h = harness(blank());
     sequence(&mut h, "HBE", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "home.borders"), "HBE must journal home.borders");
+    assert!(h.state().dialog.is_none(), "HBE must not open a dialog");
+    assert!(h.state().message.is_none(), "HBE must not open a message box");
+    assert!(h.state().toast.is_none(), "HBE must not raise a toast");
+    assert!(h.state().session.journal.is_empty(), "HBE must not journal");
 }
 
 #[test]
@@ -337,7 +340,10 @@ fn keytip_hbh_() {
 fn keytip_hbi_() {
     let mut h = harness(blank());
     sequence(&mut h, "HBI", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "home.borders"), "HBI must journal home.borders");
+    assert!(h.state().dialog.is_none(), "HBI must not open a dialog");
+    assert!(h.state().message.is_none(), "HBI must not open a message box");
+    assert!(h.state().toast.is_none(), "HBI must not raise a toast");
+    assert!(h.state().session.journal.is_empty(), "HBI must not journal");
 }
 
 #[test]
@@ -351,7 +357,7 @@ fn keytip_hbl_() {
 fn keytip_hbm_() {
     let mut h = harness(blank());
     sequence(&mut h, "HBM", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "home.borders"), "HBM must journal home.borders");
+    assert!(h.state().dialog.is_some(), "HBM must open the formatCells dialog");
 }
 
 #[test]
@@ -414,7 +420,10 @@ fn keytip_hbw_() {
 fn keytip_hby_() {
     let mut h = harness(blank());
     sequence(&mut h, "HBY", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "home.borders"), "HBY must journal home.borders");
+    assert!(h.state().dialog.is_none(), "HBY must not open a dialog");
+    assert!(h.state().message.is_none(), "HBY must not open a message box");
+    assert!(h.state().toast.is_none(), "HBY must not raise a toast");
+    assert!(h.state().session.journal.is_empty(), "HBY must not journal");
 }
 
 #[test]

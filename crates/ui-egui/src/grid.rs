@@ -1303,7 +1303,9 @@ pub(crate) fn paint_quadrant(
         // Numbers and dates never overflow: they show #### when too narrow.
         let hashed = !shrunk && (numeric || matches!(v, Value::Number(_))) && w > avail_w - 2.0 * pad && st.align.h != HAlign::Fill;
         if hashed {
-            let n = ((avail_w - 2.0 * pad) / char_w).floor().max(1.0) as usize;
+            // Measured on `#` itself: it is wider than `0` in some fonts, and #### must fit its cell.
+            let hash_w = p.layout_no_wrap("#".to_string(), font.clone(), color).size().x.max(1.0);
+            let n = ((avail_w - 2.0 * pad) / hash_w).floor().max(1.0) as usize;
             galley = p.layout_no_wrap("#".repeat(n), font.clone(), color);
             w = galley.size().x;
         }
@@ -2337,6 +2339,19 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             app.grid.filter_menu = Some((c.col, c.row, geo.mirror_pos(p)));
             return;
         }
+        // A dialog's formula box in point mode (New Formatting Rule) takes the reference; the
+        // selection, which the dialog acts on, stays.
+        if let Some(d) = app.dialog.as_mut().filter(|d| d.picks_references()) {
+            d.pick_reference(c, &sh.name, false);
+            app.grid.drag = Drag::Select;
+            app.grid.drag_select = true;
+            if resp.drag_started()
+                && let Some(p) = pos
+            {
+                select_to_pointer(app, geo, sh, wb, p);
+            }
+            return;
+        }
         // Point mode while editing a formula: clicking inserts a reference.
         if let Some(ed) = app.editor.as_mut()
             && ed.can_point()
@@ -2389,6 +2404,20 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             && !mods.shift
         {
             app.grid.last_click = None;
+            // A PivotTable's value cell shows its source records on a new sheet (Excel's Show
+            // Details); its labels and headers still edit.
+            if sh.pivots.iter().any(|pt| pt.last_range.is_some_and(|r| r.contains(c))) {
+                let not_a_value_cell =
+                    gridcraft_engine::EngineError::Disabled("pivot.showDetails".into(), gridcraft_engine::pivot::NOT_A_VALUE_CELL.into()).to_string();
+                match app.run("pivot.showDetails", json!({"cell": c.a1()})) {
+                    Ok(_) => return,
+                    Err(e) if e == not_a_value_cell => {}
+                    Err(e) => {
+                        app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+                        return;
+                    }
+                }
+            }
             // Following a hyperlink requires a single click in Excel; double-click edits.
             app.begin_edit(None, false);
             return;
@@ -2400,9 +2429,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 d.selection.anchor = sel.anchor;
             }
         } else if mods.command {
-            // Ctrl+click on a hyperlink's text follows it instead of adding the cell to the selection.
+            // Ctrl+click (without Alt) on a hyperlink's text follows it instead of adding the cell to the selection.
             if let Some(h) = sh.hyperlinks.get(&c).cloned()
                 && primary_clicked
+                && !mods.alt
                 && p.x < geo.cell_rect(sh, c).left() + geo.cell_rect(sh, c).width() * 0.8
             {
                 follow_link(app, &h.target);
@@ -2644,7 +2674,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
 /// An armed Format Painter pastes onto the cells just clicked or dragged over (not while
 /// pointing a formula reference, which also drags a Select).
 fn format_painter_apply(app: &mut SheetApp) {
-    if app.session.format_painter.is_some() && !app.editor.as_ref().is_some_and(|ed| ed.can_point()) {
+    if app.session.format_painter.is_some()
+        && !app.editor.as_ref().is_some_and(|ed| ed.can_point())
+        && !app.dialog.as_ref().is_some_and(|d| d.picks_references())
+    {
         let dest = app.session.active().map(|d| d.selection.current().a1());
         if let Some(dest) = dest
             && let Err(e) = app.run("edit.formatPainter", json!({"apply": dest}))
@@ -2697,7 +2730,9 @@ fn select_to_pointer(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, p
         geo.row_at(sh, p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0)),
         geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0)),
     );
-    if let Some(ed) = app.editor.as_mut()
+    if let Some(d) = app.dialog.as_mut().filter(|d| d.picks_references()) {
+        d.pick_reference(cell, &sh.name, true);
+    } else if let Some(ed) = app.editor.as_mut()
         && ed.point.is_some()
     {
         if let Some(start) = ed.point_anchor.filter(|(sheet, _)| *sheet == wb.active_sheet).map(|(_, cell)| cell).or(ed.point_cell) {
@@ -3090,6 +3125,19 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
     }
 }
 
+/// Room the in-cell editor keeps right of its text. It is sized from the text of the last frame, so
+/// the next typed character must still fit: a fixed 14 px was less than one glyph at high zoom,
+/// and the field scrolled and snapped back on every key (#2336). `size` is the font size in px.
+fn editor_slack(size: f32) -> f32 {
+    14.0 + size
+}
+
+/// Width of the one-line in-cell editor. While the text fits the cell (with the usual 14 px margin) the
+/// editor is exactly the cell wide, as in Excel; once it overflows, the extra `editor_slack` applies.
+fn editor_width(text_w: f32, cell_w: f32, size: f32) -> f32 {
+    if text_w + 14.0 <= cell_w { cell_w } else { text_w + editor_slack(size) }
+}
+
 fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     let Some(ed) = app.editor.as_ref() else { return };
     if ed.sheet != wb.active_sheet {
@@ -3116,7 +3164,7 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
         let text_w = ui.painter().layout_no_wrap(ed.text.clone(), font.clone(), Color32::BLACK).size().x;
         // Excel keeps the cell's height for one line and only grows for extra lines.
         let h = if lines > 1.0 { (size * 1.3 * lines + 4.0).max(rect.height()) } else { rect.height() };
-        ((text_w + 14.0).max(rect.width()).min(geo.cells.right() - rect.left()), h)
+        (editor_width(text_w, rect.width(), size).min(geo.cells.right() - rect.left()), h)
     };
     // Grows to the left on a right-to-left sheet.
     let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
@@ -3509,7 +3557,8 @@ fn fill_options_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet
     let size = vec2(18.0, 18.0);
     let corner = geo.range_rect(sh, tag.target).right_bottom();
     let button = geo.mirror_rect(Rect::from_min_size(corner + vec2(2.0, 2.0), size));
-    if !geo.cells.contains_rect(button) {
+    // `button` is in screen space, so compare it with the mirrored cells area.
+    if !geo.mirror_rect(geo.cells).contains_rect(button) {
         return;
     }
     let lang = crate::i18n::current(ui.ctx());
@@ -4115,6 +4164,23 @@ pub(crate) fn heading_font_size(zoom: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn editor_matches_the_cell_while_the_text_fits() {
+        use super::editor_width;
+        assert_eq!(editor_width(10.0, 80.0, 7.0), 80.0);
+        assert_eq!(editor_width(66.0, 80.0, 7.0), 80.0);
+        assert_eq!(editor_width(67.0, 80.0, 7.0), 88.0);
+    }
+
+    #[test]
+    fn editor_slack_fits_one_more_glyph_at_high_zoom() {
+        use super::editor_slack;
+        // A glyph is at most about one em wide; at 400% an em is ~60 px, far over the old fixed 14 px.
+        for size in [14.7_f32, 25.0, 60.0] {
+            assert!(editor_slack(size) - 4.0 >= size, "slack {} too small for a {size} px glyph", editor_slack(size));
+        }
+    }
 
     #[test]
     fn explicit_left_and_right_keep_their_side_on_a_right_to_left_sheet() {

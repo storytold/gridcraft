@@ -1,0 +1,29 @@
+//! The crate's integration tests, one module per file, built as one test binary.
+
+mod autofit_filter_buttons;
+mod cf_formula_validate;
+mod chart_workbook_names;
+mod command_sequence_fuzz;
+mod cross_sheet_cut;
+mod csv_export_budget;
+mod custom_filter_blanks;
+mod custom_view_freeze;
+mod dynamicmetadata;
+mod extreme_selection_moves;
+mod format_as_table_restyle;
+mod hidden_sheet_navigation;
+mod ink_roundtrip;
+mod line_count_overflow;
+mod long_operator_chains;
+mod offset_overflow;
+mod percent_entry;
+mod pivot_unknown_func;
+mod pivotchart_link;
+mod range_fill_formats;
+mod row_autofit;
+mod sheet_name_quoting;
+mod sparse_clear_invalidation;
+mod stored_list_shape;
+mod table_resize_overlap;
+mod table_total_row_last_row;
+mod wrap_row_height;

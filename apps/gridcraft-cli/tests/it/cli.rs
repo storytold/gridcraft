@@ -1,5 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};

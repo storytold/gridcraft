@@ -68,9 +68,11 @@ type_complexity = "allow"
 
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
 
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
 
 [profile.release]
 opt-level = 3

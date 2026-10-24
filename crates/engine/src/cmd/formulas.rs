@@ -1,7 +1,7 @@
 //! Formulas tab: AutoSum, Insert Function, names, auditing, calculation.
 
 use gridcraft_core::{CellError, CellRef, RangeRef, Value};
-use gridcraft_model::{CalcMode, DefinedName, Formula};
+use gridcraft_model::{CalcMode, DefinedName, Formula, Workbook};
 use serde_json::{Value as Json, json};
 
 use super::*;
@@ -32,18 +32,26 @@ pub fn specs() -> Vec<CommandSpec> {
             "Define Name…",
             ["Formulas", "Defined Names"],
             None,
-            "{name, refersTo?: \"=Sheet1!$A$1:$A$10\" (default: the selection), scope?: \"Workbook\"|sheet name, comment?, oldName?, oldScope?} (oldName: edit that name (Name Manager › Edit); a new name also renames it in formulas)",
+            "{name, refersTo?: \"=Sheet1!$A$1:$A$10\" (default: the selection), scope?: \"Workbook\"|sheet name, comment?, oldName?, oldScope?, force?: bool} (oldName: edit that name (Name Manager › Edit); a new name also renames it in formulas; a hidden name GridCraft keeps its own data in, `_gc_<key>_<n>` or `_sc_<key>`, is refused unless force is true)",
             has_doc,
             define_name
         ),
-        cmd!("formulas.deleteName", "Delete Name", [], None, "{name, scope?: \"Workbook\"|sheet name (default: every scope)}", has_doc, delete_name),
+        cmd!(
+            "formulas.deleteName",
+            "Delete Name",
+            [],
+            None,
+            "{name, scope?: \"Workbook\"|sheet name (default: every scope), force?: bool} (a hidden name GridCraft keeps its own data in, `_gc_<key>_<n>` or `_sc_<key>`, is refused unless force is true)",
+            has_doc,
+            delete_name
+        ),
         cmd!(query "formulas.nameManager", "Name Manager", ["Formulas", "Defined Names"], Some("Cmd+F3"), "{} → names with values", has_doc, name_manager),
         cmd!(
             "formulas.createFromSelection",
             "Create from Selection",
             ["Formulas", "Defined Names"],
             Some("Cmd+Shift+F3"),
-            "{range?, top?: true, left?: false, bottom?: false, right?: false, replace?: false (existing names are kept and listed in `skipped`)}",
+            "{range?, top?: true, left?: false, bottom?: false, right?: false, replace?: false (existing names are kept and listed in `skipped`), force?: false (labels of the shape GridCraft keeps its own data in, `_gc_<key>_<n>` and `_sc_<key>`, are listed in `skipped` unless force is true)}",
             has_doc,
             create_from_selection
         ),
@@ -268,6 +276,9 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
     if !valid_name(&name) {
         return Err(EngineError::Other("The name that you entered is not valid.".into()));
     }
+    for n in [Some(name.as_str()), str_param(p, "oldName")].into_iter().flatten() {
+        refuse_stash_name(&s.doc()?.wb, p, n)?;
+    }
     let d = s.doc()?;
     let scope = match str_param(p, "scope") {
         None | Some("Workbook") => None,
@@ -374,8 +385,29 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
     }
 }
 
+/// Refuses a name of the shape GridCraft keeps its own workbook data in ([`super::stash`]):
+/// defining, renaming or deleting one would replace or remove part of an item (a stored macro,
+/// script or view) and leave the rest behind. `force: true` lets the call go ahead.
+/// Whether `name` is one the workbook holds GridCraft's own data in: a hidden workbook-scope
+/// name of an item's shape. A visible name of that shape is the person's own (see `stash`), and
+/// the name commands may change it.
+fn holds_gridcraft_data(wb: &Workbook, name: &str) -> bool {
+    // The stash's own rule, so the two never disagree: a legacy `_sc_` item is read visible or not.
+    stash::holds_item(wb, name)
+}
+
+fn refuse_stash_name(wb: &Workbook, p: &Json, name: &str) -> Result<()> {
+    if holds_gridcraft_data(wb, name) && !bool_param(p, "force").unwrap_or(false) {
+        return Err(EngineError::Other(format!(
+            "'{name}' is a name GridCraft keeps its own data in (stored macros, scripts or views). Pass `force: true` to change it anyway."
+        )));
+    }
+    Ok(())
+}
+
 fn delete_name(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").ok_or_else(|| bad("formulas.deleteName", "missing `name`"))?.to_string();
+    refuse_stash_name(&s.doc()?.wb, p, &name)?;
     let scope = match str_param(p, "scope") {
         None => None,
         Some("Workbook") => Some(None),
@@ -461,7 +493,11 @@ fn create_from_selection(s: &mut Session, p: &Json) -> Result<Json> {
     // Excel asks before replacing an existing name; here it's kept unless `replace` is set, and
     // reported.
     let exists = |n: &str| d.wb.names.iter().any(|x| x.name.eq_ignore_ascii_case(n) && x.scope.is_none());
-    let (made, skipped): (Vec<_>, Vec<_>) = made.into_iter().partition(|(n, _)| replace || !exists(n));
+    // A label that names one of GridCraft's own hidden data names would replace part of an item
+    // (see `refuse_stash_name`).
+    let force = bool_param(p, "force").unwrap_or(false);
+    let ours = |n: &str| !force && holds_gridcraft_data(&d.wb, n);
+    let (made, skipped): (Vec<_>, Vec<_>) = made.into_iter().partition(|(n, _)| !ours(n) && (replace || !exists(n)));
     let skipped: Vec<String> = skipped.into_iter().map(|(n, _)| n).collect();
     let n = made.len();
     edit(s, |cx| {
@@ -740,6 +776,57 @@ mod tests {
         // Absolute references are kept as they are.
         let r = s.execute("formulas.defineName", json!({"name": "First", "refersTo": "=Sheet1!$A$1"})).unwrap();
         assert_eq!(r["refersTo"], "=Sheet1!$A$1");
+    }
+
+    #[test]
+    fn the_name_commands_leave_gridcraft_data_alone() {
+        // Defining, renaming or deleting a name of a stored item's shape would replace or remove
+        // one of its chunks and leave the rest behind: refused unless `force` is true.
+        let mut s = Session::new();
+        s.new_workbook();
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        let text = "m".repeat(9_000);
+        stash::set(wb, "macro_1", &text).unwrap();
+        wb.names.push(DefinedName { name: "_sc_watch".into(), scope: None, formula: "\"[]\"".into(), comment: String::new(), hidden: true });
+        // A legacy item is read whether or not it is hidden, so a visible one is data too.
+        wb.names.push(DefinedName { name: "_sc_old".into(), scope: None, formula: "\"[]\"".into(), comment: String::new(), hidden: false });
+        let names = |s: &Session| s.doc().unwrap().wb.names.clone();
+        let before = names(&s);
+        assert!(before.len() >= 3, "the item takes two chunks");
+        for params in [
+            json!({"name": "_gc_macro_1_0", "refersTo": "=1"}),
+            json!({"name": "_SC_Watch", "refersTo": "=1"}),
+            json!({"name": "Mine", "refersTo": "=1", "oldName": "_gc_macro_1_1"}),
+            json!({"name": "_gc_macro_1_0", "refersTo": "=1", "force": false}),
+            json!({"name": "Mine2", "refersTo": "=1", "oldName": "_SC_old"}),
+        ] {
+            let err = s.execute("formulas.defineName", params.clone()).unwrap_err().to_string();
+            assert!(err.contains("force"), "{params}: {err}");
+        }
+        for name in ["_gc_macro_1_1", "_sc_watch", "_sc_old"] {
+            let err = s.execute("formulas.deleteName", json!({"name": name})).unwrap_err().to_string();
+            assert!(err.contains("force"), "{name}: {err}");
+        }
+        s.execute("range.setValues", json!({"range": "A1:B2", "values": [["_gc_macro_1_0", "Rate"], [1, 2]]})).unwrap();
+        let r = s.execute("formulas.createFromSelection", json!({"range": "A1:B2", "top": true, "replace": true})).unwrap();
+        assert_eq!((r["created"].clone(), r["skipped"].clone()), (json!(1), json!(["_gc_macro_1_0"])));
+        let after = names(&s);
+        assert_eq!(after.iter().filter(|n| n.name != "Rate").cloned().collect::<Vec<_>>(), before);
+        assert_eq!(stash::get(&s.doc().unwrap().wb, "macro_1").as_deref(), Some(text.as_str()));
+        // A visible name of the shape is the person's own (the stash never reads it): the name
+        // commands change and remove it without `force`, as Name Manager cannot pass one.
+        let own = DefinedName { name: "_gc_rate_0".into(), scope: None, formula: "=1".into(), comment: String::new(), hidden: false };
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).names.push(own.clone());
+        s.execute("formulas.defineName", json!({"name": "Rate0", "refersTo": "=2", "oldName": "_gc_rate_0"})).unwrap();
+        s.execute("formulas.deleteName", json!({"name": "Rate0"})).unwrap();
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).names.push(own);
+        s.execute("formulas.deleteName", json!({"name": "_gc_rate_0"})).unwrap();
+        assert_eq!(stash::get(&s.doc().unwrap().wb, "macro_1").as_deref(), Some(text.as_str()), "the hidden item is untouched");
+        // Ordinary names and forced calls go ahead.
+        s.execute("formulas.deleteName", json!({"name": "Rate"})).unwrap();
+        s.execute("formulas.defineName", json!({"name": "_gc_macro_1_1", "refersTo": "=1", "force": true})).unwrap();
+        s.execute("formulas.deleteName", json!({"name": "_gc_macro_1_1", "force": true})).unwrap();
+        assert!(!names(&s).iter().any(|n| n.name == "_gc_macro_1_1"));
     }
 
     #[test]

@@ -314,7 +314,9 @@ pub(crate) fn wildcard_find(pattern: &str, text: &str, start: usize) -> Option<u
 }
 
 /// Exact-or-wildcard equality used by MATCH/VLOOKUP/XLOOKUP exact modes: text with wildcards
-/// matches by pattern (only when `wild`), otherwise values compare case-insensitively.
+/// matches by pattern (only when `wild`), otherwise values compare case-insensitively. Numbers
+/// compare exactly, not at the 15 digits of `=` and the criteria functions (Excel 365:
+/// `MATCH(0.1+0.2,{0.3},0)` is #N/A while `0.1+0.2=0.3` is TRUE).
 pub(crate) fn lookup_equal(needle: &Value, hay: &Value, wild: bool) -> bool {
     match (needle, hay) {
         (Value::Text(p), Value::Text(t)) => {
@@ -324,7 +326,7 @@ pub(crate) fn lookup_equal(needle: &Value, hay: &Value, wild: bool) -> bool {
                 compare_text(p, t) == Ordering::Equal
             }
         }
-        (Value::Number(a), Value::Number(b)) => compare_numbers(*a, *b) == Ordering::Equal,
+        (Value::Number(a), Value::Number(b)) => a == b,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Error(a), Value::Error(b)) => a == b,
         (Value::Empty, Value::Empty) => true,
@@ -370,7 +372,8 @@ mod tests {
         assert!(m("#N/A", Value::Error(CellError::NA)));
         assert!(Criterion::parse(&Value::Number(3.0)).matches(&Value::Number(3.0)));
         assert!(Criterion::parse(&Value::Number(0.3)).matches(&Value::Number(0.1 + 0.2)));
-        assert!(lookup_equal(&Value::Number(0.3), &Value::Number(0.1 + 0.2), false));
+        assert!(!lookup_equal(&Value::Number(0.3), &Value::Number(0.1 + 0.2), false));
+        assert!(lookup_equal(&Value::Number(0.0), &Value::Number(-0.0), false));
         assert!(m("<>a*", Value::from("bcd")));
         assert!(m(">1/1/2020", Value::Number(44000.0)));
         // Text patterns never match blank cells, but an empty string is text.

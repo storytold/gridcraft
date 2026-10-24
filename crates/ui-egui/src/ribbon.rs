@@ -74,15 +74,23 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             {
                 app.run_or_alert("file.save", json!({}));
             }
-            let can_undo = app.session.active().is_some_and(|d| !d.undo.is_empty());
-            let can_redo = app.session.active().is_some_and(|d| !d.redo.is_empty());
-            if icon_button(ui, Icon::Undo, if can_undo { t.text_dim } else { t.text_disabled }, "Undo", vec2(26.0, ch)).clicked() && can_undo {
+            // The commands' own availability: there must be a step, and no undo group may be open on
+            // the document (an action that spans several calls is still running).
+            let can_undo = gridcraft_engine::cmd::can_undo(&app.session).is_ok();
+            let can_redo = gridcraft_engine::cmd::can_redo(&app.session).is_ok();
+            // Named and marked enabled or not for assistive technology (and the UI tests).
+            let undo = icon_button(ui, Icon::Undo, if can_undo { t.text_dim } else { t.text_disabled }, "Undo", vec2(26.0, ch));
+            undo.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_undo, "Undo"));
+            if undo.clicked() && can_undo {
                 app.run_or_alert("edit.undo", json!({}));
             }
             let undo_list = icon_button(ui, Icon::Chevron, t.text_dim, "Undo list", vec2(14.0, ch));
             egui::Popup::menu(&undo_list).show(|ui| {
-                let labels: Vec<String> =
-                    app.session.active().map(|d| d.undo.iter().rev().take(20).map(|e| e.label.clone()).collect()).unwrap_or_default();
+                let labels: Vec<String> = if can_undo {
+                    app.session.active().map(|d| d.undo.iter().rev().take(20).map(|e| e.label.clone()).collect()).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
                 if labels.is_empty() {
                     ui.label("Can't Undo");
                 }
@@ -92,7 +100,9 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 }
             });
-            if icon_button(ui, Icon::Redo, if can_redo { t.text_dim } else { t.text_disabled }, "Redo", vec2(26.0, ch)).clicked() && can_redo {
+            let redo = icon_button(ui, Icon::Redo, if can_redo { t.text_dim } else { t.text_disabled }, "Redo", vec2(26.0, ch));
+            redo.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_redo, "Redo"));
+            if redo.clicked() && can_redo {
                 app.run_or_alert("edit.redo", json!({}));
             }
             let more = icon_button(ui, Icon::More, t.text_dim, "More commands", vec2(26.0, ch));
@@ -204,6 +214,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let collapsed = app.ui.ribbon_collapsed;
     let h = if collapsed { 34.0 } else { 34.0 + 92.0 };
+    // A contextual tab exists only while its object is selected (Excel hides Table Design once the
+    // cell leaves the table); a remembered one that is gone would draw an empty ribbon.
+    if CONTEXTUAL_TABS.contains(&app.ui.ribbon_tab.as_str()) && !contextual_tabs(app).contains(&app.ui.ribbon_tab.as_str()) {
+        app.ui.ribbon_tab = "Home".to_string();
+    }
     egui::Panel::top("ribbon")
         .exact_size(h)
         .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: 6 }))
@@ -321,6 +336,8 @@ fn theme_choices(app: &mut SheetApp, ui: &mut Ui) {
         }
     }
 }
+
+const CONTEXTUAL_TABS: [&str; 3] = ["Table Design", "Chart Design", crate::paper_view::TAB];
 
 fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
     let mut v = Vec::new();

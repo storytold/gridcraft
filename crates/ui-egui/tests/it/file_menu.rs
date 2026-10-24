@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::{Session, core::CellRef, core::Value};
+use gridcraft_ui_egui::i18n::Language;
 use gridcraft_ui_egui::{Services, SheetApp};
 
 fn harness(services: Services) -> egui_kittest::Harness<'static, SheetApp> {
@@ -134,30 +135,25 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
 
 #[test]
 fn translated_options_headings_show_no_context_prefix() {
-    for (code, headings, prefixed, (view, view_prefixed)) in [
-        ("fr", ["Général", "Enregistrer"], ["Options|Général", "Options|Enregistrer"], ("Affichage", "Options de la feuille|Affichage")),
-        ("sr", ["Opšte", "Sačuvaj"], ["Opcije|Opšte", "Opcije|Sačuvaj"], ("Prikaz", "Opcije lista|Prikaz")),
-        ("nl", ["Algemeen", "Opslaan"], ["Opties|Algemeen", "Opties|Opslaan"], ("Weergeven", "Bladopties|Weergeven")),
-        ("ro", ["General", "Salvare"], ["Opțiuni|General", "Opțiuni|Salvare"], ("Vizualizare", "Opțiuni foaie|Vizualizare")),
-    ] {
+    for language in [Language::Fr, Language::Sr, Language::Nl, Language::Ro] {
         let mut h = harness(Services::default());
-        h.state_mut().run("app.language.set", serde_json::json!({"language": code})).unwrap();
+        h.state_mut().run("app.language.set", serde_json::json!({"language": language.code()})).unwrap();
         h.state_mut().run("file.options", serde_json::json!({})).unwrap();
         h.run_steps(3);
         assert_eq!(page(&h), Some("options"));
-        for heading in headings {
-            assert!(h.query_all_by_label(heading).next().is_some(), "{code}: no {heading} heading");
-        }
-        for label in prefixed {
-            assert!(h.query_by_label(label).is_none(), "{code}: {label} shows its context");
+        for key in ["Options|General", "Options|Save"] {
+            let heading = language.tr(key);
+            assert!(!heading.contains('|'), "{language:?}: {key} shows its context: {heading}");
+            assert!(h.query_all_by_label(heading).next().is_some(), "{language:?}: no {heading} heading");
         }
         // Page Layout › Sheet Options: the Gridlines and Headings "View" checkboxes had the same
         // prefix. The View tab may share the word, so count at least the two checkboxes.
         h.state_mut().run("ui.backstage", serde_json::json!({"page": "close"})).unwrap();
         h.state_mut().ui.ribbon_tab = "Page Layout".into();
         h.run_steps(3);
-        assert!(h.query_by_label(view_prefixed).is_none(), "{code}: {view_prefixed} shows its context");
-        assert!(h.query_all_by_label(view).count() >= 2, "{code}: the Sheet Options checkboxes don't read {view}");
+        let view = language.tr("Sheet Options|View");
+        assert!(!view.contains('|'), "{language:?}: Sheet Options|View shows its context: {view}");
+        assert!(h.query_all_by_label(view).count() >= 2, "{language:?}: the Sheet Options checkboxes don't read {view}");
     }
 }
 

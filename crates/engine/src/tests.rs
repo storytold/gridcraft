@@ -3,6 +3,11 @@ use serde_json::json;
 
 use crate::Session;
 
+thread_local! {
+    /// Copies of a document's undo and redo history `execute` has taken on this thread.
+    pub(crate) static HISTORY_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn s() -> Session {
     let mut s = Session::new();
     s.new_workbook();
@@ -4599,3 +4604,4 @@ fn html_export_without_pictures_or_charts_has_no_fixed_geometry() {
     let html = crate::io::to_html(&s.doc().unwrap().wb, 0).unwrap();
     assert!(!html.contains("<colgroup>") && !html.contains("table-layout") && !html.contains("<svg") && !html.contains("<img"), "{html}");
 }
+mod seams;

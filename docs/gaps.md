@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-20 · **Change:** minor (the Japanese catalog covers the dialogs, messages and menus) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (§8: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -84,7 +84,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 8. PivotTables: no slicers, calculated items, PivotCharts; unverified in Excel (F)
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
   `insert.pivotChart`, `table.insertSlicer`; calculated items and GETPIVOTDATA missing (calculated fields
-  and values on rows done).
+  and values on rows done). Show Details (double-click a value, subtotal or grand total cell) lists
+  its source records on a new sheet; the "Enable show details" option isn't modelled yet.
 - **Impact:** pivots are the analyst's main tool.
 - **Estimate:** 20–30 h for beta (25–40 h full).
 
@@ -178,6 +179,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
 | 2026-10-15 | minor | §13: Solver prepares reports before committing the solution, model and report sheets together; report refusal preserves the workbook and Undo/Redo (#1050) |

@@ -212,6 +212,15 @@ pub fn specs() -> Vec<CommandSpec> {
             trust_scripts
         ),
         cmd!("automate.deleteScript", "Delete Script", [], None, "{name}", has_doc, delete_script),
+        cmd!(
+            noundo "automate.stopAction",
+            "Stop Action",
+            [],
+            None,
+            "{} → {stopped: bool}: stops an action left running on the active workbook (an open undo group, such as a debugger's) and puts back the workbook and its undo history as they were when it began",
+            has_doc,
+            stop_action
+        ),
         // Cell controls, themes, borders, styles
         cmd!(
             "insert.checkbox",
@@ -800,7 +809,7 @@ fn split(s: &mut Session, _: &Json) -> Result<Json> {
 
 fn new_window(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?.clone();
-    let mut copy = crate::DocState::new((*d.wb).clone(), d.path.clone(), format!("{}:2", d.display_title()));
+    let mut copy = crate::DocState::new((*d.wb).clone(), d.path.clone(), format!("{}:2", d.display_title()), d.trust);
     copy.selection = d.selection.clone();
     copy.scripts_trusted = d.scripts_trusted;
     let i = s.add_document(copy);
@@ -1085,6 +1094,13 @@ fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
         n += 1;
     }
     Ok(json!({"ran": n}))
+}
+
+/// Automate › Stop Action: rolls back the undo groups open on the active workbook, so Undo and
+/// Redo work there again.
+fn stop_action(s: &mut Session, _: &Json) -> Result<Json> {
+    let uid = s.doc()?.uid;
+    Ok(json!({"stopped": s.abort_groups(uid)}))
 }
 
 fn delete_script(s: &mut Session, p: &Json) -> Result<Json> {

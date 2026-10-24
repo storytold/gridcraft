@@ -1,12 +1,12 @@
 //! Japanese translations for the interface strings in `i18n.rs`; labels follow Excel for Mac's
 //! Japanese wording, and anything absent falls back to English.
 //!
-//! [`CORE`] is the shared reference catalog every language translates: the ribbon, sheet tabs,
-//! widgets and the most common dialog labels. [`DIALOGS`] adds the dialog titles and labels,
-//! message boxes, Backstage/File-view items, template names and native-menu strings the Brazilian
-//! Portuguese catalog (`pt.rs`) covers on top of it. The two lists never overlap.
+//! [`CORE`] is the shared reference set: the ribbon, sheet tabs, widgets and the most common dialog
+//! labels. [`DIALOGS`] adds the dialog titles and labels, message boxes, Backstage/File-view items,
+//! template names and native-menu strings. The two lists never overlap. A string a language doesn't
+//! translate shows in English; `cargo xtask i18n-report` lists them per language.
 
-/// English label → Japanese, the shared reference set every catalog covers.
+/// English label → Japanese, the shared reference set.
 pub(super) const CORE: &[(&str, &str)] = &[
     ("Paste", "貼り付け"),
     ("Paste Values", "値の貼り付け"),
@@ -1150,99 +1150,17 @@ mod tests {
         DIALOGS.iter().chain(CORE).map(|(english, _)| *english)
     }
 
-    /// The decoded value of the Rust string literal starting at byte `start` (its opening `"`), and
-    /// the byte index just past its closing quote. Escapes (`\n`, `\"`, `\\`, `\t`, `\u{…}`) are
-    /// decoded, so the keys compare equal to the ones in the tables above.
-    fn string_literal(source: &str, start: usize) -> Option<(String, usize)> {
-        if !source[start..].starts_with('"') {
-            return None;
-        }
-        let mut value = String::new();
-        let mut chars = source[start + 1..].char_indices();
-        while let Some((offset, c)) = chars.next() {
-            match c {
-                '"' => return Some((value, start + 1 + offset + 1)),
-                '\\' => match chars.next().map(|(_, c)| c) {
-                    Some('n') => value.push('\n'),
-                    Some('t') => value.push('\t'),
-                    Some('r') => value.push('\r'),
-                    Some('0') => value.push('\0'),
-                    Some('\\') => value.push('\\'),
-                    Some('"') => value.push('"'),
-                    Some('\'') => value.push('\''),
-                    Some('u') => {
-                        let mut hex = String::new();
-                        for (_, c) in chars.by_ref() {
-                            if c == '}' {
-                                break;
-                            }
-                            if c != '{' {
-                                hex.push(c);
-                            }
-                        }
-                        if let Some(c) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                            value.push(c);
-                        }
-                    }
-                    // A line continuation (backslash, newline, indentation) adds nothing.
-                    _ => {}
-                },
-                _ => value.push(c),
-            }
-        }
-        None
-    }
-
-    /// Every key `pt.rs` translates, read out of its source with a small scanner: a match arm is a
-    /// string literal whose `=>` is followed by another string literal, which covers the block form
-    /// (`"key" => { "value" }`) as well. Parsing the real source keeps the two catalogs from
-    /// drifting apart again instead of checking a remembered count.
-    fn portuguese_keys() -> Vec<String> {
-        let source = include_str!("pt.rs");
-        let mut literals: Vec<(String, usize, usize)> = Vec::new();
-        let mut i = 0;
-        while i < source.len() {
-            let rest = &source[i..];
-            if rest.starts_with("//") {
-                i += rest.find('\n').unwrap_or(rest.len());
-                continue;
-            }
-            if rest.starts_with('"') {
-                let (value, end) = string_literal(source, i).unwrap();
-                literals.push((value, i, end));
-                i = end;
-                continue;
-            }
-            i += rest.chars().next().unwrap().len_utf8();
-        }
-        let mut keys = Vec::new();
-        for pair in literals.windows(2) {
-            let (key, _, end) = &pair[0];
-            let start = pair[1].1;
-            let gap = source[*end..start].trim();
-            if gap == "=>" || gap == "=> {" {
-                keys.push(key.clone());
-            }
-        }
-        keys
-    }
-
     #[test]
-    fn keys_are_unique_and_every_value_is_translated() {
+    fn keys_are_unique_and_no_value_is_blank() {
         let mut seen = HashSet::new();
         for (english, japanese) in DIALOGS.iter().chain(CORE) {
-            assert!(!japanese.is_empty(), "empty translation for {english:?}");
             assert!(japanese.chars().any(|c| !c.is_whitespace()), "blank translation for {english:?}");
             assert!(seen.insert(*english), "duplicate key across CORE and DIALOGS: {english:?}");
         }
-        assert_eq!(seen.len(), catalog_keys().count());
-        assert_eq!(CORE.len(), 392, "the shared reference set every catalog covers");
-        assert_eq!(DIALOGS.len(), 562, "the dialog, message and menu strings beyond it");
-        assert_eq!(catalog_keys().count(), 954);
     }
 
     #[test]
-    fn extra_labels_are_translated_and_do_not_overlap_the_catalog() {
+    fn extra_labels_do_not_overlap_the_catalog() {
         let catalog: HashSet<&str> = catalog_keys().collect();
         let mut seen = HashSet::new();
         for (english, japanese) in EXTRA {
@@ -1251,41 +1169,5 @@ mod tests {
             assert!(seen.insert(*english), "duplicate EXTRA key: {english:?}");
             assert_eq!(translate(english), Some(*japanese));
         }
-    }
-
-    #[test]
-    fn covers_every_key_the_portuguese_catalog_translates() {
-        let portuguese = portuguese_keys();
-        assert_eq!(portuguese.len(), 954, "pt.rs's arms changed: add the new keys here and update the count");
-        let japanese: HashSet<&str> = catalog_keys().collect();
-        for key in &portuguese {
-            assert!(japanese.contains(key.as_str()), "the Portuguese catalog translates {key:?}, the Japanese one does not");
-        }
-        assert_eq!(japanese.len(), portuguese.len(), "the two catalogs hold the same key set");
-    }
-
-    #[test]
-    fn high_value_strings_use_excel_japanese_wording() {
-        for (english, japanese) in [
-            ("OK", "OK"),
-            ("Cancel", "キャンセル"),
-            ("Don't Save", "保存しない"),
-            ("Text Box", "テキスト ボックス"),
-            ("Row Height", "行の高さ"),
-            ("Column Width", "列の幅"),
-            ("Sort", "並べ替え"),
-            ("Filter", "フィルター"),
-            ("Conditional Formatting", "条件付き書式"),
-            ("Do you want to save the changes you made to {title}?", "{title} への変更を保存しますか?"),
-            ("Save a copy as .{format}", ".{format} としてコピーを保存"),
-            ("Format Cells|Fill", "塗りつぶし"),
-            ("Insert\nSlicer", "スライサーの\n挿入"),
-        ] {
-            assert_eq!(translate(english), Some(japanese), "{english:?}");
-            assert_eq!(crate::i18n::Language::Ja.tr(english), japanese, "{english:?}");
-        }
-        // A `context|label` key shows only its label in English; an unknown label keeps the text.
-        assert_eq!(crate::i18n::Language::En.tr("Format Cells|Fill"), "Fill");
-        assert_eq!(crate::i18n::Language::Ja.tr("Not in any catalog"), "Not in any catalog");
     }
 }

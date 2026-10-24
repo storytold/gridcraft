@@ -30,6 +30,7 @@ macro_rules! f {
             category: $crate::Category::$cat,
             volatile: true,
             scalar_args: $scal,
+            value_args: &[],
             signature: $sig,
             description: $desc,
             imp: {
@@ -48,6 +49,7 @@ macro_rules! f {
             category: $crate::Category::$cat,
             volatile: false,
             scalar_args: $scal,
+            value_args: &[],
             signature: $sig,
             description: $desc,
             imp: {
@@ -156,6 +158,11 @@ pub struct FnSpec {
     /// (broadcast like Excel's dynamic arrays). The last entry repeats for variadic tails; an
     /// empty slice means no lifting.
     pub scalar_args: &'static [bool],
+    /// Parameter positions that take a single value and reject a reference to more than one
+    /// cell with `#VALUE!` (the Analysis ToolPak functions: EOMONTH, WORKDAY, COUPDAYS, BIN2DEC…),
+    /// where other scalar parameters lift the range. Arrays that aren't references still lift.
+    /// Same layout as `scalar_args`; filled at registration from [`lift::value_args`].
+    pub value_args: &'static [bool],
     pub signature: &'static str,
     pub description: &'static str,
     pub imp: FnImpl,
@@ -173,6 +180,14 @@ impl FnSpec {
         match self.scalar_args.get(i) {
             Some(b) => *b,
             None => self.scalar_args.last().copied().unwrap_or(false),
+        }
+    }
+
+    /// Whether parameter `i` takes a single value, so a multi-cell reference there is `#VALUE!`.
+    pub fn is_value_arg(&self, i: usize) -> bool {
+        match self.value_args.get(i) {
+            Some(b) => *b,
+            None => self.value_args.last().copied().unwrap_or(false),
         }
     }
 
@@ -203,6 +218,9 @@ fn registry() -> &'static (Vec<FnSpec>, HashMap<&'static str, usize>) {
             database::specs(),
         ] {
             v.extend(list);
+        }
+        for s in &mut v {
+            s.value_args = lift::value_args(s.name);
         }
         let mut map = HashMap::with_capacity(v.len());
         for (i, s) in v.iter().enumerate() {

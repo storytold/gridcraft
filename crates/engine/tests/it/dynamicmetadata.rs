@@ -26,7 +26,7 @@ fn opened() -> Session {
     let bytes = io::save_bytes(&wb, "dynamic.xlsx").unwrap();
     let (back, _) = io::open_bytes("dynamic.xlsx", &bytes).unwrap();
     let mut s = Session::new();
-    s.add_document(DocState::new(back, None, "dynamic".into()));
+    s.add_document(DocState::new(back, None, "dynamic".into(), gridcraft_engine::Trust::FromFile));
     s
 }
 

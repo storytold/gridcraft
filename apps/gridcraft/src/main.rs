@@ -111,7 +111,7 @@ fn load_prefs(app: &mut SheetApp) {
     {
         let saved = serde_json::from_slice(&b).ok().and_then(|v| gridcraft_ui_egui::i18n::saved_language(&v));
         let language = saved.unwrap_or(app.ui.language);
-        app.ui = ui;
+        app.ui = ui.at_startup();
         app.ui.language = language;
     }
     if let Ok(b) = std::fs::read(dir.join("prefs.json"))

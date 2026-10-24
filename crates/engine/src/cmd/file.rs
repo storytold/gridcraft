@@ -34,7 +34,7 @@ fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
         Some(name) => {
             let wb = crate::sample::build(name).ok_or_else(|| bad("file.new", format!("unknown sample `{name}`")))?;
             let title = crate::sample::title(name);
-            s.add_document(DocState::new(wb, None, title))
+            s.add_document(DocState::new(wb, None, title, crate::Trust::Local))
         }
         None => s.new_workbook(),
     };
@@ -83,7 +83,8 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     {
         s.close_document(0);
     }
-    let mut doc = DocState::new(wb, path, title);
+    // Someone else may have made the file: its active content asks before it runs.
+    let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }

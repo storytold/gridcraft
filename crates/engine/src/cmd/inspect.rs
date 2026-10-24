@@ -7,11 +7,11 @@ use super::*;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "document.inspect", "Inspect Workbook", [], None, "{} → sheets, selection, names, tables, charts, dirty, history", has_doc, inspect),
+        cmd!(query "document.inspect", "Inspect Workbook", [], None, "{} → sheets, selection, names, tables, charts, dirty, trust (local|fromFile), history", has_doc, inspect),
         cmd!(query "sheet.read", "Read Range", [], None, "{range?: \"A1:D10\" (default: used range), sheet?, formulas?: bool, formatted?: bool} → rows of values", has_doc, read),
         cmd!(query "cell.get", "Get Cell", [], None, "{cell?, sheet?} → value, formula, display text, style, comment, link", has_doc, cell_get),
         cmd!(query "selection.stats", "Selection Statistics", [], None, "{} → count, sum, average, min, max", has_doc, sel_stats),
-        cmd!(query "history.list", "Undo History", [], None, "{} → undo/redo labels", has_doc, history),
+        cmd!(query "history.list", "Undo History", [], None, "{} → undo/redo labels, grouping (an undo group is open)", has_doc, history),
         cmd!(query "app.commands", "List Commands", [], None, "{search?} → ids, labels, params", always, list_commands),
     ]
 }
@@ -63,6 +63,7 @@ fn inspect(s: &mut Session, _: &Json) -> Result<Json> {
         "title": d.display_title(),
         "path": d.path,
         "dirty": d.is_dirty(),
+        "trust": d.trust,
         "activeSheet": wb.active_sheet,
         "sheets": sheets,
         "selection": d.selection.a1(),
@@ -148,9 +149,11 @@ fn sel_stats(s: &mut Session, _: &Json) -> Result<Json> {
 
 fn history(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?;
-    Ok(
-        json!({"undo": d.undo.iter().rev().map(|e| e.label.clone()).collect::<Vec<_>>(), "redo": d.redo.iter().rev().map(|e| e.label.clone()).collect::<Vec<_>>()}),
-    )
+    Ok(json!({
+        "undo": d.undo.iter().rev().map(|e| e.label.clone()).collect::<Vec<_>>(),
+        "redo": d.redo.iter().rev().map(|e| e.label.clone()).collect::<Vec<_>>(),
+        "grouping": s.in_group(d.uid),
+    }))
 }
 
 fn list_commands(s: &mut Session, p: &Json) -> Result<Json> {

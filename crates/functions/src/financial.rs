@@ -13,12 +13,32 @@ use crate::{Arg, Ctx, FnSpec, VAR};
 // Time value of money
 // ---------------------------------------------------------------------------------------------
 
+/// The payment per period. `(1 + rate)^nper` comes from `nper * ln_1p(rate)` and `p - 1` from
+/// `exp_m1`: rounding `1 + rate` first throws away the low bits of a small rate, which left PMT up to
+/// about 1000 ULPs from Excel (observed over 400 synthetic probes; this form is within 4). A loan
+/// schedule's last `IF(p - SUM(principal) > 0, ...)` turns on those bits. Excel gives #NUM! for a
+/// rate of -1 or less, and -pv*rate (no divide) once `(1 + rate)^nper` overflows.
 fn pmt_calc(rate: f64, nper: f64, pv: f64, fv: f64, typ: f64) -> f64 {
     if rate == 0.0 {
         return -(pv + fv) / nper;
     }
-    let p = (1.0 + rate).powf(nper);
-    -(rate * (fv + pv * p)) / ((1.0 + rate * typ) * (p - 1.0))
+    if rate <= -1.0 {
+        return f64::NAN;
+    }
+    let l = nper * rate.ln_1p();
+    let m = l.exp_m1();
+    let k = 1.0 + rate * typ;
+    if m > 0.0 {
+        // (fv + pv*p) / (p - 1) = pv + (pv + fv) / (p - 1), without the cancellation in p - 1.
+        // rate / m (about 1 / nper for a tiny rate) is taken first so (pv + fv) / m can't overflow.
+        -(pv * rate + (pv + fv) * (rate / m)) / k
+    } else if m > -0.5 {
+        // p near 1 from below: fv + pv*p = (pv + fv) + pv*m keeps the small terms that rounding p would drop.
+        -(rate * (pv + fv + pv * m)) / (k * m)
+    } else {
+        // p well below 1: m nears -1 and pv*m would swallow pv + fv, so use p itself.
+        -(rate * (fv + pv * l.exp())) / (k * m)
+    }
 }
 
 fn fv_calc(rate: f64, nper: f64, pmt: f64, pv: f64, typ: f64) -> f64 {
@@ -1788,6 +1808,42 @@ mod tests {
         close_tol(ev("CUMPRINC", vec![n(0.09 / 12.0), n(360.0), n(125000.0), n(1.0), n(1.0), n(0.0)]), -68.27827118, 1e-9);
         is_err(ev("CUMIPMT", vec![n(0.0), n(360.0), n(125000.0), n(1.0), n(1.0), n(0.0)]), CellError::Num);
         is_err(ev("CUMIPMT", vec![n(0.01), n(360.0), n(125000.0), n(1.0), n(1.0), n(2.0)]), CellError::Num);
+    }
+
+    /// PMT within about 4 ULPs of Excel's (Value2 of synthetic probes; libm differs by an ULP across
+    /// platforms). The old `(1 + rate)^nper` form was 25 to 91 ULPs off on these, enough to flip a loan schedule's final `IF(p - SUM(r) > 0, ...)`.
+    #[test]
+    fn pmt_matches_excel_within_a_few_ulps() {
+        for (rate, nper, pv, fv, typ, excel) in [
+            (0.141 / 12.0, 12.0, -4653300.0, 0.0, 0.0, 418025.37230211904),
+            (0.005716666666666666, 26.0, 42678411.0, -26010.62, 0.0, -1770235.3828507778),
+            (0.012164, 29.0, 16722649.0, 0.0, 1.0, -679516.0784762775),
+            (0.009916666666666666, 5.0, 8590842.8, 0.0, 0.0, -1769620.32624324),
+            (0.011158333333333333, 36.0, 21457108.0, 49218.26, 1.0, -720095.3912155787),
+            (-0.5, 2.5, 100.0, 0.0, 0.0, -10.736861692729645),
+        ] {
+            let got = ev("PMT", vec![n(rate), n(nper), n(pv), n(fv), n(typ)]);
+            close_tol(got, excel, 1e-15);
+        }
+    }
+
+    /// Edge cases observed in Excel: a rate of -1 or less is #NUM!, a huge nper leaves -pv*rate, and a
+    /// tiny rate no longer loses its low digits in 1 + rate.
+    #[test]
+    fn pmt_edge_cases_follow_excel() {
+        is_err(ev("PMT", vec![n(-2.0), n(3.0), n(100.0)]), CellError::Num);
+        is_err(ev("PMT", vec![n(-1.0), n(3.0), n(100.0)]), CellError::Num);
+        is_err(ev("PMT", vec![n(-2.0), n(2.5), n(100.0)]), CellError::Num);
+        assert_eq!(ev("PMT", vec![n(0.1), n(10000.0), n(100.0)]), Value::Number(-10.0));
+        assert_eq!(ev("PMT", vec![n(5.0), n(1000.0), n(100.0)]), Value::Number(-500.0));
+        assert_eq!(ev("PMT", vec![n(1e-300), n(10.0), n(100.0)]), Value::Number(-10.0));
+        close_tol(ev("PMT", vec![n(1e-12), n(10.0), n(100.0)]), -10.000000000055001, 1e-15);
+        close_tol(ev("PMT", vec![n(1e-300), n(10.0), n(1e12)]), -1e11, 1e-15);
+        close_tol(ev("PMT", vec![n(-0.999), n(5.0), n(100.0)]), -9.990_000_000_000_092e-14, 1e-15);
+        close_tol(ev("PMT", vec![n(0.05), n(-10.0), n(100.0)]), 7.950_457_496_545_667, 1e-15);
+        close_tol(ev("PMT", vec![n(-1e-17), n(1.0), n(1e18), n(-1e18)]), 10.0, 1e-9);
+        close_tol(ev("PMT", vec![n(-0.5), n(60.0), n(1e18)]), -0.433_680_868_994_201_8, 1e-6);
+        close_tol(ev("PMT", vec![n(0.05), n(10.0), n(100.0), n(50.0), n(1.0)]), -16.119701185541427, 1e-15);
     }
 
     #[test]

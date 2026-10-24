@@ -209,3 +209,65 @@ fn the_button_stays_inside_the_grid_on_a_right_to_left_sheet() {
     let filled = geo.screen_cell_rect(sheet, CellRef::parse("B6").unwrap());
     assert!(button.center().x < filled.left() && button.top() >= filled.bottom() - 1.0, "below-left of the mirrored range's corner");
 }
+
+/// Right-to-left sheet with column A made `chars` wide (so column B's right edge, where the fill
+/// range B1:B6 ends, sits far enough right to be scrolled to either edge of the cells area).
+fn rtl_wide_a(chars: u32) -> Harness {
+    harness(|s| {
+        one_two(s);
+        s.execute("home.columnWidth", json!({"cols": "A:A", "chars": chars})).unwrap();
+        s.execute("view.rightToLeft", json!({"on": true})).unwrap();
+    })
+}
+
+/// Logical right edge of the filled column B (scroll-dependent) and the current geometry.
+fn b_right(h: &Harness) -> (f32, Geo) {
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+    (geo.cell_rect(sheet, CellRef::parse("B6").unwrap()).right(), geo)
+}
+
+fn scroll_b_right_to(h: &mut Harness, logical_x: f32) {
+    let (now, geo) = b_right(h);
+    h.state_mut().view_mut().unwrap().scroll.x += (now - logical_x) / geo.z;
+    h.run_steps(3);
+    let got = b_right(h).0;
+    assert!((got - logical_x).abs() < 1.0, "setup: column B ends at logical x {got}, wanted {logical_x}");
+}
+
+/// Logical x of the range's corner is `cells.right() - 25`: the 18 px button (at corner + 2 ..
+/// corner + 20) fits in the cells area, so on screen it sits at the left edge of the mirrored cells
+/// area, left of the filled range. `fill_options_tag` tested the mirrored button against the
+/// unmirrored cells, i.e. against the row-heading strip it does not own, and hid it.
+#[test]
+fn the_button_shows_near_the_left_screen_edge_on_a_right_to_left_sheet() {
+    let mut h = rtl_wide_a(220);
+    let (_, geo) = b_right(&h);
+    scroll_b_right_to(&mut h, geo.cells.right() - 25.0);
+    drag_handle(&mut h, "B2", "B6", PointerButton::Primary);
+
+    let (_, geo) = b_right(&h);
+    let cells = h.state().grid.cells_rect.unwrap();
+    assert!(geo.header_w > 20.0 && geo.cells.right() - 25.0 + 20.0 > geo.cells.right() - geo.header_w, "setup: in the zone the old check hides");
+    let button = h.query_by_label("Auto Fill Options").expect("the button fits inside the cells area, so it shows").rect();
+    assert!(cells.contains_rect(button), "{button:?} outside {cells:?}");
+}
+
+/// The corner is 10 px left of `cells.left()` (scrolled partly behind the row headings, which are
+/// on the right on screen). The button would start 8 px behind the headings, so it must not be
+/// drawn there. The old check let it through because the mirrored button fits the unmirrored cells.
+#[test]
+fn the_button_stays_off_the_row_headings_on_a_right_to_left_sheet() {
+    let mut h = rtl_wide_a(20);
+    drag_handle(&mut h, "B2", "B6", PointerButton::Primary);
+    assert!(h.query_by_label("Auto Fill Options").is_some(), "setup: the button shows before scrolling");
+    let (_, geo) = b_right(&h);
+    scroll_b_right_to(&mut h, geo.cells.left() - 10.0);
+
+    let cells = h.state().grid.cells_rect.unwrap();
+    if let Some(b) = h.query_by_label("Auto Fill Options") {
+        let button = b.rect();
+        assert!(cells.contains_rect(button), "{button:?} overlaps the row headings, cells area is {cells:?}");
+    }
+}

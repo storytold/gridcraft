@@ -11,6 +11,7 @@ mod encrypted_tests;
 mod fixtures;
 mod ink_roundtrip;
 mod literal_category_roundtrip;
+mod locale_numfmt;
 mod malformed;
 mod multilevel_category_roundtrip;
 mod note_box;

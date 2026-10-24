@@ -334,6 +334,8 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
             if seen_dec {
                 return Err(CellError::Value);
             }
+        } else if c == '.' || c == ',' {
+            return Err(CellError::Value);
         } else {
             out.push(c);
         }
@@ -1211,11 +1213,20 @@ mod tests {
         close(ev("VALUE", vec![t("12:00")]), 0.5);
         close(ev("VALUE", vec![t("2020-01-01")]), 43831.0);
         is_err(ev("VALUE", vec![t("abc")]), CellError::Value);
+        // Accounting negatives, as Excel 365 reads them.
+        close(ev("VALUE", vec![t("$(5)")]), -5.0);
+        close(ev("VALUE", vec![t("$ (1,000.50)")]), -1000.5);
+        close(ev("VALUE", vec![t("(5)%")]), -0.05);
+        for s in ["$(5)%", "$(5%)", "$5%", "(-5)", "((5))", "$(-5)", "(1/2)"] {
+            is_err(ev("VALUE", vec![t(s)]), CellError::Value);
+        }
         close(ev("NUMBERVALUE", vec![t("2.500,27"), t(","), t(".")]), 2500.27);
         close(ev("NUMBERVALUE", vec![t("3.5%")]), 0.035);
         close(ev("NUMBERVALUE", vec![t(" 1 000 ")]), 1000.0);
         close(ev("NUMBERVALUE", vec![t("")]), 0.0);
         is_err(ev("NUMBERVALUE", vec![t("1.2.3")]), CellError::Value);
+        is_err(ev("NUMBERVALUE", vec![t("1.5"), t(","), t(" ")]), CellError::Value);
+        is_err(ev("NUMBERVALUE", vec![t("1,5"), t("."), t(" ")]), CellError::Value);
         is_text(ev("FIXED", vec![n(1234.567), n(1.0)]), "1,234.6");
         is_text(ev("FIXED", vec![n(1234.567), n(-1.0)]), "1,230");
         is_text(ev("FIXED", vec![n(-1234.567), n(1.0), b(true)]), "-1234.6");

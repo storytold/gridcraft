@@ -78,7 +78,7 @@ fn longest_flat_chains_survive_editing_saving_and_reopening() {
         let bytes = io::save_bytes(wb, "chains.xlsx").expect("save");
         let (reopened, _) = io::open_bytes("chains.xlsx", &bytes).expect("open");
         let mut session = Session::new();
-        session.add_document(DocState::new(reopened, None, "chains".into()));
+        session.add_document(DocState::new(reopened, None, "chains".into(), gridcraft_engine::Trust::FromFile));
         session.execute("formulas.calculateNow", json!({})).expect("recalc");
         assert_eq!(value(&session, "C2"), Value::Number(4096.0));
         assert_eq!(value(&session, "C3"), Value::Number(-4094.0));

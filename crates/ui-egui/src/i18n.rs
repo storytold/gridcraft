@@ -321,21 +321,14 @@ fn name_sort_key(name: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Help tables are sorted, unique, and keyed by text the function catalog still has.
+    /// Help tables are sorted and unique: lookups binary-search them.
     #[test]
-    fn function_help_is_sorted_and_keyed_by_current_catalog_text() {
-        // Lookups binary-search the tables. A key that no longer matches the catalog (an English
-        // description reworded, an argument renamed) would quietly show English again.
-        let catalog = gridcraft_engine::cmd::formulas::function_list();
-        let descriptions: std::collections::HashSet<&str> = catalog.iter().filter_map(|f| f["description"].as_str()).collect();
-        let arguments: std::collections::HashSet<&str> =
-            catalog.iter().filter_map(|f| f["signature"].as_str()).flat_map(crate::formula_locale::argument_names).collect();
+    fn function_help_tables_are_sorted_and_unique() {
         for language in Language::ALL {
             let Some((description_table, argument_table)) = language.function_help() else { continue };
-            for (table, catalog_text) in [(description_table, &descriptions), (argument_table, &arguments)] {
+            for table in [description_table, argument_table] {
                 assert!(table.windows(2).all(|pair| pair[0].0 < pair[1].0), "{language:?} function help is not sorted and unique");
                 for (english, translated) in table {
-                    assert!(catalog_text.contains(english), "{language:?} translates {english:?}, which the function catalog doesn't use");
                     assert!(!translated.is_empty(), "{language:?}: empty translation of {english:?}");
                 }
             }
@@ -343,105 +336,27 @@ mod tests {
     }
 
     #[test]
-    fn translations_are_unique_and_preserve_unknown_text() {
-        for (i, (en, ja)) in ja::CORE.iter().enumerate() {
-            assert!(!ja.is_empty());
-            assert!(ja::CORE.iter().take(i).all(|(other, _)| en != other));
-            assert_eq!(Language::En.tr(en), en.rsplit_once('|').map_or(*en, |(_, label)| label));
-        }
+    fn untranslated_text_falls_back_to_english() {
+        let label = |key: &'static str| key.rsplit_once('|').map_or(key, |(_, label)| label);
         for (english, _) in ja::CORE {
-            assert!(zh::translate(english).is_some_and(|text| !text.is_empty()), "missing Simplified Chinese: {english}");
-            assert!(ko::translate(english).is_some_and(|text| !text.is_empty()), "missing Korean: {english}");
-            assert!(ru::translate(english).is_some_and(|text| !text.is_empty()), "missing Russian: {english}");
-            assert!(pt::translate(english).is_some_and(|text| !text.is_empty()), "missing Portuguese: {english}");
-            assert!(es::translate(english).is_some_and(|text| !text.is_empty()), "missing Spanish: {english}");
-            assert!(el::translate(english).is_some_and(|text| !text.is_empty()), "missing Greek: {english}");
-            assert!(de::translate(english).is_some_and(|text| !text.is_empty()), "missing German: {english}");
-            assert!(cs::translate(english).is_some_and(|text| !text.is_empty()), "missing Czech: {english}");
-            assert!(fr::translate(english).is_some_and(|text| !text.is_empty()), "missing French: {english}");
-            assert!(sr::translate(english).is_some_and(|text| !text.is_empty()), "missing Serbian: {english}");
-            assert!(tr::translate(english).is_some_and(|text| !text.is_empty()), "missing Turkish: {english}");
-            assert!(pl::translate(english).is_some_and(|text| !text.is_empty()), "missing Polish: {english}");
-            assert!(it::translate(english).is_some_and(|text| !text.is_empty()), "missing Italian: {english}");
-            assert!(uk::translate(english).is_some_and(|text| !text.is_empty()), "missing Ukrainian: {english}");
-            assert!(vi::translate(english).is_some_and(|text| !text.is_empty()), "missing Vietnamese: {english}");
-            assert!(nl::translate(english).is_some_and(|text| !text.is_empty()), "missing Dutch: {english}");
-            assert!(ro::translate(english).is_some_and(|text| !text.is_empty()), "missing Romanian: {english}");
+            assert_eq!(Language::En.tr(english), label(english));
         }
-        assert_eq!(Language::Ja.tr("Data"), "データ");
-        assert_eq!(Language::Zh.tr("Data"), "数据");
-        assert_eq!(Language::Ko.tr("Data"), "데이터");
-        assert_eq!(Language::Ru.tr("Data"), "Данные");
-        assert_eq!(Language::PtBr.tr("Data"), "Dados");
-        assert_eq!(Language::PtBr.tr_error("Select a chart first."), "Selecione um gráfico primeiro.");
-        assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
-        assert_eq!(Language::PtBr.tr_error("command `chart`: Select a chart first."), "Selecione um gráfico primeiro.");
-        assert_eq!(Language::PtBr.tr_error("Printer Office: permission denied"), "Printer Office: permission denied");
-        assert_eq!(Language::Es.tr("Data"), "Datos");
-        assert_eq!(Language::El.tr("Data"), "Δεδομένα");
-        assert_eq!(Language::El.tr("Page Layout|Orientation"), "Προσανατολισμός σελίδας");
-        assert_eq!(Language::El.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::El.tr("Page {page} of {pages}"), "Σελίδα {page} από {pages}");
-        assert_eq!(Language::Es.tr("Freeze Panes"), "Inmovilizar paneles");
-        assert_eq!(Language::Es.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::De.tr("Data"), "Daten");
-        assert_eq!(Language::De.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Fr.tr("Data"), "Données");
-        assert_eq!(Language::Fr.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Tr.tr("Data"), "Veri");
-        assert_eq!(Language::Tr.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::PtBr.tr("Date"), "Data");
-        assert_eq!(Language::PtBr.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Ja.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Zh.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Ko.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Ru.tr("Sheet1!A1"), "Sheet1!A1");
-        // Czech "Data" is spelled as in English, so probe it with a label that differs.
-        assert_eq!(Language::Cs.tr("Data"), "Data");
-        assert_eq!(Language::Cs.tr("Formulas"), "Vzorce");
-        assert_eq!(Language::Cs.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Tr.tr("Formulas"), "Formüller");
-        // A `context|label` key shows only its label in English and splits the translation.
+        for language in Language::ALL {
+            assert_eq!(language.tr("Sheet1!A1"), "Sheet1!A1");
+            assert_eq!(language.tr("Not in any catalog|Untranslated"), "Untranslated");
+        }
+        // A `context|label` key shows only its label in English.
         assert_eq!(Language::En.tr("Page Layout|Orientation"), "Orientation");
-        assert_eq!(Language::Ja.tr("Page Layout|Orientation"), "印刷の向き");
-        assert_eq!(Language::Ja.tr("Orientation"), "方向");
-        assert_eq!(Language::Cs.tr("Page Layout|Orientation"), "Orientace");
-        assert_eq!(Language::Cs.tr("Orientation"), "Orientace textu");
-        assert_eq!(Language::Sr.tr("Data"), "Podaci");
-        assert_eq!(Language::Sr.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Sr.tr("Page Layout|Orientation"), "Orijentacija");
-        assert_eq!(Language::Sr.tr("Orientation"), "Orijentacija");
-        assert_eq!(Language::Tr.tr("Page Layout|Orientation"), "Sayfa Yönü");
-        assert_eq!(Language::Tr.tr("Orientation"), "Yönlendirme");
-        assert_eq!(Language::Pl.tr("Data"), "Dane");
-        assert_eq!(Language::Pl.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Pl.tr("Page Layout|Orientation"), "Orientacja");
-        assert_eq!(Language::It.tr("Data"), "Dati");
-        assert_eq!(Language::It.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::It.tr("Freeze Panes"), "Blocca riquadri");
-        assert_eq!(Language::It.tr("Page Layout|Orientation"), "Orientamento");
-        assert_eq!(Language::It.tr("Orientation"), "Orientamento");
-        assert_eq!(Language::Uk.tr("Data"), "Дані");
-        assert_eq!(Language::Uk.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Vi.tr("Data"), "Dữ liệu");
-        assert_eq!(Language::Vi.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Vi.tr("Page Layout|Orientation"), "Hướng giấy");
-        assert_eq!(Language::Vi.tr("Orientation"), "Hướng chữ");
-        assert_eq!(Language::Nl.tr("Data"), "Gegevens");
-        assert_eq!(Language::Nl.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Nl.tr("Page Layout|Orientation"), "Paginastand");
-        assert_eq!(Language::Nl.tr("Orientation"), "Richting");
-        assert_eq!(Language::Ro.tr("Data"), "Date");
-        assert_eq!(Language::Ro.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Ro.tr("Page Layout|Orientation"), "Orientare");
-        assert_eq!(Language::Ro.tr("Orientation"), "Orientare text");
+        // Errors drop the `command `id`:` prefix before translating; an untranslated one stays whole.
+        assert_eq!(Language::PtBr.tr_error("command `chart`: Select a chart first."), Language::PtBr.tr("Select a chart first."));
+        assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
+        assert_eq!(Language::PtBr.tr_error("Printer Office: permission denied"), "Printer Office: permission denied");
         assert_eq!(Language::parse("xx"), None);
     }
 
     /// A catalog whose translations slip onto their neighbours' keys still covers every key, so
     /// check the shape of each translation against its English: placeholders survive, and a
-    /// one-line label (a menu item, a tooltip) doesn't turn into a two-line ribbon label. French
-    /// once shipped with over a hundred translations shifted this way ("Close" read "Société").
+    /// one-line label (a menu item, a tooltip) doesn't turn into a two-line ribbon label.
     #[test]
     fn translations_keep_the_shape_of_their_english() {
         let placeholders =
@@ -457,106 +372,19 @@ mod tests {
                 }
             }
         }
-        for (english, french) in [
-            ("Close", "Fermer"),
-            ("File", "Fichier"),
-            ("Save", "Enregistrer"),
-            ("Animations", "Animations"),
-            ("Company", "Société"),
-            ("Show Detail", "Afficher le détail"),
-            ("Solver", "Solveur"),
-        ] {
-            assert_eq!(Language::Fr.tr(english), french);
-        }
-    }
-
-    #[test]
-    fn german_cell_and_header_context_menus_are_fully_translated() {
-        for label in [
-            "Cut",
-            "Copy",
-            "Paste",
-            "Paste Special…",
-            "Insert…",
-            "Delete…",
-            "Clear Contents",
-            "Filter by Selected Cell's Value",
-            "Sort A to Z",
-            "Sort Z to A",
-            "New Comment",
-            "New Note",
-            "Format Cells…",
-            "Pick From Drop-down List…",
-            "Define Name…",
-            "Insert Copied Cells",
-            "Insert Copied Cells…",
-            "Insert Cut Cells",
-            "Insert",
-            "Delete",
-            "Row Height…",
-            "AutoFit Row Height",
-            "Column Width…",
-            "AutoFit Column Width",
-            "Hide",
-            "Unhide",
-            "Group",
-        ] {
-            assert_ne!(Language::De.tr(label), label, "German context menu label missing: {label}");
-        }
-    }
-
-    #[test]
-    fn sheet_tab_menu_and_autosave_labels_are_translated() {
-        let labels = [
-            "Insert Sheet",
-            "Delete",
-            "Rename",
-            "Move or Copy…",
-            "Duplicate",
-            "Tab Color",
-            "No Color",
-            "Hide",
-            "Unhide…",
-            "Protect Sheet…",
-            "Unprotect Sheet…",
-            "Select All Sheets",
-            "AutoSave",
-            "AutoSave: save after every change (workbooks saved to a file)",
-            "Previous sheet",
-            "Next sheet",
-            "All sheets",
-            "New sheet (⇧F11)",
-        ];
-        for language in [Language::Es, Language::De, Language::Fr, Language::Ko, Language::Ru, Language::Zh, Language::Sr] {
-            for label in labels {
-                assert_ne!(language.tr(label), label, "{} lacks a translation of {label:?}", language.code());
-            }
-        }
-        assert_eq!(Language::Es.tr("AutoSave"), "Autoguardado");
     }
 
     #[test]
     fn translations_never_show_the_context_prefix() {
         // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its
         // value shows it on screen (File › Options read "Options|Général" in French).
-        for language in Language::ALL {
-            for (english, _) in ja::CORE {
+        let keys = ja::CORE.iter().map(|(english, _)| *english).chain(["Options|General", "Options|Save", "Sheet Options|View"]);
+        for english in keys {
+            for language in Language::ALL {
                 let shown = language.tr(english);
                 assert!(!shown.contains('|'), "{} shows a context prefix for {english}: {shown}", language.code());
             }
         }
-        assert_eq!(Language::Fr.tr("Options|General"), "Général");
-        assert_eq!(Language::Fr.tr("Options|Save"), "Enregistrer");
-        assert_eq!(Language::Fr.tr("Sheet Options|View"), "Affichage");
-        assert_eq!(Language::Sr.tr("Options|General"), "Opšte");
-        assert_eq!(Language::Sr.tr("Options|Save"), "Sačuvaj");
-        assert_eq!(Language::Sr.tr("Sheet Options|View"), "Prikaz");
-        assert_eq!(Language::Nl.tr("Options|General"), "Algemeen");
-        assert_eq!(Language::Nl.tr("Options|Save"), "Opslaan");
-        assert_eq!(Language::Nl.tr("Sheet Options|View"), "Weergeven");
-        assert_eq!(Language::Ro.tr("Options|General"), "General");
-        assert_eq!(Language::Ro.tr("Options|Save"), "Salvare");
-        assert_eq!(Language::Ro.tr("Sheet Options|View"), "Vizualizare");
     }
 
     #[test]

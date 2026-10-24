@@ -306,12 +306,10 @@ fn modulo(x: f64, d: f64) -> R<f64> {
     if d == 0.0 {
         return Err(CellError::Div0);
     }
-    let q = (x / d).floor();
-    let r = x - d * q;
+    // `%` is an exact remainder (truncated), so |r| < |d| even for tiny divisors.
+    let r = x % d;
     // Keep the sign of the divisor and avoid returning |d| from rounding.
-    if r != 0.0 && (r < 0.0) != (d < 0.0) {
-        return Ok(r + d);
-    }
+    let r = if r != 0.0 && (r < 0.0) != (d < 0.0) { r + d } else { r };
     if r.abs() >= d.abs() {
         return Ok(0.0);
     }
@@ -1440,6 +1438,19 @@ mod tests {
         close(ev1("ODD", -1.0), -1.0);
         close(ev1("ODD", -2.0), -3.0);
         close(ev1("ODD", 0.0), 1.0);
+    }
+
+    #[test]
+    fn mod_tiny_divisor_stays_in_range() {
+        for (x, d) in [(3.0, 1e-300), (-1.0, 1e-300), (3.0, -1e-300), (-1.0, -1e-300)] {
+            match ev2("MOD", x, d) {
+                Value::Number(r) => {
+                    assert!(r == 0.0 || (r < 0.0) == (d < 0.0), "MOD({x}, {d}) = {r}");
+                    assert!(r.abs() < d.abs(), "MOD({x}, {d}) = {r}");
+                }
+                other => panic!("MOD({x}, {d}) = {other:?}"),
+            }
+        }
     }
 
     #[test]

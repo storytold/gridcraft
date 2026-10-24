@@ -812,6 +812,24 @@ fn filter_blank(v: &Value) -> bool {
     v.is_empty() || matches!(v, Value::Text(t) if t.is_empty())
 }
 
+/// Excel grows an AutoFilter range when a value is entered in the row right below it, in one of its columns (#2342).
+/// A table's own filter is left to the table, and a row typed after a blank row does not count.
+/// A formula counts before it is calculated: this runs inside the edit, ahead of the recalc.
+pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
+    if !sh.cells.get(at).is_some_and(|c| !filter_blank(&c.value) || c.formula.is_some()) {
+        return;
+    }
+    let Some(af) = sh.autofilter.as_ref() else { return };
+    let r = af.range;
+    if r.end.row.checked_add(1) != Some(at.row) || at.col < r.start.col || at.col > r.end.col || sh.tables.iter().any(|t| t.range == r) {
+        return;
+    }
+    let grown = RangeRef::new(r.start, CellRef::new(at.row, r.end.col));
+    if let Some(af) = sh.autofilter.as_mut() {
+        af.range = grown;
+    }
+}
+
 /// Hides rows of the autofilter range that fail any criterion.
 pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
     let Some(sh) = wb.sheet(sheet) else { return };
@@ -2107,6 +2125,33 @@ mod tests {
             assert!(sh.is_row_hidden(2), "{sel}");
             assert_eq!(sh.value(CellRef::new(2, 0)).display(), "b", "{sel}");
         }
+    }
+
+    #[test]
+    fn autofilter_range_grows_when_a_value_is_entered_in_the_row_below() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Qty"], ["d", 4], ["b", 2]]})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:B3"})).unwrap();
+        let range = |s: &Session| s.doc().unwrap().wb.active().unwrap().autofilter.as_ref().map(|a| a.range.a1());
+        s.execute("cell.set", json!({"cell": "A4", "input": "e"})).unwrap();
+        assert_eq!(range(&s), Some("A1:B4".to_string()));
+        s.execute("range.setValues", json!({"range": "A5", "values": [["f", 6]]})).unwrap();
+        assert_eq!(range(&s), Some("A1:B5".to_string()));
+        // A row typed after a blank row does not grow it.
+        s.execute("cell.set", json!({"cell": "A7", "input": "x"})).unwrap();
+        assert_eq!(range(&s), Some("A1:B5".to_string()));
+        // A cell outside the filter's columns does not either.
+        s.execute("cell.set", json!({"cell": "C6", "input": "x"})).unwrap();
+        assert_eq!(range(&s), Some("A1:B5".to_string()));
+        // Empty text is a blank entry, not a value.
+        s.execute("range.setValues", json!({"range": "A6", "parse": false, "values": [[""]]})).unwrap();
+        assert_eq!(range(&s), Some("A1:B5".to_string()));
+        // A formula and Ctrl+Enter (range.fill) are entries too.
+        s.execute("cell.set", json!({"cell": "B6", "input": "=1+1"})).unwrap();
+        assert_eq!(range(&s), Some("A1:B6".to_string()));
+        s.execute("range.fill", json!({"range": "A7:B7", "input": "g"})).unwrap();
+        assert_eq!(range(&s), Some("A1:B7".to_string()));
     }
 
     #[test]

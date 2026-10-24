@@ -26,7 +26,7 @@ pub fn build(name: &str) -> Option<Workbook> {
             _ => return None,
         };
     }
-    s.add_document(DocState::new(wb, None, title(name)));
+    s.add_document(DocState::new(wb, None, title(name), crate::Trust::Local));
     let ok = match name {
         "budget" => budget(&mut s),
         "sales" => sales(&mut s),

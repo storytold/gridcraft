@@ -19,6 +19,7 @@ pub mod sheet;
 pub mod slicer;
 pub mod solver;
 pub mod spelling;
+pub mod stash;
 pub mod view;
 pub mod whatif;
 
@@ -96,11 +97,18 @@ pub fn has_doc(s: &Session) -> std::result::Result<(), String> {
 }
 pub fn can_undo(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
+    not_grouping(s)?;
     if s.active().is_some_and(|d| !d.undo.is_empty()) { Ok(()) } else { Err("nothing to undo".into()) }
 }
 pub fn can_redo(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
+    not_grouping(s)?;
     if s.active().is_some_and(|d| !d.redo.is_empty()) { Ok(()) } else { Err("nothing to redo".into()) }
+}
+/// Undo and Redo wait while an undo group is open on the active document (an action that spans
+/// several calls is still running).
+fn not_grouping(s: &Session) -> std::result::Result<(), String> {
+    if s.active().is_some_and(|d| s.in_group(d.uid)) { Err("finish or stop the running action first (automate.stopAction)".into()) } else { Ok(()) }
 }
 pub fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
@@ -175,6 +183,23 @@ pub fn register_test_command(id: &'static str, run: Run) {
         run,
         journal: true,
         undoable: false,
+    }));
+    test_commands().push(spec);
+}
+
+/// Test-only: an undoable command, to exercise how `execute` records its step.
+#[cfg(test)]
+pub(crate) fn register_undoable_test_command(id: &'static str, run: Run) {
+    let spec: &'static CommandSpec = Box::leak(Box::new(CommandSpec {
+        id,
+        label: id,
+        menu: &[],
+        shortcut: None,
+        params: "",
+        enabled: |_| Ok(()),
+        run,
+        journal: false,
+        undoable: true,
     }));
     test_commands().push(spec);
 }
