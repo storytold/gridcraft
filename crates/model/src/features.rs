@@ -137,6 +137,14 @@ pub enum CfValueKind {
     Percent(f64),
     Percentile(f64),
     Formula(String),
+    /// A formula in a stop whose kind is kept: `<cfvo type="num" val="$Z$2"/>`. Excel reads
+    /// such a stop as its kind with a formula for a value (shown as `=$Z$2`), so keep the type
+    /// through the round trip and evaluate the formula where the threshold is needed (#1848).
+    FormulaNumber(String),
+    /// `<cfvo type="percent" val="$Z$1*10"/>`: the formula's result is a percent of the span.
+    FormulaPercent(String),
+    /// `<cfvo type="percentile" val="$Z$3"/>`: the formula's result is a percentile of the values.
+    FormulaPercentile(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

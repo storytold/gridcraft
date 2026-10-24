@@ -766,6 +766,9 @@ fn cfvo_xml(v: &CfValueKind) -> String {
         CfValueKind::Percent(n) => format!("<cfvo type=\"percent\" val=\"{}\"/>", num(*n)),
         CfValueKind::Percentile(n) => format!("<cfvo type=\"percentile\" val=\"{}\"/>", num(*n)),
         CfValueKind::Formula(f) => format!("<cfvo type=\"formula\" val=\"{}\"/>", esc_attr(&text_to_file(f))),
+        CfValueKind::FormulaNumber(f) => format!("<cfvo type=\"num\" val=\"{}\"/>", esc_attr(&text_to_file(f))),
+        CfValueKind::FormulaPercent(f) => format!("<cfvo type=\"percent\" val=\"{}\"/>", esc_attr(&text_to_file(f))),
+        CfValueKind::FormulaPercentile(f) => format!("<cfvo type=\"percentile\" val=\"{}\"/>", esc_attr(&text_to_file(f))),
     }
 }
 
@@ -796,6 +799,9 @@ fn x14_cfvo(v: &CfValueKind) -> String {
         CfValueKind::Percent(n) => ("percent", num(*n)),
         CfValueKind::Percentile(n) => ("percentile", num(*n)),
         CfValueKind::Formula(f) => ("formula", text_to_file(f)),
+        CfValueKind::FormulaNumber(f) => ("num", text_to_file(f)),
+        CfValueKind::FormulaPercent(f) => ("percent", text_to_file(f)),
+        CfValueKind::FormulaPercentile(f) => ("percentile", text_to_file(f)),
     };
     format!("<x14:cfvo type=\"{ty}\"><xm:f>{}</xm:f></x14:cfvo>", esc(&val))
 }

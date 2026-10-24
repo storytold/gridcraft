@@ -1488,8 +1488,14 @@ fn check_cf_formula(cmd: &str, what: &str, formula: &str) -> Result<()> {
 }
 
 fn check_cf_value(what: &str, v: &gridcraft_model::features::CfValueKind) -> Result<()> {
-    if let gridcraft_model::features::CfValueKind::Formula(f) = v {
-        check_cf_formula("home.conditionalFormat", what, f)?;
+    use gridcraft_model::features::CfValueKind;
+    // A Number, Percent or Percentile stop may hold a formula too (#1848): what the writer puts in
+    // `cfvo val="…"` has to parse, or Excel refuses the saved file (#1999).
+    match v {
+        CfValueKind::Formula(f) | CfValueKind::FormulaNumber(f) | CfValueKind::FormulaPercent(f) | CfValueKind::FormulaPercentile(f) => {
+            check_cf_formula("home.conditionalFormat", what, f)?;
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -1540,13 +1546,15 @@ fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
             Some(Json::Object(o)) => {
                 let t = o.get("type").and_then(Json::as_str).unwrap_or("num");
                 let val = o.get("value").and_then(Json::as_f64).unwrap_or(0.0);
+                // A string value is the stop's own formula; the stop keeps its kind (#1848).
+                let formula = o.get("value").and_then(Json::as_str).map(|s| s.trim().trim_start_matches('=').to_string()).filter(|s| !s.is_empty());
                 match t {
                     "min" => CfValueKind::Min,
                     "max" => CfValueKind::Max,
-                    "percent" => CfValueKind::Percent(val),
-                    "percentile" => CfValueKind::Percentile(val),
+                    "percent" => formula.map_or(CfValueKind::Percent(val), CfValueKind::FormulaPercent),
+                    "percentile" => formula.map_or(CfValueKind::Percentile(val), CfValueKind::FormulaPercentile),
                     "formula" => CfValueKind::Formula(o.get("value").and_then(Json::as_str).unwrap_or("").into()),
-                    _ => CfValueKind::Number(val),
+                    _ => formula.map_or(CfValueKind::Number(val), CfValueKind::FormulaNumber),
                 }
             }
             _ => default,

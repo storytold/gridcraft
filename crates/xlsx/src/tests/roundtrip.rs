@@ -977,6 +977,41 @@ fn icon_sets_always_write_one_cfvo_per_icon() {
     assert_eq!(rules, [3, 4, 5]);
 }
 
+/// A colour-scale stop whose value is a formula keeps its own kind through save and open, so
+/// Excel still sees a percent, number or percentile stop instead of a plain formula one (#1848).
+#[test]
+fn cfvo_formula_stops_keep_their_kind() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.cond_formats.push(CondFormat {
+        ranges: vec![rr("A1:A5")],
+        rule: CfRule::ColorScale {
+            stops: vec![
+                (CfValueKind::FormulaPercent("$Z$1*10".into()), Color::Rgb(0x0000FF)),
+                (CfValueKind::FormulaNumber("$Z$2".into()), Color::Rgb(0xFF0000)),
+                (CfValueKind::FormulaPercentile("$Z$3".into()), Color::Rgb(0x00FF00)),
+            ],
+        },
+        priority: 1,
+        stop_if_true: false,
+    });
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    assert!(xml.contains("<cfvo type=\"percent\" val=\"$Z$1*10\"/>"), "{xml}");
+    assert!(xml.contains("<cfvo type=\"num\" val=\"$Z$2\"/>"), "{xml}");
+    assert!(xml.contains("<cfvo type=\"percentile\" val=\"$Z$3\"/>"), "{xml}");
+    assert!(!xml.contains("type=\"formula\""), "{xml}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let kinds: Vec<CfValueKind> = match &back.sheet(0).unwrap().cond_formats[0].rule {
+        CfRule::ColorScale { stops } => stops.iter().map(|(k, _)| k.clone()).collect(),
+        other => panic!("expected a colour scale, got {other:?}"),
+    };
+    assert_eq!(
+        kinds,
+        vec![CfValueKind::FormulaPercent("$Z$1*10".into()), CfValueKind::FormulaNumber("$Z$2".into()), CfValueKind::FormulaPercentile("$Z$3".into()),]
+    );
+}
+
 /// Files have no `@` operator: Excel writes `@x` as `_xlfn.SINGLE(x)` in a dynamic-array
 /// formula, and reads it back as `@x`.
 #[test]

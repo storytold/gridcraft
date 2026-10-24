@@ -338,6 +338,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 | 2026-10-18 | trivial | Stale chart notes: all chart kinds survive XLSX round-trip (PRs #158, #161) and trendlines landed |
 | 2026-10-16 | minor | Advanced Filter copy-to clears only its actual output and rejects overflow without changing cells (#1031) |
 | 2026-10-15 | minor | Row auto-fit: line breaks count only in wrapping cells (Excel: wrap off shows one line, AutoFit gives one line); unwrapped multi-line cells from files no longer grow rows on open (no score change) |
+| 2026-10-18 | minor | Conditional formatting: a colour-scale stop keeps its kind when its value is a formula, thresholds stored out of order draw in ascending order with the colours in stop order, and a Percentile stop's formula counts only as a single cell reference (#1848); no score change |
 | 2026-10-12 | minor | Essentials AutoFit evidence: rows auto-fit oversized fonts on open and row formatting (#833) |
 | 2026-10-12 | minor | Sheet tabs: reveal the selected tab on navigation and resize while preserving manual scrolling (#681); no score change |
 | 2026-10-12 | minor | PivotTables: values on rows (Σ Values in Rows at any position, all three layouts; `pivot.moveField` and the field pane move it; `dataOnRows` round-trips) (no score change) |

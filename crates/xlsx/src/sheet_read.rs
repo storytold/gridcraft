@@ -630,10 +630,11 @@ fn cfvo(e: &El) -> CfValueKind {
     match e.attr("type").unwrap_or("num") {
         "min" | "autoMin" => CfValueKind::Min,
         "max" | "autoMax" => CfValueKind::Max,
-        "percent" => n.map(CfValueKind::Percent).unwrap_or_else(|| CfValueKind::Formula(from_file(val))),
-        "percentile" => n.map(CfValueKind::Percentile).unwrap_or_else(|| CfValueKind::Formula(from_file(val))),
+        // A non-numeric `val` keeps its stop's kind instead of becoming a plain formula (#1848).
+        "percent" => n.map(CfValueKind::Percent).unwrap_or_else(|| CfValueKind::FormulaPercent(from_file(val))),
+        "percentile" => n.map(CfValueKind::Percentile).unwrap_or_else(|| CfValueKind::FormulaPercentile(from_file(val))),
         "formula" => CfValueKind::Formula(from_file(val)),
-        _ => n.map(CfValueKind::Number).unwrap_or_else(|| CfValueKind::Formula(from_file(val))),
+        _ => n.map(CfValueKind::Number).unwrap_or_else(|| CfValueKind::FormulaNumber(from_file(val))),
     }
 }
 
