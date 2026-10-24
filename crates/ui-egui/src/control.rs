@@ -334,6 +334,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             Some(e) => {
                 e.text = s("text").unwrap_or("").to_string();
                 e.caret = e.text.chars().count();
+                e.update_list();
                 ok(Json::Null)
             }
             None => err("not editing"),

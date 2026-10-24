@@ -814,6 +814,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
         in_cell_editor(app, ui, &geo, sh, &wb);
     }
+    list_search(app, ui, &geo, sh, &wb);
     filter_menu(app, ui, &geo, previous_popups.0 == app.grid.filter_menu);
     list_picker(app, ui, &geo, previous_popups.1 == app.grid.list_picker);
     header_menu(app, ui, previous_popups.2 == app.grid.header_menu);
@@ -3187,6 +3188,66 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     crate::formula_bar::editor_widget(app, &mut child, id, font, wrap, erect.width() - 4.0);
 }
 
+/// The searched list of a list validation under the cell being typed into (from the cell or the
+/// formula bar): the matches of the typed text, the highlighted one is what Enter commits.
+fn list_search(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook) {
+    let Some(ed) = app.editor.as_mut() else { return };
+    if ed.sheet != wb.active_sheet || !ed.list_open() || geo.hidden_under_frozen(sh, ed.cell) {
+        return;
+    }
+    let r = match sh.merge_at(ed.cell) {
+        Some(m) => geo.range_rect(sh, m),
+        None => geo.cell_rect(sh, ed.cell),
+    };
+    if !geo.cells.intersects(r) {
+        return;
+    }
+    let Some(list) = ed.list.as_mut() else { return };
+    let row_h = 18.0;
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    // Wide enough for the longest of the first matches, within reason.
+    let longest = list
+        .matches
+        .iter()
+        .take(200)
+        .filter_map(|&i| list.items.get(i))
+        .map(|t| ui.painter().layout_no_wrap(t.clone(), font.clone(), Color32::BLACK).size().x)
+        .fold(0.0_f32, f32::max);
+    let width = r.width().max(100.0).max((longest + 16.0).min(480.0));
+    let (at, pivot) = (geo.mirror_pos(r.left_bottom()), if geo.rtl { Align2::RIGHT_TOP } else { Align2::LEFT_TOP });
+    let reveal = std::mem::take(&mut list.reveal).then_some(list.top as f32 * row_h);
+    let mut pick = None;
+    let mut top = None;
+    egui::Area::new(egui::Id::new("dv_search")).fixed_pos(at).pivot(pivot).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
+            ui.set_min_width(width);
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let mut area = egui::ScrollArea::vertical().max_height(row_h * crate::editor::ListSearch::VISIBLE as f32).auto_shrink([false, true]);
+            if let Some(y) = reveal {
+                area = area.vertical_scroll_offset(y);
+            }
+            let out = area.show_rows(ui, row_h, list.matches.len(), |ui, rows| {
+                for row in rows {
+                    let Some(text) = list.matches.get(row).and_then(|&i| list.items.get(i)) else { continue };
+                    if ui.add(egui::Button::selectable(row == list.index, text.as_str()).min_size(vec2(width, row_h))).clicked() {
+                        pick = Some(row);
+                    }
+                }
+            });
+            top = Some((out.state.offset.y / row_h).floor().max(0.0) as usize);
+        });
+    });
+    if let Some(top) = top {
+        list.top = top;
+    }
+    if let Some(row) = pick {
+        list.index = row;
+        ed.list_accept = true;
+        app.commit_edit(0, 0, false, false);
+    }
+}
+
 /// Test the popup itself, not whether the pointer is over any part of the app.
 /// A trigger can sit outside its popup, so its opening click must be ignored.
 fn popup_dismissed(response: &egui::Response, was_open: bool) -> bool {
@@ -3766,8 +3827,14 @@ fn list_picker_height(n: usize, row_h: f32, gap: f32) -> f32 {
     rows * row_h + (rows - 1.0) * gap
 }
 
+/// The full list of a list validation, opened by the arrow beside the cell or Alt+Down.
 fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
     let Some(c) = app.grid.list_picker else { return };
+    // An edit shows its own searched list; two lists would stack.
+    if app.editor.is_some() {
+        app.grid.list_picker = None;
+        return;
+    }
     let Some(d) = app.session.active() else { return };
     let wb = d.wb.clone();
     let si = wb.active_sheet;

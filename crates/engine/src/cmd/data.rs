@@ -74,6 +74,15 @@ pub fn specs() -> Vec<CommandSpec> {
             validation
         ),
         cmd!(query "data.validate", "Check Value Against Validation", [], None, "{cell?, input} → {ok, message?}", has_doc, validate_cmd),
+        cmd!(
+            query "data.validationList",
+            "Validation List Items",
+            [],
+            None,
+            "{cell?, search?} → {items: [..], truncated} (the cell's list validation entries; `search` keeps those with a word starting with it, ignoring case and the accents of Latin letters)",
+            has_doc,
+            validation_list_cmd
+        ),
         cmd!(noundo "data.circleInvalid", "Circle Invalid Data", ["Data", "Data Tools", "Data Validation"], None, "{} → invalid cells", has_doc, circle_invalid),
         cmd!(
             "data.group",
@@ -1174,6 +1183,135 @@ pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
     }
 }
 
+/// Most entries a searched validation list returns (lists can come from huge ranges).
+pub const LIST_MATCH_CAP: usize = 10_000;
+
+/// Text folded for list search: lower case, with the accents of Latin letters removed
+/// (`É` → `e`, `ß` → `ss`, `Œ` → `oe`, `Ộ` → `o`) and combining marks dropped. Covers Latin-1,
+/// Latin Extended-A and -B and Latin Extended Additional; other scripts keep their marks.
+pub fn search_fold(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars().flat_map(char::to_lowercase) {
+        match fold_latin(ch) {
+            Some(f) => out.push_str(f),
+            None => out.push(ch),
+        }
+    }
+    out
+}
+
+/// The unaccented spelling of a lower-case Latin letter (`é` → `e`, `ß` → `ss`, `ộ` → `o`);
+/// combining marks fold to nothing. `None` leaves the character as it is.
+fn fold_latin(c: char) -> Option<&'static str> {
+    Some(match c {
+        '\u{300}'..='\u{36f}' => "",
+        'à'..='å' | 'ā' | 'ă' | 'ą' => "a",
+        'æ' => "ae",
+        'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' => "c",
+        'ð' | 'ď' | 'đ' => "d",
+        'è'..='ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' => "e",
+        'ĝ' | 'ğ' | 'ġ' | 'ģ' => "g",
+        'ĥ' | 'ħ' => "h",
+        'ì'..='ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' => "i",
+        'ĵ' => "j",
+        'ķ' => "k",
+        'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' => "l",
+        'ñ' | 'ń' | 'ņ' | 'ň' => "n",
+        'ò'..='ö' | 'ø' | 'ō' | 'ŏ' | 'ő' => "o",
+        'œ' => "oe",
+        'ŕ' | 'ŗ' | 'ř' => "r",
+        'ś' | 'ŝ' | 'ş' | 'š' | 'ș' => "s",
+        'ß' => "ss",
+        'ţ' | 'ť' | 'ŧ' | 'ț' => "t",
+        'þ' => "th",
+        'ù'..='ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' => "u",
+        'ŵ' => "w",
+        'ý' | 'ÿ' | 'ŷ' => "y",
+        'ź' | 'ż' | 'ž' => "z",
+        // Latin Extended-B and Latin Extended Additional (Vietnamese, pinyin tones, …): the base
+        // letter of each canonical decomposition (Unicode 15).
+        'ǎ' | 'ǟ' | 'ǡ' | 'ǻ' | 'ȁ' | 'ȃ' | 'ȧ' | 'ḁ' | 'ạ' | 'ả' | 'ấ' | 'ầ' | 'ẩ' | 'ẫ' | 'ậ' | 'ắ' | 'ằ' | 'ẳ' | 'ẵ' | 'ặ' => {
+            "a"
+        }
+        'ḃ' | 'ḅ' | 'ḇ' => "b",
+        'ḉ' => "c",
+        'ḋ' | 'ḍ' | 'ḏ' | 'ḑ' | 'ḓ' => "d",
+        'ȅ' | 'ȇ' | 'ȩ' | 'ḕ' | 'ḗ' | 'ḙ' | 'ḛ' | 'ḝ' | 'ẹ' | 'ẻ' | 'ẽ' | 'ế' | 'ề' | 'ể' | 'ễ' | 'ệ' => "e",
+        'ḟ' => "f",
+        'ǧ' | 'ǵ' | 'ḡ' => "g",
+        'ȟ' | 'ḣ' | 'ḥ' | 'ḧ' | 'ḩ' | 'ḫ' | 'ẖ' => "h",
+        'ǐ' | 'ȉ' | 'ȋ' | 'ḭ' | 'ḯ' | 'ỉ' | 'ị' => "i",
+        'ǰ' => "j",
+        'ǩ' | 'ḱ' | 'ḳ' | 'ḵ' => "k",
+        'ḷ' | 'ḹ' | 'ḻ' | 'ḽ' => "l",
+        'ḿ' | 'ṁ' | 'ṃ' => "m",
+        'ǹ' | 'ṅ' | 'ṇ' | 'ṉ' | 'ṋ' => "n",
+        'ơ' | 'ǒ' | 'ǫ' | 'ǭ' | 'ȍ' | 'ȏ' | 'ȫ' | 'ȭ' | 'ȯ' | 'ȱ' | 'ṍ' | 'ṏ' | 'ṑ' | 'ṓ' | 'ọ' | 'ỏ' | 'ố' | 'ồ' | 'ổ' | 'ỗ' | 'ộ' | 'ớ' | 'ờ'
+        | 'ở' | 'ỡ' | 'ợ' => "o",
+        'ṕ' | 'ṗ' => "p",
+        'ȑ' | 'ȓ' | 'ṙ' | 'ṛ' | 'ṝ' | 'ṟ' => "r",
+        'ṡ' | 'ṣ' | 'ṥ' | 'ṧ' | 'ṩ' => "s",
+        'ṫ' | 'ṭ' | 'ṯ' | 'ṱ' | 'ẗ' => "t",
+        'ư' | 'ǔ' | 'ǖ' | 'ǘ' | 'ǚ' | 'ǜ' | 'ȕ' | 'ȗ' | 'ṳ' | 'ṵ' | 'ṷ' | 'ṹ' | 'ṻ' | 'ụ' | 'ủ' | 'ứ' | 'ừ' | 'ử' | 'ữ' | 'ự' => {
+            "u"
+        }
+        'ṽ' | 'ṿ' => "v",
+        'ẁ' | 'ẃ' | 'ẅ' | 'ẇ' | 'ẉ' | 'ẘ' => "w",
+        'ẋ' | 'ẍ' => "x",
+        'ȳ' | 'ẏ' | 'ẙ' | 'ỳ' | 'ỵ' | 'ỷ' | 'ỹ' => "y",
+        'ẑ' | 'ẓ' | 'ẕ' => "z",
+        _ => return None,
+    })
+}
+
+/// The search term as typed, folded for [`search_matches`]. Leading spaces are ignored.
+pub fn search_term(typed: &str) -> String {
+    search_fold(typed.trim_start())
+}
+
+/// Whether a folded list entry matches a folded search term, as Excel's in-cell list search:
+/// the term appears as one piece that starts at the beginning of a word ("United St" finds
+/// "Los Angeles - United States", "geles" and "United Amer" don't).
+pub fn search_matches(folded_item: &str, folded_term: &str) -> bool {
+    if folded_term.is_empty() {
+        return true;
+    }
+    let mut prev: Option<char> = None;
+    for (i, ch) in folded_item.char_indices() {
+        if prev.is_none_or(|p| !p.is_alphanumeric()) && folded_item.get(i..).is_some_and(|rest| rest.starts_with(folded_term)) {
+            return true;
+        }
+        prev = Some(ch);
+    }
+    false
+}
+
+/// Indices of the list entries matching `typed`, in list order, at most `cap` of them.
+pub fn filter_list_items(items: &[String], typed: &str, cap: usize) -> Vec<usize> {
+    let term = search_term(typed);
+    items.iter().enumerate().filter(|(_, it)| search_matches(&search_fold(it), &term)).map(|(i, _)| i).take(cap).collect()
+}
+
+/// `data.validationList`: a cell's list validation entries, searched like the in-cell dropdown,
+/// at most [`LIST_MATCH_CAP`] of them.
+fn validation_list_cmd(s: &mut Session, p: &Json) -> Result<Json> {
+    let d = s.doc()?;
+    let at = cell_param(s, p, "cell")?.unwrap_or(d.selection.active);
+    let sheet = d.wb.active_sheet;
+    let dv =
+        d.wb.sheet(sheet)
+            .and_then(|sh| sh.validations.iter().find(|v| v.kind == ValidationKind::List && v.ranges.iter().any(|r| r.contains(at))))
+            .ok_or_else(|| EngineError::Other(format!("{} has no list validation", at.a1())))?;
+    let items = list_items(&d.wb, sheet, dv);
+    let picked: Vec<usize> = match str_param(p, "search") {
+        Some(term) => filter_list_items(&items, term, LIST_MATCH_CAP.saturating_add(1)),
+        None => (0..items.len().min(LIST_MATCH_CAP.saturating_add(1))).collect(),
+    };
+    let truncated = picked.len() > LIST_MATCH_CAP;
+    let out: Vec<&String> = picked.iter().take(LIST_MATCH_CAP).filter_map(|&i| items.get(i)).collect();
+    Ok(json!({"items": out, "truncated": truncated}))
+}
+
 /// Checks typed input against the validation of a cell. `Ok(None)` = valid.
 pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
@@ -1825,6 +1963,84 @@ mod tests {
         assert_eq!(split_delimited("a,b,,c", &[','], false, '"'), ["a", "b", "", "c"]);
         assert_eq!(split_delimited("a,b,,c", &[','], true, '"'), ["a", "b", "c"]);
         assert_eq!(split_delimited("\"x,y\",z", &[','], false, '"'), ["x,y", "z"]);
+    }
+
+    fn finds(item: &str, typed: &str) -> bool {
+        search_matches(&search_fold(item), &search_term(typed))
+    }
+
+    #[test]
+    fn list_search_matches_from_a_word_start() {
+        let la = "Los Angeles - United States of America";
+        for ok in ["Los an", " Los an", "Ange", "United St", "united st", "of America", "- United", "", "L"] {
+            assert!(finds(la, ok), "{ok:?} should match");
+        }
+        for bad in ["United Amer", "geles", "os", "States America", "Los Angeles  -"] {
+            assert!(!finds(la, bad), "{bad:?} should not match");
+        }
+        // A word start can hide behind an earlier, overlapping occurrence.
+        assert!(finds("xa-a-a", "a-a"));
+        assert!(finds("(USA)", "usa"));
+        assert!(finds("2024 report", "202"));
+    }
+
+    #[test]
+    fn list_search_ignores_case_and_accents() {
+        assert!(finds("États-Unis", "etats"));
+        assert!(finds("États-Unis", "UNIS"));
+        assert!(finds("Etats-Unis", "États"));
+        assert!(finds("Straße", "strasse"));
+        assert!(finds("Œuvre", "oe"));
+        assert!(finds("Łódź", "lodz"));
+        // Decomposed accents (e + combining acute) fold the same and don't start a word.
+        assert!(finds("Cafe\u{301} noir", "café n"));
+        assert!(!finds("Cafe\u{301}s", "s"));
+        assert!(finds("東京", "東"));
+        // Vietnamese (Latin Extended Additional, with ơ/ư from Latin Extended-B), any case.
+        assert!(finds("Hà Nội - Vietnam", "ha noi"));
+        assert!(finds("Đà Nẵng", "da nang"));
+        assert!(finds("Thừa Thiên Huế", "thua thien hue"));
+        assert!(finds("HỒ CHÍ MINH", "ho chi"));
+        assert!(finds("Hồ Chí Minh", "HỒ CHÍ"));
+        assert!(finds("Phường Bến Nghé", "phuong ben"));
+        // Pinyin tone marks, transliterations with dots below.
+        assert!(finds("Běijīng", "beijing"));
+        assert!(finds("Lǜ", "lu"));
+        assert!(finds("Ḥaifa", "haifa"));
+        assert_eq!(search_fold("ỆỢỰẠẞ"), "eouass");
+    }
+
+    #[test]
+    fn filter_list_items_keeps_order_and_cap() {
+        let items: Vec<String> = ["Dubai - United Arab Emirates", "Paris - France", "London - United Kingdom", "Boston - United States"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(filter_list_items(&items, "United", 100), [0, 2, 3]);
+        assert_eq!(filter_list_items(&items, "United St", 100), [3]);
+        assert_eq!(filter_list_items(&items, "United", 2), [0, 2]);
+        assert!(filter_list_items(&items, "zzz", 100).is_empty());
+    }
+
+    #[test]
+    fn validation_list_command_returns_filtered_items() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute(
+            "range.setValues",
+            json!({"range": "E1", "values": [["Paris - France"], ["Dubai - United Arab Emirates"], ["New York - United States"]]}),
+        )
+        .unwrap();
+        s.execute("data.validation", json!({"range": "B2:B5", "type": "list", "formula1": "=$E$1:$E$3"})).unwrap();
+        let all = s.execute("data.validationList", json!({"cell": "B3"})).unwrap();
+        assert_eq!(all["items"].as_array().map(Vec::len), Some(3));
+        assert_eq!(all["truncated"], json!(false));
+        let some = s.execute("data.validationList", json!({"cell": "B3", "search": "united s"})).unwrap();
+        assert_eq!(some["items"], json!(["New York - United States"]));
+        assert!(s.execute("data.validationList", json!({"cell": "A1"})).is_err(), "no list validation on A1");
+        s.execute("data.validation", json!({"range": "C1", "type": "list", "formula1": "\"Été,Hiver\""})).unwrap();
+        let lit = s.execute("data.validationList", json!({"cell": "C1", "search": "ete"})).unwrap();
+        assert_eq!(lit["items"], json!(["Été"]));
     }
 
     #[test]
