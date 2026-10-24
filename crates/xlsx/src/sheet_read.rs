@@ -11,6 +11,8 @@ use gridcraft_model::{
     NoteBox, NoteCorner, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation,
     ValidationKind, XmlColumnPr,
 };
+use quick_xml::Reader;
+use quick_xml::events::Event;
 
 use crate::IoError;
 use crate::fmla::from_file;
@@ -18,6 +20,7 @@ use crate::package::Rel;
 use crate::read::Ctx;
 use crate::styles::read_color;
 use crate::tables::{col_width_to_px, paper_name, pt_to_px};
+use crate::write::NS_MAIN;
 use crate::xml::{self, El};
 
 struct Shared {
@@ -240,6 +243,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                         if let Some(x) = cx.optional_xml(&target)?
                             && let Some(mut t) = read_table(cx, &x)
                         {
+                            read_query_table(cx, &target, &x, &mut t);
                             t.id = cx.next_object_id();
                             sheet.tables.push(t);
                         }
@@ -911,6 +915,7 @@ pub fn read_table(cx: &mut Ctx<'_>, x: &El) -> Option<Table> {
                         totals_label,
                         formula: c.child("calculatedColumnFormula").map(|f| from_file(f.text.trim())),
                         unique_name: c.attr("uniqueName").map(str::to_string),
+                        query_field_id: c.attr_u32("queryTableFieldId"),
                         xml: c.child("xmlColumnPr").and_then(|x| {
                             Some(XmlColumnPr {
                                 map_id: x.attr_u32("mapId")?,
@@ -925,8 +930,7 @@ pub fn read_table(cx: &mut Ctx<'_>, x: &El) -> Option<Table> {
         })
         .unwrap_or_default();
     let si = x.child("tableStyleInfo");
-    // Only XML tables are kept as such: a query table's definition hangs off the table part, which
-    // is rewritten, so it would lose it.
+    // A query table's definition hangs off the table part: `read_query_table` attaches it.
     let xml_table = x.attr("tableType") == Some("xml");
     Some(Table {
         id: x.attr_u32("id").unwrap_or(0),
@@ -944,7 +948,67 @@ pub fn read_table(cx: &mut Ctx<'_>, x: &El) -> Option<Table> {
         filter: x.child("autoFilter").and_then(|e| read_autofilter(cx, e)).map(|af| af.criteria).unwrap_or_default(),
         table_type: xml_table.then(|| "xml".to_string()),
         connection_id: x.attr_u32("connectionId").filter(|_| xml_table),
+        query_table: None,
     })
+}
+
+/// Most bytes kept for one table's query table part.
+const MAX_QUERY_TABLE: u64 = 1024 * 1024;
+
+/// Keeps the query table part a table of type `queryTable` points to. Without the part the table
+/// is written as a plain table, so a file that names none stays valid.
+fn read_query_table(cx: &mut Ctx<'_>, part: &str, x: &El, t: &mut Table) {
+    if x.attr("tableType") != Some("queryTable") {
+        return;
+    }
+    let target = match cx.pkg.rels(part) {
+        Ok(rels) => rels.into_iter().find(|r| r.kind == "queryTable").map(|r| r.target),
+        Err(_) => None,
+    };
+    let kept = target.and_then(|n| {
+        let bytes = cx.pkg.read_limited(&n, MAX_QUERY_TABLE).ok().flatten()?;
+        // Its own relationships (none in practice) would need to be kept with it.
+        let own_rels = cx.pkg.rels(&n).ok().is_none_or(|r| !r.is_empty());
+        let text = String::from_utf8(bytes).ok()?;
+        (!own_rels && xml::parse(text.as_bytes()).is_ok() && is_query_table_root(&text)).then_some(text)
+    });
+    match kept {
+        Some(text) => {
+            t.query_table = Some(text);
+            t.table_type = Some("queryTable".to_string());
+            t.connection_id = x.attr_u32("connectionId");
+        }
+        None => cx.warn(format!("table \"{}\": its query table could not be kept; the table was kept as a plain table", t.name)),
+    }
+}
+
+/// Whether a part's root is `queryTable` in the SpreadsheetML namespace. `El` drops namespaces, so
+/// this reads the root start tag itself, for a default or a prefixed namespace binding.
+fn is_query_table_root(text: &str) -> bool {
+    let mut reader = Reader::from_reader(text.as_bytes());
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
+                let raw = e.name();
+                let raw = raw.as_ref();
+                let (prefix, local) = match raw.iter().position(|&b| b == b':') {
+                    Some(i) => (&raw[..i], &raw[i + 1..]),
+                    None => (&raw[..0], raw),
+                };
+                return local == b"queryTable"
+                    && e.attributes().flatten().any(|a| {
+                        let key = a.key.as_ref();
+                        let bound = if prefix.is_empty() { key == b"xmlns" } else { key.strip_prefix(b"xmlns:") == Some(prefix) };
+                        bound && a.value.as_ref() == NS_MAIN.as_bytes()
+                    });
+            }
+            Ok(Event::Decl(_) | Event::Comment(_) | Event::PI(_) | Event::DocType(_)) => {}
+            Ok(Event::Text(t)) if t.iter().all(u8::is_ascii_whitespace) => {}
+            _ => return false,
+        }
+        buf.clear();
+    }
 }
 
 fn read_comments(x: &El, sheet: &mut Sheet) {

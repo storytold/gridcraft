@@ -1,6 +1,6 @@
 //! Writing worksheet parts and the parts they own (tables, comments, drawings, charts).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
@@ -8,15 +8,18 @@ use gridcraft_model::{
     Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, Sheet,
     SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
 };
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::{Reader, Writer};
 
 use crate::drawing::{Obj, image_content_type, image_ext};
 use crate::fmla::text_to_file;
 use crate::styles::{color_attrs, dxf_id};
 use crate::tables::{paper_id, px_to_col_width, px_to_pt};
 use crate::write::{
-    CT_CHART, CT_COMMENTS, CT_DRAWING, CT_TABLE, CT_THREADED_COMMENTS, NS_MAIN, NS_REL, NS_THREADED, Out, REL_THREADED_COMMENT, Rels, XML_DECL,
+    CT_CHART, CT_COMMENTS, CT_DRAWING, CT_QUERY_TABLE, CT_TABLE, CT_THREADED_COMMENTS, NS_MAIN, NS_REL, NS_THREADED, Out, REL_THREADED_COMMENT, Rels,
+    XML_DECL,
 };
-use crate::xml::{encode_xstring, esc, esc_attr, num};
+use crate::xml::{encode_xstring, esc, esc_attr, num, parse};
 
 fn sqref(ranges: &[RangeRef]) -> String {
     ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(" ")
@@ -596,6 +599,13 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             let name = table_name(&t.name, &mut used_names, out.table_id);
             let xml = table_xml(t, cols, &name, out.table_id, out);
             out.part(&format!("xl/tables/table{n}.xml"), Some(CT_TABLE), xml.into_bytes());
+            if let Some(q) = &t.query_table {
+                let qname = out.kept.claim(&format!("xl/queryTables/queryTable{n}.xml"));
+                out.part(&qname, Some(CT_QUERY_TABLE), remap_query_fields(q, t).into_bytes());
+                let mut trels = Rels::default();
+                trels.add("queryTable", &format!("/{qname}"));
+                out.part(&format!("xl/tables/_rels/table{n}.xml.rels"), None, trels.xml().into_bytes());
+            }
             let rid = rels.add("table", &format!("../tables/table{n}.xml"));
             let _ = write!(parts, "<tablePart r:id=\"{rid}\"/>");
         }
@@ -1050,6 +1060,84 @@ fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mu
     s
 }
 
+/// Rewrites a retained query table part for the columns as saved. Each `queryTableField` takes its
+/// column's new `tableColumn` id, linked through the field id a column keeps
+/// (`TableColumn::query_field_id`). A field whose column is gone is dropped, and the count follows.
+fn remap_query_fields(query: &str, t: &Table) -> String {
+    let new_id: HashMap<u32, u32> = t.columns.iter().enumerate().filter_map(|(i, c)| Some((c.query_field_id?, u32::try_from(i + 1).ok()?))).collect();
+    let Ok(root) = parse(query.as_bytes()) else { return query.to_string() };
+    let kept = root
+        .path(&["queryTableRefresh", "queryTableFields"])
+        .map_or(0, |fs| fs.kids("queryTableField").filter(|f| f.attr_u32("id").is_some_and(|id| new_id.contains_key(&id))).count());
+    let mut reader = Reader::from_reader(query.as_bytes());
+    let mut writer = Writer::new(Vec::new());
+    let mut buf = Vec::new();
+    // Depth inside a dropped field, whose children go with it.
+    let mut dropped = 0usize;
+    loop {
+        buf.clear();
+        let ev = match reader.read_event_into(&mut buf) {
+            Ok(Event::Eof) => break,
+            Ok(ev) => ev,
+            Err(_) => return query.to_string(),
+        };
+        if dropped > 0 {
+            match ev {
+                Event::Start(_) => dropped += 1,
+                Event::End(_) => dropped -= 1,
+                _ => {}
+            }
+            continue;
+        }
+        let out = match ev {
+            Event::Start(e) if e.name().as_ref() == b"queryTableField" => match query_field_el(&e, &new_id) {
+                Some(f) => Event::Start(f),
+                None => {
+                    dropped = 1;
+                    continue;
+                }
+            },
+            Event::Empty(e) if e.name().as_ref() == b"queryTableField" => match query_field_el(&e, &new_id) {
+                Some(f) => Event::Empty(f),
+                None => continue,
+            },
+            Event::Start(e) if e.name().as_ref() == b"queryTableFields" => Event::Start(set_attr(&e, b"count", &kept.to_string())),
+            Event::Empty(e) if e.name().as_ref() == b"queryTableFields" => Event::Empty(set_attr(&e, b"count", &kept.to_string())),
+            other => other,
+        };
+        if writer.write_event(out).is_err() {
+            return query.to_string();
+        }
+    }
+    String::from_utf8(writer.into_inner()).unwrap_or_else(|_| query.to_string())
+}
+
+/// A `queryTableField` with its `tableColumnId` set to its column's new id; None when the column is gone.
+fn query_field_el(e: &BytesStart, new_id: &HashMap<u32, u32>) -> Option<BytesStart<'static>> {
+    let id = e.attributes().flatten().find(|a| a.key.as_ref() == b"id")?;
+    let new = new_id.get(&std::str::from_utf8(&id.value).ok()?.trim().parse::<u32>().ok()?)?;
+    Some(set_attr(e, b"tableColumnId", &new.to_string()))
+}
+
+/// The element with attribute `key` set to `value`, every other attribute kept in order.
+fn set_attr(e: &BytesStart, key: &[u8], value: &str) -> BytesStart<'static> {
+    let mut out = e.to_owned();
+    out.clear_attributes();
+    let mut set = false;
+    for a in e.attributes().flatten() {
+        if a.key.as_ref() == key {
+            out.push_attribute((key, value.as_bytes()));
+            set = true;
+        } else {
+            out.push_attribute(a);
+        }
+    }
+    if !set {
+        out.push_attribute((key, value.as_bytes()));
+    }
+    out
+}
+
 fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> String {
     let mut s =
         format!("{XML_DECL}<table xmlns=\"{NS_MAIN}\" id=\"{id}\" name=\"{0}\" displayName=\"{0}\" ref=\"{1}\"", esc_attr(name), t.range.a1());
@@ -1061,10 +1149,11 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
     } else {
         s.push_str(" totalsRowShown=\"0\"");
     }
-    if let Some(ty) = &t.table_type {
+    // `queryTable` needs its part: without it the table is plain.
+    if let Some(ty) = t.table_type.as_ref().filter(|ty| *ty != "queryTable" || t.query_table.is_some()) {
         let _ = write!(s, " tableType=\"{}\"", esc_attr(ty));
     }
-    if let Some(c) = t.connection_id {
+    if let Some(c) = t.connection_id.filter(|_| t.table_type.as_deref() != Some("queryTable") || t.query_table.is_some()) {
         let _ = write!(s, " connectionId=\"{c}\"");
     }
     s.push('>');
@@ -1081,6 +1170,11 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
             let _ = write!(s, " uniqueName=\"{}\"", esc_attr(u));
         }
         let _ = write!(s, " name=\"{}\"", esc_attr(&encode_xstring(name)));
+        if t.query_table.is_some()
+            && let Some(f) = col.and_then(|c| c.query_field_id)
+        {
+            let _ = write!(s, " queryTableFieldId=\"{f}\"");
+        }
         let totals = col.map(|c| c.totals).unwrap_or_default();
         if t.totals_row {
             let f = match totals {

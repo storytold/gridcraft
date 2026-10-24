@@ -868,17 +868,24 @@ fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
             ));
         }
         let mut cols = Vec::new();
+        let start = t.range.start.col;
         for (i, h) in headers.iter().enumerate() {
             let name = if h.is_empty() { format!("Column{}", i + 1) } else { h.clone() };
-            let existing = t.columns.iter().find(|c| c.name.eq_ignore_ascii_case(&name)).cloned();
-            cols.push(existing.unwrap_or(TableColumn {
-                name,
-                totals: TotalsFn::None,
-                totals_label: None,
-                formula: None,
-                unique_name: None,
-                xml: None,
-            }));
+            // A column keeps its metadata by position first, so a renamed header keeps its query field.
+            let by_position = (r.start.col + i as u32).checked_sub(start).and_then(|k| t.columns.get(k as usize)).cloned();
+            let existing = by_position.or_else(|| t.columns.iter().find(|c| c.name.eq_ignore_ascii_case(&name)).cloned());
+            cols.push(match existing {
+                Some(c) => TableColumn { name, ..c },
+                None => TableColumn {
+                    name,
+                    totals: TotalsFn::None,
+                    totals_label: None,
+                    formula: None,
+                    unique_name: None,
+                    query_field_id: None,
+                    xml: None,
+                },
+            });
         }
         t.columns = cols;
         t.range = r;

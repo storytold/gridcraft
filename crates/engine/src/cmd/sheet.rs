@@ -1081,6 +1081,7 @@ fn shift_table_columns(t: &mut gridcraft_model::Table, at: u32, count: u32, inse
                     totals_label: None,
                     formula: None,
                     unique_name: None,
+                    query_field_id: None,
                     xml: None,
                 };
                 t.columns.insert((idx + k).min(t.columns.len()), col);
