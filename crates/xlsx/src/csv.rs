@@ -193,9 +193,34 @@ pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
     best.0
 }
 
+/// Excel's `sep=` line: a first line `sep=` plus one character names the delimiter and isn't data.
+/// Returns the delimiter it names (`None`: the line names none, so nothing is split) and the bytes
+/// to skip, line end included. Observed in Excel 16.0 (build 17932, Windows): spaces anywhere in the
+/// line are ignored, `SEP=` is the same, the line may be quoted as a whole field, and `sep=` with
+/// nothing after it (or a non-ASCII character) is dropped and splits nothing. Two characters after
+/// `=` (a tab counts: `sep=|<tab>`), or the line anywhere but first, is data.
+pub(crate) fn sep_line(text: &str, quote: char) -> Option<(Option<char>, usize)> {
+    let end = text.find(['\r', '\n']).unwrap_or(text.len());
+    let skip = match text.get(end..end + 2) {
+        Some("\r\n") => end + 2,
+        _ if end < text.len() => end + 1,
+        _ => end,
+    };
+    let line: String = text.get(..end)?.chars().filter(|&c| c != ' ').collect();
+    let line = line.strip_prefix(quote).and_then(|l| l.strip_suffix(quote)).unwrap_or(&line);
+    let rest = line.get(..4).filter(|p| p.eq_ignore_ascii_case("sep=")).and_then(|_| line.get(4..))?;
+    let mut chars = rest.chars();
+    match (chars.next(), chars.next()) {
+        (None, _) => Some((None, skip)),
+        (Some(c), None) => Some((Some(c).filter(char::is_ascii), skip)),
+        _ => None,
+    }
+}
+
 /// Splits CSV text into records of fields. A record keeps at most [`MAX_COLS`] fields; the rest are
 /// dropped as they are read, so a row of endless delimiters cannot allocate a string per field.
-pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record: impl FnMut(Vec<String>) -> bool) {
+/// Without a delimiter each line is one field; without a quote character nothing is quoted.
+pub(crate) fn parse_records(text: &str, delim: Option<char>, quote: Option<char>, mut on_record: impl FnMut(Vec<String>) -> bool) {
     let mut field = String::new();
     let mut record: Vec<String> = vec![];
     let mut in_q = false;
@@ -203,9 +228,9 @@ pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record:
     let mut field_started_quoted = false;
     while let Some(c) = chars.next() {
         if in_q {
-            if c == quote {
-                if chars.peek() == Some(&quote) {
-                    field.push(quote);
+            if Some(c) == quote {
+                if chars.peek() == quote.as_ref() {
+                    field.push(c);
                     chars.next();
                 } else {
                     in_q = false;
@@ -215,10 +240,10 @@ pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record:
             }
             continue;
         }
-        if c == quote && field.is_empty() && !field_started_quoted {
+        if Some(c) == quote && field.is_empty() && !field_started_quoted {
             in_q = true;
             field_started_quoted = true;
-        } else if c == delim {
+        } else if Some(c) == delim {
             let f = std::mem::take(&mut field);
             if record.len() < MAX_COLS as usize {
                 record.push(f);
@@ -251,18 +276,35 @@ pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record:
 pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
     let text = decode_text(bytes);
     let quote = if opts.quote == 0 { '"' } else { opts.quote as char };
-    let delim = if opts.delimiter == 0 { sniff_delimiter(&text, quote) } else { opts.delimiter } as char;
-    if delim == quote {
-        return Err(IoError::Format("the delimiter and quote character must differ".into()));
-    }
     let mut wb = Workbook::new();
     wb.date_system = opts.date_system;
-    wb.csv_delimiter = u8::try_from(delim).ok();
+    // A detected delimiter: a `sep=` line names it (and isn't data), else the text shows it.
+    let sep = if opts.delimiter == 0 { sep_line(&text, quote) } else { None };
+    let (body, delim, quote) = match sep {
+        Some((d, skip)) => {
+            // Saved again with it only when the text would be read with it again without the line
+            // (Excel saves with its list separator and drops the line); else with the CSV default,
+            // comma. `sep=;` over `a;b,c` keeps commas: detection would pick them.
+            let body = text.get(skip..).unwrap_or_default();
+            wb.csv_delimiter =
+                d.filter(|d| [',', ';', '\t'].contains(d) && sniff_delimiter(body, quote) as char == *d).and_then(|d| u8::try_from(d).ok());
+            // `sep="`: Excel splits at the quotes, so nothing is quoted.
+            (text.get(skip..).unwrap_or_default(), d, Some(quote).filter(|q| d != Some(*q)))
+        }
+        None => {
+            let delim = if opts.delimiter == 0 { sniff_delimiter(&text, quote) } else { opts.delimiter } as char;
+            if delim == quote {
+                return Err(IoError::Format("the delimiter and quote character must differ".into()));
+            }
+            wb.csv_delimiter = u8::try_from(delim).ok();
+            (text.as_str(), Some(delim), Some(quote))
+        }
+    };
     let mut sheet = Sheet::new("Sheet1");
     let mut styles = std::mem::take(&mut wb.styles);
     let mut fmt_cache: Vec<(&'static str, StyleId)> = vec![];
     let mut row: u32 = 0;
-    parse_records(&text, delim, quote, |rec| {
+    parse_records(body, delim, quote, |rec| {
         if row >= MAX_ROWS {
             return false;
         }
@@ -361,6 +403,11 @@ pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, mut cell_te
         if out.len() > limit {
             return Err(too_large(format!("more than {} MiB (stopped at row {})", limit >> 20, row + 1)));
         }
+    }
+    // A first row that would read as Excel's `sep=` line (a lone `sep=;` cell) stays data behind a
+    // `sep=` line of its own naming the delimiter, which GridCraft and Excel both drop on opening.
+    if out.split(['\r', '\n']).next().is_some_and(|first| sep_line(first, '"').is_some()) {
+        out.insert_str(0, &format!("sep={delim}\r\n"));
     }
     Ok(out.into_bytes())
 }

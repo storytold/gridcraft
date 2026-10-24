@@ -80,3 +80,24 @@ relative steps keep each notch feeling the same, and the doublings land on 25, 5
 400%. The status bar's Zoom In / Zoom Out buttons and Ctrl+Alt+= / Ctrl+Alt+- keep their 10%
 steps, so the wheel and the buttons now step differently. Whether they should share one ladder
 (this one, Excel's, or another) is left to the maintainers.
+## CSV: Excel's `sep=` first line (#1446)
+
+A CSV file whose first line is `sep=` plus one character is split at that character when File ›
+Open detects the delimiter, and the line isn't data. Observed in Excel 16.0 (build 17932, Windows)
+opening synthetic files: spaces anywhere in the line are ignored (`sep= |`, ` sep=|  `), case
+doesn't matter, the line may be quoted as a whole field, and a BOM before it is fine. `sep=` with
+nothing after it (or only spaces) is dropped and nothing is split; a non-ASCII character is dropped
+the same way. Two characters after `=` (a tab counts, `sep=|<tab>`), or the line anywhere but first,
+is data. `sep="` splits at the quotes, so nothing is quoted. (#1446 measured `sep=` alone as data in
+Excel for Microsoft 365, de-DE; this build drops it.)
+
+A delimiter given by the caller wins and the line stays data, so a `.tsv`/`.txt` file (read with
+tabs) keeps it. Saving: Excel writes its list separator and drops the line. GridCraft saves a CSV
+with the separator it was read with, so it keeps a named `,` `;` or tab only when detection picks
+it again on reopening; otherwise (`|`, or `sep=;` over text with as many commas) it saves commas,
+which reopen in the same columns. A first row that would itself read as a `sep=` line (a lone
+`sep=;` cell) is written behind a `sep=` line naming the delimiter, so it stays data. Excel writes
+such a row bare (`"sep=;";`) and reopens the file garbled (observed: A1 `sep=;;`, row 2 in one cell).
+
+From Text/CSV still guesses its own delimiter; making it detect like File › Open (and so honour
+`sep=`) is another part of #1446.

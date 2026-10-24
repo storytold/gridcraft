@@ -313,16 +313,102 @@ fn parser_stops_collecting_fields_at_max_cols() {
     let mut text = ",".repeat((MAX_COLS + extra) as usize - 1);
     text.push_str("end\nx,y\n");
     let mut lens = vec![];
-    parse_records(&text, ',', '"', |rec| {
+    parse_records(&text, Some(','), Some('"'), |rec| {
         lens.push(rec.len());
         true
     });
     assert_eq!(lens, vec![MAX_COLS as usize, 2]);
     // An unterminated last row is capped the same way.
     let mut lens = vec![];
-    parse_records(&",".repeat(MAX_COLS as usize + extra as usize), ',', '"', |rec| {
+    parse_records(&",".repeat(MAX_COLS as usize + extra as usize), Some(','), Some('"'), |rec| {
         lens.push(rec.len());
         true
     });
     assert_eq!(lens, vec![MAX_COLS as usize]);
+}
+
+/// #1446: a first line `sep=` plus one character names the delimiter and isn't data, as Excel 16.0
+/// reads it when it opens a CSV file. Each case: file → first two rows.
+#[test]
+fn sep_line_names_the_delimiter() {
+    let read = |src: &str| -> Vec<String> {
+        let wb = read_csv(src.as_bytes(), &CsvOptions { delimiter: 0, parse_values: false, ..Default::default() }).unwrap();
+        let sh = wb.sheet(0).unwrap();
+        let cell = |r, c| sh.value(CellRef::new(r, c)).as_text().map(|t| t.to_string()).unwrap_or_default();
+        (0..2).map(|r| (0..3).map(|c| cell(r, c)).collect::<Vec<_>>().join("|").trim_end_matches('|').to_string()).collect()
+    };
+    // Named delimiters, whatever the text would suggest.
+    assert_eq!(read("sep=|\r\nA|B\r\n1|2\r\n"), ["A|B", "1|2"]);
+    assert_eq!(read("sep=;\nA;B,C\n"), ["A|B,C", ""]);
+    assert_eq!(read("sep=,\r\n1,5;2\r\n"), ["1|5;2", ""]);
+    assert_eq!(read("sep=\t\r\nA\tB\r\n"), ["A|B", ""]);
+    assert_eq!(read("sep=x\r\nAxB\r\n"), ["A|B", ""]);
+    // Spaces anywhere, upper case, the line quoted as a field, a BOM before it.
+    for src in ["sep= |\r\nA|B", "sep =|\r\nA|B", " sep=|  \r\nA|B", "SEP=|\r\nA|B", "\"sep=|\"\r\nA|B", "\u{feff}sep=|\r\nA|B"] {
+        assert_eq!(read(src), ["A|B", ""], "{src:?}");
+    }
+    // `sep=` naming nothing (or a space) is dropped and splits nothing.
+    assert_eq!(read("sep=\r\nA;B\tC,D\r\n"), ["A;B\tC,D", ""]);
+    assert_eq!(read("sep= \r\nA,B\r\n"), ["A,B", ""]);
+    assert_eq!(read("sep=|"), ["", ""], "only the line: an empty sheet");
+    // `sep="`: split at the quotes.
+    assert_eq!(read("sep=\"\r\nA\"B\r\n"), ["A|B", ""]);
+    // Data: two characters after `=` (a tab counts), the line anywhere but first, an unclosed quote.
+    assert_eq!(read("sep=ab\r\nAaB\r\n"), ["sep=ab", "AaB"]);
+    assert_eq!(read("sep=|\t\r\nA|B\r\n"), ["sep=|\t", "A|B"]);
+    assert!(read("sep=;,\r\nA;B,C\r\n")[0].starts_with("sep=;"), "data, split as the text suggests");
+    assert_eq!(read("A,B\r\nsep=,\r\n"), ["A|B", "sep="], "a data row, split at its comma");
+    // A delimiter that was given wins, and the line stays data.
+    let wb = read_csv(b"sep=|\r\nA|B\r\n", &CsvOptions { delimiter: b',', ..Default::default() }).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::text("sep=|"));
+    // Saved again with the named delimiter only when it would be detected without the line.
+    let delim = |src: &str| read_csv(src.as_bytes(), &CsvOptions { delimiter: 0, ..Default::default() }).unwrap().csv_delimiter;
+    assert_eq!(delim("sep=;\r\nA;B"), Some(b';'));
+    assert_eq!(delim("sep=\t\r\nA\tB"), Some(b'\t'));
+    assert_eq!(delim("sep=|\r\nA|B"), None, "| isn't detected: saved with commas so it reopens in columns");
+}
+
+/// Review of #2270: the delimiter a `sep=` line names is kept for saving only if the text would be
+/// read with it again.
+#[test]
+fn a_named_delimiter_is_kept_only_if_it_would_be_detected_again() {
+    let opts = CsvOptions { delimiter: 0, parse_values: false, ..Default::default() };
+    let texts = |wb: &Workbook| -> Vec<String> {
+        let sh = wb.sheet(0).unwrap();
+        (0..2).flat_map(|r| (0..2).map(move |c| CellRef::new(r, c))).map(|c| sh.value(c).as_text().unwrap_or("").to_string()).collect()
+    };
+    let save = |wb: &Workbook| {
+        let sh = wb.sheet(0).unwrap();
+        write_csv(sh, wb.csv_delimiter.unwrap_or(b','), |c| sh.value(c).as_text().unwrap_or("").to_string()).unwrap()
+    };
+    // `;` named, but `a;b,c` would be detected as commas: saved with commas, it reopens the same.
+    let wb = read_csv(b"sep=;\na;b,c\n1;2,3\n", &opts).unwrap();
+    assert_eq!(texts(&wb), ["a", "b,c", "1", "2,3"]);
+    assert_eq!(wb.csv_delimiter, None);
+    let saved = save(&wb);
+    assert_eq!(saved, b"a,\"b,c\"\r\n1,\"2,3\"\r\n");
+    assert_eq!(texts(&read_csv(&saved, &opts).unwrap()), ["a", "b,c", "1", "2,3"]);
+    // `;` named and detected again: kept.
+    assert_eq!(read_csv(b"sep=;\na;b\n1;2\n", &opts).unwrap().csv_delimiter, Some(b';'));
+}
+
+/// Review of #2270: a first row that looks like a `sep=` line (a lone `sep=;` in A1) is data. Saved
+/// behind a `sep=,` line it opens as it was; Excel writes it bare and reads it back garbled.
+#[test]
+fn a_first_row_like_a_sep_line_survives_a_save() {
+    let opts = CsvOptions { delimiter: 0, parse_values: false, ..Default::default() };
+    let texts = |wb: &Workbook| -> Vec<String> {
+        let sh = wb.sheet(0).unwrap();
+        (0..2).flat_map(|r| (0..2).map(move |c| CellRef::new(r, c))).map(|c| sh.value(c).as_text().unwrap_or("").to_string()).collect()
+    };
+    let mut sheet = Sheet::new("Sheet1");
+    sheet.set_value(CellRef::new(0, 0), Value::text("sep=;"));
+    sheet.set_value(CellRef::new(1, 0), Value::text("value"));
+    let saved = write_csv(&sheet, b',', |c| sheet.value(c).as_text().unwrap_or("").to_string()).unwrap();
+    assert_eq!(saved, b"sep=,\r\nsep=;\r\nvalue\r\n");
+    assert_eq!(texts(&read_csv(&saved, &opts).unwrap()), ["sep=;", "", "value", ""]);
+    // Other first rows are written as before.
+    let mut plain = Sheet::new("Sheet1");
+    plain.set_value(CellRef::new(0, 0), Value::text("separator"));
+    assert_eq!(write_csv(&plain, b',', |c| plain.value(c).as_text().unwrap_or("").to_string()).unwrap(), b"separator\r\n");
 }
