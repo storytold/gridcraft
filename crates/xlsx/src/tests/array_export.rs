@@ -480,3 +480,24 @@ fn long_flat_chains_are_scalar_formulas() {
     assert_dynamic(&sheet, "B4", "B4");
     assert_eq!(cell(&sheet, "B1").child("f").unwrap().text, refs);
 }
+
+#[test]
+fn spilled_text_is_written_as_a_cached_string_not_a_shared_string() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let mut anchor = Cell::formula(Formula::new("SORT({\"b\";\"a\";\"c\"})"));
+    anchor.value = Value::text("a");
+    sh.cells.set(at("K4"), anchor);
+    sh.spill_ranges.insert(at("K4"), range("K4:K6"));
+    sh.spill.insert(at("K5"), Value::text("b"));
+    sh.spill.insert(at("K6"), Value::text("c"));
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    for (address, text) in [("K4", "a"), ("K5", "b"), ("K6", "c")] {
+        let c = cell(&sheet, address);
+        assert_eq!(c.attr("t"), Some("str"), "{address}");
+        assert_eq!(c.child("v").unwrap().text, text, "{address}");
+    }
+}

@@ -745,6 +745,11 @@ fn write_cell(
         Value::Number(n) => {
             let _ = write!(s, "><v>{}</v></c>", num(*n));
         }
+        // Text inside a spill or array range is a cached formula result: Excel writes it as `t="str"`
+        // and shows #VALUE! for a shared string there when it trusts the saved values.
+        Value::Text(t) if extra.is_some() => {
+            let _ = write!(s, " t=\"str\"><v>{}</v></c>", esc(&encode_xstring(t)));
+        }
         Value::Text(t) => {
             let i = out.sst.index(t);
             let _ = write!(s, " t=\"s\"><v>{i}</v></c>");
