@@ -151,6 +151,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "화살표 제거",
         "Show Formulas" => "수식 표시",
         "Error Checking" => "오류 검사",
+        "Circular References" => "순환 참조",
         "Evaluate Formula" => "수식 계산",
         "Watch Window" => "감시 창",
         "Calculation\nOptions" => "계산\n옵션",

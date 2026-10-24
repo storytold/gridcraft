@@ -384,6 +384,32 @@ fn circular_references_without_iterative_calculation() {
     assert_eq!(t.get("A1"), Value::Error(CellError::Circ));
 }
 
+/// The list of circular references keeps the loops that a recalculation of other cells does not
+/// reach, and drops a loop once a constant is typed over one of its cells.
+#[test]
+fn circular_references_stay_listed_until_the_loop_is_removed() {
+    let mut t = T::new();
+    t.set("A1", "=A1+1");
+    t.set("B1", "=B2");
+    t.set("B2", "=B1");
+    assert!(t.calc.circular.contains(&(0, c("A1"))), "{:?}", t.calc.circular);
+    t.set("D4", "7");
+    t.set("D5", "=D4*2");
+    assert!(t.calc.circular.contains(&(0, c("A1"))), "{:?}", t.calc.circular);
+    assert!(t.calc.circular.iter().any(|k| *k == (0, c("B1")) || *k == (0, c("B2"))), "{:?}", t.calc.circular);
+    t.set("A1", "5");
+    assert!(!t.calc.circular.contains(&(0, c("A1"))), "{:?}", t.calc.circular);
+    assert!(t.calc.circular.iter().any(|k| *k == (0, c("B1")) || *k == (0, c("B2"))), "{:?}", t.calc.circular);
+    t.set("B2", "3");
+    assert!(t.calc.circular.is_empty(), "{:?}", t.calc.circular);
+    // In manual calculation only the edited formulas are evaluated; a constant typed over the listed cell removes it.
+    t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+    t.set("C1", "=C1+1");
+    assert_eq!(t.calc.circular, vec![(0, c("C1"))]);
+    t.set("C1", "1");
+    assert!(t.calc.circular.is_empty(), "{:?}", t.calc.circular);
+}
+
 #[test]
 fn date_text_coerces_in_the_workbook_date_system() {
     for (sys, serial) in [(gridcraft_core::DateSystem::D1900, 1462.0), (gridcraft_core::DateSystem::D1904, 0.0)] {

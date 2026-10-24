@@ -152,6 +152,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Eliminare săgeți",
         "Show Formulas" => "Afișare formule",
         "Error Checking" => "Verificare erori",
+        "Circular References" => "Referințe circulare",
         "Evaluate Formula" => "Evaluare formulă",
         "Watch Window" => "Fereastră de urmărire",
         "Calculation\nOptions" => "Opțiuni de\ncalcul",

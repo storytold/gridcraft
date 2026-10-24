@@ -153,6 +153,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Bỏ mũi tên",
         "Show Formulas" => "Hiện công thức",
         "Error Checking" => "Kiểm tra lỗi",
+        "Circular References" => "Tham chiếu vòng",
         "Evaluate Formula" => "Đánh giá công thức",
         "Watch Window" => "Cửa sổ theo dõi",
         "Calculation\nOptions" => "Tùy chọn\ntính toán",

@@ -154,6 +154,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Remove Arrows", "矢印の解除"),
     ("Show Formulas", "数式の表示"),
     ("Error Checking", "エラーチェック"),
+    ("Circular References", "循環参照"),
     ("Evaluate Formula", "数式の検証"),
     ("Watch Window", "ウォッチ ウィンドウ"),
     ("Calculation\nOptions", "計算方法の設定"),

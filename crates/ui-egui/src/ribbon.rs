@@ -8,7 +8,7 @@ use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Tokens};
-use crate::widgets::{big_button, color_palette, icon_button, small_button, split_button, toggle_button};
+use crate::widgets::{big_button, color_palette, icon_button, small_button, small_split_button, split_button, toggle_button};
 
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 
@@ -380,6 +380,23 @@ fn theme_colors(app: &SheetApp) -> [u32; 12] {
 /// Runs a command from a ribbon click (menu-style: no params may open a dialog).
 fn act(app: &mut SheetApp, id: &str, params: serde_json::Value) {
     app.run_or_alert(id, params);
+}
+
+/// How many cells Formulas › Error Checking › Circular References lists.
+const CIRCULAR_MENU_LIMIT: usize = 100;
+
+/// The cell listed for each circular reference, for the Circular References submenu: each once, in the order
+/// the calculation found them, as (sheet index, cell, "Sheet!A1").
+fn circular_references(app: &SheetApp) -> Vec<(usize, String, String)> {
+    let Some(d) = app.session.active() else { return Vec::new() };
+    let mut seen = std::collections::HashSet::new();
+    d.calc
+        .circular
+        .iter()
+        .filter(|k| seen.insert(**k))
+        .filter_map(|(si, c)| d.wb.sheet(*si).map(|sh| (*si, c.a1(), format!("{}!{}", sh.name, c.a1()))))
+        .take(CIRCULAR_MENU_LIMIT)
+        .collect()
 }
 
 /// Keytips are painted, not focusable widgets: the grid retains keyboard focus.
@@ -2009,11 +2026,30 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         if __k.clicked() {
             act(app, "formulas.showFormulas", json!({}));
         }
-        let __k = small_button(ui, Icon::Validation, "Error Checking", "Error Checking", false);
-        control_keytip(app, ui, &__k, "dialog:errorChecking");
-        if __k.clicked() {
+        let (ec, ec_arrow) = small_split_button(ui, Icon::Validation, "Error Checking", "Error Checking");
+        control_keytip(app, ui, &ec, "dialog:errorChecking");
+        if ec.clicked() {
             app.open_dialog("errorChecking", json!({}));
         }
+        egui::Popup::menu(&ec_arrow).show(|ui| {
+            let lang = app.ui.language;
+            if ui.button(format!("{}…", lang.tr("Error Checking"))).clicked() {
+                app.open_dialog("errorChecking", json!({}));
+            }
+            let circular = circular_references(app);
+            ui.add_enabled_ui(!circular.is_empty(), |ui| {
+                ui.menu_button(lang.tr("Circular References"), |ui| {
+                    egui::ScrollArea::vertical().id_salt("circular_references").max_height(400.0).show(ui, |ui| {
+                        for (sheet, cell, label) in circular {
+                            if ui.button(label).clicked() {
+                                act(app, "selection.set", json!({"range": cell, "sheet": sheet}));
+                                app.grid.ensure_visible = true;
+                            }
+                        }
+                    });
+                });
+            });
+        });
         let __k = small_button(ui, Icon::Calc, "Evaluate Formula", "Evaluate Formula", false);
         control_keytip(app, ui, &__k, "dialog:evaluateFormula");
         if __k.clicked() {

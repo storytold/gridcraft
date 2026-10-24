@@ -141,6 +141,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Κατάργηση βελών",
         "Show Formulas" => "Εμφάνιση τύπων",
         "Error Checking" => "Έλεγχος σφαλμάτων",
+        "Circular References" => "Κυκλικές αναφορές",
         "Evaluate Formula" => "Αξιολόγηση τύπου",
         "Watch Window" => "Παράθυρο παρακολούθησης",
         "Calculation\nOptions" => "Επιλογές\nυπολογισμού",

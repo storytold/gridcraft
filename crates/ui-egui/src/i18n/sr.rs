@@ -146,6 +146,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Ukloni strelice",
         "Show Formulas" => "Prikaži formule",
         "Error Checking" => "Provera grešaka",
+        "Circular References" => "Kružne reference",
         "Evaluate Formula" => "Proceni formulu",
         "Watch Window" => "Prozor za praćenje",
         "Calculation\nOptions" => "Opcije\nizračunavanja",

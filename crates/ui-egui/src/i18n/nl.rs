@@ -150,6 +150,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Pijlen verwijderen",
         "Show Formulas" => "Formules weergeven",
         "Error Checking" => "Foutopsporing",
+        "Circular References" => "Kringverwijzingen",
         "Evaluate Formula" => "Formule evalueren",
         "Watch Window" => "Bewakingsvenster",
         "Calculation\nOptions" => "Berekenings-\nopties",

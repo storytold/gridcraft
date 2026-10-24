@@ -142,6 +142,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Odebrat šipky",
         "Show Formulas" => "Zobrazit vzorce",
         "Error Checking" => "Kontrola chyb",
+        "Circular References" => "Cyklické odkazy",
         "Evaluate Formula" => "Vyhodnotit vzorec",
         "Watch Window" => "Okno sledování",
         "Calculation\nOptions" => "Možnosti\nvýpočtu",

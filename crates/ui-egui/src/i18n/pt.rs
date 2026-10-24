@@ -148,6 +148,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Remover Setas",
         "Show Formulas" => "Exibir Fórmulas",
         "Error Checking" => "Verificação de Erros",
+        "Circular References" => "Referências Circulares",
         "Evaluate Formula" => "Avaliar Fórmula",
         "Watch Window" => "Janela de Inspeção",
         "Calculation\nOptions" => "Opções de\nCálculo",

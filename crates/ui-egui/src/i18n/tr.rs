@@ -144,6 +144,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Okları Kaldır",
         "Show Formulas" => "Formülleri Göster",
         "Error Checking" => "Hata Denetimi",
+        "Circular References" => "Döngüsel Başvurular",
         "Evaluate Formula" => "Formülü Değerlendir",
         "Watch Window" => "Gözcü Penceresi",
         "Calculation\nOptions" => "Hesaplama\nSeçenekleri",

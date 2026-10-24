@@ -160,6 +160,34 @@ pub fn split_button(ui: &mut Ui, icon: Icon, accent: Option<Color32>, tip: &str)
     (m.on_hover_text(tip_text(ui, tip)).clicked(), a)
 }
 
+/// A small ribbon split button with a label (Error Checking): the icon and label run the default
+/// action, the arrow at the right opens a menu. Returns (main response, arrow response).
+pub fn small_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (Response, Response) {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::ui_font(12.5);
+    let label = tr(ui, label);
+    let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x + 6.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(24.0 + tw + 14.0, 23.0), Sense::hover());
+    let main = Rect::from_min_size(rect.min, vec2(24.0 + tw, rect.height()));
+    let arrow = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
+    let m = ui.interact(main, ui.id().with((tip, "main")), Sense::click());
+    let a = ui.interact(arrow, ui.id().with((tip, "arrow")), Sense::click());
+    if m.hovered() || a.hovered() {
+        ui.painter().rect_filled(rect, 4.0, t.hover);
+        for (part, r) in [(&m, main), (&a, arrow)] {
+            if part.is_pointer_button_down_on() {
+                ui.painter().rect_filled(r, 4.0, t.pressed);
+            }
+        }
+        ui.painter().line_segment([pos2(main.right(), rect.top() + 3.0), pos2(main.right(), rect.bottom() - 3.0)], Stroke::new(1.0, t.separator));
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(16.0, 16.0)), icon, t.text);
+    ui.painter().text(pos2(rect.left() + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, t.text);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(arrow.center().x, rect.center().y + 1.0), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
+    let tip = tip_text(ui, tip);
+    (m.on_hover_text(tip.clone()), a.on_hover_text(tip))
+}
+
 /// A one-line text field for a value stored in the workbook, which callers reload every frame. The text being typed is
 /// kept in egui memory until the field loses focus, then returned to commit (`None` when Escape cancels the edit).
 pub fn committed_text(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f32>) -> Option<String> {

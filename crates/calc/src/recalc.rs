@@ -1103,7 +1103,12 @@ impl Calc {
             }
             let tw = prof_now();
             self.last_recalc_cells += results.len();
-            self.circular = cycles;
+            // The loops this round finds replace the ones listed for the formulas it evaluated.
+            if !self.circular.is_empty() {
+                let evaluated: HashSet<Key> = dirty.iter().copied().collect();
+                self.circular.retain(|k| !evaluated.contains(k));
+            }
+            self.circular.extend(cycles);
             // Write back.
             let mut spill_changes: Vec<Key> = Vec::new();
             let mut freed: Vec<(usize, RangeRef)> = Vec::new();
@@ -1215,6 +1220,13 @@ impl Calc {
                 break;
             }
             dirty = self.dirty_closure(wb, &spill_changes);
+        }
+        // Loops among formulas the run did not evaluate stay listed while they are still formulas.
+        // Iterative calculation reports none.
+        if wb.calc.iterative {
+            self.circular.clear();
+        } else {
+            self.circular.retain(|k| self.graph.nodes.contains_key(k));
         }
     }
 }
