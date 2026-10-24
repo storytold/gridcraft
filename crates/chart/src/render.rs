@@ -188,6 +188,16 @@ fn sanitize_vals(v: &[Option<f64>]) -> Vec<Option<f64>> {
     v.iter().take(MAX_POINTS).map(|x| x.filter(|n| n.is_finite()).map(clean)).collect()
 }
 
+/// The data labels' format: typed for the labels, else the source values' format.
+fn label_fmt(s: &SeriesData) -> Fmt {
+    Fmt::new(s.label_number_format.as_deref().unwrap_or(&s.number_format))
+}
+
+/// A value axis' format: typed on the axis, else the first series' source format.
+fn axis_fmt(typed: Option<&str>, data: &ChartData) -> Fmt {
+    Fmt::new(typed.or_else(|| data.series.first().map(|s| s.number_format.as_str())).unwrap_or("General"))
+}
+
 fn sanitize(d: &ChartData) -> ChartData {
     ChartData {
         palette: d.palette.iter().take(MAX_POINTS).copied().collect(),
@@ -208,6 +218,7 @@ fn sanitize(d: &ChartData) -> ChartData {
                 smooth: s.smooth,
                 trendlines: s.trendlines.iter().take(MAX_TRENDLINES).cloned().collect(),
                 number_format: s.number_format.clone(),
+                label_number_format: s.label_number_format.clone(),
             })
             .collect(),
     }
@@ -976,10 +987,11 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
             spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| if line { vec![*t] } else { vec![*b, *t] })
         }));
         let (lo, hi) = range.unwrap_or((0.0, 0.0));
+        let typed = if axis { chart.axis_number_formats.y2.as_deref() } else { chart.axis_number_formats.y.as_deref() };
         let (scale, fmt) = if all100 {
-            (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new("0%"))
+            (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new(typed.unwrap_or("0%")))
         } else {
-            let code = members.first().and_then(|i| data.series.get(*i)).map(|s| s.number_format.as_str()).unwrap_or("General");
+            let code = typed.or_else(|| members.first().and_then(|i| data.series.get(*i)).map(|s| s.number_format.as_str())).unwrap_or("General");
             (nice_scale(lo, hi, force_zero), Fmt::new(code))
         };
         axes.push((scale, fmt));
@@ -1052,7 +1064,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                 continue;
             }
             let sc = scale_of(i);
-            let fmt = Fmt::new(&s.number_format);
+            let fmt = label_fmt(s);
             let row = match spans.get(i) {
                 Some(r) => r,
                 None => continue,
@@ -1203,8 +1215,8 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let Some((ylo, yhi)) = value_range(all.iter().flatten().flatten().map(|p| p.1)) else { return };
     let xs = nice_scale(xlo, xhi, false);
     let ys = nice_scale(ylo, yhi, false);
-    let fx = Fmt::new("General");
-    let fy = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
+    let fx = Fmt::new(chart.axis_number_formats.x.as_deref().unwrap_or("General"));
+    let fy = axis_fmt(chart.axis_number_formats.y.as_deref(), data);
     let plot = frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
@@ -1246,9 +1258,10 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             }
         }
         if chart.data_labels && pts.len() <= MAX_LABELS {
+            let fl = label_fmt(s);
             for (p, raw) in px.iter().zip(pts) {
                 if let (Some(p), Some((_, y))) = (p, raw) {
-                    ctx.text(p[0], p[1] - 6.0, &fy.format(*y, None), LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
+                    ctx.text(p[0], p[1] - 6.0, &fl.format(*y, None), LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
                 }
             }
         }
@@ -1353,6 +1366,7 @@ fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let (lo, hi) = value_range(bars.iter().flat_map(|(b, t, _)| [*b, *t])).unwrap_or((0.0, 0.0));
     let ys = nice_scale(lo, hi, true);
     let f = Fmt::new(&s.number_format);
+    let fl = label_fmt(s);
     let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
@@ -1374,7 +1388,7 @@ fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         }
         if chart.data_labels && ncat <= MAX_LABELS {
             let v = if *kind == 0 { *t } else { t - b };
-            ctx.text(x + bw / 2.0, yb.min(yt) - 2.0, &f.format(v, None), LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
+            ctx.text(x + bw / 2.0, yb.min(yt) - 2.0, &fl.format(v, None), LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
         }
     }
 }
@@ -1400,7 +1414,7 @@ fn funnel(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     }
     let slot = plot.h / n as f32;
     let bh = slot * 0.85;
-    let f = Fmt::new(&s.number_format);
+    let f = label_fmt(s);
     let show = slot >= LABEL_SIZE * 0.9;
     for (j, v) in vals.iter().enumerate() {
         let bw = (*v / max) as f32 * plot.w;
@@ -1437,7 +1451,7 @@ fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inner: f32, nam
         return;
     }
     let ri = r * inner;
-    let f = Fmt::new(&s.number_format);
+    let f = label_fmt(s);
     let mut a = 0.0f32;
     let mut labels = Vec::new();
     for (j, v) in vals.iter().enumerate() {
@@ -1539,7 +1553,7 @@ fn treemap(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let mut items: Vec<(usize, f64)> =
         s.values.iter().take(MAX_MARKERS).enumerate().filter_map(|(j, v)| v.filter(|v| *v > 0.0).map(|v| (j, v))).collect();
     items.sort_by(|a, b| b.1.total_cmp(&a.1));
-    let f = Fmt::new(&s.number_format);
+    let f = label_fmt(s);
     for (j, b) in squarify(&items, area) {
         let fill = point_color(data, j);
         ctx.rect(b.x, b.y, b.w, b.h, fill, Some((WHITE, 1.5)));
@@ -1571,7 +1585,7 @@ fn radar(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let (cx, cy) = (area.cx(), area.cy());
     let (lo, hi) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())).unwrap_or((0.0, 0.0));
     let sc = nice_scale(lo, hi, true);
-    let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
+    let f = axis_fmt(chart.axis_number_formats.y.as_deref(), data);
     let ang = |j: usize| j as f32 / ncat as f32 * TAU;
     let pt = |a: f32, rr: f32| [cx + rr * a.sin(), cy - rr * a.cos()];
     let ticks = sc.ticks();
@@ -1647,7 +1661,7 @@ fn box_whisker(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let labels: Vec<String> = data.series.iter().map(|s| s.name.clone()).collect();
     let Some((lo, hi)) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())) else { return };
     let ys = nice_scale(lo, hi, false);
-    let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
+    let f = axis_fmt(chart.axis_number_formats.y.as_deref(), data);
     let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
@@ -1696,7 +1710,7 @@ fn stock(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     let labels: Vec<String> = (0..ncat).map(|j| cat_label(data, j)).collect();
     let Some((lo, hi)) = value_range(data.series.iter().flat_map(|s| s.values.iter().flatten().copied())) else { return };
     let ys = nice_scale(lo, hi, false);
-    let f = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
+    let f = axis_fmt(chart.axis_number_formats.y.as_deref(), data);
     let plot = frame(ctx, area, CatAxis::Labels(&labels, &[]), &ValAxis { scale: ys, fmt: &f }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
