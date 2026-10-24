@@ -194,13 +194,25 @@ pub struct WheelZoom {
     pub time: f64,
     /// The step the zoom is gliding to, and the percentage set last on the way.
     pub glide: Option<(u16, u16)>,
+    /// What to keep under the pointer once the sheet shows the percentage set last.
+    pub anchor: Option<ZoomAnchor>,
+}
+
+/// Ctrl+wheel zooms around the pointer: the sheet point under it (`Geo::scrolled_point` at the
+/// logical position `at`) goes back under it on the first frame that shows `zoom` percent.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ZoomAnchor {
+    pub zoom: u16,
+    pub at: Pos2,
+    pub point: (Option<f32>, Option<f32>),
 }
 
 impl WheelZoom {
     /// The state for `place` showing `zoom` percent: fresh for another document or sheet, and
     /// without its glide if the zoom was changed some other way since the glide set it.
     fn at(app: &SheetApp, place: (u64, usize), zoom: u16, now: f64) -> WheelZoom {
-        let mut w = app.grid.wheel_zoom.filter(|w| w.place == place).unwrap_or(WheelZoom { place, notches: 0.0, time: now, glide: None });
+        let fresh = WheelZoom { place, notches: 0.0, time: now, glide: None, anchor: None };
+        let mut w = app.grid.wheel_zoom.filter(|w| w.place == place).unwrap_or(fresh);
         if w.glide.is_some_and(|(_, shown)| shown != zoom) {
             w.glide = None;
         }
@@ -341,6 +353,27 @@ impl Geo {
     }
     pub fn mirror_rect(&self, r: Rect) -> Rect {
         if self.rtl { Rect::from_min_max(pos2(self.mirror_x(r.right()), r.top()), pos2(self.mirror_x(r.left()), r.bottom())) } else { r }
+    }
+    /// The sheet point (in `scroll` units) at the logical position `p`, per axis: `None` over the
+    /// frozen panes, which don't scroll.
+    pub fn scrolled_point(&self, p: Pos2) -> (Option<f32>, Option<f32>) {
+        let (dx, dy) = (p.x - self.cells.left() - self.frozen_w, p.y - self.cells.top() - self.frozen_h);
+        ((dx >= 0.0).then_some(self.scroll.x + dx / self.z), (dy >= 0.0).then_some(self.scroll.y + dy / self.z))
+    }
+    /// The scroll that puts `point` (from `scrolled_point`, maybe at another zoom) back at the
+    /// logical position `p`; an axis stays where it is without a point or over the frozen panes.
+    pub fn scroll_keeping(&self, p: Pos2, point: (Option<f32>, Option<f32>)) -> egui::Vec2 {
+        let (dx, dy) = (p.x - self.cells.left() - self.frozen_w, p.y - self.cells.top() - self.frozen_h);
+        let x = point.0.filter(|_| dx >= 0.0).map_or(self.scroll.x, |x| x - dx / self.z);
+        let y = point.1.filter(|_| dy >= 0.0).map_or(self.scroll.y, |y| y - dy / self.z);
+        vec2(x, y)
+    }
+    /// What to keep under the pointer at the screen position `at` when the zoom becomes `zoom`:
+    /// `None` unless it is over cells. The position is mirrored first on a right-to-left sheet,
+    /// as `cells` is in logical coordinates.
+    pub fn zoom_anchor(&self, at: Pos2, zoom: u16) -> Option<ZoomAnchor> {
+        let at = self.mirror_pos(at);
+        self.cells.contains(at).then(|| ZoomAnchor { zoom, at, point: self.scrolled_point(at) })
     }
     /// On-screen rectangle of a cell (`cell_rect` mirrored for right-to-left sheets).
     pub fn screen_cell_rect(&self, sh: &Sheet, c: CellRef) -> Rect {
@@ -671,16 +704,26 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // there at once without animations (as for the selection outline below: View › Animations
     // off, egui's off in the headless harness, or a screenshot on its way).
     let mut zooming = WheelZoom::at(app, place, sh.zoom, now);
+    // The first frame at the new zoom puts the sheet point that was under the pointer back under it.
+    if let Some(a) = zooming.anchor.take().filter(|a| a.zoom == sh.zoom) {
+        // Rows first: the row-header width follows the visible rows, and the columns start after it.
+        view.scroll.y = make_geo(app, view.scroll).scroll_keeping(a.at, a.point).y.max(0.0);
+        view.scroll.x = make_geo(app, view.scroll).scroll_keeping(a.at, a.point).x;
+    }
     if let Some((to, shown)) = zooming.glide {
         let glides = app.ui.animations && ui.ctx().global_style().animation_time > 0.0 && !app.shots.in_flight();
         let share = egui::emath::exponential_smooth_factor(0.9, 0.1, ui.input(|i| i.stable_dt).min(0.1));
         let z = if glides { zoom_glide_step(shown, to, share) } else { to };
+        // Zoom around the pointer: note the sheet point under it (this frame still shows the old zoom).
+        if let Some(at) = ui.input(|i| i.pointer.hover_pos()).filter(|_| z != sh.zoom) {
+            zooming.anchor = make_geo(app, view.scroll).zoom_anchor(at, z);
+        }
         let _ = app.session.run("view.zoom", json!({"percent": z}));
         zooming.glide = (z != to).then_some((to, z));
         ui.ctx().request_repaint();
     }
-    // Store a glide's progress, or that it stopped.
-    if app.grid.wheel_zoom.is_some_and(|w| w.glide.is_some()) {
+    // Store a glide's progress, or that it stopped, or that its anchor was used.
+    if app.grid.wheel_zoom.is_some_and(|w| w.glide.is_some() || w.anchor.is_some()) {
         app.grid.wheel_zoom = Some(zooming);
     }
     view.scroll = view.scroll.max(egui::Vec2::ZERO);
@@ -4156,6 +4199,54 @@ mod tests {
         assert_eq!(zoom_glide_step(100, 120, 5.0), 120);
         assert_eq!(zoom_glide_step(120, 120, 0.5), 120);
         assert_eq!(zoom_glide_step(0, 10, 0.5), 3);
+    }
+
+    #[test]
+    fn zoom_keeps_the_point_under_the_pointer() {
+        // #1851: Ctrl+wheel zoomed towards the top-left corner. With frozen panes (whose width
+        // grows with the zoom too) the sheet point under the pointer stays under it.
+        let mut sh = Sheet::new("S");
+        sh.freeze = Some((2, 1));
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(1000.0, 700.0));
+        let (at, scroll) = (pos2(500.0, 400.0), vec2(2000.0, 3000.0));
+        let under = |g: &Geo, sh: &Sheet| {
+            let (col, row) = (g.col_at(sh, at.x), g.row_at(sh, at.y));
+            (col, row, (at.x - g.x(sh, col)) / g.z, (at.y - g.y(sh, row)) / g.z)
+        };
+        let before = Geo::new(&sh, rect, scroll);
+        let point = before.scrolled_point(at);
+        let was = under(&before, &sh);
+        for zoom in [200, 50] {
+            sh.zoom = zoom;
+            let kept = Geo::new(&sh, rect, Geo::new(&sh, rect, scroll).scroll_keeping(at, point));
+            let now = under(&kept, &sh);
+            assert_eq!((now.0, now.1), (was.0, was.1), "{zoom}%");
+            assert!((now.2 - was.2).abs() < 0.01 && (now.3 - was.3).abs() < 0.01, "{zoom}%: {now:?} vs {was:?}");
+        }
+        // Over the frozen panes nothing scrolls.
+        let frozen = pos2(before.cells.left() + 1.0, before.cells.top() + 1.0);
+        assert_eq!(before.scrolled_point(frozen), (None, None));
+        assert_eq!(Geo::new(&sh, rect, scroll).scroll_keeping(frozen, point), scroll);
+    }
+
+    #[test]
+    fn zoom_anchor_on_a_right_to_left_sheet_uses_the_mirrored_position() {
+        // #1851: on a right-to-left sheet the row headers are on the screen's right, so a pointer
+        // near the left edge is over cells and must still anchor the zoom.
+        let mut sh = Sheet::new("S");
+        sh.right_to_left = true;
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(1000.0, 700.0));
+        let scroll = vec2(2000.0, 3000.0);
+        let before = Geo::new(&sh, rect, scroll);
+        let near_left = pos2(24.0, 400.0);
+        let a = before.zoom_anchor(near_left, 200).expect("over cells");
+        assert_eq!(a.at, pos2(976.0, 400.0));
+        // The row headers (screen right edge) are not cells.
+        assert!(before.zoom_anchor(pos2(990.0, 400.0), 200).is_none());
+        let was = before.col_at(&sh, before.mirror_x(near_left.x));
+        sh.zoom = 200;
+        let kept = Geo::new(&sh, rect, Geo::new(&sh, rect, scroll).scroll_keeping(a.at, a.point));
+        assert_eq!(kept.col_at(&sh, kept.mirror_x(near_left.x)), was);
     }
 
     #[test]
