@@ -9,6 +9,8 @@
 //! of `<pageSetup>`, the legacy VML shapes those controls need and the pictures of the headers and
 //! footers, `&G`, with their `<legacyDrawingHF>`). The workbook also keeps its
 //! `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the saved values.
+//! Each worksheet chart keeps its own style, colour and user-shape parts on the chart
+//! ([`KeptReader::charts`], [`write_chart_parts`]).
 //!
 //! On write, kept parts get fresh part names where needed and new relationship ids; the `r:id`s in
 //! kept XML are rewritten to match. Kept content is conservative:
@@ -30,7 +32,7 @@ use std::fmt::Write as _;
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-use gridcraft_model::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml, Sheet, Visibility, Workbook};
+use gridcraft_model::{Chart, ChartKept, Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml, Sheet, Visibility, Workbook};
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::QName;
@@ -1346,4 +1348,94 @@ fn decode_name(seg: &str) -> String {
         }
     }
     String::from_utf8(out).unwrap_or_else(|_| seg.to_string())
+}
+
+// ---------------------------------------------------------------- chart style, colour and shape parts
+
+/// Relationship kinds of a worksheet chart to its own parts: the Chart Styles gallery choice, the
+/// Change Colors set and the shapes drawn inside the chart.
+const CHART_PARTS: &[&str] = &["chartStyle", "chartColorStyle", "chartUserShapes"];
+const USER_SHAPES: &[&str] = &["chartUserShapes"];
+
+impl KeptReader {
+    /// Keeps the style, colour and user-shape parts of the charts read for `sheet`, each part on
+    /// its own: user shapes that refer to content GridCraft rewrites (a chart inside the chart)
+    /// are left out, with a warning, and the style and colours still kept.
+    pub fn charts(&mut self, cx: &mut Ctx<'_>, sheet: &mut Sheet) {
+        let list = std::mem::take(&mut cx.chart_parts);
+        if !self.on {
+            return;
+        }
+        for (id, part, chartex, shapes) in list {
+            let Some(ch) = sheet.charts.iter_mut().find(|c| c.id == id) else { continue };
+            let rels = match raw_rels(cx, &part) {
+                Ok(r) => r,
+                Err(e) => {
+                    cx.warn(format!("the style, colours and shapes of chart {part} were not kept: {e}"));
+                    continue;
+                }
+            };
+            let mut p = Preserved::default();
+            let mut seen = HashSet::from([normalize(&part)]);
+            for r in rels.iter().filter(|r| !r.external && is_kind(r, CHART_PARTS)) {
+                // A chartex part has no element that refers to user shapes, and a chart keeps only
+                // the shapes its `<c:userShapes>` names: another one would take that element's place.
+                if is_kind(r, USER_SHAPES) && (chartex || shapes.as_deref() != Some(r.id.as_str())) {
+                    continue;
+                }
+                if let Err(e) = self.keep_through(cx, &mut p, std::slice::from_ref(r), &mut seen, CHART_PARTS) {
+                    let what = match kind(&r.rel_type).to_ascii_lowercase().as_str() {
+                        "chartstyle" => "chart style",
+                        "chartcolorstyle" => "colour set",
+                        _ => "shapes drawn inside the chart",
+                    };
+                    cx.warn(format!("the {what} of chart {part} could not be kept ({e})"));
+                }
+            }
+            if !p.is_empty() {
+                ch.kept = Some(Arc::new(ChartKept { parts: p, kind: ch.kind, style: ch.style }));
+            }
+        }
+    }
+}
+
+/// Which kept chart parts were written for a chart.
+#[derive(Debug, Default)]
+pub struct ChartPartsOut {
+    pub style: bool,
+    pub colors: bool,
+    /// The chart part's relationship id to its user shapes, for `<c:userShapes r:id>`.
+    pub user_shapes: Option<String>,
+}
+
+/// Writes a chart's kept style, colour and user-shape parts and adds the chart part's
+/// relationships to them. Style and colours are left out once the chart's type or style number
+/// changed; user shapes are left out of chartex parts.
+pub fn write_chart_parts(ch: &Chart, chartex: bool, rels: &mut Rels, out: &mut Out) -> ChartPartsOut {
+    let mut res = ChartPartsOut::default();
+    let Some(k) = ch.kept.as_deref() else { return res };
+    let same = k.kind == ch.kind && k.style == ch.style;
+    let roots: Vec<&PreservedRel> =
+        k.parts.rels.iter().filter(|r| if is_kind(r, USER_SHAPES) { !chartex } else { same && is_kind(r, CHART_PARTS) }).collect();
+    if roots.is_empty() {
+        return res;
+    }
+    let mut wanted = HashSet::new();
+    for r in &roots {
+        wanted.extend(reachable(&k.parts, r));
+    }
+    let parts: Vec<PreservedPart> = k.parts.parts.iter().filter(|q| wanted.contains(&normalize(&q.name))).cloned().collect();
+    let names = write_parts(out, &parts);
+    for r in roots {
+        let Some(target) = rel_target(r, &names) else { continue };
+        let id = rels.add_raw(&r.rel_type, &target, false);
+        if is_kind(r, USER_SHAPES) {
+            res.user_shapes = Some(id);
+        } else if is_kind(r, &["chartStyle"]) {
+            res.style = true;
+        } else {
+            res.colors = true;
+        }
+    }
+    res
 }

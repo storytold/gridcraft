@@ -553,6 +553,10 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+    /// The chart's style, colour and user-shape parts from the XLSX file it was read from, written
+    /// back on save. File-format data only: not in JSON.
+    #[serde(skip)]
+    pub kept: Option<std::sync::Arc<crate::preserved::ChartKept>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

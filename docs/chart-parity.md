@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** trivial (stale chart notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip; PRs #158 and #161 merged) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-23 · **Change:** minor (chart style, colour and user-shape parts are kept on XLSX save (#330); previously trivial: stale chart notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip; PRs #158 and #161 merged) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -76,6 +76,19 @@ qualifier: with a bare name in `<c:f>` it draws the whole chart blank, without a
 (observed in Excel for Windows, Microsoft 365). External books (`[1]Sheet1!…`) are kept as they
 are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
+A chart's separate parts are kept (#330): its style part (the Chart Styles gallery choice) and
+colour part (the Change Colors set) are written back with their original bytes, for chart and
+chartex parts alike, and dropped once the chart's type or style number changes in GridCraft (a new
+chartex chart gets GridCraft's own). Text boxes, shapes and pictures drawn inside a chart (its
+user-shape part, `c:userShapes`) are written back too, unless they refer to content GridCraft
+rewrites (a chart inside the chart). They are not shown or editable in GridCraft. Observed in
+Excel: a column, line or bar chart's Chart Styles and Change Colors selection comes back only when
+the chart's own formatting (`c:spPr`) is in the chart part too, which GridCraft does not yet write,
+so Excel still reports the default style for those charts after a GridCraft save; chartex charts
+(waterfall, histogram…) show the original style and colours. Known limitation: a worksheet chart
+with user shapes that is changed to a chartex type drops those shapes on save, as chartex has no
+element to hold them (it did so before #330 too).
+
 ## Work (40–60 h)
 
 1. Chart resizing (#190): 1–2 h.
@@ -90,6 +103,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | minor | Chart style, colour and user-shape parts are kept on XLSX save (#330) |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
 | 2026-10-16 | minor | Box & whisker quartiles default to exclusive, honor each series on draw and XLSX round-trip; `chart.set {quartiles}` changes the method (#1453) |

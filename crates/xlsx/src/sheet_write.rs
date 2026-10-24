@@ -537,18 +537,36 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
                 let n = out.charts;
                 let xml = crate::chartex::write_chartex(wb, si, ch, &mut out.chart_names);
                 out.part(&format!("xl/charts/chartEx{n}.xml"), Some(crate::chartex::CT_CHARTEX), xml.into_bytes());
-                // Excel expects a chartex part's style and colour parts.
-                out.part(&format!("xl/charts/style{n}.xml"), Some(crate::chartex::CT_STYLE), crate::chartex::style_xml().into_bytes());
-                out.part(&format!("xl/charts/colors{n}.xml"), Some(crate::chartex::CT_COLORS), crate::chartex::colors_xml().into_bytes());
+                // Excel expects a chartex part's style and colour parts: the file's own when the
+                // chart was read with them, GridCraft's otherwise.
                 let mut crels = Rels::default();
-                crels.add_uri(crate::chartex::REL_STYLE, &format!("style{n}.xml"));
-                crels.add_uri(crate::chartex::REL_COLORS, &format!("colors{n}.xml"));
+                let kept = crate::passthrough::write_chart_parts(ch, true, &mut crels, out);
+                if !kept.style {
+                    out.part(&format!("xl/charts/style{n}.xml"), Some(crate::chartex::CT_STYLE), crate::chartex::style_xml().into_bytes());
+                    crels.add_uri(crate::chartex::REL_STYLE, &format!("style{n}.xml"));
+                }
+                if !kept.colors {
+                    out.part(&format!("xl/charts/colors{n}.xml"), Some(crate::chartex::CT_COLORS), crate::chartex::colors_xml().into_bytes());
+                    crels.add_uri(crate::chartex::REL_COLORS, &format!("colors{n}.xml"));
+                }
                 out.part(&format!("xl/charts/_rels/chartEx{n}.xml.rels"), None, crels.xml().into_bytes());
                 drels.add_uri(crate::chartex::REL_CHARTEX, &format!("../charts/chartEx{n}.xml"))
             } else {
-                let name = format!("xl/charts/chart{}.xml", out.charts);
-                out.part(&name, Some(CT_CHART), crate::chart::write_chart(wb, si, ch, &out.book_name).into_bytes());
-                drels.add("chart", &format!("../charts/chart{}.xml", out.charts))
+                let n = out.charts;
+                let mut crels = Rels::default();
+                let kept = crate::passthrough::write_chart_parts(ch, false, &mut crels, out);
+                let mut xml = crate::chart::write_chart(wb, si, ch, &out.book_name);
+                if let Some(rid) = kept.user_shapes {
+                    // `<c:userShapes>` is the last child GridCraft writes (after `<c:chart>`).
+                    if let Some(body) = xml.strip_suffix("</c:chartSpace>") {
+                        xml = format!("{body}<c:userShapes r:id=\"{rid}\"/></c:chartSpace>");
+                    }
+                }
+                out.part(&format!("xl/charts/chart{n}.xml"), Some(CT_CHART), xml.into_bytes());
+                if !crels.is_empty() {
+                    out.part(&format!("xl/charts/_rels/chart{n}.xml.rels"), None, crels.xml().into_bytes());
+                }
+                drels.add("chart", &format!("../charts/chart{n}.xml"))
             };
             objs.push(Obj::Chart(ch, rid));
         }

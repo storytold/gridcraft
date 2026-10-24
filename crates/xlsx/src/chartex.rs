@@ -137,6 +137,7 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
         source: None,
         by_rows: false,
         pivot: None,
+        kept: None,
     })
 }
 

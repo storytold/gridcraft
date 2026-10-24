@@ -170,6 +170,8 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                                 Some(mut ch) => {
                                     ch.id = cx.next_object_id();
                                     ch.anchor = anchor;
+                                    let shapes = cx_xml.child("userShapes").and_then(|u| u.attr("id")).map(ToString::to_string);
+                                    cx.chart_parts.push((ch.id, target.clone(), chartex, shapes));
                                     sheet.charts.push(ch);
                                 }
                                 None => cx.warn(format!("chart {target} has no supported plot and was skipped")),
