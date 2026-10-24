@@ -988,8 +988,11 @@ fn split_delimited(text: &str, delims: &[char], consecutive: bool, quote: char) 
     let mut in_q = false;
     let mut last_delim = false;
     let mut chars = text.chars().peekable();
+    let mut at_start = true;
     while let Some(c) = chars.next() {
-        if c == quote {
+        if c == quote && (in_q || at_start) {
+            at_start = false;
+            last_delim = false;
             if in_q && chars.peek() == Some(&quote) {
                 cur.push(quote);
                 chars.next();
@@ -1004,9 +1007,11 @@ fn split_delimited(text: &str, delims: &[char], consecutive: bool, quote: char) 
             }
             out.push(std::mem::take(&mut cur));
             last_delim = true;
+            at_start = true;
             continue;
         }
         last_delim = false;
+        at_start = false;
         cur.push(c);
     }
     out.push(cur);
