@@ -441,18 +441,14 @@ pub(crate) fn yearfrac_core(sys: DateSystem, s: i64, e: i64, basis: i64) -> R<f6
     Ok(match basis {
         0 => {
             let (mut a, mut b) = (d1.day as i64, d2.day as i64);
-            if a == 31 && b == 31 {
-                a = 30;
+            if last_of_feb(&d1) && last_of_feb(&d2) {
                 b = 30;
-            } else if a == 31 {
+            }
+            if last_of_feb(&d1) || a == 31 {
                 a = 30;
-            } else if a == 30 && b == 31 {
+            }
+            if a == 30 && b == 31 {
                 b = 30;
-            } else if last_of_feb(&d1) && last_of_feb(&d2) {
-                a = 30;
-                b = 30;
-            } else if last_of_feb(&d1) {
-                a = 30;
             }
             ((d2.year as i64 - d1.year as i64) * 360 + (d2.month as i64 - d1.month as i64) * 30 + b - a) as f64 / 360.0
         }
@@ -809,6 +805,13 @@ mod tests {
         close(ev("YEARFRAC", vec![n(d(2011.0, 2.0, 28.0)), n(d(2012.0, 2.0, 29.0)), n(0.0)]), 1.0);
         close(ev("YEARFRAC", vec![n(d(2011.0, 3.0, 1.0)), n(d(2012.0, 2.0, 29.0)), n(1.0)]), 365.0 / 366.0);
         close(ev("YEARFRAC", vec![s, n(d(2012.0, 1.0, 1.0))]), 0.0);
+    }
+
+    #[test]
+    fn yearfrac_basis0_feb_end_to_31() {
+        close(ev("YEARFRAC", vec![n(d(2021.0, 2.0, 28.0)), n(d(2021.0, 3.0, 31.0)), n(0.0)]), 30.0 / 360.0);
+        close(ev("YEARFRAC", vec![n(d(2020.0, 2.0, 29.0)), n(d(2020.0, 3.0, 31.0)), n(0.0)]), 30.0 / 360.0);
+        close(ev("YEARFRAC", vec![n(d(2021.0, 2.0, 28.0)), n(d(2021.0, 2.0, 28.0)), n(0.0)]), 0.0);
     }
 
     #[test]
