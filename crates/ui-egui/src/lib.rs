@@ -9,6 +9,7 @@
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
+mod chartcache;
 pub mod chartview;
 pub mod control;
 pub mod credits;
@@ -289,6 +290,8 @@ pub struct SheetApp {
     pub(crate) shots: control::Shots,
     /// Chart selected on the sheet (id).
     pub selected_chart: Option<u32>,
+    /// Rendered charts kept between frames ([`chartcache`]).
+    pub(crate) chart_cache: std::sync::Mutex<chartcache::ChartCache>,
     /// The system clipboard's text when GridCraft last copied without publishing to it (a
     /// control-channel or MCP `edit.copy`/`edit.cut`). While the system clipboard still holds this
     /// text, GridCraft's copy is the newer one and Paste uses it.
@@ -345,6 +348,7 @@ impl SheetApp {
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
             selected_chart: None,
+            chart_cache: Default::default(),
             clipboard_text_at_copy: None,
             cut_text: None,
             tab_run: None,
@@ -1172,6 +1176,8 @@ impl SheetApp {
             // New fonts apply from the next frame on: paint nothing until then.
             if self.fonts_set {
                 self.fonts_ready = true;
+                // The new set is active now: chart text was measured with the old one.
+                self.chart_cache.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
             } else {
                 SheetApp::setup_context_for_language(ctx, self.ui.dark, self.ui.language);
                 self.fonts_set = true;
@@ -1184,6 +1190,7 @@ impl SheetApp {
         } else if self.fonts_rebind {
             // A font-set change made last frame is active now.
             self.fonts_rebind = false;
+            self.chart_cache.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
         } else if fonts::scan_done() {
             // Bind the workbook's installed fonts once the background scan has finished. Adding
             // fonts re-applies the font set, which egui activates at the next pass, so skip this
