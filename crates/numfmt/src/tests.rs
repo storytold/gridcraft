@@ -15,6 +15,9 @@ fn format_colors_resolve_named_and_indexed_rgb_safely() {
 
 const S: DateSystem = DateSystem::D1900;
 
+/// Built-in format 44 (accounting with a currency symbol, two decimals).
+const ACCOUNTING_2DP: &str = "_(\"$\"* #,##0.00_);_(\"$\"* \\(#,##0.00\\);_(\"$\"* \"-\"??_);_(@_)";
+
 fn f(code: &str, n: f64) -> String {
     format_value(&Value::Number(n), &NumberFormat::parse(code), S).text
 }
@@ -256,7 +259,7 @@ fn literals_and_fill() {
     assert_eq!(f("(0)", 5.0), "(5)");
     let r = full("*-0", Value::Number(5.0));
     assert_eq!((r.text.as_str(), r.fill), ("5", Some(('-', 0))));
-    let acct = builtin_format(44).unwrap();
+    let acct = ACCOUNTING_2DP;
     let r = full(acct, Value::Number(0.0));
     assert_eq!((r.text.as_str(), r.fill), (" $-   ", Some((' ', 2))));
     let r = full(acct, Value::Number(1234.5));
@@ -347,7 +350,7 @@ fn kinds() {
     assert_eq!(NumberFormat::parse("0.00").kind(), FormatKind::Number);
     assert_eq!(NumberFormat::parse("#,##0.00;[Red](#,##0.00)").kind(), FormatKind::Number);
     assert_eq!(NumberFormat::parse("\"$\"#,##0.00").kind(), FormatKind::Currency);
-    assert_eq!(NumberFormat::parse(builtin_format(44).unwrap()).kind(), FormatKind::Accounting);
+    assert_eq!(NumberFormat::parse(ACCOUNTING_2DP).kind(), FormatKind::Accounting);
     assert_eq!(NumberFormat::parse("m/d/yyyy").kind(), FormatKind::Date);
     assert_eq!(NumberFormat::parse("h:mm AM/PM").kind(), FormatKind::Time);
     assert_eq!(NumberFormat::parse("0%").kind(), FormatKind::Percentage);
@@ -359,25 +362,11 @@ fn kinds() {
 }
 
 #[test]
-fn builtins() {
-    assert_eq!(builtin_format(0), Some("General"));
-    assert_eq!(builtin_format(14), Some("m/d/yyyy"));
-    assert_eq!(builtin_format(49), Some("@"));
-    assert_eq!(builtin_format(30), None);
-    assert_eq!(builtin_format(50), None);
-    assert_eq!(builtin_id("m/d/yyyy"), Some(14));
-    assert_eq!(builtin_id("0.00%"), Some(10));
-    assert_eq!(builtin_id("GENERAL"), Some(0));
-    assert_eq!(builtin_id("[h]:mm:ss"), Some(46));
-    assert_eq!(builtin_id("#,##0.00_);(#,##0.00)"), None);
-    for id in 0..=60 {
-        if let Some(code) = builtin_format(id) {
-            assert_eq!(builtin_id(code), Some(id));
-        }
-    }
-    assert_eq!(f(builtin_format(5).unwrap(), -1234.0), "($1,234)");
-    assert_eq!(f(builtin_format(12).unwrap(), 0.5), " 1/2");
-    assert_eq!(f(builtin_format(47).unwrap(), 61.2 / 86400.0), "0101.2");
+fn builtin_codes_render() {
+    // Built-in ids 5, 12 and 47 (the id tables live with the file formats, in gridcraft-xlsx).
+    assert_eq!(f("\"$\"#,##0_);\\(\"$\"#,##0\\)", -1234.0), "($1,234)");
+    assert_eq!(f("# ?/?", 0.5), " 1/2");
+    assert_eq!(f("mmss.0", 61.2 / 86400.0), "0101.2");
 }
 
 #[test]

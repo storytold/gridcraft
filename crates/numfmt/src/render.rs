@@ -1,5 +1,7 @@
 //! Rendering a value with a parsed section.
 
+use std::fmt::Write as _;
+
 use gridcraft_core::DateSystem;
 use gridcraft_core::date::{MONTHS, WEEKDAYS, datetime_from_serial, max_serial};
 
@@ -24,6 +26,10 @@ impl Out {
             self.fill = Some((c, self.text.len()));
         }
     }
+    /// Appends what `t` shows when it has no special meaning (no temporary string).
+    fn push_tok(&mut self, t: &Tok) {
+        t.push_literal(&mut self.text);
+    }
     pub(crate) fn prepend(&mut self, s: &str) {
         self.text.insert_str(0, s);
         if let Some((_, p)) = &mut self.fill {
@@ -39,7 +45,7 @@ pub(crate) fn render_text(sec: &Section, text: &str) -> Out {
         match t {
             Tok::At => out.push(text),
             Tok::Fill(c) => out.fill(*c),
-            other => out.push(&other.literal_text()),
+            other => out.push_tok(other),
         }
     }
     out
@@ -52,7 +58,7 @@ pub(crate) fn render_general(sec: &Section, v: f64, width: usize) -> Out {
         match t {
             Tok::General => out.push(&format_general_fit(v, width).unwrap_or_else(|| "#".repeat(width.clamp(1, 11)))),
             Tok::Fill(c) => out.fill(*c),
-            other => out.push(&other.literal_text()),
+            other => out.push_tok(other),
         }
     }
     out
@@ -63,8 +69,7 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
     if !v.is_finite() || !(0.0..max_serial(sys) as f64 + 1.0).contains(&v) {
         return None;
     }
-    let sub_digits = sec.toks.iter().filter_map(|t| if let Tok::Date(DatePart::SubSec(n)) = t { Some(*n) } else { None }).max().unwrap_or(0).min(3);
-    let unit: i64 = 10i64.pow(3 - sub_digits as u32);
+    let unit: i64 = 10i64.pow(3 - u32::from(sec.sub_digits.min(3)));
     let mut day = v.floor() as i64;
     let mut ms = (((v - v.floor()) * 86_400_000.0) / unit as f64).round() as i64 * unit;
     if ms >= 86_400_000 {
@@ -72,38 +77,33 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
         day += 1;
     }
     let total_ms = day.saturating_mul(86_400_000).saturating_add(ms);
-    let needs_date = sec.toks.iter().any(|t| matches!(t, Tok::Date(d) if d.is_calendar()));
-    let dt = if needs_date { datetime_from_serial(sys, day as f64)? } else { datetime_from_serial(sys, 0.0).unwrap_or_default() };
-    let ampm = sec.toks.iter().any(|t| matches!(t, Tok::Date(DatePart::AmPm | DatePart::AP(..))));
+    let dt = if sec.calendar { datetime_from_serial(sys, day as f64)? } else { datetime_from_serial(sys, 0.0).unwrap_or_default() };
+    let ampm = sec.ampm;
     let hour = ms / 3_600_000;
     let minute = (ms / 60_000) % 60;
     let second = (ms / 1000) % 60;
     let milli = ms % 1000;
-    let pad = |n: i64, w: u8| if w >= 2 { format!("{:0w$}", n, w = w.min(20) as usize) } else { n.to_string() };
     let month_name = MONTHS.get((dt.month as usize).wrapping_sub(1)).copied().unwrap_or("");
     let day_name = WEEKDAYS.get(dt.weekday as usize).copied().unwrap_or("");
     let mut out = Out::default();
     for t in &sec.toks {
         match t {
             Tok::Date(d) => {
-                let s = match *d {
+                let text = &mut out.text;
+                match *d {
                     DatePart::Year(n) => {
-                        if n <= 2 {
-                            format!("{:02}", dt.year.rem_euclid(100))
-                        } else {
-                            format!("{:04}", dt.year)
-                        }
+                        let _ = if n <= 2 { write!(text, "{:02}", dt.year.rem_euclid(100)) } else { write!(text, "{:04}", dt.year) };
                     }
                     DatePart::Month(n) => match n {
-                        1 | 2 => pad(dt.month as i64, n),
-                        3 => month_name.chars().take(3).collect(),
-                        5 => month_name.chars().take(1).collect(),
-                        _ => month_name.to_string(),
+                        1 | 2 => push_padded(text, dt.month as i64, n),
+                        3 => text.extend(month_name.chars().take(3)),
+                        5 => text.extend(month_name.chars().take(1)),
+                        _ => text.push_str(month_name),
                     },
                     DatePart::Day(n) => match n {
-                        1 | 2 => pad(dt.day as i64, n),
-                        3 => day_name.chars().take(3).collect(),
-                        _ => day_name.to_string(),
+                        1 | 2 => push_padded(text, dt.day as i64, n),
+                        3 => text.extend(day_name.chars().take(3)),
+                        _ => text.push_str(day_name),
                     },
                     DatePart::Hour(n) => {
                         let h = if ampm {
@@ -112,78 +112,168 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
                         } else {
                             hour
                         };
-                        pad(h, n)
+                        push_padded(text, h, n);
                     }
-                    DatePart::Minute(n) => pad(minute, n),
-                    DatePart::Second(n) => pad(second, n),
+                    DatePart::Minute(n) => push_padded(text, minute, n),
+                    DatePart::Second(n) => push_padded(text, second, n),
                     DatePart::SubSec(n) => {
-                        let mut s = format!(".{:03}", milli);
-                        s.truncate(1 + (n as usize).min(3));
-                        if n > 3 {
-                            s.push_str(&"0".repeat(n as usize - 3));
+                        // `.` and the first `n` (at most 3) of the three millisecond digits, then
+                        // zeros for the digits beyond milliseconds.
+                        text.push('.');
+                        for (k, div) in [100, 10, 1].into_iter().enumerate() {
+                            if k < n as usize {
+                                text.push(char::from(b'0' + (milli / div % 10) as u8));
+                            }
                         }
-                        s
+                        for _ in 3..n {
+                            text.push('0');
+                        }
                     }
-                    DatePart::ElapsedH(n) => pad(total_ms / 3_600_000, n),
-                    DatePart::ElapsedM(n) => pad(total_ms / 60_000, n),
-                    DatePart::ElapsedS(n) => pad(total_ms / 1000, n),
-                    DatePart::AmPm => (if hour >= 12 { "PM" } else { "AM" }).to_string(),
-                    DatePart::AP(a, p) => (if hour >= 12 { p } else { a }).to_string(),
-                };
-                out.push(&s);
+                    DatePart::ElapsedH(n) => push_padded(text, total_ms / 3_600_000, n),
+                    DatePart::ElapsedM(n) => push_padded(text, total_ms / 60_000, n),
+                    DatePart::ElapsedS(n) => push_padded(text, total_ms / 1000, n),
+                    DatePart::AmPm => text.push_str(if hour >= 12 { "PM" } else { "AM" }),
+                    DatePart::AP(a, p) => text.push(if hour >= 12 { p } else { a }),
+                }
             }
             Tok::Fill(c) => out.fill(*c),
-            other => out.push(&other.literal_text()),
+            other => out.push_tok(other),
         }
     }
     Some(out)
 }
 
+/// Appends `n`, zero padded to `w` digits (at most 20) when `w` is 2 or more.
+fn push_padded(out: &mut String, n: i64, w: u8) {
+    let _ = if w >= 2 { write!(out, "{:0w$}", n, w = w.min(20) as usize) } else { write!(out, "{n}") };
+}
+
+/// Scratch text of one number rendering: every token's own output (`piece`, replaces the token's
+/// text), the text inserted ahead of a token (`before`) and the replacement of a literal
+/// (`lit_spaces`: fractions blank the literals of a hidden part) live in ONE buffer, addressed
+/// by byte ranges, instead of one string per token. Writing a piece again appends the new text
+/// and points the slot at it.
+struct Parts {
+    buf: String,
+    slots: Vec<Slot>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Slot {
+    piece: (usize, usize),
+    before: (usize, usize),
+    /// `Some(k)`: show `k` spaces instead of the literal.
+    lit_spaces: Option<usize>,
+}
+
+impl Parts {
+    fn new(n: usize) -> Parts {
+        Parts { buf: String::new(), slots: vec![Slot::default(); n + 1] }
+    }
+    /// Start of a piece written straight into the buffer; finish it with [`Parts::end_piece`].
+    fn mark(&self) -> usize {
+        self.buf.len()
+    }
+    fn end_piece(&mut self, ti: usize, start: usize) {
+        let end = self.buf.len();
+        if let Some(sl) = self.slots.get_mut(ti) {
+            sl.piece = (start, end);
+        }
+    }
+    fn set_piece(&mut self, ti: usize, text: &str) {
+        let start = self.mark();
+        self.buf.push_str(text);
+        self.end_piece(ti, start);
+    }
+    fn set_spaces(&mut self, ti: usize, k: usize) {
+        let start = self.mark();
+        self.buf.extend(std::iter::repeat_n(' ', k));
+        self.end_piece(ti, start);
+    }
+    fn set_before(&mut self, ti: usize, text: &str) {
+        let start = self.mark();
+        self.buf.push_str(text);
+        let end = self.buf.len();
+        if let Some(sl) = self.slots.get_mut(ti) {
+            sl.before = (start, end);
+        }
+    }
+    fn set_lit_spaces(&mut self, ti: usize, k: usize) {
+        if let Some(sl) = self.slots.get_mut(ti) {
+            sl.lit_spaces = Some(k);
+        }
+    }
+    fn text(&self, (a, b): (usize, usize)) -> &str {
+        self.buf.get(a..b).unwrap_or("")
+    }
+    fn piece(&self, ti: usize) -> &str {
+        self.slots.get(ti).map_or("", |sl| self.text(sl.piece))
+    }
+    fn before(&self, ti: usize) -> &str {
+        self.slots.get(ti).map_or("", |sl| self.text(sl.before))
+    }
+}
+
 /// Assigns integer digits right-to-left to the placeholders at `idxs`; the leftmost placeholder
 /// takes all remaining digits. `force_zero` shows `0` in the units placeholder when there are no
 /// digits. A blank `?` pads with a space, and so does the thousands separator it would carry.
-fn fill_int(toks: &[Tok], idxs: &[usize], digits: &str, thousands: bool, force_zero: bool, pieces: &mut [String]) {
-    let ds: Vec<char> = digits.chars().collect();
+///
+/// `digits` is ASCII (digit strings made by this crate), so bytes are characters. Each
+/// placeholder's text is written left to right: a digit, then the separator that follows it when
+/// its position counted from the right is a multiple of 3.
+fn fill_int(toks: &[Tok], idxs: &[usize], digits: &str, thousands: bool, force_zero: bool, parts: &mut Parts) {
+    let ds = digits.as_bytes();
     let mut rem = ds.len();
     let mut pos = 0usize;
     let count = idxs.len();
+    let sep = |p: usize| thousands && p > 0 && p.is_multiple_of(3);
     for (k, &ti) in idxs.iter().rev().enumerate() {
         let leftmost = k + 1 == count;
         let ph = match toks.get(ti) {
             Some(Tok::Digit(c)) => *c,
             _ => '0',
         };
-        let mut rev = String::new();
-        let push_digit = |c: char, rev: &mut String, pos: &mut usize| {
-            if thousands && *pos > 0 && pos.is_multiple_of(3) {
-                rev.push(',');
-            }
-            rev.push(c);
-            *pos += 1;
-        };
+        let start = parts.mark();
         let take = if leftmost { rem } else { rem.min(1) };
         if take == 0 {
             match ph {
-                '0' => push_digit('0', &mut rev, &mut pos),
-                _ if force_zero && k == 0 => push_digit('0', &mut rev, &mut pos),
-                '?' => {
-                    if thousands && pos > 0 && pos.is_multiple_of(3) {
-                        rev.push(' ');
+                '0' => {
+                    parts.buf.push('0');
+                    if sep(pos) {
+                        parts.buf.push(',');
                     }
-                    rev.push(' ');
+                    pos += 1;
+                }
+                _ if force_zero && k == 0 => {
+                    parts.buf.push('0');
+                    if sep(pos) {
+                        parts.buf.push(',');
+                    }
+                    pos += 1;
+                }
+                '?' => {
+                    parts.buf.push(' ');
+                    if sep(pos) {
+                        parts.buf.push(' ');
+                    }
                     pos += 1;
                 }
                 _ => {}
             }
         } else {
-            for _ in 0..take {
-                rem -= 1;
-                push_digit(ds.get(rem).copied().unwrap_or('0'), &mut rev, &mut pos);
+            // The `take` digits just left of `rem`, most significant first; the digit `s` places
+            // from the right end of the run sits at position `pos + s`.
+            for s in (0..take).rev() {
+                let d = ds.get(rem.saturating_sub(1 + s)).copied().unwrap_or(b'0');
+                parts.buf.push(char::from(d));
+                if sep(pos + s) {
+                    parts.buf.push(',');
+                }
             }
+            rem -= take;
+            pos += take;
         }
-        if let Some(p) = pieces.get_mut(ti) {
-            *p = rev.chars().rev().collect();
-        }
+        parts.end_piece(ti, start);
     }
 }
 
@@ -203,26 +293,26 @@ fn with_commas(digits: &str, thousands: bool) -> String {
 }
 
 /// Fraction-digit placeholders: trailing zeros show as `0`, nothing (`#`) or a space (`?`).
-fn fill_frac(toks: &[Tok], idxs: &[usize], frac: &str, pieces: &mut [String]) {
-    let fd: Vec<char> = frac.chars().collect();
-    let last_sig = fd.iter().rposition(|&c| c != '0');
+/// `frac` is ASCII digits.
+fn fill_frac(toks: &[Tok], idxs: &[usize], frac: &str, parts: &mut Parts) {
+    let fd = frac.as_bytes();
+    let last_sig = fd.iter().rposition(|&c| c != b'0');
     for (i, &ti) in idxs.iter().enumerate() {
         let ph = match toks.get(ti) {
             Some(Tok::Digit(c)) => *c,
             _ => '0',
         };
-        let s = if last_sig.is_some_and(|l| i <= l) {
-            fd.get(i).copied().unwrap_or('0').to_string()
+        let start = parts.mark();
+        if last_sig.is_some_and(|l| i <= l) {
+            parts.buf.push(char::from(fd.get(i).copied().unwrap_or(b'0')));
         } else {
             match ph {
-                '0' => "0".into(),
-                '?' => " ".into(),
-                _ => String::new(),
+                '0' => parts.buf.push('0'),
+                '?' => parts.buf.push(' '),
+                _ => {}
             }
-        };
-        if let Some(p) = pieces.get_mut(ti) {
-            *p = s;
         }
+        parts.end_piece(ti, start);
     }
 }
 
@@ -246,15 +336,12 @@ pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
     }
     let toks = &sec.toks;
     let n = toks.len();
-    // Pieces replace the token's own output; `before` is inserted ahead of a token; `lits`
-    // replaces a literal's text (fractions blank the literals of a hidden part).
-    let mut pieces: Vec<String> = vec![String::new(); n];
-    let mut before: Vec<String> = vec![String::new(); n + 1];
-    let mut lits: Vec<Option<String>> = Vec::new();
+    // Pieces replace the token's own output; `before` is inserted ahead of a token; literal
+    // replacements blank the literals of a hidden fraction part (see [`Parts`]).
+    let mut parts = Parts::new(n);
     let mut zero = false;
     if sec.fraction {
-        lits = vec![None; n];
-        render_fraction(sec, x, &mut pieces, &mut lits);
+        render_fraction(sec, x, &mut parts);
     } else {
         let point = toks.iter().position(|t| matches!(t, Tok::Point));
         let exp = toks.iter().position(|t| matches!(t, Tok::Exp { .. }));
@@ -290,7 +377,6 @@ pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
             if int_s.is_empty() && frac_s.chars().all(|c| c == '0') {
                 e = 0;
             }
-            let head = if upper { "E" } else { "e" };
             let sign = if e < 0 {
                 "-"
             } else if plus {
@@ -303,18 +389,16 @@ pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
             // `E` (observed: `|0|e+|0|` shows `|1|e|+5|`); `?` pads the digits with spaces.
             match exp_idx.first() {
                 Some(&first) => {
-                    if let Some(p) = pieces.get_mut(e_at) {
-                        *p = head.to_string();
-                    }
-                    if let Some(b) = before.get_mut(first) {
-                        *b = sign.to_string();
-                    }
-                    fill_int(toks, &exp_idx, &digits, false, false, &mut pieces);
+                    parts.set_piece(e_at, if upper { "E" } else { "e" });
+                    parts.set_before(first, sign);
+                    fill_int(toks, &exp_idx, &digits, false, false, &mut parts);
                 }
                 None => {
-                    if let Some(p) = pieces.get_mut(e_at) {
-                        *p = format!("{head}{sign}{digits}");
-                    }
+                    let start = parts.mark();
+                    parts.buf.push(if upper { 'E' } else { 'e' });
+                    parts.buf.push_str(sign);
+                    parts.buf.push_str(&digits);
+                    parts.end_piece(e_at, start);
                 }
             }
             (int_s, frac_s)
@@ -322,32 +406,32 @@ pub(crate) fn render_number(sec: &Section, v: f64) -> Out {
             fixed(x, frac_idx.len())
         };
         zero = int_s.chars().chain(frac_s.chars()).all(|c| c == '0');
-        fill_int(toks, &int_idx, &int_s, sec.thousands, false, &mut pieces);
+        fill_int(toks, &int_idx, &int_s, sec.thousands, false, &mut parts);
         if int_idx.is_empty()
             && !int_s.is_empty()
             && let Some(p) = point.or(exp)
-            && let Some(b) = before.get_mut(p)
         {
-            *b = with_commas(&int_s, sec.thousands);
+            parts.set_before(p, &with_commas(&int_s, sec.thousands));
         }
-        fill_frac(toks, &frac_idx, &frac_s, &mut pieces);
-        if let Some(p) = point
-            && let Some(s) = pieces.get_mut(p)
-        {
-            *s = ".".into();
+        fill_frac(toks, &frac_idx, &frac_s, &mut parts);
+        if let Some(p) = point {
+            parts.set_piece(p, ".");
         }
     }
     let mut out = Out::default();
     for (i, t) in toks.iter().enumerate() {
-        if let Some(b) = before.get(i) {
-            out.push(b);
-        }
+        out.push(parts.before(i));
         match t {
-            Tok::Lit(s) => out.push(lits.get(i).and_then(Option::as_deref).unwrap_or(s)),
+            Tok::Lit(s) => match parts.slots.get(i).and_then(|sl| sl.lit_spaces) {
+                Some(k) => out.text.extend(std::iter::repeat_n(' ', k)),
+                None => out.push(s),
+            },
             Tok::Percent => out.push("%"),
             Tok::Fill(c) => out.fill(*c),
-            Tok::At | Tok::General | Tok::Date(_) | Tok::Comma => {}
-            _ => out.push(pieces.get(i).map(String::as_str).unwrap_or("")),
+            // Every other token shows its piece. `At` (`0@`) is reachable here, `Comma`, `General`
+            // and `Date` are not (analysis turns commas into literals and routes sections with
+            // dates or General elsewhere); none of them is ever given a piece, so they print "".
+            _ => out.push(parts.piece(i)),
         }
     }
     out.zero = zero;
@@ -403,22 +487,14 @@ fn shown_width(t: &Tok) -> usize {
 }
 
 /// Replaces the literals in `range` with spaces (`spaces`) or nothing; placeholders and the bar
-/// in it get the same treatment through `pieces`.
-fn blank_range(toks: &[Tok], range: std::ops::Range<usize>, spaces: bool, pieces: &mut [String], lits: &mut [Option<String>]) {
+/// in it get the same treatment as pieces.
+fn blank_range(toks: &[Tok], range: std::ops::Range<usize>, spaces: bool, parts: &mut Parts) {
     for i in range {
         let Some(t) = toks.get(i) else { break };
-        let s = if spaces { " ".repeat(shown_width(t)) } else { String::new() };
+        let width = if spaces { shown_width(t) } else { 0 };
         match t {
-            Tok::Lit(_) => {
-                if let Some(l) = lits.get_mut(i) {
-                    *l = Some(s);
-                }
-            }
-            Tok::Digit(_) | Tok::Slash | Tok::FixedDenom(_) => {
-                if let Some(p) = pieces.get_mut(i) {
-                    *p = s;
-                }
-            }
+            Tok::Lit(_) => parts.set_lit_spaces(i, width),
+            Tok::Digit(_) | Tok::Slash | Tok::FixedDenom(_) => parts.set_spaces(i, width),
             _ => {}
         }
     }
@@ -432,7 +508,7 @@ fn blank_range(toks: &[Tok], range: std::ops::Range<usize>, spaces: bool, pieces
 /// becomes spaces when the whole part or the numerator has a `?`); when the fraction is zero and
 /// the numerator has no `0` placeholder, the separator, numerator, bar and denominator disappear
 /// (or become spaces when any part has a `?`) and the whole part shows at least `0`.
-fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Option<String>]) {
+fn render_fraction(sec: &Section, x: f64, parts: &mut Parts) {
     let toks = &sec.toks;
     let is_digit = |i: usize| matches!(toks.get(i), Some(Tok::Digit(_)));
     let Some(slash) = toks.iter().position(|t| matches!(t, Tok::Slash)) else { return };
@@ -486,32 +562,28 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
     let whole_s = if whole >= 1.0 { fixed(whole, 0).0 } else { String::new() };
     let num_zero_ph = num_idx.iter().any(|&i| toks.get(i) == Some(&Tok::Digit('0')));
     if has_whole && num == 0.0 && !num_zero_ph {
-        fill_int(toks, &whole_idx, &whole_s, sec.thousands, true, pieces);
+        fill_int(toks, &whole_idx, &whole_s, sec.thousands, true, parts);
         let spaces = has_q(&whole_idx) || has_q(&num_idx) || has_q(&den_idx);
-        blank_range(toks, sep_start..den_end, spaces, pieces, lits);
+        blank_range(toks, sep_start..den_end, spaces, parts);
         return;
     }
     if has_whole {
         // A zero value shows `0` in a `?` or `0` units place, nothing in a `#` one.
         let units_hash = whole_idx.last().is_some_and(|&i| toks.get(i) == Some(&Tok::Digit('#')));
         let force = whole_s.is_empty() && num == 0.0 && !units_hash;
-        fill_int(toks, &whole_idx, &whole_s, sec.thousands, force, pieces);
-        let whole_shown = whole_idx.iter().any(|&i| pieces.get(i).is_some_and(|p| p.chars().any(|c| c.is_ascii_digit())));
+        fill_int(toks, &whole_idx, &whole_s, sec.thousands, force, parts);
+        let whole_shown = whole_idx.iter().any(|&i| parts.piece(i).chars().any(|c| c.is_ascii_digit()));
         if !whole_shown {
             let spaces = has_q(&whole_idx) || has_q(&num_idx);
-            blank_range(toks, sep_start..num_start, spaces, pieces, lits);
+            blank_range(toks, sep_start..num_start, spaces, parts);
         }
     }
     let num_s = if num < 1e15 { (num as u64).to_string() } else { fixed(num, 0).0 };
-    fill_int(toks, &num_idx, &num_s, false, true, pieces);
-    if let Some(p) = pieces.get_mut(slash) {
-        *p = "/".into();
-    }
+    fill_int(toks, &num_idx, &num_s, false, true, parts);
+    parts.set_piece(slash, "/");
     let den_s = den.to_string();
     if fixed_den.is_some() {
-        if let Some(p) = pieces.get_mut(den_start) {
-            *p = den_s;
-        }
+        parts.set_piece(den_start, &den_s);
     } else {
         // Denominator digits are zero padded to the `0` placeholders, then left aligned; `?`
         // pads with spaces after them.
@@ -536,9 +608,7 @@ fn render_fraction(sec: &Section, x: f64, pieces: &mut [String], lits: &mut [Opt
             } else {
                 s
             };
-            if let Some(p) = pieces.get_mut(ti) {
-                *p = s;
-            }
+            parts.set_piece(ti, &s);
         }
     }
 }

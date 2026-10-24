@@ -54,18 +54,28 @@ pub(crate) enum Tok {
 }
 
 impl Tok {
+    /// Appends the text this token shows when it has no special meaning in its section.
+    pub(crate) fn push_literal(&self, out: &mut String) {
+        match self {
+            Tok::Lit(s) | Tok::FixedDenom(s) => out.push_str(s),
+            Tok::Digit(c) => out.push(*c),
+            Tok::Point => out.push('.'),
+            Tok::Comma => out.push(','),
+            Tok::Percent => out.push('%'),
+            Tok::Exp { upper, plus } => {
+                out.push(if *upper { 'E' } else { 'e' });
+                out.push(if *plus { '+' } else { '-' });
+            }
+            Tok::Slash => out.push('/'),
+            Tok::Fill(_) | Tok::At | Tok::General | Tok::Date(_) => {}
+        }
+    }
+
     /// The text this token shows when it has no special meaning in its section.
     pub(crate) fn literal_text(&self) -> String {
-        match self {
-            Tok::Lit(s) | Tok::FixedDenom(s) => s.clone(),
-            Tok::Digit(c) => c.to_string(),
-            Tok::Point => ".".into(),
-            Tok::Comma => ",".into(),
-            Tok::Percent => "%".into(),
-            Tok::Exp { upper, plus } => format!("{}{}", if *upper { 'E' } else { 'e' }, if *plus { '+' } else { '-' }),
-            Tok::Slash => "/".into(),
-            Tok::Fill(_) | Tok::At | Tok::General | Tok::Date(_) => String::new(),
-        }
+        let mut s = String::new();
+        self.push_literal(&mut s);
+        s
     }
 }
 
@@ -122,6 +132,13 @@ pub(crate) struct Section {
     pub fraction: bool,
     pub currency: bool,
     pub fill: bool,
+    /// Date sections: the most digits of any `.0`/`.00`/`.000` part (at most 3), which decides how
+    /// the time of day is rounded.
+    pub sub_digits: u8,
+    /// Date sections: has a year, month or day part, so the serial's date is needed.
+    pub calendar: bool,
+    /// Date sections: has `AM/PM` or `A/P`, so hours show on the 12-hour clock.
+    pub ampm: bool,
 }
 
 /// Splits a code into sections at unquoted, unescaped, unbracketed semicolons.
@@ -455,6 +472,9 @@ fn analyze(raw: Raw) -> Section {
         fraction: false,
         currency,
         fill: toks.iter().any(|t| matches!(t, Tok::Fill(_))),
+        sub_digits: 0,
+        calendar: false,
+        ampm: false,
     };
     if is_date {
         sec.kind = SecKind::Date;
@@ -493,6 +513,9 @@ fn analyze(raw: Raw) -> Section {
             }
             i += 1;
         }
+        sec.sub_digits = out.iter().filter_map(|t| if let Tok::Date(DatePart::SubSec(n)) = t { Some(*n) } else { None }).max().unwrap_or(0).min(3);
+        sec.calendar = out.iter().any(|t| matches!(t, Tok::Date(d) if d.is_calendar()));
+        sec.ampm = out.iter().any(|t| matches!(t, Tok::Date(DatePart::AmPm | DatePart::AP(..))));
         sec.toks = out;
         return sec;
     }
