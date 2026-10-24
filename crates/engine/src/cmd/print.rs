@@ -11,7 +11,7 @@
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::*;
-use gridcraft_pdf::{Font, Page, PdfDoc, Rgb};
+use gridcraft_pdf::{Font, FontCatalog, Page, PdfDoc, PdfFont, Rgb};
 use serde_json::{Value as Json, json};
 
 use super::*;
@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export as PDF",
             ["File", "Export"],
             None,
-            "{path?, sheets?: active|all, range?: \"A1:F40\" (active sheet), fitToPage?: bool} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup.",
+            "{path?, sheets?: active|all, range?: \"A1:F40\" (active sheet), fitToPage?: bool, pdfFonts?: [{base64, faceIndex?}]} → {pages, bytes, path} or {pages, bytes, base64} when no path. Supply licensed TTF/OTF face bytes in `pdfFonts` on Web/WASM; `faceIndex` is 0 for standalone fonts and must exist in a collection. Native exports also scan system fonts. Honours each sheet's Page Setup.",
             has_doc,
             export_pdf
         ),
@@ -32,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print…",
             ["File"],
             Some("Cmd+P"),
-            "{path?, sheets?: active|all, range?, fitToPage?: bool} → {pages, bytes, base64} — the PDF the UI hands to the system print dialog",
+            "{path?, sheets?: active|all, range?, fitToPage?: bool, pdfFonts?: [{base64, faceIndex?}]} → {pages, bytes, base64} — the PDF the UI hands to the system print dialog; Web callers supply licensed font bytes through `pdfFonts`, whose faceIndex is validated against the font file",
             has_doc,
             print
         ),
@@ -684,11 +684,18 @@ fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<c
 }
 
 /// PDF measurement for chart layout.
-struct PdfMeasure;
+struct PdfMeasure<'a> {
+    catalog: &'a FontCatalog,
+}
 
-impl gridcraft_chart::Measure for PdfMeasure {
+impl gridcraft_chart::Measure for PdfMeasure<'_> {
     fn text_width(&self, text: &str, size: f32, bold: bool) -> f32 {
-        gridcraft_pdf::text_width(if bold { Font::HelveticaBold } else { Font::Helvetica }, size, text)
+        if text.chars().any(|c| ('\u{0e00}'..='\u{0e7f}').contains(&c)) {
+            shaped_width(self.catalog, "Arial", bold, false, text, size)
+                .unwrap_or_else(|_| gridcraft_pdf::text_width(if bold { Font::HelveticaBold } else { Font::Helvetica }, size, text))
+        } else {
+            gridcraft_pdf::text_width(if bold { Font::HelveticaBold } else { Font::Helvetica }, size, text)
+        }
     }
 }
 
@@ -710,7 +717,13 @@ impl Xf {
 }
 
 /// Draws chart primitives onto a page.
-fn draw_prims(pg: &mut Page, prims: &[gridcraft_chart::Prim], xf: Xf) {
+/// Preserve Standard-14 metrics for WinAnsi text; consult supplied/system faces for Unicode.
+/// This dispatch does not add bidi or support for otherwise unsupported script shaping.
+fn needs_unicode_text(text: &str) -> bool {
+    text.chars().any(|ch| !ch.is_control() && ch != '?' && gridcraft_pdf::win_ansi(ch) == b'?')
+}
+
+fn draw_prims(pg: &mut Page, catalog: &FontCatalog, prims: &[gridcraft_chart::Prim], xf: Xf) -> std::result::Result<(), String> {
     use gridcraft_chart::{HAlign as H, Prim, VAlign as V};
     let k = xf.k;
     for p in prims {
@@ -750,7 +763,8 @@ fn draw_prims(pg: &mut Page, prims: &[gridcraft_chart::Prim], xf: Xf) {
             Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
                 let font = if *bold { Font::HelveticaBold } else { Font::Helvetica };
                 let size = size * k;
-                let w = gridcraft_pdf::text_width(font, size, text);
+                let unicode = needs_unicode_text(text);
+                let w = if unicode { shaped_width(catalog, "Arial", *bold, false, text, size)? } else { gridcraft_pdf::text_width(font, size, text) };
                 let dx = match align {
                     H::Left => 0.0,
                     H::Center => -w / 2.0,
@@ -763,10 +777,27 @@ fn draw_prims(pg: &mut Page, prims: &[gridcraft_chart::Prim], xf: Xf) {
                 };
                 let (sn, cs) = if rotation.is_finite() { rotation.sin_cos() } else { (0.0, 1.0) };
                 let (ax, ay) = xf.p(*x, *y);
-                pg.text_rotated(ax + dx * cs - dy * sn, ay + dx * sn + dy * cs, size, font, blend(*color), text, *rotation);
+                if unicode {
+                    draw_shaped_text(
+                        pg,
+                        catalog,
+                        ax + dx * cs - dy * sn,
+                        ay + dx * sn + dy * cs,
+                        size,
+                        "Arial",
+                        *bold,
+                        false,
+                        blend(*color),
+                        text,
+                        *rotation,
+                    )?;
+                } else {
+                    pg.text_rotated(ax + dx * cs - dy * sn, ay + dx * sn + dy * cs, size, font, blend(*color), text, *rotation);
+                }
             }
         }
     }
+    Ok(())
 }
 
 const PAD_PX: f32 = 2.0;
@@ -882,16 +913,282 @@ fn draw_border(pg: &mut Page, b: &BorderLine, wb: &Workbook, x0: f32, y0: f32, x
     pg.stroke_line_dashed(x0, y0, x1, y1, lw, color, &border_dash(b.style, k));
 }
 
-fn font_for(style: &Style) -> Font {
-    Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
+enum TextRunFont {
+    Embedded(PdfFont),
+    Standard(Font),
+}
+
+struct TextRun {
+    font: TextRunFont,
+    text: String,
+    width: f32,
+}
+
+fn shaped_runs(catalog: &FontCatalog, family: &str, bold: bool, italic: bool, text: &str, size: f32) -> std::result::Result<Vec<TextRun>, String> {
+    let standard = Font::styled(Font::family_for(family), bold, italic);
+    let mut runs: Vec<TextRun> = Vec::new();
+    let mut thai_fallback: Option<PdfFont> = None;
+    for (_, cluster) in gridcraft_pdf::text_clusters(text) {
+        let is_thai = cluster.chars().any(|c| ('\u{0e00}'..='\u{0e7f}').contains(&c));
+        let latin = cluster.chars().all(|c| c.is_ascii() || c == '?' || gridcraft_pdf::win_ansi(c) != b'?');
+        let embedded = if latin {
+            catalog.family_face_for(family, bold, italic, cluster).ok()
+        } else if is_thai {
+            match thai_fallback.as_ref().filter(|face| face.covers(cluster)) {
+                Some(face) => Some(face.clone()),
+                None => catalog.face_for(family, bold, italic, cluster).ok().inspect(|face| {
+                    thai_fallback = Some(face.clone());
+                }),
+            }
+        } else {
+            catalog.face_for(family, bold, italic, cluster).ok()
+        };
+        let runfont = match embedded {
+            Some(face) => TextRunFont::Embedded(face),
+            None => TextRunFont::Standard(standard),
+        };
+        let same = runs.last().is_some_and(|run| match (&run.font, &runfont) {
+            (TextRunFont::Standard(a), TextRunFont::Standard(b)) => a == b,
+            (TextRunFont::Embedded(a), TextRunFont::Embedded(b)) => a.same_face(b),
+            _ => false,
+        });
+        if same {
+            if let Some(last) = runs.last_mut() {
+                last.text.push_str(cluster);
+            }
+        } else {
+            runs.push(TextRun { font: runfont, text: cluster.to_string(), width: 0.0 });
+        }
+    }
+    for run in &mut runs {
+        run.width = match &run.font {
+            TextRunFont::Embedded(font) => font.text_width(&run.text, size)?,
+            TextRunFont::Standard(font) => gridcraft_pdf::text_width(*font, size, &run.text),
+        };
+    }
+    Ok(runs)
+}
+
+fn shaped_width(catalog: &FontCatalog, family: &str, bold: bool, italic: bool, text: &str, size: f32) -> std::result::Result<f32, String> {
+    Ok(shaped_runs(catalog, family, bold, italic, text, size)?.iter().map(|r| r.width).sum())
+}
+
+fn shaped_extents(catalog: &FontCatalog, family: &str, bold: bool, italic: bool, text: &str, size: f32) -> std::result::Result<(f32, f32), String> {
+    let mut above: f32 = 0.0;
+    let mut below: f32 = 0.0;
+    for run in shaped_runs(catalog, family, bold, italic, text, size)? {
+        let (a, d) = match run.font {
+            TextRunFont::Embedded(font) => font.vertical_extents(size),
+            TextRunFont::Standard(_) => (size * 0.8, size * 0.22),
+        };
+        above = above.max(a);
+        below = below.max(d);
+    }
+    Ok((above, below))
+}
+
+/// Returns the next run's baseline origin after advancing along the rotated text baseline.
+fn advance_text_baseline(x: f32, y: f32, advance: f32, angle: f32) -> (f32, f32) {
+    let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
+    (x + advance * cs, y + advance * sn)
+}
+
+fn draw_text_runs(pg: &mut Page, runs: Vec<TextRun>, x: f32, y: f32, size: f32, color: Rgb, angle: f32) -> std::result::Result<f32, String> {
+    if runs.is_empty() {
+        return Ok(0.0);
+    }
+    let total_width = runs.iter().map(|run| run.width).sum();
+    let semantic_text = runs.iter().map(|run| run.text.as_str()).collect::<String>();
+    pg.begin_actual_text(&semantic_text);
+    let mut origin = (x, y);
+    let result: std::result::Result<(), String> = (|| {
+        for run in runs {
+            match run.font {
+                TextRunFont::Embedded(font) => {
+                    let id = pg.register_unicode_font(font);
+                    pg.text_unicode_rotated_without_actual_text(origin.0, origin.1, size, id, color, &run.text, angle)?;
+                }
+                TextRunFont::Standard(font) => pg.text_rotated(origin.0, origin.1, size, font, color, &run.text, angle),
+            }
+            origin = advance_text_baseline(origin.0, origin.1, run.width, angle);
+        }
+        Ok(())
+    })();
+    pg.end_actual_text();
+    result?;
+    Ok(total_width)
+}
+
+fn draw_shaped_text(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    x: f32,
+    y: f32,
+    size: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    color: Rgb,
+    text: &str,
+    angle: f32,
+) -> std::result::Result<f32, String> {
+    let runs = shaped_runs(catalog, family, bold, italic, text, size)?;
+    draw_text_runs(pg, runs, x, y, size, color, angle)
+}
+
+/// Bracket a line-sized prefix before binary search. Every probe measures a complete run,
+/// but a short line never shapes the entire remaining paragraph or collects all its clusters.
+fn fitting_text_prefix(
+    text: &str,
+    max_clusters: usize,
+    width: f32,
+    mut measure: impl FnMut(&str) -> std::result::Result<f32, String>,
+) -> std::result::Result<(usize, usize), String> {
+    let mut clusters = gridcraft_pdf::text_clusters(text).take(max_clusters);
+    let mut ends = Vec::new();
+    let mut low = 0usize;
+    let mut high = 1usize.min(max_clusters);
+    loop {
+        while ends.len() < high {
+            let Some((start, cluster)) = clusters.next() else { break };
+            ends.push(start.saturating_add(cluster.len()));
+        }
+        let count = ends.len();
+        if count == low {
+            return Ok((ends.last().copied().unwrap_or(0), count));
+        }
+        let end = ends.last().copied().unwrap_or(0);
+        let prefix = text.get(..end).ok_or("grapheme boundary is outside wrapped PDF text")?;
+        if measure(prefix.trim_end_matches(char::is_whitespace))? > width {
+            high = count;
+            break;
+        }
+        low = count;
+        if count < high || count == max_clusters {
+            return Ok((end, count));
+        }
+        high = count.saturating_mul(2).min(max_clusters);
+    }
+    while low.saturating_add(1) < high {
+        let mid = low + (high - low) / 2;
+        let end = ends.get(mid.saturating_sub(1)).copied().unwrap_or(0);
+        let prefix = text.get(..end).ok_or("grapheme boundary is outside wrapped PDF text")?;
+        if measure(prefix.trim_end_matches(char::is_whitespace))? <= width {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    let count = low.max(1);
+    Ok((ends.get(count.saturating_sub(1)).copied().unwrap_or(0), count))
+}
+
+fn wrap_shaped(
+    text: &str,
+    catalog: &FontCatalog,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    size: f32,
+    width: f32,
+) -> std::result::Result<Vec<String>, String> {
+    const MAX_GRAPHEMES_PER_LINE: usize = 8192;
+
+    fn prefix_for_clusters(text: &str, limit: usize) -> (usize, usize) {
+        let mut end = 0usize;
+        let mut count = 0usize;
+        for (start, cluster) in gridcraft_pdf::text_clusters(text).take(limit) {
+            end = start.saturating_add(cluster.len());
+            count = count.saturating_add(1);
+        }
+        (end, count)
+    }
+
+    // Keep whitespace within a line, but omit separators at a wrap boundary. Measuring a
+    // trailing separator must not push a word that otherwise fits onto the next line.
+    fn take_wrapped_line(line: &mut String) -> String {
+        line.truncate(line.trim_end_matches(char::is_whitespace).len());
+        std::mem::take(line)
+    }
+
+    let mut out = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut line = String::new();
+        let mut line_clusters = 0usize;
+        for word in paragraph.split_inclusive(char::is_whitespace) {
+            let mut remaining = word;
+            while !remaining.is_empty() {
+                if line_clusters >= MAX_GRAPHEMES_PER_LINE {
+                    out.push(take_wrapped_line(&mut line));
+                    line_clusters = 0;
+                    if out.len() >= 2000 {
+                        return Ok(out);
+                    }
+                }
+                let capacity = MAX_GRAPHEMES_PER_LINE.saturating_sub(line_clusters);
+                if line.is_empty() {
+                    let (fit_end, fit_clusters) =
+                        fitting_text_prefix(remaining, capacity, width, |prefix| shaped_width(catalog, family, bold, italic, prefix, size))?;
+                    if fit_end == 0 || fit_clusters == 0 {
+                        break;
+                    }
+                    if let Some(prefix) = remaining.get(..fit_end) {
+                        line.push_str(prefix);
+                    }
+                    line_clusters = fit_clusters;
+                    remaining = remaining.get(fit_end..).unwrap_or_default();
+                    if !remaining.is_empty() {
+                        out.push(take_wrapped_line(&mut line));
+                        line_clusters = 0;
+                    }
+                    if out.len() >= 2000 {
+                        return Ok(out);
+                    }
+                    continue;
+                }
+                let (segment_end, segment_clusters) = prefix_for_clusters(remaining, capacity);
+                if segment_end == 0 || segment_clusters == 0 {
+                    break;
+                }
+                let Some(segment) = remaining.get(..segment_end) else {
+                    return Err("grapheme boundary is outside wrapped PDF text".to_string());
+                };
+                let combined_clusters = line_clusters.saturating_add(segment_clusters);
+                let candidate = format!("{line}{segment}");
+                let fits = shaped_width(catalog, family, bold, italic, candidate.trim_end_matches(char::is_whitespace), size)? <= width;
+                if fits {
+                    line.push_str(segment);
+                    line_clusters = combined_clusters;
+                    remaining = remaining.get(segment_end..).unwrap_or_default();
+                    continue;
+                }
+                out.push(take_wrapped_line(&mut line));
+                line_clusters = 0;
+                if out.len() >= 2000 {
+                    return Ok(out);
+                }
+            }
+        }
+        out.push(line);
+        if out.len() >= 2000 {
+            return Ok(out);
+        }
+    }
+    Ok(out)
 }
 
 /// Draws the cells of a block: fills, gridlines, data bars, borders and text.
-fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::cf::CfCache>) {
+fn draw_block(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    b: &Block,
+    gridlines: bool,
+    cf: &mut Option<crate::cf::CfCache>,
+) -> std::result::Result<(), String> {
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
     if bw <= 0.0 || bh <= 0.0 {
-        return;
+        return Ok(());
     }
     let block = b.range();
     let sh = b.sh;
@@ -1002,10 +1299,11 @@ fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::
         if let Some(picture) = sh.cell_pictures.get(c) {
             draw_cell_picture(pg, &picture.data, (x, y, w, h), b.k);
         } else {
-            draw_text(pg, b, *c, l, (x, y, w, h), merged, &merges, (bx, bx + bw));
+            draw_text(pg, catalog, b, *c, l, (x, y, w, h), merged, &merges, (bx, bx + bw))?;
         }
     }
     pg.restore();
+    Ok(())
 }
 
 struct PendingPdfLink {
@@ -1110,20 +1408,29 @@ fn center_across_width(styles: &StyleTable, sh: &Sheet, c: CellRef, merges: &[Ra
     ext
 }
 
-fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f32, f32), merged: bool, merges: &[RangeRef], limits: (f32, f32)) {
+fn draw_text(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    b: &Block,
+    c: CellRef,
+    l: &Look,
+    rect: (f32, f32, f32, f32),
+    merged: bool,
+    merges: &[RangeRef],
+    limits: (f32, f32),
+) -> std::result::Result<(), String> {
     let (x, y, w, h) = rect;
     let sh = b.sh;
     let wb = b.wb;
     let v = sh.value(c);
     if v.is_empty() || l.cf.as_ref().is_some_and(|cf| cf.hide_value) {
-        return;
+        return Ok(());
     }
     if !sh.show_zeros && v.as_f64() == Some(0.0) {
-        return;
+        return Ok(());
     }
     let st = &l.style;
     let mut size = st.font.size.clamp(1.0, 409.0) * b.scale;
-    let font = font_for(st);
     let pad = PAD_PX * b.k;
     let indent = st.align.indent as f32 * 9.0 * b.k;
     let avail = (w - 2.0 * pad - indent).max(0.0);
@@ -1140,7 +1447,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     } else if code == "General"
         && let Value::Number(n) = v
     {
-        let digit = gridcraft_pdf::text_width(font, size, "0").max(0.1);
+        let digit = shaped_width(catalog, &st.font.name, st.font.bold, st.font.italic, "0", size)?.max(0.1);
         let max_chars = (avail / digit).floor().max(1.0) as usize;
         gridcraft_numfmt::format_general_fit(n, max_chars.min(11)).unwrap_or_else(|| "#".repeat(max_chars.min(255)))
     } else {
@@ -1151,17 +1458,18 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         text = text.replace(['\n', '\r'], " ");
     }
     if text.is_empty() {
-        return;
+        return Ok(());
     }
-    let mut tw = gridcraft_pdf::text_width(font, size, &text);
+    let measure = |text: &str, size: f32| shaped_width(catalog, &st.font.name, st.font.bold, st.font.italic, text, size);
+    let mut tw = measure(&text, size)?;
     if st.align.shrink && !wrap && tw > avail && tw > 0.0 {
         size = (size * avail / tw).max(1.0);
-        tw = gridcraft_pdf::text_width(font, size, &text);
+        tw = measure(&text, size)?;
     }
     if is_num && !wrap && tw > avail + 0.01 && !sh.show_formulas {
-        let hash = gridcraft_pdf::text_width(font, size, "#").max(0.1);
+        let hash = measure("#", size)?.max(0.1);
         text = "#".repeat(((avail / hash).floor().max(1.0) as usize).min(255));
-        tw = gridcraft_pdf::text_width(font, size, &text);
+        tw = measure(&text, size)?;
     }
     let h_align = match st.align.h {
         HAlign::General => {
@@ -1181,17 +1489,19 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     let rotated = rot != 0 && rot != 255;
     // Rotated text wraps along its own direction: upright (±90°) text to the row height.
     let lines: Vec<String> = match (wrap, rotated) {
-        (true, false) => wrap_lines(&text, font, size, avail.max(size)),
-        (true, true) if rot.abs() == 90 => wrap_lines(&text, font, size, (h - 2.0 * pad).max(size)),
+        (true, false) => wrap_shaped(&text, catalog, &st.font.name, st.font.bold, st.font.italic, size, avail.max(size))?,
+        (true, true) if rot.abs() == 90 => wrap_shaped(&text, catalog, &st.font.name, st.font.bold, st.font.italic, size, (h - 2.0 * pad).max(size))?,
         (true, true) => vec![text.lines().next().unwrap_or_default().to_string()],
         (false, _) => vec![text],
     };
-    let line_h = size * 1.2;
+    let laid_out_text = lines.concat();
+    let (line_above, line_below) = shaped_extents(catalog, &st.font.name, st.font.bold, st.font.italic, &laid_out_text, size)?;
+    let line_h = (size * 1.2).max(line_above + line_below);
     let n = lines.len().max(1) as f32;
     let first_baseline = match st.align.v {
-        VAlign::Top => y + pad + size * 0.8,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
-        VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+        VAlign::Top => y + pad + line_above,
+        VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_above,
+        VAlign::Bottom => y + h - pad - line_below - (n - 1.0) * line_h,
     };
     // Overflow into empty neighbours (single-line text, not merged).
     // Center Across Selection spans the empty Center Across cells to its right; the text stays within that run.
@@ -1245,29 +1555,29 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
             } else {
                 (x + pad + (last - i) * line_h, y + pad + size * 0.8)
             };
-            pg.text_rotated(ox, oy, size, font, color, t, angle);
+            draw_shaped_text(pg, catalog, ox, oy, size, &st.font.name, st.font.bold, st.font.italic, color, t, angle)?;
         }
         pg.restore();
-        return;
+        return Ok(());
     }
     if rot == 255 {
         // Vertical stacked text.
-        let chars: Vec<char> = lines.concat().chars().take(500).collect();
+        let vertical_text = lines.concat();
+        let chars: Vec<&str> = gridcraft_pdf::text_clusters(&vertical_text).take(500).map(|(_, c)| c).collect();
         let mut yy = y + pad + size * 0.8;
         for ch in chars {
-            let s = ch.to_string();
-            let cw = gridcraft_pdf::text_width(font, size, &s);
-            pg.text(x + (w - cw) / 2.0, yy, size, font, color, &s);
+            let cw = measure(ch, size)?;
+            draw_shaped_text(pg, catalog, x + (w - cw) / 2.0, yy, size, &st.font.name, st.font.bold, st.font.italic, color, ch, 0.0)?;
             yy += line_h;
             if yy > y + h + line_h {
                 break;
             }
         }
         pg.restore();
-        return;
+        return Ok(());
     }
     for (i, line) in lines.iter().enumerate() {
-        let lw = gridcraft_pdf::text_width(font, size, line);
+        let lw = measure(line, size)?;
         let lx = match h_align {
             HAlign::Right => x + w - pad - lw - indent,
             HAlign::Center => x + (w + across - lw) / 2.0,
@@ -1277,7 +1587,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         if ly - size > y + h || ly < y - line_h {
             continue;
         }
-        pg.text(lx, ly, size, font, color, line);
+        draw_shaped_text(pg, catalog, lx, ly, size, &st.font.name, st.font.bold, st.font.italic, color, line, 0.0)?;
         if st.font.underline != Underline::None {
             let uw = (size * 0.06).max(0.2);
             pg.stroke_line(lx, ly + size * 0.12, lx + lw, ly + size * 0.12, uw, color);
@@ -1290,6 +1600,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         }
     }
     pg.restore();
+    Ok(())
 }
 
 /// Sheet pixel rectangle of an anchor.
@@ -1315,12 +1626,13 @@ fn decode_image(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u3
 /// picture again, but the decode happens once).
 fn draw_objects(
     pg: &mut Page,
+    catalog: &FontCatalog,
     wb: &Workbook,
     si: usize,
     sh: &Sheet,
     b: &Block,
     pics: &mut std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>>,
-) {
+) -> std::result::Result<(), String> {
     let block = b.range();
     let (sx0, sy0) = (sh.col_left(block.start.col), sh.row_top(block.start.row));
     let (sx1, sy1) = (sh.col_left(block.end.col.saturating_add(1)), sh.row_top(block.end.row.saturating_add(1)));
@@ -1330,7 +1642,7 @@ fn draw_objects(
     let place = |r: (f64, f64, f64, f64)| (bx + ((r.0 - sx0) as f32) * b.k, by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k);
     pg.save();
     pg.clip_rect(bx, by, bw, bh);
-    draw_sparklines(pg, wb, si, sh, b, block);
+    draw_sparklines(pg, catalog, wb, si, sh, b, block)?;
     for (imi, im) in sh.images.iter().enumerate() {
         let r = anchor_rect(sh, &im.anchor);
         if !visible(r) {
@@ -1350,7 +1662,7 @@ fn draw_objects(
             continue;
         }
         let (x, y, w, h) = place(r);
-        draw_shape(pg, wb, shp, b, (x, y, w, h));
+        draw_shape(pg, catalog, wb, shp, b, (x, y, w, h))?;
     }
     for ch in &sh.charts {
         let r = anchor_rect(sh, &ch.anchor);
@@ -1359,13 +1671,22 @@ fn draw_objects(
         }
         let (x, y, _, _) = place(r);
         let data = gridcraft_chart::resolve(wb, si, ch);
-        let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure);
-        draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
+        let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure { catalog });
+        draw_prims(pg, catalog, &prims, Xf { ox: x, oy: y, k: b.k })?;
     }
     pg.restore();
+    Ok(())
 }
 
-fn draw_sparklines(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, block: RangeRef) {
+fn draw_sparklines(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    wb: &Workbook,
+    si: usize,
+    sh: &Sheet,
+    b: &Block,
+    block: RangeRef,
+) -> std::result::Result<(), String> {
     for sp in &sh.sparklines {
         if !block.contains(sp.cell) {
             continue;
@@ -1378,11 +1699,19 @@ fn draw_sparklines(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Bloc
         let (x, y, w, h) = b.rect(RangeRef::cell(sp.cell));
         let (wpx, hpx) = (w / b.k, h / b.k);
         let prims = gridcraft_chart::render_sparkline(sp.kind, &vals, [color[0], color[1], color[2], 255], sp.markers, wpx, hpx);
-        draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
+        draw_prims(pg, catalog, &prims, Xf { ox: x, oy: y, k: b.k })?;
     }
+    Ok(())
 }
 
-fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Block, (x, y, w, h): (f32, f32, f32, f32)) {
+fn draw_shape(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    wb: &Workbook,
+    shp: &gridcraft_model::Shape,
+    b: &Block,
+    (x, y, w, h): (f32, f32, f32, f32),
+) -> std::result::Result<(), String> {
     let fill = rgb_of(shp.fill, wb);
     let line = rgb_of(shp.line, wb).filter(|_| !shp.format.no_line).map(|c| (c, (0.75 * b.k).max(0.25)));
     match shp.kind {
@@ -1410,34 +1739,44 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
             pg.polygon(&[[x, y], [x + w, y], [x + w, y + h], [x, y + h]], fill, line);
         }
     }
-    if shp.text.is_empty() {
-        return;
-    }
-    use gridcraft_model::{ShapeTextAlign, ShapeTextAnchor};
-    let fm = &shp.format;
-    let text_box = shp.kind == ShapeKind::TextBox;
-    let size = fm.font_size.unwrap_or(11.0).clamp(1.0, 4000.0) * b.scale;
-    let font = Font::styled(Font::family_for(fm.font.as_deref().unwrap_or("")), fm.bold, fm.italic);
-    let color = fm.text_color.and_then(|c| rgb_of(c, wb)).unwrap_or([0, 0, 0]);
-    let align = fm.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
-    let anchor = fm.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
-    let lines = wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size));
-    let block_h = lines.len().min(500) as f32 * size * 1.2;
-    let mut yy = match anchor {
-        ShapeTextAnchor::Top => y + 2.0 * b.k,
-        ShapeTextAnchor::Middle => y + (h - block_h) / 2.0,
-        ShapeTextAnchor::Bottom => y + h - 2.0 * b.k - block_h,
-    } + size * 0.8;
-    for l in lines.iter().take(500) {
-        let lw = gridcraft_pdf::text_width(font, size, l);
-        let lx = match align {
-            ShapeTextAlign::Left => x + 2.0 * b.k,
-            ShapeTextAlign::Center => x + (w - lw) / 2.0,
-            ShapeTextAlign::Right => x + w - 2.0 * b.k - lw,
+    if !shp.text.is_empty() {
+        use gridcraft_model::{ShapeTextAlign, ShapeTextAnchor};
+        let fm = &shp.format;
+        let text_box = shp.kind == ShapeKind::TextBox;
+        let size = fm.font_size.unwrap_or(11.0).clamp(1.0, 4000.0) * b.scale;
+        let font = Font::styled(Font::family_for(fm.font.as_deref().unwrap_or("")), fm.bold, fm.italic);
+        let color = fm.text_color.and_then(|c| rgb_of(c, wb)).unwrap_or([0, 0, 0]);
+        let align = fm.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
+        let anchor = fm.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
+        let unicode = needs_unicode_text(&shp.text);
+        let family = fm.font.as_deref().unwrap_or("Arial");
+        let lines = if unicode {
+            wrap_shaped(&shp.text, catalog, family, fm.bold, fm.italic, size, (w - 4.0 * b.k).max(size))?
+        } else {
+            wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size))
         };
-        pg.text(lx, yy, size, font, color, l);
-        yy += size * 1.2;
+        let block_h = lines.len().min(500) as f32 * size * 1.2;
+        let mut yy = match anchor {
+            ShapeTextAnchor::Top => y + 2.0 * b.k,
+            ShapeTextAnchor::Middle => y + (h - block_h) / 2.0,
+            ShapeTextAnchor::Bottom => y + h - 2.0 * b.k - block_h,
+        } + size * 0.8;
+        for l in lines.iter().take(500) {
+            let lw = if unicode { shaped_width(catalog, family, fm.bold, fm.italic, l, size)? } else { gridcraft_pdf::text_width(font, size, l) };
+            let lx = match align {
+                ShapeTextAlign::Left => x + 2.0 * b.k,
+                ShapeTextAlign::Center => x + (w - lw) / 2.0,
+                ShapeTextAlign::Right => x + w - 2.0 * b.k - lw,
+            };
+            if unicode {
+                draw_shaped_text(pg, catalog, lx, yy, size, family, fm.bold, fm.italic, color, l, 0.0)?;
+            } else {
+                pg.text(lx, yy, size, font, color, l);
+            }
+            yy += size * 1.2;
+        }
     }
+    Ok(())
 }
 
 fn draw_headings(pg: &mut Page, b: &Block, col_heads: bool, row_heads: bool, at: (f32, f32), size: (f32, f32)) {
@@ -1475,7 +1814,13 @@ fn draw_headings(pg: &mut Page, b: &Block, col_heads: bool, row_heads: bool, at:
     }
 }
 
-fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::HfPage, cx: &HfContext) {
+fn draw_header_footer(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    lay: &SheetLayout,
+    which: gridcraft_model::HfPage,
+    cx: &HfContext,
+) -> std::result::Result<(), String> {
     let [l, r, _, _, hm, fm] = lay.margins;
     let pw = lay.page_w;
     let ph = lay.page_h;
@@ -1493,17 +1838,27 @@ fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::
             let lines: Vec<&str> = sec.text.split('\n').take(20).collect();
             let n = lines.len() as f32;
             for (j, line) in lines.iter().enumerate() {
-                let lw = gridcraft_pdf::text_width(font, size, line);
+                let unicode = needs_unicode_text(line);
+                let lw = if unicode {
+                    shaped_width(catalog, "Arial", sec.bold, sec.italic, line, size)?
+                } else {
+                    gridcraft_pdf::text_width(font, size, line)
+                };
                 let x = match i {
                     0 => l,
                     1 => (pw - lw) / 2.0,
                     _ => pw - r - lw,
                 };
                 let y = if header { hm + size * 0.8 + j as f32 * size * 1.2 } else { ph - fm - size * 0.22 - (n - 1.0 - j as f32) * size * 1.2 };
-                pg.text(x, y, size, font, [0, 0, 0], line);
+                if unicode {
+                    draw_shaped_text(pg, catalog, x, y, size, "Arial", sec.bold, sec.italic, [0, 0, 0], line, 0.0)?;
+                } else {
+                    pg.text(x, y, size, font, [0, 0, 0], line);
+                }
             }
         }
     }
+    Ok(())
 }
 
 /// Builds a block for rows × cols positioned at (x, y) on the page.
@@ -1543,7 +1898,17 @@ fn seg_size(sh: &Sheet, seg: (u32, u32), rows: bool) -> f32 {
 }
 
 /// Renders laid-out sheets to a PDF.
-pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
+pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> std::result::Result<(Vec<u8>, usize), String> {
+    render_pdf_with_catalog(wb, layouts, file, path, &FontCatalog::system())
+}
+
+fn render_pdf_with_catalog(
+    wb: &Workbook,
+    layouts: &[SheetLayout],
+    file: &str,
+    path: &str,
+    catalog: &FontCatalog,
+) -> std::result::Result<(Vec<u8>, usize), String> {
     let mut doc = PdfDoc::new();
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
@@ -1577,7 +1942,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                 let mut x = ox + lay.heading_w * k;
                 for (csi, cs) in csegs.iter().enumerate() {
                     let b = make_block(wb, lay.sheet, sh, *rs, *cs, x, y, lay);
-                    draw_block(pg, &b, lay.settings.gridlines, &mut cf);
+                    draw_block(pg, catalog, &b, lay.settings.gridlines, &mut cf)?;
                     draw_block_links(pg, &b, page_index, &mut pending_links);
                     printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: *rs, cols: *cs, x, y, k });
                     if lay.settings.headings {
@@ -1591,7 +1956,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                 y += seg_size(sh, *rs, true) * k;
             }
             if let Some(b) = &body {
-                draw_objects(pg, wb, lay.sheet, sh, b, &mut pics);
+                draw_objects(pg, catalog, wb, lay.sheet, sh, b, &mut pics)?;
             }
             if lay.settings.headings {
                 let fill = [0xF2, 0xF2, 0xF2];
@@ -1607,7 +1972,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                 date: date.clone(),
                 time: time.clone(),
             };
-            draw_header_footer(pg, lay, lay.settings.hf_page(pi == 0, page_no), &cx);
+            draw_header_footer(pg, catalog, lay, lay.settings.hf_page(pi == 0, page_no), &cx)?;
         }
     }
     for link in pending_links {
@@ -1619,17 +1984,53 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
         }
     }
     let n = doc.page_count();
-    (doc.finish(), n)
+    Ok((doc.finish(), n))
 }
 
 // ---------------------------------------------------------------- commands
+
+/// Accounts decoded font bytes without confusing the per-font and aggregate limits.
+fn checked_pdf_font_total(total_bytes: usize, font_bytes: usize) -> std::result::Result<usize, &'static str> {
+    if font_bytes > 32 * 1024 * 1024 {
+        return Err("a supplied PDF font exceeds the 32 MiB decoded limit");
+    }
+    let total_bytes = total_bytes.checked_add(font_bytes).ok_or("supplied font data size overflow")?;
+    if total_bytes > 64 * 1024 * 1024 {
+        return Err("supplied PDF font data exceeds the 64 MiB total limit");
+    }
+    Ok(total_bytes)
+}
 
 fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let opts = PrintOptions::from_params(p, cmd)?;
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
-    Ok(render_pdf(&d.wb, &lays, &d.display_title(), &path))
+    let mut catalog = FontCatalog::system();
+    if let Some(fonts) = p.get("pdfFonts") {
+        let fonts = fonts.as_array().ok_or_else(|| bad(cmd, "`pdfFonts` must be an array of {base64, faceIndex?}"))?;
+        if fonts.len() > 8 {
+            return Err(bad(cmd, "`pdfFonts` accepts at most 8 font faces"));
+        }
+        let mut total_bytes = 0usize;
+        for font in fonts {
+            let encoded = font.get("base64").and_then(Json::as_str).ok_or_else(|| bad(cmd, "each `pdfFonts` entry needs base64 font data"))?;
+            if encoded.len() > 48 * 1024 * 1024 {
+                return Err(bad(cmd, "a supplied PDF font exceeds the 48 MiB encoded limit"));
+            }
+            let bytes = crate::io::base64_decode(encoded).ok_or_else(|| bad(cmd, "`pdfFonts` contains invalid base64"))?;
+            total_bytes = checked_pdf_font_total(total_bytes, bytes.len()).map_err(|message| bad(cmd, message))?;
+            let index = match font.get("faceIndex") {
+                None => 0,
+                Some(value) => value
+                    .as_u64()
+                    .and_then(|index| u32::try_from(index).ok())
+                    .ok_or_else(|| bad(cmd, "`faceIndex` must be a non-negative 32-bit integer"))?,
+            };
+            catalog.add_font(bytes, index).map_err(|message| bad(cmd, message))?;
+        }
+    }
+    render_pdf_with_catalog(&d.wb, &lays, &d.display_title(), &path, &catalog).map_err(|message| bad(cmd, message))
 }
 
 pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1859,8 +2260,393 @@ mod tests {
         let bytes = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
         (bytes, r["pages"].as_u64().unwrap())
     }
+
+    fn thai_catalog() -> Option<(FontCatalog, PdfFont)> {
+        let catalog = FontCatalog::system();
+        match catalog.face_for("Arial", false, false, "น้ำกุ้งผู้ใช้เก้าอี้ภาษาไทย") {
+            Ok(font) => Some((catalog, font)),
+            Err(error) => {
+                assert!(std::env::var_os("GRIDCRAFT_REQUIRE_THAI_FONT").is_none(), "CI requires an embeddable Thai font: {error}");
+                eprintln!("skipping Thai shaping regression; no embeddable Thai font: {error}");
+                None
+            }
+        }
+    }
+
+    fn minimal_test_ttf() -> Vec<u8> {
+        let mut head = vec![0; 54];
+        head[0..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        head[12..16].copy_from_slice(&0x5F0F_3CF5u32.to_be_bytes());
+        head[18..20].copy_from_slice(&1000u16.to_be_bytes());
+        let mut maxp = vec![0; 6];
+        maxp[0..4].copy_from_slice(&0x0000_5000u32.to_be_bytes());
+        maxp[4..6].copy_from_slice(&1u16.to_be_bytes());
+        let mut hhea = vec![0; 36];
+        hhea[0..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        hhea[34..36].copy_from_slice(&1u16.to_be_bytes());
+        let hmtx = [0x01, 0xF4, 0, 0];
+        let loca = [0, 0, 0, 0];
+        let glyf: [u8; 0] = [];
+        let cmap = [0, 0, 0, 1, 0, 3, 0, 1, 0, 0, 0, 12, 0, 4, 0, 0, 0, 24, 0, 0, 0, 2, 0, 0, 0, 0, 0xFF, 0xFF, 0, 0, 0xFF, 0xFF, 0, 1, 0, 0];
+        let tables: [(&[u8; 4], &[u8]); 7] =
+            [(b"head", &head), (b"maxp", &maxp), (b"hhea", &hhea), (b"hmtx", &hmtx), (b"loca", &loca), (b"glyf", &glyf), (b"cmap", &cmap)];
+        let mut out = vec![0; 12 + tables.len() * 16];
+        out[0..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        out[4..6].copy_from_slice(&(tables.len() as u16).to_be_bytes());
+        let mut offset = out.len();
+        for (index, (tag, table)) in tables.iter().enumerate() {
+            while !offset.is_multiple_of(4) {
+                out.push(0);
+                offset += 1;
+            }
+            let record = 12 + index * 16;
+            out[record..record + 4].copy_from_slice(*tag);
+            out[record + 8..record + 12].copy_from_slice(&(offset as u32).to_be_bytes());
+            out[record + 12..record + 16].copy_from_slice(&(table.len() as u32).to_be_bytes());
+            out.extend_from_slice(table);
+            offset = out.len();
+        }
+        out
+    }
+
+    /// Tiny, generated TrueType face with 313-unit advances for printable ASCII characters.
+    /// Keeping this fixture in code makes the PDF width regression independent of installed fonts.
+    fn narrow_ascii_test_ttf() -> Vec<u8> {
+        narrow_test_ttf(32)
+    }
+
+    fn narrow_test_ttf(first: u16) -> Vec<u8> {
+        let mut head = vec![0; 54];
+        head[0..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        head[12..16].copy_from_slice(&0x5F0F_3CF5u32.to_be_bytes());
+        head[18..20].copy_from_slice(&1000u16.to_be_bytes());
+
+        let mut maxp = vec![0; 32];
+        maxp[0..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        maxp[4..6].copy_from_slice(&96u16.to_be_bytes());
+
+        let mut hhea = vec![0; 36];
+        hhea[0..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        hhea[34..36].copy_from_slice(&96u16.to_be_bytes());
+        let mut hmtx = Vec::with_capacity(96 * 4);
+        for _ in 0..96 {
+            hmtx.extend_from_slice(&313u16.to_be_bytes());
+            hmtx.extend_from_slice(&0i16.to_be_bytes());
+        }
+        let loca = vec![0; 97 * 2];
+        let glyf: [u8; 0] = [];
+
+        let mut format4 = Vec::with_capacity(222);
+        format4.extend_from_slice(&4u16.to_be_bytes());
+        format4.extend_from_slice(&222u16.to_be_bytes());
+        format4.extend_from_slice(&0u16.to_be_bytes());
+        format4.extend_from_slice(&4u16.to_be_bytes());
+        format4.extend_from_slice(&4u16.to_be_bytes());
+        format4.extend_from_slice(&1u16.to_be_bytes());
+        format4.extend_from_slice(&0u16.to_be_bytes());
+        format4.extend_from_slice(&(first + 94).to_be_bytes());
+        format4.extend_from_slice(&u16::MAX.to_be_bytes());
+        format4.extend_from_slice(&0u16.to_be_bytes());
+        format4.extend_from_slice(&first.to_be_bytes());
+        format4.extend_from_slice(&u16::MAX.to_be_bytes());
+        format4.extend_from_slice(&0u16.to_be_bytes());
+        format4.extend_from_slice(&1u16.to_be_bytes());
+        format4.extend_from_slice(&4u16.to_be_bytes());
+        format4.extend_from_slice(&0u16.to_be_bytes());
+        for glyph in 1u16..=95 {
+            format4.extend_from_slice(&glyph.to_be_bytes());
+        }
+        let mut cmap = vec![0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 20, 0, 3, 0, 1, 0, 0, 0, 20];
+        cmap.extend_from_slice(&format4);
+
+        // An undecodable Macintosh record precedes the usable Unicode family name, as in
+        // some craft-fonts faces. It must not turn this distinct family into `Unknown`.
+        let family: Vec<u8> = "GridCraftTestNarrow".encode_utf16().flat_map(u16::to_be_bytes).collect();
+        let mut name = Vec::new();
+        for value in [0u16, 2, 30, 1, 1, 0, 1, 1, 0, 3, 1, 0x0409, 1, family.len() as u16, 1] {
+            name.extend_from_slice(&value.to_be_bytes());
+        }
+        name.push(b'x');
+        name.extend_from_slice(&family);
+        let tables: [(&[u8; 4], &[u8]); 8] = [
+            (b"head", &head),
+            (b"maxp", &maxp),
+            (b"hhea", &hhea),
+            (b"hmtx", &hmtx),
+            (b"loca", &loca),
+            (b"glyf", &glyf),
+            (b"cmap", &cmap),
+            (b"name", &name),
+        ];
+        let mut out = vec![0; 12 + tables.len() * 16];
+        out[0..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        out[4..6].copy_from_slice(&(tables.len() as u16).to_be_bytes());
+        let mut offset = out.len();
+        for (index, (tag, table)) in tables.iter().enumerate() {
+            while !offset.is_multiple_of(4) {
+                out.push(0);
+                offset += 1;
+            }
+            let record = 12 + index * 16;
+            out[record..record + 4].copy_from_slice(*tag);
+            out[record + 8..record + 12].copy_from_slice(&(offset as u32).to_be_bytes());
+            out[record + 12..record + 16].copy_from_slice(&(table.len() as u32).to_be_bytes());
+            out.extend_from_slice(table);
+            offset = out.len();
+        }
+        out
+    }
+
     fn contains(hay: &[u8], needle: &str) -> bool {
         hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+    }
+
+    fn has_actual_text(pdf: &[u8], text: &str) -> bool {
+        let mut encoded = String::from("/ActualText <FEFF");
+        for unit in text.encode_utf16() {
+            use std::fmt::Write as _;
+            let _ = write!(encoded, "{unit:04X}");
+        }
+        encoded.push('>');
+        contains(pdf, &encoded)
+    }
+
+    fn stroke_operator_count(pdf: &[u8]) -> usize {
+        String::from_utf8_lossy(pdf).lines().filter(|line| line.trim_end().ends_with(" S")).count()
+    }
+
+    fn pdf_num(value: f32) -> String {
+        let rounded = (value * 1000.0).round() / 1000.0;
+        if rounded == rounded.trunc() {
+            format!("{}", rounded as i64)
+        } else {
+            format!("{rounded:.3}").trim_end_matches('0').trim_end_matches('.').to_string()
+        }
+    }
+
+    #[test]
+    fn rotated_font_runs_advance_along_the_shared_baseline() {
+        let advance = 80.0;
+        for (degrees, expected) in [
+            (0.0_f32, (80.0, 0.0)),
+            (30.0, (80.0 * 3.0_f32.sqrt() / 2.0, 40.0)),
+            (-30.0, (80.0 * 3.0_f32.sqrt() / 2.0, -40.0)),
+            (90.0, (0.0, 80.0)),
+            (-90.0, (0.0, -80.0)),
+        ] {
+            let origin = advance_text_baseline(12.0, 25.0, advance, degrees.to_radians());
+            assert!((origin.0 - (12.0 + expected.0)).abs() < 0.001, "x at {degrees} degrees: {origin:?}");
+            assert!((origin.1 - (25.0 + expected.1)).abs() < 0.001, "y at {degrees} degrees: {origin:?}");
+        }
+        assert_eq!(advance_text_baseline(12.0, 25.0, advance, f32::NAN), (92.0, 25.0));
+    }
+
+    /// Wrapped text breaks between words, as Excel does ("Regular / matrix", not "Regular mat /
+    /// rix"); only a word wider than the cell breaks inside, between grapheme clusters.
+    #[test]
+    fn wrapped_text_breaks_between_words() {
+        let catalog = FontCatalog::empty();
+        let w = |t: &str| shaped_width(&catalog, "Calibri", false, false, t, 11.0).unwrap();
+        // Room for "Regular" and a bit, not for "Regular matrix".
+        let width = w("Regular m") + 1.0;
+        let lines = wrap_shaped("Regular matrix", &catalog, "Calibri", false, false, 11.0, width).unwrap();
+        assert_eq!(lines, vec!["Regular".to_string(), "matrix".to_string()]);
+        let lines = wrap_shaped("10/22 - 10/28", &catalog, "Calibri", false, false, 11.0, w("10/22 - 10/") + 1.0).unwrap();
+        assert_eq!(lines, vec!["10/22 -".to_string(), "10/28".to_string()]);
+        // A single word too wide for the cell still breaks, and no text is lost.
+        let long = "Supercalifragilistic";
+        let lines = wrap_shaped(long, &catalog, "Calibri", false, false, 11.0, w("Supercal") + 1.0).unwrap();
+        assert!(lines.len() > 1 && lines.concat() == long, "{lines:?}");
+        // Paragraphs stay separate.
+        assert_eq!(wrap_shaped("a\nb", &catalog, "Calibri", false, false, 11.0, 200.0).unwrap(), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn unavailable_latin_styles_use_standard_fonts_instead_of_another_face() {
+        let mut catalog = FontCatalog::empty();
+        catalog.add_font(std::sync::Arc::<[u8]>::from(narrow_ascii_test_ttf()), 0).unwrap();
+        let regular = shaped_runs(&catalog, "GridCraftTestNarrow", false, false, "Regular matrix", 11.0).unwrap();
+        assert!(regular.iter().all(|run| matches!(run.font, TextRunFont::Embedded(_))));
+        for (bold, italic) in [(true, false), (false, true), (true, true)] {
+            let runs = shaped_runs(&catalog, "GridCraftTestNarrow", bold, italic, "Regular matrix", 11.0).unwrap();
+            let expected = Font::styled(Font::family_for("GridCraftTestNarrow"), bold, italic);
+            assert!(runs.iter().all(|run| matches!(run.font, TextRunFont::Standard(font) if font == expected)));
+        }
+    }
+
+    #[test]
+    fn long_unspaced_prefix_search_only_measures_line_sized_text() {
+        for count in [9000, 32_000] {
+            let text = "ก".repeat(count);
+            let mut remaining = text.as_str();
+            let mut measured_clusters = 0usize;
+            let mut largest_probe = 0usize;
+            let mut consumed = 0usize;
+            while !remaining.is_empty() {
+                let (end, clusters) = fitting_text_prefix(remaining, 8192, 20.0, |prefix| {
+                    let count = gridcraft_pdf::text_clusters(prefix).count();
+                    measured_clusters += count;
+                    largest_probe = largest_probe.max(count);
+                    Ok(count as f32)
+                })
+                .unwrap();
+                assert!(end > 0 && clusters <= 20);
+                consumed += clusters;
+                remaining = &remaining[end..];
+            }
+            assert_eq!(consumed, count);
+            assert!(largest_probe <= 32, "a narrow line must not shape thousands of remaining clusters");
+            assert!(measured_clusters < count * 16, "search work must grow with consumed text: {measured_clusters}");
+        }
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::disallowed_methods)] // Native-only timing regression; WASM has no clock.
+    fn long_unspaced_thai_wrapping_preserves_text_and_reports_time() {
+        let Some((catalog, font)) = thai_catalog() else { return };
+        let width = shaped_width(&catalog, font.family(), false, false, &"ก".repeat(20), 11.0).unwrap() + 0.01;
+        for count in [9000, 32_000] {
+            let text = "ก".repeat(count);
+            let start = std::time::Instant::now();
+            let lines = wrap_shaped(&text, &catalog, font.family(), false, false, 11.0, width).unwrap();
+            eprintln!("wrapped {count} Thai characters into {} lines in {:?}", lines.len(), start.elapsed());
+            assert_eq!(lines.concat(), text);
+            assert!(lines.len() > 1 && lines.len() <= 2000);
+            let mut session = s();
+            session.execute("cell.set", json!({"cell": "A1", "input": text})).unwrap();
+            session.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
+            session.execute("home.columnWidth", json!({"cols": "A:A", "chars": 20})).unwrap();
+            let start = std::time::Instant::now();
+            let (pdf, _) = build_pdf(&session, &json!({}), "file.exportPdf").unwrap();
+            eprintln!("exported one wrapped cell with {count} Thai characters in {:?}", start.elapsed());
+            assert!(contains(&pdf, "/FontFile2") && contains(&pdf, "/ToUnicode"));
+        }
+    }
+
+    #[test]
+    fn wrapped_whitespace_and_explicit_newlines_are_preserved() {
+        let catalog = FontCatalog::empty();
+        let text = "  Regular   matrix\ttext\u{2003}more\n\n10/22  -  10/28 \n";
+        let lines = wrap_shaped(text, &catalog, "Calibri", false, false, 11.0, f32::MAX).unwrap();
+        assert_eq!(lines, text.split('\n').collect::<Vec<_>>());
+        let width = shaped_width(&catalog, "Calibri", false, false, "Regular m", 11.0).unwrap();
+        assert_eq!(wrap_shaped("Regular   matrix", &catalog, "Calibri", false, false, 11.0, width).unwrap(), ["Regular", "matrix"]);
+        assert_eq!(wrap_shaped("Regular\tmatrix", &catalog, "Calibri", false, false, 11.0, width).unwrap(), ["Regular", "matrix"]);
+        let paragraphs = "x\n".repeat(2100);
+        assert_eq!(wrap_shaped(&paragraphs, &catalog, "Calibri", false, false, 11.0, width).unwrap().len(), 2000);
+        let words = "word ".repeat(2100);
+        let width = shaped_width(&catalog, "Calibri", false, false, "word", 11.0).unwrap() + 0.1;
+        let lines = wrap_shaped(&words, &catalog, "Calibri", false, false, 11.0, width).unwrap();
+        assert_eq!(lines.len(), 2000, "word-boundary breaks obey the same output budget as cluster and paragraph breaks");
+        assert!(lines.iter().all(|line| line == "word"));
+    }
+
+    #[test]
+    fn thai_and_mixed_text_wrap_without_splitting_clusters() {
+        let Some((catalog, font)) = thai_catalog() else { return };
+        let glyphs = font.shape("น้ำ").unwrap();
+        assert!(glyphs.iter().all(|glyph| glyph.glyph_id != 0));
+        assert!(glyphs.iter().any(|glyph| glyph.x_offset != 0 || glyph.y_offset != 0), "Thai marks must actually be shaped");
+        let text = "น้ำกุ้งผู้ใช้เก้าอี้".repeat(8);
+        let width = shaped_width(&catalog, "Calibri", false, false, "น้ำกุ้ง", 11.0).unwrap();
+        let lines = wrap_shaped(&text, &catalog, "Calibri", false, false, 11.0, width).unwrap();
+        assert!(lines.len() > 1);
+        assert_eq!(lines.concat(), text);
+        let boundaries: std::collections::HashSet<usize> =
+            gridcraft_pdf::text_clusters(&text).map(|(start, cluster)| start + cluster.len()).collect();
+        let mut end = 0usize;
+        for line in &lines {
+            end += line.len();
+            assert!(boundaries.contains(&end), "a wrapped line must end at a grapheme boundary");
+            assert!(shaped_width(&catalog, "Calibri", false, false, line, 11.0).unwrap() <= width + 0.01);
+        }
+        let width = ["Regular", "ภาษาไทย", "matrix"]
+            .iter()
+            .map(|word| shaped_width(&catalog, "Calibri", false, false, word, 11.0).unwrap())
+            .fold(0.0f32, f32::max)
+            + 0.1;
+        assert_eq!(wrap_shaped("Regular ภาษาไทย matrix", &catalog, "Calibri", false, false, 11.0, width).unwrap(), ["Regular", "ภาษาไทย", "matrix"]);
+    }
+
+    #[test]
+    fn serialized_mixed_font_runs_share_rotated_baselines() {
+        let Some((catalog, embedded)) = thai_catalog() else { return };
+        let latin_before = "ABC ";
+        let thai = "ภาษาไทย";
+        let latin_after = " XYZ";
+        let size = 12.0;
+        let actual_runs = shaped_runs(&catalog, "Calibri", false, false, "ABC ภาษาไทย XYZ", size).expect("sample text shapes into font runs");
+        assert!(actual_runs.len() > 1, "the Thai/Latin sample must exercise multiple actual font runs");
+        assert!(actual_runs.iter().any(|run| run.text.contains(thai)), "the Thai sample must be present in the shaped runs");
+        let runs = || {
+            vec![
+                TextRun {
+                    font: TextRunFont::Standard(Font::Helvetica),
+                    text: latin_before.to_string(),
+                    width: gridcraft_pdf::text_width(Font::Helvetica, size, latin_before),
+                },
+                TextRun {
+                    font: TextRunFont::Embedded(embedded.clone()),
+                    text: thai.to_string(),
+                    width: embedded.text_width(thai, size).expect("validated font width"),
+                },
+                TextRun {
+                    font: TextRunFont::Standard(Font::Helvetica),
+                    text: latin_after.to_string(),
+                    width: gridcraft_pdf::text_width(Font::Helvetica, size, latin_after),
+                },
+            ]
+        };
+        let total_width: f32 = runs().iter().map(|run| run.width).sum();
+        let first_width = gridcraft_pdf::text_width(Font::Helvetica, size, latin_before);
+        let thai_width = embedded.text_width(thai, size).expect("validated font width");
+
+        for degrees in [0.0_f32, 30.0, -30.0, 90.0, -90.0] {
+            let angle = degrees.to_radians();
+            let second_origin = advance_text_baseline(20.0, 40.0, first_width, angle);
+            let third_origin = advance_text_baseline(second_origin.0, second_origin.1, thai_width, angle);
+            let first_thai_glyph = embedded.shape(thai).expect("validated font shapes Thai").first().cloned().expect("Thai text has a visible glyph");
+            let expected_thai_glyph = if first_thai_glyph.x_offset == 0 && first_thai_glyph.y_offset == 0 { Some(second_origin) } else { None };
+            let mut doc = PdfDoc::new();
+            let page = doc.add_page(200.0, 300.0);
+            let width = draw_text_runs(page, runs(), 20.0, 40.0, size, [0, 0, 0], angle).expect("runs render");
+            assert!((width - total_width).abs() < 0.001, "returned width stays on baseline at {degrees} degrees");
+            let pdf = doc.finish();
+            assert_eq!(
+                pdf.windows(b"/ActualText".len()).filter(|window| *window == b"/ActualText").count(),
+                1,
+                "mixed font runs share one semantic source span"
+            );
+            assert!(!contains(&pdf, "3 Tr"), "semantic Unicode is not appended as invisible text");
+            let expected_third = format!(
+                "{} {} {} {} {} {} Tm",
+                pdf_num(angle.sin_cos().1),
+                pdf_num(-angle.sin()),
+                pdf_num(angle.sin()),
+                pdf_num(angle.cos()),
+                pdf_num(third_origin.0),
+                pdf_num(300.0 - third_origin.1),
+            );
+            assert!(contains(&pdf, &expected_third), "serialized third run origin at {degrees} degrees: {expected_third}");
+            let expected_first_thai_glyph = expected_thai_glyph.map(|glyph_origin| {
+                format!(
+                    "{} {} {} {} {} {} Tm <0001> Tj",
+                    pdf_num(angle.cos()),
+                    pdf_num(-angle.sin()),
+                    pdf_num(angle.sin()),
+                    pdf_num(angle.cos()),
+                    pdf_num(glyph_origin.0),
+                    pdf_num(300.0 - glyph_origin.1),
+                )
+            });
+            if let Some(expected_first_thai_glyph) = expected_first_thai_glyph {
+                assert!(
+                    contains(&pdf, &expected_first_thai_glyph),
+                    "serialized embedded glyph origin at {degrees} degrees: {expected_first_thai_glyph}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2027,14 +2813,67 @@ mod tests {
         s.execute("range.setValues", json!({"range": "A1", "values": [["签字清单", 2]]})).unwrap();
         let (pdf, _) = pdf_of(&mut s, json!({}));
         assert!(!contains(&pdf, "(????) Tj"), "CJK cell printed as (????) Tj");
-        assert!(contains(&pdf, "<7B7E5B576E055355> Tj"));
-        assert!(contains(&pdf, "(2) Tj"));
+        let embedded_with_unicode_mapping = contains(&pdf, "/ToUnicode") && contains(&pdf, "/ActualText <FEFF7B7E5B576E055355>");
+        let predefined_cid_fallback = contains(&pdf, "/UniGB-UTF16-H") && contains(&pdf, "<7B7E5B576E055355> Tj");
+        assert!(
+            embedded_with_unicode_mapping || predefined_cid_fallback,
+            "CJK text has neither an embedded Unicode mapping nor the built-in CID fallback"
+        );
+    }
+
+    #[test]
+    fn unicode_drawing_paths_use_supplied_faces_and_preserve_standard_latin() {
+        let mut catalog = FontCatalog::empty();
+        // An original generated face covers Greek, without depending on installed fonts.
+        catalog.add_font(std::sync::Arc::<[u8]>::from(narrow_test_ttf(0x0391)), 0).unwrap();
+        assert!(catalog.face_for("Arial", false, false, "Ω").is_ok());
+        for text in ["Ω", "Latin € ?"] {
+            for path in ["chart", "shape", "header", "footer"] {
+                let pdf = if path == "chart" {
+                    let mut doc = PdfDoc::new();
+                    let pg = doc.add_page(200.0, 200.0);
+                    let prim = gridcraft_chart::Prim::Text {
+                        x: 20.0,
+                        y: 20.0,
+                        text: text.to_string(),
+                        size: 10.0,
+                        color: [0, 0, 0, 255],
+                        bold: false,
+                        align: gridcraft_chart::HAlign::Center,
+                        valign: gridcraft_chart::VAlign::Top,
+                        rotation: 0.0,
+                    };
+                    draw_prims(pg, &catalog, &[prim], Xf { ox: 0.0, oy: 0.0, k: 1.0 }).unwrap();
+                    doc.finish()
+                } else {
+                    let mut session = s();
+                    session.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+                    if path == "shape" {
+                        session.execute("insert.shape", json!({"kind": "textBox", "at": "A1", "width": 180, "height": 40, "text": text})).unwrap();
+                    } else {
+                        session.execute("pageLayout.headerFooter", json!({"part": path, "section": "center", "text": text})).unwrap();
+                    }
+                    let document = session.doc().unwrap();
+                    let opts = PrintOptions::from_params(&json!({}), "file.exportPdf").unwrap();
+                    let lays = layouts(&document.wb, &opts);
+                    render_pdf_with_catalog(&document.wb, &lays, "Book1", "", &catalog).unwrap().0
+                };
+                if text == "Ω" {
+                    assert!(contains(&pdf, "/FontFile2"), "{path} must embed the supplied Unicode face");
+                    assert!(has_actual_text(&pdf, text), "{path} must retain the Unicode source text");
+                } else {
+                    assert!(!contains(&pdf, "/FontFile2"), "{path} must keep the Standard-14 WinAnsi path");
+                    assert!(contains(&pdf, "/BaseFont /Helvetica"));
+                }
+            }
+        }
     }
 
     #[test]
     fn pdf_contains_text_and_header_codes_expand() {
         let mut s = s();
         s.execute("range.setValues", json!({"range": "A1", "values": [["Quarterly Report", null], ["Total", 1234.5]]})).unwrap();
+        s.execute("home.fontName", json!({"range": "A1:B2", "name": "GridCraft Missing Test Family"})).unwrap();
         s.execute("home.bold", json!({"range": "A1"})).unwrap();
         s.execute(
             "pageLayout.pageSetup",
@@ -2043,12 +2882,13 @@ mod tests {
         .unwrap();
         let (pdf, pages) = pdf_of(&mut s, json!({}));
         assert_eq!(pages, 1);
-        assert!(contains(&pdf, "(Quarterly Report) Tj"));
-        assert!(contains(&pdf, "(1234.5) Tj"));
+        assert!(has_actual_text(&pdf, "Quarterly Report"));
+        assert!(has_actual_text(&pdf, "1234.5"));
         assert!(contains(&pdf, "(Left Sheet1) Tj"));
         assert!(contains(&pdf, "(Page 1 of 1) Tj"));
         assert!(contains(&pdf, "(Book1) Tj"));
-        assert!(contains(&pdf, "/Helvetica-Bold"));
+        assert!(contains(&pdf, "/BaseFont /Helvetica"), "unavailable Latin families use a Standard-14 alias");
+        assert!(!contains(&pdf, "/FontFile2"), "Latin fallback does not embed an arbitrary system face");
         let cx = HfContext {
             page: 3,
             pages: 9,
@@ -2070,6 +2910,227 @@ mod tests {
     }
 
     #[test]
+    fn api_and_print_pipeline_embed_and_shape_thai_text() {
+        let mut s = s();
+        s.execute(
+            "range.setValues",
+            json!({"range": "A1", "values": [
+                ["ภาษาไทย"], ["น้ำ"], ["กุ้ง"], ["ผู้ใช้"], ["เก้าอี้"], ["ป ป ญ ฐ"],
+                ["ยอดรวม 1,234.50 บาท"], ["Thai mixed English with ภาษาไทย\nข้อความหลายบรรทัด และข้อความยาวสำหรับทดสอบการตัดบรรทัด"]
+            ]}),
+        )
+        .unwrap();
+        s.execute("home.columnWidth", json!({"cols": "A:A", "chars": 30})).unwrap();
+        s.execute("home.fontName", json!({"range": "A1:A4", "name": "Arial"})).unwrap();
+        s.execute("home.bold", json!({"range": "A2"})).unwrap();
+        s.execute("home.italic", json!({"range": "A3"})).unwrap();
+        s.execute("home.bold", json!({"range": "A4"})).unwrap();
+        s.execute("home.italic", json!({"range": "A4"})).unwrap();
+        s.execute("home.alignCenter", json!({"range": "A5"})).unwrap();
+        s.execute("home.alignRight", json!({"range": "A6"})).unwrap();
+        s.execute("home.wrapText", json!({"range": "A7", "on": true})).unwrap();
+        s.execute("home.autofitRowHeight", json!({"rows": "7:7"})).unwrap();
+        s.execute("home.wrapText", json!({"range": "A8", "on": true})).unwrap();
+        s.execute("home.autofitRowHeight", json!({"rows": "8:8"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A70", "input": "ข้อความข้ามหน้า ภาษาไทย"})).unwrap();
+        s.execute("pageLayout.pageSetup", json!({"printArea": "A1:A70", "fitToPage": false, "scale": 100})).unwrap();
+        let has_thai_font = thai_catalog().is_some();
+        let (pdf, pages) = pdf_of(&mut s, json!({}));
+        assert!(pages >= 2, "Thai content beyond the first page must paginate");
+        assert!(contains(&pdf, "/Subtype /Type0"));
+        if has_thai_font {
+            assert!(contains(&pdf, "/FontFile2"), "the Thai face is embedded when it is available");
+            assert!(contains(&pdf, "/ToUnicode"));
+        }
+        assert!(contains(&pdf, "/ActualText <FEFF"), "the PDF retains semantic source text for marked Unicode text");
+        let print = s.execute("file.print", json!({})).unwrap();
+        let bytes = crate::io::base64_decode(print["base64"].as_str().unwrap()).unwrap();
+        assert!(contains(&bytes, "/Subtype /Type0"));
+        assert!(print["pages"].as_u64().unwrap_or(0) >= 2);
+        assert_eq!(s.execute("file.printPreview", json!({})).unwrap()["pages"], print["pages"]);
+        let d = s.doc().unwrap();
+        let opts = PrintOptions::from_params(&json!({}), "file.exportPdf").unwrap();
+        let lays = layouts(&d.wb, &opts);
+        let (fallback, _) = render_pdf_with_catalog(&d.wb, &lays, "Book1", "", &FontCatalog::empty()).unwrap();
+        assert!(!contains(&fallback, "/FontFile2"));
+        assert!(!contains(&fallback, "/ToUnicode"), "the predefined CID fallback needs no embedded-font CMap");
+        assert!(has_actual_text(&fallback, "ภาษาไทย"), "export without a Thai font preserves the logical text and succeeds");
+        if let Some(path) = std::env::var_os("GRIDCRAFT_PDF_SAMPLE") {
+            if let Some(parent) = std::path::Path::new(&path).parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, &pdf).unwrap();
+        }
+    }
+
+    #[test]
+    fn engine_pdf_reuses_font_cids_across_repeated_glyphs_in_multiple_cells() {
+        if thai_catalog().is_none() {
+            return;
+        }
+        let mut s = s();
+        let repeated = "ก".repeat(13_108);
+        s.execute("range.setValues", json!({"range": "A1:A3", "values": [[repeated.clone()], [repeated.clone()], [repeated.clone()]]})).unwrap();
+        s.execute("home.fontName", json!({"range": "A1:A3", "name": "Arial"})).unwrap();
+        s.execute("range.setValues", json!({"range": "A4:A5", "values": [[repeated.clone()], [repeated.clone()]]})).unwrap();
+        s.execute("home.fontName", json!({"range": "A4:A5", "name": "Arial"})).unwrap();
+        s.execute("pageLayout.pageSetup", json!({"printArea": "A1:A5", "fitToPage": false, "scale": 100})).unwrap();
+
+        let (pdf, pages) = pdf_of(&mut s, json!({}));
+        assert_eq!(pages, 1, "the repeated-occurrence regression should fit on one exported page");
+        assert!(contains(&pdf, "/CIDToGIDMap"));
+        assert!(contains(&pdf, "/ToUnicode"));
+        assert_eq!(pdf.windows(b"<0001> Tj".len()).filter(|window| *window == b"<0001> Tj").count(), 5 * 13_108);
+        assert!(contains(&pdf, "/ActualText <FEFF"), "the engine output retains the logical Unicode text");
+        if let Some(path) = std::env::var_os("GRIDCRAFT_CID_PDF_SAMPLE") {
+            if let Some(parent) = std::path::Path::new(&path).parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, &pdf).unwrap();
+        }
+    }
+
+    #[test]
+    fn supplied_pdf_font_size_errors_identify_the_limit() {
+        const MIB: usize = 1024 * 1024;
+        assert_eq!(checked_pdf_font_total(0, 32 * MIB), Ok(32 * MIB));
+        assert_eq!(checked_pdf_font_total(32 * MIB, 32 * MIB), Ok(64 * MIB));
+        assert_eq!(checked_pdf_font_total(0, 32 * MIB + 1), Err("a supplied PDF font exceeds the 32 MiB decoded limit"));
+        assert_eq!(checked_pdf_font_total(64 * MIB, 1), Err("supplied PDF font data exceeds the 64 MiB total limit"));
+        assert_eq!(checked_pdf_font_total(usize::MAX, 1), Err("supplied font data size overflow"));
+
+        let session = s();
+        let mut params = json!({"pdfFonts": [{"base64": "A".repeat(48 * MIB + 1)}]});
+        let error = build_pdf(&session, &params, "file.exportPdf").unwrap_err().to_string();
+        assert!(error.contains("48 MiB encoded"), "the pre-decode limit names the encoded size: {error}");
+        if let Json::String(encoded) = &mut params["pdfFonts"][0]["base64"] {
+            encoded.pop();
+        }
+        let error = build_pdf(&session, &params, "file.exportPdf").unwrap_err().to_string();
+        assert!(error.contains("32 MiB decoded"), "an encoded string at the limit reaches the separate decoded-size check: {error}");
+    }
+
+    #[test]
+    fn corrupt_supplied_pdf_font_returns_a_command_error() {
+        let mut s = s();
+        let error = s.execute("file.exportPdf", json!({"pdfFonts": [{"base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]})).unwrap_err().to_string();
+        assert!(error.contains("unsupported font file type"), "unexpected font error: {error}");
+    }
+
+    #[test]
+    fn supplied_pdf_font_face_index_errors_are_command_errors_and_zero_exports() {
+        let encoded = crate::io::base64_encode(&minimal_test_ttf());
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "ordinary PDF export"})).unwrap();
+
+        let valid =
+            s.execute("file.exportPdf", json!({"pdfFonts": [{"base64": encoded, "faceIndex": 0}]})).expect("standalone face zero should export");
+        let bytes = crate::io::base64_decode(valid["base64"].as_str().expect("successful export returns PDF base64")).expect("PDF base64 decodes");
+        assert!(bytes.starts_with(b"%PDF-"));
+        assert_eq!(valid["pages"].as_u64(), Some(1));
+
+        let encoded = crate::io::base64_encode(&minimal_test_ttf());
+        for index in [1u32, 99, u32::MAX] {
+            let error = s
+                .execute("file.exportPdf", json!({"pdfFonts": [{"base64": encoded, "faceIndex": index}]}))
+                .expect_err("an invalid supplied face index must stop export instead of using another face")
+                .to_string();
+            assert!(error.contains(&index.to_string()), "command error should identify the requested face index: {error}");
+            assert!(error.contains("not a collection"), "command error should describe why the index is invalid: {error}");
+        }
+
+        let encoded = crate::io::base64_encode(&minimal_test_ttf());
+        for invalid in [json!(-1), json!(1.5), json!("1"), json!(u64::from(u32::MAX) + 1)] {
+            let error = s
+                .execute("file.exportPdf", json!({"pdfFonts": [{"base64": encoded, "faceIndex": invalid}]}))
+                .expect_err("faceIndex preserves the non-negative 32-bit integer API contract")
+                .to_string();
+            assert!(error.contains("non-negative 32-bit integer"), "unexpected parameter validation error: {error}");
+        }
+    }
+
+    #[test]
+    fn ascii_numeric_cells_use_selected_font_metrics_for_measurement_and_drawing() {
+        let font_bytes = narrow_ascii_test_ttf();
+        let mut catalog = FontCatalog::empty();
+        catalog.add_font(std::sync::Arc::<[u8]>::from(font_bytes.clone()), 0).expect("generated test font is valid");
+        let face = catalog.face_for("GridCraftTestNarrow", false, false, "5,000.00").expect("generated face covers formatted number");
+        assert_eq!(face.family(), "GridCraftTestNarrow", "the first decodable family name identifies the supplied face");
+        let expected_width = face.text_width("5,000.00", 22.0).expect("generated face shapes ASCII");
+        assert!(expected_width < 100.0, "generated face's number width should remain finite and plausible: {expected_width}pt");
+
+        let mut session = s();
+        session.execute("range.setValues", json!({"range": "A1:B1", "values": [[5000, 123456789]]})).unwrap();
+        session.execute("home.fontName", json!({"range": "A1:B1", "name": "GridCraftTestNarrow"})).unwrap();
+        session.execute("home.fontSize", json!({"range": "A1:B1", "size": 22})).unwrap();
+        session.execute("home.numberFormat", json!({"range": "A1", "code": "0,000.00"})).unwrap();
+        session.execute("home.numberFormat", json!({"range": "B1", "code": "0.00"})).unwrap();
+        session.execute("home.columnWidth", json!({"cols": "A:A", "chars": 20})).unwrap();
+        session.execute("home.columnWidth", json!({"cols": "B:B", "chars": 3})).unwrap();
+        let encoded = crate::io::base64_encode(&font_bytes);
+        let response = session
+            .execute("file.exportPdf", json!({"pdfFonts": [{"base64": encoded, "faceIndex": 0}]}))
+            .expect("ASCII-only cell can export with a supplied face");
+        let pdf = crate::io::base64_decode(response["base64"].as_str().expect("export returns bytes")).expect("base64 decodes");
+        assert!(contains(&pdf, "/Subtype /Type0"), "the selected non-Standard-14 face must be embedded for ASCII-only values");
+        assert!(contains(&pdf, "/ActualText <FEFF0035002C003000300030002E00300030>"), "PDF extraction retains the formatted source text");
+        assert!(contains(&pdf, "FEFF0023"), "a number wider than its narrow column still overflows as hashes");
+        assert!(!contains(&pdf, "FEFF003100320033003400350036003700380039002E00300030"), "the narrow cell does not claim to fit its long value");
+        let pdf_width = (expected_width / 8.0 * 1000.0 / 22.0).round() as i32;
+        assert!(contains(&pdf, &format!("/W [1 [{pdf_width}")), "PDF advance widths match the selected face measurement");
+    }
+
+    #[test]
+    fn unavailable_pdf_faces_use_standard_aliases_and_degrade_missing_unicode_without_rewriting_it() {
+        let catalog = FontCatalog::empty();
+        let ascii = shaped_runs(&catalog, "Calibri", false, false, "café 123", 12.0).expect("unavailable Latin family uses Standard-14");
+        assert_eq!(ascii.len(), 1);
+        assert!(matches!(&ascii[0].font, TextRunFont::Standard(Font::Helvetica)));
+        assert_eq!(ascii[0].text, "café 123");
+
+        let missing =
+            shaped_runs(&catalog, "Calibri", false, false, "AไทยB", 12.0).expect("missing Thai fonts degrade to the Standard-14 CID fallback");
+        assert_eq!(missing.iter().map(|run| run.text.as_str()).collect::<String>(), "AไทยB");
+        assert!(missing.iter().all(|run| matches!(&run.font, TextRunFont::Standard(_))));
+        assert!(shaped_width(&catalog, "Calibri", false, false, "AไทยB", 12.0).is_ok());
+    }
+
+    #[test]
+    fn shaped_wrapping_prefers_word_boundaries_and_chunks_long_paragraphs() {
+        let catalog = FontCatalog::empty();
+        let width = gridcraft_pdf::text_width(Font::Helvetica, 12.0, "The quick") + 8.0;
+        let wrapped =
+            wrap_shaped("The quick brown fox", &catalog, "Calibri", false, false, 12.0, width).expect("ASCII wraps without installed fonts");
+        assert_eq!(wrapped.join(" "), "The quick brown fox");
+        assert_eq!(wrapped.first().map(String::as_str), Some("The quick"));
+
+        let long = "x".repeat(8193);
+        let wrapped =
+            wrap_shaped(&long, &catalog, "Calibri", false, false, 12.0, f32::MAX).expect("long paragraphs are split across bounded layout lines");
+        assert_eq!(wrapped.concat(), long);
+        assert_eq!(wrapped.len(), 2);
+        assert!(wrapped.iter().all(|line| gridcraft_pdf::text_clusters(line).count() <= 8192));
+    }
+
+    #[test]
+    fn pdf_gridlines_follow_print_setting_while_explicit_borders_always_render() {
+        let mut session = s();
+        session.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [3, 4]]})).unwrap();
+        session.execute("pageLayout.pageSetup", json!({"printArea": "A1:B2", "fitToPage": false})).unwrap();
+        let (without_gridlines, _) = pdf_of(&mut session, json!({}));
+        assert_eq!(stroke_operator_count(&without_gridlines), 0);
+
+        session.execute("pageLayout.printGridlines", json!({"on": true})).unwrap();
+        let (with_gridlines, _) = pdf_of(&mut session, json!({}));
+        assert!(stroke_operator_count(&with_gridlines) >= 4);
+
+        session.execute("pageLayout.printGridlines", json!({"on": false})).unwrap();
+        session.execute("home.borders", json!({"range": "A1:B2", "preset": "outside", "style": "thin"})).unwrap();
+        let (with_borders, _) = pdf_of(&mut session, json!({}));
+        assert!(stroke_operator_count(&with_borders) >= 4);
+    }
+
+    #[test]
     fn conditional_number_format_prints() {
         // #1163: a rule's number format replaces the cell's own, whether that is General or not;
         // cells the rule doesn't match keep theirs.
@@ -2079,9 +3140,9 @@ mod tests {
         let rule = json!({"type": "cellIs", "operator": "greater", "value": "2", "style": {"num_fmt": "0.00"}});
         s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": rule})).unwrap();
         let (pdf, _) = pdf_of(&mut s, json!({}));
-        assert!(contains(&pdf, "(1) Tj"), "an unmatched cell keeps General");
-        assert!(contains(&pdf, "(3.00) Tj") && !contains(&pdf, "(3) Tj"), "General cell under the rule");
-        assert!(contains(&pdf, "(4.00) Tj") && !contains(&pdf, "(4.0) Tj"), "formatted cell under the rule");
+        assert!(has_actual_text(&pdf, "1"), "an unmatched cell keeps General");
+        assert!(has_actual_text(&pdf, "3.00") && !has_actual_text(&pdf, "3"), "General cell under the rule");
+        assert!(has_actual_text(&pdf, "4.00") && !has_actual_text(&pdf, "4.0"), "formatted cell under the rule");
     }
 
     #[test]
@@ -2105,7 +3166,7 @@ mod tests {
         assert_eq!(r["pages"], 1);
         let bytes = std::fs::read(&path).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
-        assert!(contains(&bytes, "(hello) Tj"));
+        assert!(has_actual_text(&bytes, "hello"));
         let _ = std::fs::remove_dir_all(&dir);
         let r = s.execute("file.print", json!({})).unwrap();
         assert!(r["base64"].as_str().unwrap().len() > 100);
@@ -2122,7 +3183,7 @@ mod tests {
         assert_eq!(r["pages"], 1);
         let bytes = std::fs::read(&path).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
-        assert!(contains(&bytes, "(hello) Tj"));
+        assert!(has_actual_text(&bytes, "hello"));
         // The PDF is a print, not the workbook's file: Save still asks where to put the workbook.
         let d = s.doc().unwrap();
         assert!(d.path.is_none() && d.is_dirty());
@@ -2142,8 +3203,8 @@ mod tests {
         s.execute("home.borders", json!({"range": "J5:K6", "preset": "outside", "style": "thick"})).unwrap_or_default();
         let (pdf, pages) = pdf_of(&mut s, json!({"sheets": "all"}));
         assert!(pages >= 1);
-        assert!(contains(&pdf, "(Merged) Tj"));
-        assert!(contains(&pdf, "(A long piece of text that overflows into neighbours) Tj"));
+        assert!(has_actual_text(&pdf, "Merged"));
+        assert!(has_actual_text(&pdf, "A long piece of text that overflows into neighbours"));
     }
 
     #[test]

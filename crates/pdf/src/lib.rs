@@ -1,21 +1,30 @@
 //! A tiny, self-contained PDF 1.7 writer for GridCraft's print and PDF export.
 //!
+//! - The standard PDF fonts with WinAnsiEncoding for legacy Latin text, plus licensed TrueType
+//!   embedding and HarfRust-shaped Unicode text with logical ToUnicode semantic mappings.
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
 //!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
 //!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
 //!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`.
+//! - Approximate standard-font widths ([`text_width`]) and actual shaped widths via [`PdfFont`].
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
 //!
 //! Streams are written uncompressed (images use the trivial RunLengthDecode filter) so the crate
-//! needs no dependencies.
+//! keeps vector and image output self-contained; the Unicode path uses HarfRust, fontdb and
+//! ttf-parser without depending on the UI crate.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod font;
 mod metrics;
 
+pub use font::{FontCatalog, PdfFont, PositionedGlyph, clusters as text_clusters};
+
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 /// RGB colour, 0–255 per channel.
 pub type Rgb = [u8; 3];
@@ -103,10 +112,33 @@ impl Font {
         }
     }
 
-    /// Picks a standard family for a font name: serif faces map to Times, monospaced ones to
-    /// Courier, everything else to Helvetica.
+    /// Picks a Standard-14 family for an unavailable workbook font.
     pub fn family_for(name: &str) -> Family {
-        let n = name.to_ascii_lowercase();
+        let n = name.trim().to_ascii_lowercase();
+        const STANDARD_ALIASES: [(&str, Family); 19] = [
+            ("arial", Family::Sans),
+            ("arial narrow", Family::Sans),
+            ("aptos", Family::Sans),
+            ("aptos display", Family::Sans),
+            ("calibri", Family::Sans),
+            ("calibri light", Family::Sans),
+            ("helvetica", Family::Sans),
+            ("liberation sans", Family::Sans),
+            ("segoe ui", Family::Sans),
+            ("cambria", Family::Serif),
+            ("cambria math", Family::Serif),
+            ("georgia", Family::Serif),
+            ("liberation serif", Family::Serif),
+            ("times", Family::Serif),
+            ("times new roman", Family::Serif),
+            ("consolas", Family::Mono),
+            ("courier", Family::Mono),
+            ("courier new", Family::Mono),
+            ("liberation mono", Family::Mono),
+        ];
+        if let Some((_, family)) = STANDARD_ALIASES.iter().find(|(alias, _)| *alias == n) {
+            return *family;
+        }
         const SERIF: [&str; 10] = ["times", "cambria", "georgia", "garamond", "serif", "book", "palatino", "baskerville", "tinos", "caladea"];
         const MONO: [&str; 8] = ["courier", "consolas", "mono", "menlo", "lucida console", "cousine", "code", "typewriter"];
         if MONO.iter().any(|m| n.contains(m)) {
@@ -320,14 +352,53 @@ pub struct Page {
     height: f32,
     content: String,
     fonts: [bool; FONT_SLOTS],
+    unicode_fonts: BTreeMap<usize, PageUnicodeFont>,
     images: Vec<ImageData>,
     links: Vec<LinkAnnotation>,
     depth: u32,
 }
 
+#[derive(Clone)]
+struct UnicodeGlyph {
+    glyph_id: u16,
+    unicode: String,
+    width: i32,
+}
+
+struct PageUnicodeFont {
+    font: PdfFont,
+    glyphs: Vec<UnicodeGlyph>,
+    cid_by_mapping: std::collections::HashMap<GlyphMappingKey, u16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct GlyphMappingKey {
+    glyph_id: u16,
+    unicode: String,
+    width: i32,
+}
+
+impl PageUnicodeFont {
+    fn intern_glyph(&mut self, glyph_id: u16, unicode: String, width: i32) -> Result<u16, String> {
+        let key = GlyphMappingKey { glyph_id, unicode, width };
+        if let Some(cid) = self.cid_by_mapping.get(&key) {
+            return Ok(*cid);
+        }
+        if self.glyphs.len() >= MAX_UNICODE_CIDS {
+            return Err(format!("PDF font resource exceeds its {MAX_UNICODE_CIDS}-mapping CID limit"));
+        }
+        let cid = u16::try_from(self.glyphs.len() + 1).map_err(|_| format!("PDF font resource exceeds its {MAX_UNICODE_CIDS}-mapping CID limit"))?;
+        self.glyphs.push(UnicodeGlyph { glyph_id, unicode: key.unicode.clone(), width: key.width });
+        self.cid_by_mapping.insert(key, cid);
+        Ok(cid)
+    }
+}
+
 /// Most bytes of content per page before further drawing is dropped (keeps hostile inputs from
 /// exhausting memory).
 const MAX_PAGE_CONTENT: usize = 64 * 1024 * 1024;
+/// CID 0 is reserved for .notdef; Identity-H provides 65,535 usable nonzero CIDs per resource.
+const MAX_UNICODE_CIDS: usize = u16::MAX as usize;
 /// Largest image (pixels) embedded.
 const MAX_IMAGE_PIXELS: u64 = 40_000_000;
 const MAX_PAGE_LINKS: usize = 4096;
@@ -575,6 +646,104 @@ impl Page {
         self.op(&s);
     }
 
+    /// Registers a validated Unicode font face on this page and returns its local resource index.
+    pub fn register_unicode_font(&mut self, font: PdfFont) -> usize {
+        if let Some((id, _)) = self
+            .unicode_fonts
+            .iter()
+            .find(|(_, used)| used.font.postscript_name == font.postscript_name && used.font.family == font.family && used.font.bytes == font.bytes)
+        {
+            return *id;
+        }
+        let id = self.unicode_fonts.keys().next_back().map_or(0, |last| last + 1);
+        self.unicode_fonts.insert(id, PageUnicodeFont { font, glyphs: Vec::new(), cid_by_mapping: std::collections::HashMap::new() });
+        id
+    }
+
+    /// Shapes and draws Unicode text from a registered embedded face. ToUnicode maps the first
+    /// painted glyph in each source cluster; cluster-local ActualText preserves multi-scalar text
+    /// for extractors while keeping its selection bounds with the visible glyphs.
+    pub fn text_unicode(&mut self, x: f32, y: f32, size: f32, font_id: usize, color: Rgb, text: &str) -> Result<(), String> {
+        self.text_unicode_rotated(x, y, size, font_id, color, text, 0.0)
+    }
+
+    /// Starts a semantic replacement for a composite line that spans several font resources.
+    /// The marked-content bounds follow the visible glyph runs emitted before `end_actual_text`.
+    pub fn begin_actual_text(&mut self, text: &str) {
+        self.op(&format!("/Span << /ActualText <FEFF{}> >> BDC", utf16_hex(text)));
+    }
+
+    /// Ends a composite semantic replacement started by `begin_actual_text`.
+    pub fn end_actual_text(&mut self) {
+        self.op("EMC");
+    }
+
+    pub fn text_unicode_rotated(&mut self, x: f32, y: f32, size: f32, font_id: usize, color: Rgb, text: &str, angle: f32) -> Result<(), String> {
+        self.text_unicode_rotated_impl(x, y, size, font_id, color, text, angle, true)
+    }
+
+    /// Draws embedded Unicode glyphs inside an enclosing composite ActualText span.
+    pub fn text_unicode_rotated_without_actual_text(
+        &mut self,
+        x: f32,
+        y: f32,
+        size: f32,
+        font_id: usize,
+        color: Rgb,
+        text: &str,
+        angle: f32,
+    ) -> Result<(), String> {
+        self.text_unicode_rotated_impl(x, y, size, font_id, color, text, angle, false)
+    }
+
+    fn text_unicode_rotated_impl(
+        &mut self,
+        x: f32,
+        y: f32,
+        size: f32,
+        font_id: usize,
+        color: Rgb,
+        text: &str,
+        angle: f32,
+        actual_text: bool,
+    ) -> Result<(), String> {
+        if text.is_empty() || !extent(size) || !finite(&[x, y]) {
+            return Ok(());
+        }
+        let page_font = self.unicode_fonts.get_mut(&font_id).ok_or_else(|| format!("PDF font resource {font_id} is not registered on this page"))?;
+        let font = &page_font.font;
+        let glyphs = font.shape(text)?;
+        if glyphs.len() > 65_534 {
+            return Err("one PDF text run exceeds 65,534 shaped glyphs".to_string());
+        }
+        let unicode_by_glyph = unicode_for_clusters(text, &glyphs)?;
+        let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
+        let scale = size / f32::from(font.units_per_em);
+        let prefix = if actual_text { format!("/Span << /ActualText <FEFF{}> >> BDC\n", utf16_hex(text)) } else { String::new() };
+        let mut s = format!("{prefix}BT\n{}\n/UF{} {} Tf\n0 Tr\n", rgb_op(color, false), font_id + 1, n(size.min(10_000.0)));
+        let page_height = self.height;
+        let mut pen_x = 0i64;
+        let mut pen_y = 0i64;
+        for (glyph, unicode) in glyphs.into_iter().zip(unicode_by_glyph) {
+            let glyph_id = u16::try_from(glyph.glyph_id).map_err(|_| "font glyph id exceeds TrueType CID range".to_string())?;
+            // CIDs represent a distinct glyph/Unicode/width mapping, not each occurrence. Width
+            // stays in the key because shaping can produce contextual advances for the same GID.
+            let cid = page_font.intern_glyph(glyph_id, unicode, glyph.x_advance)?;
+            // HarfRust uses upward-positive Y; page coordinates use downward-positive Y.
+            // Transform absolute origins to preserve GPOS marks and zero-advance marks.
+            let (px, py) = unicode_glyph_origin(x, y, pen_x, pen_y, glyph.x_offset, glyph.y_offset, scale, cs, sn);
+            let _ = writeln!(s, "{} {} {} {} {} {} Tm <{:04X}> Tj", n(cs), n(-sn), n(sn), n(cs), n(px), n(page_height - py), cid);
+            pen_x += i64::from(glyph.x_advance);
+            pen_y += i64::from(glyph.y_advance);
+        }
+        s.push_str("ET\n");
+        if actual_text {
+            s.push_str("EMC\n");
+        }
+        self.op(&s);
+        Ok(())
+    }
+
     /// Draws an RGBA image (`pw`×`ph` pixels, row-major, straight alpha) into the box
     /// `(x, y, w, h)`. Malformed or oversized buffers are ignored.
     pub fn image_rgba(&mut self, x: f32, y: f32, w: f32, h: f32, rgba: &[u8], pw: u32, ph: u32) {
@@ -595,6 +764,41 @@ impl Page {
         let s = format!("q {} 0 0 {} {} {} cm /Im{} Do Q", n(w), n(h), n(x), n(self.y(y + h)), idx + 1);
         self.op(&s);
     }
+}
+
+/// Converts HarfRust's upward-positive shaped positions into the page's downward-positive
+/// coordinates, then applies the run's rotation around its baseline origin.
+fn unicode_glyph_origin(x: f32, y: f32, pen_x: i64, pen_y: i64, x_offset: i32, y_offset: i32, scale: f32, cs: f32, sn: f32) -> (f32, f32) {
+    let dx = (pen_x as f32 + x_offset as f32) * scale;
+    let dy = -(pen_y as f32 + y_offset as f32) * scale;
+    (x + dx * cs - dy * sn, y + dx * sn + dy * cs)
+}
+
+/// Assigns each source cluster to its first painted glyph, so extraction follows source text
+/// while keeping every mapping anchored to visible glyph geometry. Shaped continuation glyphs
+/// stay unmapped because the source sequence is already represented by the cluster's first CID.
+fn unicode_for_clusters(text: &str, glyphs: &[PositionedGlyph]) -> Result<Vec<String>, String> {
+    let mut starts: Vec<usize> = glyphs.iter().map(|glyph| glyph.cluster).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    let mut mapped = BTreeSet::new();
+    glyphs
+        .iter()
+        .map(|glyph| {
+            if !mapped.insert(glyph.cluster) {
+                return Ok(String::new());
+            }
+            let next = starts.get(starts.partition_point(|start| *start <= glyph.cluster)).copied().unwrap_or(text.len());
+            let source = text.get(glyph.cluster..next).ok_or("shaper returned an invalid source cluster")?;
+            if source.is_empty() {
+                return Err("shaper returned a glyph without a source-text cluster".to_string());
+            }
+            if source.encode_utf16().count() > 256 {
+                return Err("one PDF text cluster exceeds the 256 UTF-16-unit Unicode mapping limit".to_string());
+            }
+            Ok(source.to_string())
+        })
+        .collect()
 }
 
 /// Document metadata.
@@ -668,6 +872,80 @@ fn pdf_text_string(text: &str) -> String {
     s
 }
 
+fn utf16_hex(text: &str) -> String {
+    text.encode_utf16().fold(String::new(), |mut out, unit| {
+        let _ = write!(out, "{unit:04X}");
+        out
+    })
+}
+
+fn stream_object(dict: &str, data: &[u8]) -> Vec<u8> {
+    let mut out = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
+    out.extend_from_slice(data);
+    out.extend_from_slice(b"\nendstream");
+    out
+}
+
+fn font_key(font: &PdfFont) -> (String, String, Arc<[u8]>) {
+    (font.postscript_name.clone(), font.family.clone(), Arc::clone(&font.bytes))
+}
+
+fn add_unicode_font_base(font: &PdfFont, objects: &mut Vec<(u32, Vec<u8>)>, next: &mut u32) -> u32 {
+    let font_file_id = *next;
+    *next += 1;
+    objects.push((font_file_id, stream_object(&format!("/Length1 {}", font.bytes.len()), &font.bytes)));
+    let descriptor_id = *next;
+    *next += 1;
+    let scale = 1000.0 / f32::from(font.units_per_em.max(1));
+    let bbox = font.bbox.map(|v| (f32::from(v) * scale).round() as i32);
+    let ascent = (f32::from(font.ascent) * scale).round() as i32;
+    let descent = (f32::from(font.descent) * scale).round() as i32;
+    let flags = 32 | if font.italic { 64 } else { 0 } | if font.bold { 0x40000 } else { 0 };
+    let ps_name: String = font.postscript_name.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).take(120).collect();
+    let ps_name = if ps_name.is_empty() { "GridCraftFont" } else { &ps_name };
+    objects.push((descriptor_id, format!("<< /Type /FontDescriptor /FontName /{ps_name} /Flags {flags} /FontBBox [{} {} {} {}] /ItalicAngle {} /Ascent {ascent} /Descent {descent} /CapHeight {ascent} /StemV 80 /FontFile2 {font_file_id} 0 R >>", bbox[0], bbox[1], bbox[2], bbox[3], n(font.italic_angle)).into_bytes()));
+    descriptor_id
+}
+
+fn add_unicode_font_objects(font: &PdfFont, glyphs: &[UnicodeGlyph], descriptor_id: u32, objects: &mut Vec<(u32, Vec<u8>)>, next: &mut u32) -> u32 {
+    let scale = 1000.0 / f32::from(font.units_per_em.max(1));
+    let ps_name: String = font.postscript_name.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).take(120).collect();
+    let ps_name = if ps_name.is_empty() { "GridCraftFont" } else { &ps_name };
+    let cid_map_id = *next;
+    *next += 1;
+    let mut cid_map = vec![0u8, 0u8];
+    for glyph in glyphs {
+        cid_map.extend_from_slice(&glyph.glyph_id.to_be_bytes());
+    }
+    objects.push((cid_map_id, stream_object("", &cid_map)));
+    let cid_font_id = *next;
+    *next += 1;
+    let mut widths = String::new();
+    for glyph in glyphs {
+        let width = (glyph.width as f32 * scale).round() as i32;
+        let _ = write!(widths, "{width} ");
+    }
+    objects.push((cid_font_id, format!("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{ps_name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {descriptor_id} 0 R /DW 1000 /W [1 [{}]] /CIDToGIDMap {cid_map_id} 0 R >>", widths.trim()).into_bytes()));
+    let cmap_id = *next;
+    *next += 1;
+    let mut cmap = String::from(
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /GridCraftUnicode def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n",
+    );
+    for (batch_index, batch) in glyphs.chunks(100).enumerate() {
+        let _ = writeln!(cmap, "{} beginbfchar", batch.len());
+        for (i, glyph) in batch.iter().enumerate() {
+            let _ = writeln!(cmap, "<{:04X}> <{}>", batch_index * 100 + i + 1, utf16_hex(&glyph.unicode));
+        }
+        cmap.push_str("endbfchar\n");
+    }
+    cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend");
+    objects.push((cmap_id, stream_object("", cmap.as_bytes())));
+    let type0_id = *next;
+    *next += 1;
+    objects.push((type0_id, format!("<< /Type /Font /Subtype /Type0 /BaseFont /{ps_name} /Encoding /Identity-H /DescendantFonts [{cid_font_id} 0 R] /ToUnicode {cmap_id} 0 R >>").into_bytes()));
+    type0_id
+}
+
 impl PdfDoc {
     pub fn new() -> PdfDoc {
         PdfDoc::default()
@@ -677,7 +955,16 @@ impl PdfDoc {
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
         let height = if height_pt.is_finite() { height_pt.clamp(3.0, 14_400.0) } else { 792.0 };
-        self.pages.push(Page { width, height, content: String::new(), fonts: [false; FONT_SLOTS], images: Vec::new(), links: Vec::new(), depth: 0 });
+        self.pages.push(Page {
+            width,
+            height,
+            content: String::new(),
+            fonts: [false; FONT_SLOTS],
+            unicode_fonts: BTreeMap::new(),
+            images: Vec::new(),
+            links: Vec::new(),
+            depth: 0,
+        });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
     }
@@ -717,6 +1004,13 @@ impl PdfDoc {
         let mut annotations = Vec::new();
         let page_count = self.pages.len();
         let mut font_dict = String::new();
+        let mut unicode_font_descriptors = BTreeMap::new();
+        for page in &self.pages {
+            for used in page.unicode_fonts.values() {
+                let key = font_key(&used.font);
+                unicode_font_descriptors.entry(key).or_insert_with(|| add_unicode_font_base(&used.font, &mut objects, &mut next));
+            }
+        }
         for (i, id) in font_ids.iter().enumerate() {
             if *id != 0 {
                 let _ = write!(font_dict, "/F{} {} 0 R ", i + 1, id);
@@ -753,6 +1047,12 @@ impl PdfDoc {
         for page in &mut self.pages {
             while page.depth > 0 {
                 page.restore();
+            }
+            let mut page_font_dict = font_dict.clone();
+            for (font_id, used) in &page.unicode_fonts {
+                let descriptor = unicode_font_descriptors.get(&font_key(&used.font)).copied().unwrap_or(0);
+                let id = add_unicode_font_objects(&used.font, &used.glyphs, descriptor, &mut objects, &mut next);
+                let _ = write!(page_font_dict, "/UF{} {} 0 R ", font_id + 1, id);
             }
             let mut xobjects = String::new();
             for (k, img) in page.images.iter().enumerate() {
@@ -817,7 +1117,7 @@ impl PdfDoc {
                     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /ProcSet [/PDF /Text /ImageB /ImageC] /Font << {}>>{} >> /Contents {} 0 R{} >>",
                     n(page.width),
                     n(page.height),
-                    font_dict,
+                    page_font_dict,
                     xo,
                     content_id,
                     annots

@@ -41,7 +41,6 @@ sha2 = { version = "0.11", default-features = false }
 aes = { version = "0.9", default-features = false }
 sha1 = { version = "0.11", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-
 # ui
 egui = "0.36"
 egui_extras = { version = "0.36", default-features = false }
