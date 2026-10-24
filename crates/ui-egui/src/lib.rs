@@ -12,6 +12,7 @@ mod cell_pictures;
 pub mod chartview;
 pub mod control;
 pub mod credits;
+pub mod customize;
 pub mod dialogs;
 pub mod editor;
 mod floating_pictures;
@@ -80,6 +81,10 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
+    /// Customize the Ribbon and the Quick Access Toolbar: tabs shown and their order, the user's
+    /// tabs and groups, the toolbar's commands. A malformed saved value reads as the default.
+    #[serde(deserialize_with = "customize::lenient")]
+    pub ribbon: customize::RibbonLayout,
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
@@ -112,6 +117,7 @@ impl Default for UiState {
             keytip_invoke: None,
             language: i18n::Language::En,
             interface_scale: 100,
+            ribbon: customize::RibbonLayout::default(),
         }
     }
 }
@@ -228,8 +234,8 @@ pub struct Perf {
 /// host, not a user preference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Chrome {
-    /// The title bar: AutoSave, Home, Save, Undo/Redo, the file name, Comments, Share, Search and
-    /// the theme switch.
+    /// The title bar: AutoSave, Home, the Quick Access Toolbar, the file name, Comments, Share,
+    /// Search and the theme switch.
     pub title_bar: bool,
     /// The ribbon's File tab and the Backstage view it opens (also reached by keyboard and
     /// commands such as `ui.backstage`).
@@ -632,6 +638,8 @@ impl SheetApp {
                 self.ui.ribbon_collapsed = !self.ui.ribbon_collapsed;
                 Ok(Json::Null)
             }
+            "ui.customizeRibbon" => customize::customize_command(self, p),
+            "ui.quickAccessToolbar" => customize::quick_access_command(self, p),
             "view.darkMode" => {
                 let current = if self.ui.system_theme { self.effective_dark } else { self.ui.dark };
                 self.ui.dark = p.get("on").and_then(Json::as_bool).unwrap_or(!current);
@@ -1385,6 +1393,8 @@ impl SheetApp {
         for action in actions {
             match action {
                 keytips::Action::Tab("File") => self.open_backstage(backstage::Page::Home),
+                // A tab the user hid has no keytip.
+                keytips::Action::Tab(tab) if self.ui.ribbon.hidden.iter().any(|h| h == tab) => {}
                 keytips::Action::Tab(tab) => {
                     self.run_or_alert("ui.ribbonTab", json!({"tab": tab}));
                     self.ui.ribbon_collapsed = false;

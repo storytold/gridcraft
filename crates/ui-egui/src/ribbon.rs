@@ -68,60 +68,11 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             if __k.clicked() {
                 app.open_dialog("start", json!({}));
             }
-            if icon_button(ui, Icon::Save, t.text_dim, "Save", vec2(26.0, ch)).clicked()
-                // File operations must include the cell the user is still editing (as the File > Save menu item already does).
-                && app.commit_edit(0, 0, false, false)
-            {
-                app.run_or_alert("file.save", json!({}));
+            // The Quick Access Toolbar: the user's commands, then its … menu. Not over the File view,
+            // which has its own Save (two buttons of one name would confuse a screen reader).
+            if app.backstage.is_none() {
+                crate::customize::quick_access(app, ui, ch);
             }
-            // The commands' own availability: there must be a step, and no undo group may be open on
-            // the document (an action that spans several calls is still running).
-            let can_undo = gridcraft_engine::cmd::can_undo(&app.session).is_ok();
-            let can_redo = gridcraft_engine::cmd::can_redo(&app.session).is_ok();
-            // Named and marked enabled or not for assistive technology (and the UI tests).
-            let undo = icon_button(ui, Icon::Undo, if can_undo { t.text_dim } else { t.text_disabled }, "Undo", vec2(26.0, ch));
-            undo.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_undo, "Undo"));
-            if undo.clicked() && can_undo {
-                app.run_or_alert("edit.undo", json!({}));
-            }
-            let undo_list = icon_button(ui, Icon::Chevron, t.text_dim, "Undo list", vec2(14.0, ch));
-            egui::Popup::menu(&undo_list).show(|ui| {
-                let labels: Vec<String> = if can_undo {
-                    app.session.active().map(|d| d.undo.iter().rev().take(20).map(|e| e.label.clone()).collect()).unwrap_or_default()
-                } else {
-                    Vec::new()
-                };
-                if labels.is_empty() {
-                    ui.label("Can't Undo");
-                }
-                for (i, l) in labels.iter().enumerate() {
-                    if ui.button(format!("Undo {l}")).clicked() {
-                        app.run_or_alert("edit.undo", json!({"steps": i + 1}));
-                    }
-                }
-            });
-            let redo = icon_button(ui, Icon::Redo, if can_redo { t.text_dim } else { t.text_disabled }, "Redo", vec2(26.0, ch));
-            redo.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_redo, "Redo"));
-            if redo.clicked() && can_redo {
-                app.run_or_alert("edit.redo", json!({}));
-            }
-            let more = icon_button(ui, Icon::More, t.text_dim, "More commands", vec2(26.0, ch));
-            egui::Popup::menu(&more).show(|ui| {
-                for (label, id) in [
-                    ("New Workbook", "file.new"),
-                    ("Open…", "file.open"),
-                    ("Save As…", "file.saveAs"),
-                    ("Sort A to Z", "data.sortAscending"),
-                    ("Calculate Now", "formulas.calculateNow"),
-                ] {
-                    if ui.button(label).clicked() {
-                        app.run_or_alert(id, json!({}));
-                    }
-                }
-                if ui.button("Print…").clicked() {
-                    app.print_now(json!({}));
-                }
-            });
             let left_end = ui.min_rect().right();
             let right = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
@@ -232,14 +183,15 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     if app.chrome.file_tab {
                         file_menu(app, ui);
                     }
-                    let mut tabs: Vec<&str> = TABS.to_vec();
                     let ctx_tabs = contextual_tabs(app);
-                    tabs.extend(ctx_tabs.iter());
+                    let mut tabs: Vec<String> = app.ui.ribbon.visible_tabs();
+                    tabs.extend(ctx_tabs.iter().map(|t| t.to_string()));
                     for tab in tabs {
+                        let tab = tab.as_str();
                         let active = app.ui.ribbon_tab == tab;
                         let contextual = ctx_tabs.contains(&tab);
                         let font = theme::ui_font(13.5);
-                        let label = app.ui.language.tr(tab);
+                        let label = if app.ui.ribbon.is_custom(tab) { app.ui.ribbon.tab_label(tab) } else { app.ui.language.tr(tab) };
                         let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
                         let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
                         if resp.hovered() && !active {
@@ -268,6 +220,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         if resp.double_clicked() {
                             app.ui.ribbon_collapsed = !collapsed;
                         }
+                        resp.context_menu(|ui| crate::customize::ribbon_menu(app, ui));
                         if app.keytips.prefix() == Some("")
                             && let Some(sequence) = keytip_table::tab_sequence(tab)
                         {
@@ -276,6 +229,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 });
             });
+            let current = &app.ui.ribbon_tab;
+            if app.ui.ribbon.hidden.contains(current) || (current.starts_with("custom") && !app.ui.ribbon.is_custom(current)) {
+                app.ui.ribbon_tab = app.ui.ribbon.visible_tabs().first().cloned().unwrap_or_else(|| "Home".into());
+            }
+            crate::customize::apply_requests(app, ui.ctx());
             if collapsed {
                 return;
             }
@@ -284,11 +242,16 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             ui.painter().rect_filled(card, 10.0, t.ribbon);
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));
+            // Right-click on the card's empty space (controls on top take their own clicks).
+            ui.interact(card, ui.id().with("ribbon_card"), Sense::click()).context_menu(|ui| crate::customize::ribbon_menu(app, ui));
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
                 egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                        match app.ui.ribbon_tab.as_str() {
+                        let tab = app.ui.ribbon_tab.clone();
+                        match tab.as_str() {
+                            // A tab of the user's own holds only their groups.
+                            key if app.ui.ribbon.is_custom(key) => {}
                             "Home" => home(app, ui),
                             "Insert" => insert(app, ui),
                             "Draw" => draw(app, ui),
@@ -303,6 +266,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
                             _ => home(app, ui),
                         }
+                        // The user's groups, after the tab's own (or alone on a tab of theirs).
+                        crate::customize::custom_groups(app, ui, &tab);
                     });
                 });
             });
@@ -394,10 +359,14 @@ fn keytip(app: &SheetApp, ui: &Ui, sequence: &str, at: egui::Pos2) {
     painter.galley(rect.min + vec2(3.5, 1.5), text, t.text);
 }
 
-/// Paint the badge for a control that runs command `id`, when the armed prefix matches.
+/// Paint the badge for a control that runs command `id`, when the armed prefix matches. A right-click
+/// on the control adds its command to the Quick Access Toolbar or customises the ribbon.
 fn control_keytip(app: &SheetApp, ui: &Ui, response: &egui::Response, id: &str) {
     if let Some(sequence) = keytip_table::control_badge(app.keytips.prefix().unwrap_or_default(), id) {
         keytip(app, ui, sequence, response.rect.center_bottom());
+    }
+    if crate::customize::known_command(id) {
+        response.context_menu(|ui| crate::customize::control_menu(app, ui, id));
     }
 }
 

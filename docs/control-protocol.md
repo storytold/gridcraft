@@ -50,6 +50,19 @@ System follows live OS appearance changes and falls back to Light when the platf
 The saved choice remains System; new users still start in Light. The legacy
 `view.darkMode` command and `ui.set {dark}` select a fixed Light or Dark theme.
 
+`{command: "ui.customizeRibbon", params: {layout: {...}}}` replaces the user's ribbon: `order` (tab
+names and custom tab keys, in order), `hidden` (tabs not shown), `tabs` (`[{key: "custom1", label}]`),
+`groups` (`[{tab, label, commands: [id]}]`, each at the end of its tab) and `qat` (the Quick Access
+Toolbar's command ids; left as it is when `layout` has no `qat`). Unknown tabs and commands are left
+out, and so are commands a button can't run because they need a value (`view.zoom`'s `percent`,
+`home.fontSize`'s `size`). Duplicates are removed and every list capped; the result is
+`{layout, tabs}`, the layout as kept
+and the tabs now shown. A `layout` with a field of the wrong shape (`order: "Data"`) is an error
+and changes nothing. `{reset: true}` restores GridCraft's ribbon; `{}` reads it. No dialog opens.
+`{command: "ui.quickAccessToolbar", params: {add: "home.bold"}}` adds a command to the toolbar
+(`remove`, `commands: [id]` to replace the list, `reset`); it returns `{commands}` and is an error
+for an unknown command or one that needs a value. Both are saved in `ui.json` with the other UI preferences.
+
 `{command: "view.animations", params: {on: false}}` turns motion in the UI off (the selection
 outline then jumps to a new selection instead of gliding there); without `on` it toggles. It is
 the View ▸ Animations checkbox, saved with the other UI preferences and on by default.

@@ -228,8 +228,10 @@ fn step_commands(h: &mut egui_kittest::Harness<'static, SheetApp>) -> Vec<egui::
     out
 }
 
+/// Clicks the dialog's button `label`: the lowest on screen, since the title bar's Quick Access
+/// Toolbar has a Save too.
 fn click_commands(h: &mut egui_kittest::Harness<'static, SheetApp>, label: &str) -> Vec<egui::ViewportCommand> {
-    h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
+    h.get_all_by_role_and_label(egui::accesskit::Role::Button, label).max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap().click();
     step_commands(h)
 }
 

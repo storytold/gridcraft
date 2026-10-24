@@ -19,6 +19,7 @@ mod committed_text_fields;
 mod context_menu_stays_open;
 mod contextual_ribbon_tab;
 mod control_timeout;
+mod customize_ribbon;
 mod dialog_button_row;
 mod dialog_confirm;
 mod dialog_focus;
