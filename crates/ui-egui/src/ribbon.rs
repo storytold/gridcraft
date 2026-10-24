@@ -300,6 +300,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             "Automate" => automate(app, ui),
                             "Table Design" => table_design(app, ui),
                             "Chart Design" => chart_design(app, ui),
+                            "Picture Format" => picture_format(app, ui),
+                            "Shape Format" => shape_format(app, ui),
+                            "Slicer" => slicer_tools(app, ui),
                             crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
                             _ => home(app, ui),
                         }
@@ -337,7 +340,7 @@ fn theme_choices(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
-const CONTEXTUAL_TABS: [&str; 3] = ["Table Design", "Chart Design", crate::paper_view::TAB];
+const CONTEXTUAL_TABS: [&str; 6] = ["Table Design", "Chart Design", "Picture Format", "Shape Format", "Slicer", crate::paper_view::TAB];
 
 fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
     let mut v = Vec::new();
@@ -349,6 +352,15 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         }
         if app.selected_chart.is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
             v.push("Chart Design");
+        }
+        if app.selected_chart.is_some_and(|id| sh.images.iter().any(|image| image.id == id)) {
+            v.push("Picture Format");
+        }
+        if app.selected_chart.is_some_and(|id| sh.shapes.iter().any(|shape| shape.id == id)) {
+            v.push("Shape Format");
+        }
+        if app.selected_chart.is_some_and(|id| sh.slicers.iter().any(|slicer| slicer.id == id)) {
+            v.push("Slicer");
         }
         if app.grid.hf_edit.is_some() {
             v.push(crate::paper_view::TAB);
@@ -2610,6 +2622,119 @@ fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "chart.delete", json!({"chart": id}));
         app.selected_chart = None;
+    }
+}
+
+/// Contextual actions available for a selected picture; image editing is still a separate gap.
+fn picture_format(app: &mut SheetApp, ui: &mut Ui) {
+    let Some(id) = app.selected_chart else { return };
+    let exists = app.session.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.images.iter().any(|image| image.id == id));
+    if !exists {
+        return;
+    }
+    object_arrange_controls(app, ui, "image", id);
+    sep(ui);
+    let properties = big_button(ui, Icon::Settings, "Cell\nPlacement", "Picture placement relative to cells", true);
+    egui::Popup::menu(&properties).show(|ui| {
+        for (label, mode) in [
+            ("Move and size with cells", "moveAndSize"),
+            ("Move but don't size with cells", "moveOnly"),
+            ("Don't move or size with cells", "absolute"),
+        ] {
+            if ui.button(app.ui.language.tr(label)).clicked() {
+                act(app, "object.setAnchorMode", json!({"kind": "image", "id": id, "mode": mode}));
+                ui.close();
+            }
+        }
+    });
+    if big_button(ui, Icon::Delete, "Delete\nPicture", "Delete selected picture", false).clicked() {
+        act(app, "object.delete", json!({"kind": "image", "id": id}));
+        app.selected_chart = None;
+    }
+}
+
+/// Contextual actions available for a selected shape.
+fn shape_format(app: &mut SheetApp, ui: &mut Ui) {
+    let Some(id) = app.selected_chart else { return };
+    let exists = app.session.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.shapes.iter().any(|shape| shape.id == id));
+    if !exists {
+        return;
+    }
+    object_arrange_controls(app, ui, "shape", id);
+    sep(ui);
+    let fill = big_button(ui, Icon::Fill, "Shape\nFill", "Change shape fill color", true);
+    egui::Popup::menu(&fill).show(|ui| {
+        if let Some(color) = color_palette(ui, &theme_colors(app), "No change")
+            && color != "none"
+        {
+            act(app, "chart.shapeFill", json!({"kind": "shape", "id": id, "color": color}));
+            ui.close();
+        }
+    });
+    let outline = big_button(ui, Icon::Borders, "Shape\nOutline", "Change shape outline color", true);
+    egui::Popup::menu(&outline).show(|ui| {
+        if let Some(color) = color_palette(ui, &theme_colors(app), "No change")
+            && color != "none"
+        {
+            act(app, "chart.shapeOutline", json!({"kind": "shape", "id": id, "color": color}));
+            ui.close();
+        }
+    });
+    sep(ui);
+    let rotate = big_button(ui, Icon::Orient, "Rotate\n90°", "Rotate selected shape 90 degrees", false);
+    control_keytip(app, ui, &rotate, "arrange.rotate");
+    if rotate.clicked() {
+        act(app, "arrange.rotate", json!({"kind": "shape", "id": id}));
+    }
+    if big_button(ui, Icon::Delete, "Delete\nShape", "Delete selected shape", false).clicked() {
+        act(app, "object.delete", json!({"kind": "shape", "id": id}));
+        app.selected_chart = None;
+    }
+}
+
+/// Contextual filter actions for a selected slicer.
+fn slicer_tools(app: &mut SheetApp, ui: &mut Ui) {
+    let Some(id) = app.selected_chart else { return };
+    let exists = app.session.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.slicers.iter().any(|slicer| slicer.id == id));
+    if !exists {
+        return;
+    }
+    let clear = big_button(ui, Icon::Filter, "Clear\nFilter", "Clear this slicer's filter", false);
+    control_keytip(app, ui, &clear, "slicer.clear");
+    if clear.clicked() {
+        act(app, "slicer.clear", json!({"slicer": id}));
+    }
+    sep(ui);
+    if big_button(ui, Icon::Delete, "Delete\nSlicer", "Delete selected slicer", false).clicked() {
+        act(app, "slicer.delete", json!({"slicer": id}));
+        app.selected_chart = None;
+    }
+}
+
+/// Shared stacking-order and Selection Pane controls for pictures and shapes.
+fn object_arrange_controls(app: &mut SheetApp, ui: &mut Ui, kind: &str, id: u32) {
+    let forward = big_button(ui, Icon::ChevronUp, "Bring\nForward", "Bring object forward or to front", true);
+    control_keytip(app, ui, &forward, "arrange.bringForward");
+    egui::Popup::menu(&forward).show(|ui| {
+        for (label, to_front) in [("Bring Forward", false), ("Bring to Front", true)] {
+            if ui.button(app.ui.language.tr(label)).clicked() {
+                act(app, "arrange.bringForward", json!({"kind": kind, "id": id, "toFront": to_front}));
+                ui.close();
+            }
+        }
+    });
+    let backward = big_button(ui, Icon::Chevron, "Send\nBackward", "Send object backward or to back", true);
+    control_keytip(app, ui, &backward, "arrange.sendBackward");
+    egui::Popup::menu(&backward).show(|ui| {
+        for (label, to_back) in [("Send Backward", false), ("Send to Back", true)] {
+            if ui.button(app.ui.language.tr(label)).clicked() {
+                act(app, "arrange.sendBackward", json!({"kind": kind, "id": id, "toBack": to_back}));
+                ui.close();
+            }
+        }
+    });
+    if big_button(ui, Icon::Settings, "Selection\nPane", "Open Selection Pane", false).clicked() {
+        app.grid.pane = Some("selection".into());
     }
 }
 

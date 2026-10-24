@@ -63,6 +63,68 @@ fn a_saved_chart_design_tab_without_a_chart_opens_on_home() {
 }
 
 #[test]
+fn shape_format_is_available_only_while_a_shape_is_selected() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let result = session.execute("insert.shape", json!({"kind": "rectangle", "at": "B2"}));
+    assert!(result.is_ok(), "test shape should be created");
+    let id = result.ok().and_then(|value| value["shape"].as_u64()).and_then(|id| u32::try_from(id).ok());
+    assert!(id.is_some(), "shape creation returns its object id");
+    let Some(id) = id else { return };
+
+    let mut h = harness(session);
+    h.state_mut().selected_chart = Some(id);
+    h.state_mut().ui.ribbon_tab = "Shape Format".into();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Shape Format");
+
+    h.state_mut().selected_chart = None;
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Home");
+}
+
+#[test]
+fn slicer_tab_is_available_only_while_a_slicer_is_selected() {
+    let mut session = session_with_table();
+    let result = session.execute("insert.slicer", json!({"table": "Table1", "column": "Name"}));
+    assert!(result.is_ok(), "test slicer should be created");
+    let id = result.ok().and_then(|value| value["slicer"].as_u64()).and_then(|id| u32::try_from(id).ok());
+    assert!(id.is_some(), "slicer creation returns its object id");
+    let Some(id) = id else { return };
+
+    let mut h = harness(session);
+    h.state_mut().selected_chart = Some(id);
+    h.state_mut().ui.ribbon_tab = "Slicer".into();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Slicer");
+
+    h.state_mut().selected_chart = None;
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Home");
+}
+
+#[test]
+fn picture_format_is_available_only_while_a_picture_is_selected() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let result = session.execute("insert.picture", json!({"base64": "AQID", "mime": "image/png", "at": "B2"}));
+    assert!(result.is_ok(), "test picture should be created");
+    let id = result.ok().and_then(|value| value["image"].as_u64()).and_then(|id| u32::try_from(id).ok());
+    assert!(id.is_some(), "picture creation returns its object id");
+    let Some(id) = id else { return };
+
+    let mut h = harness(session);
+    h.state_mut().selected_chart = Some(id);
+    h.state_mut().ui.ribbon_tab = "Picture Format".into();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Picture Format");
+
+    h.state_mut().selected_chart = None;
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Home");
+}
+
+#[test]
 fn leaving_the_table_while_on_table_design_returns_to_home() {
     let mut h = harness(session_with_table());
     h.state_mut().ui.ribbon_tab = "Table Design".into();
