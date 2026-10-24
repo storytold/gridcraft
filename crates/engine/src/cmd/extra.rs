@@ -1099,6 +1099,11 @@ fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
 /// Automate › Stop Action: rolls back the undo groups open on the active workbook, so Undo and
 /// Redo work there again.
 fn stop_action(s: &mut Session, _: &Json) -> Result<Json> {
+    // Inside another command the open groups are that command's own (an action in progress):
+    // a step of it that stopped them would pull the workbook from under the rest of its run.
+    if s.depth() > 1 {
+        return Err(EngineError::Disabled("automate.stopAction".into(), "Stop Action runs on its own, not as a step of a script or macro.".into()));
+    }
     let uid = s.doc()?.uid;
     Ok(json!({"stopped": s.abort_groups(uid)}))
 }

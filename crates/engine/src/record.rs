@@ -18,6 +18,10 @@ pub const RECORD_LIMIT: usize = 100_000;
 /// without a size cap a recording of a few opens of a large workbook keeps tens of MB alive.
 pub const RECORD_MAX_BYTES: usize = 64 * 1024 * 1024;
 
+/// Commands never recorded: recovery actions, not steps of the person's work. A recording that
+/// replayed Stop Action would stop the run it is a step of.
+pub const NOT_RECORDED: [&str; 1] = ["automate.stopAction"];
+
 /// One recorded command and where it ran.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

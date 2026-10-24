@@ -15,7 +15,7 @@
 //! noncharacter, which XML carries but real text does not use, so the escape costs nothing on
 //! ordinary text. Legacy `_sc_` items are read as they are.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 
 use gridcraft_model::{DefinedName, Workbook};
@@ -102,15 +102,22 @@ pub fn get(wb: &Workbook, key: &str) -> Option<String> {
     assemble(&parts)
 }
 
+/// What a listing found: the first [`MAX_ITEMS`] items or keys, and how many more there were.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Listing<T> {
+    pub found: T,
+    /// Items past the cap, not listed. A caller says so rather than letting them vanish.
+    pub more: usize,
+}
+
 /// The items whose key starts with `prefix` (`"macro_"`), by lower-cased key, read in one pass
-/// over the names: the first [`MAX_ITEMS`] of [`keys`], without those over the size limit.
-pub fn items(wb: &Workbook, prefix: &str) -> BTreeMap<String, String> {
-    group(wb, prefix)
-        .into_iter()
-        .filter(|(_, parts)| parts.is_item())
-        .take(MAX_ITEMS)
-        .filter_map(|(k, parts)| assemble(&parts).map(|text| (k, text)))
-        .collect()
+/// over the names: the first [`MAX_ITEMS`] of [`keys`], without those over the size limit, and
+/// the count of the rest.
+pub fn items(wb: &Workbook, prefix: &str) -> Listing<BTreeMap<String, String>> {
+    let all: Vec<(String, Parts)> = group(wb, prefix).into_iter().filter(|(_, parts)| parts.is_item()).collect();
+    let more = all.len().saturating_sub(MAX_ITEMS);
+    let found = all.into_iter().take(MAX_ITEMS).filter_map(|(k, parts)| assemble(&parts).map(|text| (k, text))).collect();
+    Listing { found, more }
 }
 
 /// The text of the item held by `parts`, as [`get`] reads it.
@@ -169,28 +176,44 @@ fn unescape(s: &str) -> String {
 
 /// Stores `text` under `key`, replacing what was there (in either format). Empty text removes it.
 pub fn set(wb: &mut Workbook, key: &str, text: &str) -> Result<()> {
-    check_key(key)?;
-    if text.chars().count() > MAX_ITEM_CHARS {
-        return Err(EngineError::Other(format!("The data is too large to keep in the workbook ({} MB at most).", MAX_ITEM_CHARS / (1024 * 1024))));
+    set_many(wb, &[(key.to_string(), text.to_string())])
+}
+
+/// Stores every `(key, text)` of `items` as [`set`] would, with the checks done before anything
+/// changes and one pass over the names for all of them, so writing a thousand items into a
+/// workbook with many thousands of names stays near-linear.
+pub fn set_many(wb: &mut Workbook, items: &[(String, String)]) -> Result<()> {
+    let mut planned = Vec::new();
+    let mut keys: HashSet<String> = HashSet::new();
+    for (key, text) in items {
+        check_key(key)?;
+        if text.chars().count() > MAX_ITEM_CHARS {
+            return Err(EngineError::Other(format!(
+                "The data is too large to keep in the workbook ({} MB at most).",
+                MAX_ITEM_CHARS / (1024 * 1024)
+            )));
+        }
+        // Two items under one key (names compare without case) would leave two hidden names of
+        // one name, of which an xlsx file keeps one: a caller's mistake, refused.
+        if !keys.insert(key.to_ascii_lowercase()) {
+            return Err(EngineError::Other(format!("`{key}` is given twice.")));
+        }
+        for (i, formula) in chunk_formulas(text).into_iter().enumerate() {
+            planned.push(DefinedName { name: format!("{PREFIX}{key}_{i}"), scope: None, formula, comment: "GridCraft data".into(), hidden: true });
+        }
     }
-    let formulas = chunk_formulas(text);
-    // A visible name of the item's shape is someone's own (see `item_of`); a hidden name beside
-    // it with the same name would be the one an xlsx file drops. Refuse before changing anything,
-    // in one pass over the names (a file can carry many thousands).
-    let chunks = formulas.len() as u64;
-    let taken = |n: &&DefinedName| {
-        n.scope.is_none() && !n.hidden && parse_name(&n.name).is_some_and(|(k, i)| k.eq_ignore_ascii_case(key) && i.is_some_and(|i| i < chunks))
-    };
-    if let Some(n) = wb.names.iter().find(taken) {
+    // A visible name of an item's shape is someone's own (see `item_of`); a hidden name beside
+    // it with the same name would be the one an xlsx file drops. Refuse before changing anything.
+    let names: HashSet<String> = planned.iter().map(|n| n.name.to_ascii_lowercase()).collect();
+    if let Some(n) = wb.names.iter().find(|n| n.scope.is_none() && !n.hidden && names.contains(&n.name.to_ascii_lowercase())) {
         return Err(EngineError::Other(format!(
             "The workbook has a defined name '{}', which GridCraft needs for its own data. Rename it first.",
             n.name
         )));
     }
-    remove(wb, key);
-    for (i, formula) in formulas.into_iter().enumerate() {
-        wb.names.push(DefinedName { name: format!("{PREFIX}{key}_{i}"), scope: None, formula, comment: "GridCraft data".into(), hidden: true });
-    }
+    // What was there under these keys goes, in either format, then the new chunks come.
+    wb.names.retain(|n| !item_of(n).is_some_and(|(k, _)| keys.contains(&k.to_ascii_lowercase())));
+    wb.names.extend(planned);
     Ok(())
 }
 
@@ -211,8 +234,11 @@ pub fn set_json(wb: &mut Workbook, key: &str, v: &Json) -> Result<()> {
 /// The keys of the items stored in the workbook that start with `prefix` (`"macro_"`), sorted
 /// and lower-cased: the first [`MAX_ITEMS`] of them. To read them all, [`items`] takes one pass
 /// where a [`get`] per key would take one each.
-pub fn keys(wb: &Workbook, prefix: &str) -> Vec<String> {
-    group(wb, prefix).into_iter().filter(|(_, parts)| parts.is_item()).map(|(k, _)| k).take(MAX_ITEMS).collect()
+pub fn keys(wb: &Workbook, prefix: &str) -> Listing<Vec<String>> {
+    let mut found: Vec<String> = group(wb, prefix).into_iter().filter(|(_, parts)| parts.is_item()).map(|(k, _)| k).collect();
+    let more = found.len().saturating_sub(MAX_ITEMS);
+    found.truncate(MAX_ITEMS);
+    Listing { found, more }
 }
 
 /// Whether the workbook holds an item under `name` (compared without case): a hidden workbook-scope
@@ -417,10 +443,10 @@ mod tests {
         // Only a later chunk: no item, not listed, and the legacy name is still read.
         wb.names.push(name("_gc_orphan_2", "\"c\""));
         assert_eq!(get(&wb, "orphan"), None);
-        assert_eq!(keys(&wb, "orphan"), Vec::<String>::new());
+        assert_eq!(keys(&wb, "orphan").found, Vec::<String>::new());
         wb.names.push(name("_sc_orphan", "\"old\""));
         assert_eq!(get(&wb, "orphan").as_deref(), Some("old"));
-        assert_eq!(keys(&wb, "orphan"), ["orphan"]);
+        assert_eq!(keys(&wb, "orphan").found, ["orphan"]);
         // Chunks out of order, a duplicate, junk around the literals, an unterminated literal.
         wb.names.push(name("_gc_mix_1", "\"b\"&A1&"));
         wb.names.push(name("_gc_mix_0", "SUM(\"a\")"));
@@ -468,7 +494,7 @@ mod tests {
         let own = DefinedName { hidden: false, ..name("_gc_watch_0", "\"mine\"") };
         wb.names.push(own.clone());
         assert_eq!(get(&wb, "watch"), None);
-        assert!(keys(&wb, "").is_empty());
+        assert!(keys(&wb, "").found.is_empty());
         // Writing the item would put a hidden name of the same name beside it, and an xlsx file
         // keeps only one of them: refused, with the names as they were.
         let err = set(&mut wb, "watch", "theirs").unwrap_err().to_string();
@@ -483,13 +509,25 @@ mod tests {
     }
 
     #[test]
+    fn set_many_refuses_one_key_twice() {
+        // Two items under one key, in any case, would leave two hidden names of one name.
+        let mut wb = Workbook::new();
+        wb.names.push(name("_gc_other_0", "\"stays\""));
+        let err = set_many(&mut wb, &[("k".into(), "a".into()), ("K".into(), "b".into())]).unwrap_err().to_string();
+        assert!(err.contains("given twice"), "{err}");
+        assert_eq!(wb.names.len(), 1, "nothing changed");
+        set_many(&mut wb, &[("k".into(), "a".into()), ("k2".into(), "b".into())]).unwrap();
+        assert_eq!((get(&wb, "k").as_deref(), get(&wb, "K2").as_deref(), get(&wb, "other").as_deref()), (Some("a"), Some("b"), Some("stays")));
+    }
+
+    #[test]
     fn a_chunk_number_with_leading_zeros_is_another_name() {
         // `_gc_watch_00` is not chunk 0 under another spelling: a hidden one is not read, and a
         // visible one is not in the way of writing `_gc_watch_0`.
         let mut wb = Workbook::new();
         wb.names.push(name("_gc_watch_00", "\"theirs\""));
         assert_eq!(get(&wb, "watch"), None);
-        assert!(keys(&wb, "").is_empty());
+        assert!(keys(&wb, "").found.is_empty());
         let own = DefinedName { hidden: false, ..name("_gc_watch_00", "\"mine\"") };
         wb.names.push(own.clone());
         set(&mut wb, "watch", "ours").unwrap();
@@ -505,7 +543,7 @@ mod tests {
         set(&mut wb, "macro_2", "b").unwrap();
         set(&mut wb, "macro_1", &"a".repeat(9_000)).unwrap();
         set(&mut wb, "scripts", "{}").unwrap();
-        assert_eq!(keys(&wb, "macro_"), ["macro_1", "macro_2"]);
+        assert_eq!(keys(&wb, "macro_").found, ["macro_1", "macro_2"]);
         assert_eq!(item_key("_gc_macro_1_3").as_deref(), Some("macro_1"));
         assert_eq!(item_key("_SC_Scripts").as_deref(), Some("scripts"));
         assert_eq!(item_key("Total"), None);
@@ -525,7 +563,8 @@ mod tests {
         wb.names.push(name("_gc_macro_orphan_1", "\"no chunk 0\""));
         wb.names.push(name("_gc_other_0", "\"not a macro\""));
         NAME_VISITS.with(|v| v.set(0));
-        let all = items(&wb, "MACRO_");
+        let listing = items(&wb, "MACRO_");
+        let all = &listing.found;
         assert_eq!(NAME_VISITS.with(|v| v.get()), wb.names.len(), "one pass over the names");
         assert_eq!(all.len(), MAX_ITEMS);
         let first: Vec<&String> = all.keys().take(2).collect();
@@ -535,19 +574,20 @@ mod tests {
         NAME_VISITS.with(|v| v.set(0));
         let listed = keys(&wb, "macro_");
         assert_eq!(NAME_VISITS.with(|v| v.get()), wb.names.len());
-        assert_eq!(listed, all.keys().cloned().collect::<Vec<_>>(), "keys and items agree");
+        assert_eq!(listed.found, all.keys().cloned().collect::<Vec<_>>(), "keys and items agree");
+        assert_eq!((listing.more, listed.more), (10_002, 10_002), "the rest are counted, not lost");
 
         // Under the cap every item is there, read as `get` reads it.
         wb.names.retain(|n| !n.name.starts_with("_gc_macro_0") && !n.name.starts_with("_gc_macro_1"));
-        let few = items(&wb, "macro_");
+        let few = items(&wb, "macro_").found;
         let want: BTreeMap<String, String> =
             [("macro_big", "b".repeat(9_000)), ("macro_legacy", "old".into())].into_iter().map(|(k, t)| (k.to_string(), t)).collect();
         assert_eq!(few, want);
         for (k, text) in &few {
             assert_eq!(get(&wb, k).as_ref(), Some(text));
         }
-        assert_eq!(keys(&wb, "macro_"), ["macro_big", "macro_legacy"]);
-        assert_eq!(items(&wb, "").len(), 3, "the other item too");
+        assert_eq!(keys(&wb, "macro_").found, ["macro_big", "macro_legacy"]);
+        assert_eq!((items(&wb, "").found.len(), items(&wb, "").more), (3, 0), "the other item too, none past the cap");
     }
 
     #[test]
