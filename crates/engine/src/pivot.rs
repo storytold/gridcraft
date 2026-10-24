@@ -277,6 +277,18 @@ pub fn distinct_labels(wb: &Workbook, src: &Source, col: usize, group: PivotDate
 
 // ---------------------------------------------------------------- aggregation
 
+/// Groups a report may hold while it is aggregated.
+const MAX_AGG_ENTRIES: usize = 5_000_000;
+/// Value accumulators a report may hold in all (one per value field in each group; 72 bytes each,
+/// so about 720 MB). Counting groups alone let a report with many value fields reach tens of GB
+/// before it was refused (#2169).
+const MAX_ACCUMULATORS: usize = 10_000_000;
+
+/// Whether `entries` groups of `per_entry` accumulators each are more than a report may hold.
+fn aggregation_too_large(entries: usize, per_entry: usize) -> bool {
+    entries > MAX_AGG_ENTRIES || entries.saturating_mul(per_entry.max(1)) > MAX_ACCUMULATORS
+}
+
 #[derive(Clone, Debug, Default)]
 struct Acc {
     count: u64,
@@ -968,7 +980,7 @@ fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut probe: Option<
         if !cols.is_empty() && data_cols_exceed_sheet(col_leaves.len(), pt.grand_totals_rows, k) {
             return Err("The PivotTable report will not fit on the sheet.".into());
         }
-        if aggs.len() > 5_000_000 {
+        if aggregation_too_large(aggs.len(), k + extra.len()) {
             return Err("The PivotTable report is too large.".into());
         }
     }
@@ -1637,7 +1649,20 @@ pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
 
 #[cfg(test)]
 mod fit_tests {
-    use super::data_cols_exceed_sheet;
+    use super::{aggregation_too_large, data_cols_exceed_sheet};
+
+    #[test]
+    fn aggregation_budget_counts_every_value_field() {
+        // #2169: a million groups of 256 value fields (about 20 GB) passed the old group count.
+        assert!(aggregation_too_large(1_000_000, 256 + 1));
+        assert!(aggregation_too_large(40_000, 256));
+        // A one-field report keeps the old limit of five million groups.
+        assert!(!aggregation_too_large(5_000_000, 1));
+        assert!(aggregation_too_large(5_000_001, 1));
+        assert!(!aggregation_too_large(3_000_000, 3));
+        assert!(!aggregation_too_large(0, 0));
+        assert!(aggregation_too_large(usize::MAX, usize::MAX));
+    }
 
     #[test]
     fn column_budget_counts_value_fields_and_grand_total() {
