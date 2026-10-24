@@ -175,8 +175,60 @@ pub(crate) fn altgr_text(ctx: &egui::Context, m: Modifiers, mac: bool) -> bool {
     !mac && m.alt && m.ctrl && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_))))
 }
 
+fn chart_selection_elements(chart: &gridcraft_engine::model::Chart) -> Vec<crate::chartview::ChartElement> {
+    use crate::chartview::ChartElement;
+    use gridcraft_engine::model::{ChartKind, LegendPos};
+    let mut elements = vec![ChartElement::ChartArea, ChartElement::PlotArea];
+    if chart.title.is_some() {
+        elements.push(ChartElement::Title);
+    }
+    let has_axes = !matches!(chart.kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Funnel | ChartKind::Treemap | ChartKind::Sunburst);
+    if has_axes {
+        elements.extend([ChartElement::XAxis, ChartElement::YAxis]);
+        if chart.x_title.is_some() {
+            elements.push(ChartElement::XAxisTitle);
+        }
+        if chart.y_title.is_some() {
+            elements.push(ChartElement::YAxisTitle);
+        }
+        if chart.gridlines || chart.format.vertical_gridlines {
+            elements.push(ChartElement::Gridlines);
+        }
+    }
+    if chart.legend != LegendPos::None {
+        elements.push(ChartElement::Legend);
+    }
+    if chart.data_labels {
+        elements.push(ChartElement::DataLabels);
+    }
+    if chart.series.iter().any(|series| series.trendlines.iter().any(|trend| trend.display_equation || trend.display_r_squared)) {
+        elements.push(ChartElement::TrendlineText);
+    }
+    elements.extend((0..chart.series.len()).map(ChartElement::Series));
+    elements
+}
+
 /// Handles a key press in the grid. Returns whether it was a shortcut.
 pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physical: Option<Key>, m: Modifiers, geo: &Geo, sh: &Sheet) -> bool {
+    if !m.ctrl
+        && !m.command
+        && !m.alt
+        && !m.shift
+        && matches!(key, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)
+        && let Some(id) = app.selected_chart
+        && let Some(chart) = sh.charts.iter().find(|c| c.id == id)
+    {
+        let elements = chart_selection_elements(chart);
+        let current = crate::chartview::selected_element(ctx, id);
+        let at = elements.iter().position(|e| *e == current).unwrap_or(0);
+        let forward = matches!(key, Key::ArrowRight | Key::ArrowDown);
+        let at = if forward { (at + 1) % elements.len() } else { (at + elements.len() - 1) % elements.len() };
+        if let Some(element) = elements.get(at) {
+            crate::chartview::select_element(ctx, id, *element);
+        }
+        app.grid.pane = Some("formatChart".into());
+        return true;
+    }
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     if altgr_text(ctx, m, mac) {
         return false;
@@ -263,4 +315,36 @@ fn extend(app: &mut SheetApp, anchor: CellRef, active: CellRef, to: CellRef) {
     }
     app.grid.ensure_visible = true;
     app.grid.reveal_moving_end = true;
+}
+
+#[cfg(test)]
+mod chart_cycle_tests {
+    use super::*;
+
+    #[test]
+    fn chart_element_cycle_only_contains_existing_elements() {
+        let chart = gridcraft_engine::model::Chart {
+            id: 1,
+            kind: gridcraft_engine::model::ChartKind::ColumnClustered,
+            anchor: Default::default(),
+            title: None,
+            series: vec![Default::default()],
+            legend: gridcraft_engine::model::LegendPos::None,
+            data_labels: false,
+            gridlines: false,
+            style: 2,
+            x_title: None,
+            y_title: None,
+            source: None,
+            by_rows: false,
+            pivot: None,
+            format: Default::default(),
+        };
+        let elements = chart_selection_elements(&chart);
+        assert!(!elements.contains(&crate::chartview::ChartElement::Title));
+        assert!(!elements.contains(&crate::chartview::ChartElement::Legend));
+        assert!(!elements.contains(&crate::chartview::ChartElement::DataLabels));
+        assert!(!elements.contains(&crate::chartview::ChartElement::Gridlines));
+        assert!(elements.contains(&crate::chartview::ChartElement::Series(0)));
+    }
 }

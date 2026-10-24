@@ -10,6 +10,7 @@ mod autosave_persist;
 mod borders;
 mod cell_editor_caret;
 mod cell_pictures;
+mod chart_font_routing;
 mod cf_rule_pick;
 mod chart_resize;
 mod clipboard;

@@ -533,6 +533,101 @@ impl Trendline {
     }
 }
 
+/// User overrides for chart axes and visual formatting. Missing values retain automatic styling.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartAxis {
+    pub minimum: Option<f64>,
+    pub maximum: Option<f64>,
+    pub major_unit: Option<f64>,
+    pub logarithmic: bool,
+    pub reversed: bool,
+    pub number_format: Option<String>,
+    pub major_tick: Option<String>,
+    pub minor_tick: Option<String>,
+    pub minor_unit: Option<f64>,
+    pub line: ChartStroke,
+    pub tick_line: ChartStroke,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartStroke {
+    pub color: Option<[u8; 4]>,
+    pub width: Option<f32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartTextFormat {
+    pub name: Option<String>,
+    pub size: Option<f32>,
+    pub color: Option<[u8; 4]>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartSurface {
+    pub fill: Option<[u8; 4]>,
+    pub border: Option<[u8; 4]>,
+    pub border_width: Option<f32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartSeriesFormat {
+    pub line_width: Option<f32>,
+    pub dashed: bool,
+    pub no_line: bool,
+    pub marker: Option<String>,
+    pub marker_size: Option<f32>,
+    pub border_width: Option<f32>,
+    pub fill_color: Option<[u8; 4]>,
+    pub line_color: Option<[u8; 4]>,
+    pub marker_fill: Option<[u8; 4]>,
+    pub marker_no_fill: bool,
+    pub marker_border_color: Option<[u8; 4]>,
+    pub marker_border_width: Option<f32>,
+    pub smooth: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChartFormat {
+    pub legend_overlay: bool,
+    pub legend_position: Option<[f32; 2]>,
+    pub trendline_label_position: Option<[f32; 2]>,
+    pub text: std::collections::BTreeMap<String, ChartTextFormat>,
+    pub horizontal_gridline: ChartStroke,
+    pub vertical_gridline: ChartStroke,
+    pub x_axis: ChartAxis,
+    pub y_axis: ChartAxis,
+    pub vertical_gridlines: bool,
+    pub border_width: Option<f32>,
+    pub series: std::collections::BTreeMap<usize, ChartSeriesFormat>,
+    pub chart_area: ChartSurface,
+    pub plot_area: ChartSurface,
+    pub gap_width: Option<f32>,
+    pub overlap: Option<f32>,
+}
+
+impl ChartFormat {
+    /// Element-specific text formatting inherits unspecified properties from the whole chart.
+    pub fn text_style(&self, role: &str) -> ChartTextFormat {
+        let base = self.text.get("chart").cloned().unwrap_or_default();
+        let local = self.text.get(role).cloned().unwrap_or_default();
+        ChartTextFormat {
+            name: local.name.or(base.name),
+            size: local.size.or(base.size),
+            color: local.color.or(base.color),
+            bold: local.bold.or(base.bold),
+            italic: local.italic.or(base.italic),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Chart {
     pub id: u32,
@@ -553,6 +648,8 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+    #[serde(default)]
+    pub format: ChartFormat,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -431,6 +431,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             source: None,
             by_rows: false,
             pivot: None,
+            format: Default::default(),
         });
         cx.wb.sheets.insert(at, Arc::new(sheet));
         for nm in cx.wb.names.iter_mut() {

@@ -4540,6 +4540,40 @@ fn box_whisker_quartile_methods_survive_xlsx() {
 }
 
 #[test]
+fn chart_format_overrides_are_validated_and_applied_atomically() {
+    let mut s = s();
+    chart_data(&mut s);
+    s.execute("insert.chart", json!({"range": "A1:C5", "type": "scatter"})).unwrap();
+
+    let format = json!({
+        "x_axis": {"minimum": 1.0, "maximum": 50.0, "major_unit": 5.0, "major_tick": "out"},
+        "y_axis": {"logarithmic": true, "minimum": 1.0, "maximum": 1000.0, "minor_tick": "in"},
+        "horizontal_gridline": {"color": [255, 0, 0, 255], "width": 1.5},
+        "vertical_gridlines": true,
+        "text": {"x_axis": {"size": 12.0, "bold": true}},
+        "series": {"0": {"marker": "diamond", "marker_size": 8.0}}
+    });
+    s.execute("chart.set", json!({"format": format})).unwrap();
+    let chart = &s.doc().unwrap().wb.active().unwrap().charts[0];
+    assert_eq!(chart.format.x_axis.minimum, Some(1.0));
+    assert_eq!(chart.format.horizontal_gridline.width, Some(1.5));
+    assert_eq!(chart.format.series[&0].marker.as_deref(), Some("diamond"));
+
+    let before = chart.format.clone();
+    for invalid in [
+        json!({"x_axis": {"minimum": 10.0, "maximum": 2.0}}),
+        json!({"y_axis": {"logarithmic": true, "minimum": 0.0}}),
+        json!({"series": {"0": {"marker": "pentagon"}}}),
+        json!({"text": {"x_axis": {"size": 500.0}}}),
+    ] {
+        assert!(s.execute("chart.set", json!({"format": invalid, "title": "Must not apply"})).is_err());
+        let chart = &s.doc().unwrap().wb.active().unwrap().charts[0];
+        assert_eq!(chart.format, before);
+        assert_ne!(chart.title.as_deref(), Some("Must not apply"));
+    }
+}
+
+#[test]
 fn journal_is_capped_by_serialized_size() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();

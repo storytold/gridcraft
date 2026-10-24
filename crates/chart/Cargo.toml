@@ -14,3 +14,11 @@ gridcraft-model = { workspace = true }
 gridcraft-calc = { workspace = true }
 gridcraft-numfmt = { workspace = true }
 serde = { workspace = true }
+resvg = { version = "0.48.1", default-features = false, features = ["text", "system-fonts"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Font bytes only: the browser has no system font directory.
+epaint_default_fonts = { workspace = true }
+
+[dev-dependencies]
+epaint_default_fonts = { workspace = true }

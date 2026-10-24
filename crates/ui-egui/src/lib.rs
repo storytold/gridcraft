@@ -9,6 +9,11 @@
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
+#[cfg(test)]
+mod chart_font_tests;
+#[cfg(test)]
+mod chart_template_tests;
+mod chart_tools;
 pub mod chartview;
 pub mod control;
 pub mod credits;
@@ -65,6 +70,10 @@ pub struct UiState {
     /// change. A preference like the rest of this struct — it stays on across restarts (#1901).
     pub autosave: bool,
     pub recent: Vec<String>,
+    /// User chart templates are stored with desktop preferences and may be applied to charts of
+    /// the same kind. They are local to this GridCraft installation, not embedded in XLSX.
+    #[serde(default)]
+    pub chart_templates: Vec<ChartTemplate>,
     /// One-shot keytip request for a ribbon control: set when a keytip action resolves to
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
     #[serde(skip)]
@@ -80,6 +89,21 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
+}
+
+/// A reusable chart appearance saved in this installation's UI preferences.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartTemplate {
+    pub name: String,
+    pub kind: gridcraft_engine::model::ChartKind,
+    pub style: u32,
+    pub legend: gridcraft_engine::model::LegendPos,
+    pub data_labels: bool,
+    pub gridlines: bool,
+    pub format: gridcraft_engine::model::ChartFormat,
+    #[serde(default)]
+    pub use_for_new: bool,
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
@@ -109,6 +133,7 @@ impl Default for UiState {
             autocomplete: true,
             autosave: false,
             recent: vec![],
+            chart_templates: vec![],
             keytip_invoke: None,
             language: i18n::Language::En,
             interface_scale: 100,
@@ -200,6 +225,7 @@ pub struct Services {
     /// gets it from egui's `Event::Paste`). `None` from the host, or no service (web), pastes
     /// GridCraft's own clipboard.
     pub paste_text: Option<Box<dyn FnMut() -> Option<String>>>,
+    pub paste_image: Option<Box<dyn FnMut() -> Option<egui::ColorImage>>>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Box<dyn Fn(&str, &[u8])>>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
@@ -289,6 +315,8 @@ pub struct SheetApp {
     pub(crate) shots: control::Shots,
     /// Chart selected on the sheet (id).
     pub selected_chart: Option<u32>,
+    chart_context: Option<egui::Context>,
+    chart_clipboard: Option<chart_tools::ChartClipboard>,
     /// The system clipboard's text when GridCraft last copied without publishing to it (a
     /// control-channel or MCP `edit.copy`/`edit.cut`). While the system clipboard still holds this
     /// text, GridCraft's copy is the newer one and Paste uses it.
@@ -345,6 +373,8 @@ impl SheetApp {
             keytips: keytips::KeyTips::default(),
             shots: control::Shots::default(),
             selected_chart: None,
+            chart_context: None,
+            chart_clipboard: None,
             clipboard_text_at_copy: None,
             cut_text: None,
             tab_run: None,
@@ -378,6 +408,7 @@ impl SheetApp {
             names.push(d.wb.theme.minor_font.clone());
             // Text boxes and shapes name their own typefaces.
             names.extend(d.wb.sheets.iter().flat_map(|sh| sh.shapes.iter().filter_map(|s| s.format.font.clone())));
+            names.extend(d.wb.sheets.iter().flat_map(|sh| sh.charts.iter().flat_map(|c| c.format.text.values().filter_map(|t| t.name.clone()))));
         }
         names
     }
@@ -394,7 +425,104 @@ impl SheetApp {
         r
     }
 
+    fn chart_font_target(&self) -> Option<(u32, &'static str)> {
+        use crate::chartview::ChartElement;
+        let id = self.selected_chart?;
+        self.session.active()?.wb.active()?.charts.iter().find(|c| c.id == id)?;
+        let element = self.chart_context.as_ref().map(|ctx| crate::chartview::selected_element(ctx, id)).unwrap_or_default();
+        Some((
+            id,
+            match element {
+                ChartElement::Title => "title",
+                ChartElement::XAxis => "x_axis",
+                ChartElement::YAxis => "y_axis",
+                ChartElement::XAxisTitle => "x_axis_title",
+                ChartElement::YAxisTitle => "y_axis_title",
+                ChartElement::Legend => "legend",
+                ChartElement::Series(_) | ChartElement::DataLabels => "data_labels",
+                ChartElement::TrendlineText => "trendline",
+                _ => "chart",
+            },
+        ))
+    }
+
+    /// The rendered default size for a chart text role, shared with Home's size controls.
+    fn chart_font_default_size(role: &str) -> f32 {
+        match role {
+            "title" => 14.0,
+            "x_axis_title" | "y_axis_title" => 10.0,
+            _ => 9.0,
+        }
+    }
+
+    pub(crate) fn selected_chart_font(&self) -> Option<gridcraft_engine::model::ChartTextFormat> {
+        let (id, role) = self.chart_font_target()?;
+        let doc = self.session.active()?;
+        let mut style = doc.wb.active()?.charts.iter().find(|c| c.id == id)?.format.text_style(role);
+        style.size.get_or_insert(Self::chart_font_default_size(role));
+        style.name.get_or_insert(doc.wb.theme.minor_font.clone());
+        Some(style)
+    }
+
+    fn format_chart_font(&mut self, command: &str, p: &Json) -> Option<Result<Json, String>> {
+        if !matches!(
+            command,
+            "home.fontName"
+                | "home.fontSize"
+                | "home.fontColor"
+                | "home.bold"
+                | "home.italic"
+                | "home.underline"
+                | "home.strikethrough"
+                | "home.increaseFontSize"
+                | "home.decreaseFontSize"
+        ) {
+            return None;
+        }
+        if ["range", "cell", "sheet"].iter().any(|key| p.get(*key).is_some_and(|value| !value.is_null())) {
+            return None;
+        }
+        let (id, role) = self.chart_font_target()?;
+        let chart = self.session.active()?.wb.active()?.charts.iter().find(|c| c.id == id)?;
+        let mut format = chart.format.clone();
+        let current = format.text_style(role);
+        let style = format.text.entry(role.into()).or_default();
+        match command {
+            "home.fontName" => style.name = p["name"].as_str().map(str::to_string),
+            "home.fontSize" => {
+                let Some(n) = p["size"].as_f64() else {
+                    return Some(Err("Missing chart font size".into()));
+                };
+                style.size = Some(n as f32);
+            }
+            "home.fontColor" => {
+                let color = p["color"].as_str().unwrap_or("auto");
+                style.color = if matches!(color, "auto" | "none") {
+                    None
+                } else {
+                    let Some(rgb) = gridcraft_engine::model::Color::from_hex(color).and_then(|c| c.resolve(&Default::default())) else {
+                        return Some(Err("Invalid chart font color".into()));
+                    };
+                    Some([rgb[0], rgb[1], rgb[2], 255])
+                };
+            }
+            "home.bold" => style.bold = Some(p["on"].as_bool().unwrap_or(!current.bold.unwrap_or(false))),
+            "home.italic" => style.italic = Some(p["on"].as_bool().unwrap_or(!current.italic.unwrap_or(false))),
+            "home.increaseFontSize" | "home.decreaseFontSize" => {
+                style.size = Some(
+                    (current.size.unwrap_or(Self::chart_font_default_size(role)) + if command == "home.increaseFontSize" { 1.0 } else { -1.0 })
+                        .clamp(1.0, 144.0),
+                )
+            }
+            _ => return Some(Err("This text decoration is not supported for charts yet.".into())),
+        }
+        Some(self.run_command("chart.set", json!({"chart":id,"format":format})))
+    }
+
     fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        if let Some(result) = self.format_chart_font(id, &params) {
+            return result;
+        }
         if matches!(id, "file.save" | "file.saveAs" | "file.saveBytes") {
             self.store_view_state();
         }
@@ -424,10 +552,51 @@ impl SheetApp {
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
-        let r = self.session.run(id, params);
+        let template = if id == "insert.chart" && self.ui.chart_templates.iter().any(|template| template.use_for_new) {
+            gridcraft_engine::cmd::insert::build_chart(&self.session, &params)
+                .ok()
+                .and_then(|(_, chart)| self.ui.chart_templates.iter().find(|template| template.use_for_new && template.kind == chart.kind).cloned())
+        } else {
+            None
+        };
+        let mut resolved = params.clone();
+        if let Some(template) = &template {
+            let legend = match template.legend {
+                gridcraft_engine::model::LegendPos::None => "none",
+                gridcraft_engine::model::LegendPos::Top => "top",
+                gridcraft_engine::model::LegendPos::Left => "left",
+                gridcraft_engine::model::LegendPos::Bottom => "bottom",
+                gridcraft_engine::model::LegendPos::Right => "right",
+            };
+            if !resolved.is_object() {
+                resolved = json!({});
+            }
+            // Resolve local defaults into the single engine command. Undo and journal/script
+            // replay must see exactly the same operation, even at the history cap.
+            if let Some(map) = resolved.as_object_mut() {
+                for (key, value) in [
+                    ("style", json!(template.style)),
+                    ("legend", json!(legend)),
+                    ("dataLabels", json!(template.data_labels)),
+                    ("gridlines", json!(template.gridlines)),
+                    ("format", json!(template.format)),
+                ] {
+                    map.entry(key).or_insert(value);
+                }
+            }
+        }
+        let r = match self.session.run(id, resolved) {
+            Err(error) if template.is_some() => {
+                // A malformed saved preference must be visible, but should not prevent inserting
+                // the ordinary chart. Engine validation happens before any workbook mutation.
+                self.alert(error);
+                self.session.run(id, params)
+            }
+            result => result,
+        };
         self.after_engine();
         // The new chart is selected, as after inserting any object, so Delete removes it, not its data.
-        if id == "insert.chart"
+        if matches!(id, "insert.chart" | "chart.paste" | "chart.duplicate")
             && let Ok(r) = &r
             && let Some(chart) = r.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok())
         {
@@ -444,6 +613,11 @@ impl SheetApp {
     /// Copy or cut the selected cells to the system clipboard. Engine-only commands keep
     /// their existing internal clipboard behavior and do not write to the host clipboard.
     pub fn copy_to_clipboard(&mut self, ctx: &egui::Context, command: &str) {
+        if self.selected_chart_snapshot().is_some() {
+            self.copy_chart(ctx, command == "edit.cut", false);
+            return;
+        }
+        self.chart_clipboard = None;
         // Only ask the engine for HTML when the host can publish it.
         let result = match self.run_command(command, json!({"html": self.services.copy_html.is_some()})) {
             Ok(result) => result,
@@ -472,6 +646,10 @@ impl SheetApp {
     /// clipboard is pasted instead, which reports "Nothing to paste.". Other text means the
     /// clipboard has moved on, so the cut's text is forgotten and pastes normally later.
     pub fn paste_external(&mut self, text: String) {
+        if text.is_empty() && self.paste_chart_image() {
+            return;
+        }
+        self.chart_clipboard = None;
         if Self::same_clipboard_text(Some(&text), self.cut_text.as_deref()) {
             if self.session.clipboard.is_none() {
                 return self.run_or_alert("edit.paste", json!({}));
@@ -491,7 +669,11 @@ impl SheetApp {
     /// text there, no host clipboard (web), or the text that was there when GridCraft last copied
     /// without publishing, GridCraft's own clipboard is pasted.
     pub fn paste_from_clipboard(&mut self) {
-        match self.system_clipboard_text() {
+        let text = self.system_clipboard_text();
+        if text.is_none() && self.paste_chart_image() {
+            return;
+        }
+        match text {
             Some(text) if self.session.clipboard.is_none() || self.clipboard_text_at_copy.as_ref() != Some(&text) => self.paste_external(text),
             _ => self.run_or_alert("edit.paste", json!({})),
         }
@@ -1158,6 +1340,7 @@ impl SheetApp {
             let ctx = ctx.clone();
             self.session.text_width = Some(std::sync::Arc::new(move |text, font, exact| theme::cell_text_width(&ctx, text, font, exact)));
         }
+        self.chart_context = Some(ctx.clone());
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
         self.ui.keytip_invoke = None;

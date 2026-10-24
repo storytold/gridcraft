@@ -25,6 +25,23 @@ use gridcraft_engine::Session;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
+const WORKBOOK_SAVE_TYPES: [(&str, &str); 4] =
+    [("Excel Workbook (.xlsx)", "xlsx"), ("CSV UTF-8 (.csv)", "csv"), ("Web Page (.html)", "html"), ("PDF (.pdf)", "pdf")];
+const CHART_PNG_SAVE_TYPES: [(&str, &str); 1] = [("PNG image (.png)", "png")];
+const CHART_SVG_SAVE_TYPES: [(&str, &str); 1] = [("SVG vector (.svg)", "svg")];
+
+fn save_picker_options(suggested: &str) -> (&'static [(&'static str, &'static str)], String) {
+    let path = std::path::Path::new(suggested);
+    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    let types = match ext.as_deref() {
+        Some("png") => &CHART_PNG_SAVE_TYPES[..],
+        Some("svg") => &CHART_SVG_SAVE_TYPES[..],
+        _ => &WORKBOOK_SAVE_TYPES[..],
+    };
+    let ext = ext.filter(|ext| types.iter().any(|(_, supported)| *supported == ext)).unwrap_or_else(|| "xlsx".to_string());
+    (types, ext)
+}
+
 struct App(SheetApp, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
 
 impl eframe::App for App {
@@ -151,6 +168,7 @@ fn services() -> Services {
     // Keep the owner alive: X11/Wayland serve clipboard data from this handle.
     let clipboard: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
     let (html_clipboard, text_clipboard) = (clipboard.clone(), clipboard.clone());
+    let image_clipboard = clipboard.clone();
     Services {
         copy_html: Some(Box::new(move |html, text| {
             let mut clipboard = clipboard.borrow_mut();
@@ -161,6 +179,14 @@ fn services() -> Services {
         })),
         paste_html: Some(Box::new(move || read_clipboard(&html_clipboard, |clipboard| clipboard.get().html()))),
         paste_text: Some(Box::new(move || read_clipboard(&text_clipboard, |clipboard| clipboard.get_text()))),
+        paste_image: Some(Box::new(move || {
+            let image = read_clipboard(&image_clipboard, |clipboard| clipboard.get_image())?;
+            let pixels = image.width.checked_mul(image.height)?;
+            if pixels == 0 || pixels > 16_777_216 || pixels.checked_mul(4)? != image.bytes.len() {
+                return None;
+            }
+            Some(egui::ColorImage::from_rgba_unmultiplied([image.width, image.height], &image.bytes))
+        })),
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"])
@@ -182,12 +208,9 @@ fn services() -> Services {
             let path = std::path::Path::new(suggested);
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Book1").to_string();
             // The suggested name's type (an export asks for .pdf, .csv or .html) comes first.
-            const TYPES: [(&str, &str); 4] =
-                [("Excel Workbook (.xlsx)", "xlsx"), ("CSV UTF-8 (.csv)", "csv"), ("Web Page (.html)", "html"), ("PDF (.pdf)", "pdf")];
-            let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).filter(|e| TYPES.iter().any(|(_, x)| x == e));
-            let ext = ext.unwrap_or_else(|| "xlsx".to_string());
+            let (types, ext) = save_picker_options(suggested);
             let mut dialog = rfd::FileDialog::new().set_file_name(format!("{stem}.{ext}"));
-            for (label, x) in TYPES.iter().filter(|(_, x)| *x == ext).chain(TYPES.iter().filter(|(_, x)| *x != ext)) {
+            for (label, x) in types.iter().filter(|(_, x)| *x == ext).chain(types.iter().filter(|(_, x)| *x != ext)) {
                 dialog = dialog.add_filter(*label, &[*x]);
             }
             dialog.save_file().and_then(|p| p.to_str().map(str::to_string))
@@ -386,7 +409,23 @@ fn main() -> eframe::Result<()> {
 
 #[cfg(test)]
 mod packaging_tests {
+    use super::{CHART_PNG_SAVE_TYPES, CHART_SVG_SAVE_TYPES, WORKBOOK_SAVE_TYPES, save_picker_options};
     use gridcraft_engine::io::FileKind;
+
+    #[test]
+    fn save_picker_separates_workbook_formats_from_chart_images() {
+        let (workbook_types, workbook_ext) = save_picker_options("Book.xlsx");
+        assert_eq!(workbook_ext, "xlsx");
+        assert_eq!(workbook_types, &WORKBOOK_SAVE_TYPES);
+        assert!(!workbook_types.iter().any(|(_, ext)| matches!(*ext, "png" | "svg")));
+
+        let (png_types, png_ext) = save_picker_options("Chart.PNG");
+        assert_eq!(png_ext, "png");
+        assert_eq!(png_types, &CHART_PNG_SAVE_TYPES);
+        let (svg_types, svg_ext) = save_picker_options("Chart.svg");
+        assert_eq!(svg_ext, "svg");
+        assert_eq!(svg_types, &CHART_SVG_SAVE_TYPES);
+    }
 
     /// The text between `start` and `end` that follows each `marker` in `text`, sorted (e.g. the
     /// `xlsb` in `Classes\.xlsb\OpenWithProgids`).

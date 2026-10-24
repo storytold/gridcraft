@@ -621,7 +621,20 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, serde_json:
 
 fn home(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let st = active_style(app);
+    let mut st = active_style(app);
+    if let Some(font) = app.selected_chart_font() {
+        if let Some(name) = font.name {
+            st.font.name = name;
+        }
+        if let Some(size) = font.size {
+            st.font.size = size;
+        }
+        st.font.bold = font.bold.unwrap_or(false);
+        st.font.italic = font.italic.unwrap_or(false);
+        if let Some(c) = font.color {
+            st.font.color = gridcraft_engine::model::Color::rgb(c[0], c[1], c[2]);
+        }
+    }
     // Clipboard
     let paste = big_button(ui, Icon::Paste, "Paste", "Paste", true);
     paste.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Paste"));
@@ -2546,21 +2559,7 @@ fn chart_design(app: &mut SheetApp, ui: &mut Ui) {
         keytip(app, ui, sequence, ae.rect.center_bottom());
     }
     egui::Popup::menu(&ae).show(|ui| {
-        menu_items(
-            app,
-            ui,
-            &[
-                ("Legend: Bottom", "chart.set", json!({"chart": id, "legend": "bottom"})),
-                ("Legend: Right", "chart.set", json!({"chart": id, "legend": "right"})),
-                ("Legend: Top", "chart.set", json!({"chart": id, "legend": "top"})),
-                ("Legend: None", "chart.set", json!({"chart": id, "legend": "none"})),
-                ("-", "", json!(null)),
-                ("Data Labels: Show", "chart.set", json!({"chart": id, "dataLabels": true})),
-                ("Data Labels: None", "chart.set", json!({"chart": id, "dataLabels": false})),
-                ("Gridlines: Show", "chart.set", json!({"chart": id, "gridlines": true})),
-                ("Gridlines: None", "chart.set", json!({"chart": id, "gridlines": false})),
-            ],
-        );
+        crate::chart_tools::element_menu(app, ui, id);
     });
     let __k = big_button(ui, Icon::Redo, "Switch\nRow/Column", "Switch Row/Column", false);
     control_keytip(app, ui, &__k, "chart.switchRowColumn");
@@ -2656,7 +2655,14 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         Key::T => Some(("insert.table", json!({}))),
         Key::E => Some(("edit.flashFill", json!({}))),
         Key::Num1 => {
-            app.open_dialog("formatCells", json!({}));
+            let selected_chart = app
+                .selected_chart
+                .is_some_and(|id| app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.charts.iter().any(|c| c.id == id)));
+            if selected_chart {
+                app.grid.pane = Some("formatChart".into());
+            } else {
+                app.open_dialog("formatCells", json!({}));
+            }
             None
         }
         Key::Num9 if shift => Some(("home.unhideRows", json!({}))),

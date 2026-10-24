@@ -17,6 +17,50 @@ fn rr(a: &str) -> RangeRef {
     RangeRef::parse(a).unwrap()
 }
 
+#[test]
+fn chart_text_tick_and_stroke_styles_survive_xlsx_roundtrip() {
+    let mut wb = sample();
+    let sh = Arc::make_mut(&mut wb.sheets[0]);
+    let c = sh.charts.first_mut().unwrap();
+    c.format.text.insert(
+        "legend".into(),
+        ChartTextFormat { name: Some("DejaVu Sans".into()), size: Some(18.0), color: Some([1, 2, 3, 255]), ..Default::default() },
+    );
+    c.format.y_axis.minor_tick = Some("cross".into());
+    c.format.y_axis.minor_unit = Some(0.2);
+    c.format.y_axis.line.width = Some(2.0);
+    c.format.y_axis.tick_line.color = Some([22, 44, 88, 255]);
+    c.format.horizontal_gridline.color = Some([55, 66, 77, 128]);
+    let expected = c.format.clone();
+    let bytes = write_xlsx(&wb).unwrap();
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheets[0].charts[0].format, expected);
+}
+
+#[test]
+fn chartex_formatting_and_quartiles_survive_together() {
+    let mut wb = sample();
+    let sheet = Arc::make_mut(&mut wb.sheets[0]);
+    let mut base = sheet.charts[0].clone();
+    base.series[0].quartiles = QuartileMethod::Inclusive;
+    base.format.legend_overlay = true;
+    base.format.legend_position = Some([0.5, 0.25]);
+    base.format.chart_area.fill = Some([12, 34, 56, 128]);
+    base.format.text.insert("title".into(), ChartTextFormat { name: Some("DejaVu Sans".into()), italic: Some(true), ..Default::default() });
+    let kinds = [ChartKind::Waterfall, ChartKind::Histogram, ChartKind::BoxWhisker, ChartKind::Treemap, ChartKind::Sunburst, ChartKind::Funnel];
+    sheet.charts = kinds.iter().enumerate().map(|(i, kind)| Chart { id: i as u32 + 1, kind: *kind, ..base.clone() }).collect();
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let charts = &back.sheets[0].charts;
+    assert_eq!(charts.len(), kinds.len());
+    for (chart, kind) in charts.iter().zip(kinds) {
+        assert_eq!(chart.kind, kind);
+        assert_eq!(chart.format, base.format, "{kind:?}");
+        if kind == ChartKind::BoxWhisker {
+            assert_eq!(chart.series[0].quartiles, QuartileMethod::Inclusive);
+        }
+    }
+}
+
 fn sample() -> Workbook {
     let mut wb = Workbook::new();
     wb.date_system = DateSystem::D1904;
@@ -414,6 +458,7 @@ fn sample() -> Workbook {
         source: None,
         by_rows: false,
         pivot: None,
+        format: Default::default(),
     };
     for kind in [
         ChartKind::ColumnClustered,

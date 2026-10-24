@@ -747,8 +747,8 @@ fn draw_prims(pg: &mut Page, prims: &[gridcraft_chart::Prim], xf: Xf) {
                 let (px, py) = xf.p(*cx, *cy);
                 pg.circle(px, py, r * k, fill.map(blend), stroke.map(|(c, w)| (blend(c), (w * k).max(0.1))));
             }
-            Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
-                let font = if *bold { Font::HelveticaBold } else { Font::Helvetica };
+            Prim::Text { x, y, text, size, color, bold, format, align, valign, rotation, .. } => {
+                let font = Font::styled(Font::family_for(format.name.as_deref().unwrap_or("Helvetica")), *bold, format.italic.unwrap_or(false));
                 let size = size * k;
                 let w = gridcraft_pdf::text_width(font, size, text);
                 let dx = match align {

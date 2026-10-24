@@ -904,6 +904,22 @@ impl Dialog {
                 d.result = Some(app.session.run("review.spelling", json!({})).unwrap_or_else(|e| json!({"error": e})));
                 d
             }
+            "chartExport" => Dialog::form(
+                "chartExport",
+                "Save as Picture",
+                "chart.export",
+                vec![],
+                json!({"chart":p("chart"),"format":"png","scale":2,"transparent":false}),
+            ),
+            "saveChartTemplate" => {
+                let name = app
+                    .selected_chart_snapshot()
+                    .filter(|chart| Some(chart.id) == p("chart").as_u64().and_then(|id| u32::try_from(id).ok()))
+                    .and_then(|chart| chart.title.clone())
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| "My Chart Template".into());
+                Dialog::custom("saveChartTemplate", "Save Chart Template", json!({"chart":p("chart"),"name":name}))
+            }
             "chartTitle" => Dialog::form(
                 "chartTitle",
                 "Chart Title",
@@ -1255,6 +1271,32 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     window.show(ctx, |ui| {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
+                "chartExport" => {
+                    ui.label(crate::widgets::tr(ui,"Image Format"));
+                    let mut format=d.values.get("format").and_then(Json::as_str).unwrap_or("png").to_string();
+                    ui.horizontal(|ui| {ui.selectable_value(&mut format,"png".into(),"PNG");ui.selectable_value(&mut format,"svg".into(),"SVG");});
+                    d.values.insert("format".into(),json!(format));
+                    if format=="png" {
+                        ui.label(crate::widgets::tr(ui,"Resolution"));
+                        let mut scale=d.values.get("scale").and_then(Json::as_u64).unwrap_or(2);
+                        ui.horizontal(|ui| {for v in [1,2,4] {ui.selectable_value(&mut scale,v,format!("{v}×"));}});
+                        d.values.insert("scale".into(),json!(scale));
+                        ui.label(crate::widgets::tr(ui,"Lossless PNG; higher resolution creates a larger image."));
+                    } else {ui.label(crate::widgets::tr(ui,"SVG stays sharp at any size. Fonts are not embedded."));}
+                    let mut transparent=d.values.get("transparent").and_then(Json::as_bool).unwrap_or(false);
+                    ui.checkbox(&mut transparent,crate::widgets::tr(ui,"Transparent Background"));
+                    d.values.insert("transparent".into(),json!(transparent));
+                    ok_cancel(ui,&mut confirm,&mut open);
+                }
+                "saveChartTemplate" => {
+                    ui.label(crate::widgets::tr(ui, "Template name"));
+                    let mut name = d.values.get("name").and_then(Json::as_str).unwrap_or("").to_string();
+                    if ui.text_edit_singleline(&mut name).changed() {
+                        d.values.insert("name".into(), json!(name));
+                    }
+                    ui.label(crate::widgets::tr(ui, "Templates are saved in this GridCraft installation and apply to charts of the same type."));
+                    ok_cancel(ui, &mut confirm, &mut open);
+                }
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
                 "advancedFilter" => advanced_filter_form(ui, &mut d, &mut confirm, &mut open),
@@ -1486,7 +1528,21 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
     }
-    if confirm && let Some(cmd) = d.command {
+    if confirm && d.name == "saveChartTemplate" {
+        let chart = d.values.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok()).unwrap_or_default();
+        let name = d.values.get("name").and_then(Json::as_str).unwrap_or("");
+        if let Err(error) = crate::chart_tools::save_template(app, chart, name) {
+            app.message = Some((d.title.clone(), error));
+            open = true;
+        } else {
+            open = false;
+        }
+    } else if confirm && d.name == "chartExport" {
+        match app.save_chart_image(build_params(&d)) {
+            Ok(saved) => open = !saved,
+            Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
+        }
+    } else if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
         match app.run(cmd, params) {
             Ok(r) => {
