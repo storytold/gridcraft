@@ -62,25 +62,47 @@ struct Ctx<'a> {
     m: &'a dyn Measure,
 }
 
+#[cfg(test)]
+#[path = "render_perf_tests.rs"]
+mod perf_tests;
+
 impl Ctx<'_> {
     fn tw(&self, s: &str, size: f32) -> f32 {
         let w = self.m.text_width(s, size, false);
         if w.is_finite() { w.max(0.0) } else { 0.0 }
     }
+    /// `s` shortened with an ellipsis to fit `maxw`; empty when not even one character fits.
+    ///
+    /// Binary search over the number of kept characters (at most 400 are tried), about nine
+    /// `Measure` calls instead of one per character. It assumes the width of `prefix + "…"` does not
+    /// shrink as the prefix grows, which holds for per-character advance sums (`ApproxMeasure`, the
+    /// PDF metrics) and for the UI's text layout up to kerning of a few hundredths of a point; with
+    /// such a non-monotone measure the result may differ from the old linear scan by a character.
     fn fit(&self, s: &str, size: f32, maxw: f32) -> String {
         if self.tw(s, size) <= maxw {
             return s.to_string();
         }
-        let chars: Vec<char> = s.chars().collect();
-        let mut n = chars.len().min(400);
-        while n > 0 {
-            n -= 1;
-            let t: String = chars.iter().take(n).collect::<String>() + "…";
-            if self.tw(&t, size) <= maxw {
-                return if n == 0 { String::new() } else { t };
+        // Byte offset where each of the first 400 characters starts; a prefix of `k` characters
+        // (k < number of characters, so the offset exists) ends at `starts[k]`.
+        let starts: Vec<usize> = s.char_indices().map(|(i, _)| i).take(400).collect();
+        let top = starts.len().saturating_sub(1);
+        let fits = |k: usize| -> bool {
+            let end = starts.get(k).copied().unwrap_or(s.len());
+            let mut t = String::with_capacity(end + 3);
+            t.push_str(s.get(..end).unwrap_or(""));
+            t.push('…');
+            self.tw(&t, size) <= maxw
+        };
+        let (mut lo, mut hi) = (0usize, top);
+        while lo < hi {
+            let mid = lo + (hi - lo).div_ceil(2);
+            if fits(mid) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
             }
         }
-        String::new()
+        if lo == 0 { String::new() } else { format!("{}…", s.get(..starts.get(lo).copied().unwrap_or(s.len())).unwrap_or("")) }
     }
     #[allow(clippy::too_many_arguments)]
     fn text(&mut self, x: f32, y: f32, s: &str, size: f32, color: Rgba, align: HAlign, valign: VAlign) {
@@ -370,7 +392,16 @@ fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos
             if pos == LegendPos::Bottom { Bx { h: area.h - used, ..area } } else { Bx { y: area.y + used, h: area.h - used, ..area } }
         }
         LegendPos::Left | LegendPos::Right => {
-            let colw = entries.iter().map(|e| item_w(ctx, e)).fold(0.0f32, f32::max).min(area.w * 0.35);
+            // Widest entry, capped at 35% of the area: once the cap is reached the rest cannot change it.
+            let cap = area.w * 0.35;
+            let mut colw = 0.0f32;
+            for e in entries {
+                if colw >= cap {
+                    break;
+                }
+                colw = colw.max(item_w(ctx, e));
+            }
+            let colw = colw.min(cap);
             let max_rows = ((area.h / row_h).floor() as usize).max(1);
             let n = entries.len().min(max_rows);
             let lh = n as f32 * row_h;
@@ -973,7 +1004,8 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         let all100 = members.iter().all(|i| fams.get(*i) == Some(&Fam::Col100));
         let range = value_range(members.iter().flat_map(|i| {
             let line = fams.get(*i).is_some_and(|f| is_line(*f));
-            spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| if line { vec![*t] } else { vec![*b, *t] })
+            // Lines contribute only their top value, bars both ends (no per-point `Vec`).
+            spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| [*b, *t].into_iter().skip(usize::from(line)))
         }));
         let (lo, hi) = range.unwrap_or((0.0, 0.0));
         let (scale, fmt) = if all100 {
@@ -1464,19 +1496,19 @@ fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inner: f32, nam
 
 // ---------------------------------------------------------------- treemap
 
-fn worst(row: &[f64], side: f64) -> f64 {
-    let s: f64 = row.iter().sum();
+/// Worst aspect ratio of a row with the given area sum, smallest and largest item, laid along `side`.
+fn worst(s: f64, mn: f64, mx: f64, side: f64) -> f64 {
     if s <= 0.0 || side <= 0.0 {
         return f64::INFINITY;
     }
-    let (mn, mx) = row.iter().fold((f64::INFINITY, 0.0f64), |(a, b), v| (a.min(*v), b.max(*v)));
     let s2 = s * s;
     let w2 = side * side;
     (w2 * mx / s2).max(s2 / (w2 * mn))
 }
 
-/// Squarified treemap layout of (index, area) items, sorted descending, into `r`.
-fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
+/// Squarified treemap layout of (index, value) items, sorted descending, into `r`; each block
+/// comes back with its index and value.
+fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, f64, Bx)> {
     let total: f64 = items.iter().map(|i| i.1).sum();
     let area = (r.w as f64) * (r.h as f64);
     if !(total > 0.0 && area > 0.0) {
@@ -1485,9 +1517,10 @@ fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
     let scale = area / total;
     let mut out = Vec::with_capacity(items.len());
     let mut rem = r;
-    let mut row: Vec<(usize, f64)> = Vec::new();
+    let mut row: Vec<(usize, f64, f64)> = Vec::new();
+    let (mut sum, mut mn, mut mx) = (0.0f64, f64::INFINITY, 0.0f64);
     let mut i = 0;
-    let layout = |row: &[(usize, f64)], rem: &mut Bx, out: &mut Vec<(usize, Bx)>| {
+    let layout = |row: &[(usize, f64, f64)], rem: &mut Bx, out: &mut Vec<(usize, f64, Bx)>| {
         let s: f64 = row.iter().map(|x| x.1).sum();
         if s <= 0.0 {
             return;
@@ -1495,9 +1528,9 @@ fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
         if rem.w >= rem.h {
             let cw = (s / rem.h.max(1e-6) as f64) as f32;
             let mut y = rem.y;
-            for (j, a) in row {
+            for (j, a, v) in row {
                 let h = (*a / cw.max(1e-6) as f64) as f32;
-                out.push((*j, Bx { x: rem.x, y, w: cw, h }));
+                out.push((*j, *v, Bx { x: rem.x, y, w: cw, h }));
                 y += h;
             }
             rem.x += cw;
@@ -1505,9 +1538,9 @@ fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
         } else {
             let rh = (s / rem.w.max(1e-6) as f64) as f32;
             let mut x = rem.x;
-            for (j, a) in row {
+            for (j, a, v) in row {
                 let w = (*a / rh.max(1e-6) as f64) as f32;
-                out.push((*j, Bx { x, y: rem.y, w, h: rh }));
+                out.push((*j, *v, Bx { x, y: rem.y, w, h: rh }));
                 x += w;
             }
             rem.y += rh;
@@ -1517,15 +1550,17 @@ fn squarify(items: &[(usize, f64)], r: Bx) -> Vec<(usize, Bx)> {
     while let Some(&(j, v)) = items.get(i) {
         let a = v * scale;
         let side = rem.w.min(rem.h) as f64;
-        let cur: Vec<f64> = row.iter().map(|x| x.1).collect();
-        let mut with = cur.clone();
-        with.push(a);
-        if row.is_empty() || worst(&with, side) <= worst(&cur, side) {
-            row.push((j, a));
+        // Sum, smallest and largest item of the open row, kept incrementally (same fold order as
+        // summing the row afresh, so the numbers are bit-identical).
+        let with = (sum + a, mn.min(a), mx.max(a));
+        if row.is_empty() || worst(with.0, with.1, with.2, side) <= worst(sum, mn, mx, side) {
+            row.push((j, a, v));
+            (sum, mn, mx) = with;
             i += 1;
         } else {
             layout(&row, &mut rem, &mut out);
             row.clear();
+            (sum, mn, mx) = (0.0, f64::INFINITY, 0.0);
         }
     }
     if !row.is_empty() {
@@ -1540,14 +1575,13 @@ fn treemap(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         s.values.iter().take(MAX_MARKERS).enumerate().filter_map(|(j, v)| v.filter(|v| *v > 0.0).map(|v| (j, v))).collect();
     items.sort_by(|a, b| b.1.total_cmp(&a.1));
     let f = Fmt::new(&s.number_format);
-    for (j, b) in squarify(&items, area) {
+    for (j, v, b) in squarify(&items, area) {
         let fill = point_color(data, j);
         ctx.rect(b.x, b.y, b.w, b.h, fill, Some((WHITE, 1.5)));
         if b.w > 24.0 && b.h > LABEL_SIZE * 1.6 {
             let name = ctx.fit(&cat_label(data, j), LABEL_SIZE, b.w - 8.0);
             ctx.text(b.x + 4.0, b.y + 4.0, &name, LABEL_SIZE, on(fill), HAlign::Left, VAlign::Top);
             if chart.data_labels && b.h > LABEL_SIZE * 3.2 {
-                let v = items.iter().find(|x| x.0 == j).map(|x| x.1).unwrap_or(0.0);
                 let t = ctx.fit(&f.format(v, None), LABEL_SIZE, b.w - 8.0);
                 ctx.text(b.x + 4.0, b.y + 4.0 + LABEL_SIZE * 1.4, &t, LABEL_SIZE, on(fill), HAlign::Left, VAlign::Top);
             }
