@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (.xls dialog sheets are skipped instead of read as worksheets; `.xls` import reads each sheet's display options from WINDOW2: right-to-left, gridlines, headings, zeros, formulas; XLSX text boxes and shapes keep their paragraphs' right-to-left direction on save; CSV/TSV/TXT can open with every field kept as text via `file.open {csvAsText}`; formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; XLSX PivotTables read and write `rowGrandTotals`/`colGrandTotals` the way Excel does, so a table saved with only one grand total opens with the right one; HTML export keeps right-to-left; CSV and text import detects likely Windows-1256 Arabic when invalid UTF-8 has Arabic byte runs; other invalid UTF-8 remains Windows-1252; HTML export places pictures and charts, as inline SVG, at their anchors) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (Arabic PDF text is shaped, embedded and searchable; .xls dialog sheets are skipped instead of read as worksheets; `.xls` import reads each sheet's display options from WINDOW2: right-to-left, gridlines, headings, zeros, formulas; XLSX text boxes and shapes keep their paragraphs' right-to-left direction on save; CSV/TSV/TXT can open with every field kept as text via `file.open {csvAsText}`; formulas over Excel's 8,192 characters, and `%` or call chains past the nesting limit, are parse errors instead of stack overflows when a file is opened; XLSX PivotTables read and write `rowGrandTotals`/`colGrandTotals` the way Excel does, so a table saved with only one grand total opens with the right one; HTML export keeps right-to-left; CSV and text import detects likely Windows-1256 Arabic when invalid UTF-8 has Arabic byte runs; other invalid UTF-8 remains Windows-1252; HTML export places pictures and charts, as inline SVG, at their anchors) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -13,6 +13,8 @@ support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and
 
 Legacy scalar `INDEX(range, MATCH(...))` formulas remain ordinary formulas on save, including when
 shared formulas are expanded during import (`array_export.rs`, #1505).
+
+Arabic PDF output uses harfrust shaping, Unicode bidi and licensed Noto Arabic glyph outlines with ToUnicode and logical ActualText. Cells, headers and chart labels support marks, digits, rotation and style. Bundled builds use the optional `CRAFT_FONTS_DIR` input; unbundled native builds look for Noto Sans Arabic. Unsupported text fails export before writing the destination. Explicit cell reading-direction integration is separate.
 
 ## Workbook formats
 
@@ -81,7 +83,7 @@ values) is still dropped.
 
 | Format | Excel | GridCraft | Notes |
 |---|---|---|---|
-| PDF | Save As / Export | yes (own PDF 1.7 writer; CLI `convert` output) | Printed cell hyperlinks export as clickable HTTP(S)/mailto links or destinations within printed pages (#954); unsafe schemes and destinations outside the print range are omitted. Only the 14 standard PDF fonts, no embedding: **non-Latin text (CJK, Arabic, Devanagari, Thai) does not export**; web build exports without a file prompt (#141) |
+| PDF | Save As / Export | yes (own PDF 1.7 writer; CLI `convert` output) | Printed cell hyperlinks export as clickable HTTP(S)/mailto links or destinations within printed pages (#954); unsafe schemes and destinations outside the print range are omitted. Latin text uses the 14 standard PDF fonts; Arabic exports as shaped, embedded Noto Arabic glyphs; other characters outside WinAnsiEncoding (CJK) use a predefined, non-embedded Adobe-GB1 CID font (#1912); **Devanagari and Thai do not export yet**; web build exports without a file prompt (#141) |
 | XPS | Windows | no | Low priority |
 | Print | yes | yes (via PDF, system dialog on desktop; PR #143 for web) | |
 | Images of ranges/charts (Copy as Picture) | yes | chart raster in `crates/chart` | No range-to-image command |
@@ -110,6 +112,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Arabic PDF export embeds licensed glyph outlines, joins letters and marks, preserves logical text and reports unsupported glyphs before writing; Arabic runs take the embedded faces ahead of the CJK CID font, and CJK inside Arabic text is set in the CID font instead of failing the export |
 | 2026-10-21 | minor | HTML (Save as Web Page) writes pictures (`data:` URI `<img>`) and charts (inline SVG from the chart crate's drawing primitives, text included) at their anchors; the table uses the sheet's column widths and row heights when the sheet has either, and output for sheets without pictures or charts is unchanged |
 | 2026-10-20 | trivial | XLSX shared strings: Japanese phonetic runs (ふりがな, `<rPh sb="…" eb="…">` with `<phoneticPr>`) are read into the workbook and written back next to the string with the same text, so an open + save no longer deletes them; bad offsets and readings are dropped with a warning, a `<phoneticPr>` without runs is kept on its own, and when duplicate `<si>` items share a text but not a reading only the first reading is written (reported on open) (`phonetic_tests.rs`) |
 | 2026-10-20 | minor | A workbook theme's major/minor per-script typefaces (`<a:font script="Arab" typeface="…"/>`, also Hebr, Jpan and the rest) are read and written back in file order after `<a:cs>`; they were dropped before. A hostile file is held to 64 entries of 256 characters |

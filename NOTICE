@@ -14,3 +14,5 @@ list (author, source, license) is in ATTRIBUTION.md.
 
 None: every bundled asset is original to GridCraft. Builds made with craft-fonts
 (CRAFT_FONTS_DIR) embed the fonts listed in ATTRIBUTION.md under the SIL Open Font License 1.1.
+
+Arabic PDF glyph outlines use the separately supplied Noto Sans Arabic font, licensed under the SIL Open Font License 1.1. Bundled builds carry its OFL notice through the existing craft-fonts package licence copying. No font binary is stored in this repository.

@@ -3,9 +3,16 @@ name = "gridcraft-pdf"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "GridCraft's tiny self-contained PDF 1.7 writer (standard 14 fonts, vector drawing, RGBA images)"
+description = "GridCraft PDF 1.7 writer with shaped Arabic text, vector drawing and RGBA images"
 
 [lints]
 workspace = true
 
 [dependencies]
+harfrust = "=0.12.0"
+skrifa = { version = "=0.44.0", default-features = false, features = ["std"] }
+unicode-bidi = "=0.3.18"
+
+[build-dependencies]
+sha2 = { version = "=0.11.0", default-features = false }
+skrifa = { version = "=0.44.0", default-features = false, features = ["std"] }

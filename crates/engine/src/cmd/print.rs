@@ -13,6 +13,7 @@ use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::*;
 use gridcraft_pdf::{Font, Page, PdfDoc, Rgb};
 use serde_json::{Value as Json, json};
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::*;
 
@@ -784,27 +785,32 @@ fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
                 out.push(std::mem::take(&mut line));
                 line = word.to_string();
             }
-            // Break a single over-long word by characters. The cut that fits is found by binary
-            // search (each try measures one candidate prefix), so an over-long word costs
-            // O(n log n) measurements instead of re-measuring the whole cut per character for
-            // every emitted line (`a` × 100k pasted text would be cubic worst case).
-            while gridcraft_pdf::text_width(font, size, &line) > width && line.chars().count() > 1 {
-                let chars: Vec<char> = line.chars().collect();
-                let (mut lo, mut hi) = (1usize, chars.len());
-                while lo < hi {
-                    let mid = lo + (hi - lo).div_ceil(2);
-                    let cut: String = chars[..mid].iter().collect();
-                    if gridcraft_pdf::text_width(font, size, &cut) <= width {
-                        lo = mid;
-                    } else {
-                        hi = mid - 1;
-                    }
-                }
-                if lo == chars.len() {
+            // Keep marks with their base letter. Binary search avoids shaping every prefix of
+            // a long Arabic word; each emitted prefix is measured in its final joined form.
+            while gridcraft_pdf::text_width(font, size, &line) > width {
+                let boundaries: Vec<usize> = line.grapheme_indices(true).map(|(i, _)| i).chain(std::iter::once(line.len())).collect();
+                let count = boundaries.len().saturating_sub(1);
+                if count <= 1 {
                     break;
                 }
-                out.push(chars[..lo].iter().collect());
-                line = chars[lo..].iter().collect();
+                let (mut low, mut high, mut split) = (1, count - 1, 1);
+                while low <= high {
+                    let mid = low + (high - low) / 2;
+                    let end = boundaries.get(mid).copied().unwrap_or(line.len());
+                    let prefix = line.get(..end).unwrap_or_default();
+                    if gridcraft_pdf::text_width(font, size, prefix) <= width {
+                        split = mid;
+                        low = mid + 1;
+                    } else {
+                        high = mid - 1;
+                    }
+                }
+                let end = boundaries.get(split).copied().unwrap_or(line.len());
+                out.push(line.get(..end).unwrap_or_default().to_string());
+                line = line.get(end..).unwrap_or_default().to_string();
+                if out.len() > 2000 {
+                    return out;
+                }
             }
             if out.len() > 2000 {
                 return out;
@@ -1186,12 +1192,25 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         (true, true) => vec![text.lines().next().unwrap_or_default().to_string()],
         (false, _) => vec![text],
     };
-    let line_h = size * 1.2;
+    let extents = lines
+        .iter()
+        .filter_map(|line| pg.text_vertical_extents(font, size, line))
+        .reduce(|a, b| (a.0.max(b.0), a.1.max(b.1)))
+        .map(|(ascent, descent)| (ascent.max(size * 0.8), descent.max(size * 0.22)));
+    let line_h = extents.map_or(size * 1.2, |(ascent, descent)| (ascent + descent + size * 0.2).max(size * 1.2));
     let n = lines.len().max(1) as f32;
-    let first_baseline = match st.align.v {
-        VAlign::Top => y + pad + size * 0.8,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
-        VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+    let first_baseline = if let Some((ascent, descent)) = extents {
+        match st.align.v {
+            VAlign::Top => y + pad + ascent,
+            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - (n - 1.0) * line_h - ascent - descent) / 2.0 + ascent,
+            VAlign::Bottom => y + h - pad - descent - (n - 1.0) * line_h,
+        }
+    } else {
+        match st.align.v {
+            VAlign::Top => y + pad + size * 0.8,
+            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
+            VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+        }
     };
     // Overflow into empty neighbours (single-line text, not merged).
     // Center Across Selection spans the empty Center Across cells to its right; the text stays within that run.
@@ -1241,9 +1260,9 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         for (i, t) in lines.iter().enumerate() {
             let i = i as f32;
             let (ox, oy) = if deg > 0.0 {
-                (x + pad + size * 0.8 * deg.to_radians().sin() + i * line_h, y + h - pad)
+                (x + pad + extents.map_or(size * 0.8, |e| e.0) * deg.to_radians().sin() + i * line_h, y + h - pad)
             } else {
-                (x + pad + (last - i) * line_h, y + pad + size * 0.8)
+                (x + pad + (last - i) * line_h, y + pad + extents.map_or(size * 0.8, |e| e.0))
             };
             pg.text_rotated(ox, oy, size, font, color, t, angle);
         }
@@ -1252,12 +1271,12 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     }
     if rot == 255 {
         // Vertical stacked text.
-        let chars: Vec<char> = lines.concat().chars().take(500).collect();
-        let mut yy = y + pad + size * 0.8;
+        let stacked = lines.concat();
+        let chars: Vec<&str> = stacked.graphemes(true).take(500).collect();
+        let mut yy = y + pad + extents.map_or(size * 0.8, |e| e.0);
         for ch in chars {
-            let s = ch.to_string();
-            let cw = gridcraft_pdf::text_width(font, size, &s);
-            pg.text(x + (w - cw) / 2.0, yy, size, font, color, &s);
+            let cw = gridcraft_pdf::text_width(font, size, ch);
+            pg.text(x + (w - cw) / 2.0, yy, size, font, color, ch);
             yy += line_h;
             if yy > y + h + line_h {
                 break;
@@ -1543,7 +1562,7 @@ fn seg_size(sh: &Sheet, seg: (u32, u32), rows: bool) -> f32 {
 }
 
 /// Renders laid-out sheets to a PDF.
-pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
+pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> Result<(Vec<u8>, usize)> {
     let mut doc = PdfDoc::new();
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
@@ -1619,7 +1638,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
         }
     }
     let n = doc.page_count();
-    (doc.finish(), n)
+    Ok((doc.finish().map_err(|error| EngineError::Other(error.to_string()))?, n))
 }
 
 // ---------------------------------------------------------------- commands
@@ -1629,7 +1648,7 @@ fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
-    Ok(render_pdf(&d.wb, &lays, &d.display_title(), &path))
+    render_pdf(&d.wb, &lays, &d.display_title(), &path)
 }
 
 pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1884,6 +1903,70 @@ mod tests {
         let cropped = String::from_utf8_lossy(&cropped);
         assert_eq!(cropped.matches("/Subtype /Link").count(), 1);
         assert!(!cropped.contains("/Dest ["));
+    }
+
+    #[test]
+    fn unrenderable_arabic_does_not_overwrite_the_export_destination() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 😀"})).unwrap();
+        let path = std::env::temp_dir().join(format!("gridcraft-arabic-failed-export-{}.pdf", std::process::id()));
+        std::fs::write(&path, b"previous document").unwrap();
+        let result = s.execute("file.exportPdf", json!({"path": path.to_str().unwrap()}));
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous document");
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Text("مرحبا 😀".into()));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn wrapping_keeps_combining_marks_with_their_letters() {
+        let word = "a\u{301}a\u{301}a\u{301}a\u{301}";
+        let lines = wrap_lines(word, Font::Helvetica, 10.0, 7.0);
+        assert_eq!(lines.concat(), word);
+        assert!(lines.iter().all(|line| line == "a\u{301}"));
+    }
+
+    #[test]
+    fn arabic_cells_headers_and_charts_export_searchable_shaped_text() {
+        if gridcraft_pdf::text_width(Font::Helvetica, 10.0, "مرحبا") == 0.0 && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
+            return; // Optional font input; required-font CI exercises this regression.
+        }
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["مَرْحَبًا 123 (ABC)", "القيمة"], ["تفاح", 3], ["كمثرى", 5], ["العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة", null], ["تقرير ١٢٣ (ABC)", null], ["مرحبا", null]]})).unwrap();
+        s.execute("home.columnWidth", json!({"cols": "A:B", "chars": 32})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "1:6", "height": 50})).unwrap();
+        s.execute("home.fontSize", json!({"range": "A1:B6", "size": 20})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "4:4", "height": 90})).unwrap();
+        s.execute("home.bold", json!({"range": "A2"})).unwrap();
+        s.execute("home.italic", json!({"range": "A3"})).unwrap();
+        s.execute("home.wrapText", json!({"range": "A4"})).unwrap();
+        s.execute("home.orientation", json!({"range": "A6", "angle": 30})).unwrap();
+        s.execute("pageLayout.pageSetup", json!({"header": "&Cتقرير المبيعات 2026", "gridlines": true})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
+        // Keep the chart below the table in this synthetic workbook.
+        {
+            let d = s.doc_mut().unwrap();
+            let wb = std::sync::Arc::make_mut(&mut d.wb);
+            for chart in &mut wb.sheet_mut(0).unwrap().charts {
+                chart.anchor.cell = CellRef::new(8, 0);
+                chart.anchor.width = 500.0;
+                chart.anchor.height = 280.0;
+            }
+        }
+        let (pdf, pages) = pdf_of(&mut s, json!({"fitToPage": true}));
+        assert_eq!(pages, 1);
+        assert!(contains(&pdf, "/Subtype /Type3"));
+        for text in ["مَرْحَبًا 123 (ABC)", "تقرير المبيعات 2026", "القيمة", "تفاح", "كمثرى"] {
+            let utf16 = text.encode_utf16().map(|unit| format!("{unit:04X}")).collect::<String>();
+            assert!(contains(&pdf, &format!("/ActualText <FEFF{utf16}>")), "missing text {text}");
+        }
+        let lines = wrap_lines("العَرَبِيَّةالعَرَبِيَّة", Font::Helvetica, 20.0, 40.0);
+        assert_eq!(lines.concat(), "العَرَبِيَّةالعَرَبِيَّة");
+        assert!(lines.iter().all(|line| !line.starts_with(['َ', 'ِ', 'ُ', 'ّ', 'ْ'])));
+        assert!(lines.iter().all(|line| gridcraft_pdf::text_width(Font::Helvetica, 20.0, line) <= 40.0));
+        let path = std::env::temp_dir().join(format!("gridcraft-arabic-export-{}.pdf", std::process::id()));
+        std::fs::write(&path, &pdf).unwrap();
+        eprintln!("Arabic PDF artifact: {}", path.display());
     }
 
     #[test]

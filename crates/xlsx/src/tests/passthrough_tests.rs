@@ -477,7 +477,7 @@ fn kept_vml_drawings_are_charged_to_the_kept_total() {
         + wb.sheets.iter().filter_map(|s| s.preserved.as_ref()).map(|p| p.byte_len()).sum::<usize>();
     assert!(kept <= one + VML.len() / 2, "kept {kept} bytes");
     assert!(wb.sheet(0).unwrap().preserved.as_ref().is_some_and(|p| p.vml.is_some()));
-    assert!(wb.sheet(1).unwrap().preserved.as_ref().is_none_or(|p| p.vml.is_none()));
+    assert!(wb.sheet(1).unwrap().preserved.as_ref().is_some_and(|p| p.vml.is_none()));
     assert!(rep.warnings.iter().any(|w| w.contains("\"Other\"") && w.contains("too large")), "{:?}", rep.warnings);
     // Both sheets keep their drawings when there is room.
     let (wb, _) = read_xlsx(&rich_package_with(CONTENT_TYPES, true)).unwrap();
