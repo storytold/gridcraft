@@ -7,7 +7,7 @@ use gridcraft_core::date::{serial_from_ymd, time_fraction};
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{
-    AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
+    AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Color, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
     NoteBox, NoteCorner, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation,
     ValidationKind, XmlColumnPr,
 };
@@ -326,6 +326,8 @@ fn read_views(e: &El, sheet: &mut Sheet) {
     sheet.show_zeros = v.flag("showZeros", true);
     sheet.show_outline_symbols = v.flag("showOutlineSymbols", true);
     sheet.right_to_left = v.flag("rightToLeft", false);
+    sheet.focus_cell = v.flag("focusCell", false);
+    sheet.focus_cell_color = v.attr("focusCellColor").and_then(Color::from_hex);
     sheet.view = v.attr("view").and_then(gridcraft_model::SheetViewMode::parse).unwrap_or_default();
     if let Some(z) = v.attr_u32("zoomScale") {
         sheet.zoom = z.clamp(10, 400) as u16;

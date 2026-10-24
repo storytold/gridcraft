@@ -162,6 +162,20 @@ pub(crate) fn paint_pages(
         painted += 1;
         let pc = p.with_clip_rect(clip);
         grid::paint_quadrant(&pc, geo, wb, si, sh, rows, cols, cf, t);
+        if sh.focus_cell && sh.freeze.is_none() {
+            let active = sel.active;
+            let rgb = sh.focus_cell_color.and_then(|c| c.resolve(&wb.theme)).unwrap_or([0x10, 0x7C, 0x41]);
+            let color = egui::Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], 0x18);
+            let clipr = pc.clip_rect();
+            if active.row >= rows.0 && active.row <= rows.1 {
+                let rr = geo.range_rect(sh, gridcraft_engine::core::RangeRef::new(gridcraft_engine::core::CellRef::new(active.row, cols.0), gridcraft_engine::core::CellRef::new(active.row, cols.1)));
+                pc.rect_filled(rr.intersect(clipr), 0.0, color);
+            }
+            if active.col >= cols.0 && active.col <= cols.1 {
+                let rr = geo.range_rect(sh, gridcraft_engine::core::RangeRef::new(gridcraft_engine::core::CellRef::new(rows.0, active.col), gridcraft_engine::core::CellRef::new(rows.1, active.col)));
+                pc.rect_filled(rr.intersect(clipr), 0.0, color);
+            }
+        }
         if !pg.is_data_page(i, j) {
             // "Click to add data" pages: faded until something is typed there.
             pc.rect_filled(clip, 0.0, t.grid_bg.gamma_multiply(0.75));

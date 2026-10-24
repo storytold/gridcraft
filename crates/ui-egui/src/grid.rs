@@ -870,6 +870,19 @@ fn paint_panes(
         }
         let p = painter.with_clip_rect(*clip);
         paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t);
+        if sh.focus_cell && sh.freeze.is_none() {
+            let active = sel.active;
+            let rgb = sh.focus_cell_color.and_then(|c| c.resolve(&wb.theme)).unwrap_or([0x10, 0x7C, 0x41]);
+            let color = Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], 0x18);
+            if active.row >= rows.0 && active.row <= rows.1 {
+                let rr = geo.range_rect(sh, RangeRef::new(CellRef::new(active.row, cols.0), CellRef::new(active.row, cols.1)));
+                p.rect_filled(rr.intersect(p.clip_rect()), 0.0, color);
+            }
+            if active.col >= cols.0 && active.col <= cols.1 {
+                let rr = geo.range_rect(sh, RangeRef::new(CellRef::new(rows.0, active.col), CellRef::new(rows.1, active.col)));
+                p.rect_filled(rr.intersect(p.clip_rect()), 0.0, color);
+            }
+        }
         paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols);
     }
     // Freeze lines.

@@ -386,7 +386,11 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     if let Some(t0) = t0 {
         eprintln!("commit: + rows {:?}", t0.elapsed());
     }
-    d.wb = std::sync::Arc::new(wb);
+    // Avoid replacing the workbook Arc when the edit left it unchanged (e.g. toggling a flag
+    // to its current value): keep the existing Arc and only update the selection.
+    if wb != *d.wb {
+        d.wb = std::sync::Arc::new(wb);
+    }
     d.selection = sel;
     Ok(r)
 }

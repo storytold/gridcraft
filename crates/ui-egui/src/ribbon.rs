@@ -2282,7 +2282,7 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
         }
     }
     sep(ui);
-    let s = app.session.active().and_then(|d| d.wb.active().map(|s| (s.show_gridlines, s.show_headings))).unwrap_or((true, true));
+    let s = app.session.active().and_then(|d| d.wb.active().map(|s| (s.show_gridlines, s.show_headings, s.focus_cell))).unwrap_or((true, true, false));
     let lang = app.ui.language;
     let page_layout =
         app.session.active().and_then(|d| d.wb.active().map(|s| s.view == gridcraft_engine::model::SheetViewMode::PageLayout)).unwrap_or(false);
@@ -2316,6 +2316,27 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
         if resp.changed() {
             act(app, "view.headings", json!({"on": h}));
         }
+        ui.horizontal(|ui| {
+            let mut fc = s.2;
+            let resp = ui.checkbox(&mut fc, lang.tr("Focus Cell"));
+            control_keytip(app, ui, &resp, "view.focusCell");
+            if resp.changed() {
+                act(app, "view.focusCell", json!({"on": fc}));
+            }
+            let colors = app.session.active().map(|d| d.wb.theme.colors).unwrap_or_default();
+            let current_color = app.session.active().and_then(|doc| {
+                let sh = doc.wb.active()?;
+                let rgb = sh.focus_cell_color.and_then(|c| c.resolve(&doc.wb.theme))?;
+                Some(Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
+            }).unwrap_or(Color32::from_rgb(0x10, 0x7C, 0x41));
+            let color_btn = ui.add(egui::Button::new(egui::RichText::new("▾").size(10.0).color(Color32::BLACK)).fill(current_color).min_size(vec2(22.0, 18.0)));
+            egui::Popup::menu(&color_btn).show(|ui| {
+                if let Some(c) = crate::widgets::color_palette(ui, &colors, lang.tr("Automatic")) {
+                    act(app, "view.focusCellColor", json!({"color": c}));
+                }
+            });
+            control_keytip(app, ui, &color_btn, "view.focusCellColor");
+        });
     });
     sep(ui);
     let __k = big_button(ui, Icon::Zoom, "Zoom", "Zoom…", false);
