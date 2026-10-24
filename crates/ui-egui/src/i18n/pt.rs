@@ -1,6 +1,10 @@
 //! Brazilian Portuguese translations for the interface strings in i18n.rs. Labels follow Excel's
 //! pt-BR wording; anything absent falls back to English.
 
+/// Looks up an exact English interface key in the Brazilian Portuguese catalog.
+///
+/// Returns `None` for missing keys so the language layer can apply its English fallback.
+/// Context prefixes and embedded newlines are part of the key and are matched literally.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Colar",
@@ -969,6 +973,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "Salvamento automático: salvar após cada alteração (pastas de trabalho salvas em um arquivo)"
         }
         "All sheets" => "Todas as planilhas",
+        "More tabs" => "Mais abas",
+        "More commands on this tab" => "Mais comandos desta aba",
         _ => return None,
     })
 }

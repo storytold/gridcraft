@@ -1219,6 +1219,13 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
     v
 }
 
+/// Draws the pending dialog in a resizable window bounded by the current content viewport.
+///
+/// Short forms shrink to their contents; oversized bodies scroll. ToolPak owns its scroll area
+/// so its action row stays outside it, with remembered sizes separated by tool. The dialog is
+/// temporarily taken from `app` while rendering: child dialogs can take over, while an unfinished
+/// dialog is restored afterward. Confirmation builds command parameters and keeps the dialog
+/// open on errors; Escape or closing the window cancels it.
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
     if d.name == "pasteSpecial" {
@@ -1227,7 +1234,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let mut open = true;
     let mut win_open = true;
     let mut confirm = false;
-    let width = match d.name.as_str() {
+    let width: f32 = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
@@ -1238,22 +1245,41 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "pasteSpecial" => 480.0,
         _ => 380.0,
     };
+    let viewport = ctx.content_rect();
+    let room = (viewport.size() - vec2(16.0, 16.0)).max(egui::Vec2::ZERO);
+    let mut dialog_id = egui::Id::new("dialog").with(&d.name);
+    if d.name == "analysisToolPak" {
+        // The tool chooser and each form have independent remembered sizes.
+        dialog_id = dialog_id.with(d.values.get("tool").and_then(Json::as_str).unwrap_or(""));
+    }
     let window = egui::Window::new(app.ui.language.tr(&d.title))
-        .id(egui::Id::new("dialog").with(&d.name))
+        .id(dialog_id)
         .collapsible(false)
-        .resizable(false)
-        .default_width(width)
+        .resizable(true)
+        .min_size(vec2(0.0, 0.0))
+        .max_size(room)
+        .default_width(width.min(room.x))
+        // The scroll body shrinks to its content, so short forms still fit naturally.
+        // Its initial viewport must have room for the fields and the action row.
+        .default_height((room.y - 48.0).max(0.0))
         // A default position, not an anchor: egui anchors can't be dragged, and dialogs move by their title bar.
         .pivot(egui::Align2::CENTER_CENTER)
-        .default_pos(ctx.content_rect().center() + vec2(0.0, -40.0))
+        .default_pos(viewport.center())
+        .constrain_to(viewport)
         .open(&mut win_open);
     let window = match d.name.as_str() {
-        "insertPicture" => window.default_height(240.0),
-        "advancedFilter" => window.default_height(0.0),
+        "insertPicture" => window.default_height(240.0_f32.min(room.y)),
         _ => window,
     };
     window.show(ctx, |ui| {
-            ui.set_min_width(width - 20.0);
+        if d.name == "analysisToolPak" {
+            // ToolPak owns its body scroll: its actions stay outside it.
+            analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open);
+            return;
+        }
+        let body_width = ui.available_width();
+        egui::ScrollArea::both().id_salt("dialog_body").min_scrolled_height(0.0).max_height(ui.available_height()).show(ui, |ui| {
+            ui.set_max_width(body_width);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
                 "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
@@ -1270,7 +1296,6 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
                 "goalSeek" => goal_seek(app, ui, &mut d, &mut confirm),
                 "pasteSpecial" => paste_special(app, ui, &mut d, &mut confirm, &mut open),
-                "analysisToolPak" => analysis_toolpak(app, ui, &mut d, &mut confirm, &mut open),
                 "solver" => solver(ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
@@ -1461,6 +1486,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 _ => form(ui, &mut d, &mut confirm, &mut open),
             }
         });
+    });
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
     if let Some(open_url) = &app.services.open_url {
@@ -1735,7 +1761,12 @@ fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
     }
 }
 
-/// Draws a dialog's `fields`, editing its values.
+/// Draws a dialog's field descriptors and writes edits into their parameter values.
+///
+/// Labels and choices are translated without changing parameter keys or choice values. Text
+/// and password fields use the caller's available width so resized forms can shrink; the
+/// caller owns scrolling and action buttons. Numeric edits update immediately, including when
+/// Enter confirms in the same frame, and the first eligible field receives opening focus.
 fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
     let lang = crate::i18n::current(ui.ctx());
@@ -1752,9 +1783,9 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                             .unwrap_or_default();
                         let multiline = key == "text";
                         let r = if multiline {
-                            ui.add(egui::TextEdit::multiline(&mut s).desired_rows(4).desired_width(320.0))
+                            ui.add(egui::TextEdit::multiline(&mut s).desired_rows(4).desired_width(ui.available_width()))
                         } else {
-                            ui.add(egui::TextEdit::singleline(&mut s).desired_width(320.0))
+                            ui.add(egui::TextEdit::singleline(&mut s).desired_width(ui.available_width()))
                         };
                         take_first_focus(d, &r);
                         if r.changed() {
@@ -1770,7 +1801,7 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                     ui.vertical(|ui| {
                         ui.label(lang.tr(label));
                         let mut s = d.values.get(key).and_then(Json::as_str).unwrap_or_default().to_string();
-                        if ui.add(egui::TextEdit::singleline(&mut s).password(!d.show_password).desired_width(320.0)).changed() {
+                        if ui.add(egui::TextEdit::singleline(&mut s).password(!d.show_password).desired_width(ui.available_width())).changed() {
                             d.values.insert(key.into(), json!(s));
                         }
                         ui.checkbox(&mut d.show_password, lang.tr("Show password"));
@@ -2899,10 +2930,22 @@ fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
 
 /// Data › Data Analysis: pick a tool, then fill in its form. OK runs `data.analysisToolPak`
 /// (through the dialog's command); a report that would replace data asks first.
+///
+/// The caller supplies the window's remaining area. This function reserves the action row
+/// before sizing the scrollable chooser or form, keeping OK/Cancel fixed as the body scrolls.
+/// Choosing a tool replaces the draft with defaults from the current selection and consumes
+/// that Enter press without submitting the new form. In a tool form, `confirm` requests command
+/// execution by the caller and `open` records cancellation; drawing alone never writes a report.
 fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     use gridcraft_engine::cmd::analysis::TOOLS;
     if d.values.get("askOverwrite").and_then(Json::as_bool) == Some(true) {
-        ui.label("The output range already holds data. Replace it with the report?");
+        let footer = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+        let body_height = (ui.available_height() - footer).max(0.0);
+        egui::ScrollArea::vertical()
+            .id_salt("analysis_toolpak_overwrite_body")
+            .min_scrolled_height(0.0)
+            .max_height(body_height)
+            .show(ui, |ui| ui.label("The output range already holds data. Replace it with the report?"));
         ui.horizontal(|ui| {
             if ui.button("Replace").clicked() {
                 d.values.remove("askOverwrite");
@@ -2916,49 +2959,65 @@ fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confi
         return;
     }
     let tool = d.values.get("tool").and_then(Json::as_str).unwrap_or("").to_string();
-    let Some((_, label)) = TOOLS.iter().find(|(id, _)| *id == tool) else {
-        ui.label(egui::RichText::new("Analysis Tools").strong());
-        let pick = d.values.get("pick").and_then(Json::as_str).unwrap_or("").to_string();
-        let mut chosen = false;
-        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-            for (id, label) in TOOLS {
-                let r = ui.selectable_label(pick == *id, *label);
-                if r.clicked() {
-                    d.values.insert("pick".into(), json!(id));
+    let selected = TOOLS.iter().find(|(id, _)| *id == tool);
+    // Reserve exactly the action row's height, using the current font metrics. The body fills
+    // the rest of the resized window and scrolls independently in every ToolPak form.
+    let footer = ui.spacing().interact_size.y + 8.0 + ui.spacing().item_spacing.y;
+    let body_height = (ui.available_height() - footer).max(0.0);
+    let body_width = ui.available_width();
+    let mut chosen = false;
+    egui::ScrollArea::both()
+        .id_salt("analysis_toolpak_body")
+        .min_scrolled_height(0.0)
+        .min_scrolled_width(0.0)
+        .max_height(body_height)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_max_width(body_width);
+            if let Some((_, label)) = selected {
+                d.title = label.to_string();
+                d.fields = toolpak_fields(&tool);
+                form_fields(ui, d);
+                ui.separator();
+                ui.label(egui::RichText::new("Output options").strong());
+                let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
+                for (key, choice, text_label) in [("output", "range", "Output Range:"), ("newSheet", "newSheet", "New Worksheet Ply:")] {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.radio(to == choice, text_label).clicked() {
+                            d.values.insert("outputTo".into(), json!(choice));
+                        }
+                        let mut text = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
+                        if ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width())).changed() {
+                            d.values.insert(key.into(), json!(text));
+                            d.values.insert("outputTo".into(), json!(choice));
+                        }
+                    });
                 }
-                if r.double_clicked() {
-                    chosen = true;
+            } else {
+                ui.label(egui::RichText::new(app.ui.language.tr("Analysis Tools")).strong());
+                let pick = d.values.get("pick").and_then(Json::as_str).unwrap_or("").to_string();
+                for (id, label) in TOOLS {
+                    let response = ui.selectable_label(pick == *id, app.ui.language.tr(label));
+                    if response.clicked() {
+                        d.values.insert("pick".into(), json!(id));
+                    }
+                    chosen |= response.double_clicked();
                 }
             }
         });
+    if selected.is_some() {
+        ok_cancel(ui, confirm, open);
+    } else {
         let mut ok = false;
         ok_cancel(ui, &mut ok, open);
         let pick = d.values.get("pick").and_then(Json::as_str).unwrap_or("").to_string();
         if (ok || chosen) && TOOLS.iter().any(|(id, _)| *id == pick) {
             let sel = app.session.active().map(|doc| doc.selection.current().a1()).unwrap_or_default();
             d.values = toolpak_defaults(&sel, &pick);
+            // Changing the form must not also run it with the same Enter key.
+            ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Enter));
         }
-        return;
-    };
-    d.title = label.to_string();
-    d.fields = toolpak_fields(&tool);
-    form_fields(ui, d);
-    ui.separator();
-    ui.label(egui::RichText::new("Output options").strong());
-    let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
-    for (key, choice, text_label) in [("output", "range", "Output Range:"), ("newSheet", "newSheet", "New Worksheet Ply:")] {
-        ui.horizontal(|ui| {
-            if ui.radio(to == choice, text_label).clicked() {
-                d.values.insert("outputTo".into(), json!(choice));
-            }
-            let mut t = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
-            if ui.add(egui::TextEdit::singleline(&mut t).desired_width(160.0)).changed() {
-                d.values.insert(key.into(), json!(t));
-                d.values.insert("outputTo".into(), json!(choice));
-            }
-        });
     }
-    ok_cancel(ui, confirm, open);
 }
 
 /// Data › Solver: the Solver Parameters form. Solve runs `data.solver` through the dialog's
