@@ -657,6 +657,17 @@ mod tests {
     }
 
     #[test]
+    fn match_tilde_rules() {
+        // #1455 (Excel 365): in lookups `~` escapes any character and a trailing `~` is dropped.
+        let vals = ["x~", "y", "ab", "a~b", "~", "hello", "HELLO", "a?b", "~x", "xyz~"];
+        let a = arr(vals.iter().map(|v| vec![tv(v)]).collect());
+        is_err(ev("MATCH", vec![t("x~"), rf(a.clone()), n(0.0)]), CellError::NA);
+        close(ev("MATCH", vec![t("a~b"), rf(a.clone()), n(0.0)]), 3.0);
+        // A needle that is only `~` stays a literal `~` (not measured in Excel).
+        close(ev("MATCH", vec![t("~"), rf(a), n(0.0)]), 5.0);
+    }
+
+    #[test]
     fn match_fn() {
         let v = col(&[10.0, 20.0, 30.0, 40.0]);
         close(ev("MATCH", vec![n(30.0), rf(v.clone()), n(0.0)]), 3.0);

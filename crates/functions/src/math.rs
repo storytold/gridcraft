@@ -1686,6 +1686,29 @@ mod tests {
         (names, qty)
     }
 
+    /// ASCII values from the #1455 table (Excel 365 results).
+    fn tilde_values() -> Value {
+        let vals = ["x~", "y", "ab", "a~b", "~", "hello", "HELLO", "a?b", "~x", "xyz~"];
+        arr(vals.iter().map(|v| vec![tv(v)]).collect())
+    }
+
+    #[test]
+    fn criteria_tilde_rules() {
+        let a = tilde_values();
+        // A trailing `~` in a pattern is dropped: "?~" counts the one-character values.
+        close(ev("COUNTIF", vec![rf(a.clone()), t("?~")]), 2.0);
+        // No `*` or `?`: compared as plain text, tildes included.
+        close(ev("COUNTIF", vec![rf(a.clone()), t("a~b")]), 1.0);
+        close(ev("COUNTIF", vec![rf(a.clone()), t("~~")]), 0.0);
+        close(ev("COUNTIF", vec![rf(a.clone()), t("h~ello")]), 0.0);
+        close(ev("COUNTIF", vec![rf(a.clone()), t("<>a~b")]), 9.0);
+        close(ev("COUNTIF", vec![rf(a.clone()), t("*~~")]), 3.0);
+        let nums = col(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]);
+        close(ev("SUMIF", vec![rf(a.clone()), t("a~b"), rf(nums.clone())]), 4.0);
+        close(ev("COUNTIFS", vec![rf(a.clone()), t("a~b")]), 1.0);
+        close(ev("SUMIFS", vec![rf(nums), rf(a), t("a~b")]), 4.0);
+    }
+
     #[test]
     fn criteria_functions() {
         let (names, qty) = data();

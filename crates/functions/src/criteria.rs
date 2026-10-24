@@ -24,8 +24,11 @@ enum Operand {
     Number(f64),
     Bool(bool),
     Error(CellError),
-    /// Text (lower-cased chars kept for wildcard matching).
+    /// Text without `*` or `?`: `=` and `<>` compare it as plain text, tildes included.
     Text(String),
+    /// Text holding `*` or `?`: `=` and `<>` match it as a wildcard pattern, where `~` escapes
+    /// the next character.
+    Pattern(String),
     /// A criterion cut to its first 255 UTF-16 units in the middle of a surrogate pair: the
     /// complete characters before the cut, followed (in Excel) by a lone high surrogate.
     ///
@@ -117,6 +120,8 @@ impl Criterion {
             Operand::Bool(false)
         } else if let Some(e) = CellError::parse(rest) {
             Operand::Error(e)
+        } else if is_wildcard_criterion(rest) {
+            Operand::Pattern(rest.to_string())
         } else {
             Operand::Text(rest.to_string())
         };
@@ -166,14 +171,14 @@ impl Criterion {
                 Value::Error(x) => cmp_op(self.op, x.code().cmp(&e.code())),
                 _ => self.op == Op::Ne,
             },
-            Operand::Text(pat) => match self.op {
+            Operand::Text(pat) | Operand::Pattern(pat) => match self.op {
                 Op::Eq | Op::Ne => {
                     // Blank cells hold no text: `"*"` skips them and `"<>*"` counts them.
-                    let cell_text = match &v {
-                        Value::Text(t) => Some(t.to_string()),
-                        _ => None,
+                    let m = match &v {
+                        Value::Text(t) if matches!(self.operand, Operand::Pattern(_)) => wildcard_match(pat, t),
+                        Value::Text(t) => compare_text(t, pat) == Ordering::Equal,
+                        _ => false,
                     };
-                    let m = cell_text.is_some_and(|t| wildcard_match(pat, &t));
                     if self.op == Op::Eq { m } else { !m }
                 }
                 _ => match &v {
@@ -233,9 +238,13 @@ fn tokenize(pattern: &str) -> Vec<Tok> {
     let mut it = pattern.chars();
     while let Some(c) = it.next() {
         match c {
+            // `~` takes the next character literally; a trailing `~` is dropped, as in Excel.
             '~' => match it.next() {
-                Some(n) => out.extend(std::iter::once(lower_char(n)).map(Tok::Char)),
-                None => out.push(Tok::Char('~')),
+                Some(n) => out.push(Tok::Char(lower_char(n))),
+                // A pattern that is only `~` would be empty and match empty text. Excel wasn't
+                // measured for it, so it stays a literal `~`, as before #1455.
+                None if out.is_empty() => out.push(Tok::Char('~')),
+                None => {}
             },
             '*' => out.push(Tok::Star),
             '?' => out.push(Tok::Any),
@@ -253,6 +262,12 @@ fn lower_char(c: char) -> char {
 
 fn lower_chars(s: &str) -> Vec<char> {
     s.chars().map(lower_char).collect()
+}
+
+/// Whether a criterion's text is a wildcard pattern: in COUNTIF and its relatives only text
+/// holding `*` or `?` is (Excel 365, #1455); any other text, tildes included, compares as it is.
+fn is_wildcard_criterion(t: &str) -> bool {
+    t.contains('*') || t.contains('?')
 }
 
 /// Whether the pattern contains an unescaped wildcard.
@@ -380,6 +395,20 @@ mod tests {
         assert!(!m("<>*", Value::from("")));
         assert!(!m("?*", Value::Empty));
         assert!(m("<>a*", Value::Empty));
+        // Without `*` or `?` a criterion is plain text, tildes included (#1455, Excel 365).
+        assert!(m("a~b", Value::from("a~b")));
+        assert!(!m("a~b", Value::from("ab")));
+        assert!(!m("~~", Value::from("~")));
+        assert!(m("~~", Value::from("~~")));
+        assert!(!m("h~ello", Value::from("hello")));
+        assert!(m("<>a~b", Value::from("ab")));
+        // In a pattern a trailing `~` is dropped.
+        assert!(m("?~", Value::from("y")));
+        assert!(!m("?~", Value::from("x~")));
+        // Plain text compares with `compare_text`, so `İ` no longer folds to `i` here
+        // (Excel 365: COUNTIF of "i" over `İ`, `i`, `I` is 2).
+        assert!(!m("i", Value::from("\u{130}")));
+        assert!(m("i", Value::from("I")));
     }
 
     #[test]
@@ -396,5 +425,15 @@ mod tests {
         assert!(wildcard_match("i*", "\u{130}stanbul"));
         assert!(has_wildcards("a*"));
         assert!(!has_wildcards("abc"));
+        // A trailing `~` is dropped (#1455).
+        assert!(wildcard_match("x~", "x"));
+        assert!(!wildcard_match("x~", "x~"));
+        assert!(wildcard_match("*~~", "xyz~"));
+        assert_eq!(wildcard_find("x~", "axb", 0), Some(1));
+        // A pattern that is only `~` stays a literal `~` (not measured in Excel).
+        assert!(wildcard_match("~", "~"));
+        assert!(!wildcard_match("~", ""));
+        assert_eq!(wildcard_find("~", "abc", 0), None);
+        assert_eq!(wildcard_find("~", "a~b", 0), Some(1));
     }
 }
