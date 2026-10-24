@@ -22,6 +22,7 @@ pub mod spelling;
 pub mod stash;
 pub mod view;
 pub mod whatif;
+pub mod wordart;
 
 use gridcraft_calc::Key;
 use gridcraft_core::{CellRef, RangeRef};
@@ -144,6 +145,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(inspect::specs());
         v.extend(extra::specs());
         v.extend(draw::specs());
+        v.extend(wordart::specs());
         v.extend(spelling::specs());
         v.extend(solver::specs());
         v.extend(pivot::specs());

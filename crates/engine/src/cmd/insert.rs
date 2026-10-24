@@ -1143,8 +1143,14 @@ fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = d.wb.active_sheet;
     let sh = d.wb.active().ok_or_else(|| bad("shape.setText", "no such text box"))?;
     let shape = sh.shapes.iter().find(|shape| shape.id == id).ok_or_else(|| bad("shape.setText", "no such text box"))?;
-    if shape.kind != ShapeKind::TextBox {
+    if !matches!(shape.kind, ShapeKind::TextBox | ShapeKind::WordArt) {
         return Err(bad("shape.setText", "the shape is not a text box"));
+    }
+    if shape.kind == ShapeKind::WordArt && text.is_empty() {
+        return Err(bad("shape.setText", "WordArt text must not be empty"));
+    }
+    if shape.kind == ShapeKind::WordArt && text.chars().nth(super::wordart::MAX_CHARS).is_some() {
+        return Err(bad("shape.setText", format!("`text` is longer than {} characters", super::wordart::MAX_CHARS)));
     }
     // Sheet protection locks drawing objects (there is no "edit objects" allowance yet).
     if sh.is_protected() {

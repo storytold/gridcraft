@@ -500,7 +500,7 @@ fn vertical_alignment_keytips_run_their_commands() {
 fn pending_sequences_are_silent_no_ops() {
     let mut h = harness(blank());
     let journal = h.state().session.journal.len();
-    sequence(&mut h, &[Key::N, Key::W], false); // NW -> insert.wordArt (missing)
+    sequence(&mut h, &[Key::N, Key::J], false); // NJ -> insert.object (missing)
     assert!(h.state().dialog.is_none(), "no dialog for a pending sequence");
     assert!(h.state().message.is_none(), "no message box for a pending sequence");
     assert!(h.state().toast.is_none(), "no toast for a pending sequence");

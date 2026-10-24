@@ -84,3 +84,18 @@ fn shape_text_without_rtl_writes_unchanged_ppr() {
     let xml = written_drawing(&text_box("plain", ShapeFormat::default()));
     assert!(!xml.contains("<a:pPr"), "no paragraph properties without alignment or direction: {xml}");
 }
+
+#[test]
+fn word_art_keeps_right_to_left_paragraphs() {
+    let mut wb = text_box("مرحبا\nبالعالم", ShapeFormat { rtl: true, align: Some(ShapeTextAlign::Right), ..Default::default() });
+    wb.sheet_mut(0).unwrap().shapes[0].kind = ShapeKind::WordArt;
+    let xml = written_drawing(&wb);
+    assert!(xml.contains(r#"<a:prstTxWarp prst="textNoShape">"#));
+    assert_eq!(xml.matches(r#"<a:pPr algn="r" rtl="1"/>"#).count(), 2);
+    let (reopened, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let shape = &reopened.sheet(0).unwrap().shapes[0];
+    assert_eq!(shape.kind, ShapeKind::WordArt);
+    assert!(shape.format.rtl);
+    assert_eq!(shape.format.align, Some(ShapeTextAlign::Right));
+    assert_eq!(shape.text, "مرحبا\nبالعالم");
+}

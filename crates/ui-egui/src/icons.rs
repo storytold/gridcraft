@@ -78,6 +78,7 @@ pub enum Icon {
     Comment,
     Note,
     TextBox,
+    WordArt,
     Symbol,
     Sparkline,
     Checkbox,
@@ -521,6 +522,10 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
         Icon::TextBox => {
             g.rect(2.0, 3.0, 12.0, 10.0, None, Some(c));
             g.text(8.0, 8.0, "A", 8.0, c, false, false);
+        }
+        Icon::WordArt => {
+            g.text(9.0, 9.0, "A", 13.0, Color32::from_rgb(0x8E, 0x4F, 0xB5), true, false);
+            g.text(8.0, 8.0, "A", 13.0, c, true, false);
         }
         Icon::Symbol => g.text(8.0, 8.0, "Ω", 12.0, c, false, false),
         Icon::Function => g.text(8.0, 8.0, "fx", 11.0, c, false, true),

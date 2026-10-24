@@ -582,6 +582,9 @@ pub enum ShapeKind {
     /// A freehand ink stroke; `Shape::text` holds the points as `x,y;x,y;…` relative to the
     /// anchor (sheet points), `Shape::line` the ink colour and `fill` unused.
     Ink,
+    /// Decorative text (`insert.wordArt`): a transparent shape whose `Shape::text` is drawn with
+    /// the large, filled/outlined/shadowed text properties of `Shape::format`.
+    WordArt,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -632,6 +635,8 @@ pub struct ShapeFormat {
     pub text_color: Option<Color>,
     /// Text outline (`a:rPr/a:ln`): colour and width in points.
     pub text_outline: Option<(Color, f32)>,
+    /// Text drop shadow colour (`a:rPr/a:effectLst/a:outerShdw`); `None` is no shadow.
+    pub text_shadow: Option<Color>,
     /// `None`: the shape's default (left for text boxes, centred for other shapes).
     pub align: Option<ShapeTextAlign>,
     /// `None`: the shape's default (top for text boxes, middle for other shapes).

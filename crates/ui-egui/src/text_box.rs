@@ -32,7 +32,7 @@ impl SheetApp {
         }
         let Some(d) = self.session.active() else { return false };
         let Some(sh) = d.wb.active() else { return false };
-        let Some(shape) = sh.shapes.iter().find(|s| s.id == id && s.kind == ShapeKind::TextBox) else {
+        let Some(shape) = sh.shapes.iter().find(|s| s.id == id && matches!(s.kind, ShapeKind::TextBox | ShapeKind::WordArt)) else {
             return false;
         };
         // shape.setText refuses edits on a protected sheet; don't open an editor that can't commit.
@@ -116,7 +116,7 @@ pub(crate) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &gridcr
         app.text_box_editor = Some(ed);
         return;
     }
-    let Some(shape) = sh.shapes.iter().find(|s| s.id == ed.id && s.kind == ShapeKind::TextBox) else {
+    let Some(shape) = sh.shapes.iter().find(|s| s.id == ed.id && matches!(s.kind, ShapeKind::TextBox | ShapeKind::WordArt)) else {
         app.session.mode = Mode::Ready;
         return;
     };
@@ -150,7 +150,15 @@ pub(crate) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &gridcr
         let response = ui.add(
             TextEdit::multiline(&mut ed.text)
                 .id(id)
-                .font(FontId::new(14.0 * geo.z, egui::FontFamily::Name(theme::CELL.into())))
+                .font(FontId::new(
+                    // WordArt is edited at its own size (clamped so the box stays usable).
+                    if shape.kind == ShapeKind::WordArt {
+                        shape.format.font_size.map_or(14.0, |pt| (pt * 96.0 / 72.0).clamp(8.0, 200.0))
+                    } else {
+                        14.0
+                    } * geo.z,
+                    egui::FontFamily::Name(theme::CELL.into()),
+                ))
                 .text_color(Color32::BLACK)
                 .frame(egui::Frame::NONE)
                 .margin(egui::Margin::ZERO)

@@ -97,6 +97,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Shapes" => "Фігури",
         "Icons" => "Значки",
         "Text\nBox" => "Текстове\nполе",
+        "Word\nArt" => "WordArt",
+        "Insert WordArt" => "Вставити WordArt",
         "Comment" => "Коментар",
         "New\nComment" => "Новий\nкоментар",
         "New Note" => "Нова нотатка",

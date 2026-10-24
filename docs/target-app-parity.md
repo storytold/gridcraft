@@ -13,7 +13,7 @@ generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 | Number | Value | Kind |
 |---|---|---|
 | Feature breadth (weighted by use) | **~75%** | estimated from the area table below; anchored on two measurements |
-| Ribbon and menu catalog | **274 / 290 (94.5%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
+| Ribbon and menu catalog | **275 / 290 (94.8%)** | measured: `cargo xtask parity` (`crates/engine/src/catalog.rs` ∩ registered command ids) |
 | Worksheet functions, by name | **513 / 523 (98.1%)** | measured: registered functions vs Microsoft's published function list (method below) |
 | Worksheet functions that do real work | **504 / 523 (96.4%)** | measured: excludes 9 stubs (7 CUBE functions, WEBSERVICE, FILTERXML) |
 | **Ready for real work** | **~50%** | estimated; written weights below (51.6 computed) |
@@ -91,7 +91,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 | Page layout, print, PDF | 5 | ~80% | ~55% | 12–20 | Page setup, print titles, breaks, Page Break Preview, headers/footers, PDF export and printing. No true Page Layout view; the PDF writer uses only the 14 standard fonts without embedding (no CJK or other non-Latin text in PDF); web print only exports (#141, #143) |
 | What-if and analysis | 4 | ~50% | ~40% | 22–35 | Goal Seek, Scenario Manager, data tables, Analysis ToolPak (13 of 19 tools, no charts), Solver (Simplex LP, a local nonlinear method and Evolutionary; Answer and Limits reports; no Sensitivity report or options dialog). Missing: Forecast Sheet, Analyze Data |
 | Get & Transform, external data, data model | 5 | ~15% | ~10% | 60–100 | Import of CSV/TSV, JSON, HTML. No Power Query editor, no From Web, database or folder sources, no connections or refresh, no relationships or data model, no external workbook links (dropped with a warning) |
-| Insert objects | 3 | ~55% | ~45% | 25–40 | Pictures, 8 shape kinds (Excel has ~170), text boxes, own icon set, ink with Ink to Shape, hyperlinks, checkboxes. Missing: SmartArt, WordArt, equations, signature line, objects, 3-D models, screenshot, pictures in cells (PR #105) |
+| Insert objects | 3 | ~55% | ~45% | 25–40 | Pictures, 8 shape kinds (Excel has ~170), text boxes, WordArt (10 own styles; no warps or gradient fills), own icon set, ink with Ink to Shape, hyperlinks, checkboxes. Missing: SmartArt, equations, signature line, objects, 3-D models, screenshot, pictures in cells (PR #105) |
 | Review, comments, protection, collaboration | 4 | ~55% | ~40% | 35–55 | Threaded comments, notes, spelling (system dictionary), thesaurus, sheet and workbook protection, Allow Edit Ranges with Excel-compatible password hashes (#307). Missing: comment navigation, Show Changes, notes-to-comments conversion, accessibility checker, co-authoring, opening password-encrypted files (refused with a message since #17) |
 | Automation | 4 | ~30% | ~20% | 12–20 | Recorded, editable GridCraft scripts (Automate tab). VBA is out of scope by owner decision and is **dropped** when an `.xlsm` is opened (warning shown). No Office Scripts compatibility |
 | **Weighted** | 100 | **~75%** | **~59%** | **300–485** | |

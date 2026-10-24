@@ -495,6 +495,85 @@ fn shape_text_edit_survives_xlsx_roundtrip() {
 }
 
 #[test]
+fn word_art_inserts_with_defaults_and_undoes() {
+    use gridcraft_model::ShapeKind;
+    let mut s = s();
+    // Empty params: default style and text, no dialog.
+    let r = s.execute("insert.wordArt", json!({})).unwrap();
+    assert!(s.take_ui_requests().is_empty());
+    let shape = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert_eq!(shape.id, r["shape"].as_u64().unwrap() as u32);
+    assert_eq!(shape.kind, ShapeKind::WordArt);
+    assert_eq!(shape.text, crate::cmd::wordart::DEFAULT_TEXT);
+    assert!(shape.anchor.width > 8.0 && shape.format.text_color.is_some());
+    // Named style plus overrides; restyle and edit the text through wordArt.set.
+    s.execute("insert.wordArt", json!({"style": "ember", "text": "Q3", "fontSize": 60, "shadow": false, "outline": "#112233", "outlineWidth": 3}))
+        .unwrap();
+    let ember = s.doc().unwrap().wb.active().unwrap().shapes[1].clone();
+    assert_eq!(ember.format.font_size, Some(60.0));
+    assert_eq!((ember.format.text_shadow, ember.format.text_outline.map(|o| o.1)), (None, Some(3.0)));
+    s.execute("wordArt.set", json!({"id": ember.id, "style": 3, "text": "Q4"})).unwrap();
+    let styled = s.doc().unwrap().wb.active().unwrap().shapes[1].clone();
+    assert_eq!((styled.text.as_str(), styled.format.italic), ("Q4", true));
+    s.execute("shape.setText", json!({"id": ember.id, "text": "Q5"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[1], ember);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[1].text, "Q4");
+    // Moves and deletes like any floating shape.
+    s.execute("object.move", json!({"kind": "shape", "id": ember.id, "at": "D4"})).unwrap();
+    s.execute("object.delete", json!({"kind": "shape", "id": ember.id})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes.len(), 1);
+}
+
+#[test]
+fn word_art_rejects_hostile_params() {
+    let mut s = s();
+    let id = s.execute("insert.wordArt", json!({})).unwrap()["shape"].clone();
+    let rectangle = s.execute("insert.shape", json!({"kind": "rectangle"})).unwrap()["shape"].clone();
+    let before = s.doc().unwrap().wb.clone();
+    for (cmd, params) in [
+        ("insert.wordArt", json!({"style": "No Such Style"})),
+        ("insert.wordArt", json!({"style": 99})),
+        ("insert.wordArt", json!({"style": -1})),
+        ("insert.wordArt", json!({"text": 5})),
+        ("insert.wordArt", json!({"text": ""})),
+        ("insert.wordArt", json!({"text": "x".repeat(crate::cmd::wordart::MAX_CHARS + 1)})),
+        ("insert.wordArt", json!({"fill": "not a colour"})),
+        ("wordArt.set", json!({})),
+        ("wordArt.set", json!({"id": 999})),
+        ("wordArt.set", json!({"id": rectangle})),
+        ("shape.setText", json!({"id": id, "text": ""})),
+    ] {
+        assert!(matches!(s.execute(cmd, params), Err(crate::EngineError::BadParams { .. })), "{cmd}");
+        assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+    }
+    // Absurd sizes are clamped, not trusted.
+    s.execute("insert.wordArt", json!({"fontSize": 1e12, "width": 1e300, "height": -5})).unwrap();
+    let big = &s.doc().unwrap().wb.active().unwrap().shapes[2];
+    assert!(big.anchor.width <= 4000.0 && big.anchor.height >= 8.0 && big.format.font_size == Some(400.0));
+}
+
+#[test]
+fn word_art_survives_xlsx_roundtrip() {
+    use gridcraft_model::ShapeKind;
+    let mut s = s();
+    s.execute("insert.wordArt", json!({"style": "Lagoon", "text": "Sales <2026>\nOutlook & more"})).unwrap();
+    let before = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "wordart.xlsx", "base64": saved["base64"]})).unwrap();
+    let after = &s.doc().unwrap().wb.active().unwrap().shapes[0];
+    assert_eq!(after.kind, ShapeKind::WordArt);
+    assert_eq!(after.text, before.text);
+    assert_eq!(after.format.text_color, before.format.text_color);
+    assert_eq!(after.format.text_outline, before.format.text_outline);
+    assert_eq!(after.format.text_shadow, before.format.text_shadow);
+    assert_eq!((after.format.bold, after.format.italic, after.format.font_size), (true, true, before.format.font_size));
+    assert!(after.format.no_line);
+}
+
+#[test]
 fn no_border_clears_only_shared_edges_and_undo_restores_them() {
     use gridcraft_core::RangeRef;
     use gridcraft_model::{BorderLine, Borders};

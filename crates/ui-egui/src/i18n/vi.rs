@@ -103,6 +103,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Shapes" => "Hình",
         "Icons" => "Biểu tượng",
         "Text\nBox" => "Hộp\nvăn bản",
+        "Word\nArt" => "WordArt",
+        "Insert WordArt" => "Chèn WordArt",
         "Comment" => "Chú thích",
         "New\nComment" => "Chú thích\nmới",
         "New Note" => "Ghi chú mới",

@@ -95,6 +95,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Shapes" => "Σχήματα",
         "Icons" => "Εικονίδια",
         "Text\nBox" => "Πλαίσιο\nκειμένου",
+        "Word\nArt" => "WordArt",
+        "Insert WordArt" => "Εισαγωγή WordArt",
         "Comment" => "Σχόλιο",
         "New\nComment" => "Νέο\nσχόλιο",
         "New Note" => "Νέα σημείωση",

@@ -1400,10 +1400,7 @@ fn keytip_nv_() {
 fn keytip_nw_() {
     let mut h = harness(blank());
     sequence(&mut h, "NW", false);
-    assert!(h.state().dialog.is_none(), "NW must not open a dialog");
-    assert!(h.state().message.is_none(), "NW must not open a message box");
-    assert!(h.state().toast.is_none(), "NW must not raise a toast");
-    assert!(h.state().session.journal.is_empty(), "NW must not journal");
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "insert.wordArt"), "NW must journal insert.wordArt");
 }
 
 #[test]

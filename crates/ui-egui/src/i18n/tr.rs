@@ -98,6 +98,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Shapes" => "Şekiller",
         "Icons" => "Simgeler",
         "Text\nBox" => "Metin\nKutusu",
+        "Word\nArt" => "WordArt",
+        "Insert WordArt" => "WordArt Ekle",
         "Comment" => "Açıklama",
         "New\nComment" => "Yeni\nAçıklama",
         "New Note" => "Yeni Not",

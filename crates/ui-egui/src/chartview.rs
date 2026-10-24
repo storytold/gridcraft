@@ -198,10 +198,11 @@ fn area_mesh(v: &[Pos2], col: Color32) -> egui::Mesh {
 fn paint_shape_text(p: &Painter, wb: &Workbook, sp: &gridcraft_engine::model::Shape, r: Rect, z: f32) {
     use gridcraft_engine::model::{ShapeTextAlign, ShapeTextAnchor};
     let f = &sp.format;
+    let word_art = sp.kind == ShapeKind::WordArt;
     let text_box = sp.kind == ShapeKind::TextBox;
     let align = f.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
     let anchor = f.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
-    let default_color = if text_box { Color32::BLACK } else { Color32::WHITE };
+    let default_color = if text_box || word_art { Color32::BLACK } else { Color32::WHITE };
     let color = f.text_color.and_then(|c| c.resolve(&wb.theme)).map(theme::color32).unwrap_or(default_color);
     // Default 14 px (as before); a set size is in points.
     let size = f.font_size.map_or(14.0, |pt| pt * 96.0 / 72.0).clamp(1.0, 2000.0) * z;
@@ -227,6 +228,11 @@ fn paint_shape_text(p: &Painter, wb: &Workbook, sp: &gridcraft_engine::model::Sh
     };
     let pos = pos2(x, y);
     let clip = p.with_clip_rect(r.intersect(p.clip_rect()));
+    // WordArt's drop shadow: the text again, offset down and right, under everything else.
+    if let Some(sc) = f.text_shadow.and_then(|c| c.resolve(&wb.theme)).map(theme::color32) {
+        let d = (size * 0.05).clamp(1.0, 24.0);
+        clip.galley_with_override_text_color(pos + vec2(d, d), g.clone(), sc);
+    }
     // egui has no stroked text: the outline is the text drawn in the outline colour, offset in
     // eight directions by the outline width, under the filled text.
     if let Some((c, w)) = f.text_outline
@@ -278,6 +284,8 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         let line =
             if sp.format.no_line { Color32::TRANSPARENT } else { sp.line.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::DARK_GRAY) };
         match sp.kind {
+            // WordArt is only its text (no fill or outline of its own).
+            ShapeKind::WordArt => {}
             ShapeKind::Rectangle | ShapeKind::TextBox => {
                 p.rect_filled(r, 0.0, fill);
                 p.rect_stroke(r, 0.0, Stroke::new(1.0, line), StrokeKind::Inside);
@@ -327,7 +335,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         if label && !sp.text.is_empty() && !app.editing_text_box(sp.id) {
             paint_shape_text(p, wb, sp, r, geo.z);
         }
-        if label && sp.kind == ShapeKind::TextBox && app.selected_chart == Some(sp.id) {
+        if label && matches!(sp.kind, ShapeKind::TextBox | ShapeKind::WordArt) && app.selected_chart == Some(sp.id) {
             selection_frame(p, r);
         }
         done(start, r);
