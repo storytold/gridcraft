@@ -157,15 +157,29 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 // Error literal, or #-prefixed struct specifier (only inside [] which we lex as Struct).
                 let rest = src.get(start..).unwrap_or("");
                 let mut found = None;
-                for e in CellError::ALL {
-                    let t = e.as_str();
-                    if rest.len() >= t.len() && rest.get(..t.len()).is_some_and(|p| p.eq_ignore_ascii_case(t)) {
-                        found = Some(e);
+                for e in CellError::ALL.iter().chain([CellError::Circ].iter()) {
+                    let canonical = e.as_str();
+                    let localized = locale.error_name(*e);
+                    if rest.len() >= canonical.len() && rest.get(..canonical.len()).is_some_and(|p| p.eq_ignore_ascii_case(canonical)) {
+                        found = Some((*e, canonical.chars().count()));
+                        break;
+                    }
+                    let char_len = localized.chars().count();
+                    let byte_len: usize = rest.chars().take(char_len).map(char::len_utf8).sum();
+                    if rest.chars().take(char_len).count() == char_len
+                        && rest.get(..byte_len).is_some_and(|p| {
+                            if locale == crate::FormulaLocale::Tr {
+                                crate::input::tr::turkish_eq_ignore_case(localized, p)
+                            } else {
+                                p.eq_ignore_ascii_case(localized)
+                            }
+                        })
+                    {
+                        found = Some((*e, char_len));
                         break;
                     }
                 }
-                let Some(e) = found else { return Err(LexError { msg: "unknown error literal".into(), pos: start }) };
-                let len = e.as_str().chars().count();
+                let Some((e, len)) = found else { return Err(LexError { msg: "unknown error literal".into(), pos: start }) };
                 // `#REF!A1` style is not valid; `#REF!` is an error literal.
                 push(&mut out, Tok::Error(e), i + len);
                 i += len;

@@ -24,7 +24,7 @@ pub(crate) fn canonical(
     // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text).
     let body = text;
     if body.starts_with('=')
-        || ((body.starts_with('+') || body.starts_with('-')) && body.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
+        || ((body.starts_with('+') || body.starts_with('-')) && body.chars().nth(1).is_some_and(|c| c.is_alphabetic() || c == '('))
     {
         let known = |name: &str| wb.name(name, sheet).is_some() || wb.table(name).is_some();
         // Match the engine's existing convenience for missing closing parentheses.
@@ -79,6 +79,8 @@ fn hide_udf_prefix(text: &str, locale: FormulaLocale) -> String {
     out
 }
 
+mod tr;
+
 /// A function's argument hint. The name and separators follow the formula syntax; the argument
 /// names follow the interface language, all of them or none, so a hint never mixes two languages.
 pub(crate) fn signature(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
@@ -94,7 +96,13 @@ pub(crate) fn signature(name: &str, locale: FormulaLocale, language: Language) -
 
 /// A function's description in the interface language (English while untranslated).
 pub(crate) fn description(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
-    let english = crate::formula_bar::function_description(locale.canonical_name(name))?;
+    let canonical = locale.canonical_name(name);
+    if language == Language::Tr
+        && let Some((_, description)) = tr::TURKISH_DESCRIPTIONS.iter().find(|(name, ..)| *name == canonical)
+    {
+        return Some((*description).into());
+    }
+    let english = crate::formula_bar::function_description(canonical)?;
     Some(language.function_description(&english).map_or(english, str::to_string))
 }
 
@@ -139,6 +147,41 @@ pub(crate) fn display_template(text: &str, locale: FormulaLocale, wb: &Workbook,
         return format!("={}(", completion_name(name, locale, wb, sheet));
     }
     display(text, locale, wb, sheet)
+}
+
+pub(crate) fn localize_error(msg: &str, lang: crate::i18n::Language) -> String {
+    if lang != crate::i18n::Language::Tr {
+        return msg.to_string();
+    }
+    if let Some(c) = msg.strip_prefix("unexpected character `").and_then(|s| s.strip_suffix('`')) {
+        return format!("Beklenmeyen karakter: `{c}`");
+    }
+    if let Some(t) = msg.strip_prefix("unexpected ") {
+        return format!("Beklenmeyen öğe: {t}");
+    }
+    if let Some(rest) = msg.strip_prefix("expected ")
+        && let Some((exp, found)) = rest.split_once(", found ")
+    {
+        let exp_tr = match exp {
+            "`,` or `)`" => "`;` veya `)`",
+            _ => exp,
+        };
+        return format!("{exp_tr} bekleniyordu, {found} bulundu");
+    }
+    match msg {
+        "unterminated text" => "Kapatılmamış metin dizesi (tırnak işareti eksik)".into(),
+        "unterminated sheet name" => "Kapatılmamış sayfa adı (tek tırnak eksik)".into(),
+        "expected ! after sheet name" => "Sayfa adından sonra '!' işareti bekleniyordu".into(),
+        "unbalanced [" => "Kapatılmamış '[' köşeli ayracı".into(),
+        "unknown error literal" => "Bilinmeyen hata sabiti".into(),
+        "too many arguments" => "İşlev için çok fazla bağımsız değişken girildi".into(),
+        "invalid 3-D reference" => "Geçersiz 3B (çoklu çalışma sayfası) başvurusu".into(),
+        "formula is nested too deeply" => "Formül çok fazla iç içe yerleştirilmiş (derinlik sınırı aşıldı)".into(),
+        "formula is longer than 8192 characters" => "Formül 8192 karakterden uzun olamaz".into(),
+        "array constants may only contain constants" => "Dizi sabitleri yalnızca sabit değer içerebilir".into(),
+        "array rows must have the same length" => "Dizi satırları aynı sayıda elemana sahip olmalıdır".into(),
+        _ => lang.tr(msg).to_string(),
+    }
 }
 
 #[cfg(test)]

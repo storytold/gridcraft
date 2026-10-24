@@ -22,13 +22,14 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 ui.add_space(4.0);
                 let editing = app.editor.is_some();
                 let c = if editing { t.text } else { t.text_disabled };
-                if crate::widgets::icon_button(ui, Icon::Close, c, "Cancel", vec2(22.0, 22.0)).clicked() && editing {
+                let lang = app.ui.language;
+                if crate::widgets::icon_button(ui, Icon::Close, c, lang.tr("Cancel"), vec2(22.0, 22.0)).clicked() && editing {
                     app.cancel_edit();
                 }
-                if crate::widgets::icon_button(ui, Icon::Check, c, "Enter", vec2(22.0, 22.0)).clicked() && editing {
+                if crate::widgets::icon_button(ui, Icon::Check, c, lang.tr("Enter"), vec2(22.0, 22.0)).clicked() && editing {
                     app.commit_edit(0, 0, false, false);
                 }
-                if crate::widgets::icon_button(ui, Icon::Fx, t.text, "Insert Function", vec2(26.0, 22.0)).clicked() {
+                if crate::widgets::icon_button(ui, Icon::Fx, t.text, lang.tr("Insert Function"), vec2(26.0, 22.0)).clicked() {
                     app.open_dialog("insertFunction", json!({}));
                 }
                 ui.add_space(4.0);
@@ -55,7 +56,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 }
                 ui.allocate_space(vec2(avail, h - 6.0));
                 let chevron = if expanded { Icon::ChevronUp } else { Icon::Chevron };
-                if crate::widgets::icon_button(ui, chevron, t.text_dim, "Expand formula bar", vec2(20.0, 22.0)).clicked() {
+                if crate::widgets::icon_button(ui, chevron, t.text_dim, lang.tr("Expand formula bar"), vec2(20.0, 22.0)).clicked() {
                     app.ui.formula_bar_expanded = !app.ui.formula_bar_expanded;
                 }
             });
@@ -95,7 +96,20 @@ fn active_input(app: &SheetApp) -> String {
             // A legacy array formula shows in braces (`{=A1:A2*2}`), as `Cell::bar_text` does.
             if f.array.is_some() { format!("{{{shown}}}") } else { shown }
         } else {
-            gridcraft_engine::display::edit_text(&d.wb, sh, a)
+            let locale = app.ui.language.formula_locale();
+            if let gridcraft_engine::core::Value::Error(e) = &c.value {
+                locale.error_name(*e).to_string()
+            } else if let gridcraft_engine::core::Value::Bool(b) = &c.value {
+                if locale == gridcraft_engine::formula::FormulaLocale::Tr {
+                    if *b { "DOĞRU".into() } else { "YANLIŞ".into() }
+                } else if locale == gridcraft_engine::formula::FormulaLocale::Es {
+                    if *b { "VERDADERO".into() } else { "FALSO".into() }
+                } else {
+                    gridcraft_engine::display::edit_text(&d.wb, sh, a)
+                }
+            } else {
+                gridcraft_engine::display::edit_text(&d.wb, sh, a)
+            }
         };
     }
     String::new()
