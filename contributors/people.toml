@@ -64,6 +64,10 @@ sync_github_name = true
 display_name = "Netter"
 sync_github_name = false
 
+[people.richard1912]
+display_name = "richard1912"
+sync_github_name = false
+
 [people.Shnrqpdr]
 sync_github_name = true
 
