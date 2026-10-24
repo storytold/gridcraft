@@ -962,12 +962,24 @@ fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
                 }
                 None => split_delimited(&text, &delims, consecutive, quote),
             };
+            // Like Excel, fields that run past the last column are dropped; rows past the last row refuse the split.
+            if dest.offset(i as i64, 0).is_none() {
+                return Err(EngineError::Other("The result doesn't fit on the sheet below the destination.".into()));
+            }
             for (j, part) in parts.into_iter().enumerate() {
-                out.push((CellRef::new(dest.row + i as u32, dest.col + j as u32), part));
+                let Some(at) = dest.offset(i as i64, j as i64) else { break };
+                out.push((at, part));
             }
         }
         for (c, t) in out {
-            let cell = super::edit::input_to_cell(&t, sheet, c, &mut cx.wb).unwrap_or(None);
+            // Like Excel, a field that isn't a valid formula is kept as text instead of failing the split.
+            let cell = match super::edit::input_to_cell(&t, sheet, c, &mut cx.wb) {
+                Ok(cell) => cell,
+                Err(_) => {
+                    let style = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
+                    Some(Cell { value: Value::text(t.as_str()), formula: None, style })
+                }
+            };
             let shm = cx.sheet_mut(sheet)?;
             match cell {
                 Some(x) => shm.set_cell(c, x),

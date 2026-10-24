@@ -524,6 +524,55 @@ fn text_to_columns_destination_follows_its_sheet() {
 }
 
 #[test]
+fn text_to_columns_matches_excel_for_bad_fields_and_the_sheet_edge() {
+    let mut s = server();
+    let split = |s: &mut Server, range: &str, dest: &str, extra: Value| {
+        let mut params = json!({"range": range, "delimiters": [","], "destination": dest});
+        if let (Some(o), Some(e)) = (params.as_object_mut(), extra.as_object()) {
+            o.extend(e.clone());
+        }
+        ok(s, "execute_command", json!({"command": "data.textToColumns", "params": params}));
+    };
+    // A field that isn't a valid formula is kept as text and the split completes; it never clears the destination.
+    ok(&mut s, "set_cell", json!({"cell": "A2", "input": "a,=1+*"}));
+    ok(&mut s, "set_cell", json!({"cell": "D2", "input": "old"}));
+    ok(&mut s, "set_cell", json!({"cell": "E2", "input": "old2"}));
+    split(&mut s, "A2", "D2", json!({}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "D2"}))["text"], json!("a"));
+    let e2 = ok(&mut s, "get_cell", json!({"cell": "E2"}));
+    assert_eq!(e2["text"], json!("=1+*"));
+    assert_eq!(e2["type"], json!("text"));
+    assert!(e2["formula"].is_null(), "{e2}");
+    // Same with fixed widths.
+    ok(&mut s, "set_cell", json!({"cell": "B2", "input": "ab=1+*"}));
+    ok(&mut s, "set_cell", json!({"cell": "G2", "input": "old"}));
+    ok(&mut s, "set_cell", json!({"cell": "H2", "input": "old2"}));
+    ok(&mut s, "execute_command", json!({"command": "data.textToColumns", "params": {"range": "B2", "fixedWidths": [2], "destination": "G2"}}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "G2"}))["text"], json!("ab"));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "H2"}))["text"], json!("=1+*"));
+    // A valid formula field is still a formula.
+    ok(&mut s, "set_cell", json!({"cell": "A3", "input": "b,=1+2"}));
+    split(&mut s, "A3", "D3", json!({}));
+    let e3 = ok(&mut s, "get_cell", json!({"cell": "E3"}));
+    assert_eq!(e3["text"], json!("3"));
+    assert_eq!(e3["formula"], json!("=1+2"));
+    // Fields past the last column are dropped, not written to column 16,385.
+    ok(&mut s, "set_cell", json!({"cell": "A4", "input": "p,q"}));
+    split(&mut s, "A4", "XFD4", json!({}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "XFD4"}))["text"], json!("p"));
+    // Rows past the last row refuse the split and write nothing.
+    ok(&mut s, "set_cell", json!({"cell": "A5", "input": "r,s"}));
+    cmd_fails(&mut s, "data.textToColumns", json!({"range": "A3:A5", "delimiters": [","], "destination": "D1048575"}));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "D1048575"}))["type"], json!("empty"));
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "D1048576"}))["type"], json!("empty"));
+    // A plain split still works.
+    ok(&mut s, "set_cell", json!({"cell": "A6", "input": "p,q,r"}));
+    split(&mut s, "A6", "G6", json!({}));
+    let r = ok(&mut s, "read_range", json!({"range": "G6:I6"}));
+    assert_eq!(r["values"], json!([["p", "q", "r"]]), "{r}");
+}
+
+#[test]
 fn invalid_borders_are_invalid_params() {
     let mut s = server();
     let bad = |s: &mut Server, id: u64, borders: Value| {
