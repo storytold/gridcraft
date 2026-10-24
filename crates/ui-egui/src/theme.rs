@@ -822,6 +822,10 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
         v.window_corner_radius = egui::CornerRadius::same(10);
         v.menu_corner_radius = egui::CornerRadius::same(8);
         v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: t.shadow };
+        // The glyph atlas has one coverage-to-alpha curve for all text. egui's dark default
+        // thickens edges for light-on-dark text, which makes the black text on the always-white
+        // cells look bold; the cells are what people read, so both themes use the light curve.
+        v.text_options.color_transfer_function = egui::epaint::FontColorTransferFunction::LIGHT_MODE_DEFAULT;
         ctx.set_visuals_of(theme, v);
     }
     ctx.options_mut(|o| o.fallback_theme = egui::Theme::Light);

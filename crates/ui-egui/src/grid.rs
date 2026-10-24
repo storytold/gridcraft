@@ -17,8 +17,11 @@ use crate::theme::{self, Tokens};
 
 pub const COL_HEADER_H: f32 = 21.0;
 /// Sheet units are 96-dpi pixels (as in XLSX); on screen one unit is drawn at this many points,
-/// which matches desktop spreadsheet density (a default 20 px row is 16 pt tall).
-pub const DISPLAY_SCALE: f32 = 0.8;
+/// matching the desktop spreadsheet's density at 100% zoom. Excel for Windows draws sheet pixels
+/// 1:1 (a default 20 px row is 20 px, 11 pt Calibri is 14.7 px), so Windows and Linux use 1.0.
+/// Excel for Mac draws them at 72-dpi points (a default row is 16 pt), so macOS uses 0.8; the web
+/// build keeps 0.8 as well.
+pub const DISPLAY_SCALE: f32 = if cfg!(any(target_os = "macos", target_arch = "wasm32")) { 0.8 } else { 1.0 };
 
 /// The zoom percentages a Ctrl+wheel notch steps between: four per doubling (about 20% apart),
 /// so 25, 50, 100, 200 and 400 are on it. Excel steps 15 points a notch instead; the status bar's
