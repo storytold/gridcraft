@@ -2154,3 +2154,99 @@ fn loan_schedule_residue_keeps_excels_sign() {
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
+
+/// Verify both lookup orientations ignore cycles in unselected table cells.
+#[test]
+fn lookup_tables_do_not_read_unselected_results() {
+    for (formula, cells) in [
+        ("=VLOOKUP(1,A1:C2,2,FALSE)", [("A1", "1"), ("A2", "2"), ("B1", "42"), ("B2", "=D1"), ("C1", "=D1")]),
+        ("=HLOOKUP(1,A1:B3,2,FALSE)", [("A1", "1"), ("B1", "2"), ("A2", "42"), ("B2", "=D1"), ("A3", "=D1")]),
+    ] {
+        let mut t = T::new();
+        for (at, input) in cells {
+            t.set(at, input);
+        }
+        t.set("D1", formula);
+        t.calc.recalc_all(&mut t.wb);
+        assert_eq!(t.num("D1"), 42.0, "{formula}");
+        assert!(t.calc.circular.is_empty());
+    }
+}
+
+/// Check reference lookups preserve array semantics, incremental updates and genuine cycles.
+#[test]
+fn reference_lookups_match_array_lookup_semantics() {
+    let mut t = T::new();
+    for (at, input) in [("A1", "1"), ("A2", "3"), ("A3", "5"), ("B1", "10"), ("B2", "30"), ("C1", "one"), ("C2", "three"), ("C3", "five")] {
+        t.set(at, input);
+    }
+    for arguments in [
+        "3,2,FALSE",
+        "4,2",
+        "0,2",
+        "99,2,TRUE",
+        "3,2.9,FALSE",
+        "5,2,FALSE",
+        "3,4,FALSE",
+        "3,0,FALSE",
+        "3,1e300,FALSE",
+        "3,2,",
+        "#N/A,2,FALSE",
+        "3,2,\"invalid\"",
+        "{1;5},2,FALSE",
+        "3,{1,2,3},FALSE",
+        "{1;4},{2,3},{FALSE,TRUE}",
+    ] {
+        let (key, rest) = arguments.split_once(',').unwrap();
+        let reference = format!("=VLOOKUP({key},A1:C3,{rest})");
+        let array = format!("=VLOOKUP({key},{{1,10,\"one\";3,30,\"three\";5,0,\"five\"}},{rest})");
+        assert_eq!(crate::evaluate(&t.wb, 0, c("E1"), &reference), crate::evaluate(&t.wb, 0, c("E1"), &array), "{reference}");
+    }
+    t.set("E1", "=VLOOKUP(3,A:C,2,FALSE)");
+    assert_eq!(t.num("E1"), 30.0);
+    t.set("B2", "31");
+    assert_eq!(t.num("E1"), 31.0);
+    t.set("E1", "=VLOOKUP(3,A:D,4,FALSE)");
+    assert_eq!(t.num("E1"), 0.0);
+    // A selected result that reads the lookup really is circular.
+    t.set("B2", "=E1");
+    t.set("E1", "=VLOOKUP(3,A:C,2,FALSE)");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("E1"), Value::Error(CellError::Circ));
+    assert!(!t.calc.circular.is_empty());
+}
+
+/// Verify cross-sheet lookups avoid false cycles and propagate selected-result edits.
+#[test]
+fn cross_sheet_lookup_recalculates_without_false_cycles() {
+    let mut t = T::new();
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Calculations")));
+    for (at, input) in [("A1", "1"), ("A2", "2"), ("B1", "42"), ("B2", "=Sheet1!A1"), ("C1", "=Sheet1!A1")] {
+        let cell = if input.starts_with('=') { Cell::formula(Formula::new(input)) } else { Cell::value(Value::Number(input.parse().unwrap())) };
+        t.wb.sheet_mut(1).unwrap().cells.set(c(at), cell);
+    }
+    t.set("A1", "=VLOOKUP(1,Calculations!A:C,2,FALSE)");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("A1"), 42.0);
+    assert!(t.calc.circular.is_empty());
+    t.wb.sheet_mut(1).unwrap().cells.set(c("B1"), Cell::value(Value::Number(43.0)));
+    t.calc.cells_changed(&mut t.wb, &[(1, c("B1"))]);
+    assert_eq!(t.num("A1"), 43.0);
+    assert_eq!(t.wb.sheet(1).unwrap().value(c("B2")), Value::Number(43.0));
+}
+
+/// Check horizontal lookup array lifting, wildcard matching and missing-key errors.
+#[test]
+fn horizontal_lookup_arrays_and_wildcards() {
+    let mut t = T::new();
+    for (at, input) in [("A1", "Apple"), ("B1", "Berry"), ("A2", "10"), ("B2", "20"), ("A3", "=D1"), ("B3", "=D1")] {
+        t.set(at, input);
+    }
+    t.set("D1", "=HLOOKUP({\"a*\",\"B?rry\"},A1:B3,2,FALSE)");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("D1"), 10.0);
+    assert_eq!(t.num("E1"), 20.0);
+    assert!(t.calc.circular.is_empty());
+    t.set("D1", "=HLOOKUP(\"Missing\",A1:B3,2,FALSE)");
+    assert_eq!(t.get("D1"), Value::Error(CellError::NA));
+}
