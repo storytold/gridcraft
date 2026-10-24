@@ -1549,6 +1549,8 @@ fn insert_pivot_chart(s: &mut Session, p: &Json) -> Result<Json> {
         source: None,
         by_rows: false,
         pivot: Some(link),
+        cat_reverse: false,
+        val_reverse: false,
     };
     edit(s, |cx| {
         cx.sheet_mut(si)?.charts.push(chart);

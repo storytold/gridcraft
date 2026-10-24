@@ -49,6 +49,8 @@ fn chart(kind: ChartKind) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        cat_reverse: false,
+        val_reverse: false,
     }
 }
 
@@ -1214,4 +1216,296 @@ fn box_whisker_draws_each_series_quartile_method() {
     assert_eq!(heights.len(), 2);
     // The boxes span 3.5 and 2.5 data units on the same value axis.
     assert!((heights[0] / heights[1] - 1.4).abs() < 0.001);
+}
+
+#[test]
+fn reversed_categories_mirror_the_series_within_a_cluster() {
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered] {
+        let d = sample(kind);
+        let mut c = chart(kind);
+        c.data_labels = false;
+        let normal = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        c.cat_reverse = true;
+        let mirrored = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        // Bars come out series by series, so series `s` in category `j` is bar `s * 6 + j`.
+        // Vertical charts offset a slot on x, horizontal ones on y; index 0 is that axis.
+        // The canvas and the legend swatches are filled rects too: the bars are the rects
+        // sharing the most common size on the slot axis.
+        let bars = |p: &[Prim]| -> Vec<[f32; 3]> {
+            let rects: Vec<[f32; 3]> = p
+                .iter()
+                .filter_map(|q| match q {
+                    Prim::Rect { x, y, w, h, fill: Some(_), .. } => {
+                        Some(if kind == ChartKind::ColumnClustered { [*x, *w, *h] } else { [*y, *h, *w] })
+                    }
+                    _ => None,
+                })
+                .collect();
+            let width = |r: &[f32; 3]| (r[1] * 100.0).round() as i32;
+            let mut counts: Vec<(i32, usize)> = Vec::new();
+            for r in &rects {
+                match counts.iter_mut().find(|(k, _)| *k == width(r)) {
+                    Some((_, n)) => *n += 1,
+                    None => counts.push((width(r), 1)),
+                }
+            }
+            let bw = counts.iter().max_by_key(|(_, n)| *n).map(|(k, _)| *k as f32 / 100.0).unwrap_or(0.0);
+            let bars: Vec<[f32; 3]> = rects.into_iter().filter(|r| (r[1] - bw).abs() < 0.01).collect();
+            assert_eq!(bars.len(), 18, "{kind:?}: bar count");
+            bars
+        };
+        let (n, m) = (bars(&normal), bars(&mirrored));
+        // A horizontal chart's first slot sits at the bottom, so its axis runs the other way.
+        let dir = if kind == ChartKind::ColumnClustered { 1.0 } else { -1.0 };
+        for j in [0usize, 5] {
+            let (a, b, s) = (j, 6 + j, 12 + j);
+            assert!(dir * n[a][0] < dir * n[b][0] && dir * n[b][0] < dir * n[s][0], "{kind:?}: normal slot order in category {j}");
+            assert!(dir * m[a][0] > dir * m[b][0] && dir * m[b][0] > dir * m[s][0], "{kind:?}: reversed slot order in category {j}");
+            // Only the order flips: the cluster keeps the same slots and the same bar size.
+            // The category axis mirrors too, so category `j` sits where `5 - j` was.
+            let (ma, mb, ms) = (5 - j, 11 - j, 17 - j);
+            let mut slots_n = [n[a][0], n[b][0], n[s][0]];
+            let mut slots_m = [m[ma][0], m[mb][0], m[ms][0]];
+            slots_n.sort_by(f32::total_cmp);
+            slots_m.sort_by(f32::total_cmp);
+            for (p, q) in slots_n.iter().zip(&slots_m) {
+                assert!((p - q).abs() < 0.01, "{kind:?}: slot moved: {p} vs {q}");
+            }
+            for (p, q) in [(n[a], m[ms]), (n[b], m[mb]), (n[s], m[ma])] {
+                assert!((p[1] - q[1]).abs() < 0.01, "{kind:?}: bar size changed");
+            }
+        }
+        assert_sane(&mirrored, 640.0, 400.0);
+    }
+}
+
+#[test]
+fn reversed_value_axis_draws_bars_from_the_zero_baseline() {
+    let rects = |p: &[Prim], color: Rgba, min_w: f32| -> Vec<[f32; 4]> {
+        p.iter()
+            .filter_map(|q| match q {
+                Prim::Rect { x, y, w, h, fill, .. } if *fill == Some(color) && *w > min_w => Some([*x, *y, *w, *h]),
+                _ => None,
+            })
+            .collect()
+    };
+    // A histogram's zero count is the baseline: reversed, every bar grows down from the top.
+    let d = sample(ChartKind::Histogram);
+    let mut c = chart(ChartKind::Histogram);
+    c.val_reverse = true;
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let bars = rects(&prims, d.series[0].color, 20.0);
+    assert!(bars.len() > 1, "no histogram bars: {bars:?}");
+    assert!(bars.iter().all(|r| (r[1] - bars[0][1]).abs() < 0.01), "bars not on the baseline: {bars:?}");
+    assert!(bars.iter().any(|r| r[3] > 1.0), "every bin is flat: {bars:?}");
+    assert_sane(&prims, 640.0, 400.0);
+    // A reversed quartile box keeps its full height instead of collapsing to half a pixel.
+    let d = sample(ChartKind::BoxWhisker);
+    let mut c = chart(ChartKind::BoxWhisker);
+    c.val_reverse = true;
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let boxes = rects(&prims, d.series[0].color, 10.0);
+    assert!(boxes.iter().any(|r| r[3] > 1.0), "the quartile box collapsed: {boxes:?}");
+    assert_sane(&prims, 640.0, 400.0);
+}
+
+#[test]
+fn reversed_bars_put_their_labels_past_the_tip() {
+    let d = sample(ChartKind::ColumnClustered);
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.val_reverse = true;
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    // North's first value: the bar runs from the top (its baseline) down to the value tip.
+    let bar = prims
+        .iter()
+        .find_map(|q| match q {
+            Prim::Rect { y, h, w, fill, .. } if *fill == Some(d.series[0].color) && *w > 10.0 => Some((*y, *y + *h)),
+            _ => None,
+        })
+        .expect("no bar for the first series");
+    let label = prims
+        .iter()
+        .find_map(|q| match q {
+            Prim::Text { text, y, .. } if text == "$12,000" => Some(*y),
+            _ => None,
+        })
+        .expect("no label for the first value");
+    assert!(label > bar.1, "the label sits at the baseline end: {label} vs bar {:?}", bar);
+}
+
+#[test]
+fn a_zero_length_bar_keeps_its_label_on_the_axis_side() {
+    let color = [20, 96, 130, 255];
+    let d = ChartData {
+        palette: vec![],
+        category_levels: vec![],
+        categories: ["Zero", "Five"].map(String::from).to_vec(),
+        series: vec![series("North", &[0.0, 5000.0], color, ChartKind::BarClustered)],
+    };
+    let mut c = chart(ChartKind::BarClustered);
+    // A value of 0 leaves the bar without a tip, so its label follows the axis's own side: past the
+    // baseline towards growing values, which a reversed axis mirrors.
+    for (val_reverse, forward) in [(false, true), (true, false)] {
+        c.val_reverse = val_reverse;
+        let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        // Both the value-axis tick for 0 and the data label read "$0"; the tick is centred on the
+        // baseline, the data label never is.
+        let zeroes: Vec<(f32, HAlign)> = prims
+            .iter()
+            .filter_map(|q| match q {
+                Prim::Text { text, x, align, .. } if text == "$0" => Some((*x, *align)),
+                _ => None,
+            })
+            .collect();
+        let baseline = zeroes
+            .iter()
+            .find_map(|(x, a)| (*a == HAlign::Center).then_some(*x))
+            .unwrap_or_else(|| panic!("no 0 tick on the value axis (val_reverse={val_reverse})"));
+        let (x, align) = zeroes
+            .iter()
+            .find(|(_, a)| *a != HAlign::Center)
+            .copied()
+            .unwrap_or_else(|| panic!("no label for the zero value (val_reverse={val_reverse})"));
+        if forward {
+            assert_eq!(align, HAlign::Left, "the zero label points back at the categories");
+            assert!(x > baseline, "the zero label sits on the wrong side of the baseline: {x} vs {baseline}");
+        } else {
+            assert_eq!(align, HAlign::Right, "the zero label points away from the reversed axis");
+            assert!(x < baseline, "the zero label sits on the wrong side of the baseline: {x} vs {baseline}");
+        }
+    }
+}
+
+#[test]
+fn a_combo_charts_secondary_series_keep_the_forward_axes() {
+    let d = sample(ChartKind::Combo);
+    let mut c = chart(ChartKind::Combo);
+    let plain = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    // The secondary axes have no direction of their own: they are read and written forward, so
+    // neither reversing the categories nor the values moves that series (#1895 review).
+    let lines = |p: &[Prim]| -> Vec<Vec<[f32; 2]>> {
+        p.iter()
+            .filter_map(|q| match q {
+                Prim::Line { pts, color, .. } if *color == d.series[1].color => Some(pts.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let plain_lines = lines(&plain);
+    assert!(!plain_lines.is_empty(), "no secondary line");
+    for (cat_reverse, val_reverse) in [(true, false), (false, true), (true, true)] {
+        c.cat_reverse = cat_reverse;
+        c.val_reverse = val_reverse;
+        let flipped = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        assert_eq!(plain_lines, lines(&flipped), "cat_reverse={cat_reverse} val_reverse={val_reverse} moved the secondary series");
+        assert_sane(&flipped, 640.0, 400.0);
+    }
+}
+
+#[test]
+fn reversed_categories_keep_a_combo_primary_bar_off_the_secondary_slot() {
+    let (cp, cs) = ([20, 96, 130, 255], [200, 80, 40, 255]);
+    let d = ChartData {
+        palette: vec![],
+        category_levels: vec![],
+        categories: ["Q1", "Q2", "Q3"].map(String::from).to_vec(),
+        series: vec![
+            series("North", &[12000.0, 23000.0, 18000.0], cp, ChartKind::ColumnClustered),
+            SeriesData { secondary: true, ..series("East", &[9000.0, 11000.0, 8000.0], cs, ChartKind::ColumnClustered) },
+        ],
+    };
+    let mut c = chart(ChartKind::Combo);
+    c.data_labels = false;
+    c.cat_reverse = true;
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    // The bars, left to right per fill: wide rects only, the legend swatches are small.
+    let bars = |color: Rgba| -> Vec<(f32, f32)> {
+        prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Rect { x, w, fill, .. } if *fill == Some(color) && *w > 20.0 => Some((*x, *x + *w)),
+                _ => None,
+            })
+            .collect()
+    };
+    let (p, s) = (bars(cp), bars(cs));
+    assert_eq!(p.len(), 3, "primary bars: {p:?}");
+    assert_eq!(s.len(), 3, "secondary bars: {s:?}");
+    // A mirrored primary slot must stay its own: the secondary slot is not free to land on.
+    for (j, (a, b)) in p.iter().zip(&s).enumerate() {
+        assert!(a.1 <= b.0 + 0.01 || b.1 <= a.0 + 0.01, "category {j}: bars overlap: {a:?} and {b:?}");
+    }
+    assert_sane(&prims, 640.0, 400.0);
+}
+
+#[test]
+fn reversed_area_labels_sit_outside_the_area() {
+    let d = ChartData {
+        palette: vec![],
+        categories: vec!["Q1".into(), "Q2".into(), "Q3".into()],
+        series: vec![series("North", &[12000.0, 38000.0, 9000.0], [20, 96, 130, 255], ChartKind::Area)],
+        category_levels: vec![],
+    };
+    let mut c = chart(ChartKind::Area);
+    c.val_reverse = true;
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let poly: Vec<[f32; 2]> = prims
+        .iter()
+        .find_map(|p| match p {
+            Prim::Polygon { pts, .. } => Some(pts.clone()),
+            _ => None,
+        })
+        .expect("no area drawn");
+    let labels: Vec<(f32, f32)> = prims
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Text { text, x, y, align, .. } if text.starts_with('$') && *align == HAlign::Center => Some((*x, *y)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels.len(), 3, "one label per point: {labels:?}");
+    for (x, y) in labels {
+        // The fill runs from the reversed baseline down to the series' edge at this x.
+        let edge = poly.iter().filter(|q| (q[0] - x).abs() <= 2.0).map(|q| q[1]).fold(f32::MIN, f32::max);
+        assert!(y > edge, "label at ({x}, {y}) sits inside the area, whose edge is {edge}");
+    }
+    assert_sane(&prims, 640.0, 400.0);
+}
+
+#[test]
+fn mirrored_axes_flip_the_frame() {
+    let d = sample(ChartKind::ColumnClustered);
+    let mut c = chart(ChartKind::ColumnClustered);
+    let normal = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    c.cat_reverse = true;
+    c.val_reverse = true;
+    let mirrored = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let pos = |p: &[Prim], t: &str| {
+        p.iter()
+            .find_map(|q| match q {
+                Prim::Text { text, x, y, .. } if text == t => Some((*x, *y)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {t} label"))
+    };
+    // The category axis runs right to left (#1687).
+    let (x1, _) = pos(&normal, "Q1");
+    let (x6, _) = pos(&normal, "Q6");
+    assert!(x1 < x6, "normal order: {x1} then {x6}");
+    let (rx1, _) = pos(&mirrored, "Q1");
+    let (rx6, _) = pos(&mirrored, "Q6");
+    assert!(rx1 > rx6, "mirrored order: {rx1} then {rx6}");
+    // The value axis runs top to bottom: zero leaves the baseline.
+    let (_, y0) = pos(&normal, "$0");
+    let (_, ry0) = pos(&mirrored, "$0");
+    assert!(ry0 < y0, "mirrored value axis: {ry0} vs {y0}");
+    // Reversing one axis leaves the other alone.
+    c.cat_reverse = false;
+    c.val_reverse = true;
+    let val_only = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let (ox1, _) = pos(&val_only, "Q1");
+    let (ox6, _) = pos(&val_only, "Q6");
+    assert!(ox1 < ox6, "value-only reversal moved the categories");
+    assert_sane(&mirrored, 640.0, 400.0);
+    assert_sane(&normal, 640.0, 400.0);
 }

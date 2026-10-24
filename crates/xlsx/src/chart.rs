@@ -240,14 +240,20 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     let show_val = |e: &El| e.child("dLbls").is_some_and(|d| bool_val(d, "showVal"));
     let data_labels = groups.iter().any(|(g, _)| show_val(g) || g.kids("ser").any(show_val));
     let val_axes: Vec<&El> = plot.kids("valAx").collect();
-    let cat_ax = plot.child("catAx").or_else(|| plot.child("dateAx"));
+    // The primary axes are the first group's `axId`s: a file may list the secondary axes first,
+    // and reading their orientation would swap the directions (#1895 review).
+    let primary = |a: &El| a.child_val("axId").is_some_and(|id| first_axes.iter().any(|f| f == id));
+    let cat_axes: Vec<&El> = plot.kids("catAx").chain(plot.kids("dateAx")).collect();
+    let cat_ax = cat_axes.iter().find(|a| primary(a)).or_else(|| cat_axes.first()).copied();
     let scatter = matches!(first_kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
     let (x_ax, y_ax) = if scatter {
-        let x = val_axes.iter().find(|a| matches!(a.child_val("axPos"), Some("b") | Some("t"))).copied();
-        let y = val_axes.iter().find(|a| matches!(a.child_val("axPos"), Some("l") | Some("r"))).copied();
-        (x, y)
+        let pick = |pos: [&str; 2]| -> Option<&El> {
+            let hit = |a: &&&El| matches!(a.child_val("axPos"), Some(p) if pos.contains(&p));
+            val_axes.iter().find(|a| hit(a) && primary(a)).or_else(|| val_axes.iter().find(hit)).copied()
+        };
+        (pick(["b", "t"]), pick(["l", "r"]))
     } else {
-        (cat_ax, val_axes.first().copied())
+        (cat_ax, val_axes.iter().find(|a| primary(a)).or_else(|| val_axes.first()).copied())
     };
     let legend = match chart.child("legend") {
         None => LegendPos::None,
@@ -258,6 +264,8 @@ pub fn read_chart(root: &El) -> Option<Chart> {
             _ => LegendPos::Right,
         },
     };
+    // `orientation="maxMin"` on an axis means it runs backwards (#1687).
+    let reversed = |a: Option<&El>| a.is_some_and(|a| a.child("scaling").and_then(|s| s.child_val("orientation")) == Some("maxMin"));
     Some(Chart {
         id: 0,
         kind,
@@ -273,6 +281,8 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         source: None,
         by_rows: false,
         pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
+        cat_reverse: reversed(cat_ax),
+        val_reverse: reversed(y_ax),
     })
 }
 
@@ -702,13 +712,16 @@ struct Ax<'a> {
     grid: bool,
     title: Option<&'a str>,
     crosses_max: bool,
+    /// `orientation="maxMin"` in `<c:scaling>`: the axis runs backwards (#1687).
+    reverse: bool,
 }
 
 fn axis_xml(a: &Ax<'_>) -> String {
     let mut s = format!(
-        "<c:{0}><c:axId val=\"{1}\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"{2}\"/><c:axPos val=\"{3}\"/>",
+        "<c:{0}><c:axId val=\"{1}\"/><c:scaling><c:orientation val=\"{2}\"/></c:scaling><c:delete val=\"{3}\"/><c:axPos val=\"{4}\"/>",
         if a.cat { "catAx" } else { "valAx" },
         a.id,
+        if a.reverse { "maxMin" } else { "minMax" },
         a.delete as u8,
         a.pos
     );
@@ -805,6 +818,8 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: false,
                 title: ch.x_title.as_deref(),
                 crosses_max: false,
+                // A scatter has no category axis; keep the scale it was saved with (#1687).
+                reverse: false,
             }));
             s.push_str(&axis_xml(&Ax {
                 cat: false,
@@ -815,6 +830,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,
+                reverse: ch.val_reverse,
             }));
         }
         G::Bar { bar: true, .. } => {
@@ -827,6 +843,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: false,
                 title: ch.x_title.as_deref(),
                 crosses_max: false,
+                reverse: ch.cat_reverse,
             }));
             s.push_str(&axis_xml(&Ax {
                 cat: false,
@@ -837,6 +854,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,
+                reverse: ch.val_reverse,
             }));
         }
         _ => {
@@ -849,6 +867,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: false,
                 title: ch.x_title.as_deref(),
                 crosses_max: false,
+                reverse: ch.cat_reverse,
             }));
             s.push_str(&axis_xml(&Ax {
                 cat: false,
@@ -859,12 +878,35 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
                 crosses_max: false,
+                reverse: ch.val_reverse,
             }));
         }
     }
     if secondary.is_some() {
-        s.push_str(&axis_xml(&Ax { cat: true, id: 3, cross: 4, pos: "b", delete: true, grid: false, title: None, crosses_max: false }));
-        s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: "r", delete: false, grid: false, title: None, crosses_max: true }));
+        // The model holds one direction pair, for the primary axes: a file's reversed secondary
+        // axis is read into nothing and so written forward (#1687).
+        s.push_str(&axis_xml(&Ax {
+            cat: true,
+            id: 3,
+            cross: 4,
+            pos: "b",
+            delete: true,
+            grid: false,
+            title: None,
+            crosses_max: false,
+            reverse: false,
+        }));
+        s.push_str(&axis_xml(&Ax {
+            cat: false,
+            id: 4,
+            cross: 3,
+            pos: "r",
+            delete: false,
+            grid: false,
+            title: None,
+            crosses_max: true,
+            reverse: false,
+        }));
     }
     s.push_str("</c:plotArea>");
     let pos = match ch.legend {
