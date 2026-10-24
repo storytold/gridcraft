@@ -410,6 +410,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "工作簿计算",
         "Enable iterative calculation" => "启用迭代计算",
         "Calculation settings are saved with the workbook." => "计算设置随工作簿一起保存。",
+        "Search commands (Alt+Q)" => "搜索命令 (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "搜索命令，例如 冻结、图表、加粗…",
         "Insert Sheet" => "插入工作表",
         "Rename" => "重命名",
         "Move or Copy…" => "移动或复制…",

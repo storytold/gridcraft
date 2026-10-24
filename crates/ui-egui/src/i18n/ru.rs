@@ -418,6 +418,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Вычисления в книге",
         "Enable iterative calculation" => "Включить итеративные вычисления",
         "Calculation settings are saved with the workbook." => "Параметры вычислений сохраняются вместе с книгой.",
+        "Search commands (Alt+Q)" => "Поиск команд (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Найдите команду, например: закрепить, диаграмма, полужирный…",
         "Insert Sheet" => "Вставить лист",
         "Rename" => "Переименовать",
         "Move or Copy…" => "Переместить или скопировать…",

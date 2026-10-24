@@ -418,6 +418,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "통합 문서 계산",
         "Enable iterative calculation" => "반복 계산 사용",
         "Calculation settings are saved with the workbook." => "계산 설정은 통합 문서와 함께 저장됩니다.",
+        "Search commands (Alt+Q)" => "명령 검색 (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "명령 검색, 예: 틀 고정, 차트, 굵게…",
         "Insert Sheet" => "시트 삽입",
         "Rename" => "이름 바꾸기",
         "Move or Copy…" => "이동 또는 복사…",

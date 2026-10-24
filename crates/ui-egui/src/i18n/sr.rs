@@ -416,6 +416,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Bottom Margin" => "Donja margina",
         "Header Margin" => "Margina zaglavlja",
         "Footer Margin" => "Margina podnožja",
+        "Search commands (Alt+Q)" => "Pretraži komande (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Pretražite komandu, npr. zamrzni, grafikon, podebljano…",
         "Insert Sheet" => "Убаци лист",
         "Rename" => "Преименуј",
         "Move or Copy…" => "Премести или копирај…",

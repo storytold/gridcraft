@@ -44,6 +44,9 @@ pub struct Dialog {
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
+    /// Drawn at least once. The click that opened a dialog ends in its first frame, so a click
+    /// outside only closes a dialog (the search box) from its second frame on.
+    shown: bool,
     focus_initialized: bool,
     /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
     pick: Option<RefPick>,
@@ -156,6 +159,7 @@ impl Dialog {
             picture_inbox: None,
             picture_target: None,
             back: None,
+            shown: false,
             focus_initialized: false,
             pick: None,
         }
@@ -177,6 +181,7 @@ impl Dialog {
             picture_inbox: None,
             picture_target: None,
             back: None,
+            shown: false,
             focus_initialized: false,
             pick: None,
         }
@@ -1252,7 +1257,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "advancedFilter" => window.default_height(0.0),
         _ => window,
     };
-    window.show(ctx, |ui| {
+    let shown = window.show(ctx, |ui| {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
@@ -1461,6 +1466,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 _ => form(ui, &mut d, &mut confirm, &mut open),
             }
         });
+    // The search box closes on a click outside it, as Excel's does.
+    if d.name == "commandSearch" && d.shown && shown.is_some_and(|r| r.response.clicked_elsewhere()) {
+        open = false;
+    }
+    d.shown = true;
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
     if let Some(open_url) = &app.services.open_url {
@@ -2706,7 +2716,13 @@ fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Search (Alt+Q, the title bar's search icon, Automate › Command Palette): type to find a ribbon
+/// command; with nothing typed, the commands recently run from here. The first match is
+/// highlighted, Up/Down move the highlight, Enter or a click runs it and closes the box. A command
+/// that asks for its dialog opens it, as from the ribbon.
 fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+    // Arrow keys, Home/End and the page keys move the highlight here, so the text cursor and the
+    // list don't both react.
     let (down, up, home, end, pgup, pgdn) = ui.input_mut(|i| {
         (
             i.consume_key(egui::Modifiers::NONE, Key::ArrowDown),
@@ -2718,31 +2734,29 @@ fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm
         )
     });
     let width = ui.available_width();
-    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text("Type a command, e.g. freeze, chart, bold…"));
-
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut d.search)
+            .desired_width(width)
+            .hint_text(app.ui.language.tr("Search for a command, e.g. freeze, chart, bold…")),
+    );
     if !d.focus_initialized {
         r.request_focus();
         d.focus_initialized = true;
     }
-
-    let q = d.search.to_ascii_lowercase();
-    let cmds: Vec<(String, String, String)> = app
-        .session
-        .commands()
-        .into_iter()
-        .filter(|c| c.enabled)
-        .filter(|c| q.is_empty() || c.label.to_ascii_lowercase().contains(&q) || c.id.to_ascii_lowercase().contains(&q))
-        .map(|c| (c.id.to_string(), c.label.to_string(), c.menu.join(" › ")))
-        .take(40)
-        .collect();
-
+    if r.changed() {
+        d.list_index = 0;
+    }
+    let recent = d.search.trim().is_empty();
+    let cmds = if recent {
+        crate::command_search::recent(&app.session, app.recent_commands())
+    } else {
+        crate::command_search::search(&app.session, &d.search)
+    };
     let last = cmds.len().saturating_sub(1);
 
     let row_h = ui.spacing().interact_size.y.max(20.0);
     let row_step = row_h + ui.spacing().item_spacing.y;
-
     const LIST_HEIGHT: f32 = 320.0;
-
     let page_size = ((LIST_HEIGHT / row_step).floor() as usize).saturating_sub(1).max(1);
 
     if down {
@@ -2763,33 +2777,38 @@ fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm
     if end {
         d.list_index = last;
     }
-
     d.list_index = d.list_index.min(last);
 
+    let t = crate::theme::Tokens::get(ui.ctx());
+    if recent {
+        ui.label(egui::RichText::new(if cmds.is_empty() { "Type to search for a command." } else { "Recently used" }).color(t.text_dim));
+    } else if cmds.is_empty() {
+        ui.label(egui::RichText::new("No matching commands.").color(t.text_dim));
+    }
     egui::ScrollArea::vertical().max_height(LIST_HEIGHT).auto_shrink([true, false]).show(ui, |ui| {
         let scroll_area_width = ui.available_width();
-        for (i, (id, label, menu)) in cmds.iter().enumerate() {
-            let r = ui.add(egui::Button::selectable(i == d.list_index, format!("{label}    {menu}")).min_size(vec2(scroll_area_width, 20.0)));
-
+        for (i, c) in cmds.iter().enumerate() {
+            let shortcut = c.shortcut.map(|s| format!("    {s}")).unwrap_or_default();
+            let text = format!("{}    {}{shortcut}", c.label, c.menu.join(" › "));
+            let r = ui.add(egui::Button::selectable(i == d.list_index, text).min_size(vec2(scroll_area_width, 20.0)));
             if (down || up || home || end || pgup || pgdn) && i == d.list_index && !ui.clip_rect().contains_rect(r.rect) {
                 r.scroll_to_me(Some(if down || end || pgdn { egui::Align::Max } else { egui::Align::Min }));
             }
-
             if r.clicked() {
                 d.list_index = i;
                 *confirm = true;
             }
-
-            r.on_hover_text(id);
+            r.on_hover_text(c.id);
         }
     });
-    if ui.input(|i| i.key_pressed(Key::Enter)) {
+    // Enter with nothing listed keeps the box open.
+    if !cmds.is_empty() && ui.input(|i| i.key_pressed(Key::Enter)) {
         *confirm = true;
     }
-    if *confirm && let Some((id, ..)) = cmds.get(d.list_index) {
-        let id = id.clone();
+    if *confirm && let Some(c) = cmds.get(d.list_index) {
+        let id = c.id;
         app.dialog = None;
-        app.run_or_alert(&id, json!({}));
+        app.run_searched_command(ui.ctx(), id);
     }
 }
 

@@ -911,6 +911,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Scatter or Bubble" => "Dispersie sau bule",
         "Search and run any command" => "Căutați și rulați orice comandă",
         "Search commands" => "Căutare comenzi",
+        "Search commands (Alt+Q)" => "Căutați comenzi (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Căutați o comandă, de ex. înghețare, grafic, îngroșat…",
         "Select and move ink and shapes" => "Selectați și mutați cerneala și formele",
         "Series…" => "Serie…",
         "Share: export or save a copy" => "Partajare: exportați sau salvați o copie",

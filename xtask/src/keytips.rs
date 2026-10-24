@@ -324,7 +324,7 @@ fn render_tests(entries: &[Entry], probe: &Probe) -> String {
                 ),
             },
             "dialog" => format!(
-                "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().dialog.is_some(), \"{seq} must open the {dialog} dialog\");",
+                "sequence(&mut h, {seq:?}, false);\n    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some({dialog:?}), \"{seq} must open the {dialog} dialog\");",
                 seq = e.seq,
                 dialog = e.target,
             ),

@@ -905,6 +905,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Scatter or Bubble" => "Punktowy lub bąbelkowy",
         "Search and run any command" => "Wyszukaj i uruchom dowolne polecenie",
         "Search commands" => "Wyszukaj polecenia",
+        "Search commands (Alt+Q)" => "Szukaj poleceń (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Szukaj polecenia, np. zamroź, wykres, pogrubienie…",
         "Select and move ink and shapes" => "Zaznaczaj i przesuwaj pismo odręczne oraz kształty",
         "Series…" => "Seria danych…",
         "Share: export or save a copy" => "Udostępnij: eksportuj lub zapisz kopię",

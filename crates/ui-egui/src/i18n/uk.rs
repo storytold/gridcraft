@@ -908,6 +908,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Scatter or Bubble" => "Scatter or Bubble",
         "Search and run any command" => "Search and run any command",
         "Search commands" => "Search commands",
+        "Search commands (Alt+Q)" => "Пошук команд (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Знайдіть команду, напр. закріпити, діаграма, жирний…",
         "Select and move ink and shapes" => "Select and move ink and shapes",
         "Series…" => "Series…",
         "Share: export or save a copy" => "Share: export or save a copy",

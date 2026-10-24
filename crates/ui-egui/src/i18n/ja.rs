@@ -416,6 +416,8 @@ pub(super) const CORE: &[(&str, &str)] = &[
 
 /// English label → Japanese for the dialog, message, Backstage and menu strings beyond [`CORE`].
 pub(super) const DIALOGS: &[(&str, &str)] = &[
+    ("Search commands (Alt+Q)", "コマンドを検索 (Alt+Q)"),
+    ("Search for a command, e.g. freeze, chart, bold…", "コマンドを検索、例: 固定、グラフ、太字…"),
     ("OK", "OK"),
     ("Cancel", "キャンセル"),
     ("Don't Save", "保存しない"),
@@ -785,7 +787,6 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Horizontal (Category) Axis Labels:", "横軸 (項目) ラベル:"),
     ("There are no conditional formatting rules on this sheet.", "このシートには条件付き書式ルールがありません。"),
     ("applies to", "適用先"),
-    ("Type a command, e.g. freeze, chart, bold…", "コマンドを入力 (例: ウィンドウ枠の固定、グラフ、太字)…"),
     ("Set cell:", "目的セル:"),
     ("To value:", "目標値:"),
     ("By changing cell:", "変化させるセル:"),

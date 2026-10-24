@@ -448,6 +448,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Compact" => "Compacto",
         "Outline" => "Esquema",
         "Tabular" => "Tabular",
+        "Search commands (Alt+Q)" => "Buscar comandos (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Busca un comando, p. ej. inmovilizar, gráfico, negrita…",
         "Insert Sheet" => "Insertar hoja",
         "Rename" => "Cambiar nombre",
         "Move or Copy…" => "Mover o copiar…",
