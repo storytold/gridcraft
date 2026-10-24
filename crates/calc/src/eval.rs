@@ -112,6 +112,9 @@ impl Ctx for FnCtx<'_, '_> {
     fn date_system(&self) -> gridcraft_core::DateSystem {
         self.ev.host.workbook().date_system
     }
+    fn region(&self) -> &gridcraft_core::Region {
+        self.ev.host.workbook().region
+    }
     fn now_serial(&self) -> f64 {
         self.ev.host.now_serial()
     }

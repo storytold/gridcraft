@@ -290,6 +290,22 @@ impl DocState {
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.wb, &self.saved)
     }
+    /// Reinterprets formula date text in the session's region, preserving the saved state.
+    /// Undo/redo uses this too: a history snapshot must not restore an old application option.
+    pub(crate) fn apply_region(&mut self, region: &'static gridcraft_core::Region) {
+        if *self.wb.region == *region {
+            return;
+        }
+        let dirty = self.is_dirty();
+        let mut wb = (*self.wb).clone();
+        wb.region = region;
+        self.calc.recalc_all(&mut wb);
+        self.wb = Arc::new(wb);
+        if !dirty {
+            self.saved = self.wb.clone();
+        }
+        self.revision += 1;
+    }
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet
     }
@@ -347,6 +363,9 @@ pub struct Prefs {
     pub user_dictionary: Vec<String>,
     /// View › Show › Formula Bar (an application option in Excel, not saved in the file).
     pub formula_bar: bool,
+    /// The region used for date/time formula text, independent of interface language.
+    /// An unknown preference tag reads as en-US; this runtime option is not saved in XLSX.
+    pub region: String,
 }
 
 impl Default for Prefs {
@@ -361,6 +380,7 @@ impl Default for Prefs {
             r1c1: false,
             user_dictionary: vec![],
             formula_bar: true,
+            region: gridcraft_core::region::default_region().tag.into(),
         }
     }
 }
@@ -435,9 +455,39 @@ pub struct Session {
     pub text_width: Option<TextWidth>,
 }
 
+/// The region a tag names (`pt-BR`, case and `_` insensitive); an error listing the valid tags
+/// when there is none.
+pub fn find_region(tag: &str) -> Result<&'static gridcraft_core::Region> {
+    gridcraft_core::region::find(tag).ok_or_else(|| {
+        let tags: Vec<&str> = gridcraft_core::region::all().iter().map(|r| r.tag).collect();
+        EngineError::Other(format!("unknown region {tag:?} (use one of {})", tags.join(", ")))
+    })
+}
+
 impl Session {
     pub fn new() -> Session {
         Session::default()
+    }
+    /// The region used for formula date text: `prefs.region`, or en-US for an unknown tag.
+    pub fn region(&self) -> &'static gridcraft_core::Region {
+        gridcraft_core::region::find(&self.prefs.region).unwrap_or_else(gridcraft_core::region::default_region)
+    }
+    /// Sets the region (a tag such as `pt-BR`) and recalculates every open document.
+    /// This leaves source formulas, workbook dirty state and PivotTable reports unchanged;
+    /// refresh PivotTables separately after changing their calculated source dates.
+    pub fn set_region(&mut self, tag: &str) -> Result<&'static gridcraft_core::Region> {
+        let region = find_region(tag)?;
+        self.prefs.region = region.tag.into();
+        self.apply_region();
+        Ok(region)
+    }
+    /// Applies `prefs.region` to every open document after preferences were loaded or replaced.
+    /// Date/time formula text recalculates; input commands remain canonical en-US.
+    pub fn apply_region(&mut self) {
+        let region = self.region();
+        for doc in &mut self.docs {
+            doc.apply_region(region);
+        }
     }
     pub fn documents(&self) -> &[DocState] {
         &self.docs
@@ -462,7 +512,8 @@ impl Session {
     pub fn doc_mut(&mut self) -> Result<&mut DocState> {
         self.active_mut().ok_or(EngineError::NoDocument)
     }
-    pub fn add_document(&mut self, d: DocState) -> usize {
+    pub fn add_document(&mut self, mut d: DocState) -> usize {
+        d.apply_region(self.region());
         self.docs.push(d);
         self.active = self.docs.len() - 1;
         self.active
@@ -480,6 +531,7 @@ impl Session {
     pub fn new_workbook(&mut self) -> usize {
         let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
         let mut wb = Workbook::new();
+        wb.region = self.region();
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
             let name = wb.next_sheet_name();
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));

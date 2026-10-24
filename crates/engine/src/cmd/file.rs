@@ -32,7 +32,8 @@ pub fn specs() -> Vec<CommandSpec> {
 fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
     let i = match str_param(p, "sample") {
         Some(name) => {
-            let wb = crate::sample::build(name).ok_or_else(|| bad("file.new", format!("unknown sample `{name}`")))?;
+            let mut wb = crate::sample::build(name).ok_or_else(|| bad("file.new", format!("unknown sample `{name}`")))?;
+            wb.region = s.region();
             let title = crate::sample::title(name);
             s.add_document(DocState::new(wb, None, title, crate::Trust::Local))
         }
@@ -57,6 +58,8 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let encrypted = gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Encrypted;
     let (mut wb, warnings) = crate::io::open_bytes_with(&name, &bytes, str_param(p, "password"), bool_param(p, "csvAsText").unwrap_or(false))?;
+    // DATEVALUE and TIMEVALUE must use the session region on the first opening-time recalc.
+    wb.region = s.region();
     wb.source_dir = str_param(p, "path").and_then(crate::io::source_dir);
     // What `CELL("filename")` reports (#1489). A workbook opened from bytes knows its name but
     // never a folder, so it reports `[name]Sheet` with none; an import reports the file it came

@@ -2,9 +2,13 @@
 //!
 //! Recognises numbers with thousands separators, percentages, currency, scientific notation,
 //! fractions (`1 1/2`), dates (`3/4/2026`, `2026-03-04`, `4-Mar-2026`, `Mar 4, 2026`), times
-//! (`10:30`, `10:30:15 PM`) and date-times. Locale: en-US.
+//! (`10:30`, `10:30:15 PM`) and date-times. [`parse_input`] reads them the en-US way;
+//! [`parse_input_in`] reads what someone types in another [`Region`]: its decimal and group
+//! separators (`1.234,56`), currency symbol, day-month-year order (`25/09/2026`), month names
+//! and AM/PM words.
 
-use crate::date::{DateSystem, MONTHS, serial_from_ymd, time_fraction};
+use crate::date::{DateSystem, serial_from_ymd, time_fraction};
+use crate::region::{DateOrder, EN_US, Grouping, Region};
 use crate::value::{CellError, Value};
 
 /// A parsed entry: its value and the number format Excel would apply automatically.
@@ -14,9 +18,15 @@ pub struct Parsed {
     pub format: Option<&'static str>,
 }
 
-/// Interprets typed cell input (not formulas). Text that isn't a number, date, boolean or error
-/// stays text. A leading apostrophe forces text.
+/// Interprets typed cell input (not formulas) the en-US way. Text that isn't a number, date,
+/// boolean or error stays text. A leading apostrophe forces text. Files and imports use this.
 pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
+    parse_input_in(s, sys, &EN_US)
+}
+
+/// [`parse_input`] for what a person types in `region`. The formats it returns are canonical
+/// format codes (`m/d/yyyy` is the system short date, which the region's display decides).
+pub fn parse_input_in(s: &str, sys: DateSystem, region: &Region) -> Parsed {
     if s.is_empty() {
         return Parsed { value: Value::Empty, format: None };
     }
@@ -33,20 +43,27 @@ pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
     if let Some(e) = CellError::parse(t) {
         return Parsed { value: Value::Error(e), format: None };
     }
-    if let Some((n, f)) = parse_numeric(t, sys) {
+    if let Some((n, f)) = parse_numeric(t, sys, region) {
         return Parsed { value: Value::number(n), format: f };
     }
     Parsed { value: Value::text(s), format: None }
 }
 
-/// Numeric text as arithmetic coerces it ("1,000", "50%", "$3", "1/2/2020", "10:00").
+/// Numeric text as arithmetic coerces it ("1,000", "50%", "$3", "1/2/2020", "10:00"). en-US:
+/// worksheet text coercion does not follow the region.
 pub fn parse_number_text(s: &str) -> Option<f64> {
     parse_number_text_in(s, DateSystem::D1900)
 }
 
 /// Like [`parse_number_text`], with date text read in the given workbook date system.
 pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
-    parse_numeric(s.trim(), sys).map(|(n, _)| n)
+    parse_numeric(s.trim(), sys, &EN_US).map(|(n, _)| n)
+}
+
+/// Text consumed by a date-serial argument: numeric serials retain canonical en-US coercion,
+/// while date/time text uses the workbook's region. Invalid regional dates never fall back to MDY.
+pub fn parse_date_argument_text_in(s: &str, sys: DateSystem, region: &Region) -> Option<f64> {
+    parse_numeric_regions(s.trim(), sys, &EN_US, region).map(|(n, _)| n)
 }
 
 /// Text that Excel's "Number Stored as Text" check flags: it would be a number if typed (signs,
@@ -57,36 +74,40 @@ pub fn number_stored_as_text(s: &str) -> Option<f64> {
     // The same parentheses typed entry reads, accounting forms included: `$(5)`, `(5)%`.
     match parenthesized(t) {
         Some(inner) if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) => None,
-        Some(inner) => parse_plain(&inner).map(|(n, _)| -n),
-        None => parse_plain(t).map(|(n, _)| n),
+        Some(inner) => parse_plain(&inner, &EN_US).map(|(n, _)| -n),
+        None => parse_plain(t, &EN_US).map(|(n, _)| n),
     }
 }
 
-fn parse_numeric(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
+fn parse_numeric(t: &str, sys: DateSystem, r: &Region) -> Option<(f64, Option<&'static str>)> {
+    parse_numeric_regions(t, sys, r, r)
+}
+
+fn parse_numeric_regions(t: &str, sys: DateSystem, r: &Region, date_region: &Region) -> Option<(f64, Option<&'static str>)> {
     // Parenthesised negatives: (100) = -100, and the accounting forms `$(100)` and `(5)%`.
     if let Some(inner) = parenthesized(t) {
         // Excel reads no sign and no nested parentheses inside: `(-5)`, `($-5)`, `((5))`.
         if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) {
             return None;
         }
-        let r = parse_plain(&inner).or_else(|| parse_fraction(&inner).map(|n| (n, Some("# ?/?"))));
-        return r.map(|(n, f)| (-n, f));
+        let parsed = parse_plain(&inner, r).or_else(|| parse_fraction(&inner, r).map(|n| (n, Some("# ?/?"))));
+        return parsed.map(|(n, f)| (-n, f));
     }
-    parse_unparenthesised(t, sys)
+    parse_unparenthesised(t, sys, r, date_region)
 }
 
-fn parse_unparenthesised(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
+fn parse_unparenthesised(t: &str, sys: DateSystem, r: &Region, date_region: &Region) -> Option<(f64, Option<&'static str>)> {
     if t.is_empty() {
         return None;
     }
-    if let Some(r) = parse_plain(t) {
-        return Some(r);
+    if let Some(parsed) = parse_plain(t, r) {
+        return Some(parsed);
     }
-    if let Some(r) = parse_fraction(t) {
-        return Some((r, Some("# ?/?")));
+    if let Some(res) = parse_fraction(t, r) {
+        return Some((res, Some("# ?/?")));
     }
-    if let Some(r) = parse_datetime(t, sys) {
-        return Some(r);
+    if let Some(res) = parse_datetime(t, sys, date_region) {
+        return Some(res);
     }
     None
 }
@@ -107,41 +128,66 @@ fn parenthesized(t: &str) -> Option<String> {
     Some(format!("{currency}{}{percent}", body.trim()))
 }
 
-/// Signs, currency, thousands separators, percent, exponent.
-fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
+/// Digit groups of an integer part, accepted when they follow the region's grouping.
+fn groups_ok(groups: &[&str], grouping: Grouping) -> bool {
+    let (Some(first), Some(last)) = (groups.first(), groups.last()) else { return false };
+    if first.is_empty() || first.len() > 3 {
+        return false;
+    }
+    let thousands = groups.iter().skip(1).all(|g| g.len() == 3);
+    match grouping {
+        Grouping::Thousands => thousands,
+        // Indian: 12,34,567. The thousands pattern is read too.
+        Grouping::Indian => {
+            let middle = groups.get(1..groups.len().saturating_sub(1)).unwrap_or(&[]);
+            thousands || (first.len() <= 2 && last.len() == 3 && middle.iter().all(|g| g.len() == 2))
+        }
+    }
+}
+
+/// Signs, currency, group separators, percent, exponent.
+fn parse_plain(t: &str, r: &Region) -> Option<(f64, Option<&'static str>)> {
     let mut s = t;
     let mut neg = false;
     let mut currency = false;
     let mut percent = false;
-    if let Some(r) = s.strip_prefix('-') {
+    if let Some(rest) = s.strip_prefix('-') {
         neg = true;
-        s = r.trim_start();
-    } else if let Some(r) = s.strip_prefix('+') {
-        s = r.trim_start();
+        s = rest.trim_start();
+    } else if let Some(rest) = s.strip_prefix('+') {
+        s = rest.trim_start();
     }
-    if let Some(r) = s.strip_prefix('$') {
-        currency = true;
-        s = r.trim_start();
-        if !neg && let Some(r2) = s.strip_prefix('-') {
-            neg = true;
-            s = r2;
+    if r.currency_first() {
+        if let Some(rest) = s.strip_prefix(r.currency) {
+            currency = true;
+            s = rest.trim_start();
+            if !neg && let Some(rest2) = s.strip_prefix('-') {
+                neg = true;
+                s = rest2;
+            }
         }
+    } else if let Some(rest) = s.trim_end().strip_suffix(r.currency) {
+        currency = true;
+        s = rest.trim_end();
     }
-    if let Some(r) = s.strip_suffix('%') {
+    if let Some(rest) = s.strip_suffix('%') {
         percent = true;
-        s = r.trim_end();
+        s = rest.trim_end();
     }
     // Excel reads `$5` and `5%` but not `$5%`.
     if s.is_empty() || currency && percent {
         return None;
     }
-    let has_sep = s.contains(',');
+    // Where the decimal is not a point, a point is only valid as a group separator.
+    if r.decimal != '.' && s.contains('.') && !r.is_group('.') {
+        return None;
+    }
+    let has_sep = s.chars().any(|c| r.is_group(c));
     let digits: String = if has_sep {
-        // Thousands separators must be in groups of three before the decimal point.
-        let (int, frac) = s.split_once('.').map_or((s, None), |(a, b)| (a, Some(b)));
-        let groups: Vec<&str> = int.split(',').collect();
-        let first = groups.first()?;
-        if first.is_empty() || first.len() > 3 || groups.iter().skip(1).any(|g| g.len() != 3) {
+        // Group separators must split the integer part into valid groups.
+        let (int, frac) = s.split_once(r.decimal).map_or((s, None), |(a, b)| (a, Some(b)));
+        let groups: Vec<&str> = int.split(|c| r.is_group(c)).collect();
+        if !groups_ok(&groups, r.grouping) {
             return None;
         }
         let mut d = groups.concat();
@@ -150,8 +196,10 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
             d.push_str(f);
         }
         d
-    } else {
+    } else if r.decimal == '.' {
         s.to_string()
+    } else {
+        s.replacen(r.decimal, ".", 1)
     };
     let b = digits.as_bytes();
     if !b.iter().all(|c| c.is_ascii_digit() || matches!(c, b'.' | b'e' | b'E' | b'+' | b'-')) {
@@ -171,18 +219,31 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
     if neg {
         n = -n;
     }
+    let decimals = digits.contains('.');
     let fmt = if currency {
-        Some(if digits.contains('.') { "\"$\"#,##0.00" } else { "\"$\"#,##0" })
+        Some(if decimals { r.currency_format } else { r.currency_format_int })
     } else if percent {
-        Some(if digits.contains('.') { "0.00%" } else { "0%" })
+        Some(if decimals { "0.00%" } else { "0%" })
     } else if sci {
         Some("0.00E+00")
     } else if has_sep {
-        Some(if digits.contains('.') { "#,##0.00" } else { "#,##0" })
+        Some(if decimals { "#,##0.00" } else { "#,##0" })
     } else {
         None
     };
     Some((n, fmt))
+}
+
+/// The whole part of a mixed fraction, with the region's separators (`1.000` is a thousand in
+/// de-DE). Regions with a point decimal read it as before.
+fn whole_part(s: &str, r: &Region) -> Option<f64> {
+    if r.decimal == '.' {
+        return plain_number(s, false);
+    }
+    match parse_plain(s, r)? {
+        (n, None | Some("#,##0" | "#,##0.00")) => Some(n),
+        _ => None,
+    }
 }
 
 /// A plain ASCII number: digits, with an optional `.digits` fraction when `frac` is set. Rejects
@@ -201,10 +262,10 @@ fn plain_number(s: &str, frac: bool) -> Option<f64> {
 }
 
 /// `1/2` (only with a whole part, else it's a date), `1 1/2`, `0 3/4`.
-fn parse_fraction(t: &str) -> Option<f64> {
+fn parse_fraction(t: &str, r: &Region) -> Option<f64> {
     let (whole, frac) = t.split_once(' ')?;
     let neg = whole.starts_with('-');
-    let w = plain_number(whole.trim_start_matches('-'), false)?;
+    let w = whole_part(whole.trim_start_matches('-'), r)?;
     let (a, b) = frac.trim().split_once('/')?;
     let a = plain_number(a, false)?;
     let b = plain_number(b, false)?;
@@ -218,25 +279,33 @@ fn parse_fraction(t: &str) -> Option<f64> {
     Some(if neg { -v } else { v })
 }
 
-fn month_from_name(s: &str) -> Option<u32> {
-    let l = s.to_ascii_lowercase();
-    if l.len() < 3 {
-        return None;
+/// Strips an AM/PM word from a lowercase time: the region's, `am`/`pm`, or a bare `a`/`p`
+/// after the time. CJK regions put the word before the time (`午後3:30`).
+fn split_ampm(lower: &str, r: &Region) -> (String, Option<bool>) {
+    let region_am = r.am_pm[0].to_lowercase();
+    let region_pm = r.am_pm[1].to_lowercase();
+    let words: [(&str, bool); 4] = [(&region_am, false), (&region_pm, true), ("am", false), ("pm", true)];
+    for (w, pm) in words {
+        // Only a non-ASCII word (`午後`) may come first.
+        let stripped = lower.strip_suffix(w).or_else(|| if w.is_ascii() { None } else { lower.strip_prefix(w) });
+        if let Some(b) = stripped {
+            return (b.trim().to_string(), Some(pm));
+        }
     }
-    MONTHS.iter().position(|m| m.to_ascii_lowercase().starts_with(&l)).map(|i| i as u32 + 1)
+    if let Some(b) = lower.strip_suffix('a') {
+        return (b.trim().to_string(), Some(false));
+    }
+    if let Some(b) = lower.strip_suffix('p') {
+        return (b.trim().to_string(), Some(true));
+    }
+    (lower.to_string(), None)
 }
 
 /// Time part: `h:mm`, `h:mm:ss`, `h:mm:ss.000`, `h AM`, with optional AM/PM.
-fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
-    let t = t.trim();
-    let lower = t.to_ascii_lowercase();
-    let (body, ampm) = if let Some(b) = lower.strip_suffix("am").or_else(|| lower.strip_suffix('a')) {
-        (b.trim().to_string(), Some(false))
-    } else if let Some(b) = lower.strip_suffix("pm").or_else(|| lower.strip_suffix('p')) {
-        (b.trim().to_string(), Some(true))
-    } else {
-        (lower.clone(), None)
-    };
+fn parse_time(t: &str, r: &Region) -> Option<(f64, bool, bool)> {
+    let lower = t.trim().to_lowercase();
+    let (body, ampm) = split_ampm(&lower, r);
+    let body = if r.time_sep == ':' { body } else { body.replace(r.time_sep, ":") };
     let parts: Vec<&str> = body.split(':').collect();
     if parts.len() == 1 && ampm.is_none() {
         return None;
@@ -246,7 +315,11 @@ fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
     }
     let mut h = plain_number(parts.first()?, false)?;
     let m = parts.get(1).map_or(Some(0.0), |p| plain_number(p, false))?;
-    let s = parts.get(2).map_or(Some(0.0), |p| plain_number(p, true))?;
+    let s = match parts.get(2) {
+        None => 0.0,
+        Some(p) if r.decimal == '.' => plain_number(p, true)?,
+        Some(p) => plain_number(&p.replacen(r.decimal, ".", 1), true)?,
+    };
     if m >= 60.0 || s >= 60.0 || h < 0.0 || m < 0.0 || s < 0.0 {
         return None;
     }
@@ -266,7 +339,18 @@ fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
     Some((time_fraction(h, m, s), parts.len() == 3, ampm.is_some()))
 }
 
-fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
+/// A two-digit year is 20xx below 30, else 19xx.
+fn full_year(y: i64, digits: usize) -> i64 {
+    if digits <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y }
+}
+
+/// Words that join the parts of a long date in some regions (`25 de septiembre de 2026`).
+fn is_connector(w: &str, r: &Region) -> bool {
+    let w = w.to_lowercase();
+    (matches!(r.tag, "es-ES" | "pt-BR" | "pt-PT") && matches!(w.as_str(), "de" | "del")) || (r.tag == "ru-RU" && matches!(w.as_str(), "г" | "г."))
+}
+
+fn parse_date(t: &str, sys: DateSystem, r: &Region) -> Option<(f64, &'static str)> {
     let t = t.trim().trim_end_matches(',');
     let num = |s: &str| {
         let s = s.trim();
@@ -275,59 +359,71 @@ fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
         }
         s.parse::<i64>().ok()
     };
-    // ISO yyyy-mm-dd or yyyy/mm/dd
+    let month_name = |s: &str| r.month_from_name(s);
     let seps: &[char] = &['/', '-', '.'];
     let parts: Vec<&str> = t.split(seps).collect();
     if parts.len() == 3 {
-        let (a, b, c) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
+        let (a, b, c) = (parts.first()?.trim(), parts.get(1)?.trim(), parts.get(2)?.trim());
+        // Year first: ISO yyyy-mm-dd or yyyy/mm/dd.
         if a.len() == 4
             && let (Some(y), Some(m), Some(d)) = (num(a), num(b), num(c))
         {
-            return valid_ymd(sys, y, m, d).map(|s| (s, "yyyy-mm-dd"));
+            // A year-first region typing its own short date keeps the system short date.
+            let own = r.date_order == DateOrder::Ymd && t.contains(r.date_sep) && r.date_sep != '-';
+            let fmt = if own { "m/d/yyyy" } else { "yyyy-mm-dd" };
+            return valid_ymd(sys, y, m, d).map(|s| (s, fmt));
         }
-        if let (Some(m), Some(d), Some(y)) = (num(a), num(b), num(c)) {
-            let y = if c.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
-            return valid_ymd(sys, y, m, d).map(|s| (s, "m/d/yyyy"));
+        if let (Some(x), Some(y), Some(z)) = (num(a), num(b), num(c)) {
+            let (m, d, yy, ydigits) = match r.date_order {
+                DateOrder::Mdy => (x, y, z, c.len()),
+                DateOrder::Dmy => (y, x, z, c.len()),
+                DateOrder::Ymd => (y, z, x, a.len()),
+            };
+            return valid_ymd(sys, full_year(yy, ydigits), m, d).map(|s| (s, "m/d/yyyy"));
         }
         // 4-Mar-2026
-        if let (Some(d), Some(m), Some(y)) = (num(a), month_from_name(b), num(c)) {
-            let y = if c.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
-            return valid_ymd(sys, y, m as i64, d).map(|s| (s, "d-mmm-yy"));
+        if let (Some(d), Some(m), Some(y)) = (num(a), month_name(b), num(c)) {
+            return valid_ymd(sys, full_year(y, c.len()), m as i64, d).map(|s| (s, "d-mmm-yy"));
         }
     }
     if parts.len() == 2 {
-        let (a, b) = (parts[0].trim(), parts[1].trim());
-        // m/d in the current year is ambiguous without a clock; use month/day of 2026? Excel uses
-        // the current year. We accept d-mmm / mmm-d only with month names, and m/d → current year.
-        if let (Some(m), Some(d)) = (num(a), num(b)) {
-            let y = current_year();
+        let (a, b) = (parts.first()?.trim(), parts.get(1)?.trim());
+        // A date without a year is in the current year (what Excel does). A name is accepted
+        // with a day or a year.
+        if let (Some(x), Some(y)) = (num(a), num(b)) {
+            let (m, d) = match r.date_order {
+                DateOrder::Dmy => (y, x),
+                DateOrder::Mdy | DateOrder::Ymd => (x, y),
+            };
             if (1..=12).contains(&m) && (1..=31).contains(&d) {
-                return valid_ymd(sys, y, m, d).map(|s| (s, "d-mmm"));
+                return valid_ymd(sys, current_year(), m, d).map(|s| (s, "d-mmm"));
             }
-            // m/yyyy
-            if (1..=12).contains(&m) && b.len() == 4 {
-                return valid_ymd(sys, d, m, 1).map(|s| (s, "mmm-yy"));
+            // month/yyyy (and yyyy/month in year-first regions).
+            if b.len() == 4 && (1..=12).contains(&x) {
+                return valid_ymd(sys, y, x, 1).map(|s| (s, "mmm-yy"));
+            }
+            if a.len() == 4 && r.date_order == DateOrder::Ymd && (1..=12).contains(&y) {
+                return valid_ymd(sys, x, y, 1).map(|s| (s, "mmm-yy"));
             }
         }
-        if let (Some(d), Some(m)) = (num(a), month_from_name(b)) {
+        if let (Some(d), Some(m)) = (num(a), month_name(b)) {
             return valid_ymd(sys, current_year(), m as i64, d).map(|s| (s, "d-mmm"));
         }
-        if let (Some(m), Some(y)) = (month_from_name(a), num(b)) {
-            let y = if b.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
-            return valid_ymd(sys, y, m as i64, 1).map(|s| (s, "mmm-yy"));
+        if let (Some(m), Some(y)) = (month_name(a), num(b)) {
+            return valid_ymd(sys, full_year(y, b.len()), m as i64, 1).map(|s| (s, "mmm-yy"));
         }
     }
-    // "Mar 4, 2026" / "March 4 2026" / "4 March 2026"
-    let words: Vec<&str> = t.split([' ', ',']).filter(|w| !w.is_empty()).collect();
-    if words.len() == 3 {
+    // "Mar 4, 2026" / "March 4 2026" / "4 March 2026" / "25 de septiembre de 2026" / "25. září 2026"
+    let day_dot = r.date_sep == '.';
+    let words: Vec<&str> = t.split([' ', ',']).filter(|w| !w.is_empty() && !is_connector(w, r)).collect();
+    if let [w0, w1, w2] = words.as_slice() {
+        let num_w = |w: &str| if day_dot { num(w.trim_end_matches('.')) } else { num(w) };
         // Two-digit years follow the same 2029 rule as the dashed forms above.
-        let expand = |w: &str, y: i64| if w.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
-        if let (Some(m), Some(d), Some(y)) = (month_from_name(words[0]), num(words[1]), num(words[2])) {
-            let y = expand(words[2], y);
+        let year_w = |w: &str| num_w(w).map(|y| full_year(y, w.trim_end_matches('.').len()));
+        if let (Some(m), Some(d), Some(y)) = (month_name(w0), num_w(w1), year_w(w2)) {
             return valid_ymd(sys, y, m as i64, d).map(|s| (s, "d-mmm-yy"));
         }
-        if let (Some(d), Some(m), Some(y)) = (num(words[0]), month_from_name(words[1]), num(words[2])) {
-            let y = expand(words[2], y);
+        if let (Some(d), Some(m), Some(y)) = (num_w(w0), month_name(w1), year_w(w2)) {
             return valid_ymd(sys, y, m as i64, d).map(|s| (s, "d-mmm-yy"));
         }
     }
@@ -356,8 +452,8 @@ pub fn current_year() -> i64 {
     2026
 }
 
-fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
-    if let Some((tf, secs, ampm)) = parse_time(t) {
+fn parse_datetime(t: &str, sys: DateSystem, r: &Region) -> Option<(f64, Option<&'static str>)> {
+    if let Some((tf, secs, ampm)) = parse_time(t, r) {
         let f = match (secs, ampm) {
             // 24 hours or more: elapsed hours, so 25:00 shows as 25:00:00, not 1:00.
             _ if tf >= 1.0 => "[h]:mm:ss",
@@ -368,7 +464,7 @@ fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>
         };
         return Some((tf, Some(f)));
     }
-    if let Some((d, f)) = parse_date(t, sys) {
+    if let Some((d, f)) = parse_date(t, sys, r) {
         return Some((d, Some(f)));
     }
     // date + time: split at the last space(s) before a time-looking tail. Only splits where the
@@ -377,10 +473,11 @@ fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>
     for (i, _) in t.match_indices(' ') {
         let Some(b) = t.get(i + 1..) else { continue };
         let bytes = b.as_bytes();
-        if b.len() > 36 || !bytes.first().is_some_and(u8::is_ascii_digit) || !b.contains(':') {
+        let time_start = bytes.first().is_some_and(u8::is_ascii_digit) || r.am_pm.iter().any(|word| !word.is_ascii() && b.starts_with(word));
+        if b.len() > 36 || !time_start || !b.contains(r.time_sep) {
             continue;
         }
-        if let (Some((d, _)), Some((tf, _, _))) = (t.get(..i).and_then(|a| parse_date(a, sys)), parse_time(b)) {
+        if let (Some((d, _)), Some((tf, _, _))) = (t.get(..i).and_then(|a| parse_date(a, sys, r)), parse_time(b, r)) {
             return Some((d + tf, Some("m/d/yyyy h:mm")));
         }
     }
@@ -611,6 +708,211 @@ mod tests {
         // The 1904 system starts after it.
         assert_eq!(parse_input("2/29/1900", DateSystem::D1904).value, Value::text("2/29/1900"));
         assert_eq!(parse_input("2/29/1904", DateSystem::D1904).value, Value::Number(59.0));
+    }
+
+    fn pin(region: &str, s: &str) -> Parsed {
+        parse_input_in(s, DateSystem::D1900, crate::region::find(region).unwrap())
+    }
+
+    #[test]
+    fn en_us_is_unchanged_by_the_region_parameter() {
+        for s in [
+            "1,234.5",
+            "$3",
+            "3$",
+            "9/25/2026",
+            "25/09/2026",
+            "Sept 25, 2026",
+            "25 de septiembre de 2026",
+            "Mar. 4, 2026",
+            "pm 3:30",
+            "3:30 pm",
+            "1.234,56",
+            "1,5",
+        ] {
+            assert_eq!(pin("en-US", s), p(s), "{s}");
+        }
+        assert_eq!(p("25/09/2026").value, Value::text("25/09/2026"));
+        assert_eq!(p("3$").value, Value::text("3$"));
+        assert_eq!(p("pm 3:30").value, Value::text("pm 3:30"));
+        assert_eq!(p("Mar. 4, 2026").value, Value::text("Mar. 4, 2026"));
+    }
+
+    #[test]
+    fn decimal_comma_regions_read_their_numbers() {
+        let n = pin("pt-BR", "1.234,56");
+        assert_eq!(n.value, Value::Number(1234.56));
+        assert_eq!(n.format, Some("#,##0.00"));
+        assert_eq!(pin("pt-BR", "1.234").value, Value::Number(1234.0));
+        assert_eq!(pin("pt-BR", "3,5").value, Value::Number(3.5));
+        assert_eq!(pin("pt-BR", "3,5").format, None);
+        assert_eq!(pin("pt-BR", "12,5%").value, Value::Number(0.125));
+        assert_eq!(pin("pt-BR", "-0,5").value, Value::Number(-0.5));
+        assert_eq!(pin("pt-BR", "1,5e3").value, Value::Number(1500.0));
+        assert_eq!(pin("de-DE", "1,234.5").value, Value::text("1,234.5"));
+        assert_eq!(pin("pt-BR", "1,23,4").value, Value::text("1,23,4"));
+        assert_eq!(pin("de-DE", "12.34").value.as_f64().map(|_| ()), None, "a point is not a decimal in de-DE");
+        // "1.5" is 1 May there, as in Excel, not a number.
+        assert_eq!(pin("fr-FR", "1.5").format, Some("d-mmm"));
+    }
+
+    #[test]
+    fn mixed_fractions_read_their_whole_part_in_the_region() {
+        assert_eq!(pin("de-DE", "1.000 1/2").value, Value::Number(1000.5));
+        assert_eq!(pin("de-DE", "1,5 1/2").value, Value::Number(2.0));
+        assert_eq!(pin("de-DE", "-2 1/4").value, Value::Number(-2.25));
+        assert_eq!(pin("ru-RU", "1\u{a0}000 1/2").value, Value::Number(1000.5));
+        assert_eq!(pin("en-US", "1 1/2").value, Value::Number(1.5));
+        assert_eq!(pin("de-DE", "1.5 1/2").value, Value::text("1.5 1/2"));
+    }
+
+    #[test]
+    fn group_separators_that_are_spaces() {
+        assert_eq!(pin("ru-RU", "1\u{a0}234,5").value, Value::Number(1234.5));
+        assert_eq!(pin("ru-RU", "1 234,5").value, Value::Number(1234.5));
+        assert_eq!(pin("fr-FR", "1\u{202f}234").value, Value::Number(1234.0));
+        assert_eq!(pin("cs-CZ", "12\u{a0}345,67").format, Some("#,##0.00"));
+        assert_eq!(pin("ru-RU", "hello world").value, Value::text("hello world"));
+        assert_eq!(pin("fr-FR", "1 234 5").value, Value::text("1 234 5"));
+    }
+
+    #[test]
+    fn indian_grouping() {
+        assert_eq!(pin("en-IN", "12,34,567.89").value, Value::Number(1234567.89));
+        assert_eq!(pin("en-IN", "1,234,567.89").value, Value::Number(1234567.89));
+        assert_eq!(pin("en-IN", "12,34,56").value, Value::text("12,34,56"));
+        assert_eq!(pin("en-IN", "₹1,00,000").value, Value::Number(100000.0));
+        assert_eq!(pin("en-IN", "₹1,00,000").format, Some("\"₹\"#,##0"));
+    }
+
+    #[test]
+    fn currency_follows_the_region() {
+        let a = pin("pt-BR", "R$ 3,50");
+        assert_eq!((a.value, a.format), (Value::Number(3.5), Some("\"R$\" #,##0.00")));
+        let b = pin("de-DE", "1.234,50 €");
+        assert_eq!((b.value, b.format), (Value::Number(1234.5), Some("#,##0.00 \"€\"")));
+        assert_eq!(pin("de-DE", "3 €").format, Some("#,##0 \"€\""));
+        assert_eq!(pin("de-DE", "-3 €").value, Value::Number(-3.0));
+        assert_eq!(pin("pt-BR", "$3").value, Value::text("$3"));
+        assert_eq!(pin("en-GB", "£1,200.50").value, Value::Number(1200.5));
+        assert_eq!(pin("cs-CZ", "99\u{a0}Kč").value, Value::Number(99.0));
+        assert_eq!(pin("ja-JP", "¥1,000").value, Value::Number(1000.0));
+    }
+
+    #[test]
+    fn dates_in_the_regions_order() {
+        let d = |r: &str, s: &str| pin(r, s).value;
+        assert_eq!(d("en-GB", "25/09/2026"), Value::Number(46290.0));
+        assert_eq!(d("en-US", "9/25/2026"), Value::Number(46290.0));
+        assert_eq!(d("de-DE", "25.09.2026"), Value::Number(46290.0));
+        assert_eq!(d("pt-BR", "25/09/2026"), Value::Number(46290.0));
+        assert_eq!(d("ru-RU", "25.09.2026"), Value::Number(46290.0));
+        assert_eq!(d("cs-CZ", "25. 9. 2026"), Value::Number(46290.0));
+        assert_eq!(d("ja-JP", "2026/9/25"), Value::Number(46290.0));
+        assert_eq!(d("ko-KR", "2026-09-25"), Value::Number(46290.0));
+        assert_eq!(d("zh-TW", "2026/09/25"), Value::Number(46290.0));
+        assert_eq!(d("en-IN", "25/09/2026"), Value::Number(46290.0));
+        // Day first: 9/25 isn't a date, and 12/1/2026 is 12 January.
+        assert_eq!(d("en-GB", "09/25/2026"), Value::text("09/25/2026"));
+        assert_eq!(d("en-GB", "12/1/2026"), Value::Number(46034.0));
+        assert_eq!(d("en-US", "12/1/2026"), Value::Number(46357.0));
+        // Two-digit years, ISO, impossible dates.
+        assert_eq!(d("en-GB", "25/09/26"), Value::Number(46290.0));
+        assert_eq!(d("en-GB", "2026-09-25"), Value::Number(46290.0));
+        assert_eq!(d("de-DE", "31.04.2026"), Value::text("31.04.2026"));
+        // The format is the system short date (built-in 14), displayed per region.
+        assert_eq!(pin("en-GB", "25/09/2026").format, Some("m/d/yyyy"));
+        assert_eq!(pin("ja-JP", "2026/9/25").format, Some("m/d/yyyy"));
+        assert_eq!(pin("en-GB", "2026-09-25").format, Some("yyyy-mm-dd"));
+        // Day and month of the current year, month and year.
+        assert_eq!(pin("de-DE", "25.9").format, Some("d-mmm"));
+        assert_eq!(pin("en-GB", "9/2026").format, Some("mmm-yy"));
+        assert_eq!(pin("en-GB", "9/2026").value, Value::Number(46266.0));
+        assert_eq!(pin("ja-JP", "2026/9").value, Value::Number(46266.0));
+    }
+
+    #[test]
+    fn month_names_in_local_words() {
+        let d = |r: &str, s: &str| pin(r, s).value;
+        assert_eq!(d("de-DE", "25. September 2026"), Value::Number(46290.0));
+        assert_eq!(d("de-DE", "25-Sep-2026"), Value::Number(46290.0));
+        assert_eq!(d("fr-FR", "25 septembre 2026"), Value::Number(46290.0));
+        assert_eq!(d("fr-FR", "25 SEPT. 2026"), Value::Number(46290.0));
+        assert_eq!(d("es-ES", "25 de septiembre de 2026"), Value::Number(46290.0));
+        assert_eq!(d("pt-BR", "25 de setembro de 2026"), Value::Number(46290.0));
+        assert_eq!(d("it-IT", "25 Settembre 2026"), Value::Number(46290.0));
+        assert_eq!(d("ru-RU", "25 сентября 2026"), Value::Number(46290.0));
+        assert_eq!(d("ru-RU", "25 сентября 2026 г."), Value::Number(46290.0));
+        assert_eq!(d("cs-CZ", "25. září 2026"), Value::Number(46290.0));
+        assert_eq!(d("en-GB", "25 Sept 2026"), Value::Number(46290.0));
+        assert_eq!(d("en-GB", "Sep 25, 2026"), Value::Number(46290.0));
+        assert_eq!(d("de-DE", "25. Sepxx 2026"), Value::text("25. Sepxx 2026"));
+        assert_eq!(pin("de-DE", "25-Sep-2026").format, Some("d-mmm-yy"));
+    }
+
+    #[test]
+    fn times_in_the_regions_words() {
+        let d = |r: &str, s: &str| pin(r, s).value;
+        assert_eq!(d("de-DE", "15:30"), Value::Number(15.5 / 24.0));
+        assert_eq!(d("de-DE", "3:30 PM"), Value::Number(15.5 / 24.0));
+        assert_eq!(d("ja-JP", "午後3:30"), Value::Number(15.5 / 24.0));
+        assert_eq!(d("ja-JP", "午後 3:30"), Value::Number(15.5 / 24.0));
+        assert_eq!(d("ko-KR", "오후 3:30"), Value::Number(15.5 / 24.0));
+        assert_eq!(d("zh-CN", "上午12:00"), Value::Number(0.0));
+        assert_eq!(d("es-ES", "3:30 p. m."), Value::Number(15.5 / 24.0));
+        assert_eq!(d("cs-CZ", "3:30 odp."), Value::Number(15.5 / 24.0));
+        assert_eq!(pin("de-DE", "10:30:15,5").value, Value::Number(time_fraction(10.0, 30.0, 15.5)));
+        assert_eq!(d("de-DE", "25.09.2026 15:30"), Value::Number(46290.0 + 15.5 / 24.0));
+        assert_eq!(d("ja-JP", "2026/9/25 午後3:30"), Value::Number(46290.0 + 15.5 / 24.0));
+        assert_eq!(pin("de-DE", "25.09.2026 15:30").format, Some("m/d/yyyy h:mm"));
+        assert_eq!(pin("ja-JP", "午後3:30").format, Some("h:mm AM/PM"));
+    }
+
+    #[test]
+    fn hostile_input_never_panics_in_any_region() {
+        let nasty = [
+            "",
+            " ",
+            "-",
+            "()",
+            "(",
+            "€",
+            "R$",
+            "%",
+            "1,",
+            ",1",
+            "1,,2",
+            ".",
+            "..",
+            "////",
+            "a/b/c",
+            "2026//",
+            "9999999999999999999/1/1",
+            "1e999",
+            "\u{0}",
+            "٣٫٥",
+            "1\u{a0}",
+            "午後",
+            "午後:",
+            "::",
+            ":",
+            "p",
+            "a",
+            "de de de",
+            "г.",
+            "25. 25. 25.",
+            "1.2.3.4.5",
+            "🙂/🙂/🙂",
+            "-€",
+            "€-",
+            "1 e 3",
+        ];
+        for r in crate::region::all() {
+            for s in nasty {
+                let _ = parse_input_in(s, DateSystem::D1900, r);
+                let _ = parse_input_in(s, DateSystem::D1904, r);
+            }
+        }
     }
 
     #[test]

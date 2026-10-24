@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (regional text in implicit date arguments; missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -37,10 +37,22 @@ right-to-left sheets and full complex-script support. Part of
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so the ribbon-only languages cover **~12%** and
   Japanese and Portuguese **~43%** (measured count / estimated total).
-- **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
+- **en-US formula syntax and display formats.** Function names, `,` argument separator, `.` decimal
   separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
   localized function names and `;` separators (#45). German with localized numbers and formulas
   is in PR #163 (open).
+- **Regional date-text formulas.** `DATEVALUE`, `TIMEVALUE` and implicit date/time
+  arguments such as `YEAR`, `MONTH` and `DAY` use `Workbook.region` and the shared
+  parser from #1524 and `region-typed-input`. Numeric serial text keeps canonical
+  en-US number, fraction, currency, percent and accounting rules; invalid regional
+  dates never fall back to MDY.
+  The `--region TAG` native/CLI flag applies before the first calculation; `app.region`
+  changes it in open documents, recalculating dependents while preserving dirty state
+  and undo history. MDY, DMY, YMD and regional month/AM-PM names are covered. The
+  default is en-US, independent of UI language; the preference is not stored in XLSX.
+  This bridge does not enable regional cell display, localized formula names/separators,
+  or regional programmatic input. Those remain separate work in the regional stack;
+  API input and generic numeric text coercion retain their canonical en-US contracts.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
@@ -110,6 +122,8 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Implicit date/time arguments now honor the selected region, including imported text and holiday arrays, while numeric serial text and general arithmetic keep canonical en-US coercion |
+| 2026-10-21 | minor | Integrate regional date formulas with v0.9.0's file-opening API; CSV text-only import still preserves identifiers and date text before regional formula evaluation. |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |
@@ -125,6 +139,7 @@ language (none so far) and of localized function names.
 | 2026-10-19 | trivial | Text boxes and shapes keep right-to-left paragraph direction (`a:pPr rtl`) on XLSX save, so Excel-authored Arabic and Hebrew text boxes reopen right to left |
 | 2026-10-19 | minor | Save as Web Page and copied HTML mark right-to-left sheets `dir="rtl"`, let General-aligned Arabic and Hebrew text align by its own direction (`dir="auto"`), and keep numbers on right-to-left sheets left to right and on the left |
 | 2026-10-19 | minor | French and Serbian kept the context in three `context\|label` translations ("Options\|Général", "Opcije\|Opšte" for `Options\|General`; also `Options\|Save`, `Sheet Options\|View`). `tr` shows a found translation as it is, so File › Options headings and the Sheet Options "View" checkboxes showed the prefix. Fixed; a test checks that no catalog shows a `\|` |
+| 2026-10-18 | minor | DATEVALUE/TIMEVALUE share Region; pre-open flags and runtime recalculation preserve clean/dirty and undo state. Regional display and input remain separate work. |
 | 2026-10-17 | minor | Vietnamese catalog (`i18n/vi.rs`, every key in the master table); `vi` locale tags resolve to Vietnamese |
 | 2026-10-17 | minor | Lao text falls back to an installed Lao face (`sys-lao`) instead of tofu boxes |
 | 2026-10-15 | minor | Function help in the interface language: argument hints, autocomplete, Insert Function (search, categories) and the Formulas-tab menus read per-language tables of descriptions and argument names keyed by the catalog's English text; Spanish keeps its 10 functions in the new format |

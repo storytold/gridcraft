@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-23 · **Change:** minor (number text with accounting parentheses coerces like Excel 365; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-24 · **Change:** minor (regional text in implicit date arguments; number text with accounting parentheses coerces like Excel 365; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: SUBTOTAL and AGGREGATE cap the cells they visit, #2175) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -91,6 +91,7 @@ This improves series preparation; it does not change the model-fitting or season
 | Iterative calculation for circular references | done: with Enable Iterative Calculation on (`formulas.calculationOptions` `{iterative, maxIterations, maxChange}`, saved as `<calcPr iterate iterateCount iterateDelta>`), loops are evaluated again from their previous values (blank = 0) until no cell on a loop changes by Maximum Change or Maximum Iterations is reached; off, cycles give `#CIRC!`. Differences: no Options dialog yet (command only); GridCraft recalculates on open, so a loop that never settles (`=A1+1`) advances again each time the file is opened |
 | 15-significant-digit comparison semantics | done (#57): `=0.1+0.2=0.3` is TRUE, and MATCH and COUNTIF compare the same way. Arithmetic keeps full precision, as Excel does — `=(0.1+0.2)-0.3` is 5.55E-17 |
 | External workbook references (`[Book.xlsx]Sheet1!A1`) | parsed; links dropped on open, no update |
+| Regional date-text formulas | `DATEVALUE`, `TIMEVALUE` and implicit date/time arguments (including `YEAR`, `MONTH`, `DAY`, time parts, date ranges and holiday arrays) use `Workbook.region` for MDY, DMY and YMD, regional month names and AM/PM, with the workbook's 1900/1904 date system. Numeric serial text retains canonical en-US coercion, including grouping, decimal points, fractions, percentages and accounting rules. Invalid regional dates never fall back to MDY. The default context and general arithmetic coercion remain en-US. |
 | Localized function names and `;` separators | **missing** (#45); en-US only |
 | Long flat operator chains (`=A1+A2+…`, `-`, `*`, `/`, `^`, `&`, comparisons) | done: no operand limit below Excel's 8,192-character formula limit (Excel, observed: `=1+1+…` with 4,096 operands is exactly 8,192 characters with the `=` and calculates; one more character is refused). Evaluated (#484), printed (#628), stored, copied, adjusted, saved and reopened without recursing once per operand, on a 1 MiB stack (#916); written to XLSX as plain formulas, not dynamic arrays; Spanish entry accepts them |
 | Error values | the seven classic errors plus `#SPILL!`, `#CALC!`, `#GETTING_DATA` done; `#FIELD!`, `#BLOCKED!`, `#CONNECT!`, `#BUSY!`, `#UNKNOWN!`, `#PYTHON!` missing (minor: they come from data types, cloud and Python features) |
@@ -123,6 +124,8 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Implicit date/time arguments share the selected region: literal and referenced text, lifted arrays and holiday ranges. Synthetic tests cover both date systems, invalid dates, numeric serial text, runtime region changes and save/open recalculation; general arithmetic and explicit DATEVALUE/TIMEVALUE retain their contracts |
+| 2026-10-18 | minor | DATEVALUE/TIMEVALUE use the shared Region parser through the calculation context; regressions cover date orders, both date systems, regional names and unchanged generic coercion |
 | 2026-10-23 | minor | Number text coercion (VALUE, arithmetic, typed entry): a dollar sign before accounting parentheses (`$(1,234)`, `$ (5)`) and a percent sign after them (`(5)%`) read as negatives; `(-5)`, `((5))`, `($-5)`, `$5%`, `$(5)%` and dates or times in parentheses are `#VALUE!`, as observed in Excel 365 |
 | 2026-10-23 | minor | INDEX with only a row index on a reference of several rows and columns (`INDEX(A1:C3,2)`, `INDEX(A1:C3,0)`) is `#REF!`, as observed in Excel, so it also fails as a range endpoint and inside other functions; an empty column argument (`INDEX(A1:C3,2,)`) still gives the row. Checked that a column array with one index stays a 1×1 array (`TYPE` 64), which is what Excel returns |
 | 2026-10-21 | minor | SUBTOTAL and AGGREGATE charge every argument against the evaluator's 16-million-cell limit before scanning; a value in XFD1048576 no longer makes `SUBTOTAL(9,A:XFD)` read the whole sheet (#2175) |
