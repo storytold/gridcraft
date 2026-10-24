@@ -131,11 +131,143 @@ fn filter(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     from_rows(out, &Value::Empty)
 }
 
+/// Excel's text order for sorting: case-insensitive; hyphens and apostrophes ignored except to
+/// put the string without them first; punctuation and symbols before digits before letters;
+/// accented Latin letters right after their base letter; diacritic marks of other scripts only
+/// break ties. Ties keep the input order (stable sort).
+fn collate_text(a: &str, b: &str) -> Ordering {
+    fn ignored(c: &char) -> bool {
+        matches!(c, '-' | '\'')
+    }
+    fn primary(s: &str) -> impl Iterator<Item = (u8, u32, char)> + '_ {
+        let class = |c: char| if c.is_alphabetic() || VIRAMAS.contains(&c) { 2 } else { u8::from(c.is_numeric()) };
+        s.chars().flat_map(char::to_lowercase).filter(|c| !ignored(c) && !is_diacritic_mark(*c)).flat_map(base_letters).enumerate().map(
+            move |(i, c)| {
+                // Excel puts a word that starts with a Thai leading vowel (เ แ โ ใ ไ) before the
+                // Thai consonants (issue #1235): rank it just below ก U+0E01.
+                let rank = if i == 0 && ('\u{e40}'..='\u{e44}').contains(&c) { 0xe00 } else { u32::from(c) };
+                (class(c), rank, c)
+            },
+        )
+    }
+    fn secondary(s: &str) -> impl Iterator<Item = char> + '_ {
+        s.chars()
+            .flat_map(char::to_lowercase)
+            .filter(|c| !ignored(c))
+            .flat_map(|c| match ligature(c) {
+                Some([x, y]) => [Some(x), Some(y)],
+                None => [Some(c), None],
+            })
+            .flatten()
+    }
+    primary(a)
+        .cmp(primary(b))
+        .then_with(|| secondary(a).cmp(secondary(b)))
+        .then_with(|| a.chars().filter(ignored).count().cmp(&b.chars().filter(ignored).count()))
+}
+
+/// The base letter(s) of a lowercase Latin letter for the first sort level: `ä` → `a`, `ß` → `ss`.
+fn base_letters(c: char) -> impl Iterator<Item = char> {
+    // Lowercase forms of U+00E0..=U+00FF and U+0100..=U+017F; '.' keeps the character as it is.
+    const LATIN1: &[u8] = b"aaaaaa.ceeeeiiiidnooooo.ouuuuy.y";
+    const EXT_A: &[u8] =
+        b"aaaaaaccccccccddddeeeeeeeeeegggggggghhhhiiiiiiiiii..jjkkkllllllllllnnnnnn.nnoooooo..rrrrrrssssssssttttttuuuuuuuuuuuuwwyyyzzzzzzs";
+    let pair = match ligature(c) {
+        Some([x, y]) => [Some(x), Some(y)],
+        None => {
+            let (table, start) = match c {
+                '\u{e0}'..='\u{ff}' => (LATIN1, 0xe0),
+                '\u{100}'..='\u{17f}' => (EXT_A, 0x100),
+                _ => (&[][..], 0),
+            };
+            let base = match table.get((c as usize).saturating_sub(start)) {
+                Some(&b) if b != b'.' => char::from(b),
+                _ => c,
+            };
+            [Some(base), None]
+        }
+    };
+    pair.into_iter().flatten()
+}
+
+/// Letters that are two letters at every sort level, not an accent apart from them: Excel keeps
+/// `ss, ß` (and `ae, æ`, `oe, œ`) in input order whichever way it sorts.
+fn ligature(c: char) -> Option<[char; 2]> {
+    match c {
+        'æ' => Some(['a', 'e']),
+        'œ' => Some(['o', 'e']),
+        'ß' => Some(['s', 's']),
+        'ĳ' => Some(['i', 'j']),
+        _ => None,
+    }
+}
+
+/// Non-spacing marks (Unicode general category Mn) that are diacritics rather than letters: the
+/// whole Combining Diacritical Marks blocks (U+0300, U+1AB0, U+1DC0) and Combining Half Marks,
+/// plus the Mn characters of Hebrew, Arabic, the Indic scripts, Thai and Lao that the Unicode
+/// Collation Algorithm's default table (DUCET 13.0) ignores at the first level: cantillation and
+/// vowel points, harakat, nukta, candrabindu and anusvara, Thai and Lao tone marks. Indic vowel
+/// signs and Thai vowels above and below have their own first-level weight and stay letters.
+const DIACRITIC_MARKS: &[(char, char)] = &[
+    ('\u{300}', '\u{36f}'),
+    ('\u{591}', '\u{5bd}'),
+    ('\u{5bf}', '\u{5bf}'),
+    ('\u{5c1}', '\u{5c2}'),
+    ('\u{5c4}', '\u{5c5}'),
+    ('\u{5c7}', '\u{5c7}'),
+    ('\u{610}', '\u{61a}'),
+    ('\u{64b}', '\u{65f}'),
+    ('\u{670}', '\u{670}'),
+    ('\u{6d6}', '\u{6dc}'),
+    ('\u{6df}', '\u{6e4}'),
+    ('\u{6e7}', '\u{6e8}'),
+    ('\u{6ea}', '\u{6ed}'),
+    ('\u{900}', '\u{902}'),
+    ('\u{93c}', '\u{93c}'),
+    ('\u{951}', '\u{954}'),
+    ('\u{981}', '\u{981}'),
+    ('\u{9bc}', '\u{9bc}'),
+    ('\u{9fe}', '\u{9fe}'),
+    ('\u{a01}', '\u{a02}'),
+    ('\u{a3c}', '\u{a3c}'),
+    ('\u{a70}', '\u{a71}'),
+    ('\u{a81}', '\u{a82}'),
+    ('\u{abc}', '\u{abc}'),
+    ('\u{afa}', '\u{aff}'),
+    ('\u{b01}', '\u{b01}'),
+    ('\u{b3c}', '\u{b3c}'),
+    ('\u{b55}', '\u{b55}'),
+    ('\u{b82}', '\u{b82}'),
+    ('\u{c00}', '\u{c00}'),
+    ('\u{c04}', '\u{c04}'),
+    ('\u{c81}', '\u{c81}'),
+    ('\u{cbc}', '\u{cbc}'),
+    ('\u{d00}', '\u{d01}'),
+    ('\u{d81}', '\u{d81}'),
+    ('\u{e47}', '\u{e4e}'),
+    ('\u{ec8}', '\u{ecd}'),
+    ('\u{1ab0}', '\u{1aff}'),
+    ('\u{1dc0}', '\u{1dff}'),
+    ('\u{fe20}', '\u{fe2f}'),
+];
+
+/// Indic and Lao viramas (Mn, not alphabetic): letters at the first level, as in DUCET, so a
+/// conjunct does not jump ahead of the plain consonants like punctuation would.
+const VIRAMAS: &[char] =
+    &['\u{94d}', '\u{9cd}', '\u{a4d}', '\u{acd}', '\u{b4d}', '\u{bcd}', '\u{c4d}', '\u{ccd}', '\u{d3b}', '\u{d3c}', '\u{d4d}', '\u{dca}', '\u{eba}'];
+
+fn is_diacritic_mark(c: char) -> bool {
+    DIACRITIC_MARKS.iter().any(|&(lo, hi)| (lo..=hi).contains(&c))
+}
+
 /// Compares two key vectors with per-key orders (1 ascending, -1 descending).
 fn cmp_keys(a: &[Value], b: &[Value], orders: &[i64]) -> Ordering {
     for (i, ord) in orders.iter().enumerate() {
         let (Some(x), Some(y)) = (a.get(i), b.get(i)) else { continue };
-        let o = sort_compare(x, y);
+        let o = match (x, y) {
+            (Value::Text(p), Value::Text(q)) => collate_text(p, q),
+            _ => sort_compare(x, y),
+        };
         let o = if *ord < 0 {
             // Blanks stay last even when descending.
             match (x, y) {
@@ -1108,6 +1240,50 @@ mod tests {
         let m = arr(vec![vec![nv(1.0), nv(2.0)], vec![nv(1.0), nv(1.0)], vec![nv(0.0), nv(5.0)]]);
         let r = ev("SORT", vec![av(m), av(row(&[1.0, 2.0])), av(row(&[1.0, -1.0]))]);
         assert_eq!(rows_of(&r), vec![vec![nv(0.0), nv(5.0)], vec![nv(1.0), nv(2.0)], vec![nv(1.0), nv(1.0)]]);
+    }
+
+    #[test]
+    fn sort_text_collation() {
+        // Excel 365's order for this list (issue #890): hyphens and apostrophes ignored except as a
+        // tie-break, punctuation before digits before letters, accented letters next to their base.
+        let input = "x-1|x01|JO30-WE-1-|JO30-WE01-EGH|a-b|ab|AB|a c|a-c|ac|Ärger|Zebra|apfel|Apfel|_x|x_|1|10|2";
+        let expected = "_x|1|10|2|a c|ab|AB|a-b|ac|a-c|apfel|Apfel|Ärger|JO30-WE01-EGH|JO30-WE-1-|x_|x01|x-1|Zebra";
+        let v = arr(input.split('|').map(|s| vec![tv(s)]).collect());
+        let firsts = |r: Value| rows_of(&r).iter().map(|l| l[0].clone()).collect::<Vec<_>>();
+        let want: Vec<Value> = expected.split('|').map(tv).collect();
+        assert_eq!(firsts(ev("SORT", vec![av(v.clone())])), want);
+        assert_eq!(firsts(ev("SORTBY", vec![av(v.clone()), av(v)])), want);
+    }
+
+    fn sorted(list: &str, order: f64) -> String {
+        let v = arr(list.split('|').map(|s| vec![tv(s)]).collect());
+        let r = ev("SORT", vec![av(v), n(1.0), n(order)]);
+        rows_of(&r).iter().map(|l| l[0].as_text().unwrap_or_default()).collect::<Vec<_>>().join("|")
+    }
+
+    #[test]
+    fn sort_text_combining_marks() {
+        // Thai tone marks and Hebrew points only break ties (Excel: ขาว before ข้าว); Thai vowel
+        // signs and Devanagari viramas keep their place as letters, as on main.
+        assert_eq!(sorted("ข้าว|ขาว", 1.0), "ขาว|ข้าว");
+        assert_eq!(sorted("בַּיִת|בגד", 1.0), "בגד|בַּיִת");
+        assert_eq!(sorted("กิน|กา", 1.0), "กา|กิน");
+        assert_eq!(sorted("पत्र|पतन", 1.0), "पतन|पत्र");
+    }
+
+    #[test]
+    fn sort_thai_leading_vowels() {
+        // Excel 365 (issue #1235): a word starting with เ แ โ ใ ไ sorts before the Thai consonants.
+        let input = "ไก่|เกม|กา|ขาว|แกง|ข้าว|กิน|ฮา|อ่าน|โต๊ะ";
+        assert_eq!(sorted(input, 1.0), "เกม|แกง|โต๊ะ|ไก่|กา|กิน|ขาว|ข้าว|อ่าน|ฮา");
+        assert_eq!(sorted("เ|a|ก", 1.0), "a|เ|ก");
+    }
+
+    #[test]
+    fn sort_text_ligature_ties() {
+        // `ß` and `ss` are equal, not an accent apart: Excel keeps them in input order both ways.
+        assert_eq!(sorted("ss|ß|ae|æ|oe|œ", -1.0), "ss|ß|oe|œ|ae|æ");
+        assert_eq!(sorted("ß|ss|æ|ae", 1.0), "æ|ae|ß|ss");
     }
 
     #[test]
