@@ -274,6 +274,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Point" => "指向",
         "Calculate" => "计算",
         "Select destination and press Enter or choose Paste" => "选择目标位置并按 Enter，或选择“粘贴”",
+        "Extend Selection" => "扩展式选定",
+        "Add or Remove Selection" => "添加或删除所选内容",
         "General" => "常规",
         "Number" => "数值",
         "Currency" => "货币",

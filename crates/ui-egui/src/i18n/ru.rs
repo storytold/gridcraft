@@ -274,6 +274,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Point" => "Указание",
         "Calculate" => "Вычисление",
         "Select destination and press Enter or choose Paste" => "Выберите место вставки и нажмите Enter или выберите «Вставить»",
+        "Extend Selection" => "Расширить выделение",
+        "Add or Remove Selection" => "Добавить или удалить выделение",
         "General" => "Общий",
         "Number" => "Числовой",
         "Currency" => "Денежный",

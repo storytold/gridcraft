@@ -712,6 +712,18 @@ impl SheetApp {
                 self.open_dialog(name, p.clone());
                 Ok(json!({"dialog": self.dialog.as_ref().map(|d| d.name())}))
             }
+            "ui.selectionMode" => {
+                // `{"mode": "extend"}` (F8), `"add"` (Shift+F8) or `"off"`; `{}` reports the mode.
+                match p.get("mode").and_then(Json::as_str) {
+                    Some(id) => match grid::SelectionMode::parse(id) {
+                        Some(mode) => self.grid.set_selection_mode(mode),
+                        None => return Some(Err(format!("unknown selection mode {id:?} (use \"extend\", \"add\" or \"off\")"))),
+                    },
+                    None if p.get("mode").is_some_and(|v| !v.is_null()) => return Some(Err("`mode` must be \"extend\", \"add\" or \"off\"".into())),
+                    None => {}
+                }
+                Ok(json!({"mode": self.grid.selection_mode.id()}))
+            }
             "ui.message.dismiss" => {
                 self.message = None;
                 Ok(Json::Null)
@@ -947,6 +959,8 @@ impl SheetApp {
             self.message = Some(("Text Box".into(), clean_error(&e)));
             return;
         }
+        // Editing a cell ends Extend and Add mode, as in Excel.
+        self.grid.set_selection_mode(grid::SelectionMode::Off);
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);

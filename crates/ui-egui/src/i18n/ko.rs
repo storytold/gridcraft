@@ -274,6 +274,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Point" => "가리키기",
         "Calculate" => "계산",
         "Select destination and press Enter or choose Paste" => "대상을 선택하고 Enter 키를 누르거나 [붙여넣기]를 선택하세요",
+        "Extend Selection" => "선택 영역 확장",
+        "Add or Remove Selection" => "선택 영역 추가 또는 제거",
         "General" => "일반",
         "Number" => "숫자",
         "Currency" => "통화",

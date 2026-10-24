@@ -277,6 +277,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Point" => "Pokaži",
         "Calculate" => "Izračunavanje",
         "Select destination and press Enter or choose Paste" => "Izaberi odredište i pritisni Enter ili izaberi Nalepi",
+        "Extend Selection" => "Proširi izbor",
+        "Add or Remove Selection" => "Dodaj ili ukloni izbor",
         "General" => "Opšte",
         "Number" => "Broj",
         "Currency" => "Valuta",

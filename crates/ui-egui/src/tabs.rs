@@ -270,6 +270,11 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     gridcraft_engine::Mode::Point => "Point",
                 };
                 ui.label(egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
+                // F8 / Shift+F8 selection mode.
+                if let Some(text) = app.grid.selection_mode.status_text() {
+                    ui.add_space(12.0);
+                    ui.label(egui::RichText::new(app.ui.language.tr(text)).font(theme::ui_font(12.5)).color(t.text_dim));
+                }
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);

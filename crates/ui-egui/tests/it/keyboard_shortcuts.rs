@@ -1,10 +1,12 @@
 //! Excel keyboard shortcuts (crate::keymap) dispatched through real egui key events.
 
-use egui::{Event, Key, Modifiers};
+use egui::{Event, Key, Modifiers, PointerButton};
+use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_engine::model::BorderStyle;
 use gridcraft_ui_egui::SheetApp;
+use gridcraft_ui_egui::grid::{Geo, SelectionMode};
 use gridcraft_ui_egui::keymap::{Shortcut, lookup};
 use serde_json::json;
 
@@ -84,6 +86,183 @@ fn copy_formula_from_above_and_function_keys() {
     assert_eq!(h.state().session.active().unwrap().wb.sheets[0].charts.len(), 1);
     key(&mut h, Key::Equals, Modifiers { alt: true, ..CTRL });
     assert_eq!(h.state().session.active().unwrap().wb.sheets[0].zoom, 110);
+}
+
+fn selection_a1(h: &Harness) -> String {
+    h.state().session.active().unwrap().selection.a1()
+}
+
+fn active_a1(h: &Harness) -> String {
+    h.state().session.active().unwrap().selection.active.a1()
+}
+
+fn mode(h: &Harness) -> SelectionMode {
+    h.state().grid.selection_mode
+}
+
+#[test]
+fn f8_extend_selection_extends_from_the_anchor_until_turned_off() {
+    let mut h = harness(book("A1"));
+    assert!(h.query_by_label("Extend Selection").is_none());
+    key(&mut h, Key::F8, Modifiers::NONE);
+    assert_eq!(mode(&h), SelectionMode::Extend);
+    assert!(h.query_by_label("Extend Selection").is_some(), "the status bar shows the mode");
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(selection_a1(&h), "A1:B2");
+    assert_eq!(active_a1(&h), "A1", "the active cell stays on the anchor");
+    // Ctrl+arrow extends to the edge of the data, as Ctrl+Shift+arrow does.
+    key(&mut h, Key::ArrowDown, CTRL);
+    assert_eq!(selection_a1(&h), "A1:B3");
+    // F8 again ends the mode: arrows move again.
+    key(&mut h, Key::F8, Modifiers::NONE);
+    assert_eq!(mode(&h), SelectionMode::Off);
+    assert!(h.query_by_label("Extend Selection").is_none());
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(selection_a1(&h), "B1");
+    // Esc ends it too, and keeps the extended selection.
+    key(&mut h, Key::F8, Modifiers::NONE);
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(mode(&h), SelectionMode::Off);
+    assert_eq!(selection_a1(&h), "B1:C1");
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(selection_a1(&h), "B2");
+}
+
+#[test]
+fn shift_f8_add_to_selection_builds_areas_with_arrow_keys() {
+    let mut h = harness(book("A1:A2"));
+    key(&mut h, Key::F8, Modifiers::SHIFT);
+    assert_eq!(mode(&h), SelectionMode::Add);
+    assert!(h.query_by_label("Add or Remove Selection").is_some(), "the status bar shows the mode");
+    assert!(h.query_by_label("Extend Selection").is_none());
+    // Arrows move the active cell and keep A1:A2; the next arrow moves the new cell again.
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(selection_a1(&h), "A1:A2,B1");
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(selection_a1(&h), "A1:A2,C1");
+    assert_eq!(active_a1(&h), "C1");
+    // Shift+arrow grows that area from it and keeps it.
+    key(&mut h, Key::ArrowRight, Modifiers::SHIFT);
+    assert_eq!(selection_a1(&h), "A1:A2,C1:D1");
+    assert_eq!(active_a1(&h), "C1");
+    // The next arrow starts a third area.
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(selection_a1(&h), "A1:A2,C1:D1,C3");
+    // F8 switches to Extend mode, and Shift+F8 twice ends Add mode.
+    key(&mut h, Key::F8, Modifiers::NONE);
+    assert_eq!(mode(&h), SelectionMode::Extend);
+    key(&mut h, Key::F8, Modifiers::SHIFT);
+    assert_eq!(mode(&h), SelectionMode::Add);
+    key(&mut h, Key::F8, Modifiers::SHIFT);
+    assert_eq!(mode(&h), SelectionMode::Off);
+    assert!(h.query_by_label("Add or Remove Selection").is_none());
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(selection_a1(&h), "D3", "with the mode off an arrow drops the areas");
+}
+
+#[test]
+fn editing_a_cell_ends_the_selection_mode() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::F8, Modifiers::NONE);
+    key(&mut h, Key::F2, Modifiers::NONE);
+    assert!(h.state().editor.is_some());
+    assert_eq!(mode(&h), SelectionMode::Off);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::F8, Modifiers::SHIFT);
+    h.input_mut().events.push(Event::Text("7".into()));
+    h.run_steps(2);
+    assert!(h.state().editor.is_some(), "typing starts an edit");
+    assert_eq!(mode(&h), SelectionMode::Off);
+}
+
+fn click(h: &mut Harness, a1: &str) {
+    let at = {
+        let app = h.state();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll).cell_rect(sheet, CellRef::parse(a1).unwrap()).center()
+    };
+    h.input_mut().events.push(Event::PointerMoved(at));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(1);
+}
+
+#[test]
+fn clicks_extend_or_add_in_the_selection_modes() {
+    let mut h = harness(book("B2"));
+    key(&mut h, Key::F8, Modifiers::NONE);
+    click(&mut h, "D4");
+    assert_eq!(selection_a1(&h), "B2:D4", "in Extend mode a click extends from the anchor");
+    assert_eq!(mode(&h), SelectionMode::Extend, "the mode stays on");
+    key(&mut h, Key::F8, Modifiers::SHIFT);
+    click(&mut h, "F6");
+    assert_eq!(selection_a1(&h), "B2:D4,F6", "in Add mode a click adds an area");
+    // (Not a double-click: that would edit the cell.)
+    h.state_mut().grid.last_click = None;
+    click(&mut h, "F6");
+    assert_eq!(selection_a1(&h), "B2:D4", "and a click on a selected area removes it");
+    // An arrow after a click keeps the clicked areas.
+    click(&mut h, "H8");
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(selection_a1(&h), "B2:D4,H8,H9");
+    // Moving back onto the kept H8 and off again keeps it.
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(selection_a1(&h), "B2:D4,H8");
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(selection_a1(&h), "B2:D4,H8,H9");
+}
+
+/// A point in the column header band, above `col`'s cells.
+fn column_header_point(h: &Harness, col: &str) -> egui::Pos2 {
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+    let x = geo.cell_rect(sheet, CellRef::parse(&format!("{col}1")).unwrap()).center().x;
+    egui::pos2(x, geo.head_top() + 4.0)
+}
+
+fn drag(h: &mut Harness, from: egui::Pos2, to: egui::Pos2) {
+    h.input_mut().events.push(Event::PointerMoved(from));
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerMoved(to));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+#[test]
+fn add_mode_header_drag_keeps_the_earlier_areas() {
+    let mut h = harness(book("B2"));
+    key(&mut h, Key::F8, Modifiers::SHIFT);
+    click(&mut h, "F6");
+    assert_eq!(selection_a1(&h), "B2,F6");
+    h.state_mut().grid.last_click = None;
+    let (from, to) = (column_header_point(&h, "H"), column_header_point(&h, "J"));
+    drag(&mut h, from, to);
+    assert_eq!(selection_a1(&h), "B2,F6,H:J", "a header drag in Add mode adds its columns and keeps the areas already selected");
+}
+
+#[test]
+fn selection_mode_command_sets_and_reports_without_a_dialog() {
+    let mut h = harness(book("A1"));
+    assert_eq!(h.state_mut().run("ui.selectionMode", json!({})), Ok(json!({"mode": "off"})));
+    assert_eq!(h.state_mut().run("ui.selectionMode", json!({"mode": "extend"})), Ok(json!({"mode": "extend"})));
+    h.run_steps(2);
+    assert!(h.query_by_label("Extend Selection").is_some());
+    assert_eq!(h.state_mut().run("ui.selectionMode", json!({"mode": "add"})), Ok(json!({"mode": "add"})));
+    assert!(h.state_mut().run("ui.selectionMode", json!({"mode": "sideways"})).is_err());
+    assert!(h.state_mut().run("ui.selectionMode", json!({"mode": 3})).is_err());
+    assert_eq!(mode(&h), SelectionMode::Add, "a bad mode changes nothing");
+    assert_eq!(h.state_mut().run("ui.selectionMode", json!({"mode": "off"})), Ok(json!({"mode": "off"})));
+    assert!(h.state().dialog.is_none());
 }
 
 #[test]

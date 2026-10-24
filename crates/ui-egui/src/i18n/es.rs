@@ -390,6 +390,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Point" => "Señalar",
         "Calculate" => "Calcular",
         "Select destination and press Enter or choose Paste" => "Seleccione el destino y presione Entrar o elija Pegar",
+        "Extend Selection" => "Extender selección",
+        "Add or Remove Selection" => "Agregar o quitar selección",
         "General" => "General",
         "Number" => "Número",
         "Currency" => "Moneda",
