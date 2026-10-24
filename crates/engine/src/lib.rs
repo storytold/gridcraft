@@ -15,10 +15,12 @@ pub mod display;
 pub mod fill;
 pub mod io;
 pub mod links;
+pub mod macros;
 pub mod outline;
 pub mod paper;
 pub mod pivot;
 pub mod pivot_calc;
+pub mod record;
 pub mod sample;
 pub mod selection;
 pub mod tables;
@@ -66,6 +68,51 @@ pub struct HistoryEntry {
     pub retained_bytes: usize,
 }
 
+/// An undo group opened with [`Session::group_begin`]. Hand it back to [`Session::group_end`]
+/// (keep the changes as one undo step) or [`Session::group_rollback`] (undo them all).
+#[derive(Debug, PartialEq, Eq)]
+#[must_use = "an undo group stays open until it is ended or rolled back"]
+pub struct GroupToken {
+    id: u64,
+    doc: u64,
+}
+
+impl GroupToken {
+    /// The uid of the document the group belongs to.
+    pub fn doc(&self) -> u64 {
+        self.doc
+    }
+}
+
+/// An open undo group: what runs on `doc` until it ends becomes one undo step.
+#[derive(Clone, Debug)]
+struct OpenGroup {
+    id: u64,
+    doc: u64,
+    label: String,
+    /// Undo depth when the group began; the group's own steps are cut back to it.
+    start: usize,
+    wb: Arc<Workbook>,
+    selection: Selection,
+    /// The redo stack when the group began (a rollback puts it back).
+    redo: Vec<HistoryEntry>,
+}
+
+/// Where the last [`Session::group_end`] or [`Session::group_rollback`] left its document: the
+/// workbook and selection it ended at, the undo length then, and whether it made a step. A
+/// command that ended the group tells its own later changes from the group's step by it, and
+/// keeps the group's name only when the group's step is exactly its own (the entry holds the
+/// workbook the step started from). Dropped when the outermost command finishes, so it keeps no
+/// workbook alive between commands.
+#[derive(Debug)]
+struct GroupStep {
+    doc: u64,
+    after: Arc<Workbook>,
+    selection: Selection,
+    len: usize,
+    stepped: bool,
+}
+
 /// The clipboard: a block of cells (with formulas and styles) or marching-ants reference.
 #[derive(Clone, Debug)]
 pub struct Clipboard {
@@ -84,6 +131,33 @@ pub struct Clipboard {
     /// A multi-area copy: the areas as selected (for the marquee). `wb` then holds them slid
     /// together into one block at `range`. Empty for a single-range copy.
     pub areas: Vec<RangeRef>,
+    /// Trust of the source document: pasting content from a file someone else made carries it.
+    pub trust: Trust,
+}
+
+/// Whether a document's active content (macros) may run without asking the person first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Trust {
+    /// Made in this session: a new workbook or a sample.
+    #[default]
+    Local,
+    /// Opened from a file, or holding content pasted from one: active content asks before it
+    /// runs.
+    FromFile,
+}
+
+impl Trust {
+    /// Whether active content may run without asking.
+    pub fn allows_code(self) -> bool {
+        self == Trust::Local
+    }
+
+    /// The trust of a document after it receives content from a document with trust `source`:
+    /// content from an untrusted file leaves the receiver untrusted.
+    pub fn receive(self, source: Trust) -> Trust {
+        if source == Trust::FromFile { Trust::FromFile } else { self }
+    }
 }
 
 /// In-cell edit mode as shown in the status bar.
@@ -120,6 +194,11 @@ pub struct DocState {
     /// user trusts it in this session (`automate.trustScripts`); one with no scripts starts
     /// trusted, since any script it gains later was written here.
     pub scripts_trusted: bool,
+    /// Where the workbook's content came from: whether its active content may run without
+    /// asking. Unlike `scripts_trusted`, this is provenance, not consent: it is set when the
+    /// workbook is opened from a file, carried by content pasted from such a workbook, and never
+    /// changed by a trust decision.
+    pub trust: Trust,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -145,6 +224,10 @@ fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
         let next = newer.sheets.get(index).map_or(&empty, |next| &next.cells);
         bytes = bytes.saturating_add(sheet.cells.retained_bytes_against(next));
     }
+    // Snapshots share the macro list until a change to it; a snapshot with its own list keeps it.
+    if !older.macros.shares(&newer.macros) {
+        bytes = bytes.saturating_add(older.macros.estimated_bytes());
+    }
     bytes
 }
 
@@ -160,10 +243,21 @@ fn push_history_with_budget(
     selection: Selection,
     byte_budget: usize,
 ) {
+    push_entry(history, label, wb, next, selection);
+    trim_to_budget(history, byte_budget);
+}
+
+/// Adds a step without applying the limits: inside a command they wait for the outermost
+/// command to collapse its steps (see [`Session::trim_history`]).
+fn push_entry(history: &mut Vec<HistoryEntry>, label: String, wb: Arc<Workbook>, next: &Workbook, selection: Selection) {
     let retained_bytes = history_retained_bytes(&wb, next);
     history.push(HistoryEntry { label, wb, selection, retained_bytes });
+}
+
+/// Drops the oldest steps past [`UNDO_LIMIT`] or `byte_budget`, always keeping the latest one
+/// (even if that one edit exceeds the budget).
+fn trim_to_budget(history: &mut Vec<HistoryEntry>, byte_budget: usize) {
     let mut total = history.iter().fold(0usize, |sum, entry| sum.saturating_add(entry.retained_bytes));
-    // Always preserve the latest action, even if that one edit exceeds the budget.
     while history.len() > 1 && (history.len() > UNDO_LIMIT || total > byte_budget) {
         total = total.saturating_sub(history.remove(0).retained_bytes);
     }
@@ -191,6 +285,7 @@ impl DocState {
             unlocked_ranges: vec![],
             content_kind: None,
             scripts_trusted,
+            trust: Trust::Local,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -307,8 +402,13 @@ pub struct Session {
     pub last_find: Option<Json>,
     /// View › Show › Ruler is off (rulers in Page Layout view; an application option).
     pub hide_ruler: bool,
-    /// Journal position where action recording started.
+    /// Journal position where Automate › Record Actions started.
     pub recording: Option<usize>,
+    /// The recording buffer while a recorder runs ([`Session::start_recording`]): top-level
+    /// commands with the place they ran in, kept apart from the journal.
+    pub recorder: Option<record::Recorder>,
+    /// How many `execute` calls are running (0 between top-level commands).
+    depth: u32,
     /// Windows hidden with View › Hide.
     pub hidden_windows: Vec<usize>,
     /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
@@ -320,6 +420,17 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
+    /// Open undo groups, innermost last.
+    groups: Vec<OpenGroup>,
+    next_group: u64,
+    /// Counts group begins and ends, so `execute` can tell that a command opened or closed one.
+    group_epoch: u64,
+    /// Where the last group ended, so `execute` can tell a command's own changes from its group's.
+    group_step: Option<GroupStep>,
+    /// For each running command, innermost last: its document and that document's undo length
+    /// when it began. Steps before that length are not touched while the command runs (see
+    /// [`Session::bound_tail`]).
+    marks: Vec<(u64, usize)>,
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
@@ -359,7 +470,8 @@ impl Session {
     }
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {
-            self.docs.remove(i);
+            let d = self.docs.remove(i);
+            self.groups.retain(|g| g.doc != d.uid);
             if self.active >= self.docs.len() {
                 self.active = self.docs.len().saturating_sub(1);
             }
@@ -412,7 +524,8 @@ impl Session {
         command_specs().iter().map(|c| c.info(self)).collect()
     }
 
-    /// Runs a command by id. Undoable commands record a history step when the workbook changed.
+    /// Runs a command by id. Undoable commands record a history step when the workbook changed,
+    /// unless an undo group is open on the document (the group then makes the step).
     /// Panics inside commands are caught and reported; the workbook is restored.
     pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
@@ -421,36 +534,312 @@ impl Session {
         }
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
+        let (first_group, group_epoch) = (self.next_group, self.group_epoch);
+        // Whether a group was open on the document before the command, and how long its history was.
+        let start = before.as_ref().and_then(|(uid, ..)| self.docs.iter().find(|d| d.uid == *uid).map(|d| (self.in_group(*uid), d.undo.len())));
+        // A command that panics leaves the history as it found it: the steps commands nested in it
+        // made or undid, and the redo history they cleared, come back. A length is not enough,
+        // because a nested `edit.undo` removes entries.
+        let history_before = before.as_ref().and_then(|(uid, ..)| self.docs.iter().find(|d| d.uid == *uid).map(|d| (d.undo.clone(), d.redo.clone())));
+        // The groups open on the document before the command (usually none), for the same reason.
+        let groups_before: Vec<(u64, String, Arc<Workbook>, Selection)> = match &before {
+            Some((uid, ..)) => {
+                self.groups.iter().filter(|g| g.doc == *uid).map(|g| (g.id, g.label.clone(), g.wb.clone(), g.selection.clone())).collect()
+            }
+            None => Vec::new(),
+        };
+        // The recorder keeps top-level calls with the place they ran in.
+        let place = (self.depth == 0 && self.recorder.is_some()).then(|| match self.active() {
+            Some(d) => (d.uid, d.wb.active_sheet, d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(), d.selection.clone()),
+            None => (0, 0, String::new(), Selection::default()),
+        });
+        let doc_uid = before.as_ref().map(|(uid, ..)| *uid);
+        let marked = doc_uid.zip(start).map(|(uid, (_, len))| (uid, len));
+        self.marks.extend(marked);
+        self.depth = self.depth.saturating_add(1);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
+        self.depth = self.depth.saturating_sub(1);
+        if marked.is_some() {
+            self.marks.pop();
+        }
         let result = match result {
             Ok(r) => r,
             Err(p) => {
                 let msg =
                     p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
-                // Restore the workbook as it was.
+                // Restore the workbook and its history as they were, and drop the undo groups the
+                // command opened.
+                self.groups.retain(|g| g.id < first_group);
+                let group_open = before.as_ref().is_some_and(|(uid, ..)| self.groups.iter().any(|g| g.doc == *uid));
                 if let Some((uid, wb, sel)) = &before
                     && let Some(d) = self.docs.iter_mut().find(|d| d.uid == *uid)
                 {
                     d.wb = wb.clone();
                     d.selection = sel.clone();
+                    if let Some((undo, redo)) = history_before {
+                        d.undo = undo;
+                        d.redo = redo;
+                    }
+                    // A group open before the command and ended or rolled back inside it stays
+                    // ended (its token went with the command), and keeps a step from its start to
+                    // the restored workbook, so Undo still returns to the state before the group.
+                    if !group_open
+                        && let Some((_, label, wb, selection)) = groups_before.into_iter().min_by_key(|g| g.0)
+                        && !Arc::ptr_eq(&wb, &d.wb)
+                    {
+                        push_entry(&mut d.undo, label, wb, &d.wb, selection);
+                        d.redo.clear();
+                    }
                     d.calc.rebuild(&d.wb);
+                }
+                if self.depth == 0 {
+                    self.trim_history();
+                    self.group_step = None;
                 }
                 return Err(EngineError::Internal(id.to_string(), msg));
             }
         };
         if spec.journal && result.is_ok() {
+            // A command that started recording is not part of the recording; one that stopped it
+            // finds no recorder.
+            if let Some((doc, sheet, sheet_name, selection)) = place
+                && let Some(rec) = self.recorder.as_mut()
+            {
+                rec.push(record::RecordedStep { doc, sheet, sheet_name, selection, id: id.to_string(), params: cmd::journal_params(&params) });
+            }
             self.push_journal(id, cmd::journal_params(&params));
         }
+        // Inside an undo group the group owns the step. A command that ended a group open before
+        // it leaves the group its step and makes one of its own for what it changed after the end.
+        // A command that opened and closed its own groups makes one step of its own, which
+        // replaces the steps those groups made.
+        let epoch_changed = self.group_epoch != group_epoch;
+        let in_group_now = before.as_ref().is_some_and(|(uid, ..)| self.in_group(*uid));
+        let was_open = start.is_some_and(|(was_open, _)| was_open);
         if spec.undoable
             && let Some((uid, wb, sel)) = before
             && let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid)
             && !Arc::ptr_eq(&d.wb, &wb)
         {
-            push_history(&mut d.undo, spec.label.trim_end_matches('…').to_string(), wb, &d.wb, sel);
+            let label = spec.label.trim_end_matches('…').to_string();
+            if in_group_now {
+                // A group this command opened and left open (a debugger's start) takes the
+                // command's start as its own, so what the command changed before opening it is
+                // part of the group's step and not a step of its own.
+                if !was_open
+                    && let Some((_, len)) = start
+                    && let Some(g) = self.groups.iter_mut().filter(|g| g.doc == uid && g.id >= first_group).min_by_key(|g| g.id)
+                {
+                    g.start = len;
+                    g.wb = wb;
+                    g.selection = sel;
+                }
+            } else if epoch_changed && was_open {
+                // The group it ended made its step; changes after the end, whether direct or by
+                // nested commands, are the command's own step from where the group ended.
+                if let Some(step) = self.group_step.as_ref().filter(|g| g.doc == uid)
+                    && (d.undo.len() > step.len || !Arc::ptr_eq(&step.after, &d.wb))
+                {
+                    d.undo.truncate(step.len);
+                    push_entry(&mut d.undo, label, step.after.clone(), &d.wb, step.selection.clone());
+                    d.redo.clear();
+                }
+            } else {
+                let mut label = label;
+                if epoch_changed && let Some((_, len)) = start {
+                    // A command whose only step is its group's keeps that name ("Run Macro: Totals").
+                    // That is so only when the one entry the command added is a group's step from
+                    // the command's own start to its own result: an entry a nested command made,
+                    // a group step of an earlier command (undone since), or a group's step that
+                    // the command edited past all name the step after the command instead.
+                    if d.undo.len() == len + 1
+                        && let Some(last) = d.undo.last()
+                        && Arc::ptr_eq(&last.wb, &wb)
+                        && self.group_step.as_ref().is_some_and(|g| g.doc == uid && g.stepped && Arc::ptr_eq(&g.after, &d.wb))
+                    {
+                        label = last.label.clone();
+                    }
+                    d.undo.truncate(len);
+                }
+                push_entry(&mut d.undo, label, wb, &d.wb, sel);
+                d.redo.clear();
+            }
+            // Inside a group the redo history waits for the group: `group_end` clears it when the
+            // group becomes a step, and `group_rollback` puts it back as it was.
+            d.revision += 1;
+        }
+        // The history limit applies once the outermost command has collapsed its steps, so the
+        // lengths it compared stay true. Meanwhile the steps made inside it are bounded on their own.
+        if self.depth == 0 {
+            self.trim_history();
+            self.group_step = None;
+        } else if let Some(uid) = doc_uid {
+            self.bound_tail(uid);
+        }
+        result
+    }
+
+    /// Runs `f` as one undo step labelled `label` on the active document: whatever commands `f`
+    /// runs, one Undo brings back the workbook as it was before. If `f` fails, every change it made
+    /// is rolled back and its error is returned. Groups nest; the outermost one makes the step.
+    pub fn grouped<R>(&mut self, label: &str, f: impl FnOnce(&mut Session) -> Result<R>) -> Result<R> {
+        let token = self.group_begin(label)?;
+        let doc = token.doc();
+        // A panic in `f` rolls the group back before it goes on, so a caller that catches it
+        // (outside `execute`, which drops a command's groups itself) finds no group left open.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
+            Ok(Ok(r)) => match self.group_end(token) {
+                Ok(_) => Ok(r),
+                // `f` closed the group's document (`file.close`, or `file.open` taking the place of
+                // an untouched new workbook), and the group went with it: nothing is left to undo.
+                Err(_) if !self.docs.iter().any(|d| d.uid == doc) => Ok(r),
+                Err(e) => Err(e),
+            },
+            Ok(Err(e)) => {
+                // The error from `f` is the one to report. A rollback fails only when the group
+                // has already ended, and then there is nothing left to undo.
+                let _ = self.group_rollback(token);
+                Err(e)
+            }
+            Err(panic) => {
+                let _ = self.group_rollback(token);
+                std::panic::resume_unwind(panic)
+            }
+        }
+    }
+
+    /// Opens an undo group on the active document that can span several calls (for example a
+    /// debugger that runs one step per call). Until [`Session::group_end`] or
+    /// [`Session::group_rollback`], undoable commands on that document add no undo steps of their
+    /// own, and Undo and Redo are unavailable there.
+    pub fn group_begin(&mut self, label: &str) -> Result<GroupToken> {
+        let d = self.doc()?;
+        let g = OpenGroup {
+            id: self.next_group,
+            doc: d.uid,
+            label: label.trim_end_matches('…').to_string(),
+            start: d.undo.len(),
+            wb: d.wb.clone(),
+            selection: d.selection.clone(),
+            redo: d.redo.clone(),
+        };
+        let token = GroupToken { id: g.id, doc: g.doc };
+        self.next_group = self.next_group.saturating_add(1);
+        self.group_epoch = self.group_epoch.wrapping_add(1);
+        self.groups.push(g);
+        Ok(token)
+    }
+
+    /// Ends an undo group. If the workbook changed, the group becomes one undo step, unless it is
+    /// nested in another open group on the same document, which then owns the step. Groups opened
+    /// inside it and still open end with it. Returns whether the workbook changed.
+    pub fn group_end(&mut self, token: GroupToken) -> Result<bool> {
+        let g = self.take_group(&token)?;
+        let outer = self.in_group(g.doc);
+        let Some(d) = self.docs.iter_mut().find(|d| d.uid == g.doc) else { return Ok(false) };
+        // Steps pushed directly while the group was open fold into the group's step.
+        d.undo.truncate(g.start);
+        let changed = !Arc::ptr_eq(&d.wb, &g.wb);
+        if changed && !outer {
+            push_entry(&mut d.undo, g.label, g.wb, &d.wb, g.selection);
             d.redo.clear();
             d.revision += 1;
         }
-        result
+        if !outer {
+            self.group_step =
+                Some(GroupStep { doc: g.doc, after: d.wb.clone(), selection: d.selection.clone(), len: d.undo.len(), stepped: changed });
+        }
+        // Inside a command, the outermost command applies the history limit when it finishes.
+        if self.depth == 0 {
+            self.trim_history();
+        }
+        Ok(changed)
+    }
+
+    /// Bounds the undo steps pushed while a command runs (a script of many steps, a subtotal per
+    /// group): at most [`UNDO_LIMIT`] of them within [`UNDO_BYTES_LIMIT`], dropping the oldest.
+    /// Only steps after the latest mark go: a running command's start, an open group's start and
+    /// the end of the last group are positions the command or group collapses its steps by when
+    /// it finishes, so what is before them stays as it is until [`Session::trim_history`].
+    fn bound_tail(&mut self, uid: u64) {
+        let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid) else { return };
+        let marks = self.marks.iter().filter(|(doc, _)| *doc == uid).map(|(_, len)| *len);
+        let groups = self.groups.iter().filter(|g| g.doc == uid).map(|g| g.start);
+        let step = self.group_step.as_ref().filter(|g| g.doc == uid).map(|g| g.len);
+        let mark = marks.chain(groups).chain(step).max().unwrap_or(0).min(d.undo.len());
+        let mut bytes = d.undo.iter().skip(mark).fold(0usize, |sum, e| sum.saturating_add(e.retained_bytes));
+        while d.undo.len() > mark + 1 && (d.undo.len() - mark > UNDO_LIMIT || bytes > UNDO_BYTES_LIMIT) {
+            bytes = bytes.saturating_sub(d.undo.remove(mark).retained_bytes);
+        }
+    }
+
+    /// Drops the oldest undo steps past [`UNDO_LIMIT`] or [`UNDO_BYTES_LIMIT`]. A document with
+    /// an open group waits for the group to end, because the group remembers where its steps start.
+    fn trim_history(&mut self) {
+        let groups = &self.groups;
+        for d in self.docs.iter_mut().filter(|d| !groups.iter().any(|g| g.doc == d.uid)) {
+            trim_to_budget(&mut d.undo, UNDO_BYTES_LIMIT);
+        }
+    }
+
+    /// Ends an undo group by putting back the workbook, selection, undo and redo history as they
+    /// were when it began.
+    pub fn group_rollback(&mut self, token: GroupToken) -> Result<()> {
+        let g = self.take_group(&token)?;
+        let Some(d) = self.docs.iter_mut().find(|d| d.uid == g.doc) else { return Ok(()) };
+        if !Arc::ptr_eq(&d.wb, &g.wb) {
+            d.wb = g.wb;
+            d.calc.rebuild(&d.wb);
+        }
+        d.selection = g.selection;
+        d.undo.truncate(g.start);
+        d.redo = g.redo;
+        d.revision += 1;
+        // The record of the last group step stays when the document is back exactly where that
+        // step left it (this group began there); otherwise the rollback is where the group ended.
+        let kept = self.group_step.as_ref().is_some_and(|st| st.doc == g.doc && st.len == g.start && Arc::ptr_eq(&st.after, &d.wb));
+        if !kept && !self.groups.iter().any(|o| o.doc == g.doc) {
+            self.group_step = Some(GroupStep { doc: g.doc, after: d.wb.clone(), selection: d.selection.clone(), len: g.start, stepped: false });
+        }
+        Ok(())
+    }
+
+    /// Starts recording top-level commands into an empty buffer, replacing any recording in
+    /// progress. Queries, failed commands and commands run by other commands are not recorded.
+    pub fn start_recording(&mut self) {
+        self.recorder = Some(record::Recorder::default());
+    }
+
+    /// Stops recording and returns what was recorded (`None` when nothing was recording).
+    pub fn stop_recording(&mut self) -> Option<record::Recorder> {
+        self.recorder.take()
+    }
+
+    /// Whether the recording buffer is collecting commands.
+    pub fn is_recording(&self) -> bool {
+        self.recorder.is_some()
+    }
+
+    /// How many commands are running: 0 between top-level commands, 1 inside one, 2 inside a
+    /// command run by a command, and so on.
+    pub fn depth(&self) -> u32 {
+        self.depth
+    }
+
+    /// Whether an undo group is open on the document with this uid.
+    pub fn in_group(&self, doc: u64) -> bool {
+        self.groups.iter().any(|g| g.doc == doc)
+    }
+
+    /// Removes the token's group and any group on the same document opened after it.
+    fn take_group(&mut self, token: &GroupToken) -> Result<OpenGroup> {
+        let ended = || EngineError::Other("That undo group has already ended.".into());
+        let at = self.groups.iter().position(|g| g.id == token.id).ok_or_else(ended)?;
+        let mut later = self.groups.split_off(at).into_iter();
+        let g = later.next().ok_or_else(ended)?;
+        self.groups.extend(later.filter(|o| o.doc != g.doc));
+        self.group_epoch = self.group_epoch.wrapping_add(1);
+        Ok(g)
     }
 
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {
@@ -465,10 +854,17 @@ impl Session {
     /// queued a file dialog because it got no file (`file.open`, `file.saveAs`, `file.save` on a workbook with no
     /// file yet, `data.getData`) is an error instead of a silent success.
     pub fn execute_headless(&mut self, id: &str, params: Json) -> Result<Json> {
+        let recorded = self.recorder.as_ref().map(|r| (r.steps.len(), r.dropped));
         let r = self.execute(id, params);
         let requests = self.take_ui_requests();
         let asked_for_file = requests.iter().any(|q| matches!(q, UiRequest::Dialog(name, _) if name == "open" || name == "saveAs"));
         if r.is_ok() && asked_for_file {
+            // The caller gets an error, so the recording keeps no step for the command.
+            if let Some((steps, dropped)) = recorded
+                && let Some(rec) = self.recorder.as_mut()
+            {
+                rec.truncate(steps, dropped);
+            }
             let what = match id {
                 "file.open" => "`path` or `base64`",
                 "data.getData" | "data.fromTextCsv" => "`path` or `text`",

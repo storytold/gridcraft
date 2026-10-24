@@ -179,6 +179,15 @@ pub struct Workbook {
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv_delimiter: Option<u8>,
+    /// GridCraft macros (typed command lists, not VBA), in the order the macro list shows them.
+    /// The JSON format keeps them as this field; xlsx keeps them in hidden defined names.
+    #[serde(default, skip_serializing_if = "crate::macros::Macros::is_empty", skip_deserializing)]
+    pub macros: crate::macros::Macros,
+    /// The `macros` entries of a JSON file as read, before the engine checks each one on its own
+    /// and moves it into `macros`, so one damaged or newer macro doesn't stop the file opening.
+    /// Never written.
+    #[serde(rename = "macros", default, skip_serializing, deserialize_with = "crate::macros::entries")]
+    pub macros_read: Vec<serde_json::Value>,
     /// Unmodelled file content kept for saving (package root and workbook level). Not in JSON.
     #[serde(skip)]
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
@@ -225,6 +234,8 @@ impl Workbook {
             phonetics: vec![],
             vba_project: None,
             csv_delimiter: None,
+            macros: crate::macros::Macros::default(),
+            macros_read: vec![],
             preserved: None,
             source_dir: None,
             source_path: None,

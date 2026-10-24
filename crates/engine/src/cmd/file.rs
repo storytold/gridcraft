@@ -87,6 +87,8 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
+    // Someone else may have made the file: its active content asks before it runs.
+    doc.trust = crate::Trust::FromFile;
     let i = s.add_document(doc);
     // The decrypted-workbook notice is for the info bar, not a message box.
     let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE).collect();
