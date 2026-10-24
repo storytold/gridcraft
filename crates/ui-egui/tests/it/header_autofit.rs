@@ -154,6 +154,54 @@ fn dragging_a_boundary_inside_a_multi_area_selection_resizes_every_selected_line
 }
 
 #[test]
+fn a_multi_selection_resize_previews_on_the_dragged_line_and_applies_on_release() {
+    // Issue #1082: only the dragged line moves while the button is held; Esc cancels.
+    for rows in [false, true] {
+        let mut h = harness(if rows { "1:3" } else { "A:C" });
+        let before = sizes(&h, rows);
+        let (start, zoom) = edge(&h, rows, 1);
+        let delta = if rows { vec2(0.0, 30.0) } else { vec2(30.0, 0.0) };
+        button(&mut h, start, true);
+        h.input_mut().events.push(Event::PointerMoved(start + delta / 2.0));
+        h.step();
+        h.input_mut().events.push(Event::PointerMoved(start + delta));
+        h.step();
+        let held = sizes(&h, rows);
+        assert_eq!(held[1], (before[1] + 30.0 / zoom).round(), "the dragged line previews");
+        for index in [0, 2, 3] {
+            assert_eq!(held[index], before[index], "line {index} waits for the release");
+        }
+        button(&mut h, start + delta, false);
+        h.run_steps(2);
+        let after = sizes(&h, rows);
+        for (index, size) in after.iter().take(3).enumerate() {
+            assert_eq!(*size, held[1], "line {index} takes the width on release");
+        }
+        assert_eq!(after[3], before[3]);
+        assert_eq!(h.state().session.active().unwrap().undo.len(), 1);
+        h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(sizes(&h, rows), before);
+
+        // Esc during the drag cancels everything.
+        let mut h = harness(if rows { "1:3" } else { "A:C" });
+        button(&mut h, start, true);
+        h.input_mut().events.push(Event::PointerMoved(start + delta));
+        h.step();
+        h.input_mut().events.push(Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.step();
+        button(&mut h, start + delta, false);
+        h.run_steps(2);
+        assert_eq!(sizes(&h, rows), before, "Esc restores the sizes");
+    }
+}
+
+#[test]
 fn table_filter_autofit_works_through_command_and_header_double_click() {
     for zoom in [50, 100, 200] {
         for double_click in [false, true] {
