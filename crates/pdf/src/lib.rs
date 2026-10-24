@@ -4,16 +4,60 @@
 //!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
 //!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
 //!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`.
+//! - Arabic is shaped and set in embedded Type3 subsets, with exact shaped advances.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
 //!
-//! Streams are written uncompressed (images use the trivial RunLengthDecode filter) so the crate
-//! needs no dependencies.
+//! Streams are written uncompressed (images use the RunLengthDecode filter).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod arabic;
 mod metrics;
+
+/// Paragraph base direction. Context follows spreadsheet reading order: the first
+/// non-whitespace character determines direction, including digits and punctuation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextDirection {
+    #[default]
+    Auto,
+    Context,
+    LeftToRight,
+    RightToLeft,
+}
+
+impl TextDirection {
+    /// Resolve once for a paragraph before wrapping it into visual lines.
+    pub fn resolve(self, text: &str) -> Self {
+        use unicode_bidi::{BidiClass, BidiInfo, bidi_class};
+        let rtl = match self {
+            Self::Auto => BidiInfo::new(text, None).paragraphs.first().is_some_and(|p| p.level.is_rtl()),
+            Self::Context => text.chars().find(|ch| !ch.is_whitespace()).is_some_and(|ch| matches!(bidi_class(ch), BidiClass::R | BidiClass::AL)),
+            explicit => return explicit,
+        };
+        if rtl { Self::RightToLeft } else { Self::LeftToRight }
+    }
+
+    fn level(self) -> Option<unicode_bidi::Level> {
+        match self {
+            Self::Auto => None,
+            Self::LeftToRight | Self::Context => Some(unicode_bidi::Level::ltr()),
+            Self::RightToLeft => Some(unicode_bidi::Level::rtl()),
+        }
+    }
+}
+
+/// A PDF export could not preserve the requested text.
+#[derive(Clone, Debug)]
+pub struct Error(String);
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for Error {}
 
 use std::fmt::Write as _;
 
@@ -149,9 +193,22 @@ impl Font {
 }
 
 /// Width of `text` in points when set in `font` at `size` points.
+/// Arabic uses shaped advances. If its font cannot render the text, measurement returns zero
+/// and drawing that text causes [`PdfDoc::finish`] to return the rendering error.
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
+    text_width_with_direction(font, size, text, TextDirection::Auto)
+}
+
+/// Width measured with the same base direction as drawing.
+pub fn text_width_with_direction(font: Font, size: f32, text: &str, direction: TextDirection) -> f32 {
+    let direction = if direction == TextDirection::Context { direction.resolve(text) } else { direction };
+    if arabic::needed(text) {
+        // Drawing records the error and finish rejects the document; measuring never substitutes ?.
+        return arabic::layout(font, text, direction).map(|layout| layout.width * size / 1000.0).unwrap_or(0.0);
+    }
     // u64: a u32 sum overflows for ~8 million characters.
-    let units: u64 = text.chars().map(|c| u64::from(font.char_width(c))).sum();
+    let Ok(visual) = arabic::latin_visual(text, direction) else { return 0.0 };
+    let units: u64 = visual.chars().map(|c| u64::from(font.char_width(c))).sum();
     units as f32 * size / 1000.0
 }
 
@@ -323,6 +380,8 @@ pub struct Page {
     images: Vec<ImageData>,
     links: Vec<LinkAnnotation>,
     depth: u32,
+    arabic: arabic::Subset,
+    error: Option<Error>,
 }
 
 /// Most bytes of content per page before further drawing is dropped (keeps hostile inputs from
@@ -541,25 +600,104 @@ impl Page {
         self.op(&s);
     }
 
+    /// Arabic ink extents above and below the baseline, in points. Standard font text returns
+    /// `None`. Font errors are recorded for [`PdfDoc::finish`], just as when drawing text.
+    pub fn text_vertical_extents(&mut self, font: Font, size: f32, text: &str) -> Option<(f32, f32)> {
+        self.text_vertical_extents_with_direction(font, size, text, TextDirection::Auto)
+    }
+
+    /// Arabic ink extents with an explicit paragraph base direction.
+    pub fn text_vertical_extents_with_direction(&mut self, font: Font, size: f32, text: &str, direction: TextDirection) -> Option<(f32, f32)> {
+        if !arabic::needed(text) {
+            return None;
+        }
+        match arabic::vertical_extents(font, text, direction) {
+            Ok((ascent, descent)) => Some((ascent * size / 1000.0, descent * size / 1000.0)),
+            Err(error) => {
+                self.error.get_or_insert(error);
+                None
+            }
+        }
+    }
+
     /// Text with its baseline starting at `(x, y)`.
     pub fn text(&mut self, x: f32, y: f32, size: f32, font: Font, color: Rgb, text: &str) {
-        self.text_rotated(x, y, size, font, color, text, 0.0);
+        self.text_with_direction(x, y, size, font, color, text, TextDirection::Auto);
+    }
+
+    /// Text drawn with an explicit paragraph base direction.
+    pub fn text_with_direction(&mut self, x: f32, y: f32, size: f32, font: Font, color: Rgb, text: &str, direction: TextDirection) {
+        self.text_rotated_with_direction(x, y, size, font, color, text, 0.0, direction);
     }
 
     /// Text rotated by `angle` radians (clockwise on the page, like the y-down coordinate
     /// system) about its baseline origin.
     pub fn text_rotated(&mut self, x: f32, y: f32, size: f32, font: Font, color: Rgb, text: &str, angle: f32) {
+        self.text_rotated_with_direction(x, y, size, font, color, text, angle, TextDirection::Auto);
+    }
+
+    /// Rotated text with an explicit paragraph base direction.
+    pub fn text_rotated_with_direction(
+        &mut self,
+        x: f32,
+        y: f32,
+        size: f32,
+        font: Font,
+        color: Rgb,
+        text: &str,
+        angle: f32,
+        direction: TextDirection,
+    ) {
         if text.is_empty() || !extent(size) || !finite(&[x, y]) {
             return;
         }
+        let direction = if direction == TextDirection::Context { direction.resolve(text) } else { direction };
+        let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
+        if arabic::needed(text) {
+            match self.arabic.text(font, text, size.min(10_000.0), direction) {
+                Ok(body) => {
+                    for slot in [Some(font.index()), self.arabic.uses_cid.then_some(CID_FONT)].into_iter().flatten() {
+                        if let Some(f) = self.fonts.get_mut(slot) {
+                            *f = true;
+                        }
+                    }
+                    let s = format!(
+                        "q\n{} {} {} {} {} {} cm\n{} {}\n{body}\nQ",
+                        n(cs),
+                        n(-sn),
+                        n(sn),
+                        n(cs),
+                        n(x),
+                        n(self.y(y)),
+                        rgb_op(color, false),
+                        rgb_op(color, true)
+                    );
+                    if self.content.len().saturating_add(s.len()).saturating_add(1) > MAX_PAGE_CONTENT {
+                        self.error.get_or_insert_with(|| Error("PDF page text exceeds the size limit".into()));
+                    } else {
+                        self.op(&s);
+                    }
+                }
+                Err(error) => {
+                    self.error.get_or_insert(error);
+                }
+            }
+            return;
+        }
+        let visual = match arabic::latin_visual(text, direction) {
+            Ok(visual) => visual,
+            Err(error) => {
+                self.error.get_or_insert(error);
+                return;
+            }
+        };
         let fi = font.index();
         let size = n(size.min(10_000.0));
-        let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
         // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
         let mut s = format!("BT\n{}\n{} {} {} {} {} {} Tm\n", rgb_op(color, false), n(cs), n(-sn), n(sn), n(cs), n(x), n(self.y(y)));
         // Runs of WinAnsi text use `font`; runs it cannot encode use the CID font. Each `Tj`
         // advances the text position, so the runs follow each other on the baseline.
-        let mut rest = text;
+        let mut rest: &str = &visual;
         while let Some(first) = rest.chars().next() {
             let cid = needs_cid(first);
             let end = rest.char_indices().find(|(_, c)| needs_cid(*c) != cid).map_or(rest.len(), |(i, _)| i);
@@ -572,7 +710,12 @@ impl Page {
             rest = tail;
         }
         s.push_str("ET");
-        self.op(&s);
+        let s = if visual != text { format!("/Span << /ActualText {} >> BDC\n{s}\nEMC", arabic::unicode_string(text, true)) } else { s };
+        if self.content.len().saturating_add(s.len()).saturating_add(1) > MAX_PAGE_CONTENT {
+            self.error.get_or_insert_with(|| Error("PDF page text exceeds the size limit".into()));
+        } else {
+            self.op(&s);
+        }
     }
 
     /// Draws an RGBA image (`pw`×`ph` pixels, row-major, straight alpha) into the box
@@ -677,7 +820,17 @@ impl PdfDoc {
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
         let height = if height_pt.is_finite() { height_pt.clamp(3.0, 14_400.0) } else { 792.0 };
-        self.pages.push(Page { width, height, content: String::new(), fonts: [false; FONT_SLOTS], images: Vec::new(), links: Vec::new(), depth: 0 });
+        self.pages.push(Page {
+            width,
+            height,
+            content: String::new(),
+            fonts: [false; FONT_SLOTS],
+            images: Vec::new(),
+            links: Vec::new(),
+            depth: 0,
+            arabic: arabic::Subset::default(),
+            error: None,
+        });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
     }
@@ -692,7 +845,13 @@ impl PdfDoc {
     }
 
     /// Serializes the document. A document without pages gets one blank Letter page.
-    pub fn finish(mut self) -> Vec<u8> {
+    /// Returns an error if Arabic text could not be rendered without losing characters.
+    pub fn finish(mut self) -> Result<Vec<u8>, Error> {
+        for page in &self.pages {
+            if let Some(error) = &page.error {
+                return Err(error.clone());
+            }
+        }
         if self.pages.is_empty() {
             self.add_page(612.0, 792.0);
         }
@@ -754,6 +913,8 @@ impl PdfDoc {
             while page.depth > 0 {
                 page.restore();
             }
+            let arabic_fonts = page.arabic.objects(&mut next, &mut objects);
+            let page_fonts = format!("{font_dict}{arabic_fonts}");
             let mut xobjects = String::new();
             for (k, img) in page.images.iter().enumerate() {
                 let img_id = next;
@@ -817,7 +978,7 @@ impl PdfDoc {
                     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /ProcSet [/PDF /Text /ImageB /ImageC] /Font << {}>>{} >> /Contents {} 0 R{} >>",
                     n(page.width),
                     n(page.height),
-                    font_dict,
+                    page_fonts,
                     xo,
                     content_id,
                     annots
@@ -874,7 +1035,7 @@ impl PdfDoc {
         }
         let _ = write!(x, "trailer\n<< /Size {} /Root 1 0 R /Info 3 0 R >>\nstartxref\n{}\n%%EOF\n", next, xref);
         out.extend_from_slice(x.as_bytes());
-        out
+        Ok(out)
     }
 }
 

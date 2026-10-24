@@ -350,6 +350,9 @@ impl CfCache {
 /// Adds the parts `lower` sets that `style` leaves unset (differential styles: default parts
 /// are unset).
 fn layer_under(style: &mut Style, lower: &Style) {
+    if style.align.reading_order.is_none() {
+        style.align.reading_order = lower.align.reading_order;
+    }
     if style.fill.pattern == PatternType::None {
         style.fill = lower.fill;
     }
@@ -398,6 +401,28 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn reading_order_respects_conditional_rule_priority_and_explicit_context() {
+        for (higher, expected) in [
+            (json!({"font": {"bold": true}}), "RightToLeft"),
+            (json!({"align": {"reading_order": "Context"}}), "Context"),
+            (json!({"align": {"reading_order": "LeftToRight"}}), "LeftToRight"),
+        ] {
+            let mut s = crate::Session::new();
+            s.new_workbook();
+            s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 123 ABC"})).unwrap();
+            for style in [json!({"align": {"reading_order": "RightToLeft"}}), higher] {
+                s.execute("home.conditionalFormat", json!({"range": "A1", "rule": {"type": "noBlanks", "style": style}})).unwrap();
+            }
+            let wb = &s.doc().unwrap().wb;
+            let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(wb).unwrap()).unwrap();
+            for wb in [wb, &reopened] {
+                let style = CfCache::new().look(wb, 0, CellRef::new(0, 0)).unwrap().style.unwrap();
+                assert_eq!(serde_json::to_value(style.align).unwrap()["reading_order"], expected);
+            }
+        }
+    }
 
     #[test]
     fn every_matching_rule_applies() {

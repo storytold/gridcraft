@@ -342,6 +342,14 @@ pub enum VAlign {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ReadingOrder {
+    #[default]
+    Context,
+    LeftToRight,
+    RightToLeft,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Alignment {
     pub h: HAlign,
     pub v: VAlign,
@@ -350,6 +358,9 @@ pub struct Alignment {
     pub indent: u8,
     /// Degrees -90..=90, or 255 for vertical stacked text.
     pub rotation: i16,
+    /// Unspecified inherits in differential styles and uses context for ordinary cells.
+    #[serde(default)]
+    pub reading_order: Option<ReadingOrder>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -478,6 +489,25 @@ static DEFAULT_STYLE: std::sync::LazyLock<Style> = std::sync::LazyLock::new(Styl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reading_order_defaults_for_older_json_and_distinguishes_styles() {
+        let align: Alignment = serde_json::from_str(r#"{"h":"General","v":"Bottom","wrap":false,"shrink":false,"indent":0,"rotation":0}"#).unwrap();
+        assert_eq!(align.reading_order, None);
+        let mut styles = StyleTable::default();
+        let context = styles.derive(StyleId::DEFAULT, |s| s.align.reading_order = Some(ReadingOrder::Context));
+        let ltr = styles.derive(StyleId::DEFAULT, |s| s.align.reading_order = Some(ReadingOrder::LeftToRight));
+        let rtl = styles.derive(StyleId::DEFAULT, |s| s.align.reading_order = Some(ReadingOrder::RightToLeft));
+        assert_ne!(ltr, rtl);
+        assert_ne!(context, StyleId::DEFAULT);
+        assert_ne!(context, ltr);
+        assert_ne!(context, rtl);
+        assert_ne!(ltr, StyleId::DEFAULT);
+        assert_ne!(rtl, StyleId::DEFAULT);
+        assert_eq!(styles.derive(ltr, |s| s.align.reading_order = Some(ReadingOrder::RightToLeft)), rtl);
+        assert_eq!(styles.derive(rtl, |s| s.align.reading_order = Some(ReadingOrder::Context)), context);
+        assert_eq!(styles.derive(context, |s| s.align.reading_order = None), StyleId::DEFAULT);
+    }
 
     #[test]
     fn interning() {
