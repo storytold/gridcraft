@@ -109,6 +109,54 @@ fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(123.0));
 }
 
+/// Where the title bar's icon button for `name` is. Its icon has no text, so it is found by
+/// hovering along the title bar until its tooltip ("Save (⌘S)") shows.
+fn title_bar_button(h: &mut egui_kittest::Harness<'static, SheetApp>, name: &str) -> egui::Pos2 {
+    let autosave = h.get_by_label("AutoSave").rect();
+    let tip = format!("{name} (");
+    let mut x = autosave.right();
+    while x < autosave.right() + 300.0 {
+        let at = egui::pos2(x, autosave.center().y);
+        h.hover_at(at);
+        h.run_steps(3);
+        if h.query_by_label_contains(&tip).is_some() {
+            return at;
+        }
+        x += 6.0;
+    }
+    panic!("no title bar button shows a {tip:?} tooltip");
+}
+
+#[test]
+fn the_title_bar_save_button_saves_the_cell_being_typed() {
+    // Regression test for #223: the title bar's Save button saved the file without the cell the
+    // user was still typing in.
+    let dir = std::env::temp_dir().join(format!("gridcraft-title-bar-save-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx").to_string_lossy().into_owned();
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.save", serde_json::json!({"path": &path})).unwrap();
+    h.run_steps(2);
+    h.input_mut().events.push(egui::Event::Text("123".into()));
+    h.run_steps(2);
+    assert!(h.state().editor.is_some());
+    let save = title_bar_button(&mut h, "Save");
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: save,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert!(h.state().editor.is_none(), "Save commits the cell draft");
+    let (wb, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(123.0), "the saved file has the typed value");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     let mut h = harness(Services::default());

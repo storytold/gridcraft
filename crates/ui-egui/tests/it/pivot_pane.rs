@@ -56,3 +56,47 @@ fn pivot_field_button_surfaces_follow_the_active_theme() {
         assert_eq!(field_button_fill(&shapes, "Region ▾"), expected, "dark mode: {dark}");
     }
 }
+
+fn flatten(shape: Shape, out: &mut Vec<Shape>) {
+    match shape {
+        Shape::Vec(shapes) => shapes.into_iter().for_each(|s| flatten(s, out)),
+        s => out.push(s),
+    }
+}
+
+#[test]
+fn the_field_list_scrollbar_sits_at_the_pane_edge() {
+    // Regression test for #1485: with enough source fields to scroll, the field list's scrollbar
+    // sat just right of the longest (short) field name instead of at the pane's right edge.
+    use egui_kittest::kittest::Queryable as _;
+    let names: Vec<String> = (1..=14).map(|i| format!("F{i}")).collect();
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range": "A1", "values": [names.clone(), (1..=14).collect::<Vec<i32>>()]})).unwrap();
+    session.execute("insert.pivotTable", json!({"source": "Sheet1!A1:N2", "destination": "Sheet1!A5", "rows": ["F1"], "values": ["F2"]})).unwrap();
+    session.execute("selection.set", json!({"cell": "A5"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        SheetApp::new(session, Default::default()),
+    );
+    h.run_steps(4);
+    let first = h.get_by_label("F1").rect();
+    // A floating scrollbar is drawn while the pointer is over its area.
+    h.get_by_label("F1").hover();
+    h.run_steps(3);
+    let mut shapes = Vec::new();
+    h.output().shapes.iter().for_each(|c| flatten(c.shape.clone(), &mut shapes));
+    let bar = shapes
+        .iter()
+        .filter_map(|s| match s {
+            Shape::Rect(r) if r.fill.a() > 0 && r.rect.width() <= 12.0 && r.rect.height() >= 20.0 && r.rect.left() > first.left() => Some(r.rect),
+            _ => None,
+        })
+        .max_by(|a, b| a.right().total_cmp(&b.right()))
+        .expect("the field list draws a scrollbar");
+    assert!(bar.right() > 1200.0 - 20.0, "the scrollbar {bar:?} sits at the pane's right edge, not beside the field names ({first:?})");
+}

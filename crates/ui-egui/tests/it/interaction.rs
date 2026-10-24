@@ -28,6 +28,30 @@ fn blank() -> Session {
 }
 
 #[test]
+fn the_formulas_ribbon_keeps_watch_window_inside_the_ribbon() {
+    // Regression test for #360 (#342): Watch Window was a fourth small button in a column of
+    // three, so it hung below the ribbon and was cut off.
+    fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| texts(s, out)),
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.galley.rect.translate(t.pos.to_vec2()))),
+            _ => {}
+        }
+    }
+    let mut h = harness(blank());
+    h.state_mut().ui.ribbon_tab = "Formulas".into();
+    h.run_steps(3);
+    // Ribbon button labels are painted text: find them among the frame's shapes.
+    let mut painted = Vec::new();
+    h.output().shapes.iter().for_each(|c| texts(&c.shape, &mut painted));
+    let bottom_of = |word: &str| painted.iter().filter(|(s, _)| s.contains(word)).map(|(_, r)| r.bottom()).fold(f32::NEG_INFINITY, f32::max);
+    // "Calculation Options" is a big button whose second line sits at the foot of the ribbon.
+    let (watch, foot) = (bottom_of("Window"), bottom_of("Options"));
+    assert!(watch.is_finite() && foot.is_finite(), "the Formulas ribbon paints Watch Window and Calculation Options");
+    assert!(watch <= foot + 0.5, "Watch Window's label ends at y={watch}, below the ribbon's last label row (y={foot})");
+}
+
+#[test]
 fn vertical_scrollbar_pages_and_drags_without_changing_selection() {
     let mut h = harness(blank());
     let grid = h.state().grid.rect.unwrap();
