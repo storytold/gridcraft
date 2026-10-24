@@ -100,6 +100,14 @@ pub enum Drag {
         orig: (CellRef, f32, f32, f32, f32),
         resize: bool,
     },
+    /// Dragging a coloured reference of the formula being edited: by its border (moves it, `anchor`
+    /// is `None`) or a corner (resizes it around the opposite corner). `span` tracks its text.
+    Ref {
+        span: (usize, usize),
+        grab: CellRef,
+        orig: RangeRef,
+        anchor: Option<CellRef>,
+    },
 }
 
 /// The fill a left-drag of the handle just made, which the Auto Fill Options button can redo
@@ -2007,7 +2015,8 @@ fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: 
             Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
             Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
             Drag::Freeze { cols, .. } => Some(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
-            Drag::Object { resize: true, .. } => Some(CursorIcon::ResizeNwSe),
+            Drag::Object { resize: true, .. } | Drag::Ref { anchor: Some(_), .. } => Some(CursorIcon::ResizeNwSe),
+            Drag::Ref { anchor: None, .. } => Some(CursorIcon::Move),
         };
         if let Some(cursor) = cursor {
             ctx.set_cursor_icon(cursor);
@@ -2050,6 +2059,8 @@ fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: 
             Some(at) if hidden => paint_split_cursor(ctx, at, near_col_edge),
             _ => ctx.set_cursor_icon(if near_col_edge { CursorIcon::ResizeColumn } else { CursorIcon::ResizeRow }),
         }
+    } else if let Some(Drag::Ref { anchor, .. }) = in_cells.then(|| ref_hit(app, geo, sh, p)).flatten() {
+        ctx.set_cursor_icon(if anchor.is_some() { CursorIcon::ResizeNwSe } else { CursorIcon::Move });
     } else if on_handle && app.editor.is_none() {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         if app.grid.drag == Drag::None && !pointer.any_down() {
@@ -2336,6 +2347,14 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             app.grid.filter_menu = Some((c.col, c.row, geo.mirror_pos(p)));
             return;
         }
+        // Dragging a coloured reference moves it, or resizes it by a corner; a plain click inside
+        // one still commits the edit.
+        if resp.drag_started_by(egui::PointerButton::Primary)
+            && let Some(drag) = ref_hit(app, geo, sh, p)
+        {
+            app.grid.drag = drag;
+            return;
+        }
         // A dialog's formula box in point mode (New Formatting Rule) takes the reference; the
         // selection, which the dialog acts on, stays.
         if let Some(d) = app.dialog.as_mut().filter(|d| d.picks_references()) {
@@ -2555,6 +2574,20 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 let dr = pc.row as i64 - grab.row as i64;
                 let dc = pc.col as i64 - grab.col as i64;
                 app.grid.drag = Drag::Move { grab, to: Some(src.start.offset_clamped(dr, dc)) };
+                scroll_by(app, auto);
+            }
+            Drag::Ref { span, grab, orig, anchor } => {
+                let (dr, dc) = (pc.row as i64 - grab.row as i64, pc.col as i64 - grab.col as i64);
+                // Moving keeps the size, so it stops at the sheet's edge.
+                let to = match anchor {
+                    Some(a) => Some(RangeRef::new(a, pc)),
+                    None => orig.start.offset(dr, dc).zip(orig.end.offset(dr, dc)).map(|(s, e)| RangeRef::new(s, e)),
+                };
+                if let Some(to) = to
+                    && let Some(span) = app.editor.as_mut().and_then(|ed| ed.replace_ref(span, to))
+                {
+                    app.grid.drag = Drag::Ref { span, grab, orig, anchor };
+                }
                 scroll_by(app, auto);
             }
             Drag::Object { kind, id, start, orig, resize } => {
@@ -2795,6 +2828,31 @@ fn fill_target(src: RangeRef, pc: CellRef) -> RangeRef {
     } else {
         RangeRef::new(CellRef::new(src.start.row, pc.col), src.end)
     }
+}
+
+/// The coloured reference (of the formula being edited) under `p`: its span, range and, on a
+/// corner, the opposite corner to resize around. Its border always grabs it; its inside only
+/// outside point mode, where a drag inside a cell points a new range instead. Whole rows and
+/// columns aren't draggable.
+fn ref_hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<Drag> {
+    let ed = app.editor.as_ref().filter(|ed| ed.is_formula())?;
+    let inside = !ed.can_point();
+    let origin = app.session.active().and_then(|d| d.wb.sheet(ed.sheet)).map_or(sh.name.as_str(), |o| o.name.as_str());
+    let grab = geo.cell_at(sh, p);
+    crate::editor::formula_refs(&ed.text).into_iter().find_map(|(start, end, r, sheet, _)| {
+        if !crate::editor::ref_is_on_sheet(sheet.as_deref(), origin, &sh.name) || r.is_full_rows() || r.is_full_cols() {
+            return None;
+        }
+        let rr = geo.range_rect(sh, r);
+        let corners = [
+            (rr.left_top(), r.end),
+            (rr.right_top(), CellRef::new(r.end.row, r.start.col)),
+            (rr.left_bottom(), CellRef::new(r.start.row, r.end.col)),
+            (rr.right_bottom(), r.start),
+        ];
+        let anchor = corners.iter().find(|(corner, _)| (p - *corner).length() < 5.0).map(|&(_, opposite)| opposite);
+        (anchor.is_some() || on_border(rr, p) || (inside && rr.contains(p))).then_some(Drag::Ref { span: (start, end), grab, orig: r, anchor })
+    })
 }
 
 fn on_border(r: Rect, p: Pos2) -> bool {

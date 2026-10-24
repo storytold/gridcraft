@@ -24,6 +24,7 @@ mod dialog_confirm;
 mod dialog_focus;
 mod dialog_move;
 mod drag_cursor;
+mod drag_formula_refs;
 mod file_menu;
 mod fill_handle_double_click;
 mod fill_handle_right_drag;
