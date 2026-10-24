@@ -71,6 +71,8 @@ fn push_dynamic(st: &mut RowState, range: RangeRef) {
     st.dynamic.push(range);
 }
 
+/// Characters of a header or footer (Excel's own limit).
+const MAX_HF_CHARS: usize = 255;
 const MAX_HYPERLINK_CELLS: u64 = 10_000;
 /// Target and tooltip bytes kept for hyperlinks of one sheet, over all cells: the same URL is
 /// copied for every cell of its range, so length × cells must stay bounded whatever the file.
@@ -200,8 +202,16 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                     ("firstHeader", &mut pr.first_header),
                     ("firstFooter", &mut pr.first_footer),
                 ] {
-                    // Excel caps each at 255 characters; a hostile file can't make them huge.
-                    *slot = e.child(tag).map(|h| h.text.chars().take(255).collect()).unwrap_or_default();
+                    // Excel caps each at 255 characters; a hostile file can't make them huge. Line
+                    // breaks other than LF come escaped (`_x000D_`). A character takes at most 14
+                    // escaped ones (a surrogate pair), so only that much of the text is decoded.
+                    *slot = e
+                        .child(tag)
+                        .map(|h| {
+                            let raw: String = h.text.chars().take(MAX_HF_CHARS * 14).collect();
+                            xml::decode_xstring(&raw).chars().take(MAX_HF_CHARS).collect()
+                        })
+                        .unwrap_or_default();
                 }
                 pr.different_first = e.flag("differentFirst", false);
                 pr.different_odd_even = e.flag("differentOddEven", false);

@@ -274,6 +274,18 @@ fn strict_namespace_and_shared_strings() {
     assert!(rep.warnings.iter().any(|w| w.contains("shared strings")));
 }
 
+/// A header or footer keeps Excel's 255 characters, decoded from no more of the text than they
+/// need, however long the file makes it.
+#[test]
+fn a_long_escaped_footer_is_cut_at_255_characters() {
+    let long = "_x0041_".repeat(100_000);
+    let body = format!(
+        r#"<sheetData/><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><headerFooter><oddFooter>{long}</oddFooter></headerFooter>"#
+    );
+    let (wb, _) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().print.footer, "A".repeat(255));
+}
+
 #[test]
 fn hyperlinks_comments_tables_validation_filters() {
     let body = r#"<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>H</t></is></c></row></sheetData>
@@ -282,7 +294,7 @@ fn hyperlinks_comments_tables_validation_filters() {
         <dataValidation type="whole" operator="between" errorStyle="warning" showDropDown="1" sqref="C1" prompt="p" promptTitle="pt" error="e" errorTitle="et"><formula1>1</formula1><formula2>10</formula2></dataValidation></dataValidations>
       <hyperlinks><hyperlink ref="A1" r:id="rId1" tooltip="tip"/><hyperlink ref="A2" location="Data!B2"/></hyperlinks>
       <printOptions gridLines="1" horizontalCentered="1"/><pageMargins left="0.5" right="0.5" top="1" bottom="1" header="0.4" footer="0.4"/>
-      <headerFooter><oddHeader>&amp;CTitle</oddHeader><oddFooter>Page &amp;P</oddFooter></headerFooter>
+      <headerFooter><oddHeader>&amp;CTitle</oddHeader><oddFooter>Page &amp;P_x000D_</oddFooter></headerFooter>
       <rowBreaks count="1"><brk id="10" max="16383" man="1"/></rowBreaks>
       <sheetProtection sheet="1" formatCells="0" sort="0" password="CBEB"/>
       <tableParts count="1"><tablePart r:id="rId2"/></tableParts>
@@ -328,6 +340,10 @@ Check this</t></r></text></comment></commentList></comments>"#;
     assert!(s.print.gridlines && s.print.center_h);
     assert_eq!(s.print.margins, [0.5, 0.5, 1.0, 1.0, 0.4, 0.4]);
     assert_eq!(s.print.header, "&CTitle");
+    // A carriage return comes escaped, and goes back the same way.
+    assert_eq!(s.print.footer, "Page &P\r");
+    let saved = crate::write_xlsx(&wb).unwrap();
+    assert_eq!(read_xlsx(&saved).unwrap().0.sheet(0).unwrap().print.footer, "Page &P\r");
     assert_eq!(s.print.row_breaks, vec![10]);
     let p = s.protection.as_ref().unwrap();
     assert!(p.format_cells && p.sort && !p.insert_rows && p.select_locked);

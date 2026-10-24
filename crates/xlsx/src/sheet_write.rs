@@ -499,7 +499,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             ("firstFooter", &p.first_footer),
         ] {
             if !text.is_empty() {
-                let _ = write!(s, "<{tag}>{}</{tag}>", esc(text));
+                let _ = write!(s, "<{tag}>{}</{tag}>", esc(&encode_xstring(text)));
             }
         }
         s.push_str("</headerFooter>");
