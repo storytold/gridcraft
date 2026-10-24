@@ -1136,6 +1136,8 @@ const EXACT_TEXT_WIDTHS: usize = 2_000;
 fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, lines) = line_targets(s, p, false)?;
     let measure = s.text_width.clone();
+    // The text as the front end shows it, in its region's separators and dates.
+    let loc = s.display_locale;
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(si) else { return Ok(Json::Null) };
         let mut widths = Vec::new();
@@ -1153,7 +1155,7 @@ fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
                     }
                     let id = sh.style_id(cell);
                     let st = cx.wb.styles.get(id);
-                    let text = crate::display::cell_text(&cx.wb, sh, cell);
+                    let text = crate::display::cell_text_in(&cx.wb, sh, cell, &loc);
                     for line in text.lines() {
                         let w = match &measure {
                             Some(m) => {
@@ -1288,6 +1290,21 @@ mod tests {
         // The style's own snake_case keys keep working.
         s.execute("home.formatCells", json!({"range": "A1", "style": {"num_fmt": "0.00"}})).unwrap();
         assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["num_fmt"], "0.00");
+    }
+
+    #[test]
+    fn autofit_measures_the_text_in_the_display_region() {
+        let width = |tag: &str| {
+            let mut s = Session::new();
+            s.display_locale = gridcraft_numfmt::Locale::from_tag(tag);
+            s.new_workbook();
+            s.execute("range.setValues", json!({"range": "A1", "values": [[45292]]})).unwrap();
+            s.execute("home.numberFormat", json!({"range": "A1", "format": "m/d/yyyy"})).unwrap();
+            s.execute("home.autofitColumnWidth", json!({"cols": "A:A"})).unwrap();
+            s.active().unwrap().wb.active().unwrap().col_width(0)
+        };
+        // 01.01.2024 is wider than 1/1/2024.
+        assert!(width("de-CH") > width("en-US"));
     }
 
     #[test]

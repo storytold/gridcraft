@@ -5,6 +5,7 @@
 
 mod builtin;
 mod decimal;
+mod locale;
 mod parse;
 mod render;
 
@@ -14,6 +15,7 @@ use gridcraft_core::{CellError, DateSystem, Value};
 
 pub use builtin::{builtin_format, builtin_id};
 pub use decimal::format_general_fit;
+pub use locale::Locale;
 
 use parse::{SecKind, Section, Tok};
 use render::Out;
@@ -275,8 +277,12 @@ impl NumberFormat {
 
     /// Formats a number. The flag is true when the value cannot be shown (date out of range).
     fn format_number(&self, n: f64, sys: DateSystem) -> (Formatted, bool) {
+        self.format_number_in(n, sys, &Locale::EN_US)
+    }
+
+    fn format_number_in(&self, n: f64, sys: DateSystem, loc: &Locale) -> (Formatted, bool) {
         let general = |n: f64| Formatted {
-            text: format_general_fit(n, GENERAL_WIDTH).unwrap_or_else(|| OVERFLOW.into()),
+            text: localize_general(format_general_fit(n, GENERAL_WIDTH).unwrap_or_else(|| OVERFLOW.into()), loc),
             color: None,
             fill: None,
             numeric: true,
@@ -287,10 +293,10 @@ impl NumberFormat {
         let Some((sec, drop_sign)) = self.select(n) else { return (general(n), false) };
         let minus = n < 0.0 && !drop_sign;
         let out: Option<Out> = match sec.kind {
-            SecKind::Text => Some(render::render_text(sec, &format_general_fit(n, GENERAL_WIDTH).unwrap_or_default())),
+            SecKind::Text => Some(render::render_text(sec, &localize_general(format_general_fit(n, GENERAL_WIDTH).unwrap_or_default(), loc))),
             SecKind::General => {
                 let width = if minus { GENERAL_WIDTH - 1 } else { GENERAL_WIDTH };
-                Some(render::render_general(sec, n.abs(), width))
+                Some(render::render_general(sec, n.abs(), width, loc))
             }
             SecKind::Date => {
                 if minus {
@@ -299,7 +305,7 @@ impl NumberFormat {
                     render::render_date(sec, n.abs(), sys)
                 }
             }
-            SecKind::Number => Some(render::render_number(sec, n.abs())),
+            SecKind::Number => Some(render::render_number(sec, n.abs(), loc)),
         };
         let Some(mut out) = out else {
             return (Formatted { text: OVERFLOW.into(), color: sec.color, fill: None, numeric: true }, true);
@@ -322,18 +328,33 @@ impl NumberFormat {
     }
 }
 
+/// A General number in a region's decimal separator (General never groups digits).
+pub fn localize_general(text: String, loc: &Locale) -> String {
+    if loc.decimal == '.' { text } else { text.replace('.', &loc.decimal.to_string()) }
+}
+
 /// Formats a cell value for display.
 pub fn format_value(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted {
+    format_value_in(v, fmt, sys, &Locale::EN_US)
+}
+
+/// Formats a cell value for display in a region's conventions: its separators for a format's `.`
+/// and `,`, and its short date for the built-in short date format.
+pub fn format_value_in(v: &Value, fmt: &NumberFormat, sys: DateSystem, loc: &Locale) -> Formatted {
+    if let Some(code) = loc.display_code(fmt.code()) {
+        // A region's short date is never `m/d/yyyy` itself, so this doesn't come back here.
+        return format_value_in(v, &NumberFormat::parse_cached(&code), sys, loc);
+    }
     match v {
         Value::Empty => Formatted::default(),
         Value::Number(n) if !n.is_finite() => Formatted { text: CellError::Num.as_str().into(), ..Formatted::default() },
-        Value::Number(n) => fmt.format_number(*n, sys).0,
+        Value::Number(n) => fmt.format_number_in(*n, sys, loc).0,
         Value::Text(t) => fmt.format_text(t),
         Value::Bool(b) => Formatted { text: if *b { "TRUE" } else { "FALSE" }.into(), ..Formatted::default() },
         Value::Error(e) => Formatted { text: e.as_str().into(), ..Formatted::default() },
         Value::Array(a) => match a.data.first() {
             Some(Value::Array(_)) | None => Formatted::default(),
-            Some(first) => format_value(first, fmt, sys),
+            Some(first) => format_value_in(first, fmt, sys, loc),
         },
     }
 }

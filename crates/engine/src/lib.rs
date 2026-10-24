@@ -433,6 +433,9 @@ pub struct Session {
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
+    /// The region a front end shows numbers and dates in (`numfmt::Locale`): the grid draws cells
+    /// with it and AutoFit measures the text as shown. Commands, files and agents stay en-US.
+    pub display_locale: gridcraft_numfmt::Locale,
 }
 
 impl Session {

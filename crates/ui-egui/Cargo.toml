@@ -34,6 +34,10 @@ gridcraft-xlsx = { workspace = true, features = ["test-support"] }
 # The desktop's preferred language for the first-run interface language.
 sys-locale = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# The Region setting (NSLocale.currentLocale), for the grid's number and date formats.
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSLocale", "NSString"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Read the browser's preferred language for the first-run web interface language.
 web-sys = { version = "0.3", features = ["Window", "Navigator"] }

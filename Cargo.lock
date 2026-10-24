@@ -1655,6 +1655,7 @@ dependencies = [
  "gridcraft-xlsx",
  "image",
  "log",
+ "objc2-foundation 0.3.2",
  "serde",
  "serde_json",
  "skrifa",

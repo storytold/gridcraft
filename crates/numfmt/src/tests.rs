@@ -889,3 +889,41 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(f("0\\[0", 5.0), "0[5");
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
 }
+
+#[test]
+fn regional_display_formats() {
+    let f = |v: f64, code: &str, tag: &str| {
+        format_value_in(&Value::Number(v), &NumberFormat::parse(code), DateSystem::D1900, &Locale::from_tag(tag)).text
+    };
+    // Swiss German: apostrophe groups, point decimals, dd.mm.yyyy for the built-in short date.
+    assert_eq!(f(1169.0, "#,##0.00", "de-CH"), "1'169.00");
+    assert_eq!(f(45292.0, "m/d/yyyy", "de_CH.UTF-8"), "01.01.2024");
+    assert_eq!(f(45292.5, "m/d/yyyy h:mm", "de-CH"), "01.01.2024 12:00");
+    // Accounting format with a literal and a fill: only the number's separators change.
+    let acct = r#"_-* #,##0.00\ "CHF"_-;\-* #,##0.00\ "CHF"_-;_-* "-"??\ "CHF"_-;_-@_-"#;
+    assert_eq!(f(2509.0, acct, "de-CH").trim(), "2'509.00 CHF");
+    // Germany: comma decimals, point groups; a quoted "." stays a point.
+    assert_eq!(f(1234.5, "#,##0.00", "de-DE"), "1.234,50");
+    assert_eq!(f(1.5, r#"0.00" Fr."#, "de-DE"), "1,50 Fr.");
+    assert_eq!(f(0.5, "General", "de-DE"), "0,5");
+    // A number in a text section is shown as General is, regional decimal included; the
+    // section's own "." stays a point.
+    assert_eq!(f(1.5, r#"@" Nr.";0"#, "de-DE"), "1,5 Nr.");
+    assert_eq!(f(1234567.0, "0.00E+00", "de-DE"), "1,23E+06");
+    assert_eq!(f(1234.75, "#,##0 ?/?", "de-DE"), "1.234 3/4");
+    // France groups with a narrow no-break space.
+    assert_eq!(f(1234567.891, "#,##0.00", "fr-FR"), "1\u{202F}234\u{202F}567,89");
+    // A custom date code is shown as written; en-US and unknown regions are unchanged.
+    assert_eq!(f(45292.0, "dd/mm/yyyy", "de-CH"), "01/01/2024");
+    assert_eq!(f(45292.0, "m/d/yyyy", "en-US"), "1/1/2024");
+    assert_eq!(f(1234.5, "#,##0.00", "xx-YY"), "1,234.50");
+    assert_eq!(Locale::from_tag(""), Locale::EN_US);
+    // The region decides: English with Swiss formats, as macOS reports it.
+    assert_eq!(Locale::from_tag("en_CH"), Locale::from_tag("de-CH"));
+    assert_eq!(Locale::from_tag("en-CH").group, '\'');
+    assert_eq!(Locale::from_tag("de").decimal, ',');
+    assert_eq!(Locale::from_tag("en-AU"), Locale::EN_US);
+    assert_eq!(Locale::from_tag("zh-Hans-CN").short_date, "yyyy/m/d");
+    // format_value is en-US whatever the region.
+    assert_eq!(format_value(&Value::Number(1234.5), &NumberFormat::parse("#,##0.00"), DateSystem::D1900).text, "1,234.50");
+}
