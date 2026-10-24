@@ -125,7 +125,7 @@ fn workbook() -> Workbook {
         source: "SalesTbl".into(),
         anchor: at("K4"),
         rows: vec![
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Years, sort: PivotSort::None, collapsed_items: vec!["2024".into()] },
+            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Years, sort: PivotSort::Asc, collapsed_items: vec!["2024".into()] },
             PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, sort: PivotSort::Asc, collapsed_items: vec![] },
         ],
         columns: vec![PivotField { sort: PivotSort::Desc, ..field("Product") }],
@@ -723,4 +723,32 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     let t = &one["xl/pivotTables/pivotTable1.xml"];
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
+}
+
+/// #1447: Excel applies `sortType` to a date group's labels as text, so a date group is written
+/// without it and read back ascending.
+#[test]
+fn date_groups_are_written_without_sort_type() {
+    let d = vec![Value::number(date(2023, 1, 15)), Value::number(date(2023, 2, 1)), Value::number(date(2023, 8, 1))];
+    let sales: Vec<Value> = (0..d.len()).map(|i| Value::number(i as f64 + 1.0)).collect();
+    let parts = small_pivot(&[("Date", d), ("Sales", sales)], |p| {
+        p.rows = vec![PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Days, sort: PivotSort::Asc, ..PivotField::default() }];
+        p.values = vec![PivotValue { source_col: "Sales".into(), name: "Sum of Sales".into(), ..PivotValue::default() }];
+    });
+    assert!(!parts["xl/pivotTables/pivotTable1.xml"].contains("sortType="));
+}
+
+/// A date group in source order is written as `sortType="manual"` and read back in source order.
+#[test]
+fn date_group_in_source_order_round_trips_as_manual() {
+    let mut wb = workbook();
+    let pivot = wb.sheet_mut(1).unwrap().pivots.get_mut(1).unwrap();
+    assert_ne!(pivot.rows[0].date_group, PivotDateGroup::None);
+    pivot.rows[0].sort = PivotSort::None;
+    let bytes = write_xlsx(&wb).unwrap();
+    let t2 = String::from_utf8(unzip(&bytes).get("xl/pivotTables/pivotTable2.xml").unwrap().clone()).unwrap();
+    assert!(t2.contains("sortType=\"manual\""), "{t2}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheet(1).unwrap().pivots[1].rows[0].sort, PivotSort::None);
+    assert_eq!(back.sheet(1).unwrap().pivots[1].rows[1].sort, PivotSort::Asc, "the Months group keeps its default");
 }
