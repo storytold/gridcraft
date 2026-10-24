@@ -72,6 +72,10 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
   `allow-same-origin` there's no storage. Without `allow-downloads`, Save and Export (browser
   downloads) are blocked.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
+- **Window chrome:** `?chrome=none` on the iframe `src` leaves out the title bar and the File tab
+  (whose Backstage view then never opens); `?chrome=notitlebar` or `?chrome=nofiletab` leave out just
+  one. Use them when the host window already shows the file name and owns the files, so the sheet's
+  own Open or Save As cannot replace what the host thinks is open. Everything stays on by default.
 
 ## Renderer selection
 
