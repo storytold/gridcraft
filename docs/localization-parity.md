@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (Arabic glyph fallback for native and web fonts; missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -41,13 +41,22 @@ right-to-left sheets and full complex-script support. Part of
   separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
   localized function names and `;` separators (#45). German with localized numbers and formulas
   is in PR #163 (open).
+- **Arabic font coverage.** Native discovery includes Noto Sans Arabic, Noto Naskh Arabic and
+  platform Arabic faces. On Linux and BSD the face fontconfig prefers for Arabic (`fc-match
+  :lang=ar`, such as a Vazirmatn the user chose) leads every chain, ahead of the bundled face
+  (#229). Every cell style and installed workbook family inherits script fallback.
+  Builds with `CRAFT_FONTS_DIR` embed the bundle's Arabic faces for native and WASM, with checksum
+  and glyph validation; builds without it rely on system fonts. This covers missing glyphs only;
+  Arabic shaped output, bidi and editing correctness are unverified. The shared
+  Arabic fallback uses its regular face for all styles; Arabic weight/slant fidelity remains open.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
   Noto CJK and WenQuanYi faces can render Chinese without a broad filesystem grant. This does
   not change the installed-font catalogue or add bundled fonts. Lao falls back to Lao Sangam MN / Lao MN (macOS),
-  Leelawadee UI / DokChampa (Windows) or Noto Sans Lao / Phetsarath OT (Linux). There is no complex-text shaping: Arabic and
-  Devanagari don't join or reorder, and there is no bidirectional layout. **Sheet Right-to-Left**
+  Leelawadee UI / DokChampa (Windows) or Noto Sans Lao / Phetsarath OT (Linux). egui 0.36.2 shapes text with harfrust; Arabic and
+  Devanagari output is unverified, and complete bidirectional layout and editing remain missing.
+  **Sheet Right-to-Left**
   (`view.rightToLeft`, Page Layout › Sheet Options, XLSX `rightToLeft`, `.xls` WINDOW2 fRightToLeft) mirrors the grid (#146):
   column A and the row headers on the right, the vertical scrollbar on the left; hit-testing,
   arrow keys, editor, popups and floating objects follow; text stays left-to-right inside its box
@@ -71,8 +80,8 @@ separators, number/date formats, machine translation with agent review, and scri
 | English | en | ~2,200 / ~2,200 (100%, source) | yes | Latin: yes | yes | full | — |
 | Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
 | Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
-| Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
-| Arabic | ar | 0 (0%) | no | **no shaping, no RTL UI**; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
+| Hindi | hi | 0 (0%) | no | Devanagari: shaped by egui (harfrust), output **unverified** | no | none | 12–18 h |
+| Arabic | ar | 0 (0%) | no | shaped by egui (harfrust), output **unverified**; **no RTL UI**; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
 | French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
 | Portuguese | pt-BR | 943 (~43%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
@@ -102,14 +111,16 @@ language (none so far) and of localized function names.
 2. Locale-aware formulas: localized function-name tables and separators at the formula-bar
    boundary only (files keep en-US invariant names), locale number and date formats, list
    separators in CSV.
-3. Text shaping and fallback: a shaping engine for grid, editor and PDF text (Arabic, Devanagari,
-   Thai), system font fallback for CJK, bidirectional runs, right-to-left sheet tabs and printing;
+3. Text shaping and fallback: verify egui's shaped output in the grid and editor, a shaping engine
+   for PDF text (Arabic, Devanagari, Thai), system font fallback for CJK, bidirectional runs,
+   right-to-left sheet tabs and printing;
    embedded subset fonts in PDF.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Arabic system-font discovery, script fallback for installed workbook fonts, fontconfig's Arabic choice (#229) ahead of the bundled face, and optional native/WASM Arabic font embedding with checksum validation; shaping status reads the same throughout (egui shapes with harfrust, Arabic and Devanagari output unverified) |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |

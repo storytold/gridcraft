@@ -1,9 +1,9 @@
 //! Design tokens and fonts.
 //!
 //! Colours are our own, tuned to read like a modern desktop spreadsheet. Fonts come from the
-//! operating system at runtime (nothing bundled): the UI uses the platform UI font, cells use the
+//! operating system at runtime: the UI uses the platform UI font, cells use the
 //! best available match for the workbook font (Calibri/Carlito/Aptos/Arial…) with egui's built-in
-//! fonts as the last resort.
+//! fonts as the last resort. Optional craft-fonts builds embed Arabic fallback for native and WASM.
 
 use std::sync::Arc;
 
@@ -266,7 +266,7 @@ fn font_file(path: &str, index: u32) -> Option<&'static [u8]> {
     if let Some(&bytes) = files.get(path) {
         return font_parses(bytes, index).then_some(bytes);
     }
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::fonts::read_font(std::path::Path::new(path))?;
     if !font_parses(&bytes, index) {
         log::warn!("skipping font {path} (face {index}): not a font file egui can read");
         return None;
@@ -455,13 +455,26 @@ pub fn font_definitions_for_language(language: crate::i18n::Language) -> FontDef
 /// installed, so cells set in them render with them; the rest fall back to the roles. The bound
 /// families are recorded in [`crate::fonts`] so [`cell_family`] only names a family egui has.
 pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -> FontDefinitions {
+    let installed = crate::fonts::installed_among(used).into_iter().map(|family| {
+        let faces = crate::fonts::faces_of(&family);
+        (family, faces)
+    });
+    font_definitions_with_faces(language, installed)
+}
+
+fn font_definitions_with_faces(
+    language: crate::i18n::Language,
+    installed: impl IntoIterator<Item = (String, Vec<crate::fonts::Face>)>,
+) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let base_prop: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let base_mono: Vec<String> = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
     let mut bound: Vec<String> = Vec::new();
     // The non-Latin fallback faces have to sit at the end of each chain: a Latin font owns Latin,
     // and epaint picks the first face that has the glyph, so they only catch their own scripts.
-    let fallback = load_fallback(&mut fonts, HanOrder::of(language));
+    let mut fallback = load_preferred_arabic(&mut fonts);
+    fallback.extend(load_bundled_arabic(&mut fonts));
+    fallback.extend(load_fallback(&mut fonts, HanOrder::of(language)));
     for role in [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO] {
         let paths = candidates(role);
         let refs: Vec<(&str, u32)> = paths.iter().map(|(p, i)| (p.as_str(), *i)).collect();
@@ -486,10 +499,6 @@ pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -
         fonts.families.insert(FontFamily::Name(role.into()), chain);
         bound.push(role.to_string());
     }
-    // Installed workbook fonts, so a cell's chosen font actually renders in it.
-    for family in crate::fonts::installed_among(used) {
-        bound.extend(crate::fonts::bind_family(&mut fonts, &family));
-    }
     // Interface text (formula bar, name box, dialogs) falls back to the cell font before the
     // script faces: whatever a cell can draw, the formula bar can draw too, even where no script
     // fallback face was found (#349: macOS UI font without Hebrew, cells in Arial with it).
@@ -505,14 +514,32 @@ pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -
         }
     }
     // Default proportional text in widgets uses the UI font.
-    if let Some(ui) = fonts.families.get(&FontFamily::Name(UI.into())).cloned() {
-        fonts.families.insert(FontFamily::Proportional, ui);
+    for (family, role) in [(FontFamily::Proportional, UI), (FontFamily::Monospace, MONO)] {
+        if let Some(chain) = fonts.families.get(&FontFamily::Name(role.into())).cloned() {
+            fonts.families.insert(family, chain);
+        }
+    }
+    // Bind workbook fonts after the proportional chain includes every script fallback.
+    for (family, faces) in installed {
+        bound.extend(crate::fonts::bind_faces(&mut fonts, &family, &faces));
     }
     drop_unparseable_fonts(&mut fonts);
     // Only families egui still has data for count as bound (a dropped face can empty a chain).
     bound.retain(|f| fonts.families.get(&FontFamily::Name(f.as_str().into())).is_some_and(|c| !c.is_empty()));
     crate::fonts::set_bound(bound);
     fonts
+}
+
+/// Shared by native and WASM builds: the approved bundle is an optional build input.
+fn load_bundled_arabic(fonts: &mut FontDefinitions) -> Vec<String> {
+    let mut keys = Vec::new();
+    for &(key, bytes) in crate::fonts::ARABIC_FONTS {
+        if font_parses(bytes, 0) {
+            fonts.font_data.insert(key.to_owned(), Arc::new(FontData::from_static(bytes)));
+            keys.push(key.to_owned());
+        }
+    }
+    keys
 }
 
 /// Loads the system non-Latin fallback faces (one file per script family) and returns their keys so
@@ -523,12 +550,16 @@ pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -
 #[cfg(not(target_arch = "wasm32"))]
 fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder) -> Vec<String> {
     let mut keys = Vec::new();
+    let preferred_arabic = fontconfig_arabic().map(|(path, _)| path);
     // Files already loaded as a fallback face. A file serves at most one key: the region-merged
     // Noto Sans CJK .ttc found for Han also carries Hangul (and Tahoma carries both Thai and
     // Hebrew), so loading it again for a later script would only duplicate tens of MB in memory.
     let mut loaded: Vec<String> = Vec::new();
     for (key, cands) in fallback_faces(han) {
         for (path, index) in &cands {
+            if preferred_arabic.as_ref() == Some(path) {
+                continue;
+            }
             if loaded.contains(path) {
                 break; // a face loaded for an earlier script already covers this one
             }
@@ -547,6 +578,22 @@ fn load_fallback(fonts: &mut FontDefinitions, han: HanOrder) -> Vec<String> {
 fn load_fallback(_fonts: &mut FontDefinitions, _han: HanOrder) -> Vec<String> {
     Vec::new()
 }
+
+/// The user's fontconfig Arabic choice leads every chain, ahead of the bundled face (#229).
+#[cfg(not(target_arch = "wasm32"))]
+fn load_preferred_arabic(fonts: &mut FontDefinitions) -> Vec<String> {
+    let Some((path, index)) = fontconfig_arabic() else { return Vec::new() };
+    let Some(fd) = try_load(&[(path.as_str(), index)]) else { return Vec::new() };
+    fonts.font_data.insert(PREFERRED_ARABIC.into(), Arc::new(fd));
+    vec![PREFERRED_ARABIC.into()]
+}
+
+#[cfg(target_arch = "wasm32")]
+fn load_preferred_arabic(_fonts: &mut FontDefinitions) -> Vec<String> {
+    Vec::new()
+}
+
+const PREFERRED_ARABIC: &str = "sys-arabic-preferred";
 
 /// Every fallback face we look for, in chain order: `(key, candidate files)`. One file per script
 /// family is enough — epaint picks the first face with the glyph, and a script's glyphs live in one
@@ -567,6 +614,7 @@ fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u32)>)> {
         ("sys-thai", thai()),
         ("sys-lao", lao()),
         ("sys-hebrew", hebrew()),
+        ("sys-arabic", arabic()),
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
     ]
@@ -745,6 +793,73 @@ fn hebrew() -> Vec<(String, u32)> {
     }
     v.push(("/usr/share/fonts/google-noto-vf/NotoSansHebrew[wght].ttf".into(), 0));
     v
+}
+
+/// Arabic-specific faces, including the flat and distribution-specific Noto layouts.
+#[cfg(not(target_arch = "wasm32"))]
+fn arabic() -> Vec<(String, u32)> {
+    let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
+    let mut paths = Vec::new();
+    for dir in [
+        "/usr/share/fonts/truetype/noto",
+        "/usr/share/fonts/opentype/noto",
+        "/usr/share/fonts/noto",
+        "/usr/share/fonts/google-noto",
+        "/usr/share/fonts/google-noto-sans-arabic-fonts",
+        "/usr/share/fonts/TTF",
+        "/usr/local/share/fonts",
+        "/usr/local/share/fonts/noto",
+        "/usr/share/fonts/chromeos/noto",
+    ] {
+        for name in ["NotoSansArabic-Regular.ttf", "NotoSansArabic.ttf", "NotoNaskhArabic-Regular.ttf"] {
+            paths.push((format!("{dir}/{name}"), 0));
+        }
+    }
+    paths.extend([
+        ("/System/Library/Fonts/GeezaPro.ttc".into(), 0),
+        ("/System/Library/Fonts/Supplemental/Geeza Pro.ttc".into(), 0),
+        (format!("{win}\\tahoma.ttf"), 0),
+        (format!("{win}\\arial.ttf"), 0),
+    ]);
+    for family in ["Noto Sans Arabic", "Noto Naskh Arabic", "Amiri"] {
+        paths.extend(crate::fonts::faces_of(family).into_iter().map(|face| (face.path.to_string_lossy().into_owned(), face.index)));
+    }
+    paths
+}
+
+/// The face fontconfig prefers for Arabic, such as a Vazirmatn the user set as their Arabic font
+/// (#229), kept only when it has Arabic letters. Asked once per process.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn fontconfig_arabic() -> Option<(String, u32)> {
+    static PREFERRED: std::sync::OnceLock<Option<(String, u32)>> = std::sync::OnceLock::new();
+    PREFERRED
+        .get_or_init(|| {
+            let out = std::process::Command::new("fc-match").args(["--format=%{file}\n%{index}\n", ":lang=ar"]).output().ok()?;
+            let (file, index) = parse_fc_match(&String::from_utf8_lossy(&out.stdout)).filter(|_| out.status.success())?;
+            let bytes = crate::fonts::read_font(std::path::Path::new(&file))?;
+            covers_arabic(&bytes, index).then_some((file, index))
+        })
+        .clone()
+}
+
+#[cfg(all(not(target_arch = "wasm32"), not(all(unix, not(target_os = "macos")))))]
+fn fontconfig_arabic() -> Option<(String, u32)> {
+    None
+}
+
+/// The file and face index from `fc-match --format='%{file}\n%{index}\n'`.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn parse_fc_match(out: &str) -> Option<(String, u32)> {
+    let mut lines = out.lines().map(str::trim);
+    let file = lines.next().filter(|file| !file.is_empty())?;
+    let index = lines.next().and_then(|index| index.parse().ok()).unwrap_or(0);
+    Some((file.to_owned(), index))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn covers_arabic(bytes: &[u8], index: u32) -> bool {
+    use skrifa::MetadataProvider;
+    skrifa::FontRef::from_index(bytes, index).is_ok_and(|font| "العربية".chars().all(|ch| font.charmap().map(ch).is_some()))
 }
 
 /// Symbol faces behind the UI font. Interface fonts such as Noto Sans and Cantarell (and egui's
@@ -937,15 +1052,155 @@ mod tests {
     }
 
     #[test]
+    fn bundled_arabic_covers_every_family_without_system_fonts() {
+        use skrifa::MetadataProvider;
+        let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if crate::fonts::ARABIC_FONTS.is_empty() {
+            return; // Run with CRAFT_FONTS_DIR to exercise the optional font bundle.
+        }
+        let mut fonts = font_definitions();
+        // Reproduce web's lack of filesystem fonts while exercising the shared family setup.
+        fonts.font_data.retain(|key, _| !key.starts_with("sys-"));
+        for chain in fonts.families.values_mut() {
+            chain.retain(|key| fonts.font_data.contains_key(key));
+        }
+        for (family, chain) in &fonts.families {
+            for ch in "العَرَبِيَّة١٢٣؟".chars() {
+                assert!(
+                    chain
+                        .iter()
+                        .filter_map(|key| fonts.font_data.get(key))
+                        .any(|data| { skrifa::FontRef::from_index(&data.font, data.index).is_ok_and(|font| font.charmap().map(ch).is_some()) }),
+                    "{family:?} has no bundled glyph for {ch}"
+                );
+            }
+        }
+        let ctx = egui::Context::default();
+        let families: Vec<_> = fonts.families.keys().cloned().collect();
+        ctx.set_fonts(fonts);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        out.textures_delta.clear();
+        for family in families {
+            let font = FontId::new(18.0, family.clone());
+            let glyphs = |text: &str| {
+                ctx.fonts_mut(|fonts| fonts.layout_no_wrap(text.into(), font.clone(), Color32::BLACK))
+                    .rows
+                    .iter()
+                    .flat_map(|row| row.glyphs.iter().map(|glyph| glyph.uv_rect))
+                    .collect::<Vec<_>>()
+            };
+            let missing = glyphs("\u{10FFFF}");
+            for ch in "العربية١٢٣؟".chars() {
+                let drawn = glyphs(&ch.to_string());
+                assert!(!drawn.is_empty() && drawn.iter().all(|glyph| !missing.contains(glyph)), "{family:?}: {ch} rendered as tofu");
+            }
+        }
+    }
+
+    /// Font definitions with Ubuntu Light bound as an installed, Latin-only workbook font.
+    fn with_installed_latin_font() -> std::io::Result<FontDefinitions> {
+        let dir = std::env::temp_dir().join(format!("gridcraft-latin-fixture-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("Ubuntu-Light.ttf");
+        std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT)?;
+        let face = crate::fonts::Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], path, index: 0, weight: 300.0, italic: false };
+        let fonts = font_definitions_with_faces(Language::En, [("Ubuntu".into(), vec![face])]);
+        std::fs::remove_dir_all(&dir)?;
+        Ok(fonts)
+    }
+
+    fn installed_latin_chains(fonts: &FontDefinitions) -> Vec<(FontFamily, Option<&Vec<String>>)> {
+        [(false, false), (true, false), (false, true), (true, true)]
+            .into_iter()
+            .map(|(bold, italic)| {
+                let family = FontFamily::Name(crate::fonts::role_key("Ubuntu", bold, italic).into());
+                let chain = fonts.families.get(&family);
+                (family, chain)
+            })
+            .collect()
+    }
+
+    fn chain_covers(fonts: &FontDefinitions, chain: &[String], ch: char) -> bool {
+        use skrifa::MetadataProvider;
+        chain
+            .iter()
+            .filter_map(|key| fonts.font_data.get(key))
+            .any(|data| skrifa::FontRef::from_index(&data.font, data.index).is_ok_and(|font| font.charmap().map(ch).is_some()))
+    }
+
+    #[test]
+    fn installed_latin_fonts_keep_arabic_glyph_fallbacks() {
+        if crate::fonts::ARABIC_FONTS.is_empty() {
+            return; // CI requires the approved bundle; unbundled builds need not have Arabic fonts.
+        }
+        let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut fonts = with_installed_latin_font().expect("Latin-only fixture");
+        // Host fonts cannot satisfy this regression. The bundled Arabic face must survive the
+        // same assembly order used by font_definitions_with, including installed-family binding.
+        fonts.font_data.retain(|key, _| !key.starts_with("sys-"));
+        for (family, chain) in installed_latin_chains(&fonts) {
+            let chain = chain.expect("bound fixture family");
+            for ch in "العربية١٢٣".chars() {
+                assert!(chain_covers(&fonts, chain, ch), "{family:?} has no glyph for {ch}");
+            }
+        }
+    }
+
+    #[test]
+    fn installed_latin_fonts_keep_system_script_fallbacks() {
+        let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let fonts = with_installed_latin_font().expect("Latin-only fixture");
+        let loaded: Vec<&str> =
+            fallback_faces(HanOrder::Chinese).into_iter().map(|(key, _)| key).filter(|key| fonts.font_data.contains_key(*key)).collect();
+        for (family, chain) in installed_latin_chains(&fonts) {
+            let chain = chain.expect("bound fixture family");
+            for key in &loaded {
+                assert!(chain.iter().any(|k| k == key), "{family:?} lost the {key} fallback");
+            }
+            if fonts.font_data.contains_key("sys-cjk-hangul") {
+                assert!(chain_covers(&fonts, chain, '한'), "{family:?} has no glyph for 한");
+            }
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn the_fontconfig_arabic_choice_comes_first() {
+        assert_eq!(
+            parse_fc_match("/home/u/.local/share/fonts/Vazirmatn-Regular.ttf\n0\n"),
+            Some(("/home/u/.local/share/fonts/Vazirmatn-Regular.ttf".into(), 0))
+        );
+        assert_eq!(
+            parse_fc_match("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc\n2\n"),
+            Some(("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc".into(), 2))
+        );
+        assert_eq!(parse_fc_match("/usr/share/fonts/a.ttf"), Some(("/usr/share/fonts/a.ttf".into(), 0)));
+        assert_eq!(parse_fc_match(""), None);
+        assert!(!covers_arabic(epaint_default_fonts::UBUNTU_LIGHT, 0), "a Latin-only face is not an Arabic choice");
+        if fontconfig_arabic().is_some() {
+            let fonts = font_definitions();
+            for (family, chain) in &fonts.families {
+                let preferred = chain.iter().position(|key| key == PREFERRED_ARABIC);
+                let other_arabic = chain.iter().position(|key| key == "sys-arabic" || key.starts_with("craft:"));
+                assert!(preferred.is_some(), "{family:?} lacks the preferred Arabic face");
+                assert!(other_arabic.is_none_or(|other| preferred < Some(other)), "{family:?} puts another Arabic face first");
+            }
+            if let (Some(preferred), Some(system)) = (fonts.font_data.get(PREFERRED_ARABIC), fonts.font_data.get("sys-arabic")) {
+                assert!(preferred.font != system.font, "the system Arabic fallback is a different file from the preferred face");
+            }
+        }
+    }
+
+    #[test]
     fn language_reorders_only_the_han_faces() {
         let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
         assert_eq!(
             keys(HanOrder::Japanese),
-            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            ["sys-cjk-han-ja", "sys-cjk-han-zh", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-arabic", "sys-symbols", "sys-symbols-2"]
         );
         assert_eq!(
             keys(HanOrder::Chinese),
-            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-symbols", "sys-symbols-2"]
+            ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-arabic", "sys-symbols", "sys-symbols-2"]
         );
         assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
         for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs, Language::Fr, Language::Tr] {
@@ -1001,13 +1256,14 @@ mod tests {
         // Real render check, per script: the proportional family (what cells and the UI use) must
         // resolve a sample string to a real glyph, not the tofu replacement char. Skips a script
         // whose face is absent (a minimal machine) and fails if a face is present but not wired in.
-        let cases: [(&str, Vec<(String, u32)>, &str); 8] = [
+        let cases: [(&str, Vec<(String, u32)>, &str); 9] = [
             ("sys-cjk-han-ja", cjk_han_japanese(), "カテゴリ"),
             ("sys-cjk-han-zh", cjk_han_simplified(), "页面布局 客户端配置"),
             ("sys-cjk-hangul", cjk_hangul(), "한글"),
             ("sys-thai", thai(), "ทดสอบ"),
             ("sys-lao", lao(), "ພາສາລາວ"),
             ("sys-hebrew", hebrew(), "עברית"),
+            ("sys-arabic", arabic(), "العربية١٢٣"),
             ("ui", candidates(UI), "Русский"),
             // Czech interface labels: every Czech accented letter, in both cases.
             ("ui", candidates(UI), "Příliš žluťoučký kůň úpěl ďábelské ódy ŘŠČŽÝÁÍÉÚŮĚŤĎŇÓ"),
@@ -1050,6 +1306,7 @@ mod tests {
         let cros = "/usr/share/fonts/chromeos";
         assert!(probes(thai(), &format!("{cros}/noto/NotoSansThai-Regular.ttf")));
         assert!(probes(hebrew(), &format!("{cros}/noto/NotoSansHebrew-Regular.ttf")));
+        assert!(probes(arabic(), &format!("{cros}/noto/NotoSansArabic-Regular.ttf")));
         assert!(probes(cjk_han_japanese(), &format!("{cros}/notocjk/NotoSansCJK-Regular.ttc")));
         assert!(probes(cjk_han_simplified(), &format!("{cros}/notocjk/NotoSansCJK-Regular.ttc")));
         assert!(probes(cjk_hangul(), &format!("{cros}/notocjk/NotoSansCJK-Regular.ttc")));

@@ -23,6 +23,26 @@ const MAX_FONT_FILE: u64 = 64 << 20;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FAMILY_NAMES: usize = 16;
 
+include!(concat!(env!("OUT_DIR"), "/arabic_fonts.rs"));
+
+/// Keep font reads bounded even when a file changes after discovery.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_font(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let file = std::fs::File::open(path).ok()?;
+    if file.metadata().ok()?.len() > MAX_FONT_FILE {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_FONT_FILE + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= MAX_FONT_FILE).then_some(bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn read_font(_path: &std::path::Path) -> Option<Vec<u8>> {
+    None
+}
+
 /// One face of one installed font file.
 #[derive(Clone, Debug)]
 pub struct Face {
@@ -170,7 +190,7 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<Face> {
             if !is_font || std::fs::metadata(&path).map(|m| m.len() > MAX_FONT_FILE).unwrap_or(true) {
                 continue;
             }
-            let Ok(data) = std::fs::read(&path) else { continue };
+            let Some(data) = read_font(&path) else { continue };
             for (index, family, names, style) in file_faces(&data) {
                 out.push(Face { family, names, path: path.clone(), index, weight: style_weight(&style), italic: style_italic(&style) });
             }
@@ -315,7 +335,7 @@ fn face_key(face: &Face) -> String {
 /// no role is ever left pointing at missing data (egui panics on that). A family with no faces
 /// binds nothing.
 ///
-/// Each role's chain ends with egui's default proportional fonts, so glyphs the installed font
+/// Each role's chain ends with the configured proportional fallback fonts, so glyphs the installed font
 /// lacks (emoji, a stray script) still render.
 pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face]) -> Vec<String> {
     if faces.is_empty() {
@@ -333,7 +353,10 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
                 continue;
             }
             if !fonts.font_data.contains_key(&key) {
-                let Ok(bytes) = std::fs::read(&face.path) else { continue };
+                let Some(bytes) = read_font(&face.path) else { continue };
+                if !crate::theme::font_parses(&bytes, face.index) {
+                    continue;
+                }
                 let mut fd = egui::FontData::from_owned(bytes);
                 fd.index = face.index;
                 fonts.font_data.insert(key.clone(), std::sync::Arc::new(fd));
@@ -470,6 +493,10 @@ mod tests {
         }
         // A family with no faces binds nothing and never touches the map.
         assert!(bind_faces(&mut fonts, "No Such Font", &[]).is_empty());
+        std::fs::write(&face.path, b"broken font").expect("write damaged font");
+        assert!(bind_faces(&mut egui::FontDefinitions::default(), "Broken", std::slice::from_ref(&face)).is_empty());
+        std::fs::File::create(&face.path).expect("sparse file").set_len(MAX_FONT_FILE + 1).expect("oversized file");
+        assert!(read_font(&face.path).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

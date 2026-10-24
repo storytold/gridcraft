@@ -39,5 +39,7 @@ sys-locale = { workspace = true }
 web-sys = { version = "0.3", features = ["Window", "Navigator"] }
 
 [build-dependencies]
+sha2 = { workspace = true }
+skrifa = { workspace = true }
 serde_json = { workspace = true }
 toml = "1"
