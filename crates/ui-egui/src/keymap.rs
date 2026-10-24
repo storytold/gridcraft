@@ -89,8 +89,8 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         OpenBracket if ctrl => Shortcut::Run("formulas.selectPrecedents", json!({"all": true})),
         CloseBracket if ctrl && !s => run("formulas.selectDependents"),
         CloseBracket if ctrl => Shortcut::Run("formulas.selectDependents", json!({"all": true})),
-        // Windows Ctrl+; is in `ribbon::shortcut`; Excel for Mac uses Control+; and Command+;.
-        Semicolon if mac && ctrl => Shortcut::Date,
+        // Ctrl+; inserts the date on Windows and Control+; on Mac; Command+; inserts the time.
+        Semicolon if ctrl && !s => Shortcut::Date,
         Semicolon if mac && cmd && !s => Shortcut::Time,
         // Ctrl+2..5 (Windows).
         Num2 if ctrl && !mac => run("home.bold"),
@@ -175,6 +175,18 @@ pub(crate) fn altgr_text(ctx: &egui::Context, m: Modifiers, mac: bool) -> bool {
     !mac && m.alt && m.ctrl && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_))))
 }
 
+/// The wall-clock time the user's clock shows, as a 1900-system serial. The calc clock is UTC
+/// (formulas are documented that way), but Excel's date/time shortcuts insert local time (#1997).
+fn local_now_serial() -> f64 {
+    let now = chrono::Local::now();
+    local_serial(now.timestamp_millis() as f64, f64::from(now.offset().local_minus_utc()))
+}
+
+/// A UTC instant shifted by the local offset (seconds east), as a 1900-system serial.
+fn local_serial(utc_ms: f64, offset_seconds: f64) -> f64 {
+    gridcraft_engine::core::date::serial_from_unix_ms(utc_ms + offset_seconds * 1000.0)
+}
+
 /// Handles a key press in the grid. Returns whether it was a shortcut.
 pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physical: Option<Key>, m: Modifiers, geo: &Geo, sh: &Sheet) -> bool {
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
@@ -194,7 +206,7 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
                 .session
                 .active()
                 .map(|d| {
-                    let now = gridcraft_engine::core::date::serial_in_system(d.wb.date_system, gridcraft_engine::calc::now_serial());
+                    let now = gridcraft_engine::core::date::serial_in_system(d.wb.date_system, local_now_serial());
                     let (value, format) = if shortcut == Shortcut::Date { (now.floor(), "m/d/yyyy") } else { (now.fract(), "h:mm AM/PM") };
                     gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(value), format, &d.wb).text
                 })
@@ -263,4 +275,40 @@ fn extend(app: &mut SheetApp, anchor: CellRef, active: CellRef, to: CellRef) {
     }
     app.grid.ensure_visible = true;
     app.grid.reveal_moving_end = true;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_serial_is_utc_shifted_by_the_offset() {
+        let utc = 1_700_000_000_000.0;
+        assert_eq!(local_serial(utc, 3600.0), gridcraft_engine::core::date::serial_from_unix_ms(utc + 3_600_000.0));
+        assert_eq!(local_serial(utc, -4.0 * 3600.0), gridcraft_engine::core::date::serial_from_unix_ms(utc - 14_400_000.0));
+    }
+
+    #[test]
+    fn local_serial_picks_the_local_day_when_utc_is_still_yesterday() {
+        // 2026-03-04T23:30Z: in UTC+1 it is already 2026-03-05, so the shortcut must insert the 5th.
+        let utc = gridcraft_engine::core::date::serial_from_unix_ms(1_772_667_000_000.0);
+        let local = local_serial(1_772_667_000_000.0, 3600.0);
+        assert_eq!(local.floor(), utc.floor() + 1.0);
+        assert_ne!(local, utc);
+    }
+
+    #[test]
+    fn date_and_time_shortcuts_are_local_on_every_platform() {
+        let ctrl = Modifiers { ctrl: true, ..Modifiers::default() };
+        let ctrl_shift = Modifiers { ctrl: true, shift: true, ..Modifiers::default() };
+        let cmd = Modifiers { mac_cmd: true, command: true, ..Modifiers::default() };
+        for mac in [false, true] {
+            // Unshifted Ctrl+; is the date on Windows and Control+; on Mac.
+            assert_eq!(lookup(Key::Semicolon, Some(Key::Semicolon), ctrl, mac), Some(Shortcut::Date), "mac={mac}");
+            assert_eq!(lookup(Key::Semicolon, Some(Key::Semicolon), ctrl_shift, mac), Some(Shortcut::Time), "mac={mac}");
+        }
+        // Mac Command+; is the time; Windows has no Command key.
+        assert_eq!(lookup(Key::Semicolon, Some(Key::Semicolon), cmd, true), Some(Shortcut::Time));
+        assert_eq!(lookup(Key::Semicolon, Some(Key::Semicolon), cmd, false), None);
+    }
 }

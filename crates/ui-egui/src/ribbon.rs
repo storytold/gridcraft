@@ -2682,19 +2682,8 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
                 None
             }
         },
-        Key::Semicolon => {
-            // Insert today's date.
-            let text = app
-                .session
-                .active()
-                .map(|d| {
-                    let today = gridcraft_engine::core::date::serial_in_system(d.wb.date_system, gridcraft_engine::calc::now_serial()).floor();
-                    gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(today), "m/d/yyyy", &d.wb).text
-                })
-                .unwrap_or_default();
-            app.begin_edit(Some(text), false);
-            None
-        }
+        // Ctrl+; and Ctrl+Shift+: insert the local date/time in `keymap`, which runs first; no
+        // date path belongs here, where a UTC clock would silently win.
         Key::Backtick => Some(("formulas.showFormulas", json!({}))),
         _ => None,
     };
