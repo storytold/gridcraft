@@ -2317,6 +2317,61 @@ fn saving_an_opened_semicolon_csv_keeps_semicolons() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn csv_export_with_semicolons_decimal_commas_and_a_byte_order_mark() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["città", 1.5, 1234.5, "2026-03-15", "a;b"]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "C1", "code": "#,##0.00"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "D1", "code": "dd.mm.yyyy"})).unwrap();
+    let bytes = |s: &mut crate::Session, p: serde_json::Value| {
+        let r = s.execute("file.saveBytes", p).unwrap();
+        crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap()
+    };
+    // Without the new parameters nothing changes: commas, a decimal point, no byte order mark.
+    let plain = bytes(&mut s, json!({"format": "csv"}));
+    assert_eq!(String::from_utf8(plain).unwrap(), "città,1.5,\"1,234.50\",15.03.2026,a;b\r\n");
+    let comma = bytes(&mut s, json!({"format": "csv", "delimiter": ",", "decimal": ".", "bom": true}));
+    assert_eq!(comma, "\u{feff}città,1.5,\"1,234.50\",15.03.2026,a;b\r\n".as_bytes());
+    // Semicolons and decimal commas: numbers swap their marks, the dotted date stays a date.
+    let semi = bytes(&mut s, json!({"format": "csv", "delimiter": ";", "decimal": ",", "bom": true}));
+    assert_eq!(semi, "\u{feff}città;1,5;1.234,50;15.03.2026;\"a;b\"\r\n".as_bytes());
+    // The file reads back as the same values.
+    let (wb, _) = crate::io::open_bytes("back.csv", &semi).unwrap();
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("città"));
+    assert_eq!(wb.csv_delimiter, Some(b';'));
+    // A file opened with tabs keeps them when only the byte order mark is asked for.
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).csv_delimiter = Some(b'\t');
+    let tabs = bytes(&mut s, json!({"format": "csv", "bom": true}));
+    assert!(tabs.starts_with("\u{feff}città\t1.5\t".as_bytes()));
+    for bad in [json!({"format": "csv", "delimiter": "|"}), json!({"format": "csv", "decimal": ";"}), json!({"format": "csv", "bom": "yes"})] {
+        assert!(s.execute("file.saveBytes", bad.clone()).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn csv_options_apply_to_csv_only_and_an_empty_csv_keeps_its_byte_order_mark() {
+    let mut s = s();
+    let r = s.execute("file.saveBytes", json!({"format": "csv", "bom": true})).unwrap();
+    assert_eq!(crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap(), b"\xEF\xBB\xBF");
+    // CSV-only options are ignored, not rejected, by the other formats.
+    assert!(s.execute("file.saveBytes", json!({"format": "json", "delimiter": "|"})).is_ok());
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn export_csv_writes_the_style_asked_for() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-csv-style-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["x", 2.25]]})).unwrap();
+    let path = dir.join("semi.csv");
+    s.execute("file.exportCsv", json!({"path": path, "delimiter": ";", "decimal": ","})).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "x;2,25\r\n");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A workbook whose B1 is `=[1]Sheet1!A1`, linked to `link` (an external relationship target).
 fn linked_workbook(link: &str) -> Vec<u8> {
     use std::io::{Cursor, Write};

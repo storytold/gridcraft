@@ -91,6 +91,7 @@ fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
     assert!(h.state().backstage.is_none());
     choose(&mut h, "Save As");
     click(&mut h, "Download (.xlsx)");
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "B1", "input": "1.5"})).unwrap();
     choose(&mut h, "Export");
     click(&mut h, "CSV (Comma delimited)");
     let saved = downloads.lock().unwrap();
@@ -100,7 +101,17 @@ fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
         assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(123.0));
     }
     assert!(saved[2].0.ends_with(".csv"));
-    assert!(String::from_utf8_lossy(&saved[2].1).contains("123"));
+    assert!(String::from_utf8_lossy(&saved[2].1).contains("123,1.5"), "commas and a decimal point");
+    // The menu's CSVs start with the byte order mark Excel needs for UTF-8.
+    assert!(saved[2].1.starts_with(b"\xEF\xBB\xBF"));
+    drop(saved);
+    choose(&mut h, "Export");
+    click(&mut h, "CSV (Semicolon delimited)");
+    let saved = downloads.lock().unwrap();
+    assert_eq!(saved.len(), 4);
+    assert!(saved[3].0.ends_with(".csv"), "the semicolon CSV is a .csv file: {}", saved[3].0);
+    assert!(saved[3].1.starts_with(b"\xEF\xBB\xBF"));
+    assert!(String::from_utf8_lossy(&saved[3].1).contains("123;1,5"), "semicolons and a decimal comma");
     drop(saved);
     choose(&mut h, "Close");
     assert!(h.state().backstage.is_none());

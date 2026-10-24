@@ -248,8 +248,10 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
         FileKind::Xlsb => Err(EngineError::Other("XLSB is supported for data import only. Save as .xlsx or another supported export format.".into())),
         FileKind::Ods => Err(EngineError::Other("ODS is supported for data import only. Save as .xlsx or another supported export format.".into())),
         // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
-        FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','))).transpose().map(Option::unwrap_or_default),
-        FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t')).transpose().map(Option::unwrap_or_default),
+        FileKind::Csv => {
+            wb.sheet(sheet).map(|sh| csv(wb, sh, CsvStyle::plain(wb.csv_delimiter.unwrap_or(b',')))).transpose().map(Option::unwrap_or_default)
+        }
+        FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, CsvStyle::plain(b'\t'))).transpose().map(Option::unwrap_or_default),
         FileKind::Json => serde_json::to_vec_pretty(wb).map_err(|e| EngineError::Other(e.to_string())),
         FileKind::Html => to_html(wb, sheet).map(String::into_bytes),
     }
@@ -275,23 +277,75 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
     std::path::absolute(path).ok()
 }
 
+/// How a CSV export is written.
+///
+/// The names say what the file holds. Excel's do not: with the Windows list separator set to `;`
+/// (Italian, German, French… regions), Excel's «CSV UTF-8 (Comma delimited)» writes semicolons
+/// and decimal commas, and its «CSV (Comma delimited)» writes the same in ANSI (observed in Excel
+/// 365 with the Italian interface, 2026-10). GridCraft's comma CSV holds commas, and the
+/// semicolon CSV is a separate, explicit choice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CsvStyle {
+    /// Field delimiter (`,` or `;`).
+    pub delimiter: u8,
+    /// Numbers are written with a decimal comma and a period between digit groups (`1.234,5`),
+    /// as regions that use `;` as list separator read them. Dates and times are left as shown.
+    pub decimal_comma: bool,
+    /// A UTF-8 byte order mark first, which Excel needs to read the file as UTF-8 (without it,
+    /// accented letters come out garbled in Excel on Windows).
+    pub bom: bool,
+}
+
+impl CsvStyle {
+    pub const fn plain(delimiter: u8) -> CsvStyle {
+        CsvStyle { delimiter, decimal_comma: false, bom: false }
+    }
+}
+
+/// The active sheet of `wb` as CSV in `style`.
+pub fn csv_bytes(wb: &Workbook, style: CsvStyle) -> Result<Vec<u8>> {
+    match wb.sheet(wb.active_sheet) {
+        Some(sh) => csv(wb, sh, style),
+        None => Ok(Vec::new()),
+    }
+}
+
 /// Save As CSV/Text writes "the text and values as they are displayed in cells" with "all
 /// characters in each cell" (Microsoft Support, *Excel formatting and features that are not
 /// transferred to other file formats*): number formats applied, never column-width `#####`.
-fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
-    gridcraft_xlsx::write_csv(sh, delimiter, |c| {
+fn csv(wb: &Workbook, sh: &Sheet, style: CsvStyle) -> Result<Vec<u8>> {
+    let mut body = gridcraft_xlsx::write_csv(sh, style.delimiter, |c| {
+        let value = sh.value(c);
+        let code = wb.styles.get(sh.style_id(c)).num_fmt.as_str();
         // General's grid-width formatting rounds large identifiers to scientific notation.
         // Delimited files have no column width, so preserve the whole numeric value instead.
-        if wb.styles.get(sh.style_id(c)).num_fmt.as_str().eq_ignore_ascii_case("General")
-            && let gridcraft_core::Value::Number(number) = sh.value(c)
+        let text = if code.eq_ignore_ascii_case("General")
+            && let gridcraft_core::Value::Number(number) = value
             && number.is_finite()
         {
             number.to_string()
         } else {
             crate::display::value_text(wb, sh, c)
+        };
+        if style.decimal_comma && value.is_number() && !crate::display::number_format(code).is_date() {
+            // `1,234.5` becomes `1.234,5`: the decimal point and the group separator swap.
+            text.chars()
+                .map(|ch| match ch {
+                    '.' => ',',
+                    ',' => '.',
+                    other => other,
+                })
+                .collect()
+        } else {
+            text
         }
     })
-    .map_err(|e| EngineError::Other(e.to_string()))
+    .map_err(|e| EngineError::Other(e.to_string()))?;
+    if style.bom {
+        // In place: a body near the size cap is not copied into a second buffer.
+        body.splice(0..0, *b"\xEF\xBB\xBF");
+    }
+    Ok(body)
 }
 
 pub(crate) fn esc(s: &str) -> String {

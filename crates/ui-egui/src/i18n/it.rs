@@ -6,6 +6,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Incolla",
         "Paste Values" => "Incolla valori",
+        // CSV export with semicolons and decimal commas (see io::CsvStyle).
+        "CSV UTF-8 (Semicolon delimited) (*.csv)" => "CSV UTF-8 (delimitato da punto e virgola) (*.csv)",
+        "CSV (Semicolon delimited)" => "CSV (delimitato da punto e virgola)",
+        "Save the active sheet as semicolon-separated text with decimal commas (1.234,5), as Excel reads it where the list separator is ;." => {
+            "Salva il foglio attivo come testo separato da punto e virgola, con la virgola decimale (1.234,5), come lo legge Excel dove il separatore di elenco è ;."
+        }
         "Paste Formulas" => "Incolla formule",
         "Paste Formatting" => "Incolla formattazione",
         "Transpose" => "Trasponi",
@@ -374,7 +380,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "No workbook is open." => "Nessuna cartella di lavoro aperta.",
         "Save as type" => "Salva come",
         "Excel Workbook (*.xlsx)" => "Cartella di lavoro di Excel (*.xlsx)",
-        "CSV UTF-8 (Comma delimited) (*.csv)" => "CSV UTF-8 (delimitato dal separatore di elenco) (*.csv)",
+        "CSV UTF-8 (Comma delimited) (*.csv)" => "CSV UTF-8 (delimitato da virgole) (*.csv)",
         "Web Page (*.html)" => "Pagina Web (*.html)",
         "PDF (*.pdf)" => "PDF (*.pdf)",
         "Download" => "Scarica",
@@ -393,7 +399,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Create PDF" => "Crea PDF",
         "Save the sheet as a PDF document that keeps its page layout." => "Salva il foglio come documento PDF che mantiene il layout di pagina.",
         "Change File Type" => "Cambia tipo di file",
-        "CSV (Comma delimited)" => "CSV (delimitato dal separatore di elenco)",
+        "CSV (Comma delimited)" => "CSV (delimitato da virgole)",
         "Save the active sheet as comma-separated text." => "Salva il foglio attivo come testo separato da virgole.",
         "Web Page (.html)" => "Pagina Web (.html)",
         "Save the workbook as a web page." => "Salva la cartella di lavoro come pagina Web.",
