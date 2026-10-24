@@ -1324,6 +1324,13 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
 
 // ---------------------------------------------------------------- clear
 
+/// The rows of `range` an applied filter hides (rows hidden by hand are not among them).
+fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collections::BTreeSet<u32> {
+    sh.rows.range(range.start.row..=range.end.row).filter(|(r, info)| info.hidden && sh.is_row_filtered(**r)).map(|(r, _)| *r).collect()
+}
+
+/// The Clear commands (Delete is Clear Contents). As in Excel, the rows an applied filter hides
+/// are left as they are; rows hidden by hand are cleared.
 fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
@@ -1334,7 +1341,10 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
         d.wb.sheet(sheet).is_some_and(|sh| {
             ranges.iter().any(|r| {
                 r.intersection(&sh.used_range().unwrap_or(RangeRef::cell(r.start))).is_some_and(|r| {
-                    sh.cells.iter_range(r).any(|(c, x)| x.value == Value::Bool(true) && super::extra::is_checkbox_cell(&d.wb, sh, c))
+                    let skip = filtered_rows(sh, r);
+                    sh.cells
+                        .iter_range(r)
+                        .any(|(c, x)| !skip.contains(&c.row) && x.value == Value::Bool(true) && super::extra::is_checkbox_cell(&d.wb, sh, c))
                 })
             })
         })
@@ -1348,8 +1358,12 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                 },
                 None => continue,
             };
-            let cells: Vec<(CellRef, Cell)> =
-                cx.wb.sheet(sheet).map(|sh| sh.cells.iter_range(r).map(|(c, x)| (c, x.clone())).collect()).unwrap_or_default();
+            let skip = cx.wb.sheet(sheet).map(|sh| filtered_rows(sh, r)).unwrap_or_default();
+            let cells: Vec<(CellRef, Cell)> = cx
+                .wb
+                .sheet(sheet)
+                .map(|sh| sh.cells.iter_range(r).filter(|(c, _)| !skip.contains(&c.row)).map(|(c, x)| (c, x.clone())).collect())
+                .unwrap_or_default();
             // Report every stored cell we touch, even beyond a million coordinates in a sparse
             // selection. Removed formula anchors must also reach calc so their spills disappear.
             cx.changed.extend(cells.iter().map(|(c, _)| (sheet, *c)));
@@ -1384,16 +1398,17 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                     _ => {}
                 }
             }
+            let cleared = |c: CellRef| r.contains(c) && !skip.contains(&c.row);
             if matches!(what, "all" | "comments") {
-                sh.comments.retain(|c, _| !r.contains(*c));
+                sh.comments.retain(|c, _| !cleared(*c));
             }
             if matches!(what, "all" | "hyperlinks") {
-                sh.hyperlinks.retain(|c, _| !r.contains(*c));
+                sh.hyperlinks.retain(|c, _| !cleared(*c));
             }
             if matches!(what, "all" | "formats") {
                 let mut unmerged = false;
                 sh.merges.retain(|m| {
-                    let keep = !r.contains_range(m);
+                    let keep = !r.contains_range(m) || skip.range(m.start.row..=m.end.row).next().is_some();
                     unmerged |= !keep;
                     keep
                 });
