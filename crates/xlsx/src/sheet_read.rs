@@ -64,6 +64,9 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     let mut fit_to_page = false;
     let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
     cx.cf_ext_ids.clear();
+    // Collected while reading, consumed to rebuild slicers after the loop.
+    let mut slicer_anchors: Vec<(String, gridcraft_model::Anchor)> = vec![];
+    let mut table_file_ids: Vec<(u32, usize)> = vec![];
     for e in &root.children {
         match e.name.as_str() {
             "sheetPr" => {
@@ -180,7 +183,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
             "drawing" => {
                 if let Some(rel) = e.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)) {
                     let target = rel.target.clone();
-                    crate::drawing::read_drawing(cx, &target, &mut sheet)?;
+                    crate::drawing::read_drawing(cx, &target, &mut sheet, &mut slicer_anchors)?;
                 }
             }
             "tableParts" => {
@@ -190,7 +193,11 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                         if let Some(x) = cx.optional_xml(&target)?
                             && let Some(mut t) = read_table(cx, &x)
                         {
+                            // Keep the file's table id so slicers can re-link to it, then give the
+                            // model a fresh object id as usual.
+                            let file_id = t.id;
                             t.id = cx.next_object_id();
+                            table_file_ids.push((file_id, sheet.tables.len()));
                             sheet.tables.push(t);
                         }
                     }
@@ -219,6 +226,45 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
         for rel in rels.iter().filter(|r| r.kind == "vmlDrawing") {
             if let Ok(Some(x)) = cx.pkg.read_xml(&rel.target) {
                 read_note_shapes(&x, &mut sheet, 0);
+            }
+        }
+    }
+    // Rebuild table slicers from the sheet's slicer part, the workbook's slicer caches and the
+    // drawing anchors; the selection comes from the bound table column's filter.
+    if let Some(rel) = rels.iter().find(|r| r.kind == "slicer") {
+        let target = rel.target.clone();
+        if let Some(x) = cx.optional_xml(&target)? {
+            for sl in crate::slicer::read_slicers_part(&x) {
+                let Some(&(file_tid, col1)) = cx.slicer_caches.get(&sl.cache) else { continue };
+                let Some(&(_, ti)) = table_file_ids.iter().find(|(fid, _)| *fid == file_tid) else { continue };
+                let off = col1.saturating_sub(1);
+                let (table_name, column, selected, anchor) = {
+                    let Some(table) = sheet.tables.get(ti) else { continue };
+                    let Some(column) = table.columns.get(off as usize).map(|c| c.name.clone()) else { continue };
+                    let selected = table.filter.iter().find(|(o, _)| *o == off).and_then(|(_, c)| match c {
+                        FilterCriterion::Values { values, .. } => Some(values.clone()),
+                        _ => None,
+                    });
+                    let anchor = slicer_anchors.iter().find(|(n, _)| *n == sl.name).map(|(_, a)| *a).unwrap_or(gridcraft_model::Anchor {
+                        cell: table.range.start,
+                        dx: 4.0,
+                        dy: 4.0,
+                        width: 168.0,
+                        height: 200.0,
+                        mode: gridcraft_model::AnchorMode::MoveOnly,
+                    });
+                    (table.name.clone(), column, selected, anchor)
+                };
+                let caption = if sl.caption.is_empty() { column.clone() } else { sl.caption };
+                sheet.slicers.push(gridcraft_model::Slicer {
+                    id: cx.next_object_id(),
+                    table: table_name,
+                    column,
+                    caption,
+                    anchor,
+                    selected,
+                    columns: sl.columns,
+                });
             }
         }
     }

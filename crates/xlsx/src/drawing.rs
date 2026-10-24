@@ -121,11 +121,25 @@ fn mime_for(name: &str) -> &'static str {
     }
 }
 
-pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(), IoError> {
+pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet, slicer_anchors: &mut Vec<(String, Anchor)>) -> Result<(), IoError> {
     let Some(x) = cx.optional_xml(part)? else { return Ok(()) };
     let rels = cx.pkg.rels(part)?;
     for a in &x.children {
         let Some(anchor) = read_anchor(a, sheet) else { continue };
+        // A table slicer anchor: Excel wraps `sle:slicer` in a `graphicFrame` whose graphicData is
+        // the slicer namespace. Record its name + position and skip — the fallback is only a
+        // placeholder shape, and the slicer itself is rebuilt from the slicer part.
+        if let Some(name) = a
+            .child("AlternateContent")
+            .and_then(|ac| ac.child("Choice"))
+            .and_then(|c| c.child("graphicFrame"))
+            .and_then(|gf| gf.path(&["graphic", "graphicData"]))
+            .and_then(|gd| gd.child("slicer"))
+            .and_then(|sl| sl.attr("name"))
+        {
+            slicer_anchors.push((name.to_string(), anchor));
+            continue;
+        }
         // Objects in markup-compatibility blocks: the first choice (chartex frames), else the
         // fallback.
         let objs: Vec<&El> = a
@@ -312,6 +326,9 @@ pub enum Obj<'a> {
     Image(&'a Image, String),
     Chart(&'a gridcraft_model::Chart, String),
     Shape(&'a Shape),
+    /// A table slicer, positioned by its anchor and bound by its Excel slicer name. Written as an
+    /// `mc:AlternateContent` so readers without the `sle` slicer extension still see a placeholder.
+    Slicer(String, &'a Anchor),
 }
 
 /// The drawing part for a sheet's objects (relationship ids already assigned).
@@ -438,6 +455,20 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     s.push_str("</xdr:txBody>");
                 }
                 s.push_str("</xdr:sp>");
+            }
+            Obj::Slicer(name, anchor) => {
+                let (open, close) = anchor_open(sheet, anchor);
+                close_tag = close;
+                s.push_str(&open);
+                // Written exactly as Excel does: `sle:slicer` inside a `graphicFrame` guarded by an
+                // `a14` markup-compatibility choice, with a placeholder-shape fallback for readers
+                // that don't understand slicers.
+                let _ = write!(
+                    s,
+                    "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\"><mc:Choice Requires=\"a14\"><xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"{id}\" name=\"{name}\"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/></xdr:xfrm><a:graphic><a:graphicData uri=\"http://schemas.microsoft.com/office/drawing/2010/slicer\"><sle:slicer xmlns:sle=\"http://schemas.microsoft.com/office/drawing/2010/slicer\" name=\"{name}\"/></a:graphicData></a:graphic></xdr:graphicFrame></mc:Choice><mc:Fallback><xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"0\" name=\"\"/><xdr:cNvSpPr><a:spLocks noTextEdit=\"1\"/></xdr:cNvSpPr></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:solidFill><a:prstClr val=\"white\"/></a:solidFill><a:ln w=\"1\"><a:solidFill><a:prstClr val=\"green\"/></a:solidFill></a:ln></xdr:spPr><xdr:txBody><a:bodyPr vertOverflow=\"clip\" horzOverflow=\"clip\"/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"1100\"/><a:t>This shape represents a slicer. Slicers are supported in Excel 2010 or later.</a:t></a:r></a:p></xdr:txBody></xdr:sp></mc:Fallback></mc:AlternateContent>",
+                    xfrm(anchor, "a:xfrm"),
+                    name = esc_attr(name),
+                );
             }
         }
         s.push_str("<xdr:clientData/>");

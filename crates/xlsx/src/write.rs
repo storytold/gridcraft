@@ -123,6 +123,11 @@ pub struct Out {
     /// Authors of threaded comments, in first-use order; written to `xl/persons/person.xml`.
     pub persons: Vec<String>,
     pub table_id: u32,
+    /// Number of slicer parts written (`xl/slicers/slicerN.xml`).
+    pub slicers: u32,
+    /// Table slicer caches collected while sheets are written; their parts and the workbook
+    /// `extLst` that lists them are emitted after the sheet loop.
+    pub slicer_caches: Vec<crate::slicer::CacheOut>,
     pub dynamic_arrays: bool,
     pub needs_calc: bool,
     pub cell_pictures: crate::richdata::PicturesOut,
@@ -233,6 +238,8 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         comments: 0,
         persons: vec![],
         table_id: 0,
+        slicers: 0,
+        slicer_caches: vec![],
         dynamic_arrays: false,
         needs_calc: false,
         cell_pictures: Default::default(),
@@ -390,7 +397,19 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     }
     w.push_str("/>");
     w.push_str(&pivots.workbook_xml(&mut wb_rels));
-    let exts = crate::passthrough::workbook_elements(wb, "ext");
+    // Table slicer caches: one part each, listed in the workbook extLst.
+    let mut slicer_ext = String::new();
+    if !out.slicer_caches.is_empty() {
+        let caches = std::mem::take(&mut out.slicer_caches);
+        let mut rids = Vec::with_capacity(caches.len());
+        for (i, c) in caches.iter().enumerate() {
+            let n = i + 1;
+            out.part(&format!("xl/slicerCaches/slicerCache{n}.xml"), Some(crate::slicer::CT_SLICER_CACHE), crate::slicer::cache_part(c).into_bytes());
+            rids.push(wb_rels.add_uri(crate::slicer::REL_SLICER_CACHE, &format!("slicerCaches/slicerCache{n}.xml")));
+        }
+        slicer_ext = crate::slicer::workbook_ext(&rids);
+    }
+    let exts = format!("{}{slicer_ext}", crate::passthrough::workbook_elements(wb, "ext"));
     if !exts.is_empty() {
         let _ = write!(w, "<extLst>{exts}</extLst>");
     }

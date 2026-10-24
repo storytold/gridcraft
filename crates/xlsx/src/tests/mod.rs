@@ -23,6 +23,7 @@ mod roundtrip;
 mod shape_text_rtl;
 mod shared_media;
 mod sheet_names;
+mod slicer_roundtrip;
 mod smooth_roundtrip;
 mod trendline_roundtrip;
 mod xls_tests;

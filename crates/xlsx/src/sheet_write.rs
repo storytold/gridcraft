@@ -515,8 +515,20 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
     }
 
-    // Drawing: pictures, charts, shapes.
-    if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() {
+    // Table slicers to persist: each bound to a table on this sheet with a known column, carried as
+    // (slicer, Excel slicer name, 0-based column index within the table).
+    let slicer_plan: Vec<(&gridcraft_model::Slicer, String, u32)> = sheet
+        .slicers
+        .iter()
+        .filter_map(|sl| {
+            let (t, _) = tables.iter().find(|(t, _)| t.name.eq_ignore_ascii_case(&sl.table))?;
+            let ci = t.column_index(&sl.column)? as u32;
+            Some((sl, crate::slicer::slicer_name(&sl.table, &sl.column, sl.id), ci))
+        })
+        .collect();
+
+    // Drawing: pictures, charts, shapes, slicers.
+    if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() || !slicer_plan.is_empty() {
         out.drawings += 1;
         let dn = out.drawings;
         let mut drels = Rels::default();
@@ -554,6 +566,9 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         for sh in &sheet.shapes {
             objs.push(Obj::Shape(sh));
+        }
+        for (sl, name, _) in &slicer_plan {
+            objs.push(Obj::Slicer(name.clone(), &sl.anchor));
         }
         out.part(&format!("xl/drawings/drawing{dn}.xml"), Some(CT_DRAWING), crate::drawing::write_drawing(sheet, &wb.theme, &objs).into_bytes());
         if !drels.is_empty() {
@@ -593,14 +608,47 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             out.tables += 1;
             out.table_id += 1;
             let n = out.tables;
-            let name = table_name(&t.name, &mut used_names, out.table_id);
-            let xml = table_xml(t, cols, &name, out.table_id, out);
+            let tid = out.table_id;
+            let name = table_name(&t.name, &mut used_names, tid);
+            // Fold each slicer's selection into the table column's own filter, so it persists as a
+            // real table-column filter (and clears on reload the orphaned-filter state otherwise).
+            let mut eff = t.filter.clone();
+            for (sl, _, ci) in slicer_plan.iter().filter(|(sl, _, _)| sl.table.eq_ignore_ascii_case(&t.name)) {
+                eff.retain(|(o, _)| o != ci);
+                if let Some(values) = &sl.selected {
+                    eff.push((*ci, FilterCriterion::Values { values: values.clone(), blanks: false }));
+                }
+            }
+            let xml = table_xml(t, cols, &name, tid, &eff, out);
             out.part(&format!("xl/tables/table{n}.xml"), Some(CT_TABLE), xml.into_bytes());
             let rid = rels.add("table", &format!("../tables/table{n}.xml"));
             let _ = write!(parts, "<tablePart r:id=\"{rid}\"/>");
+            // One slicer cache per slicer on this table, bound to the written table id + column.
+            for (sl, slname, ci) in slicer_plan.iter().filter(|(sl, _, _)| sl.table.eq_ignore_ascii_case(&t.name)) {
+                let source = cols.get(*ci as usize).cloned().unwrap_or_else(|| sl.column.clone());
+                out.slicer_caches.push(crate::slicer::CacheOut { name: slname.clone(), source, table_id: tid, column: ci + 1 });
+            }
         }
         let _ = write!(s, "<tableParts count=\"{}\">{parts}</tableParts>", tables.len());
     }
+    // Slicer part: all of this sheet's table slicers, referenced from the worksheet extLst below.
+    let slicer_rid = if slicer_plan.is_empty() {
+        None
+    } else {
+        out.slicers += 1;
+        let n = out.slicers;
+        let slicers_out: Vec<crate::slicer::SlicerOut> = slicer_plan
+            .iter()
+            .map(|(sl, name, _)| crate::slicer::SlicerOut {
+                name: name.clone(),
+                cache: name.clone(),
+                caption: sl.caption.clone(),
+                columns: sl.columns,
+            })
+            .collect();
+        out.part(&format!("xl/slicers/slicer{n}.xml"), Some(crate::slicer::CT_SLICER), crate::slicer::slicers_part(&slicers_out).into_bytes());
+        Some(rels.add_uri(crate::slicer::REL_SLICER, &format!("../slicers/slicer{n}.xml")))
+    };
     // Excel 2010 extensions: solid data bars, then sparklines.
     let solid_bars: Vec<(&CondFormat, u32)> = sheet
         .cond_formats
@@ -609,7 +657,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         .filter(|(_, cf)| !cf.ranges.is_empty() && matches!(cf.rule, CfRule::DataBar { gradient: false, .. }))
         .map(|(i, cf)| (cf, prio.get(i).copied().unwrap_or(1)))
         .collect();
-    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() {
+    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() || slicer_rid.is_some() {
         s.push_str("<extLst>");
     }
     if !solid_bars.is_empty() {
@@ -647,7 +695,10 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         s.push_str("</x14:sparklineGroups></ext>");
     }
-    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() {
+    if let Some(rid) = &slicer_rid {
+        s.push_str(&crate::slicer::worksheet_ext(rid));
+    }
+    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() || slicer_rid.is_some() {
         s.push_str("</extLst>");
     }
     s.push_str("</worksheet>");
@@ -1050,7 +1101,7 @@ fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mu
     s
 }
 
-fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> String {
+fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, filter: &[(u32, FilterCriterion)], out: &mut Out) -> String {
     let mut s =
         format!("{XML_DECL}<table xmlns=\"{NS_MAIN}\" id=\"{id}\" name=\"{0}\" displayName=\"{0}\" ref=\"{1}\"", esc_attr(name), t.range.a1());
     if !t.header_row {
@@ -1068,10 +1119,10 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
         let _ = write!(s, " connectionId=\"{c}\"");
     }
     s.push('>');
-    if t.header_row && t.filter_button {
+    if t.header_row && (t.filter_button || !filter.is_empty()) {
         let end_row = if t.totals_row { t.range.end.row.saturating_sub(1).max(t.range.start.row) } else { t.range.end.row };
         let r = RangeRef::new(t.range.start, CellRef::new(end_row, t.range.end.col));
-        s.push_str(&autofilter_xml(r, &t.filter, out));
+        s.push_str(&autofilter_xml(r, filter, out));
     }
     let _ = write!(s, "<tableColumns count=\"{}\">", cols.len());
     for (i, name) in cols.iter().enumerate() {
