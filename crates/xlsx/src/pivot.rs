@@ -647,7 +647,7 @@ fn group_items(sys: DateSystem, by: PivotDateGroup, start: f64, end: f64) -> Vec
             }
         }
         PivotDateGroup::Quarters => v.extend((1..=4).map(|q| format!("Qtr{q}"))),
-        PivotDateGroup::Months => v.extend(MONTHS.iter().map(|m| m.to_string())),
+        PivotDateGroup::Months => v.extend(MONTHS.iter().map(ToString::to_string)),
         PivotDateGroup::Days | PivotDateGroup::None => {
             const DAYS: [u32; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
             for (m, n) in MONTHS.iter().zip(DAYS) {

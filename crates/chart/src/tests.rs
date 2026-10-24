@@ -76,7 +76,7 @@ fn sample(kind: ChartKind) -> ChartData {
     ChartData {
         category_levels: vec![],
         palette: vec![],
-        categories: cats.iter().map(|s| s.to_string()).collect(),
+        categories: cats.iter().map(ToString::to_string).collect(),
         series: vec![
             series("North", &[12000.0, -4000.0, 23000.0, 31000.0, 18000.0, 27000.0], [20, 96, 130, 255], k1),
             b,

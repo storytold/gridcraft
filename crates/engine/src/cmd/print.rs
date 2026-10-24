@@ -599,7 +599,7 @@ pub fn expand_header_footer(spec: &str, cx: &HfContext) -> [HfSection; 3] {
                 i += rest.chars().count() + 1;
             }
             d if d.is_ascii_digit() => {
-                let digits: String = std::iter::once(d).chain(chars[i..].iter().copied().take_while(|c| c.is_ascii_digit())).take(3).collect();
+                let digits: String = std::iter::once(d).chain(chars[i..].iter().copied().take_while(char::is_ascii_digit)).take(3).collect();
                 i += digits.len() - 1;
                 if let Ok(v) = digits.parse::<f32>() {
                     sec.size = Some(v.clamp(1.0, 409.0));

@@ -388,9 +388,9 @@ fn ordinal_suffix(n: i64, suffix: &str) -> String {
 /// `Item 007` → ("Item ", 7, "", 3); `3rd` style leading numbers → ("", 3, "rd", 1).
 fn split_num(t: &str) -> Option<(String, i64, String, usize)> {
     let chars: Vec<char> = t.chars().collect();
-    let end = chars.iter().rposition(|c| c.is_ascii_digit())?;
+    let end = chars.iter().rposition(char::is_ascii_digit)?;
     let mut start = end;
-    while start > 0 && chars.get(start - 1).is_some_and(|c| c.is_ascii_digit()) {
+    while start > 0 && chars.get(start - 1).is_some_and(char::is_ascii_digit) {
         start -= 1;
     }
     let digits: String = chars.get(start..=end)?.iter().collect();

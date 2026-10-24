@@ -244,7 +244,7 @@ fn find_pivot(s: &Session, p: &Json) -> Result<(usize, usize)> {
 }
 
 fn area_param(cmd: &str, v: Option<&str>) -> Result<&'static str> {
-    match v.map(|x| x.to_ascii_lowercase()) {
+    match v.map(str::to_ascii_lowercase) {
         Some(a) if a == "rows" || a == "row" => Ok("rows"),
         Some(a) if a == "columns" || a == "column" || a == "cols" => Ok("columns"),
         Some(a) if a == "values" || a == "value" || a == "data" => Ok("values"),

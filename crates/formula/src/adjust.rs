@@ -3,7 +3,7 @@
 
 use gridcraft_core::{CellError, MAX_COLS, MAX_ROWS, RangeRef};
 
-use crate::ast::*;
+use crate::ast::{Anchor, Expr, RefKind, Reference, SheetSel, clamp_anchor};
 
 /// Copy/fill: relative parts move by `(dr, dc)`. References pushed off the sheet become `#REF!`.
 pub fn shift_relative(e: Expr, dr: i64, dc: i64) -> Expr {

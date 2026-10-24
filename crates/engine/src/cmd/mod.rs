@@ -165,7 +165,7 @@ pub fn find_command(id: &str) -> Option<&'static CommandSpec> {
     test_commands().iter().find(|c| c.id == id).copied()
 }
 
-static TEST_COMMANDS: std::sync::Mutex<Vec<&'static CommandSpec>> = std::sync::Mutex::new(Vec::new());
+static TEST_COMMANDS: std::sync::Mutex<Vec<&CommandSpec>> = std::sync::Mutex::new(Vec::new());
 
 /// Test-only: register an extra command so UI integration tests can prove a pending
 /// keytip becomes live the moment its command lands (see crates/ui-egui/tests/keytips.rs).

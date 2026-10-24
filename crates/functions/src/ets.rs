@@ -278,7 +278,7 @@ fn aggregate(kind: Aggregate, xs: &mut [f64]) -> Option<f64> {
         Aggregate::Max => xs.iter().copied().reduce(f64::max),
         Aggregate::Min => xs.iter().copied().reduce(f64::min),
         Aggregate::Median => {
-            xs.sort_by(|a, b| a.total_cmp(b));
+            xs.sort_by(f64::total_cmp);
             let k = xs.len() / 2;
             let hi = xs.get(k).copied()?;
             if xs.len() % 2 == 1 { Some(hi) } else { Some((xs.get(k.checked_sub(1)?).copied()? + hi) / 2.0) }
@@ -415,7 +415,7 @@ impl Timeline {
             return None;
         }
         let mut sorted = times.to_vec();
-        sorted.sort_by(|a, b| a.total_cmp(b));
+        sorted.sort_by(f64::total_cmp);
         sorted.dedup();
         let axis = detect_axis(&sorted, sys).ok()?;
         let last = axis.position(*sorted.last()?)?.round();

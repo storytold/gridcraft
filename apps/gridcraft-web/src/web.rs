@@ -350,7 +350,7 @@ fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
         js_sys::Reflect::get(&window, &JsValue::from_str("showSaveFilePicker")).ok().and_then(|v| v.dyn_into().ok());
 
     if let Some(picker_fn) = show_picker_fn {
-        let ext = std::path::Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("xlsx").to_ascii_lowercase();
+        let ext = std::path::Path::new(name).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("xlsx").to_ascii_lowercase();
         let dot_ext = format!(".{ext}");
         let mime = mime_for(name);
 

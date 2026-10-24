@@ -20,7 +20,7 @@ const EXAMPLE_EXT: &[&str] = &["csv", "tsv", "json"];
 const ASSET_DIRS: &[&str] = &["assets/", "docs/brand/", "docs/images/"];
 
 fn ext(path: &str) -> String {
-    Path::new(path).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default()
+    Path::new(path).extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).unwrap_or_default()
 }
 
 pub fn is_asset(path: &str) -> bool {

@@ -232,7 +232,7 @@ fn guarded<T>(step: usize, kind: &'static str, f: impl FnOnce() -> Result<T, Str
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(fail(step, kind, e)),
         Err(p) => {
-            let msg = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
+            let msg = p.downcast_ref::<&str>().map(ToString::to_string).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
             Err(fail(step, kind, format!("panicked: {msg}")))
         }
     }

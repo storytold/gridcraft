@@ -352,8 +352,8 @@ fn new_tiles(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
 /// File name and folder of a recent path, split as text.
 fn split_path(path: &str) -> (String, String) {
     let p = std::path::Path::new(path);
-    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or(path).to_string();
-    let folder = p.parent().and_then(|f| f.to_str()).unwrap_or("").to_string();
+    let name = p.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(path).to_string();
+    let folder = p.parent().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_string();
     (name, folder)
 }
 
@@ -888,7 +888,7 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
         _ => return false,
     };
     let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-    let stem = std::path::Path::new(&title).file_stem().and_then(|s| s.to_str()).unwrap_or("Book1").to_string();
+    let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
     if let Some(pick) = &app.services.pick_save {
         let Some(path) = pick(&format!("{stem}.{fmt}")) else { return false };
         // The picker may suggest a workbook extension; the export writes the chosen format.

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use gridcraft_core::addr::{letters_to_col, parse_a1_prefix};
 use gridcraft_core::{CellError, MAX_ROWS};
 
-use crate::ast::*;
+use crate::ast::{Anchor, BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, TrimMode, UnOp};
 use crate::lexer::{Tok, Token, tokenize_locale};
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]

@@ -261,7 +261,7 @@ fn try_load(paths: &[(&str, u32)]) -> Option<FontData> {
 /// looked for again next time.
 #[cfg(not(target_arch = "wasm32"))]
 fn font_file(path: &str, index: u32) -> Option<&'static [u8]> {
-    static FILES: std::sync::Mutex<std::collections::BTreeMap<String, &'static [u8]>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+    static FILES: std::sync::Mutex<std::collections::BTreeMap<String, &[u8]>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
     let mut files = FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(&bytes) = files.get(path) {
         return font_parses(bytes, index).then_some(bytes);
@@ -630,12 +630,13 @@ fn cjk_han_japanese() -> Vec<(String, u32)> {
 fn cjk_han_simplified() -> Vec<(String, u32)> {
     let mac = "/System/Library/Fonts";
     let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
-    let mut v: Vec<(String, u32)> = Vec::new();
-    v.push((format!("{win}\\msyh.ttc"), 0)); // Microsoft YaHei
-    v.push((format!("{win}\\simsun.ttc"), 0)); // SimSun
-    v.push((format!("{win}\\simhei.ttf"), 0)); // SimHei
-    v.push((format!("{mac}/Hiragino Sans GB.ttc"), 0)); // ships on every recent macOS
-    v.push((format!("{mac}/PingFang.ttc"), 0)); // older macOS only; now a downloadable asset
+    let mut v: Vec<(String, u32)> = vec![
+        (format!("{win}\\msyh.ttc"), 0),            // Microsoft YaHei
+        (format!("{win}\\simsun.ttc"), 0),          // SimSun
+        (format!("{win}\\simhei.ttf"), 0),          // SimHei
+        (format!("{mac}/Hiragino Sans GB.ttc"), 0), // ships on every recent macOS
+        (format!("{mac}/PingFang.ttc"), 0),         // older macOS only; now a downloadable asset
+    ];
     for d in LINUX_CJK_DIRS {
         v.push((format!("{d}/NotoSansCJKsc-Regular.otf"), 0));
         v.push((format!("{d}/NotoSansCJK-Regular.ttc"), 2)); // SC face
@@ -678,12 +679,13 @@ fn thai() -> Vec<(String, u32)> {
         "/usr/share/fonts",
         "/usr/share/fonts/chromeos/noto", // ChromeOS's Linux container (#1762)
     ];
-    let mut v: Vec<(String, u32)> = Vec::new();
-    v.push((format!("{win}\\LeelawUI.ttf"), 0)); // Leelawadee UI
-    v.push((format!("{win}\\tahoma.ttf"), 0)); // Tahoma
-    v.push((format!("{win}\\micross.ttf"), 0)); // Microsoft Sans Serif
-    v.push((format!("{mac_sup}/Thonburi.ttc"), 0));
-    v.push((format!("{mac_sys}/SukhumvitSet.ttc"), 0));
+    let mut v: Vec<(String, u32)> = vec![
+        (format!("{win}\\LeelawUI.ttf"), 0), // Leelawadee UI
+        (format!("{win}\\tahoma.ttf"), 0),   // Tahoma
+        (format!("{win}\\micross.ttf"), 0),  // Microsoft Sans Serif
+        (format!("{mac_sup}/Thonburi.ttc"), 0),
+        (format!("{mac_sys}/SukhumvitSet.ttc"), 0),
+    ];
     for d in lin {
         v.push((format!("{d}/NotoSansThai-Regular.ttf"), 0));
         v.push((format!("{d}/tlwg/Garuda.ttf"), 0));
@@ -701,11 +703,12 @@ fn lao() -> Vec<(String, u32)> {
     let mac_sup = "/System/Library/Fonts/Supplemental";
     let win = std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into());
     let lin = ["/usr/share/fonts/truetype/noto", "/usr/share/fonts/opentype/noto", "/usr/share/fonts/truetype", "/usr/share/fonts"];
-    let mut v: Vec<(String, u32)> = Vec::new();
-    v.push((format!("{win}\\LeelawUI.ttf"), 0)); // Leelawadee UI
-    v.push((format!("{win}\\dokchamp.ttf"), 0)); // DokChampa
-    v.push((format!("{mac_sup}/Lao Sangam MN.ttf"), 0));
-    v.push((format!("{mac_sup}/Lao MN.ttc"), 0));
+    let mut v: Vec<(String, u32)> = vec![
+        (format!("{win}\\LeelawUI.ttf"), 0), // Leelawadee UI
+        (format!("{win}\\dokchamp.ttf"), 0), // DokChampa
+        (format!("{mac_sup}/Lao Sangam MN.ttf"), 0),
+        (format!("{mac_sup}/Lao MN.ttc"), 0),
+    ];
     for d in lin {
         v.push((format!("{d}/NotoSansLao-Regular.ttf"), 0));
         v.push((format!("{d}/lao/Phetsarath_OT.ttf"), 0));
@@ -728,16 +731,17 @@ fn hebrew() -> Vec<(String, u32)> {
         "/usr/share/fonts",
         "/usr/share/fonts/chromeos/noto", // ChromeOS's Linux container (#1762)
     ];
-    let mut v: Vec<(String, u32)> = Vec::new();
-    v.push((format!("{win}\\david.ttf"), 0)); // David
-    v.push((format!("{win}\\frank.ttf"), 0)); // FrankRuehl
-    v.push((format!("{win}\\tahoma.ttf"), 0)); // Tahoma
-    v.push((format!("{mac_sys}/ArialHB.ttc"), 0)); // Arial Hebrew
-    v.push((format!("{mac_sys}/SFHebrew.ttf"), 0));
-    v.push((format!("{mac_sup}/Arial Hebrew.ttf"), 0));
-    v.push((format!("{mac_sup}/David.ttf"), 0));
-    v.push((format!("{mac_sys}/LucidaGrande.ttc"), 0));
-    v.push((format!("{mac_sys}/Lucida Grande.ttc"), 0));
+    let mut v: Vec<(String, u32)> = vec![
+        (format!("{win}\\david.ttf"), 0),      // David
+        (format!("{win}\\frank.ttf"), 0),      // FrankRuehl
+        (format!("{win}\\tahoma.ttf"), 0),     // Tahoma
+        (format!("{mac_sys}/ArialHB.ttc"), 0), // Arial Hebrew
+        (format!("{mac_sys}/SFHebrew.ttf"), 0),
+        (format!("{mac_sup}/Arial Hebrew.ttf"), 0),
+        (format!("{mac_sup}/David.ttf"), 0),
+        (format!("{mac_sys}/LucidaGrande.ttc"), 0),
+        (format!("{mac_sys}/Lucida Grande.ttc"), 0),
+    ];
     for d in lin {
         v.push((format!("{d}/NotoSansHebrew-Regular.ttf"), 0));
         v.push((format!("{d}/dejavu/DejaVuSans.ttf"), 0));

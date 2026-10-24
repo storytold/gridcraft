@@ -343,7 +343,7 @@ impl Dialog {
                 // The file rides along in the values (`path` on the desktop, `name` and `base64`
                 // on the web) and goes back to `file.open` with the password.
                 let source = p("path").as_str().or(p("name").as_str()).map(str::to_string).unwrap_or_default();
-                let file = std::path::Path::new(&source).file_name().and_then(|n| n.to_str()).unwrap_or("This workbook").to_string();
+                let file = std::path::Path::new(&source).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("This workbook").to_string();
                 // An empty password from the start, so OK on the untouched field says "incorrect"
                 // rather than asking for the password again.
                 let mut values = params.clone();
@@ -1336,7 +1336,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             && let Some(path) = pick()
                         {
                             d.values.remove("base64");
-                            let alt = std::path::Path::new(&path).file_name().and_then(|name| name.to_str()).unwrap_or("");
+                            let alt = std::path::Path::new(&path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("");
                             d.values.insert("alt".into(), json!(alt));
                             d.values.insert("path".into(), json!(path));
                         }

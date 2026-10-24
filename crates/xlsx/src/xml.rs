@@ -360,7 +360,7 @@ pub fn encode_xstring(s: &str) -> String {
 }
 
 fn looks_like_escape(chars: &[char], i: usize) -> bool {
-    chars.get(i + 1) == Some(&'x') && chars.get(i + 6) == Some(&'_') && (i + 2..i + 6).all(|k| chars.get(k).is_some_and(|c| c.is_ascii_hexdigit()))
+    chars.get(i + 1) == Some(&'x') && chars.get(i + 6) == Some(&'_') && (i + 2..i + 6).all(|k| chars.get(k).is_some_and(char::is_ascii_hexdigit))
 }
 
 fn escape_unit(chars: &[char], i: usize) -> Option<u32> {

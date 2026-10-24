@@ -304,7 +304,7 @@ fn walk(dir: &Path, depth: usize, out: &mut Discovery) -> bool {
             if !walk(&p, depth + 1, out) {
                 return false;
             }
-        } else if p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("xlsx") || e.eq_ignore_ascii_case("xlsm"))
+        } else if p.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("xlsx") || e.eq_ignore_ascii_case("xlsm"))
             && !out.add_file(p)
         {
             return false;
@@ -319,7 +319,7 @@ fn walk(dir: &Path, depth: usize, out: &mut Discovery) -> bool {
 pub fn check_bytes(path: &str, bytes: &[u8], opts: &Options) -> FileReport {
     let guarded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check_inner(path, bytes, opts)));
     guarded.unwrap_or_else(|p| {
-        let msg = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
+        let msg = p.downcast_ref::<&str>().map(ToString::to_string).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
         FileReport { path: path.to_string(), error: Some(format!("internal error while checking: {msg}")), ..Default::default() }
     })
 }

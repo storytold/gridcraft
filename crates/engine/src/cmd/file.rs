@@ -69,9 +69,9 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Ods | crate::io::FileKind::Xlsb | crate::io::FileKind::Xls))
             || matches!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Ods | gridcraft_xlsx::Format::Xlsb | gridcraft_xlsx::Format::Xls);
     let title = if imported {
-        format!("{} (imported).xlsx", std::path::Path::new(&name).file_stem().and_then(|n| n.to_str()).unwrap_or("Book"))
+        format!("{} (imported).xlsx", std::path::Path::new(&name).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book"))
     } else {
-        std::path::Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or("Book").to_string()
+        std::path::Path::new(&name).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("Book").to_string()
     };
     // An import has no save target: ordinary Save must ask for a new destination. Neither does a
     // workbook decrypted with its password, so Save never replaces the encrypted original with
@@ -114,7 +114,7 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     };
     // A PDF is a print of the sheet (Page Setup applies), not a copy of the workbook: the
     // document keeps its file and its unsaved changes.
-    if std::path::Path::new(&path).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+    if std::path::Path::new(&path).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
         return super::print::export_pdf(s, &json!({"path": path}));
     }
     let d = s.doc_mut()?;

@@ -742,7 +742,7 @@ fn im_binary(a: &[Arg], f: fn(Cx, Cx) -> R<Cx>) -> R<Value> {
     fmt_complex(f(x, y)?, s.unwrap_or('i'))
 }
 fn imdiv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_binary(a, |x, y| x.div(y))
+    im_binary(a, Cx::div)
 }
 fn imsub(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     im_binary(a, |x, y| Ok(x.sub(y)))

@@ -123,6 +123,60 @@ impl Criterion {
         Criterion { op, operand, bare_empty: false }
     }
 
+    fn matches_blank(&self, v: &Value) -> bool {
+        let blank = matches!(v, Value::Empty);
+        match self.op {
+            Op::Eq => blank,
+            Op::Ne => !blank,
+            // "<" / ">" with nothing: Excel compares against "" for text cells, but an
+            // empty string never matches ("<=" and ">=" count it in neither).
+            _ => match v {
+                Value::Text(t) if !t.is_empty() => cmp_op(self.op, compare_text(t, "")),
+                _ => false,
+            },
+        }
+    }
+
+    fn matches_number(&self, v: &Value, n: f64) -> bool {
+        let cell = match v {
+            Value::Number(x) => Some(*x),
+            // Numeric text matches only for equality (COUNTIF("1") counts text "1").
+            Value::Text(t) if matches!(self.op, Op::Eq | Op::Ne) => parse_number_text(t),
+            _ => None,
+        };
+        match cell {
+            Some(x) => cmp_op(self.op, compare_numbers(x, n)),
+            None => self.op == Op::Ne,
+        }
+    }
+
+    fn matches_text(&self, v: &Value, pat: &str) -> bool {
+        match self.op {
+            Op::Eq | Op::Ne => {
+                // Blank cells hold no text: `"*"` skips them and `"<>*"` counts them.
+                let cell_text = match v {
+                    Value::Text(t) => Some(t.to_string()),
+                    _ => None,
+                };
+                let m = cell_text.is_some_and(|t| wildcard_match(pat, &t));
+                if self.op == Op::Eq { m } else { !m }
+            }
+            _ => match v {
+                Value::Text(t) => cmp_op(self.op, compare_text(t, pat)),
+                _ => false,
+            },
+        }
+    }
+
+    fn matches_cut_text(&self, v: &Value, kept: &str) -> bool {
+        match self.op {
+            Op::Eq => false,
+            Op::Ne => true,
+            Op::Lt | Op::Le => matches!(v, Value::Text(t) if compare_text(t, kept) != Ordering::Greater),
+            Op::Gt | Op::Ge => matches!(v, Value::Text(t) if compare_text(t, kept) == Ordering::Greater),
+        }
+    }
+
     /// Whether a cell value satisfies the criterion.
     pub(crate) fn matches(&self, v: &Value) -> bool {
         let v = match v {
@@ -133,31 +187,8 @@ impl Criterion {
             return matches!(&v, Value::Empty) || matches!(&v, Value::Text(t) if t.is_empty());
         }
         match &self.operand {
-            Operand::Blank => {
-                let blank = matches!(v, Value::Empty);
-                match self.op {
-                    Op::Eq => blank,
-                    Op::Ne => !blank,
-                    // "<" / ">" with nothing: Excel compares against "" for text cells, but an
-                    // empty string never matches ("<=" and ">=" count it in neither).
-                    _ => match &v {
-                        Value::Text(t) if !t.is_empty() => cmp_op(self.op, compare_text(t, "")),
-                        _ => false,
-                    },
-                }
-            }
-            Operand::Number(n) => {
-                let cell = match &v {
-                    Value::Number(x) => Some(*x),
-                    // Numeric text matches only for equality (COUNTIF("1") counts text "1").
-                    Value::Text(t) if matches!(self.op, Op::Eq | Op::Ne) => parse_number_text(t),
-                    _ => None,
-                };
-                match cell {
-                    Some(x) => cmp_op(self.op, compare_numbers(x, *n)),
-                    None => self.op == Op::Ne,
-                }
-            }
+            Operand::Blank => self.matches_blank(&v),
+            Operand::Number(n) => self.matches_number(&v, *n),
             Operand::Bool(b) => match &v {
                 Value::Bool(x) => cmp_op(self.op, x.cmp(b)),
                 _ => self.op == Op::Ne,
@@ -166,27 +197,8 @@ impl Criterion {
                 Value::Error(x) => cmp_op(self.op, x.code().cmp(&e.code())),
                 _ => self.op == Op::Ne,
             },
-            Operand::Text(pat) => match self.op {
-                Op::Eq | Op::Ne => {
-                    // Blank cells hold no text: `"*"` skips them and `"<>*"` counts them.
-                    let cell_text = match &v {
-                        Value::Text(t) => Some(t.to_string()),
-                        _ => None,
-                    };
-                    let m = cell_text.is_some_and(|t| wildcard_match(pat, &t));
-                    if self.op == Op::Eq { m } else { !m }
-                }
-                _ => match &v {
-                    Value::Text(t) => cmp_op(self.op, compare_text(t, pat)),
-                    _ => false,
-                },
-            },
-            Operand::CutText(kept) => match self.op {
-                Op::Eq => false,
-                Op::Ne => true,
-                Op::Lt | Op::Le => matches!(&v, Value::Text(t) if compare_text(t, kept) != Ordering::Greater),
-                Op::Gt | Op::Ge => matches!(&v, Value::Text(t) if compare_text(t, kept) == Ordering::Greater),
-            },
+            Operand::Text(pat) => self.matches_text(&v, pat),
+            Operand::CutText(kept) => self.matches_cut_text(&v, kept),
         }
     }
 }

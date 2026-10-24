@@ -43,7 +43,7 @@ fn var_p(x: &[f64]) -> R<f64> {
 }
 
 fn sorted(mut v: Vec<f64>) -> Vec<f64> {
-    v.sort_by(|a, b| a.total_cmp(b));
+    v.sort_by(f64::total_cmp);
     v
 }
 

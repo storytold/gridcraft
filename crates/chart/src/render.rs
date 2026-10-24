@@ -425,7 +425,7 @@ fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis
     let maxw = |ctx: &Ctx, l: &[(f64, String)]| l.iter().map(|(_, t)| ctx.tw(t, ls)).fold(0.0f32, f32::max);
     if !horizontal {
         let left = (maxw(ctx, &ylabels) + 6.0).min(area.w * 0.4);
-        let y2labels = y2.map(|a| a.labels());
+        let y2labels = y2.map(ValAxis::labels);
         let right = match (&y2labels, &cat) {
             (Some(l), _) => (maxw(ctx, l) + 6.0).min(area.w * 0.3),
             (None, CatAxis::Numeric(s, f)) => (ctx.tw(&f.format(s.max, Some(s.step)), ls) / 2.0).min(area.w * 0.2),

@@ -27,8 +27,8 @@ pub fn run(root: &Path) -> Result<(), String> {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else { continue };
-        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+        let Some(stem) = path.file_stem().and_then(std::ffi::OsStr::to_str).map(str::to_owned) else { continue };
+        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
             continue;
         }
         let Ok(source) = std::fs::read_to_string(&path) else { continue };

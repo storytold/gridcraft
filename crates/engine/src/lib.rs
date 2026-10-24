@@ -572,8 +572,11 @@ impl Session {
         let result = match result {
             Ok(r) => r,
             Err(p) => {
-                let msg =
-                    p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
+                let msg = p
+                    .downcast_ref::<&str>()
+                    .map(ToString::to_string)
+                    .or_else(|| p.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "panic".into());
                 // Restore the workbook and its history as they were, and drop the undo groups the
                 // command opened.
                 self.groups.retain(|g| g.id < first_group);

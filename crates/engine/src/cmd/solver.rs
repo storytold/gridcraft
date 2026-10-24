@@ -28,8 +28,10 @@ use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{Cell, DefinedName, Sheet, Workbook};
 use serde_json::{Value as Json, json};
 
+use super::check_arrays;
 use super::whatif::Trial;
-use super::*;
+use super::{CommandSpec, Ctx, DocState, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, str_param};
+use gridcraft_core::split_sheet;
 
 const CMD: &str = "data.solver";
 const REPORT_CMD: &str = "data.solverReport";
@@ -1705,6 +1707,26 @@ fn title(out: &mut Lines, kind: ReportKind, sheet: &str) -> u32 {
     3
 }
 
+fn format_constraint_row(sh: &Sheet, c: &Constraint, cell: CellRef, v: f64, rhs: &[f64], k: usize) -> Vec<Value> {
+    let (formula, status, slack) = match (c.rel, &c.rhs) {
+        (Rel::Int, _) => (format!("{}=Integer", abs_ref(cell)), "Binding", 0.0),
+        (Rel::Bin, _) => (format!("{}=Binary", abs_ref(cell)), "Binding", 0.0),
+        (rel, rhs_cells) => {
+            let b = rhs.get(k).or_else(|| rhs.first()).copied().unwrap_or(f64::NAN);
+            let rhs_text = match rhs_cells {
+                Rhs::Cells(cells) => cells.get(k).or_else(|| cells.first()).map(|c| abs_ref(*c)).unwrap_or_default(),
+                _ => gridcraft_core::number_to_text(b),
+            };
+            let slack = (v - b).abs();
+            let binding = rel == Rel::Eq || slack <= PRECISION * (1.0 + b.abs());
+            let slack = if binding { 0.0 } else { slack };
+            (format!("{}{}{rhs_text}", abs_ref(cell), rel.text()), if binding { "Binding" } else { "Not Binding" }, slack)
+        }
+    };
+    let num = |v: f64| if v.is_finite() { Value::number(v) } else { Value::Error(gridcraft_core::CellError::Value) };
+    vec![Value::text(abs_ref(cell)), Value::text(cell_name(sh, cell)), num(v), Value::text(formula), Value::text(status), num(slack)]
+}
+
 fn answer_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Lines {
     let m = inp.model;
     let mut trial = Trial::new(d);
@@ -1768,29 +1790,7 @@ fn answer_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Lines {
             Rhs::None => vec![],
         };
         for (k, (cell, v)) in c.lhs.iter().zip(&lhs).enumerate() {
-            let (formula, status, slack) = match (c.rel, &c.rhs) {
-                (Rel::Int, _) => (format!("{}=Integer", abs_ref(*cell)), "Binding", 0.0),
-                (Rel::Bin, _) => (format!("{}=Binary", abs_ref(*cell)), "Binding", 0.0),
-                (rel, rhs_cells) => {
-                    let b = rhs.get(k).or_else(|| rhs.first()).copied().unwrap_or(f64::NAN);
-                    let rhs_text = match rhs_cells {
-                        Rhs::Cells(cells) => cells.get(k).or_else(|| cells.first()).map(|c| abs_ref(*c)).unwrap_or_default(),
-                        _ => gridcraft_core::number_to_text(b),
-                    };
-                    let slack = (v - b).abs();
-                    let binding = rel == Rel::Eq || slack <= PRECISION * (1.0 + b.abs());
-                    let slack = if binding { 0.0 } else { slack };
-                    (format!("{}{}{rhs_text}", abs_ref(*cell), rel.text()), if binding { "Binding" } else { "Not Binding" }, slack)
-                }
-            };
-            rows.push(vec![
-                Value::text(abs_ref(*cell)),
-                Value::text(cell_name(sh, *cell)),
-                num(*v),
-                Value::text(formula),
-                Value::text(status),
-                num(slack),
-            ]);
+            rows.push(format_constraint_row(sh, c, *cell, *v, &rhs, k));
         }
     }
     table(&mut out, r + 1, &["Cell", "Name", "Cell Value", "Formula", "Status", "Slack"], rows);

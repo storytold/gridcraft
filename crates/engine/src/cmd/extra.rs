@@ -941,7 +941,7 @@ fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("Nothing to import.".into()));
     }
     let name = str_param(p, "sheet").map(str::to_string).or_else(|| {
-        str_param(p, "path").and_then(|x| std::path::Path::new(x).file_stem().and_then(|f| f.to_str()).map(|f| f.chars().take(31).collect()))
+        str_param(p, "path").and_then(|x| std::path::Path::new(x).file_stem().and_then(std::ffi::OsStr::to_str).map(|f| f.chars().take(31).collect()))
     });
     let r = s.execute("home.insertSheet", json!({"name": name})).or_else(|_| s.execute("home.insertSheet", json!({})))?;
     let w = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);

@@ -180,11 +180,11 @@ fn services() -> Services {
         })),
         pick_save: Some(Box::new(|suggested: &str| {
             let path = std::path::Path::new(suggested);
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Book1").to_string();
+            let stem = path.file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
             // The suggested name's type (an export asks for .pdf, .csv or .html) comes first.
             const TYPES: [(&str, &str); 4] =
                 [("Excel Workbook (.xlsx)", "xlsx"), ("CSV UTF-8 (.csv)", "csv"), ("Web Page (.html)", "html"), ("PDF (.pdf)", "pdf")];
-            let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).filter(|e| TYPES.iter().any(|(_, x)| x == e));
+            let ext = path.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).filter(|e| TYPES.iter().any(|(_, x)| x == e));
             let ext = ext.unwrap_or_else(|| "xlsx".to_string());
             let mut dialog = rfd::FileDialog::new().set_file_name(format!("{stem}.{ext}"));
             for (label, x) in TYPES.iter().filter(|(_, x)| *x == ext).chain(TYPES.iter().filter(|(_, x)| *x != ext)) {

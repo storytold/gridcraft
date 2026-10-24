@@ -7,7 +7,10 @@ use gridcraft_core::{CellRef, RangeRef, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::cell::{Cell, CellPicture};
-use crate::features::*;
+use crate::features::{
+    AutoFilter, Chart, Comment, CondFormat, Hyperlink, Image, LineInfo, PivotTable, PrintSettings, Shape, SheetProtection, Slicer, Sparkline, Table,
+    Validation,
+};
 use crate::store::CellStore;
 use crate::style::{Color, StyleId};
 
@@ -613,8 +616,11 @@ mod tests {
 
 // CellRef is a struct, so encode the sparse map as entries for JSON as well as other formats.
 mod picture_map {
-    use super::*;
-    use serde::{Deserializer, Serializer};
+    use crate::cell::CellPicture;
+    use gridcraft_core::CellRef;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
     pub fn serialize<S: Serializer>(map: &BTreeMap<CellRef, Arc<CellPicture>>, serializer: S) -> Result<S::Ok, S::Error> {
         map.iter().collect::<Vec<_>>().serialize(serializer)
     }

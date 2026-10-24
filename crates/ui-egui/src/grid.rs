@@ -2184,9 +2184,8 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 }
             }
             return;
-        } else {
-            app.selected_chart = None;
         }
+        app.selected_chart = None;
     }
     // A right-click on a chart, picture, shape or slicer opens the object's menu, not the cell's
     // under it; a right press that wobbles into a drag counts too (#2067).
