@@ -455,6 +455,18 @@ pub fn font_definitions_for_language(language: crate::i18n::Language) -> FontDef
 /// installed, so cells set in them render with them; the rest fall back to the roles. The bound
 /// families are recorded in [`crate::fonts`] so [`cell_family`] only names a family egui has.
 pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -> FontDefinitions {
+    let families: Vec<(String, Vec<crate::fonts::Face>)> = crate::fonts::installed_among(used)
+        .into_iter()
+        .map(|f| {
+            let faces = crate::fonts::faces_of(&f);
+            (f, faces)
+        })
+        .collect();
+    font_definitions_binding(language, &families)
+}
+
+/// [`font_definitions_with`] binding each `(name, faces)` pair as given.
+fn font_definitions_binding(language: crate::i18n::Language, families: &[(String, Vec<crate::fonts::Face>)]) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let base_prop: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let base_mono: Vec<String> = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
@@ -486,10 +498,6 @@ pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -
         fonts.families.insert(FontFamily::Name(role.into()), chain);
         bound.push(role.to_string());
     }
-    // Installed workbook fonts, so a cell's chosen font actually renders in it.
-    for family in crate::fonts::installed_among(used) {
-        bound.extend(crate::fonts::bind_family(&mut fonts, &family));
-    }
     // Interface text (formula bar, name box, dialogs) falls back to the cell font before the
     // script faces: whatever a cell can draw, the formula bar can draw too, even where no script
     // fallback face was found (#349: macOS UI font without Hebrew, cells in Arial with it).
@@ -507,6 +515,12 @@ pub fn font_definitions_with(language: crate::i18n::Language, used: &[String]) -
     // Default proportional text in widgets uses the UI font.
     if let Some(ui) = fonts.families.get(&FontFamily::Name(UI.into())).cloned() {
         fonts.families.insert(FontFamily::Proportional, ui);
+    }
+    // Installed workbook fonts, so a cell's chosen font actually renders in it. Bound after the
+    // Proportional chain becomes the UI chain: each bound family falls back to that chain, and
+    // only then does it carry the script faces (a Latin font must not draw Chinese as tofu).
+    for (family, faces) in families {
+        bound.extend(crate::fonts::bind_faces(&mut fonts, family, faces));
     }
     drop_unparseable_fonts(&mut fonts);
     // Only families egui still has data for count as bound (a dropped face can empty a chain).
@@ -895,6 +909,32 @@ mod font_binding_tests {
 mod tests {
     use super::*;
     use crate::i18n::Language;
+
+    #[test]
+    fn a_bound_workbook_font_falls_back_to_the_interface_chain() {
+        let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // A Latin workbook font must still draw Chinese: its chain ends with the UI chain, which
+        // carries the script faces, not with egui's Latin-only default chain.
+        let dir = std::env::temp_dir().join(format!("gridcraft-theme-bind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("Ubuntu-Light.ttf");
+        std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT).expect("write");
+        let face = crate::fonts::Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], path, index: 0, weight: 300.0, italic: false };
+        let fonts = font_definitions_binding(Language::Zh, &[("Ubuntu".into(), vec![face])]);
+        let ui = fonts.families.get(&FontFamily::Name(UI.into())).cloned().unwrap_or_default();
+        for (b, i) in [(false, false), (true, false), (false, true), (true, true)] {
+            let role = crate::fonts::role_key("Ubuntu", b, i);
+            let chain = fonts.families.get(&FontFamily::Name(role.as_str().into())).expect("bound role");
+            assert!(chain.ends_with(&ui), "{role}: {chain:?} should end with the UI chain {ui:?}");
+        }
+        crate::fonts::set_bound(always_bound_roles());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn always_bound_roles() -> Vec<String> {
+        [UI, UI_BOLD, CELL, CELL_BOLD, CELL_ITALIC, CELL_BOLD_ITALIC, SERIF, MONO].iter().map(|s| s.to_string()).collect()
+    }
 
     #[test]
     fn fallback_faces_are_appended_to_every_family() {
