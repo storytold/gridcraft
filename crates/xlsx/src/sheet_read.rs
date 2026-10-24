@@ -17,7 +17,7 @@ use crate::fmla::from_file;
 use crate::package::Rel;
 use crate::read::Ctx;
 use crate::styles::read_color;
-use crate::tables::{col_width_to_px, paper_name, pt_to_px};
+use crate::tables::{DEFAULT_MDW, col_width_to_px, paper_name, pt_to_px};
 use crate::xml::{self, El};
 
 struct Shared {
@@ -81,7 +81,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                     }
                 }
                 if let Some(w) = e.attr_f64("defaultColWidth") {
-                    let px = col_width_to_px(w);
+                    let px = col_width_to_px(w, DEFAULT_MDW);
                     if px > 0.0 {
                         sheet.default_col_width = px;
                     }
@@ -314,7 +314,7 @@ fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Re
         let mut info = LineInfo::default();
         // A width without `customWidth` that equals the default is just the default.
         if let Some(w) = c.attr_f64("width") {
-            let px = col_width_to_px(w);
+            let px = col_width_to_px(w, DEFAULT_MDW);
             if c.flag("customWidth", false) || px != sheet.default_col_width {
                 info.size = Some(px);
             }

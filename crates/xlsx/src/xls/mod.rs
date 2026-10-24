@@ -20,7 +20,7 @@ use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{CalcMode, CalcSettings, Cell, DefinedName, Formula, LineInfo, NumFmt, Sheet, Style, StyleId, Visibility, Workbook};
 
 use crate::cfb::Compound;
-use crate::tables::{builtin_format, col_width_to_px, pt_to_px};
+use crate::tables::{DEFAULT_MDW, builtin_format, col_width_to_px, pt_to_px};
 use crate::{IoError, ReadReport};
 use formula::{Links, Mode, SupBook, Unsupported, Xti, cell_error, decode};
 use records::{Cursor, Record, Records};
@@ -697,7 +697,7 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
                 return Ok(());
             }
             let mut info = LineInfo::default();
-            let px = col_width_to_px(f64::from(width) / 256.0);
+            let px = col_width_to_px(f64::from(width) / 256.0, DEFAULT_MDW);
             if flags & 0x0002 != 0 || px != st.sheet.default_col_width {
                 info.size = Some(px);
             }

@@ -294,26 +294,33 @@ pub fn file_function_name(name: &str) -> Option<String> {
 
 // ---------------------------------------------------------------- units
 
-/// Column width as stored in a file (characters including padding) → model width (px).
-pub fn col_width_to_px(w: f64) -> f32 {
+/// The maximum digit width (px) of Calibri 11 at 96 dpi, the default Normal font. A column width
+/// in a file counts characters of the Normal font's widest digit, so pixels depend on it.
+pub const DEFAULT_MDW: u32 = 7;
+
+/// Column width as stored in a file (characters including padding) → model width (px), for a
+/// Normal font whose widest digit is `mdw` px wide (ECMA-376 §18.3.1.13).
+pub fn col_width_to_px(w: f64, mdw: u32) -> f32 {
     if !w.is_finite() || w <= 0.0 {
         return 0.0;
     }
+    let m = f64::from(mdw.max(1));
     let w = w.min(255.0);
-    (((256.0 * w + (128.0f64 / 7.0).trunc()) / 256.0) * 7.0).trunc() as f32
+    (((256.0 * w + (128.0 / m).trunc()) / 256.0) * m).trunc() as f32
 }
 
-/// Model width (px) → stored column width.
-pub fn px_to_col_width(px: f32) -> f64 {
-    let px = (px.max(0.0) as f64).round().min(1790.0);
-    let back = |w: f64| col_width_to_px(w) as f64;
-    let chars = if px > 12.0 { ((px - 5.0) / 7.0 * 100.0 + 0.5).trunc() / 100.0 } else { px / 12.0 };
-    let w = ((chars * 7.0 + 5.0) / 7.0 * 256.0).trunc() / 256.0;
+/// Model width (px) → stored column width, for a Normal font whose widest digit is `mdw` px wide.
+pub fn px_to_col_width(px: f32, mdw: u32) -> f64 {
+    let m = f64::from(mdw.max(1));
+    let px = (px.max(0.0) as f64).round().min(255.0 * m + 5.0);
+    let back = |w: f64| col_width_to_px(w, mdw) as f64;
+    let chars = if px > 12.0 { ((px - 5.0) / m * 100.0 + 0.5).trunc() / 100.0 } else { px / 12.0 };
+    let w = ((chars * m + 5.0) / m * 256.0).trunc() / 256.0;
     if back(w) == px {
         return w;
     }
     // Smallest stored width that reads back as `px`.
-    let s = (px * 256.0 / 7.0 - 18.0).ceil().max(0.0);
+    let s = (px * 256.0 / m - (128.0 / m).trunc()).ceil().max(0.0);
     s / 256.0
 }
 
@@ -335,11 +342,18 @@ mod tests {
 
     #[test]
     fn widths() {
-        assert_eq!(col_width_to_px(9.140625), 64.0);
-        assert_eq!(px_to_col_width(64.0), 9.140625);
-        for px in 0..400 {
-            assert_eq!(col_width_to_px(px_to_col_width(px as f32)), px as f32, "px {px}");
+        assert_eq!(col_width_to_px(9.140625, DEFAULT_MDW), 64.0);
+        assert_eq!(px_to_col_width(64.0, DEFAULT_MDW), 9.140625);
+        for mdw in [5, 6, 7, 8, 9, 10, 12] {
+            for px in 0..400 {
+                assert_eq!(col_width_to_px(px_to_col_width(px as f32, mdw), mdw), px as f32, "px {px} at mdw {mdw}");
+            }
         }
+        // The spec's example: 8 characters of a 7 px digit store 8.7109375 and read back as 61 px.
+        assert_eq!(col_width_to_px(8.7109375, 7), 61.0);
+        // The same stored width is wider for a wider digit.
+        assert_eq!(col_width_to_px(15.31, 9), 138.0);
+        assert_eq!(col_width_to_px(15.31, 7), 107.0);
         assert_eq!(pt_to_px(15.0), 20.0);
         assert_eq!(px_to_pt(20.0), 15.0);
     }
