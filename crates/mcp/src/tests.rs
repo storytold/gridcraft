@@ -220,6 +220,23 @@ fn basic_tools() {
 }
 
 #[test]
+fn execute_command_acknowledges_null_without_replacing_data_or_errors() {
+    let mut s = server();
+    for (command, params) in [
+        ("home.columnWidth", json!({"cols": "A:A", "width": 130})),
+        ("home.rowHeight", json!({"rows": "1:1", "height": 36})),
+        ("pageLayout.orientation", json!({"orientation": "landscape"})),
+    ] {
+        assert_eq!(ok(&mut s, "execute_command", json!({"command": command, "params": params})), json!({"ok": true}), "{command}");
+    }
+
+    ok(&mut s, "set_cell", json!({"cell": "A1", "input": "5"}));
+    let cell = ok(&mut s, "execute_command", json!({"command": "cell.get", "params": {"cell": "A1"}}));
+    assert_eq!(cell["value"], json!(5.0));
+    assert!(fails(&mut s, "execute_command", json!({"command": "home.columnWidth", "params": {"cols": "A:A"}})).contains("width"));
+}
+
+#[test]
 fn sort_and_filter() {
     let mut s = server();
     ok(&mut s, "write_range", json!({"range": "A1", "values": [["Name", "Score"], ["b", 2], ["c", 3], ["a", 1]]}));

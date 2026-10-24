@@ -118,7 +118,8 @@ pub fn tool_definitions() -> Vec<Value> {
              docs with list_commands. Examples: {\"command\":\"cell.set\",\"params\":{\"cell\":\"B2\",\"input\":\"=SUM(A1:A9)\"}}; \
              {\"command\":\"home.bold\",\"params\":{\"range\":\"A1:C1\"}}; {\"command\":\"sheet.insert\"}; \
              {\"command\":\"data.removeDuplicates\",\"params\":{\"range\":\"A1:C20\"}}. Most commands act on the current selection \
-             when `range` is omitted. Programmatic calls never open dialogs: missing required params give an error.",
+             when `range` is omitted. Commands without a result return {\"ok\":true}; commands with data return that data. \
+             Programmatic calls never open dialogs: missing required params give an error.",
             obj(
                 json!({"command": string("Command id, e.g. \"cell.set\", \"home.fillColor\", \"insert.chart\""), "params": params_schema()}),
                 &["command"],
@@ -605,7 +606,8 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<Value, String> 
                 Some(v @ Value::Object(_)) => v.clone(),
                 Some(_) => return Err("`params` must be an object".into()),
             };
-            exec(b, cmd, p)
+            let result = exec(b, cmd, p)?;
+            if result.is_null() { Ok(json!({"ok": true})) } else { Ok(result) }
         }
         "list_commands" => b.call("engine.commands", pick(a, &["search"])),
         "inspect_workbook" => b.call("document.inspect", json!({})),
