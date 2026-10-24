@@ -328,6 +328,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Ir para o Cabeçalho",
         "Different First Page" => "Primeira Página Diferente",
         "Different Odd & Even Pages" => "Páginas Pares e Ímpares Diferentes",
+        "Scale with Document" => "Dimensionar com o Documento",
+        "Align with Page Margins" => "Alinhar com as Margens da Página",
         "Go to Footer" => "Ir para o Rodapé",
         "Ruler" => "Régua",
         // File › Backstage view.

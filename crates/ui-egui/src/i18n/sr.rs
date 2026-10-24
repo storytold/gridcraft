@@ -325,6 +325,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Idi na zaglavlje",
         "Different First Page" => "Drugačija prva stranica",
         "Different Odd & Even Pages" => "Drugačije neparne i parne stranice",
+        "Scale with Document" => "Skaliraj sa dokumentom",
+        "Align with Page Margins" => "Poravnaj sa marginama stranice",
         "Go to Footer" => "Idi na podnožje",
         "Ruler" => "Lenjir",
         "File" => "Datoteka",

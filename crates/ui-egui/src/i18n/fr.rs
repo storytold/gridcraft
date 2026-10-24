@@ -4,6 +4,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Different First Page" => "Première page différente",
         "Different Odd & Even Pages" => "Pages paires et impaires différentes",
+        "Scale with Document" => "Mettre à l'échelle avec le document",
+        "Align with Page Margins" => "Aligner sur les marges de la page",
         "Paste" => "Coller",
         "Paste Values" => "Coller les valeurs",
         "Paste Formulas" => "Coller les formules",

@@ -326,6 +326,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Naar koptekst",
         "Different First Page" => "Eerste pagina afwijkend",
         "Different Odd & Even Pages" => "Even en oneven pagina's afwijkend",
+        "Scale with Document" => "Meeschalen met document",
+        "Align with Page Margins" => "Uitlijnen op paginamarges",
         "Go to Footer" => "Naar voettekst",
         "Ruler" => "Liniaal",
         "File" => "Bestand",

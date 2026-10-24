@@ -139,7 +139,25 @@ impl SheetLayout {
         let [l, r, t, b, ..] = self.margins;
         ((self.page_w - l - r).max(36.0), (self.page_h - t - b).max(36.0))
     }
+    /// Left and right margins, in points, that header and footer sections line up with: the
+    /// page's side margins with Align with Page Margins on, otherwise 0.7 inch on each side, at
+    /// most a quarter of the page width.
+    pub(crate) fn hf_sides(&self) -> (f32, f32) {
+        if self.settings.hf_align_with_margins {
+            (self.margins[0], self.margins[1])
+        } else {
+            let side = HF_FIXED_SIDE_MARGIN.min(self.page_w / 4.0);
+            (side, side)
+        }
+    }
+    /// Scale of header and footer text: the print scale with Scale with Document on, otherwise 1.
+    pub(crate) fn hf_text_scale(&self) -> f32 {
+        if self.settings.hf_scale_with_doc { self.scale } else { 1.0 }
+    }
 }
+
+/// Side margin of headers and footers, in points, when Align with Page Margins is off.
+const HF_FIXED_SIDE_MARGIN: f32 = 0.7 * 72.0;
 
 /// Options shared by the print commands.
 #[derive(Clone, Debug, Default)]
@@ -1476,7 +1494,9 @@ fn draw_headings(pg: &mut Page, b: &Block, col_heads: bool, row_heads: bool, at:
 }
 
 fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::HfPage, cx: &HfContext) {
-    let [l, r, _, _, hm, fm] = lay.margins;
+    let [_, _, _, _, hm, fm] = lay.margins;
+    let (l, r) = lay.hf_sides();
+    let text_scale = lay.hf_text_scale();
     let pw = lay.page_w;
     let ph = lay.page_h;
     for (spec, header) in [(lay.settings.hf(which, false), true), (lay.settings.hf(which, true), false)] {
@@ -1488,7 +1508,7 @@ fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::
             if sec.text.trim().is_empty() {
                 continue;
             }
-            let size = sec.size.unwrap_or(10.0).clamp(1.0, 72.0);
+            let size = sec.size.unwrap_or(10.0).clamp(1.0, 72.0) * text_scale;
             let font = Font::styled(gridcraft_pdf::Family::Sans, sec.bold, sec.italic);
             let lines: Vec<&str> = sec.text.split('\n').take(20).collect();
             let n = lines.len() as f32;
@@ -2019,6 +2039,40 @@ mod tests {
         s.execute("pageLayout.headerFooter", json!({"differentFirst": false, "differentOddEven": false})).unwrap();
         let (pdf, _) = pdf_of(&mut s, json!({}));
         assert!(contains(&pdf, "(Odd 1) Tj") && contains(&pdf, "(Odd 2) Tj") && !contains(&pdf, "(Cover) Tj"));
+    }
+
+    /// The x position and font size of the first `(text) Tj` in a PDF.
+    fn text_at(pdf: &[u8], text: &str) -> Option<(f32, f32)> {
+        let s = String::from_utf8_lossy(pdf);
+        let before = &s[..s.find(&format!("({text}) Tj"))?];
+        let tf = before.rfind(" Tf")?;
+        let size = before[..tf].rsplit(' ').next()?.parse().ok()?;
+        let tm = before.rfind(" Tm")?;
+        let mut nums = before[..tm].rsplit([' ', '\n']);
+        let _y = nums.next()?;
+        let x = nums.next()?.parse().ok()?;
+        Some((x, size))
+    }
+
+    #[test]
+    fn headers_scale_with_the_sheet_and_align_with_its_margins_unless_turned_off() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+        s.execute("pageLayout.pageSetup", json!({"scale": 50, "left": 1.5, "right": 1.5})).unwrap();
+        s.execute("pageLayout.headerFooter", json!({"header": "&LLeft&C&14Middle"})).unwrap();
+        // Both on (the default): the text prints at half size, from the 1.5-inch left margin.
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        assert_eq!(text_at(&pdf, "Left"), Some((108.0, 5.0)));
+        assert_eq!(text_at(&pdf, "Middle").map(|t| t.1), Some(7.0));
+        let r = s.execute("pageLayout.headerFooter", json!({"scaleWithDoc": false, "alignWithMargins": false})).unwrap();
+        assert_eq!((&r["scaleWithDoc"], &r["alignWithMargins"]), (&json!(false), &json!(false)));
+        // Both off: full size, 0.7 inch from the paper's left edge.
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        assert_eq!(text_at(&pdf, "Left"), Some((50.4, 10.0)));
+        assert_eq!(text_at(&pdf, "Middle").map(|t| t.1), Some(14.0));
+        s.execute("edit.undo", json!({})).unwrap();
+        let pr = &s.doc().unwrap().wb.sheet(0).unwrap().print;
+        assert!(pr.hf_scale_with_doc && pr.hf_align_with_margins);
     }
 
     #[test]

@@ -325,6 +325,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Перейти до верхнього колонтитула",
         "Different First Page" => "Окремий колонтитул для першої сторінки",
         "Different Odd & Even Pages" => "Різні колонтитули для парних і непарних сторінок",
+        "Scale with Document" => "Масштабувати разом із документом",
+        "Align with Page Margins" => "Вирівняти за полями сторінки",
         "Go to Footer" => "Перейти до нижнього колонтитула",
         "Ruler" => "Лінійка",
         // File › Backstage view.

@@ -329,6 +329,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Salt la antet",
         "Different First Page" => "Prima pagină diferită",
         "Different Odd & Even Pages" => "Pagini pare și impare diferite",
+        "Scale with Document" => "Scalare cu documentul",
+        "Align with Page Margins" => "Aliniere la marginile paginii",
         "Go to Footer" => "Salt la subsol",
         "Ruler" => "Riglă",
         "File" => "Fișier",

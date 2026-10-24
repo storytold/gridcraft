@@ -331,6 +331,8 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Go to Header", "ヘッダーに移動"),
     ("Different First Page", "先頭ページのみ別指定"),
     ("Different Odd & Even Pages", "奇数/偶数ページ別指定"),
+    ("Scale with Document", "文書に合わせて拡大/縮小"),
+    ("Align with Page Margins", "ページ余白に合わせる"),
     ("Go to Footer", "フッターに移動"),
     ("Ruler", "ルーラー"),
     ("File", "ファイル"),

@@ -202,6 +202,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Footer" => "Υποσέλιδο",
         "Different First Page" => "Διαφορετική πρώτη σελίδα",
         "Different Odd & Even Pages" => "Διαφορετικές μονές και ζυγές σελίδες",
+        "Scale with Document" => "Κλιμάκωση με το έγγραφο",
+        "Align with Page Margins" => "Στοίχιση με τα περιθώρια σελίδας",
         "Go to Footer" => "Μετάβαση στο υποσέλιδο",
         "Go to Header" => "Μετάβαση στην κεφαλίδα",
         "Go to\nFooter" => "Μετάβαση στο\nυποσέλιδο",

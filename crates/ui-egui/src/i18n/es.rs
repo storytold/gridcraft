@@ -209,6 +209,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Footer" => "Pie de página",
         "Different First Page" => "Primera página diferente",
         "Different Odd & Even Pages" => "Páginas pares e impares diferentes",
+        "Scale with Document" => "Escalar con el documento",
+        "Align with Page Margins" => "Alinear con los márgenes de página",
         "Go to Footer" => "Ir al pie de página",
         "Go to Header" => "Ir al encabezado",
         "Go to\nFooter" => "Ir al pie\nde página",

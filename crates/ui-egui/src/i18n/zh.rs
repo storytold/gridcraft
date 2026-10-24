@@ -330,6 +330,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "转至页眉",
         "Different First Page" => "首页不同",
         "Different Odd & Even Pages" => "奇偶页不同",
+        "Scale with Document" => "随文档缩放",
+        "Align with Page Margins" => "与页边距对齐",
         "Go to Footer" => "转至页脚",
         "Ruler" => "标尺",
         // File › Backstage view.

@@ -205,6 +205,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Footer" => "Altbilgi",
         "Different First Page" => "İlk Sayfada Farklı",
         "Different Odd & Even Pages" => "Tek ve Çift Sayfalarda Farklı",
+        "Scale with Document" => "Belgeyle Ölçeklendir",
+        "Align with Page Margins" => "Sayfa Kenar Boşluklarıyla Hizala",
         "Go to Footer" => "Altbilgiye Git",
         "Go to Header" => "Üstbilgiye Git",
         "Go to\nFooter" => "Altbilgiye\nGit",

@@ -206,6 +206,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Footer" => "Zápatí",
         "Different First Page" => "Jiná první stránka",
         "Different Odd & Even Pages" => "Jiné liché a sudé stránky",
+        "Scale with Document" => "Měnit velikost s dokumentem",
+        "Align with Page Margins" => "Zarovnat k okrajům stránky",
         "Go to Footer" => "Přejít na zápatí",
         "Go to Header" => "Přejít na záhlaví",
         "Go to\nFooter" => "Přejít\nna zápatí",

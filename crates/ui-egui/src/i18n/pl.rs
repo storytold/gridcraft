@@ -322,6 +322,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Przejdź do nagłówka",
         "Different First Page" => "Inna pierwsza strona",
         "Different Odd & Even Pages" => "Inne strony nieparzyste i parzyste",
+        "Scale with Document" => "Skaluj z dokumentem",
+        "Align with Page Margins" => "Wyrównaj do marginesów strony",
         "Go to Footer" => "Przejdź do stopki",
         "Ruler" => "Linijka",
         "File" => "Plik",

@@ -210,6 +210,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Footer" => "Fußzeile",
         "Different First Page" => "Erste Seite anders",
         "Different Odd & Even Pages" => "Gerade und ungerade Seiten anders",
+        "Scale with Document" => "Mit Dokument skalieren",
+        "Align with Page Margins" => "An Seitenrändern ausrichten",
         "Go to Footer" => "Zur Fußzeile wechseln",
         "Go to Header" => "Zur Kopfzeile wechseln",
         "Go to\nFooter" => "Zur\nFußzeile",

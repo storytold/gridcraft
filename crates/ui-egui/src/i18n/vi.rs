@@ -330,6 +330,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Đi tới đầu trang",
         "Different First Page" => "Trang đầu khác",
         "Different Odd & Even Pages" => "Trang chẵn lẻ khác nhau",
+        "Scale with Document" => "Co giãn theo tài liệu",
+        "Align with Page Margins" => "Căn theo lề trang",
         "Go to Footer" => "Đi tới chân trang",
         "Ruler" => "Thước",
         // File › Backstage view.

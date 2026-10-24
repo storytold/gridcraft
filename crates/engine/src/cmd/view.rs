@@ -115,7 +115,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Header & Footer",
             ["Insert", "Text"],
             None,
-            "{sheet?, header?: \"&C&P\", footer?: \"&CPage &P of &N\", differentFirst?: bool, differentOddEven?: bool, firstHeader?, firstFooter?, evenHeader?, evenFooter?} or one section: {sheet?, page?: odd|even|first, part: header|footer, section: left|center|right, text: \"Page &[Page] of &[Pages]\"} (field names or codes) → {header, footer, differentFirst, differentOddEven, firstHeader, firstFooter, evenHeader, evenFooter}",
+            "{sheet?, header?: \"&C&P\", footer?: \"&CPage &P of &N\", differentFirst?: bool, differentOddEven?: bool, scaleWithDoc?: bool, alignWithMargins?: bool, firstHeader?, firstFooter?, evenHeader?, evenFooter?} or one section: {sheet?, page?: odd|even|first, part: header|footer, section: left|center|right, text: \"Page &[Page] of &[Pages]\"} (field names or codes) → {header, footer, differentFirst, differentOddEven, scaleWithDoc, alignWithMargins, firstHeader, firstFooter, evenHeader, evenFooter}",
             has_doc,
             header_footer
         ),
@@ -392,6 +392,12 @@ fn header_footer(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(on) = bool_param(p, "differentOddEven") {
             pr.different_odd_even = on;
         }
+        if let Some(on) = bool_param(p, "scaleWithDoc") {
+            pr.hf_scale_with_doc = on;
+        }
+        if let Some(on) = bool_param(p, "alignWithMargins") {
+            pr.hf_align_with_margins = on;
+        }
         if let Some((page, footer, idx, text)) = &section {
             let spec = pr.hf_mut(*page, *footer);
             let mut parts = super::print::split_header_footer(spec);
@@ -405,6 +411,8 @@ fn header_footer(s: &mut Session, p: &Json) -> Result<Json> {
             "footer": pr.footer,
             "differentFirst": pr.different_first,
             "differentOddEven": pr.different_odd_even,
+            "scaleWithDoc": pr.hf_scale_with_doc,
+            "alignWithMargins": pr.hf_align_with_margins,
             "firstHeader": pr.first_header,
             "firstFooter": pr.first_footer,
             "evenHeader": pr.even_header,

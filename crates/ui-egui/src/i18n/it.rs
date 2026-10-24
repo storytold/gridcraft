@@ -327,6 +327,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Vai a intestazione",
         "Different First Page" => "Prima pagina diversa",
         "Different Odd & Even Pages" => "Pagine pari e dispari diverse",
+        "Scale with Document" => "Ridimensiona con il documento",
+        "Align with Page Margins" => "Allinea ai margini della pagina",
         "Go to Footer" => "Vai a piè di pagina",
         "Ruler" => "Righello",
         // File › Backstage view.
