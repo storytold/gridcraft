@@ -200,6 +200,19 @@ fn czech_interface_retains_its_canonical_formula_fallback() {
 }
 
 #[test]
+fn italian_interface_enters_and_displays_italian_formulas() {
+    // Italian has a formula locale of its own: entry is normalized to canonical English before the
+    // engine, and the formula bar shows the formula back in Italian.
+    let mut app = app();
+    app.run("app.language.set", json!({"code":"it-IT"})).unwrap();
+    assert_eq!(app.ui.language, Language::It);
+    assert!(enter(&mut app, "=SOMMA(1,5;2,25)"));
+    assert_eq!(formula(&app), "SUM(1.5,2.25)");
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=SOMMA(1,5;2,25)");
+}
+
+#[test]
 fn user_defined_prefix_is_hidden_while_editing_and_kept_on_commit() {
     // Excel shows `_xludf.EOMONTH()` as `=EOMONTH()`; the cell still holds the user-defined call
     // (#726), and committing the edit unchanged must not turn it into the built-in.

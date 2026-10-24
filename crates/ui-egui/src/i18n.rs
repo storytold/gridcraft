@@ -16,6 +16,7 @@ mod es;
 mod es_functions;
 mod fr;
 mod it;
+mod it_functions;
 mod ja;
 mod ko;
 mod nl;
@@ -186,7 +187,11 @@ impl Language {
     }
 
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
-        if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
+        match self {
+            Self::Es => gridcraft_engine::formula::FormulaLocale::Es,
+            Self::It => gridcraft_engine::formula::FormulaLocale::It,
+            _ => gridcraft_engine::formula::FormulaLocale::En,
+        }
     }
 
     /// Translates an interface label; untranslated labels fall back to English.
@@ -243,6 +248,7 @@ impl Language {
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::It => Some((it_functions::DESCRIPTIONS, it_functions::ARGUMENTS)),
             _ => None,
         }
     }
@@ -489,5 +495,19 @@ mod tests {
         let keys: Vec<String> = order[1..].iter().map(|l| name_sort_key(l.name())).collect();
         assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
         assert_eq!(name_sort_key("Čeština"), "cestina");
+    }
+
+    /// Only the languages that have a formula locale of their own switch the formula syntax; the
+    /// others keep English formulas (a translated interface alone does not change what parses).
+    #[test]
+    fn formula_locale_follows_the_interface_language() {
+        use gridcraft_engine::formula::FormulaLocale;
+        assert_eq!(Language::Es.formula_locale(), FormulaLocale::Es);
+        assert_eq!(Language::It.formula_locale(), FormulaLocale::It);
+        for language in Language::ALL {
+            if language != Language::Es && language != Language::It {
+                assert_eq!(language.formula_locale(), FormulaLocale::En, "{language:?}");
+            }
+        }
     }
 }
