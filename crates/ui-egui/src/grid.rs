@@ -3413,6 +3413,16 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
 const FILL_MODES: [(&str, &str); 4] =
     [("Copy Cells", "copy"), ("Fill Series", "extend"), ("Fill Formatting Only", "formats"), ("Fill Without Formatting", "values")];
 
+/// The ways to fill from a date, which both menus add after [`FILL_MODES`] when the source starts
+/// with one.
+const DATE_FILL_MODES: [(&str, &str); 4] = [("Fill Days", "days"), ("Fill Weekdays", "weekdays"), ("Fill Months", "months"), ("Fill Years", "years")];
+
+/// The fill modes the menus list for a fill from `src` on the active sheet.
+fn fill_modes(app: &SheetApp, src: RangeRef) -> Vec<(&'static str, &'static str)> {
+    let dates = app.session.active().is_some_and(|d| gridcraft_engine::fill::starts_with_date(&d.wb, d.wb.active_sheet, src));
+    FILL_MODES.into_iter().chain(DATE_FILL_MODES.into_iter().filter(|_| dates)).collect()
+}
+
 /// Remembers the fill just made so the Auto Fill Options button can offer the other ways.
 fn set_fill_tag(app: &mut SheetApp, src: RangeRef, target: RangeRef) {
     app.grid.fill_tag =
@@ -3421,7 +3431,8 @@ fn set_fill_tag(app: &mut SheetApp, src: RangeRef, target: RangeRef) {
 
 /// The Auto Fill Options button below the bottom-right corner of cells a left-drag of the fill
 /// handle just filled. Its menu redoes that fill as Copy Cells, Fill Series, Fill Formatting Only
-/// or Fill Without Formatting: it undoes the drag's fill, then runs `edit.autoFill` in that mode.
+/// or Fill Without Formatting, and from a date also as Fill Days, Fill Weekdays, Fill Months or
+/// Fill Years: it undoes the drag's fill, then runs `edit.autoFill` in that mode.
 /// The button goes away as soon as anything else changes the workbook or the selection moves.
 fn fill_options_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet) {
     let Some(tag) = app.grid.fill_tag.clone() else { return };
@@ -3464,9 +3475,10 @@ fn fill_options_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet
         Stroke::NONE,
     ));
     let mut chosen = None;
+    let modes = fill_modes(app, tag.src);
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(190.0);
-        for (label, mode) in FILL_MODES {
+        for (label, mode) in modes {
             if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
                 chosen = Some(mode);
                 ui.close();
@@ -3493,10 +3505,11 @@ fn fill_options_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet
 fn fill_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
     let Some((src, target, at)) = app.grid.fill_menu else { return };
     let mut close = false;
+    let mut items = fill_modes(app, src);
+    items.extend([("-", ""), ("Series…", "ui:series")]);
     let response = egui::Area::new(egui::Id::new("fill_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(190.0);
-            let items = [FILL_MODES[0], FILL_MODES[1], FILL_MODES[2], FILL_MODES[3], ("-", ""), ("Series…", "ui:series")];
             let lang = crate::i18n::current(ui.ctx());
             for (label, mode) in items {
                 if label == "-" {

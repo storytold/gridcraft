@@ -1,5 +1,6 @@
 //! Dragging the fill handle with the right button fills nothing on release: it opens Excel's fill
-//! menu (Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, Series…).
+//! menu (Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, Series…, and from
+//! a date Fill Days, Fill Weekdays, Fill Months and Fill Years).
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::kittest::Queryable;
@@ -201,6 +202,34 @@ fn series_opens_the_series_dialog_on_the_dragged_cells_in_their_direction() {
     h.get_by_label("   OK   ").click();
     h.run_steps(3);
     assert_eq!(values(&h, &["C1", "D1", "E1"]), [n(2.0), n(3.0), n(4.0)]);
+}
+
+#[test]
+fn a_date_adds_fill_days_weekdays_months_and_years() {
+    let mut h = harness(|s| {
+        // Friday 1/30/2026 is serial 46052.
+        s.execute("cell.set", json!({"cell": "B1", "input": "1/30/2026"})).unwrap();
+        s.execute("selection.set", json!({"cell": "B1"})).unwrap();
+    });
+    drag_handle(&mut h, "B1", "B3", PointerButton::Secondary);
+    for label in ["Fill Days", "Fill Months", "Fill Years"] {
+        assert!(h.query_by_label(label).is_some(), "{label}");
+    }
+    h.get_by_label("Fill Weekdays").click();
+    h.run_steps(3);
+
+    assert_eq!(values(&h, &["B2", "B3"]), [n(46055.0), n(46056.0)], "Monday 2/2 and Tuesday 2/3");
+    assert!(h.state().grid.fill_menu.is_none());
+}
+
+#[test]
+fn a_number_gets_no_date_fills() {
+    let mut h = harness(one_two);
+    drag_handle(&mut h, "B2", "B6", PointerButton::Secondary);
+    assert!(h.query_by_label("Fill Series").is_some());
+    for label in ["Fill Days", "Fill Weekdays", "Fill Months", "Fill Years"] {
+        assert!(h.query_by_label(label).is_none(), "{label}");
+    }
 }
 
 #[test]

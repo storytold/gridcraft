@@ -79,7 +79,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "AutoFill",
             [],
             None,
-            "{source: \"A1:A2\", target: \"A1:A10\", mode?: series|alternate|copy|formats|values|extend}: the fill-handle drag (alternate = Ctrl+drag: a lone number counts up, any other series copies; values = Fill Without Formatting: the series, targets keep their formats; extend = Fill Series: the series, and a lone number counts up)",
+            "{source: \"A1:A2\", target: \"A1:A10\", mode?: series|alternate|copy|formats|values|extend|days|weekdays|months|years}: the fill-handle drag (alternate = Ctrl+drag: a lone number counts up, any other series copies; values = Fill Without Formatting: the series, targets keep their formats; extend = Fill Series: the series, and a lone number counts up; days, weekdays, months, years = Fill Days, Fill Weekdays, Fill Months, Fill Years: dates step by one unit, or by the difference between the first two dates in that unit, and weekdays skip Saturday and Sunday)",
             has_doc,
             auto_fill
         ),
@@ -1462,6 +1462,10 @@ fn auto_fill(s: &mut Session, p: &Json) -> Result<Json> {
         "formats" => crate::fill::FillMode::Formats,
         "values" => crate::fill::FillMode::ValuesOnly,
         "extend" => crate::fill::FillMode::Extend,
+        "days" => crate::fill::FillMode::Dates(crate::fill::DateUnit::Day),
+        "weekdays" => crate::fill::FillMode::Dates(crate::fill::DateUnit::Weekday),
+        "months" => crate::fill::FillMode::Dates(crate::fill::DateUnit::Month),
+        "years" => crate::fill::FillMode::Dates(crate::fill::DateUnit::Year),
         _ => crate::fill::FillMode::Series,
     };
     if target.count() > crate::fill::MAX_FILL_CELLS || src.count() > crate::fill::MAX_FILL_CELLS {
