@@ -356,7 +356,7 @@ impl PivotWriter {
     }
 }
 
-/// Resolves a pivot source to (sheet, range including the header row, worksheetSource XML).
+/// Resolves a pivot source to (sheet, bounded cache scan including headers, declared source XML).
 fn resolve_source(wb: &Workbook, text: &str, default_sheet: usize, depth: u32) -> Option<(usize, RangeRef, String)> {
     let t = text.trim().trim_start_matches('=').trim();
     if t.is_empty() || depth > 4 {
@@ -386,18 +386,16 @@ fn resolve_source(wb: &Workbook, text: &str, default_sheet: usize, depth: u32) -
             None => default_sheet,
         };
         let sh = wb.sheet(si)?;
-        let r = if r.is_full_cols() || r.is_full_rows() { r.intersection(&sh.used_range()?)? } else { r };
-        return Some((si, r, range_source_xml(&sh.name, r)));
+        // Bound cache generation, but keep whole-column/row semantics on disk so
+        // later refreshes can include data added beyond today's used range.
+        let scan = if r.is_full_cols() || r.is_full_rows() { r.intersection(&sh.used_range()?)? } else { r };
+        return Some((si, scan, range_source_xml(&sh.name, r)));
     }
     if sheet.is_none()
         && let Some(n) = wb.name(t, default_sheet)
     {
-        let (si, r, _) = resolve_source(wb, &n.formula.clone(), default_sheet, depth + 1)?;
-        let xml = if n.scope.is_none() {
-            format!("<worksheetSource name=\"{}\"/>", esc_attr(&n.name))
-        } else {
-            wb.sheet(si).map(|s| range_source_xml(&s.name, r))?
-        };
+        let (si, r, source_xml) = resolve_source(wb, &n.formula.clone(), default_sheet, depth + 1)?;
+        let xml = if n.scope.is_none() { format!("<worksheetSource name=\"{}\"/>", esc_attr(&n.name)) } else { source_xml };
         return Some((si, r, xml));
     }
     None
@@ -405,7 +403,10 @@ fn resolve_source(wb: &Workbook, text: &str, default_sheet: usize, depth: u32) -
 
 fn range_source_xml(sheet: &str, r: RangeRef) -> String {
     let name: String = sheet.chars().take(31).collect();
-    format!("<worksheetSource ref=\"{}\" sheet=\"{}\"/>", r.a1(), esc_attr(&name))
+    // Worksheet sources use cell endpoints, including the sheet limit for a
+    // whole axis; the reader restores compact A:F / 1:9 references.
+    let reference = if r.is_full_cols() || r.is_full_rows() { format!("{}:{}", r.start.a1(), r.end.a1()) } else { r.a1() };
+    format!("<worksheetSource ref=\"{reference}\" sheet=\"{}\"/>", esc_attr(&name))
 }
 
 fn header_text(v: &Value) -> String {

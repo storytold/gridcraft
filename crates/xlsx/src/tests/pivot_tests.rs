@@ -19,6 +19,36 @@ fn rr(a: &str) -> RangeRef {
     RangeRef::parse(a).unwrap()
 }
 
+#[test]
+fn whole_axis_pivot_sources_survive_xlsx_with_bounded_cache_records() {
+    for (source, reference, expected) in [
+        ("Data!$A:$F", "A1:F1048576", "Data!$A:$F"),
+        ("Data!$A$1:$F$1048576", "A1:F1048576", "Data!$A:$F"),
+        ("Data!$1:$9", "A1:XFD9", "Data!$1:$9"),
+        ("LocalColumns", "A1:F1048576", "Data!$A:$F"),
+        ("LocalRows", "A1:XFD9", "Data!$1:$9"),
+    ] {
+        let mut wb = workbook();
+        for (name, formula) in [("LocalColumns", "Data!$A:$F"), ("LocalRows", "Data!$1:$9")] {
+            wb.names.push(DefinedName { name: name.into(), scope: Some(1), formula: formula.into(), comment: String::new(), hidden: false });
+        }
+        let report = wb.sheet_mut(1).unwrap();
+        report.pivots.truncate(1);
+        report.pivots[0].source = source.into();
+        for _ in 0..2 {
+            let bytes = write_xlsx(&wb).unwrap();
+            let parts = unzip(&bytes);
+            let cache = std::str::from_utf8(&parts["xl/pivotCache/pivotCacheDefinition1.xml"]).unwrap();
+            assert!(cache.contains(&format!("<worksheetSource ref=\"{reference}\" sheet=\"Data\"/>")), "{source}: {cache}");
+            assert!(cache.contains("recordCount=\"8\""), "{source}: cache scans only existing data");
+            let records = xml::parse(&parts["xl/pivotCache/pivotCacheRecords1.xml"]).unwrap();
+            assert_eq!(records.children.len(), 8, "{source}");
+            wb = read_xlsx(&bytes).unwrap().0;
+            assert_eq!(wb.sheet(1).unwrap().pivots[0].source, expected, "{source}");
+        }
+    }
+}
+
 fn date(y: i64, m: i64, d: i64) -> f64 {
     serial_from_ymd(gridcraft_core::DateSystem::D1900, y, m, d).unwrap()
 }
