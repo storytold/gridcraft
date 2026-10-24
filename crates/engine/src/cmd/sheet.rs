@@ -401,7 +401,9 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
     {
         return Err(EngineError::Other("To prevent possible loss of data, columns cannot be shifted off of the worksheet.".into()));
     }
-    check_lines_protection(s, &json!({"cols": RangeRef::cols(before, before).a1()}), Axis::Cols, before, count, true)?;
+    check_lines_protection(s, &json!({"cols": RangeRef::cols(before, before).a1()}), Axis::Cols, before, 1, true)?;
+    // A move isn't the deletion the permission grants: the columns keep their cells, so locked
+    // ones still can't be relocated.
     check_lines_protection(s, &json!({"cols": RangeRef::cols(from, end - 1).a1()}), Axis::Cols, from, count, false)?;
 
     let moved_from = if before <= from { from + count } else { from };
@@ -714,8 +716,10 @@ fn edit_doc<R>(d: &mut crate::DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -
     super::commit(d, f)
 }
 
-/// Sheet protection for inserting or deleting rows/columns: the protection must allow it, and
-/// deleted lines must not hold locked cells.
+/// Sheet protection for inserting or deleting rows/columns. Inserting changes no cell, so the
+/// permission alone decides. Deleting removes the cells it covers, so, as in Excel, a line may only
+/// go when every cell in it is unlocked — `AllowDeletingRows`: "where every cell in the row to be
+/// deleted is unlocked", empty cells included.
 fn check_lines_protection(s: &Session, p: &Json, axis: Axis, at: u32, count: u32, insert: bool) -> Result<()> {
     let sheet = target_sheet(s, p)?;
     let wb = &s.doc()?.wb;
@@ -727,24 +731,51 @@ fn check_lines_protection(s: &Session, p: &Json, axis: Axis, at: u32, count: u32
         (Axis::Cols, true) => pr.insert_columns,
         (Axis::Cols, false) => pr.delete_columns,
     };
-    let locked = |st: gridcraft_model::StyleId| wb.styles.get(st).protection.locked;
-    let refuse = || EngineError::Other(PROTECTED.into());
     if !allowed {
-        return Err(refuse());
+        return Err(EngineError::Other(PROTECTED.into()));
     }
-    if insert {
+    if insert || lines_all_unlocked(wb, sh, axis, at, count) {
         return Ok(());
     }
-    let end = at.saturating_add(count - 1).min(if axis == Axis::Rows { MAX_ROWS - 1 } else { MAX_COLS - 1 });
-    let infos = if axis == Axis::Rows { &sh.rows } else { &sh.cols };
-    if (at..=end).any(|i| locked(infos.get(&i).and_then(|x| x.style).unwrap_or_default())) {
-        return Err(refuse());
-    }
+    Err(EngineError::Other(PROTECTED.into()))
+}
+
+/// Whether every cell of the given lines is unlocked, which is what Excel's "Delete rows" and
+/// "Delete columns" permissions cover. A stored cell keeps its own format; an empty one takes the
+/// line's format, then the crossing line's, then the default — the order `Sheet::style_id` applies.
+fn lines_all_unlocked(wb: &Workbook, sh: &Sheet, axis: Axis, at: u32, count: u32) -> bool {
+    let locked = |st: gridcraft_model::StyleId| wb.styles.get(st).protection.locked;
+    let end = at.saturating_add(count.max(1) - 1).min(if axis == Axis::Rows { MAX_ROWS - 1 } else { MAX_COLS - 1 });
     let block = if axis == Axis::Rows { RangeRef::rows(at, end) } else { RangeRef::cols(at, end) };
     if sh.cells.iter_range(block).any(|(_, cell)| locked(cell.style)) {
-        return Err(refuse());
+        return false;
     }
-    Ok(())
+    let (own, cross, cross_max) = if axis == Axis::Rows { (&sh.rows, &sh.cols, MAX_COLS as usize) } else { (&sh.cols, &sh.rows, MAX_ROWS as usize) };
+    let default_locked = locked(gridcraft_model::StyleId::default());
+    // Every line without a format of its own asks the crossing lines the same question, and a
+    // deleted block can span the whole sheet: answer it once.
+    let mut crossing_ok: Option<bool> = None;
+    for i in at..=end {
+        match own.get(&i).and_then(|x| x.style) {
+            // The line's own format covers its empty cells.
+            Some(st) => {
+                if locked(st) {
+                    return false;
+                }
+            }
+            // Empty cells take the crossing line's format, else the default.
+            None => {
+                let ok = *crossing_ok.get_or_insert_with(|| {
+                    // A crossing line with no format of its own leaves a locked empty cell.
+                    !(default_locked && cross.len() < cross_max) && !cross.values().any(|x| x.style.map_or(default_locked, locked))
+                });
+                if !ok {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
