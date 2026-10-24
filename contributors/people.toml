@@ -99,3 +99,7 @@ real_name = "Tyrel Haveman"
 
 [people.helenkwok]
 real_name = "Helen Kwok"
+
+[people.luigiPinna]
+real_name = "Luigi Pinna"
+sync_github_name = true
