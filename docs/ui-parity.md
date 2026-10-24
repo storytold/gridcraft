@@ -12,6 +12,14 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 
 ## Window and chrome
 
+Linux and FreeBSD desktop builds enable winit's `wayland-csd-adwaita-notitle` feature so that
+Wayland compositors without server-side decorations use the Adwaita frame and buttons instead
+of the minimal fallback frame (#54). The frame draws no title text and embeds no fallback font;
+the ribbon continues to show the document name. This retains the native Wayland backend, and
+OS window-title metadata still follows the document name and existing edited marker for task
+switchers. The Adwaita appearance was verified on Ubuntu; exact theme matching on other
+desktops is not guaranteed. FreeBSD has not been tested locally.
+
 | Element | Excel | GridCraft | Status |
 |---|---|---|---|
 | 2026-10-14 | minor | Dialogs (Find and Replace, Go To, Format Cells, Sort and the rest) move by their title bar instead of staying pinned to the centre (#1250) |
