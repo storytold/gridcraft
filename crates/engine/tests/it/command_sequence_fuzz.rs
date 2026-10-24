@@ -1088,3 +1088,48 @@ fn params_docs_parse_into_keys() {
         assert!(find_command(id).is_some(), "CURATED names unknown command `{id}`");
     }
 }
+
+#[test]
+fn legacy_array_clearing_copied_spill_matches_full_recalculation() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"sample":"grades"})).expect("sample opens");
+    for (id, params) in [
+        ("home.mergeCells", json!({"range":"F:H"})),
+        ("cell.set", json!({"cell":"J54","input":"=SEQUENCE(5)*C6"})),
+        ("selection.set", json!({"range":"15:15"})),
+        ("sheet.move", json!({"copy":true,"sheet":0,"to":1})),
+        ("selection.set", json!({"range":"D3:J54"})),
+        ("cell.set", json!({"array":true,"cell":"D3","input":"=SUM('Q4 2026'!J54#)"})),
+    ] {
+        s.execute(id, params).expect("reported command succeeds");
+        assert_eq!(recalc_diff(wb_of(&s)), Ok(()), "after {id}");
+    }
+    let spill = CellRef::parse("J55").expect("cell");
+    assert_eq!(wb_of(&s).sheets[0].value(spill), Value::Number(190.0));
+    assert!(wb_of(&s).sheets[1].value(spill).is_empty());
+    s.execute("edit.undo", json!({})).expect("undo array entry");
+    assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+    assert_eq!(wb_of(&s).sheets[1].value(spill), Value::Number(190.0));
+    s.execute("edit.redo", json!({})).expect("redo array entry");
+    assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+    assert!(wb_of(&s).sheets[1].value(spill).is_empty());
+}
+
+#[test]
+fn legacy_array_clearing_spill_anchor_invalidates_spill_tail() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).expect("new workbook");
+    s.execute("cell.set", json!({"cell":"D1","input":"=SEQUENCE(5)"})).expect("spill formula");
+    s.execute("selection.set", json!({"range":"A1:F1"})).expect("select spill anchor");
+    s.execute("cell.set", json!({"array":true,"cell":"A1","input":"187"})).expect("array entry");
+    assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+    for row in 1..5 {
+        assert!(wb_of(&s).sheets[0].value(CellRef::new(row, 3)).is_empty());
+    }
+    s.execute("edit.undo", json!({})).expect("undo array entry");
+    assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+    assert_eq!(wb_of(&s).sheets[0].value(CellRef::new(4, 3)), Value::Number(5.0));
+    s.execute("edit.redo", json!({})).expect("redo array entry");
+    assert_eq!(recalc_diff(wb_of(&s)), Ok(()));
+    assert!(wb_of(&s).sheets[0].value(CellRef::new(4, 3)).is_empty());
+}

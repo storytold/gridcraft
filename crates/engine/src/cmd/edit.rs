@@ -252,15 +252,21 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             if let Some(f) = cell.formula.as_mut() {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
+            let mut cleared = Vec::new();
             let sh = cx.sheet_mut(sheet)?;
             // The array takes the whole range: other cells in it lose their contents.
             for c in range.iter().skip(1).take(1_000_000) {
                 if let Some(old) = sh.cells.get(c).filter(|x| !x.value.is_empty() || x.formula.is_some()) {
                     let style = old.style;
                     sh.set_cell(c, Cell { style, ..Cell::default() });
+                    cleared.push(c);
                 }
             }
             sh.set_cell(range.start, cell);
+            // Removed formula anchors must invalidate their spills and dependents too.
+            for c in cleared {
+                cx.touch(sheet, c);
+            }
             cx.touch(sheet, range.start);
             return Ok(Json::Null);
         }
