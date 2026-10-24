@@ -164,13 +164,13 @@ impl PrintOptions {
     }
 }
 
-/// The range a sheet prints: its print area, else the used range grown to cover drawing
-/// objects. `None` when there is nothing to print.
-pub fn print_range(sh: &Sheet) -> Option<RangeRef> {
+/// The range a sheet prints: its print area, else the cells that show something on paper grown
+/// to cover drawing objects. `None` when there is nothing to print.
+pub fn print_range(wb: &Workbook, sh: &Sheet) -> Option<RangeRef> {
     if let Some(a) = sh.print.print_area {
         return Some(trim_full(sh, a));
     }
-    let mut r = sh.used_range();
+    let mut r = printed_cells(wb, sh);
     let mut grow = |a: &Anchor| {
         let x = sh.col_left(a.cell.col) + a.dx as f64;
         let y = sh.row_top(a.cell.row) + a.dy as f64;
@@ -189,6 +189,29 @@ pub fn print_range(sh: &Sheet) -> Option<RangeRef> {
     }
     // Printing starts at A1 like Excel when the data starts nearby? Excel prints from the first
     // used cell; keep the used range as is.
+    r
+}
+
+/// The smallest range covering every cell that prints something: a value, a formula, a fill or a
+/// border. Like Excel, cells that only carry a font, alignment or number format (a whole sheet
+/// set to a font, say) print nothing and don't add blank pages. Spilled results count.
+fn printed_cells(wb: &Workbook, sh: &Sheet) -> Option<RangeRef> {
+    let visible = |id: StyleId| {
+        let st = wb.styles.get(id);
+        let b = &st.borders;
+        st.fill.pattern != PatternType::None
+            || [b.left, b.right, b.top, b.bottom, b.diag_down, b.diag_up].iter().any(|l| l.style != BorderStyle::None)
+    };
+    let mut r: Option<RangeRef> = None;
+    for (at, cell) in sh.cells.iter() {
+        if cell.formula.is_some() || !matches!(cell.value, Value::Empty) || visible(cell.style) {
+            let one = RangeRef::cell(at);
+            r = Some(r.map_or(one, |x| x.union(&one)));
+        }
+    }
+    for sr in sh.spill_ranges.values() {
+        r = Some(r.map_or(*sr, |x| x.union(sr)));
+    }
     r
 }
 
@@ -264,7 +287,7 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
     }
     let area = match range_override {
         Some(r) => trim_full(sh, r),
-        None => print_range(sh).unwrap_or(RangeRef::cell(CellRef::new(0, 0))),
+        None => print_range(wb, sh).unwrap_or(RangeRef::cell(CellRef::new(0, 0))),
     };
     let title_rows = title_span(st.title_rows, MAX_ROWS);
     let title_cols = title_span(st.title_cols, MAX_COLS);
@@ -377,7 +400,7 @@ pub fn layouts(wb: &Workbook, opts: &PrintOptions) -> Vec<SheetLayout> {
             break;
         }
         let ovr = if si == wb.active_sheet { opts.range } else { None };
-        if opts.all_sheets && ovr.is_none() && wb.sheet(si).is_some_and(|s| print_range(s).is_none()) {
+        if opts.all_sheets && ovr.is_none() && wb.sheet(si).is_some_and(|s| print_range(wb, s).is_none()) {
             continue;
         }
         if let Some(mut l) = layout_sheet(wb, si, opts, ovr) {
@@ -1861,6 +1884,24 @@ mod tests {
     }
     fn contains(hay: &[u8], needle: &str) -> bool {
         hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+    }
+
+    /// Cells that only carry a font print nothing: a list whose whole columns are set to bold
+    /// prints one page, not hundreds of blank ones. A border prints, as in Excel.
+    #[test]
+    fn font_only_cells_add_no_blank_pages() {
+        let mut s = s();
+        for r in 1..=3 {
+            s.execute("cell.set", json!({"cell": format!("A{r}"), "input": format!("item {r}")})).unwrap();
+        }
+        s.execute("home.bold", json!({"range": "A1:Z900"})).unwrap();
+        let opts = PrintOptions { all_sheets: false, range: None, fit_to_page: None };
+        let l = layouts(&s.doc().unwrap().wb, &opts);
+        assert_eq!(l[0].area, RangeRef::parse("A1:A3").unwrap());
+        assert_eq!(l[0].pages.len(), 1);
+        s.execute("home.borders", json!({"range": "D40", "preset": "all"})).unwrap();
+        let l = layouts(&s.doc().unwrap().wb, &opts);
+        assert_eq!(l[0].area, RangeRef::parse("A1:D40").unwrap());
     }
 
     #[test]
