@@ -268,7 +268,7 @@ fn object_move_and_resize_keep_their_cursors_and_update_the_object() {
         let target = start + vec2(60.0, 30.0);
         let cursor = if resize { CursorIcon::ResizeNwSe } else { CursorIcon::Move };
         move_with_cursor(&mut h, target, cursor);
-        assert!(matches!(h.state().grid.drag, Drag::Object { resize: r, .. } if r == resize));
+        assert!(matches!(h.state().grid.drag, Drag::Object { grab, .. } if matches!(grab, gridcraft_ui_egui::frame::Grab::Resize(_)) == resize));
         move_with_cursor(&mut h, target + vec2(1.0, 1.0), cursor);
         button(&mut h, target, false);
         assert_eq!(h.state().grid.drag, Drag::None);

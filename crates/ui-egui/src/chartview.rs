@@ -327,8 +327,11 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Workboo
         if label && !sp.text.is_empty() && !app.editing_text_box(sp.id) {
             paint_shape_text(p, wb, sp, r, geo.z);
         }
-        if label && sp.kind == ShapeKind::TextBox && app.selected_chart == Some(sp.id) {
-            selection_frame(p, r);
+        if sp.rotation != 0.0 {
+            turn_painted(p, start, r.center(), sp.rotation);
+        }
+        if app.selected_chart == Some(sp.id) {
+            crate::frame::paint(p, r, sp.rotation, sp.kind != ShapeKind::Ink, sp.kind != ShapeKind::Ink);
         }
         done(start, r);
     }
@@ -491,12 +494,73 @@ pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) ->
 }
 
 fn selection_frame(p: &Painter, r: Rect) {
-    p.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::from_gray(120)), StrokeKind::Outside);
-    for c in [r.left_top(), r.center_top(), r.right_top(), r.left_center(), r.right_center(), r.left_bottom(), r.center_bottom(), r.right_bottom()] {
-        p.circle_filled(c, 4.0, Color32::WHITE);
-        p.circle_stroke(c, 4.0, Stroke::new(1.0, Color32::from_gray(100)));
+    crate::frame::paint(p, r, 0.0, false, true);
+}
+
+/// Turn everything painted on `p`'s layer since `start` by `deg` clockwise about `c`.
+fn turn_painted(p: &Painter, start: egui::layers::ShapeIdx, c: Pos2, deg: f32) {
+    let end = p.add(egui::Shape::Noop).0;
+    let clip = p.clip_rect();
+    p.ctx().graphics_mut(|g| {
+        let list = g.entry(p.layer_id());
+        for i in start.0..end {
+            list.mutate_shape(egui::layers::ShapeIdx(i), |cs| {
+                // A turned shape reaches past its own box: clip it to the sheet only.
+                cs.clip_rect = clip;
+                turn_shape(&mut cs.shape, c, deg);
+            });
+        }
+    });
+}
+
+fn turn_shape(shape: &mut egui::Shape, c: Pos2, deg: f32) {
+    use egui::Shape;
+    let t = |q: &mut Pos2| *q = crate::frame::turn(*q, c, deg);
+    match shape {
+        Shape::Noop | Shape::Callback(_) => {}
+        Shape::Vec(v) => v.iter_mut().for_each(|s| turn_shape(s, c, deg)),
+        Shape::Circle(k) => t(&mut k.center),
+        Shape::Ellipse(e) => {
+            let pts = (0..64)
+                .map(|i| {
+                    let a = i as f32 / 64.0 * std::f32::consts::TAU;
+                    crate::frame::turn(e.center + vec2(e.radius.x * a.cos(), e.radius.y * a.sin()), c, deg)
+                })
+                .collect();
+            *shape = Shape::Path(PathShape::convex_polygon(pts, e.fill, e.stroke));
+        }
+        Shape::LineSegment { points, .. } => points.iter_mut().for_each(t),
+        Shape::Path(path) => path.points.iter_mut().for_each(t),
+        Shape::Rect(r) => {
+            let pts = rounded_rect_points(r.rect, f32::from(r.corner_radius.nw)).into_iter().map(|q| crate::frame::turn(q, c, deg)).collect();
+            *shape = Shape::Path(PathShape::convex_polygon(pts, r.fill, r.stroke));
+        }
+        Shape::Text(text) => {
+            t(&mut text.pos);
+            text.angle += deg.to_radians();
+        }
+        Shape::Mesh(m) => std::sync::Arc::make_mut(m).vertices.iter_mut().for_each(|v| t(&mut v.pos)),
+        Shape::QuadraticBezier(b) => b.points.iter_mut().for_each(t),
+        Shape::CubicBezier(b) => b.points.iter_mut().for_each(t),
     }
-    let _ = Align2::CENTER_CENTER;
+}
+
+/// The outline of `r` with corners rounded by `radius`, clockwise from the top left.
+fn rounded_rect_points(r: Rect, radius: f32) -> Vec<Pos2> {
+    let rad = radius.min(r.width() / 2.0).min(r.height() / 2.0).max(0.0);
+    if rad < 0.5 {
+        return vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()];
+    }
+    let corners = [
+        (pos2(r.left() + rad, r.top() + rad), 180.0_f32),
+        (pos2(r.right() - rad, r.top() + rad), 270.0),
+        (pos2(r.right() - rad, r.bottom() - rad), 0.0),
+        (pos2(r.left() + rad, r.bottom() - rad), 90.0),
+    ];
+    corners
+        .into_iter()
+        .flat_map(|(o, from)| (0..=8).map(move |i| (from + i as f32 * 90.0 / 8.0).to_radians()).map(move |a| o + vec2(a.cos(), a.sin()) * rad))
+        .collect()
 }
 
 /// The topmost object under `p`: (kind, id, rect).
@@ -524,7 +588,8 @@ pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(&'static s
     }
     for s in sh.shapes.iter().rev() {
         let r = anchor_rect(geo, sh, &s.anchor);
-        if r.expand(3.0).contains(p) && geo.cells.contains(p) {
+        let local = crate::frame::turn(p, r.center(), -s.rotation);
+        if r.expand(3.0).contains(local) && geo.cells.contains(p) {
             return Some(("shape", s.id, r));
         }
     }

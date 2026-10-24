@@ -595,6 +595,9 @@ pub struct Shape {
     /// Outline visibility and text formatting (DrawingML `a:ln`, `a:bodyPr`, `a:pPr`, `a:rPr`).
     #[serde(default)]
     pub format: ShapeFormat,
+    /// Degrees clockwise about the anchor rect's centre, in `[0, 360)`.
+    #[serde(default)]
+    pub rotation: f32,
 }
 
 /// Horizontal alignment of a shape's text (`a:pPr algn`).

@@ -98,7 +98,10 @@ pub enum Drag {
         id: u32,
         start: Pos2,
         orig: (CellRef, f32, f32, f32, f32),
-        resize: bool,
+        grab: crate::frame::Grab,
+        /// The object's screen rect and angle as the drag began.
+        rect: Rect,
+        deg: f32,
     },
 }
 
@@ -1968,8 +1971,44 @@ fn hidden_around(i: u32, size: impl Fn(u32) -> f32) -> (bool, bool) {
 
 // ------------------------------------------------------------------ interaction
 
-/// How close (in points) a press must be to an object's bottom-right corner to resize it instead of moving it.
-const OBJECT_RESIZE_RADIUS: f32 = 10.0;
+/// The selected floating object, if it is on this sheet.
+struct Selected {
+    kind: &'static str,
+    id: u32,
+    /// Screen rect, before turning.
+    rect: Rect,
+    /// Degrees clockwise.
+    deg: f32,
+    /// Whether it shows a rotation handle.
+    rotates: bool,
+    /// Whether it shows resize handles (an ink stroke does not scale with its frame).
+    resizes: bool,
+    /// The cell area: handles act only inside it, not over the headers.
+    cells: Rect,
+}
+
+fn selected_object(app: &SheetApp, geo: &Geo, sh: &Sheet) -> Option<Selected> {
+    let id = app.selected_chart?;
+    let kind = ["slicer", "chart", "image", "shape"].into_iter().find(|k| object_anchor(sh, k, id).is_some())?;
+    let a = object_anchor(sh, kind, id)?;
+    let shape = sh.shapes.iter().find(|s| kind == "shape" && s.id == id);
+    let deg = shape.map_or(0.0, |s| s.rotation);
+    let rotates = shape.is_some_and(|s| s.kind != gridcraft_engine::model::ShapeKind::Ink);
+    let rect = crate::chartview::anchor_rect(geo, sh, &a);
+    Some(Selected { kind, id, rect, deg, rotates, resizes: rotates || shape.is_none(), cells: geo.cells })
+}
+
+impl Selected {
+    fn grab_at(&self, p: Pos2) -> Option<crate::frame::Grab> {
+        if !self.cells.contains(p) {
+            return None;
+        }
+        match crate::frame::grab_at(self.rect, self.deg, self.rotates, p) {
+            Some(crate::frame::Grab::Resize(_)) if !self.resizes => None,
+            g => g,
+        }
+    }
+}
 
 /// Decide after interaction so drag start and release use the new state in the same frame.
 fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
@@ -2003,11 +2042,11 @@ fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: 
             Drag::Select => Some(CursorIcon::Cell),
             Drag::Rows(_) | Drag::Cols(_) => Some(CursorIcon::Default),
             Drag::Fill { .. } => Some(CursorIcon::Crosshair),
-            Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { resize: false, .. } => Some(CursorIcon::Move),
+            Drag::Move { .. } | Drag::MoveCols { .. } => Some(CursorIcon::Move),
             Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
             Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
             Drag::Freeze { cols, .. } => Some(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
-            Drag::Object { resize: true, .. } => Some(CursorIcon::ResizeNwSe),
+            Drag::Object { grab, deg, .. } => Some(grab.cursor(deg)),
         };
         if let Some(cursor) = cursor {
             ctx.set_cursor_icon(cursor);
@@ -2036,10 +2075,14 @@ fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: 
     let border_panes = geo.range_panes(sel.current());
     let on_handle = handle.contains(p) && handle_panes.iter().any(|r| r.contains(p));
     let on_cur_border = on_border(cur_rect, p) && border_panes.iter().any(|r| r.contains(p));
-    let selected_object = crate::chartview::hit(app, geo, sh, p).filter(|&(_, id, _)| app.selected_chart == Some(id));
-    let near_corner = selected_object.is_some_and(|(_, _, rect)| (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS);
-    if app.grid.drag == Drag::None && near_corner {
-        ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
+    let grabbed = match app.grid.drag {
+        Drag::None => selected_object(app, geo, sh).and_then(|s| Some((s.grab_at(p)?, s.deg))),
+        _ => None,
+    };
+    if let Some((grab, deg)) = grabbed {
+        ctx.set_cursor_icon(grab.cursor(deg));
+    } else if in_cells && crate::chartview::hit(app, geo, sh, p).is_some() {
+        ctx.set_cursor_icon(CursorIcon::Move);
     } else if (in_col_header && col_edge(geo, sh, p.x).is_some()) || (in_row_header && row_edge(geo, sh, p.y).is_some()) {
         let near_col_edge = in_col_header && col_edge(geo, sh, p.x).is_some();
         // Just past a hidden column or row, Excel shows a split cursor: dragging or
@@ -2162,9 +2205,12 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     if primary_drag || primary_clicked {
         // A drag is recognised only after the pointer has moved, so grab the object where the press began.
         let at = if primary_drag { pointer.press_origin().or(pos) } else { pos };
+        // The selected object's handles reach past its edge, so they win over a plain hit.
+        let on_handle = at.and_then(|p| selected_object(app, geo, sh).filter(|s| s.grab_at(p).is_some())).map(|s| (s.kind, s.id, s.rect));
         if let Some(p) = at
-            && let Some((kind, id, rect)) = crate::chartview::hit(app, geo, sh, p)
+            && let Some((kind, id, _)) = on_handle.or_else(|| crate::chartview::hit(app, geo, sh, p))
         {
+            let was_selected = app.selected_chart == Some(id);
             app.selected_chart = Some(id);
             if kind == "shape"
                 && resp.double_clicked()
@@ -2178,9 +2224,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             if primary_drag {
                 let a = object_anchor(sh, kind, id);
-                let resize = (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS;
-                if let Some(a) = a {
-                    app.grid.drag = Drag::Object { kind, id, start: p, orig: (a.cell, a.dx, a.dy, a.width, a.height), resize };
+                let sel = selected_object(app, geo, sh);
+                let grab = sel.as_ref().filter(|_| was_selected).and_then(|s| s.grab_at(p)).unwrap_or(crate::frame::Grab::Move);
+                if let (Some(a), Some(s)) = (a, sel) {
+                    let orig = (a.cell, a.dx, a.dy, a.width, a.height);
+                    app.grid.drag = Drag::Object { kind, id, start: p, orig, grab, rect: s.rect, deg: s.deg };
                 }
             }
             return;
@@ -2557,18 +2605,33 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 app.grid.drag = Drag::Move { grab, to: Some(src.start.offset_clamped(dr, dc)) };
                 scroll_by(app, auto);
             }
-            Drag::Object { kind, id, start, orig, resize } => {
+            Drag::Object { kind, id, grab: crate::frame::Grab::Rotate, rect, .. } => {
+                let deg = crate::frame::angle_to(rect, p, mods.shift);
+                let _ = app.session.run("object.move", json!({"kind": kind, "id": id, "rotation": deg}));
+                coalesce_last_undo(app);
+            }
+            Drag::Object { kind, id, start, orig, grab, deg, .. } => {
                 let d = (p - start) / geo.z;
                 let (cell, dx, dy, w, h) = orig;
-                let params = if resize {
-                    json!({"kind": kind, "id": id, "width": (w + d.x).max(20.0), "height": (h + d.y).max(20.0)})
-                } else {
-                    // Re-anchor at the cell under the new top-left.
-                    let x0 = sh.col_left(cell.col) as f32 + dx + d.x;
-                    let y0 = sh.row_top(cell.row) as f32 + dy + d.y;
-                    let nc = CellRef::new(sh.row_at(y0.max(0.0) as f64), sh.col_at(x0.max(0.0) as f64));
-                    json!({"kind": kind, "id": id, "at": nc.a1(), "dx": x0.max(0.0) - sh.col_left(nc.col) as f32, "dy": y0.max(0.0) - sh.row_top(nc.row) as f32})
+                // Sheet coordinates of the object as the drag began.
+                let r0 = Rect::from_min_size(pos2(sh.col_left(cell.col) as f32 + dx, sh.row_top(cell.row) as f32 + dy), vec2(w, h));
+                let r = match grab {
+                    crate::frame::Grab::Resize(h) => {
+                        // A line or arrow can be flat on one axis: keep that axis flat.
+                        let h = crate::frame::Handle { x: if r0.width() < 1.0 { 0 } else { h.x }, y: if r0.height() < 1.0 { 0 } else { h.y } };
+                        crate::frame::resized_turned(r0, deg, h, d, 20.0, mods.shift)
+                    }
+                    _ => r0.translate(d),
                 };
+                // Re-anchor at the cell under the new top-left.
+                let (x0, y0) = (r.min.x.max(0.0), r.min.y.max(0.0));
+                let nc = CellRef::new(sh.row_at(f64::from(y0)), sh.col_at(f64::from(x0)));
+                let mut params =
+                    json!({"kind": kind, "id": id, "at": nc.a1(), "dx": x0 - sh.col_left(nc.col) as f32, "dy": y0 - sh.row_top(nc.row) as f32});
+                if matches!(grab, crate::frame::Grab::Resize(_)) {
+                    params["width"] = json!(r.width());
+                    params["height"] = json!(r.height());
+                }
                 let _ = app.session.run("object.move", params);
                 coalesce_last_undo(app);
             }
@@ -2919,8 +2982,48 @@ fn object_anchor(sh: &Sheet, kind: &str, id: u32) -> Option<gridcraft_engine::mo
         "chart" => sh.charts.iter().find(|c| c.id == id).map(|c| c.anchor),
         "image" => sh.images.iter().find(|c| c.id == id).map(|c| c.anchor),
         "slicer" => sh.slicers.iter().find(|c| c.id == id).map(|c| c.anchor),
-        _ => sh.shapes.iter().find(|c| c.id == id).map(|c| c.anchor),
+        "shape" => sh.shapes.iter().find(|c| c.id == id).map(|c| c.anchor),
+        _ => None,
     }
+}
+
+/// Arrow-key nudge of a selected object, sheet points (Ctrl/Alt: fine).
+const NUDGE: f32 = 6.0;
+
+/// Keys aimed at the selected object rather than the cells: arrows nudge it, Escape deselects
+/// it, Enter/F2 edits a text box's text.
+fn object_key(app: &mut SheetApp, geo: &Geo, sh: &Sheet, key: egui::Key, m: egui::Modifiers) -> bool {
+    use egui::Key;
+    let Some(s) = selected_object(app, geo, sh) else { return false };
+    let step = if m.ctrl || m.alt { 1.0 } else { NUDGE };
+    // Arrows follow the screen: a right-to-left sheet is mirrored.
+    let sx = if sh.right_to_left { -step } else { step };
+    let d = match key {
+        Key::ArrowLeft => vec2(-sx, 0.0),
+        Key::ArrowRight => vec2(sx, 0.0),
+        Key::ArrowUp => vec2(0.0, -step),
+        Key::ArrowDown => vec2(0.0, step),
+        Key::Escape => {
+            app.selected_chart = None;
+            return true;
+        }
+        Key::Enter | Key::F2 if sh.shapes.iter().any(|x| x.id == s.id && x.kind == gridcraft_engine::model::ShapeKind::TextBox) => {
+            app.begin_text_box_edit(s.id);
+            return true;
+        }
+        _ => return false,
+    };
+    // On Windows and Linux egui sets `command` with `ctrl`: only the Mac Command key opts out.
+    if m.shift || m.mac_cmd {
+        return false;
+    }
+    let Some(a) = object_anchor(sh, s.kind, s.id) else { return false };
+    let x0 = (sh.col_left(a.cell.col) as f32 + a.dx + d.x).max(0.0);
+    let y0 = (sh.row_top(a.cell.row) as f32 + a.dy + d.y).max(0.0);
+    let nc = CellRef::new(sh.row_at(f64::from(y0)), sh.col_at(f64::from(x0)));
+    let params = json!({"kind": s.kind, "id": s.id, "at": nc.a1(), "dx": x0 - sh.col_left(nc.col) as f32, "dy": y0 - sh.row_top(nc.row) as f32});
+    app.run_or_alert("object.move", params);
+    true
 }
 
 fn delete_selected_object(app: &mut SheetApp, sh: &Sheet) -> bool {
@@ -3037,6 +3140,9 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
+                if object_key(app, geo, sh, key, m) {
+                    continue;
+                }
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
                     shortcut_ran = true;
                     continue;

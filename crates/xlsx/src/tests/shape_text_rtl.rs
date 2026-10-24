@@ -45,6 +45,7 @@ fn text_box(text: &str, format: ShapeFormat) -> Workbook {
         line: Color::Auto,
         text: text.into(),
         format,
+        rotation: 0.0,
     });
     Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() }
 }
@@ -83,4 +84,12 @@ fn shape_text_without_rtl_writes_unchanged_ppr() {
 
     let xml = written_drawing(&text_box("plain", ShapeFormat::default()));
     assert!(!xml.contains("<a:pPr"), "no paragraph properties without alignment or direction: {xml}");
+}
+
+#[test]
+fn a_rotation_that_is_not_a_finite_number_reads_as_zero() {
+    for rot in ["NaN", "inf", "-inf"] {
+        let wb = read_drawing(&ARABIC_TEXT_BOX.replace("<a:xfrm>", &format!("<a:xfrm rot=\"{rot}\">")));
+        assert_eq!(wb.sheet(0).unwrap().shapes[0].rotation, 0.0, "rot={rot}");
+    }
 }
