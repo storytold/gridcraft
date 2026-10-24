@@ -6,6 +6,7 @@ use std::f32::consts::{PI, TAU};
 use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
+use crate::points;
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
 use crate::trend::{auto_name, fit_trendline, moving_average};
 use crate::{ChartData, HAlign, Measure, Prim, Rgba, SeriesData, VAlign};
@@ -126,8 +127,10 @@ fn plot_kind(chart: &Chart, s: &SeriesData) -> ChartKind {
 }
 
 /// Colour of point `j` for charts that colour by point (pie, doughnut, treemap, sunburst).
-fn point_color(data: &ChartData, j: usize) -> Rgba {
+fn point_color(chart: &Chart, data: &ChartData, j: usize) -> Rgba {
     match (j, data.series.first()) {
+        // Pie and doughnut slices: the point's own fill, vary colors, else the series colour.
+        (_, Some(s)) if matches!(chart.kind, ChartKind::Pie | ChartKind::Doughnut) => points::fill(data, s, j, None).0,
         (0, Some(s)) => s.color,
         _ => j.checked_rem(data.palette.len()).and_then(|k| data.palette.get(k)).copied().unwrap_or_else(|| series_color(&Theme::default(), j)),
     }
@@ -149,7 +152,7 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
     match chart.kind {
         ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst => {
             let n = first_len(data).min(MAX_CATS);
-            (0..n).map(|j| (cat_label(data, j), point_color(data, j), Swatch::Box)).collect()
+            (0..n).map(|j| (cat_label(data, j), point_color(chart, data, j), Swatch::Box)).collect()
         }
         ChartKind::Histogram | ChartKind::Funnel | ChartKind::Stock => vec![],
         ChartKind::Waterfall => {
@@ -159,20 +162,26 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
             let total = data.series.first().map(|s| s.color).unwrap_or(TEXT);
             vec![("Increase".into(), UP, Swatch::Box), ("Decrease".into(), DOWN, Swatch::Box), ("Total".into(), total, Swatch::Box)]
         }
+        // The only series of a chart that varies colours by point, or whose points have formats
+        // of their own: one entry per point, as Excel lists them.
+        _ if data.legend_by_point && data.series.len() == 1 => {
+            let Some(s) = data.series.first() else { return vec![] };
+            let sw = swatch_of(plot_kind(chart, s));
+            let n = s.values.len().max(data.categories.len()).min(MAX_CATS);
+            (0..n)
+                .map(|j| {
+                    let c = match sw {
+                        Swatch::Box => points::fill(data, s, j, None).0,
+                        Swatch::Line => points::line(data, s, j),
+                        Swatch::LineMarker | Swatch::Marker => points::marker_fill(data, s, j),
+                    };
+                    (cat_label(data, j), c, sw)
+                })
+                .collect()
+        }
         _ => {
             let series = data.series.iter().take(MAX_SERIES);
-            let mut out: Vec<(String, Rgba, Swatch)> = series
-                .clone()
-                .map(|s| {
-                    let sw = match plot_kind(chart, s) {
-                        ChartKind::Line | ChartKind::LineStacked | ChartKind::Radar | ChartKind::ScatterLines => Swatch::Line,
-                        ChartKind::LineMarkers => Swatch::LineMarker,
-                        ChartKind::Scatter | ChartKind::Bubble => Swatch::Marker,
-                        _ => Swatch::Box,
-                    };
-                    (s.name.clone(), s.color, sw)
-                })
-                .collect();
+            let mut out: Vec<(String, Rgba, Swatch)> = series.clone().map(|s| (s.name.clone(), s.color, swatch_of(plot_kind(chart, s)))).collect();
             // Trendlines follow the series, named "Linear (Sales)" unless given a name.
             for s in series.filter(|s| supports_trendline(plot_kind(chart, s))) {
                 for t in s.trendlines.iter().take(MAX_TRENDLINES) {
@@ -184,6 +193,15 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
     }
 }
 
+fn swatch_of(k: ChartKind) -> Swatch {
+    match k {
+        ChartKind::Line | ChartKind::LineStacked | ChartKind::Radar | ChartKind::ScatterLines => Swatch::Line,
+        ChartKind::LineMarkers => Swatch::LineMarker,
+        ChartKind::Scatter | ChartKind::Bubble => Swatch::Marker,
+        _ => Swatch::Box,
+    }
+}
+
 fn sanitize_vals(v: &[Option<f64>]) -> Vec<Option<f64>> {
     v.iter().take(MAX_POINTS).map(|x| x.filter(|n| n.is_finite()).map(clean)).collect()
 }
@@ -191,6 +209,8 @@ fn sanitize_vals(v: &[Option<f64>]) -> Vec<Option<f64>> {
 fn sanitize(d: &ChartData) -> ChartData {
     ChartData {
         palette: d.palette.iter().take(MAX_POINTS).copied().collect(),
+        vary_colors: d.vary_colors,
+        legend_by_point: d.legend_by_point,
         categories: d.categories.iter().take(MAX_POINTS).cloned().collect(),
         category_levels: d.category_levels.iter().take(3).map(|l| l.iter().take(MAX_POINTS).cloned().collect()).collect(),
         series: d
@@ -208,9 +228,30 @@ fn sanitize(d: &ChartData) -> ChartData {
                 smooth: s.smooth,
                 trendlines: s.trendlines.iter().take(MAX_TRENDLINES).cloned().collect(),
                 number_format: s.number_format.clone(),
+                points: sanitize_points(&s.points),
+                invert_if_negative: s.invert_if_negative,
+                invert_color: s.invert_color,
+                explicit_color: s.explicit_color,
             })
             .collect(),
     }
+}
+
+/// Point overrides sorted by index (one per index), capped, with finite sizes and explosions.
+fn sanitize_points(pts: &[crate::PointStyle]) -> Vec<crate::PointStyle> {
+    let mut out: Vec<crate::PointStyle> = pts
+        .iter()
+        .filter(|p| p.index < MAX_POINTS)
+        .take(crate::resolve::MAX_POINT_STYLES)
+        .map(|p| crate::PointStyle {
+            marker_size: p.marker_size.filter(|v| v.is_finite()).map(|v| v.clamp(2.0, 72.0)),
+            explosion: if p.explosion.is_finite() { p.explosion.clamp(0.0, 4.0) } else { 0.0 },
+            ..p.clone()
+        })
+        .collect();
+    out.sort_by_key(|p| p.index);
+    out.dedup_by_key(|p| p.index);
+    out
 }
 
 fn chart_title(chart: &Chart, data: &ChartData) -> Option<String> {
@@ -687,6 +728,50 @@ fn draw_markers(ctx: &mut Ctx, pts: impl Iterator<Item = [f32; 2]>, r: f32, colo
     }
 }
 
+/// Markers of a series whose points differ (own formats or vary colors), point `j` at `pts[j]`.
+fn draw_point_markers(ctx: &mut Ctx, data: &ChartData, s: &SeriesData, pts: &[Option<[f32; 2]>], r: f32) {
+    if !points::varies(data, s) {
+        draw_markers(ctx, pts.iter().flatten().copied(), r, s.color);
+        return;
+    }
+    let mut seen = HashSet::new();
+    for (j, p) in pts.iter().enumerate() {
+        let Some(p) = p else { continue };
+        if seen.len() >= MAX_MARKERS {
+            break;
+        }
+        // A point with its own format is always drawn, even over a neighbour.
+        if (seen.insert(((p[0] * 0.5) as i32, (p[1] * 0.5) as i32)) || points::point(s, j).is_some())
+            && let Some(m) = points::mark(data, s, j, r)
+        {
+            points::draw_mark(&mut ctx.out, *p, &m);
+        }
+    }
+}
+
+/// Redraws the segments of a line whose points differ: the segment ending at point `j` takes
+/// point `j`'s line colour (or its vary-colors colour). Long series only redraw the points
+/// with their own format.
+fn draw_point_segments(ctx: &mut Ctx, data: &ChartData, s: &SeriesData, pts: &[Option<[f32; 2]>], width: f32) {
+    if !points::varies(data, s) {
+        return;
+    }
+    let all = data.vary_colors && !s.explicit_color && pts.len() <= MAX_LINE_PTS;
+    let mut draw = |j: usize| {
+        if let (Some(Some(a)), Some(Some(b))) = (j.checked_sub(1).and_then(|i| pts.get(i)), pts.get(j)) {
+            let c = points::line(data, s, j);
+            if c != s.color {
+                ctx.line(vec![*a, *b], c, width);
+            }
+        }
+    };
+    if all {
+        (1..pts.len()).for_each(&mut draw);
+    } else {
+        s.points.iter().filter(|p| p.line.is_some()).map(|p| p.index).for_each(draw);
+    }
+}
+
 fn value_range(it: impl Iterator<Item = f64>) -> Option<(f64, f64)> {
     it.fold(None, |acc, v| match acc {
         None => Some((v, v)),
@@ -1097,12 +1182,13 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                         let c = center(j);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
+                        let (fill, stroke) = points::fill(data, s, j, s.values.get(j).copied().flatten());
                         if horizontal {
                             let y = c + nslots * bw / 2.0 - (k + 1.0) * bw;
-                            ctx.rect(lo, y, len, bw, s.color, None);
+                            ctx.rect(lo, y, len, bw, fill, stroke);
                         } else {
                             let x = c - nslots * bw / 2.0 + k * bw;
-                            ctx.rect(x, lo, bw, len, s.color, None);
+                            ctx.rect(x, lo, bw, len, fill, stroke);
                         }
                         if labels_on && let Some(v) = s.values.get(j).copied().flatten() {
                             let t = fmt.format(v, None);
@@ -1111,7 +1197,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                             if horizontal {
                                 let y = c + nslots * bw / 2.0 - (k + 0.5) * bw;
                                 if stacked {
-                                    ctx.text(mid, y, &t, LABEL_SIZE, on(s.color), HAlign::Center, VAlign::Middle);
+                                    ctx.text(mid, y, &t, LABEL_SIZE, on(fill), HAlign::Center, VAlign::Middle);
                                 } else if v >= 0.0 {
                                     ctx.text(pb.max(pt) + 3.0, y, &t, LABEL_SIZE, TEXT, HAlign::Left, VAlign::Middle);
                                 } else {
@@ -1120,7 +1206,7 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                             } else {
                                 let x = c - nslots * bw / 2.0 + (k + 0.5) * bw;
                                 if stacked {
-                                    ctx.text(x, mid, &t, LABEL_SIZE, on(s.color), HAlign::Center, VAlign::Middle);
+                                    ctx.text(x, mid, &t, LABEL_SIZE, on(fill), HAlign::Center, VAlign::Middle);
                                 } else if v >= 0.0 {
                                     ctx.text(x, lo - 2.0, &t, LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
                                 } else {
@@ -1133,9 +1219,29 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                 _ => {
                     let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc)])).collect();
                     draw_runs(ctx, &pts, s.color, 2.25, s.smooth.then_some(plot));
+                    // Point colours are drawn on straight segments only (a smoothed line keeps
+                    // the series colour).
+                    if !s.smooth {
+                        draw_point_segments(ctx, data, s, &pts, 2.25);
+                    }
                     let k = kinds.get(i).copied().unwrap_or(ChartKind::Line);
                     if k == ChartKind::LineMarkers && cw >= 3.0 {
-                        draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
+                        draw_point_markers(ctx, data, s, &pts, 3.5);
+                    } else if cw >= 3.0
+                        && s.points
+                            .iter()
+                            .any(|p| p.marker_symbol != gridcraft_model::MarkerSymbol::Auto && p.marker_symbol != gridcraft_model::MarkerSymbol::None)
+                    {
+                        // A line without markers still shows a point that sets a marker shape.
+                        for p in s
+                            .points
+                            .iter()
+                            .filter(|p| !matches!(p.marker_symbol, gridcraft_model::MarkerSymbol::Auto | gridcraft_model::MarkerSymbol::None))
+                        {
+                            if let (Some(Some(at)), Some(m)) = (pts.get(p.index), points::mark(data, s, p.index, 3.5)) {
+                                points::draw_mark(&mut ctx.out, *at, &m);
+                            }
+                        }
                     }
                     if labels_on {
                         for (j, p) in pts.iter().enumerate() {
@@ -1217,32 +1323,36 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         if bubble {
             let sizes = s.sizes.as_deref().unwrap_or(&[]);
             let smax = sizes.iter().flatten().fold(0.0f64, |a, b| a.max(*b));
-            let mut bubbles: Vec<([f32; 2], f64)> = px
+            let mut bubbles: Vec<(usize, [f32; 2], f64)> = px
                 .iter()
                 .enumerate()
                 .filter_map(|(j, p)| {
                     let sz = if sizes.is_empty() { Some(1.0) } else { sizes.get(j).copied().flatten() };
                     match (p, sz) {
-                        (Some(p), Some(sz)) if sz > 0.0 => Some((*p, sz)),
+                        (Some(p), Some(sz)) if sz > 0.0 => Some((j, *p, sz)),
                         _ => None,
                     }
                 })
                 .take(MAX_MARKERS)
                 .collect();
-            bubbles.sort_by(|a, b| b.1.total_cmp(&a.1));
+            bubbles.sort_by(|a, b| b.2.total_cmp(&a.2));
             let smax = if sizes.is_empty() { 1.0 } else { smax };
-            let fill = [s.color[0], s.color[1], s.color[2], 0xC0];
-            for (p, sz) in bubbles {
+            for (j, p, sz) in bubbles {
                 let r = ((sz / smax).sqrt() as f32 * rmax).max(1.0);
-                ctx.out.push(Prim::Circle { cx: p[0], cy: p[1], r, fill: Some(fill), stroke: Some((WHITE, 0.75)) });
+                let (c, stroke) = points::fill(data, s, j, None);
+                let fill = [c[0], c[1], c[2], 0xC0];
+                ctx.out.push(Prim::Circle { cx: p[0], cy: p[1], r, fill: Some(fill), stroke: Some(stroke.unwrap_or((WHITE, 0.75))) });
             }
         } else {
             let lines = chart.kind == ChartKind::ScatterLines || s.kind == ChartKind::ScatterLines;
             if lines {
                 draw_runs(ctx, &px, s.color, 2.0, s.smooth.then_some(plot));
+                if !s.smooth {
+                    draw_point_segments(ctx, data, s, &px, 2.0);
+                }
             }
             if !lines || px.len() <= 500 {
-                draw_markers(ctx, px.iter().flatten().copied(), 3.5, s.color);
+                draw_point_markers(ctx, data, s, &px, 3.5);
             }
         }
         if chart.data_labels && pts.len() <= MAX_LABELS {
@@ -1431,8 +1541,11 @@ fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inner: f32, nam
     if !(total.is_finite() && total > 0.0) {
         return;
     }
-    let (cx, cy) = (area.cx(), area.cy());
-    let r = area.w.min(area.h) / 2.0 * 0.92;
+    let (pcx, pcy) = (area.cx(), area.cy());
+    // Exploded slices are pulled out along their middle; the pie shrinks so they still fit.
+    let explode = |j: usize| points::point(s, j).map(|p| p.explosion).unwrap_or(0.0);
+    let max_explosion = (0..vals.len()).map(explode).fold(0.0f32, f32::max);
+    let r = area.w.min(area.h) / 2.0 * 0.92 / (1.0 + max_explosion);
     if r < 2.0 {
         return;
     }
@@ -1443,8 +1556,12 @@ fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inner: f32, nam
     for (j, v) in vals.iter().enumerate() {
         let sweep = (*v / total) as f32 * TAU;
         if sweep > 1e-4 {
-            let fill = point_color(data, j);
-            ctx.out.push(Prim::Wedge { cx, cy, r_outer: r, r_inner: ri, a0: a, a1: (a + sweep).min(TAU), fill, stroke: Some((WHITE, 1.5)) });
+            let fill = point_color(chart, data, j);
+            let stroke = points::point(s, j).and_then(|p| p.line).map(|c| (c, 1.5)).unwrap_or((WHITE, 1.5));
+            let d = explode(j) * r;
+            let mid = a + sweep / 2.0;
+            let (cx, cy) = (pcx + d * mid.sin(), pcy - d * mid.cos());
+            ctx.out.push(Prim::Wedge { cx, cy, r_outer: r, r_inner: ri, a0: a, a1: (a + sweep).min(TAU), fill, stroke: Some(stroke) });
             if (chart.data_labels || names) && vals.len() <= MAX_LABELS {
                 let t = if names { cat_label(data, j) } else { f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None) };
                 let mid = a + sweep / 2.0;
@@ -1541,7 +1658,7 @@ fn treemap(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     items.sort_by(|a, b| b.1.total_cmp(&a.1));
     let f = Fmt::new(&s.number_format);
     for (j, b) in squarify(&items, area) {
-        let fill = point_color(data, j);
+        let fill = point_color(chart, data, j);
         ctx.rect(b.x, b.y, b.w, b.h, fill, Some((WHITE, 1.5)));
         if b.w > 24.0 && b.h > LABEL_SIZE * 1.6 {
             let name = ctx.fit(&cat_label(data, j), LABEL_SIZE, b.w - 8.0);

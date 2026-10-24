@@ -543,6 +543,7 @@ fn chartex_parts_as_excel_expects_them() {
         source: None,
         by_rows: false,
         pivot: None,
+        vary_colors: None,
     });
     wb.sheets = vec![std::sync::Arc::new(sheet)];
     let bytes = crate::write_xlsx(&wb).unwrap();

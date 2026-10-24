@@ -5,7 +5,9 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{Chart, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{
+    Chart, ChartKind, Color, DataPoint, DefinedName, LegendPos, LineDash, MarkerFormat, MarkerSymbol, Series, Trendline, TrendlineKind, Workbook,
+};
 
 use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, num};
@@ -125,6 +127,7 @@ fn read_series(s: &El) -> Series {
         .child("tx")
         .and_then(|tx| tx.path(&["strRef", "f"]).map(|f| chart_ref_from_file(&f.text)).or_else(|| tx.child("v").map(|v| v.text.clone())));
     let sp = s.child("spPr");
+    let invert = bool_val(s, "invertIfNegative");
     let color = sp
         .and_then(|p| p.child("solidFill"))
         .and_then(dml_color)
@@ -141,7 +144,81 @@ fn read_series(s: &El) -> Series {
         quartiles: Default::default(),
         smooth: bool_val(s, "smooth"),
         trendlines: s.kids("trendline").filter_map(read_trendline).collect(),
+        points: read_points(s, invert),
+        invert_if_negative: invert,
+        invert_color: s
+            .child("extLst")
+            .into_iter()
+            .flat_map(|l| l.kids("ext"))
+            .find(|e| e.attr("uri").is_some_and(|u| u.eq_ignore_ascii_case(INVERT_EXT)))
+            .and_then(|e| e.path(&["invertSolidFillFmt", "spPr", "solidFill"]))
+            .and_then(dml_color),
     }
+}
+
+/// The c14 extension holding the fill of inverted negative bars (`c14:invertSolidFillFmt`).
+const INVERT_EXT: &str = "{6F2FDCE9-48DA-4B69-8628-5D25D57E5C99}";
+/// Cap on point overrides kept per series (Excel writes one `c:dPt` per formatted point).
+pub(crate) const MAX_POINT_FORMATS: usize = 4096;
+
+const SYMBOLS: [(MarkerSymbol, &str); 11] = [
+    (MarkerSymbol::Auto, "auto"),
+    (MarkerSymbol::None, "none"),
+    (MarkerSymbol::Circle, "circle"),
+    (MarkerSymbol::Square, "square"),
+    (MarkerSymbol::Diamond, "diamond"),
+    (MarkerSymbol::Triangle, "triangle"),
+    (MarkerSymbol::X, "x"),
+    (MarkerSymbol::Star, "star"),
+    (MarkerSymbol::Dot, "dot"),
+    (MarkerSymbol::Dash, "dash"),
+    (MarkerSymbol::Plus, "plus"),
+];
+
+/// Fill and line colours of an `spPr` (solid fills only).
+fn sp_colors(sp: Option<&El>) -> (Option<Color>, Option<Color>) {
+    (sp.and_then(|p| p.child("solidFill")).and_then(dml_color), sp.and_then(|p| p.path(&["ln", "solidFill"])).and_then(dml_color))
+}
+
+/// `<c:marker>` (ECMA-376 Part 1, 21.2.2.106); `None` when it sets nothing.
+fn read_marker(m: &El) -> Option<MarkerFormat> {
+    let symbol = m.child_val("symbol").and_then(|v| SYMBOLS.iter().find(|(_, n)| *n == v)).map(|(s, _)| *s).unwrap_or_default();
+    let size = m.child("size").and_then(|c| c.attr_u32("val")).map(|v| v.clamp(2, 72) as u8);
+    let (fill, line) = sp_colors(m.child("spPr"));
+    let f = MarkerFormat { symbol, size, fill, line };
+    (f != MarkerFormat::default()).then_some(f)
+}
+
+/// The series' `<c:dPt>` overrides, sorted by index, one per index, capped. Points that set
+/// nothing GridCraft models (Excel echoes the series' invertIfNegative into every bar point)
+/// are dropped.
+fn read_points(s: &El, series_invert: bool) -> Vec<DataPoint> {
+    // The cap counts distinct point indices, so repeated `dPt` entries for one index can't use it up.
+    // The first entry for an index wins.
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<DataPoint> = Vec::new();
+    for d in s.kids("dPt") {
+        let Some(index) = d.child("idx").and_then(|i| i.attr_u32("val")) else { continue };
+        let (fill, line) = sp_colors(d.child("spPr"));
+        let p = DataPoint {
+            index,
+            fill,
+            line,
+            marker: d.child("marker").and_then(read_marker),
+            explosion: d.child("explosion").and_then(|e| e.attr_u32("val")).map(|v| v.min(400)),
+            invert_if_negative: d.child("invertIfNegative").map(|c| c.flag("val", true)).filter(|v| *v != series_invert),
+        };
+        if p == (DataPoint { index, ..Default::default() }) || seen.contains(&index) {
+            continue;
+        }
+        if seen.len() >= MAX_POINT_FORMATS {
+            break;
+        }
+        seen.insert(index);
+        out.push(p);
+    }
+    out.sort_by_key(|p| p.index);
+    out
 }
 
 const DASHES: [(LineDash, &str); 11] = [
@@ -273,6 +350,13 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         source: None,
         by_rows: false,
         pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
+        vary_colors: {
+            // An absent varyColors is on (the CT_Boolean default; Excel draws it so). Only a
+            // value other than the kind's default is kept.
+            let v = first.child("varyColors").is_none_or(|v| v.flag("val", true));
+            let default = matches!(kind, ChartKind::Pie | ChartKind::Doughnut);
+            (v != default).then_some(v)
+        },
     })
 }
 
@@ -548,10 +632,16 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
         _ => {}
     }
     match g {
-        G::Bar { .. } => x.push_str("<c:invertIfNegative val=\"0\"/>"),
+        G::Bar { .. } | G::Bubble => {
+            let _ = write!(x, "<c:invertIfNegative val=\"{}\"/>", s.invert_if_negative as u8);
+        }
         G::Line { markers: false, .. } | G::Scatter { lines: true } | G::Stock => x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>"),
-        G::Bubble => x.push_str("<c:invertIfNegative val=\"0\"/>"),
         _ => {}
+    }
+    // Point overrides follow the series' spPr/invertIfNegative/marker and come before dLbls
+    // and trendlines in every series type.
+    for p in s.points.iter().take(MAX_POINT_FORMATS) {
+        x.push_str(&dpt_xml(p, g, s.invert_if_negative, wb));
     }
     // Trendlines sit between dLbls and the data in CT_LineSer, CT_BarSer, CT_AreaSer,
     // CT_ScatterSer and CT_BubbleSer; pie and radar series have none.
@@ -583,7 +673,83 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
             }
         }
     }
+    // Excel keeps the fill of inverted bars in a c14 extension, and only reads it when the
+    // series has a fill of its own (white otherwise).
+    if matches!(g, G::Bar { .. })
+        && s.invert_if_negative
+        && let Some(c) = s.color.as_ref().and_then(|_| srgb(&s.invert_color.unwrap_or(Color::Rgb(0xFF_FF_FF)), &wb.theme))
+    {
+        let _ = write!(
+            x,
+            "<c:extLst><c:ext uri=\"{INVERT_EXT}\" xmlns:c14=\"http://schemas.microsoft.com/office/drawing/2007/8/2/chart\"><c14:invertSolidFillFmt><c14:spPr><a:solidFill>{c}</a:solidFill></c14:spPr></c14:invertSolidFillFmt></c:ext></c:extLst>"
+        );
+    }
     x.push_str("</c:ser>");
+    x
+}
+
+/// `<c:marker>` with children in schema order: symbol, size, spPr.
+fn marker_xml(m: &MarkerFormat, wb: &Workbook) -> String {
+    let mut x = String::from("<c:marker>");
+    if let Some((_, n)) = SYMBOLS.iter().find(|(k, _)| *k == m.symbol).filter(|(k, _)| *k != MarkerSymbol::Auto) {
+        let _ = write!(x, "<c:symbol val=\"{n}\"/>");
+    }
+    if let Some(sz) = m.size {
+        let _ = write!(x, "<c:size val=\"{}\"/>", sz.clamp(2, 72));
+    }
+    let fill = m.fill.as_ref().and_then(|c| srgb(c, &wb.theme));
+    let line = m.line.as_ref().and_then(|c| srgb(c, &wb.theme));
+    if fill.is_some() || line.is_some() {
+        x.push_str("<c:spPr>");
+        if let Some(c) = fill {
+            let _ = write!(x, "<a:solidFill>{c}</a:solidFill>");
+        }
+        if let Some(c) = line {
+            let _ = write!(x, "<a:ln w=\"9525\"><a:solidFill>{c}</a:solidFill></a:ln>");
+        }
+        x.push_str("</c:spPr>");
+    }
+    x.push_str("</c:marker>");
+    x
+}
+
+/// `<c:dPt>` with children in schema order: idx, invertIfNegative, marker, bubble3D,
+/// explosion, spPr. Each series type gets only the children it allows.
+fn dpt_xml(p: &DataPoint, g: G, series_invert: bool, wb: &Workbook) -> String {
+    let mut x = format!("<c:dPt><c:idx val=\"{}\"/>", p.index);
+    let line_like = matches!(g, G::Line { .. } | G::Scatter { .. } | G::Radar | G::Stock);
+    if matches!(g, G::Bar { .. } | G::Bubble) {
+        let _ = write!(x, "<c:invertIfNegative val=\"{}\"/>", p.invert_if_negative.unwrap_or(series_invert) as u8);
+    }
+    if line_like && let Some(m) = &p.marker {
+        x.push_str(&marker_xml(m, wb));
+    }
+    x.push_str("<c:bubble3D val=\"0\"/>");
+    if matches!(g, G::Pie | G::Doughnut)
+        && let Some(e) = p.explosion
+    {
+        let _ = write!(x, "<c:explosion val=\"{}\"/>", e.min(400));
+    }
+    // A line point's fill draws nothing in Excel but is kept, so a series written into another
+    // group (combo charts) keeps it.
+    let fill = p.fill.as_ref().and_then(|c| srgb(c, &wb.theme));
+    let line = p.line.as_ref().and_then(|c| srgb(c, &wb.theme));
+    if fill.is_some() || line.is_some() {
+        x.push_str("<c:spPr>");
+        if let Some(c) = fill {
+            let _ = write!(x, "<a:solidFill>{c}</a:solidFill>");
+        }
+        if let Some(c) = line {
+            // A line series' segment keeps the width GridCraft writes for the series.
+            if line_like {
+                let _ = write!(x, "<a:ln w=\"28575\" cap=\"rnd\"><a:solidFill>{c}</a:solidFill><a:round/></a:ln>");
+            } else {
+                let _ = write!(x, "<a:ln><a:solidFill>{c}</a:solidFill></a:ln>");
+            }
+        }
+        x.push_str("</c:spPr>");
+    }
+    x.push_str("</c:dPt>");
     x
 }
 
@@ -651,35 +817,41 @@ fn dlbls(show: bool) -> String {
     )
 }
 
-fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
+/// One chart group; `vary` is its varyColors.
+fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), vary: bool, wb: &Workbook, si: usize) -> String {
     let sers: String = series.iter().map(|(i, s)| series_xml(s, *i, g, wb, si)).collect();
     let dl = dlbls(ch.data_labels);
+    let vary = vary as u8;
     let ax = format!("<c:axId val=\"{}\"/><c:axId val=\"{}\"/>", axes.0, axes.1);
     match g {
         G::Bar { bar, grouping } => {
             let overlap = if grouping == "clustered" { String::new() } else { "<c:overlap val=\"100\"/>".into() };
             format!(
-                "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:gapWidth val=\"150\"/>{overlap}{ax}</c:barChart>",
+                "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"{vary}\"/>{sers}{dl}<c:gapWidth val=\"150\"/>{overlap}{ax}</c:barChart>",
                 if bar { "bar" } else { "col" }
             )
         }
         G::Line { stacked, .. } => format!(
-            "<c:lineChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"1\"/>{ax}</c:lineChart>",
+            "<c:lineChart><c:grouping val=\"{}\"/><c:varyColors val=\"{vary}\"/>{sers}{dl}<c:marker val=\"1\"/>{ax}</c:lineChart>",
             if stacked { "stacked" } else { "standard" }
         ),
-        G::Pie => format!("<c:pieChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/></c:pieChart>"),
+        G::Pie => format!("<c:pieChart><c:varyColors val=\"{vary}\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/></c:pieChart>"),
         G::Doughnut => {
-            format!("<c:doughnutChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/></c:doughnutChart>")
+            format!("<c:doughnutChart><c:varyColors val=\"{vary}\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/></c:doughnutChart>")
         }
         G::Area { stacked } => format!(
-            "<c:areaChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:areaChart>",
+            "<c:areaChart><c:grouping val=\"{}\"/><c:varyColors val=\"{vary}\"/>{sers}{dl}{ax}</c:areaChart>",
             if stacked { "stacked" } else { "standard" }
         ),
-        G::Scatter { .. } => format!("<c:scatterChart><c:scatterStyle val=\"lineMarker\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:scatterChart>"),
-        G::Bubble => {
-            format!("<c:bubbleChart><c:varyColors val=\"0\"/>{sers}{dl}<c:bubbleScale val=\"100\"/><c:showNegBubbles val=\"0\"/>{ax}</c:bubbleChart>")
+        G::Scatter { .. } => {
+            format!("<c:scatterChart><c:scatterStyle val=\"lineMarker\"/><c:varyColors val=\"{vary}\"/>{sers}{dl}{ax}</c:scatterChart>")
         }
-        G::Radar => format!("<c:radarChart><c:radarStyle val=\"marker\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:radarChart>"),
+        G::Bubble => {
+            format!(
+                "<c:bubbleChart><c:varyColors val=\"{vary}\"/>{sers}{dl}<c:bubbleScale val=\"100\"/><c:showNegBubbles val=\"0\"/>{ax}</c:bubbleChart>"
+            )
+        }
+        G::Radar => format!("<c:radarChart><c:radarStyle val=\"marker\"/><c:varyColors val=\"{vary}\"/>{sers}{dl}{ax}</c:radarChart>"),
         G::Stock => format!("<c:stockChart>{sers}{dl}<c:hiLowLines/>{ax}</c:stockChart>"),
     }
 }
@@ -771,18 +943,21 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         let lines: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && is_line(kind(*i, x))).copied().collect();
         let sec: Vec<(usize, &Series)> = all.iter().filter(|(_, x)| x.secondary).copied().collect();
         primary_g = G::Bar { bar: false, grouping: "clustered" };
+        // The chart's vary colors setting is the first group's (as read); the others keep the
+        // default, so a combo's single-series group doesn't start varying its colours.
+        let mut vary = ch.vary_colors_on();
         if !bars.is_empty() || (lines.is_empty() && sec.is_empty()) {
-            s.push_str(&group_xml(primary_g, &bars, ch, (1, 2), wb, si));
+            s.push_str(&group_xml(primary_g, &bars, ch, (1, 2), std::mem::take(&mut vary), wb, si));
         }
         if !lines.is_empty() {
-            s.push_str(&group_xml(G::Line { stacked: false, markers: false }, &lines, ch, (1, 2), wb, si));
+            s.push_str(&group_xml(G::Line { stacked: false, markers: false }, &lines, ch, (1, 2), std::mem::take(&mut vary), wb, si));
         }
         if !sec.is_empty() {
             let g = match sec.first().and_then(|(_, x)| x.kind).map(group_for) {
                 Some(b @ G::Bar { .. }) => b,
                 _ => G::Line { stacked: false, markers: false },
             };
-            s.push_str(&group_xml(g, &sec, ch, (3, 4), wb, si));
+            s.push_str(&group_xml(g, &sec, ch, (3, 4), vary, wb, si));
             secondary = Some(g);
         }
     } else {
@@ -791,7 +966,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
             G::Stock if !(3..=4).contains(&ch.series.len()) => G::Line { stacked: false, markers: false },
             g => g,
         };
-        s.push_str(&group_xml(primary_g, &all, ch, (1, 2), wb, si));
+        s.push_str(&group_xml(primary_g, &all, ch, (1, 2), ch.vary_colors_on(), wb, si));
     }
     match primary_g {
         G::Pie | G::Doughnut => {}

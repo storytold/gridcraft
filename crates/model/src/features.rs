@@ -463,6 +463,65 @@ pub struct Series {
     /// Trendlines fitted to this series (Excel allows several per series).
     #[serde(default)]
     pub trendlines: Vec<Trendline>,
+    /// Format Data Point overrides (`c:dPt`), sorted by point index. Indexes are positions in
+    /// the series data, as in Excel: they don't move when rows are inserted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<DataPoint>,
+    /// Invert if Negative (`c:invertIfNegative`): negative bars are drawn in `invert_color`, or
+    /// white when the series has no fill of its own. Bar and bubble series only.
+    #[serde(default)]
+    pub invert_if_negative: bool,
+    /// The fill for inverted negative bars (the c14 `invertSolidFillFmt` extension); `None`
+    /// is white. Excel uses it only when the series has an explicit fill (`color`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invert_color: Option<Color>,
+}
+
+/// One point's own formatting (Format Data Point, `c:dPt`). `None` fields follow the series.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DataPoint {
+    /// Position of the point in the series data (0-based).
+    pub index: u32,
+    /// Fill: bars, slices, areas, bubbles.
+    pub fill: Option<Color>,
+    /// Line colour: the border of a bar or slice; for line and scatter series, the segment that
+    /// ends at this point.
+    pub line: Option<Color>,
+    /// Marker (line, scatter and radar series).
+    pub marker: Option<MarkerFormat>,
+    /// Pie and doughnut: how far the slice is pulled out, in percent of the radius.
+    pub explosion: Option<u32>,
+    /// Overrides the series' Invert if Negative for this point.
+    pub invert_if_negative: Option<bool>,
+}
+
+/// Marker shape (`c:symbol`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MarkerSymbol {
+    #[default]
+    Auto,
+    None,
+    Circle,
+    Square,
+    Diamond,
+    Triangle,
+    X,
+    Star,
+    Dot,
+    Dash,
+    Plus,
+}
+
+/// A marker's look (`c:marker`). `None` fields follow the series.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MarkerFormat {
+    pub symbol: MarkerSymbol,
+    /// Size in points (2..=72).
+    pub size: Option<u8>,
+    pub fill: Option<Color>,
+    pub line: Option<Color>,
 }
 
 /// Regression a trendline fits (`c:trendlineType`).
@@ -553,6 +612,34 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+    /// Vary colors by point (`c:varyColors`); `None` is the default for the kind (on for pie
+    /// and doughnut charts, off otherwise). Excel draws it only for pie-like charts and for
+    /// charts with a single bar, line, scatter, bubble or radar series.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vary_colors: Option<bool>,
+}
+
+impl Chart {
+    /// Whether points are coloured one by one: the explicit setting, else on for pie-like kinds.
+    pub fn vary_colors_on(&self) -> bool {
+        self.vary_colors.unwrap_or(matches!(self.kind, ChartKind::Pie | ChartKind::Doughnut))
+    }
+}
+
+impl Series {
+    /// The point override at `index`, if any.
+    pub fn point(&self, index: u32) -> Option<&DataPoint> {
+        self.points.binary_search_by_key(&index, |p| p.index).ok().and_then(|i| self.points.get(i))
+    }
+
+    /// The point override at `index`, created (in index order) when missing.
+    pub fn point_mut(&mut self, index: u32) -> Option<&mut DataPoint> {
+        let i = self.points.partition_point(|p| p.index < index);
+        if self.points.get(i).is_none_or(|p| p.index != index) {
+            self.points.insert(i, DataPoint { index, ..Default::default() });
+        }
+        self.points.get_mut(i)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
