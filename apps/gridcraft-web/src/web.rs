@@ -139,7 +139,46 @@ impl eframe::App for WebShell {
                 }
             });
         }
+        // The app first: `gridcraft:open` messages wait in the inbox that `app.logic` drains,
+        // and a command sent right after an open must not act on the previous workbook.
+        // Commands still run in the same frame, right after a queued open lands.
         self.app.logic(ctx);
+        if let Some(bridge) = &self.bridge {
+            for (id, params, request_id) in bridge.take_commands() {
+                let parsed: serde_json::Value = if params.trim().is_empty() {
+                    serde_json::json!({})
+                } else {
+                    match serde_json::from_str(&params) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            bridge.post_response(&id, request_id.as_deref(), false, Some(&format!("invalid params for {id}: {e}")));
+                            continue;
+                        }
+                    }
+                };
+                // A host close must not drop an open cell editor: commit it first, exactly
+                // like the File menu does, and refuse to close when the edit won't commit —
+                // the host hears why and the workbook stays open for the user to fix it.
+                if id == "file.close" && !self.app.commit_edit(0, 0, false, false) {
+                    bridge.post_response(&id, request_id.as_deref(), false, Some("the cell edit doesn't commit; fix or cancel it before closing"));
+                    continue;
+                }
+                if id == "file.save" && !self.app.commit_edit(0, 0, false, false) {
+                    bridge.post_response(&id, request_id.as_deref(), false, Some("the cell edit doesn't commit; fix or cancel it before saving"));
+                    continue;
+                }
+                match self.app.run(&id, parsed) {
+                    Ok(v) => {
+                        // Bind save receipts to the document that was just saved: a queued
+                        // `gridcraft:open` later in the same burst would make another document
+                        // active before the frame's sync applies the receipt.
+                        bridge.apply_receipts(&mut self.app);
+                        bridge.post_response(&id, request_id.as_deref(), true, Some(&v.to_string()));
+                    }
+                    Err(e) => bridge.post_response(&id, request_id.as_deref(), false, Some(&e)),
+                }
+            }
+        }
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         let changed = self.prefs.changed(&self.app);
         if !changed.is_empty() {
