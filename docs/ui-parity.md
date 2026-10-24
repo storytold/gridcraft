@@ -204,6 +204,8 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-13 | minor | Grid drags keep their own cursor over selection borders, fill handles and outside the grid; hover resumes on release (#936) |
 | 2026-10-13 | minor | AutoFill month patterns retain the workbook's date system, preventing shifted dates in 1904 workbooks when filling forward or backward |
 | 2026-10-13 | minor | Sheet tab bar: the tab strip shrinks to its tabs, up to 60% of the bar, so New sheet (+) sits right after the last tab and the horizontal scrollbar takes the rest (part of #943) |
+| 2026-10-16 | minor | Custom Sort dialog: Sort by columns are a dropdown of the header names (Column A, B… without headers), Order follows the data (A to Z or Smallest to Largest), levels can be added, deleted, copied and reordered, the window moves and resizes, the grid selection follows "My list has headers" and is restored on close |
+| 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
 | 2026-10-13 | minor | Formula-entry Command/Ctrl-click adds arguments and Shift-click extends references; ordinary replacement and dragging retain their behavior. Readiness estimates unchanged. |
 | 2026-10-12 | minor | Next/previous sheet navigation no longer activates hidden worksheets at either workbook boundary; command tests cover Hidden, VeryHidden and selection retention |
