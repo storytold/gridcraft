@@ -132,6 +132,8 @@ if has appimage; then
   APPDIR="$WORK/GridCraft.AppDir"
   cp -R "$STAGE" "$APPDIR"
   mv "$APPDIR/usr/share/doc" "$WORK/doc-unused"
+  # Keep the runtime Adwaita MIT notice in the packaged AppImage.
+  install -Dm644 "$ROOT/NOTICE" "$APPDIR/usr/share/doc/gridcraft/NOTICE"
   ln -s usr/bin/gridcraft "$APPDIR/AppRun"
   cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
   cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
