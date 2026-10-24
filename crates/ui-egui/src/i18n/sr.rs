@@ -202,6 +202,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Pregled preloma\nstranica",
         "Page\nLayout" => "Izgled\nstranice",
         "Formula Bar" => "Traka formule",
+        "Furigana" => "Furigana",
         "Gridlines" => "Linije mreže",
         "Headings" => "Zaglavlja",
         "Zoom" => "Uvećanje",

@@ -186,6 +186,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Formula Bar" => "Γραμμή τύπων",
         "Gridlines" => "Γραμμές πλέγματος",
         "Headings" => "Επικεφαλίδες",
+        "Furigana" => "Φουριγκάνα",
         "Zoom" => "Μεγέθυνση",
         "Forecast\nSheet" => "Φύλλο\nπρόβλεψης",
         "Add footer" => "Προσθήκη υποσέλιδου",

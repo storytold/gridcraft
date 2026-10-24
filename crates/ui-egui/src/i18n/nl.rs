@@ -207,6 +207,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Formula Bar" => "Formulebalk",
         "Gridlines" => "Celrasterlijnen",
         "Headings" => "Kopteksten",
+        "Furigana" => "Furigana",
         "Zoom" => "Zoomen",
         "100%" => "100%",
         "Zoom to\nSelection" => "Inzoomen op\nselectie",

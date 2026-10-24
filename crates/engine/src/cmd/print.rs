@@ -15,6 +15,7 @@ use gridcraft_pdf::{Font, Page, PdfDoc, Rgb};
 use serde_json::{Value as Json, json};
 
 use super::*;
+use crate::display::PhoneticIndex;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -882,7 +883,7 @@ fn font_for(style: &Style) -> Font {
 }
 
 /// Draws the cells of a block: fills, gridlines, data bars, borders and text.
-fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::cf::CfCache>) {
+fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::cf::CfCache>, phonetics: Option<&PhoneticIndex<'_>>) {
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
     if bw <= 0.0 || bh <= 0.0 {
@@ -997,7 +998,7 @@ fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::
         if let Some(picture) = sh.cell_pictures.get(c) {
             draw_cell_picture(pg, &picture.data, (x, y, w, h), b.k);
         } else {
-            draw_text(pg, b, *c, l, (x, y, w, h), merged, &merges, (bx, bx + bw));
+            draw_text(pg, b, *c, l, (x, y, w, h), merged, &merges, (bx, bx + bw), phonetics);
         }
     }
     pg.restore();
@@ -1105,7 +1106,18 @@ fn center_across_width(styles: &StyleTable, sh: &Sheet, c: CellRef, merges: &[Ra
     ext
 }
 
-fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f32, f32), merged: bool, merges: &[RangeRef], limits: (f32, f32)) {
+#[allow(clippy::too_many_arguments)]
+fn draw_text(
+    pg: &mut Page,
+    b: &Block,
+    c: CellRef,
+    l: &Look,
+    rect: (f32, f32, f32, f32),
+    merged: bool,
+    merges: &[RangeRef],
+    limits: (f32, f32),
+    phonetics: Option<&PhoneticIndex<'_>>,
+) {
     let (x, y, w, h) = rect;
     let sh = b.sh;
     let wb = b.wb;
@@ -1183,11 +1195,24 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     };
     let line_h = size * 1.2;
     let n = lines.len().max(1) as f32;
-    let first_baseline = match st.align.v {
-        VAlign::Top => y + pad + size * 0.8,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
-        VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+    // ふりがな表示: the reading takes a strip at the top of the cell and the text is laid out
+    // below it (View › Show › Furigana). Rotated and vertical cells show no reading, as on screen.
+    let reading = if phonetics.is_some() && !rotated && rot != 255 { phonetics.and_then(|index| index.reading(sh, c)) } else { None };
+    let furigana = reading.and_then(|r| furigana_layout(r, font, size, (w, h), pad, indent));
+    // The text is laid out between the reading's strip and the cell's bottom pad; without a
+    // reading the strip is just the top pad, which keeps the unread cell's baselines unchanged.
+    let text_top = furigana.as_ref().map_or(y + pad, |f| y + f.strip);
+    let text_bottom = y + h - pad;
+    let text_h = (text_bottom - text_top).max(0.0);
+    let mut first_baseline = match st.align.v {
+        VAlign::Top => text_top + size * 0.8,
+        VAlign::Center | VAlign::Justify | VAlign::Distributed => text_top + (text_h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
+        VAlign::Bottom => text_bottom - size * 0.22 - (n - 1.0) * line_h,
     };
+    if furigana.is_some() {
+        // A row too short for both clips the text's lower lines instead of drawing them over the reading.
+        first_baseline = first_baseline.max(text_top + size * 0.8);
+    }
     // Overflow into empty neighbours (single-line text, not merged).
     // Center Across Selection spans the empty Center Across cells to its right; the text stays within that run.
     let spans = st.align.h == HAlign::CenterAcross && !wrap && !merged && rot == 0;
@@ -1284,6 +1309,64 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
             pg.stroke_line(lx, ly - size * 0.3, lx + lw, ly - size * 0.3, (size * 0.06).max(0.2), color);
         }
     }
+    if let (Some(reading), Some(f)) = (reading, &furigana) {
+        draw_furigana(pg, (x, y, w, h), f.size, font, color, h_align, indent, reading, b.k);
+    }
+    pg.restore();
+}
+
+/// A cell's reading laid out for PDF export: its font size and the top strip of the cell that the
+/// text leaves clear, so the reading and the text never overlap. Row and pagination never change.
+struct Furigana {
+    size: f32,
+    strip: f32,
+}
+
+/// About half the cell font's size, capped to the cell's top 45% and shrunk until the reading fits
+/// the cell width. The strip is the cell's top pad plus the reading's line box, which the cell
+/// text is laid out below; a row too short for both clips the text rather than overlap it.
+fn furigana_layout(reading: &str, font: Font, size: f32, (w, h): (f32, f32), pad: f32, indent: f32) -> Option<Furigana> {
+    if reading.is_empty() || w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let avail = (w - 2.0 * pad - indent).max(1.0);
+    let mut fs = (size * 0.5).min((h * 0.45).max(1.0));
+    let tw = gridcraft_pdf::text_width(font, fs, reading);
+    if tw > avail {
+        fs = (fs * avail / tw).max(1.0);
+    }
+    Some(Furigana { size: fs, strip: (pad + fs * 1.2).min(h) })
+}
+
+/// Draws a cell's phonetic (ふりがな) reading above its text at the font size [`furigana_layout`]
+/// gives, aligned like the text and clipped to the cell so it never spills into a neighbour. The
+/// row height is not changed (Excel's View › Furigana).
+#[allow(clippy::too_many_arguments)]
+fn draw_furigana(
+    pg: &mut Page,
+    (x, y, w, h): (f32, f32, f32, f32),
+    size: f32,
+    font: Font,
+    color: Rgb,
+    h_align: HAlign,
+    indent: f32,
+    reading: &str,
+    k: f32,
+) {
+    if reading.is_empty() || w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    let pad = PAD_PX * k;
+    let tw = gridcraft_pdf::text_width(font, size, reading);
+    let lx = match h_align {
+        HAlign::Right => x + w - pad - tw,
+        HAlign::Center | HAlign::CenterAcross | HAlign::Distributed => x + (w - tw) / 2.0,
+        _ => x + pad + indent,
+    };
+    let ly = y + pad + size * 0.8;
+    pg.save();
+    pg.clip_rect(x, y, w, h);
+    pg.text(lx, ly, size, font, color, reading);
     pg.restore();
 }
 
@@ -1519,7 +1602,9 @@ fn seg_size(sh: &Sheet, seg: (u32, u32), rows: bool) -> f32 {
 }
 
 /// Renders laid-out sheets to a PDF.
-pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
+pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str, furigana: bool) -> (Vec<u8>, usize) {
+    // One text → reading index for the whole export; off means nothing is built.
+    let phonetics = furigana.then(|| PhoneticIndex::new(wb));
     let mut doc = PdfDoc::new();
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
@@ -1550,7 +1635,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                 let mut x = ox + lay.heading_w * k;
                 for (csi, cs) in csegs.iter().enumerate() {
                     let b = make_block(wb, lay.sheet, sh, *rs, *cs, x, y, lay);
-                    draw_block(pg, &b, lay.settings.gridlines, &mut cf);
+                    draw_block(pg, &b, lay.settings.gridlines, &mut cf, phonetics.as_ref());
                     draw_block_links(pg, &b, page_index, &mut pending_links);
                     printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: *rs, cols: *cs, x, y, k });
                     if lay.settings.headings {
@@ -1602,7 +1687,7 @@ fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
-    Ok(render_pdf(&d.wb, &lays, &d.display_title(), &path))
+    Ok(render_pdf(&d.wb, &lays, &d.display_title(), &path, s.prefs.furigana))
 }
 
 pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {
@@ -1834,6 +1919,72 @@ mod tests {
     }
     fn contains(hay: &[u8], needle: &str) -> bool {
         hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+    }
+    /// The content operand and page y of each `BT` block in a PDF. PDF y grows upwards, so a
+    /// larger y is higher on the page.
+    fn pdf_text_blocks(pdf: &[u8]) -> Vec<(String, f32)> {
+        let text = String::from_utf8_lossy(pdf);
+        text.split("BT\n")
+            .skip(1)
+            .filter_map(|block| {
+                let tm = block.find(" Tm\n")?;
+                let y = block[..tm].split_whitespace().filter_map(|n| n.parse::<f32>().ok()).next_back()?;
+                let end = block.find(" Tj")?;
+                Some((block[..end].to_string(), y))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn furigana_is_drawn_above_the_cell_text_only_when_on() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "東京都"})).unwrap();
+        // The reading is ASCII so the WinAnsi PDF can carry it (non-Latin text does not export, #141);
+        // two runs check that they are joined in document order.
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).phonetics.push(gridcraft_model::PhoneticString {
+            text: "東京都".into(),
+            runs: vec![
+                gridcraft_model::PhoneticRun { start: 0, end: 2, text: "TO".into() },
+                gridcraft_model::PhoneticRun { start: 2, end: 3, text: "KYO".into() },
+            ],
+            props: None,
+        });
+        let (off, pages_off) = pdf_of(&mut s, json!({}));
+        assert!(!contains(&off, "TOKYO"), "furigana is off by default");
+        s.execute("view.furigana", json!({"on": true})).unwrap();
+        let (on, pages_on) = pdf_of(&mut s, json!({}));
+        assert!(contains(&on, "(TOKYO) Tj"), "the reading is drawn as text");
+        // About half the 11 pt cell font, and the row height does not change.
+        assert!(contains(&on, "/F1 5.5 Tf"), "the reading is half the cell size");
+        assert_eq!(pages_on, pages_off, "furigana never changes the layout");
+        s.execute("view.furigana", json!({"on": false})).unwrap();
+        let (again, _) = pdf_of(&mut s, json!({}));
+        assert!(!contains(&again, "TOKYO"), "turning it off removes the reading");
+    }
+
+    #[test]
+    fn furigana_and_cell_text_take_separate_parts_of_the_cell() {
+        // The reading sits in a strip at the top of the cell and the text is laid out below it,
+        // for every vertical alignment. PDF y grows upwards, so the reading's y is the larger one.
+        for align in ["home.alignTop", "home.alignMiddle", "home.alignBottom"] {
+            let mut s = s();
+            s.execute("cell.set", json!({"cell": "A1", "input": "東京都"})).unwrap();
+            std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).phonetics.push(gridcraft_model::PhoneticString {
+                text: "東京都".into(),
+                runs: vec![gridcraft_model::PhoneticRun { start: 0, end: 3, text: "TOKYO".into() }],
+                props: None,
+            });
+            s.execute(align, json!({})).unwrap();
+            s.execute("view.furigana", json!({"on": true})).unwrap();
+            let (pdf, _) = pdf_of(&mut s, json!({}));
+            let blocks = pdf_text_blocks(&pdf);
+            let reading = blocks.iter().find(|(t, _)| t.contains("(TOKYO)")).expect("the reading is drawn").1;
+            // The cell's own text: a CID run, since the WinAnsi font cannot carry it.
+            let text = blocks.iter().find(|(t, _)| t.contains('<') && !t.contains("TOKYO")).expect("the cell text is drawn").1;
+            // Their baselines are 11 pt apart: more than the reading's 5.5 pt line and the text's
+            // 8.8 pt cap height together, so the glyphs cannot overlap.
+            assert!(reading - text >= 9.9, "{align}: reading y {reading} and text y {text} share a strip");
+        }
     }
 
     #[test]

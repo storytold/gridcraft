@@ -211,6 +211,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Formula Bar", "数式バー"),
     ("Gridlines", "目盛線"),
     ("Headings", "見出し"),
+    ("Furigana", "ふりがな表示"),
     ("Zoom", "ズーム"),
     ("100%", "100%"),
     ("Zoom to\nSelection", "選択範囲を拡大"),

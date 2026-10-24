@@ -210,6 +210,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Formula Bar" => "Thanh công thức",
         "Gridlines" => "Đường lưới",
         "Headings" => "Tiêu đề hàng/cột",
+        "Furigana" => "Furigana",
         "Zoom" => "Thu phóng",
         "100%" => "100%",
         "Zoom to\nSelection" => "Phóng to\nvùng chọn",

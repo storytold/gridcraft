@@ -207,6 +207,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "分页符\n预览",
         "Page\nLayout" => "页面\n布局",
         "Formula Bar" => "编辑栏",
+        "Furigana" => "注音",
         "Gridlines" => "网格线",
         "Headings" => "标题",
         "Zoom" => "缩放",

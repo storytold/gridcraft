@@ -2306,6 +2306,13 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
         if resp.changed() {
             act(app, "view.headings", json!({"on": h}));
         }
+        // Excel's 表示 › ふりがな表示: the phonetic readings XLSX keeps, above the cell text.
+        let mut fg = app.session.prefs.furigana;
+        let resp = ui.checkbox(&mut fg, lang.tr("Furigana"));
+        control_keytip(app, ui, &resp, "view.furigana");
+        if resp.changed() || invoke(app, "view.furigana") {
+            act(app, "view.furigana", json!({"on": checkbox_on(resp.changed(), fg)}));
+        }
     });
     sep(ui);
     let __k = big_button(ui, Icon::Zoom, "Zoom", "Zoom…", false);

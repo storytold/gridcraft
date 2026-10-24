@@ -253,6 +253,10 @@ pub struct Prefs {
     pub user_dictionary: Vec<String>,
     /// View › Show › Formula Bar (an application option in Excel, not saved in the file).
     pub formula_bar: bool,
+    /// View › Show › Furigana: show the phonetic (ふりがな) readings XLSX keeps for a cell's string
+    /// above the cell text. An application option like Excel's, off by default, saved in
+    /// `prefs.json`; it changes drawing only, never the document.
+    pub furigana: bool,
 }
 
 impl Default for Prefs {
@@ -267,6 +271,7 @@ impl Default for Prefs {
             r1c1: false,
             user_dictionary: vec![],
             formula_bar: true,
+            furigana: false,
         }
     }
 }

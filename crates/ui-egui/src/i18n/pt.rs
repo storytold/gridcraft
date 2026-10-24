@@ -204,6 +204,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Visualização\nde Quebras de Página",
         "Page\nLayout" => "Layout\nde Página",
         "Formula Bar" => "Barra de Fórmulas",
+        "Furigana" => "Furigana",
         "Gridlines" => "Linhas de Grade",
         "Headings" => "Títulos",
         "Zoom" => "Zoom",

@@ -189,6 +189,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Formula Bar" => "Formül Çubuğu",
         "Gridlines" => "Kılavuz Çizgileri",
         "Headings" => "Başlıklar",
+        "Furigana" => "Furigana",
         "Zoom" => "Yakınlaştır",
         "Forecast\nSheet" => "Tahmin\nSayfası",
         "Add footer" => "Altbilgi ekle",

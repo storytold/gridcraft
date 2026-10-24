@@ -44,6 +44,19 @@ pub fn specs() -> Vec<CommandSpec> {
             s.prefs.formula_bar = bool_param(p, "on").unwrap_or(!s.prefs.formula_bar);
             Ok(json!({"on": s.prefs.formula_bar}))
         }),
+        cmd!(
+            query
+            "view.furigana",
+            "Furigana",
+            ["View", "Show"],
+            None,
+            "{on?: bool} → {on}: the phonetic (ふりがな) readings of cell text, above it (an application option; off by default)",
+            always,
+            |s, p| {
+                s.prefs.furigana = bool_param(p, "on").unwrap_or(!s.prefs.furigana);
+                Ok(json!({"on": s.prefs.furigana}))
+            }
+        ),
         cmd!("view.zoomToSelection", "Zoom to Selection", ["View", "Zoom"], None, "{viewWidth?, viewHeight?}", has_doc, zoom_selection),
         cmd!("pageLayout.orientation", "Orientation", ["Page Layout", "Page Setup"], None, "{orientation: portrait|landscape}", has_doc, orientation),
         cmd!(
@@ -466,6 +479,20 @@ mod tests {
         s.execute("view.zoom", json!({"percent": 150})).unwrap();
         assert_eq!(s.execute("view.zoom100", json!({})).unwrap()["zoom"], 100);
         assert_eq!(s.doc().unwrap().wb.active().unwrap().zoom, 100);
+    }
+
+    #[test]
+    fn furigana_toggles_and_defaults_to_off() {
+        let mut s = Session::new();
+        assert!(!s.prefs.furigana, "Excel shows furigana only when asked");
+        assert_eq!(s.execute("view.furigana", json!({})).unwrap()["on"], true);
+        assert!(s.prefs.furigana);
+        assert_eq!(s.execute("view.furigana", json!({})).unwrap()["on"], false);
+        assert_eq!(s.execute("view.furigana", json!({"on": true})).unwrap()["on"], true);
+        assert!(s.prefs.furigana);
+        // A prefs.json saved before the option existed keeps furigana off.
+        let old: crate::Prefs = serde_json::from_str(r#"{"userName": "Ann"}"#).unwrap();
+        assert!(!old.furigana);
     }
 
     #[test]

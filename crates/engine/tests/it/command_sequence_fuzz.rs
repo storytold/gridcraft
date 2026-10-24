@@ -63,6 +63,10 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("insert.picture", "reads files"),
     ("pageLayout.background", "reads files"),
     ("formulas.calculationOptions", "manual and iterative calculation differ from a full recalc by design"),
+    (
+        "view.furigana",
+        "a display-only application option: it never edits the document, and keeping it out of the random draw keeps the seeds' sequences stable",
+    ),
 ];
 
 // ---------------------------------------------------------------- deterministic randomness

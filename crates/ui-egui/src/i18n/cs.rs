@@ -186,6 +186,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "Náhled\nkonců stránek",
         "Page\nLayout" => "Rozložení\nstránky",
         "Formula Bar" => "Řádek vzorců",
+        "Furigana" => "Furigana",
         "Gridlines" => "Mřížka",
         "Headings" => "Záhlaví",
         "Zoom" => "Lupa",

@@ -864,12 +864,14 @@ fn paint_panes(
     if geo.fr > 0 && geo.fc > 0 {
         quads.push((fr_rows, fr_cols, Rect::from_min_max(geo.cells.min, split)));
     }
+    // One text → reading index for this paint pass; off means nothing is built.
+    let phonetics = app.session.prefs.furigana.then(|| gridcraft_engine::display::PhoneticIndex::new(wb));
     for (rows, cols, clip) in &quads {
         if rows.0 > rows.1 || cols.0 > cols.1 {
             continue;
         }
         let p = painter.with_clip_rect(*clip);
-        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, t);
+        paint_quadrant(&p, geo, wb, si, sh, *rows, *cols, cf, phonetics.as_ref(), t);
         paint_selection(&p, geo, sh, sel, outline, t, app, *rows, *cols);
     }
     // Freeze lines.
@@ -1012,6 +1014,85 @@ pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
     }
 }
 
+/// The galley top for a cell's text when a reading is drawn in a strip at the top of the cell:
+/// the text is placed in what is left below `reading_bottom`, and a row too short for both clips
+/// the text at the bottom rather than drawing it over the reading (View › Show › Furigana).
+pub(crate) fn cell_text_y_below_reading(valign: VAlign, rect: Rect, gh: f32, z: f32, reading_bottom: f32, wrapped: bool) -> f32 {
+    let top = reading_bottom.clamp(rect.top(), rect.bottom());
+    let below = Rect::from_min_max(pos2(rect.left(), top), rect.max);
+    let y = if wrapped { wrapped_cell_text_y(valign, below, gh, z) } else { cell_text_y(valign, below, gh, z) };
+    y.max(top)
+}
+
+/// Whether a cell shows its furigana: horizontal text only. Rotated text and vertical stacked text
+/// (rotation 255) would need the reading to follow the rotation, so they show none.
+pub(crate) fn furigana_is_shown(rotation: i16) -> bool {
+    rotation == 0
+}
+
+/// The font size of a cell's furigana: about half the cell text's size, capped to the cell's top
+/// strip (45% of its height) and shrunk until the reading — measured at half size as
+/// `width_at_half` — fits `avail`, so a long reading never spills into a neighbouring cell.
+/// Never below 1 px, and the cell (and row) height never changes.
+pub(crate) fn furigana_font_size(size: f32, cell_h: f32, avail: f32, width_at_half: f32) -> f32 {
+    let half = size * 0.5;
+    let cap = half.min((cell_h * 0.45).max(1.0));
+    if !(cap > 0.0 && avail > 0.0 && width_at_half > 0.0) {
+        return cap.max(1.0);
+    }
+    // The reading's width grows with its font size, so this is the size at which it just fits.
+    let shrink = half * avail / width_at_half;
+    shrink.min(cap).max(1.0)
+}
+
+/// A cell's phonetic (ふりがな) reading laid out above its text: the galley, where it is drawn,
+/// and the bottom of the top strip it takes from the cell text. The row height is unchanged.
+pub(crate) struct CellFurigana {
+    galley: Arc<egui::Galley>,
+    pos: Pos2,
+    bottom: f32,
+    color: Color32,
+}
+
+impl CellFurigana {
+    fn paint(&self, p: &Painter, rect: Rect) {
+        p.with_clip_rect(rect.intersect(p.clip_rect())).galley(self.pos, self.galley.clone(), self.color);
+    }
+}
+
+/// Lays out a cell's phonetic (ふりがな) reading above its text at [`furigana_font_size`], aligned
+/// like the text and clipped to the cell: View › Show › Furigana, Excel's ふりがな表示. Rotated and
+/// vertical cells are skipped by the caller. `None` when there is nothing to draw.
+fn layout_cell_furigana(
+    p: &Painter,
+    rect: Rect,
+    text_size: f32,
+    z: f32,
+    font: &FontId,
+    color: Color32,
+    h_align: HAlign,
+    reading: &str,
+) -> Option<CellFurigana> {
+    if reading.is_empty() || !rect.width().is_finite() || rect.width() <= 0.0 {
+        return None;
+    }
+    let pad = 2.5 * z;
+    let avail = (rect.width() - 2.0 * pad).max(1.0);
+    let half_font = FontId::new(text_size * 0.5, font.family.clone());
+    let width_at_half = p.layout_no_wrap(reading.to_string(), half_font, color).size().x;
+    let fs = furigana_font_size(text_size, rect.height(), avail, width_at_half);
+    let galley = p.layout_no_wrap(reading.to_string(), FontId::new(fs, font.family.clone()), color);
+    let w = galley.size().x;
+    let x = match h_align {
+        HAlign::Right => rect.right() - pad - w,
+        HAlign::Center | HAlign::CenterAcross | HAlign::Distributed => rect.center().x - w / 2.0,
+        _ => rect.left() + pad,
+    };
+    // The cell's top strip; the row height is unchanged, so a tall reading stays inside the cell.
+    let y = rect.top() + 1.0 * z;
+    Some(CellFurigana { bottom: y + galley.size().y, galley, pos: pos2(x, y), color })
+}
+
 /// Where to put a `TextShape` holding a galley of `size` turned by `angle` (egui radians, so
 /// negative for upward text) for it to sit in `rect` per the cell's alignment. egui turns the
 /// galley about `pos`, its top-left corner, so the turned box is placed first and `pos` follows.
@@ -1096,6 +1177,7 @@ pub(crate) fn paint_quadrant(
     rows: (u32, u32),
     cols: (u32, u32),
     cf: &mut CfCache,
+    phonetics: Option<&gridcraft_engine::display::PhoneticIndex<'_>>,
     t: &Tokens,
 ) {
     let z = geo.z;
@@ -1265,6 +1347,11 @@ pub(crate) fn paint_quadrant(
         let indent = st.align.indent as f32 * 9.0 * z;
         let pad = 2.5 * z;
         let rotated = st.align.rotation != 0 && st.align.rotation != 255;
+        // ふりがな表示: the phonetic reading XLSX keeps for the cell's string, drawn above its
+        // text. Rotated and vertical (255) cells are out of scope (the reading would need to
+        // follow the rotation), so only horizontal cells show it.
+        let reading = if furigana_is_shown(st.align.rotation) { phonetics.and_then(|index| index.reading(sh, c)) } else { None };
+        let cell_furigana = reading.and_then(|r| layout_cell_furigana(p, *rect, size, z, &font, color, halign, r));
         // Rotated text wraps along its own direction (below), not across the column width.
         if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
             let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
@@ -1280,8 +1367,14 @@ pub(crate) fn paint_quadrant(
                 HAlign::Right => rect.right() - pad,
                 _ => text_left + pad + indent,
             };
-            let y = wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z);
+            let y = match &cell_furigana {
+                Some(f) => cell_text_y_below_reading(st.align.v, *rect, galley.size().y, z, f.bottom, true),
+                None => wrapped_cell_text_y(st.align.v, *rect, galley.size().y, z),
+            };
             p.with_clip_rect(rect.intersect(p.clip_rect())).galley(pos2(x, y), galley, color);
+            if let Some(f) = &cell_furigana {
+                f.paint(p, *rect);
+            }
             continue;
         }
         // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
@@ -1375,7 +1468,10 @@ pub(crate) fn paint_quadrant(
             _ => text_left + pad + indent,
         };
         let gh = galley.size().y;
-        let y = cell_text_y(st.align.v, *rect, gh, z);
+        let y = match &cell_furigana {
+            Some(f) => cell_text_y_below_reading(st.align.v, *rect, gh, z, f.bottom, false),
+            None => cell_text_y(st.align.v, *rect, gh, z),
+        };
         let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
         if rotated {
             let angle = -(st.align.rotation as f32).to_radians();
@@ -1406,6 +1502,9 @@ pub(crate) fn paint_quadrant(
         }
         if st.font.strike {
             cp.line_segment([pos2(x, y + gh * 0.55), pos2(x + w, y + gh * 0.55)], Stroke::new(1.0, color));
+        }
+        if let Some(f) = &cell_furigana {
+            f.paint(p, *rect);
         }
     }
     // Borders (over fills and text).
@@ -4496,5 +4595,86 @@ mod outline_band_tests {
         let clip = Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0));
         assert!(outline_bands(Rect::from_min_max(pos2(900.0, 0.0), pos2(950.0, 20.0)), 2.0, clip).is_empty());
         assert!(outline_bands(Rect::from_min_max(pos2(f32::NAN, 0.0), pos2(1.0, 1.0)), 2.0, clip).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod furigana_tests {
+    use super::*;
+
+    #[test]
+    fn only_horizontal_cells_show_a_reading() {
+        assert!(furigana_is_shown(0), "horizontal text shows its reading");
+        assert!(!furigana_is_shown(255), "vertical stacked text would get a horizontal reading");
+        for angle in [-90, -45, 45, 90] {
+            assert!(!furigana_is_shown(angle), "rotated text at {angle}° would get a horizontal reading");
+        }
+    }
+
+    #[test]
+    fn a_reading_and_the_cell_text_never_share_the_cell_top() {
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 60.0));
+        let reading_bottom = 9.0;
+        for wrapped in [false, true] {
+            for valign in [VAlign::Top, VAlign::Center, VAlign::Bottom] {
+                let y = cell_text_y_below_reading(valign, rect, 20.0, 1.0, reading_bottom, wrapped);
+                assert!(y >= reading_bottom, "{valign:?} wrapped={wrapped}: text starts at {y}, over the reading's bottom {reading_bottom}");
+            }
+        }
+        // Top alignment starts the text right below the reading; the wrapped path keeps its inset.
+        assert!((cell_text_y_below_reading(VAlign::Top, rect, 20.0, 1.0, reading_bottom, false) - 9.0).abs() < 1e-6);
+        assert!((cell_text_y_below_reading(VAlign::Top, rect, 20.0, 1.0, reading_bottom, true) - 10.5).abs() < 1e-6);
+        // A row too short for both keeps the text below the reading (the cell clips its bottom)
+        // instead of moving Center or Bottom up into the reading.
+        let short = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 16.0));
+        for valign in [VAlign::Center, VAlign::Bottom] {
+            let y = cell_text_y_below_reading(valign, short, 20.0, 1.0, reading_bottom, false);
+            assert!((y - reading_bottom).abs() < 1e-6, "{valign:?}: {y}");
+        }
+    }
+
+    #[test]
+    fn furigana_is_half_the_cell_font_and_shrinks_to_fit_the_cell() {
+        // A short reading takes half the cell text's size.
+        assert!((furigana_font_size(20.0, 100.0, 200.0, 10.0) - 10.0).abs() < 1e-6);
+        // A reading wider than the cell shrinks so that it fits the cell width…
+        let long = furigana_font_size(20.0, 100.0, 100.0, 400.0);
+        assert!((long - 2.5).abs() < 1e-6, "{long}");
+        // …and one that would need more than the cell's top strip is capped there.
+        assert!((furigana_font_size(20.0, 10.0, 1000.0, 1.0) - 4.5).abs() < 1e-6);
+        // The row height itself is never part of the result, only the cell's height.
+        assert!((furigana_font_size(20.0, 100.0, 200.0, 10.0) - 10.0).abs() < 1e-6);
+        // Degenerate cells and zero sizes still give a positive size, never an infinite one.
+        assert_eq!(furigana_font_size(0.0, 0.0, 10.0, 10.0), 1.0);
+        assert_eq!(furigana_font_size(20.0, 20.0, 0.0, 10.0), 9.0);
+        assert!(furigana_font_size(20.0, f32::NAN, 10.0, 10.0).is_finite());
+    }
+
+    #[test]
+    fn phonetic_text_is_only_asked_for_when_the_option_is_on() {
+        // The screen path reads the engine helper only behind the option, as the PDF path does;
+        // this pins the engine helper's contract the grid draws: joining and the none cases.
+        use gridcraft_engine::model::{Cell, Formula, PhoneticRun, PhoneticString};
+        let mut wb = Workbook::new();
+        {
+            let sh = std::sync::Arc::make_mut(&mut wb.sheets[0]);
+            sh.set_value(CellRef::new(0, 0), Value::text("東京"));
+        }
+        let sh = wb.sheet(0).expect("one sheet");
+        assert_eq!(gridcraft_engine::display::phonetic_text(&wb, sh, CellRef::new(0, 0)), None);
+        wb.phonetics.push(PhoneticString {
+            text: "東京".into(),
+            runs: vec![PhoneticRun { start: 0, end: 1, text: "トウ".into() }, PhoneticRun { start: 1, end: 2, text: "キョウ".into() }],
+            props: None,
+        });
+        let sh = wb.sheet(0).expect("one sheet");
+        assert_eq!(gridcraft_engine::display::phonetic_text(&wb, sh, CellRef::new(0, 0)).as_deref(), Some("トウキョウ"));
+        // The grid asks the same index once per paint pass rather than scanning per cell.
+        let index = gridcraft_engine::display::PhoneticIndex::new(&wb);
+        assert_eq!(index.reading(sh, CellRef::new(0, 0)), Some("トウキョウ"));
+        let f = Cell::formula(Formula::new("=A1"));
+        std::sync::Arc::make_mut(&mut wb.sheets[0]).set_cell(CellRef::new(1, 1), f);
+        let sh = wb.sheet(0).expect("one sheet");
+        assert_eq!(gridcraft_engine::display::phonetic_text(&wb, sh, CellRef::new(1, 1)), None);
     }
 }

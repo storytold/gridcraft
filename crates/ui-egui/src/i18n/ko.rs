@@ -207,6 +207,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Break\nPreview" => "페이지 나누기\n미리 보기",
         "Page\nLayout" => "페이지\n레이아웃",
         "Formula Bar" => "수식 입력줄",
+        "Furigana" => "후리가나",
         "Gridlines" => "눈금선",
         "Headings" => "머리글",
         "Zoom" => "확대/축소",
