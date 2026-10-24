@@ -57,12 +57,13 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
     if list.is_empty() {
         ui.label(egui::RichText::new("No comments on this sheet yet. Select a cell and choose New Comment.").italics());
     }
+    let t = crate::theme::Tokens::get(ui.ctx());
     for (cell, c) in list {
         egui::Frame::NONE
-            .fill(if c.resolved { Color32::from_gray(240) } else { Color32::WHITE })
+            .fill(if c.resolved { t.window } else { t.menu_bg })
             .corner_radius(6.0)
             .inner_margin(8.0)
-            .stroke(egui::Stroke::new(1.0, Color32::from_gray(215)))
+            .stroke(egui::Stroke::new(1.0, t.separator))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
@@ -70,14 +71,14 @@ fn comments(app: &mut SheetApp, ui: &mut Ui) {
                         let _ = app.run("selection.set", json!({"cell": cell}));
                         app.grid.ensure_visible = true;
                     }
-                    ui.label(egui::RichText::new(&c.author).color(Color32::from_gray(90)));
+                    ui.label(egui::RichText::new(&c.author).color(t.text_dim));
                     if c.resolved {
-                        ui.label(egui::RichText::new("Resolved").small().color(Color32::from_rgb(0x10, 0x7C, 0x41)));
+                        ui.label(egui::RichText::new("Resolved").small().color(t.accent));
                     }
                 });
                 ui.label(&c.text);
                 for (a, txt) in &c.replies {
-                    ui.label(egui::RichText::new(format!("↳ {a}: {txt}")).color(Color32::from_gray(60)));
+                    ui.label(egui::RichText::new(format!("↳ {a}: {txt}")).color(t.text));
                 }
                 let key = egui::Id::new(("reply", &cell));
                 let mut draft: String = ui.ctx().data_mut(|m| m.get_temp(key)).unwrap_or_default();
@@ -239,7 +240,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
                 let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::hover());
                 ui.painter().rect_filled(r, 2.0, col);
                 ui.label(&name);
-                ui.label(egui::RichText::new(&s.values).small().color(Color32::from_gray(110)));
+                ui.label(egui::RichText::new(&s.values).small().color(crate::theme::Tokens::get(ui.ctx()).text_dim));
                 ui.menu_button("Fill…", |ui| {
                     if let Some(c) = crate::widgets::color_palette_fixed(ui, &theme.colors, "Automatic") {
                         app.run_or_alert(

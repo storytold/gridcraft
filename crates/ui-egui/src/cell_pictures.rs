@@ -130,7 +130,12 @@ pub(crate) fn paint(painter: &Painter, cell: Rect, picture: &Arc<CellPicture>) {
             painter.image(texture.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
     } else {
-        crate::icons::paint(&painter, cell.shrink(2.0), crate::icons::Icon::Picture, Color32::from_gray(130));
+        crate::icons::paint_on_sheet(
+            &painter,
+            cell.shrink(2.0),
+            crate::icons::Icon::Picture,
+            crate::theme::Tokens::get(painter.ctx()).sheet_control_border,
+        );
     }
 }
 

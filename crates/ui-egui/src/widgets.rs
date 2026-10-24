@@ -4,9 +4,10 @@
 use egui::{Align2, Color32, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
 use crate::SheetApp;
+pub use crate::code_editor::{Lang, code_editor};
 use crate::i18n;
 use crate::icons::{self, Icon};
-use crate::theme::{self, Tokens};
+use crate::theme::{self, Cat, Tokens};
 
 /// Translates a label or tooltip for the language of the frame being drawn (English if untranslated).
 /// Ribbon chrome all flows through these widgets, so translating here localises it in one place.
@@ -79,13 +80,8 @@ pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
 /// Large ribbon button: 32px icon over a one- or two-line label.
 pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: bool) -> Response {
     let t = Tokens::get(ui.ctx());
-    let font = theme::ui_font(11.5);
     let label = tr(ui, label);
-    let lines: Vec<_> = label.split('\n').map(|line| ui.painter().layout_no_wrap(line.to_string(), font.clone(), t.text)).collect();
-    let arrow_size = 10.0;
-    let arrow_space = if dropdown { 4.0 + arrow_size } else { 0.0 };
-    let text_w = lines.iter().enumerate().map(|(i, line)| line.size().x + if i + 1 == lines.len() { arrow_space } else { 0.0 }).fold(0.0, f32::max);
-    let w = (text_w + 12.0).max(44.0);
+    let (lines, w) = big_label(ui, label, dropdown);
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 72.0), Sense::click());
     if resp.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect, 5.0, t.pressed);
@@ -93,6 +89,59 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
         ui.painter().rect_filled(rect, 5.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text);
+    paint_big_label(ui, rect, &lines, dropdown);
+    resp.on_hover_text(tip_text(ui, tip))
+}
+
+/// Large split button (Formulas › AutoSum): the icon runs the default action, the label and its
+/// arrow open the menu. Returns the (main, arrow) responses; their accessible names are the label
+/// and "<label> options".
+pub fn big_split_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str) -> (Response, Response) {
+    let t = Tokens::get(ui.ctx());
+    let label = tr(ui, label);
+    let (lines, w) = big_label(ui, label, true);
+    let (rect, _) = ui.allocate_exact_size(vec2(w, 72.0), Sense::hover());
+    let split = rect.top() + 38.0;
+    let main_rect = Rect::from_min_max(rect.min, pos2(rect.right(), split));
+    let arrow_rect = Rect::from_min_max(pos2(rect.left(), split), rect.max);
+    let main = ui.interact(main_rect, ui.id().with((label, "big-split-main")), Sense::click());
+    let arrow = ui.interact(arrow_rect, ui.id().with((label, "big-split-arrow")), Sense::click());
+    if main.hovered() || arrow.hovered() {
+        ui.painter().rect_filled(rect, 5.0, t.hover);
+        ui.painter().line_segment([pos2(rect.left() + 4.0, split), pos2(rect.right() - 4.0, split)], Stroke::new(1.0, t.separator));
+    }
+    for (part, r) in [(&main, main_rect), (&arrow, arrow_rect)] {
+        if part.is_pointer_button_down_on() {
+            ui.painter().rect_filled(r, 5.0, t.pressed);
+        }
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(rect.center().x, rect.top() + 21.0), vec2(30.0, 30.0)), icon, t.text);
+    paint_big_label(ui, rect, &lines, true);
+    let name = label.replace('\n', " ");
+    let enabled = ui.is_enabled();
+    main.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
+    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, format!("{name} options")));
+    let tip = tip_text(ui, tip);
+    (main.on_hover_text(tip.clone()), arrow.on_hover_text(tip))
+}
+
+/// Size of the dropdown arrow beside a big button's last label line.
+const BIG_ARROW: f32 = 10.0;
+
+/// A big button's label lines, laid out, and the width the button needs for them.
+fn big_label(ui: &Ui, label: &str, dropdown: bool) -> (Vec<std::sync::Arc<egui::Galley>>, f32) {
+    let t = Tokens::get(ui.ctx());
+    let font = theme::ui_font(11.5);
+    let lines: Vec<_> = label.split('\n').map(|line| ui.painter().layout_no_wrap(line.to_string(), font.clone(), t.text)).collect();
+    let arrow_space = if dropdown { 4.0 + BIG_ARROW } else { 0.0 };
+    let text_w = lines.iter().enumerate().map(|(i, line)| line.size().x + if i + 1 == lines.len() { arrow_space } else { 0.0 }).fold(0.0, f32::max);
+    (lines, (text_w + 12.0).max(44.0))
+}
+
+/// Paints a big button's label lines in `rect`, with the dropdown arrow beside the last one.
+fn paint_big_label(ui: &Ui, rect: Rect, lines: &[std::sync::Arc<egui::Galley>], dropdown: bool) {
+    let t = Tokens::get(ui.ctx());
+    let arrow_space = if dropdown { 4.0 + BIG_ARROW } else { 0.0 };
     for (i, line) in lines.iter().enumerate() {
         let has_arrow = dropdown && i + 1 == lines.len();
         let line_w = line.size().x + if has_arrow { arrow_space } else { 0.0 };
@@ -102,13 +151,12 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, dropdown: boo
         if has_arrow {
             icons::paint(
                 ui.painter(),
-                Rect::from_center_size(pos2(left + line_w - arrow_size / 2.0, y + 1.0), vec2(arrow_size, arrow_size)),
+                Rect::from_center_size(pos2(left + line_w - BIG_ARROW / 2.0, y + 1.0), vec2(BIG_ARROW, BIG_ARROW)),
                 Icon::Chevron,
                 t.text_dim,
             );
         }
     }
-    resp.on_hover_text(tip_text(ui, tip))
 }
 
 /// Small ribbon button: 16px icon with optional label to the right.
@@ -240,6 +288,7 @@ pub fn color_palette_fixed(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &s
 }
 
 fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors: bool) -> Option<String> {
+    let t = Tokens::get(ui.ctx());
     let mut picked = None;
     const ROWS: usize = 7; // 6 tint rows + 1 standard row
     const COLS: usize = 10;
@@ -333,9 +382,9 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
                 let col32 = Color32::from_rgb(c[0], c[1], c[2]);
                 let (r, resp) = ui.allocate_exact_size(vec2(16.0, 14.0), Sense::click());
                 ui.painter().rect_filled(r, 1.0, col32);
-                ui.painter().rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_gray(200)), StrokeKind::Inside);
+                ui.painter().rect_stroke(r, 1.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
                 if resp.hovered() || cur == Some((row, col)) {
-                    ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, Color32::from_rgb(0xE8, 0x7D, 0x2B)), StrokeKind::Outside);
+                    ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, t.cat(Cat::Orange)), StrokeKind::Outside);
                 }
                 if resp.clicked() {
                     picked = Some(theme_hex(base, *tint));
@@ -355,7 +404,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
             let (r, resp) = ui.allocate_exact_size(vec2(16.0, 14.0), Sense::click());
             ui.painter().rect_filled(r, 1.0, c);
             if resp.hovered() || cur == Some((ROWS - 1, col)) {
-                ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, Color32::from_rgb(0xE8, 0x7D, 0x2B)), StrokeKind::Outside);
+                ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, t.cat(Cat::Orange)), StrokeKind::Outside);
             }
             if resp.clicked() {
                 picked = Some(hex.to_string());
@@ -442,8 +491,9 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
         ui.set_width(380.0);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
-            ui.painter().circle_filled(r.center(), 16.0, Color32::from_rgb(0xF2, 0xC3, 0x2E));
-            ui.painter().text(r.center(), Align2::CENTER_CENTER, "!", theme::ui_bold(20.0), Color32::WHITE);
+            let t = Tokens::get(ui.ctx());
+            ui.painter().circle_filled(r.center(), 16.0, t.warning);
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, "!", theme::ui_bold(20.0), t.on_warning);
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(title).strong());
                 ui.add(egui::Label::new(msg).wrap());

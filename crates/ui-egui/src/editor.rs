@@ -1,20 +1,10 @@
 //! In-cell / formula-bar editing state: point mode, reference colouring, function
 //! autocomplete and argument hints.
 
-use egui::Color32;
 use gridcraft_engine::core::{CellRef, RangeRef};
 
-/// Colours for references in a formula being edited (our own palette).
-pub const REF_COLORS: [Color32; 8] = [
-    Color32::from_rgb(0x2E, 0x6F, 0xD8),
-    Color32::from_rgb(0xD0, 0x3C, 0x3C),
-    Color32::from_rgb(0x7A, 0x4F, 0xC9),
-    Color32::from_rgb(0x2B, 0x9A, 0x4A),
-    Color32::from_rgb(0xC2, 0x5E, 0x1E),
-    Color32::from_rgb(0x1D, 0x92, 0xA6),
-    Color32::from_rgb(0xB8, 0x3B, 0x8E),
-    Color32::from_rgb(0x8A, 0x7A, 0x1F),
-];
+/// How many distinct reference colours a formula cycles through (`Tokens::ref_colors`).
+pub const REF_COLOR_COUNT: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct EditState {
@@ -293,7 +283,7 @@ pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, 
                     seen.len() - 1
                 }
             };
-            out.push((start + offset, end + offset, range, sheet, idx % REF_COLORS.len()));
+            out.push((start + offset, end + offset, range, sheet, idx % REF_COLOR_COUNT));
             continue;
         }
         i += 1;
