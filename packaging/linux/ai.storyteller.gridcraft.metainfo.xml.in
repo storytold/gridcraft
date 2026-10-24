@@ -40,6 +40,12 @@
     <keyword>csv</keyword>
   </keywords>
   <!-- Proposed app colour (GridCraft green #1f9d55 / ink #147a40); see assets/app-icon/README.md. -->
+  <screenshots>
+    <screenshot type="default">
+      <caption>Quarterly sales dashboard with a formatted table and charts</caption>
+      <image type="source" width="2000" height="1250">https://raw.githubusercontent.com/storytold/gridcraft/main/docs/images/hero-sales.png</image>
+    </screenshot>
+  </screenshots>
   <branding>
     <color type="primary" scheme_preference="light">#a7e3bf</color>
     <color type="primary" scheme_preference="dark">#147a40</color>
