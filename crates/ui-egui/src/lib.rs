@@ -251,9 +251,12 @@ pub struct SheetApp {
     pub editor: Option<editor::EditState>,
     pub text_box_editor: Option<text_box::EditState>,
     pub dialog: Option<dialogs::Dialog>,
+    pub dialog_doc: Option<u64>,
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
+    pub backstage_doc: Option<u64>,
     pub message: Option<(String, String)>,
+    pub message_doc: Option<u64>,
     pub toast: Option<(String, f64)>,
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
@@ -316,8 +319,11 @@ impl SheetApp {
             editor: None,
             text_box_editor: None,
             dialog: None,
+            dialog_doc: None,
             backstage: None,
+            backstage_doc: None,
             message: None,
+            message_doc: None,
             toast: None,
             notice: None,
             services,
@@ -814,7 +820,10 @@ impl SheetApp {
                 let page = params.get("page").and_then(Json::as_str).and_then(backstage::Page::parse).unwrap_or(backstage::Page::Home);
                 self.open_backstage(page);
             }
-            other => self.dialog = dialogs::Dialog::open(self, other, params),
+            other => {
+                self.dialog = dialogs::Dialog::open(self, other, params);
+                self.dialog_doc = self.session.active().map(|d| d.uid);
+            }
         }
     }
 
@@ -827,6 +836,7 @@ impl SheetApp {
         if !self.commit_edit(0, 0, false, false) {
             return;
         }
+        self.backstage_doc = self.session.active().map(|d| d.uid);
         match &mut self.backstage {
             Some(b) => b.page = page,
             None => self.backstage = Some(backstage::Backstage::new(page)),
@@ -1260,6 +1270,17 @@ impl SheetApp {
         if self.session.active().is_none() {
             self.session.new_workbook();
         }
+        if self.message.is_some() && self.message_doc.is_none() {
+            self.message_doc = self.session.active().map(|d| d.uid);
+        } else if self.message.is_none() {
+            self.message_doc = None;
+        }
+        if self.dialog.is_none() {
+            self.dialog_doc = None;
+        }
+        if self.backstage.is_none() {
+            self.backstage_doc = None;
+        }
     }
 
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
@@ -1295,6 +1316,10 @@ impl SheetApp {
         if self.backstage.is_none() || self.keytips.prefix().is_some() {
             self.ribbon_keys(&ctx);
         }
+        ribbon::title_bar(self, ui);
+        let cur_uid = self.session.active().map(|d| d.uid);
+        let show_backstage = self.backstage.is_some() && (self.backstage_doc.is_none() || self.backstage_doc == cur_uid);
+        if show_backstage {
         if self.chrome.title_bar {
             ribbon::title_bar(self, ui);
         }
@@ -1350,8 +1375,9 @@ impl SheetApp {
         // Window title.
         if let Some(d) = self.session.active() {
             let title = format!("{}{}", d.display_title(), if d.is_dirty() { " — Edited" } else { "" });
-            if self.grid.last_title.as_deref() != Some(title.as_str()) {
+            if self.grid.last_titles.get(&d.uid) != Some(&title) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+                self.grid.last_titles.insert(d.uid, title.clone());
                 self.grid.last_title = Some(title);
             }
         }

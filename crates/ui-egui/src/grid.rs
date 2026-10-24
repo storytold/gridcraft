@@ -127,6 +127,7 @@ pub struct GridState {
     /// frozen ones scrolls them back to their top or left.
     pub reveal_from: Option<CellRef>,
     pub last_title: Option<String>,
+    pub last_titles: std::collections::HashMap<u64, String>,
     pub drag_select: bool,
     pub rect: Option<Rect>,
     pub cells_rect: Option<Rect>,

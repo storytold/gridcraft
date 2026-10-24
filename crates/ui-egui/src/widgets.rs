@@ -434,6 +434,11 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
 }
 
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
+    if let (Some(doc_uid), Some(active_uid)) = (app.message_doc, app.session.active().map(|d| d.uid)) {
+        if doc_uid != active_uid {
+            return;
+        }
+    }
     let Some((title, msg)) = app.message.clone() else { return };
     let title = app.ui.language.tr(&title).to_owned();
     let msg = app.ui.language.tr_error(&msg);

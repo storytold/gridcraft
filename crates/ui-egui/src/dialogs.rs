@@ -1138,6 +1138,11 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
 }
 
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
+    if let (Some(doc_uid), Some(active_uid)) = (app.dialog_doc, app.session.active().map(|d| d.uid)) {
+        if doc_uid != active_uid {
+            return;
+        }
+    }
     let Some(mut d) = app.dialog.take() else { return };
     if d.name == "pasteSpecial" {
         paste_special_shortcuts(&mut d, ctx);

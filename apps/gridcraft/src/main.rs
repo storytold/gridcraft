@@ -41,8 +41,19 @@ impl eframe::App for App {
         }
         self.0.logic(ctx);
         self.0.poll_printing(ctx);
-        if ctx.input(|input| input.viewport().close_requested()) && self.0.printing.busy() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        if ctx.input(|input| input.viewport().close_requested()) {
+            if self.0.printing.busy() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            } else if self.0.session.documents().len() > 1 {
+                // Closing document 0 in root window: cancel OS quit, close document 0,
+                // and promote document 1 to document 0.
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.0.session.set_active(0);
+                let _ = self.0.run("file.close", json!({}));
+            } else if self.0.session.active().is_some_and(|d| d.is_dirty()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                let _ = self.0.run("file.close", json!({}));
+            }
         }
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -55,7 +66,67 @@ impl eframe::App for App {
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let doc_count = self.0.session.documents().len();
+        if doc_count == 0 {
+            return;
+        }
+
+        // Check focus on root viewport
+        let root_focused = ui.ctx().input(|i| i.viewport().focused.unwrap_or(false));
+        if root_focused {
+            self.0.session.set_active(0);
+        }
+
+        // Draw document 0 in the root window
+        self.0.session.set_active(0);
         self.0.ui(ui);
+
+        // Multiple workbooks: each additional document (1..doc_count) gets its own native OS window.
+        let mut close_doc_idx = None;
+        let mut focused_doc_idx = None;
+
+        let docs_info: Vec<(u64, String)> =
+            self.0.session.documents().iter().skip(1).map(|d| (d.uid, d.display_title())).collect();
+
+        let ctx = ui.ctx().clone();
+        for (offset, (uid, title)) in docs_info.into_iter().enumerate() {
+            let doc_idx = offset + 1;
+            let vp_id = egui::ViewportId::from_hash_of(uid);
+            let builder = make_viewport_builder(&title);
+
+            ctx.show_viewport_immediate(vp_id, builder, |vp_ctx, _class| {
+                if vp_ctx.input(|i| i.viewport().close_requested()) {
+                    close_doc_idx = Some(doc_idx);
+                    vp_ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                }
+                if vp_ctx.input(|i| i.viewport().focused.unwrap_or(false)) {
+                    focused_doc_idx = Some(doc_idx);
+                }
+
+                // Handle files dropped on this secondary window
+                vp_ctx.input(|i| {
+                    for f in &i.raw.dropped_files {
+                        if let Some(p) = f.path().to_str().filter(|p| !p.is_empty()) {
+                            self.0.open_path(p);
+                        }
+                    }
+                });
+
+                self.0.session.set_active(doc_idx);
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(vp_ctx, |child_ui| {
+                    self.0.ui(child_ui);
+                });
+            });
+        }
+
+        if let Some(idx) = close_doc_idx {
+            self.0.session.set_active(idx);
+            let _ = self.0.run("file.close", json!({}));
+        } else if let Some(idx) = focused_doc_idx {
+            self.0.session.set_active(idx);
+        } else if root_focused {
+            self.0.session.set_active(0);
+        }
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
@@ -229,6 +300,22 @@ fn icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+fn make_viewport_builder(title: &str) -> egui::ViewportBuilder {
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_inner_size([1440.0, 900.0])
+        .with_min_inner_size([640.0, 420.0])
+        .with_app_id("ai.storyteller.gridcraft")
+        .with_drag_and_drop(true);
+    if cfg!(target_os = "macos") {
+        viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
+    }
+    if let Some(i) = icon() {
+        viewport = viewport.with_icon(i);
+    }
+    viewport
+}
+
 fn main() -> eframe::Result<()> {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -308,19 +395,7 @@ fn main() -> eframe::Result<()> {
     for f in &files {
         app.open_path(f);
     }
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_title("GridCraft")
-        .with_inner_size([1440.0, 900.0])
-        .with_min_inner_size([640.0, 420.0])
-        .with_app_id("ai.storyteller.gridcraft")
-        .with_drag_and_drop(true);
-    if cfg!(target_os = "macos") {
-        viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
-    }
-    if let Some(i) = icon() {
-        viewport = viewport.with_icon(i);
-    }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let options = eframe::NativeOptions { viewport: make_viewport_builder("GridCraft"), ..Default::default() };
     // Before eframe creates the wgpu instance: Windows starts on DirectX 12, or OpenGL when
     // DirectX 12 has no GPU driver, and never touches Vulkan unless asked (see graphics.rs).
     #[cfg(target_os = "windows")]
