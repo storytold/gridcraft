@@ -2339,6 +2339,10 @@ fn csv_export_with_semicolons_decimal_commas_and_a_byte_order_mark() {
     let (wb, _) = crate::io::open_bytes("back.csv", &semi).unwrap();
     assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("città"));
     assert_eq!(wb.csv_delimiter, Some(b';'));
+    // A file opened with tabs keeps them when only the byte order mark is asked for.
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).csv_delimiter = Some(b'\t');
+    let tabs = bytes(&mut s, json!({"format": "csv", "bom": true}));
+    assert!(tabs.starts_with("\u{feff}città\t1.5\t".as_bytes()));
     for bad in [json!({"format": "csv", "delimiter": "|"}), json!({"format": "csv", "decimal": ";"}), json!({"format": "csv", "bom": "yes"})] {
         assert!(s.execute("file.saveBytes", bad.clone()).is_err(), "{bad}");
     }

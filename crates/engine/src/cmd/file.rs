@@ -179,7 +179,8 @@ fn csv_style(p: &Json, wb: &gridcraft_model::Workbook, cmd: &str) -> Result<Opti
         return Ok(None);
     }
     let delimiter = match given("delimiter").map(|v| v.as_str()) {
-        None => wb.csv_delimiter.filter(|d| matches!(d, b',' | b';')).unwrap_or(b','),
+        // Unasked, keep the separator the file was opened with (tab too), as plain CSV saves do.
+        None => wb.csv_delimiter.unwrap_or(b','),
         Some(Some(",")) => b',',
         Some(Some(";")) => b';',
         Some(_) => return Err(bad(cmd, "`delimiter` is \",\" or \";\"")),

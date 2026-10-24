@@ -71,6 +71,13 @@ values) is still dropped.
 | `.csv` UTF-8 / Windows / Mac / MS-DOS | R/W | yes (UTF-8 and UTF-16 BOMs, UTF-8, likely Windows-1256 Arabic detection, otherwise Windows-1252 fallback; delimiter detection) | yes (UTF-8, CRLF; comma or semicolon CSV, see [CSV names](#csv-names-what-the-file-holds)) | Writes the **displayed** values like Excel (number formats applied, formula results, never column-width `#####`). No encoding choice on save. Re-import of a single-column export splits text (#127) A used range that would write more than 512 MiB (two far-apart cells span the whole rectangle) is refused with an error instead of being expanded (#528). |
 | `.txt` tab-delimited, Unicode text | R/W | yes (`.txt`, `.tsv`, `.tab`; likely Windows-1256 Arabic detection for invalid UTF-8) | yes (displayed values) | Text Import Wizard options partly via Text to Columns |
 
+| `.prn` formatted text (space-delimited) | R/W | no | no | |
+| `.dif`, `.slk` (SYLK) | R/W | no | no | Small, legacy |
+| `.htm` / `.html` web page | R/W (Windows) | yes, via Get Data ▸ From HTML | yes (one sheet as a table; a used range taller than 100,001 rows fails with an error instead of being cut short) | Formatting not exported. A sheet with pictures or charts is written with the sheet's own column widths and row heights, a picture as a `data:` URI `<img>` and a chart as inline SVG, each placed at its anchor; shapes, text boxes and comments are not exported |
+| `.mht` / `.mhtml` single-file web page | R/W (Windows) | no | no | |
+| `.json` | via Power Query | GridCraft's own workbook JSON (debug) and JSON import | GridCraft JSON | Not Power Query's JSON shaping; notes and hyperlinks break export (#126) |
+| `.xml` with XML maps | Developer ▸ Import/Export | no | no | |
+
 ### CSV names: what the file holds
 
 GridCraft names its CSV types after what the file holds. Excel does not, and the difference only
@@ -93,12 +100,6 @@ shows outside English-language regions:
 - Scripts and agents choose explicitly: `file.exportCsv {path, delimiter: ";", decimal: ",",
   bom: true}` (also `file.saveBytes`). Without these parameters the export is unchanged: the
   separator a file was opened with (else `,`), a decimal point and no BOM.
-| `.prn` formatted text (space-delimited) | R/W | no | no | |
-| `.dif`, `.slk` (SYLK) | R/W | no | no | Small, legacy |
-| `.htm` / `.html` web page | R/W (Windows) | yes, via Get Data ▸ From HTML | yes (one sheet as a table; a used range taller than 100,001 rows fails with an error instead of being cut short) | Formatting not exported. A sheet with pictures or charts is written with the sheet's own column widths and row heights, a picture as a `data:` URI `<img>` and a chart as inline SVG, each placed at its anchor; shapes, text boxes and comments are not exported |
-| `.mht` / `.mhtml` single-file web page | R/W (Windows) | no | no | |
-| `.json` | via Power Query | GridCraft's own workbook JSON (debug) and JSON import | GridCraft JSON | Not Power Query's JSON shaping; notes and hyperlinks break export (#126) |
-| `.xml` with XML maps | Developer ▸ Import/Export | no | no | |
 
 ## Export and print
 
