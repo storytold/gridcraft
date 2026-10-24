@@ -1,12 +1,22 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (test command) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (reject blank PivotTable source replacements and preserve source and history; tests run through cargo xtask test) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
 [`target-app-parity.md`](target-app-parity.md). Estimates are Opus 5.5 agent-hours.
 
 ## Current focus
+
+PivotTable source repair: **Change Data Source** can replace a source that has become
+invalid (for example, an unused column's header was deleted, or a defined name disappeared).
+The replacement is validated and refreshed as one undoable edit; invalid headers, protected
+sheets and occupied report cells still refuse the operation without partial changes.
+Missing, empty or whitespace-only replacements are rejected before selection-based defaults
+can apply, preserving the original source and undo/redo history.
+Generated XLSX regression tests cover four imported pivots, undo/redo and save/open/refresh.
+A [Rust-generated minimal example](pivot-source-repair.md) reproduces the invalid old source
+with fictional data and documents the explicit repair through the engine command and CLI.
 
 1. **Review and land the open PR queue** (50 PRs on 2026-10-10): recalc and spill fixes (#148,
    #155, #156, #157), whole-sheet and large-range fixes (#151, #152, #153, #154), chart kinds
@@ -113,7 +123,11 @@ to check our files, and Windows machines with the reported GPU drivers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Reject blank PivotTable source replacements and cover source and undo/redo preservation with a valid active selection |
+| 2026-10-24 | minor | Align PivotTable source repair with current main and the consolidated engine integration-test binary |
 | 2026-10-23 | minor | Measuring: tests run through `cargo xtask test` |
+| 2026-10-18 | minor | Change Data Source validates the replacement instead of requiring a valid old source, enabling repair of imported pivots while preserving validation, protection, rollback and undo/redo |
+| 2026-10-18 | patch | Document source-repair helper contracts, the fictional generator and each regression without changing behavior |
 | 2026-10-11 | minor | PivotTable calculated fields landed |
 | 2026-10-10 | minor | Current focus and M15 updated for the 10-10 merges |
 | 2026-10-10 | minor | Added the alpha gate table (six core workflows; passes, stays alpha) |

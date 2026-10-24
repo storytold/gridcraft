@@ -535,14 +535,30 @@ fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> 
 
 // ---------------------------------------------------------------- shared update
 
-/// Applies `f` to the targeted pivot and re-renders it, as one undo step.
+/// Validates the targeted pivot's current source, applies `f`, and re-renders it as one undo step.
 fn update(s: &mut Session, p: &Json, f: impl FnOnce(&mut PivotTable, &pv::Source, &Workbook) -> Result<Json>) -> Result<Json> {
+    update_with_source(s, p, None, f)
+}
+
+/// Applies `f` and refreshes the targeted pivot as one atomic, undoable edit.
+///
+/// When `source` is supplied, validate that replacement before invoking `f` instead of
+/// reading the old source. This lets Change Data Source repair an invalid existing source.
+/// Source, protection, and occupied-cell errors leave the workbook and history unchanged.
+fn update_with_source(
+    s: &mut Session,
+    p: &Json,
+    source: Option<&str>,
+    f: impl FnOnce(&mut PivotTable, &pv::Source, &Workbook) -> Result<Json>,
+) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     let replace = bool_param(p, "replace").unwrap_or(false);
     edit(s, |cx| {
-        let pt = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).cloned().ok_or_else(|| other("There's no such PivotTable."))?;
-        let src = pv::read_source(&cx.wb, &pt.source, si).map_err(other)?;
-        let mut new = pt.clone();
+        let mut new = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).cloned().ok_or_else(|| other("There's no such PivotTable."))?;
+        if let Some(source) = source {
+            new.source = source.to_string();
+        }
+        let src = pv::read_source(&cx.wb, &new.source, si).map_err(other)?;
         let mut out = f(&mut new, &src, &cx.wb)?;
         if let Some(slot) = cx.sheet_mut(si)?.pivots.get_mut(pi) {
             *slot = new;
@@ -1418,16 +1434,17 @@ fn refresh_all(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Replaces a pivot's source and refreshes it without requiring the old source to be valid.
+///
+/// Retains fields found in the replacement, preserves the position of the values axis,
+/// and returns the source, dropped field names, and refreshed range. The edit is atomic.
 fn change_source(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.changeSource";
-    if str_param(p, "source").or_else(|| str_param(p, "range")).is_none() {
+    if str_param(p, "source").or_else(|| str_param(p, "range")).is_none_or(|t| t.trim().is_empty()) {
         return Err(bad(C, "missing `source`"));
     }
     let source = source_param(s, p)?;
-    let (si, _) = find_pivot(s, p)?;
-    let src = pv::read_source(&s.doc()?.wb, &source, si).map_err(other)?;
-    update(s, p, move |pt, _, _| {
-        pt.source = source.clone();
+    update_with_source(s, p, Some(&source), |pt, src, _| {
         let mut dropped: Vec<String> = vec![];
         let keep = |name: &str, dropped: &mut Vec<String>| {
             let ok = src.col(name).is_some();
