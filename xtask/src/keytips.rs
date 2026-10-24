@@ -43,6 +43,12 @@ fn rustfmt(src: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Whether a checked-in generated file matches the emitter. A Windows checkout with
+/// `core.autocrlf=true` (Git for Windows' default) has CRLF line ends, which aren't a change.
+fn up_to_date(on_disk: &str, generated: &str) -> bool {
+    on_disk == generated || on_disk.replace("\r\n", "\n") == generated
+}
+
 #[derive(Clone)]
 struct Entry {
     seq: String,
@@ -111,7 +117,7 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
         if rest.contains(&"--check") {
             for (path, expected) in &generated {
                 let on_disk = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-                if on_disk != *expected {
+                if !up_to_date(&on_disk, expected) {
                     return Err(format!("{} is out of date — run `cargo xtask keytips` and commit the result", path.display()));
                 }
                 println!("keytips: {} up to date", path.display());
@@ -445,3 +451,30 @@ fn reset(h: &mut Harness) {
     key(h, Key::Escape); // leave keytip mode entirely
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn command(seq: &str, target: &str) -> Entry {
+        Entry {
+            seq: seq.into(),
+            kind: "command".into(),
+            target: target.into(),
+            pending: false,
+            params: String::new(),
+            excel: String::new(),
+            note: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_crlf_checkout_of_a_current_file_is_up_to_date() {
+        let table = render_table(&[command("WVG", "view.gridlines")]);
+        assert!(up_to_date(&table, &table));
+        assert!(up_to_date(&table.replace('\n', "\r\n"), &table));
+        let stale = render_table(&[command("WVG", "view.headings")]);
+        assert!(!up_to_date(&stale, &table));
+        assert!(!up_to_date(&stale.replace('\n', "\r\n"), &table));
+    }
+}
