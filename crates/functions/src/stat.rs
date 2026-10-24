@@ -256,6 +256,9 @@ fn intercept(y: &[f64], x: &[f64]) -> R<f64> {
 
 fn trunc_digits(r: f64, sig: f64) -> f64 {
     let f = 10f64.powi(sig as i32);
+    if !f.is_finite() {
+        return r;
+    }
     ((r * f) + 1e-9).floor() / f
 }
 
@@ -2486,6 +2489,11 @@ mod tests {
         close(ev("PERCENTRANK.EXC", vec![e9.clone(), n(7.0)]), 0.7);
         close(ev("PERCENTRANK.EXC", vec![e9.clone(), n(5.43)]), 0.381);
         close(ev("PERCENTRANK.EXC", vec![e9, n(5.43), n(1.0)]), 0.3);
+        let t = c(&[1.0, 2.0, 3.0]);
+        close(ev("PERCENTRANK", vec![t.clone(), n(2.0), n(400.0)]), 0.5);
+        close(ev("PERCENTRANK.INC", vec![t.clone(), n(2.0), n(400.0)]), 0.5);
+        close(ev("PERCENTRANK.INC", vec![t.clone(), n(1.0), n(400.0)]), 0.0);
+        close(ev("PERCENTRANK.EXC", vec![t, n(2.0), n(400.0)]), 0.5);
     }
 
     #[test]
