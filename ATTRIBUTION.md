@@ -42,3 +42,23 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 | `docs/images/pivot.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
 | `docs/images/format-chart.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
 | `docs/images/page-break.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
+
+## Android launcher icons (gridcraft)
+
+`apps/gridcraft-android` ships the Android Studio new-project template's default launcher art, unmodified.
+The adaptive icon in `res/mipmap-anydpi-v26/` composes the foreground drawable with the template's
+background colour; the density folders hold the same stand-in at each scale.
+
+| Asset | Author | Source | Licence |
+|---|---|---|---|
+| `apps/gridcraft-android/android/app/src/main/res/drawable/ic_launcher_foreground.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/gridcraft-android/android/app/src/main/res/mipmap-hdpi/ic_launcher.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/gridcraft-android/android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/gridcraft-android/android/app/src/main/res/mipmap-mdpi/ic_launcher.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/gridcraft-android/android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/gridcraft-android/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/gridcraft-android/android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/gridcraft-android/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/gridcraft-android/android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/gridcraft-android/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/gridcraft-android/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
