@@ -147,13 +147,15 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     }
     // Text named `.xlsx` is read as text.
     if sniffed == gridcraft_xlsx::Format::Xlsx || (kind == Some(FileKind::Xlsx) && sniffed != gridcraft_xlsx::Format::Csv) {
-        let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| {
+        let (mut wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| {
             EngineError::Other(match (&e, gridcraft_xlsx::oversized_part(bytes)) {
                 (gridcraft_xlsx::IoError::TooLarge(_), Some((part, size))) => part_too_large_message(name, &part, size),
                 _ => format!("We can't open '{name}': {e}"),
             })
         })?;
-        return Ok((wb, report.warnings));
+        let mut warnings = report.warnings;
+        mixed_filters_warning(&mut wb, &mut warnings);
+        return Ok((wb, warnings));
     }
     match kind {
         Some(FileKind::Json) => {
@@ -169,6 +171,7 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             if dropped > 0 {
                 warnings.push(format!("{name}: {dropped} cells outside the 1,048,576 × 16,384 grid were dropped"));
             }
+            mixed_filters_warning(&mut wb, &mut warnings);
             Ok((wb, warnings))
         }
         Some(FileKind::Tsv) => {
@@ -687,6 +690,15 @@ pub fn image_size(data: &[u8]) -> Option<(u32, u32)> {
         }
     }
     None
+}
+
+/// Excel saves a filter with values or with date groups, never both: a file from another program
+/// (or a hand-made session) that has both gets them as text, which is how they will be saved.
+fn mixed_filters_warning(wb: &mut Workbook, warnings: &mut Vec<String>) {
+    let n = crate::cmd::data::normalize_mixed_filters(wb);
+    if n > 0 {
+        warnings.push(format!("{n} AutoFilter column(s) mixed values and date groups; their dates are now filtered by the text they show"));
+    }
 }
 
 #[cfg(test)]

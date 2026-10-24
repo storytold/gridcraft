@@ -595,18 +595,14 @@ fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
             None => vec![],
         };
         let mut values: Vec<String> = vals.iter().map(super::edit::json_to_input).collect();
-        // Excel takes either values or date groups in one filter, never both (MS-OI29500 §18.3.2.8),
-        // and lists a selection that mixes them as text: the dates become the texts their cells show.
+        // Excel takes either values or date groups in one filter, never both: a selection that
+        // mixes them is kept as text, the dates becoming the texts their cells show.
         let dates = if values.is_empty() || dates.is_empty() {
             dates
         } else {
             let doc = s.doc()?;
             if let Some(sh) = doc.wb.sheet(sheet) {
-                for t in date_texts(&doc.wb, sh, af.range, col, &dates) {
-                    if !values.iter().any(|v| v.eq_ignore_ascii_case(&t)) {
-                        values.push(t);
-                    }
-                }
+                values = with_date_texts(&doc.wb, sh, af.range, col, values, &dates);
             }
             vec![]
         };
@@ -640,21 +636,61 @@ fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"hiddenRows": hidden}))
 }
 
-/// The distinct texts shown by the date cells of column `col` of a filter range that fall in `dates`.
-fn date_texts(wb: &Workbook, sh: &Sheet, range: RangeRef, col: u32, dates: &[DateGroupItem]) -> Vec<String> {
+/// `values` with the texts shown by the date cells of column `col` of a filter range that fall in
+/// `dates` added (each text once, ignoring case): the form Excel gives a selection that mixes values
+/// and date groups, since one filter holds one kind or the other (MS-OI29500 §18.3.2.8). The text
+/// is the value as formatted, not a formula Show Formulas would put there. Like Excel's, the result
+/// matches by text: another cell showing the same text passes too.
+fn with_date_texts(wb: &Workbook, sh: &Sheet, range: RangeRef, col: u32, mut values: Vec<String>, dates: &[DateGroupItem]) -> Vec<String> {
     let set = DateSet::new(dates);
-    let mut out: Vec<String> = vec![];
-    let mut seen = std::collections::HashSet::new();
-    for row in range.start.row + 1..=range.end.row.min(range.start.row + 1_000_000) {
+    let mut seen: std::collections::HashSet<String> = values.iter().map(|v| v.to_ascii_lowercase()).collect();
+    for row in range.start.row + 1..=range.end.row {
         let c = CellRef::new(row, col);
         if cell_date(wb, sh, c).is_some_and(|d| set.contains(&d)) {
-            let t = crate::display::cell_text(wb, sh, c);
+            let t = crate::display::value_text(wb, sh, c);
             if seen.insert(t.to_ascii_lowercase()) {
-                out.push(t);
+                values.push(t);
             }
         }
     }
-    out
+    values
+}
+
+/// Turns every value-list filter of a workbook that holds both values and date groups (a file from
+/// another program, a hand-made session) into text, as [`with_date_texts`] does for `data.filterBy`.
+/// Returns how many filters changed.
+pub fn normalize_mixed_filters(wb: &mut Workbook) -> usize {
+    let mixed = |c: &FilterCriterion| matches!(c, FilterCriterion::Values { values, dates, .. } if !values.is_empty() && !dates.is_empty());
+    let mut changes: Vec<(usize, Option<usize>, usize, FilterCriterion)> = vec![];
+    for (si, sh) in wb.sheets.iter().enumerate() {
+        let lists = sh
+            .autofilter
+            .iter()
+            .map(|a| (None, a.range, &a.criteria))
+            .chain(sh.tables.iter().enumerate().map(|(ti, t)| (Some(ti), t.range, &t.filter)));
+        for (table, range, criteria) in lists {
+            for (ci, (off, c)) in criteria.iter().enumerate() {
+                if let FilterCriterion::Values { values, blanks, dates } = c
+                    && mixed(c)
+                {
+                    let values = with_date_texts(wb, sh, range, range.start.col.saturating_add(*off), values.clone(), dates);
+                    changes.push((si, table, ci, FilterCriterion::Values { values, blanks: *blanks, dates: vec![] }));
+                }
+            }
+        }
+    }
+    let n = changes.len();
+    for (si, table, ci, crit) in changes {
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        let slot = match table {
+            None => sh.autofilter.as_mut().and_then(|a| a.criteria.get_mut(ci)),
+            Some(ti) => sh.tables.get_mut(ti).and_then(|t| t.filter.get_mut(ci)),
+        };
+        if let Some((_, c)) = slot {
+            *c = crit;
+        }
+    }
+    n
 }
 
 /// One `dates` entry of `data.filterBy`: `{year: 2026, month: 3}` is March 2026; the deepest
@@ -1945,7 +1981,32 @@ mod tests {
     }
 
     #[test]
-    fn a_date_cell_follows_the_date_groups_not_its_number() {
+    fn a_mixed_selection_keeps_the_texts_the_dates_show_and_a_mixed_file_is_converted_on_open() {
+        let mut s = dated_session();
+        s.execute("home.numberFormat", json!({"range": "A2:A8", "code": "d mmm yyyy"})).unwrap();
+        s.execute("data.filterBy", json!({"column": "A", "values": ["n/a"], "dates": [{"year": 2026, "month": 3}]})).unwrap();
+        let wb = &s.doc().unwrap().wb;
+        let sh = wb.active().unwrap();
+        let crit = sh.autofilter.as_ref().and_then(|a| a.criteria.first()).map(|(_, c)| c.clone());
+        let want = ["n/a", "5 Mar 2026", "20 Mar 2026"].map(String::from).to_vec();
+        assert_eq!(crit, Some(FilterCriterion::Values { values: want.clone(), blanks: false, dates: vec![] }));
+        let hidden: Vec<u32> = (1..8).filter(|r| sh.is_row_hidden(*r)).collect();
+        assert_eq!(hidden, [1, 4, 6], "December, April and the blank are hidden");
+        // A file that holds both kinds in one filter is converted when it opens, with a warning.
+        let mut wb = (**wb).clone();
+        let march = DateGroupItem { grouping: DateGrouping::Month, year: 2026, month: 3, day: 0, hour: 0, minute: 0, second: 0 };
+        if let Some(af) = wb.sheet_mut(0).and_then(|sh| sh.autofilter.as_mut()) {
+            af.criteria = vec![(0, FilterCriterion::Values { values: vec!["n/a".into()], blanks: false, dates: vec![march] })];
+        }
+        let bytes = serde_json::to_vec(&wb).unwrap();
+        let (opened, warnings) = crate::io::open_bytes("mixed.json", &bytes).unwrap();
+        assert!(warnings.iter().any(|w| w.contains("mixed values and date groups")), "{warnings:?}");
+        let crit = opened.sheet(0).and_then(|sh| sh.autofilter.as_ref()).and_then(|a| a.criteria.first()).map(|(_, c)| c.clone());
+        assert_eq!(crit, Some(FilterCriterion::Values { values: want, blanks: false, dates: vec![] }));
+    }
+
+    #[test]
+    fn a_date_cell_is_not_matched_by_its_serial_number() {
         let mut s = Session::new();
         s.new_workbook();
         // A2 is the plain number 46086, A3 the date with that serial (2026-03-05).

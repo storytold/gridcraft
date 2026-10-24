@@ -1500,7 +1500,7 @@ fn invalid_date_groups_are_not_written() {
 }
 
 /// Excel takes `filter` or `dateGroupItem` children in one `filters`, not both: a criterion that
-/// has both (only a hand-made session can) is written with its values.
+/// has both (the engine converts them to text first) is written with its values.
 #[test]
 fn a_filter_with_values_and_date_groups_writes_only_the_values() {
     let mut wb = Workbook::new();
