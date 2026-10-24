@@ -528,8 +528,18 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             let si = f.attr_u32("si")?;
             if !text.is_empty() {
                 let expr = gridcraft_formula::parse(text).ok();
-                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string() });
-                Some(Formula::new(text))
+                // Legacy shared formulas intersect like plain ones; followers inherit the
+                // rewritten expression, so each row still meets its own row (issue #1636).
+                match expr.clone().and_then(crate::array_formula::legacy_intersect) {
+                    Some(e) => {
+                        st.shared.insert(si, Shared { anchor: pos, expr: Some(e.clone()), text: gridcraft_formula::print(&e) });
+                        Some(Formula::from_expr(e))
+                    }
+                    None => {
+                        st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string() });
+                        Some(Formula::new(text))
+                    }
+                }
             } else {
                 let Some(sh) = st.shared.get(&si) else {
                     cx.warn("a shared formula refers to a missing master cell; kept the cached value");
@@ -567,7 +577,12 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             if text.is_empty() {
                 None
             } else {
-                Some(Formula::new(text))
+                // Plain formulas from older files keep legacy implicit intersection (issue
+                // #1636): multi-cell references in scalar positions gain an explicit `@`.
+                match gridcraft_formula::parse(text).ok().and_then(crate::array_formula::legacy_intersect) {
+                    Some(e) => Some(Formula::from_expr(e)),
+                    None => Some(Formula::new(text)),
+                }
             }
         }
     }

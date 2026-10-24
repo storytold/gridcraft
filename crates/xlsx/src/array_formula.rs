@@ -247,6 +247,253 @@ fn scalar_arg(name: &str, i: usize) -> bool {
         "FORECAST" | "FORECAST.LINEAR" => i == 0,
         "FORECAST.ETS" | "FORECAST.ETS.CONFINT" => i != 1 && i != 2,
         "FORECAST.ETS.SEASONALITY" | "FORECAST.ETS.STAT" => i > 1,
+        "DSUM" | "DCOUNT" | "DCOUNTA" | "DGET" | "DAVERAGE" | "DMAX" | "DMIN" | "DPRODUCT" | "DSTDEV" | "DSTDEVP" | "DVAR" | "DVARP" | "GCD"
+        | "LCM" | "MODE.MULT" | "F.TEST" | "FTEST" | "CHISQ.TEST" | "CHITEST" => false,
+        "PERCENTRANK" | "PERCENTRANK.INC" | "PERCENTRANK.EXC" | "TRIMMEAN" | "ZTEST" | "Z.TEST" => i != 0,
+        "PROB" | "TTEST" | "T.TEST" => i > 1,
+        "FVSCHEDULE" | "CELL" => i == 0,
+        "NETWORKDAYS" | "WORKDAY" => i < 2,
+        "NETWORKDAYS.INTL" | "WORKDAY.INTL" => i < 3,
         _ => true,
+    }
+}
+
+/// Import-time legacy implicit intersection (issue #1636).
+///
+/// A plain `<f>` formula from an older file has no `@`, but a multi-cell reference in a
+/// scalar position meant implicit intersection there (`ISBLANK(B:B)` at row 4 read `B4`).
+/// Without it the reference lifts into an array that spills or fails with `#SPILL!`. Wrap
+/// those references in `@`, which the evaluator already intersects and the exporter writes
+/// as `_xlfn.SINGLE`, so the file round-trips as a modern explicit intersection. `ROW` and
+/// `COLUMN` need their arguments to remain references, so their array result is intersected
+/// instead when the call is on a scalar path.
+///
+/// Only references on an all-scalar path from the root are wrapped: anything under an
+/// array-taking position (aggregates, `SUM(IF(…))`, array constructors such as `FILTER` or
+/// `MAP`) keeps lifting, so intentional array formulas still spill. Modern spills are
+/// stored as `t="array"` and never reach this rewrite. Deliberately untouched: names and
+/// structured references (scope needs evaluation), `LAMBDA` bodies and invocations and
+/// calls through `LET`-bound names (deferred evaluation), `LET` values (a bound array must
+/// stay an array for `SUM(x)`), and the non-lifting single-reference heads (`FORMULATEXT`,
+/// `TYPE`, `ROWS`, …), whose scalar result must not move. Defined-name `LAMBDA`s cannot be
+/// seen here (names are read after sheets) and stay a known gap. Returns `None` when
+/// nothing changed, so callers keep the original text byte-identical.
+pub(crate) fn legacy_intersect(e: Expr) -> Option<Expr> {
+    let mut rw = Rewriter { bound: Vec::new(), changed: false };
+    let out = rw.expr(e, true, 0);
+    rw.changed.then_some(out)
+}
+
+struct Rewriter {
+    /// `LET`-bound names in scope: a call to one may invoke a `LAMBDA` over a range, which
+    /// must keep spilling, so calls through these names are left alone.
+    bound: Vec<String>,
+    changed: bool,
+}
+
+/// Expression nesting the rewrite still descends into (hostile files nest deeply).
+const MAX_REWRITE_DEPTH: usize = 64;
+
+impl Rewriter {
+    /// `scalar` is whether this position expects a single value: only there does a legacy
+    /// multi-cell reference intersect. Anything else keeps its references untouched.
+    fn expr(&mut self, e: Expr, scalar: bool, depth: usize) -> Expr {
+        if !scalar || depth >= MAX_REWRITE_DEPTH {
+            return e;
+        }
+        match e {
+            Expr::Ref(r) if !r.range().is_single() && !matches!(r.sheet, SheetSel::Span(..)) => {
+                self.changed = true;
+                Expr::Unary(UnOp::At, Box::new(Expr::Ref(r)))
+            }
+            Expr::Paren(x) => Expr::Paren(Box::new(self.expr(*x, true, depth + 1))),
+            Expr::Unary(op @ (UnOp::Neg | UnOp::Plus | UnOp::Percent), x) => Expr::Unary(op, Box::new(self.expr(*x, true, depth + 1))),
+            Expr::Binary(op, a, b) if !matches!(op, BinOp::Range | BinOp::Union | BinOp::Intersect) => {
+                Expr::Binary(op, Box::new(self.expr(*a, true, depth + 1)), Box::new(self.expr(*b, true, depth + 1)))
+            }
+            Expr::Call(name, args) => self.call(&name, args, depth + 1),
+            // Array constants evaluate element-wise in every Excel; names, structured
+            // references, explicit `@`/`#`/trim references and invocations keep their shape.
+            _ => e,
+        }
+    }
+
+    fn call(&mut self, name: &str, args: Vec<Expr>, depth: usize) -> Expr {
+        if name == "LET" && args.len() >= 3 && args.len() % 2 == 1 {
+            let mut args = args;
+            if let Some(body) = args.pop() {
+                // The values stay array-evaluated (a LET-bound array must keep spilling for
+                // `SUM(x)`); only the body keeps the scalar context. Well-formed pairs lend
+                // their names to the scope, like the export scan.
+                let saved = self.bound.len();
+                for pair in args.as_chunks::<2>().0 {
+                    if let [Expr::Name(n), _] = pair {
+                        self.bound.push(n.clone());
+                    }
+                }
+                let body = self.expr(body, true, depth);
+                self.bound.truncate(saved);
+                args.push(body);
+            }
+            return Expr::Call(name.to_string(), args);
+        }
+        // Deferred or unknown-arity evaluation, and single-reference heads that never lift
+        // (`TYPE(B:B)` is 64, `ROWS(B:B)` its row count: intersecting would move the answer).
+        // Array constructors always spill, whatever their arguments hold (mirrors the export
+        // scan's always-array list, which `scalar_arg` alone does not cover).
+        if self.bound.iter().any(|b| b.eq_ignore_ascii_case(name))
+            || matches!(
+                name,
+                "LAMBDA"
+                    | "ISFORMULA"
+                    | "FORMULATEXT"
+                    | "SHEET"
+                    | "SHEETS"
+                    | "TYPE"
+                    | "ERROR.TYPE"
+                    | "FILTER"
+                    | "SORT"
+                    | "SORTBY"
+                    | "UNIQUE"
+                    | "SEQUENCE"
+                    | "RANDARRAY"
+                    | "VSTACK"
+                    | "HSTACK"
+                    | "TOROW"
+                    | "TOCOL"
+                    | "WRAPROWS"
+                    | "WRAPCOLS"
+                    | "TAKE"
+                    | "DROP"
+                    | "CHOOSEROWS"
+                    | "CHOOSECOLS"
+                    | "EXPAND"
+                    | "GROUPBY"
+                    | "PIVOTBY"
+                    | "TRANSPOSE"
+                    | "MMULT"
+                    | "MINVERSE"
+                    | "FREQUENCY"
+                    | "LINEST"
+                    | "LOGEST"
+                    | "TREND"
+                    | "GROWTH"
+                    | "MAP"
+                    | "SCAN"
+                    | "BYROW"
+                    | "BYCOL"
+                    | "MAKEARRAY"
+                    | "ANCHORARRAY"
+            )
+        {
+            return Expr::Call(name.to_string(), args);
+        }
+        let scalar_row_result = matches!(name, "ROW" | "COLUMN") && args.first().is_some_and(|a| !matches!(a, Expr::Ref(r) if r.range().is_single()));
+        let call = Expr::Call(name.to_string(), args.into_iter().enumerate().map(|(i, a)| self.expr(a, Self::arg_scalar(name, i), depth)).collect());
+        if scalar_row_result {
+            // ROW/COLUMN need their reference argument intact; intersect their array result in
+            // a legacy scalar position instead of turning that reference into a value.
+            self.changed = true;
+            Expr::Unary(UnOp::At, Box::new(call))
+        } else {
+            call
+        }
+    }
+
+    /// Whether argument `i` of `name` expects a single value, using the file-format policy above.
+    fn arg_scalar(name: &str, i: usize) -> bool {
+        scalar_arg(name, i)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `legacy_intersect` on parsed `text`: the rewritten text, or `None` for unchanged.
+    fn rewrite(text: &str) -> Option<String> {
+        legacy_intersect(gridcraft_formula::parse(text).unwrap()).map(|e| gridcraft_formula::print(&e))
+    }
+
+    #[test]
+    fn legacy_scalar_references_gain_at() {
+        // The issue's formula: the whole-column test intersects at the formula's row.
+        assert_eq!(rewrite("IF(ISBLANK(B:B),0,IF(B4=\"Thierry\",C4,0))").as_deref(), Some("IF(ISBLANK(@B:B),0,IF(B4=\"Thierry\",C4,0))"));
+        for (before, after) in [
+            ("ISBLANK(B:B)", "ISBLANK(@B:B)"),
+            ("-B:B", "-@B:B"),
+            ("B:B+1", "@B:B+1"),
+            ("B:B&C:C", "@B:B&@C:C"),
+            ("B:B", "@B:B"),
+            ("B:B=C4", "@B:B=C4"),
+            ("IF(B:B,1,0)", "IF(@B:B,1,0)"),
+            ("XLOOKUP(B:B,A:A,C:C)", "XLOOKUP(@B:B,A:A,C:C)"),
+            ("VLOOKUP(B:B,A:C,2)", "VLOOKUP(@B:B,A:C,2)"),
+            ("MATCH(B:B,A:A,0)", "MATCH(@B:B,A:A,0)"),
+            ("CHOOSE(B:B,1,2)", "CHOOSE(@B:B,1,2)"),
+            ("SUMIF(A:A,B:B,C:C)", "SUMIF(A:A,@B:B,C:C)"),
+            ("LET(x,1,x+B:B)", "LET(x,1,x+@B:B)"),
+            ("OFFSET(A1,B:B,0)", "OFFSET(A1,@B:B,0)"),
+            ("MyName+B:B", "MyName+@B:B"),
+        ] {
+            assert_eq!(rewrite(before).as_deref(), Some(after), "{before}");
+        }
+    }
+
+    #[test]
+    fn legacy_reference_arguments_stay_references() {
+        for text in ["DSUM(A1:C5,2,E1:F2)", "CELL(\"address\",B:B)", "FTEST(A:A,B:B)", "CHITEST(A:A,B:B)"] {
+            assert_eq!(rewrite(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn legacy_row_and_column_intersect_their_result_not_the_reference() {
+        assert_eq!(rewrite("ROW(B:B)").as_deref(), Some("@ROW(B:B)"));
+        assert_eq!(rewrite("COLUMN(B:B)").as_deref(), Some("@COLUMN(B:B)"));
+        assert_eq!(rewrite("ROW(B1)"), None, "a single-cell reference already returns one value");
+        assert_eq!(rewrite("SUM(ROW(B:B))"), None, "an array-taking parent keeps the array result");
+    }
+
+    #[test]
+    fn legacy_scalar_intersection_follows_argument_metadata() {
+        for (before, after) in [
+            ("PERCENTRANK(A:A,B:B,C:C)", "PERCENTRANK(A:A,@B:B,@C:C)"),
+            ("TRIMMEAN(A:A,B:B)", "TRIMMEAN(A:A,@B:B)"),
+            ("PROB(A:A,B:B,C:C,D:D)", "PROB(A:A,B:B,@C:C,@D:D)"),
+            ("TTEST(A:A,B:B,C:C,D:D)", "TTEST(A:A,B:B,@C:C,@D:D)"),
+            ("FVSCHEDULE(A:A,B:B)", "FVSCHEDULE(@A:A,B:B)"),
+            ("NETWORKDAYS(A:A,B:B,C:C)", "NETWORKDAYS(@A:A,@B:B,C:C)"),
+            ("WORKDAY.INTL(A:A,B:B,C:C,D:D)", "WORKDAY.INTL(@A:A,@B:B,@C:C,D:D)"),
+        ] {
+            assert_eq!(rewrite(before).as_deref(), Some(after), "{before}");
+        }
+    }
+
+    #[test]
+    fn legacy_array_positions_keep_lifting() {
+        // Array-taking positions, array constructors and deferred evaluation stay dynamic.
+        for text in [
+            "SUM(B:B)",
+            "SUM(IF(B:B=\"x\",1,0))",
+            "SUMPRODUCT(B:B=C:C)",
+            "FILTER(B:B,B:B>1)",
+            "MAP(B:B,LAMBDA(x,x+1))",
+            "SEQUENCE(B:B)",
+            "AND(B:B)",
+            "CONCAT(B:B)",
+            "SUM(ROW(B:B))",
+            "LET(x,B:B,SUM(x))",
+            "LET(f,LAMBDA(x,x*2),f(B:B))",
+            "LAMBDA(x,x+B:B)",
+            "TYPE(B:B)",
+            "ROWS(B:B)",
+            "FORMULATEXT(B:B)",
+            "B4",
+            "B4+1",
+            "SUM(A:A)+1",
+        ] {
+            assert_eq!(rewrite(text), None, "{text}");
+        }
     }
 }
