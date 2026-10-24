@@ -139,7 +139,15 @@ impl eframe::App for WebShell {
                 }
             });
         }
+        // First the app's own work, which opens the workbooks the inbox holds, so a command sent
+        // after an open runs on the opened workbook.
         self.app.logic(ctx);
+        if let Some(bridge) = &self.bridge {
+            for (id, params, request_id) in bridge.take_commands() {
+                let result = self.app.run(&id, params);
+                bridge.post_response(&id, request_id.as_deref(), result);
+            }
+        }
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         let changed = self.prefs.changed(&self.app);
         if !changed.is_empty() {

@@ -9,6 +9,11 @@
 //!   as PDF. The parent stores it and reports failures itself.
 //! - `gridcraft:dirty` (to the parent): `{ dirty }` whenever unsaved changes appear or go away.
 //! - `gridcraft:failed` (to the parent): `{ error }` when the app couldn't start.
+//! - `gridcraft:cmd` (from the parent): `{ id, params?, requestId? }` runs the engine command `id`
+//!   (`cell.set`, `home.bold`, ...) in the open workbook, like a ribbon button. `params` is a JSON
+//!   string (absent means `{}`) and `requestId` an optional string that comes back in the response.
+//! - `gridcraft:response` (to the parent): `{ id, requestId?, ok, value? }` or
+//!   `{ id, requestId?, ok: false, error }` for every `gridcraft:cmd`, once it has run.
 //!
 //! Only the parent window on the page's own origin is heard or answered. In host mode the page
 //! starts with an empty workbook instead of a sample, and the parent guards leaving the page.
@@ -17,9 +22,12 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
+use serde_json::Value;
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
+
+use crate::host_cmd;
 
 /// Saving one of these hands the whole workbook to the parent, which stores it: the workbook
 /// counts as saved under that name, as it would after Save on the desktop.
@@ -27,6 +35,9 @@ const WORKBOOK_EXTS: &[&str] = &["xlsx"];
 
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
+
+/// Commands the parent sent, run in the next frame: `(command id, params, request id)`.
+pub type CommandQueue = Rc<RefCell<Vec<(String, Value, Option<String>)>>>;
 
 #[derive(Clone)]
 pub struct Bridge {
@@ -37,6 +48,10 @@ pub struct Bridge {
     saved: Rc<RefCell<Vec<String>>>,
     /// The unsaved-changes state last reported to the parent.
     reported: Rc<Cell<Option<bool>>>,
+    /// Commands from the parent that haven't run yet.
+    commands: CommandQueue,
+    /// Length of the `params` text of the commands that haven't run yet.
+    queued_bytes: Rc<Cell<usize>>,
 }
 
 impl Bridge {
@@ -48,7 +63,7 @@ impl Bridge {
             return None;
         }
         let origin = window.location().origin().ok()?;
-        Some(Self { window, parent, origin, saved: Rc::default(), reported: Rc::default() })
+        Some(Self { window, parent, origin, saved: Rc::default(), reported: Rc::default(), commands: Rc::default(), queued_bytes: Rc::default() })
     }
 
     /// Send saved and exported files to the parent instead of downloading them, and hear files
@@ -112,13 +127,20 @@ impl Bridge {
     fn listen(&self, inbox: Inbox, ctx: egui::Context) {
         let parent = self.parent.clone();
         let origin = self.origin.clone();
+        let bridge = self.clone();
         let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
             if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
                 return;
             }
             let data = event.data();
-            if string(&data, "type").as_deref() != Some("gridcraft:open") {
-                return;
+            match string(&data, "type").as_deref() {
+                Some("gridcraft:open") => {}
+                Some("gridcraft:cmd") => {
+                    bridge.receive_command(&data);
+                    ctx.request_repaint();
+                    return;
+                }
+                _ => return,
             }
             let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Book.xlsx".to_string());
             let Some(bytes) = bytes(&data) else { return };
@@ -128,6 +150,47 @@ impl Bridge {
         if self.window.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref()).is_ok() {
             // The listener lives as long as the page.
             on_message.forget();
+        }
+    }
+
+    /// Queue the command in a `gridcraft:cmd` message, or answer the parent at once when the
+    /// message doesn't fit.
+    fn receive_command(&self, data: &JsValue) {
+        let params = js_sys::Reflect::get(data, &JsValue::from_str("params")).ok().filter(|v| !v.is_undefined() && !v.is_null());
+        let params = match params {
+            None => Some(None),
+            Some(v) => v.as_string().map(Some),
+        };
+        let id = string(data, "id");
+        let request_id = string(data, "requestId");
+        let parsed = match params {
+            Some(params) => host_cmd::parse(id.clone(), Some(params), request_id.clone()),
+            None => Err("params must be a string of valid JSON".to_string()),
+        };
+        match parsed {
+            Ok(c) if !host_cmd::has_room(self.commands.borrow().len(), self.queued_bytes.get(), c.params_bytes) => {
+                self.post_response(&c.id, c.request_id.as_deref(), Err("too many commands are waiting; try again".to_string()));
+            }
+            Ok(c) => {
+                self.queued_bytes.set(self.queued_bytes.get().saturating_add(c.params_bytes));
+                self.commands.borrow_mut().push((c.id, c.params, c.request_id));
+            }
+            Err(error) => self.post_response(id.as_deref().unwrap_or(""), request_id.as_deref(), Err(error)),
+        }
+    }
+
+    /// The commands the parent sent since the last frame.
+    pub fn take_commands(&self) -> Vec<(String, Value, Option<String>)> {
+        self.queued_bytes.set(0);
+        std::mem::take(&mut *self.commands.borrow_mut())
+    }
+
+    /// Tell the parent how a command ended.
+    pub fn post_response(&self, id: &str, request_id: Option<&str>, result: Result<Value, String>) {
+        let value = host_cmd::response(id, request_id, result);
+        let sent = js_sys::JSON::parse(&value.to_string()).ok().is_some_and(|m| self.parent.post_message(&m, &self.origin).is_ok());
+        if !sent {
+            log::error!("couldn't answer command {id} to the page");
         }
     }
 
