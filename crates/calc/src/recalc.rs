@@ -44,7 +44,7 @@ use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{CalcMode, Workbook};
 
-use crate::eval::{Area, Evaluator, Host, precedents};
+use crate::eval::{Area, Evaluator, Host, precedents, stack_position};
 
 pub type Key = (usize, CellRef);
 
@@ -432,6 +432,10 @@ struct PassHost<'a> {
     tainted: HashSet<Key>,
     /// Whether the formula being evaluated has read a previous value.
     taint: bool,
+    /// `stack_position()` where the outermost formula being calculated started.
+    stack_top: usize,
+    /// Whether an evaluation ran past the stack budget since the innermost formula started.
+    out_of_stack: bool,
 }
 
 impl<'a> PassHost<'a> {
@@ -462,6 +466,8 @@ impl<'a> PassHost<'a> {
             members: HashSet::default(),
             tainted: HashSet::default(),
             taint: false,
+            stack_top: 0,
+            out_of_stack: false,
         }
     }
 }
@@ -580,6 +586,9 @@ impl PassHost<'_> {
             self.suspend = Some(k);
             return Value::Error(CellError::Calc);
         }
+        if self.depth == 0 {
+            self.stack_top = stack_position();
+        }
         self.in_progress.insert(k);
         self.depth += 1;
         let outer_taint = std::mem::replace(&mut self.taint, false);
@@ -587,10 +596,24 @@ impl PassHost<'_> {
             self.stack.push(k);
         }
         let expr = std::sync::Arc::clone(expr);
+        let outer_out_of_stack = std::mem::replace(&mut self.out_of_stack, false);
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
             ev.value(&expr)
         };
+        let out_of_stack = std::mem::replace(&mut self.out_of_stack, outer_out_of_stack);
+        if out_of_stack && self.depth > 1 && self.suspend.is_none() {
+            // It ran out of the stack left below the formulas that read it: it is calculated
+            // from the top instead, as a formula needed at `MAX_NESTED` levels deep is.
+            self.suspend = Some(k);
+            self.depth -= 1;
+            self.in_progress.remove(&k);
+            if self.iterate {
+                self.stack.pop();
+            }
+            self.taint = outer_taint;
+            return Value::Error(CellError::Calc);
+        }
         if self.suspend.is_some() {
             // Abandoned: `calculate` evaluates this formula again once the one it needs is done.
             self.depth -= 1;
@@ -744,6 +767,12 @@ fn fit_to_range(v: Value, range: RangeRef) -> Value {
 impl Host for PassHost<'_> {
     fn workbook(&self) -> &Workbook {
         self.wb
+    }
+    fn stack_top(&self) -> Option<usize> {
+        (self.depth > 1).then_some(self.stack_top)
+    }
+    fn stack_exhausted(&mut self) {
+        self.out_of_stack = true;
     }
     fn spill_range(&mut self, sheet: usize, anchor: CellRef) -> Option<RangeRef> {
         let k = (sheet, anchor);
