@@ -594,11 +594,23 @@ fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
             }
             None => vec![],
         };
-        Some(FilterCriterion::Values {
-            values: vals.iter().map(super::edit::json_to_input).collect(),
-            blanks: bool_param(p, "blanks").unwrap_or(false),
-            dates,
-        })
+        let mut values: Vec<String> = vals.iter().map(super::edit::json_to_input).collect();
+        // Excel takes either values or date groups in one filter, never both (MS-OI29500 §18.3.2.8),
+        // and lists a selection that mixes them as text: the dates become the texts their cells show.
+        let dates = if values.is_empty() || dates.is_empty() {
+            dates
+        } else {
+            let doc = s.doc()?;
+            if let Some(sh) = doc.wb.sheet(sheet) {
+                for t in date_texts(&doc.wb, sh, af.range, col, &dates) {
+                    if !values.iter().any(|v| v.eq_ignore_ascii_case(&t)) {
+                        values.push(t);
+                    }
+                }
+            }
+            vec![]
+        };
+        Some(FilterCriterion::Values { values, blanks: bool_param(p, "blanks").unwrap_or(false), dates })
     } else if let Some(c) = p.get("custom") {
         let a = (c.get("op").and_then(Json::as_str).unwrap_or("=").to_string(), c.get("value").map(super::edit::json_to_input).unwrap_or_default());
         let b = c.get("op2").and_then(Json::as_str).map(|o| (o.to_string(), c.get("value2").map(super::edit::json_to_input).unwrap_or_default()));
@@ -626,6 +638,23 @@ fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     })?;
     let hidden = s.doc()?.wb.sheet(sheet).map(|sh| sh.rows.values().filter(|r| r.hidden).count()).unwrap_or(0);
     Ok(json!({"hiddenRows": hidden}))
+}
+
+/// The distinct texts shown by the date cells of column `col` of a filter range that fall in `dates`.
+fn date_texts(wb: &Workbook, sh: &Sheet, range: RangeRef, col: u32, dates: &[DateGroupItem]) -> Vec<String> {
+    let set = DateSet::new(dates);
+    let mut out: Vec<String> = vec![];
+    let mut seen = std::collections::HashSet::new();
+    for row in range.start.row + 1..=range.end.row.min(range.start.row + 1_000_000) {
+        let c = CellRef::new(row, col);
+        if cell_date(wb, sh, c).is_some_and(|d| set.contains(&d)) {
+            let t = crate::display::cell_text(wb, sh, c);
+            if seen.insert(t.to_ascii_lowercase()) {
+                out.push(t);
+            }
+        }
+    }
+    out
 }
 
 /// One `dates` entry of `data.filterBy`: `{year: 2026, month: 3}` is March 2026; the deepest
@@ -723,21 +752,21 @@ impl ValueFilter {
         }
     }
 
-    /// Does a cell pass? `date` is [`cell_date`], needed only when the filter has date groups: a
-    /// date cell then passes by its date alone, as the dropdown's tree shows it. Without date groups
-    /// a date cell still passes by its text, so filters that list dates as text (older files, the
-    /// `values` of a script) keep working; a date whose text equals a checked text value therefore
-    /// stays shown when every date in the tree is unchecked.
-    fn pass(&self, v: &Value, text: &str, date: Option<&gridcraft_core::date::DateTime>) -> bool {
+    /// Does a cell pass? `date` gives the cell's [`cell_date`], asked only when needed. With date
+    /// groups a date cell passes by its date alone, as the dropdown's tree shows it; without them it
+    /// passes by the text it shows, so filters that list dates as text (Excel's form for a selection
+    /// that mixes dates and other values, older files, scripts) keep working. A date's serial number
+    /// does not count as its text.
+    fn pass(&self, v: &Value, text: &str, date: impl Fn() -> Option<gridcraft_core::date::DateTime>) -> bool {
         if filter_blank(v) {
             return self.blanks;
         }
         if self.has_dates
-            && let Some(d) = date
+            && let Some(d) = date()
         {
-            return self.dates.contains(d);
+            return self.dates.contains(&d);
         }
-        self.values.contains(&text.to_ascii_lowercase()) || self.values.contains(&v.display().to_ascii_lowercase())
+        self.values.contains(&text.to_ascii_lowercase()) || (self.values.contains(&v.display().to_ascii_lowercase()) && date().is_none())
     }
 }
 
@@ -817,7 +846,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             let text = crate::display::cell_text(wb, sh, c);
             let ok = match crit {
                 FilterCriterion::Values { .. } => match value_filters.get(i).and_then(Option::as_ref) {
-                    Some(f) => f.pass(&v, &text, if f.has_dates { cell_date(wb, sh, c) } else { None }.as_ref()),
+                    Some(f) => f.pass(&v, &text, || cell_date(wb, sh, c)),
                     None => true,
                 },
                 FilterCriterion::Custom { a, b, and } => {
@@ -1047,7 +1076,7 @@ pub fn filter_list(wb: &Workbook, sheet: usize, col: u32) -> FilterList {
         let date = cell_date(wb, sh, c);
         let blank = filter_blank(&v);
         let t = if blank { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
-        let on = filter.as_ref().is_none_or(|f| f.pass(&v, &t, date.as_ref()));
+        let on = filter.as_ref().is_none_or(|f| f.pass(&v, &t, || date));
         match date {
             Some(d) => {
                 timed |= d.hour != 0 || d.minute != 0 || d.second != 0;
@@ -1836,11 +1865,15 @@ mod tests {
         let list = filter_list(wb, 0, 0);
         assert_eq!(tree(&list.dates), ["2025[December[24]]", "2026[March[05 20] April[01-]]"]);
         assert_eq!(list.values, [("n/a".to_string(), false), ("(Blanks)".to_string(), false)]);
-        // A text value next to the dates still filters by its text.
+        // A text value next to the dates: Excel keeps values or date groups, not both, so the dates
+        // are stored as the texts their cells show, and the same rows stay visible.
         s.execute("data.filterBy", json!({"column": "A", "values": ["n/a"], "dates": [{"year": 2025}]})).unwrap();
         let sh = s.doc().unwrap().wb.active().unwrap();
         let hidden: Vec<u32> = (1..8).filter(|r| sh.is_row_hidden(*r)).collect();
         assert_eq!(hidden, [2, 3, 4, 6, 7]);
+        let crit = sh.autofilter.as_ref().and_then(|a| a.criteria.first()).map(|(_, c)| c.clone());
+        let text_2025 = crate::display::cell_text(&s.doc().unwrap().wb, sh, CellRef::new(1, 0));
+        assert_eq!(crit, Some(FilterCriterion::Values { values: vec!["n/a".into(), text_2025], blanks: false, dates: vec![] }));
     }
 
     #[test]

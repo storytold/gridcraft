@@ -265,7 +265,7 @@ fn sample() -> Workbook {
             (
                 0,
                 FilterCriterion::Values {
-                    values: vec!["a".into(), "b".into()],
+                    values: vec![],
                     blanks: true,
                     dates: vec![
                         DateGroupItem { grouping: DateGrouping::Year, year: 2024, month: 0, day: 0, hour: 0, minute: 0, second: 0 },
@@ -1497,4 +1497,21 @@ fn invalid_date_groups_are_not_written() {
     let items: Vec<(Option<&str>, Option<&str>, Option<&str>)> =
         filters.kids("dateGroupItem").map(|d| (d.attr("year"), d.attr("month"), d.attr("dateTimeGrouping"))).collect();
     assert_eq!(items, [(Some("2026"), Some("3"), Some("month")), (Some("2024"), None, Some("year"))]);
+}
+
+/// Excel takes `filter` or `dateGroupItem` children in one `filters`, not both: a criterion that
+/// has both (only a hand-made session can) is written with its values.
+#[test]
+fn a_filter_with_values_and_date_groups_writes_only_the_values() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    let march = DateGroupItem { grouping: DateGrouping::Month, year: 2026, month: 3, day: 0, hour: 0, minute: 0, second: 0 };
+    let crit = FilterCriterion::Values { values: vec!["n/a".into()], blanks: false, dates: vec![march] };
+    s.autofilter = Some(AutoFilter { range: rr("A1:A4"), criteria: vec![(0, crit)] });
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    let filters = sheet.child("autoFilter").and_then(|a| a.child("filterColumn")).and_then(|f| f.child("filters")).unwrap();
+    assert_eq!(filters.kids("filter").filter_map(|f| f.attr("val")).collect::<Vec<_>>(), ["n/a"]);
+    assert_eq!(filters.kids("dateGroupItem").count(), 0);
 }

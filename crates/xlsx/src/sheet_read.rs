@@ -805,14 +805,9 @@ pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
     for fc in e.kids("filterColumn") {
         let Some(col) = fc.attr_u32("colId") else { continue };
         let crit = if let Some(f) = fc.child("filters") {
+            // `calendarType` is ignored, as Excel ignores it (MS-OI29500 §18.3.2.8): the items are
+            // Gregorian years, months and days.
             let items: Vec<&El> = f.kids("dateGroupItem").collect();
-            // dateGroupItem years and months follow `calendarType` (Hijri, Thai, Japanese eras…): read
-            // as Gregorian they would select other dates, so such a filter is left out.
-            let gregorian = f.attr("calendarType").is_none_or(|c| c == "none" || c.starts_with("gregorian"));
-            if !items.is_empty() && !gregorian {
-                cx.warn("AutoFilter date groups in a non-Gregorian calendar are not supported");
-                continue;
-            }
             let dates: Vec<DateGroupItem> = items.iter().filter_map(|x| read_date_group_item(x)).collect();
             let values: Vec<String> = f.kids("filter").filter_map(|x| x.attr("val")).map(str::to_string).collect();
             let blanks = f.flag("blank", false);

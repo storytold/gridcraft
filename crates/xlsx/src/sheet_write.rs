@@ -1028,9 +1028,14 @@ fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mu
                 for v in values {
                     let _ = write!(s, "<filter val=\"{}\"/>", esc_attr(v));
                 }
-                // Items from a session file are unchecked; out-of-range ones would make an invalid file.
-                for d in dates.iter().filter(|d| d.is_valid()) {
-                    date_group_item_xml(&d.normalized(), &mut s);
+                // Excel takes `filter` or `dateGroupItem` children, not both (MS-OI29500 §18.3.2.8).
+                // The engine never stores both (a mixed selection becomes text); a criterion that has
+                // them anyway, from a hand-made session, keeps its values. Items from a session file
+                // are unchecked: out-of-range ones would make an invalid file.
+                if values.is_empty() {
+                    for d in dates.iter().filter(|d| d.is_valid()) {
+                        date_group_item_xml(&d.normalized(), &mut s);
+                    }
                 }
                 s.push_str("</filters>");
             }

@@ -358,15 +358,20 @@ fn date_group_items_out_of_range_are_dropped_and_omitted_fields_default() {
 }
 
 #[test]
-fn a_date_filter_left_with_nothing_or_in_another_calendar_is_left_out() {
+fn a_date_filter_left_with_nothing_is_left_out_and_calendar_type_is_ignored() {
     // Every item dropped: an empty filter would hide every row, so the column keeps no filter.
-    let body = r#"<sheetData/><autoFilter ref="A1:B5"><filterColumn colId="0"><filters><dateGroupItem year="2026" month="0" dateTimeGrouping="month"/></filters></filterColumn><filterColumn colId="1"><filters calendarType="hijri"><dateGroupItem year="1447" month="3" dateTimeGrouping="month"/></filters></filterColumn></autoFilter>"#;
+    let body = r#"<sheetData/><autoFilter ref="A1:A5"><filterColumn colId="0"><filters><dateGroupItem year="2026" month="0" dateTimeGrouping="month"/></filters></filterColumn></autoFilter>"#;
     let (wb, rep) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
-    let af = wb.sheets[0].autofilter.as_ref().unwrap();
-    assert!(af.criteria.is_empty(), "{:?}", af.criteria);
-    assert!(rep.warnings.iter().any(|w| w.contains("non-Gregorian")), "{:?}", rep.warnings);
-    // A Gregorian calendar type reads as usual.
-    let body = r#"<sheetData/><autoFilter ref="A1:A5"><filterColumn colId="0"><filters calendarType="gregorianUs"><dateGroupItem year="2026" month="3" dateTimeGrouping="month"/></filters></filterColumn></autoFilter>"#;
-    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
-    assert_eq!(wb.sheets[0].autofilter.as_ref().unwrap().criteria.len(), 1);
+    assert!(wb.sheets[0].autofilter.as_ref().unwrap().criteria.is_empty());
+    assert!(rep.warnings.iter().any(|w| w.contains("date groups out of range")), "{:?}", rep.warnings);
+    // Excel ignores calendarType: the items read as Gregorian whatever it says.
+    for calendar in ["hijri", "gregorianUs", "saka"] {
+        let body = format!(
+            r#"<sheetData/><autoFilter ref="A1:A5"><filterColumn colId="0"><filters calendarType="{calendar}"><dateGroupItem year="2026" month="3" dateTimeGrouping="month"/></filters></filterColumn></autoFilter>"#
+        );
+        let (wb, _) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+        let af = wb.sheets[0].autofilter.as_ref().unwrap();
+        let Some((_, gridcraft_model::FilterCriterion::Values { dates, .. })) = af.criteria.first() else { panic!("{calendar}: {:?}", af.criteria) };
+        assert_eq!(dates.iter().map(|d| (d.year, d.month)).collect::<Vec<_>>(), [(2026, 3)], "{calendar}");
+    }
 }
