@@ -289,8 +289,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Page Layout|Orientation" => "Orientacja",
         "Display theme" => "Motyw wyświetlania",
         "Animations" => "Animacje",
-        "Glide the selection outline to the cell you move to instead of jumping there" => {
-            "Płynnie przesuwaj ramkę zaznaczenia do komórki, do której przechodzisz, zamiast przeskakiwać"
+        "Animation effects" => "Efekty animacji",
+        "Use system setting" => "Użyj ustawienia systemowego",
+        "Animation effects|On" => "Włączone",
+        "Animation effects|Off" => "Wyłączone",
+        "Smooth scrolling and zooming, and a selection outline that glides to the cell you move to" => {
+            "Płynne przewijanie i powiększanie oraz ramka zaznaczenia płynnie przesuwana do komórki, do której przechodzisz"
         }
         "System" => "Systemowy",
         "Light" => "Jasny",

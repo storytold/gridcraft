@@ -8,6 +8,7 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod animations;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
@@ -351,6 +352,9 @@ fn main() -> eframe::Result<()> {
                     return Err("the app was already created".into());
                 };
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
+                // The system's animation setting, which Options ▸ Animation effects follows
+                // unless it is set to On or Off.
+                app.services.animations_enabled = Some(animations::hook(&cc.egui_ctx));
                 if let Some(port) = control_port {
                     match control_server::start(port, cc.egui_ctx.clone()) {
                         Ok(rx) => app.control_rx = Some(rx),
