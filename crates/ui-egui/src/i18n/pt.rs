@@ -1,6 +1,7 @@
 //! Brazilian Portuguese translations for the interface strings in i18n.rs. Labels follow Excel's
 //! pt-BR wording; anything absent falls back to English.
 
+/// Returns the catalog translation, or `None` so the caller can fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Colar",
@@ -267,6 +268,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Ready" => "Pronto",
         "Enter" => "Inserir",
         "Edit" => "Editar",
+        "menu|Edit" => "Editar",
         "Point" => "Apontar",
         "Calculate" => "Calcular",
         "Select destination and press Enter or choose Paste" => "Selecione o destino e pressione Enter ou escolha Colar",

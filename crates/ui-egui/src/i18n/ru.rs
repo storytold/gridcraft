@@ -1,5 +1,6 @@
 //! Russian translations for the interface strings in i18n.rs.
 
+/// Returns the catalog translation, or `None` so the caller can fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Вставить",
@@ -271,6 +272,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Ready" => "Готово",
         "Enter" => "Ввод",
         "Edit" => "Изменение",
+        "menu|Edit" => "Изменение",
         "Point" => "Указание",
         "Calculate" => "Вычисление",
         "Select destination and press Enter or choose Paste" => "Выберите место вставки и нажмите Enter или выберите «Вставить»",

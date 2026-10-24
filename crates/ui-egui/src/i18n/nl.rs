@@ -275,6 +275,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Ready" => "Gereed",
         "Enter" => "Invoeren",
         "Edit" => "Bewerken",
+        "menu|Edit" => "Bewerken",
         "Point" => "Aanwijzen",
         "Calculate" => "Berekenen",
         "Select destination and press Enter or choose Paste" => "Selecteer de bestemming en druk op Enter of kies Plakken",

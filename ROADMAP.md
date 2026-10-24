@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (accounting negatives such as `$(1,234)` read as numbers; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: Page Setup paper sizes: JIS B4/B5/B6, the Japanese postcards and envelopes, and A6; long flat operator chains up to Excel's formula limit) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (French localization reconciled with upstream translation tests and moved UI tests; native menu refresh and French formula names/errors retained; accounting negatives read as numbers; INDEX with one index on a 2-D reference is #REF!) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -63,7 +63,7 @@ collaboration, mobile, AI).
 | File formats | ~50% | 80–120 | [file-format-parity.md](docs/file-format-parity.md) |
 | Performance | ~35% | 35–55 | [target-app-parity.md](docs/target-app-parity.md#performance) |
 | Stability | ~60% | 15–25 | [gaps.md](docs/gaps.md) |
-| Localization | ~10% (ribbon in 6 languages) | 100–165 | [localization-parity.md](docs/localization-parity.md) |
+| Localization | ~10% (partial UI catalogs; French formulas) | 100–165 | [localization-parity.md](docs/localization-parity.md) |
 | Hardware (multi-core calc, GPU, pen, multi-window) | ~40% | 25–40 | [hardware-parity.md](docs/hardware-parity.md) |
 | Platforms | ~80% (no iOS/Android; ahead on Linux, BSD, RISC-V) | 30–60 | [target-app-parity.md](docs/target-app-parity.md#platforms) |
 | Ecosystem / add-ins | ~10% (VBA out of scope; own scripts, MCP, CLI) | 25–40 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
@@ -96,7 +96,8 @@ added 10-11), the
 interface follows the system language, and CJK, Thai and Hebrew text falls back to system fonts
 (#38). Japanese (10-17) and Brazilian Portuguese also translate the dialog titles and labels,
 message boxes, Backstage/File-view items, template names and native menus: 943 strings each, ~43%.
-The remaining dialogs, menus and messages are English; formulas and number formats are en-US only.
+UI translations remain partial. French formulas cover all 514 registered names with French
+separators; Spanish has a smaller alias table. Stored formulas remain canonical English.
 Localized German formulas and numbers are in PR #163. Detail: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Status | UI strings |
@@ -106,7 +107,7 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 | Spanish | es | none | 0% |
 | Hindi | hi | none | 0% |
 | Arabic | ar | none (no RTL layout, no shaping) | 0% |
-| French | fr | none | 0% |
+| French | fr | partial UI; all formula names | not remeasured |
 | Portuguese | pt-BR | menus, File view, dialogs | ~43% |
 | Indonesian | id | none | 0% |
 | Japanese | ja | menus, File view, dialogs, messages | ~43% |
@@ -135,6 +136,10 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-24 | French localization reconciled with the updated translation tests and consolidated UI test suite. |
+| 2026-10-23 | Native macOS menus reflect language changes in the same frame, without waiting for another input event. |
+| 2026-10-23 | French formula error literals and corrected MAX.SI.ENS/MIN.SI.ENS names (adapted from #2310); registry coverage and uniqueness tested, canonical file/API syntax preserved. |
+| 2026-10-23 | French formula localization reconciled with upstream function help, Unicode name matching and long flat operator-chain support; regression coverage retains both French and upstream behavior. |
 | 2026-10-23 | Accounting negatives in text: `$(1,234)`, `$ (5)` and `(5)%` read as negative numbers when typed, coerced by arithmetic or passed to VALUE, like Excel 365; `(-5)`, `((5))`, `$5%` and dates or times in parentheses stay text |
 | 2026-10-23 | Calc: `INDEX(A1:C3,2)` (one index on a reference of several rows and columns) is `#REF!` as in Excel, instead of the whole row; `INDEX(A1:C3,2,)` still gives the row |
 | 2026-10-22 | Formula hardening: digits too many for a finite number are text, so `"1 <400 digits>/<400 digits>"` no longer coerces to NaN; a NaN column index in VLOOKUP, HLOOKUP and the D-functions is `#VALUE!` instead of an index underflow; REGEXREPLACE stops building a result as soon as it can only be too long (a worst case went from 1 GB to 7 MB) (#2163, #2162) |
@@ -165,6 +170,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | XLSX: `[Content_Types].xml`, `_rels/.rels`, the workbook rels and `xl/workbook.xml` are the first zip entries (document properties last), so libmagic and PHP `finfo` detect the file type even with large properties (#1090) |
 | 2026-10-13 | Conditional formatting: a rule gathers range statistics only when it reads them (top/bottom, above average, duplicates, scales, bars, icons) and borrows them instead of copying them per cell, so the per-frame lookup of an expression or cell-value rule no longer visits its whole range (#1098, part 1) |
 | 2026-10-12 | Next/previous sheet navigation stops at the first/last visible worksheet instead of activating a hidden boundary sheet; the current selection is retained |
+| 2026-10-16 | Native macOS menus and the quick-access menu use the interface language; French labels added, live language changes preserve commands and shortcuts. |
+| 2026-10-16 | French formula names cover all 514 registered names; French entry/display/autocomplete use existing locale support; XLSX remains canonical English. |
 | 2026-10-12 | Rows auto-fit oversized fonts: opening a file and whole-row/column formatting grow non-custom rows to their tallest font (#833) |
 | 2026-10-12 | Number formats: parsing a format code is linear in its length (long runs of `[`, `,` or `/` no longer take quadratic time), and an unclosed `[` is a literal when splitting sections as well as when tokenizing (#810) |
 | 2026-10-12 | Number formats: a fraction denominator with 65,536 zeros no longer crashes; format codes are capped at 255 characters like Excel (longer codes display as General, `TEXT` gives `#VALUE!`) (#807) |
@@ -226,6 +233,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | French localization reconciled with upstream translation-test policy and consolidated UI tests; French formula coverage and native-menu behavior retained |
+| 2026-10-23 | minor | Native macOS menus refresh after the UI pass when the language changes |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |
 | 2026-10-23 | minor | Progress log: INDEX with one index on a 2-D reference is #REF! |
 | 2026-10-22 | trivial | Progress log: formula hardening (#2163, #2162) |

@@ -2,6 +2,7 @@
 //! wording (sentence case, «Inmovilizar paneles», «Combinar y centrar»); anything absent falls back
 //! to English. Formula names and separators are localized separately (`formula_locale`).
 
+/// Returns the catalog translation, or `None` so the caller can fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Pegar",
@@ -387,6 +388,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Ready" => "Listo",
         "Enter" => "Introducir",
         "Edit" => "Modificar",
+        "menu|Edit" => "Modificar",
         "Point" => "Señalar",
         "Calculate" => "Calcular",
         "Select destination and press Enter or choose Paste" => "Seleccione el destino y presione Entrar o elija Pegar",

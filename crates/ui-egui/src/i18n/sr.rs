@@ -1,5 +1,6 @@
 //! Serbian (Latin script, ekavian) translations for the interface strings in i18n.rs.
 
+/// Returns the catalog translation, or `None` so the caller can fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Nalepi",
@@ -274,6 +275,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Ready" => "Spremno",
         "Enter" => "Unos",
         "Edit" => "Uređivanje",
+        "menu|Edit" => "Uređivanje",
         "Point" => "Pokaži",
         "Calculate" => "Izračunavanje",
         "Select destination and press Enter or choose Paste" => "Izaberi odredište i pritisni Enter ili izaberi Nalepi",

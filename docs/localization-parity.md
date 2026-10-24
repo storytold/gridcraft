@@ -1,11 +1,14 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (French localization reconciled with upstream translation tests and moved UI tests; native menu refresh and French formula names/errors retained; missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
 right-to-left sheets and full complex-script support. Part of
 [target-app-parity.md](target-app-parity.md). **Localization: ~10% ready, 100–165 h** (estimated).
+
+The native Edit menu uses a context-specific `menu|Edit` key in every catalog: French
+shows “Édition” while the existing action label remains “Modifier”.
 
 ## Where we are (measured from source on `main`, after the 2026-10-10 merges)
 
@@ -37,10 +40,12 @@ right-to-left sheets and full complex-script support. Part of
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so the ribbon-only languages cover **~12%** and
   Japanese and Portuguese **~43%** (measured count / estimated total).
-- **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
-  separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
-  localized function names and `;` separators (#45). German with localized numbers and formulas
-  is in PR #163 (open).
+- **Localized formulas at the UI boundary.** French covers all 514 registered function names
+  (including unchanged spellings and evaluator special forms), with decimal commas, `;` arguments
+  and `\` array columns. Spanish has a smaller alias table. Entry, display, autocomplete and
+  ribbon insertion use the existing interface-language preference. Files and engine/API calls
+  keep canonical English syntax. Function help, advanced dialogs and clipboard exchange retain
+  their existing fallback; number/date display formats are not changed by this work.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
@@ -60,6 +65,13 @@ right-to-left sheets and full complex-script support. Part of
   accepted as in Excel. Sheet names already counted characters (31).
 - **PDF export** uses only the 14 standard PDF fonts: non-Latin text cannot export.
 
+The native macOS menu bar now uses the shared language catalog, including application,
+File/Edit/View menus and theme choices. Changing the interface language updates the existing
+menu items in the same frame, after the UI pass, without reinstalling the menu or changing
+command ids/shortcuts. The quick-access
+More commands menu also uses the catalog. French includes all native menu labels; macOS-owned
+window-management items continue to follow the system language.
+
 ## Languages
 
 UI strings translated are measured counts against the ~2,200 estimate. Estimates to `full`
@@ -73,7 +85,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
 | Arabic | ar | 0 (0%) | no | **no shaping, no RTL UI**; Sheet Right-to-Left mirrors the grid (#146) | no | none | 25–35 h |
-| French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
+| French | fr | existing interface catalog | help incomplete | Latin: yes | pending | all 514 formula names; French separators | UI/help work remains |
 | Portuguese | pt-BR | 943 (~43%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display, but phonetic runs (ふりがな) survive an XLSX open + save | no | menus only | 8–12 h |
@@ -110,6 +122,10 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | French localization reconciled with upstream translation-test policy and consolidated UI tests; French formula coverage and native-menu behavior retained |
+| 2026-10-23 | minor | Refresh native macOS menus after the UI pass so selecting a language takes effect without waiting for another input event |
+| 2026-10-23 | minor | Adapted PR #2310: MAXIFS/MINIFS use MAX.SI.ENS/MIN.SI.ENS; French error literals are read and displayed in formulas while storage stays canonical English; regression tests cover registry coverage, name uniqueness, evaluation and XLSX round trips |
+| 2026-10-23 | minor | PR #1639 reconciled with upstream function-help catalogs, locale additions, Unicode LET/LAMBDA names and stack-safe long chains; French names and native-menu localization retained |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |
@@ -119,6 +135,9 @@ language (none so far) and of localized function names.
 | 2026-10-20 | trivial | XLSX: a workbook theme's major/minor East Asian (`<a:ea>`) and complex-script (`<a:cs>`) typefaces are kept through open + save, so a Japanese workbook keeps its theme's East Asian font; rendering does not resolve them yet (follow-up) |
 | 2026-10-19 | minor | XLSX fonts retain charset and family metadata so systems can select a substitute font with the intended script when the named font is unavailable |
 | 2026-10-19 | minor | Arabic CSV and text imports decode Windows-1256 text; Arabic shaping and bidirectional UI remain unsupported |
+| 2026-10-19 | minor | Context-specific Edit menu key in every language; French uses Édition without changing action labels |
+| 2026-10-16 | minor | Native macOS menus follow the selected UI language at startup and on changes; 69 French labels added, quick-access menu translated; AppKit integration test checks French and English titles |
+| 2026-10-16 | minor | French formula table covers all 514 registered names; existing locale boundary handles entry, display, autocomplete, templates and canonical XLSX round trips |
 | 2026-10-19 | minor | Defined-name length counts characters, not bytes: Arabic names up to 255 letters are accepted, and Create from Selection keeps long Arabic headers |
 | 2026-10-19 | minor | Table names are limited to 255 Unicode characters |
 | 2026-10-19 | minor | Right-to-left sheets in legacy `.xls` files (common in older Arabic workbooks) open right-to-left |

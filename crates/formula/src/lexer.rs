@@ -156,16 +156,12 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
             '#' => {
                 // Error literal, or #-prefixed struct specifier (only inside [] which we lex as Struct).
                 let rest = src.get(start..).unwrap_or("");
-                let mut found = None;
-                for e in CellError::ALL {
-                    let t = e.as_str();
-                    if rest.len() >= t.len() && rest.get(..t.len()).is_some_and(|p| p.eq_ignore_ascii_case(t)) {
-                        found = Some(e);
-                        break;
-                    }
-                }
-                let Some(e) = found else { return Err(LexError { msg: "unknown error literal".into(), pos: start }) };
-                let len = e.as_str().chars().count();
+                // Try localized spellings before canonical English, retaining the matched span.
+                let localized = locale.errors().iter().copied();
+                let english = CellError::ALL.iter().map(|e| (*e, e.as_str()));
+                let found = localized.chain(english).find(|(_, text)| rest.get(..text.len()).is_some_and(|p| p.eq_ignore_ascii_case(text)));
+                let Some((e, text)) = found else { return Err(LexError { msg: "unknown error literal".into(), pos: start }) };
+                let len = text.chars().count();
                 // `#REF!A1` style is not valid; `#REF!` is an error literal.
                 push(&mut out, Tok::Error(e), i + len);
                 i += len;

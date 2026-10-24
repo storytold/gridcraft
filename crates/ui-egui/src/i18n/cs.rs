@@ -1,5 +1,6 @@
 //! Czech translations for the interface strings in i18n.rs.
 
+/// Returns the catalog translation, or `None` so the caller can fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Vložit",
@@ -387,6 +388,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Ready" => "Připraveno",
         "Enter" => "Zadat",
         "Edit" => "Úpravy",
+        "menu|Edit" => "Úpravy",
         "Point" => "Výběr odkazu",
         "Calculate" => "Přepočítat",
         "Select destination and press Enter or choose Paste" => "Vyberte cíl a stiskněte Enter nebo zvolte Vložit",

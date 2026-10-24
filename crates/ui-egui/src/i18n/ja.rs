@@ -280,6 +280,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Ready", "準備完了"),
     ("Enter", "入力"),
     ("Edit", "編集"),
+    ("menu|Edit", "編集"),
     ("Point", "ポイント"),
     ("Calculate", "計算"),
     ("Select destination and press Enter or choose Paste", "貼り付け先を選び、Enter キーを押すか [貼り付け] を選びます"),

@@ -278,6 +278,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Ready" => "Sẵn sàng",
         "Enter" => "Nhập",
         "Edit" => "Sửa",
+        "menu|Edit" => "Sửa",
         "Point" => "Trỏ",
         "Calculate" => "Tính toán",
         "Select destination and press Enter or choose Paste" => "Chọn vị trí đích rồi nhấn Enter hoặc chọn Dán",

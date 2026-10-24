@@ -1,5 +1,6 @@
 //! Korean translations for the interface strings in i18n.rs.
 
+/// Returns the catalog translation, or `None` so the caller can fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "붙여넣기",
@@ -271,6 +272,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Ready" => "준비",
         "Enter" => "입력",
         "Edit" => "편집",
+        "menu|Edit" => "편집",
         "Point" => "가리키기",
         "Calculate" => "계산",
         "Select destination and press Enter or choose Paste" => "대상을 선택하고 Enter 키를 누르거나 [붙여넣기]를 선택하세요",

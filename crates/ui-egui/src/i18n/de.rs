@@ -1,6 +1,7 @@
 //! German translations for the interface strings in i18n.rs. Labels follow the wording German
 //! spreadsheet users know; anything absent falls back to English.
 
+/// Returns the catalog translation, or `None` so the caller can fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Einfügen",
@@ -390,6 +391,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Ready" => "Bereit",
         "Enter" => "Eingeben",
         "Edit" => "Bearbeiten",
+        "menu|Edit" => "Bearbeiten",
         "Point" => "Zeigen",
         "Calculate" => "Berechnen",
         "Select destination and press Enter or choose Paste" => "Ziel auswählen und die Eingabetaste drücken oder „Einfügen“ wählen",

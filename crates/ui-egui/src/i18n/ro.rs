@@ -269,6 +269,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Ready" => "Gata",
         "Enter" => "Enter",
         "Edit" => "Editare",
+        "menu|Edit" => "Editare",
         "Point" => "Punct",
         "Calculate" => "Calcul",
         "Select destination and press Enter or choose Paste" => "Selectați destinația și apăsați Enter sau alegeți Lipire",
