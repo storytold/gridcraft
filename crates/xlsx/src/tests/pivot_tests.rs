@@ -80,7 +80,8 @@ fn workbook() -> Workbook {
     wb.names.push(DefinedName { name: "SalesData".into(), scope: None, formula: "Data!$A$1:$F$9".into(), comment: String::new(), hidden: false });
 
     let mut report = Sheet::new("Report");
-    // Pivot 1: tabular, page filter, custom and built-in value formats, collapsed item.
+    // Pivot 1: tabular, page filter, custom and built-in value formats, collapsed item, Enable
+    // show details off.
     let p1 = PivotTable {
         id: 1,
         name: "Sales by Region".into(),
@@ -106,6 +107,7 @@ fn workbook() -> Workbook {
         ],
         filters: vec![PivotFilter { source_col: "Channel".into(), selected: Some(vec!["Online".into()]) }],
         layout: PivotLayout::Tabular,
+        enable_show_details: false,
         grand_totals_rows: false,
         grand_totals_cols: true,
         subtotals: false,
@@ -165,6 +167,7 @@ fn workbook() -> Workbook {
             PivotFilter { source_col: "Product".into(), selected: Some(vec!["A".into(), "B".into()]) },
         ],
         layout: PivotLayout::Outline,
+        enable_show_details: true,
         grand_totals_rows: true,
         grand_totals_cols: false,
         subtotals: true,
@@ -660,6 +663,24 @@ fn grand_totals_read_in_excel_direction() {
         let (wb, _) = read_xlsx(&with_pivot(&table(attr), Some(GOOD_CACHE))).unwrap();
         let pt = &wb.sheet(0).unwrap().pivots[0];
         assert_eq!((pt.grand_totals_rows, pt.grand_totals_cols), (rows, cols), "{attr}");
+    }
+}
+
+// `enableDrill="0"` is PivotTable Options › Data › Enable show details turned off; without the
+// attribute the option is on.
+#[test]
+fn enable_show_details_reads_and_writes_enable_drill() {
+    let table = |attr: &str| {
+        format!(
+            r#"<pivotTableDefinition name="Drill" cacheId="1" {attr}><location ref="C1:F4"/><pivotFields><pivotField axis="axisRow"><items><item x="0"/><item x="1"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><rowFields><field x="0"/></rowFields><dataFields><dataField name="Sum of V" fld="1"/></dataFields></pivotTableDefinition>"#
+        )
+    };
+    for (attr, on) in [("enableDrill=\"0\"", false), ("enableDrill=\"1\"", true), ("", true)] {
+        let (wb, _) = read_xlsx(&with_pivot(&table(attr), Some(GOOD_CACHE))).unwrap();
+        assert_eq!(wb.sheet(0).unwrap().pivots[0].enable_show_details, on, "{attr}");
+        let parts = unzip(&write_xlsx(&wb).unwrap());
+        let written = String::from_utf8(parts.get("xl/pivotTables/pivotTable1.xml").unwrap().clone()).unwrap();
+        assert_eq!(written.contains(" enableDrill=\"0\""), !on, "{attr}: {written}");
     }
 }
 

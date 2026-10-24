@@ -1044,6 +1044,9 @@ pub struct PivotTable {
     pub values: Vec<PivotValue>,
     pub filters: Vec<PivotFilter>,
     pub layout: PivotLayout,
+    /// PivotTable Options › Data › Enable show details: Show Details lists a value cell's
+    /// source records only while this is on.
+    pub enable_show_details: bool,
     /// Grand total for each row (the "Grand Total" column), like Excel's "On for Rows".
     pub grand_totals_rows: bool,
     /// Grand total for each column (the "Grand Total" row), like Excel's "On for Columns".
@@ -1087,6 +1090,7 @@ impl Default for PivotTable {
             values: vec![],
             filters: vec![],
             layout: PivotLayout::Compact,
+            enable_show_details: true,
             grand_totals_rows: true,
             grand_totals_cols: true,
             subtotals: true,
