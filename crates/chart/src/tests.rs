@@ -1215,3 +1215,162 @@ fn box_whisker_draws_each_series_quartile_method() {
     // The boxes span 3.5 and 2.5 data units on the same value axis.
     assert!((heights[0] / heights[1] - 1.4).abs() < 0.001);
 }
+
+/// Excel's automatic value axis, as measured in Excel for Windows (Microsoft 365) on synthetic
+/// workbooks (#1688): (smallest value, largest value) → Excel's (min, max, major unit).
+#[test]
+fn value_axis_matches_excels_automatic_bounds() {
+    for (lo, hi, want) in [
+        // Close enough to 0: the axis starts there.
+        (50.0, 100.0, (0.0, 120.0, 20.0)),
+        (83.0, 100.0, (0.0, 120.0, 20.0)),
+        // At least ⅚ of the maximum: 0 is left out, half the data range is added below.
+        (84.0, 100.0, (75.0, 105.0, 5.0)),
+        // A stacked bar of start dates plus durations: the stacked positions, 45200…45229.
+        (45200.0, 45229.0, (45180.0, 45240.0, 10.0)),
+    ] {
+        let s = value_axis_scale(lo, hi);
+        assert_eq!((s.min, s.max, s.step), want, "{lo}…{hi}");
+    }
+    // 95…100: Excel shows 92–101 by 1. The bounds start where Excel's do; GridCraft's steps allow
+    // at most 8 intervals, so it picks 2 and ends at 102 (a separate difference).
+    let s = value_axis_scale(95.0, 100.0);
+    assert_eq!(s.min, 92.0, "{s:?}");
+    assert!(s.max >= 101.0 && s.max <= 102.0, "{s:?}");
+    // All negative mirrors it: Excel −101…−92.
+    let s = value_axis_scale(-100.0, -95.0);
+    assert_eq!(s.max, -92.0, "{s:?}");
+    assert!(s.min <= -101.0 && s.min >= -102.0, "{s:?}");
+    // Hostile and degenerate input still gives a usable scale.
+    for (lo, hi) in [(0.0, 0.0), (5.0, 5.0), (-5.0, -5.0), (f64::NAN, 5.0), (-1e308, 1e308), (1e15, 1e15 + 1.0), (0.001, 0.0013), (100.0, 95.0)] {
+        let s = value_axis_scale(lo, hi);
+        assert!(s.min.is_finite() && s.max.is_finite() && s.step > 0.0 && s.max > s.min, "{lo} {hi} {s:?}");
+        assert!((2..=51).contains(&s.ticks().len()), "{lo} {hi} {s:?}");
+    }
+}
+
+fn general(name: &str, values: &[f64], color: Rgba, kind: ChartKind) -> SeriesData {
+    let mut s = series(name, values, color, kind);
+    s.number_format = "General".into();
+    s
+}
+
+fn texts_set(prims: &[Prim]) -> Vec<String> {
+    texts(prims).into_iter().map(str::to_string).collect()
+}
+
+#[test]
+fn bars_far_from_zero_start_at_the_axis_minimum() {
+    let cats: Vec<String> = ["A", "B", "C", "D"].iter().map(|s| s.to_string()).collect();
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered, ChartKind::Area] {
+        let mut c = chart(kind);
+        c.data_labels = false;
+        let d = ChartData {
+            palette: vec![],
+            categories: cats.clone(),
+            series: vec![general("V", &[95.0, 97.0, 99.0, 100.0], [10, 20, 30, 255], kind)],
+            ..ChartData::default()
+        };
+        let p = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        let t = texts_set(&p);
+        assert!(t.iter().any(|x| x == "92") && !t.iter().any(|x| x == "0"), "{kind:?} {t:?}");
+        // Every shape stays on the canvas.
+        for q in &p {
+            if let Prim::Rect { x, y, w, h, .. } = q {
+                assert!(*x >= -0.5 && *y >= -0.5 && x + w <= 640.5 && y + h <= 400.5, "{kind:?} {q:?}");
+            }
+        }
+        if kind != ChartKind::Area {
+            // Bars rise from one baseline (the axis minimum), and their lengths keep the order
+            // of the values.
+            let bars: Vec<_> = p
+                .iter()
+                .filter_map(|q| match q {
+                    Prim::Rect { x, y, w, h, fill: Some(f), .. } if *f == [10, 20, 30, 255] && w.max(*h) > 14.0 => Some((*x, *y, *w, *h)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(bars.len(), 4, "{kind:?}");
+            let (base, len): (Vec<f32>, Vec<f32>) =
+                bars.iter().map(|(x, y, w, h)| if kind == ChartKind::BarClustered { (*x, *w) } else { (y + h, *h) }).unzip();
+            assert!(base.windows(2).all(|b| (b[0] - b[1]).abs() < 0.01), "{kind:?} {base:?}");
+            assert!(len.windows(2).all(|l| l[0] < l[1]), "{kind:?} {len:?}");
+        }
+    }
+}
+
+#[test]
+fn stacked_bar_of_dates_and_durations_uses_the_stacked_positions() {
+    let mut c = chart(ChartKind::BarStacked);
+    c.data_labels = false;
+    let start = general("Start", &[45200.0, 45207.0, 45214.0, 45221.0], [10, 20, 30, 255], ChartKind::BarStacked);
+    let days = general("Days", &[5.0, 10.0, 3.0, 8.0], [200, 80, 40, 255], ChartKind::BarStacked);
+    let d = ChartData {
+        palette: vec![],
+        categories: ["T1", "T2", "T3", "T4"].iter().map(|s| s.to_string()).collect(),
+        series: vec![start, days],
+        ..ChartData::default()
+    };
+    let p = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let t = texts_set(&p);
+    // Excel: 45180–45240 by 10. Before, the axis ran from 0 and the days were slivers.
+    for want in ["45180", "45240"] {
+        assert!(t.iter().any(|x| x == want), "{want} missing from {t:?}");
+    }
+    assert!(!t.iter().any(|x| x == "0"), "{t:?}");
+    // The duration bars are now wide enough to see: 3 days of a 60-day axis.
+    let widths: Vec<f32> = p
+        .iter()
+        .filter_map(|q| match q {
+            Prim::Rect { w, h, fill: Some(f), .. } if *f == [200, 80, 40, 255] && *h > 14.0 => Some(*w),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(widths.len(), 4);
+    assert!(widths.iter().all(|w| *w > 5.0), "{widths:?}");
+}
+
+/// All-negative data: the axis leaves 0 out at the top (Excel: −101…−92), the bars hang from
+/// the top, and the category axis line is drawn there too (in Excel the axis sits at −92).
+#[test]
+fn negative_bars_hang_from_the_axis_line() {
+    let cats: Vec<String> = ["A", "B", "C", "D"].iter().map(|s| s.to_string()).collect();
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered] {
+        let mut c = chart(kind);
+        c.data_labels = false;
+        let d = ChartData {
+            categories: cats.clone(),
+            series: vec![general("V", &[-95.0, -97.0, -99.0, -100.0], [10, 20, 30, 255], kind)],
+            ..ChartData::default()
+        };
+        let p = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        let bars: Vec<(f32, f32, f32, f32)> = p
+            .iter()
+            .filter_map(|q| match q {
+                Prim::Rect { x, y, w, h, fill: Some(f), .. } if *f == [10, 20, 30, 255] && w.max(*h) > 14.0 => Some((*x, *y, *w, *h)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bars.len(), 4, "{kind:?}");
+        // The edge every bar starts from: the top of a column, the right end of a bar.
+        let starts: Vec<f32> = bars.iter().map(|(x, y, w, _)| if kind == ChartKind::BarClustered { x + w } else { *y }).collect();
+        assert!(starts.windows(2).all(|s| (s[0] - s[1]).abs() < 0.01), "{kind:?} {starts:?}");
+        // The axis line (the one drawn in the axis colour across the whole plot) is at that edge.
+        let axis = [0xBF, 0xBF, 0xBF, 0xFF];
+        let at = p.iter().find_map(|q| match q {
+            Prim::Line { pts, color, .. } if *color == axis && pts.len() == 2 => {
+                let [a, b] = [pts[0], pts[1]];
+                if kind == ChartKind::BarClustered && (a[0] - b[0]).abs() < 0.01 {
+                    Some(a[0])
+                } else if kind != ChartKind::BarClustered && (a[1] - b[1]).abs() < 0.01 {
+                    Some(a[1])
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        });
+        let at = at.unwrap_or_else(|| panic!("{kind:?}: no axis line"));
+        assert!((at - starts[0]).abs() < 0.01, "{kind:?}: axis line at {at}, bars start at {}", starts[0]);
+    }
+}
