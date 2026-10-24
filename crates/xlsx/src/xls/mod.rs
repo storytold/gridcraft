@@ -22,7 +22,7 @@ use gridcraft_model::{CalcMode, CalcSettings, Cell, DefinedName, Formula, LineIn
 use crate::cfb::Compound;
 use crate::tables::{builtin_format, col_width_to_px, pt_to_px};
 use crate::{IoError, ReadReport};
-use formula::{Links, Mode, SupBook, Unsupported, Xti, cell_error, decode};
+use formula::{Links, Mode, SupBook, Unsupported, Xti, cell_error, decode, decode_with_names};
 use records::{Cursor, Record, Records};
 
 const MAX_CELLS: usize = 4_000_000;
@@ -314,8 +314,42 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
             _ => {}
         }
     }
-    // The same test `defined_names` applies, before any cell formula is decoded.
-    let skipped = g.names.iter().map(|l| !l.rgce.is_empty() && decode(&l.rgce, &l.rgcb, CellRef::new(0, 0), Mode::Name, &g.links).is_err()).collect();
+    // The same test `defined_names` applies, before any cell formula is decoded: a name whose
+    // formula can't be decoded is skipped, and so is every name that uses one, through any chain
+    // of names and whichever order they were defined in (#2192).
+    let n = g.names.len();
+    let mut skipped = vec![false; n];
+    // users[j]: the names whose formula refers to name j (by its Lbl index, so two scopes'
+    // names with the same text are told apart)
+    let mut users: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, l) in g.names.iter().enumerate() {
+        // A name without a formula is not imported either, so neither are its users.
+        if l.rgce.is_empty() {
+            skipped[i] = true;
+            continue;
+        }
+        match decode_with_names(&l.rgce, &l.rgcb, CellRef::new(0, 0), Mode::Name, &g.links) {
+            Err(_) => skipped[i] = true,
+            Ok((_, used)) => {
+                for j in used {
+                    if j != i
+                        && let Some(u) = users.get_mut(j)
+                    {
+                        u.push(i);
+                    }
+                }
+            }
+        }
+    }
+    let mut todo: Vec<usize> = (0..n).filter(|&i| skipped[i]).collect();
+    while let Some(j) = todo.pop() {
+        for &i in &users[j] {
+            if !skipped[i] {
+                skipped[i] = true;
+                todo.push(i);
+            }
+        }
+    }
     g.links.skipped = skipped;
     Ok(g)
 }
