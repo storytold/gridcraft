@@ -1992,12 +1992,12 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         if small_button(ui, Icon::Trace, "Trace Precedents", "Trace Precedents", false).clicked()
             && let Ok(r) = app.run("formulas.tracePrecedents", json!({}))
         {
-            app.grid.trace = Some(r);
+            app.grid.trace = crate::grid::Trace::new(app, r);
         }
         if small_button(ui, Icon::Trace, "Trace Dependents", "Trace Dependents", false).clicked()
             && let Ok(r) = app.run("formulas.traceDependents", json!({}))
         {
-            app.grid.trace = Some(r);
+            app.grid.trace = crate::grid::Trace::new(app, r);
         }
         if small_button(ui, Icon::Close, "Remove Arrows", "Remove Arrows", false).clicked() {
             app.grid.trace = None;

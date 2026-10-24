@@ -115,6 +115,26 @@ pub struct FillTag {
     pub undo_len: usize,
 }
 
+/// Trace Precedents / Trace Dependents arrows: they stay on the cell they were traced from, on its
+/// sheet, while the selection moves. They go away when anything changes the workbook
+/// (`revision`): Excel removes them on edits to the traced formula and on inserted, deleted or
+/// moved cells, this also on a new value in a precedent.
+pub struct Trace {
+    pub uid: u64,
+    pub revision: u64,
+    pub sheet: usize,
+    pub cell: CellRef,
+    /// The command's result: `{"sheet", "range"}` precedents or `{"sheet", "cell"}` dependents.
+    pub items: serde_json::Value,
+}
+
+impl Trace {
+    /// A trace of the active cell, just run.
+    pub fn new(app: &SheetApp, items: serde_json::Value) -> Option<Trace> {
+        app.session.active().map(|d| Trace { uid: d.uid, revision: d.revision, sheet: d.wb.active_sheet, cell: d.selection.active, items })
+    }
+}
+
 #[derive(Default)]
 pub struct GridState {
     pub drag: Drag,
@@ -150,7 +170,7 @@ pub struct GridState {
     pub last_border: String,
     pub last_fill: String,
     pub last_font_color: String,
-    pub trace: Option<serde_json::Value>,
+    pub trace: Option<Trace>,
     pub renaming_tab: Option<usize>,
     pub rename_text: String,
     pub list_picker: Option<CellRef>,
@@ -3726,11 +3746,13 @@ pub(crate) fn paint_overlays(
         });
     }
     // Trace precedents / dependents arrows.
-    if let Some(trace) = app.grid.trace.clone()
-        && let Some(items) = trace.as_array()
+    if let Some(trace) = &app.grid.trace
+        && app.session.active().is_some_and(|d| d.uid == trace.uid && d.revision == trace.revision)
+        && trace.sheet == si
+        && let Some(items) = trace.items.as_array()
     {
         let blue = Color32::from_rgb(0x1F, 0x5F, 0xC9);
-        let active = geo.cell_rect(sh, sel.active).center();
+        let active = geo.cell_rect(sh, trace.cell).center();
         for it in items {
             if it["sheet"].as_str().is_some_and(|s| !s.eq_ignore_ascii_case(&sh.name)) {
                 continue;
@@ -4514,5 +4536,132 @@ mod outline_band_tests {
         let clip = Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0));
         assert!(outline_bands(Rect::from_min_max(pos2(900.0, 0.0), pos2(950.0, 20.0)), 2.0, clip).is_empty());
         assert!(outline_bands(Rect::from_min_max(pos2(f32::NAN, 0.0), pos2(1.0, 1.0)), 2.0, clip).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod trace_arrow_tests {
+    use super::*;
+
+    fn app() -> SheetApp {
+        let mut s = gridcraft_engine::Session::new();
+        s.new_workbook();
+        SheetApp::new(s, Default::default())
+    }
+
+    fn select(app: &mut SheetApp, cell: &str) {
+        app.run("selection.set", json!({"cell": cell})).unwrap();
+    }
+
+    /// What the ribbon's Trace Precedents / Trace Dependents buttons do.
+    fn trace(app: &mut SheetApp, id: &str) {
+        let r = app.run(id, json!({})).unwrap();
+        app.grid.trace = Trace::new(app, r);
+    }
+
+    /// The arrows `paint_overlays` draws on the active sheet, as (tail, head) points.
+    fn arrows(app: &mut SheetApp) -> (Geo, Vec<(Pos2, Pos2)>) {
+        let d = app.session.active().unwrap();
+        let (wb, si, sel) = (d.wb.clone(), d.wb.active_sheet, d.selection.clone());
+        let sh = wb.sheet(si).unwrap();
+        let geo = Geo::new(sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 800.0)), vec2(0.0, 0.0));
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let p = ui.painter().clone();
+            paint_overlays(app, ui, &p, &geo, &wb, si, sh, &sel);
+        });
+        // No renderer consumes the font atlas upload here.
+        out.textures_delta.clear();
+        let blue = Color32::from_rgb(0x1F, 0x5F, 0xC9);
+        let mut lines = Vec::new();
+        for s in out.shapes {
+            if let egui::Shape::LineSegment { points, stroke } = s.shape
+                && stroke.color == blue
+            {
+                lines.push((points[0], points[1]));
+            }
+        }
+        (geo, lines)
+    }
+
+    fn center(app: &SheetApp, geo: &Geo, cell: &str) -> Pos2 {
+        let d = app.session.active().unwrap();
+        let sh = d.wb.sheet(d.wb.active_sheet).unwrap();
+        geo.cell_rect(sh, CellRef::parse(cell).unwrap()).center()
+    }
+
+    #[test]
+    fn precedent_arrows_stay_on_the_traced_cell_when_the_selection_moves() {
+        let mut app = app();
+        for (c, v) in [("B2", "1"), ("B3", "2"), ("D2", "1"), ("D3", "2"), ("F7", "=B2+B3+SUM(D2:D3)")] {
+            app.run("cell.set", json!({"cell": c, "input": v})).unwrap();
+        }
+        select(&mut app, "F7");
+        trace(&mut app, "formulas.tracePrecedents");
+        select(&mut app, "H7");
+        let (geo, lines) = arrows(&mut app);
+        assert_eq!(lines.len(), 3, "B2, B3 and D2:D3: {lines:?}");
+        let f7 = center(&app, &geo, "F7");
+        assert!(lines.iter().all(|&(_, head)| head == f7), "every arrow points at F7, not at the active H7: {lines:?}");
+    }
+
+    #[test]
+    fn dependent_arrows_stay_on_the_traced_cell_when_the_selection_moves() {
+        let mut app = app();
+        for (c, v) in [("B2", "1"), ("D4", "=B2*2"), ("E6", "=B2+1")] {
+            app.run("cell.set", json!({"cell": c, "input": v})).unwrap();
+        }
+        select(&mut app, "B2");
+        trace(&mut app, "formulas.traceDependents");
+        select(&mut app, "C9");
+        let (geo, lines) = arrows(&mut app);
+        assert_eq!(lines.len(), 2, "D4 and E6: {lines:?}");
+        let b2 = center(&app, &geo, "B2");
+        assert!(lines.iter().all(|&(tail, _)| tail == b2), "every arrow starts at B2, not at the active C9: {lines:?}");
+    }
+
+    #[test]
+    fn arrows_stay_on_the_sheet_of_the_traced_cell() {
+        let mut app = app();
+        app.run("home.insertSheet", json!({"name": "Two"})).unwrap();
+        app.run("cell.set", json!({"sheet": "Sheet1", "cell": "B2", "input": "1"})).unwrap();
+        app.run("sheet.activate", json!({"sheet": "Two"})).unwrap();
+        app.run("cell.set", json!({"cell": "F7", "input": "=Sheet1!B2"})).unwrap();
+        select(&mut app, "F7");
+        trace(&mut app, "formulas.tracePrecedents");
+        // The precedent lives on Sheet1, but the arrow belongs to Two's F7.
+        app.run("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        assert!(arrows(&mut app).1.is_empty(), "no arrow on Sheet1 from B2 to where F7 would be");
+    }
+
+    #[test]
+    fn inserting_a_row_removes_the_arrows() {
+        let mut app = app();
+        app.run("cell.set", json!({"cell": "B2", "input": "1"})).unwrap();
+        app.run("cell.set", json!({"cell": "F7", "input": "=B2"})).unwrap();
+        select(&mut app, "F7");
+        trace(&mut app, "formulas.tracePrecedents");
+        assert_eq!(arrows(&mut app).1.len(), 1);
+        app.run("home.insertRows", json!({"rows": "4"})).unwrap();
+        assert!(arrows(&mut app).1.is_empty(), "F7 is now F8: the old arrows would point at the wrong cell");
+    }
+
+    #[test]
+    fn arrows_stay_in_their_workbook() {
+        let mut app = app();
+        app.session.new_workbook();
+        // Two books with the same cells and the same revision: only the document tells them apart.
+        for book in [1, 0] {
+            app.session.set_active(book);
+            app.run("cell.set", json!({"cell": "B2", "input": "1"})).unwrap();
+            app.run("cell.set", json!({"cell": "F7", "input": "=B2"})).unwrap();
+        }
+        select(&mut app, "F7");
+        trace(&mut app, "formulas.tracePrecedents");
+        assert_eq!(arrows(&mut app).1.len(), 1);
+        app.session.set_active(1);
+        let revisions: Vec<u64> = app.session.documents().iter().map(|d| d.revision).collect();
+        assert_eq!(revisions[0], revisions[1]);
+        assert!(arrows(&mut app).1.is_empty(), "Book1's arrows are not drawn on Book2");
     }
 }
