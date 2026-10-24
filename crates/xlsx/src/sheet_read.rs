@@ -31,8 +31,11 @@ struct RowState {
     next_row: u32,
     shared: HashMap<u32, Shared>,
     /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
-    /// the anchor) are not stored, so the formula can fill them again.
+    /// the anchor) are not stored in the cells, so the formula can fill them again.
     dynamic: Vec<RangeRef>,
+    /// The dynamic-array spill ranges among them: their cached values go to `Sheet::spill`, where
+    /// readers see them before a recalculation lays the spill out again.
+    spills: Vec<RangeRef>,
     dropped: u64,
     rows: u64,
 }
@@ -461,7 +464,20 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     }
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
-    let value = if formula.is_none() && st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos) { Value::Empty } else { value };
+    if dynamic
+        && formula.as_ref().is_some_and(|f| f.array.is_none())
+        && let Some(r) = st.spills.last().filter(|r| r.start == pos)
+    {
+        sheet.spill_ranges.insert(pos, *r);
+    }
+    let value = if formula.is_none() && st.dynamic.iter().any(|r| r.contains(pos) && r.start != pos) {
+        if !value.is_empty() && st.spills.iter().any(|r| r.contains(pos)) {
+            sheet.spill.insert(pos, value);
+        }
+        Value::Empty
+    } else {
+        value
+    };
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
 }
 
@@ -503,6 +519,10 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             let range = f.attr("ref").and_then(RangeRef::parse).unwrap_or(RangeRef::cell(pos));
             if !range.is_single() {
                 st.dynamic.push(range);
+            }
+            // A one-cell dynamic result is a spill range too (`A1#` refers to it).
+            if dynamic {
+                st.spills.push(range);
             }
             if !dynamic {
                 fm.array = Some(range);
