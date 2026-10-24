@@ -314,7 +314,7 @@ pub fn csv_bytes(wb: &Workbook, style: CsvStyle) -> Result<Vec<u8>> {
 /// characters in each cell" (Microsoft Support, *Excel formatting and features that are not
 /// transferred to other file formats*): number formats applied, never column-width `#####`.
 fn csv(wb: &Workbook, sh: &Sheet, style: CsvStyle) -> Result<Vec<u8>> {
-    let body = gridcraft_xlsx::write_csv(sh, style.delimiter, |c| {
+    let mut body = gridcraft_xlsx::write_csv(sh, style.delimiter, |c| {
         let value = sh.value(c);
         let code = wb.styles.get(sh.style_id(c)).num_fmt.as_str();
         // General's grid-width formatting rounds large identifiers to scientific notation.
@@ -342,10 +342,8 @@ fn csv(wb: &Workbook, sh: &Sheet, style: CsvStyle) -> Result<Vec<u8>> {
     })
     .map_err(|e| EngineError::Other(e.to_string()))?;
     if style.bom {
-        let mut out = Vec::with_capacity(body.len() + 3);
-        out.extend_from_slice(b"\xEF\xBB\xBF");
-        out.extend_from_slice(&body);
-        return Ok(out);
+        // In place: a body near the size cap is not copied into a second buffer.
+        body.splice(0..0, *b"\xEF\xBB\xBF");
     }
     Ok(body)
 }
