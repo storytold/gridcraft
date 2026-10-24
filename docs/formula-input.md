@@ -1,8 +1,16 @@
 # Formula language
 
-View → Interface language is the existing, persisted language preference. Choose **Español**
-for Spanish formula entry and display. On first run the preference follows the system language.
-English and the other interface languages currently use the English formula table and separators.
+View → Interface language is the existing, persisted language preference, and it also picks the
+formula language, as in Excel: function names follow the display language. On first run the
+preference follows the system language. Interface languages not listed below use English
+formulas.
+
+| Interface | Function names (e.g.) | Local names | Booleans | Errors (e.g.) | Arguments / decimal | Array columns / rows | Table specifiers (e.g.) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| English | `SUM`, `IF`, `VLOOKUP` | — | `TRUE`, `FALSE` | `#VALUE!`, `#N/A` | `,` / `.` | `,` / `;` | `#Headers`, `#This Row` |
+| Español | `SUMA`, `SI`, `BUSCARV` | 10 | `VERDADERO`, `FALSO` | `#¡VALOR!`, `#N/D` | `;` / `,` | `\` / `;` | `#Encabezados`, `#Esta fila` |
+
+The Spanish function names:
 
 | Spanish | Canonical English |
 | --- | --- |
@@ -15,11 +23,20 @@ English and the other interface languages currently use the English formula tabl
 | `BUSCARV` | `VLOOKUP` |
 | `HOY` | `TODAY` |
 | `VERDADERO`, `FALSO` | `TRUE`, `FALSE` (literals or function calls) |
+| `#¡VALOR!`, `#N/D`, `#¿NOMBRE?`… | `#VALUE!`, `#N/A`, `#NAME?`… |
+| `[#Todo]`, `[#Datos]`, `[#Encabezados]`, `[#Totales]`, `[#Esta fila]` | `[#All]`, `[#Data]`, `[#Headers]`, `[#Totals]`, `[#This Row]` |
 
-Names are case-insensitive. Spanish formulas use decimal commas (`1,5`), semicolon arguments
-and reference unions, and backslashes between array columns (`{1\2;3\4}`). For example,
-`=SI(VERDADERO;SUMA(1,5;2,25);0)` evaluates to 3.75. English mode retains comma arguments,
-decimal points and comma array columns; it does not silently translate Spanish aliases.
+Names, booleans, errors and table specifiers are case-insensitive in any script. Spanish formulas
+use decimal commas (`1,5`), semicolon arguments and reference unions, and backslashes between
+array columns (`{1\2;3\4}`). For example, `=SI(VERDADERO;SUMA(1,5;2,25);0)` evaluates to 3.75.
+English mode retains comma arguments, decimal points and comma array columns; it does not
+silently translate Spanish aliases. English names, booleans and errors are accepted in Spanish
+too. A worksheet function passed by name (`BYROW(A1:B3;SUMA)`) is spelled like its call.
+
+A formula language is a data file, `crates/formula/src/input/<language>.rs`: its function names,
+booleans, errors, table specifiers and separators, each word with its source. Adding a language
+means adding that file and one `FormulaLocale` variant; the lexer, parser and printer read every
+language through the same table.
 
 The cell editor, formula bar, Show Formulas, autocomplete, the Formula ribbon, Insert Function, and argument hints
 use the selected formula language. Common Spanish function help is translated; functions
