@@ -642,6 +642,38 @@ fn references_keep_their_size_past_the_used_range() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // a native-only timing bound: the clock is read off wasm
+fn a_whole_row_stops_at_the_used_range_like_a_whole_column() {
+    let mut t = T::new();
+    for (i, col) in ["A", "B", "C"].iter().enumerate() {
+        let n = (i + 1) as f64;
+        t.set(&format!("{col}1"), &n.to_string());
+        t.set(&format!("{col}2"), &n.to_string());
+        t.set(&format!("{col}3"), &(n * 10.0).to_string());
+    }
+    // One whole row is exactly 16,384 cells; it is read up to the used range like `1:2` or `A:A`.
+    t.set("A10", "=COLUMNS(1:1*1)");
+    t.set("A11", "=COLUMNS(1:2*1)");
+    t.set("A12", "=SUM(1:1)");
+    assert_eq!(t.num("A10"), 3.0);
+    assert_eq!(t.num("A11"), 3.0);
+    assert_eq!(t.num("A12"), 6.0);
+    // A whole-row lookup value: one lookup per used column, not 16,384 lookups over 16,384 cells.
+    let start = std::time::Instant::now();
+    for r in 13..33 {
+        t.set(&format!("A{r}"), "=INDEX(XLOOKUP(1:1,2:2,3:3),1,2)");
+        assert_eq!(t.num(&format!("A{r}")), 20.0);
+    }
+    // The same inside a one-cell Ctrl+Shift+Enter formula, which shows the first result.
+    let mut fm = Formula::new("=IFERROR(XLOOKUP(1:1,2:2,3:3),0)");
+    fm.array = Some(gridcraft_core::RangeRef::cell(c("B40")));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("B40"), Cell::formula(fm));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("B40"))]);
+    assert_eq!(t.num("B40"), 10.0);
+    assert!(start.elapsed() < std::time::Duration::from_secs(20), "{:?}", start.elapsed());
+}
+
+#[test]
 fn spilled_blank_cells_show_zero() {
     let mut t = T::new();
     t.set("A1", "5");
