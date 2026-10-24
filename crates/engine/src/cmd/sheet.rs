@@ -334,7 +334,18 @@ fn delete_areas(s: &Session, p: &Json, axis: Axis) -> Result<Vec<(u32, u32)>> {
             })
             .collect::<Result<_>>()?
     } else {
-        s.doc()?.selection.ranges.iter().map(|r| if axis == Axis::Rows { (r.start.row, r.end.row) } else { (r.start.col, r.end.col) }).collect()
+        // A selection spanning filtered-out rows deletes only the rows still showing, as Excel does.
+        let sheet = target_sheet(s, p)?;
+        let doc = s.doc()?;
+        let mut spans = Vec::new();
+        for r in &doc.selection.ranges {
+            match (axis, doc.wb.sheet(sheet)) {
+                (Axis::Rows, Some(sh)) => spans.extend(visible_row_spans(sh, r.start.row.min(r.end.row), r.start.row.max(r.end.row))),
+                (Axis::Rows, None) => spans.push((r.start.row, r.end.row)),
+                (Axis::Cols, _) => spans.push((r.start.col, r.end.col)),
+            }
+        }
+        spans
     };
     let mut spans: Vec<(u32, u32)> = spans.into_iter().map(|(a, b)| (a.min(b), a.max(b))).collect();
     spans.sort_unstable();
@@ -346,6 +357,28 @@ fn delete_areas(s: &Session, p: &Json, axis: Axis) -> Result<Vec<(u32, u32)>> {
         }
     }
     Ok(merged.into_iter().rev().map(|(a, b)| (a, b - a + 1)).collect())
+}
+
+/// `r` split into the blocks of rows that a filter has not hidden (`r` itself when none is).
+pub(super) fn visible_row_ranges(sh: &Sheet, r: RangeRef) -> Vec<RangeRef> {
+    let (first, last) = (r.start.row.min(r.end.row), r.start.row.max(r.end.row));
+    visible_row_spans(sh, first, last).into_iter().map(|(a, b)| RangeRef::new(CellRef::new(a, r.start.col), CellRef::new(b, r.end.col))).collect()
+}
+
+/// `first..=last` split into the runs of rows that a filter has not hidden.
+fn visible_row_spans(sh: &Sheet, first: u32, last: u32) -> Vec<(u32, u32)> {
+    let mut spans = Vec::new();
+    let mut start = first;
+    for row in sh.rows.range(first..=last).map(|(r, _)| *r).filter(|r| sh.is_row_filtered(*r)) {
+        if row > start {
+            spans.push((start, row - 1));
+        }
+        start = row.saturating_add(1);
+    }
+    if start <= last {
+        spans.push((start, last));
+    }
+    spans
 }
 
 fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {

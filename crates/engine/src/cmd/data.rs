@@ -1554,6 +1554,68 @@ mod tests {
         assert_eq!(ok["hiddenRows"], json!(1));
     }
 
+    /// Rows 1..=6 hold a header and Name/Flag rows; the filter keeps only the rows flagged "X".
+    fn filtered_session() -> Session {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Flag"], ["a", "X"], ["b", ""], ["c", "X"], ["d", ""], ["e", "X"]]}))
+            .unwrap();
+        s.execute("data.filter", json!({"range": "A1:B6"})).unwrap();
+        s.execute("data.filterBy", json!({"column": 1, "values": ["X"]})).unwrap();
+        s
+    }
+
+    fn column_a(s: &Session) -> Vec<String> {
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        (0..8).map(|r| crate::display::cell_text(&s.doc().unwrap().wb, sh, CellRef::new(r, 0))).collect()
+    }
+
+    #[test]
+    fn deleting_the_selected_rows_of_a_filtered_range_leaves_the_hidden_rows() {
+        let mut s = filtered_session();
+        s.execute("selection.set", json!({"range": "A2:B6"})).unwrap();
+        s.execute("home.deleteRows", json!({})).unwrap();
+        assert_eq!(&column_a(&s)[..4], ["Name", "b", "d", ""]);
+    }
+
+    #[test]
+    fn pasting_a_copy_of_a_filtered_range_leaves_out_the_hidden_rows() {
+        let mut s = filtered_session();
+        s.execute("selection.set", json!({"range": "A1:A6"})).unwrap();
+        s.execute("edit.copy", json!({})).unwrap();
+        s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        let pasted: Vec<String> = (0..6).map(|r| crate::display::cell_text(&s.doc().unwrap().wb, sh, CellRef::new(r, 3))).collect();
+        assert_eq!(pasted, ["Name", "a", "c", "e", "", ""]);
+    }
+
+    #[test]
+    fn clearing_the_selection_of_a_filtered_range_leaves_the_hidden_rows() {
+        for cmd in ["edit.clearContents", "edit.clearAll"] {
+            let mut s = filtered_session();
+            s.execute("selection.set", json!({"range": "A2:B6"})).unwrap();
+            s.execute(cmd, json!({})).unwrap();
+            assert_eq!(&column_a(&s)[..6], ["Name", "", "b", "", "d", ""], "{cmd}");
+        }
+    }
+
+    #[test]
+    fn rows_hidden_by_hand_are_copied_and_deleted_like_any_other() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["a"], ["b"], ["c"]]})).unwrap();
+        s.execute("home.hideRows", json!({"rows": "3:3"})).unwrap();
+        s.execute("selection.set", json!({"range": "A1:A4"})).unwrap();
+        s.execute("edit.copy", json!({})).unwrap();
+        s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        let pasted: Vec<String> = (0..4).map(|r| crate::display::cell_text(&s.doc().unwrap().wb, sh, CellRef::new(r, 3))).collect();
+        assert_eq!(pasted, ["Name", "a", "b", "c"]);
+        s.execute("selection.set", json!({"range": "A2:A4"})).unwrap();
+        s.execute("home.deleteRows", json!({})).unwrap();
+        assert_eq!(&column_a(&s)[..2], ["Name", ""]);
+    }
+
     #[test]
     fn filter_by_inside_a_table_installs_the_autofilter_and_keeps_the_button() {
         for sel in [json!({"cell": "A1"}), json!({"cell": "A2"}), json!({"range": "A1:A3"})] {

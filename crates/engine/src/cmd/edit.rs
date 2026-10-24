@@ -999,7 +999,19 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let sel = s.doc()?.selection.current();
     let at = cell_param_on(s, p, "at", dest_sheet)?.unwrap_or(sel.start);
     let src = clip.range;
-    let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
+    // A copy leaves out the rows a filter hid at the time, so they are not pasted either. Rows hidden
+    // by hand or collapsed in a group are copied, as in Excel.
+    let all_rows: Vec<u32> = (src.start.row..=src.end.row).collect();
+    let src_rows: Vec<u32> = match clip.wb.sheet(clip.sheet) {
+        Some(sh) if !clip.cut => {
+            let shown: Vec<u32> = all_rows.iter().copied().filter(|r| !sh.is_row_filtered(*r)).collect();
+            if shown.is_empty() { all_rows } else { shown }
+        }
+        _ => all_rows,
+    };
+    let src_h = src_rows.len() as u32;
+    let rows_skipped = src_h != src.height();
+    let (h, w) = if transpose { (src.width(), src_h) } else { (src_h, src.width()) };
     // Tile the copy over a larger destination that is a multiple of its size.
     let tile = sel.height() % h == 0
         && sel.width() % w == 0
@@ -1048,9 +1060,9 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         }
         for tr in 0..tiles_r {
             for tc in 0..tiles_c {
-                for r in 0..src.height() {
+                for (r, &src_row) in (0u32..).zip(src_rows.iter()) {
                     for c in 0..src.width() {
-                        let sc = CellRef::new(src.start.row + r, src.start.col + c);
+                        let sc = CellRef::new(src_row, src.start.col + c);
                         let (dr, dc) = if transpose { (c, r) } else { (r, c) };
                         let Some(dest) = at.offset((tr * h + dr) as i64, (tc * w + dc) as i64) else { continue };
                         let src_cell = if cut_move {
@@ -1236,7 +1248,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         // Merged areas inside the copied block travel with it.
-        if matches!(what, What::All | What::Formats) && !transpose {
+        if matches!(what, What::All | What::Formats) && !transpose && !rows_skipped {
             let merges: Vec<RangeRef> = src_sheet.merges.iter().filter(|m| src.contains_range(m)).copied().collect();
             for m in merges {
                 let dr = at.row as i64 - src.start.row as i64;
@@ -1327,6 +1339,15 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
 fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
+    // Clearing the selection leaves the rows a filter hid untouched, as in Excel.
+    let ranges = if str_param(p, "range").or_else(|| str_param(p, "cell")).is_some() {
+        ranges
+    } else {
+        match s.doc()?.wb.sheet(sheet) {
+            Some(sh) => ranges.iter().flat_map(|r| super::sheet::visible_row_ranges(sh, *r)).collect(),
+            None => ranges,
+        }
+    };
     // Delete on checkboxes works in two passes (as in Excel): checked boxes are unchecked first,
     // and only when every box in the selection is unchecked are the boxes removed.
     let uncheck_only = what == "contents" && {
