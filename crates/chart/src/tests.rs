@@ -1098,6 +1098,38 @@ fn area_charts_draw_source_value_labels_only_when_enabled() {
 }
 
 #[test]
+fn drawing_and_resolving_agree_on_the_combo_plot_kind() {
+    // Resolved series carry `effective_kind`; drawing re-derives the kind from it. Both paths
+    // must give the same kind for every chart kind, series kind (or none) and series index.
+    let series_kinds = std::iter::once(None).chain(ALL_KINDS.iter().map(|k| Some(*k)));
+    for ck in ALL_KINDS {
+        for sk in series_kinds.clone() {
+            for i in 0..3 {
+                let mut c = chart(ck);
+                c.series = (0..3).map(|j| Series { kind: if j == i { sk } else { None }, ..Default::default() }).collect();
+                let from_chart = series_plot_kind(&c, i);
+                let resolved = crate::resolve::effective_kind(ck, sk, i);
+                assert_eq!(crate::resolve::plot_kind(ck, Some(resolved), i), from_chart, "{ck:?} {sk:?} {i}");
+                if ck != ChartKind::Combo {
+                    assert_eq!(from_chart, ck);
+                } else {
+                    assert_ne!(from_chart, ChartKind::Combo);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn ticks_of_a_scale_off_the_step_grid_start_at_its_min() {
+    let s = Scale { min: 3.0, max: 7.0, step: 4.0 };
+    assert_eq!(s.ticks(), vec![3.0, 7.0]);
+    // Aligned scales still snap float error away.
+    let s = Scale { min: 0.0, max: 1.0, step: 0.1 };
+    assert!((s.ticks()[3] - 0.3).abs() < 1e-12 && s.ticks()[0] == 0.0);
+}
+
+#[test]
 fn two_level_categories_resolve_and_draw() {
     let years = ["2023", "", "", "2024", "", ""];
     let months = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar"];
