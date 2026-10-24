@@ -103,6 +103,8 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         L if (cmd || ctrl) && s => run("data.filter"),
         L if cmd && mac => run("home.alignLeft"),
         L if ctrl && mac => Shortcut::Dialog("defineName", json!({})),
+        // Ctrl+Shift+U (Control+Shift+U in Excel for Mac) expands or collapses the formula bar.
+        U if ctrl && s => run("view.expandFormulaBar"),
         U if ctrl && mac && !s => Shortcut::Edit,
         L if cmd => run("insert.table"),
         E if cmd && mac && !s => run("home.alignCenter"),

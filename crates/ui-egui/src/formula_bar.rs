@@ -290,6 +290,10 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
                 state.store(ui.ctx(), id);
             }
         }
+        // Ctrl+Shift+U (Control+Shift+U on a Mac) expands or collapses the formula bar while editing too.
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::U)) {
+            app.run_or_alert("view.expandFormulaBar", json!({}));
+        }
     }
     // The text widget.
     let refs = formula_refs(&ed.text);
