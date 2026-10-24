@@ -923,6 +923,15 @@ fn status_bar_shows_macro_badge() {
 }
 
 #[test]
+fn status_bar_quotes_the_sheet_name_of_a_circular_reference() {
+    let mut s = blank();
+    s.execute("home.insertSheet", json!({"name": "Bob's Q1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=B2+1"})).unwrap();
+    let h = harness(s);
+    assert!(h.query_by_label("Circular References: 'Bob''s Q1'!B2").is_some(), "the status bar names the cell as a reference");
+}
+
+#[test]
 fn alt_f8_opens_the_macros_dialog() {
     let mut h = harness(blank());
     key(&mut h, Key::F8, Modifiers::ALT);
