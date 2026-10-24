@@ -6,7 +6,31 @@ Start the desktop app with a control port:
 gridcraft --control 7979            # or GRIDCRAFT_CONTROL_PORT=7979
 ```
 
-Then send newline-delimited JSON to `127.0.0.1:7979`. Every request line gets one reply line:
+## Authentication
+
+The control port is reachable by every program on the machine, and by a web page that POSTs
+`text/plain` to `127.0.0.1:7979`, so every connection must prove it knows the app's token
+(#777). **There is no way to turn this off.**
+
+- The app makes a token at start (256 random bits from the operating system, kept in memory) and
+  writes it to a file only you can read: `$XDG_RUNTIME_DIR/gridcraft/control-<port>.token` (else
+  `~/.cache/gridcraft/…`; Windows: `%USERPROFILE%\.gridcraft\…`; the folder is mode 0700 and the
+  file 0600 on Unix). The path is printed on stderr. The token itself is never printed or logged.
+- Or choose the token yourself: `GRIDCRAFT_CONTROL_TOKEN=…` (preferred) or `--control-token …`
+  (visible in the process list), at least 16 characters. The app then writes no file.
+- The first line of a connection must be
+  `{"id":0,"method":"auth","params":{"token":"…"}}`; the reply is
+  `{"id":0,"ok":true,"result":{"authenticated":true}}`. Any other first line (a wrong or missing
+  token, another method, text that isn't JSON such as an HTTP request, no line within 10 s, or
+  one longer than 4 KiB) gets `{"ok":false,"error":"authentication required"}` and the
+  connection is closed. After that, a line that isn't JSON also closes the connection.
+- `gridcraft-cli send`/`mcp --connect` and `gridcraft_mcp::Remote` do this themselves: they use
+  `GRIDCRAFT_CONTROL_TOKEN` if set, else the token file of that port (so they work for the same
+  user on the same machine without setup). Your own client reads the file or the variable.
+
+## Requests
+
+Then send newline-delimited JSON to `127.0.0.1:7979` (after the `auth` line). Every request line gets one reply line:
 
 ```json
 {"id": 1, "method": "engine.execute", "params": {"command": "cell.set", "params": {"cell": "B2", "input": "=SUM(A1:A9)"}}}
