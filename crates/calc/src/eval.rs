@@ -1422,7 +1422,9 @@ impl<'h> Evaluator<'h> {
                     _ => "v",
                 }))
             }
-            "width" => Ev::V(Value::number(sheet.map_or(8.43, |s| gridcraft_model::points_to_chars(s.col_width(c.col) as f64)).round())),
+            "width" => {
+                Ev::V(Value::number(sheet.map_or(8.43, |s| gridcraft_model::points_to_chars(s.col_width(c.col) as f64, wb.digit_width())).round()))
+            }
             // Excel's `<folder>/[<file>]<sheet>`, which the classic sheet-name formula splits on
             // the `]`. Empty until the workbook has a file of its own, as in Excel (#1489).
             "filename" => Ev::V(Value::text(match &wb.source_path {

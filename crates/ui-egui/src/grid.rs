@@ -2500,8 +2500,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             Drag::ResizeCol { col, start, orig } => {
                 let w = (orig + (p.x - start) / geo.z).max(0.0);
-                app.toast =
-                    Some((format!("Width: {:.2} ({} pixels)", gridcraft_engine::cmd::format::points_to_chars(w as f64), w.round()), crate::now_ms()));
+                app.toast = Some((
+                    format!("Width: {:.2} ({} pixels)", gridcraft_engine::cmd::format::points_to_chars(w as f64, wb.digit_width()), w.round()),
+                    crate::now_ms(),
+                ));
                 // Inside a selection of whole columns, every selected column takes the new width
                 // (Ctrl-selected areas included); otherwise only the dragged one.
                 let cols = if sel.ranges.iter().any(|r| r.is_full_cols() && col >= r.start.col && col <= r.end.col) {

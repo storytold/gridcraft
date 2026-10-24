@@ -1055,8 +1055,10 @@ fn row_height(s: &mut Session, p: &Json) -> Result<Json> {
 fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
     let w = match (f64_param(p, "width"), f64_param(p, "chars")) {
         (Some(w), _) => {
-            if !(0.0..=1800.0).contains(&w) {
-                return Err(EngineError::Other("Column width must be between 0 and 1800 pixels.".into()));
+            // 255 characters of the Normal font, and never less than the 1800 px allowed so far.
+            let most = f64::from(gridcraft_model::widest_col_width(s.doc()?.wb.digit_width())).max(1800.0);
+            if !(0.0..=most).contains(&w) {
+                return Err(EngineError::Other(format!("Column width must be between 0 and {most} pixels.")));
             }
             w
         }
@@ -1064,7 +1066,7 @@ fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
             if !(0.0..=255.0).contains(&c) {
                 return Err(EngineError::Other("Column width must be between 0 and 255 characters.".into()));
             }
-            chars_to_points(c)
+            chars_to_points(c, s.doc()?.wb.digit_width())
         }
         _ => return Err(bad("home.columnWidth", "missing `width` (pixels) or `chars`")),
     };
@@ -1082,18 +1084,7 @@ fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Excel column width in characters (of the default font's digit width, 7 px) → pixels.
-pub fn chars_to_points(c: f64) -> f64 {
-    if c <= 0.0 {
-        0.0
-    } else if c < 1.0 {
-        (c * 12.0).round()
-    } else {
-        (c * 7.0 + 5.0).round()
-    }
-}
-
-pub use gridcraft_model::points_to_chars;
+pub use gridcraft_model::{chars_to_points, points_to_chars};
 
 /// Approximate text width in points for autofit (no font metrics in the engine: average glyph
 /// widths for the default font; a front end with fonts measures instead, see `Session::text_width`).
@@ -1122,6 +1113,8 @@ fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
     let measure = s.text_width.clone();
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(si) else { return Ok(Json::Null) };
+        // At most 255 characters of the Normal font, the widest a file can store.
+        let widest = gridcraft_model::widest_col_width(cx.wb.digit_width());
         let mut widths = Vec::new();
         let mut measured: std::collections::HashMap<StyleId, std::collections::HashMap<String, f32>> = Default::default();
         let mut distinct = 0usize;
@@ -1158,7 +1151,7 @@ fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
                     }
                 }
                 if max > 0.0 {
-                    widths.push((c, max.clamp(8.0, 1785.0)));
+                    widths.push((c, max.clamp(8.0, widest)));
                 }
             }
         }
@@ -1274,9 +1267,40 @@ mod tests {
         assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["num_fmt"], "0.00");
     }
 
+    /// The widest column follows the Normal font: 2040 px (255 characters) in a Calibri 12
+    /// workbook, both for Column Width in pixels and for AutoFit.
+    #[test]
+    fn the_widest_column_follows_the_normal_font() {
+        let session = |size: f32| {
+            let mut s = crate::Session::new();
+            s.new_workbook();
+            let d = s.doc_mut().unwrap();
+            let font = gridcraft_model::Font { size, ..Default::default() };
+            std::sync::Arc::make_mut(&mut d.wb).styles =
+                gridcraft_model::StyleTable::with_default(gridcraft_model::Style { font, ..Default::default() });
+            s
+        };
+        let mut s = session(12.0);
+        assert!(s.execute("home.columnWidth", json!({"cols": "A:A", "width": 2040})).is_ok());
+        assert!(s.execute("home.columnWidth", json!({"cols": "A:A", "width": 2041})).is_err());
+        s.execute("cell.set", json!({"cell": "B1", "input": "x".repeat(4000)})).unwrap();
+        s.execute("home.autofitColumnWidth", json!({"cols": "B:B"})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().col_width(1), 2040.0);
+        // Calibri 11 keeps the limits it had: 1800 px typed, 1785 px from AutoFit.
+        let mut s = session(11.0);
+        assert!(s.execute("home.columnWidth", json!({"cols": "A:A", "width": 1800})).is_ok());
+        assert!(s.execute("home.columnWidth", json!({"cols": "A:A", "width": 1801})).is_err());
+        s.execute("cell.set", json!({"cell": "B1", "input": "x".repeat(4000)})).unwrap();
+        s.execute("home.autofitColumnWidth", json!({"cols": "B:B"})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().col_width(1), 1785.0);
+    }
+
     #[test]
     fn width_units() {
-        assert_eq!(chars_to_points(8.43), 64.0);
-        assert!((points_to_chars(64.0) - 8.43).abs() < 0.01);
+        assert_eq!(chars_to_points(8.43, 7.0), 64.0);
+        assert!((points_to_chars(64.0, 7.0) - 8.43).abs() < 0.01);
+        // A Calibri 12 workbook counts 8 px digits.
+        assert_eq!(chars_to_points(8.43, 8.0), 72.0);
+        assert!((points_to_chars(72.0, 8.0) - 8.38).abs() < 0.01);
     }
 }

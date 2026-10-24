@@ -125,10 +125,61 @@ fn yes() -> bool {
 pub const DEFAULT_COL_WIDTH: f32 = 64.0;
 pub const DEFAULT_ROW_HEIGHT: f32 = 20.0;
 
-/// Column width (points) → characters of the default font's digit width (7 px), without the
-/// cell padding: the value the Column Width dialog shows.
-pub fn points_to_chars(px: f64) -> f64 {
-    if px <= 12.0 { (px / 12.0 * 100.0).round() / 100.0 } else { ((px - 5.0) / 7.0 * 100.0 + 0.5).trunc() / 100.0 }
+/// Width of a digit in the default font (Calibri 11) in 96-dpi pixels: the unit of column widths.
+pub const DEFAULT_DIGIT_WIDTH: f64 = 7.0;
+
+/// Width of a digit of `font` in 96-dpi pixels, rounded as on screen: the unit Excel measures
+/// column widths in, taken from the workbook's Normal font. Calibri 11 gives 7, Calibri 12 gives
+/// 8, Arial 10 gives 7. Digit advances (as a share of the em) are the fonts' published metrics;
+/// other fonts are measured like Calibri.
+pub fn digit_width(font: &crate::style::Font) -> f64 {
+    let name = font.name.trim().to_ascii_lowercase();
+    let em_share = match name.as_str() {
+        "arial" | "helvetica" | "liberation sans" | "arimo" => 0.5562,
+        "times new roman" | "times" | "liberation serif" | "tinos" => 0.5,
+        "courier new" | "courier" | "liberation mono" | "cousine" => 0.6001,
+        "verdana" => 0.6362,
+        "tahoma" => 0.5464,
+        _ => 0.5068,
+    };
+    let size = if font.size.is_finite() && font.size > 0.0 { f64::from(font.size).min(409.0) } else { 11.0 };
+    (size * 96.0 / 72.0 * em_share).round().clamp(1.0, 64.0)
+}
+
+/// Column width (points) → characters of the digit width `dw` (see [`digit_width`]), without
+/// the cell padding: the value the Column Width dialog shows.
+pub fn points_to_chars(px: f64, dw: f64) -> f64 {
+    let dw = if dw.is_finite() && dw >= 1.0 { dw } else { DEFAULT_DIGIT_WIDTH };
+    let one = dw + 5.0;
+    if px <= one { (px / one * 100.0).round() / 100.0 } else { ((px - 5.0) / dw * 100.0 + 0.5).trunc() / 100.0 }
+}
+
+/// Characters of the digit width `dw` → column width (points): the inverse of
+/// [`points_to_chars`].
+pub fn chars_to_points(c: f64, dw: f64) -> f64 {
+    let dw = if dw.is_finite() && dw >= 1.0 { dw } else { DEFAULT_DIGIT_WIDTH };
+    if c.is_nan() || c <= 0.0 {
+        0.0
+    } else if c < 1.0 {
+        (c * (dw + 5.0)).round()
+    } else {
+        (c * dw + 5.0).round()
+    }
+}
+
+/// Default column width (points) of a sheet without one: `baseColWidth` 8 characters plus
+/// padding, rounded up to 8 px. 64 for a 7 px digit, 72 for 8 px.
+pub fn base_col_width(chars: f64, dw: f64) -> f32 {
+    let dw = if dw.is_finite() && dw >= 1.0 { dw } else { DEFAULT_DIGIT_WIDTH };
+    // No wider than a file can store.
+    (((chars.clamp(0.0, 255.0) * dw + 5.0) / 8.0).ceil() * 8.0).min(f64::from(widest_col_width(dw))) as f32
+}
+
+/// The widest column a file can store (points): 255 characters of the digit width `dw`, by
+/// Excel's stored-width formula. 1785 for a 7 px digit, 2040 for 8 px.
+pub fn widest_col_width(dw: f64) -> f32 {
+    let dw = if dw.is_finite() && dw >= 1.0 { dw } else { DEFAULT_DIGIT_WIDTH };
+    (((256.0 * 255.0 + (128.0 / dw).trunc()) / 256.0) * dw).trunc() as f32
 }
 
 impl Sheet {

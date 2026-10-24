@@ -164,14 +164,15 @@ impl Dialog {
                 "Column Width",
                 "home.columnWidth",
                 vec![Number { key: "chars", label: "Column width (characters):" }],
-                json!({"chars": app.session.active().and_then(|d| d.wb.active().map(|s| gridcraft_engine::cmd::format::points_to_chars(s.col_width(d.selection.active.col) as f64))).unwrap_or(8.43)}),
+                json!({"chars": app.session.active().and_then(|d| d.wb.active().map(|s| gridcraft_engine::cmd::format::points_to_chars(s.col_width(d.selection.active.col) as f64, d.wb.digit_width()))).unwrap_or(8.43)}),
             ),
             "defaultWidth" => Dialog::form(
                 "defaultWidth",
                 "Standard Width",
                 "home.defaultWidth",
                 vec![Number { key: "width", label: "Standard column width (pixels):" }],
-                json!({"width": 64}),
+                // The sheet's own default: 72 px in a Calibri 12 workbook, not always 64.
+                json!({"width": app.session.active().and_then(|d| d.wb.active().map(|s| s.default_col_width)).unwrap_or(64.0)}),
             ),
             "renameSheet" => Dialog::form(
                 "renameSheet",

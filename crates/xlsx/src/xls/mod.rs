@@ -697,7 +697,8 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
                 return Ok(());
             }
             let mut info = LineInfo::default();
-            let px = col_width_to_px(f64::from(width) / 256.0);
+            // Fonts aren't read from .xls files, so the Normal font is the default (7 px digits).
+            let px = col_width_to_px(f64::from(width) / 256.0, gridcraft_model::DEFAULT_DIGIT_WIDTH);
             if flags & 0x0002 != 0 || px != st.sheet.default_col_width {
                 info.size = Some(px);
             }

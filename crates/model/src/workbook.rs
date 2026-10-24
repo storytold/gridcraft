@@ -206,6 +206,12 @@ impl Default for Workbook {
 }
 
 impl Workbook {
+    /// Width of a digit of the Normal style's font in pixels: the unit of column widths in
+    /// characters (see [`crate::digit_width`]).
+    pub fn digit_width(&self) -> f64 {
+        crate::digit_width(&self.styles.get(crate::StyleId::DEFAULT).font)
+    }
+
     /// A new workbook with one sheet, "Sheet1".
     pub fn new() -> Workbook {
         Workbook {
