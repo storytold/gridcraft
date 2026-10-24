@@ -471,7 +471,7 @@ fn run_props(f: &ShapeFormat, theme: &Theme) -> (String, String) {
         let _ = write!(body, "<a:solidFill>{c}</a:solidFill>");
     }
     if let Some(font) = &f.font {
-        let _ = write!(body, "<a:latin typeface=\"{}\"/>", esc(font));
+        let _ = write!(body, "<a:latin typeface=\"{}\"/>", esc_attr(font));
     }
     (attrs, body)
 }
