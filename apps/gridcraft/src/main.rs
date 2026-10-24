@@ -17,6 +17,8 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod print;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod x11_scale;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -230,6 +232,14 @@ fn icon() -> Option<egui::IconData> {
 }
 
 fn main() -> eframe::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("GridCraft {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    // Apply before logging and session setup; a successful re-exec must not repeat side effects.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    x11_scale::apply();
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     // Commands catch their panics (`Session::execute`), but the default hook only prints to
@@ -250,11 +260,6 @@ fn main() -> eframe::Result<()> {
             let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("gridcraft: {report}\n"));
         }
     }));
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("GridCraft {}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
-    }
     let mut control_port: Option<u16> = std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut sample: Option<String> = None;
     let mut files: Vec<String> = Vec::new();
