@@ -701,9 +701,16 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // Keep the active cell (or the moving end of an extension) visible after keyboard moves.
     if app.grid.ensure_visible {
         app.grid.ensure_visible = false;
-        let cell = if std::mem::take(&mut app.grid.reveal_moving_end) { sel.moving_end() } else { sel.active };
+        let moving = std::mem::take(&mut app.grid.reveal_moving_end);
+        let cell = if moving { sel.moving_end() } else { sel.active };
         let from = app.grid.reveal_from.take();
         let target = app.editor.as_ref().and_then(|e| e.point_cell).unwrap_or(cell);
+        // A whole column's moving end sits on the sheet's last row (a whole row's on its last
+        // column): when an extension moves it only across, the view keeps its place the other way.
+        // An extension that reaches the last row itself (Ctrl+Shift+Down past the data) still
+        // follows it.
+        let extended = (moving && target == cell).then(|| sel.current());
+        let before = view.scroll;
         if paper {
             crate::paper_view::ensure_covers(app, &wb, si, target);
             geo = make_geo(app, view.scroll);
@@ -730,6 +737,12 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             }
         } else if from.is_some_and(|f| f.col >= geo.fc) {
             view.scroll.x = 0.0;
+        }
+        if extended.is_some_and(|r| r.is_full_cols()) && from.is_some_and(|f| f.row == cell.row) {
+            view.scroll.y = before.y;
+        }
+        if extended.is_some_and(|r| r.is_full_rows()) && from.is_some_and(|f| f.col == cell.col) {
+            view.scroll.x = before.x;
         }
         view.scroll = view.scroll.max(egui::Vec2::ZERO);
         geo = make_geo(app, view.scroll);
