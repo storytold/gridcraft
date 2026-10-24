@@ -1009,7 +1009,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Underline (⌘U)" => "Sottolineato (⌘U)",
         "AutoSum (⌘⇧T)" => "Somma automatica (⌘⇧T)",
         "Filter (⌘⇧F)" => "Filtro (⌘⇧F)",
-        "Flash Fill (⌘E)" => "Riempimento veloce (⌘E)",
+        "Flash Fill (⌘E)" => "Anteprima suggerimenti (⌘E)",
         "Insert Link (⌘K)" => "Inserisci collegamento (⌘K)",
         "Paste (⌘V)" => "Incolla (⌘V)",
         "Redo (⌘Y)" => "Ripeti (⌘Y)",
