@@ -707,11 +707,17 @@ fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
             }
             "iconSet" => {
                 let Some(is) = r.child("iconSet") else { continue };
+                // `gte="0"` on a cfvo: its icon starts above the value (`>`) rather than at it.
+                let mut greater: Vec<bool> = is.kids("cfvo").map(|c| !c.flag("gte", true)).collect();
+                if !greater.contains(&true) {
+                    greater.clear();
+                }
                 CfRule::IconSet {
                     set: is.attr("iconSet").unwrap_or("3TrafficLights1").to_string(),
                     thresholds: cfvos(is),
                     reverse: is.flag("reverse", false),
                     show_value: is.flag("showValue", true),
+                    greater,
                 }
             }
             other => {

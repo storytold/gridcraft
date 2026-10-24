@@ -3863,11 +3863,42 @@ fn icon_set_thresholds_from_files_pick_the_icon() {
             thresholds: vec![CfValueKind::Percent(0.0), CfValueKind::Number(10.0), CfValueKind::Number(25.0)],
             reverse: false,
             show_value: true,
+            greater: vec![],
         },
         priority: 1,
         stop_if_true: false,
     }];
     assert_eq!([icon(&s, "A1"), icon(&s, "A2"), icon(&s, "A3"), icon(&s, "A4")], [Some(0), Some(1), Some(1), Some(2)]);
+}
+
+/// A threshold set to ">" in Excel (`gte="0"`) gives a value exactly on it the lower icon; the
+/// others stay ">=". Values and icons as measured in Excel on #1160 (0 red, 1 yellow, 2 green).
+#[test]
+fn icon_set_thresholds_set_to_greater_than_leave_the_value_on_them_below() {
+    use gridcraft_model::{CfRule, CfValueKind, CondFormat};
+    let mut s = s();
+    let values: Vec<Vec<i32>> = (0..=10).map(|v| vec![v]).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+    let mut icons = |thresholds: Vec<CfValueKind>, greater: Vec<bool>| {
+        let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.cond_formats = vec![CondFormat {
+            ranges: vec![gridcraft_core::RangeRef::parse("A1:A11").unwrap()],
+            rule: CfRule::IconSet { set: "3TrafficLights1".into(), thresholds, reverse: false, show_value: true, greater },
+            priority: 1,
+            stop_if_true: false,
+        }];
+        let wb = &s.doc().unwrap().wb;
+        // The values 3, 4, 6 and 7 sit in A4, A5, A7 and A8.
+        ["A4", "A5", "A7", "A8"].map(|a| crate::cf::CfCache::new().look(wb, 0, CellRef::parse(a).unwrap()).and_then(|l| l.icon).map(|(_, i)| i))
+    };
+    let num = |a: f64, b: f64| vec![CfValueKind::Percent(0.0), CfValueKind::Number(a), CfValueKind::Number(b)];
+    assert_eq!(icons(num(3.0, 6.0), vec![]), [Some(1), Some(1), Some(2), Some(2)]);
+    assert_eq!(icons(num(3.0, 6.0), vec![false, true, true]), [Some(0), Some(1), Some(1), Some(2)]);
+    let pct = vec![CfValueKind::Percent(0.0), CfValueKind::Percent(30.0), CfValueKind::Percent(70.0)];
+    assert_eq!(icons(pct, vec![false, true, true]), [Some(0), Some(1), Some(1), Some(1)]);
+    // Without the lower bound the flags line up with the cuts themselves; a short list is ">=".
+    assert_eq!(icons(vec![CfValueKind::Number(3.0), CfValueKind::Number(6.0)], vec![true, true]), [Some(0), Some(1), Some(1), Some(2)]);
+    assert_eq!(icons(num(3.0, 6.0), vec![false, true]), [Some(0), Some(1), Some(2), Some(2)]);
 }
 
 /// `home.conditionalFormat` styles take colours the way the other formatting commands do, refuse

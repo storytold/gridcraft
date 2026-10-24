@@ -158,6 +158,7 @@ fn sample() -> Workbook {
             thresholds: vec![CfValueKind::Percent(0.0), CfValueKind::Percent(33.0), CfValueKind::Percent(67.0)],
             reverse: true,
             show_value: false,
+            greater: vec![],
         },
     ];
     for (i, rule) in cfs.into_iter().enumerate() {
@@ -945,7 +946,7 @@ fn icon_sets_always_write_one_cfvo_per_icon() {
     {
         s.cond_formats.push(CondFormat {
             ranges: vec![rr(&format!("A{}", i + 1))],
-            rule: CfRule::IconSet { set: set.into(), thresholds, reverse: false, show_value: true },
+            rule: CfRule::IconSet { set: set.into(), thresholds, reverse: false, show_value: true, greater: vec![] },
             priority: i as u32 + 1,
             stop_if_true: false,
         });
@@ -975,6 +976,49 @@ fn icon_sets_always_write_one_cfvo_per_icon() {
         })
         .collect();
     assert_eq!(rules, [3, 4, 5]);
+}
+
+/// An icon threshold set to ">" is `gte="0"` on its cfvo (#1160): written on the right one, also
+/// when the default lower bound is put in front, and read back as it was.
+#[test]
+fn icon_set_greater_than_thresholds_round_trip_as_gte() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    let full = vec![CfValueKind::Percent(0.0), CfValueKind::Number(3.0), CfValueKind::Number(6.0)];
+    for (i, (thresholds, greater)) in
+        [(full.clone(), vec![false, true, true]), (full[1..].to_vec(), vec![false, true]), (full, vec![])].into_iter().enumerate()
+    {
+        s.cond_formats.push(CondFormat {
+            ranges: vec![rr(&format!("A{}", i + 1))],
+            rule: CfRule::IconSet { set: "3TrafficLights1".into(), thresholds, reverse: false, show_value: true, greater },
+            priority: i as u32 + 1,
+            stop_if_true: false,
+        });
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    let lights = |cfvos: &str| format!("<iconSet iconSet=\"3TrafficLights1\">{cfvos}</iconSet>");
+    assert!(
+        xml.contains(&lights("<cfvo type=\"percent\" val=\"0\"/><cfvo type=\"num\" val=\"3\" gte=\"0\"/><cfvo type=\"num\" val=\"6\" gte=\"0\"/>")),
+        "{xml}"
+    );
+    assert!(
+        xml.contains(&lights("<cfvo type=\"percent\" val=\"0\"/><cfvo type=\"num\" val=\"3\"/><cfvo type=\"num\" val=\"6\" gte=\"0\"/>")),
+        "{xml}"
+    );
+    assert!(xml.contains(&lights("<cfvo type=\"percent\" val=\"0\"/><cfvo type=\"num\" val=\"3\"/><cfvo type=\"num\" val=\"6\"/>")), "{xml}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let flags: Vec<Vec<bool>> = back
+        .sheet(0)
+        .unwrap()
+        .cond_formats
+        .iter()
+        .map(|cf| match &cf.rule {
+            CfRule::IconSet { greater, .. } => greater.clone(),
+            _ => vec![],
+        })
+        .collect();
+    assert_eq!(flags, [vec![false, true, true], vec![false, false, true], vec![]]);
 }
 
 /// Files have no `@` operator: Excel writes `@x` as `_xlfn.SINGLE(x)` in a dynamic-array

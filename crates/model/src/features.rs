@@ -221,6 +221,10 @@ pub enum CfRule {
         thresholds: Vec<CfValueKind>,
         reverse: bool,
         show_value: bool,
+        /// At the index of each threshold: `true` where the icon starts above the value (`>`, a
+        /// `cfvo` with `gte="0"`) instead of at it (`>=`). Empty when every threshold is `>=`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        greater: Vec<bool>,
     },
 }
 

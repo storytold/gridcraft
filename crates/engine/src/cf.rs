@@ -302,22 +302,23 @@ impl CfCache {
                     }
                     None
                 }
-                CfRule::IconSet { set, thresholds, reverse, show_value } => {
+                CfRule::IconSet { set, thresholds, reverse, show_value, greater } => {
                     if let Some(n) = v.as_f64() {
                         let k = icon_count(set);
                         // One threshold per icon, the first being the lower bound (as in the file);
-                        // also accept the lower bound left out, else Excel's defaults.
+                        // also accept the lower bound left out, else Excel's defaults (all `>=`).
                         let defaults;
-                        let lower = match thresholds.len() {
-                            n if n == k => thresholds.get(1..).unwrap_or_default(),
-                            n if n + 1 == k => thresholds.as_slice(),
+                        let (lower, above) = match thresholds.len() {
+                            n if n == k => (thresholds.get(1..).unwrap_or_default(), greater.get(1..).unwrap_or_default()),
+                            n if n + 1 == k => (thresholds.as_slice(), greater.as_slice()),
                             _ => {
                                 defaults = default_icon_thresholds(set);
-                                defaults.get(1..).unwrap_or_default()
+                                (defaults.get(1..).unwrap_or_default(), &[][..])
                             }
                         };
                         let cuts: Vec<f64> = lower.iter().map(|t| threshold(wb, sheet, c, st, t)).collect();
-                        let mut idx = cuts.iter().filter(|cut| n >= **cut).count();
+                        let mut idx =
+                            cuts.iter().enumerate().filter(|&(i, cut)| if above.get(i) == Some(&true) { n > *cut } else { n >= *cut }).count();
                         if *reverse {
                             idx = k - 1 - idx.min(k - 1);
                         }

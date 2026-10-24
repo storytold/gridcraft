@@ -903,7 +903,7 @@ fn cf_rule_xml(cf: &CondFormat, priority: u32, out: &mut Out) -> String {
             if *color == Color::Auto { "rgb=\"FF638EC6\"".to_string() } else { color_attrs(color) },
             if *gradient { String::new() } else { solid_bar_ext(priority) }
         ),
-        CfRule::IconSet { set, thresholds, reverse, show_value } => {
+        CfRule::IconSet { set, thresholds, reverse, show_value, greater } => {
             let mut b = format!("<iconSet iconSet=\"{}\"", esc_attr(set));
             if *reverse {
                 b.push_str(" reverse=\"1\"");
@@ -915,13 +915,22 @@ fn cf_rule_xml(cf: &CondFormat, priority: u32, out: &mut Out) -> String {
             // CT_IconSet needs one cfvo per icon (minOccurs 2); the first is the lower bound.
             let k = icon_count(set);
             let defaults = default_icon_thresholds(set);
-            let cfvos: Vec<&CfValueKind> = match thresholds.len() {
-                n if n == k => thresholds.iter().collect(),
-                n if n + 1 == k => defaults.iter().take(1).chain(thresholds).collect(),
-                _ => defaults.iter().collect(),
+            // `greater` follows `thresholds`; the default lower bound put in front is never `>`.
+            let (cfvos, above): (Vec<&CfValueKind>, Vec<bool>) = match thresholds.len() {
+                n if n == k => (thresholds.iter().collect(), greater.clone()),
+                n if n + 1 == k => {
+                    (defaults.iter().take(1).chain(thresholds).collect(), std::iter::once(false).chain(greater.iter().copied()).collect())
+                }
+                _ => (defaults.iter().collect(), Vec::new()),
             };
-            for t in cfvos {
-                b.push_str(&cfvo_xml(t));
+            for (i, t) in cfvos.into_iter().enumerate() {
+                let x = cfvo_xml(t);
+                match x.strip_suffix("/>") {
+                    Some(open) if above.get(i) == Some(&true) => {
+                        let _ = write!(b, "{open} gte=\"0\"/>");
+                    }
+                    _ => b.push_str(&x),
+                }
             }
             b.push_str("</iconSet>");
             format!("<cfRule type=\"iconSet\" priority=\"{priority}\"{stop}>{b}</cfRule>")
