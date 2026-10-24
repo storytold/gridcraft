@@ -8,12 +8,44 @@ use crate::DocState;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
-        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook and {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
-        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
-        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
-        cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
+        cmd!(
+            noundo "file.open",
+            "Open…",
+            ["File"],
+            Some("Cmd+O"),
+            "{path} | {name, base64}, plus {password} for a password-protected workbook, {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion, and {encoding} for a CSV/TSV (auto, utf-8, utf-8-bom, shift_jis/cp932, windows-1252: xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)",
+            always,
+            open
+        ),
+        cmd!(
+            noundo "file.save",
+            "Save",
+            ["File"],
+            Some("Cmd+S"),
+            "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension), {encoding?} for a CSV/TSV save (default: the encoding it was opened with, else UTF-8 without a BOM)",
+            has_doc,
+            save
+        ),
+        cmd!(
+            noundo "file.saveAs",
+            "Save As…",
+            ["File"],
+            Some("Cmd+Shift+S"),
+            "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet), {encoding?} for a CSV/TSV save",
+            has_doc,
+            save_as
+        ),
+        cmd!(
+            query "file.saveBytes",
+            "Encode Workbook",
+            [],
+            None,
+            "{format?: xlsx|csv|tsv|json|html, encoding? for csv/tsv} → {base64}",
+            has_doc,
+            save_bytes
+        ),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool}", has_doc, close),
-        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?}", has_doc, |s, p| export(s, p, "csv")),
+        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, encoding?}", has_doc, |s, p| export(s, p, "csv")),
         cmd!(noundo "file.exportHtml", "Save as Web Page", ["File", "Export"], None, "{path}", has_doc, |s, p| export(s, p, "html")),
         cmd!("file.properties", "Properties", ["File"], None, "{title?, subject?, author?, company?, keywords?, description?}", has_doc, properties),
         cmd!(
@@ -41,6 +73,16 @@ fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"index": i, "title": s.doc()?.display_title()}))
 }
 
+/// The `encoding` parameter of the file commands: the code page a CSV/TSV is read or written in.
+/// `None` = not given (opening detects it; saving writes the encoding the workbook was opened
+/// with). An unknown spelling is an error, never a silent fallback to UTF-8.
+fn csv_encoding_param(cmd: &str, p: &Json) -> Result<Option<gridcraft_model::CsvEncoding>> {
+    match str_param(p, "encoding") {
+        None => Ok(None),
+        Some(s) => s.parse().map(Some).map_err(|e: String| bad(cmd, e)),
+    }
+}
+
 fn open(s: &mut Session, p: &Json) -> Result<Json> {
     let (name, bytes) = if let Some(b) = str_param(p, "base64") {
         (str_param(p, "name").unwrap_or("Book.xlsx").to_string(), crate::io::base64_decode(b).ok_or_else(|| bad("file.open", "invalid base64"))?)
@@ -56,7 +98,9 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         return ok();
     };
     let encrypted = gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Encrypted;
-    let (mut wb, warnings) = crate::io::open_bytes_with(&name, &bytes, str_param(p, "password"), bool_param(p, "csvAsText").unwrap_or(false))?;
+    let encoding = csv_encoding_param("file.open", p)?.unwrap_or_default();
+    let csv_as_text = bool_param(p, "csvAsText").unwrap_or(false);
+    let (mut wb, warnings) = crate::io::open_bytes_with_encoding(&name, &bytes, str_param(p, "password"), csv_as_text, encoding)?;
     wb.source_dir = str_param(p, "path").and_then(crate::io::source_dir);
     // What `CELL("filename")` reports (#1489). A workbook opened from bytes knows its name but
     // never a folder, so it reports `[name]Sheet` with none; an import reports the file it came
@@ -122,9 +166,11 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     let kind = crate::io::FileKind::from_path(&path).or(d.content_kind.filter(|_| d.path.as_deref() == Some(path.as_str())));
     let rebased = crate::io::source_dir(&path).and_then(|f| gridcraft_xlsx::rebase_links(&d.wb, &f));
     let wb = rebased.as_ref().unwrap_or(&d.wb);
+    // `encoding` is this write's code page; without it a CSV keeps the one it was opened with.
+    let encoding = csv_encoding_param("file.save", p)?;
     let bytes = match kind {
-        Some(kind) => crate::io::save_bytes_as(wb, &path, kind)?,
-        None => crate::io::save_bytes(wb, &path)?,
+        Some(kind) => crate::io::save_bytes_as_encoded(wb, &path, kind, encoding)?,
+        None => crate::io::save_bytes_encoded(wb, &path, encoding)?,
     };
     crate::io::write_file(&path, &bytes)?;
     // Only a full-fidelity format clears the dirty flag and becomes the document's file.
@@ -152,10 +198,11 @@ fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let fmt = str_param(p, "format").unwrap_or("xlsx");
+    let encoding = csv_encoding_param("file.saveBytes", p)?;
     let d = s.doc()?;
     let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
     // The file name goes into a PivotChart's link to its PivotTable.
-    let bytes = crate::io::save_bytes(&d.wb, &name)?;
+    let bytes = crate::io::save_bytes_encoded(&d.wb, &name, encoding)?;
     Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len()}))
 }
 
@@ -173,13 +220,16 @@ fn close(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
     let path = str_param(p, "path").ok_or_else(|| bad("file.export", "missing `path`"))?.to_string();
+    // Only a CSV export takes an encoding; an explicit one applies to this file, and without it
+    // the export keeps the encoding the workbook was opened with.
+    let encoding = if ext == "csv" { csv_encoding_param("file.exportCsv", p)? } else { None };
     let d = s.doc()?;
     let mut wb = (*d.wb).clone();
     if p.get("sheet").is_some() {
         wb.active_sheet = target_sheet(s, p)?;
     }
     let target = if path.ends_with(&format!(".{ext}")) { path.clone() } else { format!("{path}.{ext}") };
-    let bytes = crate::io::save_bytes(&wb, &target)?;
+    let bytes = crate::io::save_bytes_encoded(&wb, &target, encoding)?;
     crate::io::write_file(&target, &bytes)?;
     Ok(json!({"path": target, "bytes": bytes.len()}))
 }

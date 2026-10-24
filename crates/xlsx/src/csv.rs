@@ -4,12 +4,16 @@ use std::sync::Arc;
 
 use gridcraft_core::parse::parse_input;
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, Value};
-use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
+use gridcraft_model::{Cell, CsvEncoding, NumFmt, Sheet, StyleId, Workbook};
 
 use crate::{CsvOptions, IoError};
 
 /// The largest CSV or tab-separated file written (bytes).
 pub const MAX_CSV_BYTES: usize = 512 << 20;
+
+/// Bytes one encode step writes into: encoding a 512 MiB CSV must not need a second copy of it
+/// (larger than any single character the code pages here need, so every step makes progress).
+const ENCODE_CHUNK: usize = 8 * 1024;
 
 /// Windows-1252 code points for bytes 0x80–0x9F (others map to Latin-1).
 const CP1252: [u32; 32] = [
@@ -115,38 +119,234 @@ fn is_cp1256_arabic(b: u8) -> bool {
     )
 }
 
-/// Decodes CSV bytes with BOM-aware UTF-8 and UTF-16 handling. Without a BOM, valid UTF-8 is kept.
-/// Other bytes decode as Windows-1256 when they read as Arabic (see [`Cp1256Evidence`]), else as
-/// Windows-1252.
-pub fn decode_text(bytes: &[u8]) -> String {
-    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
-        return String::from_utf8_lossy(rest).into_owned();
+/// Whether text holds hiragana or full-width katakana: kana that only CP932 two-byte sequences
+/// produce, so [`CsvEncoding::Auto`] can take it as proof the bytes really are Shift-JIS.
+///
+/// Half-width katakana deliberately does not count: every CP932 single byte from `0xA1` to `0xDF`
+/// is a half-width katakana, and that range is `À`–`ß` and `¡`–`¿` in Windows-1252, so counting it
+/// would read `Straße` or `Ärger` as Japanese.
+fn has_kana(text: &str) -> bool {
+    text.chars().any(|c| matches!(c, '\u{3040}'..='\u{30FF}'))
+}
+
+/// The CP932 evidence [`CsvEncoding::Auto`] needs when a clean decode holds no kana. A clean decode
+/// alone is not enough: Windows-1252 smart quotes and accented letters are valid CP932 pairs too
+/// (`‘a’b` is `0x91 0x61 0x92 0x62` and decodes as `疎鍛`), so counting pairs alone reads quoted
+/// Western text as Japanese. Two measurements separate the two:
+///
+/// - at least 80% of the non-ASCII bytes are consumed by valid double-byte pairs — a Japanese text
+///   is nearly all pairs, while a Windows-1252 word leaves its one-byte letters lone; and
+/// - valid CP932 pairs outnumber the "high byte + ASCII letter" readings a Windows-1252 word has.
+///   An accented letter followed by a letter is one of each, so `Prénom`, `Größe` and their kind
+///   stay balanced and keep the Windows-1252 reading, while a kanji-only CSV's dense pairs win:
+///   `東京都千代田区` is seven pairs against two such readings.
+///
+/// Two pairs are required, so a lone pair stays Windows-1252. A kanji-only file is therefore read
+/// as Shift-JIS when its pairs are dense; a two-character value whose trails both happen to be
+/// ASCII letters can still lose the coin toss and can be read by naming `shift_jis`.
+fn cp932_evidence(bytes: &[u8]) -> bool {
+    // Half-width katakana are single-byte CP932 characters in the same byte range as Windows-1252's
+    // Latin-1 punctuation and uppercase accents (`0xA1`–`0xDF`), so they are evidence neither way:
+    // they are left out of the ratio (half-width katakana alone never selects Shift-JIS — it has no
+    // pairs at all).
+    let is_ambiguous = |b: u8| matches!(b, 0xA1..=0xDF);
+    let high = bytes.iter().filter(|&&b| b >= 0x80 && !is_ambiguous(b)).count();
+    if high < 2 {
+        return false;
     }
-    let utf16 = |b: &[u8], le: bool| -> String {
-        let units = b.as_chunks::<2>().0.iter().map(|c| if le { u16::from_le_bytes(*c) } else { u16::from_be_bytes(*c) });
-        char::decode_utf16(units).map(|r| r.unwrap_or('\u{FFFD}')).collect()
-    };
+    let mut pairs = 0usize;
+    let mut consumed = 0usize;
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        let lead = matches!(b, 0x81..=0x9F | 0xE0..=0xFC);
+        match bytes.get(i + 1) {
+            Some(&trail) if lead && matches!(trail, 0x40..=0x7E | 0x80..=0xFC) => {
+                pairs += 1;
+                consumed += 1; // the lead is always a high, non-ambiguous byte
+                if trail >= 0x80 && !is_ambiguous(trail) {
+                    consumed += 1;
+                }
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    // The same high bytes read as a Windows-1252 character followed by a letter (`é` + `n`).
+    let accent_pairs = bytes.windows(2).filter(|w| w[0] >= 0x80 && w[1].is_ascii_alphabetic()).count();
+    pairs >= 2 && pairs > accent_pairs && consumed.saturating_mul(5) >= high.saturating_mul(4)
+}
+
+/// Whether text holds a CP932 private-use character (`U+E000`–`U+F8FF`). CP932 only produces
+/// those from its user-defined area, so their presence means the bytes probably aren't CP932 at
+/// all rather than a Japanese file: [`CsvEncoding::Auto`] then keeps the Windows-1252 reading.
+fn has_private_use(text: &str) -> bool {
+    text.chars().any(|c| matches!(c, '\u{E000}'..='\u{F8FF}'))
+}
+
+/// Windows-1252, the historical fallback: bytes 0x80–0x9F use their code points, others are Latin-1.
+fn decode_cp1252(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|&b| match b {
+            0x80..=0x9F => char::from_u32(CP1252.get((b - 0x80) as usize).copied().unwrap_or(0xFFFD)).unwrap_or('\u{FFFD}'),
+            _ => b as char,
+        })
+        .collect()
+}
+
+/// Windows-1256, Microsoft's Arabic ANSI code page: bytes 0x80–0xFF use the code points of
+/// [`CP1256`], others are ASCII.
+fn decode_cp1256(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|&b| match b {
+            0x80..=0xFF => char::from_u32(CP1256.get((b - 0x80) as usize).copied().unwrap_or(0xFFFD)).unwrap_or('\u{FFFD}'),
+            _ => b as char,
+        })
+        .collect()
+}
+
+/// Shift-JIS (CP932), with bytes it can't map replaced by `U+FFFD`. `decode_without_bom_handling`
+/// keeps an explicit code page from being overridden by a BOM.
+fn decode_shift_jis(bytes: &[u8]) -> String {
+    encoding_rs::SHIFT_JIS.decode_without_bom_handling(bytes).0.into_owned()
+}
+
+/// UTF-8, with invalid sequences replaced by `U+FFFD` and a leading BOM dropped (it isn't text).
+fn decode_utf8(bytes: &[u8]) -> String {
+    let rest = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    String::from_utf8_lossy(rest).into_owned()
+}
+
+/// UTF-16 with the given endianness, malformed units replaced by `U+FFFD`.
+fn decode_utf16(bytes: &[u8], le: bool) -> String {
+    let units = bytes.as_chunks::<2>().0.iter().map(|c| if le { u16::from_le_bytes(*c) } else { u16::from_be_bytes(*c) });
+    char::decode_utf16(units).map(|r| r.unwrap_or('\u{FFFD}')).collect()
+}
+
+/// [`CsvEncoding::Auto`]: UTF-8/UTF-16 BOMs, else UTF-8, else Shift-JIS when the decoded text holds
+/// kana or its pairs are dense enough to be a kanji-only Japanese file ([`cp932_evidence`]), with
+/// no private-use characters, else Windows-1256 when the bytes read as Arabic
+/// ([`Cp1256Evidence`]), else Windows-1252 — today's fallback, so a file that isn't convincingly
+/// Japanese reads as before.
+fn decode_auto(bytes: &[u8]) -> (String, Option<CsvEncoding>) {
+    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return (String::from_utf8_lossy(rest).into_owned(), Some(CsvEncoding::Utf8Bom));
+    }
+    // UTF-16 has no CSV encoding to write back: saving such a workbook writes UTF-8.
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
-        return utf16(rest, true);
+        return (decode_utf16(rest, true), None);
     }
     if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
-        return utf16(rest, false);
+        return (decode_utf16(rest, false), None);
     }
     match std::str::from_utf8(bytes) {
-        Ok(s) => s.to_string(),
+        Ok(s) => (s.to_string(), Some(CsvEncoding::Utf8)),
         Err(_) => {
-            let use_windows_1256 = Cp1256Evidence::of(bytes).is_arabic();
-            bytes
-                .iter()
-                .map(|&b| match b {
-                    0x80..=0xFF if use_windows_1256 => {
-                        char::from_u32(CP1256.get((b - 0x80) as usize).copied().unwrap_or(0xFFFD)).unwrap_or('\u{FFFD}')
-                    }
-                    0x80..=0x9F => char::from_u32(CP1252.get((b - 0x80) as usize).copied().unwrap_or(0xFFFD)).unwrap_or('\u{FFFD}'),
-                    _ => b as char,
-                })
-                .collect()
+            // Shift-JIS only for a *clean* CP932 decode that looks Japanese: kana, or the dense
+            // double-byte pairs of a kanji-only file (see `cp932_evidence`), with no private-use
+            // characters (the CP932 user-defined area, which real Japanese text doesn't use).
+            // Everything else keeps the historical Windows-1252 reading, so a Western file is
+            // never respelled as Japanese.
+            let (shift_jis, had_errors) = encoding_rs::SHIFT_JIS.decode_without_bom_handling(bytes);
+            let clean_japanese = !had_errors && !has_private_use(&shift_jis);
+            // Kana is proof the bytes are CP932, so it is settled first. The weaker kanji-only pair
+            // density is tried only after Windows-1256: an Arabic word made of letters in CP932's
+            // lead-byte range (`محمد` is `E3 CD E3 CF`) is a clean, dense pair reading too, so
+            // measuring Arabic evidence first keeps those files Arabic.
+            if clean_japanese && has_kana(&shift_jis) {
+                (shift_jis.into_owned(), Some(CsvEncoding::ShiftJis))
+            } else if Cp1256Evidence::of(bytes).is_arabic() {
+                // Windows-1256 Arabic is read; there is no Windows-1256 export, so saving writes
+                // UTF-8 (`None`), as for UTF-16.
+                (decode_cp1256(bytes), None)
+            } else if clean_japanese && cp932_evidence(bytes) {
+                (shift_jis.into_owned(), Some(CsvEncoding::ShiftJis))
+            } else {
+                (decode_cp1252(bytes), Some(CsvEncoding::Windows1252))
+            }
         }
+    }
+}
+
+/// Decodes CSV bytes: UTF-8/UTF-16 BOMs, else UTF-8, else Shift-JIS when they read as Japanese,
+/// else Windows-1256 when they read as Arabic, else Windows-1252.
+pub fn decode_text(bytes: &[u8]) -> String {
+    decode_text_as(bytes, CsvEncoding::Auto).0
+}
+
+/// [`decode_text`] with the code page chosen (or detected for [`CsvEncoding::Auto`]), and the
+/// encoding the bytes turned out to be in — what the workbook remembers for saving. `None` means
+/// the bytes were UTF-16, or Windows-1256 Arabic that [`CsvEncoding::Auto`] detected: there is no
+/// CSV encoding that writes them back, so saving uses UTF-8.
+pub fn decode_text_as(bytes: &[u8], encoding: CsvEncoding) -> (String, Option<CsvEncoding>) {
+    match encoding {
+        CsvEncoding::Auto => decode_auto(bytes),
+        CsvEncoding::Utf8 | CsvEncoding::Utf8Bom => (decode_utf8(bytes), Some(encoding)),
+        CsvEncoding::ShiftJis => (decode_shift_jis(bytes), Some(CsvEncoding::ShiftJis)),
+        CsvEncoding::Windows1252 => (decode_cp1252(bytes), Some(CsvEncoding::Windows1252)),
+    }
+}
+
+/// Encodes CSV text in a legacy code page: a character the code page cannot map becomes `?`, as
+/// Word and Excel write it when saving to a legacy code page — never encoding_rs' default HTML
+/// numeric character reference (`&#128512;`), which would corrupt the CSV fields.
+fn encode_legacy(text: &str, encoding: &'static encoding_rs::Encoding) -> Vec<u8> {
+    let mut encoder = encoding.new_encoder();
+    let mut out = Vec::with_capacity(text.len());
+    let mut buf = vec![0u8; ENCODE_CHUNK];
+    let mut rest = text;
+    loop {
+        let (result, read, written) = encoder.encode_from_utf8_without_replacement(rest, &mut buf, true);
+        if let Some(bytes) = buf.get(..written) {
+            out.extend_from_slice(bytes);
+        }
+        rest = rest.get(read..).unwrap_or_default();
+        match result {
+            encoding_rs::EncoderResult::InputEmpty => break,
+            // The chunk was filled: the next step encodes the rest.
+            encoding_rs::EncoderResult::OutputFull => {}
+            encoding_rs::EncoderResult::Unmappable(_) => out.push(b'?'),
+        }
+    }
+    out
+}
+
+/// Microsoft CP932 has a byte for the wave dash and the double vertical line that WHATWG
+/// `shift_jis` only maps when *decoding*; encoding them directly would write `?` (so `1〜5` would
+/// export as `1?5`). Excel writes `0x8160`/`0x8161`, which is what their CP932 equivalents encode
+/// to, so translate those two before encoding.
+fn cp932_text(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains(['\u{301C}', '\u{2016}']) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    std::borrow::Cow::Owned(
+        text.chars()
+            .map(|c| match c {
+                '\u{301C}' => '\u{FF5E}',
+                '\u{2016}' => '\u{2225}',
+                c => c,
+            })
+            .collect(),
+    )
+}
+
+/// Encodes CSV text in `encoding`. `Auto` writes UTF-8: it applies to reading only. The text is
+/// taken by value so the UTF-8 paths reuse its buffer instead of copying it (`into_bytes`): a
+/// near-limit export would otherwise hold the CSV twice.
+pub(crate) fn encode_text(text: String, encoding: CsvEncoding) -> Vec<u8> {
+    match encoding {
+        CsvEncoding::Auto | CsvEncoding::Utf8 => text.into_bytes(),
+        CsvEncoding::Utf8Bom => {
+            // The BOM goes into the buffer's own spare capacity (reserved first, so it does not
+            // grow): one allocation and one shift, not a second copy of the whole text.
+            let mut text = text;
+            text.reserve(3);
+            text.insert(0, '\u{FEFF}');
+            text.into_bytes()
+        }
+        CsvEncoding::ShiftJis => encode_legacy(&cp932_text(&text), encoding_rs::SHIFT_JIS),
+        CsvEncoding::Windows1252 => encode_legacy(&text, encoding_rs::WINDOWS_1252),
     }
 }
 
@@ -249,7 +449,7 @@ pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record:
 }
 
 pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
-    let text = decode_text(bytes);
+    let (text, encoding) = decode_text_as(bytes, opts.encoding);
     let quote = if opts.quote == 0 { '"' } else { opts.quote as char };
     let delim = if opts.delimiter == 0 { sniff_delimiter(&text, quote) } else { opts.delimiter } as char;
     if delim == quote {
@@ -258,6 +458,8 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
     let mut wb = Workbook::new();
     wb.date_system = opts.date_system;
     wb.csv_delimiter = u8::try_from(delim).ok();
+    // Like the separator: saving this workbook as CSV writes the encoding it was read in.
+    wb.csv_encoding = encoding;
     let mut sheet = Sheet::new("Sheet1");
     let mut styles = std::mem::take(&mut wb.styles);
     let mut fmt_cache: Vec<(&'static str, StyleId)> = vec![];
@@ -313,11 +515,28 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
 /// field or line end that takes it past the cap (a field is measured before it is written), with
 /// [`IoError::TooLarge`]; accepted exports keep every field in its place.
 pub fn write_csv(sheet: &Sheet, delimiter: u8, cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
-    write_csv_limited(sheet, delimiter, MAX_CSV_BYTES, cell_text)
+    write_csv_in(sheet, delimiter, CsvEncoding::Utf8, MAX_CSV_BYTES, cell_text)
 }
 
 /// [`write_csv`] with the output cap `limit` (bytes) given.
-pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, mut cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
+pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
+    write_csv_in(sheet, delimiter, CsvEncoding::Utf8, limit, cell_text)
+}
+
+/// [`write_csv`] in `encoding`: [`CsvEncoding::Utf8Bom`] writes `EF BB BF` before the UTF-8 bytes,
+/// [`CsvEncoding::ShiftJis`] and [`CsvEncoding::Windows1252`] encode in that code page (a character
+/// it cannot map becomes `?`), and [`CsvEncoding::Auto`] writes UTF-8 without a BOM.
+pub fn write_csv_encoded(sheet: &Sheet, delimiter: u8, encoding: CsvEncoding, cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
+    write_csv_in(sheet, delimiter, encoding, MAX_CSV_BYTES, cell_text)
+}
+
+fn write_csv_in(
+    sheet: &Sheet,
+    delimiter: u8,
+    encoding: CsvEncoding,
+    limit: usize,
+    mut cell_text: impl FnMut(CellRef) -> String,
+) -> Result<Vec<u8>, IoError> {
     let delim = if delimiter == 0 { ',' } else { delimiter as char };
     let mut out = String::new();
     let Some(r) = sheet.used_range() else { return Ok(Vec::new()) };
@@ -362,5 +581,12 @@ pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, mut cell_te
             return Err(too_large(format!("more than {} MiB (stopped at row {})", limit >> 20, row + 1)));
         }
     }
-    Ok(out.into_bytes())
+    // UTF-8 is the widest of the encodings here, so the check above is the conservative one; this
+    // exact check catches the BOM pushing a just-under-the-limit export over it. `out` is moved in:
+    // the UTF-8 path reuses its buffer, so an accepted export is not held twice.
+    let bytes = encode_text(out, encoding);
+    if bytes.len() > limit {
+        return Err(too_large(format!("more than {} MiB when encoded as {}", limit >> 20, encoding.as_str())));
+    }
+    Ok(bytes)
 }
