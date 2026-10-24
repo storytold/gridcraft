@@ -558,11 +558,7 @@ impl PassHost<'_> {
             return self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
         };
         if self.suspend.is_some() {
-            // Unwinding to `calculate`: the value is thrown away. A formula read at the limit is
-            // calculated with the suspended one, so the evaluations are not restarted for each.
-            if self.depth >= MAX_NESTED && !self.in_progress.contains(&k) && !self.waiting.contains(&k) {
-                self.also.push(k);
-            }
+            // Unwinding to `calculate`: the value is thrown away.
             return Value::Error(CellError::Calc);
         }
         if self.in_progress.contains(&k) || self.waiting.contains(&k) {
@@ -652,6 +648,16 @@ impl PassHost<'_> {
         };
         self.results.insert(k, v.clone());
         v
+    }
+
+    /// Batch only a range read begun before suspension, at the nesting limit. A later read may
+    /// be an IFERROR fallback selected by the temporary #CALC!, rather than a real dependency.
+    fn range_cell_value(&mut self, sheet: usize, c: CellRef, batch: bool) -> Value {
+        let k = (sheet, c);
+        if batch && self.suspend.is_some() && self.pending.contains(&k) && !self.in_progress.contains(&k) && !self.waiting.contains(&k) {
+            self.also.push(k);
+        }
+        self.cell_value(sheet, c)
     }
 
     /// A formula's previous value for iterative calculation: from the last iteration, else the
@@ -785,6 +791,7 @@ impl Host for PassHost<'_> {
         self.wb.sheet(sheet).map(|s| s.value(c)).unwrap_or_default()
     }
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
+        let batch = self.suspend.is_none() && self.depth >= MAX_NESTED;
         let (h, w) = (range.height() as usize, range.width() as usize);
         let mut out = vec![Value::Empty; h * w];
         let Some(sh) = self.wb.sheet(sheet) else { return out };
@@ -810,7 +817,7 @@ impl Host for PassHost<'_> {
             }
         }
         for (i, c) in formulas {
-            let v = self.cell_value(sheet, c);
+            let v = self.range_cell_value(sheet, c, batch);
             if let Some(slot) = out.get_mut(i) {
                 *slot = v;
             }
@@ -857,6 +864,7 @@ impl Host for PassHost<'_> {
         out
     }
     fn visit_range(&mut self, sheet: usize, range: RangeRef, f: &mut dyn FnMut(&Value) -> bool) -> bool {
+        let batch = self.suspend.is_none() && self.depth >= MAX_NESTED;
         let wb = self.wb;
         let Some(sh) = wb.sheet(sheet) else { return false };
         // Formula cells first, in row-major order like `range_values`: reading one calculates it
@@ -864,7 +872,7 @@ impl Host for PassHost<'_> {
         // this method holding any.
         for (c, cell) in sh.cells.iter_range(range) {
             if cell.formula.is_some() {
-                let _ = self.cell_value(sheet, c);
+                let _ = self.range_cell_value(sheet, c, batch);
             }
         }
         // Spilled values sit between the stored cells (and the formulas just calculated may have
