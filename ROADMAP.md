@@ -135,6 +135,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-10-24 | Go To lists the named ranges of every sheet (`Sheet2!Name` for a name scoped to another sheet; hidden names, constants and formulas left out) and the references entered before, a double-click goes to an entry, and the Reference box takes several names or references separated by commas (`Price, Type`, `B14:C22,F19:G30`) |
 | 2026-10-23 | Accounting negatives in text: `$(1,234)`, `$ (5)` and `(5)%` read as negative numbers when typed, coerced by arithmetic or passed to VALUE, like Excel 365; `(-5)`, `((5))`, `$5%` and dates or times in parentheses stay text |
 | 2026-10-23 | Calc: `INDEX(A1:C3,2)` (one index on a reference of several rows and columns) is `#REF!` as in Excel, instead of the whole row; `INDEX(A1:C3,2,)` still gives the row |
 | 2026-10-22 | Formula hardening: digits too many for a finite number are text, so `"1 <400 digits>/<400 digits>"` no longer coerces to NaN; a NaN column index in VLOOKUP, HLOOKUP and the D-functions is `#VALUE!` instead of an index underflow; REGEXREPLACE stops building a result as soon as it can only be too long (a worst case went from 1 GB to 7 MB) (#2163, #2162) |

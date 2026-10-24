@@ -2320,12 +2320,28 @@ fn zoom(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) 
 }
 
 fn go_to(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
-    let names: Vec<String> = app.session.active().map(|doc| doc.wb.names.iter().map(|n| n.name.clone()).collect()).unwrap_or_default();
-    for n in names {
-        if ui.selectable_label(false, &n).clicked() {
-            d.values.insert("reference".into(), json!(n));
+    // The named ranges of every sheet, then the references gone to before, newest first.
+    let entries: Vec<String> = app
+        .session
+        .active()
+        .map(|doc| {
+            let mut v = gridcraft_engine::cmd::edit::go_to_names(&doc.wb, doc.wb.active_sheet);
+            v.extend(doc.go_to_recent.iter().cloned());
+            v
+        })
+        .unwrap_or_default();
+    let current = d.values.get("reference").and_then(Json::as_str).unwrap_or("").to_string();
+    egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
+        for n in entries {
+            let resp = ui.selectable_label(current == n, &n);
+            if resp.clicked() || resp.double_clicked() {
+                d.values.insert("reference".into(), json!(n));
+            }
+            if resp.double_clicked() {
+                *confirm = true;
+            }
         }
-    }
+    });
     let mut r = d.values.get("reference").and_then(Json::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
         ui.label("Reference:");
@@ -2339,7 +2355,7 @@ fn go_to(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bo
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
     if *confirm {
-        app.run_or_alert("edit.goTo", json!({"reference": r}));
+        app.run_or_alert("edit.goTo", json!({"reference": r, "record": true}));
         app.grid.ensure_visible = true;
     }
     if !open {

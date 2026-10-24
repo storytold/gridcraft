@@ -199,6 +199,9 @@ pub struct DocState {
     /// workbook is opened from a file, carried by content pasted from such a workbook, and never
     /// changed by a trust decision.
     pub trust: Trust,
+    /// The references `edit.goTo` with `record: true` went to in this document, newest first,
+    /// without names, each area written with its sheet (`Sheet1!B14:C22,Sheet1!F19:G30`).
+    pub go_to_recent: Vec<String>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -285,6 +288,7 @@ impl DocState {
             content_kind: None,
             scripts_trusted,
             trust,
+            go_to_recent: vec![],
         }
     }
     pub fn is_dirty(&self) -> bool {
