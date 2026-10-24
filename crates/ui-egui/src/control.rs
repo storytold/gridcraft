@@ -215,6 +215,9 @@ fn filter_commands(commands: Vec<Json>, search: Option<&str>) -> Vec<Json> {
     commands.into_iter().filter(|c| has(c, "id") || has(c, "label") || in_menu(c)).collect()
 }
 
+/// Dispatches one control-protocol method against the UI and returns its response or screenshot request.
+/// Analysis dialog edits and confirmation verify the owning document before changing values or
+/// executing a command. Failed preparation/execution retains the dialog so clients can recover or cancel.
 pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -> Outcome {
     let s = |k: &str| p.get(k).and_then(Json::as_str);
     let f = |k: &str| p.get(k).and_then(Json::as_f64).unwrap_or(0.0) as f32;
@@ -289,6 +292,9 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         }
         "ui.dialog.set" => match app.dialog.as_mut() {
             Some(d) => {
+                if let Err(error) = d.prepare_analysis(&app.session) {
+                    return err(&error);
+                }
                 let Some(field) = s("field") else { return err("missing `field`") };
                 if field == "tab" {
                     d.tab = s("value").unwrap_or("").to_string();
@@ -302,9 +308,15 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             None => err("no dialog is open"),
         },
         "ui.dialog.confirm" => match app.dialog.take() {
-            Some(d) => match d.command {
+            Some(mut d) => match d.command {
                 Some(cmd) => {
-                    let params = crate::dialogs::build_params(&d);
+                    let params = match d.command_params(&app.session) {
+                        Ok(params) => params,
+                        Err(error) => {
+                            app.dialog = Some(d);
+                            return err(&error);
+                        }
+                    };
                     let r = app.run(cmd, params);
                     if r.is_err() {
                         app.dialog = Some(d);

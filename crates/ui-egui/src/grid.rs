@@ -61,6 +61,12 @@ pub enum Drag {
     #[default]
     None,
     Select,
+    /// A dialog range drag belongs to one worksheet in one document, even across tab changes.
+    DialogRange {
+        document: u64,
+        sheet: usize,
+        start: CellRef,
+    },
     Rows(u32),
     Cols(u32),
     /// Reordering one contiguous whole-column selection by its header.
@@ -2000,7 +2006,7 @@ fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: 
     if resp.dragged() && pointer.primary_down() {
         let cursor = match app.grid.drag {
             Drag::None => None,
-            Drag::Select => Some(CursorIcon::Cell),
+            Drag::Select | Drag::DialogRange { .. } => Some(CursorIcon::Cell),
             Drag::Rows(_) | Drag::Cols(_) => Some(CursorIcon::Default),
             Drag::Fill { .. } => Some(CursorIcon::Crosshair),
             Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { resize: false, .. } => Some(CursorIcon::Move),
@@ -2066,6 +2072,10 @@ fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: 
     }
 }
 
+/// Routes worksheet pointer input using logical coordinates, including mirrored right-to-left sheets.
+/// An active dialog picker takes precedence over objects, fill handles and cell actions. Picker
+/// drags retain their starting document UID and sheet index, so movement or release after a tab
+/// switch cannot extend that range into a different worksheet or workbook.
 fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     // Text selection and editing must not also move the object or edit worksheet cells.
     if app.text_box_editor.is_some() || app.grid.hf_edit.is_some() {
@@ -2083,6 +2093,20 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     let in_row_header = pos.is_some_and(|p| p.x < geo.cells.left() && p.x >= geo.head_left() && p.y >= geo.cells.top());
     let in_corner = pos.is_some_and(|p| p.x < geo.cells.left() && p.y < geo.cells.top() && p.x >= geo.head_left() && p.y >= geo.head_top());
     let sel = app.session.active().map(|d| d.selection.clone()).unwrap_or_default();
+    // Dialog picking precedes floating objects, fill handles and cell-value actions.
+    if crate::dialogs::dialog_range_picker_active(app)
+        && in_cells
+        && (primary_clicked || resp.drag_started_by(egui::PointerButton::Primary))
+        && let Some(p) = pos
+        && let Some(document) = app.session.active().map(|doc| doc.uid)
+    {
+        let end = geo.cell_at(sh, p);
+        let start = pointer.press_origin().map(|p| geo.cell_at(sh, geo.mirror_pos(p))).unwrap_or(end);
+        crate::dialogs::update_dialog_range_picker(app, wb.active_sheet, start, end);
+        app.grid.drag = Drag::DialogRange { document, sheet: wb.active_sheet, start };
+        app.grid.drag_select = true;
+        return;
+    }
     let cur_rect = geo.range_rect(sh, sel.current());
     let handle = Rect::from_center_size(cur_rect.right_bottom(), vec2(9.0, 9.0));
     // The fill handle and the move border only react in the panes where they are painted, not
@@ -2487,6 +2511,12 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0)),
         );
         match app.grid.drag.clone() {
+            Drag::DialogRange { document, sheet, start } => {
+                if sheet == wb.active_sheet && app.session.active().is_some_and(|doc| doc.uid == document) {
+                    crate::dialogs::update_dialog_range_picker(app, sheet, start, pc);
+                    scroll_by(app, auto);
+                }
+            }
             Drag::Select => {
                 select_to_pointer(app, geo, sh, wb, p);
                 scroll_by(app, auto);
@@ -2579,6 +2609,15 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     // Release.
     if resp.drag_stopped() || (!pointer.any_down() && app.grid.drag != Drag::None && !resp.dragged()) {
         match std::mem::take(&mut app.grid.drag) {
+            Drag::DialogRange { document, sheet, start } => {
+                if resp.drag_stopped()
+                    && sheet == wb.active_sheet
+                    && app.session.active().is_some_and(|doc| doc.uid == document)
+                    && let Some(p) = pos
+                {
+                    crate::dialogs::update_dialog_range_picker(app, sheet, start, geo.cell_at(sh, p));
+                }
+            }
             Drag::Select => {
                 if resp.drag_stopped()
                     && let Some(p) = pos
