@@ -11,6 +11,7 @@
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
+mod gpu_limits;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
@@ -320,7 +321,11 @@ fn main() -> eframe::Result<()> {
     if let Some(i) = icon() {
         viewport = viewport.with_icon(i);
     }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let mut options = eframe::NativeOptions { viewport, ..Default::default() };
+    // The adapter's largest texture side instead of eframe's 8192, so a window across several
+    // monitors keeps its surface. Before the DirectX 12 probe, which checks adapters against
+    // these limits.
+    gpu_limits::request_adapter_texture_size(&mut options);
     // Before eframe creates the wgpu instance: Windows starts on DirectX 12, or OpenGL when
     // DirectX 12 has no GPU driver, and never touches Vulkan unless asked (see graphics.rs).
     #[cfg(target_os = "windows")]
