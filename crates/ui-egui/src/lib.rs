@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod autosave;
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
@@ -219,6 +220,11 @@ pub struct Perf {
     pub frame_ms: f64,
     pub grid_ms: f64,
     pub fps: f64,
+    /// How long the last AutoSave held up its frame (taking the snapshot), how long its worker
+    /// took to write the file, and how many AutoSaves finished.
+    pub autosave_ms: f64,
+    pub autosave_write_ms: f64,
+    pub autosaves: u64,
     last: f64,
 }
 
@@ -263,6 +269,10 @@ pub struct SheetApp {
     /// Synthetic input from agents, one batch per frame (drags need several frames).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
     pub control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
+    /// The AutoSave being written on its worker thread.
+    pub autosave_job: Option<autosave::InFlight>,
+    /// Failed AutoSaves in a row; each one doubles the wait before the next try (up to 64 s).
+    pub autosave_failures: u32,
     pub grid: grid::GridState,
     pub perf: Perf,
     pub fonts_ready: bool,
@@ -325,6 +335,8 @@ impl SheetApp {
             print_feedback_seen: None,
             synthetic: Default::default(),
             control_rx: None,
+            autosave_job: None,
+            autosave_failures: 0,
             grid: grid::GridState {
                 last_border: "bottom".into(),
                 last_fill: "#FFFF00".into(),
@@ -395,6 +407,10 @@ impl SheetApp {
     }
 
     fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        if id.starts_with("file.") {
+            // Saving, opening or closing a file never races an AutoSave still being written.
+            self.finish_pending_autosave();
+        }
         if matches!(id, "file.save" | "file.saveAs" | "file.saveBytes") {
             self.store_view_state();
         }
@@ -656,6 +672,11 @@ impl SheetApp {
             "options.autoComplete" => {
                 self.ui.autocomplete = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autocomplete);
                 Ok(json!({"on": self.ui.autocomplete}))
+            }
+            "options.autoSave" => {
+                // The ribbon's AutoSave toggle, reachable from the control channel and MCP.
+                self.ui.autosave = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autosave);
+                Ok(json!({"on": self.ui.autosave}))
             }
             "view.interfaceScale" => {
                 // `{"percent": 125}` or `{"percent": "auto"}`; out-of-range values are clamped.
@@ -1327,6 +1348,7 @@ impl SheetApp {
         if !ctx.input(|i| i.focused) {
             // Nothing else to do.
         }
+        self.autosave(&ctx);
         let now = now_ms();
         self.perf.frame_ms = now - t0;
         if self.perf.last > 0.0 {
@@ -1336,17 +1358,6 @@ impl SheetApp {
             }
         }
         self.perf.last = now;
-        // AutoSave: save workbooks that have a file shortly after they change.
-        if self.ui.autosave
-            && self.editor.is_none()
-            && self.text_box_editor.is_none()
-            && now - self.grid.last_autosave > 2000.0
-            && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")))
-        {
-            self.grid.last_autosave = now;
-            self.store_view_state();
-            let _ = self.session.run("file.save", json!({}));
-        }
         // Window title.
         if let Some(d) = self.session.active() {
             let title = format!("{}{}", d.display_title(), if d.is_dirty() { " — Edited" } else { "" });
@@ -1354,6 +1365,84 @@ impl SheetApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
                 self.grid.last_title = Some(title);
             }
+        }
+    }
+
+    /// AutoSave: save workbooks that have a file shortly after they change. The frame only takes
+    /// a snapshot; a worker thread writes it ([`autosave`]). A change made within the 2 s gate
+    /// asks for a frame when the gate opens, so an idle window still saves it.
+    fn autosave(&mut self, ctx: &egui::Context) {
+        const GATE_MS: f64 = 2000.0;
+        if let Some(job) = &self.autosave_job {
+            match job.poll() {
+                Some(result) => {
+                    if let Some(job) = self.autosave_job.take() {
+                        self.finish_autosave(&job.job, job.started, result);
+                    }
+                }
+                // Still writing: the worker wakes the window when it is done.
+                None => return,
+            }
+        }
+        // After the poll: a finished save may have reset the failure count.
+        let gate = GATE_MS * f64::from(1u32 << self.autosave_failures.min(5));
+        let pending =
+            self.ui.autosave && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")));
+        if !pending {
+            return;
+        }
+        let now = now_ms();
+        let wait = self.grid.last_autosave + gate - now;
+        if wait >= 0.0 {
+            // Not yet: come back when the gate opens, even if nothing else wakes the window.
+            ctx.request_repaint_after(std::time::Duration::from_millis(wait.min(gate) as u64 + 1));
+            return;
+        }
+        if self.editor.is_some() || self.text_box_editor.is_some() {
+            // Committing the edit runs a frame, which saves then.
+            return;
+        }
+        self.grid.last_autosave = now;
+        self.store_view_state();
+        let Some(job) = self.session.autosave_job() else { return };
+        match autosave::InFlight::start(job.clone(), ctx) {
+            Some(in_flight) => self.autosave_job = Some(in_flight),
+            // No worker thread (the browser): save here.
+            None => {
+                let result = autosave::run(&job);
+                self.finish_autosave(&job, now, result);
+            }
+        }
+        self.perf.autosave_ms = now_ms() - now;
+    }
+
+    /// Records a finished AutoSave. A failed one leaves the workbook dirty, so AutoSave tries
+    /// again after the gate, which doubles with every failure in a row.
+    fn finish_autosave(&mut self, job: &gridcraft_engine::autosave::SaveJob, started: f64, result: Result<usize, String>) {
+        self.perf.autosave_write_ms = now_ms() - started;
+        // The 2 s gate runs from the end of the write, so a slow save is never followed at once by the next.
+        self.grid.last_autosave = now_ms();
+        match result {
+            Ok(_) => {
+                self.session.finish_save(job);
+                self.perf.autosaves = self.perf.autosaves.saturating_add(1);
+                self.autosave_failures = 0;
+            }
+            Err(e) => {
+                self.autosave_failures = self.autosave_failures.saturating_add(1);
+                log::warn!("AutoSave of {} failed: {e}", job.path);
+            }
+        }
+    }
+
+    /// Waits for an AutoSave that is still being written, so a command that saves, opens or
+    /// closes a file never races it.
+    pub fn finish_pending_autosave(&mut self) {
+        if let Some(in_flight) = self.autosave_job.take() {
+            let job = in_flight.job.clone();
+            let started = in_flight.started;
+            let result = in_flight.wait();
+            self.finish_autosave(&job, started, result);
         }
     }
 
@@ -1460,4 +1549,184 @@ pub fn now_ms() -> f64 {
 
 pub fn cell(r: u32, c: u32) -> CellRef {
     CellRef::new(r, c)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::unwrap_used)]
+mod autosave_gate_tests {
+    use super::*;
+
+    /// Runs one whole frame.
+    fn frame(app: &mut SheetApp) {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::font_definitions());
+        app.fonts_ready = true;
+        let mut output = ctx.run_ui(Default::default(), |ui| app.ui(ui));
+        output.textures_delta.clear();
+    }
+
+    /// Runs only the AutoSave step in a frame and returns the repaint delay it asked for (other
+    /// parts of the window, such as animations, ask for their own frames).
+    fn autosave_step(app: &mut SheetApp) -> std::time::Duration {
+        let ctx = egui::Context::default();
+        // egui asks for another pass after a context's first frames; settle that first.
+        for _ in 0..3 {
+            let mut warm = ctx.run_ui(Default::default(), |_| {});
+            warm.textures_delta.clear();
+        }
+        let mut output = ctx.run_ui(Default::default(), |ui| app.autosave(ui.ctx()));
+        output.textures_delta.clear();
+        output.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay).unwrap_or(std::time::Duration::MAX)
+    }
+
+    fn dirty_app(path: &std::path::Path) -> SheetApp {
+        let mut session = Session::new();
+        session.new_workbook();
+        session.active_mut().unwrap().path = Some(path.to_string_lossy().into_owned());
+        let mut app = SheetApp::new(session, Services::default());
+        app.run("cell.set", json!({"cell": "A1", "input": "unsaved change"})).unwrap();
+        app
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("gridcraft-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn autosave_command_turns_autosave_on_and_off() {
+        let dir = temp_dir("autosave-command");
+        let mut app = dirty_app(&dir.join("book.xlsx"));
+        assert_eq!(app.run("options.autoSave", json!({"on": true})).unwrap(), json!({"on": true}));
+        assert!(app.ui.autosave);
+        assert_eq!(app.run("options.autoSave", json!({})).unwrap(), json!({"on": false}), "no `on` toggles");
+        assert!(!app.ui.autosave);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn change_inside_the_gate_schedules_the_save_for_an_idle_window() {
+        let dir = temp_dir("autosave-idle");
+        let path = dir.join("book.xlsx");
+        let mut app = dirty_app(&path);
+        app.ui.autosave = true;
+        // A save just happened, so this change must wait for the 2 s gate.
+        app.grid.last_autosave = now_ms();
+        let delay = autosave_step(&mut app);
+        assert!(app.session.active().unwrap().is_dirty());
+        assert!(delay <= std::time::Duration::from_millis(2001), "the frame must ask to run again when the gate opens, got {delay:?}");
+        // When the gate has opened, the next frame starts the save on the worker.
+        app.grid.last_autosave = now_ms() - 2500.0;
+        frame(&mut app);
+        assert!(app.autosave_job.is_some(), "the frame hands the save to the worker");
+        app.finish_pending_autosave();
+        assert!(!app.session.active().unwrap().is_dirty(), "the change was not saved");
+        assert!(path.exists());
+        assert_eq!(app.perf.autosaves, 1);
+        assert!(app.perf.autosave_ms >= 0.0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn edits_while_the_worker_writes_stay_unsaved_until_the_next_autosave() {
+        let dir = temp_dir("autosave-worker");
+        let path = dir.join("book.xlsx");
+        let mut app = dirty_app(&path);
+        app.ui.autosave = true;
+        app.grid.last_autosave = 0.0;
+        frame(&mut app);
+        // The user keeps typing while the snapshot is written.
+        app.run("cell.set", json!({"cell": "A1", "input": "typed during the save"})).unwrap();
+        app.finish_pending_autosave();
+        assert!(app.session.active().unwrap().is_dirty(), "the newer edit is not in the file yet");
+        let (saved, _) = gridcraft_engine::io::open_bytes("book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.sheet(0).unwrap().value(cell(0, 0)), gridcraft_engine::core::Value::text("unsaved change"));
+        // The next AutoSave writes it.
+        app.grid.last_autosave = 0.0;
+        frame(&mut app);
+        app.finish_pending_autosave();
+        assert!(!app.session.active().unwrap().is_dirty());
+        assert_eq!(app.perf.autosaves, 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_write_leaves_the_document_dirty_and_restarts_the_gate() {
+        let dir = temp_dir("autosave-failed");
+        std::fs::write(dir.join("blocker.txt"), b"not a folder").unwrap();
+        let mut app = dirty_app(&dir.join("blocker.txt").join("book.xlsx"));
+        app.ui.autosave = true;
+        app.grid.last_autosave = 0.0;
+        frame(&mut app);
+        assert!(app.autosave_job.is_some(), "the save starts on the worker");
+        app.finish_pending_autosave();
+        assert!(app.session.active().unwrap().is_dirty(), "a failed save must not mark the document clean");
+        assert_eq!(app.perf.autosaves, 0);
+        assert!(now_ms() - app.grid.last_autosave < 2000.0, "the retry waits for the gate");
+        assert_eq!(app.autosave_failures, 1);
+        // The base gate has passed, but one failure doubles the wait, so no new attempt starts yet.
+        app.grid.last_autosave = now_ms() - 2500.0;
+        frame(&mut app);
+        assert!(app.autosave_job.is_none(), "the retry backs off after a failure");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn retry_that_succeeds_uses_the_base_gate_for_an_edit_made_during_it() {
+        let dir = temp_dir("autosave-retry");
+        std::fs::write(dir.join("blocker.txt"), b"not a folder").unwrap();
+        let mut app = dirty_app(&dir.join("blocker.txt").join("book.xlsx"));
+        app.ui.autosave = true;
+        app.grid.last_autosave = 0.0;
+        frame(&mut app);
+        app.finish_pending_autosave();
+        assert_eq!(app.autosave_failures, 1);
+        // Clear the blocker so the retry succeeds, and edit while the retry is written.
+        std::fs::remove_file(dir.join("blocker.txt")).unwrap();
+        std::fs::create_dir(dir.join("blocker.txt")).unwrap();
+        app.grid.last_autosave = now_ms() - 5000.0;
+        frame(&mut app);
+        app.run("cell.set", json!({"cell": "A1", "input": "typed during the retry"})).unwrap();
+        // The frame that collects the finished retry must ask for the base 2 s gate, not the backed-off one.
+        let mut delay = autosave_step(&mut app);
+        while app.autosave_job.is_some() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            delay = autosave_step(&mut app);
+        }
+        assert_eq!(app.autosave_failures, 0);
+        assert_eq!(app.perf.autosaves, 1);
+        assert!(app.session.active().unwrap().is_dirty(), "the newer edit is not in the file yet");
+        assert!(delay <= std::time::Duration::from_millis(2001), "the idle window must save the edit within the base gate, got {delay:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn manual_save_waits_for_a_running_autosave() {
+        let dir = temp_dir("autosave-manual");
+        let path = dir.join("book.xlsx");
+        let mut app = dirty_app(&path);
+        app.ui.autosave = true;
+        app.grid.last_autosave = 0.0;
+        frame(&mut app);
+        app.run("cell.set", json!({"cell": "A1", "input": "saved by hand"})).unwrap();
+        app.run("file.save", json!({})).unwrap();
+        assert!(app.autosave_job.is_none(), "Save finished the AutoSave first");
+        assert!(!app.session.active().unwrap().is_dirty());
+        let (saved, _) = gridcraft_engine::io::open_bytes("book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.sheet(0).unwrap().value(cell(0, 0)), gridcraft_engine::core::Value::text("saved by hand"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn no_wakeups_without_a_pending_autosave() {
+        let dir = temp_dir("autosave-quiet");
+        let mut app = dirty_app(&dir.join("book.xlsx"));
+        app.ui.autosave = false;
+        app.grid.last_autosave = now_ms();
+        let off = autosave_step(&mut app);
+        assert!(off > std::time::Duration::from_secs(2), "AutoSave off must not wake the window, got {off:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

@@ -120,7 +120,14 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "mode": format!("{:?}", app.session.mode),
         "documents": app.session.documents().iter().map(|d| json!({"title": d.display_title(), "dirty": d.is_dirty()})).collect::<Vec<_>>(),
         "activeDocument": app.session.active_index(),
-        "perf": {"frameMs": app.perf.frame_ms, "gridMs": app.perf.grid_ms, "fps": app.perf.fps},
+        "perf": {
+            "frameMs": app.perf.frame_ms,
+            "gridMs": app.perf.grid_ms,
+            "fps": app.perf.fps,
+            "autosaveMs": app.perf.autosave_ms,
+            "autosaveWriteMs": app.perf.autosave_write_ms,
+            "autosaves": app.perf.autosaves,
+        },
     })
 }
 
@@ -234,6 +241,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),
+                ("options.autoSave", "AutoSave", "{on?: bool} (toggles without it) → {on}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
                 ("ui.backstage", "File (Backstage view)", "{page?: home|new|open|info|saveAs|print|export|options|account|close}"),

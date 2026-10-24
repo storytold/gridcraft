@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (accounting negatives such as `$(1,234)` read as numbers; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: Page Setup paper sizes: JIS B4/B5/B6, the Japanese postcards and envelopes, and A6; long flat operator chains up to Excel's formula limit) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (AutoSave writes on a worker thread; accounting negatives such as `$(1,234)` read as numbers; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: Page Setup paper sizes: JIS B4/B5/B6, the Japanese postcards and envelopes, and A6; long flat operator chains up to Excel's formula limit) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -149,6 +149,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-16 | Memory: the interface and script fallback fonts are read once per run and shared with egui instead of copied into it: an empty workbook settles at 158 MB instead of 258 MB on macOS |
 | 2026-10-15 | Function help follows the interface language: argument hints, autocomplete, Insert Function (search and readable categories) and the Formulas-tab menus read per-language tables of descriptions and argument names; Spanish keeps its 10 functions in the new format |
 | 2026-10-15 | Row auto-fit counts a cell's line breaks only when the cell wraps, as Excel does: a file whose unwrapped cells hold multi-line text no longer opens with tall rows (typing a break still turns wrap on and grows the row) |
+| 2026-10-15 | AutoSave writes on a worker thread, so saving a big workbook no longer freezes the window; a change made within 2 s of the last AutoSave is saved even when the window is idle |
 | 2026-10-14 | Lookups (MATCH, XMATCH, VLOOKUP, HLOOKUP, XLOOKUP, LOOKUP) compare numbers exactly like Excel, so a computed key such as `=0.1+0.2` no longer finds 0.3; `=` and COUNTIF/SUMIF keep their 15-digit comparison |
 | 2026-10-14 | Functions: EOMONTH, EDATE, WORKDAY, NETWORKDAYS, YEARFRAC, WEEKNUM, the bond and coupon functions, DISC, BIN2DEC, IM* and the other Analysis ToolPak functions give `#VALUE!` for a reference to more than one cell in a value argument, as Excel 365 does, instead of spilling; array constants and computed arrays still lift |
 | 2026-10-14 | Protect Sheet on a protected sheet: Home › Format, its keytips (HOP, RPS) and the tab menu now read Unprotect Sheet… and unprotect (straight away without a password); a protected sheet that forbids selecting locked (or unlocked) cells is enforced for clicks, arrows and Go To, and the Protect Sheet dialog has the select options (#1346) |
