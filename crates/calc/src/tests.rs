@@ -711,6 +711,42 @@ fn arrays_do_not_spill_in_tables() {
 }
 
 #[test]
+fn one_value_array_in_a_table_is_not_a_spill() {
+    // Excel shows a one-value dynamic-array result in a table column; two or more is #SPILL! (#2335).
+    let table = |range: &str| gridcraft_model::Table {
+        id: 1,
+        name: "Table1".into(),
+        range: gridcraft_core::RangeRef::parse(range).unwrap(),
+        header_row: true,
+        totals_row: false,
+        columns: vec![],
+        style: String::new(),
+        banded_rows: false,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: false,
+        filter: vec![],
+        table_type: None,
+        connection_id: None,
+    };
+    let mut t = T::new();
+    t.wb.sheet_mut(0).unwrap().tables.push(table("B3:C6"));
+    t.set("A1", "7");
+    t.set("A2", "8");
+    t.set("C4", "=FILTER(A1:A2,A1:A2>7)");
+    t.set("C5", "=FILTER(A1:A2,A1:A2>0)");
+    t.set("H4", "=FILTER(A1:A2,A1:A2>7)");
+    t.set("D4", "=ROWS(C4#)");
+    assert_eq!((t.num("C4"), t.num("H4"), t.num("D4")), (8.0, 8.0, 1.0));
+    assert_eq!(t.get("C5"), Value::Error(CellError::Spill));
+    // Recalculating again keeps the one-value result.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("C4"), 8.0);
+    assert_eq!(t.num("D4"), 1.0);
+}
+
+#[test]
 fn ifs_and_lazy() {
     let mut t = T::new();
     t.set("A1", "5");
