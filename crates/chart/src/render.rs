@@ -1144,7 +1144,17 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
                             let stacked = fam != Fam::Col;
                             let mid = (pb + pt) / 2.0;
                             // Beyond the bar's tip, whichever way the value axis runs (#1895 review).
-                            let tip = if pt > pb { 1.0 } else { -1.0 };
+                            // A zero-length bar (a value of 0) has no tip, so it follows the axis's
+                            // own direction instead of the negative side: right for bars, up for
+                            // columns, mirrored with a reversed axis (#1895 review).
+                            let fwd = if horizontal { 1.0 } else { -1.0 };
+                            let tip = if pt == pb {
+                                if rev { -fwd } else { fwd }
+                            } else if pt > pb {
+                                1.0
+                            } else {
+                                -1.0
+                            };
                             if horizontal {
                                 let y = c + nslots * bw / 2.0 - (k + 0.5) * bw;
                                 if stacked {

@@ -1334,6 +1334,49 @@ fn reversed_bars_put_their_labels_past_the_tip() {
 }
 
 #[test]
+fn a_zero_length_bar_keeps_its_label_on_the_axis_side() {
+    let color = [20, 96, 130, 255];
+    let d = ChartData {
+        palette: vec![],
+        category_levels: vec![],
+        categories: ["Zero", "Five"].map(String::from).to_vec(),
+        series: vec![series("North", &[0.0, 5000.0], color, ChartKind::BarClustered)],
+    };
+    let mut c = chart(ChartKind::BarClustered);
+    // A value of 0 leaves the bar without a tip, so its label follows the axis's own side: past the
+    // baseline towards growing values, which a reversed axis mirrors (#1895 review).
+    for (val_reverse, forward) in [(false, true), (true, false)] {
+        c.val_reverse = val_reverse;
+        let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        // Both the value-axis tick for 0 and the data label read "$0"; the tick is centred on the
+        // baseline, the data label never is.
+        let zeroes: Vec<(f32, HAlign)> = prims
+            .iter()
+            .filter_map(|q| match q {
+                Prim::Text { text, x, align, .. } if text == "$0" => Some((*x, *align)),
+                _ => None,
+            })
+            .collect();
+        let baseline = zeroes
+            .iter()
+            .find_map(|(x, a)| (*a == HAlign::Center).then_some(*x))
+            .unwrap_or_else(|| panic!("no 0 tick on the value axis (val_reverse={val_reverse})"));
+        let (x, align) = zeroes
+            .iter()
+            .find(|(_, a)| *a != HAlign::Center)
+            .copied()
+            .unwrap_or_else(|| panic!("no label for the zero value (val_reverse={val_reverse})"));
+        if forward {
+            assert_eq!(align, HAlign::Left, "the zero label points back at the categories");
+            assert!(x > baseline, "the zero label sits on the wrong side of the baseline: {x} vs {baseline}");
+        } else {
+            assert_eq!(align, HAlign::Right, "the zero label points away from the reversed axis");
+            assert!(x < baseline, "the zero label sits on the wrong side of the baseline: {x} vs {baseline}");
+        }
+    }
+}
+
+#[test]
 fn a_combo_charts_secondary_series_keep_the_forward_axes() {
     let d = sample(ChartKind::Combo);
     let mut c = chart(ChartKind::Combo);
