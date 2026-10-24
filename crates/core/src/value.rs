@@ -339,12 +339,16 @@ pub fn compare_text(a: &str, b: &str) -> Ordering {
 }
 
 /// Sorting order used by Sort (ascending): numbers, text, booleans, errors, then blanks last.
+/// Numbers compare exactly, not at the 15 digits of [`compare`]. Observed in Excel 365: SORT,
+/// SORTBY, Data > Sort, the AutoFilter sort and table sort all put 0.3 before `=0.1+0.2`
+/// (0.30000000000000004) ascending and after it descending, whatever the input order.
 pub fn sort_compare(a: &Value, b: &Value) -> Ordering {
     match (a, b) {
         (Value::Empty, Value::Empty) => Ordering::Equal,
         (Value::Empty, _) => Ordering::Greater,
         (_, Value::Empty) => Ordering::Less,
         (Value::Error(_), Value::Error(_)) => Ordering::Equal,
+        (Value::Number(x), Value::Number(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
         _ => compare(a, b),
     }
 }
@@ -451,6 +455,19 @@ mod tests {
         assert_ne!(compare(&num(0.1 + 0.2), &num(0.3)), Ordering::Greater);
         assert_eq!(compare(&num(1.0), &num(1.00000000000001)), Ordering::Less);
         assert_eq!(compare(&num(1.0), &num(2.0)), Ordering::Less);
+    }
+
+    #[test]
+    fn sort_orders_numbers_exactly() {
+        let num = Value::Number;
+        let e = 0.1 + 0.2;
+        assert_eq!(sort_compare(&num(0.3), &num(e)), Ordering::Less);
+        assert_eq!(sort_compare(&num(e), &num(0.3)), Ordering::Greater);
+        assert_eq!(sort_compare(&num(100.0), &num(100.0 + 1e-14)), Ordering::Less);
+        assert_eq!(sort_compare(&num(0.0), &num(-0.0)), Ordering::Equal);
+        assert_eq!(sort_compare(&num(1.0), &Value::from("a")), Ordering::Less);
+        // `=` keeps its 15-digit comparison.
+        assert_eq!(compare(&num(0.3), &num(e)), Ordering::Equal);
     }
 
     #[test]
