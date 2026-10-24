@@ -3643,6 +3643,32 @@ fn json_import_rebuilds_cell_store_bands_and_counts() {
 }
 
 #[test]
+fn json_import_orders_ranges_and_checks_arrays() {
+    // #2160: ranges and arrays were taken from a JSON workbook as written. A merge with its
+    // corners swapped (or off the sheet) wrapped `height()` to about 4.29e9 in release, and an
+    // array shorter than rows x cols was indexed past its end.
+    let mut s = s();
+    s.execute("home.mergeCells", json!({"range": "B2:C3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A5", "input": "keep"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let good: serde_json::Value = serde_json::to_value(&**wb).unwrap();
+
+    let mut v = good.clone();
+    v["sheets"][0]["merges"][0] = json!({"start": {"row": 4_000_000_000u32, "col": 5}, "end": {"row": 2, "col": 1}});
+    let (back, _) = crate::io::open_bytes("book.json", &serde_json::to_vec(&v).unwrap()).unwrap();
+    let merge = back.active().unwrap().merges[0];
+    assert_eq!(merge, gridcraft_core::RangeRef::parse("B3:F1048576").unwrap());
+    assert_eq!(merge.height(), 1_048_574);
+
+    let mut v = good;
+    let cells = v["sheets"][0]["cells"]["bands"].as_object_mut().unwrap();
+    let band = cells.values_mut().next().unwrap();
+    band["rows"]["4"]["0"]["value"] = json!({"t": "Array", "v": {"rows": 1000, "cols": 1000, "data": []}});
+    let e = crate::io::open_bytes("book.json", &serde_json::to_vec(&v).unwrap()).unwrap_err().to_string();
+    assert!(e.contains("not a GridCraft JSON workbook") && e.contains("1000 × 1000"), "{e}");
+}
+
+#[test]
 fn notes_comments_and_links_survive_a_json_save() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();

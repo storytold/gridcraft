@@ -123,9 +123,25 @@ pub fn letters_to_col(s: &str) -> Option<u32> {
 
 /// A rectangular block of cells, inclusive on both ends. Always normalised (`start <= end`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(from = "RangeRefFields")]
 pub struct RangeRef {
     pub start: CellRef,
     pub end: CellRef,
+}
+
+/// A range as stored (`{start, end}`). A file may hold any numbers there, so loading puts the
+/// corners in order and on the sheet: `height()` and `width()` subtract them unchecked (#2160).
+#[derive(Deserialize)]
+struct RangeRefFields {
+    start: CellRef,
+    end: CellRef,
+}
+
+impl From<RangeRefFields> for RangeRef {
+    fn from(r: RangeRefFields) -> Self {
+        let on_sheet = |c: CellRef| CellRef::new(c.row.min(MAX_ROWS - 1), c.col.min(MAX_COLS - 1));
+        RangeRef::new(on_sheet(r.start), on_sheet(r.end))
+    }
 }
 
 impl RangeRef {
@@ -293,6 +309,19 @@ pub fn split_sheet(reference: &str) -> (Option<String>, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_loaded_range_is_ordered_and_on_the_sheet() {
+        // #2160: a file can hold any corners; `height()` subtracts them unchecked.
+        let r: RangeRef = serde_json::from_str(r#"{"start":{"row":4000000000,"col":5},"end":{"row":2,"col":1}}"#).unwrap();
+        assert_eq!(r, RangeRef::new(CellRef::new(2, 1), CellRef::new(MAX_ROWS - 1, 5)));
+        assert_eq!((r.height(), r.width()), (MAX_ROWS - 2, 5));
+        let r: RangeRef = serde_json::from_str(r#"{"start":{"row":9,"col":99999},"end":{"row":3,"col":0}}"#).unwrap();
+        assert_eq!(r, RangeRef::new(CellRef::new(3, 0), CellRef::new(9, MAX_COLS - 1)));
+        // What is saved loads back unchanged.
+        let ok = RangeRef::new(CellRef::new(1, 2), CellRef::new(7, 3));
+        assert_eq!(serde_json::from_str::<RangeRef>(&serde_json::to_string(&ok).unwrap()).unwrap(), ok);
+    }
 
     #[test]
     fn range_parse_rejects_signed_rows() {
