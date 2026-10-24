@@ -184,7 +184,8 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let mut cancel = false;
     // A message box over the editor (a data validation alert, a formula error) gets Enter and Esc;
     // the editor used to take them, so the first Esc cancelled the edit behind the message.
-    if has_focus && mine && app.message.is_none() {
+    // A dialog opened from the editor (F3 Paste Name) owns Enter and Escape until it closes.
+    if has_focus && mine && app.message.is_none() && app.dialog.is_none() {
         let (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, shift) = ui.input_mut(|i| {
             let m = i.modifiers;
             let alt_enter =
@@ -274,6 +275,10 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F4)) {
             cycle_anchor(&mut ed);
         }
+        // F3 opens Paste Name; its OK puts the name at the caret.
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F3)) {
+            app.open_dialog("pasteName", serde_json::json!({}));
+        }
         // Ctrl+Shift+A (Control+Shift+A on a Mac) inserts the argument names. Consumed anywhere,
         // as in Excel, so it never falls through to the text's select-all.
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::A)) {
@@ -328,6 +333,8 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         .font(font)
         .desired_width(width)
         .layouter(&mut layouter)
+        // While a dialog is open the editor takes no input, so its Enter cannot add a newline first.
+        .interactive(app.dialog.is_none())
         .lock_focus(true)
         .event_filter(egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
         .show(ui);

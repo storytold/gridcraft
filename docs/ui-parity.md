@@ -84,7 +84,7 @@ this logic, with one undo step.
 | Shortcuts bound to commands | 200+ documented shortcuts per platform | audited below (#110): shortcuts whose feature exists are bound, with the exceptions listed; the rest wait for their features |
 | Ctrl+arrow, Ctrl+Shift+arrow, Ctrl+Home/End, Ctrl+Shift+Home/End, Page Up/Down, Alt+Page | yes | done |
 | Ctrl+1, Ctrl+; and Ctrl+Shift+; , Ctrl+D/R, Ctrl+E, Ctrl+T/L, Ctrl+K, Ctrl+Shift+L, Ctrl+Shift+~!@#$%^&_ | yes | done |
-| F2, F4, F5, F7, F9 family, Shift+F2/F3/F10/F11, F12 | yes | done; F11 chart sheet, F8 extend mode, F3 Paste Name, F4 Repeat missing |
+| F2, F4, F5, F7, F9 family, Shift+F2/F3/F10/F11, F12 | yes | done; F11 chart sheet, F8 extend mode, F4 Repeat missing |
 | Mac-specific (Cmd variants, Control variants, Fn keys) | yes | done where a feature exists (`keymap.rs` picks the Mac variant) |
 | Sequential Alt access keys (Alt, H, N, …) on every ribbon tab | yes | 364-sequence keytip table for all tabs: per-control badges, prefix waiting, dropdowns open for editing (type/arrows/Enter), pending bindings for not-yet-built commands; letters also work with left Alt held (Alt+H, O, A), as in Excel; each Borders letter (H, B, …) draws its own preset, H, B, M opens Format Cells on the Border tab, and Erase Border, Line Color and Line Style are reserved; QAT/Backstage excluded |
 | Requests | — | #110 (more shortcuts and hot keys), #33 (sequential Alt; initial support landed in #43) |
@@ -133,7 +133,8 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 | Shift+F3, Ctrl+F3, Ctrl+Shift+F3 | Shift+F3, Cmd+F3 (Define Name), Cmd+Shift+F3 | Insert Function, Name Manager, Create from Selection | **added** |
 | F5, Shift+F5 (Mac), F7, Shift+F9, Ctrl+Alt+F9, F12, Ctrl+F4 | same | Go To, Find, Spelling, calculate sheet / all, Save As, close | **added** |
 | Shift+F10, Alt+Shift+F10, Ctrl+F1 | Shift+F10, Cmd+Option+R | context menu, Error Checking, ribbon | **added** |
-| F1, F3, F4 (repeat), F6 / Shift+F6, F8 / Shift+F8, F11, End mode | same | help, Paste Name, Repeat, pane cycling, extend/add mode, chart sheet | missing (no such feature yet) |
+| F3 | same | Paste Name | **added** (Paste Name dialog; no Paste List yet) |
+| F1, F4 (repeat), F6 / Shift+F6, F8 / Shift+F8, F11, End mode | same | help, Repeat, pane cycling, extend/add mode, chart sheet | missing (no such feature yet) |
 | Ctrl+Q, Ctrl+A after a function name, Ctrl+Shift+U, Ctrl+Alt+P | same | Quick Analysis, Function Arguments, formula bar height, tooltips | missing |
 | Ctrl+Shift+A after a function name | Control+Shift+A | argument names: `=SUMIF(` becomes `=SUMIF(range,criteria,sum_range)`, the `(` added when missing; one Undo takes them back | **added** |
 | Ctrl+6, Ctrl+Q, Ctrl+A after a function name, Ctrl+Shift+U, Ctrl+Alt+P | same | objects, Quick Analysis, Function Arguments, formula bar height, tooltips | missing |

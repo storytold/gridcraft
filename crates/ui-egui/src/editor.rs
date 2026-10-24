@@ -112,6 +112,14 @@ impl EditState {
         self.sync_caret = true;
     }
 
+    /// Inserts `text` at the caret as typed text (F3 Paste Name), not as a reference point mode would replace.
+    pub fn paste_text(&mut self, text: &str) {
+        self.point = None;
+        self.insert_ref(text);
+        self.point = None;
+        self.request_focus = true;
+    }
+
     /// Add another argument after the current pointed reference. Keep only the new reference
     /// replaceable, so a subsequent plain click does not remove earlier arguments or the separator.
     pub fn append_ref(&mut self, r: &str) {
@@ -377,6 +385,16 @@ mod tests {
         assert!(e.can_point());
         let e2 = EditState::new(0, CellRef::new(0, 0), "hello".into(), true, false);
         assert!(!e2.can_point());
+    }
+
+    #[test]
+    fn paste_text_goes_at_the_caret_and_is_not_a_pointed_reference() {
+        let mut e = EditState::new(0, CellRef::new(0, 0), "=SUM(".into(), true, false);
+        e.paste_text("Sales");
+        assert_eq!(e.text, "=SUM(Sales");
+        e.paste_text("Tax");
+        assert_eq!(e.text, "=SUM(SalesTax");
+        assert!(e.point.is_none());
     }
 
     #[test]
