@@ -432,6 +432,9 @@ struct PassHost<'a> {
     tainted: HashSet<Key>,
     /// Whether the formula being evaluated has read a previous value.
     taint: bool,
+    /// "Set precision as displayed" is on: results are rounded to their cells' formats before
+    /// they are stored or read by other formulas.
+    precision: Option<crate::DisplayedPrecision>,
 }
 
 impl<'a> PassHost<'a> {
@@ -462,6 +465,7 @@ impl<'a> PassHost<'a> {
             members: HashSet::default(),
             tainted: HashSet::default(),
             taint: false,
+            precision: wb.calc.precision_as_displayed.then(crate::DisplayedPrecision::new),
         }
     }
 }
@@ -632,6 +636,23 @@ impl PassHost<'_> {
                     let data = a.data.iter().map(|x| if matches!(x, Value::Empty) { Value::Number(0.0) } else { x.clone() }).collect();
                     Array::new(a.rows, a.cols, data).map(std::sync::Arc::new).unwrap_or(a)
                 };
+                // Precision as displayed: each element takes the format of the cell it lands in.
+                let a = match self.precision.as_mut() {
+                    Some(p) if a.data.iter().any(|x| matches!(x, Value::Number(_))) => {
+                        let cols = a.cols.max(1);
+                        let data = a
+                            .data
+                            .iter()
+                            .enumerate()
+                            .map(|(i, x)| {
+                                let at = CellRef::new(k.1.row.saturating_add((i / cols) as u32), k.1.col.saturating_add((i % cols) as u32));
+                                p.round_value(self.wb, k.0, at, x.clone())
+                            })
+                            .collect();
+                        Array::new(a.rows, a.cols, data).map(std::sync::Arc::new).unwrap_or(a)
+                    }
+                    _ => a,
+                };
                 // A dynamic-array formula anchors a spill range even while its result is one
                 // value -- a FILTER matching one row, a SORT or UNIQUE over one item -- so `C1#`
                 // is the 1 x 1 range and `ROWS(C1#)` is 1, as in Excel (#1491). A formula that
@@ -640,6 +661,10 @@ impl PassHost<'_> {
                 a.data.first().cloned().unwrap_or_default()
             }
             Value::Empty => Value::Number(0.0),
+            v @ Value::Number(_) => match self.precision.as_mut() {
+                Some(p) => p.round_value(self.wb, k.0, k.1, v),
+                None => v,
+            },
             v => v,
         };
         // An array that can't spill is #SPILL! for the formulas evaluated after it in this pass too.

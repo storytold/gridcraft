@@ -357,12 +357,15 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     let mut sel = d.selection.clone();
     let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new(), protection_checked: false };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, .. } = ctx;
+    let Ctx { mut wb, mut changed, structural, mut fit_rows, protection_checked, .. } = ctx;
     if !protection_checked {
         check_protection(&d.wb, &wb, &d.unlocked_ranges)?;
     }
     if !structural {
         check_arrays(&d.wb, &wb)?;
+    }
+    if wb.calc.precision_as_displayed {
+        round_edited_as_displayed(&d.wb, &mut wb, &mut changed, structural);
     }
     if changed.len() <= 200_000 {
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
@@ -389,6 +392,118 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;
     Ok(r)
+}
+
+/// "Set precision as displayed": a number typed, pasted or reformatted is stored as its format
+/// shows it (Excel rounds a constant when it is entered and when its cell's format changes,
+/// observed through COM). Only cells the edit touched are visited, so this costs nothing for
+/// the rest of the workbook; formula cells whose format changed are recalculated, and the
+/// recalculation rounds them. A structural edit recalculates everything anyway, so it only
+/// rounds its constants (a sheet the edit created, for one, holds written numbers).
+fn round_edited_as_displayed(old: &Workbook, wb: &mut Workbook, changed: &mut Vec<gridcraft_calc::Key>, structural: bool) {
+    let mut prec = gridcraft_calc::DisplayedPrecision::new();
+    for si in 0..wb.sheets.len() {
+        let Some(after) = wb.sheets.get(si) else { continue };
+        // Sheets are matched by name. A sheet the edit created has no earlier version, so all of
+        // its cells are new.
+        let before = old.sheet_index(&after.name).and_then(|i| old.sheets.get(i));
+        if before.is_some_and(|b| std::sync::Arc::ptr_eq(b, after)) {
+            continue;
+        }
+        let diffs: Vec<CellRef> = match before {
+            Some(before) => before.cells.diff(&after.cells),
+            None => after.cells.iter().map(|(c, _)| c).collect(),
+        };
+        let mut anchors = std::collections::HashSet::new();
+        for &c in &diffs {
+            if !structural && after.cell(c).is_some_and(|cell| cell.formula.is_some()) {
+                changed.push((si, c));
+                anchors.insert(c);
+            }
+        }
+        let updates = displayed_updates(&mut prec, wb, si, diffs.iter().copied());
+        // A spill destination is no stored cell: reformatting it (or its row or column) leaves
+        // no change in the store, so its anchor is recalculated to round the new element.
+        if let (Some(before), false) = (before, structural) {
+            for (&anchor, range) in &after.spill_ranges {
+                if !anchors.contains(&anchor)
+                    && (diffs.iter().any(|d| range.contains(*d))
+                        || line_styles_differ(&before.rows, &after.rows, range.start.row, range.end.row)
+                        || line_styles_differ(&before.cols, &after.cols, range.start.col, range.end.col))
+                {
+                    changed.push((si, anchor));
+                }
+            }
+        }
+        if updates.is_empty() {
+            continue;
+        }
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        for (c, r) in updates {
+            if let Some(cell) = sh.cells.get_mut(c) {
+                cell.value = gridcraft_core::Value::Number(r);
+                if !structural {
+                    changed.push((si, c));
+                }
+            }
+        }
+    }
+}
+
+/// Whether any row or column style in `lo..=hi` differs between two sheets' line maps.
+fn line_styles_differ(
+    before: &std::collections::BTreeMap<u32, gridcraft_model::LineInfo>,
+    after: &std::collections::BTreeMap<u32, gridcraft_model::LineInfo>,
+    lo: u32,
+    hi: u32,
+) -> bool {
+    let style = |m: &std::collections::BTreeMap<u32, gridcraft_model::LineInfo>, k: u32| m.get(&k).and_then(|l| l.style);
+    after.range(lo..=hi).any(|(k, l)| l.style != style(before, *k)) || before.range(lo..=hi).any(|(k, l)| l.style != style(after, *k))
+}
+
+/// Turning "Set precision as displayed" on rounds every number constant in the workbook to its
+/// format, permanently (Excel warns "Data will permanently lose accuracy"). Formulas are rounded
+/// by the recalculation that follows.
+pub(crate) fn round_all_constants_as_displayed(wb: &mut Workbook) {
+    let mut prec = gridcraft_calc::DisplayedPrecision::new();
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheets.get(si) else { continue };
+        let updates = displayed_updates(&mut prec, wb, si, sh.cells.iter().map(|(c, _)| c));
+        if updates.is_empty() {
+            continue;
+        }
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        for (c, r) in updates {
+            if let Some(cell) = sh.cells.get_mut(c) {
+                cell.value = gridcraft_core::Value::Number(r);
+            }
+        }
+    }
+}
+
+/// The constants among `cells` on sheet `si` whose value the option changes, with their rounded
+/// values. A locked constant on a protected sheet keeps its value: protection keeps its content,
+/// and rounding it by its format would change the content that the sheet protects.
+fn displayed_updates(
+    prec: &mut gridcraft_calc::DisplayedPrecision,
+    wb: &Workbook,
+    si: usize,
+    cells: impl Iterator<Item = CellRef>,
+) -> Vec<(CellRef, f64)> {
+    let Some(sh) = wb.sheet(si) else { return Vec::new() };
+    cells
+        .filter(|&c| !(sh.is_protected() && wb.styles.get(sh.style_id(c)).protection.locked))
+        .filter_map(|c| {
+            let cell = sh.cell(c)?;
+            match cell.value {
+                gridcraft_core::Value::Number(n) if cell.formula.is_none() => {
+                    let r = prec.round(wb, si, c, n);
+                    (r.to_bits() != n.to_bits()).then_some((c, r))
+                }
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// Excel's message for an edit of a locked cell on a protected sheet.
