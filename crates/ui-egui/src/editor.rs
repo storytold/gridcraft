@@ -112,6 +112,13 @@ impl EditState {
         self.sync_caret = true;
     }
 
+    /// Replaces a specific reference occurrence in the formula by its reference index.
+    pub fn replace_ref_at_index(&mut self, ref_idx: usize, new_ref_text: &str) {
+        let refs = formula_refs(&self.text);
+        if let Some((start, end, _, _, _)) = refs.iter().find(|(_, _, _, _, idx)| *idx == ref_idx) {
+            let (Some(a), Some(b)) = (self.text.get(..*start), self.text.get(*end..)) else { return };
+            self.text = format!("{a}{new_ref_text}{b}");
+            self.sync_caret = true;
     /// Add another argument after the current pointed reference. Keep only the new reference
     /// replaceable, so a subsequent plain click does not remove earlier arguments or the separator.
     pub fn append_ref(&mut self, r: &str) {
