@@ -1107,7 +1107,23 @@ fn item_label_el(e: &El, sys: DateSystem) -> String {
 }
 
 fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn> {
-    let x = cx.optional_xml(part).ok().flatten()?;
+    // A cache that can't be read loses its PivotTable: say so instead of dropping it silently.
+    // An oversized cache is refused before it inflates, so warning and opening the rest is safe.
+    let x = match cx.optional_xml(part) {
+        Ok(Some(x)) => x,
+        Ok(None) => {
+            cx.warn(format!("a PivotTable's cache {part} is missing or could not be read; kept as plain cells"));
+            return None;
+        }
+        Err(IoError::TooLarge(m)) => {
+            cx.warn(format!("a PivotTable's cache is too large to read ({m}); kept as plain cells"));
+            return None;
+        }
+        Err(e) => {
+            cx.warn(format!("a PivotTable's cache could not be read ({e}); kept as plain cells"));
+            return None;
+        }
+    };
     if x.name != "pivotCacheDefinition" {
         cx.warn(format!("{part} is not a pivot cache definition; its PivotTable was kept as plain cells"));
         return None;
