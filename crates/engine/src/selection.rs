@@ -190,7 +190,41 @@ pub fn jump(sheet: &Sheet, from: CellRef, dr: i64, dc: i64) -> CellRef {
 
 /// The contiguous data region around `c` (Ctrl+A / Ctrl+Shift+8, AutoSum, sort, tables).
 pub fn current_region(sheet: &Sheet, c: CellRef) -> RangeRef {
-    let filled = |c: CellRef| sheet.cell(c).is_some_and(|x| !x.value.is_empty() || x.formula.is_some()) || sheet.spill.contains_key(&c);
+    region_where(sheet, c, |_| true)
+}
+
+/// The data region a sheet AutoFilter takes from `c`, a cell outside any table: the current
+/// region, kept off the tables it reaches. Observed in Windows Excel 16 (table B4:C8, text in
+/// A1:A3, A5:A8 and B3; the current region of A1 is A1:C8): from A1 the filter covers A1:A3, from
+/// A6 A5:A8, from B3 A1:B3. So the region is cut to the columns on the cell's side of the table
+/// when the cell is left or right of it, else to the rows above or below, and grown again from
+/// the cell inside that window.
+pub fn current_region_outside_tables(sheet: &Sheet, c: CellRef) -> RangeRef {
+    let (mut c0, mut c1, mut r0, mut r1) = (0, MAX_COLS - 1, 0, MAX_ROWS - 1);
+    let mut region = current_region(sheet, c);
+    for _ in 0..=sheet.tables.len() {
+        let Some(t) = sheet.tables.iter().find(|t| t.range.intersects(&region)) else { break };
+        let t = t.range;
+        if c.col < t.start.col {
+            c1 = c1.min(t.start.col - 1);
+        } else if c.col > t.end.col {
+            c0 = c0.max(t.end.col + 1);
+        } else if c.row < t.start.row {
+            r1 = r1.min(t.start.row - 1);
+        } else if c.row > t.end.row {
+            r0 = r0.max(t.end.row + 1);
+        } else {
+            return RangeRef::cell(c);
+        }
+        region = region_where(sheet, c, |x| x.col >= c0 && x.col <= c1 && x.row >= r0 && x.row <= r1 && sheet.table_at(x).is_none());
+    }
+    region
+}
+
+/// The current region around `c`, counting only filled cells that `counts` accepts.
+fn region_where(sheet: &Sheet, c: CellRef, counts: impl Fn(CellRef) -> bool) -> RangeRef {
+    let filled =
+        |c: CellRef| (sheet.cell(c).is_some_and(|x| !x.value.is_empty() || x.formula.is_some()) || sheet.spill.contains_key(&c)) && counts(c);
     // Whether a row (or column) has a filled cell between two columns (rows), inclusive.
     let row_has = |row: u32, a: u32, b: u32| (a..=b).any(|col| filled(CellRef::new(row, col)));
     let col_has = |col: u32, a: u32, b: u32| (a..=b).any(|row| filled(CellRef::new(row, col)));

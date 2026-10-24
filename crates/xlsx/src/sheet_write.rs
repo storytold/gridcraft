@@ -594,7 +594,8 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             out.table_id += 1;
             let n = out.tables;
             let name = table_name(&t.name, &mut used_names, out.table_id);
-            let xml = table_xml(t, cols, &name, out.table_id, out);
+            let filter = table_filter(sheet, t);
+            let xml = table_xml(t, cols, &name, out.table_id, &filter, out);
             out.part(&format!("xl/tables/table{n}.xml"), Some(CT_TABLE), xml.into_bytes());
             let rid = rels.add("table", &format!("../tables/table{n}.xml"));
             let _ = write!(parts, "<tablePart r:id=\"{rid}\"/>");
@@ -1050,7 +1051,29 @@ fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mu
     s
 }
 
-fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> String {
+/// The criteria saved in a table's `<autoFilter>`: its own, plus those of a sheet AutoFilter
+/// that starts on the table's header row. GridCraft filters a table through the sheet
+/// AutoFilter, but a file can't hold a sheet AutoFilter that overlaps a table (the sheet element
+/// is left out), so without this the criteria would be lost and the rows they hide would reopen
+/// as rows hidden by hand, which SUBTOTAL 1-11 counts.
+fn table_filter(sheet: &Sheet, t: &Table) -> Vec<(u32, FilterCriterion)> {
+    let mut criteria = t.filter.clone();
+    let Some(af) = sheet.autofilter.as_ref().filter(|af| t.header_row && af.range.start.row == t.range.start.row && af.range.intersects(&t.range))
+    else {
+        return criteria;
+    };
+    for (off, c) in &af.criteria {
+        let Some(col) = af.range.start.col.checked_add(*off).and_then(|abs| abs.checked_sub(t.range.start.col)) else { continue };
+        if col < t.range.width() {
+            criteria.retain(|(o, _)| *o != col);
+            criteria.push((col, c.clone()));
+        }
+    }
+    criteria.sort_by_key(|(o, _)| *o);
+    criteria
+}
+
+fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, filter: &[(u32, FilterCriterion)], out: &mut Out) -> String {
     let mut s =
         format!("{XML_DECL}<table xmlns=\"{NS_MAIN}\" id=\"{id}\" name=\"{0}\" displayName=\"{0}\" ref=\"{1}\"", esc_attr(name), t.range.a1());
     if !t.header_row {
@@ -1068,10 +1091,10 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
         let _ = write!(s, " connectionId=\"{c}\"");
     }
     s.push('>');
-    if t.header_row && t.filter_button {
+    if t.header_row && (t.filter_button || !filter.is_empty()) {
         let end_row = if t.totals_row { t.range.end.row.saturating_sub(1).max(t.range.start.row) } else { t.range.end.row };
         let r = RangeRef::new(t.range.start, CellRef::new(end_row, t.range.end.col));
-        s.push_str(&autofilter_xml(r, &t.filter, out));
+        s.push_str(&autofilter_xml(r, filter, out));
     }
     let _ = write!(s, "<tableColumns count=\"{}\">", cols.len());
     for (i, name) in cols.iter().enumerate() {

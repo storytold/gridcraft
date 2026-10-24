@@ -1418,9 +1418,9 @@ fn a_table_filter_criteria_survive_a_round_trip() {
     assert!(b.autofilter.is_none(), "a table's filter belongs to the table part, not the sheet");
 }
 
-/// Stored `colId` offsets are relative to the filter range's first column, so criteria of a filter
-/// that starts right of the table's first column must not be folded into the table part, where
-/// they would apply to the wrong column.
+/// Stored `colId` offsets are relative to the table's first column, so criteria of a sheet filter
+/// that starts right of the table's first column are moved to the column they filter (Region), not
+/// kept at the filter's own offset (which would be Id).
 #[test]
 fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     let mut wb = Workbook::new();
@@ -1454,6 +1454,10 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
     let b = back.sheet(0).unwrap();
     let t = b.tables.first().expect("the table survived");
-    assert!(t.filter.is_empty(), "the criteria landed on the wrong table column: {:?}", t.filter);
+    assert!(
+        matches!(t.filter.as_slice(), [(1, FilterCriterion::Values { values, .. })] if values == &["East".to_string()]),
+        "the criteria landed on the wrong table column: {:?}",
+        t.filter
+    );
     assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
 }

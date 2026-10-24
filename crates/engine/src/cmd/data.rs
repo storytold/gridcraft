@@ -536,19 +536,53 @@ fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// Turn a sheet AutoFilter on over `p.range`, or over the data range of the selection.
+///
+/// A sheet AutoFilter never overlaps a table, because a file can't hold one (Excel refuses
+/// `Range("A1:C8").AutoFilter` over part of a table, and from a cell outside a table it leaves the
+/// table's cells out of the region). Inside a table the filter covers the table from its header
+/// row, which is saved as the table's own filter, and takes over the criteria the table already
+/// had so there is one filter to save.
 fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, mut r) = data_target(s, p, "data.filter")?;
-    // A selected header row filters the data below it (#201).
-    if p.get("range").is_none() && r.height() == 1 {
+    {
         let d = s.doc()?;
         let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
-        let below = current_region(sh, r.start).end.row;
-        if below > r.end.row {
-            r = RangeRef::new(r.start, CellRef::new(below, r.end.col));
+        if p.get("range").is_none() && sh.table_at(d.selection.active).is_none() && d.selection.current().is_single() {
+            r = crate::selection::current_region_outside_tables(sh, d.selection.active);
+        }
+        // A selected header row filters the data below it (#201).
+        if p.get("range").is_none() && r.height() == 1 {
+            let region = match sh.table_at(r.start) {
+                Some(t) => t.data_range().map(|dr| RangeRef::new(t.range.start, dr.end)).unwrap_or(t.range),
+                None => crate::selection::current_region_outside_tables(sh, r.start),
+            };
+            if region.end.row > r.end.row {
+                r = RangeRef::new(r.start, CellRef::new(region.end.row, r.end.col));
+            }
+        }
+    }
+    let Some(sh) = s.doc()?.wb.sheet(sheet) else { return Err(EngineError::NoDocument) };
+    // The table whose header row the filter starts on, when it lies inside that table.
+    let host =
+        sh.tables.iter().position(|t| t.header_row && t.range.start.row == r.start.row && t.range.contains(r.start) && t.range.contains(r.end));
+    if host.is_none() && sh.tables.iter().any(|t| t.range.intersects(&r)) {
+        return Err(bad("data.filter", "a filter range can't overlap a table; filter inside the table instead"));
+    }
+    // A narrower range would leave out the table's criteria on the columns it doesn't cover, and saving would drop them.
+    if let Some(t) = host.and_then(|i| sh.tables.get(i)) {
+        let shift = r.start.col.saturating_sub(t.range.start.col);
+        if t.filter.iter().any(|(o, _)| o.checked_sub(shift).is_none_or(|c| c >= r.width())) {
+            return Err(bad("data.filter", "the table is filtered on a column this range leaves out; filter the table's full width"));
         }
     }
     edit(s, |cx| {
-        cx.sheet_mut(sheet)?.autofilter = Some(AutoFilter { range: r, criteria: vec![] });
+        let sh = cx.sheet_mut(sheet)?;
+        let mut criteria = vec![];
+        if let Some(t) = host.and_then(|i| sh.tables.get_mut(i)) {
+            let shift = r.start.col.saturating_sub(t.range.start.col);
+            criteria = std::mem::take(&mut t.filter).into_iter().filter_map(|(o, c)| Some((o.checked_sub(shift)?, c))).collect();
+        }
+        sh.autofilter = Some(AutoFilter { range: r, criteria });
         Ok(json!({"filter": true, "range": r.a1()}))
     })
 }
