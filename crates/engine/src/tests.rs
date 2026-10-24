@@ -3395,6 +3395,41 @@ fn cell_picture_insert_validates_content_preserves_style_and_replaces_with_undo(
     assert_eq!(cell_picture(&s, "D2").unwrap().mime, "image/jpeg");
 }
 
+/// A cell's own phonetic reading goes where its text goes: copied, cut and pasted, moved with its
+/// column; pasted formats leave the target's reading; other content drops it.
+#[test]
+fn phonetic_readings_travel_with_their_text() {
+    let mut s = s();
+    let has = |s: &Session, at: &str| s.doc().unwrap().wb.active().unwrap().readings.contains_key(&CellRef::parse(at).unwrap());
+    s.execute("cell.set", json!({"cell": "B2", "input": "東"})).unwrap();
+    let own = std::sync::Arc::new(gridcraft_model::PhoneticString { text: "東".into(), runs: Vec::new(), props: None });
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().readings.insert(CellRef::parse("B2").unwrap(), own);
+    s.execute("edit.copy", json!({"range": "B2"})).unwrap();
+    s.execute("selection.set", json!({"range": "D2"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert!(has(&s, "B2") && has(&s, "D2"), "a copy takes the reading along");
+    s.execute("home.bold", json!({"range": "F1"})).unwrap();
+    s.execute("edit.copy", json!({"range": "F1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "formats", "at": "D2"})).unwrap();
+    assert!(has(&s, "D2"), "formats leave it");
+    s.execute("edit.cut", json!({"range": "D2"})).unwrap();
+    s.execute("selection.set", json!({"range": "D5"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert!(!has(&s, "D2") && has(&s, "D5"), "a cut moves it");
+    s.execute("sheet.moveColumns", json!({"cols": "D:D", "before": 1})).unwrap();
+    assert!(has(&s, "B5"), "it moves with its column");
+    s.execute("cell.set", json!({"cell": "B5", "input": "=1+1"})).unwrap();
+    assert!(!has(&s, "B5"), "a formula has no reading");
+    // Adding a number to text leaves the text, and so its reading.
+    s.execute("cell.set", json!({"cell": "H1", "input": "東"})).unwrap();
+    let own = std::sync::Arc::new(gridcraft_model::PhoneticString { text: "東".into(), runs: Vec::new(), props: None });
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().readings.insert(CellRef::parse("H1").unwrap(), own);
+    s.execute("cell.set", json!({"cell": "H3", "input": "3"})).unwrap();
+    s.execute("edit.copy", json!({"range": "H3"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "values", "at": "H1", "operation": "add"})).unwrap();
+    assert!(has(&s, "H1"), "the text stays, its reading too");
+}
+
 #[test]
 fn cell_picture_clipboard_clear_and_structural_edits_keep_complete_payload() {
     let mut s = s();

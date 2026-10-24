@@ -162,9 +162,9 @@ pub struct Workbook {
     /// text, so that an open + save keeps a Japanese workbook's readings. Written back next to the
     /// `<si>` holding the same text.
     ///
-    /// Keyed by text because that is all a cell keeps of its shared string: the saved table holds
-    /// each text once (the format's `uniqueCount`), so two `<si>` items that share a base text can
-    /// only keep one reading — the reader keeps the first and warns. Empty for workbooks without
+    /// Keyed by text because that is all a cell keeps of its shared string: the first `<si>` with a
+    /// text gives its reading here; a later one with the same text and another reading (or none)
+    /// keeps it on the cells that use it ([`crate::Sheet::readings`]). Empty for workbooks without
     /// phonetic data; not present in older JSON. Modelled data (unlike [`Workbook::preserved`],
     /// which holds unmodelled parts), so it is saved to JSON as well as to XLSX.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

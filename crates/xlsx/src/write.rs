@@ -86,8 +86,12 @@ impl Rels {
 /// Shared string table being built.
 #[derive(Default)]
 pub struct Sst {
-    list: Vec<String>,
+    /// Each item's text, and its own phonetic reading when it differs from the workbook's for that
+    /// text.
+    list: Vec<(String, Option<std::sync::Arc<PhoneticString>>)>,
     map: HashMap<String, u32>,
+    /// Items with a reading of their own, by text.
+    reading_map: HashMap<String, Vec<u32>>,
     pub count: u64,
 }
 
@@ -98,8 +102,27 @@ impl Sst {
             return i;
         }
         let i = self.list.len() as u32;
-        self.list.push(s.to_string());
+        self.list.push((s.to_string(), None));
         self.map.insert(s.to_string(), i);
+        i
+    }
+    /// The item for `s` with a phonetic reading of its own (one without runs: none).
+    pub fn index_reading(&mut self, s: &str, reading: &std::sync::Arc<PhoneticString>) -> u32 {
+        self.count += 1;
+        let list = &self.list;
+        let same = |i: &u32| list.get(*i as usize).and_then(|(_, p)| p.as_ref()).is_some_and(|p| **p == **reading);
+        if let Some(&i) = self.reading_map.get(s).and_then(|ids| ids.iter().find(|i| same(i))) {
+            return i;
+        }
+        // The text's plain item comes first, even unused (`count` counts cell references only): a
+        // reader takes the first item of a text for the workbook's reading.
+        if !self.map.contains_key(s) {
+            self.map.insert(s.to_string(), self.list.len() as u32);
+            self.list.push((s.to_string(), None));
+        }
+        let i = self.list.len() as u32;
+        self.list.push((s.to_string(), Some(reading.clone())));
+        self.reading_map.entry(s.to_string()).or_default().push(i);
         i
     }
 }
@@ -412,12 +435,13 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         crate::theme::write_theme(&wb.theme).into_bytes(),
     );
     wb_rels.add("theme", "theme/theme1.xml");
-    // Phonetic (furigana) data is kept per string text: the table below holds each text once, so
-    // the runs of the entry with that text are written next to it (`Workbook::phonetics`).
+    // Phonetic (furigana) data: the workbook's reading for a text (`Workbook::phonetics`), unless
+    // the item carries one of its own (`Sheet::readings`).
     let phonetics: HashMap<&str, &PhoneticString> = wb.phonetics.iter().map(|p| (p.text.as_str(), p)).collect();
     let mut sst = format!("{XML_DECL}<sst xmlns=\"{NS_MAIN}\" count=\"{}\" uniqueCount=\"{}\">", out.sst.count, out.sst.list.len());
-    for t in &out.sst.list {
-        let _ = write!(sst, "<si>{}</si>", crate::xml::si_body(t, phonetics.get(t.as_str()).copied()));
+    for (t, reading) in &out.sst.list {
+        let reading = reading.as_deref().or_else(|| phonetics.get(t.as_str()).copied());
+        let _ = write!(sst, "<si>{}</si>", crate::xml::si_body(t, reading));
     }
     sst.push_str("</sst>");
     out.part("xl/sharedStrings.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"), sst.into_bytes());

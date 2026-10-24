@@ -330,7 +330,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
                 let f = cell?.formula.as_ref()?;
                 (f.array.is_none() && crate::array_formula::needs_array(wb, si, *c, f)).then_some(RangeRef::cell(*c))
             });
-            write_cell(&mut s, *c, cell, sheet.cell_pictures.get(c), ov, ex, array.as_ref(), &sid, out);
+            write_cell(&mut s, *c, cell, sheet.cell_pictures.get(c), sheet.readings.get(c), ov, ex, array.as_ref(), &sid, out);
         }
         s.push_str("</row>");
     }
@@ -659,6 +659,7 @@ fn write_cell(
     c: CellRef,
     cell: Option<&Cell>,
     picture: Option<&std::sync::Arc<gridcraft_model::CellPicture>>,
+    reading: Option<&std::sync::Arc<gridcraft_model::PhoneticString>>,
     ov: Option<&String>,
     extra: Option<&Value>,
     dynamic: Option<&RangeRef>,
@@ -746,7 +747,11 @@ fn write_cell(
             let _ = write!(s, "><v>{}</v></c>", num(*n));
         }
         Value::Text(t) => {
-            let i = out.sst.index(t);
+            // A reading made for other text is stale and not written.
+            let i = match reading.filter(|p| *p.text == **t) {
+                Some(p) => out.sst.index_reading(t, p),
+                None => out.sst.index(t),
+            };
             let _ = write!(s, " t=\"s\"><v>{i}</v></c>");
         }
         Value::Bool(b) => {

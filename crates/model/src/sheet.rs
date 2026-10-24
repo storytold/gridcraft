@@ -90,6 +90,11 @@ pub struct Sheet {
     pub comments: BTreeMap<CellRef, Comment>,
     #[serde(with = "crate::cellmap")]
     pub hyperlinks: BTreeMap<CellRef, Hyperlink>,
+    /// Phonetic (furigana) readings of text cells whose shared string read differently from the
+    /// workbook's reading for that text ([`crate::Workbook::phonetics`]); one without runs stands for
+    /// no reading. Valid only while the cell holds their text.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "crate::cellmap")]
+    pub readings: BTreeMap<CellRef, Arc<crate::PhoneticString>>,
     pub charts: Vec<Chart>,
     pub images: Vec<Image>,
     pub shapes: Vec<Shape>,
@@ -160,6 +165,7 @@ impl Sheet {
             autofilter: None,
             comments: BTreeMap::new(),
             hyperlinks: BTreeMap::new(),
+            readings: BTreeMap::new(),
             charts: vec![],
             images: vec![],
             shapes: vec![],
@@ -247,20 +253,27 @@ impl Sheet {
     /// Replaces content, removing any picture at this address. Style-only edits use set_style.
     pub fn set_cell(&mut self, c: CellRef, cell: Cell) {
         self.cell_pictures.remove(&c);
+        // A phonetic reading belongs to the content it was read with.
+        self.readings.remove(&c);
         self.cells.set(c, cell);
     }
     pub fn remove_cell(&mut self, c: CellRef) -> Option<Cell> {
         self.cell_pictures.remove(&c);
+        self.readings.remove(&c);
         self.cells.remove(c)
     }
     /// Removes content in a range; returns scalar cells, with pictures removed from the side map.
+    /// The cells' own phonetic readings go too; a caller that moves the cells carries them along,
+    /// as it does the pictures.
     pub fn take_cells(&mut self, range: RangeRef) -> Vec<(CellRef, Cell)> {
         self.cell_pictures.retain(|c, _| !range.contains(*c));
+        self.readings.retain(|c, _| !range.contains(*c));
         self.cells.take_range(range)
     }
     /// Pictures retain a scalar fallback for calculation and unsupported consumers.
     pub fn set_picture(&mut self, c: CellRef, picture: Arc<CellPicture>) {
         let style = self.style_id(c);
+        self.readings.remove(&c);
         self.cells.set(c, Cell { value: Value::Error(gridcraft_core::CellError::Value), formula: None, style });
         self.cell_pictures.insert(c, picture);
     }

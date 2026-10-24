@@ -133,19 +133,58 @@ fn hostile_phonetic_runs_lose_only_the_runs() {
 }
 
 #[test]
-fn identical_text_with_different_readings_keeps_the_first_and_warns() {
+fn identical_text_with_different_readings_keeps_both() {
     let sst = r#"<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2"><si><t>東</t><rPh sb="0" eb="1"><t>ヒガシ</t></rPh></si><si><t>東</t><rPh sb="0" eb="1"><t>アズマ</t></rPh></si></sst>"#;
     let (wb, report) = read_xlsx(&package(sst)).unwrap();
-    // The saved table holds each text once, so only one reading can be written: the first.
-    assert_eq!(wb.phonetics.len(), 1);
-    assert_eq!(wb.phonetics[0].runs.first().map(|r| r.text.as_str()), Some("ヒガシ"));
-    assert!(report.warnings.iter().any(|w| w.contains("phonetic readings")), "{:?}", report.warnings);
+    // The first item gives the workbook its reading for the text; B1's item keeps its own.
+    let first = |wb: &Workbook| wb.phonetics.iter().map(|p| p.runs[0].text.clone()).collect::<Vec<_>>();
+    let own = |wb: &Workbook, a: &str| wb.sheet(0).unwrap().readings.get(&at(a)).map(|p| p.runs[0].text.clone());
+    assert_eq!((first(&wb), own(&wb, "A1"), own(&wb, "B1")), (vec!["ヒガシ".to_string()], None, Some("アズマ".into())));
+    assert!(!report.warnings.iter().any(|w| w.contains("phonetic")), "nothing is dropped: {:?}", report.warnings);
+    // Saving writes the text twice, once with each reading, and both come back.
+    let bytes = write_xlsx(&wb).unwrap();
+    let saved = part(&bytes, "xl/sharedStrings.xml");
+    assert!(saved.contains("ヒガシ") && saved.contains("アズマ") && saved.contains("uniqueCount=\"2\""), "{saved}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!((first(&back), own(&back, "A1"), own(&back, "B1")), (vec!["ヒガシ".to_string()], None, Some("アズマ".into())));
+    // A reading made for another text is not written.
+    let mut changed = back.clone();
+    text_cell(changed.sheet_mut(0).unwrap(), "B1", "西");
+    assert!(!part(&write_xlsx(&changed).unwrap(), "xl/sharedStrings.xml").contains("アズマ"));
+    // Nor does it come back when the cell gets its old text again: new content drops it.
+    let mut retyped = back.clone();
+    retyped.sheet_mut(0).unwrap().set_value(at("B1"), Value::text("西"));
+    retyped.sheet_mut(0).unwrap().set_value(at("B1"), Value::text("東"));
+    assert!(!part(&write_xlsx(&retyped).unwrap(), "xl/sharedStrings.xml").contains("アズマ"));
+    // A picture put in the cell drops it as well.
+    let mut pictured = back.clone();
+    let picture = gridcraft_model::CellPicture { data: Vec::new(), mime: "image/png".into(), alt: String::new() };
+    pictured.sheet_mut(0).unwrap().set_picture(at("B1"), std::sync::Arc::new(picture));
+    assert!(!pictured.sheet(0).unwrap().readings.contains_key(&at("B1")));
+    // A cell with a reading of its own written before the text's plain cells: the plain item
+    // still comes first, so the workbook's reading for the text survives a save.
+    let mut ordered = Workbook::new();
+    text_cell(ordered.sheet_mut(0).unwrap(), "A1", "東");
+    text_cell(ordered.sheet_mut(0).unwrap(), "B1", "東");
+    ordered.phonetics = wb.phonetics.clone();
+    let own_reading = wb.sheet(0).unwrap().readings.get(&at("B1")).unwrap().clone();
+    ordered.sheet_mut(0).unwrap().readings.insert(at("A1"), own_reading);
+    let (again, _) = read_xlsx(&write_xlsx(&ordered).unwrap()).unwrap();
+    assert_eq!((first(&again), own(&again, "A1"), own(&again, "B1")), (vec!["ヒガシ".to_string()], Some("アズマ".into()), None));
 
-    // The same text twice with the same reading is not a conflict.
+    // The same text twice with the same reading is one item.
     let same = sst.replace("アズマ", "ヒガシ");
     let (wb, report) = read_xlsx(&package(&same)).unwrap();
     assert_eq!(wb.phonetics.len(), 1);
-    assert!(!report.warnings.iter().any(|w| w.contains("phonetic readings")), "{:?}", report.warnings);
+    assert!(wb.sheet(0).unwrap().readings.is_empty());
+    assert!(!report.warnings.iter().any(|w| w.contains("phonetic")), "{:?}", report.warnings);
+
+    // The same text with and without a reading keeps the one without, too.
+    let bare = sst.replace(r#"<rPh sb="0" eb="1"><t>アズマ</t></rPh>"#, "");
+    let (wb, _) = read_xlsx(&package(&bare)).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().readings.get(&at("B1")).map(|p| p.runs.is_empty()), Some(true));
+    let saved = part(&write_xlsx(&wb).unwrap(), "xl/sharedStrings.xml");
+    assert!(saved.contains("<si><t>東</t></si>") && saved.contains("ヒガシ"), "{saved}");
 }
 
 #[test]

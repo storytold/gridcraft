@@ -801,6 +801,9 @@ fn slide_together(wb: &gridcraft_model::Workbook, sheet: usize, areas: &[RangeRe
             if let Some(picture) = src.cell_pictures.get(&c) {
                 dst.cell_pictures.insert(to, picture.clone());
             }
+            if let Some(reading) = src.readings.get(&c) {
+                dst.readings.insert(to, reading.clone());
+            }
         }
         for (c, comment) in src.comments.iter().filter(|(c, _)| a.contains(**c)) {
             if let Some(to) = c.offset(dr, dc) {
@@ -1029,10 +1032,12 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         };
         let mut moved_formulas = Vec::new();
         let mut moved_pictures = std::collections::BTreeMap::new();
+        let mut moved_readings = std::collections::BTreeMap::new();
         if cut_move {
             // Remove the source first (contents and formats), and fix references to it.
             let source = cx.sheet_mut(clip.sheet)?;
             moved_pictures = source.cell_pictures.iter().filter(|(c, _)| src.contains(**c)).map(|(c, p)| (*c, p.clone())).collect();
+            moved_readings = source.readings.iter().filter(|(c, _)| src.contains(**c)).map(|(c, r)| (*c, r.clone())).collect();
             let taken = source.take_cells(src);
             // Notes, hyperlinks and merged areas sit beside the cells, and a cut takes them
             // with the block: the destination is written from the clipboard snapshot taken
@@ -1060,12 +1065,22 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         };
                         let src_val = src_sheet.value(sc);
                         let src_picture = if cut_move { moved_pictures.get(&sc) } else { src_sheet.cell_pictures.get(&sc) }.cloned();
+                        // A text's own phonetic reading travels with it, as its picture does.
+                        let src_reading = if cut_move { moved_readings.get(&sc) } else { src_sheet.readings.get(&sc) }.cloned();
+                        // From another workbook, text read with that workbook's default reading
+                        // keeps it here, where the default for the same text may differ.
+                        let src_reading = src_reading.or_else(|| match (&src_val, same_doc) {
+                            (Value::Text(t), false) => src_wb.phonetics.iter().find(|p| p.text == t.as_ref()).map(|p| std::sync::Arc::new(p.clone())),
+                            _ => None,
+                        });
                         if skip_blanks && src_picture.is_none() && src_val.is_empty() && src_cell.as_ref().is_none_or(|x| x.formula.is_none()) {
                             continue;
                         }
                         let old = cx.wb.sheet(dest_sheet).and_then(|sh| sh.cell(dest)).cloned().unwrap_or_default();
                         let old_picture = cx.wb.sheet(dest_sheet).and_then(|sh| sh.cell_pictures.get(&dest)).cloned();
                         let mut new_picture = old_picture.clone();
+                        let old_reading = cx.wb.sheet(dest_sheet).and_then(|sh| sh.readings.get(&dest)).cloned();
+                        let mut new_reading = old_reading.clone();
                         let mut new = old.clone();
                         let shift = |cell: &Cell| -> Option<std::sync::Arc<Formula>> {
                             let f = cell.formula.as_ref()?;
@@ -1106,6 +1121,10 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             new_picture = None;
                         } else {
                             let sc_cell = src_cell.clone().unwrap_or_default();
+                            // Pasting what the cell holds brings its reading; formats leave the target's.
+                            if !matches!(what, What::Formats | What::Comments | What::Validation | What::ColumnWidths) {
+                                new_reading = src_reading.clone();
+                            }
                             match what {
                                 What::All | What::AllExceptBorders => {
                                     new_picture = src_picture.clone();
@@ -1205,6 +1224,20 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                 sh.validations.push(dv);
                             }
                         }
+                        // An operation that leaves the target's text as it was leaves its reading.
+                        if op != "none" && new.value == old.value {
+                            new_reading = old_reading.clone();
+                        }
+                        // A reading belongs to text typed in, not to a formula's result or a
+                        // picture; one this workbook gives the text anyway needs no entry.
+                        if new.formula.is_some() || new_picture.is_some() || !matches!(new.value, Value::Text(_)) {
+                            new_reading = None;
+                        }
+                        if let (Some(r), Value::Text(t)) = (&new_reading, &new.value)
+                            && cx.wb.phonetics.iter().any(|p| p.text == t.as_ref() && *p == **r)
+                        {
+                            new_reading = None;
+                        }
                         match what {
                             What::Comments => {
                                 if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
@@ -1229,6 +1262,9 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         }
                         if let Some(picture) = new_picture {
                             cx.sheet_mut(dest_sheet)?.cell_pictures.insert(dest, picture);
+                        }
+                        if let Some(reading) = new_reading {
+                            cx.sheet_mut(dest_sheet)?.readings.insert(dest, reading);
                         }
                         cx.touch(dest_sheet, dest);
                     }

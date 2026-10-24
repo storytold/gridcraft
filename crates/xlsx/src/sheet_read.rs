@@ -452,10 +452,15 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
 fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos: CellRef) {
     let style = cx.style(c.attr_u32("s"));
     let v = c.child("v").map(|v| v.text.as_str());
+    // Its own phonetic reading, when its string's differs from the workbook's for that text.
+    let mut reading = None;
     let value = match c.attr("t").unwrap_or("n") {
         "s" => match v.and_then(|v| v.trim().parse::<usize>().ok()) {
             Some(i) => match cx.sst.get(i) {
-                Some(s) => Value::Text(s.clone()),
+                Some(s) => {
+                    reading = cx.sst_reading.get(i).cloned().flatten();
+                    Value::Text(s.clone())
+                }
                 None => {
                     cx.warn("some cells refer to missing shared strings");
                     Value::Empty
@@ -512,6 +517,9 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     let value = if formula.is_none() && in_dynamic(st, pos) { Value::Empty } else { value };
+    if let Some(reading) = reading.filter(|_| formula.is_none()) {
+        sheet.readings.insert(pos, reading);
+    }
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
 }
 
