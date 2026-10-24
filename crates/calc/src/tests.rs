@@ -2294,6 +2294,7 @@ fn loan_schedule_residue_keeps_excels_sign() {
     assert_eq!(t.get("P7"), Value::Text("".into()));
 }
 
+/// Verify both lookup orientations ignore cycles in unselected table cells.
 #[test]
 fn lookup_tables_do_not_read_unselected_results() {
     for (formula, cells) in [
@@ -2311,6 +2312,7 @@ fn lookup_tables_do_not_read_unselected_results() {
     }
 }
 
+/// Check reference lookups preserve array semantics, incremental updates and genuine cycles.
 #[test]
 fn reference_lookups_match_array_lookup_semantics() {
     let mut t = T::new();
@@ -2353,6 +2355,7 @@ fn reference_lookups_match_array_lookup_semantics() {
     assert!(!t.calc.circular.is_empty());
 }
 
+/// Verify cross-sheet lookups avoid false cycles and propagate selected-result edits.
 #[test]
 fn cross_sheet_lookup_recalculates_without_false_cycles() {
     let mut t = T::new();
@@ -2371,6 +2374,7 @@ fn cross_sheet_lookup_recalculates_without_false_cycles() {
     assert_eq!(t.wb.sheet(1).unwrap().value(c("B2")), Value::Number(43.0));
 }
 
+/// Check horizontal lookup array lifting, wildcard matching and missing-key errors.
 #[test]
 fn horizontal_lookup_arrays_and_wildcards() {
     let mut t = T::new();
