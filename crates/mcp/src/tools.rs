@@ -55,13 +55,29 @@ fn obj(props: Value, required: &[&str]) -> Value {
     }
     o
 }
+/// Tools that can overwrite or discard existing data (`destructiveHint`). `execute_command` can reach any command, and
+/// undo/redo can take back an entry or reapply an overwrite, and `screenshot` replaces the file at `path`, so they are included.
+const DESTRUCTIVE_TOOLS: &[&str] = &[
+    "execute_command",
+    "write_range",
+    "set_cell",
+    "format_range",
+    "sort_range",
+    "open_workbook",
+    "save_workbook",
+    "new_workbook",
+    "undo",
+    "redo",
+    "screenshot",
+];
 fn tool(name: &str, title: &str, desc: &str, schema: Value, read_only: bool) -> Value {
+    let destructive = !read_only && DESTRUCTIVE_TOOLS.contains(&name);
     json!({
         "name": name,
         "title": title,
         "description": desc,
         "inputSchema": schema,
-        "annotations": {"title": title, "readOnlyHint": read_only, "destructiveHint": false, "openWorldHint": false},
+        "annotations": {"title": title, "readOnlyHint": read_only, "destructiveHint": destructive, "openWorldHint": false},
     })
 }
 
@@ -362,7 +378,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "Screenshot",
             "Save a PNG screenshot of the GridCraft window to `path`. Desktop app only (`gridcraft-cli mcp --connect 7979`).",
             obj(json!({"path": string("Output PNG path")}), &["path"]),
-            true,
+            false,
         ),
         tool(
             "list_functions",
