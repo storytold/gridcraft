@@ -314,6 +314,7 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
             _ => {}
         }
     }
+    g.links.macros = g.names.iter().map(|l| l.macro_name).collect();
     // The same test `defined_names` applies, before any cell formula is decoded.
     let skipped = g.names.iter().map(|l| !l.rgce.is_empty() && decode(&l.rgce, &l.rgcb, CellRef::new(0, 0), Mode::Name, &g.links).is_err()).collect();
     g.links.skipped = skipped;

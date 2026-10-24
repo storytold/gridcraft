@@ -552,6 +552,61 @@ fn formulas_using_a_skipped_name_keep_their_saved_results() {
 }
 
 #[test]
+fn formulas_calling_a_vba_function_keep_their_saved_results() {
+    // Lbl "DIAGONALWERT" is a VBA function (fFunc | fProc, no formula); "Doubled" =
+    // DIAGONALWERT(Sheet1!$A$1)*2 calls it. Cells call it as PtgName + PtgFuncVar 255 (#2139).
+    let lbl = |flags: u16, name: &str, rgce: &[u8]| {
+        rec(0x0018, &cat(&[&u16s(&[flags]), &[0, name.len() as u8], &u16s(&[rgce.len() as u16, 0, 0]), &[0; 4], &[0], name.as_bytes(), rgce]))
+    };
+    let udf = |arg: &[u8]| cat(&[&[0x23], &1u32.to_le_bytes(), arg, &[0x42, 2], &0x00FFu16.to_le_bytes()]);
+    let a1_3d = cat(&[&[0x3A], &0u16.to_le_bytes(), &u16s(&[0, 0])]);
+    let doubled = cat(&[&udf(&a1_3d), &ptg_int(2), &[0x05]]);
+    let boundsheet = |pos: u32| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 6, 0], b"Sheet1"]));
+    let globals = |pos: u32| {
+        cat(&[
+            &bof(0x0005),
+            &boundsheet(pos),
+            &rec(0x01AE, &u16s(&[1, 0x0401])),
+            &rec(0x0017, &cat(&[&u16s(&[1]), &u16s(&[0, 0, 0])])),
+            &lbl(0x000A, "DIAGONALWERT", &[]),
+            &lbl(0, "Doubled", &doubled),
+            &eof(),
+        ])
+    };
+    let b1_x10 = cat(&[&ptg_ref(0, 1), &ptg_int(10), &[0x05]]);
+    let sum = cat(&[&[0x25], &u16s(&[0, 1, 1 | 0xC000, 1 | 0xC000]), &[0x22, 1], &4u16.to_le_bytes()]);
+    let sheet = cat(&[
+        &bof(0x0010),
+        &rec(0x0203, &cat(&[&cell(0, 0, 0), &0.0f64.to_le_bytes()])),
+        // B1 = DIAGONALWERT(A1) saved as 2, B2 = DIAGONALWERT(A1+1) saved as text.
+        &formula(0, 1, num(2.0), &udf(&ptg_ref(0, 0))),
+        &formula(1, 1, special(0, 0), &udf(&cat(&[&ptg_ref(0, 0), &ptg_int(1), &[0x03]]))),
+        &rec(0x0207, &xlstr("eins")),
+        // B3 = SUM(B1:B2), B4 = B1*10 and B5 = Doubled depend on them.
+        &formula(2, 1, num(2.0), &sum),
+        &formula(3, 1, num(20.0), &b1_x10),
+        &formula(4, 1, num(4.0), &[0x43, 2, 0, 0, 0]),
+        &eof(),
+    ]);
+    let pos = globals(0).len() as u32;
+    let (wb, report) = read_xls(&compound("Workbook", &cat(&[&globals(pos), &sheet]))).unwrap();
+    assert!(wb.names.is_empty(), "{:?}", wb.names);
+    for (a1, saved) in [("B1", Value::Number(2.0)), ("B2", Value::from("eins")), ("B5", Value::Number(4.0))] {
+        assert_eq!(ftext(&wb, a1), None, "{a1}");
+        assert_eq!(v(&wb, 0, a1), saved, "{a1}");
+    }
+    // The dependents stay formulas and calculate from the kept values.
+    assert_eq!(ftext(&wb, "B3").as_deref(), Some("SUM(B1:B2)"));
+    assert_eq!(ftext(&wb, "B4").as_deref(), Some("B1*10"));
+    assert!(
+        report.warnings.iter().any(|w| w.contains("user-defined functions (VBA macros)") && w.contains("saved results")),
+        "{:?}",
+        report.warnings
+    );
+    assert!(report.warnings.iter().any(|w| w.contains("defined names use user-defined functions")), "{:?}", report.warnings);
+}
+
+#[test]
 fn reads_iterative_calculation_settings() {
     // CalcMode, CalcCount, CalcIter and CalcDelta repeat in every worksheet substream; here only
     // the first sheet carries them, so the sheet after it must not reset them to the defaults.
