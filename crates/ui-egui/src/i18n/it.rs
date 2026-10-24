@@ -6,6 +6,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Paste" => "Incolla",
         "Paste Values" => "Incolla valori",
+        // CSV export with semicolons and decimal commas (see io::CsvStyle).
+        "CSV UTF-8 (Semicolon delimited) (*.csv)" => "CSV UTF-8 (delimitato da punto e virgola) (*.csv)",
+        "CSV (Semicolon delimited)" => "CSV (delimitato da punto e virgola)",
+        "Save the active sheet as semicolon-separated text with decimal commas (1.234,5), as Excel reads it where the list separator is ;." => {
+            "Salva il foglio attivo come testo separato da punto e virgola, con la virgola decimale (1.234,5), come lo legge Excel dove il separatore di elenco è ;."
+        }
         "Paste Formulas" => "Incolla formule",
         "Paste Formatting" => "Incolla formattazione",
         "Transpose" => "Trasponi",

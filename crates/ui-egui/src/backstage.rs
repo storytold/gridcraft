@@ -122,10 +122,34 @@ pub struct Backstage {
     recent: RecentFiles,
 }
 
-/// Save As file types: (extension, label). The first is the workbook itself; the others are
-/// exports that leave the workbook's own file and unsaved state alone.
-pub const SAVE_TYPES: [(&str, &str); 4] =
-    [("xlsx", "Excel Workbook (*.xlsx)"), ("csv", "CSV UTF-8 (Comma delimited) (*.csv)"), ("html", "Web Page (*.html)"), ("pdf", "PDF (*.pdf)")];
+/// Save As file types: (type, label). The first is the workbook itself; the others are exports
+/// that leave the workbook's own file and unsaved state alone. A type is a file extension, or
+/// `csv-semicolon` (a `.csv` file), see [`csv_params`].
+pub const SAVE_TYPES: [(&str, &str); 5] = [
+    ("xlsx", "Excel Workbook (*.xlsx)"),
+    ("csv", "CSV UTF-8 (Comma delimited) (*.csv)"),
+    ("csv-semicolon", "CSV UTF-8 (Semicolon delimited) (*.csv)"),
+    ("html", "Web Page (*.html)"),
+    ("pdf", "PDF (*.pdf)"),
+];
+
+/// The file extension a Save As type writes.
+fn type_ext(fmt: &str) -> &str {
+    if fmt == "csv-semicolon" { "csv" } else { fmt }
+}
+
+/// `file.exportCsv` / `file.saveBytes` parameters for a CSV type. The names say what the file
+/// holds, unlike Excel's: in regions whose list separator is `;` Excel's «CSV UTF-8 (Comma
+/// delimited)» writes semicolons. Here the comma CSV holds commas (even for a workbook opened
+/// from a `;` file) and the semicolon CSV is its own type, with decimal commas (`1.234,5`). Both
+/// start with a UTF-8 byte order mark, which Excel needs to read accented letters.
+fn csv_params(fmt: &str) -> Json {
+    if fmt == "csv-semicolon" {
+        json!({"delimiter": ";", "decimal": ",", "bom": true})
+    } else {
+        json!({"delimiter": ",", "decimal": ".", "bom": true})
+    }
+}
 
 impl Backstage {
     pub fn new(page: Page) -> Backstage {
@@ -679,7 +703,7 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     ui.add_space(14.0);
     // Desktop: the system Save dialog. Web: the file downloads.
     let web = app.services.pick_save.is_none() && app.services.download.is_some();
-    let label = if web { format!("{} (.{fmt})", lang.tr("Download")) } else { lang.tr("Browse…").to_string() };
+    let label = if web { format!("{} (.{})", lang.tr("Download"), type_ext(fmt)) } else { lang.tr("Browse…").to_string() };
     if square_button(ui, Icon::OpenFolder, &label).clicked() && app.commit_edit(0, 0, false, false) {
         if fmt == "xlsx" {
             let before = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
@@ -867,6 +891,12 @@ fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
     section(ui, lang, "Change File Type");
     for (fmt, icon, title, detail) in [
         ("csv", Icon::TextColumns, "CSV (Comma delimited)", "Save the active sheet as comma-separated text."),
+        (
+            "csv-semicolon",
+            Icon::TextColumns,
+            "CSV (Semicolon delimited)",
+            "Save the active sheet as semicolon-separated text with decimal commas (1.234,5), as Excel reads it where the list separator is ;.",
+        ),
         ("html", Icon::Link, "Web Page (.html)", "Save the workbook as a web page."),
     ] {
         if action_row(ui, icon, lang.tr(title), lang.tr(detail)).clicked() && export_as(app, fmt) {
@@ -883,17 +913,26 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     }
     let id = match fmt {
         "pdf" => "file.exportPdf",
-        "csv" => "file.exportCsv",
+        "csv" | "csv-semicolon" => "file.exportCsv",
         "html" => "file.exportHtml",
         _ => return false,
+    };
+    let ext = type_ext(fmt);
+    let with_csv = |mut p: Json| {
+        if id == "file.exportCsv"
+            && let (Some(p), Json::Object(extra)) = (p.as_object_mut(), csv_params(fmt))
+        {
+            p.extend(extra);
+        }
+        p
     };
     let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
     let stem = std::path::Path::new(&title).file_stem().and_then(|s| s.to_str()).unwrap_or("Book1").to_string();
     if let Some(pick) = &app.services.pick_save {
-        let Some(path) = pick(&format!("{stem}.{fmt}")) else { return false };
+        let Some(path) = pick(&format!("{stem}.{ext}")) else { return false };
         // The picker may suggest a workbook extension; the export writes the chosen format.
-        let path = std::path::Path::new(&path).with_extension(fmt).to_string_lossy().into_owned();
-        return match app.run(id, json!({"path": path})) {
+        let path = std::path::Path::new(&path).with_extension(ext).to_string_lossy().into_owned();
+        return match app.run(id, with_csv(json!({"path": path}))) {
             Ok(_) => true,
             Err(e) => {
                 app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
@@ -916,10 +955,10 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
         };
     }
     app.store_view_state();
-    match app.session.run("file.saveBytes", json!({"format": fmt})) {
+    match app.session.run("file.saveBytes", with_csv(json!({"format": ext}))) {
         Ok(r) => {
             let bytes = r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode);
-            let name = r.get("name").and_then(Json::as_str).map_or_else(|| format!("{stem}.{fmt}"), str::to_string);
+            let name = r.get("name").and_then(Json::as_str).map_or_else(|| format!("{stem}.{ext}"), str::to_string);
             match (bytes, &app.services.download) {
                 (Some(b), Some(dl)) => {
                     dl(&name, &b);
