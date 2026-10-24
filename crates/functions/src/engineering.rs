@@ -710,7 +710,12 @@ im1!(imexp, |z: Cx| Ok(z.exp()));
 im1!(imln, |z: Cx| z.ln());
 im1!(imlog10, |z: Cx| z.ln().map(|l| Cx::new(l.re / std::f64::consts::LN_10, l.im / std::f64::consts::LN_10)));
 im1!(imlog2, |z: Cx| z.ln().map(|l| Cx::new(l.re / std::f64::consts::LN_2, l.im / std::f64::consts::LN_2)));
-im1!(imsqrt, |z: Cx| z.powf(0.5));
+im1!(imsqrt, |z: Cx| {
+    let m = z.abs();
+    let re = ((m + z.re) / 2.0).sqrt();
+    let im = ((m - z.re) / 2.0).sqrt();
+    Ok(Cx::new(re, if z.im < 0.0 { -im } else { im }))
+});
 im1!(imsin, |z: Cx| Ok(z.sin()));
 im1!(imcos, |z: Cx| Ok(z.cos()));
 im1!(imtan, |z: Cx| z.sin().div(z.cos()));
@@ -1271,6 +1276,10 @@ mod tests {
         cx(ev("IMLOG2", vec![t("3+4i")]), 2.321_928_094_887_362, 1.337_804_212_450_976_8);
         cx(ev("IMSQRT", vec![t("1+i")]), 1.098_684_113_467_809_9, 0.455_089_860_562_227_3);
         cx(ev("IMSQRT", vec![t("-4")]), 0.0, 2.0);
+        is_text(ev("IMSQRT", vec![t("-4")]), "2i");
+        is_text(ev("IMSQRT", vec![t("-9")]), "3i");
+        is_text(ev("IMSQRT", vec![t("4")]), "2");
+        is_text(ev("IMSQRT", vec![t("-2i")]), "1-i");
         is_text(ev("IMPOWER", vec![t("2+3i"), n(3.0)]), "-46+9i");
         cx(ev("IMPOWER", vec![t("2+3i"), n(0.5)]), 1.674_149_228_035_540_2, 0.895_977_476_129_838);
         cx(ev("IMSIN", vec![t("3+4i")]), 3.853_738_037_919_377, -27.016_813_258_003_93);
