@@ -1234,6 +1234,22 @@ pub fn evaluate(wb: &Workbook, sheet: usize, at: CellRef, formula: &str) -> Valu
     evaluate_expr(wb, sheet, at, &expr)
 }
 
+/// Evaluates a formula that refers to cells (`OFFSET(Sheet1!$A$1,0,0,10,8)`, a defined name, a
+/// list of ranges) and returns the areas it refers to; `None` when it gives a value or an error.
+/// Used for print areas a file defines with a formula.
+pub fn evaluate_reference(wb: &Workbook, sheet: usize, at: CellRef, formula: &str) -> Option<Vec<crate::eval::Area>> {
+    let body = formula.strip_prefix('=').unwrap_or(formula);
+    let expr = gridcraft_formula::parse(body).ok()?;
+    let exprs = HashMap::default();
+    let mut rng = 0x1234_5678_9ABC_DEF0u64;
+    let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
+    let mut ev = Evaluator::new(&mut host, sheet, at);
+    match ev.eval(&expr) {
+        crate::eval::Ev::R(areas) if !areas.is_empty() => Some(areas),
+        _ => None,
+    }
+}
+
 pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> Value {
     let exprs = HashMap::default();
     let mut rng = 0x1234_5678_9ABC_DEF0u64;

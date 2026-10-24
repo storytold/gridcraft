@@ -325,7 +325,13 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
                     && let Some(sheet) = wb.sheet_mut(si)
                 {
                     if lname == "_xlnm.print_area" {
-                        sheet.print.print_area = parse_print_area(text);
+                        if is_single_range(text) {
+                            sheet.print.print_area = parse_print_area(text);
+                        } else if !text.trim().is_empty() {
+                            // A formula (OFFSET, INDEX...) or several ranges: kept as a formula
+                            // and worked out when the sheet prints.
+                            sheet.print.print_area_formula = Some(crate::fmla::from_file(text.trim()));
+                        }
                     } else {
                         let (rows, cols) = parse_print_titles(text);
                         sheet.print.title_rows = rows;
@@ -416,6 +422,13 @@ fn strip_sheet(s: &str) -> &str {
         Some(i) => s.get(i + 1..).unwrap_or(""),
         None => s,
     }
+}
+
+/// Whether a print area is one plain range (`Sheet1!$A$1:$H$40`), as opposed to a formula or
+/// a list of ranges.
+fn is_single_range(text: &str) -> bool {
+    let t = text.trim();
+    !t.contains(',') && !t.contains('(') && parse_print_area(t).is_some()
 }
 
 pub fn parse_print_area(text: &str) -> Option<RangeRef> {

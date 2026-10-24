@@ -322,6 +322,13 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
                 esc(&q),
                 abs_range(pa)
             );
+        } else if let Some(f) = &sheet.print.print_area_formula {
+            let _ = write!(
+                names,
+                "<definedName name=\"_xlnm.Print_Area\" localSheetId=\"{}\">{}</definedName>",
+                kept.file_index(i),
+                esc(&crate::fmla::text_to_file(f))
+            );
         }
         let mut titles = vec![];
         if let Some((c0, c1)) = sheet.print.title_cols {

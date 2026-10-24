@@ -281,6 +281,7 @@ fn sample() -> Workbook {
         paper: "A4".into(),
         margins: [0.5, 0.6, 0.7, 0.8, 0.2, 0.25],
         print_area: Some(rr("A1:H30")),
+        print_area_formula: None,
         title_rows: Some((0, 1)),
         title_cols: Some((0, 0)),
         scale: 80,
@@ -1456,4 +1457,19 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     let t = b.tables.first().expect("the table survived");
     assert!(t.filter.is_empty(), "the criteria landed on the wrong table column: {:?}", t.filter);
     assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
+}
+
+/// A print area defined with a formula, or as several ranges, is kept as written and saved back.
+#[test]
+fn formula_print_area_round_trips() {
+    for text in ["OFFSET(Payment!$A$1,0,0,ROW(Payment!$A$18)+1+Payment!$D$12,8)", "Payment!$A$1:$B$5,Payment!$D$1:$E$5"] {
+        let mut wb = Workbook::new();
+        let sheet = Arc::make_mut(&mut wb.sheets[0]);
+        sheet.name = "Payment".into();
+        sheet.print.print_area_formula = Some(text.into());
+        let bytes = crate::write_xlsx(&wb).unwrap();
+        let (back, _) = crate::read_xlsx(&bytes).unwrap();
+        assert_eq!(back.sheets[0].print.print_area, None, "{text}");
+        assert_eq!(back.sheets[0].print.print_area_formula.as_deref(), Some(text), "{text}");
+    }
 }

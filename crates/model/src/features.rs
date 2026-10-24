@@ -730,6 +730,11 @@ pub struct PrintSettings {
     /// Margins in inches: left, right, top, bottom, header, footer.
     pub margins: [f32; 6],
     pub print_area: Option<RangeRef>,
+    /// A print area a file defines with a formula (`OFFSET(Sheet1!$A$1,0,0,COUNTA(...),8)`) or as
+    /// several ranges: kept as written, so saving writes it back, and worked out each time the
+    /// sheet prints (Excel recalculates it the same way). `print_area` is then `None`.
+    #[serde(default)]
+    pub print_area_formula: Option<String>,
     pub title_rows: Option<(u32, u32)>,
     pub title_cols: Option<(u32, u32)>,
     /// Percent scale, or fit to pages (wide, tall).
@@ -840,6 +845,7 @@ impl Default for PrintSettings {
             paper: "Letter".into(),
             margins: [0.7, 0.7, 0.75, 0.75, 0.3, 0.3],
             print_area: None,
+            print_area_formula: None,
             title_rows: None,
             title_cols: None,
             scale: 100,

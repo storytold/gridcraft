@@ -164,6 +164,25 @@ impl PrintOptions {
     }
 }
 
+/// The range sheet `si` prints, with a print area defined by a formula worked out first (Excel
+/// recalculates it each time it prints). Several areas print as the span of those on the sheet.
+fn sheet_print_range(wb: &Workbook, si: usize) -> Option<RangeRef> {
+    let sh = wb.sheet(si)?;
+    if sh.print.print_area.is_none()
+        && let Some(f) = &sh.print.print_area_formula
+        && let Some(areas) = gridcraft_calc::evaluate_reference(wb, si, CellRef::new(0, 0), f)
+    {
+        let mut span: Option<RangeRef> = None;
+        for a in areas.iter().filter(|a| a.sheet == si).take(64) {
+            span = Some(span.map_or(a.range, |s| s.union(&a.range)));
+        }
+        if let Some(r) = span {
+            return Some(trim_full(sh, r));
+        }
+    }
+    print_range(sh)
+}
+
 /// The range a sheet prints: its print area, else the used range grown to cover drawing
 /// objects. `None` when there is nothing to print.
 pub fn print_range(sh: &Sheet) -> Option<RangeRef> {
@@ -264,7 +283,7 @@ pub fn layout_sheet(wb: &Workbook, si: usize, opts: &PrintOptions, range_overrid
     }
     let area = match range_override {
         Some(r) => trim_full(sh, r),
-        None => print_range(sh).unwrap_or(RangeRef::cell(CellRef::new(0, 0))),
+        None => sheet_print_range(wb, si).unwrap_or(RangeRef::cell(CellRef::new(0, 0))),
     };
     let title_rows = title_span(st.title_rows, MAX_ROWS);
     let title_cols = title_span(st.title_cols, MAX_COLS);
@@ -377,7 +396,7 @@ pub fn layouts(wb: &Workbook, opts: &PrintOptions) -> Vec<SheetLayout> {
             break;
         }
         let ovr = if si == wb.active_sheet { opts.range } else { None };
-        if opts.all_sheets && ovr.is_none() && wb.sheet(si).is_some_and(|s| print_range(s).is_none()) {
+        if opts.all_sheets && ovr.is_none() && sheet_print_range(wb, si).is_none() {
             continue;
         }
         if let Some(mut l) = layout_sheet(wb, si, opts, ovr) {
@@ -1861,6 +1880,27 @@ mod tests {
     }
     fn contains(hay: &[u8], needle: &str) -> bool {
         hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+    }
+
+    /// A print area defined by a formula (as loan-schedule templates do: OFFSET grown by the number
+    /// of payments) prints the range the formula works out to, not just its first cell.
+    #[test]
+    fn formula_print_area_prints_the_range_it_works_out_to() {
+        let mut s = s();
+        for r in 1..=120 {
+            s.execute("cell.set", json!({"cell": format!("A{r}"), "input": format!("{r}")})).unwrap();
+        }
+        s.execute("cell.set", json!({"cell": "D1", "input": "100"})).unwrap();
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().print.print_area_formula =
+            Some("OFFSET(Sheet1!$A$1,0,0,Sheet1!$D$1,2)".into());
+        let wb = &s.doc().unwrap().wb;
+        let l = layouts(wb, &PrintOptions { all_sheets: false, range: None, fit_to_page: None });
+        assert_eq!(l.len(), 1);
+        assert_eq!(l[0].area, RangeRef::parse("A1:B100").unwrap());
+        // Set Print Area replaces the formula.
+        s.execute("pageLayout.printArea", json!({"range": "A1:A10"})).unwrap();
+        let p = &s.doc().unwrap().wb.active().unwrap().print;
+        assert_eq!((p.print_area, p.print_area_formula.clone()), (RangeRef::parse("A1:A10"), None));
     }
 
     #[test]

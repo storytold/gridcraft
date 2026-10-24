@@ -261,7 +261,9 @@ fn print_area(s: &mut Session, p: &Json) -> Result<Json> {
     let r = target_range(s, p)?;
     edit(s, |cx| {
         let si = cx.sheet_index();
-        cx.sheet_mut(si)?.print.print_area = if clear { None } else { Some(r) };
+        let print = &mut cx.sheet_mut(si)?.print;
+        print.print_area = if clear { None } else { Some(r) };
+        print.print_area_formula = None;
         Ok(Json::Null)
     })
 }
