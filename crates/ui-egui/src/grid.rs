@@ -3160,8 +3160,17 @@ fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, 
     let painter = ui.painter().with_clip_rect(clip);
     painter.rect_filled(erect, 0.0, fill);
     painter.rect_stroke(erect.expand(1.0), 0.0, Stroke::new(2.0, Tokens::get(ui.ctx()).sel_border), StrokeKind::Middle);
+    // The text sits where the cell will draw it once entered (Top, Center or Bottom), as in
+    // Excel, instead of always at the top of a tall cell.
+    let text_h = ui.painter().layout_no_wrap(if ed.text.is_empty() { " ".into() } else { ed.text.clone() }, font.clone(), Color32::BLACK).size().y;
+    // In the cell's own rectangle, as when it's drawn: the editor box can be taller.
+    let place = |v: VAlign| if st.align.wrap { wrapped_cell_text_y(v, rect, text_h, geo.z) } else { cell_text_y(v, rect, text_h, geo.z) };
+    // The field has no margin, so its top is the text's top: the y the cell draws the text at
+    // once entered, inside the editor box (a taller edit starts at its top).
+    let mut field = erect.shrink2(vec2(2.0, 0.0));
+    field.min.y = place(st.align.v).clamp(erect.top() - 2.0, (erect.bottom() - text_h).max(erect.top() - 2.0));
     let id = egui::Id::new("gridcraft.cell_editor");
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
     child.set_clip_rect(clip);
     // The theme's caret is meant for the UI chrome and vanishes on some fills (and, in the dark
     // theme, on the white paper): pick black or white against the fill, like Excel.
