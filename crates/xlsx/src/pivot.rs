@@ -63,6 +63,16 @@ fn same(a: &str, b: &str) -> bool {
     a.to_lowercase() == b.to_lowercase()
 }
 
+/// The database field named `name`: an exact match first; a name that differs only in its outer
+/// spaces (a pivot read from a file that trimmed its fields) matches when exactly one field does.
+fn find_db_field(fields: &[CField], name: &str) -> Option<usize> {
+    fields.iter().position(|f| f.col.is_some() && same(&f.name, name)).or_else(|| {
+        let mut trimmed = fields.iter().enumerate().filter(|(_, f)| f.col.is_some() && same(f.name.trim(), name.trim()));
+        let i = trimmed.next().map(|(i, _)| i)?;
+        trimmed.next().is_none().then_some(i)
+    })
+}
+
 fn func_name(f: PivotFunc) -> &'static str {
     match f {
         PivotFunc::Sum => "sum",
@@ -411,7 +421,8 @@ fn range_source_xml(sheet: &str, r: RangeRef) -> String {
 fn header_text(v: &Value) -> String {
     match v {
         Value::Empty => String::new(),
-        v => label(v).trim().to_string(),
+        // Excel names the cache field by the header as it is, spaces included.
+        v => Some(label(v)).filter(|t| !t.trim().is_empty()).unwrap_or_default(),
     }
 }
 
@@ -449,7 +460,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
             formula: None,
         });
     }
-    let find = |fields: &[CField], name: &str| fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    let find = find_db_field;
 
     // Records (rows that aren't entirely blank), read once.
     let mut rows: Vec<u32> = Vec::new();
@@ -769,7 +780,7 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
 
 fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn Fn(&str) -> Option<u32>) -> String {
     let nf = c.fields.len();
-    let find_db = |name: &str| c.fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    let find_db = |name: &str| find_db_field(&c.fields, name);
     let row_idx: Vec<usize> = c.axis_map.iter().take(pt.rows.len()).filter_map(|x| *x).collect();
     let col_idx: Vec<usize> = c.axis_map.iter().skip(pt.rows.len()).filter_map(|x| *x).collect();
     // Filters: on an axis field → hidden items there; otherwise a page field.

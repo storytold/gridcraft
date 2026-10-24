@@ -724,3 +724,31 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
 }
+
+#[test]
+fn trimmed_pivot_field_finds_its_header_with_spaces() {
+    // The report names `Region`; the source header is `Region ` (#1447). The field stays an axis.
+    let axes = |wb: &Workbook| {
+        let parts = unzip(&write_xlsx(wb).unwrap());
+        let t1 = String::from_utf8(parts.get("xl/pivotTables/pivotTable1.xml").unwrap().clone()).unwrap();
+        (axis_xs(&t1, "rowFields"), axis_xs(&t1, "colFields"))
+    };
+    let plain = workbook();
+    let mut spaced = workbook();
+    spaced.sheet_mut(0).unwrap().cells.set(at("A1"), Cell::value(Value::text("Region ")));
+    let want = axes(&plain);
+    assert!(!want.0.is_empty(), "the first PivotTable has row fields");
+    assert_eq!(axes(&spaced), want);
+
+    // The same goes for a value field and a report filter: `Sales` finds the header `Sales `.
+    let table = |wb: &Workbook| {
+        let parts = unzip(&write_xlsx(wb).unwrap());
+        String::from_utf8(parts.get("xl/pivotTables/pivotTable1.xml").unwrap().clone()).unwrap()
+    };
+    let headers = ["Region", "Product", "Date", "Units", "Sales", "Channel"];
+    let mut padded = workbook();
+    for (c, h) in headers.iter().enumerate() {
+        padded.sheet_mut(0).unwrap().cells.set(CellRef::new(0, c as u32), Cell::value(Value::text(format!("{h} "))));
+    }
+    assert_eq!(table(&padded), table(&plain));
+}

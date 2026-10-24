@@ -342,6 +342,41 @@ fn in_axes(pt: &PivotTable, field: &str) -> bool {
     pt.rows.iter().chain(pt.columns.iter()).any(|f| f.source_col.eq_ignore_ascii_case(field))
 }
 
+/// The name `field` has in the PivotTable (a field keeps the spaces of its source header, `Region `):
+/// the stored name equal to it ignoring case, else the one equal to it without its outer spaces
+/// when exactly one is; `field` itself when none is. Only the names in `area` count (`rows`,
+/// `columns`, `axes` for both, `values` for value fields and their captions, `filters`, or `any`),
+/// so a value caption can't stand in for an axis field of the same trimmed name.
+fn stored_name(pt: &PivotTable, field: &str, area: &str) -> String {
+    let mut names: Vec<&str> = vec![];
+    if matches!(area, "rows" | "axes" | "any") {
+        names.extend(pt.rows.iter().map(|f| f.source_col.as_str()));
+    }
+    if matches!(area, "columns" | "axes" | "any") {
+        names.extend(pt.columns.iter().map(|f| f.source_col.as_str()));
+    }
+    if matches!(area, "filters" | "any") {
+        names.extend(pt.filters.iter().map(|f| f.source_col.as_str()));
+    }
+    if matches!(area, "values" | "any") {
+        for v in &pt.values {
+            names.push(&v.source_col);
+            names.push(&v.name);
+        }
+    }
+    if let Some(n) = names.iter().find(|n| n.eq_ignore_ascii_case(field)) {
+        return n.to_string();
+    }
+    let key = field.trim().to_lowercase();
+    let mut found: Vec<&str> = names.iter().copied().filter(|n| n.trim().to_lowercase() == key).collect();
+    found.sort_by_key(|n| n.to_lowercase());
+    found.dedup_by_key(|n| n.to_lowercase());
+    match found.as_slice() {
+        [one] => one.to_string(),
+        _ => field.to_string(),
+    }
+}
+
 /// Name of the Σ Values pseudo-field (where the value fields sit when there are two or more).
 const VALUES_FIELD: &str = "Σ Values";
 
@@ -1027,6 +1062,7 @@ fn remove_field(s: &mut Session, p: &Json) -> Result<Json> {
         None => None,
     };
     update(s, p, |pt, _, _| {
+        let field = stored_name(pt, &field, area.unwrap_or("any"));
         match area {
             Some(a) => {
                 remove_from_area(C, pt, &field, a)?;
@@ -1052,6 +1088,7 @@ fn move_field(s: &mut Session, p: &Json) -> Result<Json> {
     let to = area_param(C, str_param(p, "to"))?;
     let pos = position_param(p);
     update(s, p, |pt, src, _| {
+        let field = stored_name(pt, &field, from);
         if is_values_field(src, &field) {
             return move_values_field(C, pt, from, to, pos);
         }
@@ -1128,6 +1165,7 @@ fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").map(str::to_string);
     let fmt = p.get("numberFormat").cloned();
     update(s, p, |pt, src, _| {
+        let field = field.as_deref().map(|f| stored_name(pt, f, "values"));
         let i = match (index, &field) {
             (Some(i), _) => i,
             (None, Some(f)) => pt
@@ -1251,6 +1289,7 @@ fn sort(s: &mut Session, p: &Json) -> Result<Json> {
         o => return Err(bad(C, format!("unknown order `{o}` (asc|desc|none)"))),
     };
     update(s, p, |pt, _, _| {
+        let field = stored_name(pt, &field, "axes");
         axis_field(C, pt, &field)?.sort = order;
         Ok(json!({}))
     })
@@ -1273,6 +1312,7 @@ fn group(s: &mut Session, p: &Json) -> Result<Json> {
     let raw = str_param(p, "by").unwrap_or("months");
     let by = group_param(Some(raw)).ok_or_else(|| bad(C, format!("unknown grouping `{raw}` (years|quarters|months|days|none)")))?;
     update(s, p, |pt, src, _| {
+        let field = stored_name(pt, &field, "axes");
         if by != PivotDateGroup::None {
             let c = src.col(&field).ok_or_else(|| bad(C, format!("no field `{field}` in the source data")))?;
             if !src.numeric.get(c).copied().unwrap_or(false) {
@@ -1293,6 +1333,7 @@ fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
     let items: Option<Vec<String>> =
         p.get("items").and_then(Json::as_array).map(|a| a.iter().take(100_000).filter_map(|x| x.as_str().map(str::to_string)).collect());
     update(s, p, |pt, src, wb| {
+        let field = stored_name(pt, &field, "axes");
         let all = match &items {
             Some(v) => v.clone(),
             None => {

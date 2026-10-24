@@ -43,8 +43,17 @@ pub struct Source {
 }
 
 impl Source {
+    /// The column named `name`: the exact header (case-insensitive) first, then, when exactly one
+    /// header matches it without its leading and trailing spaces, that one (so `Region` finds
+    /// `Region `).
     pub fn col(&self, name: &str) -> Option<usize> {
-        self.headers.iter().position(|h| h.eq_ignore_ascii_case(name))
+        self.headers.iter().position(|h| h.eq_ignore_ascii_case(name)).or_else(|| {
+            let mut found = self.headers.iter().enumerate().filter(|(_, h)| h.trim().to_lowercase() == name.trim().to_lowercase());
+            match (found.next(), found.next()) {
+                (Some((i, _)), None) => Some(i),
+                _ => None,
+            }
+        })
     }
 }
 
@@ -115,8 +124,9 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
     let mut next_suffix: HashMap<String, usize> = HashMap::new();
     let mut formats = Vec::new();
     for c in r.start.col..=r.end.col {
-        let h = crate::display::cell_text(wb, sh, CellRef::new(r.start.row, c)).trim().to_string();
-        if h.is_empty() {
+        // Excel names the field by the header as it is, spaces included.
+        let h = crate::display::cell_text(wb, sh, CellRef::new(r.start.row, c));
+        if h.trim().is_empty() {
             return Err(FIELD_NAME_ERR.into());
         }
         let key = h.to_ascii_lowercase();
@@ -1646,5 +1656,32 @@ mod fit_tests {
         assert!(!data_cols_exceed_sheet(64, false, 256));
         assert!(!data_cols_exceed_sheet(16_384, false, 0));
         assert!(data_cols_exceed_sheet(16_385, false, 0));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(headers: &[&str]) -> Source {
+        Source {
+            sheet: 0,
+            range: RangeRef::parse("A1:C2").unwrap(),
+            headers: headers.iter().map(|h| h.to_string()).collect(),
+            formats: vec![],
+            numeric: vec![],
+            dates: vec![],
+            rows: vec![],
+        }
+    }
+
+    #[test]
+    fn column_lookup_trims_and_compares_case_for_every_script() {
+        let s = source(&["RÉGION ", "Sales", "Qty"]);
+        assert_eq!(s.col("RÉGION "), Some(0));
+        assert_eq!(s.col("région"), Some(0), "non-ASCII case differs and the header has a trailing space");
+        assert_eq!(s.col("sales"), Some(1));
+        // Two headers that match once trimmed are ambiguous: neither is picked.
+        assert_eq!(source(&["Region ", " Region"]).col("Region"), None);
     }
 }
