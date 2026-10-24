@@ -138,10 +138,20 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     let mut s = format!("{XML_DECL}<worksheet xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">");
     // sheetPr
     let fit = sheet.print.fit_to.is_some();
-    if sheet.tab_color.is_some() || fit {
+    let summary = !sheet.summary_below || !sheet.summary_right;
+    if sheet.tab_color.is_some() || fit || summary {
         s.push_str("<sheetPr>");
         if let Some(c) = &sheet.tab_color {
             let _ = write!(s, "<tabColor {}/>", color_attrs(c));
+        }
+        if summary {
+            s.push_str("<outlinePr");
+            for (key, on) in [("summaryBelow", sheet.summary_below), ("summaryRight", sheet.summary_right)] {
+                if !on {
+                    let _ = write!(s, " {key}=\"0\"");
+                }
+            }
+            s.push_str("/>");
         }
         if fit {
             s.push_str("<pageSetUpPr fitToPage=\"1\"/>");

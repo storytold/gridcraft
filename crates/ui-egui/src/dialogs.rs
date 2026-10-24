@@ -642,6 +642,20 @@ impl Dialog {
                 ],
                 json!({"groupBy": "A", "function": "sum"}),
             ),
+            "outlineSettings" => {
+                let (below, right) =
+                    app.session.active().and_then(|d| d.wb.active().map(|s| (s.summary_below, s.summary_right))).unwrap_or((true, true));
+                Dialog::form(
+                    "outlineSettings",
+                    "Settings",
+                    "data.outlineSettings",
+                    vec![
+                        Check { key: "summaryBelow", label: "Summary rows below detail" },
+                        Check { key: "summaryRight", label: "Summary columns to right of detail" },
+                    ],
+                    json!({"summaryBelow": below, "summaryRight": right}),
+                )
+            }
             "zoom" => {
                 // The current zoom is pre-selected (Custom when it matches no preset). Fit
                 // selection needs the grid's size, so it is captured here for `view.zoomToSelection`.

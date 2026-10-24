@@ -343,3 +343,31 @@ fn outline_symbols_flag_round_trips() {
     let (wb, _) = read_xlsx(&minimal("<sheetData/>", &[], "", "")).unwrap();
     assert!(wb.sheet(0).unwrap().show_outline_symbols);
 }
+
+/// Outline Settings (`outlinePr summaryBelow="0" summaryRight="0"`) are read and written back,
+/// between the tab color and the page setup properties.
+#[test]
+fn outline_summary_directions_round_trip() {
+    let body = r#"<sheetPr><tabColor rgb="FF00B050"/><outlinePr summaryBelow="0"/><pageSetUpPr fitToPage="1"/></sheetPr><sheetData/><pageSetup fitToWidth="1" fitToHeight="1"/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert!(!sh.summary_below && sh.summary_right);
+    let bytes = write_xlsx(&wb).unwrap();
+    let xml = String::from_utf8(crate::package::Package::open(&bytes).unwrap().read("xl/worksheets/sheet1.xml").unwrap().unwrap()).unwrap();
+    let (tab, pr, fit) = (xml.find("<tabColor"), xml.find("<outlinePr summaryBelow=\"0\"/>"), xml.find("<pageSetUpPr"));
+    assert!(tab < pr && pr < fit && tab.is_some(), "{xml}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert!(!back.sheet(0).unwrap().summary_below && back.sheet(0).unwrap().summary_right);
+    let body = r#"<sheetPr><outlinePr summaryRight="0"/></sheetPr><sheetData/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let sh = back.sheet(0).unwrap();
+    assert!(sh.summary_below && !sh.summary_right);
+    // Absent means below and right, and the defaults write no `outlinePr`.
+    let (wb, _) = read_xlsx(&minimal("<sheetData/>", &[], "", "")).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert!(sh.summary_below && sh.summary_right);
+    let bytes = write_xlsx(&wb).unwrap();
+    let xml = String::from_utf8(crate::package::Package::open(&bytes).unwrap().read("xl/worksheets/sheet1.xml").unwrap().unwrap()).unwrap();
+    assert!(!xml.contains("outlinePr"), "{xml}");
+}

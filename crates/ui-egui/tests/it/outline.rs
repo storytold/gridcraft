@@ -1,4 +1,5 @@
-//! The outline band of grouped rows and columns: − / + and level buttons (#373).
+//! The outline band of grouped rows and columns: − / + and level buttons (#373), and the
+//! Outline Settings dialog that moves the summary rows above their detail.
 
 use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
 use gridcraft_engine::Session;
@@ -89,4 +90,31 @@ fn outline_buttons_collapse_expand_and_undo() {
 #[test]
 fn outline_buttons_work_on_right_to_left_sheets() {
     outline_buttons_collapse_and_expand(true);
+}
+
+#[test]
+fn settings_dialog_puts_summary_rows_above_their_detail() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut h = harness();
+    h.state_mut().session.run("data.group", json!({"rows": "5:8"})).unwrap();
+    h.state_mut().open_dialog("outlineSettings", json!({}));
+    h.run_steps(4);
+    h.get_by_label("Summary rows below detail").click();
+    h.run_steps(3);
+    h.get_by_label_contains("OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    let sh = h.state().session.active().unwrap().wb.active().unwrap().clone();
+    assert!(!sh.summary_below && sh.summary_right);
+
+    // The − now sits on row 4, above the detail; it hides rows 5:8 and marks row 4 collapsed.
+    let minus = button(&h, toggle(true, 1));
+    let geo = h.state().grid.geo.clone().unwrap();
+    let row4 = geo.cell_rect(&sh, gridcraft_engine::core::CellRef::new(3, 0));
+    assert!(row4.y_range().contains(minus.y), "{minus:?} is not on row 4 ({row4:?})");
+    click(&mut h, minus);
+    assert_eq!(hidden_rows(&h), [4, 5, 6, 7]);
+    let sh = h.state().session.active().unwrap().wb.active().unwrap().clone();
+    assert!(sh.rows.get(&3).is_some_and(|l| l.collapsed));
+    assert!(!sh.rows.get(&8).is_some_and(|l| l.collapsed));
 }

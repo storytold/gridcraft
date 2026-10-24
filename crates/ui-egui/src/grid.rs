@@ -252,8 +252,8 @@ impl Geo {
         let (fr, fc) = sh.freeze.unwrap_or((0, 0));
         let frozen_w = (ci.start(fc) as f32) * z;
         let frozen_h = (ri.start(fr) as f32) * z;
-        let row_outline = Arc::new(crate::outline::Axis::new(&sh.rows));
-        let col_outline = Arc::new(crate::outline::Axis::new(&sh.cols));
+        let row_outline = Arc::new(crate::outline::Axis::of(sh, true));
+        let col_outline = Arc::new(crate::outline::Axis::of(sh, false));
         // Show Outline Symbols off: no bands (the outline's hidden lines stay hidden).
         let symbols = sh.show_outline_symbols;
         let mut band_w = if symbols { crate::outline::band(row_outline.levels, zoom) } else { 0.0 };
