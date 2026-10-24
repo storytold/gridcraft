@@ -664,8 +664,12 @@ fn error_checking(s: &mut Session, _: &Json) -> Result<Json> {
             }
         }
     }
-    let circ: Vec<String> =
-        d.calc.circular.iter().map(|(si, c)| format!("{}!{}", d.wb.sheet(*si).map(|s| s.name.clone()).unwrap_or_default(), c.a1())).collect();
+    let circ: Vec<String> = d
+        .calc
+        .circular
+        .iter()
+        .map(|(si, c)| format!("{}!{}", d.wb.sheet(*si).map(|s| gridcraft_formula::quote_sheet(&s.name)).unwrap_or_default(), c.a1()))
+        .collect();
     Ok(json!({"errors": out, "circular": circ}))
 }
 

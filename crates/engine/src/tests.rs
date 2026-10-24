@@ -2784,6 +2784,23 @@ fn calculation_options_enable_iterative_calculation() {
     near(&s, "A1", 10.0);
 }
 
+#[test]
+fn error_checking_quotes_sheet_names_in_circular_references() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Bob's Q1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=B2+1"})).unwrap();
+    let r = s.execute("formulas.errorChecking", json!({})).unwrap();
+    assert_eq!(r["circular"], json!(["'Bob''s Q1'!B2"]));
+    // The reference reads back in a formula and in Go To.
+    let reference = r["circular"][0].as_str().unwrap().to_string();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": format!("=ROW({reference})")})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(2.0));
+    s.execute("edit.goTo", json!({"reference": reference})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!((d.wb.active_sheet, d.selection.active.a1()), (1, "B2".to_string()));
+}
+
 fn chart_data(s: &mut Session) {
     s.execute(
         "range.setValues",
