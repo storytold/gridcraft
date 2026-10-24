@@ -8,6 +8,7 @@ mod chart_combo_kinds;
 mod chart_ref_offsets;
 mod csv_tests;
 mod encrypted_tests;
+mod extlist;
 mod fixtures;
 mod ink_roundtrip;
 mod literal_category_roundtrip;

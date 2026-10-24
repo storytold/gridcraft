@@ -152,6 +152,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-14 | Lookups (MATCH, XMATCH, VLOOKUP, HLOOKUP, XLOOKUP, LOOKUP) compare numbers exactly like Excel, so a computed key such as `=0.1+0.2` no longer finds 0.3; `=` and COUNTIF/SUMIF keep their 15-digit comparison |
 | 2026-10-14 | Functions: EOMONTH, EDATE, WORKDAY, NETWORKDAYS, YEARFRAC, WEEKNUM, the bond and coupon functions, DISC, BIN2DEC, IM* and the other Analysis ToolPak functions give `#VALUE!` for a reference to more than one cell in a value argument, as Excel 365 does, instead of spilling; array constants and computed arrays still lift |
 | 2026-10-14 | Protect Sheet on a protected sheet: Home › Format, its keytips (HOP, RPS) and the tab menu now read Unprotect Sheet… and unprotect (straight away without a password); a protected sheet that forbids selecting locked (or unlocked) cells is enforced for clicks, arrows and Go To, and the Protect Sheet dialog has the select options (#1346) |
+| 2026-10-14 | XLSX self-contained `extLst` entries are kept on save: x15 and x14 workbook properties, the workbook compatibility version and Excel for Mac entries, alongside calcFeatures; extensions that point at other content (slicers, timelines, data model, Google Sheets data) stay dropped and are named in an open warning |
 | 2026-10-14 | XLSX: formulas opened with dynamic-array metadata (`cm`) keep it on save, with `xl/metadata.xml`. Before, a formula returning one value lost it (11 of 40 corpus files that have the part lost it entirely), and Excel recalculated some of them with implicit intersection (`SUMPRODUCT(IFERROR(...))` changed value) |
 | 2026-10-14 | Recalculation: a dynamic array's anchor given a new formula that reads its old spill area (`A1` was `=SEQUENCE(3)`, becomes `=SUM(A2:A3)+1` or `=SEQUENCE(1,A2+1)`) sees that area empty instead of the old values |
 | 2026-10-14 | Recalculation: when two arrays of one recalculation want the same empty cells, the formulas that read the one laid out second (at its anchor or over the cells it would have spilled into) read `#SPILL!` and empty cells instead of its values |
@@ -239,6 +240,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-16 | minor | Progress log: interface fonts held once instead of twice |
 | 2026-10-14 | minor | Progress log: lookups compare numbers exactly |
 | 2026-10-14 | minor | Progress log: Analysis ToolPak value arguments reject multi-cell references |
+| 2026-10-14 | trivial | Progress log: XLSX self-contained extLst entries kept on save |
 | 2026-10-14 | minor | XLSX dynamic-array `cm` metadata kept on save; progress log row |
 | 2026-10-14 | minor | Progress log: spill anchor reading its old spill area |
 | 2026-10-14 | minor | Progress log: formulas reading an array that loses a spill conflict |

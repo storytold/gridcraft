@@ -76,6 +76,13 @@ fn kept_total() -> usize {
     }
 }
 
+impl KeptReader {
+    /// Whether unmodelled content is kept for this package (not for Strict Open XML files).
+    pub fn keeps(&self) -> bool {
+        self.on
+    }
+}
+
 const NS_REL_STRICT: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships";
 const CT_VML: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
 
@@ -89,9 +96,6 @@ const SHEET_ROOTS: &[&str] = &["queryTable", "tableSingleCells"];
 const SHEET_ELEMENT_KINDS: &[&str] = &["oleObject", "ctrlProp", "control", "image", "package", "printerSettings"];
 /// Attributes of `<fileVersion>` (CT_FileVersion).
 const FILE_VERSION_ATTRS: &[&str] = &["appName", "lastEdited", "lowestEdited", "rupBuild", "codeName"];
-/// The workbook extension listing the calculation features the saved values were computed with.
-const CALC_FEATURES_URI: &str = "{B58B0392-4F1F-4190-BB64-5DF3571DCE5F}";
-const NS_CALC_FEATURES: &str = "http://schemas.microsoft.com/office/spreadsheetml/2018/calcfeatures";
 /// Kept sheet elements, in schema order (all after `<legacyDrawing>`, before `<tableParts>`).
 const SHEET_SLOTS: &[&str] = &["legacyDrawingHF", "picture", "oleObjects", "controls"];
 
@@ -446,18 +450,8 @@ impl KeptReader {
             x.push_str("/>");
             p.elements.push(PreservedXml { slot: "fileVersion".into(), xml: x });
         }
-        let calc_features = wb_xml
-            .child("extLst")
-            .and_then(|l| l.kids("ext").find(|e| e.attr("uri").is_some_and(|u| u.eq_ignore_ascii_case(CALC_FEATURES_URI))))
-            .and_then(|e| e.child("calcFeatures"));
-        if let Some(c) = calc_features {
-            let mut x = format!("<ext uri=\"{CALC_FEATURES_URI}\" xmlns:xcalcf=\"{NS_CALC_FEATURES}\"><xcalcf:calcFeatures>");
-            for name in c.kids("feature").filter_map(|f| f.attr("name")) {
-                let _ = write!(x, "<xcalcf:feature name=\"{}\"/>", esc_attr(name));
-            }
-            x.push_str("</xcalcf:calcFeatures></ext>");
-            p.elements.push(PreservedXml { slot: "ext".into(), xml: x });
-        }
+        // calcFeatures and the self-contained extensions (x14/x15 workbookPr, Mac entries).
+        crate::extlist::keep_workbook(cx, wb_xml.child("extLst"), &mut p);
         (!p.is_empty()).then(|| Arc::new(p))
     }
 

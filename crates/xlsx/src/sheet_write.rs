@@ -609,9 +609,13 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         .filter(|(_, cf)| !cf.ranges.is_empty() && matches!(cf.rule, CfRule::DataBar { gradient: false, .. }))
         .map(|(i, cf)| (cf, prio.get(i).copied().unwrap_or(1)))
         .collect();
-    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() {
+    // Then the self-contained extensions kept from the source file.
+    let has_kept_exts = !crate::extlist::sheet_exts(sheet, "").is_empty();
+    let has_exts = !solid_bars.is_empty() || !sheet.sparklines.is_empty() || has_kept_exts;
+    if has_exts {
         s.push_str("<extLst>");
     }
+    let exts_start = s.len();
     if !solid_bars.is_empty() {
         let _ = write!(
             s,
@@ -647,7 +651,9 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         s.push_str("</x14:sparklineGroups></ext>");
     }
-    if !solid_bars.is_empty() || !sheet.sparklines.is_empty() {
+    if has_exts {
+        let kept_exts = crate::extlist::sheet_exts(sheet, s.get(exts_start..).unwrap_or(""));
+        s.push_str(&kept_exts);
         s.push_str("</extLst>");
     }
     s.push_str("</worksheet>");
