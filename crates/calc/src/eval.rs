@@ -1839,62 +1839,152 @@ pub fn resized_sum_range(sum: RangeRef, height: u32, width: u32) -> RangeRef {
     RangeRef::new(sum.start, CellRef::new(row, col))
 }
 
+/// Most expression nodes [`precedents`] visits before giving up and marking the formula dynamic.
+const MAX_PRECEDENT_NODES: usize = 1_000_000;
+
 /// Collects the static references of an expression with their sheets resolved; `dynamic` is
 /// set when the formula uses INDIRECT/OFFSET/names/tables whose targets can change.
+///
+/// Every node is visited once (#2183: range-operator chains used to re-walk shared operands,
+/// costing 2^k for k operands), with an explicit stack, so a flat chain as long as Excel allows
+/// (`1+1+…`, about 4,000 levels deep) never recurses. Past [`MAX_PRECEDENT_NODES`] the result
+/// is conservative: `dynamic` is set so the formula recalculates every time.
 pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
-    let mut out = Vec::new();
-    let mut dynamic = false;
-    let push = |out: &mut Vec<Area>, r: &Reference, range: RangeRef| match &r.sheet {
-        SheetSel::Current => out.push(Area { sheet, range }),
-        SheetSel::Named(n) => {
-            if let Some(i) = wb.sheet_index(n) {
-                out.push(Area { sheet: i, range });
-            }
+    let mut c = Precedents { wb, sheet, out: Vec::new(), dynamic: false, boxes: Vec::new() };
+    c.collect(e);
+    (c.out, c.dynamic)
+}
+
+/// Grows the per-sheet bounding box in `boxes` to cover `area`.
+fn union_box(boxes: &mut Vec<Area>, area: Area) {
+    match boxes.iter_mut().find(|x| x.sheet == area.sheet) {
+        Some(x) => x.range = x.range.union(&area.range),
+        None => boxes.push(area),
+    }
+}
+
+/// One entry of [`Precedents::collect`]'s explicit stack. `boxes` indexes
+/// [`Precedents::boxes`]: the bounding boxes of the innermost enclosing range operator, if any.
+enum PrecedentStep<'e> {
+    /// Visit an expression and queue its children.
+    Visit(&'e Expr, Option<usize>),
+    /// Both operands of a range operator have been visited: record the bounding boxes they
+    /// collected in `inner`, growing the `outer` operator's boxes too.
+    Close { inner: usize, outer: Option<usize> },
+}
+
+struct Precedents<'w> {
+    wb: &'w Workbook,
+    sheet: usize,
+    out: Vec<Area>,
+    dynamic: bool,
+    /// Per-sheet bounding boxes, one list per range operator (`A1:INDEX(…)`) met so far.
+    boxes: Vec<Vec<Area>>,
+}
+
+impl Precedents<'_> {
+    /// Records `area`, also growing the bounding boxes of the enclosing range operator, if any.
+    fn add(&mut self, area: Area, boxes: Option<usize>) {
+        if let Some(b) = boxes.and_then(|i| self.boxes.get_mut(i)) {
+            union_box(b, area);
         }
-        SheetSel::Span(a, b) => {
-            if let (Some(i), Some(j)) = (wb.sheet_index(a), wb.sheet_index(b)) {
-                for s in i.min(j)..=i.max(j) {
-                    out.push(Area { sheet: s, range });
+        self.out.push(area);
+    }
+
+    fn push(&mut self, r: &Reference, range: RangeRef, boxes: Option<usize>) {
+        match &r.sheet {
+            SheetSel::Current => self.add(Area { sheet: self.sheet, range }, boxes),
+            SheetSel::Named(n) => {
+                if let Some(i) = self.wb.sheet_index(n) {
+                    self.add(Area { sheet: i, range }, boxes);
+                }
+            }
+            SheetSel::Span(a, b) => {
+                if let (Some(i), Some(j)) = (self.wb.sheet_index(a), self.wb.sheet_index(b)) {
+                    for s in i.min(j)..=i.max(j) {
+                        self.add(Area { sheet: s, range }, boxes);
+                    }
                 }
             }
         }
-    };
-    e.walk(&mut |x| match x {
-        Expr::Ref(r) => push(&mut out, r, r.range()),
-        // The cells SUMIF/AVERAGEIF really read from the sum range (see `resized_sum_range`); when
-        // the criteria range's size isn't known statically, recalculate the formula every time.
-        Expr::Call(n, args) if resizes_sum_range(n, args.len()) => match (args.first(), args.get(2)) {
-            (Some(Expr::Ref(c)), Some(Expr::Ref(s))) => {
-                let (crit, sum) = (c.range(), s.range());
-                push(&mut out, s, resized_sum_range(sum, crit.height(), crit.width()));
-            }
-            (_, Some(Expr::Number(_) | Expr::Text(_) | Expr::Bool(_) | Expr::Error(_) | Expr::Array(_) | Expr::Missing)) => {}
-            _ => dynamic = true,
-        },
-        Expr::Call(n, _)
-            if matches!(n.as_str(), "INDIRECT" | "OFFSET" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO") =>
-        {
-            dynamic = true
-        }
-        Expr::Name(_) | Expr::Struct(_) => dynamic = true,
-        Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !is_special(n) => dynamic = true,
-        // A range ending in a function's result (`A1:INDEX(B1:B9,n)`) covers the cells between
-        // the references inside it, not only those references.
-        Expr::Binary(BinOp::Range, a, b) if !matches!((&**a, &**b), (Expr::Ref(_), Expr::Ref(_))) => {
-            let mut inner = precedents(wb, sheet, a).0;
-            inner.extend(precedents(wb, sheet, b).0);
-            let mut boxes: Vec<Area> = Vec::new();
-            for area in inner {
-                match boxes.iter_mut().find(|x| x.sheet == area.sheet) {
-                    Some(x) => x.range = x.range.union(&area.range),
-                    None => boxes.push(area),
+    }
+
+    /// Visits every node of `root` once, parents before children, left to right. Areas found
+    /// inside a range operator (`A1:INDEX(…)`) also grow that operator's per-sheet bounding boxes.
+    fn collect(&mut self, root: &Expr) {
+        let mut pending = vec![PrecedentStep::Visit(root, None)];
+        let mut nodes = 0usize;
+        while let Some(step) = pending.pop() {
+            let (x, boxes) = match step {
+                PrecedentStep::Visit(x, boxes) => (x, boxes),
+                PrecedentStep::Close { inner, outer } => {
+                    let areas = self.boxes.get_mut(inner).map(std::mem::take).unwrap_or_default();
+                    for area in areas {
+                        self.add(area, outer);
+                    }
+                    continue;
                 }
+            };
+            nodes = nodes.saturating_add(1);
+            if nodes > MAX_PRECEDENT_NODES {
+                self.dynamic = true;
+                return;
             }
-            out.extend(boxes);
+            self.visit(x, boxes, &mut pending);
         }
-        _ => {}
-    });
-    (out, dynamic)
+    }
+
+    /// Handles one node for [`Precedents::collect`], queueing the children still to visit.
+    fn visit<'e>(&mut self, x: &'e Expr, boxes: Option<usize>, pending: &mut Vec<PrecedentStep<'e>>) {
+        match x {
+            Expr::Ref(r) => self.push(r, r.range(), boxes),
+            // The cells SUMIF/AVERAGEIF really read from the sum range (see `resized_sum_range`); when
+            // the criteria range's size isn't known statically, recalculate the formula every time.
+            Expr::Call(n, args) if resizes_sum_range(n, args.len()) => match (args.first(), args.get(2)) {
+                (Some(Expr::Ref(c)), Some(Expr::Ref(s))) => {
+                    let (crit, sum) = (c.range(), s.range());
+                    self.push(s, resized_sum_range(sum, crit.height(), crit.width()), boxes);
+                }
+                (_, Some(Expr::Number(_) | Expr::Text(_) | Expr::Bool(_) | Expr::Error(_) | Expr::Array(_) | Expr::Missing)) => {}
+                _ => self.dynamic = true,
+            },
+            Expr::Call(n, _)
+                if matches!(n.as_str(), "INDIRECT" | "OFFSET" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO") =>
+            {
+                self.dynamic = true
+            }
+            Expr::Name(_) | Expr::Struct(_) => self.dynamic = true,
+            Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !is_special(n) => self.dynamic = true,
+            // A range ending in a function's result (`A1:INDEX(B1:B9,n)`) covers the cells between
+            // the references inside it, not only those references. Both operands are visited once,
+            // collecting their bounding boxes on the way, which `Close` then records.
+            Expr::Binary(BinOp::Range, a, b) if !matches!((&**a, &**b), (Expr::Ref(_), Expr::Ref(_))) => {
+                let inner = self.boxes.len();
+                self.boxes.push(Vec::new());
+                pending.push(PrecedentStep::Close { inner, outer: boxes });
+                pending.push(PrecedentStep::Visit(b, Some(inner)));
+                pending.push(PrecedentStep::Visit(a, Some(inner)));
+                return;
+            }
+            _ => {}
+        }
+        // Children are pushed in reverse so they pop left to right.
+        let visit = |e: &'e Expr| PrecedentStep::Visit(e, boxes);
+        match x {
+            Expr::Array(rows) => pending.extend(rows.iter().flatten().rev().map(visit)),
+            Expr::Unary(_, e) | Expr::Paren(e) => pending.push(visit(e)),
+            Expr::Binary(_, a, b) => {
+                pending.push(visit(b));
+                pending.push(visit(a));
+            }
+            Expr::Call(_, args) => pending.extend(args.iter().rev().map(visit)),
+            Expr::Invoke(c, args) => {
+                pending.extend(args.iter().rev().map(visit));
+                pending.push(visit(c));
+            }
+            _ => {}
+        }
+    }
 }
 
 fn is_special(n: &str) -> bool {
