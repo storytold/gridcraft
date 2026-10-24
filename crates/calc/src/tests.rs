@@ -1,7 +1,8 @@
-use gridcraft_core::{CellError, CellRef, Value};
+use gridcraft_core::{CellError, CellRef, RangeRef, Value};
 use gridcraft_model::{Cell, Formula, Workbook};
 
 use crate::Calc;
+use crate::eval::Area;
 
 fn c(s: &str) -> CellRef {
     CellRef::parse(s).unwrap()
@@ -2153,4 +2154,218 @@ fn loan_schedule_residue_keeps_excels_sign() {
         other => panic!("O7: expected a number, got {other:?}"),
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
+}
+
+#[test]
+fn names_are_static_precedents_not_dynamic() {
+    // A formula that reads a defined name (a range, or a LAMBDA whose body reads a range) depends
+    // on the cells the name resolves to, like a plain reference: it is NOT re-evaluated on every
+    // recalc, and it IS re-evaluated when those cells change. Before 2026-10-14 any name made the
+    // formula dynamic, so a column of LAMBDA calls was recomputed on every edit anywhere.
+    let mut t = T::new();
+    for (r, v) in ["10", "20", "30"].iter().enumerate() {
+        t.set(&format!("A{}", r + 1), v);
+    }
+    for def in [("Keys", "Sheet1!$A$1:$A$3"), ("Pick", "LAMBDA(k,XLOOKUP(k,Keys,Keys,\"none\"))"), ("Deep", "LAMBDA(k,Pick(k))")] {
+        t.wb.names.push(gridcraft_model::DefinedName {
+            name: def.0.into(),
+            scope: None,
+            formula: def.1.into(),
+            comment: String::new(),
+            hidden: false,
+        });
+    }
+    t.calc.rebuild(&t.wb);
+    t.set("C1", "=SUM(Keys)");
+    t.set("C2", "=Pick(20)");
+    t.set("C3", "=Deep(30)");
+    t.set("C4", "=LET(x, Pick(10), x * 2)");
+    assert_eq!(t.num("C1"), 60.0);
+    assert_eq!(t.num("C2"), 20.0);
+    assert_eq!(t.num("C3"), 30.0);
+    assert_eq!(t.num("C4"), 20.0);
+    for at in ["C1", "C2", "C3", "C4"] {
+        assert!(!t.calc.graph.is_dynamic((0, c(at))), "{at} should be a static dependency of A1:A3");
+    }
+    // A LAMBDA parameter is a bound name, not a lookup: it must not make the call dynamic or
+    // #NAME?. Unknown names and INDIRECT still do.
+    t.set("D1", "=INDIRECT(\"A1\")");
+    t.set("D2", "=NoSuchName+1");
+    assert!(t.calc.graph.is_dynamic((0, c("D1"))));
+    assert!(t.calc.graph.is_dynamic((0, c("D2"))));
+    // Editing a cell the names resolve to re-evaluates the readers...
+    t.set("A2", "25");
+    assert_eq!(t.num("C1"), 65.0);
+    assert_eq!(t.get("C2"), Value::text("none"));
+    assert_eq!(t.num("C4"), 20.0);
+    // ...and editing an unrelated cell does not (the graph has no edge to it).
+    let mut deps = Vec::new();
+    t.calc.graph.dependents(0, c("F9"), &mut deps);
+    assert!(deps.is_empty());
+}
+
+#[test]
+fn name_chains_and_cycles_stay_bounded() {
+    // Names referring to names are followed to a depth bound; a cycle adds nothing and does not
+    // hang the graph build.
+    let mut t = T::new();
+    t.set("A1", "7");
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "Loop1".into(),
+        scope: None,
+        formula: "Loop2+1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "Loop2".into(),
+        scope: None,
+        formula: "Loop1+1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "Base".into(),
+        scope: None,
+        formula: "Sheet1!$A$1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    t.calc.rebuild(&t.wb);
+    t.set("B1", "=Loop1");
+    t.set("B2", "=Base*2");
+    assert_eq!(t.num("B2"), 14.0);
+    assert!(!t.calc.graph.is_dynamic((0, c("B2"))));
+    // The cycle can't be resolved to cells: evaluated every time, which reports it.
+    assert!(t.calc.graph.is_dynamic((0, c("B1"))));
+    t.set("A1", "8");
+    assert_eq!(t.num("B2"), 16.0);
+}
+
+#[test]
+fn recursive_lambda_names_stay_static() {
+    // A LAMBDA name calling itself reads what its body reads, so its callers are static
+    // dependencies of the argument and body cells, as directly, through a wrapper name, or at the
+    // end of a chain whose self-call lands on the depth bound. Two names calling each other are a
+    // cycle and stay dynamic; so does nothing else here.
+    let mut t = T::new();
+    let mut defs = vec![
+        ("SumTo".to_string(), "LAMBDA(n,IF(n<=0,0,Sheet1!$C$1+SumTo(n-1)))".to_string()),
+        ("Ping".into(), "LAMBDA(n,IF(n<=0,0,Pong(n-1)))".into()),
+        ("Pong".into(), "LAMBDA(n,IF(n<=0,0,Ping(n-1)))".into()),
+        ("Self".into(), "Self+Sheet1!$C$1".into()),
+        ("W1".into(), "LAMBDA(n,SumTo(n))".into()),
+    ];
+    // W7 → … → W1 → SumTo: SumTo is entered at depth 7, its self-call meets it at the bound.
+    for i in 2..=7 {
+        defs.push((format!("W{i}"), format!("LAMBDA(n,W{}(n))", i - 1)));
+    }
+    for (name, formula) in defs {
+        t.wb.names.push(gridcraft_model::DefinedName { name, scope: None, formula, comment: String::new(), hidden: false });
+    }
+    t.calc.rebuild(&t.wb);
+    t.set("C1", "2");
+    t.set("A2", "3");
+    t.set("B1", "=SumTo(A2)");
+    t.set("B2", "=W1(A2)");
+    t.set("B3", "=W7(A2)");
+    t.set("B4", "=Ping(3)");
+    t.set("B5", "=Self");
+    for at in ["B1", "B2", "B3"] {
+        assert_eq!(t.num(at), 6.0, "{at}");
+    }
+    assert_eq!(t.num("B4"), 0.0);
+    // A name referring to itself without a LAMBDA never settles: an error, whatever C1 holds.
+    assert_eq!(t.get("B5"), Value::Error(CellError::Calc));
+    let check_graph = |t: &T| {
+        for at in ["B1", "B2", "B3", "B5"] {
+            assert!(!t.calc.graph.is_dynamic((0, c(at))), "{at} should be static");
+        }
+        assert!(t.calc.graph.is_dynamic((0, c("B4"))), "mutual recursion stays dynamic");
+        let p = t.calc.graph.precedents_of((0, c("B1")));
+        assert_eq!(p.len(), 2, "{p:?}");
+        for at in ["A2", "C1"] {
+            assert!(p.contains(&Area { sheet: 0, range: RangeRef::cell(c(at)) }), "{at} in {p:?}");
+        }
+    };
+    check_graph(&t);
+    // One build resolving every formula through a shared cache gives the same answers.
+    t.calc.rebuild(&t.wb);
+    check_graph(&t);
+    // The argument cell and the cell the body reads both recalculate the callers.
+    t.set("A2", "4");
+    for at in ["B1", "B2", "B3"] {
+        assert_eq!(t.num(at), 8.0, "{at}");
+    }
+    t.set("C1", "5");
+    for at in ["B1", "B2", "B3"] {
+        assert_eq!(t.num(at), 20.0, "{at}");
+    }
+}
+
+#[test]
+fn sheet_scoped_names_used_from_another_sheet_are_dynamic() {
+    // A LAMBDA's body runs against the calling cell's sheet. A sheet-scoped LAMBDA name passed by
+    // name from another sheet (`MAP(5,Sheet1!F)` on Data) reads Data!A1, while its references
+    // resolve against Sheet1 when the graph is built: a static edge to Sheet1!A1 would leave the
+    // cell stale when Data!A1 changes. Used on its own sheet it stays static.
+    let mut t = T::new();
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "F".into(),
+        scope: Some(0),
+        formula: "LAMBDA(x,x+$A$1)".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    t.set("A1", "10");
+    t.set("B1", "=F(1)");
+    let data = |t: &mut T, at: &str, input: &str| {
+        let cell = if input.starts_with('=') {
+            Cell::formula(Formula::new(input))
+        } else {
+            Cell::value(gridcraft_core::parse::parse_input(input, t.wb.date_system).value)
+        };
+        t.wb.sheet_mut(1).unwrap().cells.set(c(at), cell);
+        t.calc.cells_changed(&mut t.wb, &[(1, c(at))]);
+    };
+    data(&mut t, "A1", "1000");
+    data(&mut t, "B1", "=MAP(5,Sheet1!F)");
+    assert_eq!(t.num("B1"), 11.0);
+    assert!(!t.calc.graph.is_dynamic((0, c("B1"))));
+    assert!(t.calc.graph.is_dynamic((1, c("B1"))));
+    let data_b1 = |t: &T| t.wb.sheet(1).unwrap().value(c("B1"));
+    assert_eq!(data_b1(&t), Value::number(1005.0));
+    data(&mut t, "A1", "2000");
+    assert_eq!(data_b1(&t), Value::number(2005.0));
+}
+
+#[test]
+fn names_mentioned_many_times_are_resolved_once() {
+    // Eight names, each mentioning the previous one 20 times in a branch IF never takes; a cell
+    // mentioning the last one 20 times. Followed afresh at every mention that is 20^8 expansions
+    // for one formula (a workbook can make the graph build take forever); resolved once per name
+    // and build, it is 8. The result is the same: a static dependency on the cell at the bottom.
+    let mut t = T::new();
+    t.set("A1", "7");
+    let mut formula = "Sheet1!$A$1".to_string();
+    for i in 1..=8 {
+        t.wb.names.push(gridcraft_model::DefinedName {
+            name: format!("Tier_{i}"),
+            scope: None,
+            formula: formula.clone(),
+            comment: String::new(),
+            hidden: false,
+        });
+        let mentions = vec![format!("Tier_{i}"); 20].join(",");
+        formula = format!("IF(TRUE,0,SUM({mentions}))");
+    }
+    t.calc.rebuild(&t.wb);
+    t.set("B1", &format!("={formula}"));
+    assert_eq!(t.num("B1"), 0.0);
+    assert!(!t.calc.graph.is_dynamic((0, c("B1"))));
+    assert_eq!(t.calc.graph.precedents_of((0, c("B1"))), vec![Area { sheet: 0, range: RangeRef::cell(c("A1")) }]);
+    let mut deps = Vec::new();
+    t.calc.graph.dependents(0, c("A1"), &mut deps);
+    assert!(deps.contains(&(0, c("B1"))));
 }

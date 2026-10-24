@@ -1291,9 +1291,15 @@ fn watch_window(s: &mut Session, p: &Json) -> Result<Json> {
     if changed {
         let v = json!(list.clone());
         let d = s.doc_mut()?;
-        // The watch list is view state: don't add an undo step.
+        // The watch list is view state: don't add an undo step. A formula that reads the name
+        // is recalculated all the same (the list is stored as a defined name).
+        let old = d.wb.names.clone();
         let wb = std::sync::Arc::make_mut(&mut d.wb);
         stash_set(wb, WATCH_NAME, &v);
+        let dirty = super::name_readers(wb, &super::changed_names(&old, &wb.names));
+        if !dirty.is_empty() {
+            d.calc.cells_changed(wb, &dirty);
+        }
     }
     let d = s.doc()?;
     let rows: Vec<Json> = list

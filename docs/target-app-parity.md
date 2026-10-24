@@ -205,6 +205,8 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 | Sheet size limits | 1,048,576 × 16,384 | same | measured (`crates/core/src/addr.rs`) |
 | Recalc threads | 1 | all cores | measured (no threading in `crates/calc`) |
 | Edit → recalc, 100k dependents | ~0.4 s (2026-10-07), target < 100 ms | tens of ms | measured on the owner's machine; #66 since made range-formula recalc linear, not re-timed |
+| Formulas referencing defined names | static dependencies (2026-10-14; were volatile: every name made its formula recalculate on every edit) | static | measured: 1M-cell workbook with 49K LAMBDA-name calls, unrelated edit ~10 s → ~1 s |
+| Open a 1M-cell, 49K-formula XLSX (no cached values) | 109 s single-threaded (2026-10-14; was 447 s) | seconds, multi-threaded | measured on a 2-core sandbox |
 | Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
 | Open a ~100 MB XLSX | fails (#175) | opens | user report |
 | Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
@@ -338,6 +340,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 | 2026-10-18 | trivial | Stale chart notes: all chart kinds survive XLSX round-trip (PRs #158, #161) and trendlines landed |
 | 2026-10-16 | minor | Advanced Filter copy-to clears only its actual output and rejects overflow without changing cells (#1031) |
 | 2026-10-15 | minor | Row auto-fit: line breaks count only in wrapping cells (Excel: wrap off shows one line, AutoFit gives one line); unwrapped multi-line cells from files no longer grow rows on open (no score change) |
+| 2026-10-14 | minor | Performance: defined names are static precedents (formulas calling LAMBDA names no longer recalculate on every edit), parsed names cached per pass, `TEXT(n,"0")` integer fast path; measured on a 1M-cell workbook (no score change) |
 | 2026-10-12 | minor | Essentials AutoFit evidence: rows auto-fit oversized fonts on open and row formatting (#833) |
 | 2026-10-12 | minor | Sheet tabs: reveal the selected tab on navigation and resize while preserving manual scrolling (#681); no score change |
 | 2026-10-12 | minor | PivotTables: values on rows (Σ Values in Rows at any position, all three layouts; `pivot.moveField` and the field pane move it; `dataOnRows` round-trips) (no score change) |

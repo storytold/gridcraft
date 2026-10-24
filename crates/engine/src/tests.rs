@@ -1543,6 +1543,53 @@ fn line_breaks_grow_a_row_only_when_the_cell_wraps() {
     assert!(s.doc().unwrap().wb.active().unwrap().row_height(3) > default_h * 2.5, "typed line breaks turn wrap on and grow the row");
 }
 
+#[test]
+fn rewriting_a_hidden_name_recalculates_only_its_readers() {
+    // Saving a custom view rewrites a hidden name without a structural edit. The formulas that
+    // read that name, directly or through another name, are recalculated; the rest of the
+    // workbook isn't (a full recalculation of a 50K-formula workbook for a saved view would
+    // take as long as opening it).
+    let mut s = Session::new();
+    s.new_workbook();
+    for r in 1..=50 {
+        s.execute("cell.set", json!({"cell": format!("B{r}"), "input": format!("=ROW()+{r}")})).unwrap();
+    }
+    s.execute("formulas.defineName", json!({"name": "Alias", "refersTo": "=LEN(_sc_custom_views)"})).unwrap();
+    s.execute("view.customViews", json!({"save": "first"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=LEN(_sc_custom_views)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=Alias"})).unwrap();
+    let len = |s: &Session, at: &str| match s.doc().unwrap().wb.active().unwrap().value(CellRef::parse(at).unwrap()) {
+        Value::Number(n) => n,
+        other => panic!("{at}: expected a length, got {other:?}"),
+    };
+    let (a_before, d_before) = (len(&s, "A1"), len(&s, "D1"));
+    assert!(a_before > 0.0 && d_before == a_before);
+    s.execute("view.customViews", json!({"save": "second view with a longer name"})).unwrap();
+    assert!(len(&s, "A1") > a_before, "the direct reader sees the new definition");
+    assert!(len(&s, "D1") > d_before, "the reader through another name sees it too");
+    assert_eq!(s.doc().unwrap().calc.last_recalc_cells, 2, "only the two readers were recalculated");
+}
+
+#[test]
+fn rewriting_a_hidden_name_recalculates_its_readers() {
+    // Commands that keep state in hidden defined names (custom views, scenarios, solver models,
+    // scripts) rewrite the name without marking the edit structural. Since formulas reading a
+    // name depend on its definition statically (2026-10-14), `commit` treats any change to the
+    // names as structural so such readers are re-evaluated; before, every name made its formula
+    // volatile, which hid the gap.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("view.customViews", json!({"save": "first"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=LEN(_sc_custom_views)"})).unwrap();
+    let before = s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0));
+    let Value::Number(before_len) = before else { panic!("expected a length, got {before:?}") };
+    assert!(before_len > 0.0);
+    s.execute("view.customViews", json!({"save": "second view with a longer name"})).unwrap();
+    let after = s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 0));
+    let Value::Number(after_len) = after else { panic!("expected a length, got {after:?}") };
+    assert!(after_len > before_len, "the reader of a rewritten hidden name must see the new definition ({before_len} -> {after_len})");
+}
+
 #[test] // B — Review Focus 1
 fn open_keeps_custom_height_rows() {
     let mut s = Session::new();
@@ -1983,6 +2030,21 @@ fn undo_and_redo_keep_the_watch_window_list() {
     assert_eq!(watched(&mut s), ["Sheet1!A1"], "kept after undo");
     s.execute("edit.redo", json!({})).unwrap();
     assert_eq!(watched(&mut s), ["Sheet1!A1"], "kept after redo");
+}
+
+#[test]
+fn a_formula_reading_the_watch_list_name_follows_the_list() {
+    // The list is kept in a hidden defined name and changed without an undo step; a formula
+    // that reads that name is recalculated like the reader of any other name.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=LEN(_sc_watch)"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Error(gridcraft_core::CellError::Name));
+    s.execute("formulas.watchWindow", json!({"add": "Sheet1!B1"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number("[\"Sheet1!B1\"]".len() as f64));
+    let steps = s.doc().unwrap().undo.len();
+    s.execute("formulas.watchWindow", json!({"remove": "Sheet1!B1"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(2.0));
+    assert_eq!(s.doc().unwrap().undo.len(), steps, "no undo step for the watch list");
 }
 
 #[test]
