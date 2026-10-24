@@ -2580,4 +2580,35 @@ mod tests {
         }
         assert_eq!(s.doc().unwrap().wb.sheets.len(), 2);
     }
+
+    #[test]
+    fn detail_cells_are_the_cells_show_details_takes() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+        for layout in 0..2 {
+            if layout == 1 {
+                // A two-level row axis, with subtotals at the top of each group.
+                s.execute("pivot.moveField", json!({"field": "Product", "from": "columns", "to": "rows"})).unwrap();
+            }
+            let d = s.doc().unwrap();
+            let si = d.wb.active_sheet;
+            let pt = &d.wb.active().unwrap().pivots[0];
+            let r = pt.last_range.unwrap();
+            let cells = crate::pivot::detail_cells(&d.wb, pt, si).unwrap();
+            let mut values = 0;
+            for row in 0..r.height() {
+                for col in 0..r.width() {
+                    let one = crate::pivot::detail_records(&d.wb, pt, si, row, col).unwrap();
+                    assert_eq!(cells.contains(&(row, col)), one.is_some(), "layout {layout}, cell ({row}, {col})");
+                    values += usize::from(one.is_some());
+                }
+            }
+            assert!(values > 4, "layout {layout} has value cells");
+        }
+        // An out-of-date report answers as Show Details does.
+        s.execute("range.setValues", json!({"range": "Sheet1!A2", "values": [["Central"]]})).unwrap();
+        let d = s.doc().unwrap();
+        let pt = &d.wb.active().unwrap().pivots[0];
+        assert!(crate::pivot::detail_cells(&d.wb, pt, d.wb.active_sheet).unwrap_err().contains("out of date"));
+    }
 }
