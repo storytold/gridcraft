@@ -79,6 +79,7 @@ mod shrink_to_fit;
 mod sort_dialog_columns;
 mod symbol_glyphs;
 mod system_theme;
+mod tab_split;
 mod table_headings;
 mod text_box_editing;
 mod text_overflow_scroll;

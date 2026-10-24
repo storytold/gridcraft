@@ -55,6 +55,46 @@ fn tab_drop(i: usize, steps: i64, copy: bool) -> Option<serde_json::Value> {
     Some(json!({"sheet": i, "to": to}))
 }
 
+/// The New sheet (+) button and the gap before it.
+const NEW_SHEET_WIDTH: f32 = 32.0;
+/// The handle between the tabs and the horizontal scrollbar.
+const SPLIT_WIDTH: f32 = 8.0;
+/// The narrowest the scrollbar track gets when the handle is dragged to the right.
+const MIN_TRACK: f32 = 100.0;
+
+/// The share of the tab bar (`bar`: its left edge and width) the tabs and New sheet take with
+/// the handle dragged to `x`: New sheet stays shown, and the track ending at `right` keeps
+/// [`MIN_TRACK`].
+fn dragged_share(x: f32, bar: (f32, f32), right: f32) -> f32 {
+    let (left, width) = bar;
+    if !width.is_finite() || width <= 0.0 || !x.is_finite() {
+        return 0.6;
+    }
+    let min = NEW_SHEET_WIDTH / width;
+    let max = ((right - SPLIT_WIDTH - MIN_TRACK - left) / width).max(min);
+    ((x - left) / width).clamp(min, max)
+}
+
+/// The handle at the left edge of the horizontal scrollbar: dragging it gives the sheet tabs more
+/// or less of the bar, as in Excel, for the workbook `uid`.
+fn tab_split_handle(app: &mut SheetApp, ui: &mut Ui, split: Rect, bar: (f32, f32), right: f32, uid: u64, t: &Tokens) {
+    app.grid.tab_split = Some(split);
+    let resp = ui.interact(split, ui.id().with("tab_split"), Sense::drag());
+    if resp.hovered() || resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    if resp.dragged()
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        app.grid.tab_shares.insert(uid, dragged_share(p.x - SPLIT_WIDTH / 2.0, bar, right));
+        ui.ctx().request_repaint();
+    }
+    let color = if resp.hovered() || resp.dragged() { t.text_dim } else { t.text_disabled };
+    for dy in [-4.0, 0.0, 4.0] {
+        ui.painter().circle_filled(pos2(split.center().x, split.center().y + dy), 1.0, color);
+    }
+}
+
 pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("sheet_tabs").exact_size(32.0).frame(egui::Frame::NONE.fill(t.tab_bar)).show(ui, |ui| {
@@ -81,6 +121,12 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             }
             ui.add_space(8.0);
             let Some(d) = app.session.active() else { return };
+            let (bar_left, bar_width) = (ui.cursor().left(), ui.available_width());
+            let uid = d.uid;
+            // The track ends where the grid does, so it stops under the vertical scrollbar. A share
+            // dragged in a wider window is held to the same limits as a drag at this width.
+            let bar_right = app.grid.rect.map_or(bar_left + bar_width, |r| r.right()).min(bar_left + bar_width);
+            let share = app.grid.tab_shares.get(&uid).map(|&share| dragged_share(bar_left + bar_width * share, (bar_left, bar_width), bar_right));
             let sheets: Vec<(usize, String, Option<[u8; 3]>, bool)> =
                 d.wb.sheets
                     .iter()
@@ -91,7 +137,12 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             // Keep worksheet tabs in their own horizontally scrollable viewport. As in Excel, the
             // tabs get up to 60% of the bar and the grid's horizontal scrollbar the rest; a strip
             // that needs less shrinks to its tabs, so New sheet (+) sits right after the last one.
-            let tabs_width = (ui.available_width() * 0.6).max(100.0);
+            // After the handle at the scrollbar's left edge is dragged, the tabs and New sheet
+            // take the share it was dragged to.
+            let tabs_width = match share {
+                Some(share) => (bar_width * share - NEW_SHEET_WIDTH).max(0.0),
+                None => (bar_width * 0.6).max(100.0),
+            };
             // Reveal the selected sheet after navigation or layout changes, but
             // allow browsing other tabs without snapping back on every frame.
             let reveal_key = egui::Id::new((d.uid, d.wb.active_sheet, &sheets, tabs_width.to_bits()));
@@ -116,6 +167,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                 egui::ScrollArea::horizontal()
                     .id_salt("worksheet_tabs_horizontal")
                     .auto_shrink([true, false])
+                    .min_scrolled_width(0.0)
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .show(ui, |ui| {
                         if wheel_scroll.abs() > 0.0 {
@@ -251,7 +303,13 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             // The track ends where the grid does, so it stops under the vertical scrollbar.
             let avail = ui.available_rect_before_wrap();
             let right = app.grid.rect.map_or(avail.right(), |r| r.right()).min(avail.right());
-            let track = Rect::from_min_max(pos2(avail.left() + 8.0, avail.center().y - 7.0), pos2(right, avail.center().y + 7.0));
+            // The handle sits at the track's left edge. With a dragged share, the room the tabs
+            // don't fill stays empty before it.
+            let split_left =
+                share.map_or(avail.left(), |share| (bar_left + bar_width * share).min(right - SPLIT_WIDTH - MIN_TRACK).max(avail.left()));
+            let split = Rect::from_min_max(pos2(split_left, avail.top()), pos2(split_left + SPLIT_WIDTH, avail.bottom()));
+            tab_split_handle(app, ui, split, (bar_left, bar_width), right, uid, &t);
+            let track = Rect::from_min_max(pos2(split.right(), avail.center().y - 7.0), pos2(right, avail.center().y + 7.0));
             crate::grid::horizontal_scrollbar(app, ui, track, &t);
         });
     });
@@ -373,7 +431,9 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
 
 #[cfg(test)]
 mod tests {
-    use super::{activate_sheet, drop_copies_sheet, navigator_items, rename_needs_focus, tab_drop};
+    use super::{
+        MIN_TRACK, NEW_SHEET_WIDTH, SPLIT_WIDTH, activate_sheet, dragged_share, drop_copies_sheet, navigator_items, rename_needs_focus, tab_drop,
+    };
     use crate::SheetApp;
     use egui::Modifiers;
     use gridcraft_engine::model::{Sheet, Visibility};
@@ -458,5 +518,16 @@ mod tests {
         assert_eq!(app.session.active().unwrap().wb.active_sheet, 1, "the corrected value commits and the sheet changes");
         let a1 = gridcraft_engine::core::CellRef::parse("A1").unwrap();
         assert!(app.session.active().unwrap().wb.sheet(0).unwrap().cell(a1).is_some(), "the value lands on the first sheet");
+    }
+
+    #[test]
+    fn a_dragged_share_keeps_new_sheet_and_the_scrollbar_shown() {
+        // A 1,000 px bar from x = 100 whose track ends at x = 1,100.
+        let bar = (100.0, 1000.0);
+        assert_eq!(dragged_share(600.0, bar, 1100.0), 0.5);
+        assert_eq!(dragged_share(0.0, bar, 1100.0), NEW_SHEET_WIDTH / 1000.0, "New sheet stays shown");
+        assert_eq!(dragged_share(1100.0, bar, 1100.0), (1000.0 - SPLIT_WIDTH - MIN_TRACK) / 1000.0, "the track keeps its minimum");
+        assert_eq!(dragged_share(f32::NAN, bar, 1100.0), 0.6);
+        assert_eq!(dragged_share(600.0, (100.0, 0.0), 1100.0), 0.6, "an empty bar has the default share");
     }
 }
