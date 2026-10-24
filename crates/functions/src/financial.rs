@@ -237,7 +237,12 @@ fn npv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 /// Values and dates for XNPV/XIRR: both must be numeric and of equal length.
-fn dated_flows(values: &Value, dates: &Value) -> R<(Vec<f64>, Vec<f64>)> {
+///
+/// Blank cells follow what Excel returns (observed on synthetic workbooks). With `lenient` (XIRR)
+/// a blank value counts as 0 and a blank date is ignored when its value is blank or 0; a nonzero
+/// value without a date is `#NUM!`. XNPV is strict: a blank value is `#NUM!`, and so is a blank
+/// date next to a blank or 0 value (`#VALUE!` next to a nonzero one).
+fn dated_flows(values: &Value, dates: &Value, lenient: bool) -> R<(Vec<f64>, Vec<f64>)> {
     let va = as_array(values);
     let da = as_array(dates);
     if va.data.len() != da.data.len() {
@@ -246,17 +251,22 @@ fn dated_flows(values: &Value, dates: &Value) -> R<(Vec<f64>, Vec<f64>)> {
     let mut v = Vec::with_capacity(va.data.len());
     let mut d = Vec::with_capacity(da.data.len());
     for (x, y) in va.data.iter().zip(da.data.iter()) {
-        match x {
-            Value::Number(n) => v.push(*n),
+        let value = match x {
+            Value::Number(n) => *n,
+            Value::Empty if lenient => 0.0,
+            Value::Empty => return Err(CellError::Num),
             Value::Error(e) => return Err(*e),
             _ => return Err(CellError::Value),
-        }
+        };
         match y {
             Value::Number(n) => d.push(n.trunc()),
             Value::Error(e) => return Err(*e),
             Value::Text(_) => d.push(y.to_number()?.trunc()),
+            Value::Empty if lenient && value == 0.0 => continue,
+            Value::Empty if lenient || value == 0.0 => return Err(CellError::Num),
             _ => return Err(CellError::Value),
         }
+        v.push(value);
     }
     let d0 = *d.first().ok_or(CellError::Num)?;
     if d.iter().any(|&x| x < d0 || x < 0.0) {
@@ -275,12 +285,12 @@ fn xnpv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if rate <= -1.0 {
         return Err(CellError::Num);
     }
-    let (v, d) = dated_flows(&a.get(1).ok_or(CellError::Value)?.value, &a.get(2).ok_or(CellError::Value)?.value)?;
+    let (v, d) = dated_flows(&a.get(1).ok_or(CellError::Value)?.value, &a.get(2).ok_or(CellError::Value)?.value, false)?;
     num_val(xnpv_calc(rate, &v, &d))
 }
 
 fn xirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (v, d) = dated_flows(&a.first().ok_or(CellError::Value)?.value, &a.get(1).ok_or(CellError::Value)?.value)?;
+    let (v, d) = dated_flows(&a.first().ok_or(CellError::Value)?.value, &a.get(1).ok_or(CellError::Value)?.value, true)?;
     let guess = opt_num(a, 2, 0.1)?;
     if !v.iter().any(|x| *x > 0.0) || !v.iter().any(|x| *x < 0.0) {
         return Err(CellError::Num);
@@ -1788,6 +1798,29 @@ mod tests {
         close_tol(ev("CUMPRINC", vec![n(0.09 / 12.0), n(360.0), n(125000.0), n(1.0), n(1.0), n(0.0)]), -68.27827118, 1e-9);
         is_err(ev("CUMIPMT", vec![n(0.0), n(360.0), n(125000.0), n(1.0), n(1.0), n(0.0)]), CellError::Num);
         is_err(ev("CUMIPMT", vec![n(0.01), n(360.0), n(125000.0), n(1.0), n(1.0), n(2.0)]), CellError::Num);
+    }
+
+    #[test]
+    fn blank_cash_flows_follow_excel_for_xirr_and_xnpv() {
+        // Each result below was observed in Excel on a synthetic workbook: five rows, the first
+        // four -10000, 2750, 4250, 3250 on 39448, 39508, 39751, 39859; the last row varies.
+        let dates = col(&[39448.0, 39508.0, 39751.0, 39859.0, 39904.0]);
+        let gap = arr([39448.0, 39508.0, 39751.0, 39859.0].iter().map(|x| vec![nv(*x)]).chain([vec![Value::Empty]]).collect());
+        let flows = |last: Value| arr([-10000.0, 2750.0, 4250.0, 3250.0].iter().map(|x| vec![nv(*x)]).chain([vec![last]]).collect());
+        let rate = 0.033791377645041754;
+        // XIRR: a blank value counts as 0 and a blank date is ignored when its value is blank or 0.
+        close_tol(ev("XIRR", vec![rf(flows(Value::Empty)), rf(dates.clone())]), rate, 1e-9);
+        close_tol(ev("XIRR", vec![rf(flows(nv(0.0))), rf(dates.clone())]), rate, 1e-9);
+        close_tol(ev("XIRR", vec![rf(flows(Value::Empty)), rf(gap.clone())]), rate, 1e-9);
+        close_tol(ev("XIRR", vec![rf(flows(nv(0.0))), rf(gap.clone())]), rate, 1e-9);
+        is_err(ev("XIRR", vec![rf(flows(nv(2750.0))), rf(gap.clone())]), CellError::Num);
+        is_err(ev("XIRR", vec![rf(flows(tv("-"))), rf(dates.clone())]), CellError::Value);
+        // XNPV is strict: a blank value is #NUM! where 0 is a number.
+        close_tol(ev("XNPV", vec![n(0.09), rf(flows(nv(0.0))), rf(dates.clone())]), -382.66, 1e-2);
+        is_err(ev("XNPV", vec![n(0.09), rf(flows(Value::Empty)), rf(dates)]), CellError::Num);
+        is_err(ev("XNPV", vec![n(0.09), rf(flows(nv(0.0))), rf(gap.clone())]), CellError::Num);
+        is_err(ev("XNPV", vec![n(0.09), rf(flows(Value::Empty)), rf(gap.clone())]), CellError::Num);
+        is_err(ev("XNPV", vec![n(0.09), rf(flows(nv(2750.0))), rf(gap)]), CellError::Value);
     }
 
     #[test]
