@@ -347,6 +347,27 @@ pub struct Prefs {
     pub user_dictionary: Vec<String>,
     /// View › Show › Formula Bar (an application option in Excel, not saved in the file).
     pub formula_bar: bool,
+    /// The statistics the status bar shows for a selection (right-click the status bar).
+    pub status_bar: StatusBarStats,
+}
+
+/// The selection statistics shown on the status bar, set with `view.statusBar`. Excel turns on
+/// Average, Count and Sum by default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct StatusBarStats {
+    pub average: bool,
+    pub count: bool,
+    pub numerical_count: bool,
+    pub minimum: bool,
+    pub maximum: bool,
+    pub sum: bool,
+}
+
+impl Default for StatusBarStats {
+    fn default() -> Self {
+        StatusBarStats { average: true, count: true, numerical_count: false, minimum: false, maximum: false, sum: true }
+    }
 }
 
 impl Default for Prefs {
@@ -361,6 +382,7 @@ impl Default for Prefs {
             r1c1: false,
             user_dictionary: vec![],
             formula_bar: true,
+            status_bar: StatusBarStats::default(),
         }
     }
 }

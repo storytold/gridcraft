@@ -262,6 +262,13 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
     egui::Panel::bottom("status_bar").exact_size(26.0).frame(egui::Frame::NONE.fill(t.status_bar).inner_margin(egui::Margin::symmetric(12, 0))).show(
         ui,
         |ui| {
+            // A right-click anywhere on the status bar opens the statistics menu, the text included, so its labels are not
+            // selectable. The zoom and view controls sense clicks and handle their own.
+            let background = ui.interact(ui.max_rect(), egui::Id::new("gridcraft.status_bar"), Sense::click());
+            background.context_menu(|ui| status_bar_menu(app, ui));
+            let text = |ui: &mut Ui, rich: egui::RichText| {
+                ui.add(egui::Label::new(rich).selectable(false));
+            };
             ui.horizontal_centered(|ui| {
                 let mode = match app.session.mode {
                     gridcraft_engine::Mode::Ready => "Ready",
@@ -269,25 +276,26 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     gridcraft_engine::Mode::Edit => "Edit",
                     gridcraft_engine::Mode::Point => "Point",
                 };
-                ui.label(egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
+                text(ui, egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);
-                        ui.label(egui::RichText::new("Macros preserved (not executed)").font(theme::ui_font(12.5)).color(t.danger));
+                        text(ui, egui::RichText::new("Macros preserved (not executed)").font(theme::ui_font(12.5)).color(t.danger));
                     }
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);
-                        ui.label(egui::RichText::new(app.ui.language.tr("Calculate")).font(theme::ui_font(12.5)).color(t.text_dim));
+                        text(ui, egui::RichText::new(app.ui.language.tr("Calculate")).font(theme::ui_font(12.5)).color(t.text_dim));
                     }
                     if !d.calc.circular.is_empty() {
                         ui.add_space(12.0);
                         let (si, c) = d.calc.circular[0];
                         let name = d.wb.sheet(si).map(|s| s.name.clone()).unwrap_or_default();
-                        ui.label(egui::RichText::new(format!("Circular References: {name}!{}", c.a1())).font(theme::ui_font(12.5)).color(t.danger));
+                        text(ui, egui::RichText::new(format!("Circular References: {name}!{}", c.a1())).font(theme::ui_font(12.5)).color(t.danger));
                     }
                     if app.session.clipboard.is_some() && app.editor.is_none() {
                         ui.add_space(12.0);
-                        ui.label(
+                        text(
+                            ui,
                             egui::RichText::new(app.ui.language.tr("Select destination and press Enter or choose Paste"))
                                 .font(theme::ui_font(12.5))
                                 .color(t.text_dim),
@@ -336,39 +344,73 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                         }
                     }
                     ui.add_space(16.0);
-                    // Average / Count / Sum.
-                    if let Some(d) = app.session.active()
-                        && let Some(sh) = d.wb.active()
-                        && !d.selection.is_single_cell()
-                    {
-                        let st = gridcraft_engine::display::stats(sh, &d.selection.ranges);
-                        let fmt = |v: f64| {
-                            let code = d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str().to_string();
-                            let code = if code == "General" { "#,##0.##########".to_string() } else { code };
-                            gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(v), &code, &d.wb)
-                                .text
-                                .trim_end_matches('.')
-                                .to_string()
-                        };
-                        let mut parts = Vec::new();
-                        if st.numeric > 0 {
-                            parts.push(format!("Sum: {}", fmt(st.sum)));
-                        }
-                        if st.count > 0 {
-                            parts.push(format!("Count: {}", st.count));
-                        }
-                        if let Some(a) = st.average {
-                            parts.push(format!("Average: {}", fmt(a)));
-                        }
-                        for p in parts {
-                            ui.label(egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim));
-                            ui.add_space(10.0);
-                        }
+                    // The layout runs right to left, so the last statistic is drawn first.
+                    for p in selection_statistics(app).into_iter().rev() {
+                        text(ui, egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim));
+                        ui.add_space(10.0);
                     }
                 });
             });
         },
     );
+}
+
+/// The statistics the status bar shows for a selection of more than one cell, left to right: Average, Count,
+/// Numerical Count, Minimum, Maximum, Sum. Each one shows when it is turned on (`view.statusBar`)
+/// and the selection has a value for it.
+pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
+    let Some(d) = app.session.active() else { return vec![] };
+    let Some(sh) = d.wb.active() else { return vec![] };
+    if d.selection.is_single_cell() {
+        return vec![];
+    }
+    let on = app.session.prefs.status_bar;
+    let st = gridcraft_engine::display::stats(sh, &d.selection.ranges);
+    let fmt = |v: f64| {
+        let code = d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str().to_string();
+        let code = if code == "General" { "#,##0.##########".to_string() } else { code };
+        gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(v), &code, &d.wb).text.trim_end_matches('.').to_string()
+    };
+    let mut parts = Vec::new();
+    if on.average
+        && let Some(a) = st.average
+    {
+        parts.push(format!("Average: {}", fmt(a)));
+    }
+    if on.count && st.count > 0 {
+        parts.push(format!("Count: {}", st.count));
+    }
+    if on.numerical_count && st.count > 0 {
+        parts.push(format!("Numerical Count: {}", st.numeric));
+    }
+    if on.minimum && st.numeric > 0 {
+        parts.push(format!("Minimum: {}", fmt(st.min)));
+    }
+    if on.maximum && st.numeric > 0 {
+        parts.push(format!("Maximum: {}", fmt(st.max)));
+    }
+    if on.sum && st.numeric > 0 {
+        parts.push(format!("Sum: {}", fmt(st.sum)));
+    }
+    parts
+}
+
+/// The status bar's context menu: a check item for each statistic, each one running `view.statusBar`.
+fn status_bar_menu(app: &mut SheetApp, ui: &mut Ui) {
+    ui.set_min_width(180.0);
+    let st = app.session.prefs.status_bar;
+    for (key, label, mut on) in [
+        ("average", "Average", st.average),
+        ("count", "Count", st.count),
+        ("numericalCount", "Numerical Count", st.numerical_count),
+        ("minimum", "Minimum", st.minimum),
+        ("maximum", "Maximum", st.maximum),
+        ("sum", "Sum", st.sum),
+    ] {
+        if ui.checkbox(&mut on, app.ui.language.tr(label)).changed() {
+            app.run_or_alert("view.statusBar", json!({ key: on }));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -394,6 +436,30 @@ mod tests {
 
     fn names(app: &SheetApp) -> Vec<String> {
         app.session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect()
+    }
+
+    #[test]
+    fn status_bar_shows_the_statistics_that_are_turned_on_in_order() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        for (cell, input) in [("A1", "4"), ("A2", "-1"), ("A3", "x"), ("A4", "9")] {
+            app.run("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        app.run("selection.set", json!({"range": "A1:A5"})).unwrap();
+        assert_eq!(super::selection_statistics(&app), ["Average: 4", "Count: 4", "Sum: 12"]);
+        app.run("view.statusBar", json!({"numericalCount": true, "minimum": true, "maximum": true})).unwrap();
+        assert_eq!(super::selection_statistics(&app), ["Average: 4", "Count: 4", "Numerical Count: 3", "Minimum: -1", "Maximum: 9", "Sum: 12"]);
+        app.run("view.statusBar", json!({"average": false, "count": false, "sum": false})).unwrap();
+        assert_eq!(super::selection_statistics(&app), ["Numerical Count: 3", "Minimum: -1", "Maximum: 9"]);
+        // Text only: Count and Numerical Count, nothing that needs a number.
+        app.run("view.statusBar", json!({"average": true, "count": true, "sum": true})).unwrap();
+        app.run("cell.set", json!({"cell": "B1", "input": "a"})).unwrap();
+        app.run("cell.set", json!({"cell": "B2", "input": "b"})).unwrap();
+        app.run("selection.set", json!({"range": "B1:B2"})).unwrap();
+        assert_eq!(super::selection_statistics(&app), ["Count: 2", "Numerical Count: 0"]);
+        app.run("selection.set", json!({"range": "A1"})).unwrap();
+        assert!(super::selection_statistics(&app).is_empty(), "one cell shows no statistics");
     }
 
     #[test]

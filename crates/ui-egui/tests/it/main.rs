@@ -77,6 +77,7 @@ mod sheet_tabs;
 mod show_objects;
 mod shrink_to_fit;
 mod sort_dialog_columns;
+mod status_bar_menu;
 mod symbol_glyphs;
 mod system_theme;
 mod table_headings;
