@@ -37,6 +37,10 @@ including tests, 2026-10-10.
    undo and redo history as they were before the command (never-crash guard); a group that was
    open before the command and that the command ended or rolled back stays ended and keeps a
    step from its start to the restored workbook, so Undo still returns to the state before it.
+   Only the outermost command is journaled: a command that runs other commands (Subtotal, From
+   Text/CSV, Remove Duplicates) is one journal entry, so a recorded script or a replayed journal
+   doesn't run its inner steps and then the command again. Run Script isn't journaled itself; the
+   steps it runs are, once each.
 2. **Edits** change the model through copy-on-write bands; undo keeps the previous snapshot.
    Undo retains at most 100 steps and trims older steps when its estimated retained cell storage
    exceeds 128 MiB. The newest step remains undoable even if that step alone exceeds the budget.
@@ -118,5 +122,6 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
+| 2026-10-15 | minor | Data flow: nested commands are one journal entry |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |

@@ -408,6 +408,9 @@ pub struct Session {
     pub recorder: Option<record::Recorder>,
     /// How many `execute` calls are running (0 between top-level commands).
     depth: u32,
+    /// How many journaled commands are running. Only the outermost one is journaled, and the
+    /// recorder keeps the same calls: the steps a Run Script runs are, since it isn't journaled.
+    journal_nesting: u32,
     /// Windows hidden with View › Hide.
     pub hidden_windows: Vec<usize>,
     /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
@@ -555,7 +558,7 @@ impl Session {
             None => Vec::new(),
         };
         // The recorder keeps top-level calls with the place they ran in.
-        let place = (self.depth == 0 && self.recorder.is_some()).then(|| match self.active() {
+        let place = (self.journal_nesting == 0 && self.recorder.is_some()).then(|| match self.active() {
             Some(d) => (d.uid, d.wb.active_sheet, d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(), d.selection.clone()),
             None => (0, 0, String::new(), Selection::default()),
         });
@@ -563,9 +566,18 @@ impl Session {
         let requests_before = self.ui_requests.len();
         let marked = doc_uid.zip(start).map(|(uid, (_, len))| (uid, len));
         self.marks.extend(marked);
+        // Only the outermost command is journaled: the commands it runs for itself are part of it,
+        // so replaying the journal or a recorded script doesn't run them and then the command again.
+        let journals = spec.journal && self.journal_nesting == 0;
         self.depth = self.depth.saturating_add(1);
+        if spec.journal {
+            self.journal_nesting = self.journal_nesting.saturating_add(1);
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
         self.depth = self.depth.saturating_sub(1);
+        if spec.journal {
+            self.journal_nesting = self.journal_nesting.saturating_sub(1);
+        }
         if marked.is_some() {
             self.marks.pop();
         }
@@ -612,7 +624,7 @@ impl Session {
         if result.is_err() {
             self.rollback_groups_from(first_group);
         }
-        if spec.journal && result.is_ok() {
+        if journals && result.is_ok() {
             // A command that started recording is not part of the recording; one that stopped it
             // finds no recorder. A menu-style call that only opened a dialog (`file.open` with no
             // file, `home.formatCells` with no style) is not recorded either: the dialog's own
@@ -675,6 +687,10 @@ impl Session {
                     {
                         label = last.label.clone();
                     }
+                }
+                // A command that runs other commands (Subtotal, From Text/CSV, Remove Duplicates)
+                // is one step: the steps its nested commands made are taken back here.
+                if let Some((_, len)) = start {
                     d.undo.truncate(len);
                 }
                 push_entry(&mut d.undo, label, wb, &d.wb, sel);

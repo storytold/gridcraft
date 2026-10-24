@@ -330,6 +330,204 @@ fn undo_redo() {
     assert!(s.doc().unwrap().is_dirty());
 }
 
+fn sales() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"sample": "sales"})).unwrap();
+    s
+}
+
+fn undo_depth(s: &Session) -> usize {
+    s.doc().unwrap().undo.len()
+}
+
+fn workbook(s: &Session) -> gridcraft_model::Workbook {
+    (*s.doc().unwrap().wb).clone()
+}
+
+#[test]
+fn subtotal_is_one_undo_step() {
+    // Each row insert, label, formula, bold and group Subtotal ran was its own undo step (9, then
+    // 19), and the second Ctrl+Z jumped to a half-built Subtotal.
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    assert_eq!(undo_depth(&s), 1);
+    let start = workbook(&s);
+    s.execute("data.subtotal", json!({"columns": ["J"], "function": "average", "groupBy": "A", "header": "x"})).unwrap();
+    assert_eq!(undo_depth(&s), 2);
+    let once = workbook(&s);
+    assert_ne!(once, start);
+    s.execute("data.subtotal", json!({})).unwrap();
+    assert_eq!(undo_depth(&s), 3);
+    assert_eq!(s.doc().unwrap().undo.last().unwrap().label, "Subtotal");
+    let twice = workbook(&s);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(workbook(&s), once);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(workbook(&s), start);
+    s.execute("edit.redo", json!({"steps": 2})).unwrap();
+    assert_eq!(workbook(&s), twice);
+}
+
+#[test]
+fn subtotal_near_the_history_limit_keeps_the_oldest_steps() {
+    // The nested steps used to trim the 100-step history before they were taken back, so undoing
+    // everything no longer reached the starting workbook.
+    let mut s = sales();
+    let start = workbook(&s);
+    for i in 0..99 {
+        s.execute("cell.set", json!({"cell": "N1", "input": i.to_string()})).unwrap();
+    }
+    s.execute("data.subtotal", json!({"columns": ["J"], "groupBy": "A"})).unwrap();
+    assert_eq!(undo_depth(&s), 100);
+    s.execute("edit.undo", json!({"steps": 100})).unwrap();
+    assert_eq!(workbook(&s), start);
+}
+
+#[test]
+fn commands_that_run_other_commands_are_one_undo_step() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["H"], ["a"], ["a"], ["b"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A4", "header": true})).unwrap();
+    let depth = undo_depth(&s);
+    let start = workbook(&s);
+    s.execute("table.removeDuplicates", json!({})).unwrap();
+    assert_ne!(workbook(&s), start);
+    assert_eq!(undo_depth(&s), depth + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(workbook(&s), start);
+}
+
+#[test]
+fn a_script_is_one_undo_step_and_its_own_undo_takes_back_its_own_step() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "C1", "input": "before"})).unwrap();
+    let cmds = json!([
+        {"command": "cell.set", "params": {"cell": "A1", "input": "1"}},
+        {"command": "edit.undo", "params": {}},
+        {"command": "cell.set", "params": {"cell": "B1", "input": "2"}},
+    ]);
+    s.execute("automate.newScript", json!({"name": "S", "commands": cmds})).unwrap();
+    let depth = undo_depth(&s);
+    let start = workbook(&s);
+    s.execute("automate.runScript", json!({"name": "S"})).unwrap();
+    // The script's Undo took back its own A1, not C1 from before the script.
+    assert_eq!(v(&s, "A1"), Value::Empty);
+    assert_eq!(v(&s, "B1"), Value::Number(2.0));
+    assert_eq!(v(&s, "C1"), Value::Text("before".into()));
+    assert_eq!(undo_depth(&s), depth + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(workbook(&s), start);
+}
+
+/// Records `act` as a script, then checks the recording and the journal hold `expect` (each step
+/// once, none of the commands a step ran for itself) and that both replay `act` on a fresh copy.
+/// `act` must add `undo_steps` undo steps.
+fn record_and_replay(fresh: fn() -> Session, act: impl Fn(&mut Session), expect: &[&str], undo_steps: usize) {
+    let mut s = fresh();
+    let journal_at = s.journal.len();
+    s.execute("automate.recordActions", json!({})).unwrap();
+    let depth = undo_depth(&s);
+    act(&mut s);
+    // fix/subtotal-single-undo: each recorded action is still one undo step.
+    assert_eq!(undo_depth(&s), depth + undo_steps);
+    let r = s.execute("automate.recordActions", json!({"stop": true, "name": "Rec"})).unwrap();
+    let ids: Vec<&str> = s.journal[journal_at..].iter().map(|(id, _)| id.as_str()).filter(|id| !id.starts_with("automate.")).collect();
+    assert_eq!(ids, expect, "journal");
+    assert_eq!(r["steps"], expect.len());
+    let sheets = s.doc().unwrap().wb.sheets.clone();
+
+    // Replaying the journal on a fresh copy gives the same sheets...
+    let mut j = fresh();
+    for (id, p) in s.journal[journal_at..].iter().filter(|(id, _)| !id.starts_with("automate.")) {
+        j.execute(id, p.clone()).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    assert!(j.doc().unwrap().wb.sheets == sheets, "journal replay differs");
+    // ...and so does running the recorded script there.
+    let steps: Vec<serde_json::Value> =
+        s.journal[journal_at..].iter().filter(|(id, _)| !id.starts_with("automate.")).map(|(id, p)| json!({"command": id, "params": p})).collect();
+    let mut r = fresh();
+    r.execute("automate.newScript", json!({"name": "Rec", "commands": steps})).unwrap();
+    r.execute("automate.runScript", json!({"name": "Rec"})).unwrap();
+    assert!(r.doc().unwrap().wb.sheets == sheets, "script replay differs");
+}
+
+#[test]
+fn a_recorded_subtotal_replays_once() {
+    // The rows, labels, formulas, bold and groups Subtotal ran were journaled ahead of it, so a
+    // recording replayed them and then ran Subtotal again on top.
+    record_and_replay(
+        sales,
+        |s| {
+            s.execute("data.subtotal", json!({"columns": ["J"], "groupBy": "A"})).unwrap();
+        },
+        &["data.subtotal"],
+        1,
+    );
+}
+
+#[test]
+fn a_recorded_run_script_replays_its_steps_once() {
+    // Run Script isn't journaled itself; the steps it runs are, once each, so the recording
+    // replays on a copy that doesn't have the script.
+    fn with_script() -> Session {
+        let mut s = sales();
+        let cmds = json!([
+            {"command": "cell.set", "params": {"cell": "N1", "input": "total"}},
+            {"command": "data.subtotal", "params": {"columns": ["J"], "groupBy": "A"}},
+        ]);
+        s.execute("automate.newScript", json!({"name": "Sub", "commands": cmds})).unwrap();
+        s
+    }
+    record_and_replay(
+        with_script,
+        |s| {
+            s.execute("automate.runScript", json!({"name": "Sub"})).unwrap();
+            s.execute("cell.set", json!({"cell": "N2", "input": "after"})).unwrap();
+        },
+        &["cell.set", "data.subtotal", "cell.set"],
+        2,
+    );
+    let mut s = with_script();
+    let depth = undo_depth(&s);
+    s.execute("automate.runScript", json!({"name": "Sub"})).unwrap();
+    assert_eq!(undo_depth(&s), depth + 1, "a script is one undo step");
+    assert!(!s.journal.iter().any(|(id, _)| id == "automate.runScript"));
+}
+
+#[test]
+fn a_command_that_runs_commands_like_a_plugin_is_journaled_once() {
+    // From Text/CSV runs Insert Sheet, Set Values, Insert Table and AutoFit, as a plugin command
+    // runs the engine commands it answers with.
+    fn book() -> Session {
+        let mut s = Session::new();
+        s.new_workbook();
+        s
+    }
+    record_and_replay(
+        book,
+        |s| {
+            s.execute("data.fromTextCsv", json!({"text": "Name,Qty\na,1\na,1\nb,2", "sheet": "Imported"})).unwrap();
+            s.execute("table.removeDuplicates", json!({})).unwrap();
+        },
+        &["data.fromTextCsv", "table.removeDuplicates"],
+        2,
+    );
+}
+
+#[test]
+fn a_failed_nested_step_leaves_the_journal_working() {
+    // A script whose step fails must not leave the journal switched off.
+    let mut s = sales();
+    let _ = s.execute("automate.runScript", json!({"name": "missing"}));
+    s.execute("automate.newScript", json!({"name": "Bad", "commands": [{"command": "cell.set", "params": {}}]})).unwrap();
+    assert!(s.execute("automate.runScript", json!({"name": "Bad"})).is_err());
+    let at = s.journal.len();
+    s.execute("cell.set", json!({"cell": "N1", "input": "1"})).unwrap();
+    assert_eq!(s.journal.len(), at + 1);
+}
+
 #[test]
 fn redo_selects_the_redone_cell() {
     // #1855: type into A1..A3, click A1, undo, redo: the selection follows the edit to A3.

@@ -193,15 +193,19 @@ pub fn specs() -> Vec<CommandSpec> {
             new_script
         ),
         cmd!(query "automate.allScripts", "All Scripts", ["Automate", "Scripting Tools"], None, "{} → saved scripts", has_doc, all_scripts),
-        cmd!(
-            "automate.runScript",
-            "Run Script",
-            [],
-            None,
-            "{name, trusted?: bool (runs a script from an untrusted workbook this once)} — refuses scripts in a workbook opened from a file until it is trusted, and steps that reach outside the workbook (file.*, link.*, any `path` param)",
-            has_doc,
-            run_script
-        ),
+        // Not journaled itself: the steps it runs are, so the journal and a recording taken while
+        // a script runs hold each step once (and still replay after the script is deleted).
+        CommandSpec {
+            id: "automate.runScript",
+            label: "Run Script",
+            menu: &[],
+            shortcut: None,
+            params: "{name, trusted?: bool (runs a script from an untrusted workbook this once)} — refuses scripts in a workbook opened from a file until it is trusted, and steps that reach outside the workbook (file.*, link.*, any `path` param)",
+            enabled: has_doc,
+            run: run_script,
+            journal: false,
+            undoable: true,
+        },
         cmd!(
             noundo "automate.trustScripts",
             "Trust Scripts",
