@@ -774,6 +774,7 @@ impl<'h> Evaluator<'h> {
             "XLOOKUP" => self.xlookup(args),
             "CELL" => self.cell_info(args),
             "TRIMRANGE" => self.trimrange(args),
+            "GETPIVOTDATA" => self.getpivotdata(args),
             "SUBTOTAL" | "AGGREGATE" => self.subtotal(name, args),
             "TEXT" => {
                 if args.len() != 2 {
@@ -1897,6 +1898,24 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
             (_, Some(Expr::Number(_) | Expr::Text(_) | Expr::Bool(_) | Expr::Error(_) | Expr::Array(_) | Expr::Missing)) => {}
             _ => dynamic = true,
         },
+        // GETPIVOTDATA reads the report cells, so it depends on the whole report its reference
+        // points into (pivot commands recalculate everything). Any other reference is dynamic.
+        Expr::Call(n, args) if n == "GETPIVOTDATA" => match args.get(1) {
+            Some(Expr::Ref(r)) => {
+                let si = match &r.sheet {
+                    SheetSel::Current => Some(sheet),
+                    SheetSel::Named(name) => wb.sheet_index(name),
+                    SheetSel::Span(..) => None,
+                };
+                let report =
+                    si.and_then(|i| wb.sheet(i)).and_then(|sh| sh.pivots.iter().find_map(|p| p.last_range.filter(|lr| lr.intersects(&r.range()))));
+                match report {
+                    Some(lr) => push(&mut out, r, lr),
+                    None => dynamic = true,
+                }
+            }
+            _ => dynamic = true,
+        },
         Expr::Call(n, _)
             if matches!(n.as_str(), "INDIRECT" | "OFFSET" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO") =>
         {
@@ -1946,6 +1965,7 @@ fn is_special(n: &str) -> bool {
             | "INDEX"
             | "CELL"
             | "TRIMRANGE"
+            | "GETPIVOTDATA"
             | "SUBTOTAL"
             | "AGGREGATE"
             | "TEXT"
@@ -1984,6 +2004,7 @@ pub const SPECIAL_FUNCTIONS: &[&str] = &[
     "INDEX",
     "CELL",
     "TRIMRANGE",
+    "GETPIVOTDATA",
     "SUBTOTAL",
     "AGGREGATE",
     "TEXT",

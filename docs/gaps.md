@@ -83,8 +83,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 8. PivotTables: no slicers, calculated items, PivotCharts; unverified in Excel (F)
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
-  `insert.pivotChart`, `table.insertSlicer`; calculated items and GETPIVOTDATA missing (calculated fields
-  and values on rows done). Show Details (double-click a value, subtotal or grand total cell) lists
+  `insert.pivotChart`, `table.insertSlicer`; calculated items and Generate GetPivotData missing (calculated fields,
+  values on rows and GETPIVOTDATA done). Show Details (double-click a value, subtotal or grand total cell) lists
   its source records on a new sheet; the "Enable show details" option isn't modelled yet.
 - **Impact:** pivots are the analyst's main tool.
 - **Estimate:** 20–30 h for beta (25–40 h full).
@@ -131,10 +131,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   Margins are dragged on the rulers (#792). Remaining: pictures in headers/footers, Different First Page / Odd & Even pages. Desktop now submits directly through craft-print with printer choice, copies, duplex and grayscale; browser printing stays available. Print ranges and driver tray/options UI remain. **Estimate:** 5–10 h.
 
 ### 15. Remaining functions and an oracle suite (F)
-- 18 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 16–26 h.
-- 20 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 17–29 h.
-- 21 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
-- 18 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
+- 9 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 15–25 h.
   [function-parity.md](function-parity.md)
 
 ### 16. Collaboration and review (F)
@@ -185,6 +182,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-15 | minor | §13: Solver prepares reports before committing the solution, model and report sheets together; report refusal preserves the workbook and Undo/Redo (#1050) |
 | 2026-10-13 | trivial | §4: multi-level category axes landed |
 | 2026-10-12 | minor | §9: next/previous sheet commands retain the current visible sheet and selection when there is no visible destination |
+| 2026-10-12 | minor | §8, §15: GETPIVOTDATA added (9 functions missing) |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
 | 2026-10-12 | minor | Page Layout view: dragging margins on the rulers (#792) removed from the §14 remainder |
 | 2026-10-12 | minor | §13: Forecast Sheet Forecast Start (hindcast) landed (#785) |

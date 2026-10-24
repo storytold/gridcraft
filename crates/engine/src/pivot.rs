@@ -23,6 +23,8 @@ pub const MAX_OUTPUT_CELLS: u64 = 2_000_000;
 pub const MAX_AXIS_FIELDS: usize = 32;
 /// Most fields in the Values area.
 pub const MAX_VALUE_FIELDS: usize = 256;
+/// Most report value cells kept for GETPIVOTDATA (bigger reports aren't indexed).
+pub const MAX_INDEXED_CELLS: usize = 1_000_000;
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -492,6 +494,8 @@ pub struct Output {
     pub chart_cols: Vec<(u32, String)>,
     /// Grid column holding the innermost row labels (`None` without row fields).
     pub label_col: Option<u32>,
+    /// Every value cell with the items that locate it (for GETPIVOTDATA).
+    pub data: Vec<PivotDataCell>,
 }
 
 impl Output {
@@ -1086,6 +1090,7 @@ fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut probe: Option<
             chart_rows: vec![],
             chart_cols: vec![],
             label_col: None,
+            data: vec![],
         });
     }
 
@@ -1259,6 +1264,16 @@ fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut probe: Option<
     } else {
         Some(row_levels.saturating_sub(1) as u32)
     };
+    let item_refs = |fields: &[&PivotField], items: &[FieldItems], path: &[u32]| -> Vec<PivotItemRef> {
+        path.iter()
+            .enumerate()
+            .filter_map(|(d, it)| {
+                let (f, item) = (fields.get(d)?, items.get(d)?.get(*it)?);
+                Some(PivotItemRef { field: f.source_col.clone(), label: item.label.clone(), value: item.value.clone() })
+            })
+            .collect()
+    };
+    let mut data: Vec<PivotDataCell> = Vec::new();
     for line in &lines {
         let rk = match line.kind {
             LineKind::Item(b) => RowKind::Item(b),
@@ -1326,6 +1341,17 @@ fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut probe: Option<
                     _ => raw,
                 },
             };
+            if data.len() < MAX_INDEXED_CELLS {
+                let mut items = item_refs(&ctx.rows, &ctx.row_items, rp);
+                items.extend(item_refs(&col_fields, &col_items, cp));
+                data.push(PivotDataCell {
+                    data_field: vdef.name.clone(),
+                    source_col: vdef.source_col.clone(),
+                    items,
+                    row: u32::try_from(r).unwrap_or(u32::MAX),
+                    col: u32::try_from(l + j).unwrap_or(u32::MAX),
+                });
+            }
             if let Some(pr) = probe.as_deref_mut()
                 && pr.at == (r, l + j)
             {
@@ -1334,7 +1360,7 @@ fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut probe: Option<
             g.set(r, l + j, shown, ck.1, 0, data_fmt.get(*vi).cloned().flatten());
         }
     }
-    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col })
+    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col, data })
 }
 
 // ---------------------------------------------------------------- styling and writing
@@ -1526,6 +1552,12 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     }
     let sheet_name = shm.name.clone();
     rebind_charts(wb, &sheet_name, &pt.name, origin, &out);
+    // The index of the new report; its lookup hash is built on the first GETPIVOTDATA.
+    if let Some(p) = wb.sheet_mut(sheet).and_then(|s| s.pivots.get_mut(idx)) {
+        let index = PivotLookup::default();
+        index.set_cells(out.data);
+        p.data_index = index;
+    }
     Ok(area)
 }
 
@@ -1625,6 +1657,33 @@ fn rebind_charts(wb: &mut Workbook, sheet: &str, pivot: &str, origin: CellRef, o
     }
 }
 
+/// The value cells of a PivotTable's report, for GETPIVOTDATA when a refresh did not set the
+/// index (a workbook just opened from XLSX). The positions must describe the report as it is
+/// stored on the sheet, not as the current source would render it: the source is recomputed only
+/// to learn the layout, and the result is accepted when every label and header cell of that
+/// layout equals the stored cell at the same place. A source changed since the last refresh gives
+/// a different layout, so there is no trustworthy index and the lookup fails until a refresh.
+pub fn index_cells(wb: &Workbook, sheet: usize, pt: &PivotTable) -> Result<Vec<PivotDataCell>, String> {
+    const STALE: &str = "The stored report no longer matches the source. Refresh the PivotTable.";
+    let report = pt.last_range.ok_or("The PivotTable has no report.")?;
+    let out = compute(wb, pt, sheet)?;
+    let sh = wb.sheet(sheet).ok_or("There's no such sheet.")?;
+    let rows = u64::from(report.end.row) - u64::from(report.start.row) + 1;
+    let cols = u64::from(report.end.col) - u64::from(report.start.col) + 1;
+    if rows != u64::from(out.height().max(1)) || cols != u64::from(out.width.max(1)) {
+        return Err(STALE.into());
+    }
+    let labels = [CellKind::Header, CellKind::RowLabel, CellKind::ColLabel, CellKind::Filter];
+    for (r, row) in out.grid.iter().enumerate() {
+        for (c, oc) in row.iter().enumerate() {
+            if labels.contains(&oc.kind) && sh.value(CellRef::new(report.start.row + r as u32, report.start.col + c as u32)) != oc.value {
+                return Err(STALE.into());
+            }
+        }
+    }
+    Ok(out.data)
+}
+
 /// Clears a pivot's last output area.
 pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
     let Some(shm) = wb.sheet_mut(sheet) else { return };
@@ -1632,6 +1691,7 @@ pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
     shm.take_cells(r);
     if let Some(p) = shm.pivots.get_mut(idx) {
         p.last_range = None;
+        p.data_index = PivotLookup::default();
     }
 }
 
