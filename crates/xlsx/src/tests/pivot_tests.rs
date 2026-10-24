@@ -724,3 +724,30 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
 }
+
+fn shared_items_tag(cache: &str, field: &str) -> String {
+    let start = cache.find(&format!("<cacheField name=\"{field}\"")).unwrap();
+    let rest = &cache[start..];
+    let s = rest.find("<sharedItems").unwrap();
+    rest[s..s + rest[s..].find('>').unwrap() + 1].to_string()
+}
+
+/// #1447: a date group with a blank date keeps `containsSemiMixedTypes` off the flags.
+#[test]
+fn date_group_flags_with_and_without_a_blank() {
+    for blank in [false, true] {
+        let mut d = vec![Value::number(date(2023, 1, 15)), Value::number(date(2023, 2, 1)), Value::number(date(2023, 8, 1))];
+        if blank {
+            d.push(Value::Empty);
+        }
+        let sales: Vec<Value> = (0..d.len()).map(|i| Value::number(i as f64 + 1.0)).collect();
+        let parts = small_pivot(&[("Date", d), ("Sales", sales)], |p| {
+            p.rows = vec![PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Days, ..PivotField::default() }];
+            p.values = vec![PivotValue { source_col: "Sales".into(), name: "Sum of Sales".into(), ..PivotValue::default() }];
+        });
+        let tag = shared_items_tag(&parts["xl/pivotCache/pivotCacheDefinition1.xml"], "Date");
+        assert_eq!(tag.contains("containsSemiMixedTypes=\"0\""), !blank, "{tag}");
+        assert!(tag.contains("containsNonDate=\"0\" containsDate=\"1\" containsString=\"0\""), "{tag}");
+        assert_eq!(tag.contains("containsBlank=\"1\""), blank, "{tag}");
+    }
+}
