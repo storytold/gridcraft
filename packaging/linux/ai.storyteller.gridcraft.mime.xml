@@ -13,6 +13,10 @@
     <sub-class-of type="application/zip"/>
     <glob pattern="*.xlsm"/>
   </mime-type>
+  <mime-type type="application/vnd.ms-excel">
+    <comment>Excel 97-2003 workbook</comment>
+    <glob pattern="*.xls"/>
+  </mime-type>
   <mime-type type="application/vnd.ms-excel.sheet.binary.macroEnabled.12">
     <comment>Excel binary workbook</comment>
     <glob pattern="*.xlsb"/>

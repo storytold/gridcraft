@@ -406,9 +406,33 @@ mod packaging_tests {
         let mac = extensions(plist, "<key>CFBundleTypeExtensions</key>", "<string>", '<');
         let win = extensions(wxs, "Key=\"Software\\Classes\\.", "", '\\');
         assert!(mac.iter().any(|e| e == "xlsx"), "Info.plist.in extensions not found: {mac:?}");
+        assert!(mac.iter().any(|e| e == "xls"), "Info.plist.in doesn't offer .xls: {mac:?}");
         assert_eq!(mac, win);
         for ext in &mac {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
+    }
+
+    /// The Linux desktop entry offers GridCraft for the same files as Windows Open with: every
+    /// extension has a glob in the shipped shared-mime-info whose type is on the `MimeType=` line.
+    /// #1351: `.xls` opened in the app but file managers never offered GridCraft for it.
+    #[test]
+    fn linux_offers_the_same_file_types_as_windows() {
+        let desktop = include_str!("../../../packaging/linux/ai.storyteller.gridcraft.desktop");
+        let mime = include_str!("../../../packaging/linux/ai.storyteller.gridcraft.mime.xml");
+        let wxs = include_str!("../../../packaging/windows/gridcraft.wxs");
+        let types: Vec<&str> =
+            desktop.lines().find_map(|l| l.strip_prefix("MimeType=")).unwrap_or_default().split(';').filter(|t| !t.is_empty()).collect();
+        let mut linux: Vec<String> = Vec::new();
+        for entry in mime.split("<mime-type type=\"").skip(1) {
+            let ty = entry.split('"').next().unwrap_or_default();
+            let globs = extensions(entry, "<glob pattern=\"*.", "", '"');
+            assert!(types.contains(&ty), "{ty} (for {globs:?}) is missing from the desktop MimeType= line");
+            linux.extend(globs);
+        }
+        linux.sort();
+        let win = extensions(wxs, "Key=\"Software\\Classes\\.", "", '\\');
+        assert!(linux.iter().any(|e| e == "xls"), "Linux doesn't offer .xls: {linux:?}");
+        assert_eq!(linux, win);
     }
 }

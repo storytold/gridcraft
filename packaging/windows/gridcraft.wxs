@@ -182,7 +182,8 @@
              ignored (WiX rejects an empty Value, so it repeats the ProgId). -->
         <RegistryValue Root="HKLM" Key="Software\Classes\.xlsx\OpenWithProgids" Name="GridCraft.Workbook" Value="GridCraft.Workbook" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.xlsm\OpenWithProgids" Name="GridCraft.Workbook" Value="GridCraft.Workbook" Type="string" />
-        <!-- .xlsb and .ods are imported (data only) into a new workbook that saves as .xlsx. -->
+        <!-- .xls, .xlsb and .ods are imported into a new workbook that saves as .xlsx (.xlsb and .ods data only). -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\.xls\OpenWithProgids" Name="GridCraft.Workbook" Value="GridCraft.Workbook" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.xlsb\OpenWithProgids" Name="GridCraft.Workbook" Value="GridCraft.Workbook" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.ods\OpenWithProgids" Name="GridCraft.Workbook" Value="GridCraft.Workbook" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.csv\OpenWithProgids" Name="GridCraft.TextData" Value="GridCraft.TextData" Type="string" />
