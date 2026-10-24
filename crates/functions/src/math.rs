@@ -918,7 +918,9 @@ fn minverse(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
             }
         }
     }
-    let inv = inv.into_iter().map(|x| if x.abs() < 1e-15 { 0.0 } else { x }).collect();
+    // Rounding noise in the inverse scales with 1/scale of the input matrix.
+    let noise = 1e-15 / scale;
+    let inv = inv.into_iter().map(|x| if x.abs() < noise { 0.0 } else { x }).collect();
     to_value_array(n, n, inv)
 }
 
@@ -1620,6 +1622,17 @@ mod tests {
         is_text(ev2("ROMAN", 995.0, 4.0), "VM");
         is_text(ev2("ROMAN", 99.0, 1.0), "VCIV");
         is_text(ev2("ROMAN", 99.0, 4.0), "IC");
+    }
+
+    #[test]
+    fn minverse_scale_relative() {
+        let big = ev("MINVERSE", vec![av(arr(vec![vec![nv(1e20), nv(0.0)], vec![nv(0.0), nv(1e20)]]))]);
+        let r = rows_of(&big);
+        close_tol(r[0][0].clone(), 1e-20, 1e-25);
+        close_tol(r[1][1].clone(), 1e-20, 1e-25);
+        let small = ev("MINVERSE", vec![av(arr(vec![vec![nv(1e-20), nv(0.0)], vec![nv(0.0), nv(1e-20)]]))]);
+        let r = rows_of(&small);
+        close_tol(r[0][0].clone(), 1e20, 1e10);
     }
 
     #[test]
