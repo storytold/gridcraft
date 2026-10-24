@@ -180,6 +180,100 @@ pub struct GridState {
     pub wheel_zoom: Option<WheelZoom>,
     /// A one-finger touch drag in progress: it pans the sheet instead of selecting.
     pub touch_pan: bool,
+    /// The axis the current scroll gesture is held to (see [`ScrollRail`]).
+    pub scroll_rail: ScrollRail,
+}
+
+/// Holds a trackpad swipe to the axis it starts along, so scrolling down a column doesn't drift
+/// sideways (or along a row, up and down) with the small off-axis movement every swipe has. A
+/// swipe within about 27° of an axis (twice as far along it as across, over its first few
+/// points) moves only along that axis until it ends, its momentum included; a clearly diagonal
+/// swipe moves freely. A swipe ends when the trackpad starts a new one or scrolling pauses.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ScrollRail {
+    /// How far the swipe has moved along each axis while its axis is being decided.
+    travel: egui::Vec2,
+    axis: RailAxis,
+    /// When the swipe last moved.
+    last: f64,
+    /// The trackpad reported the start of this swipe and nothing has moved yet: what's left of
+    /// the earlier swipe's glide stops, as fingers touching the trackpad stop it.
+    fresh: bool,
+    /// The scroll passes unchanged for the rest of the swipe: it comes from a mouse wheel's
+    /// notches, or a modifier already holds it to one axis. Kept until the swipe ends: egui
+    /// keeps a swipe's modifiers after they're released, so the delta stays on that axis.
+    pass: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum RailAxis {
+    #[default]
+    Undecided,
+    Vertical,
+    Horizontal,
+    Free,
+}
+
+/// A pause this long ends a swipe (egui's own end-of-scroll timer where no gesture phases come).
+const RAIL_GAP: f64 = 0.15;
+/// Points of movement after which a swipe's axis is decided.
+const RAIL_DECIDE: f32 = 8.0;
+/// How many times further along an axis than across it a swipe must go to be held to that axis.
+const RAIL_RATIO: f32 = 2.0;
+
+impl ScrollRail {
+    /// The trackpad reported the start of a gesture: a new swipe, even while the last one's
+    /// momentum runs (the start can come in a frame with no movement yet).
+    pub fn begin(&mut self, now: f64) {
+        *self = ScrollRail { last: now, fresh: true, ..ScrollRail::default() };
+    }
+
+    /// The part of `d` (one frame's scroll) to apply: along the swipe's axis only, or all of it
+    /// for a diagonal swipe. `reported` is the movement the device reported this frame, by axis;
+    /// it decides the axis, so the smoothed tail of an earlier swipe can't. `pass` when this
+    /// frame's scroll isn't the rail's to steer: mouse-wheel notches (line or page units), or a
+    /// modifier that already holds the scroll to one axis.
+    pub fn steer(&mut self, d: egui::Vec2, reported: egui::Vec2, pass: bool, now: f64) -> egui::Vec2 {
+        let since = now - self.last;
+        if since.is_nan() || since > RAIL_GAP {
+            // A pause ended the swipe. What egui is still smoothing out (a wheel notch after a
+            // slow frame) isn't a new swipe's movement: it goes through as it is.
+            *self = ScrollRail::default();
+        }
+        self.last = now;
+        self.pass |= pass;
+        if self.pass {
+            return d;
+        }
+        if self.axis == RailAxis::Undecided {
+            self.travel += reported.abs();
+            let t = self.travel;
+            if t.length() >= RAIL_DECIDE {
+                self.axis = if t.y >= RAIL_RATIO * t.x {
+                    RailAxis::Vertical
+                } else if t.x >= RAIL_RATIO * t.y {
+                    RailAxis::Horizontal
+                } else {
+                    RailAxis::Free
+                };
+            }
+        }
+        match self.axis {
+            RailAxis::Vertical => vec2(0.0, d.y),
+            RailAxis::Horizontal => vec2(d.x, 0.0),
+            RailAxis::Free => d,
+            // Until it's decided, the swipe moves along an axis it already clearly follows, and
+            // both ways otherwise. A swipe the trackpad has just started, before it has moved,
+            // stops what's left of the earlier swipe's glide.
+            RailAxis::Undecided if self.fresh && self.travel == egui::Vec2::ZERO => egui::Vec2::ZERO,
+            // Nothing reported since a pause: what egui is still smoothing out (a wheel notch
+            // after a slow frame) goes through whole, whichever way it points.
+            RailAxis::Undecided if self.travel == egui::Vec2::ZERO => d,
+            RailAxis::Undecided if self.travel.y >= RAIL_RATIO * self.travel.x => vec2(0.0, d.y),
+            RailAxis::Undecided if self.travel.x >= RAIL_RATIO * self.travel.y => vec2(d.x, 0.0),
+            RailAxis::Undecided => d,
+        }
+    }
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and
@@ -610,6 +704,11 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     };
     // Scrolling.
     let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
+    // The trackpad starting a gesture starts a new swipe, even while the last one's momentum runs
+    // (the start can come in a frame with no movement yet).
+    if ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { phase: egui::TouchPhase::Start, .. }))) {
+        app.grid.scroll_rail.begin(now);
+    }
     if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
         if zoom_delta != 1.0 {
             // egui's zoom factor is e^(speed × points); one notch is `line_scroll_speed` points.
@@ -642,7 +741,26 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             app.grid.wheel_zoom = Some(zooming);
         } else if scroll_delta != egui::Vec2::ZERO {
             let z = if paper { make_geo(app, view.scroll).z } else { sh.zoom as f32 / 100.0 * DISPLAY_SCALE };
-            let mut d = scroll_delta;
+            // What the device reported this frame (egui's smoothed delta can still carry the tail
+            // of an earlier swipe): it alone decides a new swipe's axis.
+            let reported = ui.input(|i| {
+                i.events
+                    .iter()
+                    .filter_map(|e| match e {
+                        egui::Event::MouseWheel { delta, phase: egui::TouchPhase::Move, .. } => Some(delta.abs()),
+                        _ => None,
+                    })
+                    .fold(egui::Vec2::ZERO, |a, b| a + b)
+            });
+            let wheel = ui.input(|i| {
+                i.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page, .. }))
+            });
+            // Shift (horizontal) or Alt (vertical) already puts the scroll on one axis; egui
+            // moves it there after the event, so the reported axis would be the wrong one.
+            let forced = ui.ctx().options(|o| {
+                modifiers.matches_any(o.input_options.horizontal_scroll_modifier) || modifiers.matches_any(o.input_options.vertical_scroll_modifier)
+            });
+            let mut d = app.grid.scroll_rail.steer(scroll_delta, reported, wheel || forced, now);
             // A horizontal swipe moves the content the way the fingers go, which is towards
             // higher columns on a mirrored sheet.
             if sh.right_to_left {
