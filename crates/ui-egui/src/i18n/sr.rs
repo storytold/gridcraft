@@ -204,6 +204,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Formula Bar" => "Traka formule",
         "Gridlines" => "Linije mreže",
         "Headings" => "Zaglavlja",
+        "Focus Cell" => "Fokus na ćeliju",
         "Zoom" => "Uvećanje",
         "Magnification" => "Uvećanje",
         "Fit selection" => "Uklopi izbor",

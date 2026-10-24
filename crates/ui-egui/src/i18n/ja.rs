@@ -418,6 +418,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
 pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("OK", "OK"),
     ("Cancel", "キャンセル"),
+    ("Focus Cell", "フォーカス セル"),
     ("Don't Save", "保存しない"),
     ("Open…", "開く…"),
     ("Show password", "パスワードの表示"),

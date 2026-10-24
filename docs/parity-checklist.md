@@ -4,7 +4,7 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 275 / 291 commands implemented (94.5%).**
+**Overall: 277 / 293 commands implemented (94.5%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
@@ -16,7 +16,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | Formulas | 23 | 23 | 100% |
 | Data | 23 | 28 | 82% |
 | Review | 15 | 18 | 83% |
-| View | 20 | 20 | 100% |
+| View | 22 | 22 | 100% |
 | Automate | 4 | 4 | 100% |
 | Table Design | 13 | 13 | 100% |
 | Chart Design | 8 | 8 | 100% |
@@ -299,7 +299,7 @@ Missing:
 - `review.translate` Translate (Language)
 - `review.showChanges` Show Changes (Changes)
 
-## View (20 / 20, 100%)
+## View (22 / 22, 100%)
 
 Implemented:
 
@@ -309,6 +309,8 @@ Implemented:
 - `view.customViews` Custom Views (Workbook Views)
 - `view.ruler` Ruler (Show)
 - `view.formulaBar` Formula Bar (Show)
+- `view.focusCell` Focus Cell (Show)
+- `view.focusCellColor` Focus Cell Color (Show)
 - `view.zoom` Zoom (Zoom)
 - `view.zoom100` 100% (Zoom)
 - `view.zoomToSelection` Zoom to Selection (Zoom)

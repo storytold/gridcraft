@@ -218,6 +218,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             let _ = write!(s, "<selection activeCell=\"{active}\" sqref=\"{active}\"/>");
         }
     }
+    write_focus_cell(&mut s, sheet);
     s.push_str("</sheetView></sheetViews>");
 
     // sheetFormatPr
@@ -654,6 +655,17 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     (s, rels)
 }
 
+/// The Focus Cell extension inside `<sheetView>`. Written whenever the sheet carries either
+/// half of the setting, so a color chosen while the tint is off stays remembered.
+fn write_focus_cell(s: &mut String, sheet: &Sheet) {
+    if !sheet.focus_cell && sheet.focus_cell_color.is_none() {
+        return;
+    }
+    let on = u8::from(sheet.focus_cell);
+    let color = sheet.focus_cell_color.as_ref().map(|c| format!(" {}", color_attrs(c))).unwrap_or_default();
+    let _ = write!(s, "<extLst><ext uri=\"{FOCUS_CELL_NS}\" xmlns:gcf=\"{FOCUS_CELL_NS}\"><gcf:focusCell on=\"{on}\"{color}/></ext></extLst>");
+}
+
 fn write_cell(
     s: &mut String,
     c: CellRef,
@@ -772,6 +784,11 @@ fn cfvo_xml(v: &CfValueKind) -> String {
 fn quote(t: &str) -> String {
     format!("\"{}\"", t.replace('"', "\"\""))
 }
+
+/// Focus Cell is not an ISO/IEC 29500 sheet-view attribute, so it rides in the view's extension
+/// list under GridCraft's own namespace. Excel does not read it, and keeps its own extensions
+/// beside it.
+const FOCUS_CELL_NS: &str = "https://github.com/storytold/gridcraft/xlsx/2026/focuscell";
 
 const X14_NS: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
 const XM_NS: &str = "http://schemas.microsoft.com/office/excel/2006/main";

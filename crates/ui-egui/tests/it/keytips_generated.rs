@@ -2616,10 +2616,7 @@ fn keytip_wu_() {
 fn keytip_wvc_() {
     let mut h = harness(blank());
     sequence(&mut h, "WVC", false);
-    assert!(h.state().dialog.is_none(), "WVC must not open a dialog");
-    assert!(h.state().message.is_none(), "WVC must not open a message box");
-    assert!(h.state().toast.is_none(), "WVC must not raise a toast");
-    assert!(h.state().session.journal.is_empty(), "WVC must not journal");
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "view.focusCell"), "WVC must journal view.focusCell");
 }
 
 #[test]
