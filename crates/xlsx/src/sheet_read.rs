@@ -16,7 +16,7 @@ use crate::IoError;
 use crate::fmla::from_file;
 use crate::package::Rel;
 use crate::read::Ctx;
-use crate::styles::read_color;
+use crate::styles::{read_color, read_dxf};
 use crate::tables::{col_width_to_px, paper_name, pt_to_px};
 use crate::xml::{self, El};
 
@@ -611,64 +611,10 @@ fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
     for r in e.kids("cfRule") {
         let style = Box::new(r.attr_u32("dxfId").and_then(|i| cx.dxfs.get(i as usize)).cloned().unwrap_or_default());
         let formulas: Vec<String> = r.kids("formula").map(|f| from_file(f.text.trim())).collect();
-        let f0 = formulas.first().cloned().unwrap_or_default();
-        let text = r.attr("text").unwrap_or("").to_string();
         // The x14 id that links a data bar to its Excel 2010 extension (solid fill lives there).
         let ext_id =
             r.child("extLst").and_then(|l| l.kids("ext").find_map(|x| x.child("id"))).map(|i| i.text.trim().to_string()).filter(|i| !i.is_empty());
-        let rule = match r.attr("type").unwrap_or("") {
-            "cellIs" => CfRule::CellIs { op: cf_op(r.attr("operator")), a: f0, b: formulas.get(1).cloned(), style },
-            "expression" => CfRule::Expression { formula: f0, style },
-            "containsText" => CfRule::ContainsText { text, style },
-            "notContainsText" => CfRule::NotContainsText { text, style },
-            "beginsWith" => CfRule::BeginsWith { text, style },
-            "endsWith" => CfRule::EndsWith { text, style },
-            "containsBlanks" => CfRule::Blanks { style },
-            "notContainsBlanks" => CfRule::NoBlanks { style },
-            "containsErrors" => CfRule::Errors { style },
-            "notContainsErrors" => CfRule::NoErrors { style },
-            "duplicateValues" => CfRule::Duplicate { style },
-            "uniqueValues" => CfRule::Unique { style },
-            "top10" => {
-                CfRule::Top10 { bottom: r.flag("bottom", false), percent: r.flag("percent", false), rank: r.attr_u32("rank").unwrap_or(10), style }
-            }
-            "aboveAverage" => CfRule::AboveAverage {
-                below: !r.flag("aboveAverage", true),
-                equal: r.flag("equalAverage", false),
-                std_dev: r.attr_u32("stdDev").unwrap_or(0).min(3) as u8,
-                style,
-            },
-            "timePeriod" => CfRule::TimePeriod { period: r.attr("timePeriod").unwrap_or("today").to_string(), style },
-            "colorScale" => {
-                let Some(cs) = r.child("colorScale") else { continue };
-                let colors = cs.kids("color").map(|c| read_color(c, &cx.palette));
-                CfRule::ColorScale { stops: cfvos(cs).into_iter().zip(colors).collect() }
-            }
-            "dataBar" => {
-                let Some(db) = r.child("dataBar") else { continue };
-                let v = cfvos(db);
-                CfRule::DataBar {
-                    min: v.first().cloned().unwrap_or(CfValueKind::Min),
-                    max: v.get(1).cloned().unwrap_or(CfValueKind::Max),
-                    color: db.child("color").map(|c| read_color(c, &cx.palette)).unwrap_or_default(),
-                    gradient: true,
-                    show_value: db.flag("showValue", true),
-                }
-            }
-            "iconSet" => {
-                let Some(is) = r.child("iconSet") else { continue };
-                CfRule::IconSet {
-                    set: is.attr("iconSet").unwrap_or("3TrafficLights1").to_string(),
-                    thresholds: cfvos(is),
-                    reverse: is.flag("reverse", false),
-                    show_value: is.flag("showValue", true),
-                }
-            }
-            other => {
-                cx.warn(format!("conditional format type \"{other}\" is not supported"));
-                continue;
-            }
-        };
+        let Some(rule) = cf_rule(cx, r, formulas, style) else { continue };
         if let Some(id) = ext_id {
             cx.cf_ext_ids.push((id, sheet.cond_formats.len()));
         }
@@ -679,6 +625,67 @@ fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
             stop_if_true: r.flag("stopIfTrue", false),
         });
     }
+}
+
+/// A `cfRule` of type `r.type` with its formulas and differential format, or `None` (warned) for
+/// a type GridCraft doesn't model.
+fn cf_rule(cx: &mut Ctx<'_>, r: &El, formulas: Vec<String>, style: Box<gridcraft_model::Style>) -> Option<CfRule> {
+    let f0 = formulas.first().cloned().unwrap_or_default();
+    let text = r.attr("text").unwrap_or("").to_string();
+    let rule = match r.attr("type").unwrap_or("") {
+        "cellIs" => CfRule::CellIs { op: cf_op(r.attr("operator")), a: f0, b: formulas.get(1).cloned(), style },
+        "expression" => CfRule::Expression { formula: f0, style },
+        "containsText" => CfRule::ContainsText { text, style },
+        "notContainsText" => CfRule::NotContainsText { text, style },
+        "beginsWith" => CfRule::BeginsWith { text, style },
+        "endsWith" => CfRule::EndsWith { text, style },
+        "containsBlanks" => CfRule::Blanks { style },
+        "notContainsBlanks" => CfRule::NoBlanks { style },
+        "containsErrors" => CfRule::Errors { style },
+        "notContainsErrors" => CfRule::NoErrors { style },
+        "duplicateValues" => CfRule::Duplicate { style },
+        "uniqueValues" => CfRule::Unique { style },
+        "top10" => {
+            CfRule::Top10 { bottom: r.flag("bottom", false), percent: r.flag("percent", false), rank: r.attr_u32("rank").unwrap_or(10), style }
+        }
+        "aboveAverage" => CfRule::AboveAverage {
+            below: !r.flag("aboveAverage", true),
+            equal: r.flag("equalAverage", false),
+            std_dev: r.attr_u32("stdDev").unwrap_or(0).min(3) as u8,
+            style,
+        },
+        "timePeriod" => CfRule::TimePeriod { period: r.attr("timePeriod").unwrap_or("today").to_string(), style },
+        "colorScale" => {
+            let cs = r.child("colorScale")?;
+            let colors = cs.kids("color").map(|c| read_color(c, &cx.palette));
+            CfRule::ColorScale { stops: cfvos(cs).into_iter().zip(colors).collect() }
+        }
+        "dataBar" => {
+            let db = r.child("dataBar")?;
+            let v = cfvos(db);
+            CfRule::DataBar {
+                min: v.first().cloned().unwrap_or(CfValueKind::Min),
+                max: v.get(1).cloned().unwrap_or(CfValueKind::Max),
+                color: db.child("color").map(|c| read_color(c, &cx.palette)).unwrap_or_default(),
+                gradient: true,
+                show_value: db.flag("showValue", true),
+            }
+        }
+        "iconSet" => {
+            let is = r.child("iconSet")?;
+            CfRule::IconSet {
+                set: is.attr("iconSet").unwrap_or("3TrafficLights1").to_string(),
+                thresholds: cfvos(is),
+                reverse: is.flag("reverse", false),
+                show_value: is.flag("showValue", true),
+            }
+        }
+        other => {
+            cx.warn(format!("conditional format type \"{other}\" is not supported"));
+            return None;
+        }
+    };
+    Some(rule)
 }
 
 /// A `dataValidation` (main namespace, or x14 with `xm:f` formulas and an `xm:sqref` child).
@@ -1025,15 +1032,34 @@ fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
                 }
                 "conditionalFormattings" => {
                     let mut skipped = false;
-                    for r in c.kids("conditionalFormatting").flat_map(|f| f.kids("cfRule")) {
-                        let idx = r.attr("id").and_then(|id| cx.cf_ext_ids.iter().find(|(i, _)| i == id)).map(|(_, n)| *n);
-                        match (idx.and_then(|n| sheet.cond_formats.get_mut(n)), r.child("dataBar")) {
-                            (Some(CondFormat { rule: CfRule::DataBar { gradient, .. }, .. }), Some(db)) => {
-                                *gradient = db.flag("gradient", true);
-                                // Only the fill style is modelled; borders, lengths, axis or negative colours are lost.
-                                skipped |= db.attrs.iter().any(|(k, _)| k != "gradient") || db.children.iter().any(|k| k.name != "cfvo");
+                    for f in c.kids("conditionalFormatting") {
+                        for r in f.kids("cfRule") {
+                            let idx = r.attr("id").and_then(|id| cx.cf_ext_ids.iter().find(|(i, _)| i == id)).map(|(_, n)| *n);
+                            match (idx.and_then(|n| sheet.cond_formats.get_mut(n)), r.child("dataBar")) {
+                                (Some(CondFormat { rule: CfRule::DataBar { gradient, .. }, .. }), Some(db)) => {
+                                    *gradient = db.flag("gradient", true);
+                                    // Only the fill style is modelled; borders, lengths, axis or negative colours are lost.
+                                    skipped |= db.attrs.iter().any(|(k, _)| k != "gradient") || db.children.iter().any(|k| k.name != "cfvo");
+                                }
+                                // A rule of its own, kept only here (Excel 2010+ writes one this way when
+                                // a formula refers to another sheet; some exporters always do): its
+                                // formulas are `xm:f` and its format an inline `x14:dxf`.
+                                (None, None) if !matches!(r.attr("type"), Some("dataBar" | "iconSet")) => {
+                                    let ranges = parse_sqref(f.child("sqref").map(|q| q.text.as_str()));
+                                    let formulas: Vec<String> = r.kids("f").map(|x| from_file(x.text.trim())).collect();
+                                    let style = Box::new(r.child("dxf").map(|d| read_dxf(d, &cx.palette, &cx.num_fmts)).unwrap_or_default());
+                                    match (ranges.is_empty(), cf_rule(cx, r, formulas, style)) {
+                                        (false, Some(rule)) => sheet.cond_formats.push(CondFormat {
+                                            ranges,
+                                            rule,
+                                            priority: r.attr_u32("priority").unwrap_or(0),
+                                            stop_if_true: r.flag("stopIfTrue", false),
+                                        }),
+                                        _ => skipped = true,
+                                    }
+                                }
+                                _ => skipped = true,
                             }
-                            _ => skipped = true,
                         }
                     }
                     if skipped {
