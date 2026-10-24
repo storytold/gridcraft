@@ -4028,7 +4028,7 @@ fn row_height_and_column_width_take_pixels_or_excel_units() {
     for (id, params, message) in [
         ("home.rowHeight", json!({"height": 547}), "Row height must be between 0 and 546 pixels (409.5 points)."),
         ("home.rowHeight", json!({"points": 410}), "Row height must be between 0 and 409.5 points."),
-        ("home.columnWidth", json!({"width": 1801}), "Column width must be between 0 and 1800 pixels."),
+        ("home.columnWidth", json!({"width": 1801}), "Column width must be between 0 and 1790 pixels."),
         ("home.columnWidth", json!({"chars": 256}), "Column width must be between 0 and 255 characters."),
     ] {
         assert_eq!(s.execute(id, params).unwrap_err().to_string(), message);

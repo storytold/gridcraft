@@ -63,3 +63,29 @@ fn dragging_selected_column_headers_reorders_the_block() {
     assert_eq!(app.session.journal.iter().filter(|(id, _)| id == "sheet.moveColumns").count(), 1);
     assert_eq!(app.session.active().unwrap().undo.len(), 1);
 }
+
+#[test]
+fn dragging_a_column_border_past_the_widest_column_stops_at_it() {
+    let mut harness = harness();
+    let session = &mut harness.state_mut().session;
+    session.execute("home.columnWidth", json!({"cols": "A:A", "width": 1700})).unwrap();
+    session.execute("view.zoom", json!({"percent": 50})).unwrap();
+    harness.run_steps(2);
+    let (border, max) = {
+        let app = harness.state();
+        let wb = &app.session.active().unwrap().wb;
+        let sheet = wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        (pos2(geo.x(sheet, 1), geo.rect.top() + geo.header_h * 0.5), gridcraft_engine::model::max_col_width(wb.digit_width()))
+    };
+    pointer_button(&mut harness, border, true);
+    for dx in [20.0, 100.0, 200.0] {
+        harness.input_mut().events.push(Event::PointerMoved(border + vec2(dx, 0.0)));
+        harness.step();
+    }
+    pointer_button(&mut harness, border + vec2(200.0, 0.0), false);
+    harness.run_steps(2);
+    // 200 px at 50% is 400 px past 1700: the column stops at 255 characters instead of keeping 1700.
+    let width = harness.state().session.active().unwrap().wb.active().unwrap().col_width(0);
+    assert_eq!(width, max);
+}

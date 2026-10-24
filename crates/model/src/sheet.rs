@@ -125,10 +125,59 @@ fn yes() -> bool {
 pub const DEFAULT_COL_WIDTH: f32 = 64.0;
 pub const DEFAULT_ROW_HEIGHT: f32 = 20.0;
 
-/// Column width (points) → characters of the default font's digit width (7 px), without the
-/// cell padding: the value the Column Width dialog shows.
-pub fn points_to_chars(px: f64) -> f64 {
-    if px <= 12.0 { (px / 12.0 * 100.0).round() / 100.0 } else { ((px - 5.0) / 7.0 * 100.0 + 0.5).trunc() / 100.0 }
+/// Maximum digit width (pixels at 96 dpi) of the default font, Calibri 11: the unit
+/// `DEFAULT_COL_WIDTH` is measured in.
+pub const DEFAULT_DIGIT_WIDTH: f64 = 7.0;
+
+/// Widest digit advance, as a fraction of the em, of fonts whose metrics are known. Measured from
+/// the installed fonts or their metric-compatible open counterparts (Carlito for Calibri,
+/// Liberation for Arial, Times New Roman and Courier New).
+const DIGIT_EM: [(&str, f64); 16] = [
+    ("Calibri", 0.5068),
+    ("Carlito", 0.5068),
+    ("Arial", 0.5562),
+    ("Liberation Sans", 0.5562),
+    ("Arimo", 0.5562),
+    ("Helvetica", 0.5562),
+    ("Helvetica Neue", 0.556),
+    ("Times New Roman", 0.5),
+    ("Liberation Serif", 0.5),
+    ("Tinos", 0.5),
+    ("Courier New", 0.6001),
+    ("Liberation Mono", 0.6001),
+    ("Cousine", 0.6001),
+    ("Georgia", 0.6138),
+    ("Verdana", 0.6357),
+    ("Tahoma", 0.5459),
+];
+
+/// Maximum digit width (whole pixels at 96 dpi) of a font: the unit XLSX column widths are counted
+/// in, taken from the workbook's Normal font. Unknown fonts use Calibri's digit.
+pub fn max_digit_width(name: &str, size_pt: f32) -> f64 {
+    let size = if size_pt.is_finite() && size_pt > 0.0 { f64::from(size_pt).min(409.0) } else { 11.0 };
+    let em = DIGIT_EM.iter().find(|(n, _)| n.eq_ignore_ascii_case(name.trim())).map_or(0.5068, |&(_, e)| e);
+    (size * 4.0 / 3.0 * em).round().max(1.0)
+}
+
+/// Width (px) of a column `base` digits wide plus padding, rounded up to 8 px: the default
+/// column width for a sheet's `baseColWidth` (8 unless the file says otherwise).
+pub fn base_col_width(base: f64, digit: f64) -> f32 {
+    let base = if base.is_finite() { base.clamp(0.0, 255.0) } else { 8.0 };
+    // Rounding up could pass the widest column (255 digits rounds 1790 px up to 1792).
+    ((((base * digit + 5.0) / 8.0).ceil() * 8.0) as f32).min(max_col_width(digit))
+}
+
+/// The widest column (px) for a digit width: 255 characters plus padding, Excel's limit.
+pub fn max_col_width(digit: f64) -> f32 {
+    let digit = if digit.is_finite() { digit.clamp(1.0, 1000.0) } else { DEFAULT_DIGIT_WIDTH };
+    (255.0 * digit + 5.0).trunc() as f32
+}
+
+/// Column width (px) → characters of the default font's digit width, without the cell padding:
+/// the value the Column Width dialog shows.
+pub fn points_to_chars(px: f64, digit: f64) -> f64 {
+    let digit = digit.max(1.0);
+    if px <= digit + 5.0 { (px / (digit + 5.0) * 100.0).round() / 100.0 } else { ((px - 5.0) / digit * 100.0 + 0.5).trunc() / 100.0 }
 }
 
 impl Sheet {
@@ -460,6 +509,29 @@ fn line_at(pos: f64, default: f64, custom: &BTreeMap<u32, LineInfo>, max: u32) -
 mod tests {
     use super::*;
     use crate::cell::Formula;
+
+    #[test]
+    fn digit_widths() {
+        // The format's own example: Calibri 11 has 7 px digits; Arial 10 gives the same 64 px column.
+        assert_eq!(max_digit_width("Calibri", 11.0), DEFAULT_DIGIT_WIDTH);
+        assert_eq!(max_digit_width("arial", 10.0), 7.0);
+        assert_eq!(max_digit_width("Calibri", 12.0), 8.0);
+        assert_eq!(max_digit_width(" Helvetica Neue ", 10.0), 7.0);
+        assert_eq!(max_digit_width("Courier New", 10.0), 8.0);
+        assert_eq!(max_digit_width("Arial", 16.0), 12.0);
+        // Unknown fonts and hostile sizes stay finite and at least a pixel.
+        assert_eq!(max_digit_width("", 11.0), 7.0);
+        assert_eq!(max_digit_width("Calibri", f32::NAN), 7.0);
+        assert_eq!(max_digit_width("Calibri", -3.0), 7.0);
+        assert_eq!(max_digit_width("Calibri", 0.01), 1.0);
+        assert!(max_digit_width("Calibri", f32::MAX).is_finite());
+        assert_eq!(base_col_width(8.0, 7.0), DEFAULT_COL_WIDTH);
+        assert_eq!(base_col_width(8.0, 8.0), 72.0);
+        assert_eq!(base_col_width(f64::NAN, 7.0), DEFAULT_COL_WIDTH);
+        assert_eq!(base_col_width(255.0, 7.0), max_col_width(7.0));
+        assert!((points_to_chars(DEFAULT_COL_WIDTH as f64, 7.0) - 8.43).abs() < 0.01);
+        assert_eq!(points_to_chars(6.0, 7.0), 0.5);
+    }
 
     #[test]
     fn line_index_matches_linear() {

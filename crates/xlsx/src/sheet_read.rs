@@ -94,6 +94,8 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
+    let digit = cx.digit_width();
+    sheet.default_col_width = gridcraft_model::base_col_width(8.0, digit);
     let mut st = RowState::default();
     let res = xml::parse_streaming(&bytes, &["row"], &mut |row| {
         read_row(cx, &mut sheet, &mut st, &row);
@@ -131,16 +133,15 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                     }
                 }
                 if let Some(w) = e.attr_f64("defaultColWidth") {
-                    let px = col_width_to_px(w);
+                    let px = col_width_to_px(w, digit);
                     if px > 0.0 {
                         sheet.default_col_width = px;
                     }
                 } else if let Some(b) = e.attr_f64("baseColWidth") {
-                    let px = ((b.clamp(0.0, 255.0) * 7.0 + 5.0) / 8.0).ceil() * 8.0;
-                    sheet.default_col_width = px as f32;
+                    sheet.default_col_width = gridcraft_model::base_col_width(b, digit);
                 }
             }
-            "cols" => read_cols(cx, e, &mut sheet, &mut column_assignments_left)?,
+            "cols" => read_cols(cx, e, &mut sheet, digit, &mut column_assignments_left)?,
             "mergeCells" => {
                 for m in e.kids("mergeCell") {
                     if let Some(r) = m.attr("ref").and_then(RangeRef::parse)
@@ -354,7 +355,7 @@ fn read_views(e: &El, sheet: &mut Sheet) {
     }
 }
 
-fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Result<(), IoError> {
+fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, digit: f64, remaining: &mut u64) -> Result<(), IoError> {
     for c in e.kids("col") {
         let (Some(min), Some(max)) = (c.attr_u32("min"), c.attr_u32("max")) else { continue };
         if min == 0 || min > MAX_COLS || max < min {
@@ -364,7 +365,7 @@ fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Re
         let mut info = LineInfo::default();
         // A width without `customWidth` that equals the default is just the default.
         if let Some(w) = c.attr_f64("width") {
-            let px = col_width_to_px(w);
+            let px = col_width_to_px(w, digit);
             if c.flag("customWidth", false) || px != sheet.default_col_width {
                 info.size = Some(px);
             }

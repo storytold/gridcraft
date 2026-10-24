@@ -242,6 +242,11 @@ impl Workbook {
     pub fn active(&self) -> Option<&Sheet> {
         self.sheet(self.active_sheet)
     }
+    /// Maximum digit width (px at 96 dpi) of the Normal font: the unit column widths are counted in.
+    pub fn digit_width(&self) -> f64 {
+        let f = &self.styles.get(crate::StyleId::DEFAULT).font;
+        crate::sheet::max_digit_width(&f.name, f.size)
+    }
     /// A fresh sheet name `SheetN` not in use.
     pub fn next_sheet_name(&self) -> String {
         (1..).map(|n| format!("Sheet{n}")).find(|n| self.sheet_index(n).is_none()).unwrap_or_else(|| "Sheet".into())

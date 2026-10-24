@@ -41,9 +41,22 @@ fn column_width_opens_with_the_width_ready_to_type() {
     let chars = {
         let d = h.state().session.active().unwrap();
         let sheet = d.wb.active().unwrap();
-        gridcraft_engine::cmd::format::points_to_chars(sheet.col_width(CellRef::parse("C3").unwrap().col) as f64)
+        gridcraft_engine::cmd::format::points_to_chars(sheet.col_width(CellRef::parse("C3").unwrap().col) as f64, 7.0)
     };
     assert!((chars - 12.0).abs() < 0.2, "column C is 12 characters wide, got {chars}");
+}
+
+#[test]
+fn standard_width_opens_with_the_sheets_own_width() {
+    let mut h = harness();
+    h.state_mut().session.execute("home.defaultWidth", json!({"width": 100})).unwrap();
+    h.state_mut().open_dialog("defaultWidth", json!({}));
+    h.run_steps(6);
+    h.key_press(Key::Enter);
+    h.run_steps(6);
+    assert!(h.state().dialog.is_none(), "Enter confirmed the dialog");
+    let width = h.state().session.active().unwrap().wb.active().unwrap().default_col_width;
+    assert_eq!(width, 100.0, "confirming unchanged keeps the sheet's standard width");
 }
 
 #[test]

@@ -295,9 +295,9 @@ fn column_work_budget_counts_only_clipped_nondefault_assignments() {
     let (wb, _) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
     let sheet = wb.sheet(0).unwrap();
     assert_eq!(sheet.cols.len(), 16_384);
-    assert_eq!(sheet.cols.get(&15_807).unwrap().size, Some(crate::tables::col_width_to_px(10.0)));
-    assert_eq!(sheet.cols.get(&15_808).unwrap().size, Some(crate::tables::col_width_to_px(20.0)));
-    assert_eq!(sheet.cols.get(&16_383).unwrap().size, Some(crate::tables::col_width_to_px(20.0)));
+    assert_eq!(sheet.cols.get(&15_807).unwrap().size, Some(crate::tables::col_width_to_px(10.0, 7.0)));
+    assert_eq!(sheet.cols.get(&15_808).unwrap().size, Some(crate::tables::col_width_to_px(20.0, 7.0)));
+    assert_eq!(sheet.cols.get(&16_383).unwrap().size, Some(crate::tables::col_width_to_px(20.0, 7.0)));
 
     let body = format!("<cols>{cols}<col min=\"1\" max=\"1\" hidden=\"1\"/></cols><sheetData/>");
     assert!(matches!(read_xlsx(&minimal(&body, &[], "", "")), Err(IoError::TooLarge(_))));
@@ -316,12 +316,12 @@ fn ordinary_overlapping_column_ranges_keep_last_declaration() {
     let sheet = wb.sheet(0).unwrap();
     assert_eq!(sheet.cols.len(), 5);
     let first = sheet.cols.get(&0).unwrap();
-    assert_eq!(first.size, Some(crate::tables::col_width_to_px(10.0)));
+    assert_eq!(first.size, Some(crate::tables::col_width_to_px(10.0, 7.0)));
     assert!(first.hidden);
     assert_eq!(wb.styles.get(first.style.unwrap()).num_fmt.as_str(), "0.00");
     for col in 1..4 {
         let info = sheet.cols.get(&col).unwrap();
-        assert_eq!(info.size, Some(crate::tables::col_width_to_px(20.0)));
+        assert_eq!(info.size, Some(crate::tables::col_width_to_px(20.0, 7.0)));
         assert!(!info.hidden);
         assert_eq!(info.style, None);
     }

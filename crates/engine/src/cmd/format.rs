@@ -1069,10 +1069,12 @@ fn row_height(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
+    // As wide as 255 characters of the workbook's digit, the most a file can store.
+    let max = f64::from(gridcraft_model::max_col_width(s.doc()?.wb.digit_width()));
     let w = match (f64_param(p, "width"), f64_param(p, "chars")) {
         (Some(w), _) => {
-            if !(0.0..=1800.0).contains(&w) {
-                return Err(EngineError::Other("Column width must be between 0 and 1800 pixels.".into()));
+            if !(0.0..=max).contains(&w) {
+                return Err(EngineError::Other(format!("Column width must be between 0 and {max} pixels.")));
             }
             w
         }
@@ -1080,7 +1082,7 @@ fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
             if !(0.0..=255.0).contains(&c) {
                 return Err(EngineError::Other("Column width must be between 0 and 255 characters.".into()));
             }
-            chars_to_points(c)
+            chars_to_points(c, s.doc()?.wb.digit_width())
         }
         _ => return Err(bad("home.columnWidth", "missing `width` (pixels) or `chars`")),
     };
@@ -1098,14 +1100,14 @@ fn col_width(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Excel column width in characters (of the default font's digit width, 7 px) → pixels.
-pub fn chars_to_points(c: f64) -> f64 {
+/// Excel column width in characters (of the Normal font's digit width, `digit` px) → pixels.
+pub fn chars_to_points(c: f64, digit: f64) -> f64 {
     if c <= 0.0 {
         0.0
     } else if c < 1.0 {
-        (c * 12.0).round()
+        (c * (digit + 5.0)).round()
     } else {
-        (c * 7.0 + 5.0).round()
+        (c * digit + 5.0).round()
     }
 }
 
@@ -1212,7 +1214,8 @@ fn default_width(s: &mut Session, p: &Json) -> Result<Json> {
     let w = f64_param(p, "width").ok_or_else(|| bad("home.defaultWidth", "missing `width`"))?;
     let si = target_sheet(s, p)?;
     edit(s, |cx| {
-        cx.sheet_mut(si)?.default_col_width = w.clamp(0.0, 1800.0) as f32;
+        let max = gridcraft_model::max_col_width(cx.wb.digit_width());
+        cx.sheet_mut(si)?.default_col_width = (w as f32).clamp(0.0, max);
         Ok(Json::Null)
     })
 }
@@ -1292,7 +1295,24 @@ mod tests {
 
     #[test]
     fn width_units() {
-        assert_eq!(chars_to_points(8.43), 64.0);
-        assert!((points_to_chars(64.0) - 8.43).abs() < 0.01);
+        assert_eq!(chars_to_points(8.43, 7.0), 64.0);
+        assert!((points_to_chars(64.0, 7.0) - 8.43).abs() < 0.01);
+        // Calibri 12 counts in 8 px digits: 8.43 characters are 72 px.
+        assert_eq!(chars_to_points(8.43, 8.0), 72.0);
+        assert!((points_to_chars(72.0, 8.0) - 8.38).abs() < 0.01);
+    }
+
+    #[test]
+    fn column_width_stays_within_what_a_file_can_store() {
+        let mut s = Session::new();
+        s.new_workbook();
+        // Calibri 11: 255 characters are 1790 px.
+        assert_eq!(gridcraft_model::max_col_width(7.0), 1790.0);
+        assert!(s.execute("home.columnWidth", json!({"cols": "A:A", "width": 1790})).is_ok());
+        assert!(s.execute("home.columnWidth", json!({"cols": "A:A", "width": 1791})).is_err());
+        assert!(s.execute("home.columnWidth", json!({"cols": "A:A", "chars": 255})).is_ok());
+        assert!(s.execute("home.columnWidth", json!({"cols": "A:A", "chars": 256})).is_err());
+        assert!(s.execute("home.defaultWidth", json!({"width": 5000})).is_ok());
+        assert!(s.active().unwrap().wb.active().unwrap().default_col_width <= 1790.0);
     }
 }

@@ -35,6 +35,11 @@ pub struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
+    /// Maximum digit width (px) of the workbook's Normal font, the unit of column widths.
+    pub fn digit_width(&self) -> f64 {
+        let f = &self.styles.get(StyleId::DEFAULT).font;
+        gridcraft_model::max_digit_width(&f.name, f.size)
+    }
     pub fn warn(&mut self, m: impl Into<String>) {
         self.report.warn(m);
     }

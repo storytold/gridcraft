@@ -2512,9 +2512,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 scroll_by(app, vec2(auto.x, 0.0));
             }
             Drag::ResizeCol { col, start, orig } => {
-                let w = (orig + (p.x - start) / geo.z).max(0.0);
-                app.toast =
-                    Some((format!("Width: {:.2} ({} pixels)", gridcraft_engine::cmd::format::points_to_chars(w as f64), w.round()), crate::now_ms()));
+                let digit = app.session.active().map_or(gridcraft_engine::model::DEFAULT_DIGIT_WIDTH, |d| d.wb.digit_width());
+                // No wider than `home.columnWidth` takes: 255 characters of the workbook's digit.
+                let w = (orig + (p.x - start) / geo.z).clamp(0.0, gridcraft_engine::model::max_col_width(digit));
+                let chars = gridcraft_engine::cmd::format::points_to_chars(w as f64, digit);
+                app.toast = Some((format!("Width: {chars:.2} ({} pixels)", w.round()), crate::now_ms()));
                 // Inside a selection of whole columns, every selected column takes the new width
                 // (Ctrl-selected areas included); otherwise only the dragged one.
                 let cols = if sel.ranges.iter().any(|r| r.is_full_cols() && col >= r.start.col && col <= r.end.col) {
