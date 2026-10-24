@@ -15,7 +15,10 @@
 
 mod metrics;
 
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
+use std::hash::{Hash, Hasher};
 
 /// RGB colour, 0–255 per channel.
 pub type Rgb = [u8; 3];
@@ -265,6 +268,31 @@ fn n(v: f32) -> String {
     }
 }
 
+/// Appends `v / 255` with at most three decimals, exactly what `n(v as f32 / 255.0)` gives, but
+/// without a float round trip or an allocation per channel.
+fn push_unit(s: &mut String, v: u8) {
+    let m = (u32::from(v) * 1000 + 127) / 255;
+    match m {
+        0 => s.push('0'),
+        1000 => s.push('1'),
+        _ => {
+            let _ = write!(s, "0.{m:03}");
+            while s.ends_with('0') {
+                s.pop();
+            }
+        }
+    }
+}
+
+/// Appends a colour operator line without the trailing newline: `r g b rg` (fill) or `r g b RG`.
+fn push_rgb(s: &mut String, c: Rgb, stroke: bool) {
+    for v in c {
+        push_unit(s, v);
+        s.push(' ');
+    }
+    s.push_str(if stroke { "RG" } else { "rg" });
+}
+
 /// True when every value is finite (NaN and infinities are rejected).
 fn finite(v: &[f32]) -> bool {
     v.iter().all(|x| x.is_finite())
@@ -291,16 +319,44 @@ fn dash_values(dash: &[f32]) -> String {
     d.iter().map(|v| n(*v)).collect::<Vec<_>>().join(" ")
 }
 
-fn rgb_op(c: Rgb, stroke: bool) -> String {
-    let f = |v: u8| n(v as f32 / 255.0);
-    format!("{} {} {} {}", f(c[0]), f(c[1]), f(c[2]), if stroke { "RG" } else { "rg" })
-}
-
 struct ImageData {
     width: u32,
     height: u32,
     rgb: Vec<u8>,
+    /// `None` when every pixel is fully opaque (no soft mask is written).
     alpha: Option<Vec<u8>>,
+    /// Hash of all of the above, to find duplicates quickly; equality still compares the bytes.
+    hash: u64,
+}
+
+impl ImageData {
+    fn new(width: u32, height: u32, rgb: Vec<u8>, alpha: Option<Vec<u8>>) -> ImageData {
+        let mut h = DefaultHasher::new();
+        width.hash(&mut h);
+        height.hash(&mut h);
+        rgb.hash(&mut h);
+        alpha.hash(&mut h);
+        ImageData { width, height, rgb, alpha, hash: h.finish() }
+    }
+
+    /// Same pixels (a hash match alone is never trusted).
+    fn same(&self, o: &ImageData) -> bool {
+        self.hash == o.hash && self.width == o.width && self.height == o.height && self.rgb == o.rgb && self.alpha == o.alpha
+    }
+}
+
+/// The part of the graphics state the writer tracks so that a style operator is only emitted
+/// when it changes. `None` = not set yet on this page (or since the last restore that undid it).
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Style {
+    fill: Option<Rgb>,
+    stroke: Option<Rgb>,
+    /// Formatted line width.
+    width: Option<String>,
+    /// Formatted dash array contents.
+    dash: Option<String>,
+    /// Line join; PDF's initial value is 0 (miter).
+    join: u8,
 }
 
 enum LinkTarget {
@@ -321,8 +377,13 @@ pub struct Page {
     content: String,
     fonts: [bool; FONT_SLOTS],
     images: Vec<ImageData>,
+    /// Style operators already in effect at the end of `content`.
+    style: Style,
+    /// One entry per accepted [`Page::save`], restored by [`Page::restore`].
+    saved: Vec<Style>,
+    /// `save` calls refused at the nesting limit; the same number of `restore` calls are ignored.
+    refused: u32,
     links: Vec<LinkAnnotation>,
-    depth: u32,
 }
 
 /// Most bytes of content per page before further drawing is dropped (keeps hostile inputs from
@@ -330,6 +391,11 @@ pub struct Page {
 const MAX_PAGE_CONTENT: usize = 64 * 1024 * 1024;
 /// Largest image (pixels) embedded.
 const MAX_IMAGE_PIXELS: u64 = 40_000_000;
+/// Deepest `q` nesting a PDF consumer must support (the PDF specification's implementation limits).
+const MAX_SAVE_DEPTH: usize = 28;
+/// Line join styles, as the `j` operator takes them.
+const JOIN_MITER: u8 = 0;
+const JOIN_ROUND: u8 = 1;
 const MAX_PAGE_LINKS: usize = 4096;
 const MAX_LINK_URI_BYTES: usize = 4096;
 
@@ -350,6 +416,38 @@ impl Page {
         if !self.full() {
             self.content.push_str(s);
             self.content.push('\n');
+        }
+    }
+
+    /// Appends a fill colour operator to `s` unless that colour is already in effect.
+    fn set_fill(&mut self, s: &mut String, c: Rgb) {
+        if self.style.fill != Some(c) {
+            push_rgb(s, c, false);
+            s.push('\n');
+            self.style.fill = Some(c);
+        }
+    }
+
+    /// Appends the stroke colour, width, dash and join operators to `s` that differ from the
+    /// style already in effect.
+    fn set_stroke(&mut self, s: &mut String, c: Rgb, width: f32, dash: &str, join: u8) {
+        if self.style.stroke != Some(c) {
+            push_rgb(s, c, true);
+            s.push('\n');
+            self.style.stroke = Some(c);
+        }
+        let w = n(stroke_width(width));
+        if self.style.width.as_deref() != Some(w.as_str()) {
+            let _ = writeln!(s, "{w} w");
+            self.style.width = Some(w);
+        }
+        if self.style.dash.as_deref() != Some(dash) {
+            let _ = writeln!(s, "[{dash}] 0 d");
+            self.style.dash = Some(dash.to_string());
+        }
+        if self.style.join != join {
+            let _ = writeln!(s, "{join} j");
+            self.style.join = join;
         }
     }
 
@@ -389,15 +487,23 @@ impl Page {
         }
     }
 
-    /// Saves the graphics state (pair with [`Page::restore`]).
+    /// Saves the graphics state (pair with [`Page::restore`]). Nesting is limited to 28 levels, the
+    /// depth every PDF consumer must support; a `save` beyond that is ignored, and so is the
+    /// `restore` that would have matched it.
     pub fn save(&mut self) {
-        self.depth = self.depth.saturating_add(1);
+        if self.saved.len() >= MAX_SAVE_DEPTH {
+            self.refused = self.refused.saturating_add(1);
+            return;
+        }
+        self.saved.push(self.style.clone());
         self.content.push_str("q\n");
     }
     /// Restores the graphics state saved by [`Page::save`]; extra calls are ignored.
     pub fn restore(&mut self) {
-        if self.depth > 0 {
-            self.depth -= 1;
+        if self.refused > 0 {
+            self.refused -= 1;
+        } else if let Some(style) = self.saved.pop() {
+            self.style = style;
             self.content.push_str("Q\n");
         }
     }
@@ -408,18 +514,22 @@ impl Page {
     }
 
     pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgb) {
-        if !(extent(w) && extent(h) && finite(&[x, y])) {
+        if !(extent(w) && extent(h) && finite(&[x, y])) || self.full() {
             return;
         }
-        let s = format!("{}\n{} {} {} {} re f", rgb_op(color, false), n(x), n(self.y(y + h)), n(w), n(h));
+        let mut s = String::new();
+        self.set_fill(&mut s, color);
+        let _ = write!(s, "{} {} {} {} re f", n(x), n(self.y(y + h)), n(w), n(h));
         self.op(&s);
     }
 
     pub fn rect_stroke(&mut self, x: f32, y: f32, w: f32, h: f32, width: f32, color: Rgb) {
-        if !finite(&[x, y, w, h]) {
+        if !finite(&[x, y, w, h]) || self.full() {
             return;
         }
-        let s = format!("{}\n{} w [] 0 d\n{} {} {} {} re S", rgb_op(color, true), n(stroke_width(width)), n(x), n(self.y(y + h)), n(w), n(h));
+        let mut s = String::new();
+        self.set_stroke(&mut s, color, width, "", JOIN_MITER);
+        let _ = write!(s, "{} {} {} {} re S", n(x), n(self.y(y + h)), n(w), n(h));
         self.op(&s);
     }
 
@@ -429,28 +539,22 @@ impl Page {
 
     /// A line with a dash pattern (`[on, off, …]` in points; empty = solid).
     pub fn stroke_line_dashed(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: Rgb, dash: &[f32]) {
-        if !finite(&[x0, y0, x1, y1]) {
+        if !finite(&[x0, y0, x1, y1]) || self.full() {
             return;
         }
-        let s = format!(
-            "{}\n{} w [{}] 0 d\n{} {} m {} {} l S",
-            rgb_op(color, true),
-            n(stroke_width(width)),
-            dash_values(dash),
-            n(x0),
-            n(self.y(y0)),
-            n(x1),
-            n(self.y(y1))
-        );
+        let mut s = String::new();
+        self.set_stroke(&mut s, color, width, &dash_values(dash), JOIN_MITER);
+        let _ = write!(s, "{} {} m {} {} l S", n(x0), n(self.y(y0)), n(x1), n(self.y(y1)));
         self.op(&s);
     }
 
-    /// An open polyline.
+    /// An open polyline (round joins).
     pub fn polyline(&mut self, pts: &[[f32; 2]], width: f32, color: Rgb, dash: &[f32]) {
-        if pts.len() < 2 || !pts.iter().all(|p| finite(p)) {
+        if pts.len() < 2 || !pts.iter().all(|p| finite(p)) || self.full() {
             return;
         }
-        let mut s = format!("{}\n{} w [{}] 0 d 1 j\n", rgb_op(color, true), n(stroke_width(width)), dash_values(dash));
+        let mut s = String::new();
+        self.set_stroke(&mut s, color, width, &dash_values(dash), JOIN_ROUND);
         self.path(&mut s, pts, false);
         s.push_str(" S");
         self.op(&s);
@@ -465,18 +569,17 @@ impl Page {
         }
     }
 
-    /// A closed polygon, filled and/or stroked.
+    /// A closed polygon, filled and/or stroked (round joins).
     pub fn polygon(&mut self, pts: &[[f32; 2]], fill: Option<Rgb>, stroke: Option<(Rgb, f32)>) {
-        if pts.len() < 2 || (fill.is_none() && stroke.is_none()) || !pts.iter().all(|p| finite(p)) {
+        if pts.len() < 2 || (fill.is_none() && stroke.is_none()) || !pts.iter().all(|p| finite(p)) || self.full() {
             return;
         }
         let mut s = String::new();
         if let Some(f) = fill {
-            s.push_str(&rgb_op(f, false));
-            s.push('\n');
+            self.set_fill(&mut s, f);
         }
         if let Some((c, w)) = stroke {
-            let _ = writeln!(s, "{}\n{} w [] 0 d 1 j", rgb_op(c, true), n(stroke_width(w)));
+            self.set_stroke(&mut s, c, w, "", JOIN_ROUND);
         }
         self.path(&mut s, pts, true);
         s.push_str(match (fill.is_some(), stroke.is_some()) {
@@ -489,7 +592,7 @@ impl Page {
 
     /// A circle approximated by four cubic Béziers.
     pub fn circle(&mut self, cx: f32, cy: f32, r: f32, fill: Option<Rgb>, stroke: Option<(Rgb, f32)>) {
-        if !extent(r) || !finite(&[cx, cy]) || (fill.is_none() && stroke.is_none()) {
+        if !extent(r) || !finite(&[cx, cy]) || (fill.is_none() && stroke.is_none()) || self.full() {
             return;
         }
         const K: f32 = 0.552_284_8;
@@ -497,11 +600,10 @@ impl Page {
         let y = self.y(cy);
         let mut s = String::new();
         if let Some(f) = fill {
-            s.push_str(&rgb_op(f, false));
-            s.push('\n');
+            self.set_fill(&mut s, f);
         }
         if let Some((c, w)) = stroke {
-            let _ = writeln!(s, "{}\n{} w [] 0 d", rgb_op(c, true), n(stroke_width(w)));
+            self.set_stroke(&mut s, c, w, "", JOIN_MITER);
         }
         let _ = write!(
             s,
@@ -556,9 +658,10 @@ impl Page {
         let size = n(size.min(10_000.0));
         let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
         // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
-        let mut s = format!("BT\n{}\n{} {} {} {} {} {} Tm\n", rgb_op(color, false), n(cs), n(-sn), n(sn), n(cs), n(x), n(self.y(y)));
+        let tm = format!("{} {} {} {} {} {} Tm\n", n(cs), n(-sn), n(sn), n(cs), n(x), n(self.y(y)));
         // Runs of WinAnsi text use `font`; runs it cannot encode use the CID font. Each `Tj`
         // advances the text position, so the runs follow each other on the baseline.
+        let mut runs = String::new();
         let mut rest = text;
         while let Some(first) = rest.chars().next() {
             let cid = needs_cid(first);
@@ -568,10 +671,20 @@ impl Page {
             if let Some(f) = self.fonts.get_mut(slot) {
                 *f = true;
             }
-            let _ = writeln!(s, "/F{} {} Tf\n{} Tj", slot + 1, size, string);
+            let _ = writeln!(runs, "/F{} {} Tf", slot + 1, size);
+            if runs.matches("Tf\n").count() == 1 {
+                runs.push_str(&tm);
+            }
+            let _ = writeln!(runs, "{string} Tj");
             rest = tail;
         }
-        s.push_str("ET");
+        if self.full() {
+            return;
+        }
+        // The colour goes in front of the text object, so it is tracked like any other style.
+        let mut colour = String::new();
+        self.set_fill(&mut colour, color);
+        let s = format!("{colour}BT\n{runs}ET");
         self.op(&s);
     }
 
@@ -582,16 +695,36 @@ impl Page {
         if pw == 0 || ph == 0 || px > MAX_IMAGE_PIXELS || (rgba.len() as u64) < px * 4 || !(extent(w) && extent(h) && finite(&[x, y])) {
             return;
         }
+        // The image is drawn inside its own q/Q, which counts towards the nesting limit.
+        if self.saved.len() >= MAX_SAVE_DEPTH {
+            return;
+        }
         let px = px as usize;
         let mut rgb = Vec::with_capacity(px * 3);
-        let mut alpha = Vec::with_capacity(px);
-        for p in rgba.as_chunks::<4>().0.iter().take(px) {
+        // The alpha plane is only allocated once a non-opaque pixel shows up.
+        let mut alpha: Option<Vec<u8>> = None;
+        for (i, p) in rgba.as_chunks::<4>().0.iter().take(px).enumerate() {
             rgb.extend_from_slice(&[p[0], p[1], p[2]]);
-            alpha.push(p[3]);
+            match &mut alpha {
+                Some(a) => a.push(p[3]),
+                None if p[3] != 255 => {
+                    let mut a = Vec::with_capacity(px);
+                    a.resize(i, 255);
+                    a.push(p[3]);
+                    alpha = Some(a);
+                }
+                None => {}
+            }
         }
-        let alpha = if alpha.iter().all(|a| *a == 255) { None } else { Some(alpha) };
-        let idx = self.images.len();
-        self.images.push(ImageData { width: pw, height: ph, rgb, alpha });
+        let img = ImageData::new(pw, ph, rgb, alpha);
+        // The same picture drawn again on this page shares one XObject.
+        let idx = match self.images.iter().position(|i| i.same(&img)) {
+            Some(i) => i,
+            None => {
+                self.images.push(img);
+                self.images.len() - 1
+            }
+        };
         let s = format!("q {} 0 0 {} {} {} cm /Im{} Do Q", n(w), n(h), n(x), n(self.y(y + h)), idx + 1);
         self.op(&s);
     }
@@ -668,6 +801,49 @@ fn pdf_text_string(text: &str) -> String {
     s
 }
 
+/// Starts object `id` at the current end of `out` and records its offset for the xref table.
+fn begin_obj(out: &mut Vec<u8>, offsets: &mut Vec<usize>, id: u32) {
+    let i = id as usize;
+    if offsets.len() <= i {
+        offsets.resize(i + 1, 0);
+    }
+    if let Some(slot) = offsets.get_mut(i) {
+        *slot = out.len();
+    }
+    let _ = writeln!(Utf8(out), "{id} 0 obj");
+}
+
+/// Writes `id 0 obj <body> endobj`.
+fn dict_obj(out: &mut Vec<u8>, offsets: &mut Vec<usize>, id: u32, body: &str) {
+    begin_obj(out, offsets, id);
+    out.extend_from_slice(body.as_bytes());
+    out.extend_from_slice(b"\nendobj\n");
+}
+
+/// Writes a stream object: `dict` (the dictionary entries without `<<`, `>>` and `/Length`, may be
+/// empty) and `data` as the stream body.
+fn stream_obj(out: &mut Vec<u8>, offsets: &mut Vec<usize>, id: u32, dict: &str, data: &[u8]) {
+    begin_obj(out, offsets, id);
+    out.extend_from_slice(b"<<");
+    if !dict.is_empty() {
+        out.push(b' ');
+        out.extend_from_slice(dict.as_bytes());
+    }
+    let _ = write!(Utf8(out), " /Length {} >>\nstream\n", data.len());
+    out.extend_from_slice(data);
+    out.extend_from_slice(b"\nendstream\nendobj\n");
+}
+
+/// Lets `write!` append text to a byte buffer.
+struct Utf8<'a>(&'a mut Vec<u8>);
+
+impl std::fmt::Write for Utf8<'_> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.0.extend_from_slice(s.as_bytes());
+        Ok(())
+    }
+}
+
 impl PdfDoc {
     pub fn new() -> PdfDoc {
         PdfDoc::default()
@@ -677,7 +853,17 @@ impl PdfDoc {
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
         let height = if height_pt.is_finite() { height_pt.clamp(3.0, 14_400.0) } else { 792.0 };
-        self.pages.push(Page { width, height, content: String::new(), fonts: [false; FONT_SLOTS], images: Vec::new(), links: Vec::new(), depth: 0 });
+        self.pages.push(Page {
+            width,
+            height,
+            content: String::new(),
+            fonts: [false; FONT_SLOTS],
+            images: Vec::new(),
+            links: Vec::new(),
+            style: Style::default(),
+            saved: Vec::new(),
+            refused: 0,
+        });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
     }
@@ -692,9 +878,21 @@ impl PdfDoc {
     }
 
     /// Serializes the document. A document without pages gets one blank Letter page.
+    ///
+    /// Every object is written straight into the output buffer (nothing is staged in an
+    /// intermediate list of bodies); only the xref table needs the offset of each object id, and
+    /// the ids are contiguous from 1. Objects are therefore in the file in the order they are
+    /// numbered during writing (fonts, then per page its new images, content stream and page
+    /// dictionary), with the catalog, page tree and info dictionary last.
     pub fn finish(mut self) -> Vec<u8> {
         if self.pages.is_empty() {
             self.add_page(612.0, 792.0);
+        }
+        for page in &mut self.pages {
+            page.refused = 0;
+            while !page.saved.is_empty() {
+                page.restore();
+            }
         }
         // Object numbering: 1 catalog, 2 page tree, 3 info, then fonts, then per page.
         let mut used = [false; FONT_SLOTS];
@@ -712,7 +910,13 @@ impl PdfDoc {
                 next += if i == CID_FONT { 3 } else { 1 };
             }
         }
-        let mut objects: Vec<(u32, Vec<u8>)> = Vec::new();
+        // Page contents are moved out so each one is freed as soon as it is in the output.
+        let contents: Vec<String> = self.pages.iter_mut().map(|p| std::mem::take(&mut p.content)).collect();
+        let page_links: Vec<Vec<LinkAnnotation>> = self.pages.iter_mut().map(|p| std::mem::take(&mut p.links)).collect();
+        let reserve = contents.iter().fold(4096usize, |acc, c| acc.saturating_add(c.len()).saturating_add(1024));
+        let mut out: Vec<u8> = Vec::with_capacity(reserve);
+        out.extend_from_slice(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
+        let mut offsets: Vec<usize> = vec![0; 4];
         let mut kids = Vec::new();
         let mut annotations = Vec::new();
         let page_count = self.pages.len();
@@ -722,86 +926,87 @@ impl PdfDoc {
                 let _ = write!(font_dict, "/F{} {} 0 R ", i + 1, id);
                 if i == CID_FONT {
                     let (cid_id, desc_id) = (id + 1, id + 2);
-                    objects.push((
+                    dict_obj(
+                        &mut out,
+                        &mut offsets,
                         *id,
-                        format!(
+                        &format!(
                             "<< /Type /Font /Subtype /Type0 /BaseFont /{CID_BASE_FONT} /Encoding /UniGB-UTF16-H /DescendantFonts [{cid_id} 0 R] >>"
-                        )
-                        .into_bytes(),
-                    ));
-                    objects.push((
+                        ),
+                    );
+                    dict_obj(
+                        &mut out,
+                        &mut offsets,
                         cid_id,
-                        format!(
+                        &format!(
                             "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /{CID_BASE_FONT} /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> /FontDescriptor {desc_id} 0 R /DW {CID_WIDTH} >>"
-                        )
-                        .into_bytes(),
-                    ));
-                    objects.push((
+                        ),
+                    );
+                    dict_obj(
+                        &mut out,
+                        &mut offsets,
                         desc_id,
-                        format!(
+                        &format!(
                             "<< /Type /FontDescriptor /FontName /{CID_BASE_FONT} /Flags 6 /FontBBox [-25 -254 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 880 /StemV 93 >>"
-                        )
-                        .into_bytes(),
-                    ));
+                        ),
+                    );
                     continue;
                 }
                 let name = Font::ALL.get(i).copied().unwrap_or_default().base_name();
                 let enc = if name.starts_with("Symbol") { "" } else { " /Encoding /WinAnsiEncoding" };
-                objects.push((*id, format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{enc} >>").into_bytes()));
+                dict_obj(&mut out, &mut offsets, *id, &format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{enc} >>"));
             }
         }
-        for page in &mut self.pages {
-            while page.depth > 0 {
-                page.restore();
-            }
+        // Images already written, by content hash: (page, image, object id). A hash match is
+        // confirmed by comparing the pixels before an object is shared.
+        let mut written: HashMap<u64, Vec<(usize, usize, u32)>> = HashMap::new();
+        for (pi, ((page, content), links)) in self.pages.iter().zip(contents).zip(page_links).enumerate() {
             let mut xobjects = String::new();
             for (k, img) in page.images.iter().enumerate() {
-                let img_id = next;
-                next += 1;
-                let smask = match &img.alpha {
-                    Some(a) => {
-                        let id = next;
+                let known = written.get(&img.hash).and_then(|c| {
+                    c.iter().find_map(|(p, i, id)| {
+                        let other = self.pages.get(*p)?.images.get(*i)?;
+                        img.same(other).then_some(*id)
+                    })
+                });
+                let img_id = match known {
+                    Some(id) => id,
+                    None => {
+                        let img_id = next;
                         next += 1;
-                        let data = run_length(a);
-                        let mut o = format!(
-                            "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /RunLengthDecode /Length {} >>\nstream\n",
-                            img.width,
-                            img.height,
-                            data.len()
-                        )
-                        .into_bytes();
-                        o.extend_from_slice(&data);
-                        o.extend_from_slice(b"\nendstream");
-                        objects.push((id, o));
-                        format!(" /SMask {id} 0 R")
+                        let mut dict = format!("/Type /XObject /Subtype /Image /Width {} /Height {} /BitsPerComponent 8", img.width, img.height);
+                        let smask_id = img.alpha.as_ref().map(|_| {
+                            let id = next;
+                            next += 1;
+                            id
+                        });
+                        dict.push_str(" /ColorSpace /DeviceRGB");
+                        if let Some(id) = smask_id {
+                            let _ = write!(dict, " /SMask {id} 0 R");
+                        }
+                        dict.push_str(" /Filter /RunLengthDecode");
+                        stream_obj(&mut out, &mut offsets, img_id, &dict, &run_length(&img.rgb));
+                        if let (Some(id), Some(a)) = (smask_id, &img.alpha) {
+                            let dict = format!(
+                                "/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /RunLengthDecode",
+                                img.width, img.height
+                            );
+                            stream_obj(&mut out, &mut offsets, id, &dict, &run_length(a));
+                        }
+                        written.entry(img.hash).or_default().push((pi, k, img_id));
+                        img_id
                     }
-                    None => String::new(),
                 };
-                let data = run_length(&img.rgb);
-                let mut o = format!(
-                    "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8{} /Filter /RunLengthDecode /Length {} >>\nstream\n",
-                    img.width,
-                    img.height,
-                    smask,
-                    data.len()
-                )
-                .into_bytes();
-                o.extend_from_slice(&data);
-                o.extend_from_slice(b"\nendstream");
-                objects.push((img_id, o));
                 let _ = write!(xobjects, "/Im{} {} 0 R ", k + 1, img_id);
             }
             let content_id = next;
             let page_id = next + 1;
             next += 2;
-            let body = std::mem::take(&mut page.content);
-            let mut o = format!("<< /Length {} >>\nstream\n", body.len()).into_bytes();
-            o.extend_from_slice(body.as_bytes());
-            o.extend_from_slice(b"endstream");
-            objects.push((content_id, o));
+            stream_obj(&mut out, &mut offsets, content_id, "", content.as_bytes());
+            drop(content);
             let xo = if xobjects.is_empty() { String::new() } else { format!(" /XObject << {xobjects}>>") };
             let mut link_refs = String::new();
-            for link in std::mem::take(&mut page.links) {
+            for link in links {
                 if matches!(&link.target, LinkTarget::Page { index, .. } if *index >= page_count) {
                     continue;
                 }
@@ -811,19 +1016,20 @@ impl PdfDoc {
                 annotations.push((id, link));
             }
             let annots = if link_refs.is_empty() { String::new() } else { format!(" /Annots [{link_refs}]") };
-            objects.push((
+            dict_obj(
+                &mut out,
+                &mut offsets,
                 page_id,
-                format!(
-                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /ProcSet [/PDF /Text /ImageB /ImageC] /Font << {}>>{} >> /Contents {} 0 R{} >>",
+                &format!(
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /Font << {}>>{} >> /Contents {} 0 R{} >>",
                     n(page.width),
                     n(page.height),
                     font_dict,
                     xo,
                     content_id,
                     annots
-                )
-                .into_bytes(),
-            ));
+                ),
+            );
             kids.push(page_id);
         }
         for (id, link) in annotations {
@@ -836,14 +1042,16 @@ impl PdfDoc {
                     format!("/Dest [{page_id} 0 R /XYZ {} {} null]", n(x), n(height - y))
                 }
             };
-            objects.push((
+            dict_obj(
+                &mut out,
+                &mut offsets,
                 id,
-                format!("<< /Type /Annot /Subtype /Link /Rect [{} {} {} {}] /Border [0 0 0] {action} >>", n(x0), n(y0), n(x1), n(y1)).into_bytes(),
-            ));
+                &format!("<< /Type /Annot /Subtype /Link /Rect [{} {} {} {}] /Border [0 0 0] {action} >>", n(x0), n(y0), n(x1), n(y1)),
+            );
         }
-        objects.push((1, b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()));
+        dict_obj(&mut out, &mut offsets, 1, "<< /Type /Catalog /Pages 2 0 R >>");
         let kids_s: Vec<String> = kids.iter().map(|k| format!("{k} 0 R")).collect();
-        objects.push((2, format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids_s.join(" "), kids.len()).into_bytes()));
+        dict_obj(&mut out, &mut offsets, 2, &format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids_s.join(" "), kids.len()));
         let creator = if self.info.creator.is_empty() { "GridCraft" } else { &self.info.creator };
         let mut info = format!("<< /Producer {} /Creator {}", pdf_text_string("GridCraft PDF"), pdf_text_string(creator));
         if !self.info.title.is_empty() {
@@ -853,27 +1061,14 @@ impl PdfDoc {
             let _ = write!(info, " /Author {}", pdf_text_string(&self.info.author));
         }
         info.push_str(" >>");
-        objects.push((3, info.into_bytes()));
-        objects.sort_by_key(|(id, _)| *id);
+        dict_obj(&mut out, &mut offsets, 3, &info);
 
-        let mut out: Vec<u8> = Vec::new();
-        out.extend_from_slice(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
-        let mut offsets = vec![0usize; next as usize];
-        for (id, body) in &objects {
-            if let Some(slot) = offsets.get_mut(*id as usize) {
-                *slot = out.len();
-            }
-            out.extend_from_slice(format!("{id} 0 obj\n").as_bytes());
-            out.extend_from_slice(body);
-            out.extend_from_slice(b"\nendobj\n");
-        }
         let xref = out.len();
-        let mut x = format!("xref\n0 {}\n0000000000 65535 f \n", next);
+        let _ = write!(Utf8(&mut out), "xref\n0 {}\n0000000000 65535 f \n", next);
         for off in offsets.iter().skip(1) {
-            let _ = writeln!(x, "{off:010} 00000 n ");
+            let _ = writeln!(Utf8(&mut out), "{off:010} 00000 n ");
         }
-        let _ = write!(x, "trailer\n<< /Size {} /Root 1 0 R /Info 3 0 R >>\nstartxref\n{}\n%%EOF\n", next, xref);
-        out.extend_from_slice(x.as_bytes());
+        let _ = write!(Utf8(&mut out), "trailer\n<< /Size {} /Root 1 0 R /Info 3 0 R >>\nstartxref\n{}\n%%EOF\n", next, xref);
         out
     }
 }
