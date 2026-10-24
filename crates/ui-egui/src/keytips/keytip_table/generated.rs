@@ -243,7 +243,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("MP", Entry::Finish(Action::Command("formulas.tracePrecedents"))), // Excel: Trace Precedents
     ("MQ", Entry::Finish(Action::Control("formulas.moreFunctions"))), // Excel: More Functions Menu; group level: containment(More Functions)
     ("MS", Entry::Continue),                                   // Excel: Use in Formula Menu; group level: containment(Use in Formula)
-    ("MSP", Entry::Finish(Action::Pending("formulas.pasteName"))), // pending; Excel: Paste Names; reserved until the command lands
+    ("MSP", Entry::Finish(Action::Dialog("pasteName"))),       // Excel: Paste Names
     ("MT", Entry::Finish(Action::Control("formulas.text"))),   // Excel: Text Menu; group level: containment(Text)
     ("MU", Entry::Continue),                                   // Excel: AutoSum Menu; group level:
     ("MUA", Entry::Finish(Action::Command("formulas.autoSum"))), // Excel: Average; AutoSum: Average (variant TBD)

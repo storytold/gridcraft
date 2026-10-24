@@ -372,6 +372,9 @@ pub enum UiRequest {
     Message(String),
     /// Start editing the active cell (F2) with optional initial text.
     EditCell(Option<String>),
+    /// Put a defined name at the caret of the cell being edited, in place of selected text; with
+    /// no edit under way, start editing the active cell with `=` and the name.
+    InsertName(String),
     OpenUrl(String),
 }
 

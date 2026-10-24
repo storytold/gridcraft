@@ -824,6 +824,17 @@ impl Dialog {
                 Dialog::custom("sort", "Sort", json!({"header": true, "levels": [{"column": col, "order": "asc"}]}))
             }
             "nameManager" => Dialog::custom("nameManager", "Name Manager", json!({})),
+            "pasteName" => {
+                // F3 opens it only when the workbook has names to paste, as in Excel.
+                let names = pasteable_names(app);
+                if p("shortcut") == json!(true) && names.is_empty() {
+                    return None;
+                }
+                // OK runs `formulas.pasteName` with the selected `name`, so `ui.dialog.confirm` does too.
+                let mut dialog = Dialog::custom("pasteName", "Paste Name", json!({"name": names.first()}));
+                dialog.command = Some("formulas.pasteName");
+                dialog
+            }
             "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),
@@ -1264,6 +1275,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "zoom" => zoom(ui, &mut d, &mut confirm, &mut open),
                 "sort" => sort(app, ui, &mut d, &mut confirm),
                 "nameManager" => name_manager(app, ui, &mut d, &mut open),
+                "pasteName" => paste_name(app, ui, &mut d, &mut confirm, &mut open),
                 "manageRules" => manage_rules(app, ui),
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
@@ -2494,6 +2506,73 @@ fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mu
             *open = false;
         }
     });
+}
+
+/// The names Paste Names offers in the active workbook.
+fn pasteable_names(app: &SheetApp) -> Vec<String> {
+    app.session
+        .active()
+        .map(|doc| gridcraft_engine::cmd::formulas::pasteable_names(&doc.wb).into_iter().map(|(n, _)| n).collect())
+        .unwrap_or_default()
+}
+
+/// Puts a defined name into the formula being edited, at the caret. Without an edit under way it
+/// starts one in the active cell with `=` and the name.
+pub(crate) fn insert_name(app: &mut SheetApp, name: &str) {
+    match app.editor.as_mut() {
+        Some(ed) => ed.insert_at_caret(name),
+        None => app.begin_edit(Some(format!("={name}")), false),
+    }
+}
+
+/// Paste Name (F3, Formulas › Use in Formula › Paste Names…): OK, or a double-click, inserts the
+/// selected name (`formulas.pasteName` with `name`); Paste List writes every name and what it
+/// refers to from the active cell.
+fn paste_name(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
+    let names = pasteable_names(app);
+    // The `name` value is the selection, so `ui.dialog.set` can choose one too.
+    if let Some(i) = d.values.get("name").and_then(Json::as_str).and_then(|n| names.iter().position(|x| x == n)) {
+        d.list_index = i;
+    }
+    let (down, up) = ui.input_mut(|i| (i.consume_key(egui::Modifiers::NONE, Key::ArrowDown), i.consume_key(egui::Modifiers::NONE, Key::ArrowUp)));
+    let last = names.len().saturating_sub(1);
+    if down {
+        d.list_index = (d.list_index + 1).min(last);
+    }
+    if up {
+        d.list_index = d.list_index.saturating_sub(1);
+    }
+    d.list_index = d.list_index.min(last);
+    ui.label(app.ui.language.tr("Paste name"));
+    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        if names.is_empty() {
+            ui.label(egui::RichText::new(app.ui.language.tr("No names defined")).italics());
+        }
+        for (i, n) in names.iter().enumerate() {
+            let r = ui.selectable_label(i == d.list_index, n);
+            if (down || up) && i == d.list_index && !ui.clip_rect().contains_rect(r.rect) {
+                r.scroll_to_me(Some(if down { egui::Align::Max } else { egui::Align::Min }));
+            }
+            if r.clicked() {
+                d.list_index = i;
+            }
+            if r.double_clicked() {
+                *confirm = true;
+            }
+        }
+    });
+    ui.add_space(4.0);
+    // Paste List is disabled while a cell is being edited.
+    if ui.add_enabled(!names.is_empty() && app.editor.is_none(), egui::Button::new(app.ui.language.tr("Paste List"))).clicked() {
+        app.run_or_alert("formulas.pasteName", json!({"list": true}));
+        *open = false;
+        return;
+    }
+    if let Some(n) = names.get(d.list_index) {
+        d.values.insert("name".into(), json!(n));
+    }
+    ok_cancel(ui, confirm, open);
 }
 
 /// Every chart type the All Charts tab offers: `(type, subtype, label)` for `insert.chart`.

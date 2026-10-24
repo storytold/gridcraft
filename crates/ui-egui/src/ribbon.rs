@@ -1971,14 +1971,24 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             app.open_dialog("defineName", json!({}));
         }
         let use_in = small_button(ui, Icon::Function, "Use in Formula", "Use in Formula", true);
-        anchor_keytip(app, ui, &use_in, &["formulas.pasteName"]);
+        anchor_keytip(app, ui, &use_in, &["dialog:pasteName"]);
         egui::Popup::menu(&use_in).show(|ui| {
-            let names: Vec<String> = app.session.active().map(|d| d.wb.names.iter().map(|n| n.name.clone()).collect()).unwrap_or_default();
-            for n in names {
-                if ui.button(&n).clicked() {
-                    let cur = app.editor.as_ref().map(|e| e.text.clone()).unwrap_or_else(|| "=".into());
-                    app.begin_edit(Some(format!("{cur}{n}")), false);
+            // The menu lists the names Paste Names lists; clicking one runs `formulas.useInFormula`, which puts it at the caret.
+            let names: Vec<String> = app
+                .session
+                .active()
+                .map(|d| gridcraft_engine::cmd::formulas::pasteable_names(&d.wb).into_iter().map(|(n, _)| n).collect())
+                .unwrap_or_default();
+            for n in &names {
+                if ui.button(n).clicked() {
+                    app.run_or_alert("formulas.useInFormula", json!({"name": n}));
                 }
+            }
+            if !names.is_empty() {
+                ui.separator();
+            }
+            if ui.button(app.ui.language.tr("Paste Names…")).clicked() {
+                app.open_dialog("pasteName", json!({}));
             }
         });
         let __k = small_button(ui, Icon::Table, "Create from Selection", "Create from Selection", false);

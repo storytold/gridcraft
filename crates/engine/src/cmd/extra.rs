@@ -1265,7 +1265,7 @@ fn recently_used(s: &mut Session, _: &Json) -> Result<Json> {
 
 fn use_in_formula(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").ok_or_else(|| bad("formulas.useInFormula", "missing `name`"))?;
-    s.ui_requests.push(crate::UiRequest::EditCell(Some(format!("={name}"))));
+    s.ui_requests.push(crate::UiRequest::InsertName(name.to_string()));
     ok()
 }
 

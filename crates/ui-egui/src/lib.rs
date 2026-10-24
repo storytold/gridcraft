@@ -748,6 +748,7 @@ impl SheetApp {
                     });
                     self.begin_edit(text, false);
                 }
+                UiRequest::InsertName(name) => dialogs::insert_name(self, &name),
                 UiRequest::OpenUrl(u) => {
                     if let Some(f) = &self.services.open_url {
                         f(&u);

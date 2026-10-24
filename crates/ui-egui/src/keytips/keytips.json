@@ -1666,11 +1666,10 @@
   },
   {
    "seq": "MSP",
-   "kind": "command",
-   "target": "formulas.pasteName",
+   "kind": "dialog",
+   "target": "pasteName",
    "excel": "Paste Names",
-   "note": "reserved until the command lands",
-   "pending": true
+   "note": ""
   },
   {
    "seq": "MT",
