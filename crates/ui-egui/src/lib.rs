@@ -28,6 +28,7 @@ pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
+pub mod quick_analysis;
 pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;
@@ -691,6 +692,7 @@ impl SheetApp {
                 self.ui.language = i18n::Language::Ja;
                 Ok(json!({"language": i18n::Language::Ja}))
             }
+            "ui.quickAnalysis" => quick_analysis::toggle(self, p.get("open").and_then(Json::as_bool)),
             "ui.backstage" => {
                 // `{"page": "info"}` opens File › Info; `{"page": "close"}` returns to the sheet.
                 match p.get("page").and_then(Json::as_str).map(str::trim) {

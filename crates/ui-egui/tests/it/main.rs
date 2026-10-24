@@ -64,6 +64,7 @@ mod pivot_pane;
 mod pivot_show_details;
 mod popup_dismissal;
 mod protect_password;
+mod quick_analysis_button;
 mod right_to_left;
 mod scroll_position;
 mod scrollbar_column_fill;
