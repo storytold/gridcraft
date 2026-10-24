@@ -70,6 +70,7 @@ this logic, with one undo step.
 | Quick Analysis (Ctrl+Q) | missing |
 | Smooth scrolling, scrollbars | done; vertical scrollbar added 10-09 (#73); horizontal scrollbar in the tab bar (60/40 split, drag, track click pages) 10-13 (#176, #840); the tabs/scrollbar split can't be dragged yet |
 | Text overflow into empty neighbours, wrap, rotation, shrink to fit | done |
+| Vertical alignment insets (top, middle, bottom; wrapped too) | done (10-14): the line box puts the font's leading above the text and sits on the bottom gridline, as measured in Excel (Calibri/Aptos Narrow 11 and 20 pt, 15-60 pt rows): top aligned baseline about 1.0 em below the top edge, bottom aligned about 0.3 em above the bottom edge, so a tall row shows text where a standard row does. Rotated text unchanged |
 
 ## Keyboard
 
@@ -201,6 +202,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-16 | minor | The shared UI clock delegates to the core Unix-millisecond clock, which reads Date.now() on wasm, instead of returning zero there (#1026). Native clock contract tested; browser timing remains unverified |
 | 2026-10-16 | trivial | Web: preferences (theme, interface size, language, editing options…) are kept in the browser's `localStorage` between visits, as the desktop app keeps `ui.json` and `prefs.json`; before, a reload brought back light mode and the defaults (#1562) |
 | 2026-10-15 | minor | Number-format named colors use their RGB values; indexed `[Color1]`–`[Color56]` resolve through the shared legacy palette in grid and PDF (#1452) |
+| 2026-10-14 | minor | Cell text keeps Excel's top and bottom insets: top aligned text no longer touches the top border, bottom aligned text no longer floats above the bottom one, wrapped text follows the same rule
 | 2026-10-14 | minor | Spill-child formula bar uses the anchor formula with disabled theme text and blocks formula-bar edit entry; selection and recalculation restore ordinary behavior |
 | 2026-10-14 | minor | PivotTable source-field list fills the pane width so its scrollbar stays at the list's right edge |
 | 2026-10-14 | minor | Alt, H, B border keytips apply the preset each letter names in Excel's Borders menu (they all drew a bottom border, so H,B,N No Border added one): keytips.json entries take optional `params`; H,B,M opens Format Cells on the Border tab; Erase Border, Line Color and Line Style stay reserved |
