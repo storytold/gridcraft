@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** trivial (stale chart notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip; PRs #158 and #161 merged) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-24 · **Change:** minor (an unedited embedded chart keeps its original XML on save (#1668); previously trivial: stale chart notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip; PRs #158 and #161 merged) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -63,11 +63,18 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 
 ## XLSX round-trip
 
-Charts are read from and written to DrawingML chart parts, but only the fields the model holds
-survive: anything else (axis scaling, label options, error bars, per-point formats, chartex
-extensions) is lost when GridCraft saves a workbook it opened. That is the main reason charts are
-**~30% ready**: a user who opens an Excel workbook with charts and saves it gets simpler charts
-back.
+Charts are read from and written to DrawingML chart parts. A chart that was not edited keeps its
+original chart part on save, with its style, colour and user-shape parts (#1668): everything the
+model doesn't hold (axis scaling, label options, error bars, per-point formats, text boxes in the
+chart) survives. Moving or resizing a chart is not an edit. The original part is not used, and
+the chart is written from the model as before, when the chart was edited (title, series, kind,
+legend…), when a sheet its formulas name was renamed or deleted (including references the model
+doesn't hold, such as a title taken from a cell), or after a row or column insert that moved its
+series. Then only the fields the model holds survive. Not kept: histogram, waterfall and other
+chartex charts (their data goes through `_xlchart` defined names GridCraft renumbers on save),
+and charts GridCraft can't read. The kept part's cached series values (`c:numCache`) are not
+refreshed when cells change (#1677). That is the main reason charts are **~30% ready**: a user who
+edits a chart from an Excel workbook still gets a simpler chart back (#1675).
 
 Series data, categories and names may refer to defined names, as dynamic (OFFSET) ranges do:
 Excel writes a workbook-scoped name as `[0]!Name` in `<c:f>`. GridCraft reads it as the bare
@@ -79,7 +86,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 ## Work (40–60 h)
 
 1. Chart resizing (#190): 1–2 h.
-2. Preserve unmodelled chart XML on round-trip (keep the original part, patch only edited fields): 6–10 h.
+2. Preserve unmodelled chart XML on round-trip: the original part is kept for unedited charts (#1668); patch only edited fields (#1675) and move references the model doesn't hold (#1676): 4–8 h.
 3. Axis options, label options, gridlines per axis, legend formatting: 10–15 h.
 4. Error bars; Format Trendline pane (trendlines landed): 4–6 h.
 5. Per-element Format pane parity, smoothed lines, exploded pie, pie/bar of pie, 100% variants: 8–12 h.
@@ -90,6 +97,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | An unedited embedded chart keeps its original chart part, with its style, colour and user-shape parts, on save (#1668) |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
 | 2026-10-16 | minor | Box & whisker quartiles default to exclusive, honor each series on draw and XLSX round-trip; `chart.set {quartiles}` changes the method (#1453) |

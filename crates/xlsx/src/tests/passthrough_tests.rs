@@ -926,3 +926,239 @@ fn notes_take_shape_blocks_the_header_pictures_dont_use() {
     }
     assert!(notes_ids.iter().all(|b| notes_map.contains(b)), "note ids outside their drawing's blocks");
 }
+
+// ------------------------------------------------------------------ embedded charts (#1668)
+
+const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+const CHART_STYLE: &str = r#"<?xml version="1.0"?><cs:chartStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" id="201"><!-- kept style --></cs:chartStyle>"#;
+const CHART_COLORS: &str = r#"<?xml version="1.0"?><cs:colorStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" meth="cycle" id="10"><!-- kept colours --></cs:colorStyle>"#;
+const CHART_SHAPES: &str =
+    r#"<?xml version="1.0"?><c:userShapes xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><!-- kept text box --></c:userShapes>"#;
+/// The chart's relationships to its style, colour and user-shape parts.
+const CHART_RELS: &[(&str, &str, &str)] = &[
+    ("rId1", crate::chartex::REL_STYLE, "style1.xml"),
+    ("rId2", crate::chartex::REL_COLORS, "colors1.xml"),
+    ("rId3", "chartUserShapes", "../drawings/drawing2.xml"),
+];
+
+/// A column chart with what GridCraft's chart model doesn't hold: a title taken from a cell on
+/// another sheet, a title and a chart-wide font size, a series line dash, one point's colour, gap
+/// width and overlap, axis bounds and an axis number format.
+fn formatted_chart_xml() -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="{NS_C}" xmlns:a="{NS_A}" xmlns:r="{NS_R}"><c:roundedCorners val="0"/><c:chart><c:title><c:tx><c:strRef><c:f>Notes!$A$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>Quarterly</c:v></c:pt></c:strCache></c:strRef></c:tx><c:overlay val="0"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1800" b="1"/></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr></c:title><c:autoTitleDeleted val="0"/><c:plotArea><c:layout/><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Data!$B$1</c:f></c:strRef></c:tx><c:spPr><a:solidFill><a:srgbClr val="4472C4"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="203864"/></a:solidFill><a:prstDash val="dash"/></a:ln></c:spPr><c:invertIfNegative val="0"/><c:dPt><c:idx val="1"/><c:invertIfNegative val="0"/><c:bubble3D val="0"/><c:spPr><a:solidFill><a:srgbClr val="C00000"/></a:solidFill></c:spPr></c:dPt><c:cat><c:strRef><c:f>Data!$A$2:$A$4</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Data!$B$2:$B$4</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="3"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>20</c:v></c:pt><c:pt idx="2"><c:v>30</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:gapWidth val="40"/><c:overlap val="-20"/><c:axId val="111"/><c:axId val="222"/></c:barChart><c:catAx><c:axId val="111"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:crossAx val="222"/></c:catAx><c:valAx><c:axId val="222"/><c:scaling><c:orientation val="minMax"/><c:max val="50"/><c:min val="0"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:numFmt formatCode="0.0" sourceLinked="0"/><c:crossAx val="111"/></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/><c:overlay val="0"/></c:legend><c:plotVisOnly val="1"/></c:chart><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1400"/></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr><c:userShapes r:id="rId3"/></c:chartSpace>"#
+    )
+}
+
+/// Sheets "Data" (with the chart in its drawing) and "Notes" (the cell the chart's title shows).
+/// `chart_rels` are the chart part's relationships.
+fn embedded_chart_package(chart: &str, chart_rels: &[(&str, &str, &str)]) -> Vec<u8> {
+    let workbook = format!(
+        r#"<?xml version="1.0"?><workbook xmlns="{NS_MAIN}" xmlns:r="{NS_R}"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/><sheet name="Notes" sheetId="2" r:id="rId2"/></sheets></workbook>"#
+    );
+    let content_types = format!(
+        r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/xl/workbook.xml" ContentType="{CT_PREFIX}.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="{CT_PREFIX}.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="{CT_PREFIX}.spreadsheetml.worksheet+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="{CT_PREFIX}.drawing+xml"/><Override PartName="/xl/drawings/drawing2.xml" ContentType="{CT_PREFIX}.drawingml.chartshapes+xml"/><Override PartName="/xl/charts/chart1.xml" ContentType="{CT_PREFIX}.drawingml.chart+xml"/><Override PartName="/xl/charts/style1.xml" ContentType="{}"/><Override PartName="/xl/charts/colors1.xml" ContentType="{}"/></Types>"#,
+        crate::chartex::CT_STYLE,
+        crate::chartex::CT_COLORS
+    );
+    let data = format!(
+        r#"<?xml version="1.0"?><worksheet xmlns="{NS_MAIN}" xmlns:r="{NS_R}"><sheetData><row r="1"><c r="B1" t="inlineStr"><is><t>Sales</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Q1</t></is></c><c r="B2"><v>10</v></c></row><row r="3"><c r="A3" t="inlineStr"><is><t>Q2</t></is></c><c r="B3"><v>20</v></c></row><row r="4"><c r="A4" t="inlineStr"><is><t>Q3</t></is></c><c r="B4"><v>30</v></c></row></sheetData><drawing r:id="rId1"/></worksheet>"#
+    );
+    let drawing = format!(
+        r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="{NS_A}" xmlns:r="{NS_R}" xmlns:c="{NS_C}"><xdr:twoCellAnchor><xdr:from><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>9</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>15</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="{NS_C}"><c:chart r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#
+    );
+    make_zip(&[
+        ("[Content_Types].xml", content_types.as_bytes()),
+        ("_rels/.rels", rels(&[("rId1", "officeDocument", "xl/workbook.xml")]).as_bytes()),
+        ("xl/workbook.xml", workbook.as_bytes()),
+        (
+            "xl/_rels/workbook.xml.rels",
+            rels(&[("rId1", "worksheet", "worksheets/sheet1.xml"), ("rId2", "worksheet", "worksheets/sheet2.xml")]).as_bytes(),
+        ),
+        ("xl/worksheets/sheet1.xml", data.as_bytes()),
+        ("xl/worksheets/sheet2.xml", worksheet_xml("Quarterly").as_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels", rels(&[("rId1", "drawing", "../drawings/drawing1.xml")]).as_bytes()),
+        ("xl/drawings/drawing1.xml", drawing.as_bytes()),
+        ("xl/drawings/_rels/drawing1.xml.rels", rels(&[("rId1", "chart", "../charts/chart1.xml")]).as_bytes()),
+        ("xl/charts/chart1.xml", chart.as_bytes()),
+        ("xl/charts/_rels/chart1.xml.rels", rels(chart_rels).as_bytes()),
+        ("xl/charts/style1.xml", CHART_STYLE.as_bytes()),
+        ("xl/charts/colors1.xml", CHART_COLORS.as_bytes()),
+        ("xl/drawings/drawing2.xml", CHART_SHAPES.as_bytes()),
+    ])
+}
+
+/// The chart part the first written sheet shows, found through the sheet's drawing.
+fn written_chart(u: &Unpacked) -> String {
+    let (_, sheet) = u.target("xl/workbook.xml", &attr_of(&u.text("xl/workbook.xml"), "sheet", "r:id"));
+    let drawing = u.rels(&sheet).into_iter().find(|r| r.1.ends_with("/drawing")).unwrap().2;
+    let charts: Vec<String> = u.rels(&drawing).into_iter().filter(|r| r.1.ends_with("/chart")).map(|r| r.2).collect();
+    assert_eq!(charts.len(), 1, "{charts:?}");
+    charts.into_iter().next().unwrap()
+}
+
+/// Two charts are the same apart from their id and position.
+fn same_chart(a: &gridcraft_model::Chart, b: &gridcraft_model::Chart) -> bool {
+    gridcraft_model::Chart { id: b.id, anchor: b.anchor, ..a.clone() } == *b
+}
+
+#[test]
+fn an_unedited_embedded_chart_keeps_its_xml_and_parts_on_save() {
+    let chart = formatted_chart_xml();
+    let (wb, rep) = read_xlsx(&embedded_chart_package(&chart, CHART_RELS)).unwrap();
+    assert!(!rep.warnings.iter().any(|w| w.contains("chart") || w.contains("dropped")), "{:?}", rep.warnings);
+    assert_eq!(wb.sheet(0).unwrap().charts.len(), 1);
+
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    // The chart part, byte for byte, and its style, colour and user-shape parts behind the same
+    // relationship ids.
+    let part = written_chart(&u);
+    assert_eq!(u.text(&part), chart);
+    let crels = u.rels(&part);
+    for (id, body) in [("rId1", CHART_STYLE), ("rId2", CHART_COLORS), ("rId3", CHART_SHAPES)] {
+        let r = crels.iter().find(|r| r.0 == id).unwrap_or_else(|| panic!("no {id} in {crels:?}"));
+        assert_eq!(u.text(&r.2), body, "{id}");
+    }
+    // Reading the output gives the same chart, and a second save keeps it again.
+    let (wb2, rep2) = read_xlsx(&out).unwrap();
+    assert!(!rep2.warnings.iter().any(|w| w.contains("chart") || w.contains("dropped")), "{:?}", rep2.warnings);
+    assert!(same_chart(&wb2.sheet(0).unwrap().charts[0], &wb.sheet(0).unwrap().charts[0]));
+    let again = Unpacked::new(&write_xlsx(&wb2).unwrap());
+    again.assert_valid();
+    assert_eq!(again.text(&written_chart(&again)), chart);
+}
+
+#[test]
+fn a_moved_and_resized_kept_chart_keeps_its_xml() {
+    let chart = formatted_chart_xml();
+    let (mut wb, _) = read_xlsx(&embedded_chart_package(&chart, CHART_RELS)).unwrap();
+    let ch = &mut wb.sheet_mut(0).unwrap().charts[0];
+    ch.anchor.cell = gridcraft_core::CellRef::new(20, 6);
+    ch.anchor.width += 120.0;
+    ch.anchor.height /= 2.0;
+    let moved = ch.anchor;
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    assert_eq!(u.text(&written_chart(&u)), chart);
+    // The drawing, which GridCraft writes, has the new position.
+    let (wb2, _) = read_xlsx(&out).unwrap();
+    let a = wb2.sheet(0).unwrap().charts[0].anchor;
+    assert_eq!(a.cell, moved.cell);
+    assert!((a.width - moved.width).abs() < 1.0 && (a.height - moved.height).abs() < 1.0, "{a:?} vs {moved:?}");
+}
+
+#[test]
+fn an_edited_kept_chart_is_written_from_the_model() {
+    use gridcraft_model::{Chart, ChartKind};
+    let chart = formatted_chart_xml();
+    let edits: [(&str, fn(&mut Chart)); 4] = [
+        ("title", |c| c.title = Some("Renamed".into())),
+        ("series range", |c| c.series[0].values = "Data!$B$2:$B$3".into()),
+        ("kind", |c| c.kind = ChartKind::Line),
+        ("legend", |c| c.legend = gridcraft_model::LegendPos::Bottom),
+    ];
+    for (what, edit) in edits {
+        let (mut wb, _) = read_xlsx(&embedded_chart_package(&chart, CHART_RELS)).unwrap();
+        edit(&mut wb.sheet_mut(0).unwrap().charts[0]);
+        let edited = wb.sheet(0).unwrap().charts[0].clone();
+        let out = write_xlsx(&wb).unwrap();
+        let u = Unpacked::new(&out);
+        u.assert_valid();
+        let written = u.text(&written_chart(&u));
+        assert!(!written.contains("prstDash") && !written.contains("Notes!"), "{what}: {written}");
+        assert!(u.find(CHART_STYLE.as_bytes()).is_empty() && u.find(CHART_SHAPES.as_bytes()).is_empty(), "{what}");
+        let (wb2, _) = read_xlsx(&out).unwrap();
+        let back = &wb2.sheet(0).unwrap().charts[0];
+        assert_eq!(
+            (&back.title, &back.series[0].values, back.kind, back.legend),
+            (&edited.title, &edited.series[0].values, edited.kind, edited.legend),
+            "{what}"
+        );
+    }
+    // A deleted chart takes its kept parts with it.
+    let (mut wb, _) = read_xlsx(&embedded_chart_package(&chart, CHART_RELS)).unwrap();
+    wb.sheet_mut(0).unwrap().charts.clear();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    assert!(u.find(chart.as_bytes()).is_empty() && u.find(CHART_STYLE.as_bytes()).is_empty());
+}
+
+#[test]
+fn a_kept_chart_naming_a_renamed_or_deleted_sheet_is_written_from_the_model() {
+    let chart = formatted_chart_xml();
+    // "Data" renamed: the kept series still say Data!…, so the model writes the chart.
+    let (mut wb, _) = read_xlsx(&embedded_chart_package(&chart, CHART_RELS)).unwrap();
+    wb.sheet_mut(0).unwrap().name = "Renamed".into();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    assert_ne!(u.text(&written_chart(&u)), chart);
+    assert!(u.find(CHART_STYLE.as_bytes()).is_empty());
+    // "Notes" deleted: only the title, a reference the model doesn't hold, named it.
+    let (mut wb, _) = read_xlsx(&embedded_chart_package(&chart, CHART_RELS)).unwrap();
+    wb.sheets.remove(1);
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    assert!(!u.text(&written_chart(&u)).contains("Notes!"));
+    // A rename undone before saving keeps it.
+    let (mut wb, _) = read_xlsx(&embedded_chart_package(&chart, CHART_RELS)).unwrap();
+    wb.sheet_mut(1).unwrap().name = "Other".into();
+    wb.sheet_mut(1).unwrap().name = "NOTES".into();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    assert_eq!(u.text(&written_chart(&u)), chart, "sheet names compare as Excel does, ignoring case");
+}
+
+#[test]
+fn damaged_or_oversized_kept_charts_fall_back_to_the_model() {
+    let chart = formatted_chart_xml();
+    let check = |wb: &gridcraft_model::Workbook, what: &str| {
+        let u = Unpacked::new(&write_xlsx(wb).unwrap());
+        u.assert_valid();
+        let written = u.text(&written_chart(&u));
+        assert!(!written.contains("prstDash"), "{what}: {written}");
+        assert!(u.find(CHART_STYLE.as_bytes()).is_empty(), "{what}");
+    };
+    let kept = |wb: &gridcraft_model::Workbook| wb.sheet(0).unwrap().preserved.as_ref().is_some_and(|p| !p.charts.is_empty());
+    // A missing style part, and a graph that reaches a worksheet: read as before, nothing kept.
+    let missing: Vec<(&str, &str, &str)> = vec![("rId1", crate::chartex::REL_STYLE, "style9.xml")];
+    let worksheet: Vec<(&str, &str, &str)> = vec![("rId1", "worksheet", "../worksheets/sheet2.xml")];
+    for (what, chart_rels) in [("missing part", missing), ("reaches a worksheet", worksheet)] {
+        let (wb, _) = read_xlsx(&embedded_chart_package(&chart, &chart_rels)).unwrap();
+        assert_eq!(wb.sheet(0).unwrap().charts.len(), 1, "{what}");
+        assert!(!kept(&wb), "{what}");
+        check(&wb, what);
+    }
+    // Over the kept-bytes allowance.
+    crate::passthrough::KEPT_TOTAL_FOR_TEST.with(|c| c.set(chart.len() / 2));
+    let read = read_xlsx(&embedded_chart_package(&chart, CHART_RELS));
+    crate::passthrough::KEPT_TOTAL_FOR_TEST.with(|c| c.set(crate::passthrough::MAX_KEPT_TOTAL));
+    let (wb, _) = read.unwrap();
+    assert!(!kept(&wb));
+    check(&wb, "too large");
+    // Kept XML that no longer parses, or a kept chart without its chart part: the model writes it.
+    type Damage = fn(&mut gridcraft_model::PreservedChart);
+    let damages: [(&str, Damage); 2] = [
+        ("damaged XML", |k| {
+            let part = k.part.clone();
+            if let Some(q) = k.parts.iter_mut().find(|q| q.name == part) {
+                q.data = Arc::from("<c:chart>".repeat(crate::xml::MAX_DEPTH + 1).into_bytes());
+            }
+        }),
+        ("no chart part", |k| {
+            let part = k.part.clone();
+            k.parts.retain(|q| q.name != part);
+        }),
+    ];
+    for (what, damage) in damages {
+        let (mut wb, _) = read_xlsx(&embedded_chart_package(&chart, CHART_RELS)).unwrap();
+        assert!(kept(&wb));
+        let sheet = wb.sheet_mut(0).unwrap();
+        let mut p = sheet.preserved.as_deref().cloned().unwrap();
+        damage(&mut p.charts[0]);
+        sheet.preserved = Some(Arc::new(p));
+        check(&wb, what);
+    }
+}

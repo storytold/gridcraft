@@ -9,6 +9,8 @@
 //! of `<pageSetup>`, the legacy VML shapes those controls need and the pictures of the headers and
 //! footers, `&G`, with their `<legacyDrawingHF>`). The workbook also keeps its
 //! `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the saved values.
+//! Chart sheets are kept whole, and each embedded chart GridCraft reads keeps its original chart
+//! part with the style, colour and shape parts behind it, together with the chart as it was read.
 //!
 //! On write, kept parts get fresh part names where needed and new relationship ids; the `r:id`s in
 //! kept XML are rewritten to match. Kept content is conservative:
@@ -21,6 +23,9 @@
 //! - Sheet content lives on the sheet: deleting the sheet drops it, Copy Sheet doesn't copy it.
 //!   Cell references inside kept parts (a control's linked cell, a query table's range, a cell
 //!   mapped to an XML element) are kept as they were, not adjusted to inserted or deleted rows.
+//! - An embedded chart's original XML is written back only while the model's chart still equals
+//!   what was read from it (its position aside) and every sheet its formulas name still exists;
+//!   otherwise GridCraft writes the chart from the model, as it does for charts it created.
 //! - Strict Open XML files are not passed through (their namespaces differ from what we write).
 //! - Sizes are bounded: per part and per workbook.
 
@@ -30,7 +35,9 @@ use std::fmt::Write as _;
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-use gridcraft_model::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml, Sheet, Visibility, Workbook};
+use gridcraft_model::{
+    Anchor, Chart, Preserved, PreservedChart, PreservedPart, PreservedRel, PreservedSheet, PreservedXml, Sheet, Visibility, Workbook,
+};
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::QName;
@@ -143,6 +150,10 @@ const REWRITTEN: &[&str] = &[
 /// Relationship kinds a chart sheet reaches that are otherwise rewritten: its drawing, chart and
 /// their style, colour and shape parts are kept byte for byte (the chart sheet is not modelled).
 const CHART_SHEET_GRAPH: &[&str] = &["chartsheet", "drawing", "chart", "chartex", "chartstyle", "chartcolorstyle", "chartusershapes"];
+
+/// Relationship kinds an embedded chart part reaches that are otherwise rewritten: its style,
+/// colour and user-shape parts are kept with it. A drawing or worksheet is never reached.
+const CHART_GRAPH: &[&str] = &["chart", "chartstyle", "chartcolorstyle", "chartusershapes"];
 
 /// Part-name prefixes (lower case) GridCraft's writer never produces: kept parts there keep their
 /// original names. Anything else is renamed so it can't collide with written parts.
@@ -459,6 +470,29 @@ impl KeptReader {
             p.elements.push(PreservedXml { slot: "ext".into(), xml: x });
         }
         (!p.is_empty()).then(|| Arc::new(p))
+    }
+
+    /// Keeps the original chart part, and the parts behind it, of each chart read into `sheet`
+    /// from a chart part (`Ctx::chart_parts`), with the chart as read. A chart that can't be kept
+    /// (missing or damaged part, size limits) is written from the model on save, as before.
+    pub fn charts(&mut self, cx: &mut Ctx<'_>, sheet: &mut Sheet) {
+        let read = std::mem::take(&mut cx.chart_parts);
+        if !self.on || read.is_empty() {
+            return;
+        }
+        let mut kept = vec![];
+        for (id, part) in read {
+            let Some(ch) = sheet.charts.iter().find(|c| c.id == id) else { continue };
+            let root = PreservedRel { id: String::new(), rel_type: format!("{NS_REL}/chart"), target: part.clone(), external: false };
+            if let Ok(parts) = self.closure(cx, &root, &HashSet::new(), CHART_GRAPH) {
+                kept.push(PreservedChart { id, chart: unplaced(ch), part, parts });
+            }
+        }
+        if !kept.is_empty() {
+            let mut p = sheet.preserved.as_deref().cloned().unwrap_or_default();
+            p.charts = kept;
+            sheet.preserved = Some(Arc::new(p));
+        }
     }
 
     /// Sheet-level content of the sheet part `part`.
@@ -944,7 +978,11 @@ fn part_rels_xml(rels: &[PreservedRel], names: &NameMap) -> String {
 }
 
 fn write_parts(out: &mut Out, parts: &[PreservedPart]) -> NameMap {
-    let mut names = NameMap::new();
+    write_parts_named(out, parts, NameMap::new())
+}
+
+/// [`write_parts`] with some parts' new names already chosen in `names`.
+fn write_parts_named(out: &mut Out, parts: &[PreservedPart], mut names: NameMap) -> NameMap {
     for p in parts {
         names.entry(normalize(&p.name)).or_insert_with(|| out.kept.claim(&p.name));
     }
@@ -1034,6 +1072,28 @@ fn reachable(p: &Preserved, root: &PreservedRel) -> HashSet<String> {
     seen
 }
 
+/// A chart without its id and position: what a kept chart is compared on.
+fn unplaced(ch: &Chart) -> Chart {
+    Chart { id: 0, anchor: Anchor::default(), ..ch.clone() }
+}
+
+/// The sheet names the formulas of a kept chart-kind part refer to; `None` when its XML doesn't
+/// parse. Parts without formulas (styles, colours) give none.
+fn plotted_sheets(q: &PreservedPart) -> Option<Vec<String>> {
+    if !q.content_type.contains("chart") {
+        return Some(vec![]);
+    }
+    let x = xml::parse(&q.data).ok()?;
+    let mut formulas = vec![];
+    chart_formulas(&x, &mut formulas);
+    Some(formulas.iter().flat_map(|f| sheet_names_in(f)).collect())
+}
+
+/// Sheet names as Excel compares them: the first 31 characters, ignoring ASCII case.
+fn same_sheet(a: &str, b: &str) -> bool {
+    a.chars().take(31).collect::<String>().eq_ignore_ascii_case(&b.chars().take(31).collect::<String>())
+}
+
 /// Every formula (`<c:f>`) of a chart part, depth first.
 fn chart_formulas(el: &xml::El, out: &mut Vec<String>) {
     if el.name == "f" && !el.text.trim().is_empty() {
@@ -1091,19 +1151,39 @@ pub(crate) fn sheet_names_in(formula: &str) -> Vec<String> {
 /// that exist under the same names (the chart is kept as it was, so a series on a deleted or
 /// renamed sheet would be left pointing at nothing), and no worksheet may have taken its name.
 fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet) -> bool {
-    let same = |a: &str, b: &str| a.chars().take(31).collect::<String>().eq_ignore_ascii_case(&b.chars().take(31).collect::<String>());
-    if wb.sheets.iter().any(|w| same(&w.name, &s.name)) {
+    if wb.sheets.iter().any(|w| same_sheet(&w.name, &s.name)) {
         return false;
     }
     let Some(root) = p.rels.iter().find(|r| r.id == s.rel_id) else { return false };
     let parts = reachable(p, root);
-    let mut formulas = vec![];
-    for q in p.parts.iter().filter(|q| parts.contains(&normalize(&q.name)) && q.content_type.contains("chart")) {
-        if let Ok(x) = xml::parse(&q.data) {
-            chart_formulas(&x, &mut formulas);
-        }
+    p.parts
+        .iter()
+        .filter(|q| parts.contains(&normalize(&q.name)))
+        .filter_map(plotted_sheets)
+        .flatten()
+        .all(|n| wb.sheets.iter().any(|w| same_sheet(&w.name, &n)))
+}
+
+/// The kept original of the embedded chart `ch` of `sheet`, when it can be written in place of
+/// GridCraft's chart part: the chart is unchanged since it was read (moving or resizing it only
+/// changes the drawing, which GridCraft writes), every sheet the kept formulas name still exists
+/// under the same name (a rename or delete would leave them pointing at nothing), and the kept
+/// XML still parses. `None` means: write the chart from the model.
+pub fn kept_chart<'a>(wb: &Workbook, sheet: &'a Sheet, ch: &Chart) -> Option<&'a PreservedChart> {
+    let k = sheet.preserved.as_deref()?.charts.iter().find(|k| k.id == ch.id)?;
+    if unplaced(ch) != k.chart || !k.parts.iter().any(|q| normalize(&q.name) == normalize(&k.part)) {
+        return None;
     }
-    formulas.iter().flat_map(|f| sheet_names_in(f)).all(|n| wb.sheets.iter().any(|w| same(&w.name, &n)))
+    let names: Vec<Vec<String>> = k.parts.iter().map(plotted_sheets).collect::<Option<_>>()?;
+    names.iter().flatten().all(|n| wb.sheets.iter().any(|w| same_sheet(&w.name, n))).then_some(k)
+}
+
+/// Writes a kept chart (see [`kept_chart`]): the chart part as `name` (the name GridCraft's writer
+/// gives that chart), the parts behind it under fresh names. Returns the id of the drawing's new
+/// relationship to it.
+pub fn write_kept_chart(k: &PreservedChart, name: &str, drawing_rels: &mut Rels, out: &mut Out) -> String {
+    write_parts_named(out, &k.parts, NameMap::from([(normalize(&k.part), name.to_string())]));
+    drawing_rels.add("chart", &format!("/{name}"))
 }
 
 /// Writes the workbook's kept parts and relationships. Chart sheets that can't be written back
