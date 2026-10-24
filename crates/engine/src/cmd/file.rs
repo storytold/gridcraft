@@ -164,7 +164,9 @@ fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
     // The file name goes into a PivotChart's link to its PivotTable.
-    let bytes = match csv_style(p, &d.wb, "file.saveBytes")?.filter(|_| fmt.eq_ignore_ascii_case("csv")) {
+    // The CSV options are read (and checked) only for CSV output.
+    let style = if fmt.eq_ignore_ascii_case("csv") { csv_style(p, &d.wb, "file.saveBytes")? } else { None };
+    let bytes = match style {
         Some(style) => crate::io::csv_bytes(&d.wb, style)?,
         None => crate::io::save_bytes(&d.wb, &name)?,
     };
@@ -217,7 +219,8 @@ fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
         wb.active_sheet = target_sheet(s, p)?;
     }
     let target = if path.ends_with(&format!(".{ext}")) { path.clone() } else { format!("{path}.{ext}") };
-    let bytes = match csv_style(p, &wb, "file.exportCsv")?.filter(|_| ext == "csv") {
+    let style = if ext == "csv" { csv_style(p, &wb, "file.exportCsv")? } else { None };
+    let bytes = match style {
         Some(style) => crate::io::csv_bytes(&wb, style)?,
         None => crate::io::save_bytes(&wb, &target)?,
     };

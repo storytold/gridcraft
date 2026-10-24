@@ -341,7 +341,7 @@ fn csv(wb: &Workbook, sh: &Sheet, style: CsvStyle) -> Result<Vec<u8>> {
         }
     })
     .map_err(|e| EngineError::Other(e.to_string()))?;
-    if style.bom && !body.is_empty() {
+    if style.bom {
         let mut out = Vec::with_capacity(body.len() + 3);
         out.extend_from_slice(b"\xEF\xBB\xBF");
         out.extend_from_slice(&body);

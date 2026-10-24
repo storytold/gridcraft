@@ -2349,6 +2349,15 @@ fn csv_export_with_semicolons_decimal_commas_and_a_byte_order_mark() {
 }
 
 #[test]
+fn csv_options_apply_to_csv_only_and_an_empty_csv_keeps_its_byte_order_mark() {
+    let mut s = s();
+    let r = s.execute("file.saveBytes", json!({"format": "csv", "bom": true})).unwrap();
+    assert_eq!(crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap(), b"\xEF\xBB\xBF");
+    // CSV-only options are ignored, not rejected, by the other formats.
+    assert!(s.execute("file.saveBytes", json!({"format": "json", "delimiter": "|"})).is_ok());
+}
+
+#[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn export_csv_writes_the_style_asked_for() {
     #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
