@@ -262,7 +262,18 @@ fn sample() -> Workbook {
     s.autofilter = Some(AutoFilter {
         range: rr("K1:N20"),
         criteria: vec![
-            (0, FilterCriterion::Values { values: vec!["a".into(), "b".into()], blanks: true }),
+            (
+                0,
+                FilterCriterion::Values {
+                    values: vec![],
+                    blanks: true,
+                    dates: vec![
+                        DateGroupItem { grouping: DateGrouping::Year, year: 2024, month: 0, day: 0, hour: 0, minute: 0, second: 0 },
+                        DateGroupItem { grouping: DateGrouping::Month, year: 2026, month: 3, day: 0, hour: 0, minute: 0, second: 0 },
+                        DateGroupItem { grouping: DateGrouping::Minute, year: 2025, month: 12, day: 24, hour: 18, minute: 30, second: 0 },
+                    ],
+                },
+            ),
             (1, FilterCriterion::Custom { a: (">=".into(), "5".into()), b: Some(("<".into(), "9".into())), and: true }),
             (2, FilterCriterion::Top10 { bottom: true, percent: false, count: 3 }),
             (3, FilterCriterion::FillColor(Color::Rgb(0xFF0000))),
@@ -335,7 +346,7 @@ fn sample() -> Workbook {
         last_col: false,
         filter_button: true,
         filter: vec![
-            (0, FilterCriterion::Values { values: vec!["East".into()], blanks: false }),
+            (0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, dates: vec![] }),
             (1, FilterCriterion::Icon { set: "3TrafficLights1".into(), id: Some(1) }),
         ],
         table_type: None,
@@ -1404,8 +1415,10 @@ fn a_table_filter_criteria_survive_a_round_trip() {
     });
     // The dropdown of a table's header cell installs the sheet AutoFilter over the table's
     // range, and `data.filterBy` stores its criteria there.
-    s.autofilter =
-        Some(AutoFilter { range: rr("A1:A4"), criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })] });
+    s.autofilter = Some(AutoFilter {
+        range: rr("A1:A4"),
+        criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, dates: vec![] })],
+    });
     s.rows.entry(1).or_default().hidden = true;
 
     let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
@@ -1447,8 +1460,10 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
         table_type: None,
         connection_id: None,
     });
-    s.autofilter =
-        Some(AutoFilter { range: rr("B1:B3"), criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })] });
+    s.autofilter = Some(AutoFilter {
+        range: rr("B1:B3"),
+        criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, dates: vec![] })],
+    });
 
     let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
@@ -1456,4 +1471,47 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     let t = b.tables.first().expect("the table survived");
     assert!(t.filter.is_empty(), "the criteria landed on the wrong table column: {:?}", t.filter);
     assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
+}
+
+/// Date groups are not checked when a session file loads; out-of-range ones must not reach the
+/// file (`year` is an unsignedShort, `month` 1–12), and fields below the grouping are left out.
+#[test]
+fn invalid_date_groups_are_not_written() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    let item = |grouping, year, month| DateGroupItem { grouping, year, month, day: 0, hour: 0, minute: 0, second: 0 };
+    let mut year_with_month = item(DateGrouping::Year, 2024, 7);
+    year_with_month.day = 9;
+    let dates = vec![
+        item(DateGrouping::Year, -5, 0),
+        item(DateGrouping::Month, 2026, 0),
+        item(DateGrouping::Month, 70_000, 3),
+        item(DateGrouping::Month, 2026, 3),
+        year_with_month,
+    ];
+    s.autofilter = Some(AutoFilter { range: rr("A1:A4"), criteria: vec![(0, FilterCriterion::Values { values: vec![], blanks: false, dates })] });
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    let filters = sheet.child("autoFilter").and_then(|a| a.child("filterColumn")).and_then(|f| f.child("filters")).unwrap();
+    let items: Vec<(Option<&str>, Option<&str>, Option<&str>)> =
+        filters.kids("dateGroupItem").map(|d| (d.attr("year"), d.attr("month"), d.attr("dateTimeGrouping"))).collect();
+    assert_eq!(items, [(Some("2026"), Some("3"), Some("month")), (Some("2024"), None, Some("year"))]);
+}
+
+/// Excel takes `filter` or `dateGroupItem` children in one `filters`, not both: a criterion that
+/// has both (the engine converts them to text first) is written with its values.
+#[test]
+fn a_filter_with_values_and_date_groups_writes_only_the_values() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    let march = DateGroupItem { grouping: DateGrouping::Month, year: 2026, month: 3, day: 0, hour: 0, minute: 0, second: 0 };
+    let crit = FilterCriterion::Values { values: vec!["n/a".into()], blanks: false, dates: vec![march] };
+    s.autofilter = Some(AutoFilter { range: rr("A1:A4"), criteria: vec![(0, crit)] });
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    let filters = sheet.child("autoFilter").and_then(|a| a.child("filterColumn")).and_then(|f| f.child("filters")).unwrap();
+    assert_eq!(filters.kids("filter").filter_map(|f| f.attr("val")).collect::<Vec<_>>(), ["n/a"]);
+    assert_eq!(filters.kids("dateGroupItem").count(), 0);
 }

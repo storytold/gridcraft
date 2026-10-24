@@ -3,13 +3,16 @@
 //! formats, tables, comments, filters, sparklines, floating charts/pictures/shapes and the
 //! in-cell editor.
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use egui::{Align2, Color32, CursorIcon, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_engine::cf::{CfCache, CfLook};
+use gridcraft_engine::cmd::data::{DateNode, FilterList};
 use gridcraft_engine::core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
 use gridcraft_engine::model::{BorderLine, BorderStyle, Color, HAlign, LineIndex, PatternType, Sheet, Style, Underline, VAlign, Workbook};
-use serde_json::json;
+use gridcraft_engine::model::{DateGroupItem, DateGrouping};
+use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
 use crate::editor::{EditState, REF_COLORS};
@@ -3231,9 +3234,16 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
         }
     }
     let wb = app.session.active().map(|d| d.wb.clone()).unwrap_or(wb);
-    let values = gridcraft_engine::cmd::data::filter_values(&wb, si, col);
     let key = egui::Id::new(("filter_sel", col));
     let search_key = egui::Id::new(("filter_search", col));
+    // A menu that has just opened (or moved to another column or sheet) starts from the sheet as it
+    // is now, not from a list left behind when another button was clicked with this one open.
+    if !was_open {
+        ui.ctx().data_mut(|d| {
+            d.remove::<SharedFilterMenu>(key);
+            d.remove::<String>(search_key);
+        });
+    }
     let buttons_key = egui::Id::new(("filter_buttons", col));
     // Enter is the menu's OK, as in Excel: taken before the search box (which would only drop its
     // focus) and the value checkboxes (which would toggle) see it. A focused button keeps it as its click.
@@ -3257,7 +3267,17 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
             }
             ui.separator();
             ui.label(egui::RichText::new("Filter").strong());
-            let mut checks: Vec<(String, bool)> = ui.ctx().data_mut(|d| d.get_temp::<Vec<(String, bool)>>(key)).unwrap_or(values.clone());
+            // Built once when the menu opens and shared between frames, so a frame neither rebuilds
+            // nor copies the list (a date column can hold a million leaves).
+            let state = ui.ctx().data_mut(|d| d.get_temp::<SharedFilterMenu>(key)).unwrap_or_else(|| {
+                let list = gridcraft_engine::cmd::data::filter_list(&wb, si, col);
+                let values_lc = list.values.iter().map(|(v, _)| v.to_lowercase()).collect();
+                let state: SharedFilterMenu = Arc::new(Mutex::new(FilterMenuState { list, values_lc, ..Default::default() }));
+                ui.ctx().data_mut(|d| d.insert_temp(key, state.clone()));
+                state
+            });
+            let mut guard = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let st = &mut *guard;
             // A search narrows the list; Select All and Apply then only cover the matches.
             let mut search: String = ui.ctx().data_mut(|d| d.get_temp(search_key)).unwrap_or_default();
             let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search").desired_width(f32::INFINITY));
@@ -3265,27 +3285,48 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
                 field.request_focus();
             }
             let needle = search.trim().to_lowercase();
-            let matches = |v: &str| needle.is_empty() || v.to_lowercase().contains(&needle);
-            let all = checks.iter().filter(|(v, _)| matches(v)).all(|(_, b)| *b);
-            let mut all_new = all;
+            // Which flat values the search shows (their lowercase text is made once, with the list).
+            let shown_values: Vec<bool> = st.values_lc.iter().map(|v| needle.is_empty() || v.contains(&needle)).collect();
+            // The date tree's counts follow the search: recounted when it changes, not every frame.
+            if st.counted.as_deref() != Some(needle.as_str()) {
+                st.list.refresh(&needle);
+                st.counted = Some(needle.clone());
+            }
+            // Every shown entry: the flat values and the date tree's leaves that match the search.
+            let values_shown = st.list.values.iter().zip(&shown_values).filter(|(_, s)| **s);
+            let (shown, on) = values_shown.fold((0, 0), |(n, k), ((_, b), _)| (n + 1, k + usize::from(*b)));
+            let shown = shown + st.list.dates.iter().map(|n| n.shown).sum::<usize>();
+            let on = on + st.list.dates.iter().map(|n| n.shown_on).sum::<usize>();
+            let mut all_new = on == shown;
             let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
-            if ui.checkbox(&mut all_new, label).changed() {
-                for c in checks.iter_mut().filter(|(v, _)| matches(v)) {
+            let mut dirty = false;
+            if ui.add(egui::Checkbox::new(&mut all_new, label).indeterminate(on > 0 && on < shown)).changed() {
+                for (c, _) in st.list.values.iter_mut().zip(&shown_values).filter(|(_, s)| **s) {
                     c.1 = all_new;
                 }
+                for n in &mut st.list.dates {
+                    n.set_shown(&needle, all_new);
+                }
+                dirty = true;
             }
             // Full width: shrunk to the longest value, the scroll bar sat mid-menu and the wheel only
             // worked over the values themselves (#432).
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
-                for (v, on) in checks.iter_mut().filter(|(v, _)| matches(v)) {
+                // Dates first as a Year › Month › Day tree, as in Excel; then the other values.
+                dirty |= date_tree_ui(ui, &mut st.list.dates, &needle, &mut st.open, 0);
+                for ((v, on), _) in st.list.values.iter_mut().zip(&shown_values).filter(|(_, s)| **s) {
                     ui.checkbox(on, v.as_str());
                 }
             });
-            ui.ctx().data_mut(|d| {
-                d.insert_temp(key, checks.clone());
-                d.insert_temp(search_key, search.clone());
-            });
-            let checks: Vec<(String, bool)> = checks.iter().map(|(v, on)| (v.clone(), *on && matches(v))).collect();
+            if dirty {
+                st.list.refresh(&needle);
+            }
+            ui.ctx().data_mut(|d| d.insert_temp(search_key, search.clone()));
+            // Apply and the all-checked test only cover what the search shows.
+            let picked = |i: usize, on: bool| on && shown_values.get(i).copied().unwrap_or(false);
+            let all_values = st.list.values.iter().enumerate().all(|(i, (_, on))| picked(i, *on));
+            let all_dates = st.list.dates.iter().all(|n| n.shown_on == n.leaves);
+            let any = st.list.values.iter().enumerate().any(|(i, (_, on))| picked(i, *on)) || st.list.dates.iter().any(|n| n.shown_on > 0);
             ui.separator();
             ui.horizontal(|ui| {
                 let clear = ui.button("Clear Filter");
@@ -3294,16 +3335,18 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
                     close = true;
                 }
                 // Nothing checked would hide every row, so Enter (unlike a click on Apply) does nothing then.
-                let any = checks.iter().any(|(_, on)| *on);
                 let apply = ui.button("Apply");
                 ui.ctx().data_mut(|d| d.insert_temp(buttons_key, vec![ascending.id, descending.id, clear.id, apply.id]));
                 if apply.clicked() || (enter && any) {
-                    let blanks = checks.iter().any(|(v, on)| v == "(Blanks)" && *on);
-                    let vals: Vec<String> = checks.iter().filter(|(v, on)| *on && v != "(Blanks)").map(|(v, _)| v.clone()).collect();
-                    let p = if checks.iter().all(|(_, b)| *b) {
+                    let checked = st.list.values.iter().enumerate().filter(|(i, (_, on))| picked(*i, *on)).map(|(_, (v, _))| v);
+                    let (blank, vals): (Vec<&String>, Vec<&String>) = checked.partition(|v| *v == "(Blanks)");
+                    let blanks = !blank.is_empty();
+                    let p = if all_values && all_dates {
                         json!({"column": col_to_letters(col), "clear": true})
                     } else {
-                        json!({"column": col_to_letters(col), "values": vals, "blanks": blanks})
+                        let items = gridcraft_engine::cmd::data::checked_date_items(&st.list.dates);
+                        let dates: Vec<Json> = items.iter().map(date_item_json).collect();
+                        json!({"column": col_to_letters(col), "values": vals, "blanks": blanks, "dates": dates})
                     };
                     let _ = app.run("data.filterBy", p);
                     close = true;
@@ -3313,12 +3356,72 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
     });
     if close || popup_dismissed(&response.response, was_open) {
         ui.ctx().data_mut(|d| {
-            d.remove::<Vec<(String, bool)>>(key);
+            d.remove::<SharedFilterMenu>(key);
             d.remove::<String>(search_key);
             d.remove::<Vec<egui::Id>>(buttons_key);
         });
         app.grid.filter_menu = None;
     }
+}
+
+/// The open filter dropdown's state, kept between frames.
+#[derive(Default)]
+struct FilterMenuState {
+    list: FilterList,
+    /// The flat values' text in lowercase, for the search.
+    values_lc: Vec<String>,
+    /// Expanded years, months… of the date tree.
+    open: HashSet<DateGroupItem>,
+    /// The search the date tree's counts were made for; `None` before the first count.
+    counted: Option<String>,
+}
+
+type SharedFilterMenu = Arc<Mutex<FilterMenuState>>;
+
+/// One level of the filter dropdown's date tree: an expander, then a checkbox that is mixed when
+/// only some of the dates under it are checked. Like (Select All Search Results), a box shows and
+/// sets only the dates the search shows; a search expands the matching branches and disables the
+/// expanders until it is cleared. Returns whether a box changed (the counts then need a refresh).
+fn date_tree_ui(ui: &mut egui::Ui, nodes: &mut [DateNode], needle: &str, open: &mut HashSet<DateGroupItem>, depth: usize) -> bool {
+    let mut changed = false;
+    for n in nodes.iter_mut().filter(|n| n.shown > 0) {
+        let expanded = !needle.is_empty() || open.contains(&n.item);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.add_space(depth as f32 * 14.0);
+            let arrow = egui::Button::new(if expanded { "▼" } else { "▶" }).small().frame(false);
+            let toggle = if n.children.is_empty() { ui.add_visible(false, arrow) } else { ui.add_enabled(needle.is_empty(), arrow) };
+            if toggle.clicked() && !open.remove(&n.item) {
+                open.insert(n.item);
+            }
+            let mut on = n.shown_on == n.shown;
+            if ui.add(egui::Checkbox::new(&mut on, n.label.as_str()).indeterminate(n.shown_on > 0 && n.shown_on < n.shown)).changed() {
+                n.set_shown(needle, on);
+                changed = true;
+            }
+        });
+        if expanded && !n.children.is_empty() {
+            changed |= date_tree_ui(ui, &mut n.children, needle, open, depth + 1);
+        }
+    }
+    changed
+}
+
+/// A `dates` entry of `data.filterBy`: the fields down to the item's grouping.
+fn date_item_json(d: &DateGroupItem) -> Json {
+    let mut j = json!({"year": d.year});
+    for (g, name, v) in [
+        (DateGrouping::Month, "month", d.month),
+        (DateGrouping::Day, "day", d.day),
+        (DateGrouping::Hour, "hour", d.hour),
+        (DateGrouping::Minute, "minute", d.minute),
+        (DateGrouping::Second, "second", d.second),
+    ] {
+        if d.grouping >= g {
+            j[name] = json!(v);
+        }
+    }
+    j
 }
 
 fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
@@ -3376,11 +3479,22 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                             if let Some(d) = app.session.active() {
                                 let a = d.selection.active;
                                 let text = d.wb.active().map(|sh| gridcraft_engine::display::cell_text(&d.wb, sh, a)).unwrap_or_default();
+                                // A date filters by its day (its second when it has a time), as the
+                                // dropdown's tree would, so the same date in another format matches too.
+                                let date = d.wb.active().and_then(|sh| gridcraft_engine::cmd::data::cell_date(&d.wb, sh, a));
                                 let has = d.wb.active().is_some_and(|sh| sh.autofilter.is_some());
                                 if !has {
                                     let _ = app.run("data.filter", json!({}));
                                 }
-                                app.run_or_alert("data.filterBy", json!({"column": col_to_letters(a.col), "values": [text]}));
+                                let p = match date {
+                                    Some(dt) => {
+                                        let timed = dt.hour != 0 || dt.minute != 0 || dt.second != 0;
+                                        let item = DateGroupItem::of(&dt, if timed { DateGrouping::Second } else { DateGrouping::Day });
+                                        json!({"column": col_to_letters(a.col), "dates": [date_item_json(&item)]})
+                                    }
+                                    None => json!({"column": col_to_letters(a.col), "values": [text]}),
+                                };
+                                app.run_or_alert("data.filterBy", p);
                             }
                         }
                         "edit.copy" | "edit.cut" => {

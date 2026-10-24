@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
-    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, Sheet,
-    SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
+    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, DateGroupItem, DateGrouping, ErrorStyle, FilterCriterion, LineInfo, NoteBox,
+    NoteCorner, Orientation, Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
@@ -996,6 +996,23 @@ fn filter_operator(op: &str) -> &'static str {
     }
 }
 
+/// `<dateGroupItem>`: the fields down to its grouping, in the schema's attribute order.
+fn date_group_item_xml(d: &DateGroupItem, s: &mut String) {
+    let _ = write!(s, "<dateGroupItem year=\"{}\"", d.year);
+    for (g, name, v) in [
+        (DateGrouping::Month, "month", d.month),
+        (DateGrouping::Day, "day", d.day),
+        (DateGrouping::Hour, "hour", d.hour),
+        (DateGrouping::Minute, "minute", d.minute),
+        (DateGrouping::Second, "second", d.second),
+    ] {
+        if d.grouping >= g {
+            let _ = write!(s, " {name}=\"{v}\"");
+        }
+    }
+    let _ = write!(s, " dateTimeGrouping=\"{}\"/>", d.grouping.xml());
+}
+
 fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mut Out) -> String {
     let mut s = format!("<autoFilter ref=\"{}\"", range.a1());
     if criteria.is_empty() {
@@ -1006,10 +1023,19 @@ fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mu
     for (col, c) in criteria {
         let _ = write!(s, "<filterColumn colId=\"{col}\">");
         match c {
-            FilterCriterion::Values { values, blanks } => {
+            FilterCriterion::Values { values, blanks, dates } => {
                 let _ = write!(s, "<filters{}>", if *blanks { " blank=\"1\"" } else { "" });
                 for v in values {
                     let _ = write!(s, "<filter val=\"{}\"/>", esc_attr(v));
+                }
+                // Excel takes `filter` or `dateGroupItem` children, not both (MS-OI29500 §18.3.2.8).
+                // The engine turns a mixed selection, and a mixed filter in an opened file, into text
+                // before it gets here; a criterion that has both anyway keeps its values. Items from a
+                // session file are unchecked: out-of-range ones would make an invalid file.
+                if values.is_empty() {
+                    for d in dates.iter().filter(|d| d.is_valid()) {
+                        date_group_item_xml(&d.normalized(), &mut s);
+                    }
                 }
                 s.push_str("</filters>");
             }

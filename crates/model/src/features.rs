@@ -1,6 +1,7 @@
 //! Sheet features beyond cells: tables, conditional formatting, data validation, comments,
 //! hyperlinks, charts, images, autofilter, print settings.
 
+use gridcraft_core::date::DateTime;
 use gridcraft_core::{CellRef, RangeRef};
 use serde::{Deserialize, Serialize};
 
@@ -662,9 +663,13 @@ pub struct Sparkline {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum FilterCriterion {
     /// Show rows whose display text is one of these (case-insensitive); `blanks` includes empty.
+    /// Date cells also show when they fall in one of `dates` (the checked years, months, days…
+    /// of the dropdown's date tree, `dateGroupItem`).
     Values {
         values: Vec<String>,
         blanks: bool,
+        #[serde(default)]
+        dates: Vec<DateGroupItem>,
     },
     /// Custom: one or two comparisons (`op` like `>=`, `=*abc*`), joined by and/or.
     Custom {
@@ -686,6 +691,99 @@ pub enum FilterCriterion {
         set: String,
         id: Option<u32>,
     },
+}
+
+/// How deep a [`DateGroupItem`] goes (`dateTimeGrouping`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum DateGrouping {
+    Year,
+    Month,
+    Day,
+    Hour,
+    Minute,
+    Second,
+}
+
+impl DateGrouping {
+    pub const ALL: [DateGrouping; 6] =
+        [DateGrouping::Year, DateGrouping::Month, DateGrouping::Day, DateGrouping::Hour, DateGrouping::Minute, DateGrouping::Second];
+
+    /// The XLSX `dateTimeGrouping` value.
+    pub fn xml(self) -> &'static str {
+        match self {
+            DateGrouping::Year => "year",
+            DateGrouping::Month => "month",
+            DateGrouping::Day => "day",
+            DateGrouping::Hour => "hour",
+            DateGrouping::Minute => "minute",
+            DateGrouping::Second => "second",
+        }
+    }
+
+    pub fn from_xml(s: &str) -> Option<DateGrouping> {
+        DateGrouping::ALL.into_iter().find(|g| g.xml() == s)
+    }
+}
+
+/// A year, month, day, hour, minute or second whose dates pass an AutoFilter (`dateGroupItem`).
+/// Fields below `grouping` are ignored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct DateGroupItem {
+    pub grouping: DateGrouping,
+    pub year: i32,
+    pub month: u32,
+    pub day: u32,
+    pub hour: u32,
+    pub minute: u32,
+    pub second: u32,
+}
+
+impl DateGroupItem {
+    /// The item at `grouping` that contains `dt`.
+    pub fn of(dt: &DateTime, grouping: DateGrouping) -> DateGroupItem {
+        let at = |g: DateGrouping, v: u32| if grouping >= g { v } else { 0 };
+        DateGroupItem {
+            grouping,
+            year: dt.year,
+            month: at(DateGrouping::Month, dt.month),
+            day: at(DateGrouping::Day, dt.day),
+            hour: at(DateGrouping::Hour, dt.hour),
+            minute: at(DateGrouping::Minute, dt.minute),
+            second: at(DateGrouping::Second, dt.second),
+        }
+    }
+
+    /// This item with the fields below its grouping set to 0, as [`DateGroupItem::of`] builds it.
+    pub fn normalized(&self) -> DateGroupItem {
+        let dt = DateTime {
+            year: self.year,
+            month: self.month,
+            day: self.day,
+            hour: self.hour,
+            minute: self.minute,
+            second: self.second,
+            ..DateTime::default()
+        };
+        DateGroupItem::of(&dt, self.grouping)
+    }
+
+    /// Are the fields down to the grouping in range (year 0–9999, month 1–12, day 1–31, hour 0–23,
+    /// minute and second 0–59)? An item from a session file is not checked when it loads.
+    pub fn is_valid(&self) -> bool {
+        let n = self.normalized();
+        let below = |g: DateGrouping| self.grouping < g;
+        (0..=9999).contains(&n.year)
+            && (below(DateGrouping::Month) || (1..=12).contains(&n.month))
+            && (below(DateGrouping::Day) || (1..=31).contains(&n.day))
+            && n.hour <= 23
+            && n.minute <= 59
+            && n.second <= 59
+    }
+
+    /// Does `dt` fall in this year, month, day…?
+    pub fn contains(&self, dt: &DateTime) -> bool {
+        DateGroupItem::of(dt, self.grouping) == self.normalized()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

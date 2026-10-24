@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-21 · **Change:** minor (Page Setup paper sizes match Japanese Excel: B4/B5/B6 are the JIS sizes, with ISO B4/B5/B6 by name and the Japanese postcards, envelopes and A6 added; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-22 · **Change:** minor (AutoFilter lists dates as a Year › Month › Day tree; previously minor: Page Setup paper sizes match Japanese Excel: B4/B5/B6 are the JIS sizes, with ISO B4/B5/B6 by name and the Japanese postcards, envelopes and A6 added; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -299,8 +299,8 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
   duplicates, top/bottom, averages, data bars, colour scales, icon sets, formulas), automatic
   row heights, autofit, hide/unhide, freeze panes.
   Border presets include visual diagrams; Format Cells previews draft borders before applying.
-- Data: sort (multi-level, by colour, custom lists), AutoFilter (values, custom, top 10,
-  average, colour), tables with totals rows, remove duplicates, text to columns, data validation
+- Data: sort (multi-level, by colour, custom lists), AutoFilter (values, dates grouped by year,
+  month and day, custom, top 10, average, colour), tables with totals rows, remove duplicates, text to columns, data validation
   with error alerts, grouping/outline, subtotals.
 - PivotTables: Insert/Recommended PivotTables, field list pane, compact/outline/tabular layouts,
   values on rows or columns, date grouping, sort, filters, show-values-as, refresh, and XLSX round-trip.
@@ -334,6 +334,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | minor | AutoFilter: date cells are listed as a Year › Month › Day tree (› Hour › Minute › Second with times) with mixed checkboxes, `data.filterBy` takes `dates`, and XLSX `dateGroupItem` criteria are read and written; no score change |
 | 2026-10-21 | minor | Page Setup paper sizes: `B4`/`B5`/`B6` are the JIS sizes Japanese Excel uses (ISO B4/B5/B6 by name), and Japanese Postcard, Japanese Double Postcard, the chou/kaku envelopes and A6 are added; PDF MediaBox and `file.print` follow, and the Size menu lists them |
 | 2026-10-18 | trivial | Stale chart notes: all chart kinds survive XLSX round-trip (PRs #158, #161) and trendlines landed |
 | 2026-10-16 | minor | Advanced Filter copy-to clears only its actual output and rejects overflow without changing cells (#1031) |

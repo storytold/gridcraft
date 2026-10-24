@@ -343,3 +343,35 @@ fn outline_symbols_flag_round_trips() {
     let (wb, _) = read_xlsx(&minimal("<sheetData/>", &[], "", "")).unwrap();
     assert!(wb.sheet(0).unwrap().show_outline_symbols);
 }
+
+#[test]
+fn date_group_items_out_of_range_are_dropped_and_omitted_fields_default() {
+    // Month 0, day 0, hour 24 and a missing year match no date: those items are dropped. An omitted
+    // day or hour takes Excel's default (1 for a month or day, 0 for a time field).
+    let body = r#"<sheetData/><autoFilter ref="A1:A5"><filterColumn colId="0"><filters><dateGroupItem year="2026" month="0" dateTimeGrouping="month"/><dateGroupItem year="2026" month="3" day="0" dateTimeGrouping="day"/><dateGroupItem year="2026" month="3" day="5" hour="24" dateTimeGrouping="hour"/><dateGroupItem month="3" dateTimeGrouping="month"/><dateGroupItem year="2026" month="3" day="5" dateTimeGrouping="day"/><dateGroupItem year="2026" month="4" dateTimeGrouping="day"/><dateGroupItem year="2026" month="4" day="2" dateTimeGrouping="hour"/></filters></filterColumn></autoFilter>"#;
+    let (wb, rep) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let af = wb.sheets[0].autofilter.as_ref().unwrap();
+    let Some((_, gridcraft_model::FilterCriterion::Values { dates, .. })) = af.criteria.first() else { panic!("{:?}", af.criteria) };
+    let got: Vec<(i32, u32, u32, u32)> = dates.iter().map(|d| (d.year, d.month, d.day, d.hour)).collect();
+    assert_eq!(got, [(2026, 3, 5, 0), (2026, 4, 1, 0), (2026, 4, 2, 0)]);
+    assert!(rep.warnings.iter().any(|w| w.contains("date groups out of range")), "{:?}", rep.warnings);
+}
+
+#[test]
+fn a_date_filter_left_with_nothing_is_left_out_and_calendar_type_is_ignored() {
+    // Every item dropped: an empty filter would hide every row, so the column keeps no filter.
+    let body = r#"<sheetData/><autoFilter ref="A1:A5"><filterColumn colId="0"><filters><dateGroupItem year="2026" month="0" dateTimeGrouping="month"/></filters></filterColumn></autoFilter>"#;
+    let (wb, rep) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    assert!(wb.sheets[0].autofilter.as_ref().unwrap().criteria.is_empty());
+    assert!(rep.warnings.iter().any(|w| w.contains("date groups out of range")), "{:?}", rep.warnings);
+    // Excel ignores calendarType: the items read as Gregorian whatever it says.
+    for calendar in ["hijri", "gregorianUs", "saka"] {
+        let body = format!(
+            r#"<sheetData/><autoFilter ref="A1:A5"><filterColumn colId="0"><filters calendarType="{calendar}"><dateGroupItem year="2026" month="3" dateTimeGrouping="month"/></filters></filterColumn></autoFilter>"#
+        );
+        let (wb, _) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+        let af = wb.sheets[0].autofilter.as_ref().unwrap();
+        let Some((_, gridcraft_model::FilterCriterion::Values { dates, .. })) = af.criteria.first() else { panic!("{calendar}: {:?}", af.criteria) };
+        assert_eq!(dates.iter().map(|d| (d.year, d.month)).collect::<Vec<_>>(), [(2026, 3)], "{calendar}");
+    }
+}

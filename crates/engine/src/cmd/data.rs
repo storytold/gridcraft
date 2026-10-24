@@ -1,6 +1,7 @@
 //! Data tab: sort, filter, remove duplicates, text to columns, data validation, outline.
 
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, RangeRef, Value, sort_compare};
@@ -40,7 +41,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Filter Column",
             [],
             None,
-            "{column: \"B\" (or 0-based offset), values?: [..], blanks?: bool, custom?: {op: \">\", value: \"10\", op2?, value2?, and?}, top?: {count, bottom?, percent?}, aboveAverage?: bool, clear?: bool}",
+            "{column: \"B\" (or 0-based offset), values?: [..], blanks?: bool, dates?: [{year, month?, day?, hour?, minute?, second?}], custom?: {op: \">\", value: \"10\", op2?, value2?, and?}, top?: {count, bottom?, percent?}, aboveAverage?: bool, clear?: bool}",
             has_doc,
             filter_by
         ),
@@ -574,13 +575,38 @@ fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("data.filterBy", "column outside the filter range"));
     }
     let off = col - af.range.start.col;
+    // A null `values` or `dates` is the same as leaving it out.
+    let given = |k: &str| p.get(k).filter(|v| !v.is_null());
     let crit = if bool_param(p, "clear").unwrap_or(false) {
         None
-    } else if let Some(vals) = p.get("values").and_then(Json::as_array) {
-        Some(FilterCriterion::Values {
-            values: vals.iter().map(super::edit::json_to_input).collect(),
-            blanks: bool_param(p, "blanks").unwrap_or(false),
-        })
+    } else if given("values").is_some()
+        || given("dates").is_some()
+        // `blanks: true` on its own keeps the empty cells (it used to clear the filter instead).
+        || (bool_param(p, "blanks") == Some(true) && ["custom", "top", "aboveAverage"].iter().all(|k| given(k).is_none()))
+    {
+        let vals = match given("values") {
+            Some(v) => v.as_array().ok_or_else(|| bad("data.filterBy", "`values` must be a list"))?.as_slice(),
+            None => &[],
+        };
+        let dates = match given("dates") {
+            Some(d) => {
+                d.as_array().ok_or_else(|| bad("data.filterBy", "`dates` must be a list"))?.iter().map(date_item_param).collect::<Result<Vec<_>>>()?
+            }
+            None => vec![],
+        };
+        let mut values: Vec<String> = vals.iter().map(super::edit::json_to_input).collect();
+        // Excel takes either values or date groups in one filter, never both: a selection that
+        // mixes them is kept as text, the dates becoming the texts their cells show.
+        let dates = if values.is_empty() || dates.is_empty() {
+            dates
+        } else {
+            let doc = s.doc()?;
+            if let Some(sh) = doc.wb.sheet(sheet) {
+                values = with_date_texts(&doc.wb, sh, af.range, col, values, &dates);
+            }
+            vec![]
+        };
+        Some(FilterCriterion::Values { values, blanks: bool_param(p, "blanks").unwrap_or(false), dates })
     } else if let Some(c) = p.get("custom") {
         let a = (c.get("op").and_then(Json::as_str).unwrap_or("=").to_string(), c.get("value").map(super::edit::json_to_input).unwrap_or_default());
         let b = c.get("op2").and_then(Json::as_str).map(|o| (o.to_string(), c.get("value2").map(super::edit::json_to_input).unwrap_or_default()));
@@ -608,6 +634,176 @@ fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     })?;
     let hidden = s.doc()?.wb.sheet(sheet).map(|sh| sh.rows.values().filter(|r| r.hidden).count()).unwrap_or(0);
     Ok(json!({"hiddenRows": hidden}))
+}
+
+/// `values` with the texts shown by the date cells of column `col` of a filter range that fall in
+/// `dates` added (each text once, ignoring case): the form Excel gives a selection that mixes values
+/// and date groups, since one filter holds one kind or the other (MS-OI29500 §18.3.2.8). The text
+/// is the value as formatted, not a formula Show Formulas would put there. Like Excel's, the result
+/// matches by text: another cell showing the same text passes too.
+fn with_date_texts(wb: &Workbook, sh: &Sheet, range: RangeRef, col: u32, mut values: Vec<String>, dates: &[DateGroupItem]) -> Vec<String> {
+    let set = DateSet::new(dates);
+    let mut seen: std::collections::HashSet<String> = values.iter().map(|v| v.to_ascii_lowercase()).collect();
+    for row in range.start.row + 1..=range.end.row {
+        let c = CellRef::new(row, col);
+        if cell_date(wb, sh, c).is_some_and(|d| set.contains(&d)) {
+            let t = crate::display::value_text(wb, sh, c);
+            if seen.insert(t.to_ascii_lowercase()) {
+                values.push(t);
+            }
+        }
+    }
+    values
+}
+
+/// Turns every value-list filter of a workbook that holds both values and date groups (a file from
+/// another program, a hand-made session) into text, as [`with_date_texts`] does for `data.filterBy`.
+/// Returns how many filters changed.
+pub fn normalize_mixed_filters(wb: &mut Workbook) -> usize {
+    let mixed = |c: &FilterCriterion| matches!(c, FilterCriterion::Values { values, dates, .. } if !values.is_empty() && !dates.is_empty());
+    let mut changes: Vec<(usize, Option<usize>, usize, FilterCriterion)> = vec![];
+    for (si, sh) in wb.sheets.iter().enumerate() {
+        let lists = sh
+            .autofilter
+            .iter()
+            .map(|a| (None, a.range, &a.criteria))
+            .chain(sh.tables.iter().enumerate().map(|(ti, t)| (Some(ti), t.range, &t.filter)));
+        for (table, range, criteria) in lists {
+            for (ci, (off, c)) in criteria.iter().enumerate() {
+                if let FilterCriterion::Values { values, blanks, dates } = c
+                    && mixed(c)
+                {
+                    let values = with_date_texts(wb, sh, range, range.start.col.saturating_add(*off), values.clone(), dates);
+                    changes.push((si, table, ci, FilterCriterion::Values { values, blanks: *blanks, dates: vec![] }));
+                }
+            }
+        }
+    }
+    let n = changes.len();
+    for (si, table, ci, crit) in changes {
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        let slot = match table {
+            None => sh.autofilter.as_mut().and_then(|a| a.criteria.get_mut(ci)),
+            Some(ti) => sh.tables.get_mut(ti).and_then(|t| t.filter.get_mut(ci)),
+        };
+        if let Some((_, c)) = slot {
+            *c = crit;
+        }
+    }
+    n
+}
+
+/// One `dates` entry of `data.filterBy`: `{year: 2026, month: 3}` is March 2026; the deepest
+/// field given is the grouping.
+fn date_item_param(j: &Json) -> Result<DateGroupItem> {
+    let err = || bad("data.filterBy", "a `dates` entry needs a year and valid month, day, hour, minute and second");
+    // A misspelt key (`months`) would otherwise widen the group without a word.
+    const KEYS: [&str; 6] = ["year", "month", "day", "hour", "minute", "second"];
+    match j.as_object() {
+        Some(o) if o.keys().all(|k| KEYS.contains(&k.as_str())) => {}
+        _ => return Err(err()),
+    }
+    // Months and days start at 1; hours, minutes and seconds at 0.
+    let field = |name: &str, min: u64, max: u64| -> Result<Option<u32>> {
+        match j.get(name) {
+            None => Ok(None),
+            Some(v) => v.as_u64().filter(|n| (min..=max).contains(n)).map(|n| Some(n as u32)).ok_or_else(err),
+        }
+    };
+    let year = field("year", 0, 9999)?.ok_or_else(err)?;
+    let fields = [field("month", 1, 12)?, field("day", 1, 31)?, field("hour", 0, 23)?, field("minute", 0, 59)?, field("second", 0, 59)?];
+    // Each field needs the ones above it (a day without a month means nothing).
+    let depth = fields.iter().take_while(|f| f.is_some()).count();
+    if fields.iter().skip(depth).any(Option::is_some) {
+        return Err(err());
+    }
+    let get = |i: usize| fields.get(i).copied().flatten().unwrap_or(0);
+    Ok(DateGroupItem {
+        grouping: DateGrouping::ALL.get(depth).copied().unwrap_or(DateGrouping::Second),
+        year: year as i32,
+        month: get(0),
+        day: get(1),
+        hour: get(2),
+        minute: get(3),
+        second: get(4),
+    })
+}
+
+/// The date and time a cell shows, when it is a number in a format that shows a calendar date.
+/// Times and durations (`h:mm`, `[h]:mm`) stay in the plain value list, as in Excel, and so do
+/// serials below 1 in the 1900 system (serial 0 is the fictitious 1900-01-00); the 1904 system's
+/// serial 0 is the real 1904-01-01. The serial is rounded to the second the cell shows, so a
+/// value a hair before midnight is filed under the day it displays.
+pub fn cell_date(wb: &Workbook, sh: &Sheet, c: CellRef) -> Option<gridcraft_core::date::DateTime> {
+    let n = sh.value(c).as_f64()?;
+    let first = match wb.date_system {
+        gridcraft_core::DateSystem::D1900 => 1.0,
+        gridcraft_core::DateSystem::D1904 => 0.0,
+    };
+    // `kind` reads the first section, the one a positive number uses: `0.00;yyyy-mm-dd` is no date.
+    let fmt = crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str());
+    if !n.is_finite() || n < first || fmt.kind() != gridcraft_numfmt::FormatKind::Date {
+        return None;
+    }
+    gridcraft_core::date::datetime_from_serial(wb.date_system, (n * 86_400.0).round() / 86_400.0)
+}
+
+/// A criterion's date groups, looked up by each level of a cell's date: at most six lookups per
+/// cell however many groups a file lists.
+struct DateSet(std::collections::HashSet<DateGroupItem>);
+
+impl DateSet {
+    fn new(items: &[DateGroupItem]) -> DateSet {
+        DateSet(items.iter().map(DateGroupItem::normalized).collect())
+    }
+
+    fn contains(&self, dt: &gridcraft_core::date::DateTime) -> bool {
+        DateGrouping::ALL.iter().any(|g| self.0.contains(&DateGroupItem::of(dt, *g)))
+    }
+}
+
+/// A value-list criterion, prepared once per filter instead of once per row.
+struct ValueFilter {
+    /// The checked values, ASCII-lowercased (the list matches case-insensitively).
+    values: std::collections::HashSet<String>,
+    blanks: bool,
+    dates: DateSet,
+    has_dates: bool,
+}
+
+impl ValueFilter {
+    fn new(values: &[String], blanks: bool, dates: &[DateGroupItem]) -> ValueFilter {
+        ValueFilter {
+            values: values.iter().map(|v| v.to_ascii_lowercase()).collect(),
+            blanks,
+            dates: DateSet::new(dates),
+            has_dates: !dates.is_empty(),
+        }
+    }
+
+    fn of(c: &FilterCriterion) -> Option<ValueFilter> {
+        match c {
+            FilterCriterion::Values { values, blanks, dates } => Some(ValueFilter::new(values, *blanks, dates)),
+            _ => None,
+        }
+    }
+
+    /// Does a cell pass? `date` gives the cell's [`cell_date`], asked only when needed. With date
+    /// groups a date cell passes by its date alone, as the dropdown's tree shows it; without them it
+    /// passes by the text it shows, so filters that list dates as text (Excel's form for a selection
+    /// that mixes dates and other values, older files, scripts) keep working. A date's serial number
+    /// does not count as its text.
+    fn pass(&self, v: &Value, text: &str, date: impl Fn() -> Option<gridcraft_core::date::DateTime>) -> bool {
+        if filter_blank(v) {
+            return self.blanks;
+        }
+        if self.has_dates
+            && let Some(d) = date()
+        {
+            return self.dates.contains(&d);
+        }
+        self.values.contains(&text.to_ascii_lowercase()) || (self.values.contains(&v.display().to_ascii_lowercase()) && date().is_none())
+    }
 }
 
 /// Does a value pass a custom comparison (`>`, `=*abc*`, `<>x`…)?
@@ -695,6 +891,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             col_stats.insert(i, (thr, avg));
         }
     }
+    let value_filters: Vec<Option<ValueFilter>> = af.criteria.iter().map(|(_, c)| ValueFilter::of(c)).collect();
     for row in r.start.row + 1..=r.end.row {
         let mut visible = true;
         for (i, (off, crit)) in af.criteria.iter().enumerate() {
@@ -702,13 +899,10 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             let v = sh.value(c);
             let text = crate::display::cell_text(wb, sh, c);
             let ok = match crit {
-                FilterCriterion::Values { values, blanks } => {
-                    if filter_blank(&v) {
-                        *blanks
-                    } else {
-                        values.iter().any(|x| x.eq_ignore_ascii_case(&text) || x.eq_ignore_ascii_case(&v.display()))
-                    }
-                }
+                FilterCriterion::Values { .. } => match value_filters.get(i).and_then(Option::as_ref) {
+                    Some(f) => f.pass(&v, &text, || cell_date(wb, sh, c)),
+                    None => true,
+                },
                 FilterCriterion::Custom { a, b, and } => {
                     let x = custom_ok(&v, &text, &a.0, &a.1);
                     match b {
@@ -780,32 +974,206 @@ fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
     })
 }
 
-/// Distinct display values of a filter column (for the dropdown list).
-pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool)> {
-    let Some(sh) = wb.sheet(sheet) else { return vec![] };
-    let Some(af) = &sh.autofilter else { return vec![] };
+/// A node of the dropdown's date tree: a year, a month of it, a day… down to the seconds when the
+/// column has times. Leaves carry the check state; a parent is checked when all its leaves are.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DateNode {
+    pub item: DateGroupItem,
+    /// `2026`, `March`, `05`; hours `14`, minutes and seconds `:05`.
+    pub label: String,
+    /// What the search box matches on a leaf, lowercased: the labels from the year down, then the
+    /// cells' display texts.
+    pub search: String,
+    pub checked: bool,
+    pub children: Vec<DateNode>,
+    /// Leaves under this node (1 for a leaf).
+    pub leaves: usize,
+    /// Leaves under this node that the search shows, and how many of those are checked. Set by
+    /// [`FilterList::refresh`]; a box is checked when `shown_on == shown`, mixed when between.
+    pub shown: usize,
+    pub shown_on: usize,
+}
+
+impl DateNode {
+    /// Does the search (lowercased) show this leaf?
+    pub fn matches(&self, needle: &str) -> bool {
+        needle.is_empty() || self.search.contains(needle)
+    }
+
+    /// Checks or unchecks the leaves under this node that the search shows; call
+    /// [`FilterList::refresh`] afterwards.
+    pub fn set_shown(&mut self, needle: &str, on: bool) {
+        if self.children.is_empty() {
+            if self.matches(needle) {
+                self.checked = on;
+            }
+        } else {
+            for c in &mut self.children {
+                c.set_shown(needle, on);
+            }
+        }
+    }
+
+    fn refresh(&mut self, needle: &str) {
+        if self.children.is_empty() {
+            let shown = self.matches(needle);
+            (self.shown, self.shown_on) = (usize::from(shown), usize::from(shown && self.checked));
+        } else {
+            (self.shown, self.shown_on) = (0, 0);
+            for c in &mut self.children {
+                c.refresh(needle);
+                self.shown += c.shown;
+                self.shown_on += c.shown_on;
+            }
+        }
+    }
+}
+
+/// What the filter dropdown lists: the date tree for date cells, and the other values flat.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FilterList {
+    pub dates: Vec<DateNode>,
+    pub values: Vec<(String, bool)>,
+}
+
+impl FilterList {
+    /// Recounts the date tree's `shown` and `shown_on` for a search (lowercased). One pass over the
+    /// tree: run it when the search or a check changes, not on every frame.
+    pub fn refresh(&mut self, needle: &str) {
+        for n in &mut self.dates {
+            n.refresh(needle);
+        }
+    }
+}
+
+fn date_label(item: &DateGroupItem) -> String {
+    match item.grouping {
+        DateGrouping::Year => item.year.to_string(),
+        DateGrouping::Month => {
+            gridcraft_core::date::MONTHS.get(item.month.saturating_sub(1) as usize).map_or_else(|| item.month.to_string(), |m| m.to_string())
+        }
+        DateGrouping::Day => format!("{:02}", item.day),
+        DateGrouping::Hour => format!("{:02}", item.hour),
+        DateGrouping::Minute => format!(":{:02}", item.minute),
+        DateGrouping::Second => format!(":{:02}", item.second),
+    }
+}
+
+/// Groups sorted leaves into nodes at `depth`, recursing to `leaf`; `path` holds the labels above.
+fn date_nodes(leaves: &[(DateGroupItem, BTreeSet<String>, bool)], depth: usize, leaf: usize, path: &str) -> Vec<DateNode> {
+    let Some(&grouping) = DateGrouping::ALL.get(depth) else { return vec![] };
+    let mut out: Vec<DateNode> = vec![];
+    let mut start = 0;
+    while let Some((first, ..)) = leaves.get(start) {
+        let key = DateGroupItem::of(&date_time_of(first), grouping);
+        let len = leaves.iter().skip(start).take_while(|(it, ..)| DateGroupItem::of(&date_time_of(it), grouping) == key).count().max(1);
+        let group = leaves.get(start..start + len).unwrap_or_default();
+        let label = date_label(&key);
+        let path = format!("{path} {label}");
+        let node = if depth >= leaf {
+            let mut search = path.clone();
+            for t in group.iter().flat_map(|(_, t, _)| t.iter()) {
+                search.push('\n');
+                search.push_str(t);
+            }
+            let checked = group.iter().any(|(.., on)| *on);
+            DateNode {
+                item: key,
+                label,
+                search: search.to_lowercase(),
+                checked,
+                children: vec![],
+                leaves: 1,
+                shown: 1,
+                shown_on: usize::from(checked),
+            }
+        } else {
+            let children = date_nodes(group, depth + 1, leaf, &path);
+            let sum = |f: fn(&DateNode) -> usize| children.iter().map(f).sum::<usize>();
+            let (leaves, shown_on) = (sum(|c| c.leaves), sum(|c| c.shown_on));
+            DateNode { item: key, label, search: String::new(), checked: false, leaves, shown: leaves, shown_on, children }
+        };
+        out.push(node);
+        start += len;
+    }
+    out
+}
+
+fn date_time_of(it: &DateGroupItem) -> gridcraft_core::date::DateTime {
+    gridcraft_core::date::DateTime {
+        year: it.year,
+        month: it.month,
+        day: it.day,
+        hour: it.hour,
+        minute: it.minute,
+        second: it.second,
+        ..Default::default()
+    }
+}
+
+/// The filter dropdown's list for a column: date cells as a Year › Month › Day tree (› Hour ›
+/// Minute › Second when any has a time), everything else as a flat list of distinct texts with
+/// `(Blanks)` for empty cells and empty text.
+pub fn filter_list(wb: &Workbook, sheet: usize, col: u32) -> FilterList {
+    let Some(sh) = wb.sheet(sheet) else { return FilterList::default() };
+    let Some(af) = &sh.autofilter else { return FilterList::default() };
     let off = col.saturating_sub(af.range.start.col);
     let selected: Option<&FilterCriterion> = af.criteria.iter().find(|(o, _)| *o == off).map(|(_, c)| c);
+    let filter = selected.and_then(ValueFilter::of);
     let mut seen = std::collections::BTreeMap::new();
+    // Every distinct text of a date stays searchable; a set keeps the inserts cheap however many there are.
+    let mut dates: std::collections::BTreeMap<DateGroupItem, (BTreeSet<String>, bool)> = std::collections::BTreeMap::new();
+    let mut timed = false;
     for row in af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000) {
         let c = CellRef::new(row, col);
         let v = sh.value(c);
+        let date = cell_date(wb, sh, c);
         let blank = filter_blank(&v);
         let t = if blank { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
-        let on = match selected {
-            Some(FilterCriterion::Values { values, blanks }) => {
-                if blank {
-                    *blanks
-                } else {
-                    values.iter().any(|x| x.eq_ignore_ascii_case(&t))
-                }
+        let on = filter.as_ref().is_none_or(|f| f.pass(&v, &t, || date));
+        match date {
+            Some(d) => {
+                timed |= d.hour != 0 || d.minute != 0 || d.second != 0;
+                let e = dates.entry(DateGroupItem::of(&d, DateGrouping::Second)).or_insert_with(|| (BTreeSet::new(), false));
+                e.0.insert(t);
+                e.1 |= on;
             }
-            _ => true,
-        };
-        let key = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
-        seen.entry((key, t)).or_insert(on);
+            None => {
+                let key = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
+                seen.entry((key, t)).or_insert(on);
+            }
+        }
     }
-    seen.into_iter().map(|((_, t), on)| (t, on)).collect()
+    // Leaves are days, or seconds when the column has times.
+    let leaf = if timed { 5 } else { 2 };
+    let leaf_grouping = DateGrouping::ALL.get(leaf).copied().unwrap_or(DateGrouping::Day);
+    let mut leaves: Vec<(DateGroupItem, BTreeSet<String>, bool)> = vec![];
+    for (item, (texts, on)) in dates {
+        let key = DateGroupItem::of(&date_time_of(&item), leaf_grouping);
+        match leaves.last_mut() {
+            Some(last) if DateGroupItem::of(&date_time_of(&last.0), leaf_grouping) == key => {
+                last.1.extend(texts);
+                last.2 |= on;
+            }
+            _ => leaves.push((key, texts, on)),
+        }
+    }
+    FilterList { dates: date_nodes(&leaves, 0, leaf, ""), values: seen.into_iter().map(|((_, t), on)| (t, on)).collect() }
+}
+
+/// The fewest `dates` that select the checked leaves the search shows (counts from
+/// [`FilterList::refresh`]): a year whose every leaf is shown and checked is one item, a partly
+/// selected one lists its selected months, and so on.
+pub fn checked_date_items(nodes: &[DateNode]) -> Vec<DateGroupItem> {
+    let mut out = vec![];
+    for n in nodes {
+        if n.shown_on == n.leaves {
+            out.push(n.item);
+        } else if n.shown_on > 0 {
+            out.extend(checked_date_items(&n.children));
+        }
+    }
+    out
 }
 
 /// Case-sensitive tie-break for text that is equal ignoring case: as in Excel, lowercase sorts
@@ -1509,6 +1877,254 @@ fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
 mod tests {
     use super::*;
 
+    /// A1:A8 with a header, dates over two years, a text and a blank, filtered.
+    fn dated_session() -> Session {
+        let mut s = Session::new();
+        s.new_workbook();
+        let rows = [["When"], ["2025-12-24"], ["2026-03-05"], ["2026-03-20"], ["2026-04-01"], ["n/a"], [""], ["2026-03-05"]];
+        s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:A8"})).unwrap();
+        s
+    }
+
+    fn tree(nodes: &[DateNode]) -> Vec<String> {
+        let mut out = vec![];
+        for n in nodes {
+            let kids = tree(&n.children);
+            out.push(if kids.is_empty() {
+                format!("{}{}", n.label, if n.checked { "" } else { "-" })
+            } else {
+                format!("{}[{}]", n.label, kids.join(" "))
+            });
+        }
+        out
+    }
+
+    #[test]
+    fn filter_list_groups_dates_by_year_month_and_day() {
+        let s = dated_session();
+        let list = filter_list(&s.doc().unwrap().wb, 0, 0);
+        assert_eq!(tree(&list.dates), ["2025[December[24]]", "2026[March[05 20] April[01]]"]);
+        assert_eq!(list.values, [("n/a".to_string(), true), ("(Blanks)".to_string(), true)]);
+    }
+
+    #[test]
+    fn filter_by_dates_shows_the_checked_months_and_days() {
+        let mut s = dated_session();
+        s.execute("data.filterBy", json!({"column": "A", "dates": [{"year": 2026, "month": 3}, {"year": 2025, "month": 12, "day": 24}]})).unwrap();
+        let wb = &s.doc().unwrap().wb;
+        let sh = wb.active().unwrap();
+        let hidden: Vec<u32> = (1..8).filter(|r| sh.is_row_hidden(*r)).collect();
+        assert_eq!(hidden, [4, 5, 6], "April, the text and the blank are hidden");
+        let list = filter_list(wb, 0, 0);
+        assert_eq!(tree(&list.dates), ["2025[December[24]]", "2026[March[05 20] April[01-]]"]);
+        assert_eq!(list.values, [("n/a".to_string(), false), ("(Blanks)".to_string(), false)]);
+        // A text value next to the dates: Excel keeps values or date groups, not both, so the dates
+        // are stored as the texts their cells show, and the same rows stay visible.
+        s.execute("data.filterBy", json!({"column": "A", "values": ["n/a"], "dates": [{"year": 2025}]})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        let hidden: Vec<u32> = (1..8).filter(|r| sh.is_row_hidden(*r)).collect();
+        assert_eq!(hidden, [2, 3, 4, 6, 7]);
+        let crit = sh.autofilter.as_ref().and_then(|a| a.criteria.first()).map(|(_, c)| c.clone());
+        let text_2025 = crate::display::cell_text(&s.doc().unwrap().wb, sh, CellRef::new(1, 0));
+        assert_eq!(crit, Some(FilterCriterion::Values { values: vec!["n/a".into(), text_2025], blanks: false, dates: vec![] }));
+    }
+
+    #[test]
+    fn checked_date_items_use_the_widest_fully_checked_groups() {
+        let s = dated_session();
+        let mut list = filter_list(&s.doc().unwrap().wb, 0, 0);
+        // Uncheck 20 March 2026.
+        if let Some(day) = list.dates.get_mut(1).and_then(|y| y.children.get_mut(0)).and_then(|m| m.children.get_mut(1)) {
+            day.checked = false;
+        }
+        list.refresh("");
+        let items = checked_date_items(&list.dates);
+        let g = |grouping, year, month, day| DateGroupItem { grouping, year, month, day, hour: 0, minute: 0, second: 0 };
+        assert_eq!(items, [g(DateGrouping::Year, 2025, 0, 0), g(DateGrouping::Day, 2026, 3, 5), g(DateGrouping::Month, 2026, 4, 0)]);
+    }
+
+    #[test]
+    fn a_search_limits_the_boxes_and_the_applied_dates_to_what_it_shows() {
+        let s = dated_session();
+        let mut list = filter_list(&s.doc().unwrap().wb, 0, 0);
+        list.refresh("march");
+        let counts = |l: &FilterList| l.dates.iter().map(|n| (n.shown, n.shown_on, n.leaves)).collect::<Vec<_>>();
+        assert_eq!(counts(&list), [(0, 0, 1), (2, 2, 3)], "2025 is hidden, 2026 shows its two March days");
+        // Unchecking 2026 during the search leaves April, which the search hides, checked.
+        list.dates[1].set_shown("march", false);
+        list.refresh("march");
+        assert_eq!(counts(&list), [(0, 0, 1), (2, 0, 3)]);
+        list.refresh("");
+        assert_eq!(counts(&list), [(1, 1, 1), (3, 1, 3)]);
+        // Apply under the search covers the shown, checked dates only: March, not the whole year or 2025.
+        list.dates[1].set_shown("march", true);
+        list.refresh("march");
+        let march = DateGroupItem { grouping: DateGrouping::Month, year: 2026, month: 3, day: 0, hour: 0, minute: 0, second: 0 };
+        assert_eq!(checked_date_items(&list.dates), [march]);
+    }
+
+    #[test]
+    fn dates_follow_the_second_shown_and_durations_stay_values() {
+        let mut s = Session::new();
+        s.new_workbook();
+        // A hair before midnight shows the next day; `[h]:mm` durations are not dates even past 24 hours.
+        s.execute("range.setValues", json!({"range": "A1", "values": [["When", "Took"], [46086.99999999, 0.5], [46086, 1.25]]})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "A2:A3", "code": "yyyy-mm-dd"})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "B2:B3", "code": "[h]:mm"})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:B3"})).unwrap();
+        let wb = &s.doc().unwrap().wb;
+        assert_eq!(tree(&filter_list(wb, 0, 0).dates), ["2026[March[05 06]]"]);
+        let took = filter_list(wb, 0, 1);
+        assert!(took.dates.is_empty());
+        assert_eq!(took.values.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["12:00", "30:00"]);
+    }
+
+    #[test]
+    fn a_mixed_selection_keeps_the_texts_the_dates_show_and_a_mixed_file_is_converted_on_open() {
+        let mut s = dated_session();
+        s.execute("home.numberFormat", json!({"range": "A2:A8", "code": "d mmm yyyy"})).unwrap();
+        s.execute("data.filterBy", json!({"column": "A", "values": ["n/a"], "dates": [{"year": 2026, "month": 3}]})).unwrap();
+        let wb = &s.doc().unwrap().wb;
+        let sh = wb.active().unwrap();
+        let crit = sh.autofilter.as_ref().and_then(|a| a.criteria.first()).map(|(_, c)| c.clone());
+        let want = ["n/a", "5 Mar 2026", "20 Mar 2026"].map(String::from).to_vec();
+        assert_eq!(crit, Some(FilterCriterion::Values { values: want.clone(), blanks: false, dates: vec![] }));
+        let hidden: Vec<u32> = (1..8).filter(|r| sh.is_row_hidden(*r)).collect();
+        assert_eq!(hidden, [1, 4, 6], "December, April and the blank are hidden");
+        // A file that holds both kinds in one filter is converted when it opens, with a warning.
+        let mut wb = (**wb).clone();
+        let march = DateGroupItem { grouping: DateGrouping::Month, year: 2026, month: 3, day: 0, hour: 0, minute: 0, second: 0 };
+        if let Some(af) = wb.sheet_mut(0).and_then(|sh| sh.autofilter.as_mut()) {
+            af.criteria = vec![(0, FilterCriterion::Values { values: vec!["n/a".into()], blanks: false, dates: vec![march] })];
+        }
+        let bytes = serde_json::to_vec(&wb).unwrap();
+        let (opened, warnings) = crate::io::open_bytes("mixed.json", &bytes).unwrap();
+        assert!(warnings.iter().any(|w| w.contains("mixed values and date groups")), "{warnings:?}");
+        let crit = opened.sheet(0).and_then(|sh| sh.autofilter.as_ref()).and_then(|a| a.criteria.first()).map(|(_, c)| c.clone());
+        assert_eq!(crit, Some(FilterCriterion::Values { values: want, blanks: false, dates: vec![] }));
+    }
+
+    #[test]
+    fn a_date_cell_is_not_matched_by_its_serial_number() {
+        let mut s = Session::new();
+        s.new_workbook();
+        // A2 is the plain number 46086, A3 the date with that serial (2026-03-05).
+        s.execute("range.setValues", json!({"range": "A1", "values": [["When"], [46086], ["2026-03-05"]]})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:A3"})).unwrap();
+        s.execute("data.filterBy", json!({"column": "A", "values": ["46086"], "dates": [{"year": 2025}]})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert!(!sh.is_row_hidden(1), "the number passes by its value");
+        assert!(sh.is_row_hidden(2), "the date is not in 2025, whatever its serial");
+    }
+
+    #[test]
+    fn filter_by_ignores_null_values_and_rejects_a_values_that_is_not_a_list() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["n"], [1], [5], [9]]})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:A4"})).unwrap();
+        let r = s.execute("data.filterBy", json!({"column": "A", "values": null, "dates": null, "custom": {"op": ">", "value": "4"}})).unwrap();
+        assert_eq!(r["hiddenRows"], json!(1), "the custom filter applies");
+        let err = s.execute("data.filterBy", json!({"column": "A", "values": "5"})).unwrap_err();
+        assert!(err.to_string().contains("`values` must be a list"), "{err}");
+    }
+
+    #[test]
+    fn blanks_alone_keeps_the_empty_cells() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["n"], [1], [null], [3]]})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:A4"})).unwrap();
+        let r = s.execute("data.filterBy", json!({"column": "A", "blanks": true})).unwrap();
+        assert_eq!(r["hiddenRows"], json!(2));
+        // With another kind of filter, `blanks` does not take over.
+        let r = s.execute("data.filterBy", json!({"column": "A", "blanks": true, "custom": {"op": ">", "value": "2"}})).unwrap();
+        assert_eq!(r["hiddenRows"], json!(2), "the custom filter keeps 3 only");
+    }
+
+    #[test]
+    fn times_add_hour_minute_and_second_levels() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["At"], ["2026-03-05 08:30"], ["2026-03-05 14:00:15"]]})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:A3"})).unwrap();
+        let list = filter_list(&s.doc().unwrap().wb, 0, 0);
+        assert_eq!(tree(&list.dates), ["2026[March[05[08[:30[:00]] 14[:00[:15]]]]]"]);
+        s.execute("data.filterBy", json!({"column": "A", "dates": [{"year": 2026, "month": 3, "day": 5, "hour": 14}]})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert!(sh.is_row_hidden(1));
+        assert!(!sh.is_row_hidden(2));
+    }
+
+    #[test]
+    fn date_groups_ignore_fields_below_their_grouping() {
+        // A year item that still carries a month (from a session file or an agent) covers the whole year.
+        let item = DateGroupItem { grouping: DateGrouping::Year, year: 2026, month: 3, day: 9, hour: 0, minute: 0, second: 0 };
+        let april = gridcraft_core::date::DateTime { year: 2026, month: 4, day: 1, ..Default::default() };
+        assert!(item.contains(&april));
+        assert!(DateSet::new(&[item]).contains(&april));
+        assert!(!DateSet::new(&[item]).contains(&gridcraft_core::date::DateTime { year: 2025, month: 4, day: 1, ..Default::default() }));
+    }
+
+    #[test]
+    fn dates_on_the_first_day_of_the_1904_system_are_grouped() {
+        let mut s = Session::new();
+        s.new_workbook();
+        Arc::make_mut(&mut s.doc_mut().unwrap().wb).date_system = gridcraft_core::DateSystem::D1904;
+        s.execute("range.setValues", json!({"range": "A1", "values": [["When"], [0.25], [0.5], [1.0]]})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "A2:A4", "code": "yyyy-mm-dd hh:mm"})).unwrap();
+        s.execute("range.setValues", json!({"range": "B1", "values": [["Time"], [0.25]]})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "B2", "code": "h:mm"})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:B4"})).unwrap();
+        let wb = &s.doc().unwrap().wb;
+        let list = filter_list(wb, 0, 0);
+        assert_eq!(tree(&list.dates), ["1904[January[01[06[:00[:00]] 12[:00[:00]]] 02[00[:00[:00]]]]]"]);
+        assert!(list.values.is_empty(), "{:?}", list.values);
+        // A time-only format below 1 is a time, not a date.
+        let times = filter_list(wb, 0, 1);
+        assert!(times.dates.is_empty());
+        assert_eq!(times.values.first().map(|(t, _)| t.as_str()), Some("6:00"));
+    }
+
+    #[test]
+    fn every_text_of_a_date_stays_searchable() {
+        // One day shown in nine formats: the dropdown's search must find the ninth text too.
+        let codes = ["yyyy-mm-dd", "d/m/yyyy", "m/d/yyyy", "dd.mm.yyyy", "d mmm yyyy", "mmm d, yyyy", "dddd d", "yyyy/mm/dd", "d mmmm yyyy"];
+        let mut s = Session::new();
+        s.new_workbook();
+        let mut rows = vec![json!(["When"])];
+        rows.extend(codes.iter().map(|_| json!(["2026-03-05"])));
+        s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+        for (i, code) in codes.iter().enumerate() {
+            s.execute("home.numberFormat", json!({"range": format!("A{}", i + 2), "code": code})).unwrap();
+        }
+        s.execute("data.filter", json!({"range": format!("A1:A{}", codes.len() + 1)})).unwrap();
+        let list = filter_list(&s.doc().unwrap().wb, 0, 0);
+        let day = &list.dates[0].children[0].children[0];
+        // The labels from the year down, then one line per distinct text.
+        assert_eq!(day.search.lines().count(), codes.len() + 1, "{:?}", day.search);
+        assert!(day.matches("5 march 2026"), "{:?}", day.search);
+    }
+
+    #[test]
+    fn filter_by_rejects_malformed_dates() {
+        let mut s = dated_session();
+        for bad in [
+            json!([{"month": 3}]),
+            json!([{"year": 2026, "day": 5}]),
+            json!([{"year": 2026, "month": 13}]),
+            json!([{"year": 2026, "months": 3}]),
+            json!([{"year": 2026, "month": 0}]),
+            json!([{"year": 2026, "month": 3, "day": 0}]),
+            json!({"year": 2026}),
+            json!([3]),
+        ] {
+            let err = s.execute("data.filterBy", json!({"column": "A", "dates": bad.clone()})).unwrap_err();
+            assert!(err.to_string().contains("dates"), "{bad}: {err}");
+        }
+    }
+
     #[test]
     fn filter_blanks_include_empty_text_and_formula_results() {
         let mut s = Session::new();
@@ -1517,7 +2133,7 @@ mod tests {
         s.execute("data.filter", json!({"range": "A1:B5"})).unwrap();
         let r = s.execute("data.filterBy", json!({"column": "B", "values": [], "blanks": true})).unwrap();
         assert_eq!(r["hiddenRows"], json!(2));
-        let vals = filter_values(&s.doc().unwrap().wb, 0, 1);
+        let vals = filter_list(&s.doc().unwrap().wb, 0, 1).values;
         // The `=""` result joins (Blanks) instead of showing as its own empty entry.
         assert!(!vals.iter().any(|(t, _)| t.is_empty()), "{vals:?}");
         let blanks: Vec<_> = vals.into_iter().filter(|(t, _)| t == "(Blanks)").collect();

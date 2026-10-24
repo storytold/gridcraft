@@ -51,7 +51,7 @@ with a file open.
 | `insert_chart` | `range`, `type`, `title?`, `subtype?`, `at?` | `insert.chart`. |
 | `create_table` | `range`, `style?`, `header?`, `name?` | `insert.table`. |
 | `sort_range` | `keys`, `range?`, `header?` | `data.sort`; keys are `"B"`, `"B desc"` or `{column, order}`. |
-| `filter` | `column`, `range?`, `values?`, `custom?`, `top?`, `blanks?`, `clear?` | `data.filterBy` (turns AutoFilter on when needed). |
+| `filter` | `column`, `range?`, `values?`, `dates?`, `custom?`, `top?`, `blanks?`, `clear?` | `data.filterBy` (turns AutoFilter on when needed). |
 | `open_workbook` / `save_workbook` / `new_workbook` | `path` / `path?` / `sample?` | Files (`.xlsx`, `.csv`, `.tsv`, `.json`, `.html`). |
 | `undo` / `redo` | `steps?` | History. |
 | `screenshot` | `path` | PNG of the window (Remote only). |
