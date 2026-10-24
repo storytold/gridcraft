@@ -35,7 +35,7 @@ impl Axis {
 
 /// One lane's width at this zoom (`zoom` is the sheet zoom, 1.0 = 100%).
 pub fn lane(zoom: f32) -> f32 {
-    (LANE * zoom.max(0.75)).round()
+    (LANE * crate::grid::heading_zoom(zoom)).round()
 }
 
 /// Thickness of the band for an outline `levels` deep: a lane per level plus one for the level
@@ -232,7 +232,14 @@ pub fn hit(geo: &Geo, sh: &Sheet, p: Pos2) -> Option<Action> {
     if !rows.contains(p) && !cols.contains(p) {
         return None;
     }
-    layout(geo, sh).buttons.into_iter().find(|b| b.rect.expand(1.5).contains(p)).map(|b| b.action)
+    // The hit areas reach 1.5 px past each button; small lanes (a small Cell grid size) make
+    // neighbours' areas overlap, so the button nearest the pointer wins.
+    layout(geo, sh)
+        .buttons
+        .into_iter()
+        .filter(|b| b.rect.expand(1.5).contains(p))
+        .min_by(|a, b| a.rect.center().distance_sq(p).total_cmp(&b.rect.center().distance_sq(p)))
+        .map(|b| b.action)
 }
 
 /// Paints the bands (in logical coordinates, before the grid is mirrored for right-to-left).
@@ -395,6 +402,28 @@ mod tests {
         assert!(!l.buttons.iter().any(|b| matches!(b.action, Action::Toggle { rows: true, group } if group.level == 2)));
         assert_eq!(l.brackets.len(), 1); // only the columns' bracket
         assert_eq!(outer.action.command(), ("data.showDetail", json!({"rows": "5:8", "level": 1})));
+    }
+
+    /// At a 50% Cell grid size neighbouring buttons' hit areas overlap: a click anywhere on a
+    /// button still picks that button, not the neighbour found first.
+    #[test]
+    fn small_buttons_hit_the_one_under_the_pointer() {
+        crate::grid::set_grid_scale(0.5);
+        let sh = sheet();
+        let g = geo(&sh);
+        let l = layout(&g, &sh);
+        let hits: Vec<_> = l
+            .buttons
+            .iter()
+            .flat_map(|b| {
+                [b.rect.center(), b.rect.left_top(), b.rect.right_bottom(), b.rect.left_bottom(), b.rect.right_top()].map(|p| (b.action, p))
+            })
+            .map(|(want, p)| (want, hit(&g, &sh, p)))
+            .collect();
+        crate::grid::set_grid_scale(1.0);
+        for (want, got) in hits {
+            assert_eq!(got, Some(want));
+        }
     }
 
     #[test]

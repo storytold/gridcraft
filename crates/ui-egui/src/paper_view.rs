@@ -85,7 +85,7 @@ pub fn grid_for(app: &mut SheetApp, wb: &Workbook, si: usize, sh: &Sheet, view: 
         Some(g) => g,
         None => Arc::new(PageGrid::build(wb, si, 0, 0)?),
     };
-    let z = ((sh.zoom as f32 / 100.0).clamp(0.1, 4.0) * DISPLAY_SCALE * base.scale.clamp(0.1, 4.0)).max(0.001);
+    let z = (grid::sheet_zoom(sh) * DISPLAY_SCALE * base.scale.clamp(0.1, 4.0)).max(0.001);
     let (x1, y1) = (scroll.x as f64 + (view.x / z) as f64, scroll.y as f64 + (view.y / z) as f64);
     let (need_r, need_c) = paper::need_for(sh, x1, y1);
     let g = if base.covers(need_r, need_c) {

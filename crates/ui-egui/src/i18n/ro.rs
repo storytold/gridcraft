@@ -220,6 +220,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark Mode" => "Mod întunecat",
         "Interface language" => "Limba interfeței",
         "Interface size" => "Dimensiunea interfeței",
+        "Cell grid size" => "Dimensiunea grilei de celule",
         "Auto" => "Automat",
         "Drag to freeze columns" => "Trageți pentru a îngheța coloane",
         "Drag to freeze rows" => "Trageți pentru a îngheța rânduri",

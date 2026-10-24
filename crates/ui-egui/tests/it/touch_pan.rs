@@ -89,3 +89,22 @@ fn one_finger_tap_still_selects_the_cell() {
     assert!(sel.active.row > 0, "a tap selects the tapped cell: {sel:?}");
     assert_eq!(h.state().view().scroll, egui::Vec2::ZERO);
 }
+
+/// The sheet follows the finger at any Cell grid size: at 200% a swipe covers half the sheet
+/// distance it does at 100%.
+#[test]
+fn a_touch_pan_follows_the_finger_at_any_grid_size() {
+    let pan = |percent: u32| {
+        let mut h = harness(blank());
+        h.state_mut().run("view.gridScale", serde_json::json!({"percent": percent})).unwrap();
+        h.run_steps(2);
+        let cells = h.state().grid.cells_rect.unwrap();
+        swipe(&mut h, cells.center() + egui::vec2(0.0, 100.0), egui::vec2(0.0, -200.0));
+        let y = h.state().view().scroll.y;
+        gridcraft_ui_egui::grid::set_grid_scale(1.0);
+        y
+    };
+    let (normal, double) = (pan(100), pan(200));
+    assert!(normal > 0.0);
+    assert!((double * 2.0 - normal).abs() < 1.0, "100%: {normal}, 200%: {double}");
+}

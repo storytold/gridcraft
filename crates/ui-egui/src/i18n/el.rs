@@ -307,6 +307,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable iterative calculation" => "Ενεργοποίηση επαναληπτικού υπολογισμού",
         "Calculation settings are saved with the workbook." => "Οι ρυθμίσεις υπολογισμού αποθηκεύονται στο βιβλίο εργασίας.",
         "Interface size" => "Μέγεθος περιβάλλοντος",
+        "Cell grid size" => "Μέγεθος πλέγματος κελιών",
         "Auto" => "Αυτόματο",
         "100%" => "100%",
         "Zoom to\nSelection" => "Μεγέθυνση στην\nεπιλογή",

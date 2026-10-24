@@ -321,6 +321,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable iterative calculation" => "Yinelemeli hesaplamayı etkinleştir",
         "Calculation settings are saved with the workbook." => "Hesaplama ayarları çalışma kitabıyla birlikte kaydedilir.",
         "Interface size" => "Arayüz boyutu",
+        "Cell grid size" => "Hücre ızgarası boyutu",
         "Auto" => "Otomatik",
         "100%" => "%100",
         "Zoom to\nSelection" => "Seçimi\nYakınlaştır",

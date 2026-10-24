@@ -80,6 +80,26 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
+    /// Cell grid size in percent (100 = as designed): multiplies the sheet zoom on screen, like a
+    /// display DPI setting, so the grid reads larger (or smaller) at 100% zoom while the ribbon
+    /// stays put and the zoom saved in the workbook is unchanged. Kept within
+    /// [`GRID_SCALE_MIN`]..=[`GRID_SCALE_MAX`]; a malformed or missing saved value reads as 100.
+    #[serde(deserialize_with = "lenient_grid_scale")]
+    pub grid_scale: u16,
+}
+
+pub const GRID_SCALE_MIN: u16 = 50;
+pub const GRID_SCALE_MAX: u16 = 300;
+
+/// A requested cell grid size, rounded and clamped to the supported range; `None` when it isn't
+/// a finite number.
+pub fn clamp_grid_scale(percent: f64) -> Option<u16> {
+    percent.is_finite().then(|| percent.round().clamp(GRID_SCALE_MIN as f64, GRID_SCALE_MAX as f64) as u16)
+}
+
+fn lenient_grid_scale<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u16, D::Error> {
+    let v = Json::deserialize(d)?;
+    Ok(v.as_f64().and_then(clamp_grid_scale).unwrap_or(100))
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
@@ -112,6 +132,7 @@ impl Default for UiState {
             keytip_invoke: None,
             language: i18n::Language::En,
             interface_scale: 100,
+            grid_scale: 100,
         }
     }
 }
@@ -138,6 +159,11 @@ impl UiState {
     /// The zoom factor for the interface size preference.
     pub fn zoom_factor(&self) -> f32 {
         clamp_interface_scale(self.interface_scale as f64).unwrap_or(100) as f32 / 100.0
+    }
+
+    /// The factor for the cell grid size preference.
+    pub fn grid_factor(&self) -> f32 {
+        clamp_grid_scale(self.grid_scale as f64).unwrap_or(100) as f32 / 100.0
     }
 
     pub fn theme_mode(&self) -> &'static str {
@@ -670,6 +696,22 @@ impl SheetApp {
                         Ok(json!({"percent": v}))
                     }
                     None => Err(format!("missing `percent` ({INTERFACE_SCALE_MIN}–{INTERFACE_SCALE_MAX}, or \"auto\")")),
+                }
+            }
+            "view.gridScale" => {
+                // `{"percent": 130}` or `{"percent": "default"}`; out-of-range values are clamped.
+                let percent = match p.get("percent") {
+                    Some(Json::String(s)) if s.eq_ignore_ascii_case("default") || s.eq_ignore_ascii_case("auto") => Some(100),
+                    Some(v) => v.as_f64().and_then(clamp_grid_scale),
+                    None => None,
+                };
+                match percent {
+                    Some(v) => {
+                        self.ui.grid_scale = v;
+                        grid::set_grid_scale(self.ui.grid_factor());
+                        Ok(json!({"percent": v}))
+                    }
+                    None => Err(format!("missing `percent` ({GRID_SCALE_MIN}–{GRID_SCALE_MAX}, or \"default\")")),
                 }
             }
             "app.language.set" => {
@@ -1232,6 +1274,7 @@ impl SheetApp {
             ctx.set_zoom_factor(zoom);
             ctx.request_repaint();
         }
+        grid::set_grid_scale(self.ui.grid_factor());
         control::poll(self, ctx);
         self.guard_window_close(ctx);
         // Files read asynchronously (web file picker, dropped files).

@@ -229,6 +229,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Tối",
         "Interface language" => "Ngôn ngữ giao diện",
         "Interface size" => "Kích thước giao diện",
+        "Cell grid size" => "Kích thước lưới ô",
         "Auto" => "Tự động",
         "Drag to freeze columns" => "Kéo để cố định cột",
         "Drag to freeze rows" => "Kéo để cố định hàng",

@@ -213,6 +213,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark Mode" => "Tryb ciemny",
         "Interface language" => "Język interfejsu",
         "Interface size" => "Rozmiar interfejsu",
+        "Cell grid size" => "Rozmiar siatki komórek",
         "Auto" => "Automatyczny",
         "Drag to freeze columns" => "Przeciągnij, aby zablokować kolumny",
         "Drag to freeze rows" => "Przeciągnij, aby zablokować wiersze",

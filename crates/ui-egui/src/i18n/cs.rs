@@ -243,6 +243,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Allow Edit\nRanges" => "Povolit úpravy\noblastí",
         "Allow Edit Ranges" => "Povolit úpravy oblastí",
         "Interface size" => "Velikost rozhraní",
+        "Cell grid size" => "Velikost mřížky buněk",
         "Auto" => "Automaticky",
         "Drag to freeze columns" => "Přetažením ukotvíte sloupce",
         "Drag to freeze rows" => "Přetažením ukotvíte řádky",

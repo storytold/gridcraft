@@ -226,6 +226,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Dark" => "Donker",
         "Interface language" => "Weergavetaal",
         "Interface size" => "Grootte van de interface",
+        "Cell grid size" => "Grootte van het celraster",
         "Auto" => "Automatisch",
         "Drag to freeze columns" => "Sleep om kolommen te blokkeren",
         "Drag to freeze rows" => "Sleep om rijen te blokkeren",

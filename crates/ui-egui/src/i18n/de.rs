@@ -335,6 +335,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable iterative calculation" => "Iterative Berechnung aktivieren",
         "Calculation settings are saved with the workbook." => "Berechnungseinstellungen werden mit der Arbeitsmappe gespeichert.",
         "Interface size" => "Größe der Benutzeroberfläche",
+        "Cell grid size" => "Größe des Zellrasters",
         "Auto" => "Automatisch",
         "100%" => "100%",
         "Zoom to\nSelection" => "Zoom auf die\nAuswahl",
