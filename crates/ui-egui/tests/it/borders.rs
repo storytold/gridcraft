@@ -197,3 +197,42 @@ fn frozen_merged_range_keeps_its_outline_when_scrolled() {
         "B's segments end at the freeze line: {right_ends:?} vs {freeze_x}"
     );
 }
+
+/// #2534: changing only the number format of a multi-cell selection in Format Cells kept the
+/// active cell's whole style and stamped its borders and fill onto every selected cell.
+#[test]
+fn format_cells_number_change_on_a_range_keeps_each_cells_borders_and_fill() {
+    let mut h = harness();
+    h.state_mut().run("range.setValues", json!({"range": "A1", "values": vec![[1, 2, 3, 4]; 6]})).unwrap();
+    h.state_mut().run("home.borders", json!({"range": "A1:D6", "preset": "outside"})).unwrap();
+    h.state_mut().run("home.formatCells", json!({"range": "C3", "style": {"fill": {"pattern": "Solid", "fg": {"Rgb": 0xffcc00}}}})).unwrap();
+    h.state_mut().run("selection.set", json!({"range": "A1:D6"})).unwrap();
+    h.run_steps(6);
+    let style = |h: &egui_kittest::Harness<'static, SheetApp>, cell: &str| {
+        let doc = h.state().session.active().unwrap();
+        let sheet = doc.wb.active().unwrap();
+        doc.wb.styles.get(sheet.style_id(CellRef::parse(cell).unwrap())).clone()
+    };
+    let cells = ["A1", "B2", "C3", "D6", "B1", "A4", "D3", "C6"];
+    let before: Vec<_> = cells.iter().map(|c| style(&h, c)).collect();
+    assert_eq!(borders(&h, "B2"), Borders::default());
+    h.state_mut().open_dialog("formatCells", json!({"tab": "Number"}));
+    h.run_steps(6);
+    h.get_by_label("Currency").click();
+    h.run_steps(6);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(6);
+    assert!(h.state().dialog.is_none());
+    let currency = gridcraft_engine::cmd::format::format_code_for("Currency");
+    for (cell, old) in cells.iter().zip(&before) {
+        let new = style(&h, cell);
+        assert_eq!(new.num_fmt.as_str(), currency, "{cell} gets the currency format");
+        assert_eq!(new.borders, old.borders, "{cell} keeps its borders");
+        assert_eq!(new.fill, old.fill, "{cell} keeps its fill");
+        assert_eq!(new.font, old.font, "{cell} keeps its font");
+    }
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    for (cell, old) in cells.iter().zip(&before) {
+        assert_eq!(&style(&h, cell), old, "undo restores {cell}");
+    }
+}
