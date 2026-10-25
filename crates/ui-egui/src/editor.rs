@@ -1,20 +1,10 @@
 //! In-cell / formula-bar editing state: point mode, reference colouring, function
 //! autocomplete and argument hints.
 
-use egui::Color32;
 use gridcraft_engine::core::{CellRef, RangeRef};
 
-/// Colours for references in a formula being edited (our own palette).
-pub const REF_COLORS: [Color32; 8] = [
-    Color32::from_rgb(0x2E, 0x6F, 0xD8),
-    Color32::from_rgb(0xD0, 0x3C, 0x3C),
-    Color32::from_rgb(0x7A, 0x4F, 0xC9),
-    Color32::from_rgb(0x2B, 0x9A, 0x4A),
-    Color32::from_rgb(0xC2, 0x5E, 0x1E),
-    Color32::from_rgb(0x1D, 0x92, 0xA6),
-    Color32::from_rgb(0xB8, 0x3B, 0x8E),
-    Color32::from_rgb(0x8A, 0x7A, 0x1F),
-];
+/// How many distinct reference colours a formula cycles through (`Tokens::ref_colors`).
+pub const REF_COLOR_COUNT: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct EditState {
@@ -28,6 +18,9 @@ pub struct EditState {
     pub from_formula_bar: bool,
     /// Caret position (char index), mirrored from the text widget.
     pub caret: usize,
+    /// The other end of the selected text (char index), mirrored like `caret`; equal to `caret`
+    /// when nothing is selected.
+    pub anchor: usize,
     /// The reference most recently inserted by point mode (byte range) — arrows/clicks replace it.
     pub point: Option<(usize, usize)>,
     /// Where point mode's keyboard cursor is.
@@ -39,6 +32,9 @@ pub struct EditState {
     pub request_focus: bool,
     /// The text changed programmatically: push `caret` into the widget on the next frame.
     pub sync_caret: bool,
+    /// A dialog opened over the edit has the keyboard: when the editor takes it back without a
+    /// change to the caret, the selected text (`anchor`..`caret`) stays selected.
+    pub keep_selection: bool,
     /// Column AutoComplete: the full entry the typed text completes to.
     pub completion: Option<String>,
     /// Move the caret to the end on the next frame.
@@ -56,6 +52,7 @@ impl EditState {
             enter_mode,
             from_formula_bar,
             caret,
+            anchor: caret,
             point: None,
             point_cell: None,
             point_anchor: None,
@@ -63,6 +60,7 @@ impl EditState {
             ac_index: 0,
             request_focus: true,
             sync_caret: true,
+            keep_selection: false,
             caret_to_end: true,
             completion: None,
         }
@@ -110,6 +108,27 @@ impl EditState {
         self.caret = self.text.get(..new_end).map(|s| s.chars().count()).unwrap_or(0);
         self.caret_to_end = false;
         self.sync_caret = true;
+    }
+
+    /// Inserts `t` at the caret as typed text (Paste Names), in place of the selected text: the
+    /// caret ends after it, and point mode starts afresh.
+    pub fn insert_at_caret(&mut self, t: &str) {
+        // When code moved the caret this frame (`sync_caret`), the widget has not yet stored it, so `anchor` is out of
+        // date and the name goes in at the caret.
+        let (from, to) = if self.sync_caret { (self.caret, self.caret) } else { (self.anchor.min(self.caret), self.anchor.max(self.caret)) };
+        let byte = |c: usize| self.text.char_indices().nth(c).map(|(i, _)| i).unwrap_or(self.text.len());
+        let (Some(a), Some(b)) = (self.text.get(..byte(from)), self.text.get(byte(to)..)) else { return };
+        self.text = format!("{a}{t}{b}");
+        self.point = None;
+        self.caret = from + t.chars().count();
+        self.anchor = self.caret;
+        // A function suggestion shown before the name went in no longer fits the text.
+        self.autocomplete.clear();
+        self.ac_index = 0;
+        self.completion = None;
+        self.caret_to_end = false;
+        self.sync_caret = true;
+        self.request_focus = true;
     }
 
     /// Add another argument after the current pointed reference. Keep only the new reference
@@ -293,7 +312,7 @@ pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, 
                     seen.len() - 1
                 }
             };
-            out.push((start + offset, end + offset, range, sheet, idx % REF_COLORS.len()));
+            out.push((start + offset, end + offset, range, sheet, idx % REF_COLOR_COUNT));
             continue;
         }
         i += 1;
@@ -377,6 +396,21 @@ mod tests {
         assert!(e.can_point());
         let e2 = EditState::new(0, CellRef::new(0, 0), "hello".into(), true, false);
         assert!(!e2.can_point());
+    }
+
+    #[test]
+    fn a_pasted_name_replaces_the_selected_text() {
+        let mut e = EditState::new(0, CellRef::new(0, 0), "=OldName+1".into(), false, false);
+        e.sync_caret = false;
+        (e.anchor, e.caret) = (8, 1);
+        e.autocomplete = vec!["SUM".into()];
+        e.insert_at_caret("Sales");
+        assert_eq!((e.text.as_str(), e.caret, e.anchor), ("=Sales+1", 6, 6));
+        assert!(e.autocomplete.is_empty(), "the earlier function suggestion is gone");
+        // Nothing selected: the name goes in at the caret.
+        e.sync_caret = false;
+        e.insert_at_caret("Rate");
+        assert_eq!((e.text.as_str(), e.caret), ("=SalesRate+1", 10));
     }
 
     #[test]

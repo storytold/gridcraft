@@ -153,6 +153,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove Arrows" => "Bỏ mũi tên",
         "Show Formulas" => "Hiện công thức",
         "Error Checking" => "Kiểm tra lỗi",
+        "Circular References" => "Tham chiếu vòng",
         "Evaluate Formula" => "Đánh giá công thức",
         "Watch Window" => "Cửa sổ theo dõi",
         "Calculation\nOptions" => "Tùy chọn\ntính toán",
@@ -330,6 +331,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Go to Header" => "Đi tới đầu trang",
         "Different First Page" => "Trang đầu khác",
         "Different Odd & Even Pages" => "Trang chẵn lẻ khác nhau",
+        "Scale with Document" => "Co giãn theo tài liệu",
+        "Align with Page Margins" => "Căn theo lề trang",
         "Go to Footer" => "Đi tới chân trang",
         "Ruler" => "Thước",
         // File › Backstage view.

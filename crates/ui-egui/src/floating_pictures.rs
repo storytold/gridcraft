@@ -95,6 +95,13 @@ impl Cache {
             }
             None => (None, u32::MAX),
         };
+        // Eviction only frees entries used before this frame, so a workbook covered in same-frame
+        // pictures can leave the cache unable to make room. Then draw the texture without
+        // retaining it: the handle is dropped at the end of the frame and the GPU memory goes
+        // with it, instead of the budget being outflanked (finding: cache admission).
+        if self.entries.len() >= MAX_CACHE_ITEMS || self.bytes.saturating_add(bytes) > MAX_CACHE_BYTES {
+            return texture;
+        }
         self.bytes = self.bytes.saturating_add(bytes);
         self.entries.insert(key, Entry { texture: texture.clone(), bytes, side, used: frame });
         texture
@@ -212,13 +219,24 @@ mod tests {
         }
         assert!(cache.bytes <= MAX_CACHE_BYTES, "{} bytes kept", cache.bytes);
         assert!(cache.entries.len() < data.len());
-        // Many on screen at once, over the budget: every one keeps its texture, frame after frame.
+        // Many on screen at once, over the budget: each still gets a texture this frame, but the
+        // cache cannot grow past its budget whatever the workbook shows. Eight of the 16 MB
+        // textures fit the 128 MB budget, and those stay pinned; the rest re-upload each frame
+        // instead of being retained over it (finding: cache admission).
+        // Two frames pass so the rehearsal's entries are old enough to be evictable.
+        frame(&ctx);
+        frame(&ctx);
         let shown: Vec<_> = data.iter().enumerate().take(12).map(|(i, d)| cache.texture(&ctx, key(1, i as u32, d), d, 2048).unwrap().id()).collect();
         for _ in 0..3 {
             frame(&ctx);
             for (i, d) in data.iter().enumerate().take(12) {
-                assert_eq!(cache.texture(&ctx, key(1, i as u32, d), d, 2048).map(|t| t.id()), Some(shown[i]));
+                let id = cache.texture(&ctx, key(1, i as u32, d), d, 2048).unwrap().id();
+                if i < 8 {
+                    assert_eq!(id, shown[i], "a picture that fits keeps its texture");
+                }
             }
+            assert!(cache.bytes <= MAX_CACHE_BYTES, "{} bytes kept", cache.bytes);
+            assert!(cache.entries.len() <= 8, "{} entries kept", cache.entries.len());
         }
     }
 

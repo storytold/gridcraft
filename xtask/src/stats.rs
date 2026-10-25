@@ -2,6 +2,9 @@
 
 use std::path::Path;
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt as _;
+
 #[derive(Default, Clone, Copy)]
 struct Counts {
     files: usize,
@@ -10,7 +13,24 @@ struct Counts {
     proptests: usize,
 }
 
-fn walk(dir: &Path, c: &mut Counts) {
+fn walk(dir: &Path, c: &mut Counts, seen: &mut std::collections::HashSet<u64>, budget: &mut usize) {
+    if *budget == 0 {
+        // Hard stop for pathological trees: two directory symlinks pointing at each other
+        // would otherwise be walked exponentially.
+        return;
+    }
+    // Directory identities (dev+inode on unix) make a symlink to a visited directory a
+    // no-op, not another exponential branch of the scan.
+    #[cfg(unix)]
+    let id = std::fs::metadata(dir).ok().and_then(|m| m.dev().checked_mul(1 << 60).and_then(|d| d.checked_add(m.ino())));
+    #[cfg(not(unix))]
+    let id: Option<u64> = None;
+    if let Some(id) = id
+        && !seen.insert(id)
+    {
+        return;
+    }
+    *budget -= 1;
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
@@ -18,10 +38,11 @@ fn walk(dir: &Path, c: &mut Counts) {
         let p = e.path();
         let name = e.file_name();
         let name = name.to_string_lossy();
+        // A symlinked directory is descended only if its identity is new (checked above).
         if p.is_dir() {
             // Nested fuzz workspaces and build output are not part of the crate.
             if name != "target" && name != "fuzz" && !name.starts_with('.') {
-                walk(&p, c);
+                walk(&p, c, seen, budget);
             }
         } else if name.ends_with(".rs")
             && let Ok(s) = std::fs::read_to_string(&p)
@@ -71,7 +92,7 @@ pub fn run(_root: &Path, exact: bool) -> Result<(), String> {
             continue;
         };
         let mut c = Counts::default();
-        walk(&dir, &mut c);
+        walk(&dir, &mut c, &mut std::collections::HashSet::new(), &mut 10_000);
         let ex = if exact { exact_tests(&name) } else { None };
         rows.push((name, c, ex));
     }

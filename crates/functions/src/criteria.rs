@@ -264,15 +264,27 @@ pub(crate) fn has_wildcards(pattern: &str) -> bool {
 pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
     let p = tokenize(pattern);
     let t = lower_chars(text);
-    match_from(&p, &t, true).is_some()
+    let mut budget = MAX_STEPS;
+    match_from(&p, &t, true, &mut budget).is_some()
 }
 
+/// Steps one `match_from` call may take. An honest match against Excel's 32,767-character
+/// cell ceiling costs a few hundred thousand; a hostile one (star churn) is capped instead
+/// of quadratic — a call that spends more gives up and reports no match, quiet degradation
+/// like the other work caps on far-past-realistic input.
+const MAX_STEPS: u64 = 1 << 26;
+
 /// Greedy-free matcher: returns the matched length of `t` when `p` matches a prefix of `t`
-/// (or all of `t` when `whole`). Iterative with backtracking on the last star (linear-ish).
-fn match_from(p: &[Tok], t: &[char], whole: bool) -> Option<usize> {
+/// (or all of `t` when `whole`). Iterative with backtracking on the last star (linear-ish,
+/// quadratic at worst). `(budget, whole)`: the budget is spent one per loop step; a call that
+/// would spend more than it has gives up and reports no match — quiet degradation, as with the
+/// other work caps on far-past-realistic input (an honest match against Excel's 32,767-char
+/// cell ceiling costs a few hundred thousand steps).
+fn match_from(p: &[Tok], t: &[char], whole: bool, budget: &mut u64) -> Option<usize> {
     let (mut pi, mut ti) = (0usize, 0usize);
     let mut star: Option<(usize, usize)> = None;
     loop {
+        *budget = budget.checked_sub(1)?;
         if pi == p.len() && (!whole || ti == t.len()) {
             return Some(ti);
         }
@@ -307,10 +319,32 @@ fn match_from(p: &[Tok], t: &[char], whole: bool) -> Option<usize> {
 pub(crate) fn wildcard_find(pattern: &str, text: &str, start: usize) -> Option<usize> {
     let p = tokenize(pattern);
     let t = lower_chars(text);
+    // A leading run of stars never matters for a prefix match (it consumes nothing), so
+    // dropping it lets the anchor below skip linearly through the text (#2382).
+    let skip = p.iter().take_while(|tk| matches!(tk, Tok::Star)).count();
+    let p = &p[skip.min(p.len())..];
     if p.is_empty() {
         return if start <= t.len() { Some(start) } else { None };
     }
-    (start..t.len()).find(|&i| t.get(i..).is_some_and(|rest| match_from(&p, rest, false).is_some()))
+    // The first token that consumes a character anchors the scan: a literal skips straight
+    // to its occurrences, and after leading `?`s each attempt only pays for the `?` run and
+    // one suffix try. Every attempt shares one budget, so the total work stays flat.
+    let anys = p.iter().take_while(|tk| matches!(tk, Tok::Any)).count();
+    let anchor = p.get(anys);
+    let mut budget = MAX_STEPS;
+    let mut i = start;
+    while i < t.len() {
+        let hit = match (anchor, t.get(i + anys)) {
+            (Some(Tok::Char(c)), Some(rest)) => *rest == *c && match_from(p, &t[i..], false, &mut budget).is_some(),
+            (Some(Tok::Char(_)), None) => break, // the anchor char no longer exists ahead
+            _ => match_from(p, &t[i..], false, &mut budget).is_some(),
+        };
+        if hit {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Exact-or-wildcard equality used by MATCH/VLOOKUP/XLOOKUP exact modes: text with wildcards

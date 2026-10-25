@@ -92,7 +92,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart Properties",
             ["Chart Design"],
             None,
-            "{chart?: id, type?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, quartiles?: exclusive|inclusive, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
+            "{chart?: id, type?, subtype?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, quartiles?: exclusive|inclusive, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
             has_doc,
             chart_set
         ),
@@ -582,6 +582,7 @@ pub fn chart_kind(t: &str, sub: &str) -> ChartKind {
         ("pie", _) => ChartKind::Pie,
         ("doughnut", _) => ChartKind::Doughnut,
         ("area", "stacked") => ChartKind::AreaStacked,
+        ("area", "stacked100") => ChartKind::AreaStacked100,
         ("area", _) => ChartKind::Area,
         ("scatter", "lines") => ChartKind::ScatterLines,
         ("scatter", _) => ChartKind::Scatter,

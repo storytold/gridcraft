@@ -214,7 +214,9 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             if let Some(w) = web_sys::window()
                 && let gridcraft_engine::links::LinkKind::External(url) = gridcraft_engine::links::classify(url)
             {
-                let _ = w.open_with_url_and_target(&url, "_blank");
+                // With `noopener` the new browsing context can't hold a reference back to the
+                // editor window and navigate it while the user reads the linked page.
+                let _ = w.open_with_url_and_target(&url, "_blank,noopener");
             }
         })),
         inbox: Some(inbox),

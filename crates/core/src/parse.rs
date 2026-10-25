@@ -371,10 +371,16 @@ fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>
     if let Some((d, f)) = parse_date(t, sys) {
         return Some((d, Some(f)));
     }
-    // date + time: split at the last space(s) before a time-looking tail.
+    // date + time: split at the last space(s) before a time-looking tail. Only splits where the
+    // tail could be a time are tried: a long tail can't parse, so this stays linear in the text
+    // instead of reparsing every prefix for every space (one long text field quadratic).
     for (i, _) in t.match_indices(' ') {
-        let (a, b) = (t.get(..i)?, t.get(i + 1..)?);
-        if let (Some((d, _)), Some((tf, _, _))) = (parse_date(a, sys), parse_time(b)) {
+        let Some(b) = t.get(i + 1..) else { continue };
+        let bytes = b.as_bytes();
+        if b.len() > 36 || !bytes.first().is_some_and(u8::is_ascii_digit) || !b.contains(':') {
+            continue;
+        }
+        if let (Some((d, _)), Some((tf, _, _))) = (t.get(..i).and_then(|a| parse_date(a, sys)), parse_time(b)) {
             return Some((d + tf, Some("m/d/yyyy h:mm")));
         }
     }
@@ -398,6 +404,20 @@ mod tests {
             assert_eq!(parse_number_text(&s), None, "{s}");
         }
         assert_eq!(parse_number_text("1 1/2"), Some(1.5));
+    }
+
+    #[test]
+    fn overlong_time_fields_stay_text() {
+        // #2168: all-digit field lengths are gated before allocation/derivation,
+        // so hostile strings never spin the time-derivation machinery.
+        let big = "9".repeat(500);
+        for s in [format!("{big}:00"), format!("1:00:{big}"), format!("{big}:{big}:{big}"), format!("1:0{big}"), format!("00:00:{big}.1")] {
+            assert_eq!(p(&s).value, Value::text(s.as_str()), "{s}");
+            assert_eq!(parse_number_text(&s), None, "{s}");
+        }
+        // Within the gate, times still work.
+        assert_eq!(p("01:02:03").value, Value::number(3.0 / 86_400.0 + 1.0 / 24.0 + 2.0 / 1440.0));
+        assert_eq!(parse_number_text("13:14:15"), Some(0.5515625));
     }
 
     #[test]

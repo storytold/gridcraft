@@ -2,6 +2,7 @@
 //! transform, and headers are edited in place, committed on a click elsewhere, and undoable.
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, pos2, vec2};
+use egui_kittest::kittest::Queryable;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_engine::model::SheetViewMode;
@@ -161,6 +162,27 @@ fn the_first_page_edits_its_own_header_when_different_first_page_is_on() {
     let pr = h.state().session.doc().unwrap().wb.active().unwrap().print.clone();
     assert_eq!(pr.first_header, "&CCover page");
     assert_eq!(pr.header, "&LLeft", "the other pages keep their header");
+}
+
+#[test]
+fn scale_with_document_and_align_with_page_margins_are_check_boxes_on_the_header_and_footer_tab() {
+    let mut h = fixture();
+    gridcraft_ui_egui::paper_view::start_editing(h.state_mut());
+    h.run_steps(4);
+    let options = |h: &Harness| {
+        let pr = &h.state().session.doc().unwrap().wb.active().unwrap().print;
+        (pr.hf_scale_with_doc, pr.hf_align_with_margins)
+    };
+    assert_eq!(options(&h), (true, true));
+    h.get_by_label("Scale with Document").click();
+    h.run_steps(3);
+    assert_eq!(options(&h), (false, true));
+    h.get_by_label("Align with Page Margins").click();
+    h.run_steps(3);
+    assert_eq!(options(&h), (false, false));
+    assert!(h.state().grid.hf_edit.is_some(), "the header stays in edit");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(options(&h), (false, true));
 }
 
 #[test]

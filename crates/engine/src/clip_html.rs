@@ -267,6 +267,12 @@ fn attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
     }
 }
 
+/// Entities are at most `&` + 8 chars + `;` (a decimal code point at most 7 digits deep), so
+/// the semicolon is only looked for in the first 12 bytes — and `unwrap_or(rest)` never falls
+/// back to scanning the remainder of the text either (that turn re-scans per `&`, quadratic
+/// when a paste holds many bare `&`).
+const ENTITY_WINDOW: usize = 12;
+
 /// HTML text to plain text: entities decoded, whitespace runs (and `<br>`) collapsed to one
 /// space, trimmed. The text only serves to match a cell with the tab-separated text.
 fn decode(raw: &str) -> String {
@@ -275,7 +281,9 @@ fn decode(raw: &str) -> String {
     while let Some(amp) = rest.find('&') {
         out.push_str(rest.get(..amp).unwrap_or_default());
         rest = rest.get(amp..).unwrap_or_default();
-        let semi = rest.get(..12).unwrap_or(rest).find(';');
+        // `.min(len)` (not an `unwrap_or(rest)`) — a `get(..12)` that fails on a multibyte
+        // boundary used to fall back to the complete suffix, re-scanning per '&'.
+        let semi = rest.get(..ENTITY_WINDOW.min(rest.len())).and_then(|w| w.find(';'));
         let entity = semi.and_then(|e| rest.get(1..e));
         let ch = entity.and_then(|e| match e {
             "amp" => Some('&'),
@@ -380,6 +388,19 @@ mod tests {
 
         let quoted_gt = r#"<table><tr><td style='mso-number-format:"\[>=1000\]0"' x:num="1500">1500</td></tr></table>"#;
         assert_eq!(table_cells(quoted_gt, 1, 1), vec![vec![HtmlCell { text: "1500".into(), num: Some(1500.0) }]]);
+    }
+
+    #[test]
+    fn entities_recognized_only_within_the_twelve_byte_window() {
+        // The window never scans the rest of the text for a semicolon: a bare '&' followed by
+        // long plain text stays a bare '&', and one '&' after another is linear.
+        assert_eq!(decode("a&amplifier; b"), "a&amplifier; b");
+        assert_eq!(decode("&ampampampampAMP;"), "&ampampampampAMP;");
+        // Inside the window the usual forms still decode, and a trailing bare '&' too.
+        assert_eq!(decode("&#38;"), "&");
+        assert_eq!(decode("&#x266A;"), "\u{266A}");
+        assert_eq!(decode("a&amp;b&nbsp;c"), "a&b\u{a0}c");
+        assert_eq!(decode("amp&"), "amp&");
     }
 
     #[test]

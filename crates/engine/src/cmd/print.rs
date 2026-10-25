@@ -139,7 +139,25 @@ impl SheetLayout {
         let [l, r, t, b, ..] = self.margins;
         ((self.page_w - l - r).max(36.0), (self.page_h - t - b).max(36.0))
     }
+    /// Left and right margins, in points, that header and footer sections line up with: the
+    /// page's side margins with Align with Page Margins on, otherwise 0.7 inch on each side, at
+    /// most a quarter of the page width.
+    pub(crate) fn hf_sides(&self) -> (f32, f32) {
+        if self.settings.hf_align_with_margins {
+            (self.margins[0], self.margins[1])
+        } else {
+            let side = HF_FIXED_SIDE_MARGIN.min(self.page_w / 4.0);
+            (side, side)
+        }
+    }
+    /// Scale of header and footer text: the print scale with Scale with Document on, otherwise 1.
+    pub(crate) fn hf_text_scale(&self) -> f32 {
+        if self.settings.hf_scale_with_doc { self.scale } else { 1.0 }
+    }
 }
+
+/// Side margin of headers and footers, in points, when Align with Page Margins is off.
+const HF_FIXED_SIDE_MARGIN: f32 = 0.7 * 72.0;
 
 /// Options shared by the print commands.
 #[derive(Clone, Debug, Default)]
@@ -784,22 +802,27 @@ fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
                 out.push(std::mem::take(&mut line));
                 line = word.to_string();
             }
-            // Break a single over-long word by characters.
+            // Break a single over-long word by characters. The cut that fits is found by binary
+            // search (each try measures one candidate prefix), so an over-long word costs
+            // O(n log n) measurements instead of re-measuring the whole cut per character for
+            // every emitted line (`a` × 100k pasted text would be cubic worst case).
             while gridcraft_pdf::text_width(font, size, &line) > width && line.chars().count() > 1 {
-                let mut cut = String::new();
-                let mut rest = String::new();
-                for ch in line.chars() {
-                    if rest.is_empty() && gridcraft_pdf::text_width(font, size, &format!("{cut}{ch}")) <= width || cut.is_empty() {
-                        cut.push(ch);
+                let chars: Vec<char> = line.chars().collect();
+                let (mut lo, mut hi) = (1usize, chars.len());
+                while lo < hi {
+                    let mid = lo + (hi - lo).div_ceil(2);
+                    let cut: String = chars[..mid].iter().collect();
+                    if gridcraft_pdf::text_width(font, size, &cut) <= width {
+                        lo = mid;
                     } else {
-                        rest.push(ch);
+                        hi = mid - 1;
                     }
                 }
-                if rest.is_empty() {
+                if lo == chars.len() {
                     break;
                 }
-                out.push(cut);
-                line = rest;
+                out.push(chars[..lo].iter().collect());
+                line = chars[lo..].iter().collect();
             }
             if out.len() > 2000 {
                 return out;
@@ -1306,7 +1329,16 @@ fn decode_image(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u3
 }
 
 /// Draws charts, pictures, shapes and sparklines overlapping the body block of a page.
-fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block) {
+/// `pics` memoizes decoded pictures for the whole render (one page at a time draws each
+/// picture again, but the decode happens once).
+fn draw_objects(
+    pg: &mut Page,
+    wb: &Workbook,
+    si: usize,
+    sh: &Sheet,
+    b: &Block,
+    pics: &mut std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>>,
+) {
     let block = b.range();
     let (sx0, sy0) = (sh.col_left(block.start.col), sh.row_top(block.start.row));
     let (sx1, sy1) = (sh.col_left(block.end.col.saturating_add(1)), sh.row_top(block.end.row.saturating_add(1)));
@@ -1316,6 +1348,42 @@ fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block) 
     let place = |r: (f64, f64, f64, f64)| (bx + ((r.0 - sx0) as f32) * b.k, by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k);
     pg.save();
     pg.clip_rect(bx, by, bw, bh);
+    draw_sparklines(pg, wb, si, sh, b, block);
+    for (imi, im) in sh.images.iter().enumerate() {
+        let r = anchor_rect(sh, &im.anchor);
+        if !visible(r) {
+            continue;
+        }
+        let (x, y, w, h) = place(r);
+        // About 150 dpi is plenty for print.
+        let (mw, mh) = (((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
+        let decoded = pics.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
+        if let Some((px, pw, ph)) = decoded.as_ref() {
+            pg.image_rgba(x, y, w, h, px, *pw, *ph);
+        }
+    }
+    for shp in &sh.shapes {
+        let r = anchor_rect(sh, &shp.anchor);
+        if !visible(r) {
+            continue;
+        }
+        let (x, y, w, h) = place(r);
+        draw_shape(pg, wb, shp, b, (x, y, w, h));
+    }
+    for ch in &sh.charts {
+        let r = anchor_rect(sh, &ch.anchor);
+        if !visible(r) {
+            continue;
+        }
+        let (x, y, _, _) = place(r);
+        let data = gridcraft_chart::resolve(wb, si, ch);
+        let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure);
+        draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
+    }
+    pg.restore();
+}
+
+fn draw_sparklines(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, block: RangeRef) {
     for sp in &sh.sparklines {
         if !block.contains(sp.cell) {
             continue;
@@ -1330,90 +1398,64 @@ fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block) 
         let prims = gridcraft_chart::render_sparkline(sp.kind, &vals, [color[0], color[1], color[2], 255], sp.markers, wpx, hpx);
         draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
     }
-    for im in &sh.images {
-        let r = anchor_rect(sh, &im.anchor);
-        if !visible(r) {
-            continue;
+}
+
+fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Block, (x, y, w, h): (f32, f32, f32, f32)) {
+    let fill = rgb_of(shp.fill, wb);
+    let line = rgb_of(shp.line, wb).filter(|_| !shp.format.no_line).map(|c| (c, (0.75 * b.k).max(0.25)));
+    match shp.kind {
+        ShapeKind::Ellipse => {
+            let pts: Vec<[f32; 2]> = (0..72)
+                .map(|i| {
+                    let a = i as f32 / 72.0 * std::f32::consts::TAU;
+                    [x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()]
+                })
+                .collect();
+            pg.polygon(&pts, fill, line);
         }
-        let (x, y, w, h) = place(r);
-        // About 150 dpi is plenty for print.
-        let (mw, mh) = (((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
-        if let Some((px, pw, ph)) = decode_image(&im.data, mw, mh) {
-            pg.image_rgba(x, y, w, h, &px, pw, ph);
+        ShapeKind::Triangle => pg.polygon(&[[x + w / 2.0, y], [x + w, y + h], [x, y + h]], fill, line),
+        ShapeKind::Line | ShapeKind::Arrow => {
+            let c = line.map(|l| l.0).or(fill).unwrap_or([0, 0, 0]);
+            pg.stroke_line(x, y, x + w, y + h, (1.0 * b.k).max(0.3), c);
+            if shp.kind == ShapeKind::Arrow {
+                let ang = h.atan2(w);
+                let al = 8.0 * b.k;
+                let p = |da: f32| [x + w - al * (ang + da).cos(), y + h - al * (ang + da).sin()];
+                pg.polygon(&[[x + w, y + h], p(0.4), p(-0.4)], Some(c), None);
+            }
+        }
+        _ => {
+            pg.polygon(&[[x, y], [x + w, y], [x + w, y + h], [x, y + h]], fill, line);
         }
     }
-    for shp in &sh.shapes {
-        let r = anchor_rect(sh, &shp.anchor);
-        if !visible(r) {
-            continue;
-        }
-        let (x, y, w, h) = place(r);
-        let fill = rgb_of(shp.fill, wb);
-        let line = rgb_of(shp.line, wb).filter(|_| !shp.format.no_line).map(|c| (c, (0.75 * b.k).max(0.25)));
-        match shp.kind {
-            ShapeKind::Ellipse => {
-                let pts: Vec<[f32; 2]> = (0..72)
-                    .map(|i| {
-                        let a = i as f32 / 72.0 * std::f32::consts::TAU;
-                        [x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()]
-                    })
-                    .collect();
-                pg.polygon(&pts, fill, line);
-            }
-            ShapeKind::Triangle => pg.polygon(&[[x + w / 2.0, y], [x + w, y + h], [x, y + h]], fill, line),
-            ShapeKind::Line | ShapeKind::Arrow => {
-                let c = line.map(|l| l.0).or(fill).unwrap_or([0, 0, 0]);
-                pg.stroke_line(x, y, x + w, y + h, (1.0 * b.k).max(0.3), c);
-                if shp.kind == ShapeKind::Arrow {
-                    let ang = h.atan2(w);
-                    let al = 8.0 * b.k;
-                    let p = |da: f32| [x + w - al * (ang + da).cos(), y + h - al * (ang + da).sin()];
-                    pg.polygon(&[[x + w, y + h], p(0.4), p(-0.4)], Some(c), None);
-                }
-            }
-            _ => {
-                pg.polygon(&[[x, y], [x + w, y], [x + w, y + h], [x, y + h]], fill, line);
-            }
-        }
-        if !shp.text.is_empty() {
-            use gridcraft_model::{ShapeTextAlign, ShapeTextAnchor};
-            let fm = &shp.format;
-            let text_box = shp.kind == ShapeKind::TextBox;
-            let size = fm.font_size.unwrap_or(11.0).clamp(1.0, 4000.0) * b.scale;
-            let font = Font::styled(Font::family_for(fm.font.as_deref().unwrap_or("")), fm.bold, fm.italic);
-            let color = fm.text_color.and_then(|c| rgb_of(c, wb)).unwrap_or([0, 0, 0]);
-            let align = fm.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
-            let anchor = fm.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
-            let lines = wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size));
-            let block_h = lines.len().min(500) as f32 * size * 1.2;
-            let mut yy = match anchor {
-                ShapeTextAnchor::Top => y + 2.0 * b.k,
-                ShapeTextAnchor::Middle => y + (h - block_h) / 2.0,
-                ShapeTextAnchor::Bottom => y + h - 2.0 * b.k - block_h,
-            } + size * 0.8;
-            for l in lines.iter().take(500) {
-                let lw = gridcraft_pdf::text_width(font, size, l);
-                let lx = match align {
-                    ShapeTextAlign::Left => x + 2.0 * b.k,
-                    ShapeTextAlign::Center => x + (w - lw) / 2.0,
-                    ShapeTextAlign::Right => x + w - 2.0 * b.k - lw,
-                };
-                pg.text(lx, yy, size, font, color, l);
-                yy += size * 1.2;
-            }
-        }
+    if shp.text.is_empty() {
+        return;
     }
-    for ch in &sh.charts {
-        let r = anchor_rect(sh, &ch.anchor);
-        if !visible(r) {
-            continue;
-        }
-        let (x, y, _, _) = place(r);
-        let data = gridcraft_chart::resolve(wb, si, ch);
-        let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure);
-        draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
+    use gridcraft_model::{ShapeTextAlign, ShapeTextAnchor};
+    let fm = &shp.format;
+    let text_box = shp.kind == ShapeKind::TextBox;
+    let size = fm.font_size.unwrap_or(11.0).clamp(1.0, 4000.0) * b.scale;
+    let font = Font::styled(Font::family_for(fm.font.as_deref().unwrap_or("")), fm.bold, fm.italic);
+    let color = fm.text_color.and_then(|c| rgb_of(c, wb)).unwrap_or([0, 0, 0]);
+    let align = fm.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
+    let anchor = fm.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
+    let lines = wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size));
+    let block_h = lines.len().min(500) as f32 * size * 1.2;
+    let mut yy = match anchor {
+        ShapeTextAnchor::Top => y + 2.0 * b.k,
+        ShapeTextAnchor::Middle => y + (h - block_h) / 2.0,
+        ShapeTextAnchor::Bottom => y + h - 2.0 * b.k - block_h,
+    } + size * 0.8;
+    for l in lines.iter().take(500) {
+        let lw = gridcraft_pdf::text_width(font, size, l);
+        let lx = match align {
+            ShapeTextAlign::Left => x + 2.0 * b.k,
+            ShapeTextAlign::Center => x + (w - lw) / 2.0,
+            ShapeTextAlign::Right => x + w - 2.0 * b.k - lw,
+        };
+        pg.text(lx, yy, size, font, color, l);
+        yy += size * 1.2;
     }
-    pg.restore();
 }
 
 fn draw_headings(pg: &mut Page, b: &Block, col_heads: bool, row_heads: bool, at: (f32, f32), size: (f32, f32)) {
@@ -1452,7 +1494,9 @@ fn draw_headings(pg: &mut Page, b: &Block, col_heads: bool, row_heads: bool, at:
 }
 
 fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::HfPage, cx: &HfContext) {
-    let [l, r, _, _, hm, fm] = lay.margins;
+    let [_, _, _, _, hm, fm] = lay.margins;
+    let (l, r) = lay.hf_sides();
+    let text_scale = lay.hf_text_scale();
     let pw = lay.page_w;
     let ph = lay.page_h;
     for (spec, header) in [(lay.settings.hf(which, false), true), (lay.settings.hf(which, true), false)] {
@@ -1464,7 +1508,7 @@ fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcraft_model::
             if sec.text.trim().is_empty() {
                 continue;
             }
-            let size = sec.size.unwrap_or(10.0).clamp(1.0, 72.0);
+            let size = sec.size.unwrap_or(10.0).clamp(1.0, 72.0) * text_scale;
             let font = Font::styled(gridcraft_pdf::Family::Sans, sec.bold, sec.italic);
             let lines: Vec<&str> = sec.text.split('\n').take(20).collect();
             let n = lines.len() as f32;
@@ -1528,6 +1572,9 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     let mut page_no = 0usize;
     let mut pending_links = Vec::new();
     let mut printed_blocks = Vec::new();
+    // Decoded pictures are reused across the pages their anchor covers: a floating picture
+    // spanning 40 pages was decoded (and pushed into the PDF) 40 times (#2389).
+    let mut pics: std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>> = std::collections::HashMap::new();
     for lay in layouts {
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
         let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
@@ -1564,7 +1611,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                 y += seg_size(sh, *rs, true) * k;
             }
             if let Some(b) = &body {
-                draw_objects(pg, wb, lay.sheet, sh, b);
+                draw_objects(pg, wb, lay.sheet, sh, b, &mut pics);
             }
             if lay.settings.headings {
                 let fill = [0xF2, 0xF2, 0xF2];
@@ -1992,6 +2039,40 @@ mod tests {
         s.execute("pageLayout.headerFooter", json!({"differentFirst": false, "differentOddEven": false})).unwrap();
         let (pdf, _) = pdf_of(&mut s, json!({}));
         assert!(contains(&pdf, "(Odd 1) Tj") && contains(&pdf, "(Odd 2) Tj") && !contains(&pdf, "(Cover) Tj"));
+    }
+
+    /// The x position and font size of the first `(text) Tj` in a PDF.
+    fn text_at(pdf: &[u8], text: &str) -> Option<(f32, f32)> {
+        let s = String::from_utf8_lossy(pdf);
+        let before = &s[..s.find(&format!("({text}) Tj"))?];
+        let tf = before.rfind(" Tf")?;
+        let size = before[..tf].rsplit(' ').next()?.parse().ok()?;
+        let tm = before.rfind(" Tm")?;
+        let mut nums = before[..tm].rsplit([' ', '\n']);
+        let _y = nums.next()?;
+        let x = nums.next()?.parse().ok()?;
+        Some((x, size))
+    }
+
+    #[test]
+    fn headers_scale_with_the_sheet_and_align_with_its_margins_unless_turned_off() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+        s.execute("pageLayout.pageSetup", json!({"scale": 50, "left": 1.5, "right": 1.5})).unwrap();
+        s.execute("pageLayout.headerFooter", json!({"header": "&LLeft&C&14Middle"})).unwrap();
+        // Both on (the default): the text prints at half size, from the 1.5-inch left margin.
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        assert_eq!(text_at(&pdf, "Left"), Some((108.0, 5.0)));
+        assert_eq!(text_at(&pdf, "Middle").map(|t| t.1), Some(7.0));
+        let r = s.execute("pageLayout.headerFooter", json!({"scaleWithDoc": false, "alignWithMargins": false})).unwrap();
+        assert_eq!((&r["scaleWithDoc"], &r["alignWithMargins"]), (&json!(false), &json!(false)));
+        // Both off: full size, 0.7 inch from the paper's left edge.
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        assert_eq!(text_at(&pdf, "Left"), Some((50.4, 10.0)));
+        assert_eq!(text_at(&pdf, "Middle").map(|t| t.1), Some(14.0));
+        s.execute("edit.undo", json!({})).unwrap();
+        let pr = &s.doc().unwrap().wb.sheet(0).unwrap().print;
+        assert!(pr.hf_scale_with_doc && pr.hf_align_with_margins);
     }
 
     #[test]

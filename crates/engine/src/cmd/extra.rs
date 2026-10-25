@@ -1034,6 +1034,11 @@ fn denied_script_step(id: &str, params: &Json) -> Option<String> {
     if id.starts_with("file.") || id.starts_with("link.") {
         return Some(format!("scripts can't run `{id}`: it reaches outside the workbook"));
     }
+    // Scripts are scoped to their workbook: a step that switches the active window would
+    // point every later step at another open document, so those are refused too.
+    if id.starts_with("window.") {
+        return Some(format!("scripts can't run `{id}`: it reaches outside the workbook"));
+    }
     if params.get("path").is_some() {
         return Some(format!("scripts can't pass a file `path` to `{id}`"));
     }
@@ -1265,7 +1270,7 @@ fn recently_used(s: &mut Session, _: &Json) -> Result<Json> {
 
 fn use_in_formula(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").ok_or_else(|| bad("formulas.useInFormula", "missing `name`"))?;
-    s.ui_requests.push(crate::UiRequest::EditCell(Some(format!("={name}"))));
+    s.ui_requests.push(crate::UiRequest::InsertName(name.to_string()));
     ok()
 }
 

@@ -13,6 +13,12 @@ use crate::IoError;
 /// Maximum element nesting accepted in any part.
 pub const MAX_DEPTH: usize = 256;
 
+/// Most elements kept in one part's parsed XML tree: an emptied `El` costs well over a hundred
+/// bytes, so a highly-compressible part of endless empty elements could fit the package byte
+/// limit and still take gigabytes of tree before any semantic check ran. Parts whose big runs
+/// matter (worksheet rows, shared strings) are streamed instead and never hold this tree.
+pub const MAX_XML_NODES: usize = 1_000_000;
+
 /// An element: local name (namespace prefix dropped), attributes by local name, children and
 /// its direct text content.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -223,13 +229,27 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
     let mut stack: Vec<El> = Vec::new();
     let mut root: Option<El> = None;
     let mut buf = Vec::new();
+    // Elements kept in the tree so far, so a pathological part that passes the byte limits can
+    // still be refused before the tree itself outgrows memory.
+    let mut kept = 0usize;
     // Attach a finished element to its parent (or emit it / make it the root).
-    fn finish(stack: &mut [El], root: &mut Option<El>, el: El, split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<(), IoError> {
+    fn finish(
+        stack: &mut [El],
+        root: &mut Option<El>,
+        el: El,
+        split: &[&str],
+        cb: &mut dyn FnMut(El) -> Result<(), IoError>,
+        kept: &mut usize,
+    ) -> Result<(), IoError> {
         match stack.last_mut() {
             Some(parent) => {
                 if split.contains(&el.name.as_str()) {
                     cb(el)?;
                 } else {
+                    *kept = kept.saturating_add(1);
+                    if *kept > MAX_XML_NODES {
+                        return Err(IoError::Xml(format!("the part holds more than {MAX_XML_NODES} elements")));
+                    }
                     parent.children.push(el);
                 }
             }
@@ -252,11 +272,11 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
             }
             Event::Empty(e) => {
                 let el = start_el(&e);
-                finish(&mut stack, &mut root, el, split, cb)?;
+                finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
             }
             Event::End(_) => {
                 if let Some(el) = stack.pop() {
-                    finish(&mut stack, &mut root, el, split, cb)?;
+                    finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
                 }
             }
             Event::Text(t) => {
@@ -295,7 +315,7 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
     }
     // Unclosed elements (truncated part): close them so we keep what we have.
     while let Some(el) = stack.pop() {
-        finish(&mut stack, &mut root, el, split, cb)?;
+        finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
     }
     root.ok_or_else(|| IoError::Xml("no root element".into()))
 }
@@ -473,6 +493,14 @@ mod tests {
         for s in ["plain", " leading ", "a & <b>", "line\nbreak", "日本語", "x_x0041_"] {
             assert_eq!(si_body(s, None), t_el(s));
         }
+    }
+
+    #[test]
+    fn a_part_of_endless_empty_elements_is_refused() {
+        assert!(parse(b"<r><x/><y t=\"1\"/><x/></r>").is_ok());
+        let xml = format!("<r>{}<y/></r>", "<x/>".repeat(MAX_XML_NODES + 1));
+        let err = parse(xml.as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("elements"), "{err}");
     }
 
     #[test]

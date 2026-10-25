@@ -104,3 +104,7 @@ real_name = "Helen Kwok"
 real_name = "Carmine Zacchia"
 display_name = "Carmine Zacchia"
 sync_github_name = false
+
+[people.dotCooCoo]
+real_name = "Robert Lee"
+sync_github_name = true

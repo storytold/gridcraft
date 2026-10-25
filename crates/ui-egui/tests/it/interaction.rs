@@ -388,6 +388,30 @@ fn inserted_chart_is_selected_so_delete_removes_it() {
 }
 
 #[test]
+fn insert_column_or_bar_menu_inserts_a_hundred_percent_stacked_bar() {
+    // Insert › Column or Bar (keytip N, C1) lists the column and bar types of the All Charts list.
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "North", "South"], ["Q1", 10, 30], ["Q2", 30, 10]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:C3"})).unwrap();
+    let mut h = harness(s);
+    key(&mut h, Key::F10, Modifiers::NONE);
+    for (k, t) in [(Key::N, "n"), (Key::C, "c"), (Key::Num1, "1")] {
+        h.input_mut().events.push(Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.input_mut().events.push(Event::Text(t.into()));
+        h.input_mut().events.push(Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+    }
+    h.run_steps(2);
+    for label in ["Clustered Column", "Stacked Column", "100% Stacked Column", "Clustered Bar", "Stacked Bar", "100% Stacked Bar"] {
+        assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, label).is_some(), "the menu lists {label}");
+    }
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "100% Stacked Bar").click();
+    h.run_steps(2);
+    let kinds: Vec<_> = h.state().session.active().unwrap().wb.active().unwrap().charts.iter().map(|c| c.kind).collect();
+    assert_eq!(kinds, [gridcraft_engine::model::ChartKind::BarStacked100]);
+}
+
+#[test]
 fn renders_every_ribbon_tab_without_panicking() {
     let mut s = Session::new();
     s.execute("file.new", json!({"sample": "sales"})).unwrap();
@@ -556,6 +580,33 @@ fn recommended_charts_dialog_inserts_the_chosen_chart() {
     h.state_mut().open_dialog("recommendedCharts", json!({}));
     assert!(h.state().dialog.is_none());
     assert!(h.state().message.is_some());
+}
+
+#[test]
+fn all_charts_inserts_a_hundred_percent_stacked_area() {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "North", "South"], ["Q1", 10, 30], ["Q2", 30, 10]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:C3"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("recommendedCharts", json!({"tab": "All Charts"}));
+    h.run_steps(4);
+    // The entry sits below the list's visible height: scroll the list with the wheel first.
+    let first = h.get_by_label("Pie").rect().center();
+    h.input_mut().events.push(Event::PointerMoved(first));
+    h.input_mut().events.push(Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, -10.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(20);
+    h.get_by_label("100% Stacked Area").click();
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none());
+    let kinds: Vec<_> = h.state().session.active().unwrap().wb.active().unwrap().charts.iter().map(|c| c.kind).collect();
+    assert_eq!(kinds, [gridcraft_engine::model::ChartKind::AreaStacked100]);
 }
 
 #[test]
@@ -920,6 +971,43 @@ fn status_bar_shows_macro_badge() {
     h.run_steps(3);
     h.state_mut().ui.dark = true;
     h.run_steps(2);
+}
+
+#[test]
+fn status_bar_names_a_circular_reference_by_its_address() {
+    let mut s = blank();
+    s.execute("home.insertSheet", json!({"name": "Bob's Q1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=B2+1"})).unwrap();
+    let h = harness(s);
+    assert!(h.query_by_label("Circular References: B2").is_some(), "the status bar names the cell on the active sheet without its sheet");
+}
+
+#[test]
+fn status_bar_names_no_cell_when_every_circular_reference_is_on_another_sheet() {
+    let mut s = blank();
+    s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=B2+1"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    let mut h = harness(s);
+    assert!(h.query_by_label("Circular References").is_some(), "the status bar still reports circular references");
+    assert!(h.query_by_label("Circular References: B2").is_none(), "no cell address from another sheet");
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": "Data"})).unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label("Circular References: B2").is_some(), "the active sheet's loop is named");
+}
+
+#[test]
+fn status_bar_names_a_circular_reference_on_the_active_sheet() {
+    let mut s = blank();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=A1+1"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=B2+1"})).unwrap();
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    let circular = s.active().unwrap().calc.circular.clone();
+    assert_eq!(circular, vec![(0, CellRef::new(0, 0)), (1, CellRef::new(1, 1))], "Sheet1's loop is listed first");
+    let h = harness(s);
+    assert!(h.query_by_label("Circular References: B2").is_some(), "the status bar names the loop on the active sheet");
+    assert!(h.query_by_label("Circular References: A1").is_none(), "not the first loop listed");
 }
 
 #[test]

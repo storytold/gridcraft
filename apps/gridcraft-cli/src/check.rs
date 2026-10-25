@@ -248,10 +248,11 @@ impl Discovery {
 /// (`~$…`) are skipped.
 fn collect_inputs(inputs: &[String]) -> Discovery {
     let mut out = Discovery::default();
+    let mut seen = std::collections::HashSet::new();
     for i in inputs {
         let p = PathBuf::from(i);
         if p.is_dir() {
-            if !walk(&p, 0, &mut out) {
+            if !walk(&p, 0, &mut out, &mut seen) {
                 break;
             }
         } else if !out.add_file(p) {
@@ -268,7 +269,20 @@ fn collect_inputs(inputs: &[String]) -> Discovery {
 }
 
 /// Returns false only when the global file budget stops traversal.
-fn walk(dir: &Path, depth: usize, out: &mut Discovery) -> bool {
+fn walk(dir: &Path, depth: usize, out: &mut Discovery, seen: &mut std::collections::HashSet<u64>) -> bool {
+    // A directory is visited once by identity (dev+inode on unix): several links to the same
+    // directory are aliases, not exponential branches of the scan. Other platforms keep the
+    // depth cap only.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if let Ok(m) = std::fs::metadata(dir)
+            && let Some(id) = m.dev().checked_mul(1 << 60).and_then(|d| d.checked_add(m.ino()))
+            && !seen.insert(id)
+        {
+            return true;
+        }
+    }
     if depth > MAX_DEPTH {
         out.fail(dir, format!("directory depth limit of {MAX_DEPTH} exceeded; this subtree was not checked"));
         return true;
@@ -301,7 +315,7 @@ fn walk(dir: &Path, depth: usize, out: &mut Discovery) -> bool {
             }
         };
         if metadata.is_dir() {
-            if !walk(&p, depth + 1, out) {
+            if !walk(&p, depth + 1, out, seen) {
                 return false;
             }
         } else if p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("xlsx") || e.eq_ignore_ascii_case("xlsm"))
@@ -981,6 +995,12 @@ fn relationship_kinds(bytes: &[u8]) -> Result<BTreeMap<String, String>, String> 
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a zip package: {e}"))?;
     let names = zip_names(&mut zip);
     let by_key: HashMap<String, &String> = names.iter().map(|n| (part_key(n), n)).collect();
+    // Several relationships name the same part; each fresh check decompressed it again, so
+    // repeated references to one highly compressible part multiplied the work. The verdict is
+    // remembered per (part, named content) and the decompression the package can cause is
+    // budgeted as a whole (finding: repeated decompression).
+    let mut verdicts: HashMap<(String, &'static str), bool> = HashMap::new();
+    let mut budget: u64 = 512 * 1024 * 1024;
     let mut kinds = BTreeMap::new();
     for n in names.iter().filter(|n| part_key(n).ends_with(".rels")) {
         let Some(src_dir) = rels_source_dir(&part_key(n)) else { continue };
@@ -994,7 +1014,7 @@ fn relationship_kinds(bytes: &[u8]) -> Result<BTreeMap<String, String>, String> 
             let external = attr(attrs, "TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
             if !external
                 && let Some(part) = by_key.get(&resolve_target(&src_dir, target).to_ascii_lowercase())
-                && !holds_something(&mut zip, part, kind)
+                && !holds_something(&mut zip, part, kind, &mut verdicts, &mut budget)
             {
                 continue;
             }
@@ -1013,13 +1033,39 @@ fn rels_source_dir(key: &str) -> Option<String> {
 
 /// Whether a part has content: an element under its root, or for comments (whose authors list
 /// comes first) a comment, for VML a shape. Read only as far as needed; an unreadable part counts.
-fn holds_something(zip: &mut Zip<'_>, name: &str, kind: &str) -> bool {
-    use quick_xml::events::Event;
-    let Ok(f) = zip.by_name(name) else { return true };
-    let mut reader = quick_xml::Reader::from_reader(std::io::BufReader::new(f.take(MAX_XML_PART)));
-    let wanted: Option<&[u8]> = match kind.to_ascii_lowercase().as_str() {
+/// `verdicts` remembers the answer per (part, named content); `budget` is the decompression this
+/// package's remaining checks may cause, and once it is spent the part counts as having content.
+fn holds_something(zip: &mut Zip<'_>, name: &str, kind: &str, verdicts: &mut HashMap<(String, &'static str), bool>, budget: &mut u64) -> bool {
+    let wanted: Option<&'static [u8]> = match kind.to_ascii_lowercase().as_str() {
         "comments" => Some(b"comment"),
         "vmldrawing" => Some(b"shape"),
+        _ => None,
+    };
+    let marker = match wanted {
+        Some(b"comment") => "comment",
+        Some(_) => "shape",
+        None => "any",
+    };
+    if let Some(v) = verdicts.get(&(name.to_ascii_lowercase(), marker)) {
+        return *v;
+    }
+    let v = holds_something_uncached(zip, name, marker, budget);
+    verdicts.insert((name.to_ascii_lowercase(), marker), v);
+    v
+}
+
+fn holds_something_uncached(zip: &mut Zip<'_>, name: &str, marker: &'static str, budget: &mut u64) -> bool {
+    use quick_xml::events::Event;
+    let Ok(f) = zip.by_name(name) else { return true };
+    if *budget == 0 {
+        return true;
+    }
+    let take = f.size().min(MAX_XML_PART).min(*budget);
+    *budget -= take;
+    let mut reader = quick_xml::Reader::from_reader(std::io::BufReader::new(f.take(take)));
+    let wanted: Option<&'static [u8]> = match marker {
+        "comment" => Some(b"comment"),
+        "shape" => Some(b"shape"),
         _ => None,
     };
     let mut buf = Vec::new();
@@ -1321,7 +1367,8 @@ mod tests {
         let path = std::env::temp_dir().join(format!("gridcraft-check-not-a-directory-{}", std::process::id()));
         std::fs::write(&path, "not a directory").unwrap();
         let mut discovery = Discovery::default();
-        assert!(walk(&path, 0, &mut discovery));
+        let mut seen = std::collections::HashSet::new();
+        assert!(walk(&path, 0, &mut discovery, &mut seen));
         assert!(discovery.files.is_empty());
         assert_eq!(discovery.failures.len(), 1);
         assert_eq!(discovery.failures[0].path, path.to_string_lossy());

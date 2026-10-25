@@ -233,10 +233,23 @@ fn with(p: &Json, key: &str, v: Json) -> Json {
 pub(crate) fn apply_style(s: &mut Session, p: &Json, f: impl Fn(&mut Style)) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
+    let guarded = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.protection.is_some());
     if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.protection.as_ref().is_some_and(|pr| !pr.format_cells)) {
         return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
     }
     edit(s, |cx| {
+        // Formatting on a protected sheet keeps the cell's permission flags: a format call
+        // that flips `locked` from the format permission would authorize content edits that
+        // the password should still gate, so those flags may not change (Excel keeps that
+        // checkbox disabled while the sheet is protected).
+        const FLAG_GUARD: &str = "You can't change cell protection on a protected sheet. Unprotect it first.";
+        macro_rules! guard_flags {
+            ($old:expr, $new:expr) => {
+                if guarded && cx.wb.styles.get($old).protection != cx.wb.styles.get($new).protection {
+                    return Err(EngineError::Other(FLAG_GUARD.into()));
+                }
+            };
+        }
         let mut cache: std::collections::HashMap<StyleId, StyleId> = std::collections::HashMap::new();
         for r in &ranges {
             let full_rows = r.is_full_rows();
@@ -251,6 +264,7 @@ pub(crate) fn apply_style(s: &mut Session, p: &Json, f: impl Fn(&mut Style)) -> 
                         info.and_then(|i| i.style).unwrap_or_default()
                     };
                     let new = *cache.entry(cur).or_insert_with(|| cx.wb.styles.derive(cur, &f));
+                    guard_flags!(cur, new);
                     let sh = cx.sheet_mut(sheet)?;
                     let map = if full_rows && !full_cols { &mut sh.rows } else { &mut sh.cols };
                     map.entry(line).or_default().style = Some(new);
@@ -260,6 +274,7 @@ pub(crate) fn apply_style(s: &mut Session, p: &Json, f: impl Fn(&mut Style)) -> 
                     cx.wb.sheet(sheet).map(|sh| sh.cells.iter_range(*r).map(|(c, x)| (c, x.style)).collect()).unwrap_or_default();
                 for (c, st) in &cells {
                     let new = *cache.entry(*st).or_insert_with(|| cx.wb.styles.derive(*st, &f));
+                    guard_flags!(*st, new);
                     cx.sheet_mut(sheet)?.set_style(*c, new);
                 }
                 // Formatting touched these cells: re-fit their rows (Excel auto-fits).
@@ -276,6 +291,7 @@ pub(crate) fn apply_style(s: &mut Session, p: &Json, f: impl Fn(&mut Style)) -> 
                 let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
                 let new = *cache.entry(st).or_insert_with(|| cx.wb.styles.derive(st, &f));
                 if new != st {
+                    guard_flags!(st, new);
                     cx.sheet_mut(sheet)?.set_style(c, new);
                 }
             }

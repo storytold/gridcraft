@@ -64,17 +64,22 @@ pub(super) struct Cursor<'a, 'b> {
     parts: &'b [&'a [u8]],
     part: usize,
     pos: usize,
+    /// Bytes in every part after the current one, kept up to date as parts advance, so
+    /// `remaining()` is constant-time however many `Continue` records a string session crosses.
+    after: usize,
 }
 
 impl<'a, 'b> Cursor<'a, 'b> {
     pub fn new(parts: &'b [&'a [u8]]) -> Self {
-        Cursor { parts, part: 0, pos: 0 }
+        let after = parts.iter().skip(1).map(|p| p.len()).sum::<usize>();
+        Cursor { parts, part: 0, pos: 0, after }
     }
 
     /// Skips to the next part when the current one is used up. Returns whether a new part began.
     fn settle(&mut self) -> bool {
         let mut moved = false;
         while self.parts.get(self.part).is_some_and(|p| self.pos >= p.len()) && self.part + 1 < self.parts.len() {
+            self.after = self.after.saturating_sub(self.parts[self.part + 1].len());
             self.part += 1;
             self.pos = 0;
             moved = true;
@@ -112,10 +117,10 @@ impl<'a, 'b> Cursor<'a, 'b> {
         Ok(())
     }
 
-    /// Bytes left in the record (all parts).
+    /// Bytes left in the record (all parts), constant-time in the part count.
     pub fn remaining(&self) -> usize {
         let here = self.parts.get(self.part).map_or(0, |p| p.len().saturating_sub(self.pos));
-        here + self.parts.iter().skip(self.part + 1).map(|p| p.len()).sum::<usize>()
+        here.saturating_add(self.after)
     }
 
     /// The rest of the record as one buffer.
@@ -129,6 +134,7 @@ impl<'a, 'b> Cursor<'a, 'b> {
         }
         self.part = self.parts.len();
         self.pos = 0;
+        self.after = 0;
         out
     }
 
@@ -194,5 +200,24 @@ mod tests {
         assert_eq!(c.remaining(), 0);
         let mut c = Cursor::new(&parts);
         assert!(c.chars(MAX_CHARS + 1, false).is_err());
+    }
+
+    #[test]
+    fn remaining_counts_every_part_wherever_the_cursor_is() {
+        let parts: [&[u8]; 4] = [&[1, 2, 3], &[2, 3, 4, 5], &[3, 4, 5, 6, 7], &[4]];
+        let mut c = Cursor::new(&parts);
+        assert_eq!(c.remaining(), 13);
+        for b in 1..=3u64 {
+            assert_eq!(u64::from(c.u8().unwrap()), b, "part 0 in order");
+        }
+        assert_eq!(c.remaining(), 10, "after the first part is used up");
+        for _ in 0..4 {
+            c.u8().unwrap();
+        }
+        assert_eq!(c.remaining(), 6, "into the Continue parts");
+        let mut c = Cursor::new(&parts);
+        assert_eq!(u64::from(c.u8().unwrap()), 1);
+        assert_eq!(c.rest().len(), 12);
+        assert_eq!(c.remaining(), 0);
     }
 }

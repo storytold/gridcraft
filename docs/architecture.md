@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · ** Last updated:** 2026-10-24 · **Change:** minor (engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -48,6 +48,39 @@ including tests, 2026-10-10.
    for the visible window only; charts render through `crates/chart` primitives.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
    dispatches to `crates/xlsx`; imports that lose data return warnings shown to the user.
+
+## UI building blocks
+
+The panels in `crates/ui-egui` share a few pieces, so a new feature reuses them instead of
+drawing its own:
+
+- **Colours**: `theme::Tokens`, each with a light and a dark value. The sheet stays white in both
+  themes, so colours drawn on it (`sheet_ref_colors`, `sheet_control_*`, icons through
+  `icons::paint_on_sheet`) keep their light values. `theme::contrast_tests` holds every
+  foreground/background pair to WCAG 2 (4.5:1 for text, 3:1 for glyphs) in both themes; a new
+  token pair is added there. Icons (`icons.rs`, drawn in code) take their paper and category
+  colours (`theme::Cat`) from the tokens.
+- **Ribbon widgets**: `widgets.rs` has the buttons every tab is built from (`big_button`,
+  `small_button`, `split_button`, `big_split_button`, `toggle_button`), translated through
+  `i18n` in one place. Split buttons return the main and arrow responses separately, with
+  accessible names (`AutoSum`, `AutoSum options`). The ribbon card scrolls a tab wider than the
+  window, with arrows at its edges; `ribbon::RibbonOverflow` records the groups' size each frame,
+  and a test keeps every tab within the card's three rows.
+- **Code editor**: `widgets::code_editor(ui, id, &mut text, Lang, max_lines)` (`code_editor.rs`)
+  edits code in the monospace font with `Tokens::syntax` colours: Python (keywords, strings
+  including triple-quoted ones, numbers, comments, builtins) and LaTeX (commands, scripts,
+  comments). Tab indents (every selected line, Shift+Tab dedents), Enter keeps the line's
+  indentation (one level more after a Python colon), both applied in input order with the typing
+  around them: a pass can carry several events, and the editor's keys that follow an event the
+  text field acts on (select all, an arrow) wait for the editor's next pass, which puts them
+  ahead of its input, so the field never gets a Tab or an Enter of a focused editor; and it
+  scrolls past `max_lines` with the caret in view. The tokenizer and the key edits are pure functions with tests, including
+  hostile input.
+- **Formula bar**: grows with its content from one line to `formula_bar::MAX_LINES` (five), then
+  scrolls; one line is Excel's 30 px unless the font's rows need more (`formula_bar::one_line`;
+  the Windows UI font's row is 17.28 px), so every counted line fits whatever the font;
+  `formula_bar::BarLayout` records where its parts went each frame, for tests.
+
 
 ## Engine building blocks for multi-command actions
 
