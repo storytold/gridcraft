@@ -213,10 +213,27 @@ fn italian_covers_the_newer_function_families() {
 }
 
 /// Functions whose Italian name is the English one keep it: an alias that maps a name to itself
-/// is not in the table at all.
+/// is not in the table at all. The second group is the one that used to be translated anyway
+/// (`COT` was `COTAN`, `MAP` was `MAPPA`), so it is the group that can regress unnoticed.
 #[test]
 fn italian_keeps_the_english_name_where_excel_does() {
-    for name in ["MAX", "MIN", "INT", "MAP", "MAKEARRAY", "XOR", "CONCAT", "ISOMITTED", "EUROCONVERT"] {
+    for name in [
+        "MAX",
+        "MIN",
+        "INT",
+        "XOR",
+        "CONCAT",
+        "ISOMITTED", //
+        "COT",
+        "COTH",
+        "CSC",
+        "CSCH",
+        "SECH",
+        "MAP",
+        "MAKEARRAY",
+        "REDUCE",
+        "EUROCONVERT",
+    ] {
         assert_eq!(FormulaLocale::It.function_name(name), name, "{name}");
         assert_eq!(FormulaLocale::It.canonical_name(name), name, "{name}");
     }
