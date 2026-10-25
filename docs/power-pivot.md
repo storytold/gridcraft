@@ -118,14 +118,15 @@ All overlays are reported through `overlay` = `""` | `openModel` | `existingConn
 - **Table Properties**: read-only table name, row count and column/type table.
 - **Calculation Options**: Automatic/Manual radio buttons. Manual is a window setting only —
   measure and relationship commands still commit immediately.
-- **Open Model / Existing Connections**: a JSON model path and **Load** → `dataModel.load`.
-  Errors stay in the dialog.
+- **Open Model / Existing Connections**: **Browse…** picks the model JSON (the browser has no
+  filesystem, so the picker's bytes go straight to `dataModel.load` as `json`; native hosts pass
+  the chosen path), or type a path / paste the JSON and press **Load**. Errors stay in the dialog.
 
 ## Engine command contract
 
 | Command | Parameters | Result |
 | --- | --- | --- |
-| `dataModel.load` | `{path}` | status |
+| `dataModel.load` | `{path}` on native hosts, or `{json}` / `{model}` (browser picker, agents) | status |
 | `dataModel.status` | `{}` | status |
 | `dataModel.evaluate` | `{formula}` or `{measure}`, `table?: bool` | `{value}` or `{columns, rows}` |
 | `dataModel.pivot` | `{measure, rows, columns?}` | `{columns, rows}` |

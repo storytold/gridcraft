@@ -670,7 +670,14 @@ fn power_pivot_file_menu(_app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
                 ui.label(egui::RichText::new(summary).color(t.text_dim));
                 ui.add_space(6.0);
                 let path = d.values.get("path").and_then(Json::as_str).unwrap_or("");
-                let source = if path.trim().is_empty() { "(no model file chosen)".to_string() } else { path.to_string() };
+                let picked = d.values.get("modelName").and_then(Json::as_str).unwrap_or("");
+                let source = if !picked.is_empty() {
+                    picked.to_string()
+                } else if path.trim().is_empty() {
+                    "(no model file chosen)".to_string()
+                } else {
+                    path.to_string()
+                };
                 ui.label(egui::RichText::new("Model file").small().color(t.text_dim));
                 ui.monospace(source);
                 ui.add_space(8.0);
@@ -997,13 +1004,20 @@ fn power_pivot_footer(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, t: 
 }
 
 fn power_pivot_load(app: &mut SheetApp, d: &mut Dialog) {
+    // A browser picker hands back the file's bytes as JSON text; native hosts pass a filesystem
+    // path. Pasted JSON is accepted too, so a browser without a picker still works.
+    let picked = d.values.get("modelJson").and_then(Json::as_str).map(str::trim).filter(|json| !json.is_empty()).map(str::to_string);
     let path = d.values.get("path").and_then(Json::as_str).unwrap_or("").trim().to_string();
-    if path.is_empty() {
-        d.values.insert("error".into(), json!("Enter a model JSON path, or paste the model JSON."));
+    let params = if let Some(json) = picked {
+        json!({"json": json})
+    } else if path.is_empty() {
+        d.values.insert("error".into(), json!("Choose a model JSON file, enter its path, or paste the model JSON."));
         return;
-    }
-    // Browser pickers hand back JSON text; native hosts pass a filesystem path.
-    let params = if path.starts_with('{') || path.starts_with('[') { json!({"json": path}) } else { json!({"path": path}) };
+    } else if path.starts_with('{') || path.starts_with('[') {
+        json!({"json": path})
+    } else {
+        json!({"path": path})
+    };
     match app.session.run("dataModel.load", params) {
         Ok(model) => {
             d.values.insert("model".into(), model);
@@ -1518,11 +1532,34 @@ fn power_pivot_overlay(ctx: &egui::Context, app: &mut SheetApp, d: &mut Dialog, 
         });
     if close {
         d.values.insert("overlay".into(), json!(""));
+        // A pick still in flight must not load a model into a later Open Model dialog.
+        d.model_inbox = None;
     }
 }
 
 /// The Open Model / Existing Connections dialog: the model path now lives here, not in the canvas.
 fn power_pivot_open_model_dialog(ui: &mut egui::Ui, app: &mut SheetApp, d: &mut Dialog, t: &theme::Tokens, close: &mut bool, existing: bool) {
+    // A browser picker delivers the chosen file's bytes asynchronously (the workbook inbox opens
+    // its files as workbooks, so this dialog owns a private one). Load them as soon as they arrive.
+    let arrived = d.model_inbox.as_ref().and_then(|inbox| inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop());
+    if let Some((name, bytes)) = arrived {
+        d.model_inbox = None;
+        match String::from_utf8(bytes) {
+            Ok(text) => {
+                let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
+                d.values.insert("modelName".into(), json!(name));
+                d.values.insert("modelJson".into(), json!(text));
+                d.values.insert("error".into(), json!(""));
+                power_pivot_load(app, d);
+                if d.values.get("error").and_then(Json::as_str).unwrap_or("").is_empty() {
+                    *close = true;
+                }
+            }
+            Err(_) => {
+                d.values.insert("error".into(), json!("The model file is not UTF-8 JSON."));
+            }
+        }
+    }
     ui.label(egui::RichText::new(if existing { "Connections" } else { "Model file" }).strong().color(t.text));
     if existing {
         let path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
@@ -1536,16 +1573,24 @@ fn power_pivot_open_model_dialog(ui: &mut egui::Ui, app: &mut SheetApp, d: &mut 
     }
     let web = app.services.open_async.is_some();
     ui.label(egui::RichText::new(if web { "Model JSON" } else { "Model file (JSON)" }).small().color(t.text_dim));
-    let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
+    let picked = d.values.get("modelJson").and_then(Json::as_str).map(str::to_string);
+    let chosen = d.values.get("modelName").and_then(Json::as_str).unwrap_or("").to_string();
+    if !chosen.is_empty() {
+        ui.label(egui::RichText::new(format!("Selected file: {chosen}")).small().color(t.text));
+    }
+    let mut path = picked.unwrap_or_else(|| d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string());
     let width = ui.available_width().max(320.0);
     let changed = if web {
-        // The browser has no filesystem path; paste the JSON the picker returned (or its text).
+        // The browser has no filesystem path; pick a file below or paste its JSON here.
         ui.add_sized([width, 90.0], egui::TextEdit::multiline(&mut path).hint_text("{\"tables\": [...]}")).changed()
     } else {
         ui.add_sized([width, 24.0], egui::TextEdit::singleline(&mut path).hint_text("C:\\models\\model.json")).changed()
     };
     if changed {
-        d.values.insert("path".into(), json!(path));
+        // An edited box is the model source now, so the picked file name no longer describes it.
+        d.values.remove("modelName");
+        d.values.remove("path");
+        d.values.insert("modelJson".into(), json!(path));
     }
     ui.label(
         egui::RichText::new("The Data View loads this file with dataModel.load. Model edits stay in the session, not the workbook.")
@@ -1553,8 +1598,12 @@ fn power_pivot_open_model_dialog(ui: &mut egui::Ui, app: &mut SheetApp, d: &mut 
             .color(t.text_dim),
     );
     let mut load = false;
+    let mut browse = false;
     ui.add_space(4.0);
     ui.horizontal(|ui| {
+        if (app.services.pick_model_async.is_some() || app.services.pick_open.is_some()) && ui.button("Browse…").clicked() {
+            browse = true;
+        }
         if accent_button(ui, "Load").clicked() {
             load = true;
         }
@@ -1562,6 +1611,22 @@ fn power_pivot_open_model_dialog(ui: &mut egui::Ui, app: &mut SheetApp, d: &mut 
             *close = true;
         }
     });
+    if browse {
+        if let Some(start) = &app.services.pick_model_async {
+            // Replace any previous pick: a late result from the old picker has nowhere to land.
+            let inbox = crate::Inbox::default();
+            start(inbox.clone());
+            d.model_inbox = Some(inbox);
+            d.values.insert("error".into(), json!(""));
+        } else if let Some(pick) = &app.services.pick_open
+            && let Some(path) = pick()
+        {
+            d.values.remove("modelJson");
+            d.values.remove("modelName");
+            d.values.insert("path".into(), json!(path));
+            d.values.insert("error".into(), json!(""));
+        }
+    }
     if load {
         power_pivot_load(app, d);
         if d.values.get("error").and_then(Json::as_str).unwrap_or("").is_empty() {

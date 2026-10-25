@@ -1871,3 +1871,78 @@ fn power_pivot_function_library_inserts_parseable_templates() {
     h.state_mut().dialog = None;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn power_pivot_open_model_browses_a_json_file() {
+    let (dir, path) = power_pivot_fixture("browse");
+    let bytes = std::fs::read(&path).unwrap();
+    type Requests = std::sync::Arc<std::sync::Mutex<Vec<gridcraft_ui_egui::Inbox>>>;
+    let requests: Requests = std::sync::Arc::default();
+    let send = requests.clone();
+    let mut h = crate::support::services_harness(
+        gridcraft_ui_egui::Services {
+            // The browser host: no filesystem, files arrive through a picker-owned inbox.
+            open_async: Some(Box::new(|| {})),
+            pick_model_async: Some(Box::new(move |inbox| send.lock().unwrap().push(inbox))),
+            ..Default::default()
+        },
+        4,
+    );
+    h.state_mut().open_dialog("powerPivot", json!({}));
+    h.run_steps(3);
+    click_button(&mut h, "File");
+    click_button(&mut h, "Open Model…");
+    h.run_steps(2);
+    click_button(&mut h, "Browse…");
+    h.run_steps(2);
+    assert_eq!(requests.lock().unwrap().len(), 1, "Browse… starts the browser picker");
+
+    // Canceling the dialog drops its inbox: the late pick cannot load a model later.
+    click_button(&mut h, "Cancel");
+    h.run_steps(2);
+    let canceled = requests.lock().unwrap().pop().unwrap();
+    click_button(&mut h, "Open Model…");
+    h.run_steps(2);
+    canceled.lock().unwrap().push(("late.json".into(), bytes.clone()));
+    h.run_steps(3);
+    assert_eq!(h.state_mut().session.run("dataModel.status", json!({})).unwrap()["loaded"], json!(false));
+
+    // A picked file reaches dataModel.load as JSON text (wasm has no path to read).
+    click_button(&mut h, "Browse…");
+    h.run_steps(2);
+    requests.lock().unwrap().pop().unwrap().lock().unwrap().push(("model.json".into(), bytes));
+    h.run_steps(3);
+    let status = h.state_mut().session.run("dataModel.status", json!({})).unwrap();
+    assert_eq!(status["loaded"], json!(true));
+    assert_eq!(status["tables"][0]["name"], json!("Sales"));
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!(d.values["overlay"], json!(""), "a loaded model closes the overlay");
+    assert_eq!(d.values["modelName"], json!("model.json"));
+    assert_eq!(d.values["tableData"]["columns"], json!(["Region", "Amount"]), "the Data View fetched the loaded table");
+    h.state_mut().dialog = None;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn power_pivot_open_model_browses_a_path_on_native() {
+    let (dir, path) = power_pivot_fixture("browse-native");
+    let chosen = path.to_string_lossy().to_string();
+    let mut h = crate::support::services_harness(
+        gridcraft_ui_egui::Services { pick_open: Some(Box::new(move || Some(chosen.clone()))), ..Default::default() },
+        4,
+    );
+    h.state_mut().open_dialog("powerPivot", json!({}));
+    h.run_steps(3);
+    click_button(&mut h, "File");
+    click_button(&mut h, "Open Model…");
+    h.run_steps(2);
+    click_button(&mut h, "Browse…");
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["path"], json!(path.to_string_lossy()));
+    assert!(!h.state().dialog.as_ref().unwrap().values.contains_key("modelJson"), "the native picker fills the path, not JSON text");
+    click_button(&mut h, "Load");
+    h.run_steps(3);
+    assert_eq!(h.state_mut().session.run("dataModel.status", json!({})).unwrap()["loaded"], json!(true));
+    h.state_mut().dialog = None;
+    let _ = std::fs::remove_dir_all(&dir);
+}
