@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (Italian reviewed by a native speaker: 1,149 strings, every key the other catalogs translate; previously minor: missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (Italian reviewed by a native speaker: 1,153 strings, every key the other catalogs translate; previously minor: missing translations are listed by `cargo xtask i18n-report` and never fail a check) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -80,7 +80,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Japanese | ja | 943 (~43%) | dialogs and messages | CJK system-font fallback; IME unverified; no furigana display | no | menus, File view, dialogs, messages | 3–5 h |
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; the theme's East Asian typeface (`<a:ea>`) survives open + save (rendering does not use it yet); IME unverified; no furigana display | no | menus only | 8–12 h |
 | German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
-| Italian | it | 1,149 (~52%) | dialogs, tooltips, pivot pane | Latin: yes | yes | menus, File view, dialogs, pivot pane; every key of the other catalogs | 2–4 h |
+| Italian | it | 1,153 (~52%) | dialogs, tooltips, pivot pane | Latin: yes | yes | menus, File view, dialogs, pivot pane; every key of the other catalogs | 2–4 h |
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 | Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
