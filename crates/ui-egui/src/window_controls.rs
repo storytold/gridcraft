@@ -251,16 +251,19 @@ pub fn desktop_grab(ctx: &egui::Context, command: egui::ViewportCommand) {
 }
 
 /// After `desktop_grab`, add the primary button's release to the next input, unless it brings one.
+/// The release goes before a new press of the button in that input, so the press starts a drag.
 pub fn release_after_desktop_grab(ctx: &egui::Context, raw: &mut egui::RawInput) {
     let id = grab_id(ctx.viewport_id());
     if ctx.data_mut(|d| d.remove_temp::<()>(id)).is_none() {
         return;
     }
-    let released = raw.events.iter().any(|e| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. }));
-    if !released {
-        let (pos, modifiers) = ctx.input(|i| (i.pointer.interact_pos().unwrap_or_default(), i.modifiers));
-        raw.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
+    let primary = |e: &egui::Event, down: bool| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed, .. } if *pressed == down);
+    let press = raw.events.iter().position(|e| primary(e, true)).unwrap_or(raw.events.len());
+    if raw.events.iter().take(press).any(|e| primary(e, false)) {
+        return;
     }
+    let (pos, modifiers) = ctx.input(|i| (i.pointer.interact_pos().unwrap_or_default(), i.modifiers));
+    raw.events.insert(press, egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
 }
 
 /// Resize zones along the window's edges and a hairline border, while the window is neither
@@ -334,6 +337,26 @@ mod tests {
         });
         release_after_desktop_grab(&ctx, &mut raw);
         assert_eq!(releases(&raw), 1, "not doubled when the input brings its own");
+
+        // A new click in the input that follows the grab: the grab's release goes before its
+        // press, and the click's own release doesn't stand in for it.
+        desktop_grab(&ctx, egui::ViewportCommand::StartDrag);
+        let button =
+            |pressed| egui::Event::PointerButton { pos: Pos2::ZERO, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let mut raw = egui::RawInput::default();
+        raw.events.push(egui::Event::PointerMoved(Pos2::ZERO));
+        raw.events.push(button(true));
+        raw.events.push(button(false));
+        release_after_desktop_grab(&ctx, &mut raw);
+        let order: Vec<Option<bool>> = raw
+            .events
+            .iter()
+            .map(|e| match e {
+                egui::Event::PointerButton { pressed, .. } => Some(*pressed),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(order, [None, Some(false), Some(true), Some(false)], "release, then the new press");
     }
 
     #[test]
