@@ -130,3 +130,107 @@ fn italian_chi_square_aliases_stay_distinct() {
     let expr = parse("CHISQ.DIST(1,2,TRUE)").unwrap();
     assert_eq!(print_input(&expr, FormulaLocale::It, |_| false).unwrap(), "DISTRIB.CHI.QUAD(1;2;VERO)");
 }
+
+/// The names below were read back from Italian Excel (`Range.Formula2Local`), so they are the
+/// spelling the app has to accept and show — not a translation of the English name.
+#[test]
+fn italian_names_match_what_italian_excel_shows() {
+    for (english, italian) in [
+        ("ABS", "ASS"),
+        ("COLUMN", "RIF.COLONNA"),
+        ("CHAR", "CODICE.CARATT"),
+        ("CLEAN", "LIBERA"),
+        ("DEVSQ", "DEV.Q"),
+        ("OFFSET", "SCARTO"),
+        ("RAND", "CASUALE"),
+        ("LARGE", "GRANDE"),
+        ("SMALL", "PICCOLO"),
+        ("RANK", "RANGO"),
+        ("N", "NUM"),
+        ("NA", "NON.DISP"),
+        ("WEEKDAY", "GIORNO.SETTIMANA"),
+        ("WORKDAY", "GIORNO.LAVORATIVO"),
+        ("NETWORKDAYS", "GIORNI.LAVORATIVI.TOT"),
+        ("TRANSPOSE", "MATR.TRASPOSTA"),
+        ("SUMPRODUCT", "MATR.SOMMA.PRODOTTO"),
+        ("NPV", "VAN"),
+        ("PV", "VA"),
+        ("IPMT", "INTERESSI"),
+        ("IRR", "TIR.COST"),
+        ("UNIQUE", "UNICI"),
+        ("SORT", "DATI.ORDINA"),
+        ("SORTBY", "DATI.ORDINA.PER"),
+        ("TAKE", "INCLUDI"),
+        ("DROP", "ESCLUDI"),
+        ("TOCOL", "A.COL"),
+        ("TOROW", "A.RIGA"),
+        ("WRAPROWS", "A.CAPO.RIGA"),
+        ("WRAPCOLS", "A.CAPO.COL"),
+        ("IMSUM", "COMP.SOMMA"),
+        ("IMPRODUCT", "COMP.PRODOTTO"),
+        ("IMABS", "COMP.MODULO"),
+    ] {
+        assert_eq!(FormulaLocale::It.canonical_name(italian), english, "{italian}");
+        assert_eq!(FormulaLocale::It.function_name(english), italian, "{english}");
+    }
+}
+
+/// The functions Italian Excel added in 2013+ and the dynamic-array ones, which the first
+/// version of the table was missing entirely.
+#[test]
+fn italian_covers_the_newer_function_families() {
+    for (english, italian) in [
+        ("NORM.DIST", "DISTRIB.NORM.N"),
+        ("NORM.INV", "INV.NORM.N"),
+        ("T.TEST", "TESTT"),
+        ("TTEST", "TEST.T"),
+        ("F.DIST", "DISTRIBF"),
+        ("FDIST", "DISTRIB.F"),
+        ("BINOM.DIST", "DISTRIB.BINOM.N"),
+        ("BINOMDIST", "DISTRIB.BINOM"),
+        ("STDEV.S", "DEV.ST.C"),
+        ("STDEVP", "DEV.ST.POP"),
+        ("VAR.S", "VAR.C"),
+        ("VARP", "VAR.POP"),
+        ("MIRR", "TIR.VAR"),
+        ("MDETERM", "MATR.DETERM"),
+        ("MINVERSE", "MATR.INVERSA"),
+        ("MMULT", "MATR.PRODOTTO"),
+        ("HSTACK", "STACK.ORIZ"),
+        ("VSTACK", "STACK.VERT"),
+        ("GROUPBY", "RAGGRUPPAPER"),
+        ("PIVOTBY", "PIVOTPER"),
+        ("PERCENTOF", "PERCENTUALE.DI"),
+        ("TRIMRANGE", "ESCLUDI.VUOTE"),
+        ("REGEXEXTRACT", "REGEX.ESTRAI"),
+        ("REGEXTEST", "REGEX.TEST"),
+        ("DECIMAL", "DECIMALE"),
+        ("WEBSERVICE", "SERVIZIO.WEB"),
+    ] {
+        assert_eq!(FormulaLocale::It.canonical_name(italian), english, "{italian}");
+        assert_eq!(FormulaLocale::It.function_name(english), italian, "{english}");
+    }
+}
+
+/// Functions whose Italian name is the English one keep it: an alias that maps a name to itself
+/// is not in the table at all.
+#[test]
+fn italian_keeps_the_english_name_where_excel_does() {
+    for name in ["MAX", "MIN", "INT", "MAP", "MAKEARRAY", "XOR", "CONCAT", "ISOMITTED", "EUROCONVERT"] {
+        assert_eq!(FormulaLocale::It.function_name(name), name, "{name}");
+        assert_eq!(FormulaLocale::It.canonical_name(name), name, "{name}");
+    }
+}
+
+/// Two Italian names end with the dot Excel shows; they must parse and display as typed.
+#[test]
+fn italian_names_with_a_trailing_dot_round_trip() {
+    for (src, canonical, shown) in [
+        ("SE.NON.DISP.(A1;B1)", "IFNA(A1,B1)", "SE.NON.DISP.(A1;B1)"),
+        ("INTERVALLO.DISTRIB.BINOM.N.(3;10;0,5;VERO)", "BINOM.DIST.RANGE(3,10,0.5,TRUE)", "INTERVALLO.DISTRIB.BINOM.N.(3;10;0,5;VERO)"),
+    ] {
+        let expr = parse_input(src, FormulaLocale::It, |_| false).unwrap();
+        assert_eq!(print(&expr), canonical, "{src}");
+        assert_eq!(print_input(&expr, FormulaLocale::It, |_| false).unwrap(), shown, "{src}");
+    }
+}
