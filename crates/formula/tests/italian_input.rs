@@ -38,9 +38,22 @@ fn italian_aliases_are_case_and_accent_insensitive() {
         ("VAL.ERRORE(A1)", "ISERROR(A1)"),
         ("val.vuoto(A1)", "ISBLANK(A1)"),
         ("media.più.se(A1:A9;\">0\")", "AVERAGEIFS(A1:A9,\">0\")"),
+        // The same names typed without the accent: a keyboard that cannot produce `Ù` or `À`
+        // must not turn an otherwise valid Italian formula into `#NAME?`.
+        ("media.piu.se(A1:A9;\">0\")", "AVERAGEIFS(A1:A9,\">0\")"),
+        ("PIU.SE(VERO;1;FALSO;2)", "IFS(TRUE,1,FALSE,2)"),
+        ("SOMMA.PIU.SE(A1:A10;\">0\";B1:B10;\">1\")", "SUMIFS(A1:A10,\">0\",B1:B10,\">1\")"),
+        ("CONTA.PIU.SE(A1:A10;\">0\";B1:B10;\">1\")", "COUNTIFS(A1:A10,\">0\",B1:B10,\">1\")"),
+        ("PROBABILITA(A1:A9;B1:B9;2;3)", "PROB(A1:A9,B1:B9,2,3)"),
+        ("PROPRIETA.MEMBRO.CUBO(\"cubo\";\"membro\")", "CUBEMEMBERPROPERTY(\"cubo\",\"membro\")"),
+        ("PREVISIONE.ETS.STAGIONALITA(A1:A9;B1:B9)", "FORECAST.ETS.SEASONALITY(A1:A9,B1:B9)"),
     ] {
         assert_eq!(input(src), expected, "{src}");
     }
+    // Accepting the unaccented spelling does not change what the app shows: Excel's own
+    // spelling, accents included, comes back out.
+    assert_eq!(FormulaLocale::It.function_name("IFS"), "PIÙ.SE");
+    assert_eq!(FormulaLocale::It.function_name("PROB"), "PROBABILITÀ");
 }
 
 #[test]
