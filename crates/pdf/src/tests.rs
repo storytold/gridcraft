@@ -1260,3 +1260,52 @@ fn shared_run_length_preserves_pixels_at_packet_boundaries() {
     // Two equal bytes may now terminate a literal packet. PDF pixel values stay exact.
     assert_eq!(run_length(&[1, 2, 2, 3]), [0, 1, 255, 2, 0, 3, 128]);
 }
+
+#[test]
+fn latin_extended_letters_use_the_latin_font() {
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(612.0, 792.0);
+    p.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "tőrű ŐŰ");
+    let c = page_content(&doc).to_string();
+    assert!(!c.contains("<0151>") && !c.contains("<0171>"), "ő/ű set in the CJK font: {c}");
+    // ő, ű, Ő, Ű are bytes 0xD1, 0xF1, 0xD0, 0xF0 of the Helvetica Latin Extended-A resource.
+    // Resources: the faces, then the CID font, then their Latin Extended-A twins.
+    let ext = format!("/F{}", EXT_FONT + 1);
+    let expected = format!(
+        "/F1 10 Tf\n1 0 0 1 10 772 Tm\n(t) Tj\n{ext} 10 Tf\n<D1> Tj\n/F1 10 Tf\n(r) Tj\n{ext} 10 Tf\n<F1> Tj\n/F1 10 Tf\n( ) Tj\n{ext} 10 Tf\n<D0F0> Tj\n"
+    );
+    assert!(c.contains(&expected), "ő/ű not set through the Latin resource: {c}");
+    let pdf = doc.finish().unwrap();
+    check_xref(&pdf).unwrap();
+    assert!(find(&pdf, CID_BASE_FONT.as_bytes()).is_none(), "CJK font used for Latin letters");
+    for name in ["/ohungarumlaut", "/uhungarumlaut", "/Ohungarumlaut", "/Uhungarumlaut"] {
+        assert!(find(&pdf, name.as_bytes()).is_some(), "missing glyph name {name}");
+    }
+    assert_eq!(text_width(Font::Helvetica, 10.0, "ő"), text_width(Font::Helvetica, 10.0, "o"));
+    assert_eq!(text_width(Font::TimesBold, 10.0, "Ű"), text_width(Font::TimesBold, 10.0, "U"));
+    assert_eq!(text_width(Font::Courier, 10.0, "ł"), 6.0);
+}
+
+#[test]
+fn latin_extended_letters_use_each_faces_own_resource() {
+    // Every face routed to a `/Differences` resource has the Latin glyphs; the symbolic standard
+    // fonts (Symbol, ZapfDingbats) lack them and are never routed there.
+    for face in Font::ALL {
+        let name = face.base_name();
+        if name.starts_with("Symbol") || name.starts_with("ZapfDingbats") {
+            continue;
+        }
+        let mut doc = PdfDoc::new();
+        let p = doc.add_page(612.0, 792.0);
+        p.text(10.0, 20.0, 10.0, face, [0, 0, 0], "ő");
+        let ext = Font::ALL.len() + 2 + face.index();
+        let c = page_content(&doc).to_string();
+        assert!(c.contains(&format!("/F{ext} 10 Tf\n")) && c.contains("<D1> Tj\n"), "{name}: {c}");
+        let pdf = doc.finish().unwrap();
+        check_xref(&pdf).unwrap();
+        let dict = format!("/BaseFont /{name} /Encoding << /Type /Encoding /Differences [128 /Amacron");
+        assert!(find(&pdf, dict.as_bytes()).is_some(), "{name}: no Latin Extended-A encoding");
+        assert!(find(&pdf, format!("/F{ext} ").as_bytes()).is_some(), "{name}: resource missing");
+        assert!(find(&pdf, CID_BASE_FONT.as_bytes()).is_none(), "{name}: CJK font used");
+    }
+}
