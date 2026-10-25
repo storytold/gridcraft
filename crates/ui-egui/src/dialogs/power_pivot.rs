@@ -220,7 +220,7 @@ fn power_pivot_functions_panel(ctx: &egui::Context, d: &mut Dialog) {
     let mut search = d.values.get("fnSearch").and_then(Json::as_str).unwrap_or("").to_string();
     let mut close = false;
     egui::Window::new("Function Picker")
-        .id(egui::Id::new("power_pivot_functions"))
+        .id(egui::Id::unique("power_pivot_functions"))
         .collapsible(false)
         .resizable(false)
         .default_width(620.0)
@@ -391,7 +391,7 @@ fn power_pivot_separator(ui: &mut egui::Ui, t: &theme::Tokens) {
 fn power_pivot_button(ui: &mut egui::Ui, icon: Icon, label: &str, tip: &str) -> egui::Response {
     let response = crate::widgets::big_button(ui, icon, label, tip, false);
     let accessible = label.replace('\n', " ");
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &accessible));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &accessible));
     response
 }
 
@@ -1498,7 +1498,7 @@ fn power_pivot_overlay(ctx: &egui::Context, app: &mut SheetApp, d: &mut Dialog, 
     };
     let mut close = false;
     egui::Window::new(title)
-        .id(egui::Id::new("power_pivot_overlay"))
+        .id(egui::Id::unique("power_pivot_overlay"))
         .collapsible(false)
         .resizable(false)
         .default_width(470.0)
